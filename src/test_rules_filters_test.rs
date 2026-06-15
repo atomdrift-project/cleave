@@ -1,5 +1,6 @@
 use std::sync::RwLock;
 
+use crate::composite_rules::TextQuery;
 use crate::composite_rules::context::EvaluationContext;
 use crate::composite_rules::debug::RuleType;
 use crate::composite_rules::types::FileType as RuleFileType;
@@ -20,7 +21,7 @@ fn create_report_with_size(file_size: usize) -> AnalysisReport {
 
 #[test]
 fn test_trait_filter_size_min() {
-    let condition = Condition::Text {
+    let condition = Condition::Text(TextQuery {
         exact: Some("test_symbol".to_string()),
         substr: None,
         regex: None,
@@ -34,7 +35,7 @@ fn test_trait_filter_size_min() {
         offset_range: None,
         section_offset: None,
         section_offset_range: None,
-    };
+    });
 
     let mut trait_def = TraitDefinition {
         id: "test/size-min".to_string(),
@@ -105,7 +106,7 @@ fn test_trait_filter_size_min() {
 
 #[test]
 fn test_trait_filter_size_max() {
-    let condition = Condition::Text {
+    let condition = Condition::Text(TextQuery {
         exact: Some("test_symbol".to_string()),
         substr: None,
         regex: None,
@@ -119,7 +120,7 @@ fn test_trait_filter_size_max() {
         offset_range: None,
         section_offset: None,
         section_offset_range: None,
-    };
+    });
 
     let mut trait_def = TraitDefinition {
         id: "test/size-max".to_string(),

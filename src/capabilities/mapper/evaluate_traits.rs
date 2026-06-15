@@ -9,6 +9,7 @@
 
 use crate::composite_rules::ast_kinds::map_kind_to_node_types;
 use crate::composite_rules::{Arch, Condition, EvaluationContext, SectionMap};
+use crate::composite_rules::{RawQuery, TextQuery, TreeSitterQuery};
 use crate::types::{AnalysisReport, Evidence, Finding, FindingKind};
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -52,7 +53,9 @@ impl super::CapabilityMapper {
 
         let mut required_node_types = FxHashSet::default();
         for &idx in applicable_indices {
-            if let Condition::TreeSitter { kind, node, .. } = &self.trait_definitions[idx].r#if {
+            if let Condition::TreeSitter(TreeSitterQuery { kind, node, .. }) =
+                &self.trait_definitions[idx].r#if
+            {
                 if let Some(k) = kind {
                     for nt in map_kind_to_node_types(k, file_type) {
                         required_node_types.insert(nt);
@@ -492,7 +495,7 @@ impl super::CapabilityMapper {
                 let is_simple_exact_string = trait_def.downgrade.is_none()
                     && matches!(
                         &trait_def.r#if,
-                        Condition::Text {
+                        Condition::Text(TextQuery {
                             exact: Some(_),
                             section: None,
                             offset: None,
@@ -500,7 +503,7 @@ impl super::CapabilityMapper {
                             section_offset: None,
                             section_offset_range: None,
                             ..
-                        }
+                        })
                     )
                     && trait_def.count_min.unwrap_or(1) == 1
                     && trait_def.count_max.is_none()
@@ -533,7 +536,7 @@ impl super::CapabilityMapper {
                 let is_simple_substr_string = trait_def.downgrade.is_none()
                     && matches!(
                         &trait_def.r#if,
-                        Condition::Text {
+                        Condition::Text(TextQuery {
                             substr: Some(_),
                             section: None,
                             offset: None,
@@ -541,7 +544,7 @@ impl super::CapabilityMapper {
                             section_offset: None,
                             section_offset_range: None,
                             ..
-                        }
+                        })
                     )
                     && trait_def.count_min.unwrap_or(1) == 1
                     && trait_def.count_max.is_none()
@@ -603,10 +606,12 @@ impl super::CapabilityMapper {
                 // Both are gated by the raw-content atom prefilter (text via the
                 // candidate-only substring/word path — see `RawContentRegexIndex`).
                 let has_content_regex = match &trait_def.r#if {
-                    Condition::Raw { regex: Some(_), .. }
-                    | Condition::Raw { word: Some(_), .. } => true,
-                    Condition::Text { regex: Some(_), .. }
-                    | Condition::Text { word: Some(_), .. } => file_type.uses_raw_text_search(),
+                    Condition::Raw(RawQuery { regex: Some(_), .. })
+                    | Condition::Raw(RawQuery { word: Some(_), .. }) => true,
+                    Condition::Text(TextQuery { regex: Some(_), .. })
+                    | Condition::Text(TextQuery { word: Some(_), .. }) => {
+                        file_type.uses_raw_text_search()
+                    }
                     _ => false,
                 };
                 if has_content_regex

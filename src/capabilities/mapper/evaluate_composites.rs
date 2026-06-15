@@ -7,6 +7,7 @@
 //! - Downgrade re-evaluation with complete finding context
 
 use crate::capabilities::indexes::TraitBitSet;
+use crate::composite_rules::PathQuery;
 use crate::composite_rules::{Arch, EvaluationContext, FileType as RuleFileType, SectionMap};
 use crate::types::{AnalysisReport, Criticality, Evidence, Finding, FindingKind};
 use rustc_hash::FxHashMap;
@@ -416,7 +417,7 @@ impl super::CapabilityMapper {
             // carry their real entry path, so `path` traits detect member
             // layouts (`node_modules/X/package.json`, nested `*.jar!…`, …).
             let (exact, substr, regex, case_insensitive, scope) = match &trait_def.r#if {
-                Condition::Path {
+                Condition::Path(PathQuery {
                     exact,
                     substr,
                     regex,
@@ -424,7 +425,7 @@ impl super::CapabilityMapper {
                     basename,
                     dirname,
                     ..
-                } => (
+                }) => (
                     exact,
                     substr,
                     regex,

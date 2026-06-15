@@ -9,6 +9,7 @@ use crate::composite_rules::evaluators::{match_window, truncate_evidence};
 use crate::composite_rules::{
     Condition, FileType as RuleFileType, Platform, TraitDefinition, platforms_intersect,
 };
+use crate::composite_rules::{RawQuery, SymbolQuery, TextQuery};
 use crate::types::binary::normalize_symbol;
 use crate::types::{Evidence, MAX_EVIDENCE_PER_TRAIT, StringInfo, deduplicate_evidence};
 use aho_corasick::AhoCorasick;
@@ -351,24 +352,24 @@ impl SymbolMatchIndex {
                 continue;
             }
             match &trait_def.r#if {
-                Condition::Symbol {
+                Condition::Symbol(SymbolQuery {
                     exact: Some(exact_str),
                     substr: None,
                     regex: None,
                     ..
-                } => {
+                }) => {
                     exact_symbols
                         .entry(normalize_symbol(exact_str))
                         .or_default()
                         .push(trait_idx);
                     symbol_trait_indices.insert(trait_idx);
                 }
-                Condition::Symbol {
+                Condition::Symbol(SymbolQuery {
                     exact: None,
                     substr: Some(substr_str),
                     regex: None,
                     ..
-                } => {
+                }) => {
                     let normalized = normalize_symbol(substr_str);
                     if normalized.is_empty() {
                         continue;
@@ -383,12 +384,12 @@ impl SymbolMatchIndex {
                         substr_to_traits.push(vec![trait_idx]);
                     }
                 }
-                Condition::Symbol {
+                Condition::Symbol(SymbolQuery {
                     exact: None,
                     substr: None,
                     regex: Some(regex_str),
                     ..
-                } => {
+                }) => {
                     symbol_trait_indices.insert(trait_idx);
                     // Symbol regex is no longer precompiled per condition; resolve
                     // it from the shared lazy cache. The index owns one engine per
@@ -793,11 +794,11 @@ impl StringMatchIndex {
             }
             match &trait_def.r#if {
                 // Exact string patterns
-                Condition::Text {
+                Condition::Text(TextQuery {
                     exact: Some(exact_str),
                     case_insensitive,
                     ..
-                } => {
+                }) => {
                     exact_trait_indices.insert(trait_idx);
                     if *case_insensitive {
                         let lower = exact_str.to_lowercase();
@@ -816,7 +817,7 @@ impl StringMatchIndex {
                     }
                 }
                 // Substr string patterns - add to Aho-Corasick index
-                Condition::Text {
+                Condition::Text(TextQuery {
                     substr: Some(substr_str),
                     case_insensitive,
                     // Skip patterns with location constraints - they need special handling
@@ -826,7 +827,7 @@ impl StringMatchIndex {
                     section_offset: None,
                     section_offset_range: None,
                     ..
-                } => {
+                }) => {
                     substr_trait_indices.insert(trait_idx);
                     if *case_insensitive {
                         let lower = substr_str.to_lowercase();
@@ -848,10 +849,10 @@ impl StringMatchIndex {
                     }
                 }
                 // Regex string patterns - extract literal prefix for pre-filtering
-                Condition::Text {
+                Condition::Text(TextQuery {
                     regex: Some(regex_str),
                     ..
-                } => {
+                }) => {
                     regex_trait_indices.insert(trait_idx);
                     let literal = Self::extract_regex_literal(regex_str);
                     if let Some(literal) = literal {
@@ -1510,11 +1511,11 @@ impl RawContentRegexIndex {
             // Extract regex patterns from Content traits
             // Word patterns are routed to a dedicated Aho-Corasick automaton
             match &trait_def.r#if {
-                Condition::Raw {
+                Condition::Raw(RawQuery {
                     regex: Some(regex_str),
                     case_insensitive,
                     ..
-                } => {
+                }) => {
                     let pattern = if *case_insensitive {
                         format!("(?i){}", regex_str)
                     } else {
@@ -1531,11 +1532,11 @@ impl RawContentRegexIndex {
                         }
                     }
                 }
-                Condition::Raw {
+                Condition::Raw(RawQuery {
                     word: Some(word_str),
                     case_insensitive,
                     ..
-                } => {
+                }) => {
                     let wp = WordPattern {
                         word: word_str.clone(),
                         case_insensitive: *case_insensitive,
@@ -1563,11 +1564,11 @@ impl RawContentRegexIndex {
                 // `regex:` contributes its mandatory literal (if extractable) to the
                 // substring path. A regex with no extractable literal stays unindexed
                 // (ungated; eval_raw scans it as before — correctness over speed).
-                Condition::Text {
+                Condition::Text(TextQuery {
                     word: Some(word_str),
                     case_insensitive,
                     ..
-                } => {
+                }) => {
                     let make = || WordPattern {
                         word: word_str.clone(),
                         case_insensitive: *case_insensitive,
@@ -1581,11 +1582,11 @@ impl RawContentRegexIndex {
                         }
                     }
                 }
-                Condition::Text {
+                Condition::Text(TextQuery {
                     regex: Some(regex_str),
                     case_insensitive,
                     ..
-                } => {
+                }) => {
                     // Gate on the longest *mandatory* literal anywhere in the
                     // pattern (the same atom `eval_raw`'s engine windows on), not
                     // just a prefix — otherwise ~half of `type: text` patterns are
@@ -2375,7 +2376,7 @@ mod tests {
             arch: vec![Arch::All],
             r#for: vec![RuleFileType::All],
             for_from_groups: false,
-            r#if: Condition::Raw {
+            r#if: Condition::Raw(RawQuery {
                 exact: None,
                 substr: None,
                 regex: Some("test".to_string()),
@@ -2388,7 +2389,7 @@ mod tests {
                 section_offset: None,
                 section_offset_range: None,
                 not: None,
-            },
+            }),
             size_max: None,
             count_min: None,
             count_max: None,
@@ -2427,7 +2428,7 @@ mod tests {
             arch: vec![Arch::All],
             r#for: vec![file_type],
             for_from_groups: false,
-            r#if: Condition::Raw {
+            r#if: Condition::Raw(RawQuery {
                 exact: None,
                 substr: None,
                 regex: Some("test".to_string()),
@@ -2440,7 +2441,7 @@ mod tests {
                 section_offset: None,
                 section_offset_range: None,
                 not: None,
-            },
+            }),
             size_max: None,
             count_min: None,
             count_max: None,
@@ -2486,7 +2487,7 @@ mod tests {
             arch: vec![Arch::All],
             r#for: vec![RuleFileType::All],
             for_from_groups: false,
-            r#if: Condition::Text {
+            r#if: Condition::Text(TextQuery {
                 exact: None,
                 substr: Some(substr.to_string()),
                 regex: None,
@@ -2500,7 +2501,7 @@ mod tests {
                 offset_range: None,
                 section_offset: None,
                 section_offset_range: None,
-            },
+            }),
             size_max: None,
             count_min: None,
             count_max: None,
@@ -2543,7 +2544,7 @@ mod tests {
             arch: vec![Arch::All],
             r#for: vec![RuleFileType::All],
             for_from_groups: false,
-            r#if: Condition::Text {
+            r#if: Condition::Text(TextQuery {
                 exact: None,
                 substr: None,
                 regex: Some(regex.to_string()),
@@ -2557,7 +2558,7 @@ mod tests {
                 offset_range: None,
                 section_offset: None,
                 section_offset_range: None,
-            },
+            }),
             size_max: None,
             count_min: None,
             count_max: None,
@@ -2720,10 +2721,10 @@ mod tests {
     fn test_substr_overlapping_case_insensitive() {
         let make_ci_substr_trait = |id: &str, substr: &str| -> TraitDefinition {
             let mut t = make_substr_trait(id, substr);
-            if let Condition::Text {
+            if let Condition::Text(TextQuery {
                 ref mut case_insensitive,
                 ..
-            } = t.r#if
+            }) = t.r#if
             {
                 *case_insensitive = true;
             }

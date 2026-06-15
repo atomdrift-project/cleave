@@ -11,7 +11,7 @@
 //! - Platform and file type filtering
 //! - Downgrade logic
 
-use super::condition::{Condition, NotException, NotExceptionStructured};
+use super::condition::{Condition, NotException, NotExceptionStructured, SymbolQuery, TextQuery};
 use super::context::EvaluationContext;
 use super::traits::*;
 use super::types::{Arch, FileType, Platform};
@@ -72,7 +72,7 @@ fn create_test_context(report: AnalysisReport, binary_data: Vec<u8>) -> Evaluati
 
 #[test]
 fn test_size_min_constraint_pass() {
-    let condition = Condition::Symbol {
+    let condition = Condition::Symbol(SymbolQuery {
         exact: Some("test".to_string()),
         substr: None,
         regex: None,
@@ -83,7 +83,7 @@ fn test_size_min_constraint_pass() {
         args: None,
         alias: None,
         not: None,
-    };
+    });
 
     let mut trait_def = create_test_trait("test/size::min_pass", condition);
     trait_def.size_min = Some(100); // Require at least 100 bytes
@@ -104,7 +104,7 @@ fn test_size_min_constraint_pass() {
 
 #[test]
 fn test_size_min_constraint_fail() {
-    let condition = Condition::Symbol {
+    let condition = Condition::Symbol(SymbolQuery {
         exact: Some("test".to_string()),
         substr: None,
         regex: None,
@@ -115,7 +115,7 @@ fn test_size_min_constraint_fail() {
         args: None,
         alias: None,
         not: None,
-    };
+    });
 
     let mut trait_def = create_test_trait("test/size::min_fail", condition);
     trait_def.size_min = Some(2000); // Require at least 2000 bytes
@@ -136,7 +136,7 @@ fn test_size_min_constraint_fail() {
 
 #[test]
 fn test_size_max_constraint_pass() {
-    let condition = Condition::Symbol {
+    let condition = Condition::Symbol(SymbolQuery {
         exact: Some("test".to_string()),
         substr: None,
         regex: None,
@@ -147,7 +147,7 @@ fn test_size_max_constraint_pass() {
         args: None,
         alias: None,
         not: None,
-    };
+    });
 
     let mut trait_def = create_test_trait("test/size::max_pass", condition);
     trait_def.size_max = Some(5000); // Max 5000 bytes
@@ -168,7 +168,7 @@ fn test_size_max_constraint_pass() {
 
 #[test]
 fn test_size_max_constraint_fail() {
-    let condition = Condition::Symbol {
+    let condition = Condition::Symbol(SymbolQuery {
         exact: Some("test".to_string()),
         substr: None,
         regex: None,
@@ -179,7 +179,7 @@ fn test_size_max_constraint_fail() {
         args: None,
         alias: None,
         not: None,
-    };
+    });
 
     let mut trait_def = create_test_trait("test/size::max_fail", condition);
     trait_def.size_max = Some(500); // Max 500 bytes
@@ -200,7 +200,7 @@ fn test_size_max_constraint_fail() {
 
 #[test]
 fn test_size_range_constraint() {
-    let condition = Condition::Symbol {
+    let condition = Condition::Symbol(SymbolQuery {
         exact: Some("test".to_string()),
         substr: None,
         regex: None,
@@ -211,7 +211,7 @@ fn test_size_range_constraint() {
         args: None,
         alias: None,
         not: None,
-    };
+    });
 
     let mut trait_def = create_test_trait("test/size::range", condition);
     trait_def.size_min = Some(500);
@@ -235,7 +235,7 @@ fn test_size_range_constraint() {
 
 #[test]
 fn test_count_min_constraint_pass() {
-    let condition = Condition::Symbol {
+    let condition = Condition::Symbol(SymbolQuery {
         exact: None,
         substr: Some("func".to_string()),
         regex: None,
@@ -246,7 +246,7 @@ fn test_count_min_constraint_pass() {
         args: None,
         alias: None,
         not: None,
-    };
+    });
 
     let mut trait_def = create_test_trait("test/count::min_pass", condition);
     trait_def.count_min = Some(2); // Require at least 2 matches
@@ -279,7 +279,7 @@ fn test_count_min_constraint_pass() {
 
 #[test]
 fn test_count_min_constraint_fail() {
-    let condition = Condition::Symbol {
+    let condition = Condition::Symbol(SymbolQuery {
         exact: None,
         substr: Some("func".to_string()),
         regex: None,
@@ -290,7 +290,7 @@ fn test_count_min_constraint_fail() {
         args: None,
         alias: None,
         not: None,
-    };
+    });
 
     let mut trait_def = create_test_trait("test/count::min_fail", condition);
     trait_def.count_min = Some(5); // Require at least 5 matches
@@ -317,7 +317,7 @@ fn test_count_min_constraint_fail() {
 
 #[test]
 fn test_count_max_constraint_pass() {
-    let condition = Condition::Symbol {
+    let condition = Condition::Symbol(SymbolQuery {
         exact: None,
         substr: Some("func".to_string()),
         regex: None,
@@ -328,7 +328,7 @@ fn test_count_max_constraint_pass() {
         args: None,
         alias: None,
         not: None,
-    };
+    });
 
     let mut trait_def = create_test_trait("test/count::max_pass", condition);
     trait_def.count_max = Some(5); // Max 5 matches
@@ -355,7 +355,7 @@ fn test_count_max_constraint_pass() {
 
 #[test]
 fn test_count_max_constraint_fail() {
-    let condition = Condition::Symbol {
+    let condition = Condition::Symbol(SymbolQuery {
         exact: None,
         substr: Some("func".to_string()),
         regex: None,
@@ -366,7 +366,7 @@ fn test_count_max_constraint_fail() {
         args: None,
         alias: None,
         not: None,
-    };
+    });
 
     let mut trait_def = create_test_trait("test/count::max_fail", condition);
     trait_def.count_max = Some(1); // Max 1 match
@@ -401,7 +401,7 @@ fn test_count_max_constraint_fail() {
 
 #[test]
 fn test_per_kb_min_constraint_pass() {
-    let condition = Condition::Symbol {
+    let condition = Condition::Symbol(SymbolQuery {
         exact: None,
         substr: Some("func".to_string()),
         regex: None,
@@ -412,7 +412,7 @@ fn test_per_kb_min_constraint_pass() {
         args: None,
         alias: None,
         not: None,
-    };
+    });
 
     let mut trait_def = create_test_trait("test/density::min_pass", condition);
     trait_def.per_kb_min = Some(1.0); // At least 1 match per KB
@@ -446,7 +446,7 @@ fn test_per_kb_min_constraint_pass() {
 
 #[test]
 fn test_per_kb_min_constraint_fail() {
-    let condition = Condition::Symbol {
+    let condition = Condition::Symbol(SymbolQuery {
         exact: None,
         substr: Some("func".to_string()),
         regex: None,
@@ -457,7 +457,7 @@ fn test_per_kb_min_constraint_fail() {
         args: None,
         alias: None,
         not: None,
-    };
+    });
 
     let mut trait_def = create_test_trait("test/density::min_fail", condition);
     trait_def.per_kb_min = Some(5.0); // At least 5 matches per KB
@@ -488,7 +488,7 @@ fn test_per_kb_min_constraint_fail() {
 
 #[test]
 fn test_per_kb_max_constraint_pass() {
-    let condition = Condition::Symbol {
+    let condition = Condition::Symbol(SymbolQuery {
         exact: None,
         substr: Some("func".to_string()),
         regex: None,
@@ -499,7 +499,7 @@ fn test_per_kb_max_constraint_pass() {
         args: None,
         alias: None,
         not: None,
-    };
+    });
 
     let mut trait_def = create_test_trait("test/density::max_pass", condition);
     trait_def.per_kb_max = Some(10.0); // Max 10 matches per KB
@@ -523,7 +523,7 @@ fn test_per_kb_max_constraint_pass() {
 
 #[test]
 fn test_per_kb_max_constraint_fail() {
-    let condition = Condition::Symbol {
+    let condition = Condition::Symbol(SymbolQuery {
         exact: None,
         substr: Some("func".to_string()),
         regex: None,
@@ -534,7 +534,7 @@ fn test_per_kb_max_constraint_fail() {
         args: None,
         alias: None,
         not: None,
-    };
+    });
 
     let mut trait_def = create_test_trait("test/density::max_fail", condition);
     trait_def.per_kb_max = Some(2.0); // Max 2 matches per KB
@@ -562,7 +562,7 @@ fn test_per_kb_max_constraint_fail() {
 #[test]
 fn test_per_kb_max_zero_byte_file_with_matches_fails() {
     // A zero-byte file with any matches has infinite density — must fail a max ceiling.
-    let condition = Condition::Symbol {
+    let condition = Condition::Symbol(SymbolQuery {
         exact: None,
         substr: Some("func".to_string()),
         regex: None,
@@ -573,7 +573,7 @@ fn test_per_kb_max_zero_byte_file_with_matches_fails() {
         args: None,
         alias: None,
         not: None,
-    };
+    });
 
     let mut trait_def = create_test_trait("test/density::max_zero_byte_fail", condition);
     trait_def.per_kb_max = Some(100.0);
@@ -598,7 +598,7 @@ fn test_per_kb_max_zero_byte_file_with_matches_fails() {
 #[test]
 fn test_per_kb_max_zero_byte_file_no_matches_passes() {
     // A zero-byte file with no matches has zero matches/KB — passes the ceiling check.
-    let condition = Condition::Symbol {
+    let condition = Condition::Symbol(SymbolQuery {
         exact: None,
         substr: Some("func".to_string()),
         regex: None,
@@ -609,7 +609,7 @@ fn test_per_kb_max_zero_byte_file_no_matches_passes() {
         args: None,
         alias: None,
         not: None,
-    };
+    });
 
     let mut trait_def = create_test_trait("test/density::max_zero_byte_pass", condition);
     trait_def.per_kb_max = Some(100.0);
@@ -635,7 +635,7 @@ fn test_per_kb_max_zero_byte_file_no_matches_passes() {
 
 #[test]
 fn test_platform_filter_match() {
-    let condition = Condition::Symbol {
+    let condition = Condition::Symbol(SymbolQuery {
         exact: Some("test".to_string()),
         substr: None,
         regex: None,
@@ -646,7 +646,7 @@ fn test_platform_filter_match() {
         args: None,
         alias: None,
         not: None,
-    };
+    });
 
     let mut trait_def = create_test_trait("test/platform::match", condition);
     trait_def.platforms = vec![Platform::Linux, Platform::MacOS];
@@ -669,7 +669,7 @@ fn test_platform_filter_match() {
 
 #[test]
 fn test_platform_filter_no_match() {
-    let condition = Condition::Symbol {
+    let condition = Condition::Symbol(SymbolQuery {
         exact: Some("test".to_string()),
         substr: None,
         regex: None,
@@ -680,7 +680,7 @@ fn test_platform_filter_no_match() {
         args: None,
         alias: None,
         not: None,
-    };
+    });
 
     let mut trait_def = create_test_trait("test/platform::no_match", condition);
     trait_def.platforms = vec![Platform::Linux, Platform::MacOS];
@@ -706,7 +706,7 @@ fn test_platform_filter_no_match() {
 
 #[test]
 fn test_platform_all_matches_everything() {
-    let condition = Condition::Symbol {
+    let condition = Condition::Symbol(SymbolQuery {
         exact: Some("test".to_string()),
         substr: None,
         regex: None,
@@ -717,7 +717,7 @@ fn test_platform_all_matches_everything() {
         args: None,
         alias: None,
         not: None,
-    };
+    });
 
     let mut trait_def = create_test_trait("test/platform::all", condition);
     trait_def.platforms = vec![Platform::All];
@@ -742,7 +742,7 @@ fn test_platform_all_matches_everything() {
 
 #[test]
 fn test_arch_filter_match() {
-    let condition = Condition::Symbol {
+    let condition = Condition::Symbol(SymbolQuery {
         exact: Some("test".to_string()),
         substr: None,
         regex: None,
@@ -753,7 +753,7 @@ fn test_arch_filter_match() {
         args: None,
         alias: None,
         not: None,
-    };
+    });
 
     let mut trait_def = create_test_trait("test/arch::match", condition);
     trait_def.arch = vec![Arch::Arm, Arch::Aarch64];
@@ -776,7 +776,7 @@ fn test_arch_filter_match() {
 
 #[test]
 fn test_arch_filter_no_match() {
-    let condition = Condition::Symbol {
+    let condition = Condition::Symbol(SymbolQuery {
         exact: Some("test".to_string()),
         substr: None,
         regex: None,
@@ -787,7 +787,7 @@ fn test_arch_filter_no_match() {
         args: None,
         alias: None,
         not: None,
-    };
+    });
 
     let mut trait_def = create_test_trait("test/arch::no_match", condition);
     trait_def.arch = vec![Arch::X86, Arch::X86_64];
@@ -812,7 +812,7 @@ fn test_arch_filter_no_match() {
 
 #[test]
 fn test_arch_all_matches_any_file_arch() {
-    let condition = Condition::Symbol {
+    let condition = Condition::Symbol(SymbolQuery {
         exact: Some("test".to_string()),
         substr: None,
         regex: None,
@@ -823,7 +823,7 @@ fn test_arch_all_matches_any_file_arch() {
         args: None,
         alias: None,
         not: None,
-    };
+    });
 
     let trait_def = create_test_trait("test/arch::all_trait", condition);
     assert_eq!(trait_def.arch, vec![Arch::All]);
@@ -849,7 +849,7 @@ fn test_arch_all_matches_any_file_arch() {
 
 #[test]
 fn test_arch_file_all_matches_any_trait_arch() {
-    let condition = Condition::Symbol {
+    let condition = Condition::Symbol(SymbolQuery {
         exact: Some("test".to_string()),
         substr: None,
         regex: None,
@@ -860,7 +860,7 @@ fn test_arch_file_all_matches_any_trait_arch() {
         args: None,
         alias: None,
         not: None,
-    };
+    });
 
     let mut trait_def = create_test_trait("test/arch::file_all", condition);
     trait_def.arch = vec![Arch::X86];
@@ -924,7 +924,7 @@ fn test_arch_from_str_yaml_parsing() {
 
 #[test]
 fn test_arch_multi_arch_file() {
-    let condition = Condition::Symbol {
+    let condition = Condition::Symbol(SymbolQuery {
         exact: Some("test".to_string()),
         substr: None,
         regex: None,
@@ -935,7 +935,7 @@ fn test_arch_multi_arch_file() {
         args: None,
         alias: None,
         not: None,
-    };
+    });
 
     let mut trait_def = create_test_trait("test/arch::multi_arch", condition);
     trait_def.arch = vec![Arch::X86_64];
@@ -987,7 +987,7 @@ fn test_arch_clamp_range_fat_binary() {
 
 #[test]
 fn test_file_type_filter_match() {
-    let condition = Condition::Symbol {
+    let condition = Condition::Symbol(SymbolQuery {
         exact: Some("test".to_string()),
         substr: None,
         regex: None,
@@ -998,7 +998,7 @@ fn test_file_type_filter_match() {
         args: None,
         alias: None,
         not: None,
-    };
+    });
 
     let mut trait_def = create_test_trait("test/filetype::match", condition);
     trait_def.r#for = vec![FileType::Elf, FileType::Macho];
@@ -1021,7 +1021,7 @@ fn test_file_type_filter_match() {
 
 #[test]
 fn test_file_type_filter_no_match() {
-    let condition = Condition::Symbol {
+    let condition = Condition::Symbol(SymbolQuery {
         exact: Some("test".to_string()),
         substr: None,
         regex: None,
@@ -1032,7 +1032,7 @@ fn test_file_type_filter_no_match() {
         args: None,
         alias: None,
         not: None,
-    };
+    });
 
     let mut trait_def = create_test_trait("test/filetype::no_match", condition);
     trait_def.r#for = vec![FileType::Python, FileType::JavaScript];
@@ -1060,7 +1060,7 @@ fn test_file_type_filter_no_match() {
 
 #[test]
 fn test_all_constraints_combined() {
-    let condition = Condition::Symbol {
+    let condition = Condition::Symbol(SymbolQuery {
         exact: None,
         substr: Some("func".to_string()),
         regex: None,
@@ -1071,7 +1071,7 @@ fn test_all_constraints_combined() {
         args: None,
         alias: None,
         not: None,
-    };
+    });
 
     let mut trait_def = create_test_trait("test/constraints::combined", condition);
     trait_def.size_min = Some(512);
@@ -1115,7 +1115,7 @@ fn test_all_constraints_combined() {
 
 #[test]
 fn test_finding_contains_evidence() {
-    let condition = Condition::Symbol {
+    let condition = Condition::Symbol(SymbolQuery {
         exact: Some("test".to_string()),
         substr: None,
         regex: None,
@@ -1126,7 +1126,7 @@ fn test_finding_contains_evidence() {
         args: None,
         alias: None,
         not: None,
-    };
+    });
 
     let trait_def = create_test_trait("test/finding::evidence", condition);
 
@@ -1152,7 +1152,7 @@ fn test_finding_contains_evidence() {
 
 #[test]
 fn test_finding_has_correct_criticality() {
-    let condition = Condition::Symbol {
+    let condition = Condition::Symbol(SymbolQuery {
         exact: Some("test".to_string()),
         substr: None,
         regex: None,
@@ -1163,7 +1163,7 @@ fn test_finding_has_correct_criticality() {
         args: None,
         alias: None,
         not: None,
-    };
+    });
 
     let mut trait_def = create_test_trait("test/finding::crit", condition);
     trait_def.crit = Criticality::Hostile;
@@ -1198,7 +1198,7 @@ fn powershell_case_trait() -> TraitDefinition {
             lowered_substr: None,
         })
     };
-    let condition = Condition::Text {
+    let condition = Condition::Text(TextQuery {
         exact: None,
         substr: None,
         regex: Some("[Pp][Oo][Ww][Ee][Rr][Ss][Hh][Ee][Ll][Ll]".to_string()),
@@ -1212,7 +1212,7 @@ fn powershell_case_trait() -> TraitDefinition {
         section_offset_range: None,
         not: Some(vec![exact("powershell"), exact("PowerShell")]),
         platforms: None,
-    };
+    });
     create_test_trait("test/case::powershell-case-randomized", condition)
 }
 

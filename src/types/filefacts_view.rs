@@ -48,6 +48,15 @@ pub struct FilefactsView {
     /// `filefacts::ParseError`. Emitted in compact output.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub errors: Vec<serde_json::Value>,
+    /// External references this file's content *declares* — package
+    /// dependencies, lockfile pins, `.SRCINFO` `source=` URLs — as parsed by
+    /// filefacts. An intrinsic content fact, carried per file (including archive
+    /// members) so a downstream composer (scan + fletch) can fetch and scan
+    /// them without re-extracting member bytes. Imperative/undeclared discovery
+    /// (install-hook `curl|sh`, npm `scripts`) is fletch's job and is not
+    /// surfaced here — only what filefacts declares.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub references: Vec<filefacts::ExternalRef>,
 }
 
 impl FilefactsView {
@@ -66,6 +75,7 @@ impl FilefactsView {
             values: parsed.values().as_json().clone(),
             symbols: retained_symbols(parsed),
             errors: serialize_to_array(parsed.errors()),
+            references: parsed.references().to_vec(),
         }
     }
 
@@ -74,7 +84,10 @@ impl FilefactsView {
     /// produced nothing of substance.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        is_null_or_empty_object(&self.values) && self.symbols.is_empty() && self.errors.is_empty()
+        is_null_or_empty_object(&self.values)
+            && self.symbols.is_empty()
+            && self.errors.is_empty()
+            && self.references.is_empty()
     }
 }
 

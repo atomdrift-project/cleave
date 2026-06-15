@@ -5,7 +5,7 @@
 
 #[cfg(test)]
 mod python_aes_import_tests {
-    use crate::composite_rules::{Arch, Condition, TraitDefinition};
+    use crate::composite_rules::{Arch, Condition, RawQuery, TraitDefinition};
     use crate::types::Criticality;
 
     #[test]
@@ -57,7 +57,7 @@ mod python_aes_import_tests {
             arch: vec![Arch::All],
             r#for: vec![],
             for_from_groups: false,
-            r#if: Condition::Raw {
+            r#if: Condition::Raw(RawQuery {
                 exact: None,
                 substr: None,
                 regex: Some(r"from\s+Crypto\.Cipher\s+import\s+AES".to_string()),
@@ -70,7 +70,7 @@ mod python_aes_import_tests {
                 section_offset: None,
                 section_offset_range: None,
                 not: None,
-            },
+            }),
             size_max: None,
             count_min: None,
             count_max: None,

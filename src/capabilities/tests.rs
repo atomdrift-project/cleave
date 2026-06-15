@@ -14,6 +14,7 @@ use crate::composite_rules::{
     Arch, CompositeTrait, Condition, FileType as RuleFileType, Platform, SectionMap,
     TraitDefinition,
 };
+use crate::composite_rules::{RawQuery, TextQuery, TreeSitterQuery};
 use crate::types::{AnalysisReport, Criticality, Finding, FindingKind, TargetInfo};
 use anyhow::Result;
 use std::path::Path;
@@ -203,7 +204,7 @@ fn test_apply_trait_defaults_applies_all_defaults() {
         not: None,
         unless: None,
         downgrade: None,
-        condition: Some(Condition::Text {
+        condition: Some(Condition::Text(TextQuery {
             is_check: None,
             exact: Some("test".to_string()),
             regex: None,
@@ -217,7 +218,7 @@ fn test_apply_trait_defaults_applies_all_defaults() {
             section_offset_range: None,
             not: None,
             platforms: None,
-        }),
+        })),
         count_min: Some(1),
         count_max: None,
         per_kb_min: None,
@@ -278,7 +279,7 @@ fn test_apply_trait_defaults_trait_overrides_defaults() {
         not: None,
         unless: None,
         downgrade: None,
-        condition: Some(Condition::Text {
+        condition: Some(Condition::Text(TextQuery {
             is_check: None,
             exact: Some("test".to_string()),
             regex: None,
@@ -292,7 +293,7 @@ fn test_apply_trait_defaults_trait_overrides_defaults() {
             section_offset_range: None,
             not: None,
             platforms: None,
-        }),
+        })),
         count_min: Some(1),
         count_max: None,
         per_kb_min: None,
@@ -350,7 +351,7 @@ fn test_apply_trait_defaults_unset_mbc_with_none() {
         not: None,
         unless: None,
         downgrade: None,
-        condition: Some(Condition::Text {
+        condition: Some(Condition::Text(TextQuery {
             is_check: None,
             exact: Some("test".to_string()),
             regex: None,
@@ -364,7 +365,7 @@ fn test_apply_trait_defaults_unset_mbc_with_none() {
             section_offset_range: None,
             not: None,
             platforms: None,
-        }),
+        })),
         count_min: Some(1),
         count_max: None,
         per_kb_min: None,
@@ -417,7 +418,7 @@ fn test_apply_trait_defaults_unset_attack_with_none() {
         not: None,
         unless: None,
         downgrade: None,
-        condition: Some(Condition::Text {
+        condition: Some(Condition::Text(TextQuery {
             is_check: None,
             exact: Some("test".to_string()),
             regex: None,
@@ -431,7 +432,7 @@ fn test_apply_trait_defaults_unset_attack_with_none() {
             section_offset_range: None,
             not: None,
             platforms: None,
-        }),
+        })),
         count_min: Some(1),
         count_max: None,
         per_kb_min: None,
@@ -484,7 +485,7 @@ fn test_apply_trait_defaults_unset_file_types_with_none() {
         not: None,
         unless: None,
         downgrade: None,
-        condition: Some(Condition::Text {
+        condition: Some(Condition::Text(TextQuery {
             is_check: None,
             exact: Some("test".to_string()),
             regex: None,
@@ -498,7 +499,7 @@ fn test_apply_trait_defaults_unset_file_types_with_none() {
             section_offset_range: None,
             not: None,
             platforms: None,
-        }),
+        })),
         count_min: Some(1),
         count_max: None,
         per_kb_min: None,
@@ -552,7 +553,7 @@ fn test_apply_trait_defaults_size_and_entropy_from_defaults() {
         not: None,
         unless: None,
         downgrade: None,
-        condition: Some(Condition::Text {
+        condition: Some(Condition::Text(TextQuery {
             is_check: None,
             exact: Some("test".to_string()),
             regex: None,
@@ -566,7 +567,7 @@ fn test_apply_trait_defaults_size_and_entropy_from_defaults() {
             section_offset_range: None,
             not: None,
             platforms: None,
-        }),
+        })),
         count_min: None,
         count_max: None,
         per_kb_min: None,
@@ -604,7 +605,7 @@ fn test_apply_trait_defaults_size_and_entropy_from_defaults() {
         not: None,
         unless: None,
         downgrade: None,
-        condition: Some(Condition::Text {
+        condition: Some(Condition::Text(TextQuery {
             is_check: None,
             exact: Some("test".to_string()),
             regex: None,
@@ -618,7 +619,7 @@ fn test_apply_trait_defaults_size_and_entropy_from_defaults() {
             section_offset_range: None,
             not: None,
             platforms: None,
-        }),
+        })),
         count_min: None,
         count_max: None,
         per_kb_min: None,
@@ -678,7 +679,7 @@ fn test_apply_composite_defaults_applies_all_defaults() {
         near_lines: None,
         near_bytes: None,
         scope: None,
-        condition: Some(Condition::Text {
+        condition: Some(Condition::Text(TextQuery {
             is_check: None,
             exact: Some("test".to_string()),
             regex: None,
@@ -692,7 +693,7 @@ fn test_apply_composite_defaults_applies_all_defaults() {
             section_offset_range: None,
             not: None,
             platforms: None,
-        }),
+        })),
         ..Default::default()
     };
 
@@ -751,7 +752,7 @@ fn test_apply_composite_defaults_unset_with_none() {
         near_lines: None,
         near_bytes: None,
         scope: None,
-        condition: Some(Condition::Text {
+        condition: Some(Condition::Text(TextQuery {
             is_check: None,
             exact: Some("test".to_string()),
             regex: None,
@@ -765,7 +766,7 @@ fn test_apply_composite_defaults_unset_with_none() {
             section_offset_range: None,
             not: None,
             platforms: None,
-        }),
+        })),
         ..Default::default()
     };
 
@@ -1440,7 +1441,7 @@ fn test_precision_recursive_expansion() {
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         for_from_groups: false,
-        r#if: Condition::Text {
+        r#if: Condition::Text(TextQuery {
             is_check: None,
             exact: Some("atomic".to_string()),
             regex: None,
@@ -1454,7 +1455,7 @@ fn test_precision_recursive_expansion() {
             section_offset_range: None,
             not: None,
             platforms: None,
-        },
+        }),
         size_max: None,
         count_min: Some(1),
         count_max: None,
@@ -1828,7 +1829,7 @@ fn test_suspicious_precision_threshold_validation() {
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         for_from_groups: false,
-        all: Some(vec![Condition::Text {
+        all: Some(vec![Condition::Text(TextQuery {
             is_check: None,
             exact: Some("string1".to_string()),
             regex: None,
@@ -1842,7 +1843,7 @@ fn test_suspicious_precision_threshold_validation() {
             section_offset_range: None,
             not: None,
             platforms: None,
-        }]),
+        })]),
         any: None,
         needs: None,
         near_lines: None,
@@ -1935,7 +1936,7 @@ fn test_atomic_suspicious_precision_threshold_validation() {
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         for_from_groups: false,
-        r#if: Condition::Raw {
+        r#if: Condition::Raw(RawQuery {
             exact: None,
             substr: Some("x".to_string()),
             regex: None,
@@ -1948,7 +1949,7 @@ fn test_atomic_suspicious_precision_threshold_validation() {
             offset_range: None,
             section_offset: None,
             section_offset_range: None,
-        },
+        }),
         size_max: None,
         count_min: None,
         count_max: None,
@@ -1976,7 +1977,7 @@ fn test_atomic_suspicious_precision_threshold_validation() {
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::Pe],
         for_from_groups: false,
-        r#if: Condition::Text {
+        r#if: Condition::Text(TextQuery {
             is_check: None,
             exact: Some("CreateProcessW".to_string()),
             regex: None,
@@ -1990,7 +1991,7 @@ fn test_atomic_suspicious_precision_threshold_validation() {
             section_offset_range: None,
             not: None,
             platforms: None,
-        },
+        }),
         size_max: None,
         count_min: None,
         count_max: None,
@@ -2046,7 +2047,7 @@ fn test_precision_mixed_conditions() {
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         for_from_groups: false,
-        all: Some(vec![Condition::Text {
+        all: Some(vec![Condition::Text(TextQuery {
             is_check: None,
             exact: Some("string1".to_string()),
             regex: None,
@@ -2060,13 +2061,13 @@ fn test_precision_mixed_conditions() {
             section_offset_range: None,
             not: None,
             platforms: None,
-        }]),
+        })]),
         any: Some(vec![]),
         needs: None,
         near_lines: None,
         near_bytes: None,
         scope: None,
-        unless: Some(vec![Condition::Text {
+        unless: Some(vec![Condition::Text(TextQuery {
             is_check: None,
             exact: Some("string4".to_string()),
             regex: None,
@@ -2080,7 +2081,7 @@ fn test_precision_mixed_conditions() {
             section_offset_range: None,
             not: None,
             platforms: None,
-        }]),
+        })]),
         not: None,
         downgrade: None,
         size_min: None,
@@ -2343,7 +2344,7 @@ fn test_precision_traits_with_size_restrictions() {
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         for_from_groups: false,
-        r#if: Condition::Text {
+        r#if: Condition::Text(TextQuery {
             is_check: None,
             exact: Some("pattern1".to_string()),
             regex: None,
@@ -2357,7 +2358,7 @@ fn test_precision_traits_with_size_restrictions() {
             section_offset_range: None,
             not: None,
             platforms: None,
-        },
+        }),
         size_max: Some(1048576), // Has size restriction
         count_min: None,
         count_max: None,
@@ -2386,7 +2387,7 @@ fn test_precision_traits_with_size_restrictions() {
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         for_from_groups: false,
-        r#if: Condition::Text {
+        r#if: Condition::Text(TextQuery {
             is_check: None,
             exact: Some("pattern2".to_string()),
             regex: None,
@@ -2400,7 +2401,7 @@ fn test_precision_traits_with_size_restrictions() {
             section_offset_range: None,
             not: None,
             platforms: None,
-        },
+        }),
         size_max: Some(2097152), // Has size restriction
         count_min: None,
         count_max: None,
@@ -2888,7 +2889,7 @@ fn test_atomic_precision_calibration_spread() {
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         for_from_groups: false,
-        r#if: Condition::Raw {
+        r#if: Condition::Raw(RawQuery {
             exact: None,
             substr: Some("cmd".to_string()),
             regex: None,
@@ -2901,7 +2902,7 @@ fn test_atomic_precision_calibration_spread() {
             offset_range: None,
             section_offset: None,
             section_offset_range: None,
-        },
+        }),
         size_max: None,
         count_min: None,
         count_max: None,
@@ -2929,7 +2930,7 @@ fn test_atomic_precision_calibration_spread() {
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::JavaScript],
         for_from_groups: false,
-        r#if: Condition::TreeSitter {
+        r#if: Condition::TreeSitter(TreeSitterQuery {
             kind: Some("call".to_string()),
             node: None,
             exact: Some("eval".to_string()),
@@ -2938,7 +2939,7 @@ fn test_atomic_precision_calibration_spread() {
             query: None,
             language: Some("javascript".to_string()),
             case_insensitive: false,
-        },
+        }),
         size_max: None,
         count_min: None,
         count_max: None,
@@ -2985,7 +2986,7 @@ fn test_atomic_precision_long_regex_and_large_not_list_stays_calibrated() {
             RuleFileType::JavaScript,
         ],
         for_from_groups: false,
-        r#if: Condition::Text {
+        r#if: Condition::Text(TextQuery {
             is_check: None,
             exact: None,
             regex: Some(
@@ -3001,7 +3002,7 @@ fn test_atomic_precision_long_regex_and_large_not_list_stays_calibrated() {
             section_offset_range: None,
             not: None,
             platforms: None,
-        },
+        }),
         size_max: None,
         count_min: None,
         count_max: None,
@@ -3063,7 +3064,7 @@ fn test_scope_filters_do_not_dominate_atomic_precision() {
             RuleFileType::Zip,
         ],
         for_from_groups: false,
-        r#if: Condition::Text {
+        r#if: Condition::Text(TextQuery {
             is_check: None,
             exact: Some("HmacSHA256".to_string()),
             regex: None,
@@ -3077,7 +3078,7 @@ fn test_scope_filters_do_not_dominate_atomic_precision() {
             section_offset_range: None,
             not: None,
             platforms: None,
-        },
+        }),
         size_max: None,
         count_min: None,
         count_max: None,
@@ -3131,7 +3132,7 @@ fn test_composite_precision_calibration_band() {
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::Pe],
         for_from_groups: false,
-        r#if: Condition::Text {
+        r#if: Condition::Text(TextQuery {
             is_check: None,
             exact: Some("CreateProcessW".to_string()),
             regex: None,
@@ -3145,7 +3146,7 @@ fn test_composite_precision_calibration_band() {
             section_offset_range: None,
             not: None,
             platforms: None,
-        },
+        }),
         size_max: None,
         count_min: None,
         count_max: None,
@@ -3243,7 +3244,7 @@ fn test_composite_prefix_reference_matches_explicit_expansion_precision() {
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         for_from_groups: false,
-        r#if: Condition::Raw {
+        r#if: Condition::Raw(RawQuery {
             exact: None,
             substr: Some("cmd".to_string()),
             regex: None,
@@ -3256,7 +3257,7 @@ fn test_composite_prefix_reference_matches_explicit_expansion_precision() {
             offset_range: None,
             section_offset: None,
             section_offset_range: None,
-        },
+        }),
         size_max: None,
         count_min: None,
         count_max: None,
@@ -3283,7 +3284,7 @@ fn test_composite_prefix_reference_matches_explicit_expansion_precision() {
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::Pe],
         for_from_groups: false,
-        r#if: Condition::TreeSitter {
+        r#if: Condition::TreeSitter(TreeSitterQuery {
             kind: Some("call".to_string()),
             node: None,
             exact: Some("VirtualAlloc".to_string()),
@@ -3292,7 +3293,7 @@ fn test_composite_prefix_reference_matches_explicit_expansion_precision() {
             query: None,
             language: Some("javascript".to_string()),
             case_insensitive: false,
-        },
+        }),
         size_max: None,
         count_min: None,
         count_max: None,
@@ -3447,7 +3448,7 @@ fn test_composite_any_uses_weakest_average_with_breadth_penalty() {
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         for_from_groups: false,
-        r#if: Condition::Raw {
+        r#if: Condition::Raw(RawQuery {
             exact: None,
             substr: Some("cmd".to_string()),
             regex: None,
@@ -3460,7 +3461,7 @@ fn test_composite_any_uses_weakest_average_with_breadth_penalty() {
             offset_range: None,
             section_offset: None,
             section_offset_range: None,
-        },
+        }),
         size_max: None,
         count_min: None,
         count_max: None,
@@ -3487,7 +3488,7 @@ fn test_composite_any_uses_weakest_average_with_breadth_penalty() {
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::Elf],
         for_from_groups: false,
-        r#if: Condition::Text {
+        r#if: Condition::Text(TextQuery {
             is_check: None,
             exact: Some("execve".to_string()),
             regex: None,
@@ -3501,7 +3502,7 @@ fn test_composite_any_uses_weakest_average_with_breadth_penalty() {
             section_offset_range: None,
             not: None,
             platforms: None,
-        },
+        }),
         size_max: None,
         count_min: None,
         count_max: None,
@@ -3528,7 +3529,7 @@ fn test_composite_any_uses_weakest_average_with_breadth_penalty() {
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::Pe],
         for_from_groups: false,
-        r#if: Condition::TreeSitter {
+        r#if: Condition::TreeSitter(TreeSitterQuery {
             kind: Some("call".to_string()),
             node: None,
             exact: Some("CreateRemoteThread".to_string()),
@@ -3537,7 +3538,7 @@ fn test_composite_any_uses_weakest_average_with_breadth_penalty() {
             query: None,
             language: Some("javascript".to_string()),
             case_insensitive: false,
-        },
+        }),
         size_max: None,
         count_min: None,
         count_max: None,
@@ -3636,7 +3637,7 @@ fn test_inherited_composite_scores_are_compressed() {
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::Pe],
         for_from_groups: false,
-        r#if: Condition::TreeSitter {
+        r#if: Condition::TreeSitter(TreeSitterQuery {
             kind: Some("call".to_string()),
             node: None,
             exact: Some("CreateRemoteThread".to_string()),
@@ -3645,7 +3646,7 @@ fn test_inherited_composite_scores_are_compressed() {
             query: None,
             language: Some("javascript".to_string()),
             case_insensitive: false,
-        },
+        }),
         size_max: None,
         count_min: None,
         count_max: None,

@@ -13,7 +13,13 @@
 
 use super::composite::collect_trait_refs_from_rule;
 use super::helpers::is_binary_file_type;
-use crate::composite_rules::{CompositeTrait, Condition, FileType, Platform, TraitDefinition};
+use crate::composite_rules::{
+    CommentQuery, EncodedQuery, HexQuery, LiteralQuery, MetricsQuery, PathQuery, RawQuery,
+    SectionQuery, SymbolQuery, TextQuery, TreeSitterQuery,
+};
+use crate::composite_rules::{
+    CompositeTrait, Condition, FileType, KvQuery, Platform, TraitDefinition,
+};
 use crate::types::Criticality;
 use std::collections::HashMap;
 
@@ -900,6 +906,28 @@ pub(crate) fn find_banned_directory_segments(trait_dirs: &[String]) -> Vec<(Stri
     violations
 }
 
+/// Forbid `content/` directories anywhere under `metadata/`.
+///
+/// `metadata/` holds neutral facts about what a file *is* — its structure,
+/// format, and provenance. A `content/` bucket describes what a file
+/// *contains or does*, which is behavior: intent belongs in `objectives/`, a
+/// neutral observable capability in `micro-behaviors/`. So a `content/`
+/// directory under `metadata/` is always a misfiling. (`content/` is fine
+/// elsewhere, e.g. `objectives/anti-static/obfuscation/encoding/content/`.)
+///
+/// Returns the offending directory paths.
+#[must_use]
+pub(crate) fn find_metadata_content_dirs(trait_dirs: &[String]) -> Vec<String> {
+    trait_dirs
+        .iter()
+        .filter(|d| {
+            d.starts_with("metadata/")
+                && d.split('/').any(|seg| seg.eq_ignore_ascii_case("content"))
+        })
+        .cloned()
+        .collect()
+}
+
 /// Find directories where a segment duplicates its immediate parent.
 ///
 /// e.g., "micro-behaviors/execution/execution/" or "objectives/credential-access/credentials/"
@@ -1324,53 +1352,53 @@ fn trait_targets_only_binaries(trait_def: &TraitDefinition) -> bool {
 /// on string/raw/hex conditions, or a Section type.
 fn condition_has_section_filter(cond: &Condition) -> bool {
     match cond {
-        Condition::Raw {
+        Condition::Raw(RawQuery {
             section,
             offset,
             offset_range,
             section_offset,
             section_offset_range,
             ..
-        }
-        | Condition::Text {
+        })
+        | Condition::Text(TextQuery {
             section,
             offset,
             offset_range,
             section_offset,
             section_offset_range,
             ..
-        }
-        | Condition::Literal {
+        })
+        | Condition::Literal(LiteralQuery {
             section,
             offset,
             offset_range,
             section_offset,
             section_offset_range,
             ..
-        }
-        | Condition::Encoded {
+        })
+        | Condition::Encoded(EncodedQuery {
             section,
             offset,
             offset_range,
             section_offset,
             section_offset_range,
             ..
-        }
-        | Condition::Hex {
+        })
+        | Condition::Hex(HexQuery {
             section,
             offset,
             offset_range,
             section_offset,
             section_offset_range,
             ..
-        } => {
+        }) => {
             section.is_some()
                 || offset.is_some()
                 || offset_range.is_some()
                 || section_offset.is_some()
                 || section_offset_range.is_some()
         }
-        Condition::Section { .. } => true,
+        Condition::Section(SectionQuery { .. }) => true,
         _ => false,
     }
 }
@@ -1381,11 +1409,11 @@ fn condition_has_section_filter(cond: &Condition) -> bool {
 fn condition_supports_section_filter(cond: &Condition) -> bool {
     matches!(
         cond,
-        Condition::Raw { .. }
-            | Condition::Text { .. }
-            | Condition::Literal { .. }
-            | Condition::Encoded { .. }
-            | Condition::Hex { .. }
+        Condition::Raw(RawQuery { .. })
+            | Condition::Text(TextQuery { .. })
+            | Condition::Literal(LiteralQuery { .. })
+            | Condition::Encoded(EncodedQuery { .. })
+            | Condition::Hex(HexQuery { .. })
     )
 }
 
@@ -1456,21 +1484,21 @@ const BROAD_FILETYPE_THRESHOLD_AST: usize = 1; // tree-sitter (single grammar)
 /// Per-matcher-type file-type cap. See [`BROAD_FILETYPE_THRESHOLD_TEXT`].
 fn filetype_cap_for_condition(cond: &Condition) -> usize {
     match cond {
-        Condition::Text { .. } | Condition::Literal { .. } | Condition::Comment { .. } => {
-            BROAD_FILETYPE_THRESHOLD_TEXT
-        }
+        Condition::Text(TextQuery { .. })
+        | Condition::Literal(LiteralQuery { .. })
+        | Condition::Comment(CommentQuery { .. }) => BROAD_FILETYPE_THRESHOLD_TEXT,
         // An alias/composite-leg reference (`if: { id: X }`) does no scanning of
         // its own — it delegates to the referenced trait, which is capped per its
         // own matcher. The wrapper's `for:` is only an evaluation gate, so it is
         // exempt from the file-type cap.
         Condition::Trait { .. } => usize::MAX,
-        Condition::Metrics { .. } => BROAD_FILETYPE_THRESHOLD_METRICS,
+        Condition::Metrics(MetricsQuery { .. }) => BROAD_FILETYPE_THRESHOLD_METRICS,
         // Full-path matchers use the dedicated path cap; `basename`/`dirname`-
         // scoped paths are filename-bounded and get the basename cap. A path
         // condition with no string matcher (exact/substr/regex/is) does no
         // scanning at all — it is a trivially-true type/size gate (e.g. the
         // `is-binary` building block), so it is exempt from the file-type cap.
-        Condition::Path {
+        Condition::Path(PathQuery {
             basename,
             dirname,
             exact,
@@ -1478,7 +1506,7 @@ fn filetype_cap_for_condition(cond: &Condition) -> usize {
             regex,
             is_check,
             ..
-        } => {
+        }) => {
             if exact.is_none() && substr.is_none() && regex.is_none() && is_check.is_none() {
                 usize::MAX
             } else if *basename || *dirname {
@@ -1487,14 +1515,16 @@ fn filetype_cap_for_condition(cond: &Condition) -> usize {
                 BROAD_FILETYPE_THRESHOLD_PATH
             }
         }
-        Condition::Raw { .. } => BROAD_FILETYPE_THRESHOLD_RAW,
-        Condition::Encoded { .. } => BROAD_FILETYPE_THRESHOLD_ENCODED,
-        Condition::Section { .. } => BROAD_FILETYPE_THRESHOLD_SECTION,
-        Condition::Symbol { .. } | Condition::Syscall { .. } => BROAD_FILETYPE_THRESHOLD_SYMBOL,
-        Condition::Hex { .. } => BROAD_FILETYPE_THRESHOLD_HEX,
+        Condition::Raw(RawQuery { .. }) => BROAD_FILETYPE_THRESHOLD_RAW,
+        Condition::Encoded(EncodedQuery { .. }) => BROAD_FILETYPE_THRESHOLD_ENCODED,
+        Condition::Section(SectionQuery { .. }) => BROAD_FILETYPE_THRESHOLD_SECTION,
+        Condition::Symbol(SymbolQuery { .. }) | Condition::Syscall { .. } => {
+            BROAD_FILETYPE_THRESHOLD_SYMBOL
+        }
+        Condition::Hex(HexQuery { .. }) => BROAD_FILETYPE_THRESHOLD_HEX,
         Condition::Yara { .. } => BROAD_FILETYPE_THRESHOLD_YARA,
-        Condition::Kv { .. } => BROAD_FILETYPE_THRESHOLD_VALUE,
-        Condition::TreeSitter { .. } => BROAD_FILETYPE_THRESHOLD_AST,
+        Condition::Kv(KvQuery { .. }) => BROAD_FILETYPE_THRESHOLD_VALUE,
+        Condition::TreeSitter(TreeSitterQuery { .. }) => BROAD_FILETYPE_THRESHOLD_AST,
     }
 }
 
@@ -1547,6 +1577,7 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     // shell script, package.json postinstall, setup.py cmdclass, Dockerfile RUN,
     // plist ProgramArguments, systemd ExecStart, etc.
     "text:objectives/command-and-control/dropper/delivery/download-execute/",
+    "text:objectives/command-and-control/dropper/delivery/hidden-stage/",
     // Hardcoded C2 URL string literals (IP-pinned URLs, .php panel endpoints)
     // appear in any source language — same rationale as communications/url/.
     // The directory's -encoded and -binary legs are already narrowly scoped.
@@ -1847,4 +1878,44 @@ pub(crate) fn find_meta_missing_section_filter(
             (t.id.clone(), source)
         })
         .collect()
+}
+
+#[cfg(test)]
+mod content_dir_tests {
+    use super::find_metadata_content_dirs;
+
+    fn dirs(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn flags_content_dirs_under_metadata_only() {
+        let input = dirs(&[
+            "metadata/binary/anomaly/content",
+            "metadata/binary/section/content",
+            "metadata/binary/section/metrics",
+            // content/ outside metadata/ is legitimate and must not be flagged.
+            "objectives/anti-static/obfuscation/encoding/content",
+            "micro-behaviors/data/embedded/hash-table",
+        ]);
+        let mut got = find_metadata_content_dirs(&input);
+        got.sort();
+        assert_eq!(
+            got,
+            vec![
+                "metadata/binary/anomaly/content".to_string(),
+                "metadata/binary/section/content".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn clean_metadata_tree_has_no_violations() {
+        let input = dirs(&[
+            "metadata/binary/anomaly/format",
+            "metadata/binary/section/metrics",
+            "metadata/vendor",
+        ]);
+        assert!(find_metadata_content_dirs(&input).is_empty());
+    }
 }

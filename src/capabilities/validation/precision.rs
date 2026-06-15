@@ -5,7 +5,11 @@
 //! precision for atomic traits and recursively for composite rules.
 
 use crate::composite_rules::{
-    CompositeTrait, Condition, FileType as RuleFileType, Platform, TraitDefinition,
+    CommentQuery, EncodedQuery, HexQuery, LiteralQuery, MetricsQuery, PathQuery, RawQuery,
+    SectionQuery, SymbolQuery, TextQuery, TreeSitterQuery,
+};
+use crate::composite_rules::{
+    CompositeTrait, Condition, FileType as RuleFileType, KvQuery, Platform, TraitDefinition,
     condition::{EncodingSpec, NotExceptionStructured},
 };
 use crate::types::Criticality;
@@ -297,13 +301,13 @@ fn score_condition(condition: &Condition) -> f32 {
     let mut score = 0.0f32;
 
     match condition {
-        Condition::Symbol {
+        Condition::Symbol(SymbolQuery {
             exact,
             substr,
             regex,
             platforms,
             ..
-        } => {
+        }) => {
             score += exact.as_deref().map(score_string_value).unwrap_or(0.0);
             score += substr.as_deref().map(score_string_value).unwrap_or(0.0);
             score += regex.as_deref().map(score_regex_value).unwrap_or(0.0);
@@ -314,7 +318,7 @@ fn score_condition(condition: &Condition) -> f32 {
             }
             score *= SYMBOL_MATCH_MULTIPLIER;
         }
-        Condition::Text {
+        Condition::Text(TextQuery {
             exact,
             substr,
             regex,
@@ -327,7 +331,7 @@ fn score_condition(condition: &Condition) -> f32 {
             section_offset,
             section_offset_range,
             ..
-        } => {
+        }) => {
             score += exact.as_deref().map(score_string_value).unwrap_or(0.0);
             score += substr.as_deref().map(score_string_value).unwrap_or(0.0);
             score += regex.as_deref().map(score_regex_value).unwrap_or(0.0);
@@ -349,7 +353,7 @@ fn score_condition(condition: &Condition) -> f32 {
             }
             score *= STRING_VALUE_MATCH_MULTIPLIER;
         }
-        Condition::Comment {
+        Condition::Comment(CommentQuery {
             exact,
             substr,
             regex,
@@ -357,7 +361,7 @@ fn score_condition(condition: &Condition) -> f32 {
             case_insensitive,
             is_check,
             ..
-        } => {
+        }) => {
             // Comment-scoped matching: same scoring as text, plus a section
             // bonus (it is implicitly section-filtered to comments).
             score += exact.as_deref().map(score_string_value).unwrap_or(0.0);
@@ -374,7 +378,7 @@ fn score_condition(condition: &Condition) -> f32 {
             }
             score *= STRING_VALUE_MATCH_MULTIPLIER;
         }
-        Condition::Literal {
+        Condition::Literal(LiteralQuery {
             exact,
             substr,
             regex,
@@ -387,7 +391,7 @@ fn score_condition(condition: &Condition) -> f32 {
             section_offset,
             section_offset_range,
             ..
-        } => {
+        }) => {
             score += exact.as_deref().map(score_string_value).unwrap_or(0.0);
             score += substr.as_deref().map(score_string_value).unwrap_or(0.0);
             score += regex.as_deref().map(score_regex_value).unwrap_or(0.0);
@@ -409,7 +413,7 @@ fn score_condition(condition: &Condition) -> f32 {
             }
             score *= AST_MATCH_MULTIPLIER;
         }
-        Condition::Raw {
+        Condition::Raw(RawQuery {
             exact,
             substr,
             regex,
@@ -422,7 +426,7 @@ fn score_condition(condition: &Condition) -> f32 {
             section_offset,
             section_offset_range,
             ..
-        } => {
+        }) => {
             score += exact.as_deref().map(score_string_value).unwrap_or(0.0);
             score += substr.as_deref().map(score_string_value).unwrap_or(0.0);
             score += regex.as_deref().map(score_regex_value).unwrap_or(0.0);
@@ -447,7 +451,7 @@ fn score_condition(condition: &Condition) -> f32 {
         Condition::Trait { id } => {
             score += score_string_value(id);
         }
-        Condition::TreeSitter {
+        Condition::TreeSitter(TreeSitterQuery {
             kind,
             node,
             exact,
@@ -456,7 +460,7 @@ fn score_condition(condition: &Condition) -> f32 {
             query,
             language,
             case_insensitive,
-        } => {
+        }) => {
             score += kind.as_deref().map(score_string_value).unwrap_or(0.0);
             score += node.as_deref().map(score_string_value).unwrap_or(0.0);
             score += exact.as_deref().map(score_string_value).unwrap_or(0.0);
@@ -488,20 +492,20 @@ fn score_condition(condition: &Condition) -> f32 {
             }
             // count_min, count_max, per_kb_min, per_kb_max now scored at trait level
         }
-        Condition::Metrics {
+        Condition::Metrics(MetricsQuery {
             field,
             min,
             max,
             min_size,
             max_size,
-        } => {
+        }) => {
             score += score_string_value(field);
             score += score_presence(min.as_ref());
             score += score_presence(max.as_ref());
             score += score_presence(min_size.as_ref());
             score += score_presence(max_size.as_ref());
         }
-        Condition::Hex {
+        Condition::Hex(HexQuery {
             pattern,
             not: _,
             offset,
@@ -509,7 +513,7 @@ fn score_condition(condition: &Condition) -> f32 {
             section,
             section_offset,
             section_offset_range,
-        } => {
+        }) => {
             score += score_string_value(pattern);
             score += hex_specificity_bonus(pattern);
             score += score_presence(offset.as_ref());
@@ -523,7 +527,7 @@ fn score_condition(condition: &Condition) -> f32 {
             }
             score *= HEX_MATCH_MULTIPLIER;
         }
-        Condition::Section {
+        Condition::Section(SectionQuery {
             exact,
             substr,
             regex,
@@ -541,7 +545,7 @@ fn score_condition(condition: &Condition) -> f32 {
             size_ratio_max,
             entropy_ratio_min,
             entropy_ratio_max,
-        } => {
+        }) => {
             score += exact.as_deref().map(score_string_value).unwrap_or(0.0);
             score += substr.as_deref().map(score_string_value).unwrap_or(0.0);
             score += regex.as_deref().map(score_regex_value).unwrap_or(0.0);
@@ -586,7 +590,7 @@ fn score_condition(condition: &Condition) -> f32 {
                 score += PARAM_UNIT;
             }
         }
-        Condition::Encoded {
+        Condition::Encoded(EncodedQuery {
             encoding,
             exact,
             substr,
@@ -600,7 +604,7 @@ fn score_condition(condition: &Condition) -> f32 {
             section_offset,
             section_offset_range,
             ..
-        } => {
+        }) => {
             score += exact.as_deref().map(score_string_value).unwrap_or(0.0);
             score += substr.as_deref().map(score_string_value).unwrap_or(0.0);
             score += regex.as_deref().map(score_regex_value).unwrap_or(0.0);
@@ -624,13 +628,13 @@ fn score_condition(condition: &Condition) -> f32 {
             }
             score *= ENCODED_MATCH_MULTIPLIER;
         }
-        Condition::Path {
+        Condition::Path(PathQuery {
             exact,
             substr,
             regex,
             case_insensitive,
             ..
-        } => {
+        }) => {
             score += exact.as_deref().map(score_string_value).unwrap_or(0.0);
             score += substr.as_deref().map(score_string_value).unwrap_or(0.0);
             score += regex.as_deref().map(score_regex_value).unwrap_or(0.0);
@@ -638,7 +642,7 @@ fn score_condition(condition: &Condition) -> f32 {
                 score *= CASE_INSENSITIVE_MULTIPLIER;
             }
         }
-        Condition::Kv {
+        Condition::Kv(KvQuery {
             path,
             exact,
             substr,
@@ -648,7 +652,7 @@ fn score_condition(condition: &Condition) -> f32 {
             size_min,
             size_max,
             ..
-        } => {
+        }) => {
             score += score_string_value(path);
             score += exact.as_deref().map(score_string_value).unwrap_or(0.0);
             score += substr.as_deref().map(score_string_value).unwrap_or(0.0);

@@ -14,8 +14,12 @@
 
 use super::shared::{MatchSignature, PatternLocation};
 use crate::composite_rules::{
-    CompositeTrait, Condition, FileType as RuleFileType, TraitDefinition, condition::EncodingSpec,
-    evaluators::build_regex,
+    CompositeTrait, Condition, FileType as RuleFileType, KvQuery, TraitDefinition,
+    condition::EncodingSpec, evaluators::build_regex,
+};
+use crate::composite_rules::{
+    EncodedQuery, LiteralQuery, PathQuery, RawQuery, SectionQuery, SymbolQuery, TextQuery,
+    TreeSitterQuery,
 };
 use crate::types::Criticality;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -268,40 +272,40 @@ pub(crate) fn find_duplicate_composite_rules(
 /// [`extract_patterns`].
 fn inline_condition_value(cond: &Condition) -> Option<(&'static str, &'static str, String)> {
     let (ct, mt, raw): (&'static str, &'static str, &String) = match cond {
-        Condition::Symbol { exact: Some(v), .. } => ("symbol", "exact", v),
-        Condition::Symbol {
+        Condition::Symbol(SymbolQuery { exact: Some(v), .. }) => ("symbol", "exact", v),
+        Condition::Symbol(SymbolQuery {
             substr: Some(v), ..
-        } => ("symbol", "substr", v),
-        Condition::Symbol { regex: Some(v), .. } => ("symbol", "regex", v),
-        Condition::Raw { exact: Some(v), .. } => ("raw", "exact", v),
-        Condition::Raw {
+        }) => ("symbol", "substr", v),
+        Condition::Symbol(SymbolQuery { regex: Some(v), .. }) => ("symbol", "regex", v),
+        Condition::Raw(RawQuery { exact: Some(v), .. }) => ("raw", "exact", v),
+        Condition::Raw(RawQuery {
             substr: Some(v), ..
-        } => ("raw", "substr", v),
-        Condition::Raw { word: Some(v), .. } => ("raw", "word", v),
-        Condition::Raw { regex: Some(v), .. } => ("raw", "regex", v),
-        Condition::Text { exact: Some(v), .. } => ("text", "exact", v),
-        Condition::Text {
+        }) => ("raw", "substr", v),
+        Condition::Raw(RawQuery { word: Some(v), .. }) => ("raw", "word", v),
+        Condition::Raw(RawQuery { regex: Some(v), .. }) => ("raw", "regex", v),
+        Condition::Text(TextQuery { exact: Some(v), .. }) => ("text", "exact", v),
+        Condition::Text(TextQuery {
             substr: Some(v), ..
-        } => ("text", "substr", v),
-        Condition::Text { word: Some(v), .. } => ("text", "word", v),
-        Condition::Text { regex: Some(v), .. } => ("text", "regex", v),
-        Condition::Literal { exact: Some(v), .. } => ("string_literal", "exact", v),
-        Condition::Literal {
+        }) => ("text", "substr", v),
+        Condition::Text(TextQuery { word: Some(v), .. }) => ("text", "word", v),
+        Condition::Text(TextQuery { regex: Some(v), .. }) => ("text", "regex", v),
+        Condition::Literal(LiteralQuery { exact: Some(v), .. }) => ("string_literal", "exact", v),
+        Condition::Literal(LiteralQuery {
             substr: Some(v), ..
-        } => ("string_literal", "substr", v),
-        Condition::Literal { word: Some(v), .. } => ("string_literal", "word", v),
-        Condition::Literal { regex: Some(v), .. } => ("string_literal", "regex", v),
-        Condition::Path { exact: Some(v), .. } => ("basename", "exact", v),
-        Condition::Path {
+        }) => ("string_literal", "substr", v),
+        Condition::Literal(LiteralQuery { word: Some(v), .. }) => ("string_literal", "word", v),
+        Condition::Literal(LiteralQuery { regex: Some(v), .. }) => ("string_literal", "regex", v),
+        Condition::Path(PathQuery { exact: Some(v), .. }) => ("basename", "exact", v),
+        Condition::Path(PathQuery {
             substr: Some(v), ..
-        } => ("basename", "substr", v),
-        Condition::Path { regex: Some(v), .. } => ("basename", "regex", v),
-        Condition::Encoded { exact: Some(v), .. } => ("encoded", "exact", v),
-        Condition::Encoded {
+        }) => ("basename", "substr", v),
+        Condition::Path(PathQuery { regex: Some(v), .. }) => ("basename", "regex", v),
+        Condition::Encoded(EncodedQuery { exact: Some(v), .. }) => ("encoded", "exact", v),
+        Condition::Encoded(EncodedQuery {
             substr: Some(v), ..
-        } => ("encoded", "substr", v),
-        Condition::Encoded { word: Some(v), .. } => ("encoded", "word", v),
-        Condition::Encoded { regex: Some(v), .. } => ("encoded", "regex", v),
+        }) => ("encoded", "substr", v),
+        Condition::Encoded(EncodedQuery { word: Some(v), .. }) => ("encoded", "word", v),
+        Condition::Encoded(EncodedQuery { regex: Some(v), .. }) => ("encoded", "regex", v),
         _ => return None,
     };
     let normalized = normalize_pattern_for_comparison(raw, mt == "regex");
@@ -734,7 +738,7 @@ fn extract_patterns(trait_def: &TraitDefinition) -> Vec<(String, PatternLocation
     // can filter on `condition_type` after extraction if they need to scope
     // their check to a subset of types.
     match &trait_def.r#if {
-        Condition::Symbol {
+        Condition::Symbol(SymbolQuery {
             exact,
             substr,
             regex,
@@ -742,7 +746,7 @@ fn extract_patterns(trait_def: &TraitDefinition) -> Vec<(String, PatternLocation
             kind,
             alias,
             ..
-        } => {
+        }) => {
             // The symbol `kind` discriminates the fact being matched: a call to
             // `exec` (`kind: call`) is a different atom from a function *named*
             // `exec` (`kind: function`) — they match distinct symbol facts. Fold
@@ -801,14 +805,14 @@ fn extract_patterns(trait_def: &TraitDefinition) -> Vec<(String, PatternLocation
                 add_pattern("symbol", "regex", format!("{v}{disc}"), None, None);
             }
         }
-        Condition::Raw {
+        Condition::Raw(RawQuery {
             exact,
             substr,
             word,
             regex,
             section,
             ..
-        } => {
+        }) => {
             let sec = section.clone();
             if let Some(v) = exact {
                 add_pattern("raw", "exact", v.clone(), sec.clone(), None);
@@ -823,14 +827,14 @@ fn extract_patterns(trait_def: &TraitDefinition) -> Vec<(String, PatternLocation
                 add_pattern("raw", "regex", v.clone(), sec.clone(), None);
             }
         }
-        Condition::Text {
+        Condition::Text(TextQuery {
             exact,
             substr,
             word,
             regex,
             section,
             ..
-        } => {
+        }) => {
             let sec = section.clone();
             if let Some(v) = exact {
                 add_pattern("text", "exact", v.clone(), sec.clone(), None);
@@ -845,14 +849,14 @@ fn extract_patterns(trait_def: &TraitDefinition) -> Vec<(String, PatternLocation
                 add_pattern("text", "regex", v.clone(), sec.clone(), None);
             }
         }
-        Condition::Literal {
+        Condition::Literal(LiteralQuery {
             exact,
             substr,
             word,
             regex,
             section,
             ..
-        } => {
+        }) => {
             let sec = section.clone();
             if let Some(v) = exact {
                 add_pattern("string_literal", "exact", v.clone(), sec.clone(), None);
@@ -867,12 +871,12 @@ fn extract_patterns(trait_def: &TraitDefinition) -> Vec<(String, PatternLocation
                 add_pattern("string_literal", "regex", v.clone(), sec.clone(), None);
             }
         }
-        Condition::Path {
+        Condition::Path(PathQuery {
             exact,
             substr,
             regex,
             ..
-        } => {
+        }) => {
             if let Some(v) = exact {
                 add_pattern("basename", "exact", v.clone(), None, None);
             }
@@ -883,7 +887,7 @@ fn extract_patterns(trait_def: &TraitDefinition) -> Vec<(String, PatternLocation
                 add_pattern("basename", "regex", v.clone(), None, None);
             }
         }
-        Condition::Encoded {
+        Condition::Encoded(EncodedQuery {
             exact,
             substr,
             word,
@@ -891,7 +895,7 @@ fn extract_patterns(trait_def: &TraitDefinition) -> Vec<(String, PatternLocation
             section,
             encoding,
             ..
-        } => {
+        }) => {
             let sec = section.clone();
             let enc = canonical_encoding_scope(encoding);
             if let Some(v) = exact {
@@ -1990,14 +1994,14 @@ fn collect_case_insensitive_overlap_issues(
         // `case_insensitive` flag. Symbol is excluded (no such flag — symbol
         // matching is always case-sensitive).
         match &trait_def.r#if {
-            Condition::Raw {
+            Condition::Raw(RawQuery {
                 exact,
                 substr,
                 word,
                 regex,
                 case_insensitive,
                 ..
-            } => {
+            }) => {
                 if let Some(v) = exact {
                     add_case_pattern("raw", "exact", v.clone(), *case_insensitive);
                 }
@@ -2011,14 +2015,14 @@ fn collect_case_insensitive_overlap_issues(
                     add_case_pattern("raw", "regex", v.clone(), *case_insensitive);
                 }
             }
-            Condition::Text {
+            Condition::Text(TextQuery {
                 exact,
                 substr,
                 word,
                 regex,
                 case_insensitive,
                 ..
-            } => {
+            }) => {
                 if let Some(v) = exact {
                     add_case_pattern("text", "exact", v.clone(), *case_insensitive);
                 }
@@ -2032,14 +2036,14 @@ fn collect_case_insensitive_overlap_issues(
                     add_case_pattern("text", "regex", v.clone(), *case_insensitive);
                 }
             }
-            Condition::Literal {
+            Condition::Literal(LiteralQuery {
                 exact,
                 substr,
                 word,
                 regex,
                 case_insensitive,
                 ..
-            } => {
+            }) => {
                 if let Some(v) = exact {
                     add_case_pattern("string_literal", "exact", v.clone(), *case_insensitive);
                 }
@@ -2053,14 +2057,14 @@ fn collect_case_insensitive_overlap_issues(
                     add_case_pattern("string_literal", "regex", v.clone(), *case_insensitive);
                 }
             }
-            Condition::Encoded {
+            Condition::Encoded(EncodedQuery {
                 exact,
                 substr,
                 word,
                 regex,
                 case_insensitive,
                 ..
-            } => {
+            }) => {
                 if let Some(v) = exact {
                     add_case_pattern("encoded", "exact", v.clone(), *case_insensitive);
                 }
@@ -2074,13 +2078,13 @@ fn collect_case_insensitive_overlap_issues(
                     add_case_pattern("encoded", "regex", v.clone(), *case_insensitive);
                 }
             }
-            Condition::Path {
+            Condition::Path(PathQuery {
                 exact,
                 substr,
                 regex,
                 case_insensitive,
                 ..
-            } => {
+            }) => {
                 if let Some(v) = exact {
                     add_case_pattern("basename", "exact", v.clone(), *case_insensitive);
                 }
@@ -2091,14 +2095,14 @@ fn collect_case_insensitive_overlap_issues(
                     add_case_pattern("basename", "regex", v.clone(), *case_insensitive);
                 }
             }
-            Condition::Section {
+            Condition::Section(SectionQuery {
                 exact,
                 substr,
                 word,
                 regex,
                 case_insensitive,
                 ..
-            } => {
+            }) => {
                 if let Some(v) = exact {
                     add_case_pattern("section", "exact", v.clone(), *case_insensitive);
                 }
@@ -2112,13 +2116,13 @@ fn collect_case_insensitive_overlap_issues(
                     add_case_pattern("section", "regex", v.clone(), *case_insensitive);
                 }
             }
-            Condition::Kv {
+            Condition::Kv(KvQuery {
                 exact,
                 substr,
                 regex,
                 case_insensitive,
                 ..
-            } => {
+            }) => {
                 if let Some(v) = exact {
                     add_case_pattern("value", "exact", v.clone(), *case_insensitive);
                 }
@@ -2129,13 +2133,13 @@ fn collect_case_insensitive_overlap_issues(
                     add_case_pattern("value", "regex", v.clone(), *case_insensitive);
                 }
             }
-            Condition::TreeSitter {
+            Condition::TreeSitter(TreeSitterQuery {
                 exact,
                 substr,
                 regex,
                 case_insensitive,
                 ..
-            } => {
+            }) => {
                 if let Some(v) = exact {
                     add_case_pattern("tree-sitter", "exact", v.clone(), *case_insensitive);
                 }
@@ -2395,12 +2399,16 @@ pub(crate) fn find_regex_literal_overlap_issues(
         };
 
         match &trait_def.r#if {
-            Condition::Symbol { regex: Some(r), .. } => add_regex("symbol", r.clone()),
-            Condition::Raw { regex: Some(r), .. } => add_regex("raw", r.clone()),
-            Condition::Text { regex: Some(r), .. } => add_regex("text", r.clone()),
-            Condition::Literal { regex: Some(r), .. } => add_regex("string_literal", r.clone()),
-            Condition::Path { regex: Some(r), .. } => add_regex("basename", r.clone()),
-            Condition::Encoded { regex: Some(r), .. } => add_regex("encoded", r.clone()),
+            Condition::Symbol(SymbolQuery { regex: Some(r), .. }) => add_regex("symbol", r.clone()),
+            Condition::Raw(RawQuery { regex: Some(r), .. }) => add_regex("raw", r.clone()),
+            Condition::Text(TextQuery { regex: Some(r), .. }) => add_regex("text", r.clone()),
+            Condition::Literal(LiteralQuery { regex: Some(r), .. }) => {
+                add_regex("string_literal", r.clone())
+            }
+            Condition::Path(PathQuery { regex: Some(r), .. }) => add_regex("basename", r.clone()),
+            Condition::Encoded(EncodedQuery { regex: Some(r), .. }) => {
+                add_regex("encoded", r.clone())
+            }
             _ => {}
         }
     }
@@ -2431,7 +2439,7 @@ pub(crate) fn find_regex_literal_overlap_issues(
         };
 
         match &trait_def.r#if {
-            Condition::Symbol { exact, substr, .. } => {
+            Condition::Symbol(SymbolQuery { exact, substr, .. }) => {
                 if let Some(e) = exact {
                     add_literal("symbol", "exact", e.clone());
                 }
@@ -2439,12 +2447,12 @@ pub(crate) fn find_regex_literal_overlap_issues(
                     add_literal("symbol", "substr", s.clone());
                 }
             }
-            Condition::Raw {
+            Condition::Raw(RawQuery {
                 exact,
                 substr,
                 word,
                 ..
-            } => {
+            }) => {
                 if let Some(e) = exact {
                     add_literal("raw", "exact", e.clone());
                 }
@@ -2455,12 +2463,12 @@ pub(crate) fn find_regex_literal_overlap_issues(
                     add_literal("raw", "word", w.clone());
                 }
             }
-            Condition::Text {
+            Condition::Text(TextQuery {
                 exact,
                 substr,
                 word,
                 ..
-            } => {
+            }) => {
                 if let Some(e) = exact {
                     add_literal("text", "exact", e.clone());
                 }
@@ -2471,12 +2479,12 @@ pub(crate) fn find_regex_literal_overlap_issues(
                     add_literal("text", "word", w.clone());
                 }
             }
-            Condition::Literal {
+            Condition::Literal(LiteralQuery {
                 exact,
                 substr,
                 word,
                 ..
-            } => {
+            }) => {
                 if let Some(e) = exact {
                     add_literal("string_literal", "exact", e.clone());
                 }
@@ -2487,7 +2495,7 @@ pub(crate) fn find_regex_literal_overlap_issues(
                     add_literal("string_literal", "word", w.clone());
                 }
             }
-            Condition::Path { exact, substr, .. } => {
+            Condition::Path(PathQuery { exact, substr, .. }) => {
                 if let Some(e) = exact {
                     add_literal("basename", "exact", e.clone());
                 }
@@ -2495,12 +2503,12 @@ pub(crate) fn find_regex_literal_overlap_issues(
                     add_literal("basename", "substr", s.clone());
                 }
             }
-            Condition::Encoded {
+            Condition::Encoded(EncodedQuery {
                 exact,
                 substr,
                 word,
                 ..
-            } => {
+            }) => {
                 if let Some(e) = exact {
                     add_literal("encoded", "exact", e.clone());
                 }
@@ -2818,35 +2826,35 @@ pub(crate) fn check_regex_alternative_subsets(
         };
 
         match &trait_def.r#if {
-            Condition::Symbol { regex: Some(r), .. } => {
+            Condition::Symbol(SymbolQuery { regex: Some(r), .. }) => {
                 // Symbol doesn't have case_insensitive flag, always case-sensitive
                 add_regex("symbol", r.clone(), false);
             }
-            Condition::Raw {
+            Condition::Raw(RawQuery {
                 regex: Some(r),
                 case_insensitive,
                 ..
-            } => add_regex("raw", r.clone(), *case_insensitive),
-            Condition::Text {
+            }) => add_regex("raw", r.clone(), *case_insensitive),
+            Condition::Text(TextQuery {
                 regex: Some(r),
                 case_insensitive,
                 ..
-            } => add_regex("text", r.clone(), *case_insensitive),
-            Condition::Literal {
+            }) => add_regex("text", r.clone(), *case_insensitive),
+            Condition::Literal(LiteralQuery {
                 regex: Some(r),
                 case_insensitive,
                 ..
-            } => add_regex("string_literal", r.clone(), *case_insensitive),
-            Condition::Path {
+            }) => add_regex("string_literal", r.clone(), *case_insensitive),
+            Condition::Path(PathQuery {
                 regex: Some(r),
                 case_insensitive,
                 ..
-            } => add_regex("basename", r.clone(), *case_insensitive),
-            Condition::Encoded {
+            }) => add_regex("basename", r.clone(), *case_insensitive),
+            Condition::Encoded(EncodedQuery {
                 regex: Some(r),
                 case_insensitive,
                 ..
-            } => add_regex("encoded", r.clone(), *case_insensitive),
+            }) => add_regex("encoded", r.clone(), *case_insensitive),
             _ => {}
         }
     }
@@ -3074,12 +3082,12 @@ pub(crate) fn validate_regex_overlap_with_literal(
 
     for t in trait_definitions {
         match &t.r#if {
-            Condition::Symbol { exact: Some(s), .. }
-            | Condition::Raw { exact: Some(s), .. }
-            | Condition::Text { exact: Some(s), .. }
-            | Condition::Literal { exact: Some(s), .. }
-            | Condition::Path { exact: Some(s), .. }
-            | Condition::Encoded { exact: Some(s), .. } => {
+            Condition::Symbol(SymbolQuery { exact: Some(s), .. })
+            | Condition::Raw(RawQuery { exact: Some(s), .. })
+            | Condition::Text(TextQuery { exact: Some(s), .. })
+            | Condition::Literal(LiteralQuery { exact: Some(s), .. })
+            | Condition::Path(PathQuery { exact: Some(s), .. })
+            | Condition::Encoded(EncodedQuery { exact: Some(s), .. }) => {
                 literal_patterns.push((
                     s.clone(),
                     "exact".to_string(),
@@ -3088,24 +3096,24 @@ pub(crate) fn validate_regex_overlap_with_literal(
                     t.r#for.clone(),
                 ));
             }
-            Condition::Symbol {
+            Condition::Symbol(SymbolQuery {
                 substr: Some(s), ..
-            }
-            | Condition::Raw {
+            })
+            | Condition::Raw(RawQuery {
                 substr: Some(s), ..
-            }
-            | Condition::Text {
+            })
+            | Condition::Text(TextQuery {
                 substr: Some(s), ..
-            }
-            | Condition::Literal {
+            })
+            | Condition::Literal(LiteralQuery {
                 substr: Some(s), ..
-            }
-            | Condition::Path {
+            })
+            | Condition::Path(PathQuery {
                 substr: Some(s), ..
-            }
-            | Condition::Encoded {
+            })
+            | Condition::Encoded(EncodedQuery {
                 substr: Some(s), ..
-            } => {
+            }) => {
                 literal_patterns.push((
                     s.clone(),
                     "substr".to_string(),
@@ -3121,12 +3129,12 @@ pub(crate) fn validate_regex_overlap_with_literal(
     // Check regex patterns against literal patterns
     for t in trait_definitions {
         let regex_pattern = match &t.r#if {
-            Condition::Symbol { regex: Some(r), .. }
-            | Condition::Raw { regex: Some(r), .. }
-            | Condition::Text { regex: Some(r), .. }
-            | Condition::Literal { regex: Some(r), .. }
-            | Condition::Path { regex: Some(r), .. }
-            | Condition::Encoded { regex: Some(r), .. } => Some(r),
+            Condition::Symbol(SymbolQuery { regex: Some(r), .. })
+            | Condition::Raw(RawQuery { regex: Some(r), .. })
+            | Condition::Text(TextQuery { regex: Some(r), .. })
+            | Condition::Literal(LiteralQuery { regex: Some(r), .. })
+            | Condition::Path(PathQuery { regex: Some(r), .. })
+            | Condition::Encoded(EncodedQuery { regex: Some(r), .. }) => Some(r),
             _ => None,
         };
 
@@ -3440,12 +3448,12 @@ pub(crate) fn find_alternation_merge_candidates(
 
     for t in trait_definitions {
         let regex_pattern = match &t.r#if {
-            Condition::Raw { regex: Some(r), .. }
-            | Condition::Symbol { regex: Some(r), .. }
-            | Condition::Text { regex: Some(r), .. }
-            | Condition::Literal { regex: Some(r), .. }
-            | Condition::Path { regex: Some(r), .. }
-            | Condition::Encoded { regex: Some(r), .. } => Some(r.clone()),
+            Condition::Raw(RawQuery { regex: Some(r), .. })
+            | Condition::Symbol(SymbolQuery { regex: Some(r), .. })
+            | Condition::Text(TextQuery { regex: Some(r), .. })
+            | Condition::Literal(LiteralQuery { regex: Some(r), .. })
+            | Condition::Path(PathQuery { regex: Some(r), .. })
+            | Condition::Encoded(EncodedQuery { regex: Some(r), .. }) => Some(r.clone()),
             _ => None,
         };
 
@@ -3541,7 +3549,7 @@ pub(crate) fn find_alternation_merge_candidates(
 /// Extract matching signature from a Condition (for string/raw collision detection)
 fn extract_match_signature(condition: &Condition) -> Option<(bool, MatchSignature)> {
     match condition {
-        Condition::Text {
+        Condition::Text(TextQuery {
             exact,
             substr,
             regex,
@@ -3554,7 +3562,7 @@ fn extract_match_signature(condition: &Condition) -> Option<(bool, MatchSignatur
             section_offset,
             section_offset_range,
             ..
-        } => Some((
+        }) => Some((
             true, // is_string_type
             MatchSignature {
                 exact: exact.clone(),
@@ -3570,7 +3578,7 @@ fn extract_match_signature(condition: &Condition) -> Option<(bool, MatchSignatur
                 section_offset_range: *section_offset_range,
             },
         )),
-        Condition::Raw {
+        Condition::Raw(RawQuery {
             exact,
             substr,
             regex,
@@ -3583,7 +3591,7 @@ fn extract_match_signature(condition: &Condition) -> Option<(bool, MatchSignatur
             section_offset,
             section_offset_range,
             ..
-        } => Some((
+        }) => Some((
             false, // is_content_type
             MatchSignature {
                 exact: exact.clone(),
@@ -3639,13 +3647,13 @@ pub(crate) fn check_basename_pattern_duplicates(
 
     for trait_def in trait_definitions {
         // Only process basename conditions
-        if let Condition::Path {
+        if let Condition::Path(PathQuery {
             exact,
             substr,
             regex,
             case_insensitive,
             ..
-        } = &trait_def.r#if
+        }) = &trait_def.r#if
         {
             // Skip basename conditions that don't actually have any patterns
             // (These can occur when a trait only has size constraints)
@@ -3943,10 +3951,14 @@ pub(crate) fn find_structural_regex_duplicates(
         }
 
         let (regex_opt, scope, condition_type) = match &trait_def.r#if {
-            Condition::Text { regex, .. } => (regex.as_ref(), Scope::Body, "text"),
-            Condition::Literal { regex, .. } => (regex.as_ref(), Scope::Body, "string_literal"),
-            Condition::Raw { regex, .. } => (regex.as_ref(), Scope::Raw, "raw"),
-            Condition::Symbol { regex, .. } => (regex.as_ref(), Scope::Symbol, "symbol"),
+            Condition::Text(TextQuery { regex, .. }) => (regex.as_ref(), Scope::Body, "text"),
+            Condition::Literal(LiteralQuery { regex, .. }) => {
+                (regex.as_ref(), Scope::Body, "string_literal")
+            }
+            Condition::Raw(RawQuery { regex, .. }) => (regex.as_ref(), Scope::Raw, "raw"),
+            Condition::Symbol(SymbolQuery { regex, .. }) => {
+                (regex.as_ref(), Scope::Symbol, "symbol")
+            }
             _ => continue,
         };
         let Some(regex) = regex_opt else { continue };
@@ -3957,7 +3969,7 @@ pub(crate) fn find_structural_regex_duplicates(
             .map(|ft| format!("{:?}", ft).to_lowercase())
             .collect();
 
-        let section = if let Condition::Raw { section, .. } = &trait_def.r#if {
+        let section = if let Condition::Raw(RawQuery { section, .. }) = &trait_def.r#if {
             section.clone()
         } else {
             None

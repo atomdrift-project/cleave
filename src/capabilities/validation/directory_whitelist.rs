@@ -683,6 +683,7 @@ const ALLOWED_METADATA: &[&str] = &[
     "document",  // Document format internals (office, PDF, RTF, OLE, HTML)
     "file",      // File-level observables (magic bytes, extension, encoded content)
     "hardening", // Security hardening features (sandbox, seccomp, pledge)
+    "image",     // Image-specific neutral measurements (entropy, edge density)
     "import",    // Dependencies/imports (auto-generated)
     "lang",      // Language, compiler, encoding detection
     "library",   // Library/framework detection (react, vue, jquery, etc.)
@@ -740,6 +741,15 @@ const ALLOWED_METADATA_FILE: &[&str] = &[
     "extension", // File extension classification
     "magic",     // Magic byte signatures
     "text",      // Text/data format identification (JSON, makefile)
+];
+
+/// Allowed subdirectories in metadata/image/
+///
+/// Image-specific neutral measurements. File identity (PNG/JPEG magic,
+/// extension) belongs in metadata/file/. Document container image references
+/// belong in metadata/document/.
+const ALLOWED_METADATA_IMAGE: &[&str] = &[
+    "metrics", // Pixel/channel/statistical image measurements
 ];
 
 /// Allowed subdirectories in metadata/lang/
@@ -1232,6 +1242,7 @@ pub(crate) fn validate_directory_structure(traits_path: &Path) -> Result<(), Vec
         ("binary", ALLOWED_METADATA_BINARY),
         ("document", ALLOWED_METADATA_DOCUMENT),
         ("file", ALLOWED_METADATA_FILE),
+        ("image", ALLOWED_METADATA_IMAGE),
         ("lang", ALLOWED_METADATA_LANG),
         ("package", ALLOWED_METADATA_PACKAGE),
         ("signed", ALLOWED_METADATA_SIGNED),
@@ -1684,6 +1695,32 @@ mod tests {
         assert!(
             errors.iter().any(|e| e.contains("metadata/binary/pe")),
             "Should flag 'pe' as invalid under binary/: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn test_allows_image_metrics_but_not_file_identity() {
+        let temp_dir = TempDir::new().unwrap();
+        let traits_path = temp_dir.path();
+
+        std::fs::create_dir_all(traits_path.join("metadata/image/metrics")).unwrap();
+        assert!(
+            validate_directory_structure(traits_path).is_ok(),
+            "metadata/image/metrics should be allowed for neutral image measurements"
+        );
+
+        std::fs::create_dir_all(traits_path.join("metadata/image/magic")).unwrap();
+        let result = validate_directory_structure(traits_path);
+        assert!(
+            result.is_err(),
+            "metadata/image/magic should not duplicate metadata/file/magic"
+        );
+
+        let errors = result.unwrap_err();
+        assert!(
+            errors.iter().any(|e| e.contains("metadata/image/magic")),
+            "Should flag 'magic' as invalid under image/: {:?}",
             errors
         );
     }

@@ -85,6 +85,7 @@ fn inspect_one(target: &str, tree: Option<&cli::InspectTree>) -> Result<Value> {
             "metrics": parsed.metrics(),
             "sections": parsed.sections(),
             "symbols": parsed.symbols(),
+            "references": parsed.references(),
             "errors": parsed.errors(),
         }),
         Some(cli::InspectTree::Fileid { .. }) => serde_json::to_value(parsed.fileid())?,
@@ -101,6 +102,7 @@ fn inspect_one(target: &str, tree: Option<&cli::InspectTree>) -> Result<Value> {
         Some(cli::InspectTree::Members { .. }) => kind_to_value(SymbolKind::Member)?,
         Some(cli::InspectTree::Binds { .. }) => kind_to_value(SymbolKind::Bind)?,
         Some(cli::InspectTree::Identifiers { .. }) => kind_to_value(SymbolKind::Identifier)?,
+        Some(cli::InspectTree::References { .. }) => serde_json::to_value(parsed.references())?,
         Some(cli::InspectTree::Errors { .. }) => serde_json::to_value(parsed.errors())?,
     })
 }

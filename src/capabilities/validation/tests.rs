@@ -8,7 +8,7 @@
 #[cfg(test)]
 mod precision_tests {
     use crate::capabilities::validation::precision::calculate_trait_precision;
-    use crate::composite_rules::{Arch, Condition, FileType, Platform, TraitDefinition};
+    use crate::composite_rules::{Arch, Condition, FileType, Platform, RawQuery, TraitDefinition};
     use std::path::PathBuf;
 
     fn create_minimal_trait(condition: Condition) -> TraitDefinition {
@@ -44,7 +44,7 @@ mod precision_tests {
     #[test]
     #[ignore]
     fn test_precision_count_min_scored() {
-        let mut trait_def = create_minimal_trait(Condition::Raw {
+        let mut trait_def = create_minimal_trait(Condition::Raw(RawQuery {
             exact: Some("test".to_string()),
             substr: None,
             regex: None,
@@ -57,7 +57,7 @@ mod precision_tests {
             offset_range: None,
             section_offset: None,
             section_offset_range: None,
-        });
+        }));
         let base = calculate_trait_precision(&trait_def);
 
         trait_def.count_min = Some(3);
@@ -76,7 +76,7 @@ mod precision_tests {
     #[test]
     #[ignore]
     fn test_precision_density_scored() {
-        let mut trait_def = create_minimal_trait(Condition::Raw {
+        let mut trait_def = create_minimal_trait(Condition::Raw(RawQuery {
             exact: Some("test".to_string()),
             substr: None,
             regex: None,
@@ -89,7 +89,7 @@ mod precision_tests {
             offset_range: None,
             section_offset: None,
             section_offset_range: None,
-        });
+        }));
         let base = calculate_trait_precision(&trait_def);
 
         trait_def.per_kb_min = Some(1.0);
@@ -112,7 +112,10 @@ mod duplicate_tests {
     use super::super::duplicates::*;
     use super::super::helpers::extract_tier;
     use crate::composite_rules::condition::EncodingSpec;
-    use crate::composite_rules::{Arch, Condition, FileType, Platform, TraitDefinition};
+    use crate::composite_rules::{
+        Arch, Condition, EncodedQuery, FileType, LiteralQuery, PathQuery, Platform, RawQuery,
+        SymbolQuery, TextQuery, TraitDefinition,
+    };
     use std::path::PathBuf;
 
     // ========================================================================
@@ -185,7 +188,7 @@ mod duplicate_tests {
     ) -> TraitDefinition {
         create_test_trait(
             id,
-            Condition::Raw {
+            Condition::Raw(RawQuery {
                 exact: Some(pattern.to_string()),
                 substr: None,
                 regex: None,
@@ -198,7 +201,7 @@ mod duplicate_tests {
                 offset_range: None,
                 section_offset: None,
                 section_offset_range: None,
-            },
+            }),
             for_types,
             file_path,
         )
@@ -214,7 +217,7 @@ mod duplicate_tests {
     ) -> TraitDefinition {
         create_test_trait(
             id,
-            Condition::Text {
+            Condition::Text(TextQuery {
                 exact: Some(pattern.to_string()),
                 substr: None,
                 regex: None,
@@ -228,7 +231,7 @@ mod duplicate_tests {
                 offset_range: None,
                 section_offset: None,
                 section_offset_range: None,
-            },
+            }),
             for_types,
             file_path,
         )
@@ -244,7 +247,7 @@ mod duplicate_tests {
     ) -> TraitDefinition {
         create_test_trait(
             id,
-            Condition::Literal {
+            Condition::Literal(LiteralQuery {
                 kind: None,
                 exact: Some(pattern.to_string()),
                 substr: None,
@@ -261,7 +264,7 @@ mod duplicate_tests {
                 offset_range: None,
                 section_offset: None,
                 section_offset_range: None,
-            },
+            }),
             for_types,
             file_path,
         )
@@ -277,7 +280,7 @@ mod duplicate_tests {
     ) -> TraitDefinition {
         create_test_trait(
             id,
-            Condition::Raw {
+            Condition::Raw(RawQuery {
                 exact: None,
                 substr: Some(pattern.to_string()),
                 regex: None,
@@ -290,7 +293,7 @@ mod duplicate_tests {
                 offset_range: None,
                 section_offset: None,
                 section_offset_range: None,
-            },
+            }),
             for_types,
             file_path,
         )
@@ -305,7 +308,7 @@ mod duplicate_tests {
     ) -> TraitDefinition {
         create_test_trait(
             id,
-            Condition::Encoded {
+            Condition::Encoded(EncodedQuery {
                 exact: None,
                 substr: Some(pattern.to_string()),
                 regex: None,
@@ -319,7 +322,7 @@ mod duplicate_tests {
                 offset_range: None,
                 section_offset: None,
                 section_offset_range: None,
-            },
+            }),
             for_types,
             file_path,
         )
@@ -335,7 +338,7 @@ mod duplicate_tests {
     ) -> TraitDefinition {
         create_test_trait(
             id,
-            Condition::Raw {
+            Condition::Raw(RawQuery {
                 exact: None,
                 substr: None,
                 regex: Some(pattern.to_string()),
@@ -348,7 +351,7 @@ mod duplicate_tests {
                 offset_range: None,
                 section_offset: None,
                 section_offset_range: None,
-            },
+            }),
             for_types,
             file_path,
         )
@@ -363,7 +366,7 @@ mod duplicate_tests {
     ) -> TraitDefinition {
         create_test_trait(
             id,
-            Condition::Symbol {
+            Condition::Symbol(SymbolQuery {
                 exact: Some(pattern.to_string()),
                 substr: None,
                 regex: None,
@@ -374,7 +377,7 @@ mod duplicate_tests {
                 args: None,
                 alias: None,
                 not: None,
-            },
+            }),
             for_types,
             file_path,
         )
@@ -390,7 +393,7 @@ mod duplicate_tests {
     ) -> TraitDefinition {
         create_test_trait(
             id,
-            Condition::Raw {
+            Condition::Raw(RawQuery {
                 exact: None,
                 substr: None,
                 regex: Some(pattern.to_string()),
@@ -403,7 +406,7 @@ mod duplicate_tests {
                 section_offset: None,
                 section_offset_range: None,
                 not: None,
-            },
+            }),
             for_types,
             file_path,
         )
@@ -418,7 +421,7 @@ mod duplicate_tests {
     ) -> TraitDefinition {
         create_test_trait(
             id,
-            Condition::Raw {
+            Condition::Raw(RawQuery {
                 exact: None,
                 substr: None,
                 regex: Some(pattern.to_string()),
@@ -431,7 +434,7 @@ mod duplicate_tests {
                 section_offset: None,
                 section_offset_range: None,
                 not: None,
-            },
+            }),
             for_types,
             file_path,
         )
@@ -445,7 +448,7 @@ mod duplicate_tests {
     ) -> TraitDefinition {
         create_test_trait(
             id,
-            Condition::Path {
+            Condition::Path(PathQuery {
                 exact: None,
                 substr: None,
                 regex: Some(pattern.to_string()),
@@ -453,7 +456,7 @@ mod duplicate_tests {
                 is_check: None,
                 basename: true,
                 dirname: false,
-            },
+            }),
             for_types,
             file_path,
         )
@@ -1221,7 +1224,7 @@ mod duplicate_tests {
         // Same exact pattern without any carveout -> should warn
         let trait1 = create_test_trait_with_conf_crit(
             "test::a",
-            Condition::Raw {
+            Condition::Raw(RawQuery {
                 exact: Some("duplicate".to_string()),
                 substr: None,
                 regex: None,
@@ -1234,7 +1237,7 @@ mod duplicate_tests {
                 section_offset: None,
                 section_offset_range: None,
                 not: None,
-            },
+            }),
             vec![FileType::All],
             "file1.yaml",
             0.8,
@@ -1243,7 +1246,7 @@ mod duplicate_tests {
 
         let trait2 = create_test_trait_with_conf_crit(
             "test::b",
-            Condition::Raw {
+            Condition::Raw(RawQuery {
                 exact: Some("duplicate".to_string()),
                 substr: None,
                 regex: None,
@@ -1256,7 +1259,7 @@ mod duplicate_tests {
                 section_offset: None,
                 section_offset_range: None,
                 not: None,
-            },
+            }),
             vec![FileType::All],
             "file2.yaml",
             0.9,
@@ -1276,7 +1279,7 @@ mod duplicate_tests {
         // Hex-encoded duplicate with same conf/crit -> should warn
         let trait1 = create_test_trait_with_conf_crit(
             "test::a",
-            Condition::Raw {
+            Condition::Raw(RawQuery {
                 exact: Some("AB".to_string()),
                 substr: None,
                 regex: None,
@@ -1289,7 +1292,7 @@ mod duplicate_tests {
                 section_offset: None,
                 section_offset_range: None,
                 not: None,
-            },
+            }),
             vec![FileType::All],
             "file1.yaml",
             0.8,
@@ -1298,7 +1301,7 @@ mod duplicate_tests {
 
         let trait2 = create_test_trait_with_conf_crit(
             "test::b",
-            Condition::Raw {
+            Condition::Raw(RawQuery {
                 exact: Some("\\x41B".to_string()), // Normalizes to "AB"
                 substr: None,
                 regex: None,
@@ -1311,7 +1314,7 @@ mod duplicate_tests {
                 section_offset: None,
                 section_offset_range: None,
                 not: None,
-            },
+            }),
             vec![FileType::All],
             "file2.yaml",
             0.8,
@@ -1331,7 +1334,7 @@ mod duplicate_tests {
         // Same normalized pattern "test", but original values differ by >2 chars AND confidence differs by >=0.2 -> NO warning
         let trait1 = create_test_trait_with_conf_crit(
             "test::a",
-            Condition::Raw {
+            Condition::Raw(RawQuery {
                 exact: Some("test".to_string()), // 4 chars
                 substr: None,
                 regex: None,
@@ -1344,7 +1347,7 @@ mod duplicate_tests {
                 section_offset: None,
                 section_offset_range: None,
                 not: None,
-            },
+            }),
             vec![FileType::All],
             "file1.yaml",
             0.5, // conf = 0.5
@@ -1353,7 +1356,7 @@ mod duplicate_tests {
 
         let trait2 = create_test_trait_with_conf_crit(
             "test::b",
-            Condition::Raw {
+            Condition::Raw(RawQuery {
                 exact: Some("\\x74\\x65\\x73\\x74".to_string()), // 16 chars hex-encoded "test" (diff = 12 > 2)
                 substr: None,
                 regex: None,
@@ -1366,7 +1369,7 @@ mod duplicate_tests {
                 section_offset: None,
                 section_offset_range: None,
                 not: None,
-            },
+            }),
             vec![FileType::All],
             "file2.yaml",
             0.9, // conf = 0.9 (diff = 0.4 >= 0.2)
@@ -1385,7 +1388,7 @@ mod duplicate_tests {
         // Same normalized "data", but original differs by >2 chars AND criticality differs -> NO warning
         let trait1 = create_test_trait_with_conf_crit(
             "test::a",
-            Condition::Raw {
+            Condition::Raw(RawQuery {
                 exact: Some("data".to_string()), // 4 chars
                 substr: None,
                 regex: None,
@@ -1398,7 +1401,7 @@ mod duplicate_tests {
                 section_offset: None,
                 section_offset_range: None,
                 not: None,
-            },
+            }),
             vec![FileType::All],
             "file1.yaml",
             0.8,
@@ -1407,7 +1410,7 @@ mod duplicate_tests {
 
         let trait2 = create_test_trait_with_conf_crit(
             "test::b",
-            Condition::Raw {
+            Condition::Raw(RawQuery {
                 exact: Some("\\x64ata".to_string()), // 7 chars hex-encoded first char (diff = 3 > 2)
                 substr: None,
                 regex: None,
@@ -1420,7 +1423,7 @@ mod duplicate_tests {
                 section_offset: None,
                 section_offset_range: None,
                 not: None,
-            },
+            }),
             vec![FileType::All],
             "file2.yaml",
             0.8,
@@ -1440,7 +1443,7 @@ mod duplicate_tests {
         // Carveout requires BOTH >2 char diff AND conf/crit difference
         let trait1 = create_test_trait_with_conf_crit(
             "test::a",
-            Condition::Raw {
+            Condition::Raw(RawQuery {
                 exact: Some("pattern".to_string()), // 7 chars
                 substr: None,
                 regex: None,
@@ -1453,7 +1456,7 @@ mod duplicate_tests {
                 section_offset: None,
                 section_offset_range: None,
                 not: None,
-            },
+            }),
             vec![FileType::All],
             "file1.yaml",
             0.5,
@@ -1462,7 +1465,7 @@ mod duplicate_tests {
 
         let trait2 = create_test_trait_with_conf_crit(
             "test::b",
-            Condition::Raw {
+            Condition::Raw(RawQuery {
                 exact: Some("pattern".to_string()), // 7 chars (diff = 0, not >2)
                 substr: None,
                 regex: None,
@@ -1475,7 +1478,7 @@ mod duplicate_tests {
                 section_offset: None,
                 section_offset_range: None,
                 not: None,
-            },
+            }),
             vec![FileType::All],
             "file2.yaml",
             0.9, // conf diff = 0.4 >= 0.2 (but pattern diff = 0, so carveout doesn't apply)
@@ -1495,7 +1498,7 @@ mod duplicate_tests {
         // Same normalized "value", original differs by >2 chars BUT confidence diff <0.2 and crit same -> should warn
         let trait1 = create_test_trait_with_conf_crit(
             "test::a",
-            Condition::Raw {
+            Condition::Raw(RawQuery {
                 exact: Some("value".to_string()), // 5 chars
                 substr: None,
                 regex: None,
@@ -1508,7 +1511,7 @@ mod duplicate_tests {
                 section_offset: None,
                 section_offset_range: None,
                 not: None,
-            },
+            }),
             vec![FileType::All],
             "file1.yaml",
             0.8,
@@ -1517,7 +1520,7 @@ mod duplicate_tests {
 
         let trait2 = create_test_trait_with_conf_crit(
             "test::b",
-            Condition::Raw {
+            Condition::Raw(RawQuery {
                 exact: Some("\\x76\\x61lue".to_string()), // 11 chars, first 2 chars hex-encoded (diff = 6 > 2)
                 substr: None,
                 regex: None,
@@ -1530,7 +1533,7 @@ mod duplicate_tests {
                 section_offset: None,
                 section_offset_range: None,
                 not: None,
-            },
+            }),
             vec![FileType::All],
             "file2.yaml",
             0.9,                                // conf diff = 0.1 < 0.2
@@ -1550,7 +1553,7 @@ mod duplicate_tests {
         // Three traits, all normalize to "name", all pairs meet carveout criteria -> NO warnings
         let trait1 = create_test_trait_with_conf_crit(
             "test::a",
-            Condition::Raw {
+            Condition::Raw(RawQuery {
                 exact: Some("name".to_string()), // 4 chars
                 substr: None,
                 regex: None,
@@ -1563,7 +1566,7 @@ mod duplicate_tests {
                 section_offset: None,
                 section_offset_range: None,
                 not: None,
-            },
+            }),
             vec![FileType::All],
             "file1.yaml",
             0.5,
@@ -1572,7 +1575,7 @@ mod duplicate_tests {
 
         let trait2 = create_test_trait_with_conf_crit(
             "test::b",
-            Condition::Raw {
+            Condition::Raw(RawQuery {
                 exact: Some("\\x6e\\x61me".to_string()), // 11 chars (diff from trait1 = 7 > 2)
                 substr: None,
                 regex: None,
@@ -1585,7 +1588,7 @@ mod duplicate_tests {
                 section_offset: None,
                 section_offset_range: None,
                 not: None,
-            },
+            }),
             vec![FileType::All],
             "file2.yaml",
             0.9, // conf diff from trait1 = 0.4 >= 0.2
@@ -1594,7 +1597,7 @@ mod duplicate_tests {
 
         let trait3 = create_test_trait_with_conf_crit(
             "test::c",
-            Condition::Raw {
+            Condition::Raw(RawQuery {
                 exact: Some("\\x6e\\x61\\x6d\\x65".to_string()), // 16 chars, all hex-encoded (diff from trait1 = 12, from trait2 = 5 > 2)
                 substr: None,
                 regex: None,
@@ -1607,7 +1610,7 @@ mod duplicate_tests {
                 section_offset: None,
                 section_offset_range: None,
                 not: None,
-            },
+            }),
             vec![FileType::All],
             "file3.yaml",
             0.5,
@@ -1626,7 +1629,7 @@ mod duplicate_tests {
         // Three traits, all normalize to "code", one pair doesn't meet carveout -> should warn
         let trait1 = create_test_trait_with_conf_crit(
             "test::a",
-            Condition::Raw {
+            Condition::Raw(RawQuery {
                 exact: Some("code".to_string()), // 4 chars
                 substr: None,
                 regex: None,
@@ -1639,7 +1642,7 @@ mod duplicate_tests {
                 section_offset: None,
                 section_offset_range: None,
                 not: None,
-            },
+            }),
             vec![FileType::All],
             "file1.yaml",
             0.8,
@@ -1648,7 +1651,7 @@ mod duplicate_tests {
 
         let trait2 = create_test_trait_with_conf_crit(
             "test::b",
-            Condition::Raw {
+            Condition::Raw(RawQuery {
                 exact: Some("\\x63\\x6fde".to_string()), // 11 chars (diff = 7 > 2)
                 substr: None,
                 regex: None,
@@ -1661,7 +1664,7 @@ mod duplicate_tests {
                 section_offset: None,
                 section_offset_range: None,
                 not: None,
-            },
+            }),
             vec![FileType::All],
             "file2.yaml",
             0.9,                                // conf diff from trait1 = 0.1 < 0.2
@@ -1670,7 +1673,7 @@ mod duplicate_tests {
 
         let trait3 = create_test_trait_with_conf_crit(
             "test::c",
-            Condition::Raw {
+            Condition::Raw(RawQuery {
                 exact: Some("\\x63\\x6f\\x64\\x65".to_string()), // 16 chars (diff from trait1 = 12 > 2)
                 substr: None,
                 regex: None,
@@ -1683,7 +1686,7 @@ mod duplicate_tests {
                 section_offset: None,
                 section_offset_range: None,
                 not: None,
-            },
+            }),
             vec![FileType::All],
             "file3.yaml",
             0.5,
@@ -1735,7 +1738,7 @@ mod duplicate_tests {
         let traits = vec![
             create_test_trait(
                 "test1",
-                Condition::Path {
+                Condition::Path(PathQuery {
                     exact: Some("setup.py".to_string()),
                     substr: None,
                     regex: None,
@@ -1743,13 +1746,13 @@ mod duplicate_tests {
                     is_check: None,
                     basename: true,
                     dirname: false,
-                },
+                }),
                 vec![FileType::Python],
                 "file1.yaml",
             ),
             create_test_trait(
                 "test2",
-                Condition::Path {
+                Condition::Path(PathQuery {
                     exact: Some("setup.py".to_string()),
                     substr: None,
                     regex: None,
@@ -1757,7 +1760,7 @@ mod duplicate_tests {
                     is_check: None,
                     basename: true,
                     dirname: false,
-                },
+                }),
                 vec![FileType::Python],
                 "file2.yaml",
             ),
@@ -1777,7 +1780,7 @@ mod duplicate_tests {
         let traits = vec![
             create_test_trait(
                 "test1",
-                Condition::Path {
+                Condition::Path(PathQuery {
                     exact: None,
                     substr: Some("chrome".to_string()),
                     regex: None,
@@ -1785,13 +1788,13 @@ mod duplicate_tests {
                     is_check: None,
                     basename: true,
                     dirname: false,
-                },
+                }),
                 vec![FileType::All],
                 "file1.yaml",
             ),
             create_test_trait(
                 "test2",
-                Condition::Path {
+                Condition::Path(PathQuery {
                     exact: None,
                     substr: Some("chrome".to_string()),
                     regex: None,
@@ -1799,7 +1802,7 @@ mod duplicate_tests {
                     is_check: None,
                     basename: true,
                     dirname: false,
-                },
+                }),
                 vec![FileType::All],
                 "file2.yaml",
             ),
@@ -1817,7 +1820,7 @@ mod duplicate_tests {
         let traits = vec![
             create_test_trait(
                 "test1",
-                Condition::Path {
+                Condition::Path(PathQuery {
                     exact: None,
                     substr: None,
                     regex: Some("\\.pyc$".to_string()),
@@ -1825,13 +1828,13 @@ mod duplicate_tests {
                     is_check: None,
                     basename: true,
                     dirname: false,
-                },
+                }),
                 vec![FileType::Python],
                 "file1.yaml",
             ),
             create_test_trait(
                 "test2",
-                Condition::Path {
+                Condition::Path(PathQuery {
                     exact: None,
                     substr: None,
                     regex: Some("\\.pyc$".to_string()),
@@ -1839,7 +1842,7 @@ mod duplicate_tests {
                     is_check: None,
                     basename: true,
                     dirname: false,
-                },
+                }),
                 vec![FileType::Python],
                 "file2.yaml",
             ),
@@ -1857,7 +1860,7 @@ mod duplicate_tests {
         let traits = vec![
             create_test_trait(
                 "test1",
-                Condition::Path {
+                Condition::Path(PathQuery {
                     exact: None,
                     substr: None,
                     regex: Some("^Makefile$".to_string()),
@@ -1865,13 +1868,13 @@ mod duplicate_tests {
                     is_check: None,
                     basename: true,
                     dirname: false,
-                },
+                }),
                 vec![FileType::All],
                 "file1.yaml",
             ),
             create_test_trait(
                 "test2",
-                Condition::Path {
+                Condition::Path(PathQuery {
                     exact: None,
                     substr: None,
                     regex: Some("^setup\\.py$".to_string()),
@@ -1879,7 +1882,7 @@ mod duplicate_tests {
                     is_check: None,
                     basename: true,
                     dirname: false,
-                },
+                }),
                 vec![FileType::Python],
                 "file2.yaml",
             ),
@@ -1897,7 +1900,7 @@ mod duplicate_tests {
     fn test_basename_regex_should_be_exact_case_insensitive() {
         let traits = vec![create_test_trait(
             "test1",
-            Condition::Path {
+            Condition::Path(PathQuery {
                 exact: None,
                 substr: None,
                 regex: Some("(?i)^setup\\.py$".to_string()),
@@ -1905,7 +1908,7 @@ mod duplicate_tests {
                 is_check: None,
                 basename: true,
                 dirname: false,
-            },
+            }),
             vec![FileType::Python],
             "file1.yaml",
         )];
@@ -1922,7 +1925,7 @@ mod duplicate_tests {
         let traits = vec![
             create_test_trait(
                 "test1",
-                Condition::Path {
+                Condition::Path(PathQuery {
                     exact: None,
                     substr: None,
                     regex: Some("^(setup|install)\\.py$".to_string()),
@@ -1930,13 +1933,13 @@ mod duplicate_tests {
                     is_check: None,
                     basename: true,
                     dirname: false,
-                },
+                }),
                 vec![FileType::Python],
                 "file1.yaml",
             ),
             create_test_trait(
                 "test2",
-                Condition::Path {
+                Condition::Path(PathQuery {
                     exact: None,
                     substr: None,
                     regex: Some(".*\\.exe$".to_string()),
@@ -1944,7 +1947,7 @@ mod duplicate_tests {
                     is_check: None,
                     basename: true,
                     dirname: false,
-                },
+                }),
                 vec![FileType::Pe],
                 "file2.yaml",
             ),
@@ -1963,7 +1966,7 @@ mod duplicate_tests {
     fn test_basename_empty_pattern_skipped() {
         let traits = vec![create_test_trait(
             "test1",
-            Condition::Path {
+            Condition::Path(PathQuery {
                 exact: None,
                 substr: None,
                 regex: None,
@@ -1971,7 +1974,7 @@ mod duplicate_tests {
                 is_check: None,
                 basename: true,
                 dirname: false,
-            },
+            }),
             vec![FileType::All],
             "file1.yaml",
         )];
@@ -1987,7 +1990,7 @@ mod duplicate_tests {
     fn test_basename_bogus_dot_pattern_skipped() {
         let traits = vec![create_test_trait(
             "test1",
-            Condition::Path {
+            Condition::Path(PathQuery {
                 exact: None,
                 substr: None,
                 regex: Some(".".to_string()),
@@ -1995,7 +1998,7 @@ mod duplicate_tests {
                 is_check: None,
                 basename: true,
                 dirname: false,
-            },
+            }),
             vec![FileType::All],
             "file1.yaml",
         )];
@@ -2012,7 +2015,7 @@ mod duplicate_tests {
         let traits = vec![
             create_test_trait(
                 "test1",
-                Condition::Raw {
+                Condition::Raw(RawQuery {
                     exact: Some("setup.py".to_string()),
                     substr: None,
                     word: None,
@@ -2025,13 +2028,13 @@ mod duplicate_tests {
                     section_offset: None,
                     section_offset_range: None,
                     not: None,
-                },
+                }),
                 vec![FileType::Python],
                 "file1.yaml",
             ),
             create_test_trait(
                 "test2",
-                Condition::Symbol {
+                Condition::Symbol(SymbolQuery {
                     exact: Some("setup".to_string()),
                     substr: None,
                     regex: None,
@@ -2042,7 +2045,7 @@ mod duplicate_tests {
                     args: None,
                     alias: None,
                     not: None,
-                },
+                }),
                 vec![FileType::Python],
                 "file2.yaml",
             ),
@@ -2216,7 +2219,7 @@ mod duplicate_tests {
         let traits = vec![
             create_test_trait(
                 "basename_exact",
-                Condition::Path {
+                Condition::Path(PathQuery {
                     exact: Some("sshd".to_string()),
                     substr: None,
                     regex: None,
@@ -2224,13 +2227,13 @@ mod duplicate_tests {
                     is_check: None,
                     basename: true,
                     dirname: false,
-                },
+                }),
                 vec![FileType::Shell],
                 "file1.yaml",
             ),
             create_test_trait(
                 "basename_regex",
-                Condition::Path {
+                Condition::Path(PathQuery {
                     exact: None,
                     substr: None,
                     regex: Some("^(ssh|sshd|ssh_config)$".to_string()),
@@ -2238,7 +2241,7 @@ mod duplicate_tests {
                     is_check: None,
                     basename: true,
                     dirname: false,
-                },
+                }),
                 vec![FileType::Shell],
                 "file2.yaml",
             ),
@@ -2258,7 +2261,7 @@ mod duplicate_tests {
         let traits = vec![
             create_test_trait_with_conf_crit(
                 "exact_notable",
-                Condition::Raw {
+                Condition::Raw(RawQuery {
                     exact: Some("malware.exe".to_string()),
                     substr: None,
                     regex: None,
@@ -2271,7 +2274,7 @@ mod duplicate_tests {
                     section_offset: None,
                     section_offset_range: None,
                     not: None,
-                },
+                }),
                 vec![FileType::Pe],
                 "file1.yaml",
                 1.0,
@@ -2279,7 +2282,7 @@ mod duplicate_tests {
             ),
             create_test_trait_with_conf_crit(
                 "regex_hostile",
-                Condition::Raw {
+                Condition::Raw(RawQuery {
                     exact: None,
                     substr: None,
                     regex: Some("malware\\.exe".to_string()),
@@ -2292,7 +2295,7 @@ mod duplicate_tests {
                     section_offset: None,
                     section_offset_range: None,
                     not: None,
-                },
+                }),
                 vec![FileType::Pe],
                 "file2.yaml",
                 1.0,
@@ -2314,7 +2317,7 @@ mod duplicate_tests {
         let traits = vec![
             create_test_trait(
                 "subset",
-                Condition::Path {
+                Condition::Path(PathQuery {
                     exact: None,
                     substr: None,
                     regex: Some("\\.(test|spec)\\.[cm]?[jt]sx?$".to_string()),
@@ -2322,13 +2325,13 @@ mod duplicate_tests {
                     is_check: None,
                     basename: true,
                     dirname: false,
-                },
+                }),
                 vec![FileType::JavaScript, FileType::TypeScript],
                 "file1.yaml",
             ),
             create_test_trait(
                 "superset",
-                Condition::Path {
+                Condition::Path(PathQuery {
                     exact: None,
                     substr: None,
                     regex: Some("\\.(test|spec|bench)\\.[cm]?[jt]sx?$".to_string()),
@@ -2336,7 +2339,7 @@ mod duplicate_tests {
                     is_check: None,
                     basename: true,
                     dirname: false,
-                },
+                }),
                 vec![FileType::JavaScript, FileType::TypeScript],
                 "file2.yaml",
             ),
@@ -2546,7 +2549,7 @@ mod duplicate_tests {
         let traits = vec![
             create_test_trait_with_conf_crit(
                 "trait_notable",
-                Condition::Raw {
+                Condition::Raw(RawQuery {
                     exact: Some("malicious_pattern".to_string()),
                     substr: None,
                     regex: None,
@@ -2559,7 +2562,7 @@ mod duplicate_tests {
                     section_offset: None,
                     section_offset_range: None,
                     not: None,
-                },
+                }),
                 vec![FileType::Elf],
                 "file1.yaml",
                 1.0,
@@ -2567,7 +2570,7 @@ mod duplicate_tests {
             ),
             create_test_trait_with_conf_crit(
                 "trait_hostile",
-                Condition::Raw {
+                Condition::Raw(RawQuery {
                     exact: Some("malicious_pattern".to_string()),
                     substr: None,
                     regex: None,
@@ -2580,7 +2583,7 @@ mod duplicate_tests {
                     section_offset: None,
                     section_offset_range: None,
                     not: None,
-                },
+                }),
                 vec![FileType::Elf],
                 "file2.yaml",
                 1.0,
@@ -2600,7 +2603,7 @@ mod duplicate_tests {
         let traits = vec![
             create_test_trait_with_conf_crit(
                 "trait_low_conf",
-                Condition::Raw {
+                Condition::Raw(RawQuery {
                     exact: Some("test_pattern".to_string()),
                     substr: None,
                     regex: None,
@@ -2613,7 +2616,7 @@ mod duplicate_tests {
                     section_offset: None,
                     section_offset_range: None,
                     not: None,
-                },
+                }),
                 vec![FileType::Shell],
                 "file1.yaml",
                 0.5,
@@ -2621,7 +2624,7 @@ mod duplicate_tests {
             ),
             create_test_trait_with_conf_crit(
                 "trait_high_conf",
-                Condition::Raw {
+                Condition::Raw(RawQuery {
                     exact: Some("test_pattern".to_string()),
                     substr: None,
                     regex: None,
@@ -2634,7 +2637,7 @@ mod duplicate_tests {
                     section_offset: None,
                     section_offset_range: None,
                     not: None,
-                },
+                }),
                 vec![FileType::Shell],
                 "file2.yaml",
                 0.9,
@@ -2655,7 +2658,7 @@ mod duplicate_tests {
         let traits = vec![
             create_test_trait_with_conf_crit(
                 "trait_elf_macho",
-                Condition::Raw {
+                Condition::Raw(RawQuery {
                     exact: Some("shared_pattern".to_string()),
                     substr: None,
                     regex: None,
@@ -2668,7 +2671,7 @@ mod duplicate_tests {
                     section_offset: None,
                     section_offset_range: None,
                     not: None,
-                },
+                }),
                 vec![FileType::Elf, FileType::Macho],
                 "file1.yaml",
                 1.0,
@@ -2676,7 +2679,7 @@ mod duplicate_tests {
             ),
             create_test_trait_with_conf_crit(
                 "trait_elf_pe",
-                Condition::Raw {
+                Condition::Raw(RawQuery {
                     exact: Some("shared_pattern".to_string()),
                     substr: None,
                     regex: None,
@@ -2689,7 +2692,7 @@ mod duplicate_tests {
                     section_offset: None,
                     section_offset_range: None,
                     not: None,
-                },
+                }),
                 vec![FileType::Elf, FileType::Pe],
                 "file2.yaml",
                 1.0,
@@ -2710,7 +2713,7 @@ mod duplicate_tests {
         let traits = vec![
             create_test_trait_with_conf_crit(
                 "trait_macho",
-                Condition::Raw {
+                Condition::Raw(RawQuery {
                     exact: Some("platform_pattern".to_string()),
                     substr: None,
                     regex: None,
@@ -2723,7 +2726,7 @@ mod duplicate_tests {
                     section_offset: None,
                     section_offset_range: None,
                     not: None,
-                },
+                }),
                 vec![FileType::Macho],
                 "file1.yaml",
                 1.0,
@@ -2731,7 +2734,7 @@ mod duplicate_tests {
             ),
             create_test_trait_with_conf_crit(
                 "trait_pe",
-                Condition::Raw {
+                Condition::Raw(RawQuery {
                     exact: Some("platform_pattern".to_string()),
                     substr: None,
                     regex: None,
@@ -2744,7 +2747,7 @@ mod duplicate_tests {
                     section_offset: None,
                     section_offset_range: None,
                     not: None,
-                },
+                }),
                 vec![FileType::Pe],
                 "file2.yaml",
                 1.0,
@@ -2765,7 +2768,7 @@ mod duplicate_tests {
         let traits = vec![
             create_test_trait_with_conf_crit(
                 "trait_component",
-                Condition::Raw {
+                Condition::Raw(RawQuery {
                     exact: Some("building_block".to_string()),
                     substr: None,
                     regex: None,
@@ -2778,7 +2781,7 @@ mod duplicate_tests {
                     section_offset: None,
                     section_offset_range: None,
                     not: None,
-                },
+                }),
                 vec![FileType::All],
                 "file1.yaml",
                 1.0,
@@ -2786,7 +2789,7 @@ mod duplicate_tests {
             ),
             create_test_trait_with_conf_crit(
                 "trait_baseline",
-                Condition::Raw {
+                Condition::Raw(RawQuery {
                     exact: Some("building_block".to_string()),
                     substr: None,
                     regex: None,
@@ -2799,7 +2802,7 @@ mod duplicate_tests {
                     section_offset: None,
                     section_offset_range: None,
                     not: None,
-                },
+                }),
                 vec![FileType::All],
                 "file2.yaml",
                 1.0,
@@ -2820,7 +2823,7 @@ mod duplicate_tests {
         let traits = vec![
             create_test_trait_with_conf_crit(
                 "trait_a",
-                Condition::Raw {
+                Condition::Raw(RawQuery {
                     exact: Some("pattern_a".to_string()),
                     substr: None,
                     regex: None,
@@ -2833,7 +2836,7 @@ mod duplicate_tests {
                     section_offset: None,
                     section_offset_range: None,
                     not: None,
-                },
+                }),
                 vec![FileType::All],
                 "file1.yaml",
                 1.0,
@@ -2841,7 +2844,7 @@ mod duplicate_tests {
             ),
             create_test_trait_with_conf_crit(
                 "trait_b",
-                Condition::Raw {
+                Condition::Raw(RawQuery {
                     exact: Some("pattern_b".to_string()),
                     substr: None,
                     regex: None,
@@ -2854,7 +2857,7 @@ mod duplicate_tests {
                     section_offset: None,
                     section_offset_range: None,
                     not: None,
-                },
+                }),
                 vec![FileType::All],
                 "file2.yaml",
                 1.0,
@@ -2902,7 +2905,7 @@ mod duplicate_tests {
         // Component/Baseline tier traits are intentional building blocks.
         let a = create_test_trait_with_conf_crit(
             "test::comp_a",
-            Condition::Raw {
+            Condition::Raw(RawQuery {
                 exact: None,
                 substr: None,
                 regex: Some(r"eval\s*\([a-z]+\)".to_string()),
@@ -2915,7 +2918,7 @@ mod duplicate_tests {
                 section_offset: None,
                 section_offset_range: None,
                 not: None,
-            },
+            }),
             vec![FileType::JavaScript],
             "file_a.yaml",
             1.0,
@@ -2923,7 +2926,7 @@ mod duplicate_tests {
         );
         let b = create_test_trait_with_conf_crit(
             "test::comp_b",
-            Condition::Raw {
+            Condition::Raw(RawQuery {
                 exact: None,
                 substr: None,
                 regex: Some(r"eval\s*\([A-Z]+\)".to_string()),
@@ -2936,7 +2939,7 @@ mod duplicate_tests {
                 section_offset: None,
                 section_offset_range: None,
                 not: None,
-            },
+            }),
             vec![FileType::JavaScript],
             "file_b.yaml",
             1.0,
@@ -2976,7 +2979,7 @@ mod duplicate_tests {
         // since a graduated severity ladder is intentional.
         let a = create_test_trait_with_conf_crit(
             "test::a",
-            Condition::Raw {
+            Condition::Raw(RawQuery {
                 exact: None,
                 substr: None,
                 regex: Some(r"eval\s*\(\s*[a-z]+\s*\)".to_string()),
@@ -2989,7 +2992,7 @@ mod duplicate_tests {
                 section_offset: None,
                 section_offset_range: None,
                 not: None,
-            },
+            }),
             vec![FileType::JavaScript],
             "file_a.yaml",
             1.0,
@@ -2997,7 +3000,7 @@ mod duplicate_tests {
         );
         let b = create_test_trait_with_conf_crit(
             "test::b",
-            Condition::Raw {
+            Condition::Raw(RawQuery {
                 exact: None,
                 substr: None,
                 regex: Some(r"eval\s*\(\s*[A-Z]+\s*\)".to_string()),
@@ -3010,7 +3013,7 @@ mod duplicate_tests {
                 section_offset: None,
                 section_offset_range: None,
                 not: None,
-            },
+            }),
             vec![FileType::JavaScript],
             "file_b.yaml",
             1.0,
@@ -3055,7 +3058,7 @@ mod composite_tests {
 #[cfg(test)]
 mod pattern_tests {
     use super::super::patterns::find_non_capturing_groups;
-    use crate::composite_rules::{Arch, Condition, FileType, Platform, TraitDefinition};
+    use crate::composite_rules::{Arch, Condition, FileType, Platform, RawQuery, TraitDefinition};
     use std::path::PathBuf;
 
     fn create_raw_regex_trait(id: &str, pattern: &str) -> TraitDefinition {
@@ -3066,7 +3069,7 @@ mod pattern_tests {
             crit: crate::types::Criticality::Notable,
             mbc: None,
             attack: None,
-            r#if: Condition::Raw {
+            r#if: Condition::Raw(RawQuery {
                 exact: None,
                 substr: None,
                 regex: Some(pattern.to_string()),
@@ -3079,7 +3082,7 @@ mod pattern_tests {
                 section_offset: None,
                 section_offset_range: None,
                 not: None,
-            },
+            }),
             size_max: None,
             count_min: None,
             count_max: None,
@@ -3503,7 +3506,7 @@ mod constraint_tests {
     };
     use crate::capabilities::validation::find_pure_directory_alias_composites;
     use crate::composite_rules::{
-        Arch, CompositeTrait, Condition, FileType, Platform, TraitDefinition,
+        Arch, CompositeTrait, Condition, FileType, KvQuery, Platform, RawQuery, TraitDefinition,
     };
     use crate::types::Criticality;
     use std::collections::{HashMap, HashSet};
@@ -3568,7 +3571,7 @@ mod constraint_tests {
             crit,
             mbc: None,
             attack: None,
-            r#if: Condition::Raw {
+            r#if: Condition::Raw(RawQuery {
                 exact: Some("test".to_string()),
                 substr: None,
                 regex: None,
@@ -3581,7 +3584,7 @@ mod constraint_tests {
                 section_offset: None,
                 section_offset_range: None,
                 not: None,
-            },
+            }),
             size_max: None,
             count_min: None,
             count_max: None,
@@ -3640,7 +3643,7 @@ mod constraint_tests {
         section_offset: Option<i64>,
         section_offset_range: Option<(i64, Option<i64>)>,
     ) -> Condition {
-        Condition::Raw {
+        Condition::Raw(RawQuery {
             exact: Some("MZ".to_string()),
             substr: None,
             regex: None,
@@ -3653,7 +3656,7 @@ mod constraint_tests {
             section_offset,
             section_offset_range,
             not: None,
-        }
+        })
     }
 
     #[test]
@@ -3974,7 +3977,8 @@ mod constraint_tests {
             crit: Criticality::Baseline,
             mbc: None,
             attack: None,
-            r#if: Condition::Kv {
+            r#if: Condition::Kv(KvQuery {
+                match_mode: Default::default(),
                 path: "scripts.postinstall".to_string(),
                 exact: Some("curl".to_string()),
                 substr: None,
@@ -3985,7 +3989,7 @@ mod constraint_tests {
                 exists: Some(false),
                 size_min: None,
                 size_max: None,
-            },
+            }),
             size_min: None,
             size_max: None,
             count_min: None,
@@ -4021,7 +4025,8 @@ mod constraint_tests {
             crit: Criticality::Baseline,
             mbc: None,
             attack: None,
-            r#if: Condition::Kv {
+            r#if: Condition::Kv(KvQuery {
+                match_mode: Default::default(),
                 path: "scripts.postinstall".to_string(),
                 exact: None,
                 substr: None,
@@ -4032,7 +4037,7 @@ mod constraint_tests {
                 exists: Some(false),
                 size_min: None,
                 size_max: None,
-            },
+            }),
             size_min: None,
             size_max: None,
             count_min: None,
@@ -4242,7 +4247,7 @@ mod autoprefix_tests {
     use super::super::composite::{
         autoprefix_trait_refs, collect_trait_refs_from_rule, collect_trait_refs_from_trait_def,
     };
-    use crate::composite_rules::condition::Condition;
+    use crate::composite_rules::condition::{Condition, RawQuery};
     use crate::composite_rules::traits::{CompositeTrait, DowngradeConditions, TraitDefinition};
     use crate::composite_rules::types::{Arch, FileType, Platform};
     use crate::types::Criticality;
@@ -4421,7 +4426,7 @@ mod autoprefix_tests {
     #[test]
     fn test_collect_refs_from_atomic_trait_ignores_non_trait_conditions() {
         let trait_def = make_trait_def(
-            Condition::Raw {
+            Condition::Raw(RawQuery {
                 exact: Some("marker".to_string()),
                 substr: None,
                 regex: None,
@@ -4434,7 +4439,7 @@ mod autoprefix_tests {
                 offset_range: None,
                 section_offset: None,
                 section_offset_range: None,
-            },
+            }),
             None,
             None,
         );
@@ -4447,7 +4452,7 @@ mod autoprefix_tests {
 mod orphan_tests {
     use crate::capabilities::validation::constraints::find_orphaned_components;
     use crate::composite_rules::traits::{CompositeTrait, DowngradeConditions};
-    use crate::composite_rules::{Arch, Condition, FileType, Platform, TraitDefinition};
+    use crate::composite_rules::{Arch, Condition, FileType, Platform, RawQuery, TraitDefinition};
     use std::collections::HashMap;
     use std::path::PathBuf;
 
@@ -4459,7 +4464,7 @@ mod orphan_tests {
             crit: crate::types::Criticality::Component,
             mbc: None,
             attack: None,
-            r#if: Condition::Raw {
+            r#if: Condition::Raw(RawQuery {
                 exact: Some("test".to_string()),
                 substr: None,
                 regex: None,
@@ -4472,7 +4477,7 @@ mod orphan_tests {
                 offset_range: None,
                 section_offset: None,
                 section_offset_range: None,
-            },
+            }),
             size_min: None,
             size_max: None,
             count_min: None,
@@ -4563,7 +4568,7 @@ mod orphan_tests {
 mod excessive_file_types_tests {
     use crate::capabilities::validation::constraints::find_excessive_file_types;
     use crate::composite_rules::{
-        Arch, CompositeTrait, Condition, FileType, Platform, TraitDefinition,
+        Arch, CompositeTrait, Condition, FileType, Platform, RawQuery, TraitDefinition,
     };
     use crate::types::Criticality;
     use std::path::PathBuf;
@@ -4576,7 +4581,7 @@ mod excessive_file_types_tests {
             crit: Criticality::Notable,
             mbc: None,
             attack: None,
-            r#if: Condition::Raw {
+            r#if: Condition::Raw(RawQuery {
                 exact: Some("test".to_string()),
                 substr: None,
                 regex: None,
@@ -4589,7 +4594,7 @@ mod excessive_file_types_tests {
                 section_offset: None,
                 section_offset_range: None,
                 not: None,
-            },
+            }),
             size_min: None,
             size_max: None,
             count_min: None,
@@ -5322,7 +5327,7 @@ mod defaults_tests {
 #[cfg(test)]
 mod raw_should_use_string_value_tests {
     use crate::capabilities::validation::patterns::find_raw_should_use_string_value;
-    use crate::composite_rules::{Arch, Condition, FileType, Platform, TraitDefinition};
+    use crate::composite_rules::{Arch, Condition, FileType, Platform, RawQuery, TraitDefinition};
     use std::path::PathBuf;
 
     fn binary_trait(id: &str, condition: Condition) -> TraitDefinition {
@@ -5356,7 +5361,7 @@ mod raw_should_use_string_value_tests {
     }
 
     fn raw_substr(pattern: &str) -> Condition {
-        Condition::Raw {
+        Condition::Raw(RawQuery {
             exact: None,
             substr: Some(pattern.to_string()),
             regex: None,
@@ -5369,11 +5374,11 @@ mod raw_should_use_string_value_tests {
             offset_range: None,
             section_offset: None,
             section_offset_range: None,
-        }
+        })
     }
 
     fn raw_regex(pattern: &str) -> Condition {
-        Condition::Raw {
+        Condition::Raw(RawQuery {
             exact: None,
             substr: None,
             regex: Some(pattern.to_string()),
@@ -5386,7 +5391,7 @@ mod raw_should_use_string_value_tests {
             offset_range: None,
             section_offset: None,
             section_offset_range: None,
-        }
+        })
     }
 
     #[test]
@@ -5461,7 +5466,7 @@ mod raw_should_use_string_value_tests {
     fn skips_with_offset_constraint() {
         let t = binary_trait(
             "t/offset",
-            Condition::Raw {
+            Condition::Raw(RawQuery {
                 exact: None,
                 substr: Some("long_pattern_here".to_string()),
                 regex: None,
@@ -5474,7 +5479,7 @@ mod raw_should_use_string_value_tests {
                 offset_range: None,
                 section_offset: None,
                 section_offset_range: None,
-            },
+            }),
         );
         let mut warnings = Vec::new();
         find_raw_should_use_string_value(&[t], &mut warnings);
@@ -5485,7 +5490,7 @@ mod raw_should_use_string_value_tests {
     fn skips_with_section_constraint() {
         let t = binary_trait(
             "t/section",
-            Condition::Raw {
+            Condition::Raw(RawQuery {
                 exact: None,
                 substr: Some("long_pattern_here".to_string()),
                 regex: None,
@@ -5498,7 +5503,7 @@ mod raw_should_use_string_value_tests {
                 offset_range: None,
                 section_offset: None,
                 section_offset_range: None,
-            },
+            }),
         );
         let mut warnings = Vec::new();
         find_raw_should_use_string_value(&[t], &mut warnings);
@@ -5559,7 +5564,7 @@ mod section_filter_validation_tests {
     use crate::capabilities::validation::taxonomy::{
         find_meta_missing_section_filter, find_wellknown_missing_section_filter,
     };
-    use crate::composite_rules::{Arch, Condition, FileType, Platform, TraitDefinition};
+    use crate::composite_rules::{Arch, Condition, FileType, Platform, TextQuery, TraitDefinition};
     use std::collections::HashMap;
     use std::path::PathBuf;
 
@@ -5571,7 +5576,7 @@ mod section_filter_validation_tests {
             crit: crate::types::Criticality::Notable,
             mbc: None,
             attack: None,
-            r#if: Condition::Text {
+            r#if: Condition::Text(TextQuery {
                 exact: None,
                 substr: Some("ProjectDiscovery".to_string()),
                 regex: None,
@@ -5585,7 +5590,7 @@ mod section_filter_validation_tests {
                 offset_range: None,
                 section_offset: None,
                 section_offset_range: None,
-            },
+            }),
             size_min: None,
             size_max: None,
             count_min: None,
@@ -5657,7 +5662,9 @@ mod section_filter_validation_tests {
 #[cfg(test)]
 mod string_literal_should_use_text_tests {
     use crate::capabilities::validation::patterns::find_string_literal_should_use_text;
-    use crate::composite_rules::{Arch, Condition, FileType, Platform, TraitDefinition};
+    use crate::composite_rules::{
+        Arch, Condition, FileType, LiteralQuery, Platform, TraitDefinition,
+    };
     use std::path::PathBuf;
 
     fn source_trait(id: &str, condition: Condition, file_type: FileType) -> TraitDefinition {
@@ -5694,7 +5701,7 @@ mod string_literal_should_use_text_tests {
     fn flags_code_structure_pattern() {
         let t = source_trait(
             "t::literal-eval",
-            Condition::Literal {
+            Condition::Literal(LiteralQuery {
                 kind: None,
                 exact: None,
                 substr: Some("eval(".to_string()),
@@ -5711,7 +5718,7 @@ mod string_literal_should_use_text_tests {
                 offset_range: None,
                 section_offset: None,
                 section_offset_range: None,
-            },
+            }),
             FileType::Python,
         );
         let mut warnings = Vec::new();
@@ -5724,7 +5731,7 @@ mod string_literal_should_use_text_tests {
 #[cfg(test)]
 mod ast_function_call_should_use_symbol_tests {
     use crate::capabilities::validation::patterns::find_ast_function_call_should_use_symbol;
-    use crate::composite_rules::{Arch, Condition, FileType, Platform, TraitDefinition};
+    use crate::composite_rules::{Arch, Condition, FileType, Platform, TextQuery, TraitDefinition};
     use std::path::PathBuf;
 
     fn make_trait(id: &str, condition: Condition, for_types: Vec<FileType>) -> TraitDefinition {
@@ -5758,7 +5765,7 @@ mod ast_function_call_should_use_symbol_tests {
     }
 
     fn text_substr(value: &str) -> Condition {
-        Condition::Text {
+        Condition::Text(TextQuery {
             exact: None,
             substr: Some(value.to_string()),
             regex: None,
@@ -5772,11 +5779,11 @@ mod ast_function_call_should_use_symbol_tests {
             offset_range: None,
             section_offset: None,
             section_offset_range: None,
-        }
+        })
     }
 
     fn text_regex(value: &str) -> Condition {
-        Condition::Text {
+        Condition::Text(TextQuery {
             exact: None,
             substr: None,
             regex: Some(value.to_string()),
@@ -5790,7 +5797,7 @@ mod ast_function_call_should_use_symbol_tests {
             offset_range: None,
             section_offset: None,
             section_offset_range: None,
-        }
+        })
     }
 
     #[test]

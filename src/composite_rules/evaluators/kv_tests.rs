@@ -11,7 +11,7 @@
 //! - Real-world scenarios (package.json, manifest.json, pyproject.toml)
 
 use super::kv::*;
-use crate::composite_rules::Condition;
+use crate::composite_rules::{Condition, KvQuery};
 use serde_json::json;
 use std::path::Path;
 
@@ -352,13 +352,14 @@ fn test_evaluate_kv_package_json_permissions() {
     }"#;
     let path = Path::new("package.json");
 
-    let condition = Condition::Kv {
+    let condition = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
         path: "permissions".to_string(),
         exact: Some("debugger".to_string()),
         substr: None,
         regex: None,
         case_insensitive: false,
-    };
+    });
 
     let result = evaluate_kv(&condition, content, path);
     assert!(result.is_some(), "Should detect debugger permission");
@@ -380,13 +381,14 @@ fn test_evaluate_kv_manifest_all_urls() {
     }"#;
     let path = Path::new("manifest.json");
 
-    let condition = Condition::Kv {
+    let condition = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
         path: "content_scripts[*].matches".to_string(),
         exact: Some("<all_urls>".to_string()),
         substr: None,
         regex: None,
         case_insensitive: false,
-    };
+    });
 
     let result = evaluate_kv(&condition, content, path);
     assert!(result.is_some(), "Should detect <all_urls> access");
@@ -402,13 +404,14 @@ fn test_evaluate_kv_package_json_postinstall() {
     }"#;
     let path = Path::new("package.json");
 
-    let condition = Condition::Kv {
+    let condition = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
         path: "scripts.postinstall".to_string(),
         exact: None,
         substr: Some("curl".to_string()),
         regex: None,
         case_insensitive: false,
-    };
+    });
 
     let result = evaluate_kv(&condition, content, path);
     assert!(result.is_some(), "Should detect curl in postinstall");
@@ -419,13 +422,14 @@ fn test_evaluate_kv_yaml_format() {
     let content = b"name: test-workflow\njobs:\n  build:\n    runs-on:\n      - ubuntu-latest\n      - self-hosted\n";
     let path = Path::new(".github/workflows/test.yaml");
 
-    let condition = Condition::Kv {
+    let condition = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
         path: "jobs.build.runs-on".to_string(),
         exact: Some("self-hosted".to_string()),
         substr: None,
         regex: None,
         case_insensitive: false,
-    };
+    });
 
     let result = evaluate_kv(&condition, content, path);
     assert!(result.is_some(), "Should parse YAML and detect self-hosted runner");
@@ -436,13 +440,14 @@ fn test_evaluate_kv_toml_format() {
     let content = b"[package]\nname = \"test\"\nversion = \"1.0.0\"\n\n[dependencies]\nevil-package = \"*\"\n";
     let path = Path::new("Cargo.toml");
 
-    let condition = Condition::Kv {
+    let condition = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
         path: "dependencies.evil-package".to_string(),
         exact: None,
         substr: None,
         regex: None,
         case_insensitive: false,
-    };
+    });
 
     let result = evaluate_kv(&condition, content, path);
     assert!(result.is_some(), "Should parse TOML and detect evil-package");
@@ -453,13 +458,14 @@ fn test_evaluate_kv_nonexistent_path() {
     let content = br#"{"name": "test"}"#;
     let path = Path::new("package.json");
 
-    let condition = Condition::Kv {
+    let condition = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
         path: "nonexistent.path".to_string(),
         exact: Some("value".to_string()),
         substr: None,
         regex: None,
         case_insensitive: false,
-    };
+    });
 
     let result = evaluate_kv(&condition, content, path);
     assert!(result.is_none(), "Should return None for nonexistent path");
@@ -470,13 +476,14 @@ fn test_evaluate_kv_invalid_json() {
     let content = b"not valid json {[}]";
     let path = Path::new("package.json");
 
-    let condition = Condition::Kv {
+    let condition = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
         path: "name".to_string(),
         exact: Some("test".to_string()),
         substr: None,
         regex: None,
         case_insensitive: false,
-    };
+    });
 
     let result = evaluate_kv(&condition, content, path);
     assert!(result.is_none(), "Should return None for invalid JSON");
@@ -492,14 +499,15 @@ fn test_evaluate_kv_regex_pattern() {
     let path = Path::new("package.json");
 
     let regex = regex::Regex::new(r"eval\s*\(").unwrap();
-    let condition = Condition::Kv {
+    let condition = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
         path: "scripts.test".to_string(),
         exact: None,
         substr: None,
         regex: Some(r"eval\s*\(".to_string()),
         compiled_regex: Some(regex),
         case_insensitive: false,
-    };
+    });
 
     let result = evaluate_kv(&condition, content, path);
     assert!(result.is_some(), "Should detect eval pattern");
@@ -510,13 +518,14 @@ fn test_evaluate_kv_case_insensitive() {
     let content = br#"{"name": "TEST-PACKAGE"}"#;
     let path = Path::new("package.json");
 
-    let condition = Condition::Kv {
+    let condition = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
         path: "name".to_string(),
         exact: None,
         substr: Some("test".to_string()),
         regex: None,
         case_insensitive: true,
-    };
+    });
 
     let result = evaluate_kv(&condition, content, path);
     assert!(result.is_some(), "Should match case-insensitively");
@@ -533,13 +542,14 @@ fn test_evaluate_kv_multiple_wildcards() {
     }"#;
     let path = Path::new("manifest.json");
 
-    let condition = Condition::Kv {
+    let condition = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
         path: "features[*].permissions[*]".to_string(),
         exact: Some("root".to_string()),
         substr: None,
         regex: None,
         case_insensitive: false,
-    };
+    });
 
     let result = evaluate_kv(&condition, content, path);
     assert!(result.is_some(), "Should navigate through multiple wildcards");

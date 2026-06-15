@@ -497,6 +497,33 @@ fn evaluate(
             Target::DoesNothing { dir, .. } => {
                 for file in &report.files {
                     stats.does_nothing_total += 1;
+                    // Intent invariant (always enforced, independent of score
+                    // caps): a do-nothing benign binary must carry NO intent —
+                    // zero objectives/ or well-known/ findings at ANY
+                    // criticality. Such a finding is a trait false positive
+                    // (e.g. a crypto/rsa import read as ransomware, or a log
+                    // rotation helper read as mass-delete); these fixtures exist
+                    // precisely to keep that class regression-free. Score caps
+                    // can be version-sensitive and are bypassable; this is not.
+                    let intent: Vec<&str> = file
+                        .findings
+                        .iter()
+                        .filter(|f| {
+                            f.id.starts_with("objectives/")
+                                || f.id.starts_with("well-known/")
+                        })
+                        .map(|f| f.id.as_str())
+                        .collect();
+                    if !intent.is_empty() {
+                        eprintln!(
+                            "❌ {}: {} objectives/well-known finding(s) on a does-nothing fixture: {intent:?}",
+                            file.path,
+                            intent.len(),
+                        );
+                        print_contributing_findings(file, "     ");
+                        failed += 1;
+                        continue;
+                    }
                     if disable_score_caps {
                         stats.does_nothing_passed += 1;
                         continue;

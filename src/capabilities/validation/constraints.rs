@@ -5,7 +5,10 @@
 
 use crate::capabilities::models::{RawCompositeRule, RawTraitDefinition, TraitDefaults};
 use crate::capabilities::validation::shared::is_limited_byte_range;
-use crate::composite_rules::{CompositeTrait, Condition, FileType, TraitDefinition};
+use crate::composite_rules::{CompositeTrait, Condition, FileType, KvQuery, TraitDefinition};
+use crate::composite_rules::{
+    EncodedQuery, HexQuery, LiteralQuery, PathQuery, RawQuery, SectionQuery, SymbolQuery, TextQuery,
+};
 
 /// Compare two slices of strings in a case-insensitive, order-independent way.
 fn vec_values_equal(a: &[String], b: &[String]) -> bool {
@@ -358,48 +361,48 @@ pub(crate) fn find_missing_search_patterns(trait_definitions: &[TraitDefinition]
 
     for t in trait_definitions {
         let has_pattern = match &t.r#if {
-            Condition::Raw {
+            Condition::Raw(RawQuery {
                 exact,
                 substr,
                 regex,
                 word,
                 ..
-            }
-            | Condition::Text {
+            })
+            | Condition::Text(TextQuery {
                 exact,
                 substr,
                 regex,
                 word,
                 ..
-            }
-            | Condition::Literal {
+            })
+            | Condition::Literal(LiteralQuery {
                 exact,
                 substr,
                 regex,
                 word,
                 ..
-            }
-            | Condition::Encoded {
+            })
+            | Condition::Encoded(EncodedQuery {
                 exact,
                 substr,
                 regex,
                 word,
                 ..
-            } => exact.is_some() || substr.is_some() || regex.is_some() || word.is_some(),
-            Condition::Hex { pattern, .. } => !pattern.is_empty(),
-            Condition::Symbol {
+            }) => exact.is_some() || substr.is_some() || regex.is_some() || word.is_some(),
+            Condition::Hex(HexQuery { pattern, .. }) => !pattern.is_empty(),
+            Condition::Symbol(SymbolQuery {
                 exact,
                 substr,
                 regex,
                 ..
-            }
-            | Condition::Path {
+            })
+            | Condition::Path(PathQuery {
                 exact,
                 substr,
                 regex,
                 ..
-            } => exact.is_some() || substr.is_some() || regex.is_some(),
-            Condition::Section {
+            }) => exact.is_some() || substr.is_some() || regex.is_some(),
+            Condition::Section(SectionQuery {
                 exact,
                 substr,
                 regex,
@@ -416,7 +419,7 @@ pub(crate) fn find_missing_search_patterns(trait_definitions: &[TraitDefinition]
                 entropy_ratio_min,
                 entropy_ratio_max,
                 ..
-            } => {
+            }) => {
                 exact.is_some()
                     || substr.is_some()
                     || regex.is_some()
@@ -611,46 +614,46 @@ const MIN_PATTERN_LENGTH: usize = 3;
 /// `size_max` alone is NOT enough — the whole file is still searched.
 /// Density constraints (`count_min`, `per_kb_min`) don't bound the search space.
 fn has_short_pattern_constraints(t: &TraitDefinition, cond: &Condition) -> bool {
-    let (Condition::Raw {
+    let (Condition::Raw(RawQuery {
         section,
         offset,
         offset_range,
         section_offset,
         section_offset_range,
         ..
-    }
-    | Condition::Text {
+    })
+    | Condition::Text(TextQuery {
         section,
         offset,
         offset_range,
         section_offset,
         section_offset_range,
         ..
-    }
-    | Condition::Literal {
+    })
+    | Condition::Literal(LiteralQuery {
         section,
         offset,
         offset_range,
         section_offset,
         section_offset_range,
         ..
-    }
-    | Condition::Encoded {
+    })
+    | Condition::Encoded(EncodedQuery {
         section,
         offset,
         offset_range,
         section_offset,
         section_offset_range,
         ..
-    }
-    | Condition::Hex {
+    })
+    | Condition::Hex(HexQuery {
         section,
         offset,
         offset_range,
         section_offset,
         section_offset_range,
         ..
-    }) = cond
+    })) = cond
     else {
         return true;
     };
@@ -702,11 +705,13 @@ pub(crate) fn find_too_short_patterns(
         }
 
         let (exact, substr) = match &t.r#if {
-            Condition::Raw { exact, substr, .. }
-            | Condition::Text { exact, substr, .. }
-            | Condition::Literal { exact, substr, .. }
-            | Condition::Encoded { exact, substr, .. } => (exact.as_deref(), substr.as_deref()),
-            Condition::Hex { pattern, .. } => {
+            Condition::Raw(RawQuery { exact, substr, .. })
+            | Condition::Text(TextQuery { exact, substr, .. })
+            | Condition::Literal(LiteralQuery { exact, substr, .. })
+            | Condition::Encoded(EncodedQuery { exact, substr, .. }) => {
+                (exact.as_deref(), substr.as_deref())
+            }
+            Condition::Hex(HexQuery { pattern, .. }) => {
                 let concrete_bytes = count_concrete_hex_bytes(pattern);
                 if concrete_bytes < MIN_PATTERN_LENGTH {
                     violations.push((t.id.clone(), pattern.clone(), "hex"));
@@ -948,11 +953,13 @@ pub(crate) fn find_invalid_not_usage(trait_definitions: &[TraitDefinition]) -> V
             // Variants that carry both `regex` and `not`: `not` only makes sense
             // alongside an ambiguous matcher (regex). With exact/substr/word the
             // match is already precise — change the pattern instead.
-            Condition::Raw { regex, not, .. }
-            | Condition::Encoded { regex, not, .. }
-            | Condition::Symbol { regex, not, .. }
-            | Condition::Text { regex, not, .. }
-            | Condition::Literal { regex, not, .. } => not.is_some() && regex.is_none(),
+            Condition::Raw(RawQuery { regex, not, .. })
+            | Condition::Encoded(EncodedQuery { regex, not, .. })
+            | Condition::Symbol(SymbolQuery { regex, not, .. })
+            | Condition::Text(TextQuery { regex, not, .. })
+            | Condition::Literal(LiteralQuery { regex, not, .. }) => {
+                not.is_some() && regex.is_none()
+            }
             // Hex: not is always valid (patterns are inherently ambiguous).
             // Other condition types do not have a `not:` field.
             _ => false,
@@ -973,13 +980,13 @@ pub(crate) fn find_invalid_not_usage(trait_definitions: &[TraitDefinition]) -> V
 fn is_kv_exists_redundant(cond: &Condition) -> bool {
     matches!(
         cond,
-        Condition::Kv {
+        Condition::Kv(KvQuery {
             exists: Some(_),
             exact,
             substr,
             regex,
             ..
-        } if exact.is_some() || substr.is_some() || regex.is_some()
+        }) if exact.is_some() || substr.is_some() || regex.is_some()
     )
 }
 
@@ -1219,12 +1226,12 @@ pub(crate) fn find_hex_binary_missing_section(
     trait_definitions
         .iter()
         .filter(|t| {
-            let Condition::Hex {
+            let Condition::Hex(HexQuery {
                 section,
                 offset,
                 offset_range,
                 ..
-            } = &t.r#if
+            }) = &t.r#if
             else {
                 return false;
             };

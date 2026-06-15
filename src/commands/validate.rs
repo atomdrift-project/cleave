@@ -25,11 +25,12 @@ enum Target {
     /// Known-benign sample whose root-file score must stay under a per-file cap.
     Benign { path: PathBuf, cap: u32 },
     /// Walked-hostile sample (e.g. `testdata/drop-exec/`, `testdata/reverse-shell/`).
-    /// Every file under the corpus directory must surface at least `min_hostile`
-    /// hostile findings — like the inverse of the does-nothing walk.
+    /// Every file under the corpus directory must satisfy the configured score
+    /// and/or hostile-finding floors — like the inverse of the does-nothing walk.
     WalkedHostile {
         path: PathBuf,
         corpus: String,
+        min_score: u32,
         min_hostile: usize,
     },
     /// Does-nothing sample. Its (and any archive-member) score must stay
@@ -289,7 +290,13 @@ fn collect_targets() -> Result<(Vec<Target>, Expectations)> {
     for corpus in &exp.walked_hostile {
         let dir = traits_dir.join("testdata").join(&corpus.corpus);
         if dir.is_dir() {
-            walk_hostile_corpus(&dir, &corpus.corpus, corpus.min_hostile, &mut targets)?;
+            walk_hostile_corpus(
+                &dir,
+                &corpus.corpus,
+                corpus.min_score,
+                corpus.min_hostile,
+                &mut targets,
+            )?;
         }
     }
 
@@ -397,6 +404,7 @@ fn walk_does_nothing(dir: &Path, out: &mut Vec<Target>) -> Result<()> {
 fn walk_hostile_corpus(
     dir: &Path,
     corpus: &str,
+    min_score: u32,
     min_hostile: usize,
     out: &mut Vec<Target>,
 ) -> Result<()> {
@@ -412,6 +420,7 @@ fn walk_hostile_corpus(
         out.push(Target::WalkedHostile {
             path: entry.path().to_path_buf(),
             corpus: corpus.to_string(),
+            min_score,
             min_hostile,
         });
     }
@@ -541,11 +550,12 @@ fn evaluate(
             Target::WalkedHostile {
                 path,
                 corpus,
+                min_score,
                 min_hostile,
             } => {
                 let entry = stats.walked_hostile.entry(corpus.clone()).or_default();
                 entry.total += 1;
-                if judge_walked_hostile(&path, &corpus, min_hostile, &report) {
+                if judge_walked_hostile(&path, &corpus, min_score, min_hostile, &report) {
                     entry.passed += 1;
                 } else {
                     failed += 1;
@@ -564,6 +574,7 @@ fn evaluate(
 fn judge_walked_hostile(
     path: &Path,
     corpus: &str,
+    min_score: u32,
     min_hostile: usize,
     report: &AnalysisReport,
 ) -> bool {
@@ -572,13 +583,22 @@ fn judge_walked_hostile(
         return false;
     };
     let hostile = count_findings(file, Criticality::Hostile);
-    if hostile >= min_hostile {
+    if file.score >= min_score && hostile >= min_hostile {
         return true;
     }
-    eprintln!(
-        "❌ {} [{corpus}]: hostile findings {hostile} < minimum {min_hostile}",
-        path.display()
-    );
+    if file.score < min_score {
+        eprintln!(
+            "❌ {} [{corpus}]: score {} < minimum {min_score}",
+            path.display(),
+            file.score
+        );
+    }
+    if hostile < min_hostile {
+        eprintln!(
+            "❌ {} [{corpus}]: hostile findings {hostile} < minimum {min_hostile}",
+            path.display()
+        );
+    }
     print_contributing_findings(file, "     ");
     false
 }
@@ -712,6 +732,8 @@ struct BenignCap {
 #[derive(Debug, Deserialize)]
 struct WalkedCorpus {
     corpus: String,
+    #[serde(default)]
+    min_score: u32,
     min_hostile: usize,
 }
 

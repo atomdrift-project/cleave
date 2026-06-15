@@ -6,7 +6,7 @@
 #[cfg(test)]
 mod validation_tests {
     use crate::composite_rules::{
-        Arch, Condition, TraitDefinition,
+        Arch, Condition, RawQuery, SymbolQuery, TextQuery, TraitDefinition,
         condition::{NotException, NotExceptionStructured},
     };
     use crate::types::Criticality;
@@ -43,7 +43,7 @@ mod validation_tests {
 
     #[test]
     fn test_exact_match_should_use_unless() {
-        let cond = Condition::Text {
+        let cond = Condition::Text(TextQuery {
             exact: Some("test".to_string()),
             substr: None,
             regex: None,
@@ -57,7 +57,7 @@ mod validation_tests {
             section_offset_range: None,
             not: None,
             platforms: None,
-        };
+        });
 
         let not = vec![NotException::Shorthand("test".to_string())];
         let trait_def = create_test_trait(cond, Some(not));
@@ -75,7 +75,7 @@ mod validation_tests {
     fn test_substr_with_valid_not_exception() {
         // substr: "test" should match strings like "testing", "test123", etc.
         // not: ["testing"] should work because "testing" contains "test"
-        let cond = Condition::Text {
+        let cond = Condition::Text(TextQuery {
             exact: None,
             substr: Some("test".to_string()),
             regex: None,
@@ -89,7 +89,7 @@ mod validation_tests {
             section_offset_range: None,
             not: None,
             platforms: None,
-        };
+        });
 
         let not = vec![NotException::Shorthand("testing".to_string())];
         let trait_def = create_test_trait(cond, Some(not));
@@ -104,7 +104,7 @@ mod validation_tests {
     #[test]
     fn test_substr_with_invalid_not_exception() {
         // substr: "test" won't match "hurl", so not: ["hurl"] will never apply
-        let cond = Condition::Text {
+        let cond = Condition::Text(TextQuery {
             exact: None,
             substr: Some("test".to_string()),
             regex: None,
@@ -118,7 +118,7 @@ mod validation_tests {
             section_offset_range: None,
             not: None,
             platforms: None,
-        };
+        });
 
         let not = vec![NotException::Shorthand("hurl".to_string())];
         let trait_def = create_test_trait(cond, Some(not));
@@ -139,7 +139,7 @@ mod validation_tests {
     fn test_substr_with_exact_not_exception_valid() {
         // substr: "test" should match "testing"
         // not: {exact: "testing"} should work
-        let cond = Condition::Text {
+        let cond = Condition::Text(TextQuery {
             exact: None,
             substr: Some("test".to_string()),
             regex: None,
@@ -153,7 +153,7 @@ mod validation_tests {
             section_offset_range: None,
             not: None,
             platforms: None,
-        };
+        });
 
         let not = vec![NotException::Structured(NotExceptionStructured {
             exact: Some("testing".to_string()),
@@ -171,7 +171,7 @@ mod validation_tests {
     fn test_substr_with_exact_not_exception_invalid() {
         // substr: "test" won't match strings containing "hurl"
         // not: {exact: "hurl"} will never apply
-        let cond = Condition::Text {
+        let cond = Condition::Text(TextQuery {
             exact: None,
             substr: Some("test".to_string()),
             regex: None,
@@ -185,7 +185,7 @@ mod validation_tests {
             section_offset_range: None,
             not: None,
             platforms: None,
-        };
+        });
 
         let not = vec![NotException::Structured(NotExceptionStructured {
             exact: Some("hurl".to_string()),
@@ -205,7 +205,7 @@ mod validation_tests {
     fn test_substr_with_overlapping_substr_not_exception() {
         // substr: "test" and not: {substr: "testing"}
         // "testing" contains "test", so this should be valid
-        let cond = Condition::Text {
+        let cond = Condition::Text(TextQuery {
             exact: None,
             substr: Some("test".to_string()),
             regex: None,
@@ -219,7 +219,7 @@ mod validation_tests {
             section_offset_range: None,
             not: None,
             platforms: None,
-        };
+        });
 
         let not = vec![NotException::Structured(NotExceptionStructured {
             exact: None,
@@ -237,7 +237,7 @@ mod validation_tests {
     fn test_substr_with_non_overlapping_substr_not_exception() {
         // substr: "test" and not: {substr: "hurl"}
         // No overlap, so the not will never apply
-        let cond = Condition::Text {
+        let cond = Condition::Text(TextQuery {
             exact: None,
             substr: Some("test".to_string()),
             regex: None,
@@ -251,7 +251,7 @@ mod validation_tests {
             section_offset_range: None,
             not: None,
             platforms: None,
-        };
+        });
 
         let not = vec![NotException::Structured(NotExceptionStructured {
             exact: None,
@@ -270,7 +270,7 @@ mod validation_tests {
     fn test_substr_case_insensitive() {
         // substr: "test" (case insensitive) should match "TESTING"
         // not: ["TESTING"] should work
-        let cond = Condition::Text {
+        let cond = Condition::Text(TextQuery {
             exact: None,
             substr: Some("test".to_string()),
             regex: None,
@@ -284,7 +284,7 @@ mod validation_tests {
             section_offset_range: None,
             not: None,
             platforms: None,
-        };
+        });
 
         let not = vec![NotException::Shorthand("TESTING".to_string())];
         let trait_def = create_test_trait(cond, Some(not));
@@ -297,7 +297,7 @@ mod validation_tests {
     fn test_regex_with_matching_not_exception() {
         // regex: "c.?rl" matches "crl" and "curl"
         // not: ["curl"] should work
-        let cond = Condition::Text {
+        let cond = Condition::Text(TextQuery {
             exact: None,
             substr: None,
             regex: Some("c.?rl".to_string()),
@@ -311,7 +311,7 @@ mod validation_tests {
             section_offset_range: None,
             not: None,
             platforms: None,
-        };
+        });
 
         let not = vec![NotException::Shorthand("curl".to_string())];
         let trait_def = create_test_trait(cond, Some(not));
@@ -324,7 +324,7 @@ mod validation_tests {
     fn test_regex_with_non_matching_not_exception_curl() {
         // regex: "c.?rl" matches "crl" and "curl" but not "hurl"
         // not: ["hurl"] will never apply
-        let cond = Condition::Text {
+        let cond = Condition::Text(TextQuery {
             exact: None,
             substr: None,
             regex: Some("c.?rl".to_string()),
@@ -338,7 +338,7 @@ mod validation_tests {
             section_offset_range: None,
             not: None,
             platforms: None,
-        };
+        });
 
         let not = vec![NotException::Shorthand("hurl".to_string())];
         let trait_def = create_test_trait(cond, Some(not));
@@ -354,7 +354,7 @@ mod validation_tests {
     fn test_regex_with_non_matching_not_exception() {
         // regex: "^test$" only matches exactly "test"
         // not: ["testing"] will never apply because "testing" doesn't match "^test$"
-        let cond = Condition::Text {
+        let cond = Condition::Text(TextQuery {
             exact: None,
             substr: None,
             regex: Some("^test$".to_string()),
@@ -368,7 +368,7 @@ mod validation_tests {
             section_offset_range: None,
             not: None,
             platforms: None,
-        };
+        });
 
         let not = vec![NotException::Shorthand("testing".to_string())];
         let trait_def = create_test_trait(cond, Some(not));
@@ -383,7 +383,7 @@ mod validation_tests {
     #[test]
     fn test_content_substr_with_not_should_error() {
         // content + substr + not should be an error - behavior is unclear
-        let cond = Condition::Raw {
+        let cond = Condition::Raw(RawQuery {
             exact: None,
             substr: Some("test".to_string()),
             regex: None,
@@ -396,7 +396,7 @@ mod validation_tests {
             section_offset: None,
             section_offset_range: None,
             not: None,
-        };
+        });
 
         let not = vec![NotException::Shorthand("testing".to_string())];
         let trait_def = create_test_trait(cond, Some(not));
@@ -410,7 +410,7 @@ mod validation_tests {
     #[test]
     fn test_content_exact_with_not_should_error() {
         // content + exact + not should be an error - doesn't make sense
-        let cond = Condition::Raw {
+        let cond = Condition::Raw(RawQuery {
             exact: Some("test".to_string()),
             substr: None,
             regex: None,
@@ -423,7 +423,7 @@ mod validation_tests {
             section_offset: None,
             section_offset_range: None,
             not: None,
-        };
+        });
 
         let not = vec![NotException::Shorthand("test".to_string())];
         let trait_def = create_test_trait(cond, Some(not));
@@ -437,7 +437,7 @@ mod validation_tests {
     #[test]
     fn test_content_regex_with_not_is_ok() {
         // content + regex + not should work (no warning)
-        let cond = Condition::Raw {
+        let cond = Condition::Raw(RawQuery {
             exact: None,
             substr: None,
             regex: Some("test.*".to_string()),
@@ -450,7 +450,7 @@ mod validation_tests {
             section_offset: None,
             section_offset_range: None,
             not: None,
-        };
+        });
 
         let not = vec![NotException::Shorthand("testing".to_string())];
         let trait_def = create_test_trait(cond, Some(not));
@@ -462,7 +462,7 @@ mod validation_tests {
     #[test]
     fn test_symbol_exact_with_not_should_warn() {
         // Symbol exact match with not: should suggest using unless:
-        let cond = Condition::Symbol {
+        let cond = Condition::Symbol(SymbolQuery {
             exact: Some("test".to_string()),
             substr: None,
             regex: None,
@@ -473,7 +473,7 @@ mod validation_tests {
             args: None,
             alias: None,
             not: None,
-        };
+        });
 
         let not = vec![NotException::Shorthand("test".to_string())];
         let trait_def = create_test_trait(cond, Some(not));
@@ -487,7 +487,7 @@ mod validation_tests {
     #[test]
     fn test_symbol_substr_with_valid_not() {
         // Symbol substr with not: should work if exception contains substr
-        let cond = Condition::Symbol {
+        let cond = Condition::Symbol(SymbolQuery {
             exact: None,
             substr: Some("test".to_string()),
             regex: None,
@@ -498,7 +498,7 @@ mod validation_tests {
             args: None,
             alias: None,
             not: None,
-        };
+        });
 
         let not = vec![NotException::Shorthand("testing".to_string())];
         let trait_def = create_test_trait(cond, Some(not));
@@ -510,7 +510,7 @@ mod validation_tests {
     #[test]
     fn test_symbol_substr_with_invalid_not() {
         // Symbol substr with not: should error if exception doesn't contain substr
-        let cond = Condition::Symbol {
+        let cond = Condition::Symbol(SymbolQuery {
             exact: None,
             substr: Some("test".to_string()),
             regex: None,
@@ -521,7 +521,7 @@ mod validation_tests {
             args: None,
             alias: None,
             not: None,
-        };
+        });
 
         let not = vec![NotException::Shorthand("hurl".to_string())];
         let trait_def = create_test_trait(cond, Some(not));
@@ -536,7 +536,7 @@ mod validation_tests {
     #[test]
     fn test_symbol_regex_with_valid_not() {
         // Symbol regex with not: should work if exception matches regex
-        let cond = Condition::Symbol {
+        let cond = Condition::Symbol(SymbolQuery {
             exact: None,
             substr: None,
             regex: Some("c.?rl".to_string()),
@@ -547,7 +547,7 @@ mod validation_tests {
             args: None,
             alias: None,
             not: None,
-        };
+        });
 
         let not = vec![NotException::Shorthand("curl".to_string())];
         let trait_def = create_test_trait(cond, Some(not));
@@ -559,7 +559,7 @@ mod validation_tests {
     #[test]
     fn test_symbol_regex_with_invalid_not() {
         // Symbol regex with not: should error if exception doesn't match regex
-        let cond = Condition::Symbol {
+        let cond = Condition::Symbol(SymbolQuery {
             exact: None,
             substr: None,
             regex: Some("c.?rl".to_string()),
@@ -570,7 +570,7 @@ mod validation_tests {
             args: None,
             alias: None,
             not: None,
-        };
+        });
 
         let not = vec![NotException::Shorthand("hurl".to_string())];
         let trait_def = create_test_trait(cond, Some(not));
@@ -585,13 +585,13 @@ mod validation_tests {
 
 #[cfg(test)]
 mod criticality_tests {
-    use crate::composite_rules::{Arch, Condition, TraitDefinition};
+    use crate::composite_rules::{Arch, Condition, TextQuery, TraitDefinition};
     use crate::types::Criticality;
 
     #[test]
     fn test_filtered_criticality_should_error() {
         // Criticality::Filtered is internal-only
-        let cond = Condition::Text {
+        let cond = Condition::Text(TextQuery {
             exact: None,
             substr: Some("test".to_string()),
             regex: None,
@@ -605,7 +605,7 @@ mod criticality_tests {
             section_offset_range: None,
             not: None,
             platforms: None,
-        };
+        });
 
         let trait_def = TraitDefinition {
             id: "test".to_string(),
@@ -654,7 +654,7 @@ mod criticality_tests {
             Criticality::Suspicious,
             Criticality::Hostile,
         ] {
-            let cond = Condition::Text {
+            let cond = Condition::Text(TextQuery {
                 exact: None,
                 substr: Some("test".to_string()),
                 regex: None,
@@ -668,7 +668,7 @@ mod criticality_tests {
                 section_offset_range: None,
                 not: None,
                 platforms: None,
-            };
+            });
 
             let trait_def = TraitDefinition {
                 id: "test".to_string(),
@@ -706,12 +706,12 @@ mod criticality_tests {
 
 #[cfg(test)]
 mod constraint_tests {
-    use crate::composite_rules::{Arch, Condition, TraitDefinition};
+    use crate::composite_rules::{Arch, Condition, TextQuery, TraitDefinition};
     use crate::types::Criticality;
 
     #[test]
     fn test_confidence_out_of_range_low() {
-        let cond = Condition::Text {
+        let cond = Condition::Text(TextQuery {
             exact: None,
             substr: Some("test".to_string()),
             regex: None,
@@ -725,7 +725,7 @@ mod constraint_tests {
             section_offset_range: None,
             not: None,
             platforms: None,
-        };
+        });
 
         let trait_def = TraitDefinition {
             id: "test".to_string(),
@@ -762,7 +762,7 @@ mod constraint_tests {
 
     #[test]
     fn test_confidence_out_of_range_high() {
-        let cond = Condition::Text {
+        let cond = Condition::Text(TextQuery {
             exact: None,
             substr: Some("test".to_string()),
             regex: None,
@@ -776,7 +776,7 @@ mod constraint_tests {
             section_offset_range: None,
             not: None,
             platforms: None,
-        };
+        });
 
         let trait_def = TraitDefinition {
             id: "test".to_string(),
@@ -813,7 +813,7 @@ mod constraint_tests {
 
     #[test]
     fn test_size_max_less_than_min() {
-        let cond = Condition::Text {
+        let cond = Condition::Text(TextQuery {
             exact: None,
             substr: Some("test".to_string()),
             regex: None,
@@ -827,7 +827,7 @@ mod constraint_tests {
             section_offset_range: None,
             not: None,
             platforms: None,
-        };
+        });
 
         let trait_def = TraitDefinition {
             id: "test".to_string(),
@@ -865,7 +865,7 @@ mod constraint_tests {
 
     #[test]
     fn test_count_max_less_than_min() {
-        let cond = Condition::Text {
+        let cond = Condition::Text(TextQuery {
             exact: None,
             substr: Some("test".to_string()),
             regex: None,
@@ -879,7 +879,7 @@ mod constraint_tests {
             section_offset_range: None,
             not: None,
             platforms: None,
-        };
+        });
 
         let trait_def = TraitDefinition {
             id: "test".to_string(),
@@ -917,7 +917,7 @@ mod constraint_tests {
 
     #[test]
     fn test_per_kb_max_less_than_min() {
-        let cond = Condition::Text {
+        let cond = Condition::Text(TextQuery {
             exact: None,
             substr: Some("test".to_string()),
             regex: None,
@@ -931,7 +931,7 @@ mod constraint_tests {
             section_offset_range: None,
             not: None,
             platforms: None,
-        };
+        });
 
         let trait_def = TraitDefinition {
             id: "test".to_string(),
@@ -969,7 +969,7 @@ mod constraint_tests {
 
     #[test]
     fn test_mutually_exclusive_match_types() {
-        let cond = Condition::Text {
+        let cond = Condition::Text(TextQuery {
             exact: Some("test".to_string()),
             substr: Some("test".to_string()),
             regex: None,
@@ -983,7 +983,7 @@ mod constraint_tests {
             section_offset_range: None,
             not: None,
             platforms: None,
-        };
+        });
 
         let warning = cond.check_match_exclusivity();
         assert!(warning.is_some());
@@ -994,7 +994,7 @@ mod constraint_tests {
 
     #[test]
     fn test_valid_constraints() {
-        let cond = Condition::Text {
+        let cond = Condition::Text(TextQuery {
             exact: None,
             substr: Some("test".to_string()),
             regex: None,
@@ -1008,7 +1008,7 @@ mod constraint_tests {
             section_offset_range: None,
             not: None,
             platforms: None,
-        };
+        });
 
         assert!(cond.check_count_constraints().is_none());
         assert!(cond.check_density_constraints().is_none());
@@ -1050,12 +1050,12 @@ mod constraint_tests {
 #[cfg(test)]
 mod llm_validation_tests {
     use crate::composite_rules::condition::{NotException, NotExceptionStructured};
-    use crate::composite_rules::{Arch, Condition, TraitDefinition};
+    use crate::composite_rules::{Arch, Condition, SymbolQuery, TextQuery, TraitDefinition};
     use crate::types::Criticality;
 
     #[test]
     fn test_empty_string_pattern() {
-        let cond = Condition::Text {
+        let cond = Condition::Text(TextQuery {
             exact: Some("".to_string()),
             substr: None,
             regex: None,
@@ -1069,7 +1069,7 @@ mod llm_validation_tests {
             section_offset_range: None,
             not: None,
             platforms: None,
-        };
+        });
 
         let warning = cond.check_empty_patterns();
         assert!(warning.is_some());
@@ -1078,7 +1078,7 @@ mod llm_validation_tests {
 
     #[test]
     fn test_whitespace_only_pattern() {
-        let cond = Condition::Text {
+        let cond = Condition::Text(TextQuery {
             exact: Some("   ".to_string()),
             substr: None,
             regex: None,
@@ -1092,7 +1092,7 @@ mod llm_validation_tests {
             section_offset_range: None,
             not: None,
             platforms: None,
-        };
+        });
 
         let warning = cond.check_empty_patterns();
         assert!(warning.is_some());
@@ -1101,7 +1101,7 @@ mod llm_validation_tests {
 
     #[test]
     fn test_short_substr_pattern() {
-        let cond = Condition::Text {
+        let cond = Condition::Text(TextQuery {
             exact: None,
             substr: Some("a".to_string()),
             regex: None,
@@ -1115,7 +1115,7 @@ mod llm_validation_tests {
             section_offset_range: None,
             not: None,
             platforms: None,
-        };
+        });
 
         let warning = cond.check_short_patterns();
         assert!(warning.is_some());
@@ -1124,7 +1124,7 @@ mod llm_validation_tests {
 
     #[test]
     fn test_short_word_pattern() {
-        let cond = Condition::Text {
+        let cond = Condition::Text(TextQuery {
             exact: None,
             substr: None,
             regex: None,
@@ -1138,7 +1138,7 @@ mod llm_validation_tests {
             section_offset_range: None,
             not: None,
             platforms: None,
-        };
+        });
 
         let warning = cond.check_short_patterns();
         assert!(warning.is_some());
@@ -1147,7 +1147,7 @@ mod llm_validation_tests {
 
     #[test]
     fn test_literal_regex() {
-        let cond = Condition::Text {
+        let cond = Condition::Text(TextQuery {
             exact: None,
             substr: None,
             regex: Some("literalstring".to_string()),
@@ -1161,7 +1161,7 @@ mod llm_validation_tests {
             section_offset_range: None,
             not: None,
             platforms: None,
-        };
+        });
 
         let warning = cond.check_literal_regex();
         assert!(warning.is_some());
@@ -1175,7 +1175,7 @@ mod llm_validation_tests {
 
     #[test]
     fn test_regex_with_metacharacters_is_valid() {
-        let cond = Condition::Text {
+        let cond = Condition::Text(TextQuery {
             exact: None,
             substr: None,
             regex: Some("test.*pattern".to_string()),
@@ -1189,7 +1189,7 @@ mod llm_validation_tests {
             section_offset_range: None,
             not: None,
             platforms: None,
-        };
+        });
 
         let warning = cond.check_literal_regex();
         assert!(warning.is_none());
@@ -1197,7 +1197,7 @@ mod llm_validation_tests {
 
     #[test]
     fn test_case_insensitive_on_numeric_pattern() {
-        let cond = Condition::Text {
+        let cond = Condition::Text(TextQuery {
             exact: Some("12345".to_string()),
             substr: None,
             regex: None,
@@ -1211,7 +1211,7 @@ mod llm_validation_tests {
             section_offset_range: None,
             not: None,
             platforms: None,
-        };
+        });
 
         let warning = cond.check_case_insensitive_on_non_alpha();
         assert!(warning.is_some());
@@ -1220,7 +1220,7 @@ mod llm_validation_tests {
 
     #[test]
     fn test_case_insensitive_on_alpha_pattern() {
-        let cond = Condition::Text {
+        let cond = Condition::Text(TextQuery {
             exact: Some("test".to_string()),
             substr: None,
             regex: None,
@@ -1234,7 +1234,7 @@ mod llm_validation_tests {
             section_offset_range: None,
             not: None,
             platforms: None,
-        };
+        });
 
         let warning = cond.check_case_insensitive_on_non_alpha();
         assert!(warning.is_none());
@@ -1242,7 +1242,7 @@ mod llm_validation_tests {
 
     #[test]
     fn test_count_min_zero() {
-        let cond = Condition::Text {
+        let cond = Condition::Text(TextQuery {
             exact: Some("test".to_string()),
             substr: None,
             regex: None,
@@ -1256,7 +1256,7 @@ mod llm_validation_tests {
             section_offset_range: None,
             not: None,
             platforms: None,
-        };
+        });
 
         let trait_def = TraitDefinition {
             id: "test-trait".to_string(),
@@ -1296,7 +1296,7 @@ mod llm_validation_tests {
 
     #[test]
     fn test_count_min_nonzero() {
-        let cond = Condition::Text {
+        let cond = Condition::Text(TextQuery {
             exact: Some("test".to_string()),
             substr: None,
             regex: None,
@@ -1310,7 +1310,7 @@ mod llm_validation_tests {
             section_offset_range: None,
             not: None,
             platforms: None,
-        };
+        });
 
         let warning = cond.check_count_min_value();
         assert!(warning.is_none());
@@ -1318,7 +1318,7 @@ mod llm_validation_tests {
 
     #[test]
     fn test_empty_description() {
-        let cond = Condition::Text {
+        let cond = Condition::Text(TextQuery {
             exact: Some("test".to_string()),
             substr: None,
             regex: None,
@@ -1332,7 +1332,7 @@ mod llm_validation_tests {
             section_offset_range: None,
             not: None,
             platforms: None,
-        };
+        });
 
         let trait_def = TraitDefinition {
             id: "test".to_string(),
@@ -1371,7 +1371,7 @@ mod llm_validation_tests {
     fn test_placeholder_words_allowed_in_descriptions() {
         // Placeholder words are now allowed since traits may legitimately
         // detect placeholder text in manifests
-        let cond = Condition::Text {
+        let cond = Condition::Text(TextQuery {
             exact: Some("test".to_string()),
             substr: None,
             regex: None,
@@ -1385,11 +1385,11 @@ mod llm_validation_tests {
             section_offset_range: None,
             not: None,
             platforms: None,
-        };
+        });
 
         let trait_def = TraitDefinition {
             id: "test".to_string(),
-            desc: "Package manifest contains placeholder author name".to_string(),
+            desc: "Manifest contains placeholder author name".to_string(),
             conf: 0.8,
             crit: Criticality::Notable,
             mbc: None,
@@ -1424,7 +1424,7 @@ mod llm_validation_tests {
 
     #[test]
     fn test_short_description() {
-        let cond = Condition::Text {
+        let cond = Condition::Text(TextQuery {
             exact: Some("test".to_string()),
             substr: None,
             regex: None,
@@ -1438,7 +1438,7 @@ mod llm_validation_tests {
             section_offset_range: None,
             not: None,
             platforms: None,
-        };
+        });
 
         let trait_def = TraitDefinition {
             id: "test".to_string(),
@@ -1475,7 +1475,7 @@ mod llm_validation_tests {
 
     #[test]
     fn test_valid_description() {
-        let cond = Condition::Text {
+        let cond = Condition::Text(TextQuery {
             exact: Some("test".to_string()),
             substr: None,
             regex: None,
@@ -1489,7 +1489,7 @@ mod llm_validation_tests {
             section_offset_range: None,
             not: None,
             platforms: None,
-        };
+        });
 
         let trait_def = TraitDefinition {
             id: "test".to_string(),
@@ -1525,7 +1525,7 @@ mod llm_validation_tests {
 
     #[test]
     fn test_empty_not_array() {
-        let cond = Condition::Text {
+        let cond = Condition::Text(TextQuery {
             exact: None,
             substr: None,
             regex: Some("test.*".to_string()),
@@ -1539,7 +1539,7 @@ mod llm_validation_tests {
             section_offset_range: None,
             not: None,
             platforms: None,
-        };
+        });
 
         let trait_def = TraitDefinition {
             id: "test".to_string(),
@@ -1576,7 +1576,7 @@ mod llm_validation_tests {
 
     #[test]
     fn test_empty_unless_array() {
-        let cond = Condition::Text {
+        let cond = Condition::Text(TextQuery {
             exact: Some("test".to_string()),
             substr: None,
             regex: None,
@@ -1590,7 +1590,7 @@ mod llm_validation_tests {
             section_offset_range: None,
             not: None,
             platforms: None,
-        };
+        });
 
         let trait_def = TraitDefinition {
             id: "test".to_string(),
@@ -1627,7 +1627,7 @@ mod llm_validation_tests {
 
     #[test]
     fn test_symbol_regex_word_boundary_simple() {
-        let cond = Condition::Symbol {
+        let cond = Condition::Symbol(SymbolQuery {
             exact: None,
             substr: None,
             regex: Some(r"\bsetsid\b".to_string()),
@@ -1638,7 +1638,7 @@ mod llm_validation_tests {
             args: None,
             alias: None,
             not: None,
-        };
+        });
 
         let warning = cond.check_symbol_regex_whitespace();
         assert!(warning.is_some());
@@ -1650,7 +1650,7 @@ mod llm_validation_tests {
     #[test]
     fn test_symbol_regex_word_boundary_complex() {
         // \b with alternation - not a simple word, but still a bad pattern for symbols
-        let cond = Condition::Symbol {
+        let cond = Condition::Symbol(SymbolQuery {
             exact: None,
             substr: None,
             regex: Some(r"\b(fork|exec)\b".to_string()),
@@ -1661,7 +1661,7 @@ mod llm_validation_tests {
             args: None,
             alias: None,
             not: None,
-        };
+        });
 
         let warning = cond.check_symbol_regex_whitespace();
         assert!(warning.is_some());
@@ -1671,7 +1671,7 @@ mod llm_validation_tests {
 
     #[test]
     fn test_symbol_regex_whitespace_space() {
-        let cond = Condition::Symbol {
+        let cond = Condition::Symbol(SymbolQuery {
             exact: None,
             substr: None,
             regex: Some("some function".to_string()),
@@ -1682,7 +1682,7 @@ mod llm_validation_tests {
             args: None,
             alias: None,
             not: None,
-        };
+        });
 
         let warning = cond.check_symbol_regex_whitespace();
         assert!(warning.is_some());
@@ -1691,7 +1691,7 @@ mod llm_validation_tests {
 
     #[test]
     fn test_symbol_regex_whitespace_class() {
-        let cond = Condition::Symbol {
+        let cond = Condition::Symbol(SymbolQuery {
             exact: None,
             substr: None,
             regex: Some(r"foo\sbar".to_string()),
@@ -1702,7 +1702,7 @@ mod llm_validation_tests {
             args: None,
             alias: None,
             not: None,
-        };
+        });
 
         let warning = cond.check_symbol_regex_whitespace();
         assert!(warning.is_some());
@@ -1711,7 +1711,7 @@ mod llm_validation_tests {
 
     #[test]
     fn test_symbol_regex_valid_no_warning() {
-        let cond = Condition::Symbol {
+        let cond = Condition::Symbol(SymbolQuery {
             exact: None,
             substr: None,
             regex: Some(r"dlopen|dlsym".to_string()),
@@ -1722,7 +1722,7 @@ mod llm_validation_tests {
             args: None,
             alias: None,
             not: None,
-        };
+        });
 
         let warning = cond.check_symbol_regex_whitespace();
         assert!(warning.is_none());
@@ -1731,7 +1731,7 @@ mod llm_validation_tests {
     #[test]
     fn test_symbol_regex_valid_substr_no_warning() {
         // Non-symbol condition should not trigger
-        let cond = Condition::Text {
+        let cond = Condition::Text(TextQuery {
             exact: None,
             substr: None,
             regex: Some(r"\bsetsid\b".to_string()),
@@ -1745,7 +1745,7 @@ mod llm_validation_tests {
             section_offset_range: None,
             not: None,
             platforms: None,
-        };
+        });
 
         let warning = cond.check_symbol_regex_whitespace();
         assert!(warning.is_none());

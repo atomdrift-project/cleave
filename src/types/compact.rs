@@ -2,14 +2,14 @@
 //!
 //! These types represent the v7 schema designed for dense filefacts-backed output.
 //! Each file's JSON is fully self-contained (splittable for per-file DB storage).
-//! Conversion from internal types happens via `AnalysisReport::to_compact()`.
+//! Conversion from internal types happens via `compact_from_files()`.
 
 use std::collections::{BTreeMap, HashMap};
 
 use serde::ser::{SerializeSeq, SerializeStruct};
 use serde::{Serialize, Serializer};
 
-use super::core::{AnalysisReport, Criticality};
+use super::core::Criticality;
 
 /// Maximum strings per file in compact output
 const MAX_STRINGS: usize = 256;
@@ -777,41 +777,60 @@ fn convert_file(file: &super::file_analysis::FileAnalysis, id: u32) -> CompactFi
 #[must_use]
 pub fn compact_from_files(files: &[super::file_analysis::FileAnalysis]) -> CompactReport {
     let compact_files: Vec<CompactFile> = files.iter().map(|f| convert_file(f, f.id)).collect();
+    assemble_report(compact_files)
+}
+
+/// Strip every cross-file reference that does not resolve to an emitted file id.
+/// An inherited finding's `src` and a composite's `srcs[].f` both index into
+/// `files[]`; if a caller filtered or renumbered `files[]` without remapping
+/// these, the index would dangle and the trait renders with no file context
+/// downstream. A dangling `src` is cleared (the finding stays, attributed to its
+/// own file); a dangling composite source is dropped from its list. Either way
+/// the result is a structurally valid report. Returns the number of references
+/// neutralized so the caller can surface the upstream defect.
+fn sanitize_references(files: &mut [CompactFile]) -> usize {
+    let ids: std::collections::HashSet<u32> = files.iter().map(|f| f.id).collect();
+    let mut dangling = 0usize;
+    for file in files.iter_mut() {
+        for tr in &mut file.findings {
+            if tr.src.is_some_and(|src| !ids.contains(&src)) {
+                tr.src = None;
+                dangling += 1;
+            }
+            let before = tr.sources.len();
+            tr.sources.retain(|s| ids.contains(&s.file));
+            dangling += before - tr.sources.len();
+        }
+    }
+    dangling
+}
+
+/// The single choke point both conversion entry points pass through: it stamps
+/// the version fields and guarantees the report's internal consistency, so a
+/// `CompactReport` can never be emitted carrying a dangling cross-file reference
+/// regardless of how the caller built `files[]`. In debug builds a stray
+/// reference trips the assertion at its source; in release it is healed and
+/// logged rather than panicking (library code must not panic).
+fn assemble_report(mut files: Vec<CompactFile>) -> CompactReport {
+    let dangling = sanitize_references(&mut files);
+    debug_assert_eq!(
+        dangling, 0,
+        "compact: dangling cross-file reference(s) reached emit — a caller dropped \
+         or renumbered files[] without remapping src/srcs",
+    );
+    if dangling > 0 {
+        tracing::warn!(
+            dangling,
+            files = files.len(),
+            "compact: neutralized dangling cross-file reference(s) before emit",
+        );
+    }
     let traits_version =
         crate::traits_repo::version().map(|v| if v.len() > 5 { v[..5].to_string() } else { v });
     CompactReport {
         version: "7",
         traits_version,
-        files: compact_files,
-    }
-}
-
-impl AnalysisReport {
-    /// Convert this pre-finalized report to compact v7 output format.
-    ///
-    /// This is a non-mutating conversion — the internal report is unchanged.
-    /// Builds the root file from top-level data and includes archive members.
-    /// For post-finalize reports, use `compact_from_files(&report.files)` instead.
-    #[must_use]
-    pub fn to_compact(&self) -> CompactReport {
-        // Build the root file entry from the report's top-level data (its path is
-        // already `target.path`), then convert pre-populated members (archive
-        // members, decoded payloads) in place — `convert_file` takes the id
-        // explicitly, so members need no clone just to be renumbered.
-        let root_file = self.to_file_analysis(0);
-        let mut files = Vec::with_capacity(1 + self.files.len());
-        files.push(convert_file(&root_file, 0));
-        for (idx, file) in self.files.iter().enumerate() {
-            files.push(convert_file(file, (idx + 1) as u32));
-        }
-
-        let traits_version =
-            crate::traits_repo::version().map(|v| if v.len() > 5 { v[..5].to_string() } else { v });
-        CompactReport {
-            version: "7",
-            traits_version,
-            files,
-        }
+        files,
     }
 }
 
@@ -852,6 +871,44 @@ mod formula_tests {
         let mut fa = FileAnalysis::new(0, "t.py".into(), "python".into(), "sha".into(), 1);
         fa.findings = findings;
         fa
+    }
+
+    /// The emit guard must neutralize any cross-file reference that does not
+    /// resolve to an emitted file id: a dangling inherited `src` is cleared and
+    /// a dangling composite source is dropped, while valid references survive.
+    /// This is what makes a dangling-ref report (the symptom of an upstream
+    /// drop/renumber) impossible to emit.
+    #[test]
+    fn sanitize_strips_only_dangling_references() {
+        use super::{CompactSource, convert_file, sanitize_references};
+
+        let mut files = vec![
+            convert_file(
+                &file_with(vec![finding("a/b/c", Criticality::Notable, 0.9)]),
+                0,
+            ),
+            convert_file(
+                &file_with(vec![finding("d/e/f", Criticality::Notable, 0.9)]),
+                1,
+            ),
+        ];
+        let src = |f: u32| CompactSource {
+            file: f,
+            line: None,
+            offset: None,
+        };
+        files[0].findings[0].src = Some(9); // dangling: no file id 9
+        files[0].findings[0].sources = vec![src(1), src(9)]; // one valid, one dangling
+
+        let dangling = sanitize_references(&mut files);
+
+        assert_eq!(dangling, 2, "one src + one composite source");
+        assert_eq!(files[0].findings[0].src, None, "dangling src cleared");
+        let kept = &files[0].findings[0].sources;
+        assert_eq!(kept.len(), 1, "dangling source dropped");
+        assert_eq!(kept[0].file, 1, "valid source kept");
+        // A clean report passes through untouched.
+        assert_eq!(sanitize_references(&mut files), 0);
     }
 
     /// JSON `f` formula must mirror the CLI: only notable-or-higher findings

@@ -6,7 +6,7 @@
 #[cfg(test)]
 #[allow(clippy::module_inception)]
 mod description_validation_tests {
-    use crate::composite_rules::{Arch, Condition, TraitDefinition};
+    use crate::composite_rules::{Arch, Condition, TextQuery, TraitDefinition};
     use crate::types::Criticality;
 
     fn create_test_trait_with_desc(desc: &str) -> TraitDefinition {
@@ -21,7 +21,7 @@ mod description_validation_tests {
             arch: vec![Arch::All],
             r#for: vec![],
             for_from_groups: false,
-            r#if: Condition::Text {
+            r#if: Condition::Text(TextQuery {
                 exact: Some("test".to_string()),
                 substr: None,
                 regex: None,
@@ -35,7 +35,7 @@ mod description_validation_tests {
                 section_offset_range: None,
                 not: None,
                 platforms: None,
-            },
+            }),
             size_max: None,
             count_min: None,
             count_max: None,

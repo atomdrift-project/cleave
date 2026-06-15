@@ -28,17 +28,18 @@ use crate::capabilities::validation::{
     find_hostile_meta_rules, find_impossible_count_constraints, find_impossible_needs,
     find_impossible_size_constraints, find_invalid_not_usage, find_invalid_trait_ids,
     find_kv_exists_with_matcher, find_line_number, find_malware_subcategory_violations,
-    find_many_directory_refs, find_meta_missing_section_filter, find_metadata_cross_tier_refs,
-    find_missing_search_patterns, find_needs_without_any, find_needs_zero,
-    find_non_capturing_groups, find_none_only_with_proximity, find_objectives_wellknown_violations,
-    find_orphaned_components, find_overlapping_conditions, find_oversized_trait_directories,
-    find_parent_duplicate_segments, find_platform_named_directories, find_pure_alias_traits,
-    find_pure_directory_alias_composites, find_raw_should_use_text, find_redundant_any_refs,
-    find_redundant_explicit_defaults, find_redundant_needs_one, find_redundant_unix_platforms,
-    find_regex_literal_overlap_issues, find_self_referencing_traits, find_short_pattern_warnings,
-    find_should_use_defaults, find_single_item_clauses, find_slow_regex_patterns,
-    find_string_content_collisions, find_string_literal_should_use_text,
-    find_string_pattern_duplicates, find_structural_regex_duplicates, find_too_short_patterns,
+    find_many_directory_refs, find_meta_missing_section_filter, find_metadata_content_dirs,
+    find_metadata_cross_tier_refs, find_missing_search_patterns, find_needs_without_any,
+    find_needs_zero, find_non_capturing_groups, find_none_only_with_proximity,
+    find_objectives_wellknown_violations, find_orphaned_components, find_overlapping_conditions,
+    find_oversized_trait_directories, find_parent_duplicate_segments,
+    find_platform_named_directories, find_pure_alias_traits, find_pure_directory_alias_composites,
+    find_raw_should_use_text, find_redundant_any_refs, find_redundant_explicit_defaults,
+    find_redundant_needs_one, find_redundant_unix_platforms, find_regex_literal_overlap_issues,
+    find_self_referencing_traits, find_short_pattern_warnings, find_should_use_defaults,
+    find_single_item_clauses, find_slow_regex_patterns, find_string_content_collisions,
+    find_string_literal_should_use_text, find_string_pattern_duplicates,
+    find_structural_regex_duplicates, find_too_short_patterns,
     find_unanchored_wellknown_composites, find_wellknown_category_violations,
     find_wellknown_missing_section_filter, find_wellknown_missing_size_filter,
     precalculate_all_composite_precisions, simple_rule_to_composite_rule,
@@ -48,6 +49,7 @@ use crate::capabilities::validation::{
 use crate::composite_rules::{
     CompositeTrait, Condition, FileType as RuleFileType, Platform, TraitDefinition,
 };
+use crate::composite_rules::{MetricsQuery, SymbolQuery};
 use crate::types::Criticality;
 use anyhow::{Context, Result};
 use rayon::prelude::*;
@@ -1026,13 +1028,13 @@ impl super::CapabilityMapper {
                     .contains(&crate::composite_rules::FileType::All)
                     || trait_def.r#for.is_empty();
                 if is_universal
-                    && let Condition::Symbol {
+                    && let Condition::Symbol(SymbolQuery {
                         exact,
                         substr: _,
                         regex,
                         platforms: _,
                         ..
-                    } = &trait_def.r#if
+                    }) = &trait_def.r#if
                 {
                     // If exact is specified, add it directly
                     if let Some(exact_val) = exact {
@@ -1685,6 +1687,29 @@ impl super::CapabilityMapper {
                 warnings.push(format!(
                     "{} directories contain meaningless segments",
                     banned_segment_violations.len()
+                ));
+            }
+
+            // Forbid content/ directories under metadata/ (content describes
+            // behavior/capability, never a neutral structural property).
+            let metadata_content_dirs = find_metadata_content_dirs(&dir_list);
+            if !metadata_content_dirs.is_empty() {
+                eprintln!(
+                    "\n❌ ERROR: {} content/ director(ies) under metadata/",
+                    metadata_content_dirs.len()
+                );
+                eprintln!(
+                    "   metadata/ is for neutral structural facts; a content/ bucket describes\n   \
+                     what a file contains or does — move these traits to objectives/ (intent) or\n   \
+                     micro-behaviors/ (neutral capability):\n"
+                );
+                for dir_path in &metadata_content_dirs {
+                    eprintln!("   {}", dir_path);
+                }
+                eprintln!();
+                warnings.push(format!(
+                    "{} content/ directories under metadata/",
+                    metadata_content_dirs.len()
                 ));
             }
 
@@ -3814,7 +3839,8 @@ impl super::CapabilityMapper {
             let in_filefacts_namespace = |f: &str| EXPOSE_PREFIXES.iter().any(|p| f.starts_with(p));
 
             for trait_def in &trait_definitions {
-                if let crate::composite_rules::Condition::Metrics { field, .. } = &trait_def.r#if
+                if let crate::composite_rules::Condition::Metrics(MetricsQuery { field, .. }) =
+                    &trait_def.r#if
                     && !valid_metric_fields.contains(field)
                     && !in_filefacts_namespace(field)
                 {
@@ -4103,17 +4129,49 @@ impl super::CapabilityMapper {
         let raw_content_regex_index = raw_regex_result?;
         tracing::trace!("Indexes built successfully");
 
-        // Parse errors are fatal - print all and exit if any exist
+        // Unparseable files are fatal during validation but only a warning at
+        // analysis time (forward compatibility — see the else branch).
         if !parse_errors.is_empty() {
-            eprintln!(
-                "\n❌ ERROR: {} YAML parsing error(s) found:\n",
-                parse_errors.len()
-            );
-            for error in &parse_errors {
-                eprintln!("   {}", error);
+            if enable_full_validation {
+                // Authoring/validation: an unparseable file is a hard error so
+                // typos and malformed rules never ship.
+                eprintln!(
+                    "\n❌ ERROR: {} YAML parsing error(s) found:\n",
+                    parse_errors.len()
+                );
+                for error in &parse_errors {
+                    eprintln!("   {}", error);
+                }
+                eprintln!("\n   Fix these issues in the YAML files before continuing.\n");
+                has_fatal_errors = true;
+            } else {
+                // Forward compatibility at analysis time: a file this build
+                // cannot parse — most often a rule using a condition field, type,
+                // or value introduced in a newer release — is skipped with a
+                // warning instead of aborting the whole rule set. The remaining
+                // rules still load and run; the skipped ones simply don't fire
+                // until the tool is upgraded. (Already-shipped older builds can't
+                // be retrofitted, but this keeps every build from this point on
+                // tolerant of newer rule packs.)
+                let prog = std::env::current_exe()
+                    .ok()
+                    .and_then(|p| p.file_name().map(|s| s.to_string_lossy().into_owned()))
+                    .unwrap_or_else(|| "cleave".to_string());
+                tracing::warn!(
+                    skipped_files = parse_errors.len(),
+                    "skipped trait file(s) this build of {prog} could not parse"
+                );
+                eprintln!(
+                    "\n⚠️  WARNING: skipped {} trait file(s) this build of {prog} could not parse; \
+                     their rules will not run.\n   If they use newer rule features, upgrade {prog} \
+                     to the latest version.\n",
+                    parse_errors.len()
+                );
+                for error in &parse_errors {
+                    eprintln!("   {}", error);
+                }
+                eprintln!();
             }
-            eprintln!("\n   Fix these issues in the YAML files before continuing.\n");
-            has_fatal_errors = true;
         }
 
         if enable_full_validation && !warnings.is_empty() {

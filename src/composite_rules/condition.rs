@@ -501,6 +501,29 @@ pub enum StringValidator {
     BitcoinAddr,
 }
 
+/// Quantifier for cross-fact `eq`/`ne` when a path resolves to multiple values
+/// (a bare array or a `[*]` wildcard path). `Any` (the default) fires when the
+/// left and right value sets contain a matching/differing pair; `All` requires
+/// the relation to hold for every right-hand value. Disambiguates the otherwise
+/// unclear `ne: arr[*]` — "differs from some element" vs "differs from all".
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ArrayQuantifier {
+    /// Existential: the relation holds for at least one right-hand value.
+    #[default]
+    Any,
+    /// Universal: the relation holds for every right-hand value.
+    All,
+}
+
+impl ArrayQuantifier {
+    /// True for the default (`Any`) — used to skip it during serialization.
+    #[must_use]
+    fn is_default(&self) -> bool {
+        matches!(self, ArrayQuantifier::Any)
+    }
+}
+
 /// Symbol category filter for `type: symbol` conditions.
 ///
 /// When a rule sets `kind:`, only symbols of that category are matched. The
@@ -542,7 +565,7 @@ pub(crate) enum SymbolKind {
 }
 
 /// Filter for matching a single argument at a call site. Used by
-/// `Condition::Symbol { kind: Call, arg: ... }`. Each field narrows
+/// `Condition::Symbol(SymbolQuery { kind: Call, arg: ... })`. Each field narrows
 /// the match: `kind` filters arg shape (`string`/`number`/`identifier`),
 /// the per-shape fields filter content.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -580,8 +603,8 @@ pub(crate) struct ArgFilter {
 }
 
 /// Filter for a source-language import's local alias — the `sp` in
-/// `import subprocess as sp`. Used by `Condition::Symbol { kind: import,
-/// alias: ... }`. An empty filter (`alias: {}`) matches any aliased import;
+/// `import subprocess as sp`. Used by `Condition::Symbol(SymbolQuery { kind: import,
+/// alias: ... })`. An empty filter (`alias: {}`) matches any aliased import;
 /// `exact`/`substr`/`regex` narrow to a specific alias (e.g. a 1–2 char alias
 /// as an obfuscation signal). A plain (non-aliased) import never matches when
 /// an `alias` filter is present.
@@ -1153,6 +1176,14 @@ enum ConditionTagged {
         /// Mirrors `eq` with reversed sense; same normalization applies.
         #[serde(skip_serializing_if = "Option::is_none")]
         ne: Option<String>,
+        /// Quantifier for `eq`/`ne` when a side resolves to multiple values:
+        /// `any` (default) or `all`. Disambiguates `ne: arr[*]`.
+        #[serde(
+            rename = "match",
+            default,
+            skip_serializing_if = "ArrayQuantifier::is_default"
+        )]
+        match_mode: ArrayQuantifier,
         /// Case insensitive matching (default: false)
         #[serde(default)]
         case_insensitive: bool,
@@ -1184,7 +1215,7 @@ impl From<ConditionDeser> for Condition {
                     args,
                     alias,
                     not,
-                } => Condition::Symbol {
+                } => Condition::Symbol(SymbolQuery {
                     exact,
                     substr,
                     regex,
@@ -1195,7 +1226,7 @@ impl From<ConditionDeser> for Condition {
                     args,
                     alias,
                     not,
-                },
+                }),
                 ConditionTagged::Import {
                     exact,
                     substr,
@@ -1203,7 +1234,7 @@ impl From<ConditionDeser> for Condition {
                     platforms,
                     is_check,
                     not,
-                } => Condition::Symbol {
+                } => Condition::Symbol(SymbolQuery {
                     exact,
                     substr,
                     regex,
@@ -1214,7 +1245,7 @@ impl From<ConditionDeser> for Condition {
                     args: None,
                     alias: None,
                     not,
-                },
+                }),
                 ConditionTagged::Export {
                     exact,
                     substr,
@@ -1222,7 +1253,7 @@ impl From<ConditionDeser> for Condition {
                     platforms,
                     is_check,
                     not,
-                } => Condition::Symbol {
+                } => Condition::Symbol(SymbolQuery {
                     exact,
                     substr,
                     regex,
@@ -1233,7 +1264,7 @@ impl From<ConditionDeser> for Condition {
                     args: None,
                     alias: None,
                     not,
-                },
+                }),
                 ConditionTagged::Function {
                     exact,
                     substr,
@@ -1241,7 +1272,7 @@ impl From<ConditionDeser> for Condition {
                     platforms,
                     is_check,
                     not,
-                } => Condition::Symbol {
+                } => Condition::Symbol(SymbolQuery {
                     exact,
                     substr,
                     regex,
@@ -1252,7 +1283,7 @@ impl From<ConditionDeser> for Condition {
                     args: None,
                     alias: None,
                     not,
-                },
+                }),
                 ConditionTagged::Text {
                     exact,
                     substr,
@@ -1267,7 +1298,7 @@ impl From<ConditionDeser> for Condition {
                     offset_range,
                     section_offset,
                     section_offset_range,
-                } => Condition::Text {
+                } => Condition::Text(TextQuery {
                     exact,
                     substr,
                     regex,
@@ -1281,7 +1312,7 @@ impl From<ConditionDeser> for Condition {
                     offset_range,
                     section_offset,
                     section_offset_range,
-                },
+                }),
                 ConditionTagged::Comment {
                     exact,
                     substr,
@@ -1291,7 +1322,7 @@ impl From<ConditionDeser> for Condition {
                     is_check,
                     not,
                     platforms,
-                } => Condition::Comment {
+                } => Condition::Comment(CommentQuery {
                     exact,
                     substr,
                     regex,
@@ -1300,7 +1331,7 @@ impl From<ConditionDeser> for Condition {
                     is_check,
                     not,
                     platforms,
-                },
+                }),
                 ConditionTagged::Literal {
                     kind,
                     exact,
@@ -1318,7 +1349,7 @@ impl From<ConditionDeser> for Condition {
                     offset_range,
                     section_offset,
                     section_offset_range,
-                } => Condition::Literal {
+                } => Condition::Literal(LiteralQuery {
                     kind,
                     exact,
                     substr,
@@ -1335,7 +1366,7 @@ impl From<ConditionDeser> for Condition {
                     offset_range,
                     section_offset,
                     section_offset_range,
-                },
+                }),
                 ConditionTagged::Trait { id } => Condition::Trait { id },
                 ConditionTagged::TreeSitter {
                     kind,
@@ -1346,7 +1377,7 @@ impl From<ConditionDeser> for Condition {
                     query,
                     language,
                     case_insensitive,
-                } => Condition::TreeSitter {
+                } => Condition::TreeSitter(TreeSitterQuery {
                     kind,
                     node,
                     exact,
@@ -1355,7 +1386,7 @@ impl From<ConditionDeser> for Condition {
                     query,
                     language,
                     case_insensitive,
-                },
+                }),
                 ConditionTagged::Yara { source } => Condition::Yara {
                     source,
                     compiled: None,
@@ -1370,13 +1401,13 @@ impl From<ConditionDeser> for Condition {
                     max,
                     min_size,
                     max_size,
-                } => Condition::Metrics {
+                } => Condition::Metrics(MetricsQuery {
                     field,
                     min,
                     max,
                     min_size,
                     max_size,
-                },
+                }),
                 ConditionTagged::Hex {
                     pattern,
                     not,
@@ -1385,7 +1416,7 @@ impl From<ConditionDeser> for Condition {
                     section,
                     section_offset,
                     section_offset_range,
-                } => Condition::Hex {
+                } => Condition::Hex(HexQuery {
                     pattern,
                     not,
                     offset,
@@ -1393,7 +1424,7 @@ impl From<ConditionDeser> for Condition {
                     section,
                     section_offset,
                     section_offset_range,
-                },
+                }),
                 ConditionTagged::Raw {
                     exact,
                     substr,
@@ -1407,7 +1438,7 @@ impl From<ConditionDeser> for Condition {
                     offset_range,
                     section_offset,
                     section_offset_range,
-                } => Condition::Raw {
+                } => Condition::Raw(RawQuery {
                     exact,
                     substr,
                     regex,
@@ -1420,7 +1451,7 @@ impl From<ConditionDeser> for Condition {
                     offset_range,
                     section_offset,
                     section_offset_range,
-                },
+                }),
                 ConditionTagged::Section {
                     exact,
                     substr,
@@ -1439,7 +1470,7 @@ impl From<ConditionDeser> for Condition {
                     size_ratio_max,
                     entropy_ratio_min,
                     entropy_ratio_max,
-                } => Condition::Section {
+                } => Condition::Section(SectionQuery {
                     exact,
                     substr,
                     regex,
@@ -1457,7 +1488,7 @@ impl From<ConditionDeser> for Condition {
                     size_ratio_max,
                     entropy_ratio_min,
                     entropy_ratio_max,
-                },
+                }),
                 ConditionTagged::Encoded {
                     encoding,
                     exact,
@@ -1472,7 +1503,7 @@ impl From<ConditionDeser> for Condition {
                     offset_range,
                     section_offset,
                     section_offset_range,
-                } => Condition::Encoded {
+                } => Condition::Encoded(EncodedQuery {
                     encoding,
                     exact,
                     substr,
@@ -1486,7 +1517,7 @@ impl From<ConditionDeser> for Condition {
                     offset_range,
                     section_offset,
                     section_offset_range,
-                },
+                }),
                 // `type: basename` is sugar for a filename-scoped path matcher.
                 ConditionTagged::Basename {
                     exact,
@@ -1494,7 +1525,7 @@ impl From<ConditionDeser> for Condition {
                     regex,
                     case_insensitive,
                     is_check,
-                } => Condition::Path {
+                } => Condition::Path(PathQuery {
                     exact,
                     substr,
                     regex,
@@ -1502,7 +1533,7 @@ impl From<ConditionDeser> for Condition {
                     is_check,
                     basename: true,
                     dirname: false,
-                },
+                }),
                 ConditionTagged::Path {
                     exact,
                     substr,
@@ -1511,7 +1542,7 @@ impl From<ConditionDeser> for Condition {
                     is_check,
                     basename,
                     dirname,
-                } => Condition::Path {
+                } => Condition::Path(PathQuery {
                     exact,
                     substr,
                     regex,
@@ -1519,7 +1550,7 @@ impl From<ConditionDeser> for Condition {
                     is_check,
                     basename,
                     dirname,
-                },
+                }),
                 ConditionTagged::Kv {
                     path,
                     exact,
@@ -1527,22 +1558,24 @@ impl From<ConditionDeser> for Condition {
                     regex,
                     eq,
                     ne,
+                    match_mode,
                     case_insensitive,
                     exists,
                     size_min,
                     size_max,
-                } => Condition::Kv {
+                } => Condition::Kv(KvQuery {
                     path,
                     exact,
                     substr,
                     regex,
                     eq,
                     ne,
+                    match_mode,
                     case_insensitive,
                     exists,
                     size_min,
                     size_max,
-                },
+                }),
             },
         }
     }
@@ -1551,7 +1584,7 @@ impl From<ConditionDeser> for Condition {
 impl From<Condition> for ConditionTagged {
     fn from(cond: Condition) -> Self {
         match cond {
-            Condition::Symbol {
+            Condition::Symbol(SymbolQuery {
                 exact,
                 substr,
                 regex,
@@ -1562,7 +1595,7 @@ impl From<Condition> for ConditionTagged {
                 args,
                 alias,
                 not,
-            } => ConditionTagged::Symbol {
+            }) => ConditionTagged::Symbol {
                 exact,
                 substr,
                 regex,
@@ -1574,7 +1607,7 @@ impl From<Condition> for ConditionTagged {
                 alias,
                 not,
             },
-            Condition::Text {
+            Condition::Text(TextQuery {
                 exact,
                 substr,
                 regex,
@@ -1588,7 +1621,7 @@ impl From<Condition> for ConditionTagged {
                 offset_range,
                 section_offset,
                 section_offset_range,
-            } => ConditionTagged::Text {
+            }) => ConditionTagged::Text {
                 exact,
                 substr,
                 regex,
@@ -1603,7 +1636,7 @@ impl From<Condition> for ConditionTagged {
                 section_offset,
                 section_offset_range,
             },
-            Condition::Comment {
+            Condition::Comment(CommentQuery {
                 exact,
                 substr,
                 regex,
@@ -1612,7 +1645,7 @@ impl From<Condition> for ConditionTagged {
                 is_check,
                 not,
                 platforms,
-            } => ConditionTagged::Comment {
+            }) => ConditionTagged::Comment {
                 exact,
                 substr,
                 regex,
@@ -1622,7 +1655,7 @@ impl From<Condition> for ConditionTagged {
                 not,
                 platforms,
             },
-            Condition::Literal {
+            Condition::Literal(LiteralQuery {
                 kind,
                 exact,
                 substr,
@@ -1639,7 +1672,7 @@ impl From<Condition> for ConditionTagged {
                 offset_range,
                 section_offset,
                 section_offset_range,
-            } => ConditionTagged::Literal {
+            }) => ConditionTagged::Literal {
                 kind,
                 exact,
                 substr,
@@ -1658,7 +1691,7 @@ impl From<Condition> for ConditionTagged {
                 section_offset_range,
             },
             Condition::Trait { id } => ConditionTagged::Trait { id },
-            Condition::TreeSitter {
+            Condition::TreeSitter(TreeSitterQuery {
                 kind,
                 node,
                 exact,
@@ -1667,7 +1700,7 @@ impl From<Condition> for ConditionTagged {
                 query,
                 language,
                 case_insensitive,
-            } => ConditionTagged::TreeSitter {
+            }) => ConditionTagged::TreeSitter {
                 kind,
                 node,
                 exact,
@@ -1685,20 +1718,20 @@ impl From<Condition> for ConditionTagged {
             Condition::Syscall { name, number, arch } => {
                 ConditionTagged::Syscall { name, number, arch }
             }
-            Condition::Metrics {
+            Condition::Metrics(MetricsQuery {
                 field,
                 min,
                 max,
                 min_size,
                 max_size,
-            } => ConditionTagged::Metrics {
+            }) => ConditionTagged::Metrics {
                 field,
                 min,
                 max,
                 min_size,
                 max_size,
             },
-            Condition::Hex {
+            Condition::Hex(HexQuery {
                 pattern,
                 not,
                 offset,
@@ -1706,7 +1739,7 @@ impl From<Condition> for ConditionTagged {
                 section,
                 section_offset,
                 section_offset_range,
-            } => ConditionTagged::Hex {
+            }) => ConditionTagged::Hex {
                 pattern,
                 not,
                 offset,
@@ -1715,7 +1748,7 @@ impl From<Condition> for ConditionTagged {
                 section_offset,
                 section_offset_range,
             },
-            Condition::Raw {
+            Condition::Raw(RawQuery {
                 exact,
                 substr,
                 regex,
@@ -1728,7 +1761,7 @@ impl From<Condition> for ConditionTagged {
                 offset_range,
                 section_offset,
                 section_offset_range,
-            } => ConditionTagged::Raw {
+            }) => ConditionTagged::Raw {
                 exact,
                 substr,
                 regex,
@@ -1742,7 +1775,7 @@ impl From<Condition> for ConditionTagged {
                 section_offset,
                 section_offset_range,
             },
-            Condition::Section {
+            Condition::Section(SectionQuery {
                 exact,
                 substr,
                 regex,
@@ -1760,7 +1793,7 @@ impl From<Condition> for ConditionTagged {
                 size_ratio_max,
                 entropy_ratio_min,
                 entropy_ratio_max,
-            } => ConditionTagged::Section {
+            }) => ConditionTagged::Section {
                 exact,
                 substr,
                 regex,
@@ -1779,7 +1812,7 @@ impl From<Condition> for ConditionTagged {
                 entropy_ratio_min,
                 entropy_ratio_max,
             },
-            Condition::Encoded {
+            Condition::Encoded(EncodedQuery {
                 encoding,
                 exact,
                 substr,
@@ -1793,7 +1826,7 @@ impl From<Condition> for ConditionTagged {
                 offset_range,
                 section_offset,
                 section_offset_range,
-            } => ConditionTagged::Encoded {
+            }) => ConditionTagged::Encoded {
                 encoding,
                 exact,
                 substr,
@@ -1808,7 +1841,7 @@ impl From<Condition> for ConditionTagged {
                 section_offset,
                 section_offset_range,
             },
-            Condition::Path {
+            Condition::Path(PathQuery {
                 exact,
                 substr,
                 regex,
@@ -1816,7 +1849,7 @@ impl From<Condition> for ConditionTagged {
                 is_check,
                 basename,
                 dirname,
-            } => ConditionTagged::Path {
+            }) => ConditionTagged::Path {
                 exact,
                 substr,
                 regex,
@@ -1825,24 +1858,26 @@ impl From<Condition> for ConditionTagged {
                 basename,
                 dirname,
             },
-            Condition::Kv {
+            Condition::Kv(KvQuery {
                 path,
                 exact,
                 substr,
                 regex,
                 eq,
                 ne,
+                match_mode,
                 case_insensitive,
                 exists,
                 size_min,
                 size_max,
-            } => ConditionTagged::Kv {
+            }) => ConditionTagged::Kv {
                 path,
                 exact,
                 substr,
                 regex,
                 eq,
                 ne,
+                match_mode,
                 case_insensitive,
                 exists,
                 size_min,
@@ -1861,121 +1896,18 @@ impl From<Condition> for ConditionTagged {
 #[serde(from = "ConditionDeser", into = "ConditionTagged")]
 pub(crate) enum Condition {
     /// Match a symbol (import/export/function/forward)
-    Symbol {
-        /// Full symbol name match (entire symbol must equal this)
-        #[serde(skip_serializing_if = "Option::is_none")]
-        exact: Option<String>,
-        /// Substring match (appears anywhere in symbol name)
-        #[serde(skip_serializing_if = "Option::is_none")]
-        substr: Option<String>,
-        /// Regex pattern to match symbol names
-        #[serde(skip_serializing_if = "Option::is_none")]
-        regex: Option<String>,
-        /// Platform filter - only evaluate this condition for these platforms
-        #[serde(skip_serializing_if = "Option::is_none")]
-        platforms: Option<Vec<Platform>>,
-        /// Optional high-fidelity validation check
-        #[serde(rename = "is", default)]
-        is_check: Option<StringValidator>,
-        /// Restrict match to a specific symbol category. `None` matches
-        /// across imports, exports, and internal functions.
-        #[serde(skip_serializing_if = "Option::is_none", default)]
-        kind: Option<SymbolKind>,
-        /// Per-argument filter (kind=call only). Narrows matches to
-        /// call sites whose argument list contains at least one arg
-        /// matching the filter — e.g. `chmod(_, 0o777)` via
-        /// `kind: call, name: chmod, arg: { kind: number, value: 511,
-        /// radix: 8 }`.
-        #[serde(skip_serializing_if = "Option::is_none", default)]
-        arg: Option<ArgFilter>,
-        /// Multi-argument filter (kind=call only) — every filter must be
-        /// satisfied by a distinct arg of the call (`File.rename("a.png",
-        /// "b.exe")`). Combined (AND) with `arg` when both are present.
-        #[serde(skip_serializing_if = "Option::is_none", default)]
-        args: Option<Vec<ArgFilter>>,
-        /// Import-alias filter (kind=import only) — matches the local alias of
-        /// an aliased import. Present → only aliased imports match.
-        #[serde(skip_serializing_if = "Option::is_none", default)]
-        alias: Option<AliasFilter>,
-        /// Exclude individual matches where the symbol name matches any of
-        /// these patterns. Combined (OR) with the trait-level `not:` filter.
-        #[serde(skip_serializing_if = "Option::is_none", default)]
-        not: Option<Vec<NotException>>,
-    },
+    Symbol(SymbolQuery),
 
     /// Match human-readable text.
     ///
     /// On binary-like formats this searches extracted strings for speed. On
     /// source and structured text formats it searches raw file text.
-    Text {
-        /// Full text match (entire string or content slice must equal this)
-        #[serde(skip_serializing_if = "Option::is_none")]
-        exact: Option<String>,
-        /// Substring match (appears anywhere in text)
-        #[serde(skip_serializing_if = "Option::is_none")]
-        substr: Option<String>,
-        /// Regex pattern match
-        #[serde(skip_serializing_if = "Option::is_none")]
-        regex: Option<String>,
-        /// Match pattern only at word boundaries (convenience for \bpattern\b)
-        #[serde(skip_serializing_if = "Option::is_none")]
-        word: Option<String>,
-        /// If true, matching is case-insensitive
-        #[serde(default)]
-        case_insensitive: bool,
-        /// Optional high-fidelity validation check
-        #[serde(rename = "is", default)]
-        is_check: Option<StringValidator>,
-        /// Exclude individual matches where evidence matches any of these patterns
-        #[serde(skip_serializing_if = "Option::is_none")]
-        not: Option<Vec<NotException>>,
-        /// Platform filter - only evaluate this condition for these platforms
-        #[serde(skip_serializing_if = "Option::is_none")]
-        platforms: Option<Vec<Platform>>,
-        /// Section constraint: only match text in this section (supports fuzzy names like "text")
-        #[serde(skip_serializing_if = "Option::is_none")]
-        section: Option<String>,
-        /// Absolute file offset: only match at this exact byte position (negative = from end)
-        #[serde(skip_serializing_if = "Option::is_none")]
-        offset: Option<i64>,
-        /// Absolute offset range: [start, end) (negative values resolved from file end)
-        #[serde(
-            skip_serializing_if = "Option::is_none",
-            deserialize_with = "offset_range_serde::deserialize"
-        )]
-        offset_range: Option<(i64, Option<i64>)>,
-        /// Section-relative offset: only match at this offset within the section
-        #[serde(skip_serializing_if = "Option::is_none")]
-        section_offset: Option<i64>,
-        /// Section-relative offset range: [start, end) within section bounds
-        #[serde(
-            skip_serializing_if = "Option::is_none",
-            deserialize_with = "offset_range_serde::deserialize"
-        )]
-        section_offset_range: Option<(i64, Option<i64>)>,
-    },
+    Text(TextQuery),
 
     /// Match against source-code comment bodies only (`report.comments`).
     /// The lowest-false-positive tier for "keyword mentioned in a comment"
     /// rules — never fires on the same keyword in code or a string literal.
-    Comment {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        exact: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        substr: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        regex: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        word: Option<String>,
-        #[serde(default)]
-        case_insensitive: bool,
-        #[serde(rename = "is", default)]
-        is_check: Option<StringValidator>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        not: Option<Vec<NotException>>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        platforms: Option<Vec<Platform>>,
-    },
+    Comment(CommentQuery),
 
     /// Match a language-level literal recovered by the AST walker.
     ///
@@ -1987,65 +1919,7 @@ pub(crate) enum Condition {
     ///
     /// Only works on file types with tree-sitter support; does not
     /// fall back to raw text.
-    Literal {
-        /// Literal kind to match: `string` (default) or `number`.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        kind: Option<String>,
-        /// Full literal match (string mode) — entire literal text must equal this.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        exact: Option<String>,
-        /// Substring match (string mode) — appears anywhere in the literal.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        substr: Option<String>,
-        /// Regex pattern match (string mode).
-        #[serde(skip_serializing_if = "Option::is_none")]
-        regex: Option<String>,
-        /// Word-boundary substring match (string mode).
-        #[serde(skip_serializing_if = "Option::is_none")]
-        word: Option<String>,
-        /// Numeric value (kind=number) — matches when the literal's
-        /// parsed integer equals this.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        value: Option<i64>,
-        /// Source-written radix (kind=number): 2, 8, 10, 16. When set
-        /// with `value`, both must match — distinguishes `0o777` from
-        /// `511` even though they parse to the same integer.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        radix: Option<u32>,
-        /// Case-insensitive matching (string mode).
-        #[serde(default)]
-        case_insensitive: bool,
-        /// Optional high-fidelity validation check (string mode).
-        #[serde(rename = "is", default)]
-        is_check: Option<StringValidator>,
-        /// Exclude individual matches where evidence matches any of these patterns.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        not: Option<Vec<NotException>>,
-        /// Platform filter.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        platforms: Option<Vec<Platform>>,
-        /// Section constraint.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        section: Option<String>,
-        /// Absolute file offset.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        offset: Option<i64>,
-        /// Absolute offset range: [start, end).
-        #[serde(
-            skip_serializing_if = "Option::is_none",
-            deserialize_with = "offset_range_serde::deserialize"
-        )]
-        offset_range: Option<(i64, Option<i64>)>,
-        /// Section-relative offset.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        section_offset: Option<i64>,
-        /// Section-relative offset range: [start, end).
-        #[serde(
-            skip_serializing_if = "Option::is_none",
-            deserialize_with = "offset_range_serde::deserialize"
-        )]
-        section_offset_range: Option<(i64, Option<i64>)>,
-    },
+    Literal(LiteralQuery),
 
     /// Reference a previously-defined trait by ID
     Trait {
@@ -2081,32 +1955,7 @@ pub(crate) enum Condition {
     ///     (#eq? @fn "eval"))
     /// language: javascript    # optional, for validation
     /// ```
-    TreeSitter {
-        /// Abstract node category (e.g., "call", "function", "class")
-        #[serde(skip_serializing_if = "Option::is_none")]
-        kind: Option<String>,
-        /// Raw tree-sitter node type (escape hatch, bypasses kind mapping)
-        #[serde(skip_serializing_if = "Option::is_none")]
-        node: Option<String>,
-        /// Full match (entire node text must equal this)
-        #[serde(skip_serializing_if = "Option::is_none")]
-        exact: Option<String>,
-        /// Substring match (appears anywhere in node text)
-        #[serde(skip_serializing_if = "Option::is_none")]
-        substr: Option<String>,
-        /// Regex match in node text
-        #[serde(skip_serializing_if = "Option::is_none")]
-        regex: Option<String>,
-        /// Tree-sitter S-expression query (advanced mode)
-        #[serde(skip_serializing_if = "Option::is_none")]
-        query: Option<String>,
-        /// Language hint for query validation
-        #[serde(skip_serializing_if = "Option::is_none")]
-        language: Option<String>,
-        /// Case-insensitive matching (default: false)
-        #[serde(default)]
-        case_insensitive: bool,
-    },
+    TreeSitter(TreeSitterQuery),
 
     /// Inline YARA rule for pattern matching
     /// Example: { type: yara, source: "rule test { strings: $a = \"test\" if: $a }" }
@@ -2138,22 +1987,7 @@ pub(crate) enum Condition {
 
     /// Check computed metrics for obfuscation/anomaly detection
     /// For detecting obfuscation patterns in source code via statistical analysis
-    Metrics {
-        /// Metric path (e.g., "identifiers.avg_entropy", "functions.density_per_100_lines")
-        field: String,
-        /// Minimum value threshold
-        #[serde(skip_serializing_if = "Option::is_none")]
-        min: Option<f64>,
-        /// Maximum value threshold
-        #[serde(skip_serializing_if = "Option::is_none")]
-        max: Option<f64>,
-        /// Minimum file size in bytes (only apply this rule to files >= this size)
-        #[serde(skip_serializing_if = "Option::is_none")]
-        min_size: Option<u64>,
-        /// Maximum file size in bytes (only apply this rule to files <= this size)
-        #[serde(skip_serializing_if = "Option::is_none")]
-        max_size: Option<u64>,
-    },
+    Metrics(MetricsQuery),
 
     /// Match hex byte patterns in binary data
     /// Supports wildcards (??) and variable-length gaps ([N] or [N-M])
@@ -2161,29 +1995,7 @@ pub(crate) enum Condition {
     /// Example: { type: hex, pattern: "7F 45 4C 46" }  # ELF magic
     /// Example: { type: hex, pattern: "31 ?? 48 83" }  # With wildcards - ?? bytes will be extracted
     /// Example: { type: hex, pattern: "00 03 [4] 00 04" }  # With 4-byte gap
-    Hex {
-        /// Hex pattern with optional wildcards (??) and gaps ([N] or [N-M])
-        /// Format: space-separated hex bytes, ?? for any byte, [N] for N-byte gap
-        pattern: String,
-        /// Exclude individual matches where evidence matches any of these patterns
-        #[serde(skip_serializing_if = "Option::is_none")]
-        not: Option<Vec<NotException>>,
-        /// Absolute file offset (negative = from end of file)
-        #[serde(skip_serializing_if = "Option::is_none")]
-        offset: Option<i64>,
-        /// Absolute offset range: [start, end) (negative values resolved from file end, null = open-ended)
-        #[serde(skip_serializing_if = "Option::is_none")]
-        offset_range: Option<(i64, Option<i64>)>,
-        /// Section constraint: only match in this section (supports fuzzy names like "text")
-        #[serde(skip_serializing_if = "Option::is_none")]
-        section: Option<String>,
-        /// Section-relative offset: only match at this offset within the section
-        #[serde(skip_serializing_if = "Option::is_none")]
-        section_offset: Option<i64>,
-        /// Section-relative offset range: [start, end) within section bounds
-        #[serde(skip_serializing_if = "Option::is_none")]
-        section_offset_range: Option<(i64, Option<i64>)>,
-    },
+    Hex(HexQuery),
 
     /// Search raw file content directly (for source files or matching across
     /// string boundaries in binaries). Unlike `type: text` which only searches
@@ -2194,183 +2006,22 @@ pub(crate) enum Condition {
     /// Example: { type: raw, exact: "#!/bin/sh" }  # Entire file must equal this
     /// Example: { type: raw, regex: "\\bpassword\\s*=", case_insensitive: true }
     /// Example: { type: raw, word: "socket" }  # Match "socket" as whole word
-    Raw {
-        /// Full file match (entire file content must equal this)
-        #[serde(skip_serializing_if = "Option::is_none")]
-        exact: Option<String>,
-        /// Substring match (appears anywhere in file)
-        #[serde(skip_serializing_if = "Option::is_none")]
-        substr: Option<String>,
-        /// Regex pattern to match
-        #[serde(skip_serializing_if = "Option::is_none")]
-        regex: Option<String>,
-        /// Match pattern only at word boundaries (convenience for \bpattern\b)
-        #[serde(skip_serializing_if = "Option::is_none")]
-        word: Option<String>,
-        /// Case insensitive matching (default: false)
-        #[serde(default)]
-        case_insensitive: bool,
-        /// Optional high-fidelity validation check
-        #[serde(rename = "is", default)]
-        is_check: Option<StringValidator>,
-        /// Exclude individual matches where evidence matches any of these patterns
-        #[serde(skip_serializing_if = "Option::is_none")]
-        not: Option<Vec<NotException>>,
-        /// Section constraint: only match in this section (supports fuzzy names like "text")
-        #[serde(skip_serializing_if = "Option::is_none")]
-        section: Option<String>,
-        /// Absolute file offset: only match at this exact byte position (negative = from end)
-        #[serde(skip_serializing_if = "Option::is_none")]
-        offset: Option<i64>,
-        /// Absolute offset range: [start, end) (negative values resolved from file end)
-        #[serde(
-            skip_serializing_if = "Option::is_none",
-            deserialize_with = "offset_range_serde::deserialize"
-        )]
-        offset_range: Option<(i64, Option<i64>)>,
-        /// Section-relative offset: only match at this offset within the section
-        #[serde(skip_serializing_if = "Option::is_none")]
-        section_offset: Option<i64>,
-        /// Section-relative offset range: [start, end) within section bounds
-        #[serde(
-            skip_serializing_if = "Option::is_none",
-            deserialize_with = "offset_range_serde::deserialize"
-        )]
-        section_offset_range: Option<(i64, Option<i64>)>,
-    },
+    Raw(RawQuery),
 
     /// Match section names in binary files (PE, ELF, Mach-O)
     /// Replaces YARA patterns like: `for any section in pe.sections : (section.name matches /^UPX/)`
     /// Example: { type: section, regex: "^UPX" }
     /// Example: { type: section, substr: "upx", case_insensitive: true }
-    Section {
-        /// Full section name match (entire name must equal this)
-        #[serde(skip_serializing_if = "Option::is_none")]
-        exact: Option<String>,
-        /// Substring match (appears anywhere in section name)
-        #[serde(skip_serializing_if = "Option::is_none")]
-        substr: Option<String>,
-        /// Regex pattern to match
-        #[serde(skip_serializing_if = "Option::is_none")]
-        regex: Option<String>,
-        /// Word boundary match (equivalent to regex "\bword\b")
-        #[serde(skip_serializing_if = "Option::is_none")]
-        word: Option<String>,
-        /// Case insensitive matching (default: false)
-        #[serde(default)]
-        case_insensitive: bool,
-        /// Minimum section length in bytes
-        #[serde(skip_serializing_if = "Option::is_none")]
-        length_min: Option<u64>,
-        /// Maximum section length in bytes
-        #[serde(skip_serializing_if = "Option::is_none")]
-        length_max: Option<u64>,
-        /// Minimum section entropy (0.0-8.0)
-        #[serde(skip_serializing_if = "Option::is_none")]
-        entropy_min: Option<f64>,
-        /// Maximum section entropy (0.0-8.0)
-        #[serde(skip_serializing_if = "Option::is_none")]
-        entropy_max: Option<f64>,
-        /// Require section to have read permission (works across PE/ELF/Mach-O)
-        #[serde(skip_serializing_if = "Option::is_none")]
-        readable: Option<bool>,
-        /// Require section to have write permission (works across PE/ELF/Mach-O)
-        #[serde(skip_serializing_if = "Option::is_none")]
-        writable: Option<bool>,
-        /// Require section to have execute permission (works across PE/ELF/Mach-O)
-        #[serde(skip_serializing_if = "Option::is_none")]
-        executable: Option<bool>,
-        /// Reference section (or `"total"` for file size) used as the denominator
-        /// for both `size_ratio_*` and `entropy_ratio_*` checks. Defaults to
-        /// `"total"` when a size ratio is requested and no pattern is given.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        compare_to: Option<String>,
-        /// Minimum ratio of matched-section size to denominator size.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        size_ratio_min: Option<f64>,
-        /// Maximum ratio of matched-section size to denominator size.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        size_ratio_max: Option<f64>,
-        /// Minimum ratio of matched-section entropy to denominator entropy.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        entropy_ratio_min: Option<f64>,
-        /// Maximum ratio of matched-section entropy to denominator entropy.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        entropy_ratio_max: Option<f64>,
-    },
+    Section(SectionQuery),
 
     /// Match patterns in encoded/decoded strings (unified replacement for base64/xor)
     /// Example: { type: encoded, encoding: base64, regex: "https?://" }
     /// Example: { type: encoded, encoding: [xor, hex], substr: "eval(" }
     /// Example: { type: encoded, word: "password" } - searches ALL encoded strings
-    Encoded {
-        /// Optional encoding filter - single, multiple, or omit for all
-        /// Examples: "base64", ["xor", "hex"], "xor+base64" (chain)
-        #[serde(default)]
-        encoding: Option<EncodingSpec>,
-        /// Full match (entire decoded string must equal this)
-        #[serde(skip_serializing_if = "Option::is_none")]
-        exact: Option<String>,
-        /// Substring match (appears anywhere in decoded string)
-        #[serde(skip_serializing_if = "Option::is_none")]
-        substr: Option<String>,
-        /// Regex pattern to match
-        #[serde(skip_serializing_if = "Option::is_none")]
-        regex: Option<String>,
-        /// Word boundary match (equivalent to regex "\bword\b")
-        #[serde(skip_serializing_if = "Option::is_none")]
-        word: Option<String>,
-        /// Case insensitive matching
-        #[serde(default)]
-        case_insensitive: bool,
-        /// Optional high-fidelity validation check
-        #[serde(rename = "is", default)]
-        is_check: Option<StringValidator>,
-        /// Exclude individual matches where evidence matches any of these patterns
-        #[serde(skip_serializing_if = "Option::is_none")]
-        not: Option<Vec<NotException>>,
-        /// Section constraint: only match in this section (supports fuzzy names like "text")
-        #[serde(skip_serializing_if = "Option::is_none")]
-        section: Option<String>,
-        /// Absolute file offset: only match at this exact byte position (negative = from end)
-        #[serde(skip_serializing_if = "Option::is_none")]
-        offset: Option<i64>,
-        /// Absolute offset range: [start, end) (negative values resolved from file end)
-        #[serde(
-            skip_serializing_if = "Option::is_none",
-            deserialize_with = "offset_range_serde::deserialize"
-        )]
-        offset_range: Option<(i64, Option<i64>)>,
-        /// Section-relative offset: only match at this offset within the section
-        #[serde(skip_serializing_if = "Option::is_none")]
-        section_offset: Option<i64>,
-        /// Section-relative offset range: [start, end) within section bounds
-        #[serde(
-            skip_serializing_if = "Option::is_none",
-            deserialize_with = "offset_range_serde::deserialize"
-        )]
-        section_offset_range: Option<(i64, Option<i64>)>,
-    },
+    Encoded(EncodedQuery),
 
     /// Match the file path. Full path by default; `basename`/`dirname` scope it.
-    Path {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        exact: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        substr: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        regex: Option<String>,
-        #[serde(default)]
-        case_insensitive: bool,
-        #[serde(rename = "is", default)]
-        is_check: Option<StringValidator>,
-        /// Match only the final path component (filename).
-        #[serde(default)]
-        basename: bool,
-        /// Match only the directory portion of the path.
-        #[serde(default)]
-        dirname: bool,
-    },
+    Path(PathQuery),
 
     /// Query structural values using path expressions.
     /// Supports dot notation for nested access and [*] for array iteration.
@@ -2379,46 +2030,212 @@ pub(crate) enum Condition {
     /// Example: { type: value, path: "content_scripts[*].matches", is: "<all_urls>" }
     /// Example: { type: value, path: "maintainers", size_min: 1, size_max: 1 }
     /// Example: { type: value, path: "file.basename", ne: "pe.version_info.original_filename" }
-    Kv {
-        /// Path to navigate using dot notation, [n] for indices, [*] for wildcards.
-        /// Accepts an optional `<filename>::` prefix to reference a sibling
-        /// file's values within the same archive scope.
-        path: String,
-        /// Value/element equals exactly
-        #[serde(
-            rename = "is",
-            alias = "exact",
-            skip_serializing_if = "Option::is_none"
-        )]
-        exact: Option<String>,
-        /// Value/element contains substring
-        #[serde(skip_serializing_if = "Option::is_none")]
-        substr: Option<String>,
-        /// Value/element matches regex pattern
-        #[serde(skip_serializing_if = "Option::is_none")]
-        regex: Option<String>,
-        /// Right-hand-side value path for cross-fact equality. When set,
-        /// the value at `path` must equal the value at `eq` (case-insensitive,
-        /// whitespace-trimmed). Paths accept an optional `<filename>::`
-        /// prefix to cross archive entries.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        eq: Option<String>,
-        /// Right-hand-side value path for cross-fact inequality.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        ne: Option<String>,
-        /// Case insensitive matching (default: false)
-        #[serde(default)]
-        case_insensitive: bool,
-        /// Explicit existence check (true = must exist, false = must not exist)
-        #[serde(skip_serializing_if = "Option::is_none")]
-        exists: Option<bool>,
-        /// Minimum collection size (array elements or object keys)
-        #[serde(skip_serializing_if = "Option::is_none")]
-        size_min: Option<usize>,
-        /// Maximum collection size (array elements or object keys)
-        #[serde(skip_serializing_if = "Option::is_none")]
-        size_max: Option<usize>,
-    },
+    Kv(KvQuery),
+}
+
+/// Payload for a `type: value` (kv) condition. A named, `Default`-able struct so
+/// call sites build it with `KvQuery { path, ..Default::default() }` and adding a
+/// field touches only the sites that set it. The wire format lives in
+/// `ConditionTagged::Kv`; this is the internal representation, so it carries no
+/// serde attributes.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct KvQuery {
+    /// Path to navigate using dot notation, `[n]` for indices, `[*]` for
+    /// wildcards. Accepts an optional `<filename>::` prefix to reference a
+    /// sibling file's values within the same archive scope.
+    pub path: String,
+    /// Value/element equals exactly.
+    pub exact: Option<String>,
+    /// Value/element contains substring.
+    pub substr: Option<String>,
+    /// Value/element matches regex pattern.
+    pub regex: Option<String>,
+    /// Right-hand-side value path for cross-fact equality (case-insensitive,
+    /// whitespace-trimmed). Accepts a `<filename>::` sibling prefix.
+    pub eq: Option<String>,
+    /// Right-hand-side value path for cross-fact inequality.
+    pub ne: Option<String>,
+    /// Quantifier when `eq`/`ne` resolves to multiple values (`any`/`all`).
+    pub match_mode: ArrayQuantifier,
+    /// Case insensitive matching (default: false).
+    pub case_insensitive: bool,
+    /// Explicit existence check (true = must exist, false = must not exist).
+    pub exists: Option<bool>,
+    /// Minimum collection size (array elements or object keys).
+    pub size_min: Option<usize>,
+    /// Maximum collection size (array elements or object keys).
+    pub size_max: Option<usize>,
+}
+
+/// Payload for `type: text` — byte-scan over extracted strings / raw source text.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct TextQuery {
+    pub exact: Option<String>,
+    pub substr: Option<String>,
+    pub regex: Option<String>,
+    pub word: Option<String>,
+    pub case_insensitive: bool,
+    pub is_check: Option<StringValidator>,
+    pub not: Option<Vec<NotException>>,
+    pub platforms: Option<Vec<Platform>>,
+    pub section: Option<String>,
+    pub offset: Option<i64>,
+    pub offset_range: Option<(i64, Option<i64>)>,
+    pub section_offset: Option<i64>,
+    pub section_offset_range: Option<(i64, Option<i64>)>,
+}
+
+/// Payload for `type: raw` — substring/regex over the full raw file bytes.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct RawQuery {
+    pub exact: Option<String>,
+    pub substr: Option<String>,
+    pub regex: Option<String>,
+    pub word: Option<String>,
+    pub case_insensitive: bool,
+    pub is_check: Option<StringValidator>,
+    pub not: Option<Vec<NotException>>,
+    pub section: Option<String>,
+    pub offset: Option<i64>,
+    pub offset_range: Option<(i64, Option<i64>)>,
+    pub section_offset: Option<i64>,
+    pub section_offset_range: Option<(i64, Option<i64>)>,
+}
+
+/// Payload for `type: encoded` — matches across decoded-string layers.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct EncodedQuery {
+    pub encoding: Option<EncodingSpec>,
+    pub exact: Option<String>,
+    pub substr: Option<String>,
+    pub regex: Option<String>,
+    pub word: Option<String>,
+    pub case_insensitive: bool,
+    pub is_check: Option<StringValidator>,
+    pub not: Option<Vec<NotException>>,
+    pub section: Option<String>,
+    pub offset: Option<i64>,
+    pub offset_range: Option<(i64, Option<i64>)>,
+    pub section_offset: Option<i64>,
+    pub section_offset_range: Option<(i64, Option<i64>)>,
+}
+
+/// Payload for `type: section` — binary section name/size/entropy/permission match.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct SectionQuery {
+    pub exact: Option<String>,
+    pub substr: Option<String>,
+    pub regex: Option<String>,
+    pub word: Option<String>,
+    pub case_insensitive: bool,
+    pub length_min: Option<u64>,
+    pub length_max: Option<u64>,
+    pub entropy_min: Option<f64>,
+    pub entropy_max: Option<f64>,
+    pub readable: Option<bool>,
+    pub writable: Option<bool>,
+    pub executable: Option<bool>,
+    pub compare_to: Option<String>,
+    pub size_ratio_min: Option<f64>,
+    pub size_ratio_max: Option<f64>,
+    pub entropy_ratio_min: Option<f64>,
+    pub entropy_ratio_max: Option<f64>,
+}
+
+/// Payload for `type: symbol` — imports/exports/functions/calls.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct SymbolQuery {
+    pub exact: Option<String>,
+    pub substr: Option<String>,
+    pub regex: Option<String>,
+    pub platforms: Option<Vec<Platform>>,
+    pub is_check: Option<StringValidator>,
+    pub kind: Option<SymbolKind>,
+    pub arg: Option<ArgFilter>,
+    pub args: Option<Vec<ArgFilter>>,
+    pub alias: Option<AliasFilter>,
+    pub not: Option<Vec<NotException>>,
+}
+
+/// Payload for `type: comment` — source comment-body matches.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct CommentQuery {
+    pub exact: Option<String>,
+    pub substr: Option<String>,
+    pub regex: Option<String>,
+    pub word: Option<String>,
+    pub case_insensitive: bool,
+    pub is_check: Option<StringValidator>,
+    pub not: Option<Vec<NotException>>,
+    pub platforms: Option<Vec<Platform>>,
+}
+
+/// Payload for `type: literal` — parser-extracted string/number literals.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct LiteralQuery {
+    pub kind: Option<String>,
+    pub exact: Option<String>,
+    pub substr: Option<String>,
+    pub regex: Option<String>,
+    pub word: Option<String>,
+    pub value: Option<i64>,
+    pub radix: Option<u32>,
+    pub case_insensitive: bool,
+    pub is_check: Option<StringValidator>,
+    pub not: Option<Vec<NotException>>,
+    pub platforms: Option<Vec<Platform>>,
+    pub section: Option<String>,
+    pub offset: Option<i64>,
+    pub offset_range: Option<(i64, Option<i64>)>,
+    pub section_offset: Option<i64>,
+    pub section_offset_range: Option<(i64, Option<i64>)>,
+}
+
+/// Payload for `type: tree-sitter` — live tree-sitter query escape hatch.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct TreeSitterQuery {
+    pub kind: Option<String>,
+    pub node: Option<String>,
+    pub exact: Option<String>,
+    pub substr: Option<String>,
+    pub regex: Option<String>,
+    pub query: Option<String>,
+    pub language: Option<String>,
+    pub case_insensitive: bool,
+}
+
+/// Payload for `type: hex` — byte-pattern match with wildcards/gaps.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct HexQuery {
+    pub pattern: String,
+    pub not: Option<Vec<NotException>>,
+    pub offset: Option<i64>,
+    pub offset_range: Option<(i64, Option<i64>)>,
+    pub section: Option<String>,
+    pub section_offset: Option<i64>,
+    pub section_offset_range: Option<(i64, Option<i64>)>,
+}
+
+/// Payload for `type: path` — file path / basename / dirname match.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct PathQuery {
+    pub exact: Option<String>,
+    pub substr: Option<String>,
+    pub regex: Option<String>,
+    pub case_insensitive: bool,
+    pub is_check: Option<StringValidator>,
+    pub basename: bool,
+    pub dirname: bool,
+}
+
+/// Payload for `type: metrics` — computed metric threshold check.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct MetricsQuery {
+    pub field: String,
+    pub min: Option<f64>,
+    pub max: Option<f64>,
+    pub min_size: Option<u64>,
+    pub max_size: Option<u64>,
 }
 
 impl Condition {
@@ -2440,12 +2257,11 @@ impl Condition {
 
         match self {
             // Section analysis is binary-only
-            Condition::Section { .. } => is_binary,
+            Condition::Section(SectionQuery { .. }) => is_binary,
 
             // AST-backed searches require source code support
-            Condition::TreeSitter { .. } | Condition::Literal { .. } => {
-                file_type.supports_ast_queries()
-            }
+            Condition::TreeSitter(TreeSitterQuery { .. })
+            | Condition::Literal(LiteralQuery { .. }) => file_type.supports_ast_queries(),
 
             // All other conditions can potentially match any file type
             _ => true,
@@ -2456,22 +2272,22 @@ impl Condition {
     #[must_use]
     pub(crate) fn type_name(&self) -> &'static str {
         match self {
-            Condition::Symbol { .. } => "symbol",
-            Condition::Text { .. } => "text",
-            Condition::Comment { .. } => "comment",
-            Condition::Literal { .. } => "string_literal",
+            Condition::Symbol(SymbolQuery { .. }) => "symbol",
+            Condition::Text(TextQuery { .. }) => "text",
+            Condition::Comment(CommentQuery { .. }) => "comment",
+            Condition::Literal(LiteralQuery { .. }) => "string_literal",
             Condition::Trait { .. } => "trait",
-            Condition::TreeSitter { .. } => "tree-sitter",
+            Condition::TreeSitter(TreeSitterQuery { .. }) => "tree-sitter",
             Condition::Yara { .. } => "yara",
             Condition::Syscall { .. } => "syscall",
-            Condition::Metrics { .. } => "metrics",
-            Condition::Hex { .. } => "hex",
-            Condition::Raw { .. } => "raw",
-            Condition::Section { .. } => "section",
-            Condition::Encoded { .. } => "encoded",
-            Condition::Path {
+            Condition::Metrics(MetricsQuery { .. }) => "metrics",
+            Condition::Hex(HexQuery { .. }) => "hex",
+            Condition::Raw(RawQuery { .. }) => "raw",
+            Condition::Section(SectionQuery { .. }) => "section",
+            Condition::Encoded(EncodedQuery { .. }) => "encoded",
+            Condition::Path(PathQuery {
                 basename, dirname, ..
-            } => {
+            }) => {
                 if *basename {
                     "basename"
                 } else if *dirname {
@@ -2480,7 +2296,7 @@ impl Condition {
                     "path"
                 }
             }
-            Condition::Kv { .. } => "value",
+            Condition::Kv(KvQuery { .. }) => "value",
         }
     }
 
@@ -2497,7 +2313,7 @@ impl Condition {
                     .map_err(|e| anyhow::anyhow!("invalid YARA rule: {}", e))?;
                 Ok(())
             }
-            Condition::TreeSitter {
+            Condition::TreeSitter(TreeSitterQuery {
                 kind,
                 node,
                 exact,
@@ -2506,7 +2322,7 @@ impl Condition {
                 query,
                 language,
                 ..
-            } => {
+            }) => {
                 // Validate mode: either (kind/node + exact/substr/regex) or query, not both
                 let has_simple_mode = kind.is_some() || node.is_some();
                 let has_pattern = exact.is_some() || substr.is_some() || regex.is_some();
@@ -2549,13 +2365,13 @@ impl Condition {
 
                 Ok(())
             }
-            Condition::Kv {
+            Condition::Kv(KvQuery {
                 path,
                 exact,
                 substr,
                 regex,
                 ..
-            } => {
+            }) => {
                 // Path must not be empty
                 if path.is_empty() {
                     return Err(anyhow::anyhow!("value condition requires non-empty path"));
@@ -2578,14 +2394,14 @@ impl Condition {
                 Ok(())
             }
             // Validate location constraints for string/content conditions
-            Condition::Text {
+            Condition::Text(TextQuery {
                 section,
                 offset,
                 offset_range,
                 section_offset,
                 section_offset_range,
                 ..
-            } => validate_location_constraints(
+            }) => validate_location_constraints(
                 section,
                 *offset,
                 *offset_range,
@@ -2593,14 +2409,14 @@ impl Condition {
                 *section_offset_range,
                 "text",
             ),
-            Condition::Literal {
+            Condition::Literal(LiteralQuery {
                 section,
                 offset,
                 offset_range,
                 section_offset,
                 section_offset_range,
                 ..
-            } => validate_location_constraints(
+            }) => validate_location_constraints(
                 section,
                 *offset,
                 *offset_range,
@@ -2608,14 +2424,14 @@ impl Condition {
                 *section_offset_range,
                 "string_literal",
             ),
-            Condition::Raw {
+            Condition::Raw(RawQuery {
                 section,
                 offset,
                 offset_range,
                 section_offset,
                 section_offset_range,
                 ..
-            } => validate_location_constraints(
+            }) => validate_location_constraints(
                 section,
                 *offset,
                 *offset_range,
@@ -2623,14 +2439,14 @@ impl Condition {
                 *section_offset_range,
                 "content",
             ),
-            Condition::Hex {
+            Condition::Hex(HexQuery {
                 section,
                 offset,
                 offset_range,
                 section_offset,
                 section_offset_range,
                 ..
-            } => {
+            }) => {
                 // Validate location constraints
                 validate_location_constraints(
                     section,
@@ -2678,9 +2494,9 @@ impl Condition {
     #[must_use]
     pub(crate) fn check_greedy_patterns(&self) -> Option<String> {
         let regex_to_check = match self {
-            Condition::Text { regex: Some(r), .. }
-            | Condition::Raw { regex: Some(r), .. }
-            | Condition::TreeSitter { regex: Some(r), .. } => Some(r.as_str()),
+            Condition::Text(TextQuery { regex: Some(r), .. })
+            | Condition::Raw(RawQuery { regex: Some(r), .. })
+            | Condition::TreeSitter(TreeSitterQuery { regex: Some(r), .. }) => Some(r.as_str()),
             _ => None,
         };
 
@@ -2700,9 +2516,9 @@ impl Condition {
     #[must_use]
     pub(crate) fn check_word_boundary_regex(&self) -> Option<String> {
         let regex_to_check = match self {
-            Condition::Text { regex: Some(r), .. }
-            | Condition::Literal { regex: Some(r), .. }
-            | Condition::Raw { regex: Some(r), .. } => Some(r.as_str()),
+            Condition::Text(TextQuery { regex: Some(r), .. })
+            | Condition::Literal(LiteralQuery { regex: Some(r), .. })
+            | Condition::Raw(RawQuery { regex: Some(r), .. }) => Some(r.as_str()),
             _ => None,
         };
 
@@ -2772,61 +2588,61 @@ impl Condition {
         };
 
         match self {
-            Condition::Text {
+            Condition::Text(TextQuery {
                 exact: Some(s),
                 case_insensitive: true,
                 ..
-            }
-            | Condition::Literal {
+            })
+            | Condition::Literal(LiteralQuery {
                 exact: Some(s),
                 case_insensitive: true,
                 ..
-            }
-            | Condition::Raw {
+            })
+            | Condition::Raw(RawQuery {
                 exact: Some(s),
                 case_insensitive: true,
                 ..
-            }
-            | Condition::TreeSitter {
+            })
+            | Condition::TreeSitter(TreeSitterQuery {
                 exact: Some(s),
                 case_insensitive: true,
                 ..
-            }
-            | Condition::Text {
+            })
+            | Condition::Text(TextQuery {
                 substr: Some(s),
                 case_insensitive: true,
                 ..
-            }
-            | Condition::Literal {
+            })
+            | Condition::Literal(LiteralQuery {
                 substr: Some(s),
                 case_insensitive: true,
                 ..
-            }
-            | Condition::Raw {
+            })
+            | Condition::Raw(RawQuery {
                 substr: Some(s),
                 case_insensitive: true,
                 ..
-            }
-            | Condition::TreeSitter {
+            })
+            | Condition::TreeSitter(TreeSitterQuery {
                 substr: Some(s),
                 case_insensitive: true,
                 ..
-            }
-            | Condition::Text {
+            })
+            | Condition::Text(TextQuery {
                 word: Some(s),
                 case_insensitive: true,
                 ..
-            }
-            | Condition::Literal {
+            })
+            | Condition::Literal(LiteralQuery {
                 word: Some(s),
                 case_insensitive: true,
                 ..
-            }
-            | Condition::Raw {
+            })
+            | Condition::Raw(RawQuery {
                 word: Some(s),
                 case_insensitive: true,
                 ..
-            } => check_pattern(s),
+            }) => check_pattern(s),
             _ => None,
         }
     }
@@ -2862,29 +2678,29 @@ impl Condition {
         };
 
         match self {
-            Condition::Text { exact: Some(s), .. }
-            | Condition::Literal { exact: Some(s), .. }
-            | Condition::Raw { exact: Some(s), .. }
-            | Condition::Symbol { exact: Some(s), .. } => check_empty(s, "exact"),
-            Condition::Text {
+            Condition::Text(TextQuery { exact: Some(s), .. })
+            | Condition::Literal(LiteralQuery { exact: Some(s), .. })
+            | Condition::Raw(RawQuery { exact: Some(s), .. })
+            | Condition::Symbol(SymbolQuery { exact: Some(s), .. }) => check_empty(s, "exact"),
+            Condition::Text(TextQuery {
                 substr: Some(s), ..
-            }
-            | Condition::Literal {
+            })
+            | Condition::Literal(LiteralQuery {
                 substr: Some(s), ..
-            }
-            | Condition::Raw {
+            })
+            | Condition::Raw(RawQuery {
                 substr: Some(s), ..
-            }
-            | Condition::Symbol {
+            })
+            | Condition::Symbol(SymbolQuery {
                 substr: Some(s), ..
-            } => check_empty(s, "substr"),
-            Condition::Text { regex: Some(s), .. }
-            | Condition::Literal { regex: Some(s), .. }
-            | Condition::Raw { regex: Some(s), .. }
-            | Condition::Symbol { regex: Some(s), .. } => check_empty(s, "regex"),
-            Condition::Text { word: Some(s), .. }
-            | Condition::Literal { word: Some(s), .. }
-            | Condition::Raw { word: Some(s), .. } => check_empty(s, "word"),
+            }) => check_empty(s, "substr"),
+            Condition::Text(TextQuery { regex: Some(s), .. })
+            | Condition::Literal(LiteralQuery { regex: Some(s), .. })
+            | Condition::Raw(RawQuery { regex: Some(s), .. })
+            | Condition::Symbol(SymbolQuery { regex: Some(s), .. }) => check_empty(s, "regex"),
+            Condition::Text(TextQuery { word: Some(s), .. })
+            | Condition::Literal(LiteralQuery { word: Some(s), .. })
+            | Condition::Raw(RawQuery { word: Some(s), .. }) => check_empty(s, "word"),
             _ => None,
         }
     }
@@ -2907,17 +2723,17 @@ impl Condition {
 
         match self {
             // For exact matches, warn if less than 2 characters
-            Condition::Text {
+            Condition::Text(TextQuery {
                 exact: Some(s),
                 case_insensitive: false,
                 ..
-            }
-            | Condition::Literal {
+            })
+            | Condition::Literal(LiteralQuery {
                 exact: Some(s),
                 case_insensitive: false,
                 ..
-            }
-            | Condition::Symbol { exact: Some(s), .. } => {
+            })
+            | Condition::Symbol(SymbolQuery { exact: Some(s), .. }) => {
                 if s.len() == 1 {
                     return Some(format!(
                         "exact: pattern '{}' is a single character and will rarely be useful - consider if this is intentional",
@@ -2927,30 +2743,30 @@ impl Condition {
                 None
             }
             // For substr, warn if less than 3 characters (more prone to false positives)
-            Condition::Text {
+            Condition::Text(TextQuery {
                 substr: Some(s),
                 case_insensitive: false,
                 ..
-            }
-            | Condition::Literal {
+            })
+            | Condition::Literal(LiteralQuery {
                 substr: Some(s),
                 case_insensitive: false,
                 ..
-            }
-            | Condition::Symbol {
+            })
+            | Condition::Symbol(SymbolQuery {
                 substr: Some(s), ..
-            } => check_short(s, "substr", 3),
+            }) => check_short(s, "substr", 3),
             // For word, warn if less than 2 characters
-            Condition::Text {
+            Condition::Text(TextQuery {
                 word: Some(s),
                 case_insensitive: false,
                 ..
-            }
-            | Condition::Literal {
+            })
+            | Condition::Literal(LiteralQuery {
                 word: Some(s),
                 case_insensitive: false,
                 ..
-            } => check_short(s, "word", 2),
+            }) => check_short(s, "word", 2),
             _ => None,
         }
     }
@@ -2982,10 +2798,10 @@ impl Condition {
         };
 
         match self {
-            Condition::Text { regex: Some(r), .. }
-            | Condition::Literal { regex: Some(r), .. }
-            | Condition::Raw { regex: Some(r), .. }
-            | Condition::Symbol { regex: Some(r), .. } => {
+            Condition::Text(TextQuery { regex: Some(r), .. })
+            | Condition::Literal(LiteralQuery { regex: Some(r), .. })
+            | Condition::Raw(RawQuery { regex: Some(r), .. })
+            | Condition::Symbol(SymbolQuery { regex: Some(r), .. }) => {
                 if is_literal(r) {
                     return Some(format!(
                         "regex: pattern '{}' is a literal string with no regex metacharacters - use 'substr' instead for better performance",
@@ -3013,36 +2829,36 @@ impl Condition {
         };
 
         match self {
-            Condition::Text {
+            Condition::Text(TextQuery {
                 exact: Some(s),
                 case_insensitive: true,
                 ..
-            }
-            | Condition::Literal {
+            })
+            | Condition::Literal(LiteralQuery {
                 exact: Some(s),
                 case_insensitive: true,
                 ..
-            } => check_pattern(s, "exact"),
-            Condition::Text {
+            }) => check_pattern(s, "exact"),
+            Condition::Text(TextQuery {
                 substr: Some(s),
                 case_insensitive: true,
                 ..
-            }
-            | Condition::Literal {
+            })
+            | Condition::Literal(LiteralQuery {
                 substr: Some(s),
                 case_insensitive: true,
                 ..
-            } => check_pattern(s, "substr"),
-            Condition::Text {
+            }) => check_pattern(s, "substr"),
+            Condition::Text(TextQuery {
                 word: Some(s),
                 case_insensitive: true,
                 ..
-            }
-            | Condition::Literal {
+            })
+            | Condition::Literal(LiteralQuery {
                 word: Some(s),
                 case_insensitive: true,
                 ..
-            } => check_pattern(s, "word"),
+            }) => check_pattern(s, "word"),
             _ => None,
         }
     }
@@ -3055,7 +2871,7 @@ impl Condition {
     #[must_use]
     pub(crate) fn check_symbol_regex_whitespace(&self) -> Option<String> {
         let regex = match self {
-            Condition::Symbol { regex: Some(r), .. } => r.as_str(),
+            Condition::Symbol(SymbolQuery { regex: Some(r), .. }) => r.as_str(),
             _ => return None,
         };
 
@@ -3150,44 +2966,44 @@ impl Condition {
             };
 
         match self {
-            Condition::Text {
+            Condition::Text(TextQuery {
                 exact,
                 substr,
                 regex,
                 word,
                 ..
-            }
-            | Condition::Literal {
+            })
+            | Condition::Literal(LiteralQuery {
                 exact,
                 substr,
                 regex,
                 word,
                 ..
-            }
-            | Condition::Raw {
+            })
+            | Condition::Raw(RawQuery {
                 exact,
                 substr,
                 regex,
                 word,
                 ..
-            } => check_exclusive(
+            }) => check_exclusive(
                 exact.is_some(),
                 substr.is_some(),
                 regex.is_some(),
                 word.is_some(),
             ),
-            Condition::Symbol {
+            Condition::Symbol(SymbolQuery {
                 exact,
                 substr,
                 regex,
                 ..
-            }
-            | Condition::TreeSitter {
+            })
+            | Condition::TreeSitter(TreeSitterQuery {
                 exact,
                 substr,
                 regex,
                 ..
-            } => check_exclusive(exact.is_some(), substr.is_some(), regex.is_some(), false),
+            }) => check_exclusive(exact.is_some(), substr.is_some(), regex.is_some(), false),
             _ => None,
         }
     }
@@ -3197,10 +3013,10 @@ impl Condition {
     /// Returns an error if any regex pattern is invalid.
     pub(crate) fn precompile_regexes(&mut self) -> anyhow::Result<()> {
         match self {
-            Condition::Symbol {
+            Condition::Symbol(SymbolQuery {
                 regex: Some(regex_pattern),
                 ..
-            } => {
+            }) => {
                 // Validate only — the compiled regex is resolved lazily and shared
                 // process-wide at eval time (see `cached_regex`), so it isn't stored
                 // per condition. Compile here purely to surface invalid patterns.
@@ -3217,22 +3033,22 @@ impl Condition {
             // Kept as an explicit, documented arm rather than folded into the
             // catch-all below.
             #[allow(clippy::match_same_arms)]
-            Condition::Text { .. } | Condition::Literal { .. } => {}
+            Condition::Text(TextQuery { .. }) | Condition::Literal(LiteralQuery { .. }) => {}
             // Validate only (see Symbol arm). `(?i)` doesn't affect parse
             // validity, so the raw pattern is sufficient to catch errors; eval
             // applies case-insensitivity via `lazy_regex`.
-            Condition::Kv {
+            Condition::Kv(KvQuery {
                 regex: Some(regex_pattern),
                 ..
-            } => {
+            }) => {
                 regex::Regex::new(regex_pattern).map_err(|e| {
                     anyhow::anyhow!("Failed to compile value regex '{}': {}", regex_pattern, e)
                 })?;
             }
-            Condition::Path {
+            Condition::Path(PathQuery {
                 regex: Some(regex_pattern),
                 ..
-            } => {
+            }) => {
                 regex::Regex::new(regex_pattern).map_err(|e| {
                     anyhow::anyhow!(
                         "Failed to compile basename regex '{}': {}",
@@ -3587,7 +3403,7 @@ mod location_constraint_tests {
     #[test]
     fn test_condition_validate_string_location() {
         // Test that Condition::Text validates location constraints
-        let condition = Condition::Text {
+        let condition = Condition::Text(TextQuery {
             exact: Some("test".to_string()),
             substr: None,
             regex: None,
@@ -3601,14 +3417,14 @@ mod location_constraint_tests {
             section_offset: None,
             section_offset_range: None,
             platforms: None,
-        };
+        });
         assert!(condition.validate(true).is_err());
     }
 
     #[test]
     fn test_condition_validate_content_location() {
         // Valid content condition with section constraint
-        let condition = Condition::Raw {
+        let condition = Condition::Raw(RawQuery {
             exact: Some("test".to_string()),
             substr: None,
             regex: None,
@@ -3621,7 +3437,7 @@ mod location_constraint_tests {
             offset_range: Some((0, Some(0x1000))),
             section_offset: None,
             section_offset_range: None,
-        };
+        });
         assert!(condition.validate(true).is_ok());
     }
 
@@ -3754,8 +3570,8 @@ mod location_constraint_tests {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod backtrack_tests {
     use super::find_backtrack_issue;
-    use crate::composite_rules::Condition;
     use crate::composite_rules::condition::SymbolKind;
+    use crate::composite_rules::{Condition, KvQuery, LiteralQuery, PathQuery, SymbolQuery};
 
     // ── patterns that MUST be flagged ──────────────────────────────────────
 
@@ -3839,7 +3655,8 @@ mod backtrack_tests {
 
     #[test]
     fn greedy_pattern_lint_skips_kv_regex() {
-        let cond = Condition::Kv {
+        let cond = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: "debug.pdb_path".to_string(),
             exact: None,
             substr: None,
@@ -3850,7 +3667,7 @@ mod backtrack_tests {
             exists: None,
             size_min: None,
             size_max: None,
-        };
+        });
         assert!(cond.check_greedy_patterns().is_none());
     }
 
@@ -3880,27 +3697,27 @@ exact: main
 
         assert!(matches!(
             import_cond,
-            Condition::Symbol {
+            Condition::Symbol(SymbolQuery {
                 kind: Some(SymbolKind::Import),
                 regex: Some(ref r),
                 ..
-            } if r == "^CreateFileW$"
+            }) if r == "^CreateFileW$"
         ));
         assert!(matches!(
             export_cond,
-            Condition::Symbol {
+            Condition::Symbol(SymbolQuery {
                 kind: Some(SymbolKind::Export),
                 substr: Some(ref s),
                 ..
-            } if s == "DllRegisterServer"
+            }) if s == "DllRegisterServer"
         ));
         assert!(matches!(
             function_cond,
-            Condition::Symbol {
+            Condition::Symbol(SymbolQuery {
                 kind: Some(SymbolKind::Function),
                 exact: Some(ref s),
                 ..
-            } if s == "main"
+            }) if s == "main"
         ));
     }
 
@@ -3927,17 +3744,17 @@ exact: curl
         assert_eq!(legacy.type_name(), "value");
         assert!(matches!(
             current,
-            Condition::Kv {
+            Condition::Kv(KvQuery {
                 exact: Some(ref s),
                 ..
-            } if s == "curl"
+            }) if s == "curl"
         ));
         assert!(matches!(
             legacy,
-            Condition::Kv {
+            Condition::Kv(KvQuery {
                 exact: Some(ref s),
                 ..
-            } if s == "curl"
+            }) if s == "curl"
         ));
     }
 
@@ -3950,8 +3767,8 @@ exact: curl
             serde_yaml::from_str("type: literal\nsubstr: rm -rf").expect("parse type: literal");
         let old_form: Condition = serde_yaml::from_str("type: string_literal\nsubstr: rm -rf")
             .expect("parse type: string_literal");
-        assert!(matches!(new_form, Condition::Literal { .. }));
-        assert!(matches!(old_form, Condition::Literal { .. }));
+        assert!(matches!(new_form, Condition::Literal(LiteralQuery { .. })));
+        assert!(matches!(old_form, Condition::Literal(LiteralQuery { .. })));
     }
 
     #[test]
@@ -4027,10 +3844,10 @@ exact: curl
         let cond: Condition =
             serde_yaml::from_str("type: literal\nkind: number\nvalue: 511\nradix: 8")
                 .expect("parse numeric literal");
-        assert!(matches!(cond, Condition::Literal { .. }));
-        if let Condition::Literal {
+        assert!(matches!(cond, Condition::Literal(LiteralQuery { .. })));
+        if let Condition::Literal(LiteralQuery {
             kind, value, radix, ..
-        } = cond
+        }) = cond
         {
             assert_eq!(kind.as_deref(), Some("number"));
             assert_eq!(value, Some(511));
@@ -4040,7 +3857,7 @@ exact: curl
 
     #[test]
     fn greedy_pattern_lint_skips_string_literal_regex() {
-        let cond = Condition::Literal {
+        let cond = Condition::Literal(LiteralQuery {
             kind: None,
             exact: None,
             substr: None,
@@ -4057,13 +3874,13 @@ exact: curl
             offset_range: None,
             section_offset: None,
             section_offset_range: None,
-        };
+        });
         assert!(cond.check_greedy_patterns().is_none());
     }
 
     #[test]
     fn greedy_pattern_lint_skips_symbol_regex() {
-        let cond = Condition::Symbol {
+        let cond = Condition::Symbol(SymbolQuery {
             exact: None,
             substr: None,
             regex: Some(r"^libc\.so(\.[0-9]+)*$".to_string()),
@@ -4074,13 +3891,13 @@ exact: curl
             args: None,
             alias: None,
             not: None,
-        };
+        });
         assert!(cond.check_greedy_patterns().is_none());
     }
 
     #[test]
     fn greedy_pattern_lint_skips_basename_regex() {
-        let cond = Condition::Path {
+        let cond = Condition::Path(PathQuery {
             exact: None,
             substr: None,
             regex: Some(r"^ssh(d|-.+)?$".to_string()),
@@ -4088,7 +3905,7 @@ exact: curl
             is_check: None,
             basename: true,
             dirname: false,
-        };
+        });
         assert!(cond.check_greedy_patterns().is_none());
     }
 

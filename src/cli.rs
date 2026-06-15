@@ -777,6 +777,13 @@ pub enum InspectTree {
         #[arg(required = true)]
         targets: Vec<String>,
     },
+    ///External references (PURL/URL) the file points at, with relation
+    /// and fetch-target flag.
+    References {
+        /// File paths to inspect (1+ required).
+        #[arg(required = true)]
+        targets: Vec<String>,
+    },
     /// Recoverable parser diagnostics
     Errors {
         /// File paths to inspect (1+ required).
@@ -804,6 +811,7 @@ impl InspectTree {
             | Self::Members { targets }
             | Self::Binds { targets }
             | Self::Identifiers { targets }
+            | Self::References { targets }
             | Self::Errors { targets } => targets,
         }
     }
@@ -827,6 +835,7 @@ impl InspectTree {
             Self::Members { .. } => "members",
             Self::Binds { .. } => "binds",
             Self::Identifiers { .. } => "identifiers",
+            Self::References { .. } => "references",
             Self::Errors { .. } => "errors",
         }
     }

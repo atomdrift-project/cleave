@@ -1,5 +1,6 @@
 //! Helper functions for validation, file type detection, and metric field handling.
 
+use crate::composite_rules::RawQuery;
 use crate::composite_rules::{
     CompositeTrait, Condition, FileType as RuleFileType, TraitDefinition,
 };
@@ -136,7 +137,7 @@ pub(super) fn check_yaml_patterns(content: &str, path: &Path) -> Vec<String> {
 /// Check a single condition for problematic patterns.
 /// Returns true if an error was found.
 fn check_condition(condition: &Condition, trait_id: &str, path: &Path) -> bool {
-    if let Condition::Raw { exact: Some(_), .. } = condition {
+    if let Condition::Raw(RawQuery { exact: Some(_), .. }) = condition {
         eprintln!(
             "❌ ERROR: Trait '{}' in {} uses 'type: raw' with 'exact' match. \
             This requires the entire file content to exactly match the pattern, \

@@ -18,8 +18,12 @@ use crate::capabilities::validation::{
 };
 use crate::composite_rules::debug::{DebugCollector, EvaluationDebug, RuleType};
 use crate::composite_rules::{
-    Arch, CompositeTrait, Condition, EvaluationContext, FileType as RuleFileType, Platform,
-    SectionMap, TraitDefinition,
+    Arch, CompositeTrait, Condition, EvaluationContext, FileType as RuleFileType, KvQuery,
+    Platform, SectionMap, TraitDefinition,
+};
+use crate::composite_rules::{
+    HexQuery, MetricsQuery, PathQuery, RawQuery, SectionQuery, SymbolQuery, TextQuery,
+    TreeSitterQuery,
 };
 use crate::types::{AnalysisReport, Evidence};
 use colored::Colorize;
@@ -626,17 +630,17 @@ impl<'a> RuleDebugger<'a> {
 
         match condition {
             Condition::Trait { id } => self.debug_trait_reference(id),
-            Condition::Symbol {
+            Condition::Symbol(SymbolQuery {
                 exact,
                 substr,
                 regex,
                 ..
-            } => self.debug_symbol_condition(exact, substr, regex),
-            Condition::Metrics {
+            }) => self.debug_symbol_condition(exact, substr, regex),
+            Condition::Metrics(MetricsQuery {
                 field, min, max, ..
-            } => self.debug_metrics_condition(field, *min, *max),
+            }) => self.debug_metrics_condition(field, *min, *max),
             Condition::Yara { source, .. } => self.debug_yara_inline_condition(source),
-            Condition::Raw {
+            Condition::Raw(RawQuery {
                 regex,
                 substr,
                 exact,
@@ -647,7 +651,7 @@ impl<'a> RuleDebugger<'a> {
                 section_offset,
                 section_offset_range,
                 ..
-            } => self.debug_raw_condition(
+            }) => self.debug_raw_condition(
                 exact,
                 substr,
                 regex,
@@ -658,7 +662,7 @@ impl<'a> RuleDebugger<'a> {
                 *section_offset,
                 *section_offset_range,
             ),
-            Condition::TreeSitter {
+            Condition::TreeSitter(TreeSitterQuery {
                 kind,
                 node,
                 exact,
@@ -667,10 +671,10 @@ impl<'a> RuleDebugger<'a> {
                 query,
                 case_insensitive,
                 ..
-            } => {
+            }) => {
                 self.debug_ast_condition(kind, node, exact, substr, regex, query, *case_insensitive)
             }
-            Condition::Kv {
+            Condition::Kv(KvQuery {
                 path,
                 exact,
                 substr,
@@ -680,7 +684,7 @@ impl<'a> RuleDebugger<'a> {
                 size_min,
                 size_max,
                 ..
-            } => self.debug_kv_condition(
+            }) => self.debug_kv_condition(
                 path,
                 exact,
                 substr,
@@ -690,7 +694,7 @@ impl<'a> RuleDebugger<'a> {
                 *size_min,
                 *size_max,
             ),
-            Condition::Hex {
+            Condition::Hex(HexQuery {
                 pattern,
                 offset,
                 offset_range,
@@ -698,7 +702,7 @@ impl<'a> RuleDebugger<'a> {
                 section_offset,
                 section_offset_range,
                 ..
-            } => self.debug_hex_condition(
+            }) => self.debug_hex_condition(
                 pattern,
                 *offset,
                 *offset_range,
@@ -706,13 +710,13 @@ impl<'a> RuleDebugger<'a> {
                 *section_offset,
                 *section_offset_range,
             ),
-            Condition::Text {
+            Condition::Text(TextQuery {
                 exact,
                 substr,
                 regex,
                 case_insensitive,
                 ..
-            } => {
+            }) => {
                 let desc = describe_condition(condition);
                 let result = evaluate_condition_simple(condition, &ctx);
                 let mut debug =
@@ -1345,7 +1349,8 @@ impl<'a> RuleDebugger<'a> {
         // YAML trait like `type: value, path: …, exists: true, size_min: 1`
         // was rebuilt as a no-op match — every value-only trait reported
         // NOT MATCHED in test-rules even when it fired in production.
-        let condition = Condition::Kv {
+        let condition = Condition::Kv(KvQuery {
+            match_mode: Default::default(),
             path: path.to_string(),
             exact: exact.clone(),
             substr: substr.clone(),
@@ -1356,7 +1361,7 @@ impl<'a> RuleDebugger<'a> {
             exists,
             size_min,
             size_max,
-        };
+        });
 
         // Create evaluation context
         let ctx = EvaluationContext::new(
@@ -1715,12 +1720,12 @@ fn format_location_suffix(
 fn describe_condition(condition: &Condition) -> String {
     match condition {
         Condition::Trait { id } => format!("trait: {}", id),
-        Condition::Symbol {
+        Condition::Symbol(SymbolQuery {
             exact,
             substr,
             regex,
             ..
-        } => {
+        }) => {
             if let Some(e) = exact {
                 format!("symbol[exact]: \"{}\"", e)
             } else if let Some(c) = substr {
@@ -1731,13 +1736,13 @@ fn describe_condition(condition: &Condition) -> String {
                 "symbol[?]".to_string()
             }
         }
-        Condition::Metrics {
+        Condition::Metrics(MetricsQuery {
             field, min, max, ..
-        } => {
+        }) => {
             format!("metrics: {} [{:?}, {:?}]", field, min, max)
         }
         Condition::Yara { .. } => "yara[inline]".to_string(),
-        Condition::Raw {
+        Condition::Raw(RawQuery {
             exact,
             substr,
             regex,
@@ -1748,7 +1753,7 @@ fn describe_condition(condition: &Condition) -> String {
             section_offset,
             section_offset_range,
             ..
-        } => {
+        }) => {
             let loc = format_location_suffix(
                 section,
                 *offset,
@@ -1768,13 +1773,13 @@ fn describe_condition(condition: &Condition) -> String {
                 format!("raw[?]{}", loc)
             }
         }
-        Condition::Kv {
+        Condition::Kv(KvQuery {
             path,
             exact,
             substr,
             regex,
             ..
-        } => {
+        }) => {
             let matcher = if exact.is_some() {
                 "exact"
             } else if substr.is_some() {
@@ -1786,12 +1791,12 @@ fn describe_condition(condition: &Condition) -> String {
             };
             format!("value[{}]: path=\"{}\"", matcher, truncate_string(path, 30))
         }
-        Condition::Hex {
+        Condition::Hex(HexQuery {
             pattern,
             offset,
             offset_range,
             ..
-        } => {
+        }) => {
             let mut desc = format!("hex: \"{}\"", truncate_string(pattern, 30));
             if let Some(off) = offset {
                 desc.push_str(&format!(" @{:#x}", off));
@@ -1924,7 +1929,7 @@ fn evaluate_condition_simple(
 
     // Evaluate conditions that fall through to the _ => case in debug_condition
     match condition {
-        Condition::Section {
+        Condition::Section(SectionQuery {
             exact,
             substr,
             regex,
@@ -1942,7 +1947,7 @@ fn evaluate_condition_simple(
             size_ratio_max,
             entropy_ratio_min,
             entropy_ratio_max,
-        } => eval_section(
+        }) => eval_section(
             &SectionParams {
                 exact: exact.as_ref(),
                 substr: substr.as_ref(),
@@ -1967,7 +1972,7 @@ fn evaluate_condition_simple(
         Condition::Syscall { name, number, arch } => {
             eval_syscall(name.as_ref(), number.as_ref(), arch.as_ref(), ctx)
         }
-        Condition::Path {
+        Condition::Path(PathQuery {
             exact,
             substr,
             regex,
@@ -1975,7 +1980,7 @@ fn evaluate_condition_simple(
             is_check,
             basename,
             dirname,
-        } => eval_path(
+        }) => eval_path(
             exact.as_ref(),
             substr.as_ref(),
             regex.as_ref(),

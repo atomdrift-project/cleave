@@ -3,6 +3,7 @@
 //! This module provides shared utilities used across validation modules,
 //! including line number finding and rule conversions.
 
+use crate::composite_rules::SymbolQuery;
 use crate::composite_rules::{CompositeTrait, Condition, FileType as RuleFileType, Platform};
 use crate::types::Criticality;
 
@@ -143,7 +144,7 @@ pub(crate) fn simple_rule_to_composite_rule(
         for_from_groups: false,
         size_min: None,
         size_max: None,
-        all: Some(vec![Condition::Symbol {
+        all: Some(vec![Condition::Symbol(SymbolQuery {
             exact: None,
             substr: None,
             regex: Some(rule.symbol),
@@ -154,7 +155,7 @@ pub(crate) fn simple_rule_to_composite_rule(
             args: None,
             alias: None,
             not: None,
-        }]),
+        })]),
         any: None,
         needs: None,
         near_lines: None,

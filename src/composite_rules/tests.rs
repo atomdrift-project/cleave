@@ -6,6 +6,7 @@
 use super::*;
 use crate::composite_rules::condition::{NotException, NotExceptionStructured};
 use crate::composite_rules::traits::DowngradeConditions;
+use crate::composite_rules::{PathQuery, SymbolQuery, TextQuery};
 use crate::types::{
     AnalysisReport, Criticality, Finding, FindingKind, Import, StringInfo, TargetInfo,
 };
@@ -69,7 +70,7 @@ fn test_symbol_condition() {
         for_from_groups: false,
         size_min: None,
         size_max: None,
-        all: Some(vec![Condition::Symbol {
+        all: Some(vec![Condition::Symbol(SymbolQuery {
             exact: None,
             substr: None,
             regex: Some("socket".to_string()),
@@ -80,7 +81,7 @@ fn test_symbol_condition() {
             args: None,
             alias: None,
             not: None,
-        }]),
+        })]),
         any: None,
 
         unless: None,
@@ -122,7 +123,7 @@ fn test_all() {
         for_from_groups: false,
         size_min: None,
         size_max: None,
-        all: Some(vec![Condition::Symbol {
+        all: Some(vec![Condition::Symbol(SymbolQuery {
             exact: None,
             substr: None,
             regex: Some("socket".to_string()),
@@ -133,7 +134,7 @@ fn test_all() {
             args: None,
             alias: None,
             not: None,
-        }]),
+        })]),
         any: None,
 
         unless: None,
@@ -173,7 +174,7 @@ fn test_count() {
         size_max: None,
         all: None,
         any: Some(vec![
-            Condition::Symbol {
+            Condition::Symbol(SymbolQuery {
                 exact: None,
                 substr: None,
                 regex: Some("socket".to_string()),
@@ -184,8 +185,8 @@ fn test_count() {
                 args: None,
                 alias: None,
                 not: None,
-            },
-            Condition::Symbol {
+            }),
+            Condition::Symbol(SymbolQuery {
                 exact: None,
                 substr: None,
                 regex: Some("connect".to_string()),
@@ -196,8 +197,8 @@ fn test_count() {
                 args: None,
                 alias: None,
                 not: None,
-            },
-            Condition::Symbol {
+            }),
+            Condition::Symbol(SymbolQuery {
                 exact: None,
                 substr: None,
                 regex: Some("nonexistent".to_string()),
@@ -208,7 +209,7 @@ fn test_count() {
                 args: None,
                 alias: None,
                 not: None,
-            },
+            }),
         ]),
         unless: None,
         not: None,
@@ -245,7 +246,7 @@ fn test_string_exact_condition() {
         for_from_groups: false,
         size_min: None,
         size_max: None,
-        all: Some(vec![Condition::Text {
+        all: Some(vec![Condition::Text(TextQuery {
             exact: Some("/bin/sh".to_string()),
             substr: None,
             regex: None,
@@ -259,7 +260,7 @@ fn test_string_exact_condition() {
             section_offset_range: None,
             not: None,
             platforms: None,
-        }]),
+        })]),
         any: None,
 
         unless: None,
@@ -299,7 +300,7 @@ fn test_any() {
         size_max: None,
         all: None,
         any: Some(vec![
-            Condition::Symbol {
+            Condition::Symbol(SymbolQuery {
                 exact: None,
                 substr: None,
                 regex: Some("nonexistent".to_string()),
@@ -310,8 +311,8 @@ fn test_any() {
                 args: None,
                 alias: None,
                 not: None,
-            },
-            Condition::Symbol {
+            }),
+            Condition::Symbol(SymbolQuery {
                 exact: None,
                 substr: None,
                 regex: Some("socket".to_string()),
@@ -322,7 +323,7 @@ fn test_any() {
                 args: None,
                 alias: None,
                 not: None,
-            },
+            }),
         ]),
 
         unless: None,
@@ -382,7 +383,7 @@ fn test_not_directive_shorthand() {
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
         for_from_groups: false,
-        r#if: Condition::Text {
+        r#if: Condition::Text(TextQuery {
             exact: None,
             substr: None,
             regex: Some(r"[a-z]+\.com".to_string()),
@@ -396,7 +397,7 @@ fn test_not_directive_shorthand() {
             section_offset_range: None,
             not: None,
             platforms: None,
-        },
+        }),
         size_max: None,
         count_min: None,
         count_max: None,
@@ -458,7 +459,7 @@ fn test_not_directive_exact() {
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
         for_from_groups: false,
-        r#if: Condition::Text {
+        r#if: Condition::Text(TextQuery {
             exact: None,
             substr: None,
             regex: Some(r"[a-z]+\.com".to_string()),
@@ -472,7 +473,7 @@ fn test_not_directive_exact() {
             section_offset_range: None,
             not: None,
             platforms: None,
-        },
+        }),
         size_max: None,
         count_min: None,
         count_max: None,
@@ -539,7 +540,7 @@ fn test_not_directive_regex() {
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
         for_from_groups: false,
-        r#if: Condition::Text {
+        r#if: Condition::Text(TextQuery {
             exact: None,
             substr: None,
             regex: Some(r"\d+\.\d+\.\d+\.\d+".to_string()),
@@ -553,7 +554,7 @@ fn test_not_directive_regex() {
             section_offset_range: None,
             not: None,
             platforms: None,
-        },
+        }),
         size_max: None,
         count_min: None,
         count_max: None,
@@ -618,7 +619,7 @@ fn test_unless_directive_skips_trait() {
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
         for_from_groups: false,
-        r#if: Condition::Symbol {
+        r#if: Condition::Symbol(SymbolQuery {
             exact: None,
             substr: None,
             regex: Some("socket".to_string()),
@@ -629,7 +630,7 @@ fn test_unless_directive_skips_trait() {
             args: None,
             alias: None,
             not: None,
-        },
+        }),
         size_max: None,
         count_min: None,
         count_max: None,
@@ -670,7 +671,7 @@ fn test_unless_directive_allows_trait() {
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
         for_from_groups: false,
-        r#if: Condition::Symbol {
+        r#if: Condition::Symbol(SymbolQuery {
             exact: None,
             substr: None,
             regex: Some("socket".to_string()),
@@ -681,7 +682,7 @@ fn test_unless_directive_allows_trait() {
             args: None,
             alias: None,
             not: None,
-        },
+        }),
         size_max: None,
         count_min: None,
         count_max: None,
@@ -739,7 +740,7 @@ fn test_downgrade_to_notable() {
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
         for_from_groups: false,
-        r#if: Condition::Text {
+        r#if: Condition::Text(TextQuery {
             exact: Some("/bin/sh".to_string()),
             substr: None,
             regex: None,
@@ -753,7 +754,7 @@ fn test_downgrade_to_notable() {
             section_offset_range: None,
             not: None,
             platforms: None,
-        },
+        }),
         size_max: None,
         count_min: None,
         count_max: None,
@@ -818,7 +819,7 @@ fn test_downgrade_one_level() {
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
         for_from_groups: false,
-        r#if: Condition::Symbol {
+        r#if: Condition::Symbol(SymbolQuery {
             exact: None,
             substr: None,
             regex: Some("socket".to_string()),
@@ -829,7 +830,7 @@ fn test_downgrade_one_level() {
             args: None,
             alias: None,
             not: None,
-        },
+        }),
         size_max: None,
         count_min: None,
         count_max: None,
@@ -878,7 +879,7 @@ fn test_downgrade_no_match_keeps_original() {
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
         for_from_groups: false,
-        r#if: Condition::Symbol {
+        r#if: Condition::Symbol(SymbolQuery {
             exact: None,
             substr: None,
             regex: Some("socket".to_string()),
@@ -889,7 +890,7 @@ fn test_downgrade_no_match_keeps_original() {
             args: None,
             alias: None,
             not: None,
-        },
+        }),
         size_max: None,
         count_min: None,
         count_max: None,
@@ -955,7 +956,7 @@ fn test_downgrade_from_hostile() {
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
         for_from_groups: false,
-        r#if: Condition::Symbol {
+        r#if: Condition::Symbol(SymbolQuery {
             exact: None,
             substr: None,
             regex: Some("socket".to_string()),
@@ -966,7 +967,7 @@ fn test_downgrade_from_hostile() {
             args: None,
             alias: None,
             not: None,
-        },
+        }),
         size_max: None,
         count_min: None,
         count_max: None,
@@ -1052,7 +1053,7 @@ fn test_all_three_directives_combined() {
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
         for_from_groups: false,
-        r#if: Condition::Text {
+        r#if: Condition::Text(TextQuery {
             exact: None,
             substr: None,
             regex: Some(r"[a-z]+\.com".to_string()),
@@ -1066,7 +1067,7 @@ fn test_all_three_directives_combined() {
             section_offset_range: None,
             not: None,
             platforms: None,
-        },
+        }),
         size_max: None,
         count_min: None,
         count_max: None,
@@ -1141,7 +1142,7 @@ fn test_string_exact_match_requires_full_equality() {
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
         for_from_groups: false,
-        r#if: Condition::Text {
+        r#if: Condition::Text(TextQuery {
             exact: Some("hello".to_string()),
             substr: None,
             regex: None,
@@ -1155,7 +1156,7 @@ fn test_string_exact_match_requires_full_equality() {
             section_offset_range: None,
             not: None,
             platforms: None,
-        },
+        }),
         size_max: None,
         count_min: None,
         count_max: None,
@@ -1218,7 +1219,7 @@ fn test_string_substr_matches_substrings() {
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
         for_from_groups: false,
-        r#if: Condition::Text {
+        r#if: Condition::Text(TextQuery {
             exact: None,
             substr: Some("hello".to_string()),
             regex: None,
@@ -1232,7 +1233,7 @@ fn test_string_substr_matches_substrings() {
             section_offset_range: None,
             not: None,
             platforms: None,
-        },
+        }),
         size_max: None,
         count_min: None,
         count_max: None,
@@ -1288,7 +1289,7 @@ fn test_symbol_exact_vs_substr() {
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
         for_from_groups: false,
-        r#if: Condition::Symbol {
+        r#if: Condition::Symbol(SymbolQuery {
             exact: Some("read".to_string()),
             substr: None,
             regex: None,
@@ -1299,7 +1300,7 @@ fn test_symbol_exact_vs_substr() {
             args: None,
             alias: None,
             not: None,
-        },
+        }),
         size_max: None,
         count_min: None,
         count_max: None,
@@ -1334,7 +1335,7 @@ fn test_symbol_exact_vs_substr() {
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
         for_from_groups: false,
-        r#if: Condition::Symbol {
+        r#if: Condition::Symbol(SymbolQuery {
             exact: None,
             substr: Some("read".to_string()),
             regex: None,
@@ -1345,7 +1346,7 @@ fn test_symbol_exact_vs_substr() {
             args: None,
             alias: None,
             not: None,
-        },
+        }),
         size_max: None,
         count_min: None,
         count_max: None,
@@ -1396,7 +1397,7 @@ fn test_string_case_insensitive_exact() {
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
         for_from_groups: false,
-        r#if: Condition::Text {
+        r#if: Condition::Text(TextQuery {
             exact: Some("hello".to_string()),
             substr: None,
             regex: None,
@@ -1410,7 +1411,7 @@ fn test_string_case_insensitive_exact() {
             section_offset_range: None,
             not: None,
             platforms: None,
-        },
+        }),
         size_max: None,
         count_min: None,
         count_max: None,
@@ -1468,7 +1469,7 @@ fn test_string_word_boundary_match() {
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
         for_from_groups: false,
-        r#if: Condition::Text {
+        r#if: Condition::Text(TextQuery {
             exact: None,
             substr: None,
             regex: None,
@@ -1482,7 +1483,7 @@ fn test_string_word_boundary_match() {
             not: None,
             platforms: None,
             section_offset_range: None,
-        },
+        }),
         size_max: None,
         count_min: None,
         count_max: None,
@@ -1553,7 +1554,7 @@ fn test_string_regex_match() {
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
         for_from_groups: false,
-        r#if: Condition::Text {
+        r#if: Condition::Text(TextQuery {
             exact: None,
             substr: None,
             regex: Some(r"\d+\.\d+\.\d+\.\d+".to_string()),
@@ -1567,7 +1568,7 @@ fn test_string_regex_match() {
             not: None,
             platforms: None,
             section_offset_range: None,
-        },
+        }),
         size_max: None,
         count_min: None,
         count_max: None,
@@ -1793,7 +1794,7 @@ fn test_basename_in_trait_definition() {
         arch: vec![Arch::All],
         r#for: vec![FileType::Python],
         for_from_groups: false,
-        r#if: Condition::Path {
+        r#if: Condition::Path(PathQuery {
             exact: Some("__init__.py".to_string()),
             substr: None,
             regex: None,
@@ -1801,7 +1802,7 @@ fn test_basename_in_trait_definition() {
             is_check: None,
             basename: true,
             dirname: false,
-        },
+        }),
         size_max: None,
         count_min: None,
         count_max: None,
@@ -1851,7 +1852,7 @@ fn test_basename_in_composite_rule() {
         for_from_groups: false,
         size_min: None,
         size_max: None,
-        all: Some(vec![Condition::Path {
+        all: Some(vec![Condition::Path(PathQuery {
             exact: None,
             substr: None,
             regex: Some("^setup\\.py$".to_string()),
@@ -1859,7 +1860,7 @@ fn test_basename_in_composite_rule() {
             is_check: None,
             basename: true,
             dirname: false,
-        }]),
+        })]),
         any: None,
         unless: None,
         not: None,
@@ -1919,7 +1920,7 @@ fn test_composite_unless_skips_rule() {
         for_from_groups: false,
         size_min: None,
         size_max: None,
-        all: Some(vec![Condition::Symbol {
+        all: Some(vec![Condition::Symbol(SymbolQuery {
             exact: None,
             substr: None,
             regex: Some("socket".to_string()),
@@ -1930,7 +1931,7 @@ fn test_composite_unless_skips_rule() {
             args: None,
             alias: None,
             not: None,
-        }]),
+        })]),
         any: None,
         unless: Some(vec![Condition::Trait {
             id: "file/signed/apple".to_string(),
@@ -1974,7 +1975,7 @@ fn test_composite_unless_allows_rule() {
         for_from_groups: false,
         size_min: None,
         size_max: None,
-        all: Some(vec![Condition::Symbol {
+        all: Some(vec![Condition::Symbol(SymbolQuery {
             exact: None,
             substr: None,
             regex: Some("socket".to_string()),
@@ -1985,7 +1986,7 @@ fn test_composite_unless_allows_rule() {
             args: None,
             alias: None,
             not: None,
-        }]),
+        })]),
         any: None,
         unless: Some(vec![Condition::Trait {
             id: "file/signed/apple".to_string(),
@@ -2030,7 +2031,7 @@ fn test_composite_unless_with_basename() {
         for_from_groups: false,
         size_min: None,
         size_max: None,
-        any: Some(vec![Condition::Symbol {
+        any: Some(vec![Condition::Symbol(SymbolQuery {
             exact: None,
             substr: None,
             regex: Some("XQueryKeymap".to_string()),
@@ -2041,10 +2042,10 @@ fn test_composite_unless_with_basename() {
             args: None,
             alias: None,
             not: None,
-        }]),
+        })]),
         all: None,
         // Skip if this looks like libX11 itself
-        unless: Some(vec![Condition::Path {
+        unless: Some(vec![Condition::Path(PathQuery {
             exact: None,
             substr: None,
             regex: Some(r"^libX11(\\.so|\\.dylib).*".to_string()),
@@ -2052,7 +2053,7 @@ fn test_composite_unless_with_basename() {
             is_check: None,
             basename: true,
             dirname: false,
-        }]),
+        })]),
         not: None,
         downgrade: None,
         needs: None,
@@ -2103,7 +2104,7 @@ fn test_composite_unless_multiple_conditions_any_matches() {
         for_from_groups: false,
         size_min: None,
         size_max: None,
-        all: Some(vec![Condition::Symbol {
+        all: Some(vec![Condition::Symbol(SymbolQuery {
             exact: None,
             substr: None,
             regex: Some("socket".to_string()),
@@ -2114,11 +2115,11 @@ fn test_composite_unless_multiple_conditions_any_matches() {
             args: None,
             alias: None,
             not: None,
-        }]),
+        })]),
         any: None,
         // Multiple unless conditions - any match should skip the rule
         unless: Some(vec![
-            Condition::Path {
+            Condition::Path(PathQuery {
                 exact: Some("system-library.so".to_string()),
                 substr: None,
                 regex: None,
@@ -2126,8 +2127,8 @@ fn test_composite_unless_multiple_conditions_any_matches() {
                 is_check: None,
                 basename: true,
                 dirname: false,
-            },
-            Condition::Text {
+            }),
+            Condition::Text(TextQuery {
                 exact: None,
                 substr: Some("X.Org Foundation".to_string()),
                 regex: None,
@@ -2141,7 +2142,7 @@ fn test_composite_unless_multiple_conditions_any_matches() {
                 offset_range: None,
                 section_offset: None,
                 section_offset_range: None,
-            },
+            }),
         ]),
         not: None,
         downgrade: None,
@@ -2189,7 +2190,7 @@ fn test_needs_with_any_only_respects_threshold() {
         size_max: None,
         all: None,
         any: Some(vec![
-            Condition::Symbol {
+            Condition::Symbol(SymbolQuery {
                 exact: Some("socket".to_string()),
                 substr: None,
                 regex: None,
@@ -2200,8 +2201,8 @@ fn test_needs_with_any_only_respects_threshold() {
                 args: None,
                 alias: None,
                 not: None,
-            },
-            Condition::Symbol {
+            }),
+            Condition::Symbol(SymbolQuery {
                 exact: Some("connect".to_string()),
                 substr: None,
                 regex: None,
@@ -2212,8 +2213,8 @@ fn test_needs_with_any_only_respects_threshold() {
                 args: None,
                 alias: None,
                 not: None,
-            },
-            Condition::Symbol {
+            }),
+            Condition::Symbol(SymbolQuery {
                 exact: Some("nonexistent1".to_string()),
                 substr: None,
                 regex: None,
@@ -2224,8 +2225,8 @@ fn test_needs_with_any_only_respects_threshold() {
                 args: None,
                 alias: None,
                 not: None,
-            },
-            Condition::Symbol {
+            }),
+            Condition::Symbol(SymbolQuery {
                 exact: Some("nonexistent2".to_string()),
                 substr: None,
                 regex: None,
@@ -2236,7 +2237,7 @@ fn test_needs_with_any_only_respects_threshold() {
                 args: None,
                 alias: None,
                 not: None,
-            },
+            }),
         ]),
         unless: None,
         not: None,
@@ -2281,7 +2282,7 @@ fn test_needs_with_any_only_matches_when_threshold_met() {
         size_max: None,
         all: None,
         any: Some(vec![
-            Condition::Symbol {
+            Condition::Symbol(SymbolQuery {
                 exact: Some("socket".to_string()),
                 substr: None,
                 regex: None,
@@ -2292,8 +2293,8 @@ fn test_needs_with_any_only_matches_when_threshold_met() {
                 args: None,
                 alias: None,
                 not: None,
-            },
-            Condition::Symbol {
+            }),
+            Condition::Symbol(SymbolQuery {
                 exact: Some("connect".to_string()),
                 substr: None,
                 regex: None,
@@ -2304,8 +2305,8 @@ fn test_needs_with_any_only_matches_when_threshold_met() {
                 args: None,
                 alias: None,
                 not: None,
-            },
-            Condition::Symbol {
+            }),
+            Condition::Symbol(SymbolQuery {
                 exact: Some("nonexistent".to_string()),
                 substr: None,
                 regex: None,
@@ -2316,7 +2317,7 @@ fn test_needs_with_any_only_matches_when_threshold_met() {
                 args: None,
                 alias: None,
                 not: None,
-            },
+            }),
         ]),
         unless: None,
         not: None,
@@ -2530,7 +2531,7 @@ fn test_needs_with_all_and_any_respects_threshold() {
         for_from_groups: false,
         size_min: None,
         size_max: None,
-        all: Some(vec![Condition::Symbol {
+        all: Some(vec![Condition::Symbol(SymbolQuery {
             exact: Some("socket".to_string()),
             substr: None,
             regex: None,
@@ -2541,9 +2542,9 @@ fn test_needs_with_all_and_any_respects_threshold() {
             args: None,
             alias: None,
             not: None,
-        }]),
+        })]),
         any: Some(vec![
-            Condition::Symbol {
+            Condition::Symbol(SymbolQuery {
                 exact: Some("connect".to_string()),
                 substr: None,
                 regex: None,
@@ -2554,8 +2555,8 @@ fn test_needs_with_all_and_any_respects_threshold() {
                 args: None,
                 alias: None,
                 not: None,
-            },
-            Condition::Symbol {
+            }),
+            Condition::Symbol(SymbolQuery {
                 exact: Some("nonexistent1".to_string()),
                 substr: None,
                 regex: None,
@@ -2566,8 +2567,8 @@ fn test_needs_with_all_and_any_respects_threshold() {
                 args: None,
                 alias: None,
                 not: None,
-            },
-            Condition::Symbol {
+            }),
+            Condition::Symbol(SymbolQuery {
                 exact: Some("nonexistent2".to_string()),
                 substr: None,
                 regex: None,
@@ -2578,8 +2579,8 @@ fn test_needs_with_all_and_any_respects_threshold() {
                 args: None,
                 alias: None,
                 not: None,
-            },
-            Condition::Symbol {
+            }),
+            Condition::Symbol(SymbolQuery {
                 exact: Some("nonexistent3".to_string()),
                 substr: None,
                 regex: None,
@@ -2590,7 +2591,7 @@ fn test_needs_with_all_and_any_respects_threshold() {
                 args: None,
                 alias: None,
                 not: None,
-            },
+            }),
         ]),
         unless: None,
         not: None,
@@ -2653,7 +2654,7 @@ fn test_needs_with_all_and_any_matches_when_threshold_met() {
         for_from_groups: false,
         size_min: None,
         size_max: None,
-        all: Some(vec![Condition::Symbol {
+        all: Some(vec![Condition::Symbol(SymbolQuery {
             exact: Some("socket".to_string()),
             substr: None,
             regex: None,
@@ -2664,9 +2665,9 @@ fn test_needs_with_all_and_any_matches_when_threshold_met() {
             args: None,
             alias: None,
             not: None,
-        }]),
+        })]),
         any: Some(vec![
-            Condition::Symbol {
+            Condition::Symbol(SymbolQuery {
                 exact: Some("connect".to_string()),
                 substr: None,
                 regex: None,
@@ -2677,8 +2678,8 @@ fn test_needs_with_all_and_any_matches_when_threshold_met() {
                 args: None,
                 alias: None,
                 not: None,
-            },
-            Condition::Symbol {
+            }),
+            Condition::Symbol(SymbolQuery {
                 exact: Some("send".to_string()),
                 substr: None,
                 regex: None,
@@ -2689,8 +2690,8 @@ fn test_needs_with_all_and_any_matches_when_threshold_met() {
                 args: None,
                 alias: None,
                 not: None,
-            },
-            Condition::Symbol {
+            }),
+            Condition::Symbol(SymbolQuery {
                 exact: Some("recv".to_string()),
                 substr: None,
                 regex: None,
@@ -2701,8 +2702,8 @@ fn test_needs_with_all_and_any_matches_when_threshold_met() {
                 args: None,
                 alias: None,
                 not: None,
-            },
-            Condition::Symbol {
+            }),
+            Condition::Symbol(SymbolQuery {
                 exact: Some("nonexistent".to_string()),
                 substr: None,
                 regex: None,
@@ -2713,7 +2714,7 @@ fn test_needs_with_all_and_any_matches_when_threshold_met() {
                 args: None,
                 alias: None,
                 not: None,
-            },
+            }),
         ]),
         unless: None,
         not: None,
@@ -2758,7 +2759,7 @@ fn test_needs_with_all_and_any_all_fails() {
         for_from_groups: false,
         size_min: None,
         size_max: None,
-        all: Some(vec![Condition::Symbol {
+        all: Some(vec![Condition::Symbol(SymbolQuery {
             exact: Some("nonexistent_required".to_string()),
             substr: None,
             regex: None,
@@ -2769,9 +2770,9 @@ fn test_needs_with_all_and_any_all_fails() {
             args: None,
             alias: None,
             not: None,
-        }]),
+        })]),
         any: Some(vec![
-            Condition::Symbol {
+            Condition::Symbol(SymbolQuery {
                 exact: Some("socket".to_string()),
                 substr: None,
                 regex: None,
@@ -2782,8 +2783,8 @@ fn test_needs_with_all_and_any_all_fails() {
                 args: None,
                 alias: None,
                 not: None,
-            },
-            Condition::Symbol {
+            }),
+            Condition::Symbol(SymbolQuery {
                 exact: Some("connect".to_string()),
                 substr: None,
                 regex: None,
@@ -2794,7 +2795,7 @@ fn test_needs_with_all_and_any_all_fails() {
                 args: None,
                 alias: None,
                 not: None,
-            },
+            }),
         ]),
         unless: None,
         not: None,
@@ -2837,7 +2838,7 @@ fn test_all_and_any_without_needs_requires_one_any() {
         for_from_groups: false,
         size_min: None,
         size_max: None,
-        all: Some(vec![Condition::Symbol {
+        all: Some(vec![Condition::Symbol(SymbolQuery {
             exact: Some("socket".to_string()),
             substr: None,
             regex: None,
@@ -2848,9 +2849,9 @@ fn test_all_and_any_without_needs_requires_one_any() {
             args: None,
             alias: None,
             not: None,
-        }]),
+        })]),
         any: Some(vec![
-            Condition::Symbol {
+            Condition::Symbol(SymbolQuery {
                 exact: Some("connect".to_string()),
                 substr: None,
                 regex: None,
@@ -2861,8 +2862,8 @@ fn test_all_and_any_without_needs_requires_one_any() {
                 args: None,
                 alias: None,
                 not: None,
-            },
-            Condition::Symbol {
+            }),
+            Condition::Symbol(SymbolQuery {
                 exact: Some("nonexistent1".to_string()),
                 substr: None,
                 regex: None,
@@ -2873,8 +2874,8 @@ fn test_all_and_any_without_needs_requires_one_any() {
                 args: None,
                 alias: None,
                 not: None,
-            },
-            Condition::Symbol {
+            }),
+            Condition::Symbol(SymbolQuery {
                 exact: Some("nonexistent2".to_string()),
                 substr: None,
                 regex: None,
@@ -2885,7 +2886,7 @@ fn test_all_and_any_without_needs_requires_one_any() {
                 args: None,
                 alias: None,
                 not: None,
-            },
+            }),
         ]),
         unless: None,
         not: None,
@@ -3734,7 +3735,7 @@ fn test_downgrade_combined_all_and_none_blocked_by_none() {
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
         for_from_groups: false,
-        r#if: Condition::Text {
+        r#if: Condition::Text(TextQuery {
             exact: Some("suspicious_call".to_string()),
             substr: None,
             regex: None,
@@ -3748,7 +3749,7 @@ fn test_downgrade_combined_all_and_none_blocked_by_none() {
             section_offset_range: None,
             not: None,
             platforms: None,
-        },
+        }),
         size_max: None,
         count_min: None,
         count_max: None,
@@ -3761,7 +3762,7 @@ fn test_downgrade_combined_all_and_none_blocked_by_none() {
         unless: None,
         downgrade: Some(DowngradeConditions {
             // all: passes (string matches)
-            all: Some(vec![Condition::Text {
+            all: Some(vec![Condition::Text(TextQuery {
                 exact: Some("/bin/sh".to_string()),
                 substr: None,
                 regex: None,
@@ -3775,7 +3776,7 @@ fn test_downgrade_combined_all_and_none_blocked_by_none() {
                 section_offset_range: None,
                 not: None,
                 platforms: None,
-            }]),
+            })]),
             any: None,
             // none: should block downgrade because "file/type/binary" IS present
             none: Some(vec![Condition::Trait {
@@ -3826,7 +3827,7 @@ fn test_downgrade_combined_all_and_none_pass() {
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
         for_from_groups: false,
-        r#if: Condition::Text {
+        r#if: Condition::Text(TextQuery {
             exact: Some("suspicious_call".to_string()),
             substr: None,
             regex: None,
@@ -3840,7 +3841,7 @@ fn test_downgrade_combined_all_and_none_pass() {
             section_offset_range: None,
             not: None,
             platforms: None,
-        },
+        }),
         size_max: None,
         count_min: None,
         count_max: None,
@@ -3852,7 +3853,7 @@ fn test_downgrade_combined_all_and_none_pass() {
         not: None,
         unless: None,
         downgrade: Some(DowngradeConditions {
-            all: Some(vec![Condition::Text {
+            all: Some(vec![Condition::Text(TextQuery {
                 exact: Some("/bin/sh".to_string()),
                 substr: None,
                 regex: None,
@@ -3866,7 +3867,7 @@ fn test_downgrade_combined_all_and_none_pass() {
                 section_offset_range: None,
                 not: None,
                 platforms: None,
-            }]),
+            })]),
             any: None,
             // none: passes because "nonexistent/trait" is NOT present
             none: Some(vec![Condition::Trait {
@@ -3920,7 +3921,7 @@ fn test_downgrade_needs_threshold_not_met() {
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
         for_from_groups: false,
-        r#if: Condition::Text {
+        r#if: Condition::Text(TextQuery {
             exact: Some("/bin/sh".to_string()),
             substr: None,
             regex: None,
@@ -3934,7 +3935,7 @@ fn test_downgrade_needs_threshold_not_met() {
             section_offset_range: None,
             not: None,
             platforms: None,
-        },
+        }),
         size_max: None,
         count_min: None,
         count_max: None,
@@ -4023,7 +4024,7 @@ fn test_downgrade_needs_threshold_met() {
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
         for_from_groups: false,
-        r#if: Condition::Text {
+        r#if: Condition::Text(TextQuery {
             exact: Some("/bin/sh".to_string()),
             substr: None,
             regex: None,
@@ -4037,7 +4038,7 @@ fn test_downgrade_needs_threshold_met() {
             section_offset_range: None,
             not: None,
             platforms: None,
-        },
+        }),
         size_max: None,
         count_min: None,
         count_max: None,
@@ -4139,7 +4140,7 @@ fn test_composite_downgrade_all_match() {
         for_from_groups: false,
         size_min: None,
         size_max: None,
-        all: Some(vec![Condition::Symbol {
+        all: Some(vec![Condition::Symbol(SymbolQuery {
             exact: None,
             substr: None,
             regex: Some("socket".to_string()),
@@ -4150,7 +4151,7 @@ fn test_composite_downgrade_all_match() {
             args: None,
             alias: None,
             not: None,
-        }]),
+        })]),
         any: None,
         unless: None,
         not: None,
@@ -4226,7 +4227,7 @@ fn test_composite_downgrade_none_blocks() {
         for_from_groups: false,
         size_min: None,
         size_max: None,
-        all: Some(vec![Condition::Symbol {
+        all: Some(vec![Condition::Symbol(SymbolQuery {
             exact: None,
             substr: None,
             regex: Some("socket".to_string()),
@@ -4237,7 +4238,7 @@ fn test_composite_downgrade_none_blocks() {
             args: None,
             alias: None,
             not: None,
-        }]),
+        })]),
         any: None,
         unless: None,
         not: None,

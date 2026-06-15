@@ -1062,16 +1062,31 @@ impl PackageJsonAnalyzer {
 
     fn analyze_dependencies(&self, pkg: &PackageJson, content: &str, report: &mut AnalysisReport) {
         let is_official_react_native = self.is_official_react_native_package(pkg);
-        let all_deps: Vec<(&str, &str)> = pkg
+        let dependencies = pkg
             .dependencies
             .iter()
-            .chain(pkg.dev_dependencies.iter())
-            .chain(pkg.peer_dependencies.iter())
-            .chain(pkg.optional_dependencies.iter())
-            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .map(|(k, v)| ("dependencies", k.as_str(), v.as_str()));
+        let dev_dependencies = pkg
+            .dev_dependencies
+            .iter()
+            .map(|(k, v)| ("devDependencies", k.as_str(), v.as_str()));
+        let peer_dependencies = pkg
+            .peer_dependencies
+            .iter()
+            .map(|(k, v)| ("peerDependencies", k.as_str(), v.as_str()));
+        let optional_dependencies = pkg
+            .optional_dependencies
+            .iter()
+            .map(|(k, v)| ("optionalDependencies", k.as_str(), v.as_str()));
+        let all_deps: Vec<(&str, &str, &str)> = dependencies
+            .chain(dev_dependencies)
+            .chain(peer_dependencies)
+            .chain(optional_dependencies)
             .collect();
 
-        for (name, version) in &all_deps {
+        for (section, name, version) in &all_deps {
+            let dep_offset = json_entry_offset(content, section, name);
+
             // Check for git/GitHub URLs (potential typosquatting or malicious forks)
             if version.starts_with("git://")
                 || version.starts_with("git+")
@@ -1088,8 +1103,7 @@ impl PackageJsonAnalyzer {
                         method: "pattern".to_string(),
                         source: "package.json".to_string(),
                         value: version.to_string(),
-                        location: json_entry_offset(content, "dependencies", name)
-                            .map(|o| format!("offset:{o}")),
+                        location: dep_offset.map(|o| format!("offset:{o}")),
                         ..Default::default()
                     }]),
                 );
@@ -1108,8 +1122,7 @@ impl PackageJsonAnalyzer {
                         method: "pattern".to_string(),
                         source: "package.json".to_string(),
                         value: version.to_string(),
-                        location: json_entry_offset(content, "dependencies", name)
-                            .map(|o| format!("offset:{o}")),
+                        location: dep_offset.map(|o| format!("offset:{o}")),
                         ..Default::default()
                     }]),
                 );
@@ -1131,7 +1144,7 @@ impl PackageJsonAnalyzer {
                         method: "pattern".to_string(),
                         source: "package.json".to_string(),
                         value: name.to_string(),
-                        location: json_field_location(content, "dependencies"),
+                        location: dep_offset.map(|o| format!("offset:{o}")),
                         ..Default::default()
                     }]),
                 );
@@ -1150,18 +1163,18 @@ impl PackageJsonAnalyzer {
                         method: "levenshtein".to_string(),
                         source: "package.json".to_string(),
                         value: format!("{} -> {}", name, original),
-                        location: json_field_location(content, "dependencies"),
+                        location: dep_offset.map(|o| format!("offset:{o}")),
                         ..Default::default()
                     }]),
                 );
             }
 
             // Add as import for tracking
-            report.imports.push(Import {
-                symbol: name.to_string(),
-                library: Some(version.to_string()),
-                offset: None,
-                alias: None,
+            report.imports.push(match dep_offset {
+                Some(offset) => {
+                    Import::with_offset(name.to_string(), Some(version.to_string()), offset)
+                }
+                None => Import::new(name.to_string(), Some(version.to_string())),
             });
         }
     }

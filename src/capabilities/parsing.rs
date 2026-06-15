@@ -7,6 +7,10 @@
 
 use crate::composite_rules::types::Arch;
 use crate::composite_rules::{CompositeTrait, FileType as RuleFileType, Platform, TraitDefinition};
+use crate::composite_rules::{
+    EncodedQuery, LiteralQuery, PathQuery, RawQuery, SectionQuery, SymbolQuery, TextQuery,
+    TreeSitterQuery,
+};
 use crate::types::Criticality;
 use std::collections::HashSet;
 
@@ -238,9 +242,8 @@ pub(crate) fn apply_trait_defaults(
 
     // For size-only traits without a condition, create a synthetic "always-true" condition
     // This uses a basename regex that matches everything
-    let mut condition = raw
-        .condition
-        .unwrap_or_else(|| crate::composite_rules::Condition::Path {
+    let mut condition = raw.condition.unwrap_or_else(|| {
+        crate::composite_rules::Condition::Path(PathQuery {
             exact: None,
             substr: None,
             regex: Some(".".to_string()),
@@ -248,7 +251,8 @@ pub(crate) fn apply_trait_defaults(
             is_check: None,
             basename: false,
             dirname: false,
-        });
+        })
+    });
 
     // Auto-fix: Convert literal regex patterns to substr for better performance
     // If a regex pattern contains only alphanumeric chars and underscores, it's a literal
@@ -1088,11 +1092,11 @@ fn fix_literal_regex_patterns(condition: &mut crate::composite_rules::Condition)
     };
 
     match condition {
-        Condition::Raw {
+        Condition::Raw(RawQuery {
             regex: regex_opt,
             substr,
             ..
-        } if substr.is_none() => {
+        }) if substr.is_none() => {
             if let Some(pattern) = regex_opt
                 && is_literal(pattern)
             {
@@ -1101,11 +1105,11 @@ fn fix_literal_regex_patterns(condition: &mut crate::composite_rules::Condition)
                 *regex_opt = None;
             }
         }
-        Condition::Symbol {
+        Condition::Symbol(SymbolQuery {
             regex: regex_opt,
             substr,
             ..
-        } if substr.is_none() => {
+        }) if substr.is_none() => {
             if let Some(pattern) = regex_opt
                 && is_literal(pattern)
             {
@@ -1114,11 +1118,11 @@ fn fix_literal_regex_patterns(condition: &mut crate::composite_rules::Condition)
                 *regex_opt = None;
             }
         }
-        Condition::Path {
+        Condition::Path(PathQuery {
             regex: regex_opt,
             substr,
             ..
-        } if substr.is_none() => {
+        }) if substr.is_none() => {
             if let Some(pattern) = regex_opt
                 && is_literal(pattern)
             {
@@ -1210,18 +1214,18 @@ fn check_regex_length(
     source_path: Option<&std::path::Path>,
     warnings: &mut Vec<String>,
 ) {
-    use crate::composite_rules::Condition;
+    use crate::composite_rules::{Condition, KvQuery};
 
     let regex = match condition {
-        Condition::Symbol { regex, .. }
-        | Condition::Text { regex, .. }
-        | Condition::Literal { regex, .. }
-        | Condition::Raw { regex, .. }
-        | Condition::TreeSitter { regex, .. }
-        | Condition::Section { regex, .. }
-        | Condition::Encoded { regex, .. }
-        | Condition::Path { regex, .. }
-        | Condition::Kv { regex, .. } => regex.as_deref(),
+        Condition::Symbol(SymbolQuery { regex, .. })
+        | Condition::Text(TextQuery { regex, .. })
+        | Condition::Literal(LiteralQuery { regex, .. })
+        | Condition::Raw(RawQuery { regex, .. })
+        | Condition::TreeSitter(TreeSitterQuery { regex, .. })
+        | Condition::Section(SectionQuery { regex, .. })
+        | Condition::Encoded(EncodedQuery { regex, .. })
+        | Condition::Path(PathQuery { regex, .. })
+        | Condition::Kv(KvQuery { regex, .. }) => regex.as_deref(),
         _ => None,
     };
 
@@ -1243,7 +1247,7 @@ fn check_regex_length(
         // "decompose into multiple traits" doesn't fit a path-structure matcher,
         // so they are exempt from the alternation-chain check.
         if or_symbol_count > max_or_symbols
-            && !matches!(condition, Condition::Path { .. })
+            && !matches!(condition, Condition::Path(PathQuery { .. }))
             && !crate::validation_controls::is_validator_disabled("simple-alternation-chain")
         {
             warnings.push(format!(
@@ -2221,7 +2225,7 @@ mod tests {
     #[test]
     fn test_regex_length_ok() {
         let pattern = "a".repeat(MAX_REGEX_LENGTH_BYTES);
-        let condition = crate::composite_rules::Condition::Path {
+        let condition = crate::composite_rules::Condition::Path(PathQuery {
             exact: None,
             substr: None,
             regex: Some(pattern),
@@ -2229,7 +2233,7 @@ mod tests {
             is_check: None,
             basename: true,
             dirname: false,
-        };
+        });
         let mut warnings = Vec::new();
         super::check_regex_length("test-trait", &condition, None, &mut warnings);
         assert!(warnings.is_empty());
@@ -2238,7 +2242,7 @@ mod tests {
     #[test]
     fn test_regex_length_over_limit_warns() {
         let pattern = "a".repeat(MAX_REGEX_LENGTH_BYTES + 1);
-        let condition = crate::composite_rules::Condition::Path {
+        let condition = crate::composite_rules::Condition::Path(PathQuery {
             exact: None,
             substr: None,
             regex: Some(pattern),
@@ -2246,7 +2250,7 @@ mod tests {
             is_check: None,
             basename: true,
             dirname: false,
-        };
+        });
         let mut warnings = Vec::new();
         super::check_regex_length("test-trait", &condition, None, &mut warnings);
         assert_eq!(warnings.len(), 1);
@@ -2264,7 +2268,7 @@ mod tests {
 
     #[test]
     fn test_regex_length_no_regex_no_warning() {
-        let condition = crate::composite_rules::Condition::Path {
+        let condition = crate::composite_rules::Condition::Path(PathQuery {
             exact: None,
             substr: Some("some substring".to_string()),
             regex: None,
@@ -2272,7 +2276,7 @@ mod tests {
             is_check: None,
             basename: true,
             dirname: false,
-        };
+        });
         let mut warnings = Vec::new();
         super::check_regex_length("test-trait", &condition, None, &mut warnings);
         assert!(warnings.is_empty());
@@ -2293,7 +2297,7 @@ mod tests {
         // `path` matchers are exempt from the alternation-chain check (their
         // `(^|[\\/])…` anchoring spends pipes structurally), so exercise the
         // limit with a content matcher that is subject to it.
-        let condition = crate::composite_rules::Condition::Text {
+        let condition = crate::composite_rules::Condition::Text(TextQuery {
             exact: None,
             substr: None,
             regex: Some("a|b|c|d|e".to_string()),
@@ -2307,7 +2311,7 @@ mod tests {
             offset_range: None,
             section_offset: None,
             section_offset_range: None,
-        };
+        });
         let mut warnings = Vec::new();
         super::check_regex_length("test-trait", &condition, None, &mut warnings);
         assert!(warnings.iter().any(|w| w.contains("too many '|' symbols")));
@@ -2315,7 +2319,7 @@ mod tests {
 
     #[test]
     fn test_regex_or_symbol_limit_allows_escaped_and_charclass_pipes() {
-        let condition = crate::composite_rules::Condition::Text {
+        let condition = crate::composite_rules::Condition::Text(TextQuery {
             exact: None,
             substr: None,
             regex: Some(r"a\|b|[|]|c|d".to_string()),
@@ -2329,7 +2333,7 @@ mod tests {
             offset_range: None,
             section_offset: None,
             section_offset_range: None,
-        };
+        });
         let mut warnings = Vec::new();
         super::check_regex_length("test-trait", &condition, None, &mut warnings);
         assert!(!warnings.iter().any(|w| w.contains("too many '|' symbols")));
@@ -2337,7 +2341,7 @@ mod tests {
 
     #[test]
     fn test_regex_or_symbol_limit_relaxed_for_data_text_traits() {
-        let condition = crate::composite_rules::Condition::Text {
+        let condition = crate::composite_rules::Condition::Text(TextQuery {
             exact: None,
             substr: None,
             regex: Some("a|b|c|d|e|f|g".to_string()),
@@ -2351,7 +2355,7 @@ mod tests {
             offset_range: None,
             section_offset: None,
             section_offset_range: None,
-        };
+        });
         let mut warnings = Vec::new();
         super::check_regex_length(
             "test-trait",
@@ -2366,7 +2370,7 @@ mod tests {
 
     #[test]
     fn test_regex_or_symbol_limit_still_caps_data_text_traits() {
-        let condition = crate::composite_rules::Condition::Text {
+        let condition = crate::composite_rules::Condition::Text(TextQuery {
             exact: None,
             substr: None,
             regex: Some("a|b|c|d|e|f|g|h".to_string()),
@@ -2380,7 +2384,7 @@ mod tests {
             offset_range: None,
             section_offset: None,
             section_offset_range: None,
-        };
+        });
         let mut warnings = Vec::new();
         super::check_regex_length(
             "test-trait",
@@ -2395,7 +2399,7 @@ mod tests {
 
     #[test]
     fn test_simple_alphanumeric_alternation_warns() {
-        let condition = crate::composite_rules::Condition::Path {
+        let condition = crate::composite_rules::Condition::Path(PathQuery {
             exact: None,
             substr: None,
             regex: Some("word1|word2|word3".to_string()),
@@ -2403,7 +2407,7 @@ mod tests {
             is_check: None,
             basename: true,
             dirname: false,
-        };
+        });
         let mut warnings = Vec::new();
         super::check_regex_length("test-trait", &condition, None, &mut warnings);
         assert!(
@@ -2415,7 +2419,7 @@ mod tests {
 
     #[test]
     fn test_non_simple_alternation_does_not_warn() {
-        let condition = crate::composite_rules::Condition::Path {
+        let condition = crate::composite_rules::Condition::Path(PathQuery {
             exact: None,
             substr: None,
             regex: Some(r"word1|word-2|\d+".to_string()),
@@ -2423,7 +2427,7 @@ mod tests {
             is_check: None,
             basename: true,
             dirname: false,
-        };
+        });
         let mut warnings = Vec::new();
         super::check_regex_length("test-trait", &condition, None, &mut warnings);
         assert!(

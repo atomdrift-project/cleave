@@ -390,6 +390,74 @@ fn looks_like_passive_markup(value: &str) -> bool {
     !active_markers.iter().any(|marker| value.contains(marker))
 }
 
+fn is_component_source_host(parent_path: &str, host_file_type: Option<&FileType>) -> bool {
+    if !matches!(
+        host_file_type,
+        Some(FileType::JavaScript | FileType::TypeScript | FileType::Html)
+    ) {
+        return false;
+    }
+
+    let host_path = parent_path.split("##").next().unwrap_or(parent_path);
+    Path::new(host_path)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| {
+            matches!(
+                ext.to_ascii_lowercase().as_str(),
+                "svelte" | "vue" | "astro"
+            )
+        })
+}
+
+fn looks_like_component_source_markup(value: &str) -> bool {
+    let trimmed = value.trim_start();
+    if !(trimmed.starts_with('<') && value.contains('>')) {
+        return false;
+    }
+
+    let component_markers = [
+        "<script",
+        "</script",
+        "<style",
+        "</style",
+        "<template",
+        "</template",
+        "<svelte:",
+        "<slot",
+        "<div",
+        "</div",
+        "<span",
+        "</span",
+        "<button",
+        "</button",
+        " class=",
+        "class=\"",
+        "class='",
+        "{#if",
+        "{#each",
+        "{/if}",
+        "{/each}",
+        "@click=",
+        " v-if=",
+        " v-for=",
+    ];
+
+    component_markers
+        .iter()
+        .any(|marker| value.contains(marker))
+}
+
+fn should_skip_component_source_markup(
+    parent_path: &str,
+    string_info: &StringInfo,
+    host_file_type: Option<&FileType>,
+) -> bool {
+    string_info.encoding_chain.is_empty()
+        && is_component_source_host(parent_path, host_file_type)
+        && looks_like_component_source_markup(&string_info.value)
+}
+
 fn looks_like_ansi_color_helper(value: &str) -> bool {
     value.contains('\u{1b}')
         && value.contains("colors ?")
@@ -1405,6 +1473,15 @@ pub(crate) fn process_all_strings_with_host(
             continue;
         }
 
+        // Component single-file formats (.svelte/.vue/.astro) are parsed by the
+        // source analyzer as JS/TS-like hosts, but their own active markup can
+        // look like an embedded second language to string classification. Do not
+        // promote plain component markup to an embedded-code layer; encoded
+        // content inside the component still flows through the payload checks.
+        if should_skip_component_source_markup(parent_path, string_info, host_file_type) {
+            continue;
+        }
+
         detection_attempts += 1;
 
         // Check for PowerShell -EncodedCommand blobs first
@@ -1580,6 +1657,45 @@ mod tests {
         assert_eq!(
             detect_language_with_host(&info, true, Some(&FileType::Go)),
             Some(FileType::JavaScript),
+        );
+    }
+
+    #[test]
+    fn test_skip_plain_component_markup_in_component_host() {
+        let mut info = make_string_info(
+            "<script>\n  let count = 0;\n</script>\n\
+             <button class=\"primary\" onclick={() => count += 1}>Click</button>",
+        );
+        // This is the bad upstream classification shape from stng: component
+        // markup with `class` and method-like expressions can look Python-ish.
+        info.string_type = Some(crate::types::binary::StringType::PythonCode);
+
+        assert!(should_skip_component_source_markup(
+            "Component.svelte",
+            &info,
+            Some(&FileType::JavaScript),
+        ));
+        assert!(
+            !should_skip_component_source_markup("page.html", &info, Some(&FileType::Html)),
+            "ordinary HTML remains eligible for embedded-code analysis",
+        );
+
+        let mapper = Arc::new(CapabilityMapper::default());
+        let (encoded_layers, plain_findings) = process_all_strings(
+            "Component.svelte",
+            &[info],
+            &mapper,
+            0,
+            Some(&FileType::JavaScript),
+            None,
+        );
+
+        assert!(encoded_layers.is_empty());
+        assert!(
+            plain_findings
+                .iter()
+                .all(|f| f.id != "metadata/lang/embedded::python"),
+            "component source markup should not be reported as embedded Python"
         );
     }
 

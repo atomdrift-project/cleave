@@ -10,7 +10,11 @@
 //! for their target domain.
 
 use super::helpers::{find_line_number, is_ast_source_type, is_binary_file_type};
-use crate::composite_rules::{Condition, FileType, TraitDefinition};
+use crate::composite_rules::{Condition, FileType, KvQuery, TraitDefinition};
+use crate::composite_rules::{
+    EncodedQuery, HexQuery, LiteralQuery, PathQuery, RawQuery, SectionQuery, SymbolQuery,
+    TextQuery, TreeSitterQuery,
+};
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
@@ -24,29 +28,33 @@ fn substr_regex_fields(
     condition: &Condition,
 ) -> Option<(Option<&str>, Option<&str>, &'static str)> {
     match condition {
-        Condition::Symbol { substr, regex, .. } => {
+        Condition::Symbol(SymbolQuery { substr, regex, .. }) => {
             Some((substr.as_deref(), regex.as_deref(), "symbol"))
         }
-        Condition::Text { substr, regex, .. } => {
+        Condition::Text(TextQuery { substr, regex, .. }) => {
             Some((substr.as_deref(), regex.as_deref(), "text"))
         }
-        Condition::Literal { substr, regex, .. } => {
+        Condition::Literal(LiteralQuery { substr, regex, .. }) => {
             Some((substr.as_deref(), regex.as_deref(), "string_literal"))
         }
-        Condition::Raw { substr, regex, .. } => Some((substr.as_deref(), regex.as_deref(), "raw")),
-        Condition::TreeSitter { substr, regex, .. } => {
+        Condition::Raw(RawQuery { substr, regex, .. }) => {
+            Some((substr.as_deref(), regex.as_deref(), "raw"))
+        }
+        Condition::TreeSitter(TreeSitterQuery { substr, regex, .. }) => {
             Some((substr.as_deref(), regex.as_deref(), "tree-sitter"))
         }
-        Condition::Section { substr, regex, .. } => {
+        Condition::Section(SectionQuery { substr, regex, .. }) => {
             Some((substr.as_deref(), regex.as_deref(), "section"))
         }
-        Condition::Encoded { substr, regex, .. } => {
+        Condition::Encoded(EncodedQuery { substr, regex, .. }) => {
             Some((substr.as_deref(), regex.as_deref(), "encoded"))
         }
-        Condition::Path { substr, regex, .. } => {
+        Condition::Path(PathQuery { substr, regex, .. }) => {
             Some((substr.as_deref(), regex.as_deref(), "basename"))
         }
-        Condition::Kv { substr, regex, .. } => Some((substr.as_deref(), regex.as_deref(), "value")),
+        Condition::Kv(KvQuery { substr, regex, .. }) => {
+            Some((substr.as_deref(), regex.as_deref(), "value"))
+        }
         _ => None,
     }
 }
@@ -334,46 +342,46 @@ pub(crate) fn find_short_pattern_warnings(
         // Helper to check if condition has location constraints
         let has_location_constraints = |condition: &Condition| -> bool {
             match condition {
-                Condition::Raw {
+                Condition::Raw(RawQuery {
                     section,
                     offset,
                     offset_range,
                     section_offset,
                     section_offset_range,
                     ..
-                }
-                | Condition::Text {
+                })
+                | Condition::Text(TextQuery {
                     section,
                     offset,
                     offset_range,
                     section_offset,
                     section_offset_range,
                     ..
-                }
-                | Condition::Literal {
+                })
+                | Condition::Literal(LiteralQuery {
                     section,
                     offset,
                     offset_range,
                     section_offset,
                     section_offset_range,
                     ..
-                }
-                | Condition::Encoded {
+                })
+                | Condition::Encoded(EncodedQuery {
                     section,
                     offset,
                     offset_range,
                     section_offset,
                     section_offset_range,
                     ..
-                }
-                | Condition::Hex {
+                })
+                | Condition::Hex(HexQuery {
                     section,
                     offset,
                     offset_range,
                     section_offset,
                     section_offset_range,
                     ..
-                } => {
+                }) => {
                     section.is_some()
                         || offset.is_some()
                         || offset_range.is_some()
@@ -427,7 +435,7 @@ pub(crate) fn find_short_pattern_warnings(
                 }
             }
         }
-        if let Condition::Hex { pattern, .. } = &trait_def.r#if {
+        if let Condition::Hex(HexQuery { pattern, .. }) = &trait_def.r#if {
             // Count effective hex bytes (excluding ?? wildcards and [N] gaps,
             // but counting nibble wildcards like 4? or ?F)
             let effective_bytes = pattern
@@ -579,14 +587,14 @@ fn regex_is_effectively_literal(pattern: &str) -> bool {
 
 fn condition_has_position_constraints(condition: &Condition) -> bool {
     match condition {
-        Condition::Raw {
+        Condition::Raw(RawQuery {
             section,
             offset,
             offset_range,
             section_offset,
             section_offset_range,
             ..
-        } => {
+        }) => {
             section.is_some()
                 || offset.is_some()
                 || offset_range.is_some()
@@ -622,23 +630,23 @@ fn pattern_targets_code_structure(condition: &Condition) -> Option<(&str, &str)>
     });
 
     match condition {
-        Condition::Literal {
+        Condition::Literal(LiteralQuery {
             substr: Some(s), ..
-        } => {
+        }) => {
             if func_call_re.is_match(s) || import_re.is_match(s) {
                 Some((s.as_str(), "substr"))
             } else {
                 None
             }
         }
-        Condition::Literal { exact: Some(s), .. } => {
+        Condition::Literal(LiteralQuery { exact: Some(s), .. }) => {
             if func_call_re.is_match(s) || import_re.is_match(s) {
                 Some((s.as_str(), "exact"))
             } else {
                 None
             }
         }
-        Condition::Literal { regex: Some(s), .. } => {
+        Condition::Literal(LiteralQuery { regex: Some(s), .. }) => {
             if regex_code_re.is_match(s) {
                 Some((s.as_str(), "regex"))
             } else {
@@ -676,7 +684,7 @@ pub(crate) fn find_string_literal_should_use_text(
         }
 
         let (pattern_value, pattern_kind) = match &trait_def.r#if {
-            Condition::Literal { .. } => {
+            Condition::Literal(LiteralQuery { .. }) => {
                 if let Some(match_info) = pattern_targets_code_structure(&trait_def.r#if) {
                     match_info
                 } else {
@@ -716,13 +724,13 @@ pub(crate) fn find_string_literal_should_use_text(
 pub(crate) fn find_raw_should_use_text(traits: &[TraitDefinition], warnings: &mut Vec<String>) {
     for trait_def in traits {
         let (exact, substr, regex, word) = match &trait_def.r#if {
-            Condition::Raw {
+            Condition::Raw(RawQuery {
                 exact,
                 substr,
                 regex,
                 word,
                 ..
-            } => (
+            }) => (
                 exact.as_deref(),
                 substr.as_deref(),
                 regex.as_deref(),
@@ -927,7 +935,7 @@ pub(crate) fn find_ast_function_call_should_use_symbol(
             continue;
         }
 
-        let (Condition::Text {
+        let (Condition::Text(TextQuery {
             exact,
             substr,
             regex,
@@ -935,8 +943,8 @@ pub(crate) fn find_ast_function_call_should_use_symbol(
             case_insensitive,
             is_check,
             ..
-        }
-        | Condition::Raw {
+        })
+        | Condition::Raw(RawQuery {
             exact,
             substr,
             regex,
@@ -944,7 +952,7 @@ pub(crate) fn find_ast_function_call_should_use_symbol(
             case_insensitive,
             is_check,
             ..
-        }) = &trait_def.r#if
+        })) = &trait_def.r#if
         else {
             continue;
         };

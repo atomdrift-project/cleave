@@ -21,7 +21,7 @@ mod proximity_scripting_symbols_tests {
     use crate::composite_rules::condition::SymbolKind;
     use crate::composite_rules::context::EvaluationContext;
     use crate::composite_rules::types::{FileType as CFileType, Platform};
-    use crate::composite_rules::{Arch, CompositeTrait, Condition};
+    use crate::composite_rules::{Arch, CompositeTrait, Condition, SymbolQuery};
     use crate::types::{AnalysisReport, Criticality, Import, TargetInfo};
     use std::path::PathBuf;
 
@@ -43,17 +43,19 @@ mod proximity_scripting_symbols_tests {
     ) -> CompositeTrait {
         let conds: Vec<Condition> = substrs
             .iter()
-            .map(|s| Condition::Symbol {
-                exact: Some((*s).to_string()),
-                substr: None,
-                regex: None,
-                platforms: None,
-                is_check: None,
-                kind: Some(SymbolKind::Import),
-                arg: None,
-                args: None,
-                alias: None,
-                not: None,
+            .map(|s| {
+                Condition::Symbol(SymbolQuery {
+                    exact: Some((*s).to_string()),
+                    substr: None,
+                    regex: None,
+                    platforms: None,
+                    is_check: None,
+                    kind: Some(SymbolKind::Import),
+                    arg: None,
+                    args: None,
+                    alias: None,
+                    not: None,
+                })
             })
             .collect();
 

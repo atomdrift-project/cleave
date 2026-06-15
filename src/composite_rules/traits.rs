@@ -4,7 +4,9 @@
 //! (boolean combinations of conditions).
 
 use super::condition::{
-    Condition, NotException, NotExceptionStructured, StringValidator, SymbolKind,
+    CommentQuery, Condition, EncodedQuery, HexQuery, KvQuery, LiteralQuery, MetricsQuery,
+    NotException, NotExceptionStructured, PathQuery, RawQuery, SectionQuery, StringValidator,
+    SymbolKind, SymbolQuery, TextQuery, TreeSitterQuery,
 };
 use super::context::{ConditionResult, EvaluationContext, StringParams};
 use super::evaluators::{
@@ -30,6 +32,11 @@ const MAX_RULE_EVAL_DURATION: Duration = Duration::from_secs(90);
 /// Debug log threshold for rule evaluation (500ms).
 /// Rules exceeding this emit an info-level log.
 const RULE_EVAL_DEBUG_DURATION: Duration = Duration::from_millis(600);
+
+/// Upper bound on a trait `desc`. Descriptions are shown in the terminal UI and
+/// version diffs where a tight cap keeps rows scannable; 48 leaves room for a few
+/// genuinely useful longer phrasings without inviting sentence-length blurbs.
+const MAX_DESCRIPTION_CHARS: usize = 48;
 
 /// Lower a criticality by one level when a downgrade condition fires. Hostile →
 /// Suspicious → Notable → Baseline; anything already at or below Baseline floors
@@ -409,7 +416,7 @@ impl TraitDefinition {
     pub(crate) fn check_size_constraints(&self) -> Option<String> {
         // Skip validation for Section conditions - they have their own size_min/size_max
         // for section sizes, which are separate from file size constraints
-        if matches!(self.r#if, Condition::Section { .. }) {
+        if matches!(self.r#if, Condition::Section(SectionQuery { .. })) {
             return None;
         }
 
@@ -513,11 +520,11 @@ impl TraitDefinition {
             ));
         }
 
-        if desc.chars().count() > 50 {
+        let desc_len = desc.chars().count();
+        if desc_len > MAX_DESCRIPTION_CHARS {
             return Some(format!(
-                "desc: '{}' is too long ({} chars). Keep descriptions at 50 characters or less.",
-                desc,
-                desc.chars().count()
+                "desc: '{}' is too long ({} chars). Keep descriptions at {} characters or less.",
+                desc, desc_len, MAX_DESCRIPTION_CHARS
             ));
         }
 
@@ -580,20 +587,20 @@ impl TraitDefinition {
 
         match &self.r#if {
             // Symbol conditions with not: - validate exceptions match the pattern
-            Condition::Symbol {
+            Condition::Symbol(SymbolQuery {
                 exact: Some(_),
                 regex: None,
                 ..
-            } => {
+            }) => {
                 return Some(
                     "not: field used with symbol exact match - consider using 'unless:' instead for deterministic patterns".to_string()
                 );
             }
-            Condition::Symbol {
+            Condition::Symbol(SymbolQuery {
                 substr: Some(search_substr),
                 regex: None,
                 ..
-            } => {
+            }) => {
                 // For symbol substr, validate not: exceptions contain the search substr
                 for exc in not_exceptions {
                     match exc {
@@ -627,10 +634,10 @@ impl TraitDefinition {
                     }
                 }
             }
-            Condition::Symbol {
+            Condition::Symbol(SymbolQuery {
                 regex: Some(pattern),
                 ..
-            } => {
+            }) => {
                 // For symbol regex, validate that exceptions could potentially match
                 for exc in not_exceptions {
                     match exc {
@@ -659,48 +666,48 @@ impl TraitDefinition {
                 }
             }
             // Exact matches should use `unless:` instead of `not:`
-            Condition::Text {
+            Condition::Text(TextQuery {
                 exact: Some(_),
                 regex: None,
                 word: None,
                 ..
-            }
-            | Condition::Literal {
+            })
+            | Condition::Literal(LiteralQuery {
                 exact: Some(_),
                 regex: None,
                 word: None,
                 ..
-            } => {
+            }) => {
                 return Some(
                     "not: field used with exact match - consider using 'unless:' instead for deterministic patterns".to_string()
                 );
             }
             // For Content exact matches, not: doesn't make sense
-            Condition::Raw {
+            Condition::Raw(RawQuery {
                 exact: Some(_),
                 regex: None,
                 word: None,
                 ..
-            } => {
+            }) => {
                 return Some(
                     "not: field used with content/exact match - this doesn't make sense. Content exact matches the entire file content.".to_string()
                 );
             }
             // For String substr matches, validate that not: exceptions could match strings containing the substr
-            Condition::Text {
+            Condition::Text(TextQuery {
                 substr: Some(search_substr),
                 regex: None,
                 word: None,
                 case_insensitive,
                 ..
-            }
-            | Condition::Literal {
+            })
+            | Condition::Literal(LiteralQuery {
                 substr: Some(search_substr),
                 regex: None,
                 word: None,
                 case_insensitive,
                 ..
-            } => {
+            }) => {
                 let case_insensitive = *case_insensitive;
 
                 for exc in not_exceptions {
@@ -742,29 +749,29 @@ impl TraitDefinition {
                 }
             }
             // For Content substr matches, not: is unclear - content searches don't extract individual strings
-            Condition::Raw {
+            Condition::Raw(RawQuery {
                 substr: Some(_),
                 regex: None,
                 word: None,
                 ..
-            } => {
+            }) => {
                 return Some(
                     "not: field used with content/substr match - behavior is unclear because content searches on binary data don't extract individual strings for filtering. Use regex instead, or use 'string' type with substr.".to_string()
                 );
             }
             // For regex matches, validate that exceptions could potentially match
-            Condition::Text {
+            Condition::Text(TextQuery {
                 regex: Some(pattern),
                 ..
-            }
-            | Condition::Literal {
+            })
+            | Condition::Literal(LiteralQuery {
                 regex: Some(pattern),
                 ..
-            }
-            | Condition::Raw {
+            })
+            | Condition::Raw(RawQuery {
                 regex: Some(pattern),
                 ..
-            } => {
+            }) => {
                 for exc in not_exceptions {
                     match exc {
                         // Validate shorthand (substr) exceptions — check if the substr matches the regex
@@ -792,7 +799,7 @@ impl TraitDefinition {
                 }
             }
             // For hex patterns, validate exceptions match
-            Condition::Hex { pattern: _, .. } => {
+            Condition::Hex(HexQuery { pattern: _, .. }) => {
                 // For hex patterns, we should validate that not: exceptions make sense
                 // Since hex matching is complex, we'll do a basic check
                 // Hex patterns match byte sequences, so not: exceptions should be regex-based
@@ -1264,7 +1271,7 @@ impl TraitDefinition {
         let arch_clamp = ctx.arch_clamp_range(&self.arch);
 
         match condition {
-            Condition::Symbol {
+            Condition::Symbol(SymbolQuery {
                 exact,
                 substr,
                 regex,
@@ -1275,7 +1282,7 @@ impl TraitDefinition {
                 args,
                 alias,
                 not,
-            } => {
+            }) => {
                 let merged_not = merge_not_exceptions(not.as_ref(), self.not.as_ref());
                 // Source-AST projection kinds (call/member/bind/identifier)
                 // dispatch to the filefacts-fact evaluators — pre-extracted
@@ -1326,7 +1333,7 @@ impl TraitDefinition {
                     ),
                 }
             }
-            Condition::Text {
+            Condition::Text(TextQuery {
                 exact,
                 substr,
                 regex,
@@ -1340,7 +1347,7 @@ impl TraitDefinition {
                 offset_range,
                 section_offset,
                 section_offset_range,
-            } => {
+            }) => {
                 let params = StringParams {
                     exact: exact.as_ref(),
                     substr: substr.as_ref(),
@@ -1363,7 +1370,7 @@ impl TraitDefinition {
                     eval_text(&params, merged_not.as_ref(), ctx, Some(self.id.as_str()))
                 )
             }
-            Condition::Comment {
+            Condition::Comment(CommentQuery {
                 exact,
                 substr,
                 regex,
@@ -1372,7 +1379,7 @@ impl TraitDefinition {
                 is_check,
                 not: _,
                 platforms: _,
-            } => {
+            }) => {
                 let params = StringParams {
                     exact: exact.as_ref(),
                     substr: substr.as_ref(),
@@ -1396,7 +1403,7 @@ impl TraitDefinition {
                     )
                 )
             }
-            Condition::Literal {
+            Condition::Literal(LiteralQuery {
                 kind,
                 exact,
                 substr,
@@ -1413,7 +1420,7 @@ impl TraitDefinition {
                 offset_range,
                 section_offset,
                 section_offset_range,
-            } => {
+            }) => {
                 // kind=number dispatches to numeric matching against
                 // literals extracted into report.strings with
                 // section="ast-number" (where value is the decimal
@@ -1450,7 +1457,7 @@ impl TraitDefinition {
                 }
             }
             Condition::Trait { id } => timed_eval!("trait", eval_trait(id, ctx)),
-            Condition::TreeSitter {
+            Condition::TreeSitter(TreeSitterQuery {
                 kind,
                 node,
                 exact,
@@ -1459,7 +1466,7 @@ impl TraitDefinition {
                 query,
                 case_insensitive,
                 ..
-            } => timed_eval!(
+            }) => timed_eval!(
                 "ast",
                 eval_ast(
                     kind.as_deref(),
@@ -1488,17 +1495,17 @@ impl TraitDefinition {
                     eval_syscall(name.as_ref(), number.as_ref(), arch.as_ref(), ctx)
                 )
             }
-            Condition::Metrics {
+            Condition::Metrics(MetricsQuery {
                 field,
                 min,
                 max,
                 min_size,
                 max_size,
-            } => timed_eval!(
+            }) => timed_eval!(
                 "metrics",
                 eval_metrics(field, *min, *max, *min_size, *max_size, ctx)
             ),
-            Condition::Hex {
+            Condition::Hex(HexQuery {
                 pattern,
                 not: _,
                 offset,
@@ -1506,7 +1513,7 @@ impl TraitDefinition {
                 section,
                 section_offset,
                 section_offset_range,
-            } => timed_eval!(
+            }) => timed_eval!(
                 "hex",
                 eval_hex(
                     pattern,
@@ -1522,7 +1529,7 @@ impl TraitDefinition {
                     Some(self.id.as_str()),
                 )
             ),
-            Condition::Raw {
+            Condition::Raw(RawQuery {
                 exact,
                 substr,
                 regex,
@@ -1535,7 +1542,7 @@ impl TraitDefinition {
                 offset_range,
                 section_offset,
                 section_offset_range,
-            } => {
+            }) => {
                 use super::evaluators::ContentLocationParams;
                 let location = ContentLocationParams {
                     section: section.clone(),
@@ -1561,7 +1568,7 @@ impl TraitDefinition {
                     )
                 )
             }
-            Condition::Section {
+            Condition::Section(SectionQuery {
                 exact,
                 substr,
                 regex,
@@ -1579,7 +1586,7 @@ impl TraitDefinition {
                 size_ratio_max,
                 entropy_ratio_min,
                 entropy_ratio_max,
-            } => timed_eval!(
+            }) => timed_eval!(
                 "section",
                 eval_section(
                     &SectionParams {
@@ -1604,7 +1611,7 @@ impl TraitDefinition {
                     ctx,
                 )
             ),
-            Condition::Encoded {
+            Condition::Encoded(EncodedQuery {
                 encoding,
                 exact,
                 substr,
@@ -1618,7 +1625,7 @@ impl TraitDefinition {
                 offset_range,
                 section_offset,
                 section_offset_range,
-            } => {
+            }) => {
                 use super::evaluators::ContentLocationParams;
                 let location = ContentLocationParams {
                     section: section.clone(),
@@ -1644,7 +1651,7 @@ impl TraitDefinition {
                     )
                 )
             }
-            Condition::Path {
+            Condition::Path(PathQuery {
                 exact,
                 substr,
                 regex,
@@ -1652,7 +1659,7 @@ impl TraitDefinition {
                 is_check,
                 basename,
                 dirname,
-            } => timed_eval!(
+            }) => timed_eval!(
                 "path",
                 eval_path(
                     exact.as_ref(),
@@ -1665,7 +1672,7 @@ impl TraitDefinition {
                     ctx,
                 )
             ),
-            Condition::Kv { .. } => {
+            Condition::Kv(KvQuery { .. }) => {
                 timed_eval!("value", {
                     // Delegate to value evaluator with caching
                     if let Some(evidence) = super::evaluators::evaluate_kv(condition, ctx) {
@@ -2671,7 +2678,7 @@ impl CompositeTrait {
         let arch_clamp = ctx.arch_clamp_range(&self.arch);
 
         match condition {
-            Condition::Symbol {
+            Condition::Symbol(SymbolQuery {
                 exact,
                 substr,
                 regex,
@@ -2682,7 +2689,7 @@ impl CompositeTrait {
                 args,
                 alias,
                 not,
-            } => {
+            }) => {
                 let merged_not = merge_not_exceptions(not.as_ref(), self.not.as_ref());
                 use crate::composite_rules::condition::SymbolKind;
                 match kind {
@@ -2719,7 +2726,7 @@ impl CompositeTrait {
                     ),
                 }
             }
-            Condition::Text {
+            Condition::Text(TextQuery {
                 exact,
                 substr,
                 regex,
@@ -2733,7 +2740,7 @@ impl CompositeTrait {
                 offset_range,
                 section_offset,
                 section_offset_range,
-            } => {
+            }) => {
                 let params = StringParams {
                     exact: exact.as_ref(),
                     substr: substr.as_ref(),
@@ -2753,7 +2760,7 @@ impl CompositeTrait {
                 let merged_not = merge_not_exceptions(not.as_ref(), self.not.as_ref());
                 eval_text(&params, merged_not.as_ref(), ctx, Some(self.id.as_str()))
             }
-            Condition::Comment {
+            Condition::Comment(CommentQuery {
                 exact,
                 substr,
                 regex,
@@ -2762,7 +2769,7 @@ impl CompositeTrait {
                 is_check,
                 not: _,
                 platforms: _,
-            } => {
+            }) => {
                 let params = StringParams {
                     exact: exact.as_ref(),
                     substr: substr.as_ref(),
@@ -2783,7 +2790,7 @@ impl CompositeTrait {
                     ctx,
                 )
             }
-            Condition::Literal {
+            Condition::Literal(LiteralQuery {
                 kind: _,
                 exact,
                 substr,
@@ -2800,7 +2807,7 @@ impl CompositeTrait {
                 offset_range,
                 section_offset,
                 section_offset_range,
-            } => {
+            }) => {
                 let params = StringParams {
                     exact: exact.as_ref(),
                     substr: substr.as_ref(),
@@ -2818,7 +2825,7 @@ impl CompositeTrait {
                 eval_string_literal(&params, self.not.as_ref(), ctx)
             }
             Condition::Trait { id } => eval_trait(id, ctx),
-            Condition::TreeSitter {
+            Condition::TreeSitter(TreeSitterQuery {
                 kind,
                 node,
                 exact,
@@ -2827,7 +2834,7 @@ impl CompositeTrait {
                 query,
                 case_insensitive,
                 ..
-            } => timed_eval!(
+            }) => timed_eval!(
                 "ast",
                 eval_ast(
                     kind.as_deref(),
@@ -2856,17 +2863,17 @@ impl CompositeTrait {
                     eval_syscall(name.as_ref(), number.as_ref(), arch.as_ref(), ctx)
                 )
             }
-            Condition::Metrics {
+            Condition::Metrics(MetricsQuery {
                 field,
                 min,
                 max,
                 min_size,
                 max_size,
-            } => timed_eval!(
+            }) => timed_eval!(
                 "metrics",
                 eval_metrics(field, *min, *max, *min_size, *max_size, ctx)
             ),
-            Condition::Hex {
+            Condition::Hex(HexQuery {
                 pattern,
                 not: _,
                 offset,
@@ -2874,7 +2881,7 @@ impl CompositeTrait {
                 section,
                 section_offset,
                 section_offset_range,
-            } => timed_eval!(
+            }) => timed_eval!(
                 "hex",
                 eval_hex(
                     pattern,
@@ -2890,7 +2897,7 @@ impl CompositeTrait {
                     Some(self.id.as_str()),
                 )
             ),
-            Condition::Raw {
+            Condition::Raw(RawQuery {
                 exact,
                 substr,
                 regex,
@@ -2903,7 +2910,7 @@ impl CompositeTrait {
                 offset_range,
                 section_offset,
                 section_offset_range,
-            } => {
+            }) => {
                 use super::evaluators::ContentLocationParams;
                 let location = ContentLocationParams {
                     section: section.clone(),
@@ -2929,7 +2936,7 @@ impl CompositeTrait {
                     )
                 )
             }
-            Condition::Section {
+            Condition::Section(SectionQuery {
                 exact,
                 substr,
                 regex,
@@ -2947,7 +2954,7 @@ impl CompositeTrait {
                 size_ratio_max,
                 entropy_ratio_min,
                 entropy_ratio_max,
-            } => timed_eval!(
+            }) => timed_eval!(
                 "section",
                 eval_section(
                     &SectionParams {
@@ -2972,7 +2979,7 @@ impl CompositeTrait {
                     ctx,
                 )
             ),
-            Condition::Encoded {
+            Condition::Encoded(EncodedQuery {
                 encoding,
                 exact,
                 substr,
@@ -2986,7 +2993,7 @@ impl CompositeTrait {
                 offset_range,
                 section_offset,
                 section_offset_range,
-            } => {
+            }) => {
                 use super::evaluators::ContentLocationParams;
                 let location = ContentLocationParams {
                     section: section.clone(),
@@ -3012,7 +3019,7 @@ impl CompositeTrait {
                     )
                 )
             }
-            Condition::Path {
+            Condition::Path(PathQuery {
                 exact,
                 substr,
                 regex,
@@ -3020,7 +3027,7 @@ impl CompositeTrait {
                 is_check,
                 basename,
                 dirname,
-            } => timed_eval!(
+            }) => timed_eval!(
                 "path",
                 eval_path(
                     exact.as_ref(),
@@ -3033,7 +3040,7 @@ impl CompositeTrait {
                     ctx,
                 )
             ),
-            Condition::Kv { .. } => {
+            Condition::Kv(KvQuery { .. }) => {
                 timed_eval!("value", {
                     // Delegate to value evaluator with caching
                     if let Some(evidence) = super::evaluators::evaluate_kv(condition, ctx) {
@@ -3618,17 +3625,19 @@ mod scope_tests {
     /// `min_distinct_conditions()` returns `n_conditions`.
     fn composite_with(n_conditions: usize, scope: Option<Scope>) -> CompositeTrait {
         let conds = (0..n_conditions)
-            .map(|_| Condition::Symbol {
-                exact: Some("x".to_string()),
-                substr: None,
-                regex: None,
-                platforms: None,
-                is_check: None,
-                kind: None,
-                arg: None,
-                args: None,
-                alias: None,
-                not: None,
+            .map(|_| {
+                Condition::Symbol(SymbolQuery {
+                    exact: Some("x".to_string()),
+                    substr: None,
+                    regex: None,
+                    platforms: None,
+                    is_check: None,
+                    kind: None,
+                    arg: None,
+                    args: None,
+                    alias: None,
+                    not: None,
+                })
             })
             .collect();
         CompositeTrait {

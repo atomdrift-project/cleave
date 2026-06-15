@@ -992,7 +992,8 @@ pub fn run(
             } else {
                 None
             };
-            let condition = composite_rules::Condition::Kv {
+            let condition = composite_rules::Condition::Kv(composite_rules::KvQuery {
+                match_mode: Default::default(),
                 path: kv_path_str.to_string(),
                 exact: exact.clone(),
                 substr: substr.clone(),
@@ -1003,7 +1004,7 @@ pub fn run(
                 exists: kv_exists,
                 size_min: kv_size_min,
                 size_max: kv_size_max,
-            };
+            });
 
             // Create minimal context for kv evaluation
             let internal_file_type = match file_type {

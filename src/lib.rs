@@ -2527,8 +2527,9 @@ where
             });
             // Release wasmtime Scanner VMs on this thread to prevent non-jemalloc
             // memory accumulation. Each Scanner holds mmap'd VM regions (~50-100MB)
-            // that macOS keeps resident even after munmap (MADV_FREE).
-            composite_rules::evaluators::clear_thread_local_caches();
+            // that macOS keeps resident even after munmap (MADV_FREE). Throttled:
+            // clearing per file re-paid wasmtime instantiation on the next file.
+            composite_rules::evaluators::clear_thread_local_caches_throttled();
             return;
         }
 
@@ -2546,7 +2547,7 @@ where
             path: file_path.clone(),
             result: Box::new(result),
         });
-        composite_rules::evaluators::clear_thread_local_caches();
+        composite_rules::evaluators::clear_thread_local_caches_throttled();
         })); // end catch_unwind
         if panic_result.is_err() {
             tracing::error!(path = %file_path.display(), "panic during file analysis (caught)");
@@ -2669,7 +2670,7 @@ where
                 result: Box::new(result),
             });
             // Release wasmtime Scanner VMs on this thread (see scan_directory).
-            composite_rules::evaluators::clear_thread_local_caches();
+            composite_rules::evaluators::clear_thread_local_caches_throttled();
         }));
         if panic_result.is_err() {
             tracing::error!(path = %file_path.display(), "panic during file analysis (caught)");

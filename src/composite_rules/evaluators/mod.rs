@@ -252,38 +252,6 @@ pub fn clear_thread_local_caches() {
     crate::yara_engine::clear_engine_scanner_cache();
 }
 
-thread_local! {
-    /// Per-worker file counter driving [`clear_thread_local_caches_throttled`].
-    static FILES_SINCE_CACHE_CLEAR: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
-}
-
-/// Per-file cleanup that drops the cheap file-scoped state every time but only
-/// evicts the expensive YARA scanner cache every `CLEAR_EVERY_N_FILES` files.
-///
-/// Each cached `yara_x::Scanner` owns a wasmtime VM (~50-100MB of mmap'd, JIT'd
-/// regions). The per-thread LRU exists precisely to amortize that instantiation
-/// across files, so clearing it after *every* file re-paid `Scanner::new()` per
-/// tier per file — a large share of syscall/page-fault time on directories of
-/// many small binaries. Throttling keeps the steady-state RSS bound (a long
-/// worker still evicts regularly) while letting a burst of files reuse the warm
-/// scanners. The file-id reset stays per-file: it is cheap and correctness-bearing.
-#[allow(dead_code)] // Exported via lib.rs, false positive from lib/bin split
-pub fn clear_thread_local_caches_throttled() {
-    /// Bursts of this many files reuse warm scanners before the next eviction.
-    const CLEAR_EVERY_N_FILES: u32 = 64;
-
-    crate::ip_validator::clear_current_file_id();
-    let n = FILES_SINCE_CACHE_CLEAR.with(|c| {
-        let n = c.get() + 1;
-        c.set(n);
-        n
-    });
-    if n >= CLEAR_EVERY_N_FILES {
-        FILES_SINCE_CACHE_CLEAR.with(|c| c.set(0));
-        crate::yara_engine::clear_engine_scanner_cache();
-    }
-}
-
 /// Clear the process-global regex caches.
 ///
 /// These caches are shared across all threads and can grow up to

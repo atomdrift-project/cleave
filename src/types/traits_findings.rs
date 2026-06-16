@@ -117,22 +117,21 @@ fn is_zero_usize(n: &usize) -> bool {
 /// A finding's highlight spans `note.off - addr.unwrap_or(loc) .. + note.len`.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ContextLine {
-    /// Anchor: 1-based line number when `addr` is set, else a byte offset.
-    #[serde(rename = "l")]
+    /// Line number (1-based, source) when `addr` is set; byte offset otherwise.
+    #[serde(rename = "ln")]
     pub loc: u64,
-    /// Byte offset of a source line's content start; omitted for byte-addressed
-    /// units, where `loc` is already the offset (consumers use `addr.unwrap_or(loc)`).
-    #[serde(rename = "a", default, skip_serializing_if = "Option::is_none")]
+    /// Byte offset of this source line's first byte. Absent for byte-addressed
+    /// units (binary/minified), where `ln` is already the byte offset.
+    #[serde(rename = "addr", default, skip_serializing_if = "Option::is_none")]
     pub addr: Option<u64>,
-    /// The raw matched bytes, carried as Z85 in JSON. Rendered as hex or decoded
-    /// text per `hex`.
+    /// Raw content bytes, Z85-encoded. Binary files render as hex+ascii;
+    /// source lines render as decoded text. Render mode is derived from the
+    /// file's `type` field — no per-line flag needed.
     #[serde(rename = "b", with = "crate::types::z85::serde_z85")]
     pub data: Vec<u8>,
-    /// Render `data` as a `hex  ascii` dump rather than decoded UTF-8 text.
-    #[serde(rename = "x", default, skip_serializing_if = "crate::types::is_false")]
-    pub hex: bool,
-    /// Findings whose match falls on this unit (deduped by id, severity-sorted).
-    #[serde(rename = "n", default, skip_serializing_if = "Vec::is_empty")]
+    /// Findings whose match falls on this unit — internal only; not serialized.
+    /// Prism locates matches via `finding.spans` intersection against ctx windows.
+    #[serde(skip)]
     pub notes: Vec<Note>,
 }
 
@@ -314,9 +313,11 @@ pub struct StructuralFeature {
 /// Maximum size for evidence value field (4KB)
 const MAX_EVIDENCE_VALUE_SIZE: usize = 4096;
 
-/// Maximum number of evidence items per trait/finding.
-/// Prevents output explosion from patterns that match thousands of times.
-pub(crate) const MAX_EVIDENCE_PER_TRAIT: usize = 16;
+/// Maximum number of evidence items collected per trait/finding internally.
+pub(crate) const MAX_EVIDENCE_PER_TRAIT: usize = 64;
+
+/// Maximum match locations stored in JSON output and used for context windows.
+pub(crate) const MAX_EV_LOCS: usize = 8;
 
 /// Serialize evidence value, truncating to MAX_EVIDENCE_VALUE_SIZE.
 /// Strips null bytes (\0) which are common in strings extracted from malware

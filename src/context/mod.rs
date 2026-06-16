@@ -13,17 +13,16 @@
 use filefacts::FileType;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::types::{AnalysisReport, ContextLine, Criticality, Finding, Note};
+use crate::types::{traits_findings::MAX_EV_LOCS, AnalysisReport, ContextLine, Criticality, Finding, Note};
 
 /// Maximum match windows kept per finding (the rest are dropped). A composite
-/// shows only its first location; an atomic trait up to [`ATOMIC_MAX_MATCHES`].
-const MAX_MATCHES: usize = 4;
+/// shows only its first location; an atomic trait up to [`MAX_EV_LOCS`].
+const MAX_MATCHES: usize = MAX_EV_LOCS;
 /// Locations shown for an atomic trait that matches in several places.
-const ATOMIC_MAX_MATCHES: usize = 3;
-/// Minimum source-line window height per match, richest first: match 1 gets 5
-/// lines (±2), match 2 gets 3 (±1), match 3 gets 2, match 4 gets 1. Merging can
+const ATOMIC_MAX_MATCHES: usize = MAX_EV_LOCS;
+/// Minimum source-line window height per match, richest first. Merging can
 /// grow a window beyond these minima.
-const MIN_HEIGHTS: [u32; MAX_MATCHES] = [5, 3, 2, 1];
+const MIN_HEIGHTS: [u32; MAX_EV_LOCS] = [5, 3, 2, 1, 1, 1, 1, 1];
 /// Max rendered characters for a minified slice (clipped, `…`-elided).
 const LINE_CLIP: usize = 120;
 /// Max raw bytes stored per source line; the renderer clips to terminal width.
@@ -398,7 +397,6 @@ fn render_line_segment(index: &LineIndex<'_>, seg: &Segment) -> Vec<ContextLine>
                 loc: line + 1, // 1-based for humans
                 addr: Some(index.byte_start(line)),
                 data: index.raw_line(line as usize).to_vec(),
-                hex: false,
                 notes,
             }
         })
@@ -511,7 +509,6 @@ fn render_hex_segment(data: &[u8], seg: &Segment) -> Vec<ContextLine> {
         loc: lo,
         addr: None, // loc is already the byte offset
         data: data[lo as usize..hi as usize].to_vec(),
-        hex: true,
         notes: seg.all_notes(),
     }]
 }
@@ -530,11 +527,8 @@ fn render_text_segment(data: &[u8], seg: &Segment) -> Vec<ContextLine> {
         .map(|n| (n.off as usize).saturating_sub(start));
     vec![ContextLine {
         loc: seg.lo,
-        addr: None, // loc is already the byte offset
-        // Minified source is byte-addressed but textual: render as a clipped
-        // string, not a hex dump.
+        addr: None, // loc is already the byte offset; no addr = minified/binary unit
         data: clip(&text, col, LINE_CLIP).into_bytes(),
-        hex: false,
         notes,
     }]
 }
@@ -920,6 +914,6 @@ mod tests {
         // Byte-offset mode: one hex-flagged window of raw bytes spanning the
         // match (the renderer wraps it into rows at display time).
         let hit = r.context.iter().find(|c| !c.notes.is_empty());
-        assert!(matches!(hit, Some(c) if c.hex && c.data.contains(&16u8)));
+        assert!(matches!(hit, Some(c) if c.addr.is_none() && c.data.contains(&16u8)));
     }
 }

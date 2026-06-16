@@ -1573,8 +1573,8 @@ fn test_eval_string_match_count_exceeds_evidence_cap() {
 
     let result = eval_text(&params, None, &ctx, None);
     assert!(result.matched);
-    // Evidence is capped at 16 (MAX_EVIDENCE_PER_TRAIT)
-    assert_eq!(result.evidence.len(), 16);
+    // Evidence is capped at MAX_EVIDENCE_PER_TRAIT (64); all 25 fit
+    assert_eq!(result.evidence.len(), 25);
     // But match_count should reflect all 25 actual matches
     assert_eq!(result.match_count, 25);
 }

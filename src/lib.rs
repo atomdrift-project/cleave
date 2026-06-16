@@ -2393,10 +2393,24 @@ where
     // pull, so we never materialize the full PathBuf list. Memory for pending
     // paths stays bounded to the work-stealing deque depth instead of growing
     // with total file count.
-    let analyze_files = || {
-        use rayon::iter::ParallelBridge;
+    // Above this file count we keep the walk in directory order and skip the
+    // largest-first sort: the sort needs one upfront `stat` per file (the walk
+    // only yields `d_type`, not size), and on huge trees that serial stat storm
+    // costs more than the tail-latency win it buys.
+    const MAX_SORT_FILES: usize = 50_000;
 
-        let walk = WalkDir::new(path)
+    let analyze_files = || {
+        // Collect the work-list up front, then dispatch with indexed
+        // work-stealing (`into_par_iter`). The previous `par_bridge()` drove
+        // `next()` from worker threads behind an internal mutex; profiling a
+        // directory of binaries showed rayon workers parked ~1/3 of wall time
+        // (`Sleep::sleep <- WorkerThread::wait_until_cold <- bridge_unindexed`)
+        // because that mutex serialized hand-off faster than workers drained
+        // it. A materialized Vec removes the mutex and, for trees small enough
+        // to sort, lets us order work largest-first. Collecting the paths costs
+        // ~100 bytes each — negligible even for the 200k-file trees — so the
+        // streaming-to-bound-memory rationale no longer outweighs the stall.
+        let mut paths: Vec<std::path::PathBuf> = WalkDir::new(path)
             .follow_links(false)
             .into_iter()
             .filter_entry(|e| {
@@ -2426,10 +2440,21 @@ where
                 walked.fetch_add(1, Ordering::Relaxed);
                 true
             })
-            .map(|e| e.path().to_path_buf());
+            .map(|e| e.path().to_path_buf())
+            .collect();
+
+        // Longest-processing-time-first scheduling: per-file analysis cost rises
+        // with size, so dispatching the largest binaries first overlaps them
+        // with the long tail of small files instead of leaving one giant binary
+        // running alone on a single core at the end of the scan.
+        if paths.len() <= MAX_SORT_FILES {
+            paths.sort_by_cached_key(|p| {
+                std::cmp::Reverse(std::fs::metadata(p).map(|m| m.len()).unwrap_or(0))
+            });
+        }
 
         let mem_gate = scan_mem_gate::ScanMemGate::new();
-        walk.par_bridge().for_each(|file_path| {
+        paths.into_par_iter().for_each(|file_path| {
         // Cancellation fast path: once SIGINT has flipped the flag, every
         // remaining par_bridge slot returns instantly so the scan drains in
         // work already in-flight rather than starting new files. Inner

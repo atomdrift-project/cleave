@@ -1181,16 +1181,45 @@ fn count_regex_or_symbols(pattern: &str) -> usize {
     count
 }
 
-/// Detect simple alphanumeric alternation chains like:
-/// `word1|word2|word3` or `^word1|word2$` (after anchor stripping).
-/// These should be split into atomic exact/word traits instead of regex.
-fn is_simple_alphanumeric_or_chain(pattern: &str) -> bool {
-    let mut p = pattern.trim();
-    if let Some(stripped) = p.strip_prefix('^') {
-        p = stripped;
+/// Strip leading/trailing regex boundary anchors (`^`, `$`, `\b`) from a
+/// pattern fragment, repeatedly so stacked anchors (`\b^…$\b`) collapse fully.
+fn strip_boundary_anchors(s: &str) -> &str {
+    let mut s = s.trim();
+    loop {
+        let start = s;
+        for prefix in ["^", r"\b"] {
+            if let Some(rest) = s.strip_prefix(prefix) {
+                s = rest;
+                break;
+            }
+        }
+        for suffix in ["$", r"\b"] {
+            if let Some(rest) = s.strip_suffix(suffix) {
+                s = rest;
+                break;
+            }
+        }
+        if s == start {
+            return s;
+        }
     }
-    if let Some(stripped) = p.strip_suffix('$') {
-        p = stripped;
+}
+
+/// Detect simple alphanumeric alternation chains like:
+/// `word1|word2|word3`, `^word1|word2$`, or the word-boundary-anchored
+/// `\b(crond|xinetd|inetd)\b` form (after stripping anchors and a single
+/// wrapping group, plus any per-branch boundaries like `\bword\b`).
+/// These should be split into atomic exact/word traits instead of one regex.
+fn is_simple_alphanumeric_or_chain(pattern: &str) -> bool {
+    let mut p = strip_boundary_anchors(pattern);
+
+    // Peel a single alternation-wrapping group: `(…)` or `(?:…)`. The closing
+    // `)` must be the last char, so a group around only part of the pattern
+    // (e.g. `(foo)|bar`) is left intact and correctly fails the pl-word check.
+    if let Some(inner) = p.strip_prefix("(?:").or_else(|| p.strip_prefix('('))
+        && let Some(inner) = inner.strip_suffix(')')
+    {
+        p = strip_boundary_anchors(inner);
     }
 
     // Must be an alternation to trigger this rule.
@@ -1203,9 +1232,10 @@ fn is_simple_alphanumeric_or_chain(pattern: &str) -> bool {
         return false;
     }
 
-    parts
-        .into_iter()
-        .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+    parts.into_iter().all(|part| {
+        let word = strip_boundary_anchors(part);
+        !word.is_empty() && word.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    })
 }
 
 fn check_regex_length(
@@ -1259,10 +1289,16 @@ fn check_regex_length(
         if is_simple_alphanumeric_or_chain(pattern)
             && !crate::validation_controls::is_validator_disabled("simple-alternation-chain")
         {
+            // `\b`-anchored alternatives match whole words, so each maps cleanly
+            // to a `word:` atom; without boundaries, `exact` or `word` may fit.
+            let matcher = if pattern.contains(r"\b") {
+                "word"
+            } else {
+                "exact/word"
+            };
             warnings.push(format!(
-                "Trait '{}': regex is a simple alphanumeric alternation chain. Use atomic exact/word traits instead: {:?}",
-                trait_id,
-                pattern
+                "Trait '{}': regex is a simple alphanumeric alternation chain. Decompose into one atomic `{}` trait per alternative, joined with an `any:` composite: {:?}",
+                trait_id, matcher, pattern
             ));
         }
     }
@@ -2415,6 +2451,50 @@ mod tests {
                 .iter()
                 .any(|w| w.contains("simple alphanumeric alternation chain"))
         );
+    }
+
+    #[test]
+    fn test_word_boundary_grouped_alternation_warns() {
+        // `\b(crond|xinetd|inetd)\b` has only 2 pipes (under the or-symbol cap)
+        // and the `\b`/`()` previously hid it from the alternation-chain check.
+        let condition = crate::composite_rules::Condition::Text(TextQuery {
+            regex: Some(r"\b(crond|xinetd|inetd)\b".to_string()),
+            ..Default::default()
+        });
+        let mut warnings = Vec::new();
+        super::check_regex_length("test-trait", &condition, None, &mut warnings);
+        let warning = warnings
+            .iter()
+            .find(|w| w.contains("simple alphanumeric alternation chain"))
+            .expect("word-boundary grouped alternation should warn");
+        // Boundary-anchored alternatives should be steered to `word:` atoms.
+        assert!(
+            warning.contains("`word`"),
+            "expected word: advice: {warning}"
+        );
+    }
+
+    #[test]
+    fn test_per_branch_word_boundary_alternation_warns() {
+        let condition = crate::composite_rules::Condition::Text(TextQuery {
+            regex: Some(r"\bcrond\b|\bxinetd\b".to_string()),
+            ..Default::default()
+        });
+        let mut warnings = Vec::new();
+        super::check_regex_length("test-trait", &condition, None, &mut warnings);
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("simple alphanumeric alternation chain"))
+        );
+    }
+
+    #[test]
+    fn test_partial_group_alternation_does_not_warn() {
+        // `(foo)|bar` is not a single wrapping group; must not be misread as a
+        // simple chain (the `)` survives and fails the plain-word check).
+        assert!(!super::is_simple_alphanumeric_or_chain("(foo)|bar"));
+        assert!(!super::is_simple_alphanumeric_or_chain(r"(a|b)(c|d)"));
     }
 
     #[test]

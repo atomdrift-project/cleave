@@ -2441,6 +2441,79 @@ mod duplicate_tests {
         assert_eq!(warnings.len(), 0);
     }
 
+    #[test]
+    fn test_regex_regex_structurally_identical_shorthand_vs_class() {
+        use crate::capabilities::validation::duplicates::check_overlapping_regex_patterns;
+
+        // `\d{3}` and `[0-9]{3}` are the same language written two ways. The HIR
+        // canonicalization must flag them even though they differ in length by
+        // >33% with no alternation (the heuristic that allowed `\.exe$` vs
+        // `7z\.exe$` must not suppress a genuine duplicate).
+        let traits = vec![
+            create_string_regex(
+                "digits_shorthand",
+                r"\d{3}",
+                false,
+                vec![FileType::Pe],
+                "a.yaml",
+            ),
+            create_string_regex(
+                "digits_class",
+                r"[0-9]{3}",
+                false,
+                vec![FileType::Pe],
+                "b.yaml",
+            ),
+        ];
+
+        let mut warnings = Vec::new();
+        check_overlapping_regex_patterns(&traits, &mut warnings);
+
+        assert_eq!(warnings.len(), 1, "expected one duplicate: {warnings:?}");
+        assert!(warnings[0].contains("Structurally identical regex patterns"));
+        assert!(warnings[0].contains("canonical form"));
+    }
+
+    #[test]
+    fn test_regex_regex_structurally_identical_class_order() {
+        use crate::capabilities::validation::duplicates::check_overlapping_regex_patterns;
+
+        // Character-class member order is not semantic: `gr[ae]y` ≡ `gr[ea]y`.
+        let traits = vec![
+            create_string_regex("grey_ae", r"gr[ae]y", false, vec![FileType::Pe], "a.yaml"),
+            create_string_regex("grey_ea", r"gr[ea]y", false, vec![FileType::Pe], "b.yaml"),
+        ];
+
+        let mut warnings = Vec::new();
+        check_overlapping_regex_patterns(&traits, &mut warnings);
+
+        assert_eq!(warnings.len(), 1, "expected one duplicate: {warnings:?}");
+        assert!(warnings[0].contains("Structurally identical regex patterns"));
+    }
+
+    #[test]
+    fn test_regex_regex_word_boundary_not_identical_to_substring() {
+        use crate::capabilities::validation::duplicates::check_overlapping_regex_patterns;
+
+        // `\bfoobar\b` (whole word) and `foobar` (substring) describe different
+        // languages — the look-around boundaries change the match, so this must
+        // NOT be reported as structurally identical.
+        let traits = vec![
+            create_string_regex("word", r"\bfoobar\b", false, vec![FileType::Pe], "a.yaml"),
+            create_string_regex("substr", r"foobar", false, vec![FileType::Pe], "b.yaml"),
+        ];
+
+        let mut warnings = Vec::new();
+        check_overlapping_regex_patterns(&traits, &mut warnings);
+
+        assert!(
+            !warnings
+                .iter()
+                .any(|w| w.contains("Structurally identical")),
+            "word-boundary vs substring must not be called identical: {warnings:?}"
+        );
+    }
+
     // ========================================================================
     // Criticality Equivalence Tests
     // ========================================================================

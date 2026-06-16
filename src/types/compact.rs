@@ -11,14 +11,8 @@ use serde::{Serialize, Serializer};
 
 use super::core::Criticality;
 
-/// Maximum strings per file in compact output
-const MAX_STRINGS: usize = 256;
-
 /// Maximum imports per file in compact output
 const MAX_IMPORTS: usize = 4096;
-
-/// Maximum chars per string value
-const MAX_STRING_CHARS: usize = 128;
 
 /// Default confidence value (omitted from output)
 const DEFAULT_CONF: f32 = 0.5;
@@ -30,11 +24,11 @@ const DEFAULT_CONF: f32 = 0.5;
 /// Top-level v7 report
 #[derive(Debug, Serialize)]
 pub struct CompactReport {
-    /// Schema version — always "7"
+    /// Schema version — always "8"
     #[serde(rename = "v")]
     pub version: &'static str,
-    /// Traits repo commit hash (first 5 chars)
-    #[serde(rename = "tv")]
+    /// Traits repo revision (first 8 chars of commit hash)
+    #[serde(rename = "rev")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub traits_version: Option<String>,
     /// Files array
@@ -62,33 +56,28 @@ pub struct CompactFile {
     #[serde(skip_serializing_if = "super::is_zero_u32")]
     pub risk: u32,
     /// Archive nesting depth (omit when 0)
-    #[serde(rename = "dp")]
+    #[serde(rename = "depth")]
     #[serde(skip_serializing_if = "super::is_zero_u32")]
     pub depth: u32,
     /// Molecular formula
     #[serde(rename = "mol")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub formula: Option<String>,
-    /// Normalized identity claims (filefacts `Identity`) for the file this
-    /// record was extracted from: name, version, signer, trust tier, and other
-    /// cross-format provenance. Omitted when the file asserts no identity.
-    #[serde(rename = "idn")]
+    /// Normalized identity claims: name, version, signer, trust tier.
+    #[serde(rename = "ident")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub identity: Option<filefacts::Identity>,
     /// Traits (findings)
-    #[serde(rename = "find")]
+    #[serde(rename = "traits")]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub findings: Vec<CompactTrait>,
-    /// Merged context: the matched content shown once, in file order, annotated
-    /// with the findings that touch it (notes reference findings by id). The
-    /// context-centric successor to per-finding `ev`/`loc` evidence.
+    /// Merged context windows: raw bytes in file order for match highlighting.
+    /// Render mode (hex vs text) is derived from the file's `type` field.
     #[serde(rename = "ctx")]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub context: Vec<crate::types::ContextLine>,
-    /// Dense filefacts-derived facts. This is command-complete for cleave's
-    /// facts/value/metrics/sections/symbol commands, but not a lossless mirror
-    /// of filefacts' researcher-facing JSON.
-    #[serde(rename = "fact")]
+    /// Dense filefacts-derived facts.
+    #[serde(rename = "facts")]
     #[serde(skip_serializing_if = "CompactFacts::is_empty")]
     facts: CompactFacts,
 }
@@ -118,64 +107,40 @@ pub struct CompactTrait {
     #[serde(rename = "atk")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attack: Option<String>,
-    /// Origin file index when this finding was inherited from an embedded
-    /// member; absent when native to this file. Index into `files[]` — the
-    /// member's own context renders it, so traverse there instead of anchoring
-    /// the offsets here (they index the member's bytes, not this file's).
-    #[serde(rename = "src")]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub src: Option<u32>,
-    /// For a cross-file composite, the archive members it fired on — each a
-    /// member `files[]` id with the component's location where a context note
-    /// pins it. Lets a consumer tie the composite to the files (and offsets) it
-    /// was based on, since the linking component traits are filtered from output.
-    #[serde(rename = "srcs")]
+    /// Source files this finding came from. A single-entry vec means the
+    /// finding was inherited from that embedded member; multiple entries means
+    /// a cross-file composite that fired across several members.
+    /// Omitted when the finding is native to this file.
+    #[serde(rename = "from")]
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub sources: Vec<CompactSource>,
-    // Per-trait evidence (`ev`/`loc`) was removed in favour of the per-file
-    // `ctx` block: the matched content is shown once, in context, and each
-    // context note references the finding by `id`. Highlight a match via
-    // `note.off - line_addr .. + note.len`.
+    pub from: Vec<CompactSource>,
+    /// Evidence locations: `[[offset, length], ...]` byte spans, capped at 8.
+    /// Locate matching content in `ctx` via range intersection:
+    /// a ctx window covering `[addr, addr+len)` that overlaps `[off, off+len)`
+    /// contains this finding's match. Omitted when empty.
+    #[serde(rename = "spans")]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub ev: Vec<[u64; 2]>,
 }
 
 /// One member a cross-file composite drew from, in compact form.
 #[derive(Debug, Serialize)]
 pub struct CompactSource {
     /// Contributing member's `files[]` id.
-    #[serde(rename = "f")]
     pub file: u32,
     /// 1-based source line of the component match, when known.
-    #[serde(rename = "ln", skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub line: Option<u64>,
     /// Byte offset of the component match, when known.
-    #[serde(rename = "o", skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "off", skip_serializing_if = "Option::is_none")]
     pub offset: Option<u64>,
-}
-
-/// A string in compact tuple form
-#[derive(Debug)]
-pub struct CompactString {
-    /// Byte offset in file
-    pub offset: u64,
-    /// Encoding chain (empty for plain strings)
-    pub encoding: String,
-    /// String value (truncated to MAX_STRING_CHARS)
-    pub value: String,
 }
 
 /// Dense filefacts-backed fact block for compact v7.
 #[derive(Debug)]
 struct CompactFacts {
-    /// File identity without source/provenance tags. Usually mirrors the
-    /// top-level `type` field but stays under `fact` for consumers that treat
-    /// facts as an independent cache unit.
-    id: String,
     /// Metrics (nested structure, floats rounded to 2dp).
     metrics: Option<RoundedMetrics>,
-    /// Flat structural-value map. Path → leaf value (`a.b[0].c` notation).
-    values: BTreeMap<String, serde_json::Value>,
-    /// Strings as tuples: [offset, encoding, value].
-    strings: Vec<CompactString>,
     /// Imports as tuples: [library, name] or [library, name, ordinal].
     imports: Vec<CompactImport>,
     /// Exports as tuples: [name] or [name, forward_to].
@@ -188,26 +153,17 @@ struct CompactFacts {
     targets: Vec<String>,
     /// AST members.
     members: Vec<String>,
-    /// AST call string arguments.
-    call_args: Vec<CompactCallArg>,
-    /// Recoverable extraction errors as [kind, stage].
-    errors: Vec<CompactError>,
 }
 
 impl CompactFacts {
     fn is_empty(&self) -> bool {
-        self.id.is_empty()
-            && self.metrics.is_none()
-            && self.values.is_empty()
-            && self.strings.is_empty()
+        self.metrics.is_none()
             && self.imports.is_empty()
             && self.exports.is_empty()
             && self.functions.is_empty()
             && self.sections.is_empty()
             && self.targets.is_empty()
             && self.members.is_empty()
-            && self.call_args.is_empty()
-            && self.errors.is_empty()
     }
 }
 
@@ -216,31 +172,18 @@ impl Serialize for CompactFacts {
     where
         S: Serializer,
     {
-        let mut fields = usize::from(!self.id.is_empty());
-        fields += usize::from(self.metrics.is_some());
-        fields += usize::from(!self.values.is_empty());
-        fields += usize::from(!self.strings.is_empty());
+        let mut fields = usize::from(self.metrics.is_some());
         fields += usize::from(!self.imports.is_empty());
         fields += usize::from(!self.exports.is_empty());
         fields += usize::from(!self.functions.is_empty());
         fields += usize::from(!self.sections.is_empty());
         fields += usize::from(!self.targets.is_empty());
         fields += usize::from(!self.members.is_empty());
-        fields += usize::from(!self.call_args.is_empty());
-        fields += usize::from(!self.errors.is_empty());
+
 
         let mut st = serializer.serialize_struct("CompactFacts", fields)?;
-        if !self.id.is_empty() {
-            st.serialize_field("id", &self.id)?;
-        }
         if let Some(metrics) = &self.metrics {
-            st.serialize_field("met", metrics)?;
-        }
-        if !self.values.is_empty() {
-            st.serialize_field("val", &self.values)?;
-        }
-        if !self.strings.is_empty() {
-            st.serialize_field("str", &StringTuples(&self.strings))?;
+            st.serialize_field("metrics", metrics)?;
         }
         if !self.imports.is_empty() {
             st.serialize_field("imp", &self.imports)?;
@@ -249,7 +192,7 @@ impl Serialize for CompactFacts {
             st.serialize_field("exp", &self.exports)?;
         }
         if !self.functions.is_empty() {
-            st.serialize_field("fn", &self.functions)?;
+            st.serialize_field("funcs", &self.functions)?;
         }
         if !self.sections.is_empty() {
             st.serialize_field("sec", &self.sections)?;
@@ -259,12 +202,6 @@ impl Serialize for CompactFacts {
         }
         if !self.members.is_empty() {
             st.serialize_field("mbr", &self.members)?;
-        }
-        if !self.call_args.is_empty() {
-            st.serialize_field("arg", &self.call_args)?;
-        }
-        if !self.errors.is_empty() {
-            st.serialize_field("err", &self.errors)?;
         }
         st.end()
     }
@@ -369,42 +306,6 @@ impl Serialize for CompactSection {
     }
 }
 
-#[derive(Debug)]
-struct CompactCallArg {
-    callee: String,
-    value: String,
-}
-
-impl Serialize for CompactCallArg {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let mut seq = serializer.serialize_seq(Some(2))?;
-        seq.serialize_element(&self.callee)?;
-        seq.serialize_element(&self.value)?;
-        seq.end()
-    }
-}
-
-#[derive(Debug)]
-struct CompactError {
-    kind: String,
-    stage: String,
-}
-
-impl Serialize for CompactError {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let mut seq = serializer.serialize_seq(Some(2))?;
-        seq.serialize_element(&self.kind)?;
-        seq.serialize_element(&self.stage)?;
-        seq.end()
-    }
-}
-
 /// Wrapper for metrics that rounds floats to 2dp during serialization
 #[derive(Debug)]
 pub struct RoundedMetrics(pub serde_json::Value);
@@ -424,18 +325,6 @@ impl Serialize for RoundedMetrics {
 
 fn is_default_conf(v: &f32) -> bool {
     (*v - DEFAULT_CONF).abs() < f32::EPSILON || *v == 0.0
-}
-
-/// Truncate a string at a valid UTF-8 char boundary
-fn truncate_at_boundary(s: &str, max_bytes: usize) -> &str {
-    if s.len() <= max_bytes {
-        return s;
-    }
-    let mut end = max_bytes;
-    while end > 0 && !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    &s[..end]
 }
 
 /// Convert Criticality enum to v4 ordinal (0-5).
@@ -496,30 +385,6 @@ fn nest_flat_metrics(metrics: &BTreeMap<String, f64>) -> serde_json::Value {
     serde_json::Value::Object(root)
 }
 
-struct StringTuples<'a>(&'a [CompactString]);
-
-impl Serialize for StringTuples<'_> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let mut seq = serializer.serialize_seq(Some(self.0.len()))?;
-        for s in self.0 {
-            seq.serialize_element(&(s.offset, &s.encoding, &s.value))?;
-        }
-        seq.end()
-    }
-}
-
-fn compact_encoding(raw: &str) -> String {
-    match raw.to_ascii_lowercase().as_str() {
-        "" | "ascii" => "a".to_string(),
-        "utf8" | "utf-8" => "u8".to_string(),
-        "utf16le" | "utf-16le" | "wide" => "u16".to_string(),
-        other => other.to_string(),
-    }
-}
-
 fn parse_hex_or_decimal_u64(raw: &str) -> Option<u64> {
     let s = raw.trim();
     if s.is_empty() {
@@ -533,37 +398,16 @@ fn parse_hex_or_decimal_u64(raw: &str) -> Option<u64> {
     }
 }
 
-fn json_string(value: &serde_json::Value, key: &str) -> Option<String> {
-    value.get(key)?.as_str().map(str::to_string)
-}
-
-fn compact_errors(file: &super::file_analysis::FileAnalysis) -> Vec<CompactError> {
-    file.filefacts
-        .as_ref()
-        .map(|view| {
-            view.errors
-                .iter()
-                .filter_map(|err| {
-                    let kind = json_string(err, "kind")?;
-                    let stage = json_string(err, "stage").unwrap_or_default();
-                    Some(CompactError { kind, stage })
-                })
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
 fn compact_ast(
     file: &super::file_analysis::FileAnalysis,
-) -> (Vec<String>, Vec<String>, Vec<CompactCallArg>) {
+) -> (Vec<String>, Vec<String>) {
     let Some(view) = file.filefacts.as_ref() else {
-        return (Vec::new(), Vec::new(), Vec::new());
+        return (Vec::new(), Vec::new());
     };
     if view.symbols.is_empty() {
-        return (Vec::new(), Vec::new(), Vec::new());
+        return (Vec::new(), Vec::new());
     }
 
-    // Targets: sorted-unique Call.target across all call symbols.
     let mut target_set: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let mut member_set: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for sym in &view.symbols {
@@ -581,18 +425,9 @@ fn compact_ast(
         }
     }
 
-    // call_args (callee → literal value) was derived from the old
-    // `Ast::call_strings` index. The unified Symbol::Call no longer
-    // carries an inline strings field — literal values live in
-    // top-level `literals` and correlate by offset window. Return
-    // empty here; rule engines that need this correlation do it
-    // themselves via Stage 5's offset-window predicate.
-    let call_args = Vec::new();
-
     (
         target_set.into_iter().collect(),
         member_set.into_iter().collect(),
-        call_args,
     )
 }
 
@@ -607,31 +442,54 @@ fn convert_file(file: &super::file_analysis::FileAnalysis, id: u32) -> CompactFi
     let mut trait_order: Vec<&str> = Vec::new();
 
     for finding in &file.findings {
-        // Dedup findings by id, keeping the highest criticality. The matched
-        // content now lives once in the file-level `ctx` block; each context
-        // note references the finding by id, so no per-trait evidence here.
+        // Collect local evidence spans: (offset, len) for evidence whose offset
+        // lives in this file's byte space (skip archive: member offsets).
+        let mut ev_spans: Vec<[u64; 2]> = finding
+            .evidence
+            .iter()
+            .filter(|e| {
+                !e.location
+                    .as_deref()
+                    .is_some_and(|l| l.starts_with("archive:"))
+            })
+            .filter_map(|e| {
+                e.byte_offset()
+                    .map(|off| [off, u64::from(u32::try_from(e.value.len()).unwrap_or(u32::MAX))])
+            })
+            .collect();
+        ev_spans.sort_unstable_by_key(|s| s[0]);
+        ev_spans.dedup_by_key(|s| s[0]);
+        ev_spans.truncate(crate::types::traits_findings::MAX_EV_LOCS);
+
         if let Some(existing) = trait_map.get_mut(finding.id.as_str()) {
             let new_crit = crit_to_int(finding.crit);
             if new_crit > existing.criticality {
                 existing.criticality = new_crit;
             }
-            // A copy native to this file (src=None) outranks an inherited one.
-            existing.src = existing.src.and(finding.src);
+            // A copy native to this file (from empty) outranks an inherited one.
+            if finding.src.is_none() && file.composite_sources.get(finding.id.as_str()).is_none() {
+                existing.from.clear();
+            }
+            // Merge ev spans — deduplicate by offset, cap at MAX_EV_LOCS.
+            if !ev_spans.is_empty() {
+                existing.ev.extend(ev_spans);
+                existing.ev.sort_unstable_by_key(|s| s[0]);
+                existing.ev.dedup_by_key(|s| s[0]);
+                existing.ev.truncate(crate::types::traits_findings::MAX_EV_LOCS);
+            }
         } else {
             trait_order.push(&finding.id);
-            let sources = file
-                .composite_sources
-                .get(&finding.id)
-                .map(|srcs| {
-                    srcs.iter()
-                        .map(|s| CompactSource {
-                            file: s.file,
-                            line: s.line,
-                            offset: s.offset,
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
+            // Build `from`: composite sources take priority; fall back to the
+            // scalar `src` for a single inherited finding.
+            let from: Vec<CompactSource> = if let Some(srcs) = file.composite_sources.get(&finding.id) {
+                srcs.iter()
+                    .map(|s| CompactSource { file: s.file, line: s.line, offset: s.offset })
+                    .collect()
+            } else if let Some(src_id) = finding.src {
+                vec![CompactSource { file: src_id, line: None, offset: None }]
+            } else {
+                Vec::new()
+            };
             trait_map.insert(
                 &finding.id,
                 CompactTrait {
@@ -641,8 +499,8 @@ fn convert_file(file: &super::file_analysis::FileAnalysis, id: u32) -> CompactFi
                     confidence: finding.conf,
                     mbc: finding.mbc.clone(),
                     attack: finding.attack.clone(),
-                    src: finding.src,
-                    sources,
+                    from,
+                    ev: ev_spans,
                 },
             );
         }
@@ -651,26 +509,6 @@ fn convert_file(file: &super::file_analysis::FileAnalysis, id: u32) -> CompactFi
     let traits: Vec<CompactTrait> = trait_order
         .into_iter()
         .filter_map(|id| trait_map.remove(id))
-        .collect();
-
-    // Convert strings to compact tuples, capped at MAX_STRINGS
-    let str_tuples: Vec<CompactString> = file
-        .strings
-        .iter()
-        .take(MAX_STRINGS)
-        .map(|s| {
-            let value = truncate_at_boundary(&s.value, MAX_STRING_CHARS).to_string();
-            let encoding = if s.encoding_chain.is_empty() {
-                compact_encoding(&s.encoding)
-            } else {
-                s.encoding_chain.join(",")
-            };
-            CompactString {
-                offset: s.offset.unwrap_or(0),
-                encoding,
-                value,
-            }
-        })
         .collect();
 
     // Flatten symbol-like collections into dense tuples, capped to prevent oversized output.
@@ -736,21 +574,16 @@ fn convert_file(file: &super::file_analysis::FileAnalysis, id: u32) -> CompactFi
         (!f.is_empty()).then_some(f)
     });
 
-    let (targets, members, call_args) = compact_ast(file);
+    let (targets, members) = compact_ast(file);
 
     let facts = CompactFacts {
-        id: file.file_type.clone(),
         metrics,
-        values: file.kv.clone(),
-        strings: str_tuples,
         imports,
         exports,
         functions,
         sections,
         targets,
         members,
-        call_args,
-        errors: compact_errors(file),
     };
 
     CompactFile {
@@ -793,13 +626,9 @@ fn sanitize_references(files: &mut [CompactFile]) -> usize {
     let mut dangling = 0usize;
     for file in files.iter_mut() {
         for tr in &mut file.findings {
-            if tr.src.is_some_and(|src| !ids.contains(&src)) {
-                tr.src = None;
-                dangling += 1;
-            }
-            let before = tr.sources.len();
-            tr.sources.retain(|s| ids.contains(&s.file));
-            dangling += before - tr.sources.len();
+            let before = tr.from.len();
+            tr.from.retain(|s| ids.contains(&s.file));
+            dangling += before - tr.from.len();
         }
     }
     dangling
@@ -828,7 +657,7 @@ fn assemble_report(mut files: Vec<CompactFile>) -> CompactReport {
     let traits_version =
         crate::traits_repo::version().map(|v| if v.len() > 5 { v[..5].to_string() } else { v });
     CompactReport {
-        version: "7",
+        version: "8",
         traits_version,
         files,
     }
@@ -836,7 +665,7 @@ fn assemble_report(mut files: Vec<CompactFile>) -> CompactReport {
 
 #[cfg(test)]
 mod formula_tests {
-    use super::super::binary::{Import, Section, StringInfo};
+    use super::super::binary::{Import, Section};
     use super::super::file_analysis::FileAnalysis;
     use super::super::filefacts_view::FilefactsView;
     use super::super::traits_findings::Finding;
@@ -897,14 +726,12 @@ mod formula_tests {
             line: None,
             offset: None,
         };
-        files[0].findings[0].src = Some(9); // dangling: no file id 9
-        files[0].findings[0].sources = vec![src(1), src(9)]; // one valid, one dangling
+        files[0].findings[0].from = vec![src(1), src(9)]; // one valid, one dangling
 
         let dangling = sanitize_references(&mut files);
 
-        assert_eq!(dangling, 2, "one src + one composite source");
-        assert_eq!(files[0].findings[0].src, None, "dangling src cleared");
-        let kept = &files[0].findings[0].sources;
+        assert_eq!(dangling, 1, "one dangling from entry");
+        let kept = &files[0].findings[0].from;
         assert_eq!(kept.len(), 1, "dangling source dropped");
         assert_eq!(kept[0].file, 1, "valid source kept");
         // A clean report passes through untouched.
@@ -974,15 +801,6 @@ mod formula_tests {
     #[test]
     fn compact_v7_packs_filefacts_under_fact() {
         let mut fa = FileAnalysis::new(0, "t.exe".into(), "pe".into(), "sha".into(), 7);
-        fa.strings.push(StringInfo {
-            value: "CreateFileW".into(),
-            offset: Some(0x40),
-            encoding: "utf16le".into(),
-            string_type: None,
-            section: None,
-            encoding_chain: Vec::new(),
-            fragments: None,
-        });
         fa.imports
             .push(Import::new("CreateFileW", Some("kernel32.dll".into())));
         fa.sections.push(Section {
@@ -999,7 +817,6 @@ mod formula_tests {
                 .into_iter()
                 .collect(),
         );
-        fa.kv.insert("pe.machine".into(), json!("x86_64"));
         fa.filefacts = Some(FilefactsView {
             symbols: vec![
                 filefacts::Symbol::Call {
@@ -1024,13 +841,10 @@ mod formula_tests {
         };
         assert_eq!(
             value.get("v").and_then(serde_json::Value::as_str),
-            Some("7")
+            Some("8")
         );
-        let ff = &value["files"][0]["fact"];
-        assert_eq!(ff["id"], "pe");
-        assert_eq!(ff["met"]["binary"]["overall_entropy"], 7.13);
-        assert_eq!(ff["val"]["pe.machine"], "x86_64");
-        assert_eq!(ff["str"][0], json!([64, "u16", "CreateFileW"]));
+        let ff = &value["files"][0]["facts"];
+        assert_eq!(ff["metrics"]["binary"]["overall_entropy"], 7.13);
         assert_eq!(ff["imp"][0], json!(["kernel32.dll", "CreateFileW"]));
         assert_eq!(ff["sec"][0], json!([".text", 1024, 4096, 6.42, "r-x"]));
         assert_eq!(ff["tgt"], json!(["fetch"]));

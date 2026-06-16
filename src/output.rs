@@ -1158,7 +1158,7 @@ fn render_context(
     term_width: usize,
     colorize: bool,
 ) {
-    if file.context.first().is_some_and(|l| l.hex) {
+    if is_binary_file_type(&file.file_type) {
         // The machine/LLM view (Minimal header) renders binary windows as a
         // single ASCII-forward line — no hex column, no offsets — which a local
         // model reads far more cheaply than a hex|ascii dump. The terminal view
@@ -1408,6 +1408,12 @@ fn render_hex_context(
             colorize,
         );
     }
+}
+
+/// True for file types whose context renders as a hex+ascii dump.
+/// Mirrors `filefacts::FileType::is_binary()` without requiring the enum.
+fn is_binary_file_type(file_type: &str) -> bool {
+    matches!(file_type, "elf" | "pe" | "macho" | "java_class" | "python_bytecode" | "beam")
 }
 
 /// Line-comment marker for the sample's language; `//` for binary and anything
@@ -3341,14 +3347,12 @@ mod tests {
                 loc: 4,
                 addr: Some(40),
                 data: b"ctx before".to_vec(),
-                hex: false,
                 notes: vec![],
             },
             ContextLine {
                 loc: 5,
                 addr: Some(55),
                 data: b"s = socket()".to_vec(),
-                hex: false,
                 notes: vec![Note {
                     crit: Criticality::Notable,
                     id: "net/socket".to_string(),

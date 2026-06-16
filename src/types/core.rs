@@ -1827,7 +1827,6 @@ mod tests {
             loc: 3,         // source line 3
             addr: Some(40), // byte offset of the line → source unit
             data: b"  \"preinstall\": \"node x\"".to_vec(),
-            hex: false,
             notes: vec![Note {
                 crit: Criticality::Component,
                 id: "comp/manifest".into(),
@@ -1852,7 +1851,6 @@ mod tests {
             loc: 0x1234,
             addr: None, // byte-addressed (binary) → no source line
             data: vec![0u8; 4],
-            hex: true,
             notes: vec![Note {
                 crit: Criticality::Suspicious,
                 id: "comp/payload".into(),

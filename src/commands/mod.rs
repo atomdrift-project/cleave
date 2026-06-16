@@ -66,6 +66,7 @@ pub mod iter_files;
 pub mod shared;
 pub mod test;
 pub mod validate;
+pub mod validate_testdata;
 
 // Re-export shared utilities needed by main.rs
 pub use shared::expand_paths;
@@ -87,3 +88,4 @@ pub use inspect::run as inspect_command;
 pub use iter_files::{IterFilesConfig, run as iter_files_command};
 pub use test::{test_match, test_rules};
 pub use validate::run as validate_command;
+pub use validate_testdata::check_testdata_overlaps;

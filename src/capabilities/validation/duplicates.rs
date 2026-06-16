@@ -610,6 +610,31 @@ fn normalize_regex(pattern: &str) -> String {
     normalized
 }
 
+/// Canonicalize a regex into a stable string derived from its parsed HIR, so
+/// that two patterns describing the same language collapse to one key even when
+/// written differently: `[0-9]{3}` and `\d{3}` both become `[0-9]{3}`, and
+/// `gr[ae]y` and `gr[ea]y` both sort their class to `gr[ae]y`. The HIR
+/// representation merges adjacent literals and stores classes as sorted,
+/// non-overlapping ranges, so its `Display` is a normal form.
+///
+/// Unicode mode is disabled so the ASCII shorthands (`\d`, `\w`, `\s`) fold to
+/// their byte-class equivalents — matching how trait regexes scan extracted
+/// bytes — and `utf8(false)` lets those byte classes parse without requiring
+/// valid-UTF-8 boundaries (we only want the structural form, never a matcher).
+///
+/// Returns `None` for fragments that do not parse as a standalone regex (e.g. a
+/// single branch carved out of a larger group), letting callers fall back to
+/// textual normalization.
+fn canonical_regex_form(pattern: &str) -> Option<String> {
+    let hir = regex_syntax::ParserBuilder::new()
+        .unicode(false)
+        .utf8(false)
+        .build()
+        .parse(pattern)
+        .ok()?;
+    Some(hir.to_string())
+}
+
 /// If `pattern` is a regex that contains no actual regex metacharacters
 /// (only literal text plus simple `\<punct>` escapes), return the substr-
 /// equivalent literal. Otherwise return `None`.
@@ -1363,39 +1388,52 @@ pub(crate) fn check_overlapping_regex_patterns(
     struct RegexWithAlternatives {
         location: PatternLocation,
         alternatives: FxHashSet<String>,
+        /// HIR-canonical form of the whole pattern (`None` if it does not parse).
+        /// Equal canonical forms mean the two regexes match the same language.
+        canonical: Option<String>,
         has_alternation: bool,
     }
+
+    // Comparison key for one top-level alternative: its HIR-canonical form when
+    // the branch parses on its own, else the textually-normalized fallback. Two
+    // branches that mean the same thing (`\d{3}` and `[0-9]{3}`) share a key.
+    let alternative_key = |branch: &str| -> Option<String> {
+        let branch = branch.trim();
+        let normalized = normalize_regex(branch);
+        if !meaningful_regex_alternative(&normalized) {
+            return None;
+        }
+        Some(canonical_regex_form(branch).unwrap_or(normalized))
+    };
 
     let mut regex_patterns: Vec<RegexWithAlternatives> = Vec::new();
     for trait_def in trait_definitions {
         let patterns = extract_patterns(trait_def);
         for (_, location) in patterns {
             if location.match_type == "regex" {
-                // Pre-compute normalized alternatives for this pattern
+                // Pre-compute canonical keys for each meaningful alternative.
                 let alts: FxHashSet<String> = split_top_level_alternation(&location.original_value)
                     .into_iter()
-                    .map(|s| normalize_regex(s.trim()))
-                    .filter(|s| meaningful_regex_alternative(s))
+                    .filter_map(&alternative_key)
                     .collect();
 
-                // If no alternatives, use the whole normalized pattern
+                // If no alternatives, key on the whole pattern instead.
                 let alternatives = if alts.is_empty() {
-                    let normalized = normalize_regex(location.original_value.trim());
-                    if !meaningful_regex_alternative(&normalized) {
-                        FxHashSet::default()
-                    } else {
-                        let mut set = FxHashSet::default();
-                        set.insert(normalized);
-                        set
+                    let mut set = FxHashSet::default();
+                    if let Some(key) = alternative_key(&location.original_value) {
+                        set.insert(key);
                     }
+                    set
                 } else {
                     alts
                 };
 
+                let canonical = canonical_regex_form(location.original_value.trim());
                 let has_alternation = location.original_value.contains('|');
                 regex_patterns.push(RegexWithAlternatives {
                     location,
                     alternatives,
+                    canonical,
                     has_alternation,
                 });
             }
@@ -1482,7 +1520,39 @@ pub(crate) fn check_overlapping_regex_patterns(
             continue;
         }
 
-        // Compute shared alternatives (fast since we have pre-computed sets)
+        // Dedup key for this trait pair, shared by both overlap signals below.
+        let key_a = format!("{}::{}", a.location.file_path, a.location.trait_id);
+        let key_b = format!("{}::{}", b.location.file_path, b.location.trait_id);
+        let key = if key_a <= key_b {
+            (key_a, key_b)
+        } else {
+            (key_b, key_a)
+        };
+
+        // Strongest signal: the two regexes describe the same language written
+        // differently (`\d{3}` vs `[0-9]{3}`, `gr[ae]y` vs `gr[ea]y`). Their HIR
+        // canonical forms are equal, so this is a genuine duplicate regardless of
+        // textual length — the different-specificity length allowance applied to
+        // partial overlaps below does not apply here.
+        if let (Some(ca), Some(cb)) = (a.canonical.as_deref(), b.canonical.as_deref())
+            && ca == cb
+        {
+            if seen_pairs.insert(key) {
+                warnings.push(format!(
+                    "Structurally identical regex patterns (same match, different spelling) with overlapping file types:\n   {}::{} => {}\n   {}::{} => {}\n   canonical form: {}",
+                    a.location.file_path,
+                    a.location.trait_id,
+                    a.location.original_value,
+                    b.location.file_path,
+                    b.location.trait_id,
+                    b.location.original_value,
+                    ca
+                ));
+            }
+            continue;
+        }
+
+        // Otherwise look for a partial overlap: a shared meaningful alternative.
         let shared: Vec<String> = a
             .alternatives
             .intersection(&b.alternatives)
@@ -1511,14 +1581,6 @@ pub(crate) fn check_overlapping_regex_patterns(
         if len_diff_pct > 0.33 && (!a.has_alternation || !b.has_alternation) {
             continue;
         }
-
-        let key_a = format!("{}::{}", a.location.file_path, a.location.trait_id);
-        let key_b = format!("{}::{}", b.location.file_path, b.location.trait_id);
-        let key = if key_a <= key_b {
-            (key_a.clone(), key_b.clone())
-        } else {
-            (key_b.clone(), key_a.clone())
-        };
 
         if !seen_pairs.insert(key) {
             continue;

@@ -4,6 +4,7 @@
 //! errors or quality issues found. Exits with a non-zero status if validation fails.
 
 use crate::cli::OutputFormat;
+use crate::commands::validate_testdata;
 use anyhow::{Context, Result};
 use cleave::{AnalysisReport, CapabilityMapper, Criticality, FileAnalysis, validation_controls};
 use rayon::prelude::*;
@@ -114,6 +115,9 @@ pub fn run(format: &OutputFormat, exclude: Option<&str>) -> Result<String> {
         })
         .collect();
 
+    // Check for overlapping traits in the analyzed findings
+    let overlap_findings = collect_overlap_findings(&results);
+
     let stats = evaluate(results, &expectations.does_nothing)?;
 
     let traits_ver = cleave::traits_repo::version()
@@ -122,6 +126,14 @@ pub fn run(format: &OutputFormat, exclude: Option<&str>) -> Result<String> {
     let traits_dir = cleave::traits_repo::try_resolve()
         .map(|p| format!(" traits_dir={}", p.display()))
         .unwrap_or_default();
+    // Report overlapping traits if found
+    if !overlap_findings.is_empty() {
+        eprintln!(
+            "\n{}",
+            validate_testdata::format_overlaps(&overlap_findings)
+        );
+    }
+
     let report = ValidateOutput {
         ok: true,
         traits_version: traits_ver
@@ -801,4 +813,105 @@ fn does_nothing_cap(file_path: &str, dir: &Path, does_nothing: &DoesNothing) -> 
         .iter()
         .find_map(|o| (o.path == rel).then_some(o.cap))
         .unwrap_or(does_nothing.default_cap)
+}
+
+/// Collect findings from all analyzed test files and check for overlapping traits
+fn collect_overlap_findings(
+    results: &[(Target, Result<AnalysisReport>)],
+) -> Vec<validate_testdata::OverlapFinding> {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    // Helper struct to track trait ranges
+    struct TraitRange {
+        offset: u64,
+        length: u64,
+        trait_id: String,
+    }
+
+    // Collect all trait ranges from all analysis results
+    let mut all_ranges: BTreeMap<String, Vec<TraitRange>> = BTreeMap::new();
+
+    for (_, report_result) in results {
+        if let Ok(report) = report_result {
+            for file_analysis in &report.files {
+                let file_key = report
+                    .target
+                    .path
+                    .strip_prefix("testdata/")
+                    .unwrap_or(&report.target.path)
+                    .to_string();
+
+                for finding in &file_analysis.findings {
+                    // Skip composite rules — we want atomic trait overlaps
+                    if finding.id.matches("::").count() > 2 {
+                        continue;
+                    }
+
+                    // Collect all ranges where this trait fired
+                    for evidence in &finding.evidence {
+                        let length = evidence.value.len() as u64;
+                        for &offset in &evidence.offsets {
+                            all_ranges
+                                .entry(file_key.to_string())
+                                .or_default()
+                                .push(TraitRange {
+                                    offset,
+                                    length,
+                                    trait_id: finding.id.clone(),
+                                });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Find overlapping ranges for each file
+    let mut overlaps = Vec::new();
+    for (file_path, ranges) in all_ranges {
+        let mut found_overlaps: BTreeMap<(u64, u64), BTreeSet<String>> = BTreeMap::new();
+
+        for i in 0..ranges.len() {
+            for j in (i + 1)..ranges.len() {
+                let a = &ranges[i];
+                let b = &ranges[j];
+
+                let a_end = a.offset + a.length;
+                let b_end = b.offset + b.length;
+
+                let overlap_start = a.offset.max(b.offset);
+                let overlap_end = a_end.min(b_end);
+
+                if overlap_start < overlap_end {
+                    found_overlaps
+                        .entry((overlap_start, overlap_end))
+                        .or_default()
+                        .insert(a.trait_id.clone());
+                    found_overlaps
+                        .entry((overlap_start, overlap_end))
+                        .or_default()
+                        .insert(b.trait_id.clone());
+                }
+            }
+        }
+
+        for (range, trait_set) in found_overlaps {
+            let trait_ids = trait_set.into_iter().collect::<Vec<_>>();
+            overlaps.push(validate_testdata::OverlapFinding {
+                file_path: file_path.clone(),
+                range,
+                overlap_count: trait_ids.len(),
+                trait_ids,
+            });
+        }
+    }
+
+    // Sort by file, then by range start
+    overlaps.sort_by(|a, b| {
+        a.file_path
+            .cmp(&b.file_path)
+            .then(a.range.0.cmp(&b.range.0))
+    });
+
+    overlaps
 }

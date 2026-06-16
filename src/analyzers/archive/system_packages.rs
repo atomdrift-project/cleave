@@ -329,6 +329,53 @@ pub(crate) fn extract_deb_from_reader<R: Read>(
     Ok(())
 }
 
+/// Extract an Alpine/Wolfi `.apk` package.
+///
+/// An apk v2 is **not** a single gzip-tar: it is several gzip streams
+/// concatenated back to back — an optional signature segment, the control
+/// segment (`.PKGINFO` and install scripts), and the data segment (the
+/// installed files, including every ELF binary). A single-stream `GzDecoder`
+/// decompresses only the first segment, and the `tar` crate stops at the first
+/// archive's end-of-archive marker regardless, so the data segment — where the
+/// binaries live — was silently dropped. We walk each concatenated gzip member
+/// in turn, extracting every tar segment into `dest_dir`, so the data segment's
+/// members are analyzed like any other archive member.
+pub(crate) fn extract_apk_alpine_from_data(
+    data: &[u8],
+    dest_dir: &Path,
+    guard: &ExtractionGuard,
+) -> Result<()> {
+    use std::io::{BufRead, Cursor};
+
+    let mut input = BufReader::new(Cursor::new(data));
+    loop {
+        // A gzip member begins with the magic 0x1f 0x8b. Anything else (or an
+        // empty buffer) marks the end of the concatenated segments, including
+        // any trailing padding a packager may append after the data segment.
+        let header = input.fill_buf().context("Failed to read apk segment")?;
+        if header.len() < 2 || header[0] != 0x1f || header[1] != 0x8b {
+            break;
+        }
+
+        // `bufread::GzDecoder` decodes exactly one gzip member and leaves the
+        // underlying reader positioned at the next member's first byte (just
+        // past this member's 8-byte trailer) — the property that lets us
+        // advance segment by segment. The shared `guard` enforces the file-count
+        // and total-byte caps across every segment, so a multi-segment apk can't
+        // evade the zip-bomb limits.
+        let mut decoder = flate2::bufread::GzDecoder::new(&mut input);
+        extract_tar_entries_safe(&mut decoder, dest_dir, guard)?;
+
+        // The tar walk stops at the segment's end-of-archive marker, which can
+        // leave trailing zero-block padding and the gzip trailer unread. Drain
+        // them so the BufReader advances to the next concatenated member.
+        std::io::copy(&mut decoder, &mut std::io::sink())
+            .context("Failed to drain apk segment")?;
+    }
+
+    Ok(())
+}
+
 /// Extract an RPM package from an in-memory reader.
 pub(crate) fn extract_rpm_from_reader<R: Read>(
     reader: R,

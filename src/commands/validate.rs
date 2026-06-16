@@ -386,7 +386,14 @@ fn walk_does_nothing(dir: &Path, out: &mut Vec<Target>) -> Result<()> {
     for entry in walkdir::WalkDir::new(dir)
         .follow_links(false)
         .into_iter()
-        .filter_entry(|e| !e.file_name().to_string_lossy().starts_with(".git"))
+        .filter_entry(|e| {
+            let name = e.file_name().to_string_lossy();
+            // Skip VCS metadata and the fixture-generator scripts. The latter are
+            // build tooling that legitimately imports pickle/gzip/tar to assemble
+            // the artifacts — they are not do-nothing samples and were only ever
+            // swept in accidentally by the recursive walk.
+            !name.starts_with(".git") && name != "scripts"
+        })
     {
         let entry = entry?;
         if !entry.file_type().is_file() {
@@ -506,28 +513,56 @@ fn evaluate(
             Target::DoesNothing { dir, .. } => {
                 for file in &report.files {
                     stats.does_nothing_total += 1;
-                    // Intent invariant (always enforced, independent of score
-                    // caps): a do-nothing benign binary must carry NO intent —
-                    // zero objectives/ or well-known/ findings at ANY
-                    // criticality. Such a finding is a trait false positive
-                    // (e.g. a crypto/rsa import read as ransomware, or a log
-                    // rotation helper read as mass-delete); these fixtures exist
-                    // precisely to keep that class regression-free. Score caps
-                    // can be version-sensitive and are bypassable; this is not.
-                    let intent: Vec<&str> = file
+                    // Boring-by-definition invariant (always enforced,
+                    // independent of the bypassable, version-sensitive score
+                    // caps): a do-nothing benign binary must carry
+                    //   1. NO intent — zero objectives/ or well-known/ findings
+                    //      at ANY criticality (e.g. a crypto/rsa import read as
+                    //      ransomware, or a log-rotation helper read as
+                    //      mass-delete), and
+                    //   2. nothing NOTABLE — these samples are the opposite of
+                    //      notable, so every finding must be component/baseline;
+                    //      a notable/suspicious/hostile trait firing here is a
+                    //      false positive.
+                    // These fixtures exist precisely to keep both classes
+                    // regression-free.
+                    let disallowed: Vec<String> = file
                         .findings
                         .iter()
                         .filter(|f| {
-                            f.id.starts_with("objectives/")
+                            // Intent and malware-family findings are never
+                            // acceptable on a do-nothing fixture, at any crit.
+                            if f.id.starts_with("objectives/")
                                 || f.id.starts_with("well-known/")
+                            {
+                                return true;
+                            }
+                            // Inherent code-signing trust state is a legitimate
+                            // file property, not a behavior. Ad-hoc signing in
+                            // particular is unusual-but-real and notable by
+                            // design (and is the default for every `go build`
+                            // macOS binary), so a notable metadata/signed/*
+                            // finding is not a do-nothing false positive.
+                            // Higher tiers (suspicious/hostile) are still caught.
+                            if f.id.starts_with("metadata/signed/")
+                                && f.crit == Criticality::Notable
+                            {
+                                return false;
+                            }
+                            matches!(
+                                f.crit,
+                                Criticality::Notable
+                                    | Criticality::Suspicious
+                                    | Criticality::Hostile
+                            )
                         })
-                        .map(|f| f.id.as_str())
+                        .map(|f| format!("{} ({:?})", f.id, f.crit))
                         .collect();
-                    if !intent.is_empty() {
+                    if !disallowed.is_empty() {
                         eprintln!(
-                            "❌ {}: {} objectives/well-known finding(s) on a does-nothing fixture: {intent:?}",
+                            "❌ {}: {} disallowed finding(s) on a does-nothing fixture (intent or >= notable): {disallowed:?}",
                             file.path,
-                            intent.len(),
+                            disallowed.len(),
                         );
                         print_contributing_findings(file, "     ");
                         failed += 1;

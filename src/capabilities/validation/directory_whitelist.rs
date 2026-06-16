@@ -304,6 +304,7 @@ const ALLOWED_MB_DYLIB: &[&str] = &["enumerate", "library", "load", "lookup"];
 const ALLOWED_MB_FS: &[&str] = &[
     "acl",
     "attributes",
+    "build-artifacts",
     "chmod",
     "chown",
     "config",
@@ -315,6 +316,7 @@ const ALLOWED_MB_FS: &[&str] = &[
     "file",
     "link",
     "lock",
+    "log-rotation",
     "memory",
     "path",
     "pipe",

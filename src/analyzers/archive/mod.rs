@@ -1107,10 +1107,16 @@ impl ArchiveAnalyzer {
             FileType::Tar | FileType::Gem => {
                 tar::extract_tar_entries_safe(Cursor::new(data), dest_dir, guard)
             }
-            // Gzip-tar packages: Alpine `.apk`, npm `.tgz`, Rust `.crate` —
-            // same extraction as a generic gzip tar; recursion analyzes their
-            // members (package.json, Cargo.toml, installed files).
-            FileType::TarGz | FileType::ApkAlpine | FileType::Npm | FileType::Crate => {
+            // Alpine/Wolfi `.apk`: several gzip streams concatenated (control +
+            // data segments), not a single gzip-tar. Walk every segment so the
+            // data segment's members — the installed ELF binaries — are analyzed.
+            FileType::ApkAlpine => {
+                system_packages::extract_apk_alpine_from_data(data, dest_dir, guard)
+            }
+            // Gzip-tar packages: npm `.tgz`, Rust `.crate` — a single gzip
+            // stream wrapping a single tar; recursion analyzes their members
+            // (package.json, Cargo.toml, installed files).
+            FileType::TarGz | FileType::Npm | FileType::Crate => {
                 tar::extract_tar_entries_safe(
                     flate2::read::GzDecoder::new(Cursor::new(data)),
                     dest_dir,
@@ -3326,40 +3332,55 @@ traits:
         }
     }
 
-    #[test]
-    fn test_alpine_apk_detected_via_gzip_tar_path() {
+    /// Build one gzip-compressed tar segment from `(path, contents)` members.
+    /// A real apk is several of these concatenated; tests build the segments
+    /// separately and join them so the fixture matches the on-disk format.
+    #[allow(clippy::expect_used)]
+    fn apk_gzip_tar_segment(members: &[(&str, &[u8])]) -> Vec<u8> {
         use flate2::Compression;
         use flate2::write::GzEncoder;
         use tar::Builder;
 
+        let enc = GzEncoder::new(Vec::new(), Compression::default());
+        let mut tar_builder = Builder::new(enc);
+        for (path, contents) in members {
+            let mut header = tar::Header::new_gnu();
+            header.set_path(path).expect("set tar path");
+            header.set_size(contents.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            tar_builder.append(&header, *contents).expect("append member");
+        }
+        tar_builder
+            .into_inner()
+            .expect("finish tar")
+            .finish()
+            .expect("finish gzip")
+    }
+
+    #[test]
+    fn test_alpine_apk_detected_via_gzip_tar_path() {
         #[allow(clippy::expect_used)]
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let apk_path = temp_dir.path().join("sample.apk");
 
         {
-            let file = File::create(&apk_path).unwrap();
-            let enc = GzEncoder::new(file, Compression::default());
-            let mut tar_builder = Builder::new(enc);
+            // A real apk concatenates independent gzip streams: the control
+            // segment (`.PKGINFO`) followed by the data segment (installed
+            // files). The data member must live in its *own* segment — a single
+            // combined tar would mask the multi-segment walking this verifies.
+            let control = apk_gzip_tar_segment(&[(
+                ".PKGINFO",
+                b"pkgname = ruby3.2-public_suffix\npkgver = 6.0.0-r0\n",
+            )]);
+            let data = apk_gzip_tar_segment(&[(
+                "usr/lib/ruby/gems/3.2.0/gems/public_suffix-6.0.1/lib/public_suffix.rb",
+                b"File.open(\"the_Score.vbs\", \"w\")\n",
+            )]);
 
-            let pkginfo = b"pkgname = ruby3.2-public_suffix\npkgver = 6.0.0-r0\n";
-            let mut pkg_header = tar::Header::new_gnu();
-            pkg_header.set_path(".PKGINFO").unwrap();
-            pkg_header.set_size(pkginfo.len() as u64);
-            pkg_header.set_mode(0o644);
-            pkg_header.set_cksum();
-            tar_builder.append(&pkg_header, &pkginfo[..]).unwrap();
-
-            let ruby = b"File.open(\"the_Score.vbs\", \"w\")\n";
-            let mut ruby_header = tar::Header::new_gnu();
-            ruby_header
-                .set_path("usr/lib/ruby/gems/3.2.0/gems/public_suffix-6.0.1/lib/public_suffix.rb")
-                .unwrap();
-            ruby_header.set_size(ruby.len() as u64);
-            ruby_header.set_mode(0o644);
-            ruby_header.set_cksum();
-            tar_builder.append(&ruby_header, &ruby[..]).unwrap();
-
-            tar_builder.finish().unwrap();
+            let mut file = File::create(&apk_path).unwrap();
+            file.write_all(&control).unwrap();
+            file.write_all(&data).unwrap();
         }
 
         let analyzer = ArchiveAnalyzer::new();

@@ -343,10 +343,10 @@ opt-level = 3
 
 
 
-# Local override to pick up the PKGBUILD basename → Shell recognition fix in
-# filefacts (src/fileid/ext.rs) before it is published upstream. Without it,
-# short Arch PKGBUILD recipes type as Unknown and the pacman supply-chain trait
-# family never runs on them. Remove once the filefacts change is released.
+# Local override to pick up unpublished filefacts identification fixes used by
+# triage, including PKGBUILD shell recognition, UDIF/DMG detection, and
+# extensionless PHP/HTML fragments that previously scored as Lua. Remove once
+# the filefacts changes are released upstream.
 #[patch."https://codeberg.org/atomdrift/filefacts.git"]
 #filefacts = { path = "../filefacts" }
 

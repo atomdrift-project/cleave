@@ -422,12 +422,128 @@ fn decompress_to_file<R: std::io::Read>(
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("extracted");
-    let mut out = File::create(dest_dir.join(stem))?;
     let mut limited = guards::LimitedReader::new(&mut decoder, guards::MAX_FILE_SIZE);
-    let written = std::io::copy(&mut limited, &mut out)?;
+    let mut decompressed = Vec::new();
+    std::io::Read::read_to_end(&mut limited, &mut decompressed)?;
+    let written = decompressed.len() as u64;
     guard.check_compression_ratio(compressed_size, written);
     guard.check_bytes(written, stem);
-    Ok(())
+
+    extract_decompressed_data_or_write_file(decompressed, stem, dest_dir, guard)
+}
+
+fn extract_decompressed_data_or_write_file(
+    data: Vec<u8>,
+    stem: &str,
+    dest_dir: &Path,
+    guard: &guards::ExtractionGuard,
+) -> Result<()> {
+    use std::io::Cursor;
+
+    if looks_like_tar_archive(&data) {
+        return tar::extract_tar_entries_safe(Cursor::new(data), dest_dir, guard);
+    }
+
+    let logical_path = Path::new(stem);
+    match crate::analyzers::detect_file_type_from_data(logical_path, &data) {
+        FileType::Tar | FileType::Gem => {
+            tar::extract_tar_entries_safe(Cursor::new(data), dest_dir, guard)
+        }
+        FileType::TarGz | FileType::Npm | FileType::Crate => tar::extract_tar_entries_safe(
+            flate2::read::GzDecoder::new(Cursor::new(data)),
+            dest_dir,
+            guard,
+        ),
+        FileType::TarBz2 => tar::extract_tar_entries_safe(
+            bzip2::read::BzDecoder::new(Cursor::new(data)),
+            dest_dir,
+            guard,
+        ),
+        FileType::TarXz => tar::extract_tar_entries_safe(
+            xz2::read::XzDecoder::new(Cursor::new(data)),
+            dest_dir,
+            guard,
+        ),
+        FileType::TarZst | FileType::PkgArch | FileType::PkgFreebsd => {
+            tar::extract_tar_entries_safe(
+                zstd::stream::read::Decoder::new(Cursor::new(data))
+                    .context("Failed to create zstd decoder")?,
+                dest_dir,
+                guard,
+            )
+        }
+        FileType::Gz => decompress_to_file(
+            flate2::read::GzDecoder::new(Cursor::new(&data)),
+            logical_path,
+            dest_dir,
+            data.len() as u64,
+            guard,
+        ),
+        FileType::Bz2 => decompress_to_file(
+            bzip2::read::BzDecoder::new(Cursor::new(&data)),
+            logical_path,
+            dest_dir,
+            data.len() as u64,
+            guard,
+        ),
+        FileType::Xz => decompress_to_file(
+            xz2::read::XzDecoder::new(Cursor::new(&data)),
+            logical_path,
+            dest_dir,
+            data.len() as u64,
+            guard,
+        ),
+        FileType::Zst => decompress_to_file(
+            zstd::stream::read::Decoder::new(Cursor::new(&data))
+                .context("Failed to create zstd decoder")?,
+            logical_path,
+            dest_dir,
+            data.len() as u64,
+            guard,
+        ),
+        _ => {
+            let mut out = File::create(dest_dir.join(stem))?;
+            std::io::Write::write_all(&mut out, &data)?;
+            Ok(())
+        }
+    }
+}
+
+fn looks_like_tar_archive(data: &[u8]) -> bool {
+    if data.get(257..262) == Some(b"ustar") {
+        return true;
+    }
+    if data.len() < 512 {
+        return false;
+    }
+
+    let checksum_field = &data[148..156];
+    let checksum_text = checksum_field
+        .iter()
+        .copied()
+        .take_while(|b| *b != 0 && *b != b' ')
+        .collect::<Vec<_>>();
+    if checksum_text.is_empty() || !checksum_text.iter().all(u8::is_ascii_digit) {
+        return false;
+    }
+    let Ok(expected) =
+        u32::from_str_radix(std::str::from_utf8(&checksum_text).unwrap_or_default(), 8)
+    else {
+        return false;
+    };
+
+    let actual = data[..512]
+        .iter()
+        .enumerate()
+        .map(|(i, b)| {
+            if (148..156).contains(&i) {
+                b' ' as u32
+            } else {
+                *b as u32
+            }
+        })
+        .sum::<u32>();
+    actual == expected
 }
 
 impl ArchiveAnalyzer {
@@ -3283,6 +3399,59 @@ traits:
                 "decompressed content should match original"
             );
         }
+    }
+
+    #[test]
+    fn test_extract_dir_standalone_bz2_wrapped_tar_without_tar_extension() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let extract_dir = tempfile::tempdir().expect("create extract dir");
+        let bz2_path = temp_dir.path().join("payload.unknown");
+
+        let mut tar_data = Vec::new();
+        {
+            let contents = b"inner executable placeholder";
+            let mut header = [0u8; 512];
+            header[0.."invoice.scr".len()].copy_from_slice(b"invoice.scr");
+            header[100..108].copy_from_slice(b"0000755\0");
+            header[108..116].copy_from_slice(b"0000000\0");
+            header[116..124].copy_from_slice(b"0000000\0");
+            let size = format!("{:011o}\0", contents.len());
+            header[124..136].copy_from_slice(size.as_bytes());
+            header[136..148].copy_from_slice(b"00000000000\0");
+            header[148..156].fill(b' ');
+            header[156] = b'0';
+            let checksum = header.iter().map(|b| *b as u32).sum::<u32>();
+            let checksum = format!("{:06o}\0 ", checksum);
+            header[148..156].copy_from_slice(checksum.as_bytes());
+
+            tar_data.extend_from_slice(&header);
+            tar_data.extend_from_slice(contents);
+            let padding = (512 - (contents.len() % 512)) % 512;
+            tar_data.extend(std::iter::repeat_n(0, padding));
+            tar_data.extend(std::iter::repeat_n(0, 1024));
+        }
+
+        {
+            let file = File::create(&bz2_path).expect("create bz2");
+            let mut enc = bzip2::write::BzEncoder::new(file, bzip2::Compression::default());
+            enc.write_all(&tar_data).expect("write bz2 tar");
+            enc.finish().expect("finish bz2");
+        }
+
+        let config = SampleExtractionConfig::new(extract_dir.path().to_path_buf());
+        let analyzer = ArchiveAnalyzer::new()
+            .with_sample_extraction(config)
+            .with_analysis_options(Arc::new(crate::AnalysisOptions {
+                all_files: true,
+                ..crate::AnalysisOptions::default()
+            }));
+        let report = analyzer.analyze(&bz2_path).expect("analyze .bz2 tar");
+
+        assert!(
+            report.files.iter().any(|f| f.path.ends_with("invoice.scr")),
+            "bzip2-wrapped tar should recurse into tar members, got files: {:?}",
+            report.files.iter().map(|f| &f.path).collect::<Vec<_>>()
+        );
     }
 
     #[test]

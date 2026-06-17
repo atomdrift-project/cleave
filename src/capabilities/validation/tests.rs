@@ -2724,6 +2724,52 @@ mod duplicate_tests {
     }
 
     #[test]
+    fn test_atomic_logic_duplicates_differ_only_in_unless() {
+        use crate::capabilities::validation::duplicates::find_atomic_logic_duplicates;
+
+        // Same matcher, same crit/conf/platforms — they differ only in `unless:`.
+        // The matcher signature ignores `unless`, so the pair is flagged and the
+        // recommendation is to collapse it into one trait with a downgrade.
+        let matcher = || {
+            Condition::Raw(RawQuery {
+                exact: Some("shared_matcher".to_string()),
+                ..Default::default()
+            })
+        };
+        let mut guarded = create_test_trait_with_conf_crit(
+            "trait_guarded",
+            matcher(),
+            vec![FileType::Shell],
+            "a.yaml",
+            0.9,
+            crate::types::Criticality::Suspicious,
+        );
+        guarded.unless = Some(vec![Condition::Trait {
+            id: "some/benign::context".to_string(),
+        }]);
+        let unguarded = create_test_trait_with_conf_crit(
+            "trait_unguarded",
+            matcher(),
+            vec![FileType::Shell],
+            "b.yaml",
+            0.9,
+            crate::types::Criticality::Suspicious,
+        );
+
+        let duplicates = find_atomic_logic_duplicates(&[guarded, unguarded]);
+        assert_eq!(
+            duplicates.len(),
+            1,
+            "same matcher differing only in unless must be flagged"
+        );
+        assert!(duplicates[0].2.contains("unless: differs"));
+        assert!(
+            duplicates[0].2.contains("downgrade:"),
+            "should recommend merging via a downgrade"
+        );
+    }
+
+    #[test]
     fn test_atomic_logic_duplicates_overlapping_for_types() {
         use crate::capabilities::validation::duplicates::find_atomic_logic_duplicates;
 
@@ -4518,6 +4564,197 @@ mod autoprefix_tests {
         );
 
         assert!(collect_trait_refs_from_trait_def(&trait_def).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod excessive_skip_tests {
+    use crate::capabilities::validation::constraints::find_excessive_skip_conditions;
+    use crate::composite_rules::condition::{Condition, RawQuery};
+    use crate::composite_rules::traits::{CompositeTrait, DowngradeConditions, TraitDefinition};
+    use crate::types::Criticality;
+
+    /// `n` distinct, inert raw conditions — stand-ins for suppression entries.
+    fn raw_conds(n: usize) -> Vec<Condition> {
+        (0..n)
+            .map(|i| {
+                Condition::Raw(RawQuery {
+                    exact: Some(format!("c{i}")),
+                    ..Default::default()
+                })
+            })
+            .collect()
+    }
+
+    fn trait_def(
+        id: &str,
+        r#if: Condition,
+        unless: usize,
+        downgrade_all: usize,
+    ) -> TraitDefinition {
+        TraitDefinition {
+            id: id.to_string(),
+            desc: "t".to_string(),
+            crit: Criticality::Suspicious,
+            r#if,
+            unless: (unless > 0).then(|| raw_conds(unless)),
+            downgrade: (downgrade_all > 0).then(|| DowngradeConditions {
+                any: None,
+                all: Some(raw_conds(downgrade_all)),
+                none: None,
+                needs: None,
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn raw_if() -> Condition {
+        Condition::Raw(RawQuery {
+            exact: Some("marker".to_string()),
+            ..Default::default()
+        })
+    }
+
+    /// `Condition::Trait` reference for each ID.
+    fn refs(ids: &[&str]) -> Vec<Condition> {
+        ids.iter()
+            .map(|r| Condition::Trait {
+                id: (*r).to_string(),
+            })
+            .collect()
+    }
+
+    /// An aggregator composite — its `any:` legs are the exception list a rule pulls
+    /// in by referencing it from `unless:`.
+    fn aggregator(id: &str, any_legs: &[&str]) -> CompositeTrait {
+        CompositeTrait {
+            id: id.to_string(),
+            desc: "agg".to_string(),
+            crit: Criticality::Component,
+            any: Some(refs(any_legs)),
+            ..Default::default()
+        }
+    }
+
+    /// A composite rule whose only suppression is the given `unless:` conditions.
+    fn rule_unless(id: &str, unless: Vec<Condition>) -> CompositeTrait {
+        CompositeTrait {
+            id: id.to_string(),
+            desc: "r".to_string(),
+            crit: Criticality::Suspicious,
+            unless: Some(unless),
+            ..Default::default()
+        }
+    }
+
+    /// Leaf IDs `p0..pn` (e.g. `a0`, `b0`) — referenced but never defined as composites,
+    /// so each resolves to a single leaf exception.
+    fn leaf_ids(prefix: &str, n: usize) -> Vec<String> {
+        (0..n).map(|i| format!("{prefix}{i}")).collect()
+    }
+
+    // The own limit (8) counts the `unless:`/`downgrade:` entries written literally on a
+    // single rule, regardless of what it references. This is the original behavior.
+    #[test]
+    fn own_limit_flags_single_rule() {
+        let traits = vec![trait_def("t", raw_if(), 5, 3)];
+        let v = find_excessive_skip_conditions(&traits, &[]);
+        let t = v
+            .iter()
+            .find(|e| e.id == "t")
+            .expect("flagged on own count");
+        assert_eq!((t.own, t.is_composite), (8, false));
+    }
+
+    // A few literal exceptions, no aggregator references => clean on both limits.
+    #[test]
+    fn under_both_limits_is_clean() {
+        let traits = vec![trait_def("a", raw_if(), 7, 0)];
+        assert!(find_excessive_skip_conditions(&traits, &[]).is_empty());
+    }
+
+    // The expanded limit (40) catches an exception list hidden behind one reference:
+    // `unless: [agg]` where `agg` enumerates 45 benign indicators. Own count is 1.
+    #[test]
+    fn expanded_aggregator_reference_flags_rule() {
+        let leaves = leaf_ids("a", 45);
+        let leaf_refs: Vec<&str> = leaves.iter().map(String::as_str).collect();
+        let composites = vec![
+            aggregator("agg", &leaf_refs),
+            rule_unless("comp", refs(&["agg"])),
+        ];
+
+        let v = find_excessive_skip_conditions(&[], &composites);
+        let comp = v
+            .iter()
+            .find(|e| e.id == "comp")
+            .expect("flagged on expanded count");
+        assert_eq!((comp.own, comp.expanded), (1, 45));
+        // The aggregator itself carries no suppressions, so it is not flagged.
+        assert!(!v.iter().any(|e| e.id == "agg"));
+    }
+
+    // The KEY property: `all:`/`any:` MATCHING references are never counted as
+    // suppressions. A rule that merely requires a heavily-suppressed composite to match
+    // inherits none of its exceptions.
+    #[test]
+    fn matching_references_are_not_counted() {
+        let heavy = rule_unless("heavy", raw_conds(50)); // 50 literal exceptions
+        let comp = CompositeTrait {
+            id: "comp".to_string(),
+            desc: "c".to_string(),
+            crit: Criticality::Hostile,
+            all: Some(refs(&["heavy"])), // requires heavy as a match, no unless of its own
+            ..Default::default()
+        };
+        let v = find_excessive_skip_conditions(&[], &[heavy, comp]);
+        assert!(
+            !v.iter().any(|e| e.id == "comp"),
+            "a matching (all:) reference must not contribute to the suppression count"
+        );
+        assert!(
+            v.iter().any(|e| e.id == "heavy"),
+            "heavy itself is over the limit"
+        );
+    }
+
+    // Leaf and `dir/` references inside `unless:` each count as one — only aggregator
+    // composites expand. Here 39 expanded + 1 dir + 1 leaf = 41 trips the limit.
+    #[test]
+    fn leaf_and_directory_references_count_one() {
+        let leaves = leaf_ids("a", 39);
+        let leaf_refs: Vec<&str> = leaves.iter().map(String::as_str).collect();
+        let composites = vec![
+            aggregator("agg", &leaf_refs),
+            rule_unless("comp", refs(&["agg", "some/dir/", "x::leaf"])),
+        ];
+
+        let v = find_excessive_skip_conditions(&[], &composites);
+        let comp = v.iter().find(|e| e.id == "comp").expect("flagged");
+        assert_eq!((comp.own, comp.expanded), (3, 41));
+    }
+
+    // Aggregator expansion must terminate on a cycle and dedupe shared visits.
+    #[test]
+    fn expansion_cycle_terminates_and_dedupes() {
+        // x references y, y references x; distinct leaves on each side total 45.
+        let ax = leaf_ids("a", 30);
+        let by = leaf_ids("b", 15);
+        let mut x_legs = vec!["y"];
+        x_legs.extend(ax.iter().map(String::as_str));
+        let mut y_legs = vec!["x"];
+        y_legs.extend(by.iter().map(String::as_str));
+
+        let composites = vec![
+            aggregator("x", &x_legs),
+            aggregator("y", &y_legs),
+            rule_unless("comp", refs(&["x"])),
+        ];
+
+        let v = find_excessive_skip_conditions(&[], &composites);
+        let comp = v.iter().find(|e| e.id == "comp").expect("flagged");
+        // 30 + 15 distinct leaves; x and y each expanded once (no hang, no double-count).
+        assert_eq!(comp.expanded, 45);
     }
 }
 

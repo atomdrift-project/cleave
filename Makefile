@@ -213,7 +213,10 @@ DIST ?= dist
 # 3 = HEAD + the last 2 release tags. RELEASES (tag count) is derived as VERSIONS-1.
 VERSIONS ?= 3
 RELEASES ?= $(shell expr $(VERSIONS) - 1)
-COMMITS ?= 100
+# How far back to walk traits commits for OLD release tags (per-version compat).
+# HEAD/`latest` ignores this entirely — it only ever uses the single newest commit
+# and fails the whole publish if that commit doesn't validate.
+COMMITS ?= 8
 # No soak for now (stable = newest compatible commit). A soak window would starve
 # a release whose only compatible traits are recent (e.g. rc.4 → a 1-day-old commit).
 SOAK_DAYS ?= 0
@@ -226,7 +229,7 @@ ENGINE ?= ./$(CARGO_TARGET)/release/$(BINARY)
 # HEAD_ENGINE validates the `latest` pointer (newest bundle that works for the
 # current build); it's the working-tree binary, so always the local release build.
 HEAD_ENGINE ?= ./$(CARGO_TARGET)/release/$(BINARY)
-gen-manifest: release ## Auto-generate versions.toml ([RELEASES=5] [COMMITS=10] [SOAK_DAYS=7] [ENGINE=path|empty] [SIGN=1 IDENTITY=...])
+gen-manifest: release ## Auto-generate versions.toml ([RELEASES=5] [COMMITS=8] [SOAK_DAYS=7] [ENGINE=path|empty] [SIGN=1 IDENTITY=...])
 	cd tools/manifest-gen && GOWORK=off go build -o manifest-gen .
 	tools/manifest-gen/manifest-gen \
 	  --traits "$(TRAITS)" --repo . --out "$(DIST)" \

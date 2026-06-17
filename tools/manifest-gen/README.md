@@ -12,8 +12,14 @@ release tags and the last few `cleave-traits` commits, gating each pointer on
 2. Walks the last `--commits` traits commits (newest first) and runs
    `cleave validate` (the `--engine` binary) against each committed tree.
    Results are memoized in `<out>/.validate-cache.tsv` on `(engineVer, commit)`.
+   This walk-back applies only to **old release tags** (per-version compat).
 3. **beta** = newest commit that passes. **stable** = newest passing commit at
    least `--soak-days` old (time-based soak; falls back to beta if none).
+   **latest** (HEAD) is special: it is validated **first**, against only the
+   single newest commit. If that commit fails, the whole run aborts with the
+   engine's exact output — we never walk HEAD back to an older commit. Old
+   release tags are untouched by that failure (they stay on the traits they
+   already validated).
 4. Builds reproducible artifacts (`git archive` → `zstd -19`, committed tree only)
    and computes sha256 in-process.
 5. Renders `versions.toml`; with `--sign`, cosign-signs it.
@@ -57,7 +63,7 @@ magnitude slower.
 | `--engine` | `./target/release/cleave` | validation oracle |
 | `--out` | `dist` | artifacts + manifest output |
 | `--releases` | `2` | recent release tags to key the manifest |
-| `--commits` | `10` | recent traits commits to consider |
+| `--commits` | `8` | recent traits commits to consider for **old release tags** (HEAD/`latest` always uses only the newest commit) |
 | `--soak-days` | `7` | stable lags beta by ≥ this many days |
 | `--valid-days` | `7` | `valid_until` = now + this |
 | `--channels` | `stable,beta` | channels to populate, in order |
@@ -75,9 +81,12 @@ make publish-traits IDENTITY=releaser@<project>.iam.gserviceaccount.com
 
 It chains, aborting on any failure:
 1. **`gen-manifest ENGINE= VERSIONS=3`** — compat-tests `VERSIONS` versions
-   *including HEAD*: builds each of the last `VERSIONS-1` release tags' own engines
-   and walks traits commits back until that engine's `validate` passes (the real
-   compat test), and validates HEAD for `latest`. Signs the manifest.
+   *including HEAD*. HEAD is checked **first**: the current engine must validate
+   the single newest traits commit or the whole release aborts (with the exact
+   `cleave validate` output) — `latest` is never walked back to an older commit.
+   Only then does it build each of the last `VERSIONS-1` release tags' own engines
+   and walk traits commits back until that engine's `validate` passes (the real
+   per-version compat test). Signs the manifest.
 2. **`check-manifest`** — pre-publish gate: manifest parses, every referenced
    artifact is present with a matching sha256, signature exists, and `cosign
    verify-blob` confirms the signature is valid for `IDENTITY`.

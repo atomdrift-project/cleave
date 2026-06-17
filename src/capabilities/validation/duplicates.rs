@@ -9,7 +9,8 @@
 //! - **Type conflicts**: Same pattern appearing as different condition types (string vs symbol vs raw)
 //! - **String/raw collisions**: Pattern appearing as both string and raw conditions with same criticality
 //! - **For-only duplicates**: Traits identical except for the `for:` field, indicating mergeable rules
-//! - **Atomic logic duplicates**: Traits with same matching logic but different metadata (crit/conf/platforms)
+//! - **Atomic logic duplicates**: Traits with the same matcher but different metadata
+//!   (crit/conf/platforms/unless/downgrade) — candidates for one trait with a downgrade
 //! - **Alternation merge candidates**: Regex patterns differing only in first token case that could be combined
 
 use super::shared::{MatchSignature, PatternLocation};
@@ -3400,8 +3401,15 @@ pub(crate) fn find_for_only_duplicates(
 }
 
 /// Find traits with identical matching logic but different metadata.
-/// These represent potential inconsistencies - same detection with conflicting criticality/confidence.
-/// Only flags pairs with overlapping file types (so they'd actually fire on the same files).
+///
+/// The grouping signature is the **matcher only** (`if` + `not` + numeric/size
+/// filters). It deliberately ignores `crit`, `conf`, `platforms`, `unless`, and
+/// `downgrade`: two traits that match the same thing but differ in criticality or in
+/// their exceptions are not separate detections — they are one detection whose
+/// variation a single trait with a `downgrade:` can express. Such pairs are reported
+/// with that recommendation. Only flags pairs with overlapping file types (so they'd
+/// actually fire on the same files).
+///
 /// Returns: Vec<(trait_id_a, trait_id_b, description)>
 #[must_use]
 pub(crate) fn find_atomic_logic_duplicates(
@@ -3409,18 +3417,15 @@ pub(crate) fn find_atomic_logic_duplicates(
 ) -> Vec<(String, String, String)> {
     let mut duplicates = Vec::new();
 
-    // Group traits by matching logic signature (if + not + unless)
-    // This excludes metadata: crit, conf, desc, attack, ref, platforms, etc.
-    // Key: matching signature -> Vec<trait>
+    // Group traits by matcher signature only — `crit`, `conf`, `platforms`, `unless`,
+    // and `downgrade` are excluded so same-matcher traits group regardless of those.
     let mut groups: HashMap<String, Vec<&TraitDefinition>> = HashMap::new();
 
     for t in trait_definitions {
-        // Create signature from matching logic including filter fields
         let signature = format!(
-            "{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}",
+            "{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}",
             t.r#if,
             t.not,
-            t.unless,
             t.size_min,
             t.size_max,
             t.count_min,
@@ -3450,14 +3455,21 @@ pub(crate) fn find_atomic_logic_duplicates(
                     continue;
                 }
 
-                // Check if metadata differs (crit, conf, or platforms)
-                // Use the equivalence check for criticality
                 let crit_differs = !criticalities_equivalent(a.crit, b.crit);
                 let conf_differs = (a.conf - b.conf).abs() >= 0.1;
                 let platforms_differ = a.platforms != b.platforms;
+                let unless_differs = format!("{:?}", a.unless) != format!("{:?}", b.unless);
+                let downgrade_differs =
+                    format!("{:?}", a.downgrade) != format!("{:?}", b.downgrade);
 
-                if !crit_differs && !conf_differs && !platforms_differ {
-                    // Metadata is effectively the same, not interesting
+                if !crit_differs
+                    && !conf_differs
+                    && !platforms_differ
+                    && !unless_differs
+                    && !downgrade_differs
+                {
+                    // Everything outside the matcher is the same too — an exact
+                    // duplicate handled by the exact-duplicate checks, not this one.
                     continue;
                 }
 
@@ -3472,14 +3484,30 @@ pub(crate) fn find_atomic_logic_duplicates(
                 if platforms_differ {
                     diffs.push(format!("platforms: {:?} vs {:?}", a.platforms, b.platforms));
                 }
+                if unless_differs {
+                    diffs.push("unless: differs".to_string());
+                }
+                if downgrade_differs {
+                    diffs.push("downgrade: differs".to_string());
+                }
+
+                // When the only differences are criticality and/or exceptions, the pair
+                // is a single detection split in two — recommend collapsing it.
+                let mergeable_via_downgrade = crit_differs || unless_differs || downgrade_differs;
+                let recommendation = if mergeable_via_downgrade {
+                    " — merge into one trait and express the difference as a downgrade:"
+                } else {
+                    ""
+                };
 
                 let for_a: Vec<_> = a.r#for.iter().map(|f| format!("{f:?}")).collect();
                 let for_b: Vec<_> = b.r#for.iter().map(|f| format!("{f:?}")).collect();
                 let desc = format!(
-                    "Same matching logic, overlapping types ({}∩{}), but: {}",
+                    "Same matching logic, overlapping types ({}∩{}), but: {}{}",
                     for_a.join(","),
                     for_b.join(","),
-                    diffs.join(", ")
+                    diffs.join(", "),
+                    recommendation
                 );
 
                 duplicates.push((a.id.clone(), b.id.clone(), desc));

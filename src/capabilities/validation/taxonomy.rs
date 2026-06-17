@@ -34,8 +34,22 @@ const PLATFORM_NAMES: &[&str] = &[
     "java",
     "go",
     "rust",
+    "cargo",
+    "npm",
+    "node",
+    "golang",
+    "pypi",
+    "aur",
+    "archlinux",
+    "rpm",
+    "linux",
+    "unix",
+    "gem",
+    "gems",
     "c",
     "php",
+    "packagist",
+    "r",
     "perl",
     "lua",
     "swift",
@@ -97,6 +111,10 @@ const BANNED_DIRECTORY_SEGMENTS: &[&str] = &[
     "composites", // vague
     "default",    // meaningless
     "detection",  // every trait is detection; meaningless modifier
+    "fields",
+    "field",
+    "kind",
+    "category",
     "derived",    // yes
     "generic",    // says nothing about what's inside
     "helpers",    // too vague
@@ -104,6 +122,13 @@ const BANNED_DIRECTORY_SEGMENTS: &[&str] = &[
     "heuristic",  // vague
     "hostile",    // dumping ground
     "impl",       // implementation detail
+    "general",
+    "lexicon",
+    "dictionary",
+    "word",
+    "words",
+    "subtechnique",
+    "technique",
     "indicator",
     "indicators",
     "kind",   // too vague
@@ -127,15 +152,18 @@ const BANNED_DIRECTORY_SEGMENTS: &[&str] = &[
     "simple",     // meaningless
     "stuff",      // obviously bad
     "signals",
+    "words",
+    "kinds",
     "suspicious", // dumping ground
     "technique",  // dumping ground
     "techniques", // dumping ground
-    "things",     // obviously bad
-    "type",       // too vague
-    "types",      // dumping ground
-    "utils",      // too vague
-    "various",    // dumping ground
-    "windows",    // generic platform
+    "text",
+    "things",  // obviously bad
+    "type",    // too vague
+    "types",   // dumping ground
+    "utils",   // too vague
+    "various", // dumping ground
+    "windows", // generic platform
 ];
 
 /// Directories that are allowed to have segments that duplicate their parent.
@@ -1540,7 +1568,7 @@ fn broad_filetype_category(cond: &Condition) -> &'static str {
 
 /// Trait path prefixes where 4+ effective platforms are permitted.
 pub(crate) const BROAD_PLATFORM_ALLOWLIST: &[&str] =
-    &["objectives/supply-chain/", "micro-behaviors/data/text/"];
+    &["objectives/supply-chain/"];
 
 /// Trait path prefixes where broad file type coverage is permitted.
 ///
@@ -1553,8 +1581,6 @@ pub(crate) const BROAD_PLATFORM_ALLOWLIST: &[&str] =
 /// `text` matcher in an allowlisted `text:` directory passes; the same directory
 /// does **not** license a broad `value`/`symbol`/etc. matcher.
 pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
-    // Text data patterns (encoding, obfuscation markers) appear in any file
-    "text:micro-behaviors/data/text/",
     // IP addresses and port numbers are embedded in binaries, scripts, manifests, docs
     "text:micro-behaviors/communications/ip/",
     // URLs and URL fragments appear in any file type
@@ -1582,9 +1608,36 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     // appear in any source language — same rationale as communications/url/.
     // The directory's -encoded and -binary legs are already narrowly scoped.
     "text:micro-behaviors/communications/http/url/",
-    // Cross-language text/format properties (license headers, human-language
-    // prose, generic source tokens) appear in any language's files.
-    "text:metadata/file/text/",
+    // Cross-language file text/format properties (license headers, text
+    // profiles, catalog strings, generic string identities) appear broadly.
+    "text:metadata/file/catalog/",
+    "text:metadata/file/format/",
+    "text:metadata/file/profile/",
+    "text:metadata/file/string/",
+    "text:metadata/file/extension/",
+    "text:micro-behaviors/data/encoded/",
+    "text:micro-behaviors/data/format/media/",
+    "text:micro-behaviors/data/runtime/keywords/",
+    "text:micro-behaviors/communications/http/keywords/",
+    "text:micro-behaviors/data/parse/vocabulary/",
+    "text:micro-behaviors/ui/window/notify/keywords/",
+    "text:objectives/command-and-control/backdoor/keywords/",
+    "text:objectives/command-and-control/backdoor/rat/keywords/",
+    "text:objectives/command-and-control/dropper/keywords/",
+    "text:objectives/command-and-control/remote-command/keywords/",
+    "text:objectives/command-and-control/remote-command/llm/",
+    "text:objectives/collection/clipboard/keywords/",
+    "text:objectives/evasion/kernel-hide/keywords/",
+    "text:objectives/evasion/indicator-removal/keywords/",
+    "text:objectives/evasion/security-bypass/llm/",
+    "text:objectives/impact/crypto-manipulation/keywords/",
+    "text:objectives/impact/destroy/keywords/",
+    "text:objectives/impact/dos/keywords/",
+    "text:objectives/privilege-escalation/exploit/keywords/",
+    "text:well-known/tool/detection/",
+    "text:well-known/app/context/",
+    "text:well-known/malware/trojan/family/",
+    "text:well-known/tool/offensive/payload-corpus/",
     // Marking a file executable (chmod +x / mode 0o755) is a delivery step that
     // appears across every script, source language, and manifest that drops and
     // launches a payload — so the chmod-executable atoms scan broadly.
@@ -1611,9 +1664,15 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     "literal:micro-behaviors/communications/http/url/",
     "literal:objectives/command-and-control/infrastructure/",
     "literal:micro-behaviors/fs/path/sensitive/credentials/",
-    "literal:micro-behaviors/data/text/",
     "literal:micro-behaviors/process/create/shell/lang/",
-    "literal:metadata/file/text/",
+    "literal:metadata/file/catalog/",
+    "literal:metadata/file/extension/",
+    "literal:metadata/file/format/",
+    "literal:metadata/file/profile/",
+    "literal:metadata/file/string/",
+    "literal:objectives/impact/destroy/keywords/",
+    "literal:objectives/command-and-control/remote-command/llm/",
+    "literal:objectives/credential-access/theft/keywords/",
     // Archive-member structural matchers (a vim-swap file, go.mod, .go source,
     // or Package.swift shipped inside a package) legitimately span the whole
     // archive family — the same member can appear in an npm tarball, gem, whl,

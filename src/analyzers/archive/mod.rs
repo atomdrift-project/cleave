@@ -60,6 +60,82 @@ fn is_zip_container(file_type: FileType) -> bool {
     )
 }
 
+/// Count `package.json` runtime `dependencies` that no shipped module imports.
+///
+/// A phantom runtime dependency — declared but never `import`ed/`require`d
+/// anywhere in the package's own code — is the fingerprint of an install-time
+/// payload: a hijacked publisher appends a malicious package to `dependencies`
+/// (its `postinstall` does the work) without touching the code that would
+/// reference it. The June 2026 Mastra scope-takeover injected `easy-day-js`
+/// exactly this way.
+///
+/// Returns `None` (no metric emitted) unless the archive holds a `package.json`
+/// with runtime dependencies *and* at least one import was observed across its
+/// members — without any imports we cannot distinguish "unused" from "we never
+/// parsed the code", and a types-only / asset package would false-positive.
+///
+/// Matching is by package name: an import specifier counts as a use of dep `D`
+/// when it equals `D` or begins with `D/` (a subpath import like
+/// `dayjs/plugin/utc`). Only `dependencies` is considered — never
+/// `devDependencies`/`peerDependencies`/`optionalDependencies`, which the
+/// shipped runtime code is not expected to import.
+fn compute_unused_runtime_deps(report: &AnalysisReport) -> Option<u64> {
+    const DEP_PREFIX: &str = "dependencies.";
+
+    // Declared runtime dependency names, read from the package.json member's
+    // flattened kv (`dependencies.<name>` → version scalar). `<name>` may carry
+    // a scope (`@scope/pkg`) or a dot (`lodash.merge`); the whole remainder is
+    // the name.
+    let declared: Vec<&str> = report
+        .files
+        .iter()
+        .filter(|f| {
+            Path::new(&f.path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.eq_ignore_ascii_case("package.json"))
+        })
+        .flat_map(|f| f.kv.keys())
+        .filter_map(|k| k.strip_prefix(DEP_PREFIX))
+        .collect();
+    if declared.is_empty() {
+        return None;
+    }
+
+    // Every module specifier imported by a *code* member. The manifest and
+    // lockfiles are skipped: cleave surfaces a package.json's declared
+    // dependencies as `imports` (so `type: import` matchers can target them),
+    // and counting those here would make every dependency look "used" and mask
+    // the very phantom we are hunting.
+    let is_manifest_like = |path: &str| {
+        Path::new(path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| {
+                n.eq_ignore_ascii_case("package.json")
+                    || n.eq_ignore_ascii_case("package-lock.json")
+                    || n.eq_ignore_ascii_case("npm-shrinkwrap.json")
+            })
+    };
+    let imported: Vec<&str> = report
+        .files
+        .iter()
+        .filter(|f| !is_manifest_like(&f.path))
+        .flat_map(|f| f.imports.iter())
+        .map(|imp| imp.symbol.as_str())
+        .collect();
+    if imported.is_empty() {
+        return None;
+    }
+
+    let used = |dep: &str| {
+        imported
+            .iter()
+            .any(|spec| *spec == dep || spec.strip_prefix(dep).is_some_and(|r| r.starts_with('/')))
+    };
+    Some(declared.iter().filter(|dep| !used(dep)).count() as u64)
+}
+
 fn archive_finding(
     id: &str,
     desc: String,
@@ -1119,6 +1195,19 @@ impl ArchiveAnalyzer {
     /// and temp_dir analysis paths so both produce the same composites
     /// (e.g. `python-package-with-dll`).
     fn evaluate_container_findings(&self, report: &mut AnalysisReport) {
+        // Cross-member npm consistency: a runtime dependency declared in
+        // package.json that no shipped module imports is a phantom dependency
+        // — the install-time-payload shape of a hijacked-publisher release
+        // (the package code never references the injected dropper). Computed
+        // here, before container composites run, so a `type: metrics` trait can
+        // read `consistency.unused_runtime_deps` at archive scope.
+        if let Some(count) = compute_unused_runtime_deps(report) {
+            report
+                .filefacts_metrics
+                .get_or_insert_with(Default::default)
+                .insert("consistency.unused_runtime_deps".to_string(), count as f64);
+        }
+
         let Some(mapper) = &self.capability_mapper else {
             return;
         };
@@ -1435,6 +1524,88 @@ mod tests {
     // Import external crate types (our modules shadow these names)
     use ::tar;
     use ::zip;
+
+    fn pkg_json_member(deps: &[&str]) -> FileAnalysis {
+        let mut f = FileAnalysis::new(
+            0,
+            "package/package.json".into(),
+            "package.json".into(),
+            String::new(),
+            0,
+        );
+        for d in deps {
+            f.kv.insert(
+                format!("dependencies.{d}"),
+                serde_json::Value::String("^1.0.0".into()),
+            );
+        }
+        f
+    }
+
+    fn code_member(specifiers: &[&str]) -> FileAnalysis {
+        let mut f = FileAnalysis::new(
+            1,
+            "package/dist/index.js".into(),
+            "javascript".into(),
+            String::new(),
+            0,
+        );
+        f.imports = specifiers
+            .iter()
+            .map(|s| crate::types::Import::new(*s, None))
+            .collect();
+        f
+    }
+
+    fn report_with(files: Vec<FileAnalysis>) -> AnalysisReport {
+        let mut r = AnalysisReport::new(TargetInfo::default());
+        r.files = files;
+        r
+    }
+
+    #[test]
+    fn phantom_dep_counts_unimported_runtime_dep() {
+        // @turbopuffer is imported (incl. a subpath); easy-day-js is declared
+        // but never imported → exactly one phantom.
+        let report = report_with(vec![
+            pkg_json_member(&["@turbopuffer/turbopuffer", "easy-day-js"]),
+            code_member(&["@turbopuffer/turbopuffer/resources/custom", "node:crypto"]),
+        ]);
+        assert_eq!(compute_unused_runtime_deps(&report), Some(1));
+    }
+
+    #[test]
+    fn phantom_dep_zero_when_all_imported() {
+        let report = report_with(vec![
+            pkg_json_member(&["dayjs"]),
+            code_member(&["dayjs/plugin/utc"]),
+        ]);
+        assert_eq!(compute_unused_runtime_deps(&report), Some(0));
+    }
+
+    #[test]
+    fn phantom_dep_ignores_manifest_self_reported_imports() {
+        // The manifest member also carries its declared deps as `imports`
+        // (engine surfaces them for `type: import`); those must not count as
+        // real usage, or every dep would look used.
+        let mut manifest = pkg_json_member(&["easy-day-js"]);
+        manifest.imports = vec![crate::types::Import::new("easy-day-js", None)];
+        let report = report_with(vec![manifest, code_member(&["@turbopuffer/turbopuffer"])]);
+        assert_eq!(compute_unused_runtime_deps(&report), Some(1));
+    }
+
+    #[test]
+    fn phantom_dep_none_without_imports() {
+        // No code imports observed → cannot conclude; emit nothing.
+        let report = report_with(vec![pkg_json_member(&["easy-day-js"])]);
+        assert_eq!(compute_unused_runtime_deps(&report), None);
+    }
+
+    #[test]
+    fn phantom_dep_none_without_manifest() {
+        let report = report_with(vec![code_member(&["dayjs"])]);
+        assert_eq!(compute_unused_runtime_deps(&report), None);
+    }
 
     fn write_test_traits(yaml: &str) -> tempfile::NamedTempFile {
         let mut file = tempfile::NamedTempFile::new().expect("create temp yaml");

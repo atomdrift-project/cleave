@@ -11,7 +11,7 @@ CARGO_TARGET ?= $(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR),target)
 
 # For sccache, set RUSTC_WRAPPER=sccache in your environment
 
-.PHONY: all build debug release release-lto check-cargo install tarball rollout-bastille test test-fast test-unit lint fmt clean coverage ci help regenerate-testdata loadtest bench-build benchmark sampled-benchmark validate tuna tuna-once wolfi wolfi-bootstrap wolfi-build wolfi-test wolfi-shell wolfi-clean wolfi-nuke
+.PHONY: all build debug release release-lto check-cargo install tarball rollout-bastille test test-fast test-unit lint fmt clean coverage ci install-hooks help regenerate-testdata loadtest bench-build benchmark sampled-benchmark validate tuna tuna-once wolfi wolfi-bootstrap wolfi-build wolfi-test wolfi-shell wolfi-clean wolfi-nuke
 
 # Default target
 all: build
@@ -193,6 +193,11 @@ coverage: ## Generate code coverage report
 
 ci: test lint ## Run all CI checks (test + lint)
 	@echo "✓ All CI checks passed"
+
+install-hooks: ## Install the git pre-commit hook (lint + test + no local Cargo overrides)
+	cp scripts/pre-commit .git/hooks/pre-commit
+	chmod +x .git/hooks/pre-commit
+	@echo "✓ Pre-commit hook installed."
 
 validate: ## Validate trait definitions (for: restrictions, taxonomy, precision, etc.)
 	@echo "Validating trait definitions..."

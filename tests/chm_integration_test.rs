@@ -146,7 +146,7 @@ fn synthetic_chm_is_recognized_as_chm() {
 }
 
 #[test]
-fn synthetic_chm_emits_kv_and_metrics() {
+fn synthetic_chm_emits_metrics() {
     let chm = build_minimal_chm("/hello.html", b"<html>hi</html>");
     let tmp = NamedTempFile::new().expect("tempfile");
     std::fs::write(tmp.path(), &chm).expect("write");
@@ -154,35 +154,9 @@ fn synthetic_chm_emits_kv_and_metrics() {
     let out = run_cleave_json(tmp.path());
     let f = first_file(&out);
 
-    // values: ITSF version + lcid lifted directly out of the header.
-    let kv = compact_values(f);
-    assert_eq!(
-        kv["chm.itsf.version"].as_u64(),
-        Some(3),
-        "kv chm.itsf.version: {kv}"
-    );
-    assert_eq!(
-        kv["chm.itsf.lcid"].as_u64(),
-        Some(1033),
-        "kv chm.itsf.lcid: {kv}"
-    );
-    assert_eq!(
-        kv["chm.itsf.timestamp_counter"].as_u64(),
-        Some(0xdeadbeef),
-        "kv chm.itsf.timestamp_counter: {kv}"
-    );
-
-    // The user-visible entry should appear in the entries listing.
-    let listed: Vec<&str> = (0..)
-        .map_while(|i| kv[format!("chm.entries[{i}]")].as_str())
-        .collect();
-    assert!(
-        listed.iter().any(|n| n == &"/hello.html"),
-        "expected /hello.html in listed entries: {listed:?}"
-    );
-
-    // metrics: user_entry_count is computed from the directory, not
-    // from values. Counts live in compact v5 filefacts metrics (`ff.m`).
+    // metrics: user_entry_count is computed from the directory. Counts live
+    // in compact v8 filefacts metrics (the residual `val` kv tree the ITSF
+    // header values used to ride was retired in v8).
     let m = compact_metrics(f);
     let metric_int = |name: &str| -> u64 {
         *m.get(name)
@@ -208,9 +182,9 @@ fn synthetic_chm_has_no_dropper_findings() {
 
     let out = run_cleave_json(tmp.path());
     let f = first_file(&out);
-    let traits = f["ts"].as_array().cloned().unwrap_or_default();
+    let traits = f["traits"].as_array().cloned().unwrap_or_default();
     for t in &traits {
-        let id = t["i"].as_str().unwrap_or("");
+        let id = t["id"].as_str().unwrap_or("");
         assert!(
             !id.contains("htmlhelp-shortcut-"),
             "synthetic CHM unexpectedly fired {id}"
@@ -321,17 +295,12 @@ fn first_file(report: &Value) -> &Value {
         .expect("report has no files")
 }
 
-fn compact_values(file: &Value) -> &Value {
-    file.pointer("/fact/val")
-        .expect("compact v7 filefacts values missing")
-}
-
 fn compact_metrics(file: &Value) -> HashMap<String, f64> {
     let mut out = HashMap::new();
     let groups = file
-        .pointer("/fact/met")
+        .pointer("/facts/metrics")
         .and_then(Value::as_object)
-        .expect("compact v7 filefacts metrics missing");
+        .expect("compact v8 filefacts metrics missing");
     for (group, fields) in groups {
         let Some(fields) = fields.as_object() else {
             continue;
@@ -346,7 +315,7 @@ fn compact_metrics(file: &Value) -> HashMap<String, f64> {
 }
 
 fn trait_ids(f: &Value) -> Vec<String> {
-    f["find"]
+    f["traits"]
         .as_array()
         .cloned()
         .unwrap_or_default()

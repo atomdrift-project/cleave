@@ -1,10 +1,10 @@
 //! Per-format regression tests for filefacts-backed emission.
 //!
 //! These tests load representative fixtures and assert the canonical
-//! metric/value paths trait authors are expected to read from. Compact
-//! v5 stores filefacts data under `ff`: typed fact families are kept out
-//! of residual values, grouped metrics live under `ff.m`, and residual
-//! values live under `ff.v`.
+//! metric paths trait authors are expected to read from. Compact v8 stores
+//! filefacts data under `facts`: typed fact families (`imp`/`exp`/`sec`/…)
+//! sit alongside grouped metrics under `facts.metrics`. The residual `val`
+//! kv tree was retired in v8.
 //!
 //! - Cross-format counts: `sections.count`, `imports.count`,
 //!   `exports.count`, `functions.count`, `dependencies.count`,
@@ -23,11 +23,11 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
 
-/// Run `cleave --json analyze <path>` and return the first file's
-/// compact view. Skips YARA + cache for speed and determinism.
-fn analyze(path: &Path) -> Option<Value> {
-    // Fixtures not present on the test host silently skip (the binary fixtures
-    // are gitignored); we test what the host can extract, not require every one.
+/// Run `cleave --json analyze <path>` and return the full compact report.
+/// Skips YARA + cache for speed and determinism. Returns `None` when the
+/// fixture is not present on the test host (binary fixtures are gitignored;
+/// we test what the host can extract, not require every one).
+fn analyze_report(path: &Path) -> Option<Value> {
     if !path.exists() {
         eprintln!("skipping: fixture {} not present", path.display());
         return None;
@@ -49,7 +49,12 @@ fn analyze(path: &Path) -> Option<Value> {
         .lines()
         .find(|l| l.trim_start().starts_with('{'))
         .expect("no JSON line in cleave output");
-    let report: Value = serde_json::from_str(line).unwrap_or_else(|e| panic!("bad JSON: {e}"));
+    Some(serde_json::from_str(line).unwrap_or_else(|e| panic!("bad JSON: {e}")))
+}
+
+/// Run `cleave --json analyze <path>` and return the first file's compact view.
+fn analyze(path: &Path) -> Option<Value> {
+    let report = analyze_report(path)?;
     Some(
         report["files"]
             .as_array()
@@ -59,13 +64,13 @@ fn analyze(path: &Path) -> Option<Value> {
     )
 }
 
-/// Compact v5 metrics as a flat dotted-key map.
+/// Compact v8 metrics as a flat dotted-key map.
 fn metrics(file: &Value) -> HashMap<String, f64> {
     let mut out = HashMap::new();
     let groups = file
-        .pointer("/fact/met")
+        .pointer("/facts/metrics")
         .and_then(Value::as_object)
-        .expect("compact v5 filefacts metrics missing");
+        .expect("compact v8 filefacts metrics missing");
     for (group, fields) in groups {
         let Some(fields) = fields.as_object() else {
             continue;
@@ -77,16 +82,6 @@ fn metrics(file: &Value) -> HashMap<String, f64> {
         }
     }
     out
-}
-
-/// Compact v5 residual values as a flat dotted-key map.
-fn kv(file: &Value) -> HashMap<String, Value> {
-    file.pointer("/fact/val")
-        .and_then(Value::as_object)
-        .expect("compact v5 filefacts values missing")
-        .iter()
-        .map(|(key, value)| (key.clone(), value.clone()))
-        .collect()
 }
 
 /// `true` when every canonical cross-format count is present in `m`.
@@ -248,36 +243,22 @@ fn no_retired_aliases_emit() {
 // ────────────────────────────────────────────────────────────────────
 
 #[test]
-fn pe_emits_format_specific_kv() {
+fn pe_emits_typed_import_family() {
     let Some(f) = analyze(Path::new("tests/fixtures/test.exe")) else {
         return;
     };
-    let k = kv(&f);
-    for key in [
-        "pe.machine",
-        "pe.subsystem",
-        "pe.timestamp",
-        "pe.entry_point",
-        "pe.entry_section",
-        "pe.image_base",
-        "pe.imphash",
-        "pe.image_hash.sha256",
-    ] {
-        assert!(k.contains_key(key), "missing PE kv key {key}");
-    }
-    // Imports are a typed fact family in v5, not residual values.
+    // Imports are a typed fact family in v8 (`facts.imp`), each entry a
+    // `[library, name]` tuple — not residual `pe.imports[0].*` kv keys.
     let imports = f
-        .pointer("/fact/imp")
+        .pointer("/facts/imp")
         .and_then(Value::as_array)
-        .expect("PE imports should be present under ff.i");
+        .expect("PE imports should be present under facts.imp");
     assert!(imports.iter().any(|entry| {
         entry.as_array().is_some_and(|fields| {
             fields.first().and_then(Value::as_str).is_some()
                 && fields.get(1).and_then(Value::as_str).is_some()
         })
     }));
-    assert!(!k.contains_key("pe.imports[0].library"));
-    assert!(!k.contains_key("pe.imports[0].functions[0]"));
 }
 
 // ────────────────────────────────────────────────────────────────────
@@ -285,15 +266,11 @@ fn pe_emits_format_specific_kv() {
 // ────────────────────────────────────────────────────────────────────
 
 #[test]
-fn elf_emits_format_specific_kv_and_metrics() {
+fn elf_emits_format_specific_metrics() {
     let Some(f) = analyze(Path::new("tests/fixtures/test.elf")) else {
         return;
     };
     let m = metrics(&f);
-    let k = kv(&f);
-    assert!(k.contains_key("elf.machine"));
-    assert!(k.contains_key("elf.type"));
-    assert!(k.contains_key("elf.entry_section"));
     // Hardening flags expressed as flat metrics — keep them locked in.
     for key in ["elf.bits", "elf.little_endian", "elf.program_header_count"] {
         assert!(m.contains_key(key), "missing ELF metric {key}");
@@ -305,14 +282,22 @@ fn elf_emits_format_specific_kv_and_metrics() {
 // ────────────────────────────────────────────────────────────────────
 
 #[test]
-fn macho_emits_format_specific_kv() {
+fn macho_emits_typed_import_family_and_metrics() {
     let Some(f) = analyze(Path::new("tests/fixtures/test.macho")) else {
         return;
     };
-    let k = kv(&f);
-    assert!(k.contains_key("macho.cpu_type"));
-    // Indexed import structure should be there.
-    assert!(k.contains_key("macho.imports[0]") || k.contains_key("macho.libraries[0]"));
+    // Mach-O load-command structure surfaces as flat metrics in v8.
+    let m = metrics(&f);
+    assert!(
+        m.contains_key("macho.load_command_count"),
+        "missing Mach-O metric macho.load_command_count"
+    );
+    // Imports are a typed fact family (`facts.imp`), not indexed kv keys.
+    let imports = f
+        .pointer("/facts/imp")
+        .and_then(Value::as_array)
+        .expect("Mach-O imports should be present under facts.imp");
+    assert!(!imports.is_empty(), "Mach-O should surface imports");
 }
 
 // ────────────────────────────────────────────────────────────────────
@@ -337,9 +322,6 @@ fn lnk_emits_argument_whitespace_metrics() {
     ] {
         assert!(m.contains_key(key), "missing LNK metric {key}");
     }
-    // Arguments value should be in the kv tree, not just analyzed.
-    let k = kv(&f);
-    assert!(k.contains_key("lnk.arguments"));
 }
 
 // ────────────────────────────────────────────────────────────────────
@@ -382,25 +364,31 @@ fn zip_emits_canonical_archive_keys() {
 //  Tar (gzipped)
 // ────────────────────────────────────────────────────────────────────
 
-/// Tar.gz is handled by cleave's archive analyzer (which decompresses
-/// and recurses); filefacts itself only carries `archive.*` extraction for
-/// uncompressed tar by design. The compressed wrapper still shows
-/// `archive.format.kind = "tar.gz"` in kv and surfaces member-level
-/// detail via `archive.members[N].*` — those are the keys traits
-/// targeting tar.gz actually rely on.
+/// Tar.gz is handled by cleave's archive analyzer (which decompresses and
+/// recurses). In v8 the wrapper is typed `tar.gz` and each member is surfaced
+/// as its own `files[]` entry (path `<archive>!!<member>`, `depth > 0`) rather
+/// than the retired `archive.members[N].*` kv keys — those member files are
+/// what traits targeting tar.gz contents now analyze.
 #[test]
-fn targz_emits_member_level_kv_and_format_kind() {
-    let Some(f) = analyze(Path::new("tests/fixtures/archives/test.tar.gz")) else {
+fn targz_emits_members_as_child_files() {
+    let Some(report) = analyze_report(Path::new("tests/fixtures/archives/test.tar.gz")) else {
         return;
     };
-    let k = kv(&f);
+    let files = report["files"]
+        .as_array()
+        .expect("report should contain file entries");
     assert_eq!(
-        k.get("archive.format.kind").and_then(|v| v.as_str()),
-        Some("tar.gz")
+        files[0]["type"].as_str(),
+        Some("tar.gz"),
+        "wrapper file should be typed tar.gz"
     );
-    assert!(k.contains_key("archive.member_count"));
-    assert!(k.contains_key("archive.members[0].path"));
-    assert!(k.contains_key("archive.members[0].sha256"));
+    let member = files.iter().find(|f| {
+        f["path"].as_str().is_some_and(|p| p.contains("!!")) && f["depth"].as_u64().unwrap_or(0) > 0
+    });
+    assert!(
+        member.is_some(),
+        "tar.gz member should be surfaced as a child file: {files:?}"
+    );
 }
 
 // ────────────────────────────────────────────────────────────────────

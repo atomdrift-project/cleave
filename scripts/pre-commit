@@ -1,0 +1,30 @@
+#!/bin/sh
+# cleave pre-commit hook: block the commit unless the tree is clean.
+#
+#   1. no active [patch.*] local overrides in Cargo.toml (e.g. ../filefacts)
+#   2. `make lint` passes
+#   3. `make test` passes
+#
+# Install with `make install-hooks`. Bypass in an emergency with `git commit --no-verify`.
+
+set -e
+
+repo_root=$(git rev-parse --show-toplevel)
+cd "$repo_root"
+
+# 1. Reject uncommented [patch...] sections in Cargo.toml. These point at local
+#    sibling checkouts (../filefacts, ../stng) and must never be committed.
+if grep -nE '^[[:space:]]*\[patch' Cargo.toml >/dev/null 2>&1; then
+	echo "pre-commit: active [patch.*] local override found in Cargo.toml:" >&2
+	grep -nE '^[[:space:]]*\[patch' Cargo.toml >&2
+	echo "Comment it out before committing (or use --no-verify to bypass)." >&2
+	exit 1
+fi
+
+echo "pre-commit: running make lint..."
+make lint
+
+echo "pre-commit: running make test..."
+make test
+
+echo "pre-commit: all checks passed."

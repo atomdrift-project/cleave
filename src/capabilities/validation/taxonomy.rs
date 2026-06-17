@@ -1947,7 +1947,7 @@ mod content_dir_tests {
     use super::find_metadata_content_dirs;
 
     fn dirs(v: &[&str]) -> Vec<String> {
-        v.iter().map(|s| s.to_string()).collect()
+        v.iter().map(ToString::to_string).collect()
     }
 
     #[test]

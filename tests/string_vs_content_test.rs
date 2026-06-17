@@ -101,10 +101,12 @@ int main() {
 
     let stdout = String::from_utf8_lossy(&output.get_output().stdout);
 
-    // Should find the IP in the string literal
-    // Note: The IP 45.33.32.156 is a real external IP that should pass validation
+    // Should detect the IP in the string literal. The v8 compact format no
+    // longer echoes the raw matched value, so assert on the source-literal
+    // trait that fires only when the external IPv4 URL is found in a code
+    // string literal (not a comment).
     assert!(
-        stdout.contains("45.33.32.156") || stdout.contains("http-raw-ip"),
+        stdout.contains("http-ip-url-source-literal"),
         "Expected to find IP address from string literal. Output: {}",
         stdout
     );

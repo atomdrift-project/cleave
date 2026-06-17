@@ -157,6 +157,30 @@ pub(crate) fn eval_basename(
     )
 }
 
+/// Final path component, treating `/`, `\`, and the archive-member separator
+/// `!` as boundaries.
+///
+/// Archive members carry synthetic paths like `outer.zip!inner/file` (and, for
+/// a member at a nested archive's root, `outer.jar!Main.class`). Splitting on
+/// `!` keeps a `basename` match consistent whether the member is scanned
+/// in-archive or after extraction to disk — `basename` of `foo.jar!Main.class`
+/// is `Main.class`, the same as the extracted `Main.class`.
+pub(crate) fn path_basename(path: &str) -> &str {
+    match path.rfind(['/', '\\', '!']) {
+        Some(i) => &path[i + 1..],
+        None => path,
+    }
+}
+
+/// Directory portion of a path, treating `/`, `\`, and `!` as boundaries.
+/// The complement of [`path_basename`]; empty when there is no separator.
+pub(crate) fn path_dirname(path: &str) -> &str {
+    match path.rfind(['/', '\\', '!']) {
+        Some(i) => &path[..i],
+        None => "",
+    }
+}
+
 /// Evaluate a `type: path` condition against the file path. Matches the full
 /// path by default; `basename` scopes to the final component, `dirname` to the
 /// directory portion.
@@ -171,11 +195,10 @@ pub(crate) fn eval_path(
     ctx: &EvaluationContext<'_>,
 ) -> ConditionResult {
     let full = ctx.report.target.path.as_str();
-    let p = std::path::Path::new(full);
     let target: &str = if basename {
-        p.file_name().and_then(|s| s.to_str()).unwrap_or("")
+        path_basename(full)
     } else if dirname {
-        p.parent().and_then(|s| s.to_str()).unwrap_or("")
+        path_dirname(full)
     } else {
         full
     };

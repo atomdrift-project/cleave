@@ -71,6 +71,11 @@ pub struct CompactFile {
     #[serde(rename = "traits")]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub findings: Vec<CompactTrait>,
+    /// External references this file declares (deps, URLs, repository), each
+    /// with its byte offset — the file→dependency edges of the galaxy view.
+    #[serde(rename = "refs")]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub refs: Vec<CompactRef>,
     /// Merged context windows: raw bytes in file order for match highlighting.
     /// Render mode (hex vs text) is derived from the file's `type` field.
     #[serde(rename = "ctx")]
@@ -134,6 +139,34 @@ pub struct CompactSource {
     /// Byte offset of the component match, when known.
     #[serde(rename = "off", skip_serializing_if = "Option::is_none")]
     pub offset: Option<u64>,
+}
+
+/// One reference a file declares — what it points at, how it was expressed, and
+/// where in the file it sits. Lets a downstream consumer (prism's galaxy view)
+/// draw byte-anchored edges from each file to what it references.
+///
+/// The target is either *external* — a package/URL named by `to` — or
+/// *internal* — another file in the same bundle, named by `file` (its `files[]`
+/// id). External today; `file` is reserved so that when cleave resolves
+/// intra-bundle references (a relative `require`/`import`, an HTML `src`, a
+/// manifest pointing at a sibling) — work that currently lives in prism — those
+/// file→file edges ride the same list instead of being re-derived downstream.
+#[derive(Debug, Serialize)]
+pub struct CompactRef {
+    /// The reference text/locator: a PURL or URL for an external target, or the
+    /// raw specifier (e.g. `./util`) for an internal one.
+    #[serde(rename = "to")]
+    pub locator: String,
+    /// Coarse kind: `dependency`, `command`, `url_fetch`, `repository`, ….
+    pub kind: String,
+    /// Byte offset of the reference in this file — the citation anchor.
+    #[serde(rename = "off")]
+    pub offset: u64,
+    /// When the reference resolves to another file in this bundle, that file's
+    /// `files[]` id — the intra-bundle (file→file) edge. Absent for external
+    /// references.
+    #[serde(rename = "file", skip_serializing_if = "Option::is_none")]
+    pub target_file: Option<u32>,
 }
 
 /// Dense filefacts-backed fact block for compact v7.
@@ -586,6 +619,30 @@ fn convert_file(file: &super::file_analysis::FileAnalysis, id: u32) -> CompactFi
         (!f.is_empty()).then_some(f)
     });
 
+    // External references this file declares, byte-anchored, for the galaxy
+    // view. Read straight from the filefacts view so every reference (fetched
+    // or not) is attributed to the file that named it.
+    let refs: Vec<CompactRef> = file
+        .filefacts
+        .as_ref()
+        .map(|ff| {
+            ff.references
+                .iter()
+                .map(|r| CompactRef {
+                    locator: match &r.locator {
+                        filefacts::RefLocator::Purl(p) => p.clone(),
+                        filefacts::RefLocator::Url(u) => u.clone(),
+                    },
+                    kind: ref_kind_str(r.kind).to_string(),
+                    offset: r.offset,
+                    // External today; intra-bundle resolution (prism's job for
+                    // now) will fill this when it moves into cleave.
+                    target_file: None,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
     let (targets, members) = compact_ast(file);
 
     let facts = CompactFacts {
@@ -609,8 +666,22 @@ fn convert_file(file: &super::file_analysis::FileAnalysis, id: u32) -> CompactFi
         formula,
         identity: file.identity.clone(),
         findings: traits,
+        refs,
         context: file.context.clone(),
         facts,
+    }
+}
+
+/// The stable snake_case name for a reference kind, for the compact `refs`
+/// view. `RefKind` is `#[non_exhaustive]`, so an unrecognized kind maps to
+/// `undefined` rather than failing.
+fn ref_kind_str(kind: filefacts::RefKind) -> &'static str {
+    match kind {
+        filefacts::RefKind::Dependency => "dependency",
+        filefacts::RefKind::Command => "command",
+        filefacts::RefKind::UrlFetch => "url_fetch",
+        filefacts::RefKind::Repository => "repository",
+        _ => "undefined",
     }
 }
 

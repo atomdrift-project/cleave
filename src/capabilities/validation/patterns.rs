@@ -1009,6 +1009,94 @@ pub(crate) fn find_ast_function_call_should_use_symbol(
     }
 }
 
+/// Maximum length for a `type: path` / `type: basename` search pattern.
+/// Path fragments longer than this are matching too much of the layout and
+/// break the moment a directory is renamed or nested differently.
+const MAX_PATH_PATTERN_LEN: usize = 64;
+
+/// Maximum number of `/` separators allowed in a path search pattern.
+/// More than two path components encodes a specific directory layout, which is
+/// brittle: real-world archives shuffle, prefix, and re-nest paths constantly.
+const MAX_PATH_PATTERN_SLASHES: usize = 2;
+
+/// Describe why a path search pattern is brittle, or `None` if it is fine.
+///
+/// Applies to the fuzzy match modes (`substr`, `regex`) of a path/basename
+/// search. A pattern is brittle when it embeds `!` (almost always a misplaced
+/// negation or shell sigil that won't match a path), encodes more than two
+/// directory components, or is so long it pins an exact layout.
+fn brittle_path_reason(pattern: &str) -> Option<String> {
+    if pattern.contains('!') {
+        return Some("contains '!'".to_string());
+    }
+    let slashes = pattern.bytes().filter(|&b| b == b'/').count();
+    if slashes > MAX_PATH_PATTERN_SLASHES {
+        return Some(format!(
+            "has {slashes} '/' separators (max {MAX_PATH_PATTERN_SLASHES})"
+        ));
+    }
+    if pattern.chars().count() > MAX_PATH_PATTERN_LEN {
+        return Some(format!(
+            "is {} chars long (max {MAX_PATH_PATTERN_LEN})",
+            pattern.chars().count()
+        ));
+    }
+    None
+}
+
+/// Detect brittle `type: path` / `type: basename` search patterns.
+///
+/// Path searches matched by `substr` or `regex` should stay short and shallow:
+/// they must not contain `!`, encode more than two directory components, or run
+/// past 64 characters.
+///
+/// The rationale is detection invariance under extraction. `!` is the
+/// archive-member separator (`foo.apk!usr/bin/foo`); a pattern that anchors on
+/// it — or on an archive-prefixed, deeply-nested path — matches when the file is
+/// scanned *inside* an archive but silently misses the identical bytes once the
+/// archive is extracted to disk (and vice versa). Keeping path searches short
+/// and shallow makes the same content detect either way.
+pub(crate) fn find_brittle_path_patterns(traits: &[TraitDefinition], warnings: &mut Vec<String>) {
+    for trait_def in traits {
+        let Condition::Path(PathQuery { substr, regex, .. }) = &trait_def.r#if else {
+            continue;
+        };
+
+        for (mode, pattern) in [("substr", substr), ("regex", regex)] {
+            let Some(pattern) = pattern else {
+                continue;
+            };
+            let Some(reason) = brittle_path_reason(pattern) else {
+                continue;
+            };
+
+            let source_file = trait_def
+                .defined_in
+                .to_str()
+                .unwrap_or("unknown")
+                .to_string();
+            let location = match find_line_number(&source_file, &trait_def.id) {
+                Some(line) => format!("{source_file}:{line}"),
+                None => source_file,
+            };
+
+            warnings.push(format!(
+                "Brittle path: trait '{}' in {} uses `type: path` {} '{}' which {} — \
+                 path searches must detect the same content whether scanned inside an archive \
+                 or extracted to disk; keep them short and shallow (no '!' archive-member \
+                 separator, ≤{} '/' separators, ≤{} chars)",
+                trait_def.id,
+                location,
+                mode,
+                pattern,
+                reason,
+                MAX_PATH_PATTERN_SLASHES,
+                MAX_PATH_PATTERN_LEN
+            ));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{RegexFacts, regex_performance_issues};

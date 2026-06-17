@@ -396,6 +396,8 @@ pub(crate) enum FileType {
     PackageJson,
     /// npm package-lock.json lockfile
     PackageLockJson,
+    /// Go module dependency manifest (go.mod)
+    GoMod,
     /// Chrome extension manifest.json
     ChromeManifest,
     /// VS Code extension manifest (extension.vsixmanifest)
@@ -557,6 +559,7 @@ impl FileType {
                 self,
                 FileType::PackageJson
                     | FileType::PackageLockJson
+                    | FileType::GoMod
                     | FileType::Json
                     | FileType::ChromeManifest
                     | FileType::VsixManifest
@@ -654,6 +657,7 @@ impl FileType {
             // Manifest/config formats
             FileType::PackageJson,
             FileType::PackageLockJson,
+            FileType::GoMod,
             FileType::ChromeManifest,
             FileType::VsixManifest,
             FileType::CargoToml,
@@ -749,6 +753,7 @@ impl FileType {
             // Manifest/config formats
             "package.json" | "packagejson" => FileType::PackageJson,
             "package-lock.json" | "packagelockjson" => FileType::PackageLockJson,
+            "go.mod" | "gomod" | "go-mod" | "gomodfile" => FileType::GoMod,
             "chrome-manifest" | "chromemanifest" => FileType::ChromeManifest,
             "vsixmanifest" | "vsix-manifest" | "extension.vsixmanifest" => FileType::VsixManifest,
             "cargo-toml" | "cargotoml" | "cargo.toml" => FileType::CargoToml,
@@ -886,6 +891,14 @@ mod tests {
     }
 
     #[test]
+    fn test_go_mod_is_raw_text_manifest() {
+        assert!(!FileType::GoMod.is_source_code());
+        assert!(FileType::GoMod.uses_raw_text_search());
+        assert_eq!(FileType::from_str("go.mod"), FileType::GoMod);
+        assert_eq!(FileType::from_str("gomod"), FileType::GoMod);
+    }
+
+    #[test]
     fn test_is_source_code_false_for_plist() {
         assert!(!FileType::Plist.is_source_code());
     }
@@ -931,6 +944,12 @@ mod tests {
     fn test_all_concrete_variants_includes_package_lock_json() {
         let variants = FileType::all_concrete_variants();
         assert!(variants.contains(&FileType::PackageLockJson));
+    }
+
+    #[test]
+    fn test_all_concrete_variants_includes_go_mod() {
+        let variants = FileType::all_concrete_variants();
+        assert!(variants.contains(&FileType::GoMod));
     }
 
     #[test]

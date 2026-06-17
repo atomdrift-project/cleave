@@ -440,6 +440,7 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 "manifests" => vec![
                     RuleFileType::PackageJson,
                     RuleFileType::PackageLockJson,
+                    RuleFileType::GoMod,
                     RuleFileType::Gyp,
                     RuleFileType::ChromeManifest,
                     RuleFileType::VsixManifest,
@@ -531,6 +532,7 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 // Specific filenames
                 "package.json" => vec![RuleFileType::PackageJson],
                 "package-lock.json" => vec![RuleFileType::PackageLockJson],
+                "go.mod" | "gomod" | "go-mod" => vec![RuleFileType::GoMod],
                 "cargo.toml" => vec![RuleFileType::CargoToml],
                 "pyproject.toml" => vec![RuleFileType::PyProjectToml],
                 "composer.json" => vec![RuleFileType::ComposerJson],
@@ -1997,6 +1999,7 @@ mod tests {
             &[
                 "package.json".to_string(),
                 "package-lock.json".to_string(),
+                "go.mod".to_string(),
                 "cargo.toml".to_string(),
                 "pyproject.toml".to_string(),
             ],
@@ -2004,6 +2007,7 @@ mod tests {
         );
         assert!(result.types.contains(&RuleFileType::PackageJson));
         assert!(result.types.contains(&RuleFileType::PackageLockJson));
+        assert!(result.types.contains(&RuleFileType::GoMod));
         assert!(result.types.contains(&RuleFileType::CargoToml));
         assert!(result.types.contains(&RuleFileType::PyProjectToml));
         assert!(warnings.is_empty());

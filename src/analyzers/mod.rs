@@ -170,6 +170,7 @@ pub fn analyzer_for_file_type(
         // Text-based formats without tree-sitter - use generic analyzer
         FileType::PkgInfo
         | FileType::CargoToml
+        | FileType::GoMod
         | FileType::PyProjectToml
         | FileType::PackageLockJson
         | FileType::Json
@@ -284,6 +285,7 @@ pub(crate) fn analyzer_for_file_type_arc(
         // Text-based formats without tree-sitter - use generic analyzer
         FileType::PkgInfo
         | FileType::CargoToml
+        | FileType::GoMod
         | FileType::PyProjectToml
         | FileType::PackageLockJson
         | FileType::Json
@@ -479,6 +481,7 @@ fn known_manifest_type_from_basename(file_path: &Path) -> Option<FileType> {
     let name = file_path.file_name()?.to_str()?.to_ascii_lowercase();
     match name.as_str() {
         "cargo.toml" => Some(FileType::CargoToml),
+        "go.mod" => Some(FileType::GoMod),
         "pyproject.toml" => Some(FileType::PyProjectToml),
         _ => None,
     }
@@ -574,6 +577,7 @@ impl FileTypeExt for FileType {
             FileType::ObjectiveC => "objc".to_string(),
             FileType::GithubActions => "github-actions".to_string(),
             FileType::PkgInfo => "pkg-info".to_string(),
+            FileType::GoMod => "go.mod".to_string(),
             FileType::CargoToml => "cargo.toml".to_string(),
             FileType::PyProjectToml => "pyproject.toml".to_string(),
             _ => format!("{:?}", self).to_lowercase(),
@@ -620,6 +624,7 @@ impl FileTypeExt for FileType {
             FileType::PkgInfo => vec!["pkg-info", "metadata", "dist-info"],
             FileType::VsixManifest => vec!["xml", "vsix", "vscode"],
             FileType::ChromeManifest => vec!["json", "manifest.json", "chrome", "extension"],
+            FileType::GoMod => vec!["go.mod", "gomod", "go"],
             FileType::CargoToml => vec!["toml", "cargo.toml", "rust"],
             FileType::PyProjectToml => vec!["toml", "pyproject.toml", "python"],
             FileType::ComposerJson => vec!["json", "composer.json", "php"],

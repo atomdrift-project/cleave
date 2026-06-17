@@ -349,3 +349,51 @@ fn test_eval_basename_no_pattern() {
     let result = eval_basename(None, None, None, false, None, &ctx);
     assert!(!result.matched);
 }
+
+#[test]
+fn path_basename_splits_on_archive_separator() {
+    use super::path_basename;
+    // Plain paths behave like a normal basename.
+    assert_eq!(path_basename("usr/bin/buildah"), "buildah");
+    assert_eq!(path_basename("buildah"), "buildah");
+    // Archive members: the `archive!member` synthetic path resolves to the
+    // member's own final component, the same value as the extracted file.
+    assert_eq!(path_basename("foo.apk!usr/bin/buildah"), "buildah");
+    // Root member of a nested archive (no inner `/`) — this is the case
+    // `Path::file_name` gets wrong, returning the whole `foo.jar!Main.class`.
+    assert_eq!(path_basename("foo.jar!Main.class"), "Main.class");
+    assert_eq!(path_basename("a.zip!b.tar!7z.exe"), "7z.exe");
+}
+
+#[test]
+fn path_basename_matches_extracted_form() {
+    use super::path_basename;
+    // The invariant the whole rule rests on: in-archive and extracted forms
+    // yield the same basename.
+    assert_eq!(
+        path_basename("pkg-1.2.apk!usr/bin/tool"),
+        path_basename("usr/bin/tool"),
+    );
+}
+
+#[test]
+fn path_dirname_splits_on_archive_separator() {
+    use super::path_dirname;
+    assert_eq!(path_dirname("usr/bin/buildah"), "usr/bin");
+    assert_eq!(path_dirname("foo.apk!usr/bin/buildah"), "foo.apk!usr/bin");
+    assert_eq!(path_dirname("foo.jar!Main.class"), "foo.jar");
+    assert_eq!(path_dirname("solo"), "");
+}
+
+#[test]
+fn eval_basename_matches_nested_archive_root_member() {
+    // End-to-end through eval_path: a `basename: true` exact match must fire on
+    // a nested-archive root member whose synthetic path carries the `!` prefix.
+    let report = create_test_report("inner.jar!Main.class");
+    let data = vec![];
+    let ctx = create_test_context(&report, &data, None);
+
+    let pat = "Main.class".to_string();
+    let result = eval_basename(Some(&pat), None, None, false, None, &ctx);
+    assert!(result.matched);
+}

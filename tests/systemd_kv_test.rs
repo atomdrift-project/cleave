@@ -46,7 +46,7 @@ fn get_file_type(file: &Value) -> &str {
 }
 
 fn get_findings(file: &Value) -> &[Value] {
-    file.get("find")
+    file.get("traits")
         .and_then(Value::as_array)
         .map(Vec::as_slice)
         .expect("analysis output should contain findings")

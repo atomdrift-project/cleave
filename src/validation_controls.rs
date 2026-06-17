@@ -310,6 +310,13 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         fix: "Remove the unnecessary group.",
     },
     ValidatorSpec {
+        id: "brittle-path-pattern",
+        category: ValidatorCategory::Quality,
+        display_id: "path-brittle",
+        description: "type: path substr/regex won't match consistently once an archive is extracted.",
+        fix: "Match a basename or single component, not the archive prefix/layout: no '!', \u{2264}2 '/' separators, \u{2264}64 chars.",
+    },
+    ValidatorSpec {
         id: "defaults-hoist",
         category: ValidatorCategory::Reuse,
         display_id: "defaults",

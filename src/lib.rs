@@ -2072,15 +2072,24 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         }
     }?;
 
-    // Identity is normalized the same way for every file. Binary, source,
-    // and archive analyzers attach it from the filefacts context they
-    // already opened; for the remaining formats (documents, images, …)
-    // derive it once here so the headline is consistent across every
-    // analyzer path. Gated on `is_none` so no path pays a second open.
-    if report.identity.is_none()
+    // Identity and the filefacts view are normalized the same way for every
+    // file. Most analyzers attach them from the context they already opened;
+    // for the rest (documents, images, the no-dedicated-analyzer path) attach
+    // them here so no analyzer can silently drop them — losing, e.g., a
+    // manifest's declared dependencies. Gated on `is_none` so a path that
+    // already attached pays nothing, and the single open serves both.
+    if (report.identity.is_none() || report.filefacts.is_none())
         && let Ok(ctx) = crate::analysis_context::AnalysisContext::open(path, file_data)
     {
-        report.identity = ctx.identity();
+        if report.identity.is_none() {
+            report.identity = ctx.identity();
+        }
+        if report.filefacts.is_none() {
+            let view = crate::types::FilefactsView::from_ctx(&ctx);
+            if !view.is_empty() {
+                report.filefacts = Some(view);
+            }
+        }
     }
     let stage_structural_ms = structural_start.elapsed().as_millis() as u64;
 

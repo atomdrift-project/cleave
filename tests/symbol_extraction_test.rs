@@ -72,7 +72,7 @@ fn has_structure(json: &serde_json::Value) -> bool {
         return false;
     };
     ["tgt", "mbr", "imp"].iter().any(|key| {
-        file.pointer(&format!("/fact/{key}"))
+        file.pointer(&format!("/facts/{key}"))
             .and_then(|v| v.as_array())
             .is_some_and(|arr| !arr.is_empty())
     }) || get_file_type(json).is_some()
@@ -86,7 +86,7 @@ fn get_symbols(json: &serde_json::Value) -> Vec<String> {
     let mut out = Vec::new();
     for key in ["tgt", "mbr"] {
         if let Some(values) = file
-            .pointer(&format!("/fact/{key}"))
+            .pointer(&format!("/facts/{key}"))
             .and_then(|v| v.as_array())
         {
             out.extend(
@@ -96,7 +96,7 @@ fn get_symbols(json: &serde_json::Value) -> Vec<String> {
             );
         }
     }
-    if let Some(imports) = file.pointer("/fact/imp").and_then(|v| v.as_array()) {
+    if let Some(imports) = file.pointer("/facts/imp").and_then(|v| v.as_array()) {
         for entry in imports {
             if let Some(symbol) = entry
                 .as_array()

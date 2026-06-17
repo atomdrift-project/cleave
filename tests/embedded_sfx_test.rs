@@ -30,12 +30,8 @@ fn analyze_compact(path: &std::path::Path) -> (String, serde_json::Value) {
 
 fn compact_metric(file: &serde_json::Value, name: &str) -> Option<f64> {
     let (group, field) = name.split_once(".")?;
-    file.pointer(&format!("/fact/met/{group}/{field}"))
+    file.pointer(&format!("/facts/metrics/{group}/{field}"))
         .and_then(serde_json::Value::as_f64)
-}
-
-fn compact_strings(file: &serde_json::Value) -> Option<&Vec<serde_json::Value>> {
-    file.pointer("/fact/str")?.as_array()
 }
 
 // ── Fixture builders ───────────────────────────────────────────────────────────
@@ -202,7 +198,7 @@ fn embedded_binary_scanning() {
     let nsis_path = tmp.path().join("nsis_payload.exe");
     fs::write(&nsis_path, &nsis).unwrap();
     let (stdout, report) = analyze_compact(&nsis_path);
-    let findings = report["files"][0]["find"]
+    let findings = report["files"][0]["traits"]
         .as_array()
         .expect("top-level findings should be an array");
     let embedded_pe: Vec<_> = findings
@@ -252,7 +248,10 @@ fn embedded_binary_scanning() {
         None
     );
 
-    // 4. Child ELF extracts its own strings.
+    // 4. Child ELF is carved and analyzed: its own symbols (e.g. the `execve`
+    //    import) are extracted from the carved bytes. The v8 compact format
+    //    dropped the residual strings tree, so assert on the typed import
+    //    fact family instead.
     let files = report["files"]
         .as_array()
         .expect("report should contain file entries");
@@ -264,15 +263,17 @@ fn embedded_binary_scanning() {
                 .is_some_and(|path| path.contains("!!embedded:elf@"))
         })
         .expect("embedded ELF should be analyzed as a child file");
-    let strings =
-        compact_strings(child).expect("embedded ELF child should include extracted strings");
+    let imports = child
+        .pointer("/facts/imp")
+        .and_then(serde_json::Value::as_array)
+        .expect("embedded ELF child should include extracted imports");
     assert!(
-        strings.iter().any(|entry| {
+        imports.iter().any(|entry| {
             entry
                 .as_array()
                 .is_some_and(|fields| fields.iter().any(|value| value.as_str() == Some("execve")))
         }),
-        "expected child ELF strings to be extracted from the carved bytes.\nchild:\n{}",
+        "expected child ELF imports to be extracted from the carved bytes.\nchild:\n{}",
         serde_json::to_string_pretty(child).unwrap()
     );
 }

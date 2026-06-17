@@ -450,10 +450,13 @@ impl super::CapabilityMapper {
             let resolved_regex: Option<&regex::Regex> = resolved_regex_owned.as_deref();
 
             for entry_name in entry_names {
-                let p = std::path::Path::new(entry_name);
                 let target: &str = match scope {
-                    Scope::Base => p.file_name().and_then(|s| s.to_str()).unwrap_or(""),
-                    Scope::Dir => p.parent().and_then(|s| s.to_str()).unwrap_or(""),
+                    Scope::Base => {
+                        crate::composite_rules::evaluators::misc::path_basename(entry_name)
+                    }
+                    Scope::Dir => {
+                        crate::composite_rules::evaluators::misc::path_dirname(entry_name)
+                    }
                     Scope::Full => entry_name.as_str(),
                 };
                 if target.is_empty() {

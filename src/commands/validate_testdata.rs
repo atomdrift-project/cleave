@@ -29,7 +29,7 @@ pub fn check_testdata_overlaps(
     let mut overlaps = Vec::new();
 
     // Find all files in testdata/ (recursively)
-    let testdata_files = find_testdata_files(testdata_dir)?;
+    let testdata_files = find_testdata_files(testdata_dir);
     if testdata_files.is_empty() {
         eprintln!("No testdata files found in {:?}", testdata_dir);
         return Ok(overlaps);
@@ -164,26 +164,27 @@ fn analyze_file_for_overlaps(
 }
 
 /// Find all files in testdata/ recursively
-fn find_testdata_files(testdata_dir: &Path) -> Result<Vec<PathBuf>> {
+fn find_testdata_files(testdata_dir: &Path) -> Vec<PathBuf> {
     let mut files = Vec::new();
 
     if !testdata_dir.exists() {
         // Testdata dir doesn't exist — that's OK, just return empty
-        return Ok(files);
+        return files;
     }
 
     walkdir::WalkDir::new(testdata_dir)
         .into_iter()
-        .filter_map(|entry| entry.ok())
+        .filter_map(Result::ok)
         .filter(|entry| entry.path().is_file())
         .for_each(|entry| {
             files.push(entry.path().to_path_buf());
         });
 
-    Ok(files)
+    files
 }
 
 /// Format overlap findings for display
+#[must_use]
 pub fn format_overlaps(overlaps: &[OverlapFinding]) -> String {
     if overlaps.is_empty() {
         return "✓ No overlapping trait ranges found in testdata".to_string();

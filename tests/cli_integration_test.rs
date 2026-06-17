@@ -83,12 +83,12 @@ fn test_analyze_json_output() {
 
     fs::write(&script_path, "#!/bin/bash\necho 'hello'\n").unwrap();
 
-    // Compact v7 format: single JSON object with "v" and "fs" (files array)
+    // Compact v8 format: single JSON object with "v" and "fs" (files array)
     isolated_cleave_cmd()
         .args(["--json", "analyze", script_path.to_str().unwrap()])
         .assert()
         .success()
-        .stdout(predicate::str::contains(r#""v":"7""#))
+        .stdout(predicate::str::contains(r#""v":"8""#))
         .stdout(predicate::str::contains(r#""files":[{"#));
 }
 
@@ -139,7 +139,7 @@ fn test_analyze_output_to_file() {
 
     // Verify output file was created and contains v6 compact format
     let content = fs::read_to_string(&output_path).unwrap();
-    assert!(content.contains(r#""v":"7""#));
+    assert!(content.contains(r#""v":"8""#));
     assert!(content.contains(r#""files":["#));
 }
 
@@ -307,7 +307,7 @@ fn test_analyze_directory_json_output() {
         .args(["--json", "analyze", temp_dir.path().to_str().unwrap()])
         .assert()
         .success()
-        .stdout(predicate::str::contains(r#""v":"7""#));
+        .stdout(predicate::str::contains(r#""v":"8""#));
 }
 
 /// Test that --yara flag enables YARA (deprecated feature, disabled by default)
@@ -575,7 +575,7 @@ fn test_system_binary_false_positive_sanity() {
     let file_entry = &report["files"][0];
     assert!(
         file_entry.is_object(),
-        "no file entry in v7 output for {binary}"
+        "no file entry in v8 output for {binary}"
     );
 
     let findings = file_entry

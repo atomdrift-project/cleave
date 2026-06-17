@@ -405,8 +405,65 @@ pub(crate) fn detect_file_type_from_data(file_path: &Path, file_data: &[u8]) -> 
         .map(|d| d.file_type)
         .filter(|ft| *ft != FileType::Pe || looks_like_pe_image(file_data))
         .filter(|ft| *ft != FileType::Unknown)
+        .or_else(|| sniff_script_type_from_content(file_data))
         .or_else(|| known_manifest_type_from_basename(file_path))
         .unwrap_or(FileType::Unknown)
+}
+
+fn sniff_script_type_from_content(data: &[u8]) -> Option<FileType> {
+    let text = if let Some(decoded) = decode_probable_utf16le(data) {
+        decoded
+    } else {
+        String::from_utf8_lossy(data).into_owned()
+    };
+    let lower = text.to_ascii_lowercase();
+
+    let vbscript_markers = [
+        "on error resume next",
+        "createobject(",
+        "createobject (",
+        "wscript.shell",
+        "wscript.scriptfullname",
+        "function ",
+        "end function",
+        ".run ",
+    ];
+    let hits = vbscript_markers
+        .iter()
+        .filter(|marker| lower.contains(**marker))
+        .count();
+    if hits >= 3 {
+        return Some(FileType::Vbs);
+    }
+
+    None
+}
+
+fn decode_probable_utf16le(data: &[u8]) -> Option<String> {
+    if data.len() < 16 {
+        return None;
+    }
+    let pairs = data.len() / 2;
+    let sample_pairs = pairs.min(4096);
+    let mut nul_high = 0usize;
+    let mut printable_low = 0usize;
+    for chunk in data.chunks_exact(2).take(sample_pairs) {
+        if chunk[1] == 0 {
+            nul_high += 1;
+        }
+        if chunk[0].is_ascii_graphic() || chunk[0].is_ascii_whitespace() {
+            printable_low += 1;
+        }
+    }
+    if nul_high * 100 / sample_pairs < 60 || printable_low * 100 / sample_pairs < 50 {
+        return None;
+    }
+
+    let units = data
+        .chunks_exact(2)
+        .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+        .collect::<Vec<_>>();
+    String::from_utf16(&units).ok()
 }
 
 fn looks_like_pe_image(data: &[u8]) -> bool {
@@ -785,6 +842,19 @@ mod tests {
         assert_eq!(
             detect_file_type_from_data(Path::new("script"), data),
             FileType::Python
+        );
+    }
+
+    #[test]
+    fn bridge_heuristic_utf16le_vbscript_without_extension() {
+        let script = "On Error Resume Next\r\nSet sh = CreateObject(\"WScript.Shell\")\r\nself = WScript.ScriptFullName\r\nFunction repl(x)\r\nrepl = Replace(x, \"a\", \"\")\r\nEnd Function\r\nsh.Run \"powershell -command echo ok\", 0, true\r\n";
+        let data = script
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            detect_file_type_from_data(Path::new("payload"), &data),
+            FileType::Vbs
         );
     }
 

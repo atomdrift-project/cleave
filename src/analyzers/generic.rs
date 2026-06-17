@@ -187,6 +187,13 @@ impl GenericAnalyzer {
             if tree.is_some() {
                 // Tree-sitter available: use AST-based extraction (more accurate)
                 self.extract_strings(content, tree, &mut report);
+                if let Some(stng_results) = stng_strings {
+                    for es in stng_results {
+                        if is_decoded_stng_method(es.method) {
+                            push_stng_string(&mut report, es);
+                        }
+                    }
+                }
                 tracing::debug!(
                     "GenericAnalyzer: Tree-sitter string extraction completed in {:?}",
                     t_strings.elapsed()
@@ -194,44 +201,7 @@ impl GenericAnalyzer {
             } else if let Some(stng_results) = stng_strings {
                 // No tree-sitter: use stng results (passed from caller)
                 for es in stng_results {
-                    // Convert stng fragments to our format (just record offsets, we don't need to reconstruct values)
-                    let fragments = es.fragments.as_ref().map(|frags| {
-                        frags
-                            .iter()
-                            .map(|f| format!("{:#x}+{}", f.offset, f.length))
-                            .collect()
-                    });
-
-                    // Preserve stng's decoded-string encoding so `type: encoded,
-                    // encoding: xor` rules can match XOR/base64/hex/etc. content.
-                    let encoding_chain = match es.method {
-                        stng::StringMethod::XorDecode | stng::StringMethod::XorStackPair => {
-                            vec!["xor".to_string()]
-                        }
-                        stng::StringMethod::Base64Decode => vec!["base64".to_string()],
-                        stng::StringMethod::Base64ObfuscatedDecode => {
-                            vec!["base64-obf".to_string()]
-                        }
-                        stng::StringMethod::HexDecode => vec!["hex".to_string()],
-                        stng::StringMethod::UrlDecode => vec!["url".to_string()],
-                        stng::StringMethod::UnicodeEscapeDecode => {
-                            vec!["unicode-escape".to_string()]
-                        }
-                        stng::StringMethod::Base32Decode => vec!["base32".to_string()],
-                        stng::StringMethod::Base85Decode => vec!["base85".to_string()],
-                        stng::StringMethod::ScriptDecode => vec!["script".to_string()],
-                        _ => Vec::new(),
-                    };
-
-                    report.strings.push(crate::types::binary::StringInfo {
-                        value: es.value.clone().into(),
-                        offset: Some(es.data_offset),
-                        string_type: es.kind,
-                        encoding: "utf-8".to_string(),
-                        section: es.section.clone(),
-                        encoding_chain,
-                        fragments,
-                    });
+                    push_stng_string(&mut report, es);
                 }
                 tracing::debug!(
                     "GenericAnalyzer: Used {} stng strings in {:?}",
@@ -282,6 +252,14 @@ impl GenericAnalyzer {
             "GenericAnalyzer: Metrics computed in {:?}",
             t_metrics.elapsed()
         );
+
+        if let Some(ctx) = source_ctx {
+            let view = crate::types::FilefactsView::from_ctx(ctx);
+            if !view.is_empty() {
+                report.filefacts = Some(view);
+            }
+            report.identity = ctx.identity();
+        }
 
         // Evaluate all rules (atomic + composite) and merge into report.
         //
@@ -459,6 +437,58 @@ impl GenericAnalyzer {
             }
         }
     }
+}
+
+fn is_decoded_stng_method(method: stng::StringMethod) -> bool {
+    matches!(
+        method,
+        stng::StringMethod::XorDecode
+            | stng::StringMethod::XorStackPair
+            | stng::StringMethod::Base64Decode
+            | stng::StringMethod::Base64ObfuscatedDecode
+            | stng::StringMethod::HexDecode
+            | stng::StringMethod::UrlDecode
+            | stng::StringMethod::UnicodeEscapeDecode
+            | stng::StringMethod::Base32Decode
+            | stng::StringMethod::Base85Decode
+            | stng::StringMethod::ScriptDecode
+    )
+}
+
+fn push_stng_string(report: &mut AnalysisReport, es: &stng::ExtractedString) {
+    let fragments = es.fragments.as_ref().map(|frags| {
+        frags
+            .iter()
+            .map(|f| format!("{:#x}+{}", f.offset, f.length))
+            .collect()
+    });
+
+    // Preserve stng's decoded-string encoding so `type: encoded,
+    // encoding: xor` rules can match XOR/base64/hex/etc. content.
+    let encoding_chain = match es.method {
+        stng::StringMethod::XorDecode | stng::StringMethod::XorStackPair => {
+            vec!["xor".to_string()]
+        }
+        stng::StringMethod::Base64Decode => vec!["base64".to_string()],
+        stng::StringMethod::Base64ObfuscatedDecode => vec!["base64-obf".to_string()],
+        stng::StringMethod::HexDecode => vec!["hex".to_string()],
+        stng::StringMethod::UrlDecode => vec!["url".to_string()],
+        stng::StringMethod::UnicodeEscapeDecode => vec!["unicode-escape".to_string()],
+        stng::StringMethod::Base32Decode => vec!["base32".to_string()],
+        stng::StringMethod::Base85Decode => vec!["base85".to_string()],
+        stng::StringMethod::ScriptDecode => vec!["script".to_string()],
+        _ => Vec::new(),
+    };
+
+    report.strings.push(crate::types::binary::StringInfo {
+        value: es.value.clone().into(),
+        offset: Some(es.data_offset),
+        string_type: es.kind,
+        encoding: "utf-8".to_string(),
+        section: es.section.clone(),
+        encoding_chain,
+        fragments,
+    });
 }
 
 impl Analyzer for GenericAnalyzer {

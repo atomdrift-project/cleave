@@ -468,7 +468,7 @@ fn convert_file(file: &super::file_analysis::FileAnalysis, id: u32) -> CompactFi
                 existing.criticality = new_crit;
             }
             // A copy native to this file (from empty) outranks an inherited one.
-            if finding.src.is_none() && file.composite_sources.get(finding.id.as_str()).is_none() {
+            if finding.src.is_none() && !file.composite_sources.contains_key(finding.id.as_str()) {
                 existing.from.clear();
             }
             // Merge ev spans — deduplicate by offset, cap at MAX_EV_LOCS.

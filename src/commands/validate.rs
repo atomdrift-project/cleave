@@ -75,7 +75,11 @@ fn print_contributing_findings(file: &FileAnalysis, indent: &str) {
 /// single rayon parallel pool; judgement happens serially afterwards by
 /// scanning the collected reports. On success, prints a single summary line.
 /// On failure, prints only the failing files with their contributing findings.
-pub fn run(format: &OutputFormat, exclude: Option<&str>) -> Result<String> {
+///
+/// The testdata trait-overlap diagnostic is informational (overlaps are not
+/// failures), so it is emitted only under `verbose` to keep a passing run to a
+/// single line.
+pub fn run(format: &OutputFormat, exclude: Option<&str>, verbose: bool) -> Result<String> {
     validation_controls::set_disabled_validators_override(exclude)?;
     let (targets, expectations) = collect_targets()?;
 
@@ -115,8 +119,13 @@ pub fn run(format: &OutputFormat, exclude: Option<&str>) -> Result<String> {
         })
         .collect();
 
-    // Check for overlapping traits in the analyzed findings
-    let overlap_findings = collect_overlap_findings(&results);
+    // Check for overlapping traits in the analyzed findings. This is a
+    // diagnostic, not a pass/fail signal, so only compute it when verbose.
+    let overlap_findings = if verbose {
+        collect_overlap_findings(&results)
+    } else {
+        Vec::new()
+    };
 
     let stats = evaluate(results, &expectations.does_nothing)?;
 

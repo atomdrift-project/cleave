@@ -338,7 +338,7 @@ pub(crate) fn dispatch_command(
             return Ok(None);
         }
         Some(cli::Command::Validate { exclude }) => {
-            validate_command(ctx.format, exclude.as_deref())?
+            validate_command(ctx.format, exclude.as_deref(), args.verbose)?
         }
         Some(cli::Command::Diff {
             old,

@@ -788,6 +788,29 @@ impl StringMatchIndex {
         let mut regex_trait_indices: FxHashSet<usize> = FxHashSet::default();
         let mut exact_trait_indices: FxHashSet<usize> = FxHashSet::default();
 
+        // Regex-literal extraction parses each pattern into regex_syntax HIR — the
+        // dominant serial cost of this build (profiled: ~330ms of a ~370ms build).
+        // It is a pure function of the pattern string, so compute every regex
+        // trait's literal across all cores up front; the order-dependent dedup
+        // loop below just looks the result up. Behavior-identical to calling
+        // extract_regex_literal inline, only parallelized off the serial path.
+        let regex_literal_by_trait: FxHashMap<usize, Option<String>> = traits
+            .par_iter()
+            .enumerate()
+            .filter_map(|(trait_idx, trait_def)| {
+                if !platforms_intersect(&trait_def.platforms, platforms) {
+                    return None;
+                }
+                match &trait_def.r#if {
+                    Condition::Text(TextQuery {
+                        regex: Some(regex_str),
+                        ..
+                    }) => Some((trait_idx, Self::extract_regex_literal(regex_str))),
+                    _ => None,
+                }
+            })
+            .collect();
+
         for (trait_idx, trait_def) in traits.iter().enumerate() {
             if !platforms_intersect(&trait_def.platforms, platforms) {
                 continue;
@@ -850,11 +873,11 @@ impl StringMatchIndex {
                 }
                 // Regex string patterns - extract literal prefix for pre-filtering
                 Condition::Text(TextQuery {
-                    regex: Some(regex_str),
+                    regex: Some(_),
                     ..
                 }) => {
                     regex_trait_indices.insert(trait_idx);
-                    let literal = Self::extract_regex_literal(regex_str);
+                    let literal = regex_literal_by_trait.get(&trait_idx).cloned().flatten();
                     if let Some(literal) = literal {
                         if let Some(&pattern_idx) = regex_literal_map.get(&literal) {
                             regex_literal_to_traits[pattern_idx].push(trait_idx);

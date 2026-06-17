@@ -260,13 +260,20 @@ pub(crate) fn apply_trait_defaults(
 
     // Validation: regex patterns must not exceed 80 bytes.
     let warn_start = warnings.len();
-    check_regex_length(&raw.id, &condition, Some(path), warnings);
+    // A count/density-bearing trait measures token-family frequency (one signal),
+    // so it is exempt from the alternation-decomposition warnings on its main
+    // condition. Nested unless:/downgrade: conditions are boolean and still checked.
+    let exempt_decomposition = raw.count_min.is_some()
+        || raw.count_max.is_some()
+        || raw.per_kb_min.is_some()
+        || raw.per_kb_max.is_some();
+    check_regex_length(&raw.id, &condition, Some(path), exempt_decomposition, warnings);
 
     // Also check regex patterns in unless: conditions
     if let Some(ref unless_conditions) = raw.unless {
         for (idx, cond) in unless_conditions.iter().enumerate() {
             let ctx = format!("{} unless[{}]", raw.id, idx);
-            check_regex_length(&ctx, cond, Some(path), warnings);
+            check_regex_length(&ctx, cond, Some(path), false, warnings);
         }
     }
 
@@ -275,19 +282,19 @@ pub(crate) fn apply_trait_defaults(
         if let Some(ref any) = downgrade.any {
             for (idx, cond) in any.iter().enumerate() {
                 let ctx = format!("{} downgrade.any[{}]", raw.id, idx);
-                check_regex_length(&ctx, cond, Some(path), warnings);
+                check_regex_length(&ctx, cond, Some(path), false, warnings);
             }
         }
         if let Some(ref all) = downgrade.all {
             for (idx, cond) in all.iter().enumerate() {
                 let ctx = format!("{} downgrade.all[{}]", raw.id, idx);
-                check_regex_length(&ctx, cond, Some(path), warnings);
+                check_regex_length(&ctx, cond, Some(path), false, warnings);
             }
         }
         if let Some(ref none) = downgrade.none {
             for (idx, cond) in none.iter().enumerate() {
                 let ctx = format!("{} downgrade.none[{}]", raw.id, idx);
-                check_regex_length(&ctx, cond, Some(path), warnings);
+                check_regex_length(&ctx, cond, Some(path), false, warnings);
             }
         }
     }
@@ -1014,7 +1021,7 @@ pub(crate) fn apply_composite_defaults(
         if let Some(conds) = conditions {
             for (idx, cond) in conds.iter().enumerate() {
                 let ctx = format!("{} {}[{}]", raw.id, clause_name, idx);
-                check_regex_length(&ctx, cond, Some(path), warnings);
+                check_regex_length(&ctx, cond, Some(path), false, warnings);
             }
         }
     };
@@ -1242,6 +1249,14 @@ fn check_regex_length(
     trait_id: &str,
     condition: &crate::composite_rules::Condition,
     source_path: Option<&std::path::Path>,
+    // When true, suppress the two ML-decomposition warnings (alternation-chain
+    // and too-many-`|`). A `count_min`/`count_max`/`per_kb` trait measures the
+    // FREQUENCY of a token family — one density signal, not N separable
+    // capabilities — so decomposing its alternation into `any:` atoms is wrong:
+    // a finding-reference composite cannot reconstruct the total match count
+    // (referenced atoms short-circuit at the first match). The 80-byte length
+    // check still applies. Mirrors the existing `path`-matcher exemption.
+    exempt_decomposition: bool,
     warnings: &mut Vec<String>,
 ) {
     use crate::composite_rules::{Condition, KvQuery};
@@ -1277,6 +1292,7 @@ fn check_regex_length(
         // "decompose into multiple traits" doesn't fit a path-structure matcher,
         // so they are exempt from the alternation-chain check.
         if or_symbol_count > max_or_symbols
+            && !exempt_decomposition
             && !matches!(condition, Condition::Path(PathQuery { .. }))
             && !crate::validation_controls::is_validator_disabled("simple-alternation-chain")
         {
@@ -1287,6 +1303,7 @@ fn check_regex_length(
         }
 
         if is_simple_alphanumeric_or_chain(pattern)
+            && !exempt_decomposition
             && !crate::validation_controls::is_validator_disabled("simple-alternation-chain")
         {
             // `\b`-anchored alternatives match whole words, so each maps cleanly
@@ -2271,7 +2288,7 @@ mod tests {
             dirname: false,
         });
         let mut warnings = Vec::new();
-        super::check_regex_length("test-trait", &condition, None, &mut warnings);
+        super::check_regex_length("test-trait", &condition, None, false, &mut warnings);
         assert!(warnings.is_empty());
     }
 
@@ -2288,7 +2305,7 @@ mod tests {
             dirname: false,
         });
         let mut warnings = Vec::new();
-        super::check_regex_length("test-trait", &condition, None, &mut warnings);
+        super::check_regex_length("test-trait", &condition, None, false, &mut warnings);
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("regex pattern exceeds 90 bytes"));
         assert!(warnings[0].contains("91 bytes"));
@@ -2314,7 +2331,7 @@ mod tests {
             dirname: false,
         });
         let mut warnings = Vec::new();
-        super::check_regex_length("test-trait", &condition, None, &mut warnings);
+        super::check_regex_length("test-trait", &condition, None, false, &mut warnings);
         assert!(warnings.is_empty());
     }
 
@@ -2324,7 +2341,7 @@ mod tests {
             id: "some-trait-id".to_string(),
         };
         let mut warnings = Vec::new();
-        super::check_regex_length("test-trait", &condition, None, &mut warnings);
+        super::check_regex_length("test-trait", &condition, None, false, &mut warnings);
         assert!(warnings.is_empty());
     }
 
@@ -2349,7 +2366,7 @@ mod tests {
             section_offset_range: None,
         });
         let mut warnings = Vec::new();
-        super::check_regex_length("test-trait", &condition, None, &mut warnings);
+        super::check_regex_length("test-trait", &condition, None, false, &mut warnings);
         assert!(warnings.iter().any(|w| w.contains("too many '|' symbols")));
     }
 
@@ -2371,7 +2388,7 @@ mod tests {
             section_offset_range: None,
         });
         let mut warnings = Vec::new();
-        super::check_regex_length("test-trait", &condition, None, &mut warnings);
+        super::check_regex_length("test-trait", &condition, None, false, &mut warnings);
         assert!(!warnings.iter().any(|w| w.contains("too many '|' symbols")));
     }
 
@@ -2399,6 +2416,7 @@ mod tests {
             Some(std::path::Path::new(
                 "micro-behaviors/data/text/llm/action/traits.yaml",
             )),
+            false,
             &mut warnings,
         );
         assert!(!warnings.iter().any(|w| w.contains("too many '|' symbols")));
@@ -2428,6 +2446,7 @@ mod tests {
             Some(std::path::Path::new(
                 "micro-behaviors/data/text/llm/action/traits.yaml",
             )),
+            false,
             &mut warnings,
         );
         assert!(warnings.iter().any(|w| w.contains("too many '|' symbols")));
@@ -2445,11 +2464,32 @@ mod tests {
             dirname: false,
         });
         let mut warnings = Vec::new();
-        super::check_regex_length("test-trait", &condition, None, &mut warnings);
+        super::check_regex_length("test-trait", &condition, None, false, &mut warnings);
         assert!(
             warnings
                 .iter()
                 .any(|w| w.contains("simple alphanumeric alternation chain"))
+        );
+    }
+
+    #[test]
+    fn test_count_density_trait_exempt_from_alternation_warning() {
+        // A `count_min`/`per_kb` trait measures token-family FREQUENCY (one
+        // density signal), so its alternation must not be flagged for `any:`
+        // decomposition — a finding-reference composite can't reconstruct the
+        // total match count. `exempt_decomposition = true` suppresses both
+        // decomposition warnings while keeping the length check.
+        let condition = crate::composite_rules::Condition::Text(TextQuery {
+            regex: Some(r"\b(MODE_GCM|MODE_CTR)\b".to_string()),
+            ..Default::default()
+        });
+        let mut warnings = Vec::new();
+        super::check_regex_length("test-trait", &condition, None, true, &mut warnings);
+        assert!(
+            !warnings
+                .iter()
+                .any(|w| w.contains("simple alphanumeric alternation chain")),
+            "count/density traits must be exempt from alternation decomposition: {warnings:?}"
         );
     }
 
@@ -2462,7 +2502,7 @@ mod tests {
             ..Default::default()
         });
         let mut warnings = Vec::new();
-        super::check_regex_length("test-trait", &condition, None, &mut warnings);
+        super::check_regex_length("test-trait", &condition, None, false, &mut warnings);
         let warning = warnings
             .iter()
             .find(|w| w.contains("simple alphanumeric alternation chain"))
@@ -2481,7 +2521,7 @@ mod tests {
             ..Default::default()
         });
         let mut warnings = Vec::new();
-        super::check_regex_length("test-trait", &condition, None, &mut warnings);
+        super::check_regex_length("test-trait", &condition, None, false, &mut warnings);
         assert!(
             warnings
                 .iter()
@@ -2509,7 +2549,7 @@ mod tests {
             dirname: false,
         });
         let mut warnings = Vec::new();
-        super::check_regex_length("test-trait", &condition, None, &mut warnings);
+        super::check_regex_length("test-trait", &condition, None, false, &mut warnings);
         assert!(
             !warnings
                 .iter()

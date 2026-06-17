@@ -900,26 +900,29 @@ pub fn prefetch_yara_engine(enable_third_party: bool) {
     }
 }
 
-/// Pre-warm the capability mapper on a background thread.
+/// Pre-warm the capability mapper, blocking until it is built and stored.
 ///
-/// Companion to [`prefetch_yara_engine`]. The mapper first-load parses every
-/// trait definition and can take seconds; doing it in the background avoids
-/// blocking the first real analysis.
+/// Companion to [`prefetch_yara_engine`], and blocking for the same reason: the
+/// mapper's lock-free first-build (see [`shared_resources::capability_mapper`])
+/// lets multiple callers build concurrently and discard all but one. If this
+/// returned before the build finished, the immediately-following directory scan
+/// would race it from a rayon worker — both would parse the 32 MB cache and
+/// recompile ~60k regexes, paying the multi-second build twice. Building here on
+/// the calling (non-rayon) thread fills the global slot once, so subsequent
+/// `capability_mapper()` calls hit the fast path.
 pub fn prefetch_capability_mapper() {
-    std::thread::spawn(|| {
-        if let Err(e) = shared_resources::capability_mapper() {
-            tracing::warn!(error = %e, "capability mapper prefetch failed");
-        }
-    });
+    if let Err(e) = shared_resources::capability_mapper() {
+        tracing::warn!(error = %e, "capability mapper prefetch failed");
+    }
 }
 
 /// Pre-warm both YARA and the capability mapper.
 ///
 /// Call this once at process startup (e.g. at the top of a worker or server
 /// main) so the first incoming request does not pay the multi-second cold-start
-/// cost. YARA initialization completes before this returns so subsequent rayon
-/// scans cannot win the first-init race. Safe to call multiple times; subsequent
-/// calls are cheap.
+/// cost. Both YARA and the capability mapper complete before this returns, so a
+/// subsequent rayon scan cannot win the first-init race and rebuild them. Safe
+/// to call multiple times; subsequent calls are cheap.
 pub fn prefetch_shared_resources(enable_third_party: bool) {
     prefetch_yara_engine(enable_third_party);
     prefetch_capability_mapper();

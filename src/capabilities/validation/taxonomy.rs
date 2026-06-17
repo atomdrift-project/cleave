@@ -1584,6 +1584,10 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     "text:micro-behaviors/communications/ip/",
     // URLs and URL fragments appear in any file type
     "text:micro-behaviors/communications/url/",
+    // IDN homograph / non-ASCII URL checks are deliberately host-format-agnostic:
+    // a spoofed source URL can hide in a PKGBUILD, package manifest, source file,
+    // config, or document, so narrowing `for:` would silently drop coverage.
+    "text:objectives/supply-chain/impersonation/homograph/",
     // C2 infrastructure indicators (IPs, domains, ports, tunnels) appear in any file
     "text:objectives/command-and-control/infrastructure/",
     // HTTP header names and values appear in binaries, scripts, and documents

@@ -127,6 +127,7 @@ pub(crate) fn build_sample_extraction(
 pub(crate) fn init_logging(
     verbose: bool,
     is_server: bool,
+    is_validate: bool,
     format: cli::OutputFormat,
     effective_log_file: Option<&str>,
 ) {
@@ -147,6 +148,13 @@ pub(crate) fn init_logging(
         } else if is_server {
             (
                 EnvFilter::new(scoped_filter("info")),
+                EnvFilter::new(scoped_filter(file_log_level())),
+            )
+        } else if is_validate {
+            // `validate` stays quiet on stderr (single summary line) but keeps
+            // the persistent log at its usual level.
+            (
+                EnvFilter::new("error"),
                 EnvFilter::new(scoped_filter(file_log_level())),
             )
         } else {
@@ -227,6 +235,11 @@ pub(crate) fn init_logging(
             EnvFilter::new(scoped_filter("trace"))
         } else if is_server {
             EnvFilter::new(scoped_filter("info"))
+        } else if is_validate {
+            // `validate` prints a single summary line on success; drop the
+            // global `warn` floor so benign third-party warnings (e.g. goblin's
+            // fat-Mach-O offset warnings on testdata fixtures) stay silent.
+            EnvFilter::new("error")
         } else {
             // Global `warn` floor — see the stderr-filter note above; surfaces
             // warnings/errors from every crate when there's no log file.

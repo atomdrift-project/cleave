@@ -130,9 +130,15 @@ fn main() -> Result<()> {
     };
     let effective_log_file = args.log_file.clone().or(default_log_file);
 
+    // `cleave validate` is meant to print a single summary line on success, so
+    // suppress the global `warn` tracing floor (e.g. goblin's benign fat-Mach-O
+    // offset warnings on testdata fixtures) unless `--verbose` is requested.
+    let is_validate_command = matches!(args.command, Some(cli::Command::Validate { .. }));
+
     init_logging(
         args.verbose,
         is_server,
+        is_validate_command,
         format,
         effective_log_file.as_deref(),
     );
@@ -151,7 +157,6 @@ fn main() -> Result<()> {
     // so skip the ~4 s (release) / ~18 s (debug) compile of 14 k+ inline YARA
     // rules that the prefetch triggers. Trait-structure validation doesn't
     // require YARA to have compiled either — mapper loading is independent.
-    let is_validate_command = matches!(args.command, Some(cli::Command::Validate { .. }));
     if !disabled.yara && !is_validate_command {
         cleave::prefetch_yara_engine(!disabled.third_party);
     }

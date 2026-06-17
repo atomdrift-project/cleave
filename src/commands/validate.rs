@@ -544,9 +544,7 @@ fn evaluate(
                         .filter(|f| {
                             // Intent and malware-family findings are never
                             // acceptable on a do-nothing fixture, at any crit.
-                            if f.id.starts_with("objectives/")
-                                || f.id.starts_with("well-known/")
-                            {
+                            if f.id.starts_with("objectives/") || f.id.starts_with("well-known/") {
                                 return true;
                             }
                             // Inherent code-signing trust state is a legitimate

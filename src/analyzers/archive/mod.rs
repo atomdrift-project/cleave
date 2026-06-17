@@ -1116,13 +1116,11 @@ impl ArchiveAnalyzer {
             // Gzip-tar packages: npm `.tgz`, Rust `.crate` — a single gzip
             // stream wrapping a single tar; recursion analyzes their members
             // (package.json, Cargo.toml, installed files).
-            FileType::TarGz | FileType::Npm | FileType::Crate => {
-                tar::extract_tar_entries_safe(
-                    flate2::read::GzDecoder::new(Cursor::new(data)),
-                    dest_dir,
-                    guard,
-                )
-            }
+            FileType::TarGz | FileType::Npm | FileType::Crate => tar::extract_tar_entries_safe(
+                flate2::read::GzDecoder::new(Cursor::new(data)),
+                dest_dir,
+                guard,
+            ),
             FileType::TarBz2 => tar::extract_tar_entries_safe(
                 bzip2::read::BzDecoder::new(Cursor::new(data)),
                 dest_dir,
@@ -3349,7 +3347,9 @@ traits:
             header.set_size(contents.len() as u64);
             header.set_mode(0o644);
             header.set_cksum();
-            tar_builder.append(&header, *contents).expect("append member");
+            tar_builder
+                .append(&header, *contents)
+                .expect("append member");
         }
         tar_builder
             .into_inner()

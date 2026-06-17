@@ -704,20 +704,20 @@ const ALLOWED_TOOLS: &[&str] = &[
 ///
 /// Update this list AND TAXONOMY.md when adding new metadata categories.
 const ALLOWED_METADATA: &[&str] = &[
-    "arch",      // CPU architecture detection (x86, ARM, MIPS, IoT)
-    "binary",    // Binary internals (sections, debug, framework, installer, metrics)
-    "build",     // Build system detection (cmake, cargo, docker, CI/CD)
-    "document",  // Document format internals (office, PDF, RTF, OLE, HTML)
-    "file",      // File-level observables (magic bytes, extension, encoded content)
-    "hardening", // Security hardening features (sandbox, seccomp, pledge)
-    "image",     // Image-specific neutral measurements (entropy, edge density)
-    "import",    // Dependencies/imports (auto-generated)
-    "lang",      // Language, compiler, encoding detection
-    "library",   // Library/framework detection (react, vue, jquery, etc.)
+    "arch",       // CPU architecture detection (x86, ARM, MIPS, IoT)
+    "binary",     // Binary internals (sections, debug, framework, installer, metrics)
+    "build",      // Build system detection (cmake, cargo, docker, CI/CD)
+    "document",   // Document format internals (office, PDF, RTF, OLE, HTML)
+    "file",       // File-level observables (magic bytes, extension, encoded content)
+    "hardening",  // Security hardening features (sandbox, seccomp, pledge)
+    "image",      // Image-specific neutral measurements (entropy, edge density)
+    "import",     // Dependencies/imports (auto-generated)
+    "lang",       // Language, compiler, encoding detection
+    "library",    // Library/framework detection (react, vue, jquery, etc.)
     "package",    // Package ecosystem metadata & project quality
     "permission", // Declared permissions and extension authority
     "signed",     // Code signatures, certificates, entitlements
-    "vendor",    // Vendor identification (Apple, Microsoft, FSF, etc.)
+    "vendor",     // Vendor identification (Apple, Microsoft, FSF, etc.)
 ];
 
 /// Allowed subdirectories in metadata/binary/
@@ -765,16 +765,16 @@ const ALLOWED_METADATA_DOCUMENT: &[&str] = &[
 /// File-level observables — properties visible without deep parsing.
 /// These are primarily component traits used as building blocks in composite rules.
 const ALLOWED_METADATA_FILE: &[&str] = &[
-    "catalog",   // File/catalog identity and generated registries
-    "encoded",   // Encoded content presence (base64)
-    "extension", // File extension classification
-    "format",    // Text/data format identification (JSON, makefile)
+    "catalog",           // File/catalog identity and generated registries
+    "encoded",           // Encoded content presence (base64)
+    "extension",         // File extension classification
+    "format",            // Text/data format identification (JSON, makefile)
     "invisible-unicode", // Invisible Unicode text properties
-    "magic",     // Magic byte signatures
-    "metrics",   // Text/file-level measurements
-    "policy",    // Policy/config text identities
-    "profile",   // Text profile and wrapper shapes
-    "string",    // Neutral string identities
+    "magic",             // Magic byte signatures
+    "metrics",           // Text/file-level measurements
+    "policy",            // Policy/config text identities
+    "profile",           // Text profile and wrapper shapes
+    "string",            // Neutral string identities
 ];
 
 /// Allowed subdirectories in metadata/image/
@@ -810,24 +810,24 @@ const ALLOWED_METADATA_LANG: &[&str] = &[
 /// Package ecosystem metadata and project quality indicators.
 /// Behavioral supply-chain detection belongs in objectives/supply-chain/, not here.
 const ALLOWED_METADATA_PACKAGE: &[&str] = &[
-    "config",           // Configuration file detection
-    "contributors",     // Contributor metadata
-    "dependencies",     // Dependency analysis
-    "documentation",    // Documentation presence
-    "error-handling",   // Error handling patterns
-    "files",            // File counts and types
-    "help",             // Help/usage interface
-    "keywords",         // Package keywords
-    "license",          // License detection
-    "logging",          // Logging patterns
-    "maintainers",      // Maintainer counts
-    "manifest",        // Package manifest fields
-    "metrics",          // Code metrics
-    "quality",          // Quality signals
-    "scripts",          // Package scripts
-    "testing",          // Testing detection
-    "tooling",          // Package tooling
-    "versioning",       // Version detection
+    "config",         // Configuration file detection
+    "contributors",   // Contributor metadata
+    "dependencies",   // Dependency analysis
+    "documentation",  // Documentation presence
+    "error-handling", // Error handling patterns
+    "files",          // File counts and types
+    "help",           // Help/usage interface
+    "keywords",       // Package keywords
+    "license",        // License detection
+    "logging",        // Logging patterns
+    "maintainers",    // Maintainer counts
+    "manifest",       // Package manifest fields
+    "metrics",        // Code metrics
+    "quality",        // Quality signals
+    "scripts",        // Package scripts
+    "testing",        // Testing detection
+    "tooling",        // Package tooling
+    "versioning",     // Version detection
 ];
 
 /// Allowed subdirectories in metadata/permission/

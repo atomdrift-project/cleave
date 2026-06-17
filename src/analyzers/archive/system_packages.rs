@@ -369,8 +369,7 @@ pub(crate) fn extract_apk_alpine_from_data(
         // The tar walk stops at the segment's end-of-archive marker, which can
         // leave trailing zero-block padding and the gzip trailer unread. Drain
         // them so the BufReader advances to the next concatenated member.
-        std::io::copy(&mut decoder, &mut std::io::sink())
-            .context("Failed to drain apk segment")?;
+        std::io::copy(&mut decoder, &mut std::io::sink()).context("Failed to drain apk segment")?;
     }
 
     Ok(())

@@ -180,7 +180,6 @@ impl Serialize for CompactFacts {
         fields += usize::from(!self.targets.is_empty());
         fields += usize::from(!self.members.is_empty());
 
-
         let mut st = serializer.serialize_struct("CompactFacts", fields)?;
         if let Some(metrics) = &self.metrics {
             st.serialize_field("metrics", metrics)?;
@@ -398,9 +397,7 @@ fn parse_hex_or_decimal_u64(raw: &str) -> Option<u64> {
     }
 }
 
-fn compact_ast(
-    file: &super::file_analysis::FileAnalysis,
-) -> (Vec<String>, Vec<String>) {
+fn compact_ast(file: &super::file_analysis::FileAnalysis) -> (Vec<String>, Vec<String>) {
     let Some(view) = file.filefacts.as_ref() else {
         return (Vec::new(), Vec::new());
     };
@@ -453,8 +450,12 @@ fn convert_file(file: &super::file_analysis::FileAnalysis, id: u32) -> CompactFi
                     .is_some_and(|l| l.starts_with("archive:"))
             })
             .filter_map(|e| {
-                e.byte_offset()
-                    .map(|off| [off, u64::from(u32::try_from(e.value.len()).unwrap_or(u32::MAX))])
+                e.byte_offset().map(|off| {
+                    [
+                        off,
+                        u64::from(u32::try_from(e.value.len()).unwrap_or(u32::MAX)),
+                    ]
+                })
             })
             .collect();
         ev_spans.sort_unstable_by_key(|s| s[0]);
@@ -475,21 +476,32 @@ fn convert_file(file: &super::file_analysis::FileAnalysis, id: u32) -> CompactFi
                 existing.ev.extend(ev_spans);
                 existing.ev.sort_unstable_by_key(|s| s[0]);
                 existing.ev.dedup_by_key(|s| s[0]);
-                existing.ev.truncate(crate::types::traits_findings::MAX_EV_LOCS);
+                existing
+                    .ev
+                    .truncate(crate::types::traits_findings::MAX_EV_LOCS);
             }
         } else {
             trait_order.push(&finding.id);
             // Build `from`: composite sources take priority; fall back to the
             // scalar `src` for a single inherited finding.
-            let from: Vec<CompactSource> = if let Some(srcs) = file.composite_sources.get(&finding.id) {
-                srcs.iter()
-                    .map(|s| CompactSource { file: s.file, line: s.line, offset: s.offset })
-                    .collect()
-            } else if let Some(src_id) = finding.src {
-                vec![CompactSource { file: src_id, line: None, offset: None }]
-            } else {
-                Vec::new()
-            };
+            let from: Vec<CompactSource> =
+                if let Some(srcs) = file.composite_sources.get(&finding.id) {
+                    srcs.iter()
+                        .map(|s| CompactSource {
+                            file: s.file,
+                            line: s.line,
+                            offset: s.offset,
+                        })
+                        .collect()
+                } else if let Some(src_id) = finding.src {
+                    vec![CompactSource {
+                        file: src_id,
+                        line: None,
+                        offset: None,
+                    }]
+                } else {
+                    Vec::new()
+                };
             trait_map.insert(
                 &finding.id,
                 CompactTrait {

@@ -1567,8 +1567,7 @@ fn broad_filetype_category(cond: &Condition) -> &'static str {
 }
 
 /// Trait path prefixes where 4+ effective platforms are permitted.
-pub(crate) const BROAD_PLATFORM_ALLOWLIST: &[&str] =
-    &["objectives/supply-chain/"];
+pub(crate) const BROAD_PLATFORM_ALLOWLIST: &[&str] = &["objectives/supply-chain/"];
 
 /// Trait path prefixes where broad file type coverage is permitted.
 ///

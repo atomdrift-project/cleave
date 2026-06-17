@@ -1413,7 +1413,10 @@ fn render_hex_context(
 /// True for file types whose context renders as a hex+ascii dump.
 /// Mirrors `filefacts::FileType::is_binary()` without requiring the enum.
 fn is_binary_file_type(file_type: &str) -> bool {
-    matches!(file_type, "elf" | "pe" | "macho" | "java_class" | "python_bytecode" | "beam")
+    matches!(
+        file_type,
+        "elf" | "pe" | "macho" | "java_class" | "python_bytecode" | "beam"
+    )
 }
 
 /// Line-comment marker for the sample's language; `//` for binary and anything

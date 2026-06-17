@@ -267,7 +267,13 @@ pub(crate) fn apply_trait_defaults(
         || raw.count_max.is_some()
         || raw.per_kb_min.is_some()
         || raw.per_kb_max.is_some();
-    check_regex_length(&raw.id, &condition, Some(path), exempt_decomposition, warnings);
+    check_regex_length(
+        &raw.id,
+        &condition,
+        Some(path),
+        exempt_decomposition,
+        warnings,
+    );
 
     // Also check regex patterns in unless: conditions
     if let Some(ref unless_conditions) = raw.unless {

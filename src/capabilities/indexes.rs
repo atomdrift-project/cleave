@@ -872,10 +872,7 @@ impl StringMatchIndex {
                     }
                 }
                 // Regex string patterns - extract literal prefix for pre-filtering
-                Condition::Text(TextQuery {
-                    regex: Some(_),
-                    ..
-                }) => {
+                Condition::Text(TextQuery { regex: Some(_), .. }) => {
                     regex_trait_indices.insert(trait_idx);
                     let literal = regex_literal_by_trait.get(&trait_idx).cloned().flatten();
                     if let Some(literal) = literal {

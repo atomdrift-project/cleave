@@ -13,7 +13,9 @@
 use filefacts::FileType;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::types::{traits_findings::MAX_EV_LOCS, AnalysisReport, ContextLine, Criticality, Finding, Note};
+use crate::types::{
+    AnalysisReport, ContextLine, Criticality, Finding, Note, traits_findings::MAX_EV_LOCS,
+};
 
 /// Maximum match windows kept per finding (the rest are dropped). A composite
 /// shows only its first location; an atomic trait up to [`MAX_EV_LOCS`].

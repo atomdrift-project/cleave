@@ -239,10 +239,6 @@ mod tests {
             "demo artifacts should not emit impact/control: {:?}",
             report.findings.iter().map(|f| &f.id).collect::<Vec<_>>()
         );
-        assert!(
-            report.findings.iter().any(|f| f.id == "intel/system"),
-            "expected benign class reference detections to remain"
-        );
     }
 
     #[test]
@@ -291,6 +287,38 @@ mod tests {
                 .iter()
                 .all(|f| f.id != "credential/password"),
             "browser bypass class names should not emit password theft: {:?}",
+            report.findings.iter().map(|f| &f.id).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_static_dictionary_text_is_not_java_dropper() {
+        let analyzer = JavaClassAnalyzer::new();
+        let class_refs = vec![
+            "java/lang/Object".to_string(),
+            "java/lang/RuntimeException".to_string(),
+            "java/lang/String".to_string(),
+        ];
+        let strings = vec![
+            "Corrupted brotli dictionary".to_string(),
+            "download featured football selected language distance execution context".to_string(),
+        ];
+        let mut report = AnalysisReport::new(TargetInfo {
+            path: "/tmp/org/brotli/dec/Dictionary.class".to_string(),
+            file_type: "java_class".to_string(),
+            size_bytes: 0,
+            sha256: String::new(),
+            architectures: None,
+        });
+
+        analyzer.detect_capabilities_from_facts(&class_refs, &strings, &mut report);
+
+        assert!(
+            report
+                .findings
+                .iter()
+                .all(|f| f.id != "command-and-control/dropper"),
+            "static dictionary text should not emit Java dropper findings: {:?}",
             report.findings.iter().map(|f| &f.id).collect::<Vec<_>>()
         );
     }

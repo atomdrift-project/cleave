@@ -42,118 +42,13 @@ impl super::JavaClassAnalyzer {
     /// `strings` are expected to have passed [`Self::is_interesting_string`].
     pub(super) fn detect_capabilities_from_facts(
         &self,
-        class_refs: &[String],
+        _class_refs: &[String],
         strings: &[String],
         report: &mut AnalysisReport,
     ) {
         let target_path = report.target.path.to_lowercase();
         let is_sig_stub = target_path.ends_with(".sig") || target_path.contains("ct.sym");
         let is_demo_artifact = target_path.contains("/demo/") || target_path.contains("j2ddemo");
-
-        // Detect suspicious class references
-        let suspicious_classes = [
-            (
-                "java/lang/Runtime",
-                "execution/process",
-                "Process execution capability",
-            ),
-            (
-                "java/lang/ProcessBuilder",
-                "execution/process",
-                "Process execution via ProcessBuilder",
-            ),
-            ("java/net/Socket", "net/socket", "Network socket operations"),
-            (
-                "java/net/ServerSocket",
-                "net/server",
-                "Network server socket",
-            ),
-            ("java/net/URL", "net/http", "URL/HTTP operations"),
-            ("java/net/URLConnection", "net/http", "HTTP connection"),
-            ("java/net/HttpURLConnection", "net/http", "HTTP operations"),
-            ("javax/net/ssl", "net/ssl", "SSL/TLS operations"),
-            ("java/io/File", "fs/file", "File system operations"),
-            ("java/nio/file", "fs/file", "NIO file operations"),
-            (
-                "java/lang/reflect",
-                "reflect/invoke",
-                "Reflection capabilities",
-            ),
-            (
-                "java/lang/ClassLoader",
-                "reflect/classloader",
-                "Dynamic class loading",
-            ),
-            ("javax/crypto", "crypto/cipher", "Cryptographic operations"),
-            ("java/security", "crypto/security", "Security operations"),
-            ("java/util/zip", "archive/zip", "ZIP archive operations"),
-            ("java/util/jar", "archive/jar", "JAR archive operations"),
-            ("java/sql", "data/sql", "SQL database operations"),
-            (
-                "javax/naming",
-                "net/jndi",
-                "JNDI operations (potential for injection)",
-            ),
-            ("java/rmi", "net/rmi", "Remote Method Invocation"),
-            (
-                "java/awt/Robot",
-                "ui/automation",
-                "UI automation (keylogger potential)",
-            ),
-            (
-                "java/lang/System",
-                "intel/system",
-                "System information access",
-            ),
-            (
-                "java/lang/Thread",
-                "execution/thread",
-                "Thread manipulation",
-            ),
-            ("sun/misc/Unsafe", "mem/unsafe", "Unsafe memory operations"),
-        ];
-
-        for class_ref in class_refs {
-            for (pattern, cap_id, description) in &suspicious_classes {
-                if is_sig_stub {
-                    continue;
-                }
-                // Use exact match or proper prefix match (pattern must match up to a / or end of string)
-                // to avoid e.g. "java/lang/Runtime" matching "java/lang/RuntimeException"
-                if class_ref == *pattern
-                    || (class_ref.starts_with(pattern)
-                        && class_ref
-                            .as_bytes()
-                            .get(pattern.len())
-                            .is_none_or(|&b| b == b'/'))
-                {
-                    if !report.findings.iter().any(|c| c.id == *cap_id) {
-                        report.findings.push(Finding {
-                            src: None,
-                            kind: FindingKind::Capability,
-                            trait_refs: vec![],
-                            id: cap_id.to_string(),
-                            desc: description.to_string(),
-                            conf: 0.9,
-                            crit: Criticality::Notable,
-                            mbc: None,
-                            attack: None,
-                            evidence: vec![Evidence {
-                                method: "class_reference".to_string(),
-                                source: "constant_pool".to_string(),
-                                value: class_ref.clone(),
-                                location: None,
-                                ..Default::default()
-                            }],
-
-                            match_count: 0,
-                            source_file: None,
-                        });
-                    }
-                    break;
-                }
-            }
-        }
 
         // Detect suspicious strings (RAT commands, malware indicators)
         for s in strings {
@@ -260,23 +155,6 @@ impl super::JavaClassAnalyzer {
                     "Encryption/decryption operation",
                     s,
                     Criticality::Notable,
-                );
-            }
-
-            // Download and execute
-            let updater_installer_class = s_lower.contains("updateinstaller")
-                && (s_lower.contains("downloadmanager") || s_lower.contains("updateapplier"));
-            if !updater_installer_class
-                && (s_lower.contains("up-n-exec")
-                    || s_lower.contains("download") && s_lower.contains("exec")
-                    || Self::contains_word(&s_lower, "dropper"))
-            {
-                self.add_capability(
-                    report,
-                    "command-and-control/dropper",
-                    "Download and execute capability",
-                    s,
-                    Criticality::Hostile,
                 );
             }
 

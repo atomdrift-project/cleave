@@ -3446,40 +3446,55 @@ impl super::CapabilityMapper {
             let disable_excessive_suppression_validation =
                 crate::validation_controls::is_validator_disabled("excessive-suppression");
 
-            // Validate: excessive unless:/downgrade: suppressions (8+ combined)
+            // Validate: excessive unless:/downgrade: suppressions
+            // (8+ on the rule itself, or 40+ once referenced constituents are summed in)
             let excessive_skips =
                 find_excessive_skip_conditions(&trait_definitions, &composite_rules);
             if !disable_excessive_suppression_validation && !excessive_skips.is_empty() {
                 eprintln!(
-                    "\n❌ ERROR: {} rules have 8+ combined unless:/downgrade: clauses",
+                    "\n❌ ERROR: {} rules exceed a suppression limit (8+ written on the rule, or 40+ after expanding aggregator references)",
                     excessive_skips.len()
                 );
                 eprintln!(
-                    "   Either improve the rule precision or refactor with a more appropriate"
+                    "   A heavy suppression list usually means the rule is fighting its own breadth."
+                );
+                eprintln!("   Before adding more, try:");
+                eprintln!(
+                    "     • drop dead downgrades — conditions that can never lower the criticality"
                 );
                 eprintln!(
-                    "   taxonomy and criticality. If the rule is so broad that it provides no"
+                    "     • tighten scope — narrow `for:` file types or add `size_min`/`size_max`"
                 );
-                eprintln!("   signal to humans or ML pipelines, consider removing it:\n");
-                for (id, unless_count, downgrade_count, is_composite) in &excessive_skips {
+                eprintln!(
+                    "     • right-size `crit:` — a routinely-downgraded match may simply be pitched too high"
+                );
+                eprintln!(
+                    "     • prefer a `dir/` reference over many `::leaf` ones — a directory reference"
+                );
+                eprintln!("       counts as 1 and does not sum in its members' suppressions");
+                eprintln!(
+                    "   If it still gives no signal to humans or ML pipelines, consider removing it:\n"
+                );
+                for v in &excessive_skips {
                     let source = rule_source_files
-                        .get(id)
+                        .get(&v.id)
                         .map(std::string::String::as_str)
                         .unwrap_or("unknown");
-                    let line_hint = find_line_number(source, id);
-                    let kind = if *is_composite { "composite" } else { "trait" };
-                    let combined = unless_count + downgrade_count;
-                    if let Some(line) = line_hint {
-                        eprintln!(
-                            "   {}:{}: {} '{}' ({} unless + {} downgrade = {} total)",
-                            source, line, kind, id, unless_count, downgrade_count, combined
-                        );
-                    } else {
-                        eprintln!(
-                            "   {}: {} '{}' ({} unless + {} downgrade = {} total)",
-                            source, kind, id, unless_count, downgrade_count, combined
-                        );
+                    let line_hint = find_line_number(source, &v.id);
+                    let kind = if v.is_composite { "composite" } else { "trait" };
+                    let location = match line_hint {
+                        Some(line) => format!("{source}:{line}"),
+                        None => source.to_string(),
+                    };
+                    eprintln!(
+                        "   {location}: {kind} '{}' ({} written; {} after expanding aggregators)",
+                        v.id, v.own, v.expanded
+                    );
+                    let mut tree = String::new();
+                    for branch in &v.branches {
+                        branch.render(0, &mut tree);
                     }
+                    eprint!("{tree}");
                 }
                 eprintln!();
                 warnings.push_count(

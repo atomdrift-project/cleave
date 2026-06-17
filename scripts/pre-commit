@@ -3,7 +3,8 @@
 #
 #   1. no active [patch.*] local overrides in Cargo.toml (e.g. ../filefacts)
 #   2. `make lint` passes
-#   3. `make test` passes
+#   3. `make validate` passes (`cleave validate` exits 0)
+#   4. `make test` passes
 #
 # Install with `make install-hooks`. Bypass in an emergency with `git commit --no-verify`.
 
@@ -23,6 +24,9 @@ fi
 
 echo "pre-commit: running make lint..."
 make lint
+
+echo "pre-commit: running make validate..."
+make validate
 
 echo "pre-commit: running make test..."
 make test

@@ -3,9 +3,13 @@
 //! This module validates logical constraints in rules, detecting impossible
 //! or contradictory configurations that would make rules unsatisfiable.
 
+use std::collections::{HashMap, HashSet};
+
 use crate::capabilities::models::{RawCompositeRule, RawTraitDefinition, TraitDefaults};
 use crate::capabilities::validation::shared::is_limited_byte_range;
-use crate::composite_rules::{CompositeTrait, Condition, FileType, KvQuery, TraitDefinition};
+use crate::composite_rules::{
+    CompositeTrait, Condition, DowngradeConditions, FileType, KvQuery, TraitDefinition,
+};
 use crate::composite_rules::{
     EncodedQuery, HexQuery, LiteralQuery, PathQuery, RawQuery, SectionQuery, SymbolQuery, TextQuery,
 };
@@ -463,8 +467,6 @@ pub(crate) fn find_missing_search_patterns(trait_definitions: &[TraitDefinition]
 pub(crate) fn find_pure_alias_traits(
     trait_definitions: &[TraitDefinition],
 ) -> Vec<(String, String)> {
-    use std::collections::HashMap;
-
     // Build a map of trait ID -> criticality for lookup
     let crit_map: HashMap<&str, &crate::types::Criticality> = trait_definitions
         .iter()
@@ -553,44 +555,237 @@ pub(crate) fn find_redundant_needs_one(composite_rules: &[CompositeTrait]) -> Ve
     violations
 }
 
-/// Find traits/rules with excessive unless: and downgrade: suppressions combined.
+/// Count the `unless:` and `downgrade:` conditions declared directly on a single rule.
 ///
-/// A rule with 8 or more combined skip/downgrade conditions likely has poor precision
-/// and should be improved rather than patched with suppressions.
+/// Returns `(unless_count, downgrade_count)`.
+fn direct_suppression_counts(
+    unless: Option<&Vec<Condition>>,
+    downgrade: Option<&DowngradeConditions>,
+) -> (usize, usize) {
+    let unless_count = unless.map_or(0, Vec::len);
+    let downgrade_count = downgrade.map_or(0, |d| {
+        d.any.as_ref().map_or(0, Vec::len)
+            + d.all.as_ref().map_or(0, Vec::len)
+            + d.none.as_ref().map_or(0, Vec::len)
+    });
+    (unless_count, downgrade_count)
+}
+
+/// One node in a rule's suppression-expansion tree.
 ///
-/// Returns: `Vec<(id, unless_count, downgrade_count, is_composite)>`
+/// `count` is the number of *newly* counted distinct exceptions in this node's subtree
+/// (first occurrence wins; a leaf or aggregator reached again contributes 0 and is
+/// marked in `label`). A rule's expanded total is the sum of its top-level branches'
+/// `count`s.
+pub(crate) struct SuppressionBranch {
+    /// The reference ID (or a marker like `(inline condition)` / `… (already counted)`).
+    pub label: String,
+    /// Distinct exceptions newly contributed by this subtree.
+    pub count: usize,
+    /// Expansion of an aggregator composite's matching legs; empty for a leaf.
+    pub children: Vec<SuppressionBranch>,
+}
+
+impl SuppressionBranch {
+    /// Append an indented rendering of this branch to `out`, one line per node as
+    /// `<label> (<count>)`. Nested aggregators are recursed into; the leaf references
+    /// directly under a node are collapsed into a single summary line so a branch with
+    /// dozens of leaves stays readable.
+    pub(crate) fn render(&self, depth: usize, out: &mut String) {
+        use std::fmt::Write as _;
+        let indent = "  ".repeat(depth);
+        let _ = writeln!(out, "        {indent}{} ({})", self.label, self.count);
+
+        let mut leaf_refs = 0usize;
+        let mut leaf_counted = 0usize;
+        for child in &self.children {
+            if child.children.is_empty() {
+                leaf_refs += 1;
+                leaf_counted += child.count;
+            } else {
+                child.render(depth + 1, out);
+            }
+        }
+        if leaf_refs > 0 {
+            let _ = writeln!(
+                out,
+                "        {indent}  ({leaf_refs} leaf refs, {leaf_counted} counted)"
+            );
+        }
+    }
+}
+
+/// Builds suppression-expansion trees while deduplicating across the whole rule:
+/// each aggregator and each leaf is counted at its first occurrence only, which keeps
+/// the per-node counts additive (a node's `count` equals the sum of its children's)
+/// and bounds the walk to one visit per reference.
+struct SuppressionExpander<'a> {
+    composite_map: &'a HashMap<&'a str, &'a CompositeTrait>,
+    seen_aggregators: HashSet<&'a str>,
+    seen_leaves: HashSet<&'a str>,
+}
+
+impl<'a> SuppressionExpander<'a> {
+    fn branch(&mut self, cond: &'a Condition) -> SuppressionBranch {
+        let Condition::Trait { id } = cond else {
+            // An inline (non-reference) condition is one bespoke exception.
+            return SuppressionBranch {
+                label: "(inline condition)".to_string(),
+                count: 1,
+                children: Vec::new(),
+            };
+        };
+        let key = id.as_str();
+
+        if let Some(c) = self.composite_map.get(key) {
+            // Aggregator composite: expand its matching legs, once.
+            if !self.seen_aggregators.insert(key) {
+                return SuppressionBranch {
+                    label: format!("{key} (already counted)"),
+                    count: 0,
+                    children: Vec::new(),
+                };
+            }
+            let children: Vec<SuppressionBranch> = c
+                .all
+                .iter()
+                .chain(c.any.iter())
+                .flatten()
+                .map(|leg| self.branch(leg))
+                .collect();
+            let count = children.iter().map(|b| b.count).sum();
+            SuppressionBranch {
+                label: key.to_string(),
+                count,
+                children,
+            }
+        } else if self.seen_leaves.insert(key) {
+            // Leaf trait or directory reference: one exception.
+            SuppressionBranch {
+                label: key.to_string(),
+                count: 1,
+                children: Vec::new(),
+            }
+        } else {
+            SuppressionBranch {
+                label: format!("{key} (dup)"),
+                count: 0,
+                children: Vec::new(),
+            }
+        }
+    }
+}
+
+/// Expand a rule's `unless:`/`downgrade:` into a counted tree, returning the effective
+/// exception total and the per-branch breakdown.
+///
+/// Authors can hide a large exception list behind a single reference:
+/// `unless: [some-benign-context]`, where `some-benign-context` is a composite whose
+/// `any:`/`all:` legs enumerate dozens of benign indicators. Counting the reference as
+/// one would understate the real burden, so an entry that points at a composite is
+/// expanded (recursively). A leaf or directory reference (no exact composite) counts as
+/// one. Everything is deduplicated across the rule, so cycles terminate and a shared
+/// aggregator is counted once.
+fn expand_suppressions<'a>(
+    unless: Option<&'a Vec<Condition>>,
+    downgrade: Option<&'a DowngradeConditions>,
+    composite_map: &'a HashMap<&'a str, &'a CompositeTrait>,
+) -> (usize, Vec<SuppressionBranch>) {
+    let mut expander = SuppressionExpander {
+        composite_map,
+        seen_aggregators: HashSet::new(),
+        seen_leaves: HashSet::new(),
+    };
+
+    let downgrade_lists = downgrade
+        .into_iter()
+        .flat_map(|d| [d.any.as_ref(), d.all.as_ref(), d.none.as_ref()]);
+    let conditions = unless
+        .into_iter()
+        .chain(downgrade_lists.flatten())
+        .flatten();
+
+    let branches: Vec<SuppressionBranch> = conditions.map(|cond| expander.branch(cond)).collect();
+    let total = branches.iter().map(|b| b.count).sum();
+    (total, branches)
+}
+
+/// A rule flagged for carrying too many `unless:`/`downgrade:` suppressions.
+pub(crate) struct ExcessiveSkip {
+    /// The offending rule's ID.
+    pub id: String,
+    /// True for a composite rule, false for an atomic trait.
+    pub is_composite: bool,
+    /// Number of `unless:`/`downgrade:` entries written literally on the rule.
+    pub own: usize,
+    /// Effective exception count once aggregator references in `unless:`/`downgrade:`
+    /// are expanded to their underlying conditions.
+    pub expanded: usize,
+    /// Per-branch expansion of the rule's suppressions, for debugging where the weight
+    /// comes from.
+    pub branches: Vec<SuppressionBranch>,
+}
+
+/// Exceptions a single rule may write directly on itself.
+const MAX_OWN_SUPPRESSIONS: usize = 8;
+
+/// Effective exceptions a rule may carry once aggregator references in its
+/// `unless:`/`downgrade:` are expanded. Higher than the direct cap because one
+/// reference can legitimately stand in for a handful of related benign indicators;
+/// this only catches rules whose true exception burden is runaway.
+const MAX_AGGREGATE_SUPPRESSIONS: usize = 40;
+
+/// Find traits/rules with excessive `unless:`/`downgrade:` suppressions.
+///
+/// Both limits look only at a rule's own `unless:`/`downgrade:` — never at its `all:`/
+/// `any:` matching conditions. Flagged on either:
+///
+/// - **Own** (`MAX_OWN_SUPPRESSIONS`, 8): `unless:`/`downgrade:` entries written
+///   literally on the rule. A rule this heavily patched usually has poor precision and
+///   should be improved rather than suppressed.
+/// - **Expanded** (`MAX_AGGREGATE_SUPPRESSIONS`, 40): the effective exception count once
+///   any `unless:`/`downgrade:` entry that references an aggregator composite is
+///   expanded to its underlying conditions. This catches exception lists hidden behind a
+///   single reference. Leaf and directory references each count as one.
 #[must_use]
-pub(crate) fn find_excessive_skip_conditions(
-    trait_definitions: &[TraitDefinition],
-    composite_rules: &[CompositeTrait],
-) -> Vec<(String, usize, usize, bool)> {
-    const MAX_COMBINED: usize = 8;
+pub(crate) fn find_excessive_skip_conditions<'a>(
+    trait_definitions: &'a [TraitDefinition],
+    composite_rules: &'a [CompositeTrait],
+) -> Vec<ExcessiveSkip> {
+    let composite_map: HashMap<&'a str, &'a CompositeTrait> =
+        composite_rules.iter().map(|r| (r.id.as_str(), r)).collect();
+
     let mut violations = Vec::new();
 
-    for t in trait_definitions {
-        let unless_count = t.unless.as_ref().map_or(0, Vec::len);
-        let downgrade_count = t.downgrade.as_ref().map_or(0, |d| {
-            d.any.as_ref().map_or(0, Vec::len)
-                + d.all.as_ref().map_or(0, Vec::len)
-                + d.none.as_ref().map_or(0, Vec::len)
-        });
-
-        if unless_count + downgrade_count >= MAX_COMBINED {
-            violations.push((t.id.clone(), unless_count, downgrade_count, false));
+    let mut flag = |id: &'a str,
+                    unless: Option<&'a Vec<Condition>>,
+                    downgrade: Option<&'a DowngradeConditions>,
+                    is_composite: bool| {
+        let (u, d) = direct_suppression_counts(unless, downgrade);
+        let own = u + d;
+        let (expanded, branches) = expand_suppressions(unless, downgrade, &composite_map);
+        if own >= MAX_OWN_SUPPRESSIONS || expanded >= MAX_AGGREGATE_SUPPRESSIONS {
+            violations.push(ExcessiveSkip {
+                id: id.to_string(),
+                is_composite,
+                own,
+                expanded,
+                branches,
+            });
         }
+    };
+
+    for t in trait_definitions {
+        flag(
+            t.id.as_str(),
+            t.unless.as_ref(),
+            t.downgrade.as_ref(),
+            false,
+        );
     }
 
     for r in composite_rules {
-        let unless_count = r.unless.as_ref().map_or(0, Vec::len);
-        let downgrade_count = r.downgrade.as_ref().map_or(0, |d| {
-            d.any.as_ref().map_or(0, Vec::len)
-                + d.all.as_ref().map_or(0, Vec::len)
-                + d.none.as_ref().map_or(0, Vec::len)
-        });
-
-        if unless_count + downgrade_count >= MAX_COMBINED {
-            violations.push((r.id.clone(), unless_count, downgrade_count, true));
-        }
+        flag(r.id.as_str(), r.unless.as_ref(), r.downgrade.as_ref(), true);
     }
 
     violations

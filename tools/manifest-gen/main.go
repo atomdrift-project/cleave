@@ -67,7 +67,7 @@ func main() {
 	validateArgs := flag.String("validate-args", "validate",
 		"engine subcommand+args used as the oracle (cleave: \"validate\"; litmus: \"validate --skip-traits\")")
 	flag.IntVar(&c.nReleases, "releases", 2, "recent engine release tags to key the manifest by")
-	flag.IntVar(&c.nCommits, "commits", 20, "recent traits commits to consider (the ceiling; the floor bounds the rest)")
+	flag.IntVar(&c.nCommits, "commits", 8, "recent traits commits to consider (the ceiling; the floor bounds the rest). HEAD/`latest` only ever uses the single newest commit")
 	flag.IntVar(&c.soakDays, "soak-days", 7, "stable lags beta by at least this many days")
 	flag.IntVar(&c.validDays, "valid-days", 7, "valid_until = now + this many days")
 	chans := flag.String("channels", "stable,beta", "channels to populate, in output order")
@@ -104,11 +104,26 @@ func run(c *config) {
 	if len(commits) == 0 {
 		fatal("no commits in %s", c.traits)
 	}
-	floors, latestFloor := parseFloors(filepath.Join(c.out, "versions.toml")) // [channel][release]=key, + latest
+	floors, _ := parseFloors(filepath.Join(c.out, "versions.toml")) // [channel][release]=key
 	memo := loadCache(c.out)
 	tarCache := map[string][]byte{}
 	cutoff := time.Now().UTC().AddDate(0, 0, -c.soakDays)
 	logf("releases=%v  considering up to %d traits commits", tags, len(commits))
+
+	// HEAD anchor, FIRST: `latest` must point at the single newest traits commit
+	// validated by the current engine. We never walk back to an older commit for
+	// HEAD — if the newest commit fails, the whole release fails (loudly, with the
+	// engine's exact output). Doing this before any per-release engine build means
+	// a broken HEAD aborts instantly instead of after minutes of cargo builds.
+	// Older release tags are unaffected: they stay frozen on the traits they
+	// already validated.
+	latest := ""
+	if c.headEngine != "" {
+		latest = anchorHead(c, commits[0], tarCache, memo)
+		saveCache(c.out, memo)
+	} else {
+		logf("  (no --head-engine: 'latest' left empty; HEAD/dev clients have no fallback)")
+	}
 
 	// pointers[channel][release] = selected key (short commit)
 	pointers := map[string]map[string]string{}
@@ -169,20 +184,6 @@ func run(c *config) {
 		}
 	}
 
-	// `latest` = the newest commit the HEAD (current) engine actually validates.
-	// We never assume the newest commit works for HEAD — we walk it back too,
-	// bounded by the prior latest floor.
-	latest := ""
-	if c.headEngine != "" {
-		cand := commits[:floorIndex(commits, latestFloor)]
-		latest = selectPointer(c, c.headEngine, "HEAD", "beta", cand, cutoff, tarCache, memo)
-		if latest == "" {
-			latest = latestFloor // nothing newer passed — keep the known-good floor
-		}
-		logf("  HEAD/latest -> %s (floor=%q, %d candidates)", orNone(latest), latestFloor, len(cand))
-	} else {
-		logf("  (no --head-engine: 'latest' left empty; HEAD/dev clients have no fallback)")
-	}
 	saveCache(c.out, memo)
 
 	arts := buildArtifacts(c, pointers, latest, tarCache)
@@ -409,6 +410,21 @@ func validate(cfg *config, engine, rel string, c commit, tarCache map[string][]b
 	if v, ok := memo[ck]; ok {
 		return v
 	}
+	ok, output := runValidate(cfg, engine, c, tarCache)
+	if !ok {
+		// Never let a rejection be a silent "fail": print the engine's own error,
+		// attributed to the (release, commit) under test and quoted as a block.
+		logf("    %s rejects %s (%s):\n%s", rel, c.short, c.date, indentOutput(output))
+	}
+	memo[ck] = ok
+	return ok
+}
+
+// runValidate extracts the commit's traits tree and runs the engine's validate
+// oracle against it, returning whether it passed and the engine's combined
+// stdout+stderr so a failure can be reported verbatim. Not memoized — callers
+// decide whether to cache the boolean.
+func runValidate(cfg *config, engine string, c commit, tarCache map[string][]byte) (bool, string) {
 	tmp, err := os.MkdirTemp("", "checkout-"+c.short+"-")
 	if err != nil {
 		fatal("mktemp: %v", err)
@@ -422,9 +438,48 @@ func validate(cfg *config, engine, rel string, c commit, tarCache map[string][]b
 	}
 	cmd := exec.Command(engine, cfg.validateArgs...)
 	cmd.Env = append(os.Environ(), cfg.traitsEnv+"="+tmp)
-	ok := cmd.Run() == nil
-	memo[ck] = ok
-	return ok
+	out, err := cmd.CombinedOutput()
+	return err == nil, string(out)
+}
+
+// anchorHead validates the single newest traits commit against the current
+// (HEAD) engine and returns it as the `latest` pointer. If it fails, the entire
+// run aborts with the engine's exact output — we deliberately do NOT walk back to
+// an older commit, so a broken HEAD never ships and is never masked by a stale
+// pointer.
+func anchorHead(c *config, newest commit, tarCache map[string][]byte, memo map[string]bool) string {
+	if c.noValidate {
+		logf("  HEAD/latest -> %s (%s) [validation skipped: --no-validate]", newest.short, newest.date)
+		return newest.short
+	}
+	ok, output := runValidate(c, c.headEngine, newest, tarCache)
+	memo["HEAD\t"+newest.full] = ok
+	if !ok {
+		fatal("HEAD engine rejects the newest traits commit %s (%s) — refusing to publish.\n"+
+			"  `latest` must point at the newest commit; we do not fall back to an older one.\n"+
+			"  Fix or revert the breaking traits commit, then re-run.\n"+
+			"  ── exact `%s %s` output ──\n%s",
+			newest.short, newest.date, filepath.Base(c.headEngine),
+			strings.Join(c.validateArgs, " "), indentOutput(output))
+	}
+	logf("  HEAD/latest -> %s (%s) PASS", newest.short, newest.date)
+	return newest.short
+}
+
+// indentOutput quotes captured engine output as an indented block for the log,
+// trimming trailing blank lines. Returns a clear placeholder when the engine
+// printed nothing (so "rejected with no output" is never mistaken for a bug here).
+func indentOutput(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return "      | (engine produced no output)"
+	}
+	var b strings.Builder
+	for _, line := range strings.Split(strings.TrimRight(s, "\n"), "\n") {
+		b.WriteString("      | ")
+		b.WriteString(line)
+		b.WriteByte('\n')
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 func archive(traits string, c commit, tarCache map[string][]byte) []byte {

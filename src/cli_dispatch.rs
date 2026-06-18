@@ -337,8 +337,12 @@ pub(crate) fn dispatch_command(
             run_version();
             return Ok(None);
         }
-        Some(cli::Command::Validate { exclude }) => {
-            validate_command(ctx.format, exclude.as_deref(), args.verbose)?
+        Some(cli::Command::Validate { exclude, soft }) => {
+            if soft {
+                cleave::commands::validate::run_soft(ctx.format, exclude.as_deref(), args.verbose)?
+            } else {
+                validate_command(ctx.format, exclude.as_deref(), args.verbose)?
+            }
         }
         Some(cli::Command::Diff {
             old,

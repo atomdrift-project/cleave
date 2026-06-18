@@ -488,9 +488,9 @@ dependencies = [
 
 [[package]]
 name = "bitvec"
-version = "1.0.1"
+version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1bc2832c24239b0141d5674bb9174f9d68a8b5b3f2753311927c172ca46f7e9c"
+checksum = "ddcec3d12c579d40898fe0a9a358a803c23e9c52ca3c425707f81c9436211837"
 dependencies = [
  "funty",
  "radium",
@@ -561,9 +561,9 @@ checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
 
 [[package]]
 name = "bytes"
-version = "1.11.1"
+version = "1.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
+checksum = "8ae3f5d315924270530207e2a68396c3cc547f6dca3fbdca317cfb1a51edb593"
 
 [[package]]
 name = "bzip2"
@@ -1608,7 +1608,7 @@ dependencies = [
 [[package]]
 name = "filefacts"
 version = "1.0.1"
-source = "git+https://codeberg.org/atomdrift/filefacts.git#9d566e6fa2ee158e3a73a7d9259374d72e06a6a2"
+source = "git+https://codeberg.org/atomdrift/filefacts.git#47f7de0462b16d2d2be27c288deecc36c5c0366e"
 dependencies = [
  "aho-corasick",
  "bincode",
@@ -5033,7 +5033,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-clojure"
 version = "0.1.0"
-source = "git+https://codeberg.org/atomdrift/filefacts.git#9d566e6fa2ee158e3a73a7d9259374d72e06a6a2"
+source = "git+https://codeberg.org/atomdrift/filefacts.git#47f7de0462b16d2d2be27c288deecc36c5c0366e"
 dependencies = [
  "cc",
  "tree-sitter",
@@ -6167,9 +6167,9 @@ version = "0.1.0"
 
 [[package]]
 name = "yara-x"
-version = "1.17.0"
+version = "1.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b53bd070da0bb85da8d91d943ef34536092567ce340b38f487f04017f202c9d6"
+checksum = "26bc7b76e86c04841709a2cb0a08d0cdce61eede8ddbb096855ba0b094859918"
 dependencies = [
  "annotate-snippets",
  "anyhow",
@@ -6249,9 +6249,9 @@ dependencies = [
 
 [[package]]
 name = "yara-x-parser"
-version = "1.17.0"
+version = "1.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0750e3c54507bd3bcf1e0e54419308371d32f20a3aee86ac6909a48420250a9c"
+checksum = "36ee3856f10d3f683e76cbc4361176326caaf627a7a892520079c9defbb26c28"
 dependencies = [
  "ascii_tree",
  "bitflags 2.13.0",

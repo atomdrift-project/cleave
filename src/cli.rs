@@ -320,6 +320,17 @@ pub enum Command {
         /// string (`--exclude ""`) to enable every validator.
         #[arg(long, value_name = "IDS")]
         exclude: Option<String>,
+
+        /// Fail only on flaws that break detection, not authoring hygiene.
+        ///
+        /// Soft mode keeps the load-correctness errors (unparseable YAML, regex
+        /// that won't compile, invalid/unknown file types, duplicate trait ids)
+        /// and the testdata fixture scoring, but downgrades taxonomy, size,
+        /// dedup/reuse, regex-style, and precision issues to non-fatal. Intended
+        /// for trait-bundle gates that must accept hygiene debt yet reject a
+        /// bundle that won't load or silently loses detections.
+        #[arg(long)]
+        soft: bool,
     },
 
     /// Compare two versions for supply-chain attack detection.

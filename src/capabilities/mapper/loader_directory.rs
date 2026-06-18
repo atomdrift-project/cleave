@@ -4199,6 +4199,14 @@ impl super::CapabilityMapper {
             }
         }
 
+        // Disabled validators never cause a fatal failure. Most validators
+        // self-gate at their push site, but legacy/context messages do not, so
+        // drop every disabled-validator issue here before deciding fatality.
+        // This makes the disabled set — including the `--soft` preset — the
+        // single source of truth for pass/fail. (invalid/unknown file types and
+        // regex-compile failures are handled earlier and are unaffected.)
+        warnings.retain(|w| !crate::validation_controls::is_validator_disabled(w.validator_id));
+
         if enable_full_validation && !warnings.is_empty() {
             use crate::validation_controls::ValidationOutputFormat;
             let rendered = match crate::validation_controls::validation_output_format() {

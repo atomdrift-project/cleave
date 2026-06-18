@@ -134,6 +134,15 @@ impl ValidationIssues {
         self.issues.truncate(len);
     }
 
+    /// Keep only the issues for which `keep` returns `true`.
+    ///
+    /// Used to drop disabled-validator issues before deciding fatality, so the
+    /// disabled set (including the `--soft` preset) is authoritative over
+    /// pass/fail even for issues pushed without a per-site gate.
+    pub(crate) fn retain(&mut self, keep: impl Fn(&ValidationIssue) -> bool) {
+        self.issues.retain(|issue| keep(issue));
+    }
+
     pub(crate) fn iter(&self) -> impl Iterator<Item = &ValidationIssue> {
         self.issues.iter()
     }
@@ -242,6 +251,28 @@ const UNKNOWN_VALIDATOR: ValidatorSpec = ValidatorSpec {
 };
 
 const DISABLED_VALIDATOR_IDS: &[&str] = &[];
+
+/// Validators that stay fatal in `--soft` mode.
+///
+/// Soft validation fails only on flaws that prevent a trait bundle from loading
+/// or that silently lose detections on the engine doing the validating — not on
+/// authoring hygiene (taxonomy depth, size limits, dedup/reuse, regex style,
+/// precision). The always-on hard errors (YAML parse failures, regex that won't
+/// compile) are not validators and remain fatal regardless. Fixture/testdata
+/// scoring is retained via `score-caps`, so a detection regression still fails.
+const SOFT_RETAINED_VALIDATOR_IDS: &[&str] = &[
+    // Two ids collide on the same `directory::id`; one silently shadows the
+    // other, so a real detection is lost.
+    "duplicate-trait-id",
+    // Trait `for:` targets a structurally invalid file type — it can never match.
+    "invalid-file-type",
+    // Trait targets a file type unknown to this engine — the rule silently won't
+    // run on the binary doing the scanning.
+    "unknown-file-type",
+    // Fixture score regressed past its cap: detection efficacy, kept in soft so
+    // the testdata corpus still gates the bundle.
+    "score-caps",
+];
 
 static DISABLED_VALIDATOR_OVERRIDE: OnceLock<RwLock<Option<BTreeSet<String>>>> = OnceLock::new();
 
@@ -623,6 +654,46 @@ pub(crate) fn set_disabled_validators_override(ids: Option<&str>) -> Result<()> 
     Ok(())
 }
 
+/// Install the `--soft` disabled set: every validator except the
+/// detection-critical [`SOFT_RETAINED_VALIDATOR_IDS`], unioned with any
+/// caller-supplied `--exclude` ids. After this, soft validation fails only on
+/// flaws that prevent loading or lose detections.
+#[allow(clippy::expect_used)]
+pub(crate) fn set_soft_validation_override(extra_exclude: Option<&str>) -> Result<()> {
+    let disabled = soft_disabled_set(extra_exclude)?;
+    *disabled_validator_override()
+        .write()
+        .expect("validator override lock poisoned") = Some(disabled);
+    Ok(())
+}
+
+/// Build the soft-mode disabled set: every validator except the
+/// detection-critical [`SOFT_RETAINED_VALIDATOR_IDS`], plus any resolved
+/// `extra_exclude` ids. Pure (no global state) so the invariant is unit-testable.
+fn soft_disabled_set(extra_exclude: Option<&str>) -> Result<BTreeSet<String>> {
+    let mut disabled: BTreeSet<String> = VALIDATOR_SPECS
+        .iter()
+        .map(|spec| spec.id)
+        .filter(|id| !SOFT_RETAINED_VALIDATOR_IDS.contains(id))
+        .map(str::to_string)
+        .collect();
+
+    if let Some(ids) = extra_exclude {
+        for raw_id in ids.split(',') {
+            let raw_id = raw_id.trim();
+            if raw_id.is_empty() {
+                continue;
+            }
+            let Some(id) = resolve_validator_id(raw_id) else {
+                bail!("unknown validator in --exclude: {raw_id}");
+            };
+            disabled.insert(id.to_string());
+        }
+    }
+
+    Ok(disabled)
+}
+
 #[must_use]
 pub(crate) fn disabled_validator_specs() -> Vec<&'static ValidatorSpec> {
     VALIDATOR_SPECS
@@ -815,6 +886,44 @@ mod tests {
         assert_eq!(issue.file.as_deref(), Some("./traits/a.yaml"));
         assert_eq!(issue.line, None);
         assert_eq!(issue.location(), "./traits/a.yaml");
+    }
+
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn soft_set_disables_hygiene_but_keeps_detection_critical() {
+        let disabled = soft_disabled_set(None).expect("soft set");
+
+        // Detection-critical validators stay enabled (absent from the disabled set).
+        for id in SOFT_RETAINED_VALIDATOR_IDS {
+            assert!(!disabled.contains(*id), "{id} must stay fatal in soft mode");
+        }
+
+        // Representative hygiene validators are downgraded (present in the set).
+        for id in [
+            "regex-length",
+            "brittle-path-pattern",
+            "oversized-dir",
+            "tier-violation",
+            "precision",
+            "wellknown-size-filter",
+        ] {
+            assert!(disabled.contains(id), "{id} must be non-fatal in soft mode");
+        }
+
+        // Every spec is accounted for: disabled ∪ retained == all specs.
+        assert_eq!(
+            disabled.len() + SOFT_RETAINED_VALIDATOR_IDS.len(),
+            VALIDATOR_SPECS.len()
+        );
+    }
+
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn soft_set_unions_extra_exclude() {
+        let disabled = soft_disabled_set(Some("score-caps")).expect("soft set");
+        // A retained validator can still be opted out via --exclude on top of soft.
+        assert!(disabled.contains("score-caps"));
+        assert!(soft_disabled_set(Some("not-a-validator")).is_err());
     }
 
     #[test]

@@ -272,6 +272,15 @@ check-manifest: ## Pre-publish gate: manifest parses, artifacts present + sha ma
 	    "$(DIST)/versions.toml" && echo "✓ signature verifies for $(IDENTITY)"; \
 	else echo "⚠ IDENTITY unset — skipping cosign signature verification"; fi
 
+# Soft validation for the release gate: a trait bundle is rejected only for
+# flaws that break loading or lose detections (unparseable YAML, uncompilable
+# regex, invalid/unknown file types, duplicate ids) plus fixture regressions —
+# never for authoring hygiene (taxonomy, size, dedup, style, precision). Passed
+# as an env toggle, not a `--soft` flag, so older per-release engines in the
+# cross-version matrix silently ignore it instead of failing on an unknown flag.
+# Exported so it propagates through the `gen-manifest` sub-make into manifest-gen
+# and on into every engine subprocess it spawns.
+publish-traits: export CLEAVE_VALIDATE_SOFT := 1
 publish-traits: ## FULL RELEASE: compat-test HEAD + last (VERSIONS-1) releases → sign → verify → upload to R2 ([VERSIONS=3] IDENTITY=<signer>)
 	@[ -n "$(IDENTITY)" ] || { echo "publish-traits: IDENTITY=<signer> required (e.g. releaser@<project>.iam.gserviceaccount.com)"; exit 1; }
 	@command -v rclone >/dev/null || { echo "publish-traits: rclone not found"; exit 1; }

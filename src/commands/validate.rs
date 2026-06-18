@@ -80,7 +80,43 @@ fn print_contributing_findings(file: &FileAnalysis, indent: &str) {
 /// failures), so it is emitted only under `verbose` to keep a passing run to a
 /// single line.
 pub fn run(format: &OutputFormat, exclude: Option<&str>, verbose: bool) -> Result<String> {
-    validation_controls::set_disabled_validators_override(exclude)?;
+    run_inner(format, exclude, verbose, soft_env_enabled())
+}
+
+/// Run trait validation in **soft** mode: fail only on flaws that prevent the
+/// bundle from loading or that silently lose detections (unparseable YAML,
+/// uncompilable regex, invalid/unknown file types, duplicate trait ids), plus
+/// the testdata fixture scoring. Authoring-hygiene issues (taxonomy, size,
+/// dedup/reuse, regex style, precision) are reported only, never fatal.
+///
+/// Intended for trait-bundle gates — `make publish-traits`, the scan worker,
+/// and hopper's local scanner — that must tolerate hygiene debt but reject a
+/// bundle that won't load or won't detect on this engine.
+pub fn run_soft(format: &OutputFormat, exclude: Option<&str>, verbose: bool) -> Result<String> {
+    run_inner(format, exclude, verbose, true)
+}
+
+/// Honor the `CLEAVE_VALIDATE_SOFT` env toggle for callers that invoke [`run`]
+/// over a released engine and cannot pass the flag directly. The explicit paths
+/// are `cleave validate --soft` and [`run_soft`].
+fn soft_env_enabled() -> bool {
+    matches!(
+        std::env::var("CLEAVE_VALIDATE_SOFT").ok().as_deref(),
+        Some("1" | "true" | "yes" | "on")
+    )
+}
+
+fn run_inner(
+    format: &OutputFormat,
+    exclude: Option<&str>,
+    verbose: bool,
+    soft: bool,
+) -> Result<String> {
+    if soft {
+        validation_controls::set_soft_validation_override(exclude)?;
+    } else {
+        validation_controls::set_disabled_validators_override(exclude)?;
+    }
     let (targets, expectations) = collect_targets()?;
 
     // Skip the analysis cache so every run reflects the current trait set,

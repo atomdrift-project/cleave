@@ -2769,6 +2769,136 @@ mod duplicate_tests {
         );
     }
 
+    /// Build two `metadata/` traits sharing a matcher, with the given ids and `unless:`.
+    fn metadata_unless_pair(
+        id_a: &str,
+        id_b: &str,
+        unless_a: &str,
+        unless_b: &str,
+    ) -> Vec<TraitDefinition> {
+        let matcher = || {
+            Condition::Raw(RawQuery {
+                exact: Some("gate_matcher".to_string()),
+                ..Default::default()
+            })
+        };
+        let mut a = create_test_trait_with_conf_crit(
+            id_a,
+            matcher(),
+            vec![FileType::Shell],
+            "a.yaml",
+            0.7,
+            crate::types::Criticality::Component,
+        );
+        a.unless = Some(vec![Condition::Trait {
+            id: unless_a.to_string(),
+        }]);
+        let mut b = create_test_trait_with_conf_crit(
+            id_b,
+            matcher(),
+            vec![FileType::Shell],
+            "b.yaml",
+            0.7,
+            crate::types::Criticality::Component,
+        );
+        b.unless = Some(vec![Condition::Trait {
+            id: unless_b.to_string(),
+        }]);
+        vec![a, b]
+    }
+
+    // The metadata field-presence idiom: two metadata traits sharing a gate matcher,
+    // distinct ids, differing only in `unless:` — distinct detections, NOT flagged.
+    #[test]
+    fn test_atomic_logic_duplicates_metadata_unless_idiom_skipped() {
+        use crate::capabilities::validation::duplicates::find_atomic_logic_duplicates;
+        let traits = metadata_unless_pair(
+            "metadata/package/manifest::pkginfo-no-author",
+            "metadata/package/manifest::pkginfo-no-author-email",
+            "field-author-present",
+            "field-author-email-present",
+        );
+        assert!(
+            find_atomic_logic_duplicates(&traits).is_empty(),
+            "metadata gate+unless idiom must not be flagged"
+        );
+    }
+
+    // The same local id duplicated across two metadata directories is a copy-paste —
+    // flagged even though it differs only in unless and lives under metadata/.
+    #[test]
+    fn test_atomic_logic_duplicates_metadata_same_local_id_flagged() {
+        use crate::capabilities::validation::duplicates::find_atomic_logic_duplicates;
+        let traits = metadata_unless_pair(
+            "metadata/binary/metrics/structural::text-dominates-cstring",
+            "metadata/binary/anomaly/format::text-dominates-cstring",
+            "guard-apple",
+            "guard-funcs",
+        );
+        assert_eq!(
+            find_atomic_logic_duplicates(&traits).len(),
+            1,
+            "same local id across metadata dirs is a copy-paste dupe"
+        );
+    }
+
+    // A crit mismatch is a real inconsistency — flagged even within metadata/.
+    #[test]
+    fn test_atomic_logic_duplicates_metadata_crit_diff_flagged() {
+        use crate::capabilities::validation::duplicates::find_atomic_logic_duplicates;
+        let mut traits = metadata_unless_pair(
+            "metadata/hardening/mitigation::textrel",
+            "metadata/hardening/mitigation::text-relocations",
+            "guard-a",
+            "guard-b",
+        );
+        traits[1].crit = crate::types::Criticality::Suspicious; // a is Component
+        assert_eq!(
+            find_atomic_logic_duplicates(&traits).len(),
+            1,
+            "crit mismatch must flag even under metadata/"
+        );
+    }
+
+    // When the shared matcher is a bare existence gate, crit may legitimately vary per
+    // field (missing description = notable, missing author = component). Not flagged.
+    #[test]
+    fn test_atomic_logic_duplicates_metadata_gate_crit_diff_skipped() {
+        use crate::capabilities::validation::duplicates::find_atomic_logic_duplicates;
+        let gate = || {
+            Condition::Kv(crate::composite_rules::KvQuery {
+                path: "metadata-version".to_string(),
+                ..Default::default()
+            })
+        };
+        let mut a = create_test_trait_with_conf_crit(
+            "metadata/package/manifest::pkginfo-missing-description",
+            gate(),
+            vec![FileType::Shell],
+            "a.yaml",
+            0.7,
+            crate::types::Criticality::Notable,
+        );
+        a.unless = Some(vec![Condition::Trait {
+            id: "field-description-present".to_string(),
+        }]);
+        let mut b = create_test_trait_with_conf_crit(
+            "metadata/package/manifest::pkginfo-no-author",
+            gate(),
+            vec![FileType::Shell],
+            "b.yaml",
+            0.7,
+            crate::types::Criticality::Component,
+        );
+        b.unless = Some(vec![Condition::Trait {
+            id: "field-author-present".to_string(),
+        }]);
+        assert!(
+            find_atomic_logic_duplicates(&[a, b]).is_empty(),
+            "gate matcher: per-field crit variation is legitimate, not a dupe"
+        );
+    }
+
     #[test]
     fn test_atomic_logic_duplicates_overlapping_for_types() {
         use crate::capabilities::validation::duplicates::find_atomic_logic_duplicates;
@@ -4734,27 +4864,25 @@ mod excessive_skip_tests {
         assert_eq!((comp.own, comp.expanded), (3, 41));
     }
 
-    // Aggregator expansion must terminate on a cycle and dedupe shared visits.
+    // A composite reused as a suppression by several rules is shared infrastructure —
+    // counted as one, not inlined. A 45-leg aggregator referenced by two rules is reuse,
+    // not bloat, so neither rule is flagged. (Shared-as-leaf also guarantees the walk
+    // terminates: only single-use bespoke aggregators expand, so no cycle can recurse.)
     #[test]
-    fn expansion_cycle_terminates_and_dedupes() {
-        // x references y, y references x; distinct leaves on each side total 45.
-        let ax = leaf_ids("a", 30);
-        let by = leaf_ids("b", 15);
-        let mut x_legs = vec!["y"];
-        x_legs.extend(ax.iter().map(String::as_str));
-        let mut y_legs = vec!["x"];
-        y_legs.extend(by.iter().map(String::as_str));
-
+    fn shared_aggregator_counts_as_one() {
+        let leaves = leaf_ids("a", 45);
+        let leaf_refs: Vec<&str> = leaves.iter().map(String::as_str).collect();
         let composites = vec![
-            aggregator("x", &x_legs),
-            aggregator("y", &y_legs),
-            rule_unless("comp", refs(&["x"])),
+            aggregator("agg", &leaf_refs),
+            rule_unless("r1", refs(&["agg"])),
+            rule_unless("r2", refs(&["agg"])), // second user => agg is shared infra
         ];
 
         let v = find_excessive_skip_conditions(&[], &composites);
-        let comp = v.iter().find(|e| e.id == "comp").expect("flagged");
-        // 30 + 15 distinct leaves; x and y each expanded once (no hang, no double-count).
-        assert_eq!(comp.expanded, 45);
+        assert!(
+            !v.iter().any(|e| e.id == "r1" || e.id == "r2"),
+            "a shared aggregator counts as one, so neither user is flagged"
+        );
     }
 }
 

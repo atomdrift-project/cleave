@@ -15,7 +15,7 @@
 
 use super::shared::{MatchSignature, PatternLocation};
 use crate::composite_rules::{
-    CompositeTrait, Condition, FileType as RuleFileType, KvQuery, TraitDefinition,
+    CompositeTrait, Condition, FileType as RuleFileType, KvQuery, Platform, TraitDefinition,
     condition::EncodingSpec, evaluators::build_regex,
 };
 use crate::composite_rules::{
@@ -3400,6 +3400,37 @@ pub(crate) fn find_for_only_duplicates(
     duplicates
 }
 
+/// Whether a matcher is a bare field-existence gate — a `type: value` condition that
+/// only navigates to a path with no value assertion, so it matches every file that has
+/// that field (e.g. `value path: metadata-version` = "is a PKG-INFO file"). Traits that
+/// share such a gate carry their real meaning in `unless:`, so differing criticality
+/// across them (missing description = notable, missing author = component) is a
+/// legitimate per-field severity, not an inconsistency.
+fn is_existence_gate(cond: &Condition) -> bool {
+    matches!(
+        cond,
+        Condition::Kv(kv)
+            if kv.exact.is_none()
+                && kv.substr.is_none()
+                && kv.regex.is_none()
+                && kv.eq.is_none()
+                && kv.ne.is_none()
+                && kv.size_min.is_none()
+                && kv.size_max.is_none()
+                && kv.exists != Some(false)
+    )
+}
+
+/// Whether two platform lists denote effectively the same set, honouring the `Unix`
+/// (and `Appliance`) meta-platforms via [`Platform::matches_filter`]. So
+/// `[Unix, Windows]` and `[Linux, MacOS, Windows]` are equivalent and not a difference.
+fn platforms_equivalent(a: &[Platform], b: &[Platform]) -> bool {
+    let covered_by = |xs: &[Platform], ys: &[Platform]| {
+        xs.iter().all(|x| ys.iter().any(|y| x.matches_filter(y)))
+    };
+    covered_by(a, b) && covered_by(b, a)
+}
+
 /// Find traits with identical matching logic but different metadata.
 ///
 /// The grouping signature is the **matcher only** (`if` + `not` + numeric/size
@@ -3409,6 +3440,13 @@ pub(crate) fn find_for_only_duplicates(
 /// variation a single trait with a `downgrade:` can express. Such pairs are reported
 /// with that recommendation. Only flags pairs with overlapping file types (so they'd
 /// actually fire on the same files).
+///
+/// One exception avoids a false positive: the metadata field-presence idiom, where a
+/// gate matcher is discriminated purely by `unless:` (e.g. `pkginfo-no-author` vs
+/// `pkginfo-no-author-email`). A pair is NOT flagged when both traits are under
+/// `metadata/`, they differ only in `unless:`/`downgrade:`, and their local ids differ.
+/// Crit/conf/platform mismatches and the same local id duplicated across directories
+/// are still flagged, even within `metadata/`.
 ///
 /// Returns: Vec<(trait_id_a, trait_id_b, description)>
 #[must_use]
@@ -3457,7 +3495,7 @@ pub(crate) fn find_atomic_logic_duplicates(
 
                 let crit_differs = !criticalities_equivalent(a.crit, b.crit);
                 let conf_differs = (a.conf - b.conf).abs() >= 0.1;
-                let platforms_differ = a.platforms != b.platforms;
+                let platforms_differ = !platforms_equivalent(&a.platforms, &b.platforms);
                 let unless_differs = format!("{:?}", a.unless) != format!("{:?}", b.unless);
                 let downgrade_differs =
                     format!("{:?}", a.downgrade) != format!("{:?}", b.downgrade);
@@ -3470,6 +3508,33 @@ pub(crate) fn find_atomic_logic_duplicates(
                 {
                     // Everything outside the matcher is the same too — an exact
                     // duplicate handled by the exact-duplicate checks, not this one.
+                    continue;
+                }
+
+                // The metadata field-presence idiom: distinct metadata traits sharing a
+                // matcher, discriminated purely by `unless:` field checks —
+                // `pkginfo-no-author` (`unless: author present`) vs
+                // `pkginfo-no-author-email` (`unless: author-email present`). Those are
+                // distinct detections, not duplicates, so skip a metadata pair with
+                // distinct local ids that differs in `unless:`/`downgrade:`. When the
+                // shared matcher is a bare existence gate (matches the whole file class),
+                // criticality may legitimately vary per field, so tolerate crit/conf/
+                // platform differences too; otherwise require them to match (so a real
+                // inconsistency like `textrel` vs `text-relocations` still flags). The
+                // same local id across directories is always a copy-paste — never skipped.
+                let exceptions_differ = unless_differs || downgrade_differs;
+                let only_exceptions_differ =
+                    exceptions_differ && !crit_differs && !conf_differs && !platforms_differ;
+                let both_metadata = a.id.starts_with("metadata/") && b.id.starts_with("metadata/");
+                let same_local_id = a.id.rsplit("::").next() == b.id.rsplit("::").next();
+                // A bare existence-gate matcher discriminated by `unless:` is the
+                // field-presence idiom wherever it is filed, so its per-field crit
+                // variation is legitimate. The looser metadata-only allowance (skip when
+                // only `unless:`/`downgrade:` differs) still requires both under metadata/.
+                if !same_local_id
+                    && exceptions_differ
+                    && (is_existence_gate(&a.r#if) || (both_metadata && only_exceptions_differ))
+                {
                     continue;
                 }
 

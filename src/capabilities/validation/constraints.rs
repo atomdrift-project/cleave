@@ -619,8 +619,14 @@ impl SuppressionBranch {
 /// each aggregator and each leaf is counted at its first occurrence only, which keeps
 /// the per-node counts additive (a node's `count` equals the sum of its children's)
 /// and bounds the walk to one visit per reference.
+///
+/// Only a *bespoke* aggregator — one used by a single rule — is expanded into its
+/// underlying conditions. An aggregator reused by several rules is shared exception
+/// infrastructure (e.g. `has-tests`, a benign-context cluster), so referencing it is
+/// reuse, not hidden bloat; it counts as one, like a leaf.
 struct SuppressionExpander<'a> {
     composite_map: &'a HashMap<&'a str, &'a CompositeTrait>,
+    shared: &'a HashSet<&'a str>,
     seen_aggregators: HashSet<&'a str>,
     seen_leaves: HashSet<&'a str>,
 }
@@ -637,8 +643,11 @@ impl<'a> SuppressionExpander<'a> {
         };
         let key = id.as_str();
 
-        if let Some(c) = self.composite_map.get(key) {
-            // Aggregator composite: expand its matching legs, once.
+        // Expand only bespoke aggregators; shared infrastructure and plain leaf/
+        // directory references each count as one.
+        let is_bespoke_aggregator =
+            self.composite_map.contains_key(key) && !self.shared.contains(key);
+        if is_bespoke_aggregator {
             if !self.seen_aggregators.insert(key) {
                 return SuppressionBranch {
                     label: format!("{key} (already counted)"),
@@ -646,6 +655,7 @@ impl<'a> SuppressionExpander<'a> {
                     children: Vec::new(),
                 };
             }
+            let c = self.composite_map[key];
             let children: Vec<SuppressionBranch> = c
                 .all
                 .iter()
@@ -660,7 +670,6 @@ impl<'a> SuppressionExpander<'a> {
                 children,
             }
         } else if self.seen_leaves.insert(key) {
-            // Leaf trait or directory reference: one exception.
             SuppressionBranch {
                 label: key.to_string(),
                 count: 1,
@@ -690,9 +699,11 @@ fn expand_suppressions<'a>(
     unless: Option<&'a Vec<Condition>>,
     downgrade: Option<&'a DowngradeConditions>,
     composite_map: &'a HashMap<&'a str, &'a CompositeTrait>,
+    shared: &'a HashSet<&'a str>,
 ) -> (usize, Vec<SuppressionBranch>) {
     let mut expander = SuppressionExpander {
         composite_map,
+        shared,
         seen_aggregators: HashSet::new(),
         seen_leaves: HashSet::new(),
     };
@@ -729,11 +740,24 @@ pub(crate) struct ExcessiveSkip {
 /// Exceptions a single rule may write directly on itself.
 const MAX_OWN_SUPPRESSIONS: usize = 8;
 
-/// Effective exceptions a rule may carry once aggregator references in its
+/// Effective exceptions a rule may carry once *bespoke* aggregator references in its
 /// `unless:`/`downgrade:` are expanded. Higher than the direct cap because one
 /// reference can legitimately stand in for a handful of related benign indicators;
 /// this only catches rules whose true exception burden is runaway.
 const MAX_AGGREGATE_SUPPRESSIONS: usize = 40;
+
+/// A composite referenced as a building block by at least this many rules is treated as
+/// shared infrastructure (counted as one), not an inlined exception subtree.
+const SHARED_REFERENCE_THRESHOLD: usize = 2;
+
+/// Tally each `Condition::Trait` reference in a clause into `counts`.
+fn tally_clause<'a>(conds: Option<&'a Vec<Condition>>, counts: &mut HashMap<&'a str, usize>) {
+    for cond in conds.into_iter().flatten() {
+        if let Condition::Trait { id } = cond {
+            *counts.entry(id.as_str()).or_default() += 1;
+        }
+    }
+}
 
 /// Find traits/rules with excessive `unless:`/`downgrade:` suppressions.
 ///
@@ -744,9 +768,11 @@ const MAX_AGGREGATE_SUPPRESSIONS: usize = 40;
 ///   literally on the rule. A rule this heavily patched usually has poor precision and
 ///   should be improved rather than suppressed.
 /// - **Expanded** (`MAX_AGGREGATE_SUPPRESSIONS`, 40): the effective exception count once
-///   any `unless:`/`downgrade:` entry that references an aggregator composite is
-///   expanded to its underlying conditions. This catches exception lists hidden behind a
-///   single reference. Leaf and directory references each count as one.
+///   any `unless:`/`downgrade:` entry that references a *bespoke* (single-use) aggregator
+///   composite is expanded to its underlying conditions. This catches a large exception
+///   list hidden behind one reference. Leaf/directory references — and aggregators reused
+///   by several rules (shared infrastructure like a benign-context cluster) — each count
+///   as one, so reuse is not mistaken for bloat.
 #[must_use]
 pub(crate) fn find_excessive_skip_conditions<'a>(
     trait_definitions: &'a [TraitDefinition],
@@ -754,6 +780,37 @@ pub(crate) fn find_excessive_skip_conditions<'a>(
 ) -> Vec<ExcessiveSkip> {
     let composite_map: HashMap<&'a str, &'a CompositeTrait> =
         composite_rules.iter().map(|r| (r.id.as_str(), r)).collect();
+
+    // Count how often each composite is referenced across all rules (any clause). A
+    // composite reused by several rules is shared infrastructure, so the expander stops
+    // at it instead of inlining its whole subtree.
+    let mut ref_counts: HashMap<&'a str, usize> = HashMap::new();
+    for t in trait_definitions {
+        if let Condition::Trait { id } = &t.r#if {
+            *ref_counts.entry(id.as_str()).or_default() += 1;
+        }
+        tally_clause(t.unless.as_ref(), &mut ref_counts);
+        for dg in t.downgrade.iter() {
+            tally_clause(dg.any.as_ref(), &mut ref_counts);
+            tally_clause(dg.all.as_ref(), &mut ref_counts);
+            tally_clause(dg.none.as_ref(), &mut ref_counts);
+        }
+    }
+    for r in composite_rules {
+        tally_clause(r.all.as_ref(), &mut ref_counts);
+        tally_clause(r.any.as_ref(), &mut ref_counts);
+        tally_clause(r.unless.as_ref(), &mut ref_counts);
+        for dg in r.downgrade.iter() {
+            tally_clause(dg.any.as_ref(), &mut ref_counts);
+            tally_clause(dg.all.as_ref(), &mut ref_counts);
+            tally_clause(dg.none.as_ref(), &mut ref_counts);
+        }
+    }
+    let shared: HashSet<&'a str> = ref_counts
+        .iter()
+        .filter(|&(_, &n)| n >= SHARED_REFERENCE_THRESHOLD)
+        .map(|(&k, _)| k)
+        .collect();
 
     let mut violations = Vec::new();
 
@@ -763,7 +820,7 @@ pub(crate) fn find_excessive_skip_conditions<'a>(
                     is_composite: bool| {
         let (u, d) = direct_suppression_counts(unless, downgrade);
         let own = u + d;
-        let (expanded, branches) = expand_suppressions(unless, downgrade, &composite_map);
+        let (expanded, branches) = expand_suppressions(unless, downgrade, &composite_map, &shared);
         if own >= MAX_OWN_SUPPRESSIONS || expanded >= MAX_AGGREGATE_SUPPRESSIONS {
             violations.push(ExcessiveSkip {
                 id: id.to_string(),

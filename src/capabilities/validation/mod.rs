@@ -119,8 +119,8 @@ pub(crate) use duplicates::{
 pub(crate) use composite::{
     autoprefix_trait_refs, collect_trait_refs_from_rule, collect_trait_refs_from_trait_def,
     find_many_directory_refs, find_overlapping_conditions, find_pure_directory_alias_composites,
-    find_redundant_any_refs, find_self_referencing_traits, find_single_item_clauses,
-    validate_composite_trait_only,
+    find_redundant_any_refs, find_self_referencing_composites, find_self_referencing_traits,
+    find_single_item_clauses, validate_composite_trait_only,
 };
 
 // Pattern quality checks
@@ -142,20 +142,21 @@ pub(crate) use taxonomy::{
     find_metadata_content_dirs, find_metadata_cross_tier_refs,
     find_objectives_wellknown_violations, find_oversized_trait_directories,
     find_parent_duplicate_segments, find_platform_named_directories, find_redundant_unix_platforms,
-    find_unanchored_wellknown_composites, find_wellknown_category_violations,
-    find_wellknown_missing_section_filter, find_wellknown_missing_size_filter,
+    find_suppression_only_building_blocks, find_unanchored_wellknown_composites,
+    find_wellknown_category_violations, find_wellknown_missing_section_filter,
+    find_wellknown_missing_size_filter,
 };
 
 // Logic constraint validation
 #[allow(unused_imports)] // find_needs_zero used by binary target
 pub(crate) use constraints::{
     find_empty_condition_clauses, find_excessive_file_types, find_excessive_skip_conditions,
-    find_hex_binary_missing_section, find_impossible_count_constraints, find_impossible_needs,
-    find_impossible_size_constraints, find_invalid_not_usage, find_kv_exists_with_matcher,
-    find_missing_search_patterns, find_needs_without_any, find_needs_zero,
-    find_none_only_with_proximity, find_orphaned_components, find_pure_alias_traits,
-    find_redundant_explicit_defaults, find_redundant_needs_one, find_should_use_defaults,
-    find_too_short_patterns,
+    find_hex_binary_missing_section, find_hostile_composites_without_notable_leg,
+    find_impossible_count_constraints, find_impossible_needs, find_impossible_size_constraints,
+    find_invalid_not_usage, find_kv_exists_with_matcher, find_missing_search_patterns,
+    find_needs_without_any, find_needs_zero, find_none_only_with_proximity,
+    find_orphaned_components, find_pure_alias_traits, find_redundant_explicit_defaults,
+    find_redundant_needs_one, find_should_use_defaults, find_too_short_patterns,
 };
 
 // Utility functions

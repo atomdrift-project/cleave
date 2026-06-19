@@ -3388,6 +3388,7 @@ mod taxonomy_tests {
     use crate::capabilities::validation::taxonomy::{
         ObjectivesWellknownViolation, find_cap_obj_violations, find_cap_wellknown_violations,
         find_metadata_cross_tier_refs, find_objectives_wellknown_violations,
+        find_suppression_only_building_blocks,
     };
     use crate::composite_rules::traits::CompositeTrait;
     use crate::composite_rules::{Arch, Condition, FileType, Platform, TraitDefinition};
@@ -3495,6 +3496,61 @@ mod taxonomy_tests {
             precision: None,
             ..Default::default()
         }
+    }
+
+    // ---- hostile composites must reference a notable+ leg ----
+
+    #[test]
+    fn test_hostile_without_notable_leg() {
+        use crate::capabilities::validation::find_hostile_composites_without_notable_leg;
+
+        fn leaf(id: &str, crit: Criticality) -> TraitDefinition {
+            TraitDefinition {
+                crit,
+                ..make_trait(id, "ignored")
+            }
+        }
+        let traits = vec![
+            leaf("objectives/x::a", Criticality::Component),
+            leaf("objectives/x::b", Criticality::Component),
+            leaf("objectives/x::notable-leg", Criticality::Notable),
+            // notable trait reachable only via a directory-subtree reference
+            leaf("micro-behaviors/comms/http::client", Criticality::Notable),
+        ];
+
+        let mut all_component =
+            make_composite("objectives/x::bad", &["objectives/x::a", "objectives/x::b"]);
+        all_component.crit = Criticality::Hostile;
+
+        let mut direct_notable = make_composite(
+            "objectives/x::good-direct",
+            &["objectives/x::a", "objectives/x::notable-leg"],
+        );
+        direct_notable.crit = Criticality::Hostile;
+
+        // directory reference into a subtree containing a notable trait
+        let mut dir_ref = make_composite("objectives/x::good-dir", &["micro-behaviors/comms/http"]);
+        dir_ref.crit = Criticality::Hostile;
+
+        // transitive: hostile -> component sub-composite -> notable leg
+        let sub = make_composite("objectives/x::sub", &["objectives/x::notable-leg"]); // Baseline
+        let mut transitive =
+            make_composite("objectives/x::good-transitive", &["objectives/x::sub"]);
+        transitive.crit = Criticality::Hostile;
+
+        // non-hostile composites are ignored even with only component legs
+        let non_hostile = make_composite("objectives/x::ignored", &["objectives/x::a"]);
+
+        let composites = vec![
+            all_component,
+            direct_notable,
+            dir_ref,
+            sub,
+            transitive,
+            non_hostile,
+        ];
+        let v = find_hostile_composites_without_notable_leg(&traits, &composites);
+        assert_eq!(v, vec!["objectives/x::bad".to_string()]);
     }
 
     // ---- metadata cross-tier refs ----
@@ -3745,6 +3801,214 @@ mod taxonomy_tests {
         let v = find_objectives_wellknown_violations(&[], &composites, &sources);
         assert!(v.is_empty());
     }
+
+    // ---- suppression-only building blocks ----
+
+    /// A baseline/component atomic leaf (raw matcher, no references).
+    fn leaf(id: &str, crit: Criticality) -> TraitDefinition {
+        TraitDefinition {
+            id: id.to_string(),
+            desc: "leaf".to_string(),
+            conf: 1.0,
+            crit,
+            mbc: None,
+            attack: None,
+            r#if: Condition::Raw(crate::composite_rules::RawQuery {
+                exact: Some("needle".to_string()),
+                substr: None,
+                regex: None,
+                word: None,
+                case_insensitive: false,
+                is_check: None,
+                section: None,
+                offset: None,
+                offset_range: None,
+                section_offset: None,
+                section_offset_range: None,
+                not: None,
+            }),
+            size_min: None,
+            size_max: None,
+            count_min: None,
+            count_max: None,
+            per_kb_min: None,
+            per_kb_max: None,
+            entropy_min: None,
+            entropy_max: None,
+            r#for: vec![FileType::All],
+            for_from_groups: false,
+            platforms: vec![Platform::All],
+            arch: vec![Arch::All],
+            not: None,
+            unless: None,
+            downgrade: None,
+            defined_in: PathBuf::from("test.yaml"),
+            precision: None,
+            ..Default::default()
+        }
+    }
+
+    /// A composite with explicit crit, optional `any:`, and optional `unless:` references.
+    fn comp(id: &str, crit: Criticality, any: &[&str], unless: &[&str]) -> CompositeTrait {
+        let to_conds = |refs: &[&str]| {
+            refs.iter()
+                .map(|r| Condition::Trait { id: r.to_string() })
+                .collect::<Vec<_>>()
+        };
+        CompositeTrait {
+            required_trait_indices: Vec::new(),
+            id: id.to_string(),
+            desc: "comp".to_string(),
+            conf: 1.0,
+            crit,
+            mbc: None,
+            attack: None,
+            platforms: vec![Platform::All],
+            arch: vec![Arch::All],
+            r#for: vec![FileType::All],
+            for_from_groups: false,
+            size_min: None,
+            size_max: None,
+            all: None,
+            any: (!any.is_empty()).then(|| to_conds(any)),
+            unless: (!unless.is_empty()).then(|| to_conds(unless)),
+            not: None,
+            downgrade: None,
+            needs: None,
+            near_lines: None,
+            near_bytes: None,
+            scope: None,
+            defined_in: PathBuf::from("test.yaml"),
+            precision: None,
+            ..Default::default()
+        }
+    }
+
+    fn ids(v: &[(String, String)]) -> Vec<&str> {
+        v.iter().map(|(id, _)| id.as_str()).collect()
+    }
+
+    #[test]
+    fn flags_baseline_leaf_referenced_only_in_unless() {
+        let traits = vec![leaf(
+            "objectives/evasion/x::benign-ctx",
+            Criticality::Baseline,
+        )];
+        // A notable composite that only *suppresses* on the leaf.
+        let composites = vec![comp(
+            "objectives/evasion/x::detect",
+            Criticality::Notable,
+            &["micro-behaviors/foo::bar"],
+            &["objectives/evasion/x::benign-ctx"],
+        )];
+        let v = find_suppression_only_building_blocks(&traits, &composites, &HashMap::new());
+        assert_eq!(ids(&v), vec!["objectives/evasion/x::benign-ctx"]);
+    }
+
+    #[test]
+    fn exempt_when_positive_evidence_in_notable_composite() {
+        let traits = vec![leaf("objectives/evasion/x::probe", Criticality::Baseline)];
+        let composites = vec![comp(
+            "objectives/evasion/x::detect",
+            Criticality::Notable,
+            &["objectives/evasion/x::probe"],
+            &[],
+        )];
+        let v = find_suppression_only_building_blocks(&traits, &composites, &HashMap::new());
+        assert!(
+            v.is_empty(),
+            "positive ref by a notable composite satisfies"
+        );
+    }
+
+    #[test]
+    fn exempt_transitively_through_baseline_aggregator() {
+        // component fragment -> baseline aggregator -> notable composite.
+        let traits = vec![leaf("objectives/evasion/x::frag", Criticality::Component)];
+        let composites = vec![
+            comp(
+                "objectives/evasion/x::agg",
+                Criticality::Baseline,
+                &["objectives/evasion/x::frag"],
+                &[],
+            ),
+            comp(
+                "objectives/evasion/x::detect",
+                Criticality::Notable,
+                &["objectives/evasion/x::agg"],
+                &[],
+            ),
+        ];
+        let v = find_suppression_only_building_blocks(&traits, &composites, &HashMap::new());
+        assert!(
+            v.is_empty(),
+            "a fragment feeding a notable detection transitively is fine, got {:?}",
+            ids(&v)
+        );
+    }
+
+    #[test]
+    fn flags_chain_that_never_reaches_notable() {
+        // fragment -> baseline aggregator, but nothing notable consumes the aggregator.
+        let traits = vec![leaf("objectives/evasion/x::frag", Criticality::Component)];
+        let composites = vec![comp(
+            "objectives/evasion/x::agg",
+            Criticality::Baseline,
+            &["objectives/evasion/x::frag"],
+            &[],
+        )];
+        let v = find_suppression_only_building_blocks(&traits, &composites, &HashMap::new());
+        // Both the fragment and the baseline aggregator are unreached building blocks.
+        assert_eq!(
+            ids(&v),
+            vec!["objectives/evasion/x::agg", "objectives/evasion/x::frag"]
+        );
+    }
+
+    #[test]
+    fn directory_reference_from_notable_satisfies_members() {
+        let traits = vec![leaf(
+            "well-known/malware/foo::marker",
+            Criticality::Baseline,
+        )];
+        // Notable composite references the directory, not the specific id.
+        let composites = vec![comp(
+            "well-known/malware/foo::detect",
+            Criticality::Notable,
+            &["well-known/malware/foo"],
+            &[],
+        )];
+        let v = find_suppression_only_building_blocks(&traits, &composites, &HashMap::new());
+        assert!(v.is_empty(), "a directory ref covers members beneath it");
+    }
+
+    #[test]
+    fn ignores_other_tiers() {
+        // micro-behaviors/ and metadata/ are out of scope even when only suppressed.
+        let traits = vec![leaf("micro-behaviors/foo::ctx", Criticality::Baseline)];
+        let composites = vec![comp(
+            "objectives/evasion/x::detect",
+            Criticality::Notable,
+            &["other::thing"],
+            &["micro-behaviors/foo::ctx"],
+        )];
+        let v = find_suppression_only_building_blocks(&traits, &composites, &HashMap::new());
+        assert!(
+            v.is_empty(),
+            "only objectives/ and well-known/ are candidates"
+        );
+    }
+
+    #[test]
+    fn notable_rule_itself_is_not_a_candidate() {
+        // A notable leaf in objectives/ surfaces on its own — not a building block.
+        let traits = vec![leaf(
+            "objectives/evasion/x::standalone",
+            Criticality::Notable,
+        )];
+        let v = find_suppression_only_building_blocks(&traits, &[], &HashMap::new());
+        assert!(v.is_empty());
+    }
 }
 
 #[cfg(test)]
@@ -3753,7 +4017,10 @@ mod constraint_tests {
         find_empty_condition_clauses, find_needs_zero, find_none_only_with_proximity,
         find_pure_alias_traits, find_too_short_patterns,
     };
-    use crate::capabilities::validation::find_pure_directory_alias_composites;
+    use crate::capabilities::validation::{
+        find_many_directory_refs, find_pure_directory_alias_composites,
+        find_self_referencing_composites,
+    };
     use crate::composite_rules::{
         Arch, CompositeTrait, Condition, FileType, KvQuery, Platform, RawQuery, TraitDefinition,
     };
@@ -4168,14 +4435,40 @@ mod constraint_tests {
     fn test_pure_directory_alias_composite_detected() {
         let traits = dir_traits("foo/bar", &["foo/bar::a", "foo/bar::b"]);
         let rules = vec![create_composite_any(
-            "foo/bar::alias",
+            "other/dir::alias",
             &["foo/bar::a", "foo/bar::b"],
         )];
 
         let violations = find_pure_directory_alias_composites(&rules, &traits);
 
         assert_eq!(violations.len(), 1);
-        assert_eq!(violations[0].0, "foo/bar::alias");
+        assert_eq!(violations[0].0, "other/dir::alias");
+        assert_eq!(violations[0].1, "foo/bar");
+    }
+
+    #[test]
+    fn test_same_directory_alias_composite_not_recommended() {
+        let traits = dir_traits("foo/bar", &["foo/bar::a", "foo/bar::b"]);
+        let rule = create_composite_any("foo/bar::alias", &["foo/bar::a", "foo/bar::b"]);
+
+        assert!(
+            find_many_directory_refs(&rule, &traits).is_empty(),
+            "same-directory replacement would recursively include the composite"
+        );
+        assert!(
+            find_pure_directory_alias_composites(&[rule], &traits).is_empty(),
+            "same-directory aliases must not be rewritten as recursive directory refs"
+        );
+    }
+
+    #[test]
+    fn test_composite_directory_self_reference_detected() {
+        let rule = create_composite_any("foo/bar::alias", &["foo/bar"]);
+        let rules = [rule];
+        let violations = find_self_referencing_composites(&rules);
+
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].0.id, "foo/bar::alias");
         assert_eq!(violations[0].1, "foo/bar");
     }
 
@@ -4803,7 +5096,7 @@ mod excessive_skip_tests {
         assert!(find_excessive_skip_conditions(&traits, &[]).is_empty());
     }
 
-    // The expanded limit (40) catches an exception list hidden behind one reference:
+    // The expanded limit (32) catches an exception list hidden behind one reference:
     // `unless: [agg]` where `agg` enumerates 45 benign indicators. Own count is 1.
     #[test]
     fn expanded_aggregator_reference_flags_rule() {
@@ -4864,25 +5157,53 @@ mod excessive_skip_tests {
         assert_eq!((comp.own, comp.expanded), (3, 41));
     }
 
-    // A composite reused as a suppression by several rules is shared infrastructure —
-    // counted as one, not inlined. A 45-leg aggregator referenced by two rules is reuse,
-    // not bloat, so neither rule is flagged. (Shared-as-leaf also guarantees the walk
-    // terminates: only single-use bespoke aggregators expand, so no cycle can recurse.)
+    // An aggregator is expanded for every referrer, shared or not: the recursive cap
+    // measures each rule's exception burden, and sharing a 45-leg cluster does not make
+    // the 45 conditions weigh less on the rule that pulls them in. Both users are flagged.
     #[test]
-    fn shared_aggregator_counts_as_one() {
+    fn shared_aggregator_is_expanded_for_every_referrer() {
         let leaves = leaf_ids("a", 45);
         let leaf_refs: Vec<&str> = leaves.iter().map(String::as_str).collect();
         let composites = vec![
             aggregator("agg", &leaf_refs),
             rule_unless("r1", refs(&["agg"])),
-            rule_unless("r2", refs(&["agg"])), // second user => agg is shared infra
+            rule_unless("r2", refs(&["agg"])), // sharing is no discount
         ];
 
         let v = find_excessive_skip_conditions(&[], &composites);
-        assert!(
-            !v.iter().any(|e| e.id == "r1" || e.id == "r2"),
-            "a shared aggregator counts as one, so neither user is flagged"
-        );
+        for id in ["r1", "r2"] {
+            let e = v.iter().find(|e| e.id == id).expect("flagged");
+            assert_eq!((e.own, e.expanded), (1, 45));
+        }
+    }
+
+    // Aggregator cycles still terminate: a node revisited within one rule's walk is
+    // counted zero the second time, so two aggregators that reference each other resolve
+    // to a finite total rather than recursing forever.
+    #[test]
+    fn aggregator_cycle_terminates() {
+        let composites = vec![
+            CompositeTrait {
+                id: "a".to_string(),
+                desc: "agg".to_string(),
+                crit: Criticality::Component,
+                any: Some(refs(&["b"])),
+                ..Default::default()
+            },
+            CompositeTrait {
+                id: "b".to_string(),
+                desc: "agg".to_string(),
+                crit: Criticality::Component,
+                any: Some(refs(&["a"])),
+                ..Default::default()
+            },
+            rule_unless("comp", refs(&["a"])),
+        ];
+
+        let v = find_excessive_skip_conditions(&[], &composites);
+        // a -> b -> a(already counted, 0): the cycle contributes nothing past first visit,
+        // so `comp` stays well under the cap and is not flagged.
+        assert!(!v.iter().any(|e| e.id == "comp"));
     }
 }
 

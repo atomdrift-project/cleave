@@ -618,15 +618,15 @@ impl SuppressionBranch {
 /// Builds suppression-expansion trees while deduplicating across the whole rule:
 /// each aggregator and each leaf is counted at its first occurrence only, which keeps
 /// the per-node counts additive (a node's `count` equals the sum of its children's)
-/// and bounds the walk to one visit per reference.
+/// and bounds the walk to one visit per reference (so cycles terminate).
 ///
-/// Only a *bespoke* aggregator — one used by a single rule — is expanded into its
-/// underlying conditions. An aggregator reused by several rules is shared exception
-/// infrastructure (e.g. `has-tests`, a benign-context cluster), so referencing it is
-/// reuse, not hidden bloat; it counts as one, like a leaf.
+/// Every aggregator composite is expanded into its underlying conditions, regardless of
+/// how widely it is reused: the recursive cap measures one rule's *exception burden*, and
+/// a rule that suppresses on a 45-leg cluster carries that weight whether or not the
+/// cluster is shared. Sharing is a DRY property of the composite, not a discount on the
+/// burden it imposes on each referrer.
 struct SuppressionExpander<'a> {
     composite_map: &'a HashMap<&'a str, &'a CompositeTrait>,
-    shared: &'a HashSet<&'a str>,
     seen_aggregators: HashSet<&'a str>,
     seen_leaves: HashSet<&'a str>,
 }
@@ -643,11 +643,9 @@ impl<'a> SuppressionExpander<'a> {
         };
         let key = id.as_str();
 
-        // Expand only bespoke aggregators; shared infrastructure and plain leaf/
-        // directory references each count as one.
-        let is_bespoke_aggregator =
-            self.composite_map.contains_key(key) && !self.shared.contains(key);
-        if is_bespoke_aggregator {
+        // An aggregator composite expands into its legs; a leaf or directory reference
+        // (no exact composite) counts as one.
+        if self.composite_map.contains_key(key) {
             if !self.seen_aggregators.insert(key) {
                 return SuppressionBranch {
                     label: format!("{key} (already counted)"),
@@ -699,11 +697,9 @@ fn expand_suppressions<'a>(
     unless: Option<&'a Vec<Condition>>,
     downgrade: Option<&'a DowngradeConditions>,
     composite_map: &'a HashMap<&'a str, &'a CompositeTrait>,
-    shared: &'a HashSet<&'a str>,
 ) -> (usize, Vec<SuppressionBranch>) {
     let mut expander = SuppressionExpander {
         composite_map,
-        shared,
         seen_aggregators: HashSet::new(),
         seen_leaves: HashSet::new(),
     };
@@ -740,24 +736,11 @@ pub(crate) struct ExcessiveSkip {
 /// Exceptions a single rule may write directly on itself.
 const MAX_OWN_SUPPRESSIONS: usize = 8;
 
-/// Effective exceptions a rule may carry once *bespoke* aggregator references in its
-/// `unless:`/`downgrade:` are expanded. Higher than the direct cap because one
-/// reference can legitimately stand in for a handful of related benign indicators;
+/// Effective exceptions a rule may carry once aggregator references in its
+/// `unless:`/`downgrade:` are recursively expanded. Higher than the direct cap because
+/// one reference can legitimately stand in for a handful of related benign indicators;
 /// this only catches rules whose true exception burden is runaway.
-const MAX_AGGREGATE_SUPPRESSIONS: usize = 40;
-
-/// A composite referenced as a building block by at least this many rules is treated as
-/// shared infrastructure (counted as one), not an inlined exception subtree.
-const SHARED_REFERENCE_THRESHOLD: usize = 2;
-
-/// Tally each `Condition::Trait` reference in a clause into `counts`.
-fn tally_clause<'a>(conds: Option<&'a Vec<Condition>>, counts: &mut HashMap<&'a str, usize>) {
-    for cond in conds.into_iter().flatten() {
-        if let Condition::Trait { id } = cond {
-            *counts.entry(id.as_str()).or_default() += 1;
-        }
-    }
-}
+const MAX_AGGREGATE_SUPPRESSIONS: usize = 32;
 
 /// Find traits/rules with excessive `unless:`/`downgrade:` suppressions.
 ///
@@ -767,12 +750,12 @@ fn tally_clause<'a>(conds: Option<&'a Vec<Condition>>, counts: &mut HashMap<&'a 
 /// - **Own** (`MAX_OWN_SUPPRESSIONS`, 8): `unless:`/`downgrade:` entries written
 ///   literally on the rule. A rule this heavily patched usually has poor precision and
 ///   should be improved rather than suppressed.
-/// - **Expanded** (`MAX_AGGREGATE_SUPPRESSIONS`, 40): the effective exception count once
-///   any `unless:`/`downgrade:` entry that references a *bespoke* (single-use) aggregator
-///   composite is expanded to its underlying conditions. This catches a large exception
-///   list hidden behind one reference. Leaf/directory references — and aggregators reused
-///   by several rules (shared infrastructure like a benign-context cluster) — each count
-///   as one, so reuse is not mistaken for bloat.
+/// - **Expanded** (`MAX_AGGREGATE_SUPPRESSIONS`, 32): the effective exception count once
+///   any `unless:`/`downgrade:` entry that references an aggregator composite is
+///   recursively expanded to its underlying conditions. This catches a large exception
+///   list hidden behind one reference, even when the aggregator is shared by several
+///   rules — sharing is a DRY property of the composite, not a discount on the burden it
+///   imposes on each referrer. Leaf and directory references each count as one.
 #[must_use]
 pub(crate) fn find_excessive_skip_conditions<'a>(
     trait_definitions: &'a [TraitDefinition],
@@ -780,37 +763,6 @@ pub(crate) fn find_excessive_skip_conditions<'a>(
 ) -> Vec<ExcessiveSkip> {
     let composite_map: HashMap<&'a str, &'a CompositeTrait> =
         composite_rules.iter().map(|r| (r.id.as_str(), r)).collect();
-
-    // Count how often each composite is referenced across all rules (any clause). A
-    // composite reused by several rules is shared infrastructure, so the expander stops
-    // at it instead of inlining its whole subtree.
-    let mut ref_counts: HashMap<&'a str, usize> = HashMap::new();
-    for t in trait_definitions {
-        if let Condition::Trait { id } = &t.r#if {
-            *ref_counts.entry(id.as_str()).or_default() += 1;
-        }
-        tally_clause(t.unless.as_ref(), &mut ref_counts);
-        for dg in t.downgrade.iter() {
-            tally_clause(dg.any.as_ref(), &mut ref_counts);
-            tally_clause(dg.all.as_ref(), &mut ref_counts);
-            tally_clause(dg.none.as_ref(), &mut ref_counts);
-        }
-    }
-    for r in composite_rules {
-        tally_clause(r.all.as_ref(), &mut ref_counts);
-        tally_clause(r.any.as_ref(), &mut ref_counts);
-        tally_clause(r.unless.as_ref(), &mut ref_counts);
-        for dg in r.downgrade.iter() {
-            tally_clause(dg.any.as_ref(), &mut ref_counts);
-            tally_clause(dg.all.as_ref(), &mut ref_counts);
-            tally_clause(dg.none.as_ref(), &mut ref_counts);
-        }
-    }
-    let shared: HashSet<&'a str> = ref_counts
-        .iter()
-        .filter(|&(_, &n)| n >= SHARED_REFERENCE_THRESHOLD)
-        .map(|(&k, _)| k)
-        .collect();
 
     let mut violations = Vec::new();
 
@@ -820,7 +772,7 @@ pub(crate) fn find_excessive_skip_conditions<'a>(
                     is_composite: bool| {
         let (u, d) = direct_suppression_counts(unless, downgrade);
         let own = u + d;
-        let (expanded, branches) = expand_suppressions(unless, downgrade, &composite_map, &shared);
+        let (expanded, branches) = expand_suppressions(unless, downgrade, &composite_map);
         if own >= MAX_OWN_SUPPRESSIONS || expanded >= MAX_AGGREGATE_SUPPRESSIONS {
             violations.push(ExcessiveSkip {
                 id: id.to_string(),
@@ -1019,6 +971,129 @@ fn count_concrete_hex_bytes(pattern: &str) -> usize {
 ///
 /// Returns: `Vec<(trait_id, source_file)>`
 #[must_use]
+/// Collect a composite's positive (`all:`/`any:`) trait references.
+///
+/// `unless:`, `none:`, and `downgrade:` are exclusions and deliberately ignored —
+/// they suppress a match, they never supply the purpose-defining evidence.
+fn positive_trait_refs(rule: &CompositeTrait) -> Vec<String> {
+    let mut refs = Vec::new();
+    for conditions in [rule.all.as_ref(), rule.any.as_ref()].into_iter().flatten() {
+        for cond in conditions {
+            if let Condition::Trait { id } = cond {
+                refs.push(id.clone());
+            }
+        }
+    }
+    refs
+}
+
+/// Resolve a reference to the concrete ids it matches, mirroring the runtime
+/// resolver in `evaluate_merged`: an exact `::` reference matches one id; a bare
+/// short name (no `/`) suffix-matches `::name`/`/name`; a directory reference
+/// (has `/`, no `::`) prefix-matches the id itself, `dir::*`, and the whole
+/// `dir/*` subtree. A trailing slash is trimmed first.
+fn resolve_reference<'a>(reference: &str, all_ids: &[&'a str]) -> Vec<&'a str> {
+    let id = reference.trim_end_matches('/');
+    if id.contains("::") {
+        return all_ids.iter().copied().filter(|f| *f == id).collect();
+    }
+    if !id.contains('/') {
+        let suffix_new = format!("::{id}");
+        let suffix_legacy = format!("/{id}");
+        return all_ids
+            .iter()
+            .copied()
+            .filter(|f| f.ends_with(&suffix_new) || f.ends_with(&suffix_legacy))
+            .collect();
+    }
+    let prefix_new = format!("{id}::");
+    let prefix_legacy = format!("{id}/");
+    all_ids
+        .iter()
+        .copied()
+        .filter(|f| *f == id || f.starts_with(&prefix_new) || f.starts_with(&prefix_legacy))
+        .collect()
+}
+
+/// Find `crit: hostile` composites that reference no `notable`-or-higher trait
+/// anywhere in their positive (`all:`/`any:`) reference tree.
+///
+/// Every genuine hostile pattern should rest on at least one leg an analyst would
+/// want surfaced on its own — a communications, code-execution, crypto, encoding,
+/// privilege-escalation, sensitive-file, registry, or persistence capability (the
+/// behaviours that earn at least `notable` per TAXONOMY.md). A hostile composite
+/// assembled purely from `component`/`baseline` fragments signals that a
+/// purpose-defining capability has been buried at the wrong tier (polluting the
+/// `component`/`baseline` namespace and the ML feature space), or that the rule is
+/// low quality. The fix is to upgrade the best-fitting leg to `notable`, relocate a
+/// mislabelled capability, or delete a weak composite.
+///
+/// Resolution mirrors the loader: trait ids are fully qualified (`dir::id`),
+/// directory references (`dir/path`, no `::`) expand to every id under that prefix,
+/// and a leg that is itself a composite is followed transitively.
+///
+/// Returns the ids of the offending hostile composites.
+#[must_use]
+pub(crate) fn find_hostile_composites_without_notable_leg(
+    trait_definitions: &[TraitDefinition],
+    composite_rules: &[CompositeTrait],
+) -> Vec<String> {
+    use crate::types::Criticality;
+
+    // Effective criticality (defaults already applied at load) for every trait and
+    // composite, keyed by full id.
+    let mut crit_by_id: HashMap<&str, Criticality> = HashMap::new();
+    for t in trait_definitions {
+        crit_by_id.insert(t.id.as_str(), t.crit);
+    }
+    for c in composite_rules {
+        crit_by_id.insert(c.id.as_str(), c.crit);
+    }
+    let all_ids: Vec<&str> = crit_by_id.keys().copied().collect();
+    let composite_by_id: HashMap<&str, &CompositeTrait> =
+        composite_rules.iter().map(|c| (c.id.as_str(), c)).collect();
+
+    let mut violations = Vec::new();
+    'rules: for rule in composite_rules {
+        if rule.crit != Criticality::Hostile {
+            continue;
+        }
+
+        let mut stack: Vec<String> = positive_trait_refs(rule);
+        let mut visited: HashSet<String> = HashSet::new();
+        while let Some(reference) = stack.pop() {
+            if !visited.insert(reference.clone()) {
+                continue;
+            }
+            // Fast path: an exact `::` reference is a single O(1) lookup.
+            let trimmed = reference.trim_end_matches('/');
+            if trimmed.contains("::") {
+                match crit_by_id.get(trimmed) {
+                    Some(&crit) if crit >= Criticality::Notable => continue 'rules,
+                    _ => {}
+                }
+                if let Some(sub) = composite_by_id.get(trimmed) {
+                    stack.extend(positive_trait_refs(sub));
+                }
+                continue;
+            }
+            // Bare or directory reference: resolve to every id it matches.
+            for id in resolve_reference(&reference, &all_ids) {
+                match crit_by_id.get(id) {
+                    Some(&crit) if crit >= Criticality::Notable => continue 'rules,
+                    _ => {}
+                }
+                if let Some(sub) = composite_by_id.get(id) {
+                    stack.extend(positive_trait_refs(sub));
+                }
+            }
+        }
+
+        violations.push(rule.id.clone());
+    }
+    violations
+}
+
 pub(crate) fn find_orphaned_components(
     trait_definitions: &[TraitDefinition],
     composite_rules: &[CompositeTrait],

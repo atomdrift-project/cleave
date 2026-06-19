@@ -694,6 +694,135 @@ fn find_tier_wellknown_violations(
     violations
 }
 
+/// Find `baseline`/`component` rules in `objectives/` or `well-known/` that never appear
+/// as positive evidence in a `notable`-or-higher rule — building blocks that exist only
+/// to be suppressed.
+///
+/// A `baseline` or `component` rule in these tiers is a building block: it carries little
+/// analytical signal on its own and is meant to feed a real detection. If the only places
+/// it is referenced are `unless:`/`downgrade:` carve-outs — or it is unreferenced as
+/// positive evidence entirely — it can never raise the criticality of anything. These
+/// tiers are not for suppression-only rules: a rule should be named and located by what it
+/// searches for, so the right fix is usually to relocate it to the directory that matches
+/// what it detects per TAXONOMY.md. Otherwise reference it as positive evidence from a
+/// notable+ rule, or raise its `crit:`.
+///
+/// A candidate is satisfied when a `notable`-or-higher rule reaches it through a chain of
+/// *positive* references — an `any:`/`all:` clause of a composite, or an atomic trait's
+/// `if:`. Reachability is transitive: a `component` fragment feeding a `baseline` aggregator
+/// that a `notable` composite consumes is satisfied, because the notable detection
+/// ultimately rests on it. Suppression clauses (`unless:`/`downgrade:`) are not positive
+/// references and never satisfy. A bare directory reference (`well-known/tool`) reaches
+/// every rule beneath that prefix.
+///
+/// Returns `(rule_id, source_file)` for each violation, sorted by id.
+#[must_use]
+pub(crate) fn find_suppression_only_building_blocks<'a>(
+    trait_definitions: &'a [TraitDefinition],
+    composite_rules: &'a [CompositeTrait],
+    rule_source_files: &HashMap<String, String>,
+) -> Vec<(String, String)> {
+    use std::collections::{HashSet, VecDeque};
+
+    // Every rule id, for expanding bare directory references to the rules beneath them.
+    let all_ids: Vec<&str> = trait_definitions
+        .iter()
+        .map(|t| t.id.as_str())
+        .chain(composite_rules.iter().map(|r| r.id.as_str()))
+        .collect();
+
+    // Positive-reference edges parent → child. A specific `dir::id` reference is one edge;
+    // a bare directory reference fans out to every rule beneath the prefix.
+    let mut adjacency: HashMap<&str, Vec<&str>> = HashMap::new();
+    let mut add_edge = |parent: &'a str, ref_id: &'a str| {
+        let children = adjacency.entry(parent).or_default();
+        if ref_id.contains("::") {
+            children.push(ref_id);
+        } else {
+            let prefix_new = format!("{ref_id}::");
+            let prefix_legacy = format!("{ref_id}/");
+            for &c in &all_ids {
+                if c.starts_with(&prefix_new) || c.starts_with(&prefix_legacy) {
+                    children.push(c);
+                }
+            }
+        }
+    };
+
+    // Positive evidence: composite `all:`/`any:` and atomic `if:`. Never `unless:`/`downgrade:`.
+    for r in composite_rules {
+        for conds in [r.all.as_ref(), r.any.as_ref()].into_iter().flatten() {
+            for cond in conds {
+                if let Condition::Trait { id } = cond {
+                    add_edge(r.id.as_str(), id.as_str());
+                }
+            }
+        }
+    }
+    for t in trait_definitions {
+        if let Condition::Trait { id } = &t.r#if {
+            add_edge(t.id.as_str(), id.as_str());
+        }
+    }
+
+    // Forward BFS from every notable+ root over positive edges. Everything reached is
+    // backing a real detection, transitively.
+    let mut reachable: HashSet<&str> = HashSet::new();
+    let mut queue: VecDeque<&str> = VecDeque::new();
+    for id in trait_definitions
+        .iter()
+        .filter(|t| t.crit >= Criticality::Notable)
+        .map(|t| t.id.as_str())
+        .chain(
+            composite_rules
+                .iter()
+                .filter(|r| r.crit >= Criticality::Notable)
+                .map(|r| r.id.as_str()),
+        )
+    {
+        if reachable.insert(id) {
+            queue.push_back(id);
+        }
+    }
+    while let Some(node) = queue.pop_front() {
+        for &child in adjacency.get(node).into_iter().flatten() {
+            if reachable.insert(child) {
+                queue.push_back(child);
+            }
+        }
+    }
+
+    // Candidate building blocks: baseline/component rules under objectives/ or well-known/
+    // that no notable+ detection reaches. Both tiers are positive-detection trees — even a
+    // benign well-known/{app,lib,tool,game} directory should carry at least one notable
+    // trait that identifies the software (its identity *is* notable signal, independent of
+    // being benign), with the baseline/component fragments feeding it. A directory of only
+    // never-surfaced fragments means that notable identifier is missing.
+    let is_building_block =
+        |crit: Criticality| matches!(crit, Criticality::Baseline | Criticality::Component);
+    let is_candidate_tier =
+        |id: &str| matches!(ref_tier(id), Some("objectives") | Some("well-known"));
+
+    let mut violations: Vec<(String, String)> = trait_definitions
+        .iter()
+        .map(|t| (t.id.as_str(), t.crit))
+        .chain(composite_rules.iter().map(|r| (r.id.as_str(), r.crit)))
+        .filter(|(id, crit)| {
+            is_building_block(*crit) && is_candidate_tier(id) && !reachable.contains(id)
+        })
+        .map(|(id, _)| {
+            let source = rule_source_files
+                .get(id)
+                .cloned()
+                .unwrap_or_else(|| "unknown".to_string());
+            (id.to_string(), source)
+        })
+        .collect();
+
+    violations.sort_by(|a, b| a.0.cmp(&b.0));
+    violations
+}
+
 /// Find rules that use `malware/` as a subcategory of `objectives/` or `micro-behaviors/`.
 ///
 /// Malware-specific signatures belong in `well-known/malware/`, not as subcategories

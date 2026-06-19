@@ -25,9 +25,9 @@ use crate::capabilities::validation::{
     find_duplicate_inline_exclusions, find_duplicate_second_level_directories,
     find_empty_condition_clauses, find_excessive_file_types, find_excessive_skip_conditions,
     find_for_only_duplicates, find_generic_wellknown_leaf_dirs, find_hex_binary_missing_section,
-    find_hostile_cap_rules, find_hostile_meta_rules, find_impossible_count_constraints,
-    find_impossible_needs, find_impossible_size_constraints, find_invalid_not_usage,
-    find_invalid_trait_ids, find_kv_exists_with_matcher, find_line_number,
+    find_hostile_cap_rules, find_hostile_composites_without_notable_leg, find_hostile_meta_rules,
+    find_impossible_count_constraints, find_impossible_needs, find_impossible_size_constraints,
+    find_invalid_not_usage, find_invalid_trait_ids, find_kv_exists_with_matcher, find_line_number,
     find_malware_subcategory_violations, find_many_directory_refs,
     find_meta_missing_section_filter, find_metadata_content_dirs, find_metadata_cross_tier_refs,
     find_missing_search_patterns, find_needs_without_any, find_needs_zero,
@@ -36,14 +36,15 @@ use crate::capabilities::validation::{
     find_parent_duplicate_segments, find_platform_named_directories, find_pure_alias_traits,
     find_pure_directory_alias_composites, find_raw_should_use_text, find_redundant_any_refs,
     find_redundant_explicit_defaults, find_redundant_needs_one, find_redundant_unix_platforms,
-    find_regex_literal_overlap_issues, find_self_referencing_traits, find_short_pattern_warnings,
-    find_should_use_defaults, find_single_item_clauses, find_slow_regex_patterns,
-    find_string_content_collisions, find_string_literal_should_use_text,
-    find_string_pattern_duplicates, find_structural_regex_duplicates, find_too_short_patterns,
-    find_unanchored_wellknown_composites, find_wellknown_category_violations,
-    find_wellknown_missing_section_filter, find_wellknown_missing_size_filter,
-    precalculate_all_composite_precisions, simple_rule_to_composite_rule,
-    validate_composite_trait_only, validate_directory_structure,
+    find_regex_literal_overlap_issues, find_self_referencing_composites,
+    find_self_referencing_traits, find_short_pattern_warnings, find_should_use_defaults,
+    find_single_item_clauses, find_slow_regex_patterns, find_string_content_collisions,
+    find_string_literal_should_use_text, find_string_pattern_duplicates,
+    find_structural_regex_duplicates, find_suppression_only_building_blocks,
+    find_too_short_patterns, find_unanchored_wellknown_composites,
+    find_wellknown_category_violations, find_wellknown_missing_section_filter,
+    find_wellknown_missing_size_filter, precalculate_all_composite_precisions,
+    simple_rule_to_composite_rule, validate_composite_trait_only, validate_directory_structure,
     validate_hostile_composite_precision, validate_hostile_trait_precision,
 };
 use crate::composite_rules::{
@@ -1882,6 +1883,43 @@ impl super::CapabilityMapper {
                     self_refs.len()
                 ));
             }
+
+            tracing::trace!("Step 7c/15: Checking for self-referencing composites");
+            let composite_self_refs = find_self_referencing_composites(&composite_rules);
+            if !composite_self_refs.is_empty() {
+                eprintln!(
+                    "\n❌ ERROR: {} composites self-reference (will never fire)",
+                    composite_self_refs.len()
+                );
+                eprintln!(
+                    "   A composite cannot reference itself directly, or through a directory\n   \
+                     reference that expands to include its own rule ID. Directory refs in\n   \
+                     the same directory as the composite are recursive.\n"
+                );
+                for (rule, ref_id) in &composite_self_refs {
+                    let source_file = rule_source_files
+                        .get(&rule.id)
+                        .map(std::string::String::as_str)
+                        .unwrap_or("unknown");
+                    let line_hint = find_line_number(source_file, &rule.id);
+                    if let Some(line) = line_hint {
+                        eprintln!(
+                            "   {}:{}: Rule '{}' references itself through '{}'",
+                            source_file, line, rule.id, ref_id
+                        );
+                    } else {
+                        eprintln!(
+                            "   {}: Rule '{}' references itself through '{}'",
+                            source_file, rule.id, ref_id
+                        );
+                    }
+                }
+                eprintln!();
+                warnings.push(format!(
+                    "{} self-referencing composites (will never fire)",
+                    composite_self_refs.len()
+                ));
+            }
         } // End of enable_full_validation block for steps 3-7
 
         tracing::trace!("Step 8/15: Validating trait references in composite rules");
@@ -2285,6 +2323,70 @@ impl super::CapabilityMapper {
                     "{} objectives/ → well-known/ references violate the tier policy",
                     obj_wk_violations.len()
                 ));
+            }
+
+            // Validate that baseline/component building blocks in objectives/ or well-known/
+            // are actually used as positive evidence by a notable+ rule, not only suppressed.
+            tracing::trace!("Step 13e/15: Checking for suppression-only building blocks");
+            let disable_suppression_only_validation =
+                crate::validation_controls::is_validator_disabled(
+                    "suppression-only-building-block",
+                );
+            let suppression_only = find_suppression_only_building_blocks(
+                &trait_definitions,
+                &composite_rules,
+                &rule_source_files,
+            );
+            if !disable_suppression_only_validation && !suppression_only.is_empty() {
+                eprintln!(
+                    "\n❌ ERROR: {} baseline/component rules in objectives/ or well-known/ never feed a notable+ detection",
+                    suppression_only.len()
+                );
+                eprintln!(
+                    "   A baseline/component rule in these tiers is a building block: some notable-or-"
+                );
+                eprintln!(
+                    "   higher rule must reach it through positive `all:`/`any:`/`if:` references"
+                );
+                eprintln!(
+                    "   (transitively — fragments feeding a baseline aggregator that a notable composite"
+                );
+                eprintln!(
+                    "   consumes are fine). These appear only in `unless:`/`downgrade:` carve-outs, or"
+                );
+                eprintln!("   nowhere positive:\n");
+                for (rule_id, source_file) in &suppression_only {
+                    let line_hint = find_line_number(source_file, rule_id);
+                    if let Some(line) = line_hint {
+                        eprintln!("   {}:{}: '{}'", source_file, line, rule_id);
+                    } else {
+                        eprintln!("   {}: '{}'", source_file, rule_id);
+                    }
+                }
+                eprintln!();
+                eprintln!(
+                    "   A rule should be named and located by what it searches for. Likely fixes:"
+                );
+                eprintln!(
+                    "     • add the missing notable identifier — e.g. a benign well-known/ directory still"
+                );
+                eprintln!(
+                    "       needs a notable trait that identifies the software, with these fragments feeding it"
+                );
+                eprintln!(
+                    "     • relocate a genuine suppressor to the directory that matches what it detects per TAXONOMY.md"
+                );
+                eprintln!(
+                    "     • raise the consuming composite's `crit:` if it actually defines program behavior"
+                );
+                eprintln!();
+                warnings.push_id(
+                    "suppression-only-building-block",
+                    format!(
+                        "{} baseline/component rules in objectives/ or well-known/ are only ever suppressed",
+                        suppression_only.len()
+                    ),
+                );
             }
 
             // NOTE: baseline traits are now allowed in objectives/ - they serve as building blocks
@@ -3452,26 +3554,41 @@ impl super::CapabilityMapper {
                 crate::validation_controls::is_validator_disabled("excessive-suppression");
 
             // Validate: excessive unless:/downgrade: suppressions
-            // (8+ on the rule itself, or 40+ once referenced constituents are summed in)
+            // (8+ on the rule itself, or 32+ once referenced aggregators are expanded)
             let excessive_skips =
                 find_excessive_skip_conditions(&trait_definitions, &composite_rules);
             if !disable_excessive_suppression_validation && !excessive_skips.is_empty() {
                 eprintln!(
-                    "\n❌ ERROR: {} rules exceed a suppression limit (8+ written on the rule, or 40+ after expanding aggregator references)",
+                    "\n❌ ERROR: {} rules exceed a suppression limit (8+ written on the rule, or 32+ after expanding aggregator references)",
                     excessive_skips.len()
                 );
                 eprintln!(
                     "   A heavy suppression list usually means the rule is fighting its own breadth."
                 );
-                eprintln!("   Before adding more, try:");
+                eprintln!("   In order of preference, try:");
+                eprintln!(
+                    "     • downgrade the parent rule — if it is suppressed this often it is pitched"
+                );
+                eprintln!(
+                    "       too high; lowering its `crit:` is usually a one-line fix and needs no carve-outs"
+                );
+                eprintln!(
+                    "     • split by file type — a `suspicious` variant for the risky types and a"
+                );
+                eprintln!(
+                    "       `notable` variant elsewhere, instead of one rule plus a pile of `unless:`"
+                );
+                eprintln!(
+                    "     • group the exceptions — find the broader semantic that the carve-outs share"
+                );
+                eprintln!(
+                    "       (e.g. \"test fixture\", \"vendored dependency\") and express it once, not N times"
+                );
                 eprintln!(
                     "     • drop dead downgrades — conditions that can never lower the criticality"
                 );
                 eprintln!(
                     "     • tighten scope — narrow `for:` file types or add `size_min`/`size_max`"
-                );
-                eprintln!(
-                    "     • right-size `crit:` — a routinely-downgraded match may simply be pitched too high"
                 );
                 eprintln!(
                     "     • prefer a `dir/` reference over many `::leaf` ones — a directory reference"
@@ -3621,6 +3738,44 @@ impl super::CapabilityMapper {
                     "{} component traits are orphaned (not referenced by any rule)",
                     orphaned_components.len()
                 ));
+            }
+
+            // Validate: hostile composites must reference a notable-or-higher leg.
+            // A hostile rule built only from component/baseline fragments means a
+            // purpose-defining capability is buried at the wrong tier (or the rule is
+            // low quality). Pick the best leg and upgrade it to `notable`, relocate a
+            // mislabelled capability, or delete the composite.
+            let disable_hostile_notable_leg =
+                crate::validation_controls::is_validator_disabled("hostile-missing-notable-leg");
+            let hostile_missing_notable =
+                find_hostile_composites_without_notable_leg(&trait_definitions, &composite_rules);
+            if !disable_hostile_notable_leg && !hostile_missing_notable.is_empty() {
+                eprintln!(
+                    "\n❌ ERROR: {} hostile composites reference no notable-or-higher leg",
+                    hostile_missing_notable.len()
+                );
+                eprintln!("   Every hostile composite must reference at least one trait at crit");
+                eprintln!("   notable/suspicious/hostile in its any:/all: tree. Upgrade the best");
+                eprintln!("   purpose-defining leg (comms, exec, crypto, encode, persist, ...) to");
+                eprintln!("   notable per TAXONOMY.md, or delete a low-quality composite:\n");
+                for rule_id in &hostile_missing_notable {
+                    let source = rule_source_files
+                        .get(rule_id)
+                        .map(std::string::String::as_str)
+                        .unwrap_or("unknown");
+                    let line_hint = find_line_number(source, rule_id);
+                    if let Some(line) = line_hint {
+                        eprintln!("   {}:{}: '{}'", source, line, rule_id);
+                    } else {
+                        eprintln!("   {}: '{}'", source, rule_id);
+                    }
+                }
+                eprintln!();
+                warnings.push(format!(
+                    "{} hostile composites reference no notable-or-higher leg",
+                    hostile_missing_notable.len()
+                ));
+                has_fatal_errors = true;
             }
 
             // Validate: short patterns that are likely to produce too many false positives

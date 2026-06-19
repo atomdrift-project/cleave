@@ -250,7 +250,14 @@ const UNKNOWN_VALIDATOR: ValidatorSpec = ValidatorSpec {
     fix: "Review the validation message and update the trait.",
 };
 
-const DISABLED_VALIDATOR_IDS: &[&str] = &[];
+const DISABLED_VALIDATOR_IDS: &[&str] = &[
+    // Newly added; surfaces a large existing backlog (~2.1k baseline/component rules in
+    // objectives/ or well-known/ that no notable+ detection reaches). Temporarily disabled
+    // so it does not block loading while the backlog is worked down — promote the missing
+    // notable identifier, relocate genuine suppressors, or fix mis-crit'd composites.
+    // Run `cleave validate --exclude ""` to see the full list.
+    "suppression-only-building-block",
+];
 
 /// Validators that stay fatal in `--soft` mode.
 ///
@@ -456,6 +463,13 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         display_id: "tier",
         description: "Trait violates taxonomy dependency direction.",
         fix: "Move or reference traits according to TAXONOMY.md tiers.",
+    },
+    ValidatorSpec {
+        id: "suppression-only-building-block",
+        category: ValidatorCategory::Policy,
+        display_id: "supp-only",
+        description: "Baseline/component rule in objectives/ or well-known/ never feeds a notable+ detection (only suppressed, or unreferenced).",
+        fix: "Add the missing notable identifier these fragments feed, relocate a genuine suppressor per TAXONOMY.md, or raise the consuming composite's crit:.",
     },
     ValidatorSpec {
         id: "regex-case-subsumption",

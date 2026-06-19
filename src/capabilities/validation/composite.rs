@@ -25,6 +25,60 @@ pub(crate) fn find_self_referencing_traits(traits: &[TraitDefinition]) -> Vec<&T
         .collect()
 }
 
+fn directory_ref_includes_rule(ref_id: &str, rule_id: &str) -> bool {
+    if ref_id.contains("::") {
+        return false;
+    }
+    rule_id
+        .strip_prefix(ref_id)
+        .is_some_and(|rest| rest.starts_with("::") || rest.starts_with('/'))
+}
+
+/// Find composite rules whose conditions reference the composite itself.
+///
+/// This catches both direct references (`id: <rule-id>`) and directory
+/// references that would expand to include the composite (`id: <rule-dir>`).
+/// The latter is easy to introduce when replacing a long same-directory `any:`
+/// list with a bare directory reference.
+#[must_use]
+pub(crate) fn find_self_referencing_composites(
+    rules: &[CompositeTrait],
+) -> Vec<(&CompositeTrait, String)> {
+    fn ref_includes_rule(ref_id: &str, rule_id: &str) -> bool {
+        if ref_id == rule_id {
+            return true;
+        }
+        directory_ref_includes_rule(ref_id, rule_id)
+    }
+
+    fn scan_conditions(rule: &CompositeTrait, conditions: Option<&[Condition]>) -> Option<String> {
+        conditions?.iter().find_map(|cond| {
+            let Condition::Trait { id } = cond else {
+                return None;
+            };
+            ref_includes_rule(id, &rule.id).then(|| id.clone())
+        })
+    }
+
+    let mut violations = Vec::new();
+    for rule in rules {
+        let direct_ref = scan_conditions(rule, rule.all.as_deref())
+            .or_else(|| scan_conditions(rule, rule.any.as_deref()))
+            .or_else(|| scan_conditions(rule, rule.unless.as_deref()))
+            .or_else(|| {
+                let downgrade = rule.downgrade.as_ref()?;
+                scan_conditions(rule, downgrade.all.as_deref())
+                    .or_else(|| scan_conditions(rule, downgrade.any.as_deref()))
+                    .or_else(|| scan_conditions(rule, downgrade.none.as_deref()))
+            });
+        if let Some(ref_id) = direct_ref {
+            violations.push((rule, ref_id));
+        }
+    }
+
+    violations
+}
+
 /// Validate that a composite rule only contains trait references, not inline conditions.
 ///
 /// Composite rules in objectives/ should only reference traits from micro-behaviors/,
@@ -313,6 +367,9 @@ pub(crate) fn find_many_directory_refs(
             let Some(traits) = dir_traits.get(&dir) else {
                 continue;
             };
+            if directory_ref_includes_rule(&dir, &rule.id) {
+                continue;
+            }
             if traits.len() < MIN_DIRECTORY_REFS || refs.len() != traits.len() {
                 continue;
             }
@@ -393,6 +450,9 @@ pub(crate) fn find_pure_directory_alias_composites(
         let Some(traits) = dir_traits.get(&dir) else {
             continue;
         };
+        if directory_ref_includes_rule(&dir, &rule.id) {
+            continue;
+        }
         if traits.len() < 2 || refs.len() != traits.len() || !refs.is_superset(traits) {
             continue;
         }

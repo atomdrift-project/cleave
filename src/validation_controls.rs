@@ -260,15 +260,20 @@ const DISABLED_VALIDATOR_IDS: &[&str] = &[];
 /// precision). The always-on hard errors (YAML parse failures, regex that won't
 /// compile) are not validators and remain fatal regardless. Fixture/testdata
 /// scoring is retained via `score-caps`, so a detection regression still fails.
+///
+/// `unknown-file-type` is deliberately *not* retained: a trait targeting a file
+/// type this engine doesn't recognise (e.g. a newer bundle adding `go.mod`) is
+/// exactly the forward-compatibility case soft mode exists for — the rule simply
+/// won't run on this older build, which is graceful degradation, not a flaw in
+/// the bundle. `invalid-file-type` stays fatal because a structurally invalid
+/// type can never match on any engine.
 const SOFT_RETAINED_VALIDATOR_IDS: &[&str] = &[
     // Two ids collide on the same `directory::id`; one silently shadows the
     // other, so a real detection is lost.
     "duplicate-trait-id",
-    // Trait `for:` targets a structurally invalid file type — it can never match.
+    // Trait `for:` targets a structurally invalid file type — it can never match
+    // on any engine, so the rule is broken rather than merely ahead of this build.
     "invalid-file-type",
-    // Trait targets a file type unknown to this engine — the rule silently won't
-    // run on the binary doing the scanning.
-    "unknown-file-type",
     // Fixture score regressed past its cap: detection efficacy, kept in soft so
     // the testdata corpus still gates the bundle.
     "score-caps",
@@ -906,6 +911,9 @@ mod tests {
             "tier-violation",
             "precision",
             "wellknown-size-filter",
+            // A file type unknown to this (older) engine is forward-compat
+            // degradation, not a load-breaking flaw — soft mode tolerates it.
+            "unknown-file-type",
         ] {
             assert!(disabled.contains(id), "{id} must be non-fatal in soft mode");
         }

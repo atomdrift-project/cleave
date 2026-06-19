@@ -1205,7 +1205,12 @@ impl super::CapabilityMapper {
             .filter(|w| w.validator_id == "unknown-file-type")
             .collect();
         if !unknown_ft_warnings.is_empty() {
-            if enable_full_validation {
+            // Soft mode disables `unknown-file-type`: a trait targeting a type this
+            // (older) engine doesn't recognise is forward-compat degradation, so the
+            // rule is skipped rather than failing the whole bundle load.
+            if enable_full_validation
+                && !crate::validation_controls::is_validator_disabled("unknown-file-type")
+            {
                 let mut sorted_errors: Vec<&str> = unknown_ft_warnings
                     .iter()
                     .map(|e| e.message.as_str())

@@ -357,79 +357,6 @@ fn is_publish_or_install_lifecycle_script(name: &str) -> bool {
     )
 }
 
-fn is_local_node_script(script: &str) -> bool {
-    let trimmed = script.trim();
-    let Some(rest) = trimmed.strip_prefix("node ") else {
-        return false;
-    };
-    if rest.is_empty() || rest.contains(char::is_whitespace) {
-        return false;
-    }
-    if rest.contains(['|', '&', ';', '$', '`', '(', ')', '<', '>']) {
-        return false;
-    }
-
-    matches!(
-        rest,
-        path if path.starts_with("scripts/")
-            || path.starts_with("./scripts/")
-            || path.starts_with("tools/")
-            || path.starts_with("./tools/")
-    )
-}
-
-fn is_local_node_eval_loader(script: &str) -> bool {
-    let trimmed = script.trim();
-    (trimmed.starts_with("node -e") || trimmed.starts_with("node --eval"))
-        && !trimmed.contains("http://")
-        && !trimmed.contains("https://")
-        && !trimmed.contains("curl")
-        && !trimmed.contains("wget")
-        && !trimmed.contains("fetch(")
-        && !trimmed.contains("fetch ")
-        && !trimmed.contains("child_process")
-        && !trimmed.contains("exec(")
-        && !trimmed.contains("spawn(")
-        && !trimmed.contains("eval(")
-        && (trimmed.contains("require('./") || trimmed.contains("require(\"./"))
-}
-
-fn is_suspicious_install_hook_script(script: &str) -> bool {
-    let trimmed = script.trim();
-    if matches!(
-        trimmed,
-        "node -e 'process.exit(0)'"
-            | "node -e \"process.exit(0)\""
-            | "node --eval 'process.exit(0)'"
-            | "node --eval \"process.exit(0)\""
-    ) {
-        return false;
-    }
-
-    if trimmed.contains("curl")
-        || trimmed.contains("wget")
-        || trimmed.contains("http://")
-        || trimmed.contains("https://")
-    {
-        return true;
-    }
-
-    if is_local_node_script(trimmed) {
-        return false;
-    }
-
-    if is_local_node_eval_loader(trimmed) {
-        return false;
-    }
-
-    trimmed.contains("node -e")
-        || trimmed.contains("node --eval")
-        || trimmed.contains("python -c")
-        || trimmed.contains("bash -c")
-        || trimmed.contains("sh -c")
-        || trimmed.contains("powershell -e")
-}
-
 fn is_known_benign_piped_installer(script: &str) -> bool {
     let normalized = script.trim();
     normalized == "curl https://tinybird.co | sh"
@@ -942,7 +869,9 @@ impl PackageJsonAnalyzer {
                 );
             }
 
-            // Check for suspicious domain patterns (random-looking names)
+            // Surface suspicious-looking domain patterns as package facts. The
+            // policy decision to escalate them belongs in YAML, where lifecycle
+            // context and known-benign package contexts can suppress noise.
             for url in self.extract_urls(script) {
                 if self.is_suspicious_domain(&url) {
                     report.add_finding(
@@ -951,7 +880,7 @@ impl PackageJsonAnalyzer {
                             format!("Script '{}' contacts suspicious domain: {}", name, url),
                             0.8,
                         )
-                        .with_criticality(Criticality::Suspicious)
+                        .with_criticality(Criticality::Notable)
                         .with_attack("T1071.001".to_string())
                         .with_evidence(vec![Evidence {
                             method: "heuristic".to_string(),
@@ -1201,23 +1130,13 @@ impl PackageJsonAnalyzer {
 
         for hook in install_hooks {
             if let Some(script) = scripts.get(hook) {
-                // Suspicious only when the script actively fetches or executes external content.
-                // Script length alone is not a reliable signal: legitimate publish-safety guards
-                // (e.g. ljharb's `not-in-publish || safe-publish-latest` pattern) are verbose
-                // but benign.
-                let criticality = if is_suspicious_install_hook_script(script) {
-                    Criticality::Suspicious
-                } else {
-                    Criticality::Notable
-                };
-
                 report.add_finding(
                     Finding::indicator(
                         format!("supply-chain/install-hook/{}", hook),
                         format!("Package has '{}' hook that runs during install", hook),
                         0.8,
                     )
-                    .with_criticality(criticality)
+                    .with_criticality(Criticality::Notable)
                     .with_evidence(vec![Evidence {
                         method: "pattern".to_string(),
                         source: "package.json".to_string(),

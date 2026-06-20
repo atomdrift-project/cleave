@@ -102,6 +102,11 @@ const BANNED_DIRECTORY_SEGMENTS: &[&str] = &[
     "component",
     "components",
     "commands",
+    "context",
+    "exceptions",
+    "downgrade",
+    "unless",
+    "downgrades",
     "category",   // dumping ground
     "combos",     // vague
     "code",       // vague
@@ -158,7 +163,10 @@ const BANNED_DIRECTORY_SEGMENTS: &[&str] = &[
     "technique",  // dumping ground
     "techniques", // dumping ground
     "text",
-    "things",  // obviously bad
+    "things", // obviously bad
+    "tools",
+    "tool",
+    "tooling",
     "type",    // too vague
     "types",   // dumping ground
     "utils",   // too vague
@@ -179,6 +187,10 @@ const BANNED_SEGMENT_EXCEPTIONS: &[(&str, &str)] = &[
     (
         "metadata/package/fields/types",
         "types", // package.json `types`/`typings` entry point field
+    ),
+    (
+        "well-known/tool",
+        "tool", // `well-known/tool/` is an established tier category, not a vague segment
     ),
     (
         "well-known/tool/detection",
@@ -1729,6 +1741,10 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     "text:micro-behaviors/fs/path/",
     // IP discovery service hostnames are embedded in any executable (scripts, binaries, config)
     "text:micro-behaviors/communications/http/ip-discovery/",
+    // Service API hostnames (api.telegram.org, slack.com, …) are host-string
+    // literals that appear in any language that talks to the service — script,
+    // compiled binary, or source. Narrowing `for:` would silently drop coverage.
+    "text:micro-behaviors/communications/http/services/",
     // Shell language markers are intentionally shared across scripts, source, and binaries
     "text:micro-behaviors/process/create/shell/lang/",
     // Download-execute dropper patterns are malicious whether they appear in a

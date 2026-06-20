@@ -57,7 +57,6 @@ fn create_test_source_report(path: &str, file_type: &str, size: u64) -> Analysis
 #[test]
 fn test_empty_mapper() {
     let mapper = CapabilityMapper::empty();
-    assert_eq!(mapper.mapping_count(), 0);
     assert_eq!(mapper.trait_definitions_count(), 0);
     assert_eq!(mapper.composite_rules_count(), 0);
 }
@@ -66,7 +65,6 @@ fn test_empty_mapper() {
 fn test_new_mapper() {
     let mapper = CapabilityMapper::new_without_validation();
     // Test constructor should be hermetic unless a test opts into a traits directory.
-    assert_eq!(mapper.mapping_count(), 0);
     assert_eq!(mapper.trait_definitions_count(), 0);
 }
 
@@ -75,14 +73,14 @@ fn test_with_platforms() {
     let mapper = CapabilityMapper::empty().with_platforms(vec![Platform::MacOS, Platform::Linux]);
 
     // Should accept the platforms (can't directly test private field, but verify construction)
-    assert_eq!(mapper.mapping_count(), 0);
+    assert_eq!(mapper.trait_definitions_count(), 0);
 }
 
 #[test]
 fn test_with_platforms_empty_defaults_to_all() {
     let mapper = CapabilityMapper::empty().with_platforms(vec![]);
     // Should default to Platform::All when empty vec is provided
-    assert_eq!(mapper.mapping_count(), 0);
+    assert_eq!(mapper.trait_definitions_count(), 0);
 }
 
 #[test]
@@ -131,22 +129,6 @@ traits:
         linux.string_match_index.total_patterns,
         full_patterns
     );
-}
-
-#[test]
-fn test_from_yaml_minimal_symbol_map() {
-    let yaml = r#"
-symbols:
-  - symbol: "malloc"
-    capability: "micro-behaviors/mem/allocate::malloc"
-    desc: "Allocate memory"
-    conf: 0.9
-"#;
-    let (_dir, path) = create_test_yaml(yaml);
-    let mapper = CapabilityMapper::from_yaml(&path).unwrap();
-
-    assert_eq!(mapper.mapping_count(), 1);
-    assert!(mapper.lookup("malloc", None).is_some());
 }
 
 #[test]
@@ -205,51 +187,7 @@ fn test_from_yaml_empty_file() {
     let mapper = CapabilityMapper::from_yaml(&path).unwrap();
 
     // Empty YAML should create empty mapper
-    assert_eq!(mapper.mapping_count(), 0);
     assert_eq!(mapper.trait_definitions_count(), 0);
-}
-
-#[test]
-fn test_lookup_with_symbol() {
-    let yaml = r#"
-symbols:
-  - symbol: "malloc"
-    capability: "micro-behaviors/mem/allocate::malloc"
-    desc: "Allocate memory"
-    conf: 0.9
-"#;
-    let (_dir, path) = create_test_yaml(yaml);
-    let mapper = CapabilityMapper::from_yaml(&path).unwrap();
-
-    let finding = mapper.lookup("malloc", None).unwrap();
-    assert_eq!(finding.id, "micro-behaviors/mem/allocate::malloc");
-    assert_eq!(finding.desc, "Allocate memory");
-    assert_eq!(finding.crit, Criticality::Baseline);
-}
-
-#[test]
-fn test_lookup_nonexistent_symbol() {
-    let mapper = CapabilityMapper::empty();
-    let finding = mapper.lookup("nonexistent_func", None);
-    assert!(finding.is_none());
-}
-
-#[test]
-fn test_lookup_with_prefix_stripping() {
-    let yaml = r#"
-symbols:
-  - symbol: "malloc"
-    capability: "micro-behaviors/mem/allocate::malloc"
-    desc: "Allocate memory"
-    conf: 0.9
-"#;
-    let (_dir, path) = create_test_yaml(yaml);
-    let mapper = CapabilityMapper::from_yaml(&path).unwrap();
-
-    // Should strip common prefixes like '_', '__', etc.
-    let finding = mapper.lookup("_malloc", None);
-    assert!(finding.is_some());
-    assert_eq!(finding.unwrap().id, "micro-behaviors/mem/allocate::malloc");
 }
 
 #[test]
@@ -416,9 +354,8 @@ traits:
 
 #[test]
 fn test_symbol_lookup_respects_file_type() {
-    // Traits with restrictive for: constraints should not be in the symbol_map
-    // fast-path, which bypasses file type filtering. Regression test for a bug
-    // where `for: [dll]` symbol traits matched on ELF files via lookup().
+    // A `for: [dll]` symbol trait must not fire on an ELF file — file-type
+    // filtering applies to symbol traits like every other kind.
     let yaml = r#"
 defaults:
   for: [dll]
@@ -436,13 +373,7 @@ traits:
     let (_dir, path) = create_test_yaml(yaml);
     let mapper = CapabilityMapper::from_yaml(&path).unwrap();
 
-    // The symbol_map should NOT contain this trait since it has for: [dll]
-    assert!(
-        mapper.lookup("textdomain", None).is_none(),
-        "symbol_map should not include traits with restrictive for: constraints"
-    );
-
-    // Also verify via full evaluation on an ELF report
+    // Verify via full evaluation on an ELF report
     let mut report = create_test_report();
     report.target.file_type = "elf".to_string();
     report
@@ -468,17 +399,20 @@ fn test_evaluate_composite_rules_empty() {
 
 #[test]
 fn test_evaluate_and_merge_findings() {
+    // A symbol trait (matched against an import) and a text trait both fire
+    // through the single evaluation pass — symbol matching flows through the
+    // trait engine, not a separate lookup path.
     let yaml = r#"
 defaults:
   for: [all]
 
-symbols:
-  - symbol: "malloc"
-    capability: "micro-behaviors/mem/allocate::malloc"
-    desc: "Allocate memory"
-    conf: 0.9
-
 traits:
+  - id: "test/mem::malloc"
+    desc: "Allocate memory"
+    crit: notable
+    if:
+      type: symbol
+      exact: "malloc"
   - id: "test/string::check"
     desc: "String check"
     crit: notable
@@ -499,13 +433,6 @@ traits:
         alias: None,
     });
 
-    // Manually lookup and add symbol findings
-    for import in &report.imports {
-        if let Some(finding) = mapper.lookup(&import.symbol, None) {
-            report.findings.push(finding);
-        }
-    }
-
     let binary_data = b"some binary with test_marker inside";
     report.strings.push(crate::types::StringInfo {
         value: ("some binary with test_marker inside".to_string()).into(),
@@ -519,18 +446,9 @@ traits:
 
     mapper.evaluate_and_merge_findings(&mut report, binary_data, None, None);
 
-    // Should have findings from both symbol lookup and trait evaluation
-    assert!(report.findings.len() >= 2);
-
-    // Verify we have the malloc capability
-    assert!(
-        report
-            .findings
-            .iter()
-            .any(|f| f.id == "micro-behaviors/mem/allocate::malloc")
-    );
-
-    // Verify we have the string check trait
+    // The symbol trait (matched on the malloc import) fires...
+    assert!(report.findings.iter().any(|f| f.id == "test/mem::malloc"));
+    // ...and so does the text trait.
     assert!(report.findings.iter().any(|f| f.id == "test/string::check"));
 }
 
@@ -595,29 +513,6 @@ traits:
 fn test_from_directory_nonexistent() {
     let result = CapabilityMapper::from_directory("/nonexistent/path/to/traits");
     assert!(result.is_err());
-}
-
-#[test]
-fn test_mapping_count() {
-    let yaml = r#"
-symbols:
-  - symbol: "malloc"
-    capability: "micro-behaviors/mem::malloc"
-    desc: "malloc"
-    conf: 0.9
-  - symbol: "free"
-    capability: "micro-behaviors/mem::free"
-    desc: "free"
-    conf: 0.9
-  - symbol: "calloc"
-    capability: "micro-behaviors/mem::calloc"
-    desc: "calloc"
-    conf: 0.9
-"#;
-    let (_dir, path) = create_test_yaml(yaml);
-    let mapper = CapabilityMapper::from_yaml(&path).unwrap();
-
-    assert_eq!(mapper.mapping_count(), 3);
 }
 
 #[test]
@@ -757,17 +652,22 @@ traits:
 #[test]
 fn test_precision_thresholds() {
     let yaml = r#"
-symbols:
-  - symbol: "malloc"
-    capability: "micro-behaviors/mem::malloc"
+defaults:
+  for: [all]
+
+traits:
+  - id: "test/mem::malloc"
     desc: "malloc"
-    conf: 0.9
+    crit: notable
+    if:
+      type: symbol
+      exact: "malloc"
 "#;
     let (_dir, path) = create_test_yaml(yaml);
     let mapper =
         CapabilityMapper::from_yaml_with_precision_thresholds(&path, 5.0, 3.0, false).unwrap();
 
-    assert_eq!(mapper.mapping_count(), 1);
+    assert_eq!(mapper.trait_definitions_count(), 1);
 }
 
 #[test]

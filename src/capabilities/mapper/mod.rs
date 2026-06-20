@@ -25,15 +25,12 @@
 use crate::capabilities::indexes::{
     RawContentRegexIndex, StringMatchIndex, SymbolMatchIndex, TraitIndex,
 };
-use crate::capabilities::models::TraitInfo;
 use crate::composite_rules::{CompositeTrait, Platform, TraitDefinition};
-use std::collections::HashMap;
 
 /// Maps symbols (function names, library calls) to capability IDs
 /// Also supports trait definitions and composite rules that combine traits
 #[derive(Clone, Debug)]
 pub struct CapabilityMapper {
-    pub(super) symbol_map: HashMap<String, TraitInfo>,
     pub(super) trait_definitions: Vec<TraitDefinition>,
     pub(crate) composite_rules: Vec<CompositeTrait>,
     /// Index for fast trait lookup by file type

@@ -181,22 +181,11 @@ impl PEAnalyzer {
         features
     }
 
-    /// Project filefacts's typed `Imports` view into `Vec<Import>` and
-    /// run capability-mapper lookups over the symbol set. Symbol
-    /// names are pre-normalised inside `imports_from_filefacts`.
-    fn pe_imports(&self, ctx: &Ctx<'_>) -> (Vec<Import>, Vec<Finding>) {
-        let imports = ctx.imports_from_filefacts();
-        let mut findings = Vec::new();
-        for imp in &imports {
-            let normalized = crate::types::binary::normalize_symbol(&imp.symbol);
-            if let Some(capability) = self
-                .capability_mapper
-                .lookup(&normalized, imp.offset.as_deref())
-            {
-                findings.push(capability);
-            }
-        }
-        (imports, findings)
+    /// Project filefacts's typed `Imports` view into `Vec<Import>`. Symbol
+    /// names are pre-normalised inside `imports_from_filefacts`; symbol traits
+    /// match them through the trait engine's symbol index.
+    fn pe_imports(&self, ctx: &Ctx<'_>) -> Vec<Import> {
+        ctx.imports_from_filefacts()
     }
 
     /// Project filefacts's typed `Exports` view and the
@@ -641,20 +630,13 @@ impl PEAnalyzer {
         if filefacts_ok {
             let s_start = std::time::Instant::now();
             let structural_features = self.structural_features(ctx);
-            let (pe_imports, pe_import_findings) = self.pe_imports(ctx);
+            let pe_imports = self.pe_imports(ctx);
             let (pe_exports, _aliased_count) = self.pe_exports(ctx);
             let pe_sections = self.pe_sections(ctx);
             struct_ms = s_start.elapsed().as_millis();
 
             report.structure.extend(structural_features);
             report.imports.extend(pe_imports);
-            let mut finding_ids: std::collections::HashSet<String> =
-                report.findings.iter().map(|f| f.id.clone()).collect();
-            for finding in pe_import_findings {
-                if finding_ids.insert(finding.id.clone()) {
-                    report.findings.push(finding);
-                }
-            }
             report.exports.extend(pe_exports);
             report.sections.extend(pe_sections);
         }

@@ -23,7 +23,6 @@
 //! - `CapabilityMapper::new()` - Load from traits/ directory or capabilities.yaml
 //! - `mapper.evaluate_traits()` - Evaluate atomic traits against a report
 //! - `mapper.evaluate_composite_rules()` - Evaluate composite rules
-//! - `mapper.lookup()` - Look up symbol by name
 
 mod error_formatting;
 pub(crate) mod indexes;

@@ -267,6 +267,7 @@ impl<'a> RuleDebugger<'a> {
             cached_lower_binary: std::sync::Arc::new(std::sync::OnceLock::new()),
             string_exact_index: std::sync::Arc::new(std::sync::OnceLock::new()),
             string_exact_index_ci: std::sync::Arc::new(std::sync::OnceLock::new()),
+            encoded_string_indices: std::sync::Arc::new(std::sync::OnceLock::new()),
             deadline: None,
             slow_rule_ms: 4000,
             cached_evidence: None,
@@ -620,6 +621,7 @@ impl<'a> RuleDebugger<'a> {
             cached_lower_binary: std::sync::Arc::new(std::sync::OnceLock::new()),
             string_exact_index: std::sync::Arc::new(std::sync::OnceLock::new()),
             string_exact_index_ci: std::sync::Arc::new(std::sync::OnceLock::new()),
+            encoded_string_indices: std::sync::Arc::new(std::sync::OnceLock::new()),
             deadline: None,
             slow_rule_ms: 4000,
             cached_evidence: None,
@@ -878,13 +880,19 @@ impl<'a> RuleDebugger<'a> {
             let mut result = ConditionDebugResult::new(desc, false);
 
             if trait_debug_result.matched {
-                // Trait re-evaluates as matched but wasn't in findings - this is a bug!
-                result
-                    .details
-                    .push("⚠ Trait re-evaluates as matched but not in findings!".to_string());
-                result
-                    .details
-                    .push("  This indicates a discrepancy in evaluation".to_string());
+                // The primary condition matched, yet the trait is absent from the
+                // final findings. The cause is almost always an `unless:` skip or a
+                // `downgrade:` that resolved against a sibling finding in the full
+                // run; attribute it precisely instead of emitting a bare warning.
+                let attribution = self.explain_unless_downgrade(trait_def);
+                if attribution.is_empty() {
+                    result.details.push(
+                        "⚠ Trait re-evaluates as matched but not in findings (cause unattributed)"
+                            .to_string(),
+                    );
+                } else {
+                    result.details.extend(attribution);
+                }
             } else if let Some(reason) = &trait_debug_result.skipped_reason {
                 result
                     .details
@@ -926,6 +934,130 @@ impl<'a> RuleDebugger<'a> {
         }
 
         result
+    }
+
+    /// Attribute why a trait that matched its primary condition is nonetheless
+    /// absent from (or de-emphasized in) the final findings. The cause is almost
+    /// always an `unless:` skip or a `downgrade:` that resolved against a sibling
+    /// finding in the full run — so re-check those clauses against the real
+    /// report and name the responsible clause and what triggered it. This turns
+    /// the old bare "discrepancy" note into a direct readout of unless/downgrade
+    /// manipulation.
+    fn explain_unless_downgrade(&self, trait_def: &TraitDefinition) -> Vec<String> {
+        let mut out = Vec::new();
+
+        // `unless:` — default semantics skip the trait if ANY clause matches.
+        if let Some(unless_conds) = &trait_def.unless {
+            for (idx, cond) in unless_conds.iter().enumerate() {
+                if let Some(trigger) = self.unless_clause_satisfied(cond) {
+                    out.push(format!(
+                        "✗ SUPPRESSED by `unless:` clause #{} → {}",
+                        idx + 1,
+                        describe_condition(cond)
+                    ));
+                    out.push(format!("      ↳ matched by: {}", trigger));
+                }
+            }
+        }
+
+        // `downgrade:` — every present block (all/any/none) must pass to fire.
+        if let Some(downgrade) = &trait_def.downgrade
+            && let Some(reason) = self.explain_downgrade(downgrade)
+        {
+            out.push(format!(
+                "↓ DOWNGRADED {:?} → {:?} by `downgrade:` ({})",
+                trait_def.crit,
+                crate::composite_rules::traits::downgrade_crit(trait_def.crit),
+                reason
+            ));
+        }
+
+        out
+    }
+
+    /// Decide whether a single `unless:`/`downgrade:` clause is satisfied against
+    /// the analyzed file, returning the triggering trait id when it is. Tries the
+    /// findings-based view first (covers inline matchers and single-trait refs,
+    /// which `debug_condition` already re-evaluates when absent from findings).
+    /// Falls back to re-evaluating each member of a *directory* trait-reference —
+    /// the case that the findings view misses when those members were themselves
+    /// suppressed in the same run (mutual annihilation), which is exactly how a
+    /// pair of same-directory clauses can each silence the other.
+    fn unless_clause_satisfied(&self, cond: &Condition) -> Option<String> {
+        let res = self.debug_condition(cond);
+        if res.matched {
+            let trigger = res
+                .details
+                .iter()
+                .find_map(|d| d.trim().strip_prefix("- ").map(str::to_string))
+                .unwrap_or_else(|| describe_condition(cond));
+            return Some(trigger);
+        }
+
+        // Directory trait-reference fallback: re-evaluate each member's matcher.
+        if let Condition::Trait { id } = cond {
+            let id = id.trim_end_matches('/');
+            let pfx_new = format!("{id}::");
+            let pfx_legacy = format!("{id}/");
+            for t in self.traits {
+                if (t.id == id || t.id.starts_with(&pfx_new) || t.id.starts_with(&pfx_legacy))
+                    && self.debug_trait_via_evaluation(t).matched
+                {
+                    return Some(t.id.clone());
+                }
+            }
+        }
+        None
+    }
+
+    /// Mirror of the engine's downgrade evaluation: every specified block must
+    /// pass for the downgrade to fire. Returns a reason string naming the
+    /// matched clause when it would trigger, else `None`.
+    fn explain_downgrade(
+        &self,
+        dg: &crate::composite_rules::traits::DowngradeConditions,
+    ) -> Option<String> {
+        let mut reasons = Vec::new();
+
+        if let Some(all) = &dg.all {
+            if !all
+                .iter()
+                .all(|c| self.unless_clause_satisfied(c).is_some())
+            {
+                return None;
+            }
+            reasons.push("all: satisfied".to_string());
+        }
+        if let Some(any) = &dg.any {
+            let matched = any
+                .iter()
+                .filter(|c| self.unless_clause_satisfied(c).is_some())
+                .count();
+            if matched < dg.needs.unwrap_or(1) {
+                return None;
+            }
+            if let Some(c) = any
+                .iter()
+                .find(|c| self.unless_clause_satisfied(c).is_some())
+            {
+                reasons.push(format!("any: {}", describe_condition(c)));
+            }
+        }
+        if let Some(none) = &dg.none {
+            if none
+                .iter()
+                .any(|c| self.unless_clause_satisfied(c).is_some())
+            {
+                return None;
+            }
+            reasons.push("none: satisfied".to_string());
+        }
+
+        if reasons.is_empty() {
+            None
+        } else {
+            Some(reasons.join("; "))
+        }
     }
 
     fn debug_symbol_condition(
@@ -1098,6 +1230,7 @@ impl<'a> RuleDebugger<'a> {
             cached_lower_binary: std::sync::Arc::new(std::sync::OnceLock::new()),
             string_exact_index: std::sync::Arc::new(std::sync::OnceLock::new()),
             string_exact_index_ci: std::sync::Arc::new(std::sync::OnceLock::new()),
+            encoded_string_indices: std::sync::Arc::new(std::sync::OnceLock::new()),
             deadline: None,
             slow_rule_ms: 4000,
             cached_evidence: None,
@@ -1487,6 +1620,7 @@ impl<'a> RuleDebugger<'a> {
             cached_lower_binary: std::sync::Arc::new(std::sync::OnceLock::new()),
             string_exact_index: std::sync::Arc::new(std::sync::OnceLock::new()),
             string_exact_index_ci: std::sync::Arc::new(std::sync::OnceLock::new()),
+            encoded_string_indices: std::sync::Arc::new(std::sync::OnceLock::new()),
             deadline: None,
             slow_rule_ms: 4000,
             cached_evidence: None,
@@ -1617,6 +1751,7 @@ impl<'a> RuleDebugger<'a> {
             cached_lower_binary: std::sync::Arc::new(std::sync::OnceLock::new()),
             string_exact_index: std::sync::Arc::new(std::sync::OnceLock::new()),
             string_exact_index_ci: std::sync::Arc::new(std::sync::OnceLock::new()),
+            encoded_string_indices: std::sync::Arc::new(std::sync::OnceLock::new()),
             deadline: None,
             slow_rule_ms: 4000,
             cached_evidence: None,

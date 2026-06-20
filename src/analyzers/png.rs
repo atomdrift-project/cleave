@@ -54,7 +54,7 @@ impl PngAnalyzer {
     ) -> AnalysisReport {
         let mut hasher = Sha256::new();
         hasher.update(data);
-        let sha256 = format!("{:x}", hasher.finalize());
+        let sha256 = hex::encode(hasher.finalize());
 
         let target = TargetInfo {
             path: file_path.display().to_string(),

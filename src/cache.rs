@@ -8,14 +8,18 @@
 //!
 //! # Cache Types
 //!
-//! - `re/` - Radare2/rizin analysis results (keyed by file SHA256)
-//! - Additional cache types can be added as needed
+//! - compiled-rule caches (`yara-rules-*.bin`, `capability-mapper-*.bin`)
+//! - the SQLite analysis-report cache ([`crate::analysis_cache`])
+//!
+//! Rizin disassembly results are no longer cached here: rizin moved into
+//! filefacts, which owns its own cache (`filefacts::cache`). The legacy
+//! `re/` tree is retired by [`maintain_filefacts_cache`].
 //!
 //! # Cleanup
 //!
-//! Versioned compiled-rule caches (`yara-rules-*.bin`, `capability-mapper-*.bin`) are
-//! pruned automatically when a new version is written. RE cache entries (`re/`) are pruned
-//! at server startup via `prune_re_cache()`; they are not evicted automatically on CLI use.
+//! Versioned compiled-rule caches are pruned automatically when a new version
+//! is written. The filefacts cache (old schema versions, build-orphaned
+//! entries) is maintained at startup via [`maintain_filefacts_cache`].
 
 use anyhow::{Context, Result};
 use std::fs;
@@ -581,66 +585,23 @@ pub fn save_rule_stats(trait_count: usize, composite_count: usize) -> Result<()>
     Ok(())
 }
 
-/// Get the reverse engineering tool analysis cache directory
-/// Returns: {cache_dir}/re/
-pub(crate) fn re_cache_dir() -> Result<PathBuf> {
-    let dir = cache_dir()?.join("re");
-    if !dir.exists() {
-        fs::create_dir_all(&dir).context("Failed to create RE cache directory")?;
-    }
-    Ok(dir)
-}
-
-/// Prune RE cache entries older than `max_age_secs`.
+/// Maintain the filefacts disk cache that now owns rizin recovery.
 ///
-/// The `re/` subdirectory has no automatic eviction and grows without bound as
-/// new unique binaries are analyzed. Call this periodically (server startup,
-/// scan_directory entry, or scheduled task) to prevent unbounded disk growth.
-pub(crate) fn prune_re_cache(max_age_secs: u64) -> usize {
-    let Ok(re_dir) = re_cache_dir() else {
-        return 0;
-    };
-    let cutoff = std::time::SystemTime::now()
-        .checked_sub(std::time::Duration::from_secs(max_age_secs))
-        .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-
-    let mut removed = 0usize;
-    let Ok(subdirs) = fs::read_dir(&re_dir) else {
-        return 0;
-    };
-    for subdir in subdirs.flatten() {
-        let Ok(entries) = fs::read_dir(subdir.path()) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if !path.is_file() {
-                continue;
-            }
-            let stale = fs::metadata(&path)
-                .and_then(|m| m.modified())
-                .map(|mtime| mtime < cutoff)
-                .unwrap_or(false);
-            if stale && fs::remove_file(&path).is_ok() {
-                removed += 1;
-            }
-        }
+/// Rizin moved into filefacts, which caches its extraction snapshot
+/// (recovered imports/exports/functions/sections included) keyed by
+/// `(content, filefacts build, rizin config)`. cleave relies on that
+/// cache instead of the old `re/` tree it kept before the migration, so
+/// at startup it prunes superseded schema versions and ages out entries
+/// orphaned by filefacts rebuilds, and removes the now-dead `re/` tree
+/// left behind on pre-migration installs. Best-effort; runs in the
+/// background.
+pub(crate) fn maintain_filefacts_cache(max_age_secs: u64) {
+    filefacts::cache::prune_old_versions();
+    filefacts::cache::prune_stale(std::time::Duration::from_secs(max_age_secs));
+    // One-shot cleanup of the legacy radare2 cache; harmless once gone.
+    if let Ok(dir) = cache_dir() {
+        let _ = fs::remove_dir_all(dir.join("re"));
     }
-    removed
-}
-
-/// Get the cache path for a reverse engineering analysis result by SHA256
-/// Uses first 2 chars as subdirectory to avoid huge flat directories.
-/// Returns: {cache_dir}/re/{sha256[0:2]}/{sha256}.bin
-pub fn re_cache_path(sha256: &str) -> Result<PathBuf> {
-    if sha256.len() < 2 {
-        anyhow::bail!("Invalid SHA256: too short");
-    }
-    let subdir = re_cache_dir()?.join(&sha256[..2]);
-    if !subdir.exists() {
-        fs::create_dir_all(&subdir).context("Failed to create RE cache subdirectory")?;
-    }
-    Ok(subdir.join(format!("{}.bin", sha256)))
 }
 
 /// Clean up old cache files (keep only current one)

@@ -484,10 +484,12 @@ fn convert_file(file: &super::file_analysis::FileAnalysis, id: u32) -> CompactFi
             })
             .filter_map(|e| {
                 e.byte_offset().map(|off| {
-                    [
-                        off,
-                        u64::from(u32::try_from(e.value.len()).unwrap_or(u32::MAX)),
-                    ]
+                    // A decoded-layer match sets `match_len` to its encoded
+                    // source size; otherwise the span is the value's own length.
+                    let len = e.match_len.unwrap_or_else(|| {
+                        u64::from(u32::try_from(e.value.len()).unwrap_or(u32::MAX))
+                    });
+                    [off, len]
                 })
             })
             .collect();

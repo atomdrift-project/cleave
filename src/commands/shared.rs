@@ -177,7 +177,7 @@ pub(crate) fn create_analysis_report(
         // Fallback: create minimal report for unsupported types
         let mut hasher = Sha256::new();
         hasher.update(binary_data);
-        let sha256 = format!("{:x}", hasher.finalize());
+        let sha256 = hex::encode(hasher.finalize());
 
         let target = types::TargetInfo {
             path: path.display().to_string(),

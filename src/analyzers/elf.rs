@@ -712,28 +712,15 @@ impl ElfAnalyzer {
         }
     }
 
-    /// Project filefacts's typed Imports / Exports into the report.
-    /// Capability lookup runs against each import's symbol so capability
-    /// findings still attach. Exports come from `.dynsym` only —
-    /// filefacts's typed view doesn't filefacts `.symtab` exports today.
+    /// Project filefacts's typed Imports / Exports into the report. Symbol
+    /// traits match these through the trait engine's symbol index. Exports come
+    /// from `.dynsym` only — filefacts's typed view doesn't surface `.symtab`
+    /// exports today.
     fn fill_dynamic_symbols_from_ctx(&self, ctx: &Ctx<'_>, report: &mut AnalysisReport) {
         use std::collections::HashSet;
-        // Dedup via sets, not O(n²) linear rescans — `.dynsym` can carry
-        // thousands of exports.
-        let mut finding_ids: HashSet<String> =
-            report.findings.iter().map(|f| f.id.clone()).collect();
-        for imp in ctx.imports_from_filefacts() {
-            // Capability lookup runs against the symbol name; the
-            // source argument is used only for evidence attribution.
-            if let Some(cap) = self
-                .capability_mapper
-                .lookup(&imp.symbol, imp.offset.as_deref())
-                && finding_ids.insert(cap.id.clone())
-            {
-                report.findings.push(cap);
-            }
-            report.imports.push(imp);
-        }
+        report.imports.extend(ctx.imports_from_filefacts());
+        // Dedup exports via a set, not O(n²) linear rescans — `.dynsym` can
+        // carry thousands of entries.
         let mut export_symbols: HashSet<String> =
             report.exports.iter().map(|e| e.symbol.clone()).collect();
         for exp in ctx.exports_from_filefacts() {

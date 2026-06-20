@@ -5,20 +5,8 @@
 //! - File-level defaults
 //! - Raw trait definitions (before default application)
 //! - Raw composite rules (before default application)
-//! - Simple symbol mappings
 
-use serde::{Deserialize, Serialize};
-
-/// Internal trait information for symbol lookups
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub(crate) struct TraitInfo {
-    pub(crate) id: String,
-    pub(crate) desc: String,
-    pub(crate) conf: f32,
-    pub(crate) crit: crate::types::Criticality,
-    pub(crate) mbc: Option<String>,
-    pub(crate) attack: Option<String>,
-}
+use serde::Deserialize;
 
 /// File-level defaults that apply to all traits in a file
 #[derive(Debug, Deserialize, Default, Clone)]
@@ -169,42 +157,8 @@ pub(crate) struct TraitMappings {
     pub(crate) defaults: TraitDefaults,
 
     #[serde(default)]
-    pub(crate) symbols: Vec<SymbolMapping>,
-
-    #[serde(default)]
-    pub(crate) simple_rules: Vec<SimpleRule>,
-
-    #[serde(default)]
     pub(crate) traits: Vec<RawTraitDefinition>,
 
     #[serde(default, alias = "capabilities")]
     pub(crate) composite_rules: Vec<RawCompositeRule>,
-}
-
-/// Simple rule with platform/file type constraints
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct SimpleRule {
-    pub(crate) symbol: String,
-    pub(crate) capability: String,
-    #[serde(alias = "description")]
-    pub(crate) desc: String,
-    #[serde(alias = "confidence")]
-    pub(crate) conf: f32,
-    #[serde(default)]
-    pub(crate) platforms: Vec<String>,
-    #[serde(default, alias = "for")]
-    pub(crate) file_types: Vec<String>,
-}
-
-/// Legacy symbol mapping format
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct SymbolMapping {
-    pub(crate) symbol: String,
-    pub(crate) capability: String,
-    #[serde(alias = "description")]
-    pub(crate) desc: String,
-    #[serde(alias = "confidence")]
-    pub(crate) conf: f32,
 }

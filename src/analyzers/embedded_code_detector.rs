@@ -890,9 +890,26 @@ pub fn analyze_embedded_string(
         analyzer = analyzer.with_encoded_context(string_info.encoding_chain.clone());
     }
 
-    // Analyze in-memory
+    // Analyze in-memory.
+    //
+    // For an interpreter inline-code invocation (`python3 -c "<code>"`) the
+    // language is declared by the interpreter token, so force the parse grammar
+    // to it: the virtual path carries no usable extension, and plain
+    // `analyze_source` would re-detect the stripped body as Unknown and recover
+    // no AST — losing every capability of the payload (a `python3 -c` body's
+    // `zlib.decompress` / `open(...,'rb')` calls).
+    //
+    // For heuristically classified plain embedded code (prose, prompts, doc
+    // snippets that stng tagged as shell/python) keep the conservative
+    // re-detecting path: forcing a grammar there would promote benign text to
+    // full capability analysis and surface intent findings on non-code.
     let t_analyze = std::time::Instant::now();
-    let report = analyzer.analyze_source(Path::new(&virtual_path), &source_to_analyze);
+    let virtual_path_ref = Path::new(&virtual_path);
+    let report = if inline_code.is_some() {
+        analyzer.analyze_source_as_configured(virtual_path_ref, &source_to_analyze)
+    } else {
+        analyzer.analyze_source(virtual_path_ref, &source_to_analyze)
+    };
     let analyze_time = t_analyze.elapsed();
 
     if analyze_time.as_millis() > 100 {

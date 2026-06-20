@@ -1,7 +1,7 @@
 //! Utility functions for archive analysis.
 
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 
 /// Calculate SHA256 hash of data
@@ -18,7 +18,14 @@ pub(crate) fn calculate_file_sha256(path: &Path) -> std::io::Result<String> {
     use sha2::{Digest, Sha256};
     let mut file = File::open(path)?;
     let mut hasher = Sha256::new();
-    std::io::copy(&mut file, &mut hasher)?;
+    let mut buf = [0_u8; 8192];
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
     Ok(hex::encode(hasher.finalize()))
 }
 

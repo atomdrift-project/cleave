@@ -41,7 +41,7 @@ const MAX_DESCRIPTION_CHARS: usize = 48;
 /// Lower a criticality by one level when a downgrade condition fires. Hostile →
 /// Suspicious → Notable → Baseline; anything already at or below Baseline floors
 /// at Component.
-fn downgrade_crit(c: Criticality) -> Criticality {
+pub(crate) fn downgrade_crit(c: Criticality) -> Criticality {
     match c {
         Criticality::Hostile => Criticality::Suspicious,
         Criticality::Suspicious => Criticality::Notable,
@@ -3616,6 +3616,7 @@ mod scope_tests {
             location: Some(location.to_string()),
             offsets: Vec::new(),
             count: 0,
+            match_len: None,
             alt_value: None,
         }
     }

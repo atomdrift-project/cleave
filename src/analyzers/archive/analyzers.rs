@@ -31,8 +31,7 @@ use super::guards::{
 use super::utils::{calculate_sha256, find_main_class, is_benign_java_path};
 use crate::analyzers::{AnalysisInput, FileType, FileTypeExt, detect_file_type};
 use crate::types::{
-    AnalysisReport, ArchiveEntry, FileAnalysis, Finding, StringInfo, StringType, TargetInfo,
-    YaraMatch, encode_archive_path,
+    AnalysisReport, ArchiveEntry, FileAnalysis, Finding, TargetInfo, YaraMatch, encode_archive_path,
 };
 use anyhow::Result;
 use rayon::prelude::*;
@@ -123,7 +122,6 @@ struct MemberAccumulator {
     distinct_finding_ids: HashSet<String>,
     collected_traits: HashMap<String, Finding>,
     collected_yara: Vec<YaraMatch>,
-    collected_strings: Vec<StringInfo>,
     collected_archive_entries: Vec<ArchiveEntry>,
     collected_files: Vec<FileAnalysis>,
     files_analyzed: usize,
@@ -186,16 +184,13 @@ impl MemberAccumulator {
                 .or_insert(new_finding);
         }
 
-        for string in &file_entry.strings {
-            if matches!(
-                string.string_type,
-                Some(StringType::Url | StringType::IP | StringType::Base64)
-            ) && self.collected_strings.len() < 10_000
-            {
-                self.collected_strings.push(string.clone());
-            }
-        }
-
+        // Member strings (URLs/IPs/base64) are deliberately NOT hoisted onto the
+        // parent. Each member keeps its own strings on its FileAnalysis record;
+        // pulling them up made the parent's `type: text` trait evaluation re-match
+        // member content with no way to attribute it back, producing findings on
+        // the archive itself (e.g. a `jsonkeeper.com` URL decoded from a member)
+        // with member-relative offsets meaningless in the archive's byte space.
+        // Only traits roll up to the parent — carrying their member `from`.
         self.collected_files.push(file_entry);
         self.collected_archive_entries.extend(archive_contents);
         for mut nested_file in nested_files {
@@ -244,7 +239,6 @@ impl MemberAccumulator {
                 report.yara_matches.push(ym);
             }
         }
-        report.strings.extend(self.collected_strings);
         report
             .archive_contents
             .extend(self.collected_archive_entries);

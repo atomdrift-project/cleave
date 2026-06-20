@@ -1,6 +1,6 @@
 [package]
 name = "cleave"
-version = "2.1.0-rc.2"
+version = "2.1.0"
 edition = "2024"
 authors = ["The Atomdrift Project"]
 description = "Deep static analysis tool for extracting features from binaries and source code"
@@ -89,10 +89,7 @@ cleave-macros = { path = "cleave-macros" }
 # views on `ParsedFile`.
 filefacts = { git = "https://codeberg.org/atomdrift/filefacts.git" }
 
-# Binary parsing — all goblin reads now go through filefacts's typed views.
-iced-x86 = { version = "1.21", default-features = false, features = ["decoder", "std"] }
-cfb = "0.10"  # Microsoft OLE2/CFBF compound document parsing
-lnk = "0.6"  # Windows Shell Link (.lnk) parsing
+cfb = "0.14"  # Microsoft OLE2/CFBF compound document parsing
 
 # AppleScript parsing
 scpt = { path = "crates/scpt" }
@@ -125,7 +122,7 @@ plist = "1.9"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_yaml = "0.9"
-simd-json = "0.14"
+simd-json = "0.17"
 toml = "1.1"
 bincode = { package = "cu-bincode", git = "https://github.com/copper-project/cu-bincode", features = ["serde", "alloc", "std"] }
 
@@ -148,8 +145,14 @@ cpio = "0.4"
 zstd = "0.13"
 unrar = "0.5"
 cab = "0.6"
+# Apple disk images: dmgwiz decompresses every UDIF codec (zlib/bzip2/LZFSE/ADC/
+# LZMA) to a raw image — the fallback for DMGs 7z can't decompress (e.g. ULMO).
+# Pinned to the fork carrying the LZMA/ULMO codec work (PR pending upstream at
+# citruz/dmgwiz). default-features = false drops the crypto (openssl/ring) and
+# cli (clap) features cleave doesn't use.
+dmgwiz = { git = "https://github.com/tstromberg/dmgwiz.git", default-features = false }
 lzx = { path = "crates/lzx" }
-rusqlite = { version = "0.33", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
 
 # Parallelization
 rayon = "1.12"
@@ -160,39 +163,21 @@ rayon = "1.12"
 stacker = "0.1"
 
 # Cryptography (for decrypting obfuscated payloads)
-aes = "0.8"
-cbc = { version = "0.1", features = ["alloc"] }
+aes = "0.9"
+cbc = { version = "0.2", features = ["alloc"] }
 
 # Utilities
-sha2 = { version = "0.10", features = ["asm-aarch64"] }
-md-5 = "0.10"
-# RSA-PKCS1v15 verification — for cryptographic validation of PE
-# Authenticode SignerInfo signatures against the leaf cert pubkey.
-# Already a transitive dep via yara-x; pinning explicitly here.
-rsa = "0.9"
-# ECDSA verification (P-256, P-384) — for the ECDSA Authenticode case.
-# Already transitive deps; pinning explicitly here.
-p256 = { version = "0.13", features = ["ecdsa"] }
-p384 = { version = "0.13", features = ["ecdsa"] }
-# Non-crypto checksum for bound-import / build-host fingerprinting —
-# u32 output fits cleanly into the metric integer model.
-crc32fast = "1.5"
+sha2 = "0.11"  # ARM/x86 hardware SHA acceleration is automatic in 0.11 (no feature flag)
 regex = "1.12"
 regex-syntax = "0.8"  # For safe literal extraction from regex patterns (mandatory-atom extraction)
 memchr = "2.8"
 aho-corasick = "1.1"
 rustc-hash = "2.1"
 dashmap = "6.2"
-lru = "0.12"  # LRU cache for UTF-8 conversion results
+lru = "0.18"  # LRU cache for UTF-8 conversion results
 anyhow = "1.0"
 thiserror = "2.0"
 chrono = { version = "0.4", features = ["serde"] }
-# Transitive-only (via plist/yara-x/sevenz-rust), pinned explicitly: `time`
-# 0.3.48 added a `ModifierValue` projection impl that rustc 1.96 rejects as
-# coherence-conflicting against any downstream blanket `From` impl (breaks
-# yara-x, sevenz-rust, …). 0.3.47 is the newest release without it and still
-# satisfies plist's `^0.3.47`. Drop this once a fixed `time` ships.
-time = "=0.3.47"
 hex = "0.4"
 base64 = "0.22"
 roxmltree = "0.21"
@@ -204,7 +189,7 @@ semver = "1"  # Version comparison for the update notifier
 # HTTPS client for the zero-telemetry update notice (plain GET of a static
 # manifest; blocking so it stays off the async path). rustls-tls avoids a
 # system OpenSSL dependency.
-reqwest = { version = "0.12", features = ["blocking", "rustls-tls"], default-features = false }
+reqwest = { version = "0.13", features = ["blocking", "rustls", "webpki-roots"], default-features = false }
 parking_lot = "0.12"  # Efficient mutexes/RwLocks. NOTE: `deadlock_detection` is opt-in (see the `deadlock-detection` feature) — it adds per-lock global-registry bookkeeping that has no place in release builds.
 libc = "0.2"          # For FreeBSD sysctl thread info and other OS APIs
 memmap2 = "0.9"  # Memory-mapped file I/O for large files
@@ -220,7 +205,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 axum = { version = "0.8", features = ["multipart"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "fs", "signal", "io-util", "sync"] }
 tower = { version = "0.5", features = ["timeout", "limit"] }
-tower-http = { version = "0.6", features = ["limit"] }
+tower-http = { version = "0.7", features = ["limit"] }
 once_cell = "1.21"
 
 [lib]
@@ -263,12 +248,12 @@ memprofile = ["jemalloc"]
 # Excluded on illumos/Solaris which ship libumem (a comparable arena allocator)
 # and where tikv-jemalloc-sys's bundled config.sub doesn't recognize the host triple.
 [target.'cfg(all(unix, not(any(target_os = "freebsd", target_os = "dragonfly", target_os = "openbsd", target_os = "illumos", target_os = "solaris"))))'.dependencies]
-tikv-jemallocator = { version = "0.6", optional = true }
-tikv-jemalloc-ctl = { version = "0.6", optional = true, features = ["stats"] }
+tikv-jemallocator = { version = "0.7", optional = true }
+tikv-jemalloc-ctl = { version = "0.7", optional = true, features = ["stats"] }
 
 [dev-dependencies]
 assert_cmd = "2.2"
-criterion = { version = "0.5", features = ["html_reports"] }
+criterion = { version = "0.8", features = ["html_reports"] }
 insta = { version = "1.48", features = ["yaml"] }
 once_cell = "1.21"  # For shared test initialization
 predicates = "3.1"
@@ -350,9 +335,10 @@ opt-level = 3
 #[patch."https://codeberg.org/atomdrift/filefacts.git"]
 #filefacts = { path = "../filefacts" }
 
-# Local override to pick up the URL-decode FP fix in stng (src/decoders.rs):
-# a plain URL's percent-encoding is normal syntax, not an encoded payload, so it
-# no longer surfaces as `metadata/encoded-payload/url`. Remove once stng is
-# published upstream and this dependency's pinned revision is bumped.
+# Local override: filefacts' disk cache round-trips `stng::ExtractedString`,
+# which needs `Deserialize` (added locally, not yet released). The patch must
+# live in cleave's root manifest too — filefacts' own [patch] does not apply
+# when cleave is the root crate. Remove once stng is published with the derive
+# and filefacts' pinned revision is bumped.
 #[patch."https://codeberg.org/atomdrift/stng.git"]
 #stng = { path = "../stng" }

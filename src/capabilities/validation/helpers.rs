@@ -1,13 +1,9 @@
 //! Utility functions for validation.
 //!
 //! This module provides shared utilities used across validation modules,
-//! including line number finding and rule conversions.
+//! including line-number finding and file-type classification.
 
-use crate::composite_rules::SymbolQuery;
-use crate::composite_rules::{CompositeTrait, Condition, FileType as RuleFileType, Platform};
-use crate::types::Criticality;
-
-use super::super::parsing::{parse_file_types, parse_platforms};
+use crate::composite_rules::FileType as RuleFileType;
 
 /// Returns true if the file type is a compiled binary format with sections.
 #[must_use]
@@ -90,83 +86,4 @@ pub(crate) fn find_line_number(file_path: &str, search_str: &str) -> Option<usiz
         }
     }
     None
-}
-
-/// Convert a simple rule with constraints into a composite rule
-/// Collects warnings into the provided vector.
-#[must_use]
-pub(crate) fn simple_rule_to_composite_rule(
-    rule: super::super::models::SimpleRule,
-    warnings: &mut Vec<String>,
-) -> CompositeTrait {
-    // Parse platforms
-    let platforms = if rule.platforms.is_empty() {
-        warnings.push(format!(
-            "Rule '{}': missing 'platforms:' declaration. Every rule must specify which \
-             platforms it targets. List explicit platforms such as [unix, windows, macos].",
-            rule.capability
-        ));
-        vec![Platform::All]
-    } else {
-        let parsed = parse_platforms(
-            &rule
-                .platforms
-                .iter()
-                .map(std::string::ToString::to_string)
-                .collect::<Vec<_>>(),
-            warnings,
-        );
-        if parsed.is_empty() {
-            vec![Platform::All]
-        } else {
-            parsed
-        }
-    };
-
-    // Parse file types
-    let file_types = if rule.file_types.is_empty() {
-        vec![RuleFileType::All]
-    } else {
-        parse_file_types(&rule.file_types, warnings).types
-    };
-
-    // Create a composite trait with a single symbol condition
-    CompositeTrait {
-        id: rule.capability,
-        desc: rule.desc,
-        conf: rule.conf,
-        crit: Criticality::Baseline,
-        mbc: None,
-        attack: None,
-        platforms,
-        arch: vec![crate::composite_rules::types::Arch::All],
-        r#for: file_types,
-        for_from_groups: false,
-        size_min: None,
-        size_max: None,
-        all: Some(vec![Condition::Symbol(SymbolQuery {
-            exact: None,
-            substr: None,
-            regex: Some(rule.symbol),
-            platforms: None,
-            is_check: None,
-            kind: None,
-            arg: None,
-            args: None,
-            alias: None,
-            not: None,
-        })]),
-        any: None,
-        needs: None,
-        near_lines: None,
-        near_bytes: None,
-        scope: None,
-        unless: None,
-        not: None,
-        downgrade: None,
-        r#ref: None,
-        defined_in: std::path::PathBuf::from("converted_simple_rule"),
-        precision: None,
-        required_trait_indices: Vec::new(),
-    }
 }

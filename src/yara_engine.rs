@@ -318,6 +318,41 @@ impl YaraEngine {
         let _ = self.tier_rules(YaraTier::CrossFormat);
     }
 
+    /// Eagerly materialize the tiers a scan with `file_type_filter` would use.
+    ///
+    /// This only fills cold `OnceLock`s; already-materialized tiers return
+    /// immediately. Callers use this to overlap cache deserialization with other
+    /// structural analysis before the actual YARA scan reaches the same tiers.
+    pub(crate) fn prewarm_filetypes(&self, file_type_filter: Option<&[&str]>) {
+        let tiers_to_warm: Vec<YaraTier> = YaraTier::scan_order(file_type_filter)
+            .into_iter()
+            .filter(|tier| self.populated_tiers.contains(tier))
+            .filter(|tier| {
+                self.tiers
+                    .get(tier)
+                    .is_some_and(|cell| cell.get().is_none())
+            })
+            .collect();
+        if tiers_to_warm.is_empty() {
+            return;
+        }
+
+        let labels: Vec<&str> = tiers_to_warm.iter().map(|tier| tier.label()).collect();
+        let started = std::time::Instant::now();
+        if tiers_to_warm.len() == 1 {
+            let _ = self.tier_rules(tiers_to_warm[0]);
+        } else {
+            tiers_to_warm.par_iter().for_each(|tier| {
+                let _ = self.tier_rules(*tier);
+            });
+        }
+        tracing::debug!(
+            tiers = ?labels,
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "prewarmed YARA tiers"
+        );
+    }
+
     /// Create a new YARA engine without rules loaded
     #[must_use]
     pub(crate) fn new() -> Self {

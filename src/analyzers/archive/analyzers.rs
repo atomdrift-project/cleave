@@ -674,6 +674,21 @@ impl ArchiveAnalyzer {
             return Ok(None);
         }
 
+        if !file_type.is_archive()
+            && let Some(ref yara_engine) = self.yara_engine
+            && Self::archive_member_yara_skip_reason(relative_path, file_type, data.len()).is_none()
+        {
+            let yara_engine = yara_engine.clone();
+            let yara_filetypes = Self::archive_member_yara_filetypes(file_type);
+            rayon::spawn(move || {
+                if yara_filetypes.is_empty() {
+                    yara_engine.prewarm_filetypes(None);
+                } else {
+                    yara_engine.prewarm_filetypes(Some(&yara_filetypes));
+                }
+            });
+        }
+
         let result = if file_type.is_archive() {
             if self.current_depth + 1 >= self.max_depth {
                 Err(anyhow::anyhow!(

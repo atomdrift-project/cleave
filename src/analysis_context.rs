@@ -95,12 +95,15 @@ impl<'a> AnalysisContext<'a> {
         self.parsed.source_ast()
     }
 
-    /// Owned clone of filefacts' extracted-string rows (the `text()` view) —
-    /// the single string-extraction authority, in the form analyzers thread
-    /// through `AnalysisInput` and convert to `StringInfo`.
+    /// The shared extracted-string rows from filefacts' `text()` view — the
+    /// single string-extraction authority. Returns an `Arc` clone (a refcount
+    /// bump, not a copy of the string data) of the allocation stng owns and
+    /// filefacts holds, so analyzers thread it through `AnalysisInput` and
+    /// convert to `StringInfo` without duplicating the bytes. Rows are in
+    /// stng's offset-sorted order.
     #[must_use]
-    pub fn text_rows(&self) -> Vec<stng::ExtractedString> {
-        self.parsed.text().iter().cloned().collect()
+    pub fn text_rows(&self) -> std::sync::Arc<[stng::ExtractedString]> {
+        self.parsed.text().rows().clone()
     }
 
     /// Normalized identity claims filefacts derived, when the file

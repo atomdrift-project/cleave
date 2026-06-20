@@ -214,7 +214,9 @@ impl StringExtractor {
             offset: Some(es.data_offset),
             encoding: "utf8".to_string(),
             string_type: None,
-            section: es.section.clone(),
+            // stng no longer carries a per-string section; cleave derives it
+            // from the offset itself where needed.
+            section: None,
             encoding_chain: vec!["base64".to_string()],
             fragments: None,
         })
@@ -238,7 +240,7 @@ impl StringExtractor {
             offset: Some(es.data_offset),
             encoding: "utf8".to_string(),
             string_type,
-            section: es.section,
+            section: None,
             encoding_chain: Vec::new(),
             // Note: fragments from stng are StringFragment, not String - skip for now
             fragments: None,
@@ -293,17 +295,9 @@ mod tests {
         ExtractedString {
             value,
             data_offset: 42,
-            section: Some(".rodata".to_string()),
             method,
             kind,
-            raw: None,
-            source: None,
             fragments: None,
-            section_size: None,
-            section_executable: None,
-            section_writable: None,
-            architecture: None,
-            function_meta: None,
         }
     }
 
@@ -337,7 +331,8 @@ mod tests {
             .expect("base64 classified strings should filefacts decoded text to encoded traits");
         assert_eq!(sidecar.encoding_chain, vec!["base64"]);
         assert_eq!(sidecar.offset, Some(42));
-        assert_eq!(sidecar.section.as_deref(), Some(".rodata"));
+        // section is derived from offset by cleave now, not carried from stng.
+        assert_eq!(sidecar.section, None);
     }
 
     #[test]

@@ -134,7 +134,7 @@ impl OfficeAnalyzer {
     ) -> AnalysisReport {
         let mut hasher = Sha256::new();
         hasher.update(data);
-        let sha256 = format!("{:x}", hasher.finalize());
+        let sha256 = hex::encode(hasher.finalize());
 
         let office_ctx = crate::analysis_context::AnalysisContext::open(file_path, data).ok();
         let office_archive_entries = if matches!(file_type, FileType::Ooxml) {

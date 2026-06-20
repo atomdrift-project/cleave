@@ -372,7 +372,7 @@ fn sevenzip_cmd() -> &'static str {
     }
 }
 
-fn run_7z(src: &Path, out: &Path) -> bool {
+pub(crate) fn run_7z(src: &Path, out: &Path) -> bool {
     std::process::Command::new(sevenzip_cmd())
         .args(["x", "-y", &format!("-o{}", out.display()), "--"])
         .arg(src)

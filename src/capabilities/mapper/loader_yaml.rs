@@ -6,16 +6,14 @@
 use crate::capabilities::indexes::{
     RawContentRegexIndex, StringMatchIndex, SymbolMatchIndex, TraitIndex,
 };
-use crate::capabilities::models::{TraitInfo, TraitMappings};
+use crate::capabilities::models::TraitMappings;
 use crate::capabilities::parsing::{apply_composite_defaults, apply_trait_defaults};
 use crate::capabilities::validation::{
     find_duplicate_traits_and_composites, precalculate_all_composite_precisions,
     validate_hostile_composite_precision, validate_hostile_trait_precision,
 };
 use crate::composite_rules::Platform;
-use crate::types::Criticality;
 use anyhow::{Context, Result};
-use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
@@ -62,38 +60,6 @@ impl super::CapabilityMapper {
 
         let mappings: TraitMappings =
             serde_yaml::from_str(&content).context("Failed to parse capabilities YAML")?;
-
-        let mut symbol_map = HashMap::new();
-
-        // Load legacy "symbols" format
-        for mapping in mappings.symbols {
-            symbol_map.insert(
-                mapping.symbol.clone(),
-                TraitInfo {
-                    id: mapping.capability,
-                    desc: mapping.desc,
-                    conf: mapping.conf,
-                    crit: Criticality::Baseline, // Legacy format defaults to baseline
-                    mbc: None,                   // Legacy format has no mbc field
-                    attack: None,                // Legacy format has no attack field
-                },
-            );
-        }
-
-        // Load "simple_rules" format
-        for rule in mappings.simple_rules {
-            symbol_map.insert(
-                rule.symbol.clone(),
-                TraitInfo {
-                    id: rule.capability,
-                    desc: rule.desc,
-                    conf: rule.conf,
-                    crit: Criticality::Baseline, // Simple rules default to baseline
-                    mbc: None,                   // Simple rules have no mbc field
-                    attack: None,                // Simple rules have no attack field
-                },
-            );
-        }
 
         // Convert raw traits to final traits with defaults applied
         let mut warnings: Vec<String> = Vec::new();
@@ -232,7 +198,6 @@ impl super::CapabilityMapper {
         }
 
         Ok(Self {
-            symbol_map,
             trait_definitions,
             composite_rules,
             trait_index,

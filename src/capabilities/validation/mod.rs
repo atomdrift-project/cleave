@@ -160,7 +160,7 @@ pub(crate) use constraints::{
 };
 
 // Utility functions
-pub(crate) use helpers::{find_line_number, simple_rule_to_composite_rule};
+pub(crate) use helpers::find_line_number;
 
 #[cfg(test)]
 mod tests;

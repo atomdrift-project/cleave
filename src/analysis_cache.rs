@@ -253,8 +253,15 @@ fn options_hash(options: &AnalysisOptions) -> String {
     // (Symbol enum collapse, Text/Literals split). Cached reports from
     // older binaries deserialize via `serde_json::Value` flexibility,
     // but the underlying field semantics differ — force re-analysis.
+    //
+    // `rizin=` folds in filefacts' rizin fingerprint (tool presence /
+    // version / native-arch slicing). This lookup short-circuits *before*
+    // filefacts runs, so without it a report built when rizin was absent
+    // (or on an older rizin) would be served to a run that now has it,
+    // hiding the recovered symbols. filefacts' own cache uses the same
+    // fingerprint; this keeps the report layer in step.
     let key = format!(
-        "v=6,3p={},yara={},r2={},upx={},plat={},hp={},sp={},ps={},fv={}",
+        "v=6,3p={},yara={},r2={},upx={},plat={},hp={},sp={},ps={},fv={},rizin={}",
         options.enable_third_party_yara,
         !options.disable_yara,
         !options.disable_radare2,
@@ -264,10 +271,11 @@ fn options_hash(options: &AnalysisOptions) -> String {
         options.min_suspicious_precision,
         options.enable_precision_scoring,
         options.enable_full_validation,
+        filefacts::rizin::cache_fingerprint(),
     );
     let hash = Sha256::digest(key.as_bytes());
     // First 16 hex chars is plenty for a small option space
-    format!("{:x}", hash)[..16].to_string()
+    hex::encode(hash)[..16].to_string()
 }
 
 /// Get the active analysis-cache revision fingerprint, or `None` if unavailable.

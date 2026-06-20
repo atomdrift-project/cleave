@@ -507,23 +507,10 @@ impl MachOAnalyzer {
         }
     }
 
-    /// Pull imports off filefacts's typed Imports view, run capability
-    /// lookups against each, and merge into the report.
+    /// Pull imports off filefacts's typed Imports view into the report. Symbol
+    /// traits match these through the trait engine's symbol index.
     fn analyze_imports_from_ctx(&self, ctx: &Ctx<'_>, report: &mut AnalysisReport) {
-        // Dedup capability findings via a set rather than rescanning every
-        // existing finding per import (import tables run to thousands).
-        let mut finding_ids: std::collections::HashSet<String> =
-            report.findings.iter().map(|f| f.id.clone()).collect();
-        for imp in ctx.imports_from_filefacts() {
-            if let Some(cap) = self
-                .capability_mapper
-                .lookup(&imp.symbol, imp.offset.as_deref())
-                && finding_ids.insert(cap.id.clone())
-            {
-                report.findings.push(cap);
-            }
-            report.imports.push(imp);
-        }
+        report.imports.extend(ctx.imports_from_filefacts());
     }
 
     /// Pull exports off filefacts's typed Exports view.
@@ -1290,8 +1277,6 @@ impl MachOAnalyzer {
             .collect();
         let mut seen_exports: HashSet<String> =
             report.exports.iter().map(|e| e.symbol.clone()).collect();
-        let mut seen_finding_ids: HashSet<String> =
-            report.findings.iter().map(|f| f.id.clone()).collect();
         let baseline_imports = report.imports.len();
         let baseline_exports = report.exports.len();
         let mut arches_parsed = 0;
@@ -1341,16 +1326,7 @@ impl MachOAnalyzer {
                 // full-file coordinates by the slice's fat offset, matching
                 // the preferred slice (rebased by `rebase_slice_offsets`).
                 shift_hex_offset(&mut imp.offset, offset as u64);
-                let symbol = imp.symbol.clone();
-                let import_offset = imp.offset.clone();
                 report.imports.push(crate::types::Import { ..imp });
-                if let Some(cap) = self
-                    .capability_mapper
-                    .lookup(&symbol, import_offset.as_deref())
-                    && seen_finding_ids.insert(cap.id.clone())
-                {
-                    report.findings.push(cap);
-                }
             }
 
             for mut exp in slice_ctx.exports_from_filefacts() {

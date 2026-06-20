@@ -8,7 +8,7 @@ use crate::capabilities::error_formatting::enhance_yaml_error;
 use crate::capabilities::indexes::{
     RawContentRegexIndex, StringMatchIndex, SymbolMatchIndex, TraitIndex,
 };
-use crate::capabilities::models::{TraitInfo, TraitMappings};
+use crate::capabilities::models::TraitMappings;
 use crate::capabilities::parsing::{apply_composite_defaults, apply_trait_defaults};
 use crate::capabilities::validation::{
     BROAD_PLATFORM_ALLOWLIST, MAX_TRAITS_PER_DIRECTORY, ObjectivesWellknownViolation,
@@ -44,13 +44,13 @@ use crate::capabilities::validation::{
     find_too_short_patterns, find_unanchored_wellknown_composites,
     find_wellknown_category_violations, find_wellknown_missing_section_filter,
     find_wellknown_missing_size_filter, precalculate_all_composite_precisions,
-    simple_rule_to_composite_rule, validate_composite_trait_only, validate_directory_structure,
+    validate_composite_trait_only, validate_directory_structure,
     validate_hostile_composite_precision, validate_hostile_trait_precision,
 };
+use crate::composite_rules::MetricsQuery;
 use crate::composite_rules::{
     CompositeTrait, Condition, FileType as RuleFileType, Platform, TraitDefinition,
 };
-use crate::composite_rules::{MetricsQuery, SymbolQuery};
 use crate::types::Criticality;
 use anyhow::{Context, Result};
 use rayon::prelude::*;
@@ -65,7 +65,6 @@ use std::path::Path;
 /// Indexes (TraitIndex, StringMatchIndex, RawContentRegexIndex) are rebuilt after load.
 #[derive(Serialize, Deserialize)]
 struct MapperCacheData {
-    symbol_map: HashMap<String, TraitInfo>,
     trait_definitions: Vec<TraitDefinition>,
     composite_rules: Vec<CompositeTrait>,
 }
@@ -512,7 +511,6 @@ impl super::CapabilityMapper {
                                 }
 
                                 return Ok(Self {
-                                    symbol_map: cache_data.symbol_map,
                                     trait_definitions: cache_data.trait_definitions,
                                     composite_rules: cache_data.composite_rules,
                                     trait_index,
@@ -660,7 +658,6 @@ impl super::CapabilityMapper {
 
         // Merge all results, collecting errors to report all at once
         tracing::trace!("Merging trait definitions and composite rules");
-        let mut symbol_map = HashMap::new();
         // Use HashMaps during loading for O(1) duplicate detection (will convert to Vec later)
         let mut trait_definitions_map: HashMap<String, TraitDefinition> = HashMap::new();
         let mut composite_rules_map: HashMap<String, CompositeTrait> = HashMap::new();
@@ -693,61 +690,8 @@ impl super::CapabilityMapper {
                 .map(|p| p.to_string_lossy().replace('\\', "/"))
                 .filter(|s| !s.is_empty());
 
-            let before_symbols = symbol_map.len();
             let before_traits = trait_definitions_map.len();
             let before_composites = composite_rules_map.len();
-
-            // Merge symbols
-            for mapping in mappings.symbols {
-                symbol_map.insert(
-                    mapping.symbol.clone(),
-                    TraitInfo {
-                        id: mapping.capability,
-                        desc: mapping.desc,
-                        conf: mapping.conf,
-                        crit: Criticality::Baseline, // Legacy format defaults to baseline
-                        mbc: None,                   // Legacy format has no mbc field
-                        attack: None,                // Legacy format has no attack field
-                    },
-                );
-            }
-
-            // Merge simple_rules
-            let mut parsing_warnings = Vec::new();
-            for rule in mappings.simple_rules {
-                // If rule has platform or file_type constraints, convert to composite rule
-                if !rule.platforms.is_empty() || !rule.file_types.is_empty() {
-                    let mut composite = simple_rule_to_composite_rule(rule, &mut parsing_warnings);
-                    // Pre-compile regexes for this composite rule
-                    if let Err(e) = composite.precompile_regexes() {
-                        return Err(anyhow::anyhow!(
-                            "Failed to compile regex for simple rule '{}': {}",
-                            composite.id,
-                            e
-                        ));
-                    }
-                    composite_rules_map.insert(composite.id.clone(), composite);
-                } else {
-                    // No constraints - add to symbol map for fast lookup
-                    symbol_map.insert(
-                        rule.symbol.clone(),
-                        TraitInfo {
-                            id: rule.capability,
-                            desc: rule.desc,
-                            conf: rule.conf,
-                            crit: Criticality::Baseline, // Simple rules default to baseline
-                            mbc: None,                   // Simple rules have no mbc field
-                            attack: None,                // Simple rules have no attack field
-                        },
-                    );
-                }
-            }
-
-            // Add file path to file-type warnings, append others as-is
-            let path_str = path.display().to_string();
-            for warning in parsing_warnings {
-                push_parsing_warning(&mut warnings, &path_str, warning);
-            }
 
             // Per-file: check for values that should use defaults, and values redundant with defaults
             if enable_full_validation
@@ -1020,55 +964,6 @@ impl super::CapabilityMapper {
                     composite_rules_map.remove(&trait_def.id);
                 }
 
-                // Extract symbol mappings from trait definitions with symbol conditions.
-                // Only add to the fast symbol_map when the trait applies to all file types —
-                // traits with restrictive `for:` constraints must go through the full
-                // evaluation pipeline which respects file type filtering.
-                let is_universal = trait_def
-                    .r#for
-                    .contains(&crate::composite_rules::FileType::All)
-                    || trait_def.r#for.is_empty();
-                if is_universal
-                    && let Condition::Symbol(SymbolQuery {
-                        exact,
-                        substr: _,
-                        regex,
-                        platforms: _,
-                        ..
-                    }) = &trait_def.r#if
-                {
-                    // If exact is specified, add it directly
-                    if let Some(exact_val) = exact {
-                        symbol_map
-                            .entry(exact_val.clone())
-                            .or_insert_with(|| TraitInfo {
-                                id: trait_def.id.clone(),
-                                desc: trait_def.desc.clone(),
-                                conf: trait_def.conf,
-                                crit: trait_def.crit,
-                                mbc: trait_def.mbc.clone(),
-                                attack: trait_def.attack.clone(),
-                            });
-                    }
-
-                    // For each regex pattern (may contain "|" for alternatives)
-                    if let Some(regex_val) = regex {
-                        for symbol_pattern in regex_val.split('|') {
-                            let symbol: String = symbol_pattern.trim().to_string();
-
-                            // Only add if not already present (first match wins)
-                            symbol_map.entry(symbol).or_insert_with(|| TraitInfo {
-                                id: trait_def.id.clone(),
-                                desc: trait_def.desc.clone(),
-                                conf: trait_def.conf,
-                                crit: trait_def.crit,
-                                mbc: trait_def.mbc.clone(),
-                                attack: trait_def.attack.clone(),
-                            });
-                        }
-                    }
-                } // is_universal
-
                 // Pre-compile regexes for this trait
                 if let Err(e) = trait_def.precompile_regexes() {
                     return Err(anyhow::anyhow!(
@@ -1172,8 +1067,7 @@ impl super::CapabilityMapper {
 
             if debug {
                 eprintln!(
-                    "      +{} symbols, +{} traits, +{} composite rules",
-                    symbol_map.len() - before_symbols,
+                    "      +{} traits, +{} composite rules",
                     trait_definitions_map.len() - before_traits,
                     composite_rules_map.len() - before_composites
                 );
@@ -4409,7 +4303,6 @@ impl super::CapabilityMapper {
             && let Ok(cache_path) = crate::cache::mapper_cache_path()
         {
             let cache_data = MapperCacheData {
-                symbol_map: symbol_map.clone(),
                 trait_definitions: trait_definitions.clone(),
                 composite_rules: composite_rules.clone(),
             };
@@ -4450,7 +4343,6 @@ impl super::CapabilityMapper {
         }
 
         Ok(Self {
-            symbol_map,
             trait_definitions,
             composite_rules,
             trait_index,

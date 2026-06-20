@@ -7,18 +7,19 @@
 //! - 7-Zip archives (.7z)
 //! - RAR archives (.rar)
 //! - Windows cabinet (.cab)
+//! - Apple disk images (.dmg / UDIF)
 //! - Standalone compression (.gz, .xz, .bz2)
 
 use std::io::Seek;
 
 use super::guards::{
     CancellableWriter, ExtractionGuard, HostileArchiveReason, LimitedReader, MAX_FILE_SIZE,
-    sanitize_entry_path, symlink_escapes,
+    MAX_TOTAL_SIZE, sanitize_entry_path, symlink_escapes,
 };
 use super::tar::extract_tar_entries_safe;
 use anyhow::{Context, Result};
 use std::fs::{self, File};
-use std::io::{BufReader, Read, Write};
+use std::io::{BufReader, BufWriter, Cursor, Read, Write};
 use std::path::Path;
 
 fn extract_7z_entry_safe<R: Read + ?Sized>(
@@ -169,6 +170,148 @@ pub(crate) fn extract_7z_from_data(
     }
 
     Err(err).context("7z extraction failed")
+}
+
+/// Extract an Apple disk image (`.dmg` / UDIF) in two stages.
+///
+/// **Stage 1 — system `7z`/`7zz` on the image directly.** 7-Zip walks the UDIF
+/// container, decompresses the blocks it knows (zlib/bzip2/LZFSE/ADC), unpacks
+/// an **HFS+** filesystem to a real file tree, and recovers the embedded
+/// universal Mach-O from **APFS** images (whose filesystem it can't read). This
+/// handles the common case.
+///
+/// **Stage 2 — dmgwiz reconstruction, only if stage 1 lands no real files.** An
+/// LZMA(ULMO) image is opaque to 7-Zip, which then dumps only partition
+/// pseudo-files (`*.MBR`, GPT tables, an undecompressed `*.Apple_APFS` blob);
+/// dmgwiz decompresses *every* UDIF codec, so we rebuild the raw disk image and
+/// hand that back to 7-Zip.
+///
+/// Success is judged by what landed, not 7-Zip's exit code: it exits non-zero on
+/// HFS+ images carrying symlinks/special files it can't recreate, even though it
+/// extracted the tree fine.
+///
+/// Best-effort throughout: an image neither tool can crack still carries its
+/// host-level `dmg.*` facts (filesystem, builder fingerprint, volume name,
+/// `newfs_apfs` version, dates), which filefacts merges independently — so this
+/// returns `Ok` rather than failing the analysis when nothing extracts. Full
+/// APFS file trees remain the libfsapfs path.
+pub(crate) fn extract_dmg_from_data(
+    data: &[u8],
+    dest_dir: &Path,
+    guard: &ExtractionGuard,
+) -> Result<()> {
+    // The UDIF trailer declares the mounted volume size — the upper bound on
+    // what extraction will write. Refuse images that would blow the total-size
+    // budget before we shell out, since a subprocess extraction can't be
+    // bounded entry-by-entry the way the in-process extractors are. Record the
+    // reason and stop (not an error): the host-level metadata floor survives.
+    if let Some(uncompressed) = udif_uncompressed_size(data)
+        && uncompressed > MAX_TOTAL_SIZE
+    {
+        guard.add_hostile_reason(HostileArchiveReason::ExcessiveTotalSize(uncompressed));
+        return Ok(());
+    }
+
+    // Stage 1: 7-Zip reads from a path, not a stream; materialize the image.
+    let temp = tempfile::Builder::new()
+        .suffix(".dmg")
+        .tempfile()
+        .context("Failed to create temp file for DMG extraction")?;
+    fs::write(temp.path(), data).context("Failed to write DMG to temp file")?;
+    crate::analyzers::sfx_detector::run_7z(temp.path(), dest_dir);
+    if dir_has_real_content(dest_dir) {
+        return Ok(()); // HFS+ file tree or APFS Mach-O carve
+    }
+
+    // Stage 1 produced only partition pseudo-files (or nothing) — typically an
+    // ULMO/LZMA image 7-Zip can't decompress. Discard the partials, then rebuild
+    // the raw disk image with dmgwiz (which handles every UDIF codec) and let
+    // 7-Zip read that.
+    clear_dir(dest_dir);
+    let raw = tempfile::Builder::new()
+        .suffix(".img")
+        .tempfile()
+        .context("Failed to create temp file for DMG reconstruction")?;
+    if reconstruct_dmg_raw(data, raw.path()).is_ok() {
+        crate::analyzers::sfx_detector::run_7z(raw.path(), dest_dir);
+    }
+    Ok(())
+}
+
+/// Reconstruct the raw whole-disk image from a UDIF `.dmg` using dmgwiz, which
+/// decompresses every UDIF block codec (including LZMA/ULMO, which 7-Zip can't).
+///
+/// dmgwiz parses attacker-controlled block tables with `.unwrap()`, so a crafted
+/// DMG can panic it. Since this runs on hostile input, the panic is isolated
+/// with `catch_unwind` (cleave builds with the default unwind strategy) and
+/// turned into a recoverable error — the caller then keeps the metadata floor
+/// rather than letting one bad image abort the analysis.
+fn reconstruct_dmg_raw(data: &[u8], out_path: &Path) -> Result<()> {
+    let extract = std::panic::AssertUnwindSafe(|| -> Result<()> {
+        let mut wiz = dmgwiz::DmgWiz::from_reader(Cursor::new(data), dmgwiz::Verbosity::None)
+            .map_err(|e| anyhow::anyhow!("dmgwiz could not parse DMG: {e}"))?;
+        let out = BufWriter::new(File::create(out_path)?);
+        wiz.extract_all(out)
+            .map_err(|e| anyhow::anyhow!("dmgwiz could not reconstruct image: {e}"))?;
+        Ok(())
+    });
+    match std::panic::catch_unwind(extract) {
+        Ok(result) => result,
+        Err(_) => anyhow::bail!("dmgwiz panicked on malformed DMG"),
+    }
+}
+
+/// Whether `dir` holds at least one real extracted file — i.e. something other
+/// than the partition pseudo-files 7-Zip dumps when it can't read the
+/// filesystem. Used to decide stage 1 succeeded without trusting 7-Zip's exit
+/// code (which is non-zero for HFS+ images with unrecreatable symlinks).
+fn dir_has_real_content(dir: &Path) -> bool {
+    walkdir::WalkDir::new(dir)
+        .min_depth(1)
+        .into_iter()
+        .filter_map(std::result::Result::ok)
+        .any(|e| {
+            e.file_type().is_file() && !is_partition_artifact(&e.file_name().to_string_lossy())
+        })
+}
+
+/// 7-Zip's partition-layer entry names, emitted when it parses the GPT/MBR but
+/// can't read the contained filesystem: `0.MBR`, `*.Primary GPT Table`,
+/// `3.free`, an undecompressed `4.Apple_APFS`/`*.Apple_HFS` blob, etc.
+fn is_partition_artifact(name: &str) -> bool {
+    name.ends_with(".MBR")
+        || name.ends_with(".free")
+        || name.contains("GPT")
+        || name.contains("Apple_APFS")
+        || name.contains("Apple_HFS")
+}
+
+/// Remove every entry beneath `dir` — discards a failed extraction's partial
+/// output before the reconstruction retry writes into the same directory.
+fn clear_dir(dir: &Path) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let _ = if path.is_dir() {
+            fs::remove_dir_all(&path)
+        } else {
+            fs::remove_file(&path)
+        };
+    }
+}
+
+/// The mounted (uncompressed) volume size declared in the UDIF `koly` trailer:
+/// `sector_count` (big-endian u64 at trailer offset 492) × 512. `None` when the
+/// trailer is absent or truncated.
+fn udif_uncompressed_size(data: &[u8]) -> Option<u64> {
+    let trailer = data.get(data.len().checked_sub(512)?..)?;
+    if !trailer.starts_with(b"koly") {
+        return None;
+    }
+    let sectors = u64::from_be_bytes(trailer.get(492..500)?.try_into().ok()?);
+    sectors.checked_mul(512)
 }
 
 /// Extract a macOS PKG (XAR) archive from an in-memory reader.
@@ -783,4 +926,66 @@ pub(crate) fn extract_cab_from_reader<R: Read + Seek>(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod tests {
+    use super::*;
+
+    /// A crafted DMG: valid `koly` trailer + a plist whose only `blkx` carries a
+    /// `Data` blob too short for the BLKXTable header. dmgwiz navigates the plist
+    /// fine, then panics in `BLKXTable::from` (bincode `.unwrap()` hits EOF
+    /// before `sector_number`). `reconstruct_dmg_raw` must catch that and return
+    /// an error rather than unwinding into the analyzer — so one hostile DMG
+    /// can't abort a batch scan.
+    #[test]
+    fn reconstruct_dmg_raw_isolates_dmgwiz_panic() {
+        // A complete 204-byte BLKXTable header (so navigation/parse succeeds)
+        // that claims 1000 chunks but supplies none — the chunk-deserialize loop
+        // then `.unwrap()`s an EOF error and panics.
+        let mut mish = vec![0u8; 204];
+        mish[0..4].copy_from_slice(b"mish");
+        mish[200..204].copy_from_slice(&1000u32.to_be_bytes()); // num_chunks, no chunk data
+        let mut entry = plist::Dictionary::new();
+        entry.insert(
+            "Name".into(),
+            plist::Value::String("disk image (Apple_APFS : 4)".into()),
+        );
+        entry.insert("Data".into(), plist::Value::Data(mish));
+        let mut rsrc = plist::Dictionary::new();
+        rsrc.insert(
+            "blkx".into(),
+            plist::Value::Array(vec![plist::Value::Dictionary(entry)]),
+        );
+        let mut root = plist::Dictionary::new();
+        root.insert("resource-fork".into(), plist::Value::Dictionary(rsrc));
+        let mut xml = Vec::new();
+        plist::to_writer_xml(&mut xml, &plist::Value::Dictionary(root)).unwrap();
+
+        // Layout: [data fork][xml][koly]. The data fork must be non-empty or
+        // dmgwiz rejects the image before parsing the (panicking) block table.
+        let data_fork = vec![0u8; 16];
+        let mut bytes = data_fork.clone();
+        let xml_offset = bytes.len() as u64;
+        bytes.extend_from_slice(&xml);
+        let mut koly = vec![0u8; 512];
+        koly[0..4].copy_from_slice(b"koly");
+        koly[4..8].copy_from_slice(&4u32.to_be_bytes()); // version
+        koly[8..12].copy_from_slice(&512u32.to_be_bytes()); // header size
+        koly[24..32].copy_from_slice(&0u64.to_be_bytes()); // data fork offset
+        koly[32..40].copy_from_slice(&(data_fork.len() as u64).to_be_bytes()); // data fork length
+        koly[216..224].copy_from_slice(&xml_offset.to_be_bytes()); // xml offset
+        koly[224..232].copy_from_slice(&(xml.len() as u64).to_be_bytes()); // xml length
+        koly[492..500].copy_from_slice(&8u64.to_be_bytes()); // sector count
+        bytes.extend_from_slice(&koly);
+
+        let tmp = tempfile::Builder::new().suffix(".img").tempfile().unwrap();
+        let err = reconstruct_dmg_raw(&bytes, tmp.path())
+            .expect_err("malformed blkx must not unwind into the caller");
+        assert!(
+            err.to_string().contains("panicked"),
+            "expected the dmgwiz panic to be caught, got: {err}"
+        );
+    }
 }

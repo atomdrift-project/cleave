@@ -23,57 +23,16 @@ use std::path::Path;
 fn test_empty_mapper() {
     let mapper = CapabilityMapper::empty();
 
-    // Should have no mappings
-    assert_eq!(mapper.mapping_count(), 0);
+    // Should have no traits or composite rules.
     assert_eq!(mapper.trait_definitions_count(), 0);
     assert_eq!(mapper.composite_rules_count(), 0);
-
-    // Lookup should return None
-    assert!(mapper.lookup("socket", None).is_none());
-}
-
-#[test]
-fn test_yaml_loading() {
-    // Test loading from embedded capabilities (without validation to allow tests to run)
-    let mapper = CapabilityMapper::new_without_validation();
-
-    // Should be able to create mapper (may or may not load mappings depending on environment)
-    let count = mapper.mapping_count();
-    println!("Loaded {} symbol mappings", count);
-    // Test passes if mapper was created successfully
-    let _ = count;
-}
-
-#[test]
-fn test_mapping_count() {
-    let mapper = CapabilityMapper::new_without_validation();
-    let count = mapper.mapping_count();
-
-    // Mapper should be created successfully (count depends on environment)
-    let _ = count;
-}
-
-#[test]
-fn test_lookup_nonexistent() {
-    let mapper = CapabilityMapper::empty();
-    let capability = mapper.lookup("nonexistent_func", None);
-    assert!(capability.is_none());
 }
 
 #[test]
 fn test_empty_mapper_counts() {
     let mapper = CapabilityMapper::empty();
-    assert_eq!(mapper.mapping_count(), 0);
     assert_eq!(mapper.composite_rules_count(), 0);
     assert_eq!(mapper.trait_definitions_count(), 0);
-}
-
-#[test]
-fn test_new_loads_symbols() {
-    let mapper = CapabilityMapper::new_without_validation();
-
-    // Should create mapper successfully (loading depends on environment)
-    let _ = mapper.mapping_count();
 }
 
 #[test]

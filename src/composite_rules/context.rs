@@ -58,6 +58,13 @@ pub(crate) struct EvaluationContext<'a> {
     /// Index for O(1) case-insensitive exact lookups (key = lowercased value,
     /// values = `report.strings` indices).
     pub string_exact_index_ci: Arc<OnceLock<FxHashMap<String, Vec<u32>>>>,
+    /// Lazily-built list of `report.strings` indices whose value is a decoded
+    /// layer (non-empty `encoding_chain`). `type: text`'s second pass scans only
+    /// these so a pattern can match content that appears only after base64/xor/…
+    /// decoding — e.g. a `jsonkeeper.com` URL hidden in a base64 literal —
+    /// without the raw pass ever seeing it. Built once per file; empty (the
+    /// common case) makes the encoded pass a single is-empty check.
+    pub encoded_string_indices: Arc<OnceLock<Vec<u32>>>,
     /// Hard deadline for rule evaluation.
     pub deadline: Option<Instant>,
     /// Cooperative cancellation flag (set by litmus timeout).
@@ -142,6 +149,7 @@ impl<'a> EvaluationContext<'a> {
             ast_kind_cache: None,
             string_exact_index: Arc::new(OnceLock::new()),
             string_exact_index_ci: Arc::new(OnceLock::new()),
+            encoded_string_indices: Arc::new(OnceLock::new()),
             deadline: None,
             cancellation: None,
             arch_ranges: None,
@@ -299,6 +307,23 @@ impl<'a> EvaluationContext<'a> {
         })
     }
 
+    /// Get or build the list of `report.strings` indices that carry a decoded
+    /// encoding layer (non-empty `encoding_chain`). `type: text`'s encoded pass
+    /// scans only these; see [`Self::encoded_string_indices`]. The result is
+    /// usually empty, so callers should gate on `is_empty()` before resolving a
+    /// matcher.
+    pub(crate) fn encoded_strings(&self) -> &[u32] {
+        self.encoded_string_indices.get_or_init(|| {
+            self.report
+                .strings
+                .iter()
+                .enumerate()
+                .filter(|(_, s)| !s.encoding_chain.is_empty())
+                .map(|(i, _)| i as u32)
+                .collect()
+        })
+    }
+
     /// Run a closure against the debug collector if one is present.
     pub(crate) fn with_debug(&self, f: impl FnOnce(&mut EvaluationDebug)) {
         if let Some(collector) = self.debug_collector
@@ -355,6 +380,7 @@ impl<'a> EvaluationContext<'a> {
             ast_kind_cache: None,
             string_exact_index: Arc::new(OnceLock::new()),
             string_exact_index_ci: Arc::new(OnceLock::new()),
+            encoded_string_indices: Arc::new(OnceLock::new()),
             deadline: None,
             cancellation: None,
             arch_ranges: None,

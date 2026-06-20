@@ -352,6 +352,38 @@ impl UnifiedSourceAnalyzer {
         self
     }
 
+    /// Analyze `content` as this analyzer's configured language, forcing the
+    /// parse grammar instead of re-detecting from `file_path`.
+    ///
+    /// `analyze_source` opens its context with `open`, which re-runs
+    /// filefacts detection on the path. That is correct when `file_path` is a
+    /// real file, but wrong for embedded code analyzed under a synthetic
+    /// virtual path (`host.php##plain@0x0`): detection lands on `Unknown` and
+    /// no AST is produced. The embedded-code detector already knows the inner
+    /// language — it created this analyzer `for_file_type` — so the parse must
+    /// honor that, not the virtual path.
+    pub(crate) fn analyze_source_as_configured(
+        &self,
+        file_path: &Path,
+        content: &str,
+    ) -> AnalysisReport {
+        let ctx = crate::analysis_context::AnalysisContext::open_as(
+            file_path,
+            content.as_bytes(),
+            self.file_type,
+        )
+        .ok();
+        self.analyze_source_impl(
+            file_path,
+            content,
+            &[],
+            &[],
+            None,
+            self.cancellation.as_ref(),
+            ctx.as_ref(),
+        )
+    }
+
     pub(crate) fn analyze_source(&self, file_path: &Path, content: &str) -> AnalysisReport {
         let ctx =
             crate::analysis_context::AnalysisContext::open(file_path, content.as_bytes()).ok();

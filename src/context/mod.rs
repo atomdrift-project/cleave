@@ -52,6 +52,11 @@ pub(crate) fn capture(report: &mut AnalysisReport, data: &[u8], file_type: FileT
         return;
     }
 
+    // Anchor symbol matches that arrived without a byte offset before any
+    // anchoring runs, so both the matched finding and any composite that
+    // references it pick up the recovered position.
+    anchor_orphan_symbol_matches(&mut report.findings, data);
+
     // Only capture context for findings that will be shown: skip Filtered noise
     // and Component building blocks unless a composite references them. Mirrors
     // the output `tiny_should_show` policy so context and rendering agree.
@@ -195,6 +200,53 @@ fn composite_legs(finding: &Finding, by_id: &FxHashMap<&str, &Finding>) -> Vec<(
     legs.sort_by(|a, b| b.2.total_cmp(&a.2).then(a.0.cmp(&b.0)));
     legs.truncate(MAX_LEGS);
     legs
+}
+
+/// Anchor symbol matches that carry a name but no byte offset.
+///
+/// Most formats hand each import/export/function the file offset of its name —
+/// but degraded extraction can't: rizin recovery with no PLT address, forwarded
+/// PE exports, a future format gap. The matched value is still the symbol *name*,
+/// literal bytes present in the file, so locate it directly. Symbol-table names
+/// are NUL-terminated, so searching `name\0` lands on the real table entry
+/// rather than a same-prefix substring (`read` inside `readdir`). Mutating the
+/// evidence here (rather than only the local anchor) lets a composite that
+/// references this finding pick up the recovered offset through its component.
+///
+/// A name genuinely absent from the file stays unanchored and is still surfaced
+/// by [`fallback_anchor`] — that is the matcher bug the guard exists to catch.
+fn anchor_orphan_symbol_matches(findings: &mut [Finding], data: &[u8]) {
+    for finding in findings {
+        for e in &mut finding.evidence {
+            if !matches!(e.method.as_str(), "symbol" | "symbols") || e.byte_offset().is_some() {
+                continue;
+            }
+            // An `archive:` location indexes an embedded member's bytes, not
+            // this file's — its own member anchors it.
+            if e.location
+                .as_deref()
+                .is_some_and(|l| l.starts_with("archive:"))
+            {
+                continue;
+            }
+            if let Some(off) = locate_nul_terminated(data, &e.value) {
+                e.offsets.push(off);
+            }
+        }
+    }
+}
+
+/// First file offset of `value` stored as a NUL-terminated string — the shape a
+/// symbol/string table holds a name in. Values shorter than three bytes are
+/// skipped: they match too liberally to anchor meaningfully.
+fn locate_nul_terminated(data: &[u8], value: &str) -> Option<u64> {
+    if value.len() < 3 {
+        return None;
+    }
+    let mut needle = Vec::with_capacity(value.len() + 1);
+    needle.extend_from_slice(value.as_bytes());
+    needle.push(0);
+    memchr::memmem::find(data, &needle).map(|pos| pos as u64)
 }
 
 /// Every shown finding must anchor somewhere so it renders attached to its file
@@ -906,6 +958,45 @@ mod tests {
         let l1 = line(&r.context, 1);
         assert!(matches!(l1, Some(c) if c.notes.len() == 1));
         assert!(matches!(l1, Some(c) if c.notes[0].id == "a/strong"));
+    }
+
+    #[test]
+    fn locate_nul_terminated_finds_table_entry_not_substring() {
+        let data = b"readdir\0read\0";
+        // "read\0" matches the standalone table entry at offset 8, never the
+        // "read" prefix inside "readdir" (which is followed by 'd', not NUL).
+        assert_eq!(locate_nul_terminated(data, "read"), Some(8));
+        // Too-short values match too liberally to anchor — skipped.
+        assert_eq!(locate_nul_terminated(data, "rd"), None);
+        // A value absent from the file gets no anchor.
+        assert_eq!(locate_nul_terminated(data, "write"), None);
+    }
+
+    #[test]
+    fn orphan_symbol_match_anchors_at_name_in_file() {
+        // A symbol matched with a name but no offset — the shape degraded
+        // extraction produces (rizin recovery with no PLT address, a forwarded
+        // PE export). It must anchor at the name's bytes in the file, not float
+        // at byte 0, and the recovered offset must land on the evidence so a
+        // referencing composite inherits it.
+        let data = b"....\0sleep\0....";
+        let mut f = finding("micro/sleep", Criticality::Notable, &[]);
+        f.evidence = vec![Evidence {
+            method: "symbol".to_string(),
+            value: "sleep".to_string(),
+            location: Some("import".to_string()),
+            ..Default::default()
+        }];
+        let mut r = report(vec![f]);
+        capture(&mut r, data, FileType::Elf);
+        assert_eq!(r.findings[0].evidence[0].byte_offset(), Some(5));
+        assert!(
+            r.context
+                .iter()
+                .any(|c| c.notes.iter().any(|n| n.id == "micro/sleep")),
+            "recovered symbol finding should render anchored: {:?}",
+            r.context
+        );
     }
 
     #[test]

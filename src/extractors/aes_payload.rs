@@ -231,7 +231,7 @@ fn is_valid_key_length(algo: &str, len: usize) -> bool {
 
 /// Decrypt AES-256-CBC ciphertext
 pub(crate) fn decrypt_aes_256_cbc(ciphertext: &[u8], key: &[u8], iv: &[u8]) -> Option<Vec<u8>> {
-    use aes::cipher::{BlockDecryptMut, KeyIvInit, block_padding::Pkcs7};
+    use aes::cipher::{BlockModeDecrypt, KeyIvInit, block_padding::Pkcs7};
     type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
 
     if key.len() != 32 || iv.len() != 16 {
@@ -245,14 +245,14 @@ pub(crate) fn decrypt_aes_256_cbc(ciphertext: &[u8], key: &[u8], iv: &[u8]) -> O
     let mut buf = ciphertext.to_vec();
 
     cipher
-        .decrypt_padded_mut::<Pkcs7>(&mut buf)
+        .decrypt_padded::<Pkcs7>(&mut buf)
         .ok()
         .map(<[u8]>::to_vec)
 }
 
 /// Decrypt AES-128-CBC ciphertext
 pub(crate) fn decrypt_aes_128_cbc(ciphertext: &[u8], key: &[u8], iv: &[u8]) -> Option<Vec<u8>> {
-    use aes::cipher::{BlockDecryptMut, KeyIvInit, block_padding::Pkcs7};
+    use aes::cipher::{BlockModeDecrypt, KeyIvInit, block_padding::Pkcs7};
     type Aes128CbcDec = cbc::Decryptor<aes::Aes128>;
 
     if key.len() != 16 || iv.len() != 16 {
@@ -266,7 +266,7 @@ pub(crate) fn decrypt_aes_128_cbc(ciphertext: &[u8], key: &[u8], iv: &[u8]) -> O
     let mut buf = ciphertext.to_vec();
 
     cipher
-        .decrypt_padded_mut::<Pkcs7>(&mut buf)
+        .decrypt_padded::<Pkcs7>(&mut buf)
         .ok()
         .map(<[u8]>::to_vec)
 }

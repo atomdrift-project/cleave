@@ -159,13 +159,12 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         reload_in_progress: AtomicBool::new(false),
     });
 
-    // Prune stale RE disk-cache entries on startup (unbounded without eviction).
-    // 30-day max age; runs in background so it doesn't delay startup.
+    // Maintain the filefacts disk cache (which now owns rizin recovery) on
+    // startup: prune old schema versions and entries orphaned by filefacts
+    // rebuilds, and retire the legacy `re/` tree. 30-day max age; runs in
+    // the background so it doesn't delay startup.
     tokio::task::spawn_blocking(|| {
-        let removed = crate::cache::prune_re_cache(30 * 24 * 3600);
-        if removed > 0 {
-            tracing::info!(removed, "Pruned stale RE cache entries");
-        }
+        crate::cache::maintain_filefacts_cache(30 * 24 * 3600);
     });
 
     // Spawn background task to clean up stale rate limiter entries

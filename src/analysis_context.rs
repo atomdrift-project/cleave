@@ -35,6 +35,26 @@ impl<'a> AnalysisContext<'a> {
         })
     }
 
+    /// Open `content` forcing a caller-known `file_type`, bypassing
+    /// detection. For embedded code whose language is already known but
+    /// whose virtual path / extracted body carries no detectable shebang,
+    /// extension, or magic (e.g. the inner source of `python3 -c "<code>"`).
+    /// Without this, filefacts re-detects the type from the virtual path,
+    /// lands on `Unknown`, and produces no source AST — so the payload's
+    /// capabilities never surface.
+    pub fn open_as(
+        path: &'a Path,
+        content: &'a [u8],
+        file_type: filefacts::FileType,
+    ) -> Result<Self, filefacts::Error> {
+        let parsed = filefacts::open_as(path, content, file_type)?;
+        Ok(Self {
+            path,
+            content,
+            parsed,
+        })
+    }
+
     /// Format-native residual values tree as JSON.
     ///
     /// Current filefacts releases do not mirror typed fact families into this

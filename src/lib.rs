@@ -410,6 +410,14 @@ struct AnalysisDisableGuards {
 
 impl AnalysisDisableGuards {
     fn from_options(options: &AnalysisOptions) -> Self {
+        // filefacts' extraction cache is on by default; when cleave's own
+        // cache switch is off (`--no-cache`, `CLEAVE_SKIP_CACHE`) keep
+        // filefacts from writing to disk too. We only ever *disable* here —
+        // re-enabling is left to filefacts' own default / `FILEFACTS_CACHE`,
+        // so a test or ops env that disabled it isn't silently overridden.
+        if crate::cache::skip_cache() {
+            filefacts::cache::set_caching_enabled(false);
+        }
         Self {
             _radare2: options
                 .disable_radare2
@@ -562,7 +570,7 @@ pub fn create_analysis_report(
     } else {
         let mut hasher = Sha256::new();
         hasher.update(binary_data);
-        let sha256 = format!("{:x}", hasher.finalize());
+        let sha256 = hex::encode(hasher.finalize());
 
         let target = types::TargetInfo {
             path: path.display().to_string(),
@@ -1920,25 +1928,25 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             // YARA) and supplies both structure and strings. When filefacts
             // can't open the bytes, fall back to the analyzer's own
             // bytes-only entry point so the malformed signal still surfaces.
-            let ctx = file_ctx;
-            let struct_result: Result<AnalysisReport, anyhow::Error> =
-                if let Some(ctx) = ctx.as_ref() {
-                    Ok(analyzer.analyze_structural_with_ctx(
-                        path,
-                        file_data,
-                        input.sha256.as_deref(),
-                        ctx,
-                    ))
-                } else {
-                    Ok(analyzer.analyze_structural(path, file_data, input.sha256.clone()))
-                };
+            // Borrow (don't consume) the full-file context opened above: it is
+            // reused by the identity/filefacts fallback after the match so the
+            // file's extraction — including rizin recovery — runs exactly once.
+            let ctx = file_ctx.as_ref();
+            let struct_result: Result<AnalysisReport, anyhow::Error> = if let Some(ctx) = ctx {
+                Ok(analyzer.analyze_structural_with_ctx(
+                    path,
+                    file_data,
+                    input.sha256.as_deref(),
+                    ctx,
+                ))
+            } else {
+                Ok(analyzer.analyze_structural(path, file_data, input.sha256.clone()))
+            };
             let raw_regex =
                 capability_mapper.precompute_raw_regex_matches(file_data, &rule_file_type);
             let mut report = struct_result?;
-            report.filefacts = ctx.as_ref().map(crate::types::FilefactsView::from_ctx);
-            report.identity = ctx
-                .as_ref()
-                .and_then(crate::analysis_context::AnalysisContext::identity);
+            report.filefacts = ctx.map(crate::types::FilefactsView::from_ctx);
+            report.identity = ctx.and_then(crate::analysis_context::AnalysisContext::identity);
             let inline_yara =
                 process_yara_result(&mut report, prefetched_yara, engine.map(AsRef::as_ref));
             // Trait authors read ELF facts directly from
@@ -1950,7 +1958,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             capability_mapper.evaluate_and_merge_findings_with_precomputed(
                 &mut report,
                 file_data,
-                crate::capabilities::AnalysisBorrow::with_filefacts(None, ctx.as_ref()),
+                crate::capabilities::AnalysisBorrow::with_filefacts(None, ctx),
                 Some(&inline_yara),
                 Some(raw_regex),
                 None,
@@ -1983,14 +1991,19 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             // YARA) and supplies sections, imports, exports, values, metrics,
             // and strings — no second PE parser pass. A PE that filefacts
             // can't open is unanalyzable, so surface the error.
-            let ctx = file_ctx.ok_or_else(|| anyhow::anyhow!("filefacts open failed for PE"))?;
+            // Borrow (don't consume) the full-file context so the identity/
+            // filefacts fallback after the match reuses it — one extraction
+            // per file, never a second rizin pass to re-derive identity.
+            let ctx = file_ctx
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("filefacts open failed for PE"))?;
             let struct_result = Ok::<_, anyhow::Error>(analyzer.analyze_structural_with_ctx(
                 path,
                 file_data,
                 input.sha256.as_deref(),
-                &ctx,
+                ctx,
             ));
-            let filefacts_view = crate::types::FilefactsView::from_ctx(&ctx);
+            let filefacts_view = crate::types::FilefactsView::from_ctx(ctx);
             let raw_regex =
                 capability_mapper.precompute_raw_regex_matches(file_data, &rule_file_type);
             let mut report = struct_result?;
@@ -2007,7 +2020,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             capability_mapper.evaluate_and_merge_findings_with_precomputed(
                 &mut report,
                 file_data,
-                crate::capabilities::AnalysisBorrow::with_filefacts(None, Some(&ctx)),
+                crate::capabilities::AnalysisBorrow::with_filefacts(None, Some(ctx)),
                 Some(&inline_yara),
                 Some(raw_regex),
                 None,
@@ -2078,16 +2091,32 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     // them here so no analyzer can silently drop them — losing, e.g., a
     // manifest's declared dependencies. Gated on `is_none` so a path that
     // already attached pays nothing, and the single open serves both.
-    if (report.identity.is_none() || report.filefacts.is_none())
-        && let Ok(ctx) = crate::analysis_context::AnalysisContext::open(path, file_data)
-    {
-        if report.identity.is_none() {
-            report.identity = ctx.identity();
-        }
-        if report.filefacts.is_none() {
-            let view = crate::types::FilefactsView::from_ctx(&ctx);
-            if !view.is_empty() {
-                report.filefacts = Some(view);
+    if report.identity.is_none() || report.filefacts.is_none() {
+        // Reuse the context already opened for this file (binary/source/generic
+        // paths all opened one above). Its extraction — including any rizin
+        // disassembly — is cached on the `ParsedFile`, so deriving identity here
+        // is free. Re-`open`ing instead, as this used to, re-ran the *entire*
+        // extraction pipeline (a second rizin pass per binary) just to recompute
+        // an identity that is empty for stripped/unsigned files. Only open a
+        // fresh context for paths that never opened one (archives, and the
+        // source/image arms that moved theirs into the analyzer input).
+        let fresh;
+        let ctx = match file_ctx.as_ref() {
+            Some(ctx) => Some(ctx),
+            None => {
+                fresh = crate::analysis_context::AnalysisContext::open(path, file_data).ok();
+                fresh.as_ref()
+            }
+        };
+        if let Some(ctx) = ctx {
+            if report.identity.is_none() {
+                report.identity = ctx.identity();
+            }
+            if report.filefacts.is_none() {
+                let view = crate::types::FilefactsView::from_ctx(ctx);
+                if !view.is_empty() {
+                    report.filefacts = Some(view);
+                }
             }
         }
     }
@@ -2366,14 +2395,12 @@ where
     }
     let _disable_guards = AnalysisDisableGuards::from_options(options);
 
-    // Prune stale radare2 disk-cache entries in the background. The `re/` dir
-    // has no in-line eviction and grows unbounded across scans (each new SHA256
-    // adds a zstd-compressed blob). 30 days matches the server default.
+    // Maintain the filefacts disk cache (which now owns rizin recovery) in
+    // the background: prune old schema versions and entries orphaned by
+    // filefacts rebuilds, and retire the legacy `re/` tree. 30-day max age
+    // matches the server default.
     std::thread::spawn(|| {
-        let removed = cache::prune_re_cache(30 * 24 * 3600);
-        if removed > 0 {
-            tracing::info!(removed, "Pruned stale RE cache entries");
-        }
+        cache::maintain_filefacts_cache(30 * 24 * 3600);
     });
 
     // Load shared resources once; all rayon workers share them via cheap Arc clones.

@@ -257,10 +257,11 @@ const ALLOWED_MB_COMMUNICATIONS: &[&str] = &[
     "icmp",
     "ip",
     "ipc",
-    "modbus",   // Modbus industrial control protocol          (TCP 502)
-    "nats",     // NATS pub/sub messaging                      (TCP 4222)
-    "opcua",    // OPC UA industrial interoperability          (TCP 4840)
-    "profinet", // PROFINET industrial Ethernet                (RT/IRT)
+    "messaging", // Chat/bot messaging-platform send APIs (sendMessage, etc.)
+    "modbus",    // Modbus industrial control protocol          (TCP 502)
+    "nats",      // NATS pub/sub messaging                      (TCP 4222)
+    "opcua",     // OPC UA industrial interoperability          (TCP 4840)
+    "profinet",  // PROFINET industrial Ethernet                (RT/IRT)
     "proxy",
     "s7", // Siemens S7comm/ISO-TSAP                     (TCP 102)
     "socket",
@@ -821,12 +822,12 @@ const ALLOWED_METADATA_PACKAGE: &[&str] = &[
     "license",        // License detection
     "logging",        // Logging patterns
     "maintainers",    // Maintainer counts
+    "manager",        // Package-manager fingerprints (homebrew, composer)
     "manifest",       // Package manifest fields
     "metrics",        // Code metrics
     "quality",        // Quality signals
     "scripts",        // Package scripts
     "testing",        // Testing detection
-    "tooling",        // Package tooling
     "versioning",     // Version detection
 ];
 

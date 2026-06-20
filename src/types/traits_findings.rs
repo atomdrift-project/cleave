@@ -417,6 +417,14 @@ pub struct Evidence {
     /// Total occurrence count when offsets are truncated (0 means use offsets.len())
     #[serde(skip_serializing_if = "is_zero_usize", default)]
     pub count: usize,
+    /// Source-byte length of the match, when it differs from `value.len()`.
+    /// Set for matches against a decoded string layer (base64/xor/…): `value`
+    /// holds the decoded text but the match occupies the longer *encoded* form in
+    /// the source, so the emitted span must use this length, not the decoded
+    /// one. `None` means the span length is `value.len()` (the common case).
+    /// Internal matching detail — not part of the serialized surface.
+    #[serde(skip)]
+    pub match_len: Option<u64>,
     /// Secondary value the matcher may try as a fallback. Currently
     /// only populated by the AST cache for `call`-kind nodes, where
     /// `value` is the full call expression text (`name(args)`) and
@@ -445,6 +453,7 @@ impl Evidence {
             location: None,
             offsets: Vec::new(),
             count: 0,
+            match_len: None,
             alt_value: None,
         }
     }

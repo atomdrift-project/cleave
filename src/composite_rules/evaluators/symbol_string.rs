@@ -673,7 +673,7 @@ pub(crate) fn eval_text<'a, 'b>(
             section_offset_range: params.section_offset_range,
             arch_clamp: params.arch_clamp,
         };
-        return eval_raw(
+        let raw = eval_raw(
             params.exact,
             params.substr,
             params.regex,
@@ -685,6 +685,18 @@ pub(crate) fn eval_text<'a, 'b>(
             ctx,
             trait_id,
         );
+        // Second pass over decoded string layers (base64/xor/…). The raw pass
+        // above already covers plain text and plain string literals, so this
+        // scans only strings carrying an `encoding_chain` — content the raw bytes
+        // can't reveal, e.g. a `jsonkeeper.com` URL hidden in a base64 literal.
+        // The two passes are disjoint by construction (decoded values aren't
+        // present verbatim in the raw bytes), so results union with no dedup.
+        // Gated on the file actually having decoded layers, so the >99% of files
+        // with none pay only this `is_empty()` check.
+        if ctx.encoded_strings().is_empty() {
+            return raw;
+        }
+        return merge_text_passes(raw, eval_text_encoded(params, trait_not, ctx));
     }
 
     let effective_range = resolve_string_effective_range(params, ctx);
@@ -819,6 +831,108 @@ pub(crate) fn eval_text<'a, 'b>(
         precision: string_match_precision(params),
         matched_trait_ids: Vec::new(),
     }
+}
+
+/// Byte length of the *encoded* source that produced a `decoded_len`-byte string
+/// through `encoding_chain`. A `type: text` match on decoded content must span
+/// the encoded bytes in the source, not the shorter decoded length — e.g. the 34
+/// decoded bytes of a `jsonkeeper.com` URL occupy 48 base64 bytes. Returns
+/// `None` for chains we can't size precisely (multi-layer, or encodings that
+/// aren't a fixed expansion), so callers fall back to the decoded length.
+#[must_use]
+pub(crate) fn encoded_source_len(decoded_len: usize, encoding_chain: &[String]) -> Option<u64> {
+    match encoding_chain {
+        // Standard base64 packs 3 source bytes into 4 padded chars.
+        [layer] if layer == "base64" => Some((decoded_len.div_ceil(3) * 4) as u64),
+        _ => None,
+    }
+}
+
+/// Second `type: text` pass: match `params` against decoded string layers only
+/// — entries with a non-empty `encoding_chain` (base64/xor/…). The raw pass in
+/// [`eval_text`] handles plain text and literals, so this surfaces patterns that
+/// appear only after decoding. Scans [`EvaluationContext::encoded_strings`], so
+/// cost scales with the (usually zero) number of decoded strings, not the whole
+/// haystack.
+#[must_use]
+fn eval_text_encoded<'a, 'b>(
+    params: &StringParams<'a>,
+    trait_not: Option<&Vec<NotException>>,
+    ctx: &EvaluationContext<'b>,
+) -> ConditionResult {
+    let effective_range = resolve_string_effective_range(params, ctx);
+    let matcher = StringMatcher::resolve(params);
+
+    let mut evidence = Vec::new();
+    let mut match_count = 0usize;
+
+    for &idx in ctx.encoded_strings() {
+        let string_info = &ctx.report.strings[idx as usize];
+        if !offset_in_range(string_info.offset, effective_range) {
+            continue;
+        }
+
+        let Some(match_value) = matcher.match_value_ref(&string_info.value) else {
+            continue;
+        };
+        let excluded_by_not = trait_not
+            .map(|exceptions| exceptions.iter().any(|exc| exc.matches(match_value)))
+            .unwrap_or(false);
+        let excluded_by_is = !validate_match(match_value, params.is_check);
+        if excluded_by_not || excluded_by_is {
+            continue;
+        }
+
+        match_count += 1;
+        if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
+            // The match lives inside an encoded blob: a sub-offset into the
+            // decoded value has no meaning in the source byte space, so anchor at
+            // the string's offset and span the *encoded* source bytes — not the
+            // shorter decoded length (see `encoded_source_len`).
+            evidence.push(Evidence {
+                method: "text".to_string(),
+                source: "string_extractor".to_string(),
+                value: truncate_evidence_value(match_value),
+                location: string_info.offset.map(|o| format!("{o:#x}")),
+                match_len: encoded_source_len(string_info.value.len(), &string_info.encoding_chain),
+                ..Default::default()
+            });
+        }
+    }
+
+    ConditionResult {
+        matched: match_count > 0,
+        evidence,
+        match_count,
+        warnings: Vec::new(),
+        precision: string_match_precision(params),
+        matched_trait_ids: Vec::new(),
+    }
+}
+
+/// Union the raw and encoded `type: text` passes. Evidence concatenates (capped
+/// at `MAX_EVIDENCE_PER_TRAIT`), match counts sum, and precision takes the higher
+/// of the two so an encoded-layer hit isn't penalised by the raw pass's miss.
+/// The passes never match the same content (one searches raw bytes, the other
+/// decoded layers), so no deduplication is needed.
+#[must_use]
+fn merge_text_passes(mut raw: ConditionResult, mut encoded: ConditionResult) -> ConditionResult {
+    if !encoded.matched {
+        return raw;
+    }
+    if !raw.matched {
+        return encoded;
+    }
+    raw.match_count += encoded.match_count;
+    let room = MAX_EVIDENCE_PER_TRAIT.saturating_sub(raw.evidence.len());
+    if room > 0 {
+        encoded.evidence.truncate(room);
+        raw.evidence.append(&mut encoded.evidence);
+    }
+    raw.precision = raw.precision.max(encoded.precision);
+    raw.warnings.append(&mut encoded.warnings);
+    raw.matched_trait_ids.append(&mut encoded.matched_trait_ids);
+    raw
 }
 
 /// Evaluate string-literal condition using AST-derived string entries only.

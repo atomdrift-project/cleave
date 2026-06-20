@@ -9,7 +9,6 @@ use crate::capabilities::indexes::{
 };
 use crate::composite_rules::{Platform, platforms_intersect};
 use anyhow::Context;
-use std::collections::HashMap;
 
 fn log_mapper_init_error(err: &anyhow::Error) {
     tracing::error!(error = %err, "Failed to initialize CapabilityMapper; returning empty mapper");
@@ -34,7 +33,6 @@ impl super::CapabilityMapper {
     #[must_use]
     pub(crate) fn empty() -> Self {
         Self {
-            symbol_map: HashMap::new(),
             trait_definitions: Vec::new(),
             composite_rules: Vec::new(),
             trait_index: TraitIndex::new(),

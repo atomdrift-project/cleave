@@ -125,6 +125,10 @@ rollout-bastille: ## Deploy to Bastille jails (BUILD=jail RUN=jail)
 	@[ -n "$(BUILD)" ] && [ -n "$(RUN)" ] || { echo "Usage: make rollout-bastille BUILD=<build-jail> RUN=<run-jail>"; exit 1; }
 	./hacks/rollout-bastille.sh "$(BUILD)" "$(RUN)"
 
+# Keep filefacts' on-by-default extraction cache out of the test runs so they
+# stay hermetic (no reads/writes to the shared user cache dir).
+test test-fast test-unit: export FILEFACTS_CACHE := 0
+
 test: ## Run all tests (unit + integration)
 	@echo "Running all tests (hybrid: nextest + cargo test for state-sharing tests)..."
 	@echo ""

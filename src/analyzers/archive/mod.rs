@@ -1407,6 +1407,10 @@ impl ArchiveAnalyzer {
             FileType::Cab => {
                 system_packages::extract_cab_from_reader(Cursor::new(data), dest_dir, guard)
             }
+            // Apple disk image: 7-Zip unpacks HFS+ to a file tree and recovers
+            // the embedded Mach-O from APFS images. The host-level `dmg.*`
+            // facts come from filefacts regardless of what 7-Zip can extract.
+            FileType::Dmg => system_packages::extract_dmg_from_data(data, dest_dir, guard),
             _ => anyhow::bail!("Unsupported archive type: {:?}", file_type),
         }
     }

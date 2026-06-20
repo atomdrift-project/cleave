@@ -439,7 +439,7 @@ impl UnifiedSourceAnalyzer {
             ));
 
         let has_preextracted = !preextracted_stng.is_empty();
-        let mut owned_stng = Vec::new();
+        let mut owned_stng: std::sync::Arc<[stng::ExtractedString]> = Vec::new().into();
 
         // Run stng extraction first (sequential). Previously this used
         // rayon::in_place_scope to overlap stng with tree-sitter parsing,

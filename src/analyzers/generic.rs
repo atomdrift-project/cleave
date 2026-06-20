@@ -485,7 +485,7 @@ fn push_stng_string(report: &mut AnalysisReport, es: &stng::ExtractedString) {
         offset: Some(es.data_offset),
         string_type: es.kind,
         encoding: "utf-8".to_string(),
-        section: es.section.clone(),
+        section: None,
         encoding_chain,
         fragments,
     });

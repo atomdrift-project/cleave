@@ -1749,7 +1749,8 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         (ctx, strings, t.elapsed().as_millis() as u64)
     };
     let (mut file_ctx, stng_strings, stage_stng_ms, prefetched_yara) = if file_type.is_archive() {
-        (None, Vec::new(), 0u64, None)
+        let empty: std::sync::Arc<[stng::ExtractedString]> = Vec::new().into();
+        (None, empty, 0u64, None)
     } else if let Some(ftypes) = binary_yara_ftypes {
         // Binaries (PE/ELF/Mach-O): overlap the filefacts open + string
         // harvest with the YARA prefetch (both need only the file bytes).

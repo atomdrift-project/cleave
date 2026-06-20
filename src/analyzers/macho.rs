@@ -1548,7 +1548,7 @@ impl Analyzer for MachOAnalyzer {
         let data = fs::read(file_path).context("Failed to read file")?;
         // filefacts is the string-extraction authority. Harvest its full-file
         // `text()` view; the structural pass opens its own per-arch slice.
-        let strings: Vec<stng::ExtractedString> =
+        let strings: std::sync::Arc<[stng::ExtractedString]> =
             crate::analysis_context::AnalysisContext::open(file_path, &data)
                 .ok()
                 .map(|c| c.text_rows())

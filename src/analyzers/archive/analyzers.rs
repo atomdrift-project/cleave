@@ -805,7 +805,7 @@ impl ArchiveAnalyzer {
             // parsed a single time, regardless of member type.
             let member_ctx =
                 crate::analysis_context::AnalysisContext::open(logical_path, data).ok();
-            let stng_strings: Vec<stng::ExtractedString> = member_ctx
+            let stng_strings: std::sync::Arc<[stng::ExtractedString]> = member_ctx
                 .as_ref()
                 .map(crate::analysis_context::AnalysisContext::text_rows)
                 .unwrap_or_default();

@@ -178,6 +178,7 @@ pub fn analyzer_for_file_type(
         | FileType::SystemdService
         | FileType::DesktopEntry
         | FileType::Xml
+        | FileType::Svg
         | FileType::Html
         | FileType::Markdown
         | FileType::Text
@@ -293,6 +294,7 @@ pub(crate) fn analyzer_for_file_type_arc(
         | FileType::SystemdService
         | FileType::DesktopEntry
         | FileType::Xml
+        | FileType::Svg
         | FileType::Html
         | FileType::Markdown
         | FileType::Text
@@ -360,7 +362,7 @@ pub trait Analyzer {
         // string-extraction authority. Thread the context into the input so
         // an analyzer that reads it reuses this parse.
         let ctx = crate::analysis_context::AnalysisContext::open(file_path, &data).ok();
-        let strings: Vec<stng::ExtractedString> = ctx
+        let strings: std::sync::Arc<[stng::ExtractedString]> = ctx
             .as_ref()
             .map(crate::analysis_context::AnalysisContext::text_rows)
             .unwrap_or_default();
@@ -632,6 +634,7 @@ impl FileTypeExt for FileType {
             FileType::SystemdService => vec!["service", "systemd", "unit"],
             FileType::DesktopEntry => vec!["desktop", "desktop-entry", "freedesktop", "xdg"],
             FileType::Xml => vec!["xml", "csproj", "xaml", "svg", "msbuild"],
+            FileType::Svg => vec!["svg", "xml", "image/svg+xml"],
             FileType::Zip => vec!["zip", "archive"],
             FileType::Tar
             | FileType::TarGz

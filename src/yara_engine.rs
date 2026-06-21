@@ -222,24 +222,44 @@ struct SplitSource {
 /// additionally include the `Raw` and residual `Unknown` tiers.
 ///
 /// Scanners are cached per-thread to avoid expensive re-creation.
-/// Backing source for lazily materializing a tier's compiled `Rules`.
+/// How a tier's compiled `Rules` are produced on first access.
 ///
-/// On a cache hit (the common path) tiers are deserialized from the mmap'd
-/// cache on first access, so tiers a session never scans (e.g. PE/ELF rules
-/// during an all-source scan) are never deserialized and never allocate. On a
-/// cache miss the rules are compiled eagerly (once) and the cache is written;
-/// that run pre-fills the tier cells, so `Compiled` carries no backing source.
+/// One lazy path for both warm and cold: [`YaraEngine::build_tier`] reads the
+/// tier's per-tier compiled cache file (`<dir>/<tier>.yrc`) if present, else
+/// compiles just that tier from source and writes the file. So a run only ever
+/// compiles or holds the tiers it actually scans — never all ~14k rules at once
+/// — and the cache fills in incrementally as file types are seen. `sources` is
+/// collected (rule text read + classified) lazily on the first cache miss, so a
+/// fully-warm process never touches rule text at all.
 #[derive(Debug)]
 enum TierSource {
-    /// No rules available.
+    /// No rules available, or tier cells are externally pre-filled (a pre-set
+    /// `OnceLock` cell is returned directly, so `build_tier` is never reached).
     Empty,
-    /// Tiers already compiled and stored in the cells (cache-miss path).
-    Compiled,
-    /// Deserialize each tier from the mmap'd cache slice on demand.
-    Cached {
-        mmap: memmap2::Mmap,
-        offsets: HashMap<YaraTier, (usize, usize)>,
+    /// Compile-or-load each tier on demand.
+    Lazy {
+        /// Per-tier compiled-cache directory (`None` = caching disabled).
+        cache_dir: Option<std::path::PathBuf>,
+        traits_dir: std::path::PathBuf,
+        third_party_dir: std::path::PathBuf,
+        enable_third_party: bool,
+        /// Per-tier rule source, collected on the first cache miss.
+        sources: OnceLock<HashMap<YaraTier, Vec<(String, String)>>>,
     },
+}
+
+/// Metadata persisted alongside the per-tier compiled rule files. Lets a warm
+/// start restore counts/contexts/namespaces without reading or classifying any
+/// rule text — the tiers themselves load lazily from their `.yrc` files.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct YaraManifest {
+    builtin_count: usize,
+    third_party_count: usize,
+    inline_namespaces: Vec<String>,
+    #[serde(default)]
+    rule_contexts: HashMap<String, RuleContext>,
+    /// Labels of tiers that carry at least one rule.
+    populated_tiers: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -287,19 +307,125 @@ impl YaraEngine {
     /// Compile or deserialize one tier's rules. Single-tier work only (no inner
     /// rayon), so it is safe to call from a rayon worker during a scan.
     fn build_tier(&self, tier: YaraTier) -> Option<yara_x::Rules> {
-        match &self.source {
-            TierSource::Empty | TierSource::Compiled => None,
-            TierSource::Cached { mmap, offsets } => {
-                let &(offset, length) = offsets.get(&tier)?;
-                let end = offset.checked_add(length)?;
-                let slice = mmap.get(offset..end)?;
-                match yara_x::Rules::deserialize(slice) {
-                    Ok(rules) => Some(rules),
+        let TierSource::Lazy {
+            cache_dir,
+            traits_dir,
+            third_party_dir,
+            enable_third_party,
+            sources,
+        } = &self.source
+        else {
+            // Empty, or Compiled (cells externally pre-filled by a test helper).
+            return None;
+        };
+
+        // 1. Per-tier compiled cache file — deserialize + re-JIT just this tier.
+        if let Some(dir) = cache_dir {
+            let path = dir.join(format!("{}.yrc", tier.label()));
+            if let Ok(bytes) = std::fs::read(&path) {
+                match yara_x::Rules::deserialize(&bytes) {
+                    Ok(rules) => return Some(rules),
                     Err(e) => {
-                        tracing::warn!(tier = %tier.label(), error = ?e, "lazy tier deserialize failed");
-                        None
+                        tracing::warn!(tier = %tier.label(), error = ?e, "tier cache deserialize failed; recompiling");
                     }
                 }
+            }
+        }
+
+        // 2. Cache miss — compile just this tier from source. The rule text is
+        //    read + classified once, lazily, and shared across tiers.
+        let sources = sources.get_or_init(|| {
+            Self::collect_all_sources(traits_dir, third_party_dir, *enable_third_party).0
+        });
+        let tier_sources = sources.get(&tier)?;
+        if tier_sources.is_empty() {
+            return None;
+        }
+        let mut compiler = yara_x::Compiler::new();
+        for (ns, src) in tier_sources {
+            compiler.new_namespace(ns);
+            if let Err(e) = compiler.add_source(src.as_bytes()) {
+                tracing::warn!("Tier {:?}: failed to add source: {:?}", tier, e);
+            }
+        }
+        let rules = compiler.build();
+
+        // 3. Write the compiled tier back to the cache (best effort, atomic) so
+        //    later scans and processes skip the compile.
+        if let Some(dir) = cache_dir
+            && let Ok(bytes) = rules.serialize()
+            && std::fs::create_dir_all(dir).is_ok()
+        {
+            let tmp = dir.join(format!("{}.yrc.tmp.{}", tier.label(), std::process::id()));
+            if std::fs::write(&tmp, &bytes).is_ok() {
+                let _ = std::fs::rename(&tmp, dir.join(format!("{}.yrc", tier.label())));
+            }
+        }
+        Some(rules)
+    }
+
+    /// Collect rule source per tier (plus contexts/namespaces/counts) — the
+    /// cheap text read + classify pass shared by the cold load and the lazy
+    /// per-tier compile. Compiles nothing.
+    fn collect_all_sources(
+        traits_dir: &Path,
+        third_party_dir: &Path,
+        enable_third_party: bool,
+    ) -> (
+        HashMap<YaraTier, Vec<(String, String)>>,
+        HashMap<String, RuleContext>,
+        Vec<String>,
+        usize,
+        usize,
+    ) {
+        let (mut inline_tier_sources, inline_namespaces) = if traits_dir.exists() {
+            Self::collect_inline_trait_sources_tiered(traits_dir)
+        } else {
+            (HashMap::new(), Vec::new())
+        };
+        let (mut builtin_tier_sources, builtin_contexts, builtin_count) = if traits_dir.exists() {
+            Self::collect_builtin_sources_tiered(traits_dir)
+        } else {
+            (HashMap::new(), HashMap::new(), 0)
+        };
+        let (mut tier_sources, third_party_contexts, third_party_count, _vt, _disabled) =
+            if enable_third_party && third_party_dir.exists() {
+                Self::collect_third_party_sources_tiered(third_party_dir)
+            } else {
+                (HashMap::new(), HashMap::new(), 0, 0, 0)
+            };
+
+        let mut rule_contexts = builtin_contexts;
+        rule_contexts.extend(third_party_contexts);
+        for (tier, s) in builtin_tier_sources.drain() {
+            tier_sources.entry(tier).or_default().extend(s);
+        }
+        for (tier, s) in inline_tier_sources.drain() {
+            tier_sources.entry(tier).or_default().extend(s);
+        }
+
+        (
+            tier_sources,
+            rule_contexts,
+            inline_namespaces,
+            builtin_count,
+            third_party_count,
+        )
+    }
+
+    fn read_manifest(dir: &Path) -> Option<YaraManifest> {
+        let bytes = std::fs::read(dir.join("manifest.json")).ok()?;
+        serde_json::from_slice(&bytes).ok()
+    }
+
+    fn write_manifest(dir: &Path, manifest: &YaraManifest) {
+        if std::fs::create_dir_all(dir).is_err() {
+            return;
+        }
+        if let Ok(bytes) = serde_json::to_vec(manifest) {
+            let tmp = dir.join(format!("manifest.json.tmp.{}", std::process::id()));
+            if std::fs::write(&tmp, &bytes).is_ok() {
+                let _ = std::fs::rename(&tmp, dir.join("manifest.json"));
             }
         }
     }
@@ -419,187 +545,96 @@ impl YaraEngine {
 
         tracing::info!("Loading YARA rules");
 
-        let skip_cache = crate::cache::skip_yara_cache();
-        if skip_cache {
-            tracing::info!(
-                "Skipping YARA cache (CLEAVE_SKIP_YARA_CACHE / CLEAVE_SKIP_CACHE set or debug build)"
-            );
-        } else {
-            // Try to load from cache
-            if let Ok(cache_path) = crate::cache::yara_cache_path(enable_third_party) {
-                if cache_path.exists() {
-                    tracing::debug!("Attempting to load from cache");
-                    match self.load_from_cache(&cache_path) {
-                        Ok((builtin, third_party)) => {
-                            tracing::info!("Loaded YARA rules from cache");
-                            return (builtin, third_party);
-                        }
-                        Err(e) => {
-                            tracing::warn!("Cache load failed ({e}), recompiling");
-                            eprintln!("⚠️  Cache invalid, recompiling...");
-                        }
-                    }
-                } else {
-                    tracing::info!(
-                        expected = %cache_path.display(),
-                        "YARA cache miss — expected file not found"
-                    );
-                    match crate::cache::most_recent_yar_file() {
-                        Ok((mtime, path)) => {
-                            let age = mtime.elapsed().map(|d| d.as_secs()).unwrap_or(0);
-                            tracing::info!(
-                                newest_rule = %path.display(),
-                                modified_ago = %crate::cache::format_age(age),
-                                "Cache key derived from newest .yar/.yara file"
-                            );
-                        }
-                        Err(_) => tracing::info!("No .yar/.yara files found in traits directory"),
-                    }
-                }
-            }
-        }
-
-        // Cache miss or invalid - compile from source into per-tier rule sets
-        tracing::info!("Compiling YARA rules from source (tiered)");
-
         let traits_dir = crate::cache::traits_path();
         let third_party_dir = crate::cache::third_party_path();
-
-        // Phase 1: collect (namespace, source) pairs per tier — all pure transforms, no compilers yet.
-
-        // 0. Inline YARA from trait YAML files → tiered using trait `for:` metadata when possible
-        let (mut inline_tier_sources, inline_namespaces) = if traits_dir.exists() {
-            Self::collect_inline_trait_sources_tiered(&traits_dir)
+        let cache_dir = if crate::cache::skip_yara_cache() {
+            tracing::info!("Skipping YARA cache (CLEAVE_SKIP_YARA_CACHE / CLEAVE_SKIP_CACHE)");
+            None
         } else {
-            (HashMap::new(), Vec::new())
+            crate::cache::yara_cache_path(enable_third_party).ok()
         };
-        self.compiled_inline_namespaces = inline_namespaces;
-        let inline_count = self.compiled_inline_namespaces.len();
 
-        // 1. Built-in YARA rule files → tiered using the same classifier as third-party rules
-        let (mut builtin_tier_sources, builtin_rule_contexts, builtin_count) =
-            if traits_dir.exists() {
-                Self::collect_builtin_sources_tiered(&traits_dir)
-            } else {
-                (HashMap::new(), HashMap::new(), 0)
+        // Warm path: a manifest restores counts/contexts/namespaces without
+        // reading any rule text; each tier compiles or deserializes lazily on
+        // the first scan that needs it (see `build_tier`), so only the tiers a
+        // run actually touches ever allocate.
+        if let Some(dir) = &cache_dir
+            && let Some(manifest) = Self::read_manifest(dir)
+        {
+            self.rule_counts = (manifest.builtin_count, manifest.third_party_count);
+            self.rule_contexts = manifest.rule_contexts;
+            self.compiled_inline_namespaces = manifest.inline_namespaces;
+            self.populated_tiers = manifest
+                .populated_tiers
+                .iter()
+                .filter_map(|label| YaraTier::ALL.iter().find(|t| t.label() == label).copied())
+                .collect();
+            self.source = TierSource::Lazy {
+                cache_dir: cache_dir.clone(),
+                traits_dir,
+                third_party_dir,
+                enable_third_party,
+                sources: OnceLock::new(),
             };
-        self.rule_contexts.extend(builtin_rule_contexts);
+            tracing::info!(
+                tiers = self.populated_tiers.len(),
+                "Loaded YARA manifest (tiers compile lazily on first scan)"
+            );
+            return self.rule_counts;
+        }
 
-        // 2. Third-party rules → classified into per-tier source lists
-        let (
-            mut tier_sources,
-            third_party_rule_contexts,
-            third_party_count,
-            vt_skipped,
-            disabled_count,
-        ) = if enable_third_party && third_party_dir.exists() {
-            Self::collect_third_party_sources_tiered(&third_party_dir)
-        } else {
-            (HashMap::new(), HashMap::new(), 0, 0, 0)
-        };
-        self.rule_contexts.extend(third_party_rule_contexts);
+        // Cold path: read + classify rule text (cheap), record metadata, write
+        // the manifest. Compile nothing here — each tier compiles lazily and
+        // caches itself per-tier on the first scan that needs it.
+        tracing::info!("Collecting YARA rule sources (tiers compile lazily on first scan)");
+        let (tier_sources, rule_contexts, inline_namespaces, builtin_count, third_party_count) =
+            Self::collect_all_sources(&traits_dir, &third_party_dir, enable_third_party);
 
-        let total_count = builtin_count + third_party_count + inline_count;
-        if total_count == 0 {
+        if builtin_count + third_party_count + inline_namespaces.len() == 0 {
             eprintln!("\n⚠️  No YARA rules loaded");
             return (0, 0);
         }
 
-        for (tier, sources) in builtin_tier_sources.drain() {
-            tier_sources.entry(tier).or_default().extend(sources);
-        }
-        for (tier, sources) in inline_tier_sources.drain() {
-            tier_sources.entry(tier).or_default().extend(sources);
-        }
-
-        // Ensure residual tiers exist even if empty so cache manifests stay stable.
-        let cross_format_sources = tier_sources
-            .remove(&YaraTier::CrossFormat)
-            .unwrap_or_default();
-        tier_sources.insert(YaraTier::CrossFormat, cross_format_sources);
-        let raw_sources = tier_sources.remove(&YaraTier::Raw).unwrap_or_default();
-        tier_sources.insert(YaraTier::Raw, raw_sources);
-        let unknown_sources = tier_sources.remove(&YaraTier::Unknown).unwrap_or_default();
-        tier_sources.insert(YaraTier::Unknown, unknown_sources);
-
-        // Phase 2: build all tiers in parallel.
-        //
-        // yara_x::Compiler uses Rc internally and is not Send, so we cannot share one across
-        // threads. Instead we create a fresh Compiler inside each rayon task (no Send required),
-        // load its assigned sources, call build(), and return the resulting Rules (which is Send).
-        // All populated tiers compile concurrently; total wall-clock time ≈ slowest tier.
-        let non_empty_tiers = tier_sources.values().filter(|v| !v.is_empty()).count();
-        let total_sources: usize = tier_sources.values().map(Vec::len).sum();
-        tracing::info!(
-            sources = total_sources,
-            tiers = non_empty_tiers,
-            "Compiling YARA rules (this may take 30-60s on first run)"
-        );
-        let compile_start = std::time::Instant::now();
-
-        let tier_rules: Vec<(YaraTier, yara_x::Rules)> = tier_sources
-            .into_iter()
-            .collect::<Vec<_>>()
-            .into_par_iter()
-            .filter_map(|(tier, sources)| {
-                if sources.is_empty() {
-                    return None;
-                }
-                let mut compiler = yara_x::Compiler::new();
-                for (ns, src) in &sources {
-                    compiler.new_namespace(ns);
-                    if let Err(e) = compiler.add_source(src.as_bytes()) {
-                        tracing::warn!("Tier {:?}: failed to add source: {:?}", tier, e);
-                    }
-                }
-                Some((tier, compiler.build()))
-            })
+        self.rule_contexts = rule_contexts;
+        self.compiled_inline_namespaces = inline_namespaces.clone();
+        self.populated_tiers = tier_sources
+            .iter()
+            .filter(|(_, v)| !v.is_empty())
+            .map(|(t, _)| *t)
             .collect();
-
-        let compile_elapsed_ms = compile_start.elapsed().as_millis();
-        let mut total_rules = 0usize;
-        for (tier, rules) in tier_rules {
-            let count = rules.iter().count();
-            if count > 0 {
-                tracing::info!("Tier {}: {} rules", tier.label(), count);
-                total_rules += count;
-                if let Some(cell) = self.tiers.get(&tier) {
-                    let _ = cell.set(Some(rules));
-                    self.populated_tiers.insert(tier);
-                }
-            }
-        }
-        // Cache-miss path: tiers are pre-filled above, so there is no backing
-        // source to materialize lazily.
-        self.source = TierSource::Compiled;
-        // Inline trait rules come from the traits dir, so fold them into the
-        // built-in tally for reporting.
-        let builtin_count = builtin_count + inline_count;
+        // Inline trait rules are folded into the built-in tally for reporting.
+        let builtin_count = builtin_count + inline_namespaces.len();
         self.rule_counts = (builtin_count, third_party_count);
-        tracing::info!(
-            elapsed_ms = compile_elapsed_ms,
-            rules = total_rules,
-            "YARA compilation complete"
-        );
 
-        if disabled_count > 0 {
-            tracing::info!("{} third-party rule(s) disabled via config", disabled_count);
-        }
-        if vt_skipped > 0 {
-            tracing::info!(
-                "{} third-party rule(s) skipped (require VirusTotal context)",
-                vt_skipped
+        if let Some(dir) = &cache_dir {
+            Self::write_manifest(
+                dir,
+                &YaraManifest {
+                    builtin_count,
+                    third_party_count,
+                    inline_namespaces,
+                    rule_contexts: self.rule_contexts.clone(),
+                    populated_tiers: self
+                        .populated_tiers
+                        .iter()
+                        .map(|t| t.label().to_string())
+                        .collect(),
+                },
             );
+            let _ = crate::cache::cleanup_old_caches(dir);
         }
 
-        // Save to cache for next time
-        if let Ok(cache_path) = crate::cache::yara_cache_path(enable_third_party) {
-            if let Err(e) = self.save_to_cache(&cache_path, builtin_count, third_party_count) {
-                eprintln!("⚠️  Failed to save cache: {}", e);
-            } else {
-                let _ = crate::cache::cleanup_old_caches(&cache_path);
-            }
-        }
+        // Pre-fill the lazy source cell so the first scan compiles straight from
+        // memory instead of re-reading the rule files.
+        let sources = OnceLock::new();
+        let _ = sources.set(tier_sources);
+        self.source = TierSource::Lazy {
+            cache_dir,
+            traits_dir,
+            third_party_dir,
+            enable_third_party,
+            sources,
+        };
 
         (builtin_count, third_party_count)
     }
@@ -2187,265 +2222,7 @@ impl YaraEngine {
 
         Ok((matches, findings))
     }
-
-    /// Save compiled YARA rules to cache using per-tier serialization.
-    ///
-    /// Cache format v6: header + JSON manifest + per-tier serialized rules.
-    /// The manifest maps tier labels to (offset, length) pairs within the file.
-    fn save_to_cache(
-        &self,
-        cache_path: &Path,
-        builtin_count: usize,
-        third_party_count: usize,
-    ) -> Result<()> {
-        use std::io::Write;
-
-        if self.populated_tiers.is_empty() {
-            anyhow::bail!("No rules to cache");
-        }
-
-        // Serialize each tier's rules. Only reached on the cache-miss compile
-        // path, where every populated tier's cell is already filled, so
-        // `tier_rules` returns without lazily building anything.
-        let mut tier_data: Vec<(String, Vec<u8>)> = Vec::new();
-        for tier in YaraTier::ALL {
-            if let Some(rules) = self.tier_rules(*tier) {
-                let data = rules
-                    .serialize()
-                    .context(format!("Failed to serialize tier {:?}", tier))?;
-                tier_data.push((tier.label().to_string(), data));
-            }
-        }
-
-        // Build manifest: tier_label → (offset, length) — offsets filled after layout
-        #[derive(serde::Serialize)]
-        struct CacheManifest {
-            builtin_count: usize,
-            third_party_count: usize,
-            inline_namespaces: Vec<String>,
-            rule_contexts: HashMap<String, RuleContext>,
-            tiers: Vec<CacheTierEntry>,
-        }
-        #[derive(serde::Serialize)]
-        struct CacheTierEntry {
-            label: String,
-            offset: usize,
-            length: usize,
-        }
-
-        // Calculate layout: header + manifest_json + padding + tier1_data + tier2_data + ...
-        let manifest_placeholder = CacheManifest {
-            builtin_count,
-            third_party_count,
-            inline_namespaces: self.compiled_inline_namespaces.clone(),
-            rule_contexts: self.rule_contexts.clone(),
-            tiers: Vec::new(),
-        };
-        // Estimate manifest size (will recalculate after filling offsets)
-        let manifest_estimate = serde_json::to_vec(&manifest_placeholder)
-            .unwrap_or_default()
-            .len()
-            + 512;
-        let data_start = CACHE_HEADER_SIZE + manifest_estimate;
-        let data_start_aligned = (data_start + 7) & !7;
-
-        let mut current_offset = data_start_aligned;
-        let mut tier_entries = Vec::new();
-        for (label, data) in &tier_data {
-            tier_entries.push(CacheTierEntry {
-                label: label.clone(),
-                offset: current_offset,
-                length: data.len(),
-            });
-            current_offset += data.len();
-            // Align each tier to 8 bytes
-            current_offset = (current_offset + 7) & !7;
-        }
-
-        let manifest = CacheManifest {
-            builtin_count,
-            third_party_count,
-            inline_namespaces: self.compiled_inline_namespaces.clone(),
-            rule_contexts: self.rule_contexts.clone(),
-            tiers: tier_entries,
-        };
-        let manifest_json =
-            serde_json::to_vec(&manifest).context("Failed to serialize manifest")?;
-
-        // Recalculate with actual manifest size
-        let actual_data_start = CACHE_HEADER_SIZE + manifest_json.len();
-        let actual_data_start_aligned = (actual_data_start + 7) & !7;
-
-        // If data start shifted, rebuild manifest with corrected offsets
-        let (manifest_json, _data_start_aligned) =
-            if actual_data_start_aligned != data_start_aligned {
-                let mut entries = Vec::new();
-                let mut off = actual_data_start_aligned;
-                for (label, data) in &tier_data {
-                    entries.push(CacheTierEntry {
-                        label: label.clone(),
-                        offset: off,
-                        length: data.len(),
-                    });
-                    off += data.len();
-                    off = (off + 7) & !7;
-                }
-                let m = CacheManifest {
-                    builtin_count,
-                    third_party_count,
-                    inline_namespaces: self.compiled_inline_namespaces.clone(),
-                    rule_contexts: self.rule_contexts.clone(),
-                    tiers: entries,
-                };
-                let j = serde_json::to_vec(&m).context("Failed to serialize manifest")?;
-                let final_start = (CACHE_HEADER_SIZE + j.len() + 7) & !7;
-                (j, final_start)
-            } else {
-                (manifest_json, actual_data_start_aligned)
-            };
-
-        // Write cache file
-        let mut file = fs::File::create(cache_path).context("Failed to create cache file")?;
-
-        // Header
-        file.write_all(CACHE_MAGIC)?;
-        file.write_all(&CACHE_VERSION.to_le_bytes())?;
-        file.write_all(&(manifest_json.len() as u64).to_le_bytes())?;
-
-        // Manifest
-        file.write_all(&manifest_json)?;
-
-        // Pad to alignment
-        let pos = CACHE_HEADER_SIZE + manifest_json.len();
-        let pad = ((_data_start_aligned).saturating_sub(pos)).min(7);
-        if pad > 0 {
-            file.write_all(&vec![0u8; pad])?;
-        }
-
-        // Tier data
-        for (i, (_label, data)) in tier_data.iter().enumerate() {
-            file.write_all(data)?;
-            // Align between tiers
-            if i + 1 < tier_data.len() {
-                let cur = file.metadata()?.len() as usize;
-                let aligned = (cur + 7) & !7;
-                let gap = aligned - cur;
-                if gap > 0 {
-                    file.write_all(&vec![0u8; gap])?;
-                }
-            }
-        }
-
-        tracing::info!(
-            "Saved YARA cache: {} tier(s), {:.1}MB",
-            tier_data.len(),
-            file.metadata()?.len() as f64 / 1_048_576.0,
-        );
-
-        Ok(())
-    }
-
-    /// Load compiled YARA rules from cache using memory-mapped I/O.
-    ///
-    /// Reads the v6 per-tier cache format: header + JSON manifest + per-tier rule data.
-    #[allow(clippy::unwrap_used)] // Slice-to-array conversions safe after size checks
-    fn load_from_cache(&mut self, cache_path: &Path) -> Result<(usize, usize)> {
-        let t0 = std::time::Instant::now();
-
-        let file = fs::File::open(cache_path).context("Failed to open cache file")?;
-        let mmap = unsafe { memmap2::Mmap::map(&file) }.context("Failed to mmap cache file")?;
-
-        if mmap.len() < CACHE_HEADER_SIZE {
-            anyhow::bail!("Cache file too small");
-        }
-        if &mmap[0..4] != CACHE_MAGIC {
-            anyhow::bail!("Invalid cache magic");
-        }
-
-        let version = u32::from_le_bytes(
-            mmap[4..8]
-                .try_into()
-                .map_err(|e| anyhow::anyhow!("cache header version truncated: {e}"))?,
-        );
-        if version != CACHE_VERSION {
-            anyhow::bail!(
-                "Cache version mismatch: expected {}, got {}",
-                CACHE_VERSION,
-                version
-            );
-        }
-
-        let manifest_len = u64::from_le_bytes(
-            mmap[8..16]
-                .try_into()
-                .map_err(|e| anyhow::anyhow!("cache header manifest length truncated: {e}"))?,
-        ) as usize;
-        let manifest_end = CACHE_HEADER_SIZE + manifest_len;
-        if manifest_end > mmap.len() {
-            anyhow::bail!("Cache manifest truncated");
-        }
-
-        #[derive(serde::Deserialize)]
-        struct CacheManifest {
-            builtin_count: usize,
-            third_party_count: usize,
-            inline_namespaces: Vec<String>,
-            #[serde(default)]
-            rule_contexts: HashMap<String, RuleContext>,
-            tiers: Vec<CacheTierEntry>,
-        }
-        #[derive(serde::Deserialize)]
-        struct CacheTierEntry {
-            label: String,
-            offset: usize,
-            length: usize,
-        }
-
-        let manifest: CacheManifest =
-            serde_json::from_slice(&mmap[CACHE_HEADER_SIZE..manifest_end])
-                .context("Failed to parse cache manifest")?;
-
-        // Lazy: record each tier's (offset, length) and defer the actual
-        // `Rules::deserialize` to the first scan that needs that tier. Bounds
-        // are validated now so `build_tier` can trust the slice. A session that
-        // only scans, say, source files never deserializes the PE/ELF/Mach-O
-        // tiers — their rules are never allocated and their cache pages never
-        // fault in.
-        let mut offsets: HashMap<YaraTier, (usize, usize)> = HashMap::new();
-        for entry in &manifest.tiers {
-            let end = entry.offset.checked_add(entry.length);
-            if end.is_none_or(|e| e > mmap.len()) {
-                anyhow::bail!("Cache tier '{}' data truncated", entry.label);
-            }
-            let tier = YaraTier::ALL
-                .iter()
-                .find(|t| t.label() == entry.label)
-                .copied()
-                .unwrap_or(YaraTier::Unknown);
-            offsets.insert(tier, (entry.offset, entry.length));
-            self.populated_tiers.insert(tier);
-        }
-
-        self.compiled_inline_namespaces = manifest.inline_namespaces;
-        self.rule_contexts = manifest.rule_contexts;
-        self.rule_counts = (manifest.builtin_count, manifest.third_party_count);
-        self.source = TierSource::Cached { mmap, offsets };
-
-        tracing::debug!(
-            elapsed = ?t0.elapsed(),
-            tiers = self.populated_tiers.len(),
-            "YARA cache load (lazy): tiers mapped"
-        );
-
-        Ok((manifest.builtin_count, manifest.third_party_count))
-    }
 }
-
-/// Per-tier cache format v6.
-/// Layout: MAGIC(4) + VERSION(4) + manifest_len(8) + manifest_json + padding + tier_data...
-const CACHE_MAGIC: &[u8; 4] = b"YARC";
-const CACHE_VERSION: u32 = 14; // bumped: rule_counts now tally actual rules, not files/fragments
-const CACHE_HEADER_SIZE: usize = 4 + 4 + 8; // 16 bytes
 
 impl Default for YaraEngine {
     fn default() -> Self {
@@ -2467,7 +2244,8 @@ impl YaraEngine {
             let _ = cell.set(Some(rules));
         }
         self.populated_tiers.insert(YaraTier::CrossFormat);
-        self.source = TierSource::Compiled;
+        // Source stays `Empty`: the pre-set cell above is returned directly, so
+        // `build_tier` is never consulted for this tier.
         self.rule_counts = (count, 0);
         Ok(())
     }
@@ -3502,30 +3280,33 @@ rule ELASTIC_Windows_Generic_Threat : FILE
     }
 
     #[test]
-    fn test_cache_roundtrip_preserves_rule_contexts() {
-        let mut engine = YaraEngine::new_for_test();
-        engine
-            .load_rule_source(r#"rule test_rule { strings: $a = "abc" condition: $a }"#)
-            .unwrap();
-        engine.rule_contexts.insert(
+    fn test_manifest_roundtrip_preserves_rule_contexts() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut rule_contexts = HashMap::new();
+        rule_contexts.insert(
             rule_context_key("", "test_rule"),
             RuleContext {
                 filetypes: vec!["sh".to_string(), "bash".to_string(), "zsh".to_string()],
-                filetype_source: "cache-roundtrip".to_string(),
+                filetype_source: "manifest-roundtrip".to_string(),
                 platforms: vec!["unix".to_string()],
                 os_meta: Some("linux".to_string()),
                 arch_context: Some("x64".to_string()),
             },
         );
+        let manifest = YaraManifest {
+            builtin_count: 7,
+            third_party_count: 11,
+            inline_namespaces: vec!["ns1".to_string()],
+            rule_contexts,
+            populated_tiers: vec![YaraTier::CrossFormat.label().to_string()],
+        };
+        YaraEngine::write_manifest(dir.path(), &manifest);
 
-        let tmp = tempfile::tempdir().unwrap();
-        let cache_path = tmp.path().join("test.yarc");
-        engine.save_to_cache(&cache_path, 7, 11).unwrap();
-
-        let mut restored = YaraEngine::new_for_test();
-        let counts = restored.load_from_cache(&cache_path).unwrap();
-        assert_eq!(counts, (7, 11));
-
+        let restored = YaraEngine::read_manifest(dir.path()).expect("manifest restored");
+        assert_eq!(
+            (restored.builtin_count, restored.third_party_count),
+            (7, 11)
+        );
         let ctx = restored
             .rule_contexts
             .get(&rule_context_key("", "test_rule"))
@@ -3534,10 +3315,58 @@ rule ELASTIC_Windows_Generic_Threat : FILE
             ctx.filetypes,
             vec!["sh".to_string(), "bash".to_string(), "zsh".to_string()]
         );
-        assert_eq!(ctx.filetype_source, "cache-roundtrip");
+        assert_eq!(ctx.filetype_source, "manifest-roundtrip");
         assert_eq!(ctx.platforms, vec!["unix".to_string()]);
         assert_eq!(ctx.os_meta.as_deref(), Some("linux"));
         assert_eq!(ctx.arch_context.as_deref(), Some("x64"));
+    }
+
+    #[test]
+    fn test_lazy_tier_compiles_then_loads_from_per_tier_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let tier = YaraTier::CrossFormat;
+        let mut sources = HashMap::new();
+        sources.insert(
+            tier,
+            vec![(
+                "test_ns".to_string(),
+                r#"rule r { strings: $a = "abc" condition: $a }"#.to_string(),
+            )],
+        );
+        let cell = OnceLock::new();
+        let _ = cell.set(sources);
+
+        let mut engine = YaraEngine::new_for_test();
+        engine.populated_tiers.insert(tier);
+        engine.source = TierSource::Lazy {
+            cache_dir: Some(dir.path().to_path_buf()),
+            traits_dir: dir.path().to_path_buf(),
+            third_party_dir: dir.path().to_path_buf(),
+            enable_third_party: false,
+            sources: cell,
+        };
+        // First access compiles from source and writes the per-tier cache file.
+        assert!(engine.tier_rules(tier).is_some());
+        assert!(
+            dir.path().join(format!("{}.yrc", tier.label())).exists(),
+            "compiling a tier must write its per-tier cache file"
+        );
+
+        // A fresh engine with NO sources must load that tier straight from the
+        // per-tier cache file — the warm path that never touches rule text.
+        let mut warm = YaraEngine::new_for_test();
+        warm.populated_tiers.insert(tier);
+        warm.source = TierSource::Lazy {
+            cache_dir: Some(dir.path().to_path_buf()),
+            traits_dir: dir.path().to_path_buf(),
+            third_party_dir: dir.path().to_path_buf(),
+            enable_third_party: false,
+            sources: OnceLock::new(),
+        };
+        assert!(
+            warm.tier_rules(tier).is_some(),
+            "warm engine must load the tier from its per-tier cache without sources"
+        );
     }
 
     #[test]

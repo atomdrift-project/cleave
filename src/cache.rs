@@ -497,10 +497,13 @@ pub(crate) fn yara_cache_key(third_party_enabled: bool) -> Result<String> {
     };
     let version = env!("CARGO_PKG_VERSION");
 
-    Ok(format!("yara-rules-v3-{version}-{timestamp}-{suffix}.bin",))
+    // v4 is a *directory* holding `manifest.json` + one `<tier>.yrc` per tier,
+    // each compiled lazily on first scan. v3 was a single all-tiers blob whose
+    // cold build held every tier's JIT'd native code resident at once.
+    Ok(format!("yara-rules-v4-{version}-{timestamp}-{suffix}"))
 }
 
-/// Get the path to the YARA rules cache file
+/// Path to the YARA rules cache *directory* (per-tier compiled rules + manifest).
 pub fn yara_cache_path(third_party_enabled: bool) -> Result<PathBuf> {
     let cache_key = yara_cache_key(third_party_enabled)?;
     Ok(cache_dir()?.join(cache_key))
@@ -612,16 +615,19 @@ pub fn cleanup_old_caches(current_cache: &Path) -> Result<()> {
         let entry = entry?;
         let path = entry.path();
 
-        // Remove old yara-rules-*.bin files (except the current one)
-        if path.is_file()
-            && path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .map(|n| n.starts_with("yara-rules-") && n.ends_with(".bin"))
-                .unwrap_or(false)
-            && path != current_cache
-        {
-            let _ = fs::remove_file(&path); // Ignore errors
+        // Remove stale YARA caches (except the current one): v3 single-file
+        // blobs (`yara-rules-*.bin`) and v4 per-tier directories
+        // (`yara-rules-v4-*`).
+        let is_yara_cache = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.starts_with("yara-rules-"));
+        if is_yara_cache && path != current_cache {
+            if path.is_dir() {
+                let _ = fs::remove_dir_all(&path);
+            } else {
+                let _ = fs::remove_file(&path);
+            }
         }
     }
 
@@ -639,13 +645,13 @@ mod tests {
     fn test_yara_cache_key_format() {
         // Test that cache key has expected format
         if let Ok(key) = yara_cache_key(false) {
-            assert!(key.starts_with("yara-rules-"));
-            assert!(key.ends_with("-builtin.bin"));
+            assert!(key.starts_with("yara-rules-v4-"));
+            assert!(key.ends_with("-builtin"));
         }
 
         if let Ok(key) = yara_cache_key(true) {
-            assert!(key.starts_with("yara-rules-"));
-            assert!(key.ends_with("-with-3p.bin"));
+            assert!(key.starts_with("yara-rules-v4-"));
+            assert!(key.ends_with("-with-3p"));
         }
     }
 
@@ -697,8 +703,7 @@ mod tests {
     fn test_yara_cache_path_includes_cache_key() {
         if let Ok(path) = yara_cache_path(false) {
             let path_str = path.to_string_lossy();
-            assert!(path_str.contains("yara-rules-"));
-            assert!(path_str.contains(".bin"));
+            assert!(path_str.contains("yara-rules-v4-"));
         }
     }
 

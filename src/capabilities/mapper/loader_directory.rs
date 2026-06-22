@@ -1462,7 +1462,9 @@ impl super::CapabilityMapper {
             // Check for unknown subdirectories in taxonomy tiers
             // According to TAXONOMY.md, only specific subdirectories are allowed
             tracing::trace!("Step 2b/15: Validating directory whitelist");
-            if let Err(errors) = validate_directory_structure(dir_path) {
+            if !crate::validation_controls::is_validator_disabled("unknown-subdirectory")
+                && let Err(errors) = validate_directory_structure(dir_path)
+            {
                 eprintln!(
                     "\n❌ ERROR: {} unknown subdirectories found in taxonomy tiers",
                     errors.len()
@@ -1545,7 +1547,9 @@ impl super::CapabilityMapper {
             // According to TAXONOMY.md, directories should not be repeated across metadata/, micro-behaviors/, objectives/, known/
             tracing::trace!("Step 3b/15: Checking for duplicate second-level directories");
             let duplicate_dirs = find_duplicate_second_level_directories(&dir_list);
-            if !duplicate_dirs.is_empty() {
+            if !crate::validation_controls::is_validator_disabled("duplicate-second-level-dir")
+                && !duplicate_dirs.is_empty()
+            {
                 eprintln!(
                     "\n❌ ERROR: {} second-level directories are duplicated across namespaces (TAXONOMY.md violation)",
                     duplicate_dirs.len()
@@ -2052,7 +2056,9 @@ impl super::CapabilityMapper {
             let hostile_meta_rules =
                 find_hostile_meta_rules(&trait_definitions, &composite_rules, &rule_source_files);
 
-            if !hostile_meta_rules.is_empty() {
+            if !crate::validation_controls::is_validator_disabled("metadata-hostile-criticality")
+                && !hostile_meta_rules.is_empty()
+            {
                 eprintln!(
                     "\n❌ ERROR: {} metadata/ rules have hostile criticality",
                     hostile_meta_rules.len()
@@ -2295,7 +2301,9 @@ impl super::CapabilityMapper {
                 &rule_source_files,
             );
 
-            if !malware_violations.is_empty() {
+            if !crate::validation_controls::is_validator_disabled("malware-subcategory")
+                && !malware_violations.is_empty()
+            {
                 eprintln!(
                     "\n❌ ERROR: {} rules use malware/ as a subcategory of objectives/ or micro-behaviors/",
                     malware_violations.len()
@@ -2400,7 +2408,9 @@ impl super::CapabilityMapper {
             tracing::trace!("Checking for composite-only well-known/ files");
             let composite_only =
                 find_composite_only_wellknown_files(&trait_definitions, &composite_rules);
-            if !composite_only.is_empty() {
+            if !crate::validation_controls::is_validator_disabled("wellknown-composite-only")
+                && !composite_only.is_empty()
+            {
                 eprintln!(
                     "\n❌ ERROR: {} well-known/ directories contain only composites (no atomic traits in directory)",
                     composite_only.len()
@@ -2496,7 +2506,12 @@ impl super::CapabilityMapper {
 
             // Validate: traits with too many file types (10+ multi-platform, 12+ single-platform)
             tracing::trace!("Checking for over-broad file type scope");
-            let broad_ft = find_broad_filetype_traits(&trait_definitions, &rule_source_files);
+            let broad_ft =
+                if crate::validation_controls::is_validator_disabled("broad-filetype-cap") {
+                    Vec::new()
+                } else {
+                    find_broad_filetype_traits(&trait_definitions, &rule_source_files)
+                };
             if !broad_ft.is_empty() {
                 eprintln!(
                     "\n❌ ERROR: {} traits exceed the file-type cap for their matcher type",
@@ -2900,7 +2915,9 @@ impl super::CapabilityMapper {
                     ));
                 }
             }
-            if !overlapping.is_empty() {
+            if !crate::validation_controls::is_validator_disabled("overlapping-conditions")
+                && !overlapping.is_empty()
+            {
                 eprintln!(
                     "\n❌ ERROR: {} composite rules have overlapping all:/any: conditions",
                     overlapping.len()
@@ -3564,7 +3581,9 @@ impl super::CapabilityMapper {
 
             // Validate: pure alias traits that add no value
             let pure_aliases = find_pure_alias_traits(&trait_definitions);
-            if !pure_aliases.is_empty() {
+            if !crate::validation_controls::is_validator_disabled("pure-alias")
+                && !pure_aliases.is_empty()
+            {
                 eprintln!(
                     "\n❌ ERROR: {} traits are pure aliases with no added value",
                     pure_aliases.len()
@@ -3935,7 +3954,9 @@ impl super::CapabilityMapper {
                 }
             }
 
-            if !invalid_metric_refs.is_empty() {
+            if !crate::validation_controls::is_validator_disabled("unknown-metric-field")
+                && !invalid_metric_refs.is_empty()
+            {
                 eprintln!(
                     "\n❌ ERROR: {} unknown metric field references found in traits",
                     invalid_metric_refs.len()
@@ -3997,7 +4018,9 @@ impl super::CapabilityMapper {
                 inline_errors.extend(validate_composite_trait_only(rule, source));
             }
 
-            if !inline_errors.is_empty() {
+            if !crate::validation_controls::is_validator_disabled("composite-inline-primitive")
+                && !inline_errors.is_empty()
+            {
                 eprintln!(
                     "\n❌ ERROR: {} composite rules have inline primitives\n",
                     inline_errors.len()
@@ -4119,7 +4142,9 @@ impl super::CapabilityMapper {
                 }
             }
 
-            if !redundant_composites.is_empty() {
+            if !crate::validation_controls::is_validator_disabled("single-trait-composite")
+                && !redundant_composites.is_empty()
+            {
                 eprintln!(
                     "\n❌ ERROR: {} single-trait composites add no value",
                     redundant_composites.len()
@@ -4150,7 +4175,9 @@ impl super::CapabilityMapper {
                 has_fatal_errors = true;
             }
 
-            if !unless_only_composites.is_empty() {
+            if !crate::validation_controls::is_validator_disabled("unless-only-composite")
+                && !unless_only_composites.is_empty()
+            {
                 eprintln!(
                     "\n❌ ERROR: {} single-trait composites only add 'unless' clauses",
                     unless_only_composites.len()

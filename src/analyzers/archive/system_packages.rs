@@ -17,6 +17,8 @@ use super::guards::{
     MAX_TOTAL_SIZE, sanitize_entry_path, symlink_escapes,
 };
 use super::tar::extract_tar_entries_safe;
+use crate::analyzers::FileTypeExt;
+use crate::types::ArchiveEntry;
 use anyhow::{Context, Result};
 use std::fs::{self, File};
 use std::io::{BufReader, BufWriter, Cursor, Read, Write};
@@ -170,6 +172,88 @@ pub(crate) fn extract_7z_from_data(
     }
 
     Err(err).context("7z extraction failed")
+}
+
+/// Read 7z directory metadata without extracting member contents.
+///
+/// Password-protected 7z archives often leave filenames, sizes, and timestamps
+/// visible while encrypting the payload streams. Preserving those headers lets
+/// archive-layout traits still fire when the payload password is unknown.
+pub(crate) fn list_7z_entries_from_file(path: &Path) -> Result<Vec<ArchiveEntry>> {
+    // Header-encrypted 7z archives make `7z l` prompt for a password on stdin,
+    // which would block forever. Detach stdin and pass `-y`/empty `-p` so the
+    // tool fails fast instead of waiting for interactive input.
+    let run = |bin: &str| {
+        std::process::Command::new(bin)
+            .arg("l")
+            .arg("-y")
+            .arg("-p")
+            .arg(path)
+            .stdin(std::process::Stdio::null())
+            .output()
+    };
+    let output = run("7z")
+        .or_else(|_| run("7zz"))
+        .context("Failed to run 7z listing")?;
+    if !output.status.success() {
+        anyhow::bail!("7z listing failed with status {}", output.status);
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut in_table = false;
+    let mut entries = Vec::new();
+    for line in stdout.lines() {
+        if line.starts_with("-------------------") {
+            if in_table {
+                break;
+            }
+            in_table = true;
+            continue;
+        }
+        if !in_table || line.trim().is_empty() {
+            continue;
+        }
+
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() < 5 {
+            continue;
+        }
+        let Some(size_bytes) = parts.get(3).and_then(|s| s.parse::<u64>().ok()) else {
+            continue;
+        };
+        let name_start = if parts
+            .get(4)
+            .is_some_and(|s| s.chars().all(|c| c.is_ascii_digit()))
+        {
+            5
+        } else {
+            4
+        };
+        if parts.len() <= name_start {
+            continue;
+        }
+        let name = parts[name_start..].join(" ");
+        let file_type =
+            crate::analyzers::detect_file_type_from_path(Path::new(&name)).report_file_type();
+        let compressed_size = parts
+            .get(4)
+            .filter(|s| s.chars().all(|c| c.is_ascii_digit()))
+            .and_then(|s| s.parse::<u64>().ok());
+
+        entries.push(ArchiveEntry {
+            path: name.replace('\\', "/"),
+            file_type,
+            sha256: String::new(),
+            size_bytes,
+            compressed_size,
+            compression_method: Some("7z".to_string()),
+            entry_type: Some("regular".to_string()),
+            encrypted: true,
+            ..ArchiveEntry::default()
+        });
+    }
+
+    Ok(entries)
 }
 
 /// Extract an Apple disk image (`.dmg` / UDIF) in two stages.

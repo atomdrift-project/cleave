@@ -104,6 +104,18 @@ pub use types::traits_findings::{Evidence, Finding, FindingKind, Trait, TraitKin
 // Re-export cache management functions
 pub use shared_resources::{reload_capability_mapper, set_skip_traits_override};
 
+/// Pre-compile all YARA rules into portable, per-tier `.yrc` files plus a
+/// `manifest.json` in `out_dir` — the producer side run offline by the
+/// `yara-precompile` tool (a peer to `yara-update`, run after it). The `.yrc`
+/// hold WASM bytecode (not native code), so one build is loadable on every
+/// client architecture and OS. Returns `(builtin_count, third_party_count)`.
+pub fn precompile_yara(
+    out_dir: &std::path::Path,
+    enable_third_party: bool,
+) -> anyhow::Result<(usize, usize)> {
+    yara_engine::YaraEngine::precompile_to(out_dir, enable_third_party)
+}
+
 use rustc_hash::FxHasher;
 use std::hash::{Hash, Hasher};
 

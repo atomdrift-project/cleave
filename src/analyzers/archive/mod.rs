@@ -1117,12 +1117,52 @@ impl ArchiveAnalyzer {
         let hostile_reasons = guard.take_reasons();
 
         if let Err(e) = extraction_result {
+            let mut preserved_7z_metadata = false;
+            if matches!(file_type, FileType::SevenZ)
+                && let Ok(entries) = system_packages::list_7z_entries_from_file(archive_path)
+                && !entries.is_empty()
+            {
+                report.archive_contents.extend(entries);
+                report.metadata.errors.push(format!(
+                    "7z extraction failed; preserved encrypted directory metadata: {e}"
+                ));
+                preserved_7z_metadata = true;
+            }
+
             let extracted_count = walkdir::WalkDir::new(temp_dir.path())
                 .min_depth(1)
                 .into_iter()
                 .filter_map(std::result::Result::ok)
                 .count();
             if extracted_count == 0 {
+                if preserved_7z_metadata {
+                    let suppress_path_traversal =
+                        should_suppress_path_traversal_findings(archive_path, &hostile_reasons);
+                    push_archive_hostile_findings(
+                        &mut report,
+                        hostile_reasons,
+                        "archive_analyzer",
+                        suppress_path_traversal,
+                    );
+                    report.structure.push(StructuralFeature {
+                        id: format!("archive/{}", archive_type_str),
+                        desc: format!("{} archive", archive_type_str),
+                        evidence: vec![Evidence {
+                            method: "extension".to_string(),
+                            source: "archive_analyzer".to_string(),
+                            value: archive_path
+                                .extension()
+                                .and_then(|ext| ext.to_str())
+                                .unwrap_or("unknown")
+                                .to_string(),
+                            location: None,
+                            ..Default::default()
+                        }],
+                    });
+                    report.seal_archive_metadata_kv();
+                    self.evaluate_container_findings(&mut report);
+                    return Ok(report);
+                }
                 return Err(e);
             }
         }

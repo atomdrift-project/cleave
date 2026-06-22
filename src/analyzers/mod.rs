@@ -381,6 +381,9 @@ pub trait Analyzer {
 #[must_use]
 #[inline]
 pub(crate) fn detect_file_type_from_path(file_path: &Path) -> FileType {
+    if is_dotenv_name(file_path) {
+        return FileType::Text;
+    }
     if is_arch_package_metadata_name(file_path) {
         return FileType::Text;
     }
@@ -398,6 +401,9 @@ pub(crate) fn detect_file_type_from_path(file_path: &Path) -> FileType {
 /// Detect file type from already-loaded data (content first, extension fallback).
 #[inline]
 pub(crate) fn detect_file_type_from_data(file_path: &Path, file_data: &[u8]) -> FileType {
+    if is_dotenv_name(file_path) {
+        return FileType::Text;
+    }
     if is_arch_package_metadata_name(file_path) {
         return FileType::Text;
     }
@@ -441,6 +447,13 @@ fn sniff_script_type_from_content(data: &[u8]) -> Option<FileType> {
     }
 
     None
+}
+
+fn is_dotenv_name(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+        return false;
+    };
+    name == ".env" || name == ".env.backup" || name.starts_with(".env.backup.")
 }
 
 fn decode_probable_utf16le(data: &[u8]) -> Option<String> {
@@ -891,6 +904,29 @@ mod tests {
         assert_eq!(
             detect_file_type_from_data(Path::new("config.toml"), b"[package]\nname='x'\n"),
             FileType::Unknown
+        );
+    }
+
+    #[test]
+    fn bridge_dotenv_files_are_text() {
+        assert_eq!(
+            detect_file_type_from_path(Path::new(".env")),
+            FileType::Text
+        );
+        assert_eq!(
+            detect_file_type_from_data(Path::new(".env"), b"API_KEY=abc123\n"),
+            FileType::Text
+        );
+        assert_eq!(
+            detect_file_type_from_path(Path::new(".env.backup.20260617_154013")),
+            FileType::Text
+        );
+        assert_eq!(
+            detect_file_type_from_data(
+                Path::new(".env.backup.20260617_154013"),
+                b"CLOUDFLOW_CENTER_API_KEY=7e83812d309d3954a6fcdc5482aca2da73125828ab0d1e4a781e30404a718cfe\n"
+            ),
+            FileType::Text
         );
     }
 

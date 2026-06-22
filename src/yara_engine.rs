@@ -74,7 +74,12 @@ fn skip_yara_active() -> bool {
     std::env::var("CLEAVE_SKIP_YARA").is_ok()
 }
 use walkdir::WalkDir;
+#[cfg(test)]
 use yara_classify::YaraTier;
+
+/// Bucket key for rules that apply to any file (EICAR-style). Always loaded by
+/// every scan in addition to the detected file type's buckets.
+const FALLBACK_BUCKET: &str = "fallback";
 
 /// Compiled regex for YARA rule header matching — shared across all preprocessing steps.
 fn rule_start_re() -> Option<&'static regex::Regex> {
@@ -211,7 +216,9 @@ struct RuleContext {
 }
 
 struct SplitSource {
-    tiers: HashMap<YaraTier, String>,
+    /// Per-filetype-bucket source text, keyed by filetype string (e.g. "pe",
+    /// "docx") or [`FALLBACK_BUCKET`] for rules with no filetype constraint.
+    tiers: HashMap<String, String>,
     contexts: HashMap<String, RuleContext>,
 }
 
@@ -243,8 +250,9 @@ enum TierSource {
         traits_dir: std::path::PathBuf,
         third_party_dir: std::path::PathBuf,
         enable_third_party: bool,
-        /// Per-tier rule source, collected on the first cache miss.
-        sources: OnceLock<HashMap<YaraTier, Vec<(String, String)>>>,
+        /// Per-bucket rule source, collected on the first cache miss. Keyed by
+        /// filetype string (or [`FALLBACK_BUCKET`]).
+        sources: OnceLock<HashMap<String, Vec<(String, String)>>>,
     },
 }
 
@@ -264,16 +272,17 @@ struct YaraManifest {
 
 #[derive(Debug)]
 pub(crate) struct YaraEngine {
-    /// Per-tier compiled rule sets, materialized lazily. The map is pre-keyed
-    /// with every [`YaraTier`]; each cell is built on first access via
-    /// [`YaraEngine::tier_rules`] from [`Self::source`]. `None` = tier has no
-    /// rules.
-    tiers: HashMap<YaraTier, OnceLock<Option<yara_x::Rules>>>,
-    /// Backing source for lazy tier construction.
+    /// Per-bucket compiled rule sets, materialized lazily. The map is keyed by
+    /// filetype string (e.g. "pe", "docx") plus [`FALLBACK_BUCKET`]; it is
+    /// pre-keyed from [`Self::populated_tiers`] at load. Each cell is built on
+    /// first access via [`YaraEngine::tier_rules`] from [`Self::source`]. `None`
+    /// = bucket has no rules.
+    tiers: HashMap<String, OnceLock<Option<yara_x::Rules>>>,
+    /// Backing source for lazy bucket construction.
     source: TierSource,
-    /// Tiers that actually carry rules — lets scans skip empty tiers and
+    /// Buckets that actually carry rules — lets scans skip empty buckets and
     /// `is_empty`/scan-gating work without forcing every cell to build.
-    populated_tiers: std::collections::HashSet<YaraTier>,
+    populated_tiers: std::collections::HashSet<String>,
     /// (builtin, third_party) rule counts recorded at load, so `total_rules`
     /// doesn't have to materialize every tier.
     rule_counts: (usize, usize),
@@ -286,27 +295,32 @@ pub(crate) struct YaraEngine {
 }
 
 impl YaraEngine {
-    /// An empty, pre-keyed tier map (one `OnceLock` per [`YaraTier`]).
-    fn empty_tier_cells() -> HashMap<YaraTier, OnceLock<Option<yara_x::Rules>>> {
-        YaraTier::ALL
-            .iter()
-            .map(|&t| (t, OnceLock::new()))
+    /// An empty tier map pre-keyed with one `OnceLock` per bucket key.
+    /// Keys are filetype strings (or [`FALLBACK_BUCKET`]) that actually carry
+    /// rules — bucket keys cannot be pre-enumerated, so they are seeded from the
+    /// populated set discovered at load.
+    fn tier_cells<'a>(
+        keys: impl IntoIterator<Item = &'a str>,
+    ) -> HashMap<String, OnceLock<Option<yara_x::Rules>>> {
+        keys.into_iter()
+            .map(|k| (k.to_string(), OnceLock::new()))
             .collect()
     }
 
-    /// Lazily materialize the compiled rules for `tier`, building from
+    /// Lazily materialize the compiled rules for `bucket`, building from
     /// [`Self::source`] on first access. Thread-safe: concurrent first-touch
-    /// callers block on the cell until the winner finishes.
-    fn tier_rules(&self, tier: YaraTier) -> Option<&yara_x::Rules> {
+    /// callers block on the cell until the winner finishes. Returns `None` for
+    /// a bucket that was never populated.
+    fn tier_rules(&self, bucket: &str) -> Option<&yara_x::Rules> {
         self.tiers
-            .get(&tier)?
-            .get_or_init(|| self.build_tier(tier))
+            .get(bucket)?
+            .get_or_init(|| self.build_tier(bucket))
             .as_ref()
     }
 
-    /// Compile or deserialize one tier's rules. Single-tier work only (no inner
-    /// rayon), so it is safe to call from a rayon worker during a scan.
-    fn build_tier(&self, tier: YaraTier) -> Option<yara_x::Rules> {
+    /// Compile or deserialize one bucket's rules. Single-bucket work only (no
+    /// inner rayon), so it is safe to call from a rayon worker during a scan.
+    fn build_tier(&self, bucket: &str) -> Option<yara_x::Rules> {
         let TierSource::Lazy {
             cache_dir,
             traits_dir,
@@ -319,46 +333,46 @@ impl YaraEngine {
             return None;
         };
 
-        // 1. Per-tier compiled cache file — deserialize + re-JIT just this tier.
+        // 1. Per-bucket compiled cache file — deserialize + re-JIT just this one.
         if let Some(dir) = cache_dir {
-            let path = dir.join(format!("{}.yrc", tier.label()));
+            let path = dir.join(format!("{bucket}.yrc"));
             if let Ok(bytes) = std::fs::read(&path) {
                 match yara_x::Rules::deserialize(&bytes) {
                     Ok(rules) => return Some(rules),
                     Err(e) => {
-                        tracing::warn!(tier = %tier.label(), error = ?e, "tier cache deserialize failed; recompiling");
+                        tracing::warn!(bucket = %bucket, error = ?e, "bucket cache deserialize failed; recompiling");
                     }
                 }
             }
         }
 
-        // 2. Cache miss — compile just this tier from source. The rule text is
-        //    read + classified once, lazily, and shared across tiers.
+        // 2. Cache miss — compile just this bucket from source. The rule text is
+        //    read + classified once, lazily, and shared across buckets.
         let sources = sources.get_or_init(|| {
             Self::collect_all_sources(traits_dir, third_party_dir, *enable_third_party).0
         });
-        let tier_sources = sources.get(&tier)?;
-        if tier_sources.is_empty() {
+        let bucket_sources = sources.get(bucket)?;
+        if bucket_sources.is_empty() {
             return None;
         }
         let mut compiler = yara_x::Compiler::new();
-        for (ns, src) in tier_sources {
+        for (ns, src) in bucket_sources {
             compiler.new_namespace(ns);
             if let Err(e) = compiler.add_source(src.as_bytes()) {
-                tracing::warn!("Tier {:?}: failed to add source: {:?}", tier, e);
+                tracing::warn!("Bucket {bucket}: failed to add source: {:?}", e);
             }
         }
         let rules = compiler.build();
 
-        // 3. Write the compiled tier back to the cache (best effort, atomic) so
-        //    later scans and processes skip the compile.
+        // 3. Write the compiled bucket back to the cache (best effort, atomic)
+        //    so later scans and processes skip the compile.
         if let Some(dir) = cache_dir
             && let Ok(bytes) = rules.serialize()
             && std::fs::create_dir_all(dir).is_ok()
         {
-            let tmp = dir.join(format!("{}.yrc.tmp.{}", tier.label(), std::process::id()));
+            let tmp = dir.join(format!("{bucket}.yrc.tmp.{}", std::process::id()));
             if std::fs::write(&tmp, &bytes).is_ok() {
-                let _ = std::fs::rename(&tmp, dir.join(format!("{}.yrc", tier.label())));
+                let _ = std::fs::rename(&tmp, dir.join(format!("{bucket}.yrc")));
             }
         }
         Some(rules)
@@ -372,7 +386,7 @@ impl YaraEngine {
         third_party_dir: &Path,
         enable_third_party: bool,
     ) -> (
-        HashMap<YaraTier, Vec<(String, String)>>,
+        HashMap<String, Vec<(String, String)>>,
         HashMap<String, RuleContext>,
         Vec<String>,
         usize,
@@ -430,6 +444,73 @@ impl YaraEngine {
         }
     }
 
+    /// Offline pre-compilation: read + classify all rule sources, compile each
+    /// populated per-filetype tier with `yara_x`, and write `<tier>.yrc` +
+    /// `manifest.json` into `out_dir`. This is the producer side run by the
+    /// `yara-precompile` tool at trait-package build time; the resulting `.yrc`
+    /// are portable across arch/OS (they hold WASM bytecode, re-JIT'd per host)
+    /// and are loaded at runtime without any in-process compilation.
+    ///
+    /// Returns `(builtin_count, third_party_count)`.
+    pub(crate) fn precompile_to(
+        out_dir: &Path,
+        enable_third_party: bool,
+    ) -> anyhow::Result<(usize, usize)> {
+        use anyhow::Context;
+        let traits_dir = crate::cache::traits_path();
+        let third_party_dir = crate::cache::third_party_path();
+        let (tier_sources, rule_contexts, inline_namespaces, builtin_count, third_party_count) =
+            Self::collect_all_sources(&traits_dir, &third_party_dir, enable_third_party);
+
+        std::fs::create_dir_all(out_dir)
+            .with_context(|| format!("create out dir {}", out_dir.display()))?;
+
+        // Compile populated buckets in parallel; each yields its serialized
+        // bytes (compact WASM), so only one bucket's compiler is live per rayon
+        // task.
+        let compiled: Vec<(String, Vec<u8>)> = tier_sources
+            .par_iter()
+            .filter(|(_, s)| !s.is_empty())
+            .filter_map(|(bucket, sources)| {
+                let mut compiler = yara_x::Compiler::new();
+                for (ns, src) in sources {
+                    compiler.new_namespace(ns);
+                    if let Err(e) = compiler.add_source(src.as_bytes()) {
+                        tracing::warn!("precompile bucket {bucket}: add_source: {:?}", e);
+                    }
+                }
+                match compiler.build().serialize() {
+                    Ok(bytes) => Some((bucket.clone(), bytes)),
+                    Err(e) => {
+                        tracing::warn!("precompile bucket {bucket}: serialize failed: {e}");
+                        None
+                    }
+                }
+            })
+            .collect();
+
+        let mut populated_tiers = Vec::with_capacity(compiled.len());
+        for (bucket, bytes) in &compiled {
+            std::fs::write(out_dir.join(format!("{bucket}.yrc")), bytes)
+                .with_context(|| format!("write {bucket}.yrc"))?;
+            populated_tiers.push(bucket.clone());
+        }
+        populated_tiers.sort();
+
+        let builtin_count = builtin_count + inline_namespaces.len();
+        Self::write_manifest(
+            out_dir,
+            &YaraManifest {
+                builtin_count,
+                third_party_count,
+                inline_namespaces,
+                rule_contexts,
+                populated_tiers,
+            },
+        );
+        Ok((builtin_count, third_party_count))
+    }
+
     /// Total number of YARA rules loaded (recorded at load; does not force
     /// lazy tiers to materialize).
     #[must_use]
@@ -437,45 +518,61 @@ impl YaraEngine {
         self.rule_counts.0 + self.rule_counts.1
     }
 
-    /// Eagerly materialize the `CrossFormat` tier (scanned for every file).
-    /// Call once off the hot path so the first scan doesn't pay its lazy
-    /// deserialize; all other tiers stay lazy.
-    pub(crate) fn prewarm_cross_format(&self) {
-        let _ = self.tier_rules(YaraTier::CrossFormat);
+    /// Bucket keys a scan with `file_type_filter` should load, intersected with
+    /// the populated set.
+    ///
+    /// A concrete filter loads the buckets named by its filetype strings plus
+    /// the always-on [`FALLBACK_BUCKET`]. An unfiltered scan (unknown/untyped
+    /// input, and the test path) loads every populated bucket — bucket-agnostic,
+    /// so it does not depend on how rules are routed.
+    fn buckets_to_scan(&self, file_type_filter: Option<&[&str]>) -> Vec<String> {
+        match file_type_filter {
+            Some(types) => {
+                let mut buckets: Vec<String> = types
+                    .iter()
+                    .map(|ft| ft.to_ascii_lowercase())
+                    .chain(std::iter::once(FALLBACK_BUCKET.to_string()))
+                    .filter(|b| self.populated_tiers.contains(b))
+                    .collect();
+                buckets.sort();
+                buckets.dedup();
+                buckets
+            }
+            None => self.populated_tiers.iter().cloned().collect(),
+        }
     }
 
-    /// Eagerly materialize the tiers a scan with `file_type_filter` would use.
+    /// Eagerly materialize the buckets a scan with `file_type_filter` would use.
     ///
-    /// This only fills cold `OnceLock`s; already-materialized tiers return
+    /// This only fills cold `OnceLock`s; already-materialized buckets return
     /// immediately. Callers use this to overlap cache deserialization with other
-    /// structural analysis before the actual YARA scan reaches the same tiers.
+    /// structural analysis before the actual YARA scan reaches the same buckets.
     pub(crate) fn prewarm_filetypes(&self, file_type_filter: Option<&[&str]>) {
-        let tiers_to_warm: Vec<YaraTier> = YaraTier::scan_order(file_type_filter)
+        let buckets_to_warm: Vec<String> = self
+            .buckets_to_scan(file_type_filter)
             .into_iter()
-            .filter(|tier| self.populated_tiers.contains(tier))
-            .filter(|tier| {
+            .filter(|bucket| {
                 self.tiers
-                    .get(tier)
+                    .get(bucket)
                     .is_some_and(|cell| cell.get().is_none())
             })
             .collect();
-        if tiers_to_warm.is_empty() {
+        if buckets_to_warm.is_empty() {
             return;
         }
 
-        let labels: Vec<&str> = tiers_to_warm.iter().map(|tier| tier.label()).collect();
         let started = std::time::Instant::now();
-        if tiers_to_warm.len() == 1 {
-            let _ = self.tier_rules(tiers_to_warm[0]);
+        if buckets_to_warm.len() == 1 {
+            let _ = self.tier_rules(&buckets_to_warm[0]);
         } else {
-            tiers_to_warm.par_iter().for_each(|tier| {
-                let _ = self.tier_rules(*tier);
+            buckets_to_warm.par_iter().for_each(|bucket| {
+                let _ = self.tier_rules(bucket);
             });
         }
         tracing::debug!(
-            tiers = ?labels,
+            buckets = ?buckets_to_warm,
             elapsed_ms = started.elapsed().as_millis() as u64,
-            "prewarmed YARA tiers"
+            "prewarmed YARA buckets"
         );
     }
 
@@ -483,7 +580,7 @@ impl YaraEngine {
     #[must_use]
     pub(crate) fn new() -> Self {
         Self {
-            tiers: Self::empty_tier_cells(),
+            tiers: HashMap::new(),
             source: TierSource::Empty,
             populated_tiers: std::collections::HashSet::new(),
             rule_counts: (0, 0),
@@ -535,7 +632,7 @@ impl YaraEngine {
         // via env var or `set_builtin_yara_only_override`.
         let enable_third_party = enable_third_party && !builtin_yara_only_active();
 
-        self.tiers = Self::empty_tier_cells();
+        self.tiers = HashMap::new();
         self.populated_tiers.clear();
         self.source = TierSource::Empty;
         self.rule_counts = (0, 0);
@@ -547,7 +644,18 @@ impl YaraEngine {
 
         let traits_dir = crate::cache::traits_path();
         let third_party_dir = crate::cache::third_party_path();
-        let cache_dir = if crate::cache::skip_yara_cache() {
+        // Pre-compiled rules shipped with the traits (produced by
+        // `yara-precompile` into `third-party/compiled/`) take precedence: a
+        // load-only path with no in-process compilation. They're portable
+        // across arch/OS, so one build serves every client.
+        let shipped = third_party_dir.join("compiled");
+        let cache_dir = if Self::read_manifest(&shipped).is_some() {
+            tracing::info!(
+                "Using shipped pre-compiled YARA rules at {}",
+                shipped.display()
+            );
+            Some(shipped)
+        } else if crate::cache::skip_yara_cache() {
             tracing::info!("Skipping YARA cache (CLEAVE_SKIP_YARA_CACHE / CLEAVE_SKIP_CACHE)");
             None
         } else {
@@ -564,11 +672,8 @@ impl YaraEngine {
             self.rule_counts = (manifest.builtin_count, manifest.third_party_count);
             self.rule_contexts = manifest.rule_contexts;
             self.compiled_inline_namespaces = manifest.inline_namespaces;
-            self.populated_tiers = manifest
-                .populated_tiers
-                .iter()
-                .filter_map(|label| YaraTier::ALL.iter().find(|t| t.label() == label).copied())
-                .collect();
+            self.tiers = Self::tier_cells(manifest.populated_tiers.iter().map(String::as_str));
+            self.populated_tiers = manifest.populated_tiers.into_iter().collect();
             self.source = TierSource::Lazy {
                 cache_dir: cache_dir.clone(),
                 traits_dir,
@@ -577,8 +682,8 @@ impl YaraEngine {
                 sources: OnceLock::new(),
             };
             tracing::info!(
-                tiers = self.populated_tiers.len(),
-                "Loaded YARA manifest (tiers compile lazily on first scan)"
+                buckets = self.populated_tiers.len(),
+                "Loaded YARA manifest (buckets compile lazily on first scan)"
             );
             return self.rule_counts;
         }
@@ -600,8 +705,9 @@ impl YaraEngine {
         self.populated_tiers = tier_sources
             .iter()
             .filter(|(_, v)| !v.is_empty())
-            .map(|(t, _)| *t)
+            .map(|(t, _)| t.clone())
             .collect();
+        self.tiers = Self::tier_cells(self.populated_tiers.iter().map(String::as_str));
         // Inline trait rules are folded into the built-in tally for reporting.
         let builtin_count = builtin_count + inline_namespaces.len();
         self.rule_counts = (builtin_count, third_party_count);
@@ -614,11 +720,7 @@ impl YaraEngine {
                     third_party_count,
                     inline_namespaces,
                     rule_contexts: self.rule_contexts.clone(),
-                    populated_tiers: self
-                        .populated_tiers
-                        .iter()
-                        .map(|t| t.label().to_string())
-                        .collect(),
+                    populated_tiers: self.populated_tiers.iter().cloned().collect(),
                 },
             );
             let _ = crate::cache::cleanup_old_caches(dir);
@@ -656,32 +758,37 @@ impl YaraEngine {
         caps.get(3).map(|m| m.as_str().to_string())
     }
 
+    /// Determine the filetype buckets an inline trait YARA rule belongs in.
+    ///
+    /// Explicit `for:` filetypes (drawn from the same vocabulary as
+    /// [`crate::analyzers::FileTypeExt::yara_filetypes`]) take priority and are
+    /// used verbatim. Otherwise the rule's derived [`RuleContext`] filetypes are
+    /// used, falling back to [`FALLBACK_BUCKET`] when nothing constrains it.
     fn classify_inline_trait_yara_tiers(
         source: &str,
         namespace: &str,
         declared_for: &[String],
-    ) -> Vec<YaraTier> {
-        if !declared_for.is_empty() {
-            let mut tiers = Vec::new();
-            for filetype in declared_for {
-                let tier = YaraTier::from_filetypes(&[filetype.as_str()]);
-                if tier != YaraTier::Unknown && !tiers.contains(&tier) {
-                    tiers.push(tier);
-                }
-            }
-            if !tiers.is_empty() {
-                return tiers;
-            }
+    ) -> Vec<String> {
+        let mut buckets: Vec<String> = declared_for
+            .iter()
+            .map(|ft| ft.trim().to_ascii_lowercase())
+            .filter(|ft| !ft.is_empty() && ft != "none" && ft != "any" && ft != "all")
+            .map(|ft| yara_classify::canonical_binary_filetype(&ft).to_string())
+            .collect();
+        if !buckets.is_empty() {
+            let mut seen = std::collections::HashSet::new();
+            buckets.retain(|ft| seen.insert(ft.clone()));
+            return buckets;
         }
 
         if let Some(rule_name) = Self::extract_rule_name_from_source(source) {
-            let tier = YaraTier::classify_rule(&rule_name, source, namespace);
-            if tier != YaraTier::Unknown {
-                return vec![tier];
+            let context = Self::derive_rule_context(&rule_name, source, namespace);
+            if !context.filetypes.is_empty() {
+                return context.filetypes;
             }
         }
 
-        vec![YaraTier::CrossFormat]
+        vec![FALLBACK_BUCKET.to_string()]
     }
 
     /// Parse trait YAML files and collect all `type: yara` conditions into tiered source lists.
@@ -690,7 +797,7 @@ impl YaraEngine {
     /// can be mapped back to the originating trait during evaluation.
     fn collect_inline_trait_sources_tiered(
         traits_dir: &Path,
-    ) -> (HashMap<YaraTier, Vec<(String, String)>>, Vec<String>) {
+    ) -> (HashMap<String, Vec<(String, String)>>, Vec<String>) {
         let yaml_files: Vec<PathBuf> = WalkDir::new(traits_dir)
             .follow_links(false)
             .into_iter()
@@ -706,7 +813,7 @@ impl YaraEngine {
             .collect();
 
         // Read and parse YAML files in parallel, then collect inline YARA sources.
-        let collected: Vec<(YaraTier, String, String)> = yaml_files
+        let collected: Vec<(String, String, String)> = yaml_files
             .par_iter()
             .flat_map(|path| {
                 let Ok(content) = fs::read_to_string(path) else {
@@ -755,29 +862,29 @@ impl YaraEngine {
                         item_for
                     };
                     let namespace = format!("inline.{}", id);
-                    let tiers =
+                    let buckets =
                         Self::classify_inline_trait_yara_tiers(source, &namespace, &declared_for);
                     tracing::trace!("Collected inline YARA rule for trait {}", id);
                     tracing::debug!(
                         trait_id = id,
-                        tiers = ?tiers.iter().map(|tier| tier.label()).collect::<Vec<_>>(),
+                        buckets = ?buckets,
                         declared_for = ?declared_for,
                         "Classified inline YARA rule"
                     );
-                    for tier in tiers {
-                        result.push((tier, namespace.clone(), source.to_string()));
+                    for bucket in buckets {
+                        result.push((bucket, namespace.clone(), source.to_string()));
                     }
                 }
                 result
             })
             .collect();
 
-        let mut tier_sources: HashMap<YaraTier, Vec<(String, String)>> = HashMap::new();
+        let mut tier_sources: HashMap<String, Vec<(String, String)>> = HashMap::new();
         let mut namespaces = Vec::with_capacity(collected.len());
-        for (tier, namespace, source) in collected {
+        for (bucket, namespace, source) in collected {
             namespaces.push(namespace.clone());
             tier_sources
-                .entry(tier)
+                .entry(bucket)
                 .or_default()
                 .push((namespace, source));
         }
@@ -815,11 +922,12 @@ impl YaraEngine {
             anyhow::bail!("No YARA rules loaded");
         }
 
-        // Determine which tiers to scan
-        let tiers_to_scan: Vec<YaraTier> = YaraTier::scan_order(file_type_filter)
-            .into_iter()
-            .filter(|tier| self.populated_tiers.contains(tier))
-            .collect();
+        // Determine which buckets to scan. A concrete file-type filter loads the
+        // buckets named by its filetype strings plus the always-on fallback
+        // bucket; an unfiltered scan (unknown/untyped input, and the test path)
+        // scans every populated bucket — bucket-agnostic, so it does not depend
+        // on how rules are routed.
+        let buckets_to_scan = self.buckets_to_scan(file_type_filter);
 
         let inline_ns_set: std::collections::HashSet<&str> = self
             .compiled_inline_namespaces
@@ -827,61 +935,62 @@ impl YaraEngine {
             .map(String::as_str)
             .collect();
 
-        tracing::debug!(tiers = tiers_to_scan.len(), "YARA scan starting");
+        tracing::debug!(buckets = buckets_to_scan.len(), "YARA scan starting");
 
-        // Each tier has its own compiled Rules, and Scanner only borrows &Rules + &[u8],
-        // so tiers can scan concurrently on the same data without contention.
-        // `tier_rules` materializes any not-yet-built tier on first touch (the
-        // common cache-hit path); the per-tier `OnceLock` makes that safe under
-        // this `par_iter` and across concurrent scans on other workers.
+        // Each bucket has its own compiled Rules, and Scanner only borrows
+        // &Rules + &[u8], so buckets can scan concurrently on the same data
+        // without contention. `tier_rules` materializes any not-yet-built bucket
+        // on first touch (the common cache-hit path); the per-bucket `OnceLock`
+        // makes that safe under this `par_iter` and across concurrent scans on
+        // other workers.
         //
-        // Small payloads scan their tiers sequentially. A tiny member's tier
+        // Small payloads scan their buckets sequentially. A tiny member's bucket
         // scan costs less than a rayon task's scheduling + steal exposure: under
         // member-level fan-out this is a third nesting level that floods a
-        // saturated pool with micro-tasks, and any tier task that blocks in a
+        // saturated pool with micro-tasks, and any bucket task that blocks in a
         // join can steal an unrelated multi-second chunk onto its stack (observed:
-        // 2 KB members "taking" seconds of wall under load). Sequential tiers
+        // 2 KB members "taking" seconds of wall under load). Sequential buckets
         // also keep one file's scans on one thread, so its scanner cache serves
-        // every tier without cross-thread churn. Tunable via
+        // every bucket without cross-thread churn. Tunable via
         // `CLEAVE_YARA_TIER_PARALLEL_MIN_BYTES`.
-        let scan_one = |tier: &YaraTier| {
-            self.tier_rules(*tier).map(|rules| {
+        let scan_one = |bucket: &String| {
+            self.tier_rules(bucket).map(|rules| {
                 let started = std::time::Instant::now();
                 let result = Self::run_scanner(rules, data);
-                (*tier, started.elapsed().as_millis() as u64, result)
+                (bucket.clone(), started.elapsed().as_millis() as u64, result)
             })
         };
-        let all_raw: Vec<(YaraTier, u64, Result<Vec<RawRule>>)> =
+        let all_raw: Vec<(String, u64, Result<Vec<RawRule>>)> =
             if data.len() < tier_parallel_min_bytes() {
-                tiers_to_scan.iter().filter_map(scan_one).collect()
+                buckets_to_scan.iter().filter_map(scan_one).collect()
             } else {
-                tiers_to_scan.par_iter().filter_map(scan_one).collect()
+                buckets_to_scan.par_iter().filter_map(scan_one).collect()
             };
 
         let mut yara_matches = Vec::new();
         let mut inline_results: HashMap<String, Vec<Evidence>> = HashMap::new();
 
-        // Warn threshold: a single YARA tier taking >30 s is beyond "large file, expected slow"
+        // Warn threshold: a single YARA bucket taking >30 s is beyond "large file, expected slow"
         // and enters "likely stuck in a pathological regex" territory. The 321 s .bat case fires
-        // here per offending tier, making it possible to attribute time without per-rule tracing.
+        // here per offending bucket, making it possible to attribute time without per-rule tracing.
         const SLOW_YARA_TIER_WARN_MS: u64 = 30_000;
 
-        for (tier, elapsed_ms, result) in all_raw {
+        for (bucket, elapsed_ms, result) in all_raw {
             if elapsed_ms >= SLOW_YARA_TIER_WARN_MS {
                 tracing::warn!(
-                    tier = tier.label(),
+                    bucket = %bucket,
                     elapsed_ms,
                     data_bytes = data.len(),
-                    "YARA tier scan exceeded slow threshold; \
+                    "YARA bucket scan exceeded slow threshold; \
                      set CLEAVE_BUILTIN_YARA_ONLY=1 to isolate third-party rules"
                 );
             } else {
-                tracing::debug!(tier = tier.label(), elapsed_ms, "YARA tier scan finished");
+                tracing::debug!(bucket = %bucket, elapsed_ms, "YARA bucket scan finished");
             }
             let raw_rules = match result {
                 Ok(rules) => rules,
                 Err(e) => {
-                    tracing::error!(tier = tier.label(), error = %e, "YARA tier scan failed, skipping tier");
+                    tracing::error!(bucket = %bucket, error = %e, "YARA bucket scan failed, skipping bucket");
                     continue;
                 }
             };
@@ -912,12 +1021,12 @@ impl YaraEngine {
             .map(|(k, v)| (k, deduplicate_evidence(v)))
             .collect();
 
-        // Log tier-level scan summary (rule count per tier, not individual rules)
+        // Log bucket-level scan summary (rule count per bucket, not individual rules)
         if tracing::enabled!(tracing::Level::DEBUG) {
-            for tier in &tiers_to_scan {
-                if let Some(rules) = self.tier_rules(*tier) {
+            for bucket in &buckets_to_scan {
+                if let Some(rules) = self.tier_rules(bucket) {
                     tracing::debug!(
-                        tier = tier.label(),
+                        bucket = %bucket,
                         rules = rules.iter().count(),
                         "YARA scan set",
                     );
@@ -926,7 +1035,7 @@ impl YaraEngine {
         }
         tracing::debug!(
             elapsed_ms = scan_start.elapsed().as_millis() as u64,
-            tiers = tiers_to_scan.len(),
+            buckets = buckets_to_scan.len(),
             matches = yara_matches.len(),
             inline_traits = inline_results.len(),
             "YARA scan complete",
@@ -1139,14 +1248,15 @@ impl YaraEngine {
         entry.extend(evidence.into_iter().take(remaining));
     }
 
-    /// Collect built-in YARA rule sources from the traits directory, classifying each rule into
-    /// a tier with the same splitter used for third-party collections.
+    /// Collect built-in YARA rule sources from the traits directory, bucketing
+    /// each rule by filetype with the same splitter used for third-party
+    /// collections.
     ///
     /// Returns `(tier_sources, rule_contexts, builtin_file_count)`.
     fn collect_builtin_sources_tiered(
         dir: &Path,
     ) -> (
-        HashMap<YaraTier, Vec<(String, String)>>,
+        HashMap<String, Vec<(String, String)>>,
         HashMap<String, RuleContext>,
         usize,
     ) {
@@ -1184,60 +1294,54 @@ impl YaraEngine {
                 let bytes = fs::read(path).ok()?;
                 let raw_source = String::from_utf8_lossy(&bytes);
                 let source = yara_classify::inject_condition_filetype_hints(&raw_source);
-                let mut split = Self::split_monolithic_by_tier(&source, "traits", re);
-                if let Some(unknown_source) = split.tiers.remove(&YaraTier::Unknown) {
-                    split
-                        .tiers
-                        .entry(YaraTier::CrossFormat)
-                        .and_modify(|existing| existing.push_str(&unknown_source))
-                        .or_insert(unknown_source);
-                }
+                let split = Self::split_monolithic_by_tier(&source, "traits", re);
                 tracing::trace!(
                     path = %path.display(),
-                    tiers = ?split.tiers.keys().map(|tier| tier.label()).collect::<Vec<_>>(),
+                    buckets = ?split.tiers.keys().collect::<Vec<_>>(),
                     "Collected built-in YARA source"
                 );
                 Some(split)
             })
             .collect();
 
-        let mut tier_sources: HashMap<YaraTier, Vec<(String, String)>> = HashMap::new();
+        let mut tier_sources: HashMap<String, Vec<(String, String)>> = HashMap::new();
         let mut rule_contexts: HashMap<String, RuleContext> = HashMap::new();
-        let mut tier_counts: HashMap<YaraTier, usize> = HashMap::new();
+        let mut tier_counts: HashMap<String, usize> = HashMap::new();
         // Count actual public rules, not files: a single .yar file holds many rules.
         let mut rule_count = 0usize;
 
         for split in processed {
             rule_count += split.contexts.len();
             rule_contexts.extend(split.contexts);
-            for (tier, source) in split.tiers {
+            for (bucket, source) in split.tiers {
+                *tier_counts.entry(bucket.clone()).or_insert(0) += 1;
                 tier_sources
-                    .entry(tier)
+                    .entry(bucket)
                     .or_default()
                     .push(("traits".to_string(), source));
-                *tier_counts.entry(tier).or_insert(0) += 1;
             }
         }
 
-        for (tier, count) in &tier_counts {
-            tracing::info!("Built-in tier {:?}: {} source(s)", tier, count);
+        for (bucket, count) in &tier_counts {
+            tracing::info!("Built-in bucket {bucket}: {count} source(s)");
         }
 
         (tier_sources, rule_contexts, rule_count)
     }
 
-    /// Collect third-party YARA rule sources, classifying each rule into a tier.
+    /// Collect third-party YARA rule sources, bucketing each rule by filetype.
     ///
     /// Small files (single-rule or few rules from one vendor) are classified as a whole.
     /// Large monolithic files (like YARAForge's single .yar with ~11K rules) are split
-    /// per-rule so each rule goes to the correct tier.
+    /// per-rule so each rule goes to the correct bucket(s).
     ///
     /// Returns `(tier_sources, rule_contexts, total_source_count, vt_skipped, disabled_count)`.
-    /// `tier_sources` maps each `YaraTier` to its list of `(namespace, source)` pairs.
+    /// `tier_sources` maps each filetype bucket (or [`FALLBACK_BUCKET`]) to its
+    /// list of `(namespace, source)` pairs.
     fn collect_third_party_sources_tiered(
         dir: &Path,
     ) -> (
-        HashMap<YaraTier, Vec<(String, String)>>,
+        HashMap<String, Vec<(String, String)>>,
         HashMap<String, RuleContext>,
         usize,
         usize,
@@ -1335,15 +1439,16 @@ impl YaraEngine {
             })
             .collect();
 
-        let mut tier_sources: HashMap<YaraTier, Vec<(String, String)>> = HashMap::new();
+        let mut tier_sources: HashMap<String, Vec<(String, String)>> = HashMap::new();
         let mut rule_contexts: HashMap<String, RuleContext> = HashMap::new();
-        // `fragments` counts per-tier source splits (for diagnostics); `rule_count`
-        // counts actual public rules — a monolithic pack holds thousands per file.
+        // `fragments` counts per-bucket source splits (for diagnostics);
+        // `rule_count` counts actual public rules — a monolithic pack holds
+        // thousands per file.
         let mut fragments = 0;
         let mut rule_count = 0;
         let mut vt_skipped = 0;
         let mut disabled_count = 0;
-        let mut tier_counts: HashMap<YaraTier, usize> = HashMap::new();
+        let mut tier_counts: HashMap<String, usize> = HashMap::new();
 
         for p in processed {
             if p.vt_stripped > 0 {
@@ -1358,21 +1463,21 @@ impl YaraEngine {
             rule_count += p.split.contexts.len();
             rule_contexts.extend(p.split.contexts);
 
-            for (tier, tier_source) in p.split.tiers {
+            for (bucket, tier_source) in p.split.tiers {
+                fragments += 1;
+                *tier_counts.entry(bucket.clone()).or_insert(0) += 1;
                 tier_sources
-                    .entry(tier)
+                    .entry(bucket)
                     .or_default()
                     .push((p.namespace.clone(), tier_source));
-                fragments += 1;
-                *tier_counts.entry(tier).or_insert(0) += 1;
             }
         }
 
-        for (tier, count) in &tier_counts {
-            tracing::info!("Third-party tier {:?}: {} source(s)", tier, count);
+        for (bucket, count) in &tier_counts {
+            tracing::info!("Third-party bucket {bucket}: {count} source(s)");
         }
         tracing::debug!(
-            "Successfully added {} third-party YARA source(s) across {} tier(s)",
+            "Successfully added {} third-party YARA source(s) across {} bucket(s)",
             fragments,
             tier_counts.len().max(1),
         );
@@ -1451,6 +1556,28 @@ impl YaraEngine {
             }
         }
 
+        // Strongest signal: the rule's own condition. A magic-byte check
+        // (MZ / ELF / Mach-O / PDF / OLE / ZIP) or a YARA module reference
+        // (`pe.` / `elf.` / `macho.` / `dotnet.`) pins the filetype regardless
+        // of name or metadata, and catches rules with no naming signal at all.
+        if filetypes.is_empty()
+            && let Some(ft) = yara_classify::filetype_from_magic(&lower)
+        {
+            filetypes = vec![ft.to_string()];
+            filetype_source = "condition".to_string();
+        }
+        // High-confidence string markers in the body (e.g. the `_CorExeMain`
+        // .NET entry-point symbol) when there is no magic/module signal.
+        if filetypes.is_empty() {
+            let inferred = yara_classify::infer_filetypes_from_string_markers(&lower);
+            if !inferred.is_empty() {
+                filetypes = inferred
+                    .iter()
+                    .map(std::string::ToString::to_string)
+                    .collect();
+                filetype_source = "string-marker".to_string();
+            }
+        }
         if filetypes.is_empty() {
             let inferred = yara_classify::infer_filetypes_from_tags(&tags);
             if !inferred.is_empty() {
@@ -1492,6 +1619,33 @@ impl YaraEngine {
                 filetype_source = "namespace".to_string();
             }
         }
+        // Last resort: curated rule-name → filetype overrides for known families
+        // with no inferable signal. Anything still empty stays in `fallback`.
+        if filetypes.is_empty() {
+            let inferred = yara_classify::filetypes_from_override(rule_name);
+            if !inferred.is_empty() {
+                filetypes = inferred
+                    .iter()
+                    .map(std::string::ToString::to_string)
+                    .collect();
+                filetype_source = "override-table".to_string();
+            }
+        }
+
+        // Collapse binary-format aliases (dll/exe -> pe, so/ko -> elf,
+        // dylib/kext -> macho) so each rule lands in exactly one bucket. A scan
+        // loads every alias of a detected type together, so separate alias
+        // buckets would only duplicate the rule.
+        for ft in &mut filetypes {
+            let canon = yara_classify::canonical_binary_filetype(ft);
+            if canon != ft.as_str() {
+                *ft = canon.to_string();
+            }
+        }
+        {
+            let mut seen = std::collections::HashSet::new();
+            filetypes.retain(|ft| seen.insert(ft.clone()));
+        }
 
         let mut platforms: Vec<String> =
             crate::third_party_yara::platforms_from_name_and_os(rule_name, os_meta.as_deref())
@@ -1520,11 +1674,15 @@ impl YaraEngine {
         }
     }
 
-    /// Split a large monolithic YARA source into per-tier chunks.
+    /// Split a large monolithic YARA source into per-filetype-bucket chunks.
     ///
-    /// Extracts import statements and private rules, then classifies each public rule.
-    /// Private rules are duplicated into every tier that has dependents (simplest approach
-    /// since there are typically <30 private rules).
+    /// Extracts import statements and private rules, then buckets each public
+    /// rule by the filetype strings of its derived [`RuleContext`] (drawn from
+    /// the same vocabulary as
+    /// [`crate::analyzers::FileTypeExt::yara_filetypes`]). A rule with no
+    /// filetype constraint lands in [`FALLBACK_BUCKET`] (always scanned). Private
+    /// rules are duplicated into every bucket that has dependents (simplest
+    /// approach since there are typically <30 private rules).
     fn split_monolithic_by_tier(
         source: &str,
         namespace: &str,
@@ -1585,23 +1743,35 @@ impl YaraEngine {
             .collect::<Vec<_>>()
             .join("\n");
 
-        // Classify each public rule
-        let mut tier_rules: HashMap<YaraTier, Vec<&str>> = HashMap::new();
+        // Bucket each public rule into each of its filetype strings, or the
+        // fallback bucket when it carries no filetype constraint.
+        let mut tier_rules: HashMap<String, Vec<&str>> = HashMap::new();
         let mut contexts: HashMap<String, RuleContext> = HashMap::new();
         for r in &rules {
             if r.is_private {
                 continue;
             }
             let rule_text = &source[r.start..r.end];
-            let tier = YaraTier::classify_rule(r.name, rule_text, namespace);
             let context = Self::derive_rule_context(r.name, rule_text, namespace);
+            if context.filetypes.is_empty() {
+                tier_rules
+                    .entry(FALLBACK_BUCKET.to_string())
+                    .or_default()
+                    .push(rule_text);
+            } else {
+                for ft in &context.filetypes {
+                    tier_rules
+                        .entry(ft.to_ascii_lowercase())
+                        .or_default()
+                        .push(rule_text);
+                }
+            }
             contexts.insert(rule_context_key(namespace, r.name), context);
-            tier_rules.entry(tier).or_default().push(rule_text);
         }
 
-        // Build per-tier source strings
-        let mut result: HashMap<YaraTier, String> = HashMap::new();
-        for (tier, rule_texts) in tier_rules {
+        // Build per-bucket source strings
+        let mut result: HashMap<String, String> = HashMap::new();
+        for (bucket, rule_texts) in tier_rules {
             let mut s = String::with_capacity(imports.len() + private_chunk.len() + 4096);
             s.push_str(&imports);
             s.push('\n');
@@ -1612,7 +1782,7 @@ impl YaraEngine {
             for text in rule_texts {
                 s.push_str(text);
             }
-            result.insert(tier, s);
+            result.insert(bucket, s);
         }
 
         SplitSource {
@@ -2232,7 +2402,9 @@ impl Default for YaraEngine {
 
 #[cfg(test)]
 impl YaraEngine {
-    /// Compile YARA rules from source text into the CrossFormat tier. For tests only.
+    /// Compile YARA rules from source text into the always-scanned fallback
+    /// bucket. For tests only — keeps functional tests filetype-agnostic since
+    /// the fallback bucket is loaded by every scan regardless of filter.
     fn load_rule_source(&mut self, source: &str) -> Result<()> {
         let mut compiler = yara_x::Compiler::new();
         compiler
@@ -2240,12 +2412,11 @@ impl YaraEngine {
             .map_err(|e| anyhow::anyhow!("{:?}", e))?;
         let rules = compiler.build();
         let count = rules.iter().count();
-        if let Some(cell) = self.tiers.get(&YaraTier::CrossFormat) {
-            let _ = cell.set(Some(rules));
-        }
-        self.populated_tiers.insert(YaraTier::CrossFormat);
+        let cell = self.tiers.entry(FALLBACK_BUCKET.to_string()).or_default();
+        let _ = cell.set(Some(rules));
+        self.populated_tiers.insert(FALLBACK_BUCKET.to_string());
         // Source stays `Empty`: the pre-set cell above is returned directly, so
-        // `build_tier` is never consulted for this tier.
+        // `build_tier` is never consulted for this bucket.
         self.rule_counts = (count, 0);
         Ok(())
     }
@@ -3298,7 +3469,7 @@ rule ELASTIC_Windows_Generic_Threat : FILE
             third_party_count: 11,
             inline_namespaces: vec!["ns1".to_string()],
             rule_contexts,
-            populated_tiers: vec![YaraTier::CrossFormat.label().to_string()],
+            populated_tiers: vec!["pe".to_string(), FALLBACK_BUCKET.to_string()],
         };
         YaraEngine::write_manifest(dir.path(), &manifest);
 
@@ -3319,15 +3490,20 @@ rule ELASTIC_Windows_Generic_Threat : FILE
         assert_eq!(ctx.platforms, vec!["unix".to_string()]);
         assert_eq!(ctx.os_meta.as_deref(), Some("linux"));
         assert_eq!(ctx.arch_context.as_deref(), Some("x64"));
+        assert_eq!(
+            restored.populated_tiers,
+            vec!["pe".to_string(), FALLBACK_BUCKET.to_string()]
+        );
     }
 
     #[test]
+
     fn test_lazy_tier_compiles_then_loads_from_per_tier_cache() {
         let dir = tempfile::tempdir().unwrap();
-        let tier = YaraTier::CrossFormat;
+        let bucket = "pe";
         let mut sources = HashMap::new();
         sources.insert(
-            tier,
+            bucket.to_string(),
             vec![(
                 "test_ns".to_string(),
                 r#"rule r { strings: $a = "abc" condition: $a }"#.to_string(),
@@ -3337,7 +3513,8 @@ rule ELASTIC_Windows_Generic_Threat : FILE
         let _ = cell.set(sources);
 
         let mut engine = YaraEngine::new_for_test();
-        engine.populated_tiers.insert(tier);
+        engine.populated_tiers.insert(bucket.to_string());
+        engine.tiers = YaraEngine::tier_cells([bucket]);
         engine.source = TierSource::Lazy {
             cache_dir: Some(dir.path().to_path_buf()),
             traits_dir: dir.path().to_path_buf(),
@@ -3345,17 +3522,18 @@ rule ELASTIC_Windows_Generic_Threat : FILE
             enable_third_party: false,
             sources: cell,
         };
-        // First access compiles from source and writes the per-tier cache file.
-        assert!(engine.tier_rules(tier).is_some());
+        // First access compiles from source and writes the per-bucket cache file.
+        assert!(engine.tier_rules(bucket).is_some());
         assert!(
-            dir.path().join(format!("{}.yrc", tier.label())).exists(),
-            "compiling a tier must write its per-tier cache file"
+            dir.path().join(format!("{bucket}.yrc")).exists(),
+            "compiling a bucket must write its per-bucket cache file"
         );
 
-        // A fresh engine with NO sources must load that tier straight from the
-        // per-tier cache file — the warm path that never touches rule text.
+        // A fresh engine with NO sources must load that bucket straight from the
+        // per-bucket cache file — the warm path that never touches rule text.
         let mut warm = YaraEngine::new_for_test();
-        warm.populated_tiers.insert(tier);
+        warm.populated_tiers.insert(bucket.to_string());
+        warm.tiers = YaraEngine::tier_cells([bucket]);
         warm.source = TierSource::Lazy {
             cache_dir: Some(dir.path().to_path_buf()),
             traits_dir: dir.path().to_path_buf(),
@@ -3364,20 +3542,50 @@ rule ELASTIC_Windows_Generic_Threat : FILE
             sources: OnceLock::new(),
         };
         assert!(
-            warm.tier_rules(tier).is_some(),
-            "warm engine must load the tier from its per-tier cache without sources"
+            warm.tier_rules(bucket).is_some(),
+            "warm engine must load the bucket from its per-bucket cache without sources"
         );
     }
 
     #[test]
-    fn test_js_scan_order_includes_script_fallback() {
+    fn test_js_scan_selection_includes_fallback() {
+        let mut engine = YaraEngine::new_for_test();
+        for bucket in ["js", "ts", "ps1", "pe", FALLBACK_BUCKET] {
+            engine.populated_tiers.insert(bucket.to_string());
+        }
+
+        // A concrete filter loads the named filetype buckets plus the always-on
+        // fallback bucket, intersected with the populated set (results sorted).
         assert_eq!(
-            YaraTier::scan_order(Some(&["ts", "tsx", "js"])),
-            vec![YaraTier::ScriptJs, YaraTier::CrossFormat]
+            engine.buckets_to_scan(Some(&["ts", "tsx", "js"])),
+            vec![
+                FALLBACK_BUCKET.to_string(),
+                "js".to_string(),
+                "ts".to_string()
+            ]
         );
         assert_eq!(
-            YaraTier::scan_order(Some(&["ps1"])),
-            vec![YaraTier::Script, YaraTier::CrossFormat]
+            engine.buckets_to_scan(Some(&["ps1"])),
+            vec![FALLBACK_BUCKET.to_string(), "ps1".to_string()]
+        );
+        // A filter naming an unpopulated bucket still always gets the fallback.
+        assert_eq!(
+            engine.buckets_to_scan(Some(&["docx"])),
+            vec![FALLBACK_BUCKET.to_string()]
+        );
+
+        // An unfiltered scan loads every populated bucket.
+        let mut all = engine.buckets_to_scan(None);
+        all.sort();
+        assert_eq!(
+            all,
+            vec![
+                FALLBACK_BUCKET.to_string(),
+                "js".to_string(),
+                "pe".to_string(),
+                "ps1".to_string(),
+                "ts".to_string()
+            ]
         );
     }
 
@@ -3389,13 +3597,14 @@ rule demo_inline_archive_rule {
         true
 }
 "#;
+        // Explicit `for:` filetypes are used verbatim as bucket keys.
         assert_eq!(
             YaraEngine::classify_inline_trait_yara_tiers(
                 source,
                 "inline.demo-inline",
                 &["ts".to_string()]
             ),
-            vec![YaraTier::ScriptJs]
+            vec!["ts".to_string()]
         );
         assert_eq!(
             YaraEngine::classify_inline_trait_yara_tiers(
@@ -3403,7 +3612,7 @@ rule demo_inline_archive_rule {
                 "inline.demo-inline",
                 &["jar".to_string(), "zip".to_string()]
             ),
-            vec![YaraTier::Archive]
+            vec!["jar".to_string(), "zip".to_string()]
         );
         assert_eq!(
             YaraEngine::classify_inline_trait_yara_tiers(
@@ -3411,7 +3620,7 @@ rule demo_inline_archive_rule {
                 "inline.demo-inline",
                 &["ps1".to_string()]
             ),
-            vec![YaraTier::Script]
+            vec!["ps1".to_string()]
         );
     }
 
@@ -3425,18 +3634,20 @@ rule demo_inline_php {
         $a
 }
 "#;
+        // No usable `for:`, so the rule's derived context filetypes are used —
+        // the "php" token in the rule name resolves to the php bucket.
         assert_eq!(
             YaraEngine::classify_inline_trait_yara_tiers(
                 source,
                 "inline.demo-inline",
                 &["none".to_string()]
             ),
-            vec![YaraTier::Script]
+            vec!["php".to_string()]
         );
     }
 
     #[test]
-    fn test_split_monolithic_by_tier_reclassifies_built_in_rules() {
+    fn test_split_monolithic_buckets_built_in_rules_by_filetype() {
         let source = r#"
 rule builtin_js_rule {
     meta:
@@ -3455,30 +3666,35 @@ rule builtin_generic_rule {
         true
 }
 "#;
+        // Mirror the collectors: inject filetype hints from magic conditions
+        // before splitting (so the PE magic rule gets a "pe" filetype).
+        let injected = yara_classify::inject_condition_filetype_hints(source);
 
         let split = YaraEngine::split_monolithic_by_tier(
-            source,
+            &injected,
             "traits",
             rule_start_re().expect("valid test regex"),
         );
 
-        let js_tier = split
+        // The JS rule lands in each of its inferred filetype buckets.
+        let js_bucket = split
             .tiers
-            .get(&YaraTier::ScriptJs)
-            .expect("js rule classified into script-js tier");
-        assert!(js_tier.contains("builtin_js_rule"));
+            .get("js")
+            .expect("js rule bucketed into js filetype");
+        assert!(js_bucket.contains("builtin_js_rule"));
 
-        let pe_tier = split
+        let pe_bucket = split
             .tiers
-            .get(&YaraTier::Pe)
-            .expect("pe rule classified into pe tier");
-        assert!(pe_tier.contains("builtin_pe_rule"));
+            .get("pe")
+            .expect("pe rule bucketed into pe filetype");
+        assert!(pe_bucket.contains("builtin_pe_rule"));
 
-        let unknown_tier = split
+        // A rule with no filetype constraint lands in the always-scanned fallback.
+        let fallback = split
             .tiers
-            .get(&YaraTier::Unknown)
-            .expect("residual unknown tier preserved before built-in promotion");
-        assert!(unknown_tier.contains("builtin_generic_rule"));
+            .get(FALLBACK_BUCKET)
+            .expect("generic rule bucketed into fallback");
+        assert!(fallback.contains("builtin_generic_rule"));
     }
 
     /// Extract the rule name from YARA source text.
@@ -3640,47 +3856,49 @@ rule builtin_generic_rule {
             (HashMap::new(), HashMap::new(), 0, 0, 0)
         };
 
-        let mut tier_names: HashMap<YaraTier, Vec<String>> = HashMap::new();
+        let mut tier_names: HashMap<String, Vec<String>> = HashMap::new();
 
-        for (tier, sources) in inline_tier_sources {
+        for (bucket, sources) in inline_tier_sources {
             for (namespace, source) in sources {
                 for name in extract_rule_names(&source) {
                     tier_names
-                        .entry(tier)
+                        .entry(bucket.clone())
                         .or_default()
                         .push(format!("{name} (ns={namespace})"));
                 }
             }
         }
 
-        for (tier, sources) in builtin_tier_sources {
+        for (bucket, sources) in builtin_tier_sources {
             for (namespace, source) in sources {
                 for name in extract_rule_names(&source) {
                     tier_names
-                        .entry(tier)
+                        .entry(bucket.clone())
                         .or_default()
                         .push(format!("{name} (ns={namespace})"));
                 }
             }
         }
 
-        for (tier, sources) in third_party_sources.drain() {
+        for (bucket, sources) in third_party_sources.drain() {
             for (namespace, source) in sources {
                 for name in extract_rule_names(&source) {
                     tier_names
-                        .entry(tier)
+                        .entry(bucket.clone())
                         .or_default()
                         .push(format!("{name} (ns={namespace})"));
                 }
             }
         }
 
-        eprintln!("\n=== Runtime Rule Sets By Tier ===");
-        for tier in YaraTier::ALL {
-            let mut names = tier_names.remove(tier).unwrap_or_default();
+        eprintln!("\n=== Runtime Rule Sets By Bucket ===");
+        let mut buckets: Vec<String> = tier_names.keys().cloned().collect();
+        buckets.sort();
+        for bucket in buckets {
+            let mut names = tier_names.remove(&bucket).unwrap_or_default();
             names.sort();
             names.dedup();
-            eprintln!("\n=== {} ({}) ===", tier.label(), names.len());
+            eprintln!("\n=== {} ({}) ===", bucket, names.len());
             for name in names {
                 eprintln!("  {name}");
             }

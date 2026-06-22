@@ -990,8 +990,17 @@ impl TraitDefinition {
             for condition in unless_conds {
                 let result = self.eval_condition(condition, ctx);
                 if result.matched {
+                    // For a directory-prefix unless (e.g. `metadata/binary/resource/`),
+                    // the bare pattern alone is rarely actionable — surface the concrete
+                    // trait(s) that actually matched the prefix so `test-rules` names the
+                    // real suppressor instead of echoing the prefix back.
+                    let concrete = if result.matched_trait_ids.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" [matched: {}]", result.matched_trait_ids.join(", "))
+                    };
                     ctx.record_skip(SkipReason::UnlessConditionMatched {
-                        condition_desc: format!("{:?}", condition),
+                        condition_desc: format!("{:?}{}", condition, concrete),
                     });
                     return None;
                 }
@@ -2245,8 +2254,17 @@ impl CompositeTrait {
             for condition in unless_conds {
                 let result = self.eval_condition(condition, ctx);
                 if result.matched {
+                    // For a directory-prefix unless (e.g. `metadata/binary/resource/`),
+                    // the bare pattern alone is rarely actionable — surface the concrete
+                    // trait(s) that actually matched the prefix so `test-rules` names the
+                    // real suppressor instead of echoing the prefix back.
+                    let concrete = if result.matched_trait_ids.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" [matched: {}]", result.matched_trait_ids.join(", "))
+                    };
                     ctx.record_skip(SkipReason::UnlessConditionMatched {
-                        condition_desc: format!("{:?}", condition),
+                        condition_desc: format!("{:?}{}", condition, concrete),
                     });
                     return None;
                 }

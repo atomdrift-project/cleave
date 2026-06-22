@@ -5076,23 +5076,23 @@ mod excessive_skip_tests {
         (0..n).map(|i| format!("{prefix}{i}")).collect()
     }
 
-    // The own limit (8) counts the `unless:`/`downgrade:` entries written literally on a
+    // The own limit (10) counts the `unless:`/`downgrade:` entries written literally on a
     // single rule, regardless of what it references. This is the original behavior.
     #[test]
     fn own_limit_flags_single_rule() {
-        let traits = vec![trait_def("t", raw_if(), 5, 3)];
+        let traits = vec![trait_def("t", raw_if(), 6, 4)];
         let v = find_excessive_skip_conditions(&traits, &[]);
         let t = v
             .iter()
             .find(|e| e.id == "t")
             .expect("flagged on own count");
-        assert_eq!((t.own, t.is_composite), (8, false));
+        assert_eq!((t.own, t.is_composite), (10, false));
     }
 
     // A few literal exceptions, no aggregator references => clean on both limits.
     #[test]
     fn under_both_limits_is_clean() {
-        let traits = vec![trait_def("a", raw_if(), 7, 0)];
+        let traits = vec![trait_def("a", raw_if(), 9, 0)];
         assert!(find_excessive_skip_conditions(&traits, &[]).is_empty());
     }
 

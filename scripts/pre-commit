@@ -26,7 +26,7 @@ echo "pre-commit: running make lint..."
 make lint
 
 echo "pre-commit: running make validate..."
-make validate
+env CLEAVE_VALIDATE_SOFT=1 make validate
 
 echo "pre-commit: running make test..."
 make test

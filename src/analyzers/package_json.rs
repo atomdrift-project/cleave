@@ -1377,6 +1377,7 @@ impl PackageJsonAnalyzer {
             "colors",
             "lodash",
             "lodash-es",
+            "preact",
             "asynct",
             "axios",
             "axios-proxy-builder",

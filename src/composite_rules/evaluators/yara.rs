@@ -524,41 +524,54 @@ pub(crate) fn eval_hex<'a>(
         if let Some(atom) = extract_best_atom(&segments) {
             let finder = memchr::memmem::Finder::new(atom);
 
-            // Find the atom's position within the pattern
-            let atom_offset_in_pattern: usize = segments
+            // Distance from the pattern start to the chosen atom. A variable gap
+            // BEFORE the atom makes this a RANGE, not a single value: the prefix can
+            // be as short as the sum of gap minimums or as long as the sum of gap
+            // maximums. Back-aligning by the minimum alone (the old behavior) silently
+            // dropped every match whose preceding `[N-M]` gap consumed more than N
+            // bytes — e.g. `44 8D 49 40 [0-8] 41 B8 ..` when the real gap was 5 and the
+            // longest atom (`41 B8 ..`) sits after the gap.
+            let (prefix_min, prefix_max): (usize, usize) = segments
                 .iter()
                 .take_while(|s| !matches!(s, HexSegment::Bytes(b) if b.as_slice() == atom))
-                .map(|s| match s {
-                    HexSegment::Bytes(b) => b.len(),
-                    HexSegment::Gap { min, .. } => *min,
+                .fold((0usize, 0usize), |(lo, hi), s| match s {
+                    HexSegment::Bytes(b) => (lo + b.len(), hi + b.len()),
+                    HexSegment::Gap { min, max } => (lo + *min, hi + *max),
                     HexSegment::Wildcard
                     | HexSegment::NibbleMask { .. }
-                    | HexSegment::ByteSet(_) => 1,
-                })
-                .sum();
+                    | HexSegment::ByteSet(_) => (lo + 1, hi + 1),
+                });
 
-            // Search for atom, then verify full pattern
-            // Track seen positions to avoid double-counting
+            // Search for atom, then verify full pattern at every plausible start.
+            // Track seen positions to avoid double-counting.
             let mut seen_positions = rustc_hash::FxHashSet::default();
-            for atom_pos in finder.find_iter(&data[search_start..search_end]) {
-                let pattern_start =
-                    (search_start + atom_pos).saturating_sub(atom_offset_in_pattern);
-
-                // Ensure candidate position is within our search range
-                if pattern_start < search_start || pattern_start >= search_end {
-                    continue;
-                }
-
-                if match_pattern_at(data, pattern_start, &segments)
-                    && !seen_positions.contains(&pattern_start)
-                {
-                    seen_positions.insert(pattern_start);
-                    total_count += 1;
-                    if matches.len() < MAX_STORED_MATCHES {
-                        matches.push(pattern_start);
+            'atoms: for atom_pos in finder.find_iter(&data[search_start..search_end]) {
+                let abs_atom = search_start + atom_pos;
+                // Candidate pattern starts: abs_atom - prefix_max ..= abs_atom - prefix_min.
+                // (Equal bounds when no variable gap precedes the atom — the common case,
+                // so this stays a single probe and adds no overhead there.)
+                let start_hi = abs_atom.saturating_sub(prefix_min);
+                let start_lo = abs_atom.saturating_sub(prefix_max);
+                for pattern_start in start_lo..=start_hi {
+                    // Ensure candidate position is within our search range.
+                    if pattern_start < search_start || pattern_start >= search_end {
+                        continue;
                     }
-                    if total_count >= MAX_COUNT_MATCHES {
-                        break;
+                    if seen_positions.contains(&pattern_start) {
+                        continue;
+                    }
+                    if match_pattern_at(data, pattern_start, &segments) {
+                        seen_positions.insert(pattern_start);
+                        total_count += 1;
+                        if matches.len() < MAX_STORED_MATCHES {
+                            matches.push(pattern_start);
+                        }
+                        if total_count >= MAX_COUNT_MATCHES {
+                            break 'atoms;
+                        }
+                        // One match per atom occurrence: a variable prefix gap could
+                        // otherwise let several starts align to the same atom hit.
+                        continue 'atoms;
                     }
                 }
             }

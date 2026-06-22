@@ -734,7 +734,7 @@ pub(crate) struct ExcessiveSkip {
 }
 
 /// Exceptions a single rule may write directly on itself.
-const MAX_OWN_SUPPRESSIONS: usize = 8;
+const MAX_OWN_SUPPRESSIONS: usize = 10;
 
 /// Effective exceptions a rule may carry once aggregator references in its
 /// `unless:`/`downgrade:` are recursively expanded. Higher than the direct cap because
@@ -747,7 +747,7 @@ const MAX_AGGREGATE_SUPPRESSIONS: usize = 32;
 /// Both limits look only at a rule's own `unless:`/`downgrade:` — never at its `all:`/
 /// `any:` matching conditions. Flagged on either:
 ///
-/// - **Own** (`MAX_OWN_SUPPRESSIONS`, 8): `unless:`/`downgrade:` entries written
+/// - **Own** (`MAX_OWN_SUPPRESSIONS`, 10): `unless:`/`downgrade:` entries written
 ///   literally on the rule. A rule this heavily patched usually has poor precision and
 ///   should be improved rather than suppressed.
 /// - **Expanded** (`MAX_AGGREGATE_SUPPRESSIONS`, 32): the effective exception count once

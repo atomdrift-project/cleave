@@ -152,7 +152,10 @@ cab = "0.6"
 # cli (clap) features cleave doesn't use.
 dmgwiz = { git = "https://github.com/tstromberg/dmgwiz.git", default-features = false }
 lzx = { path = "crates/lzx" }
-rusqlite = { version = "0.40", features = ["bundled"] }
+# Pinned to 0.39 because rusqlite 0.40 pulls libsqlite3-sys 0.38, whose build
+# script uses the still-unstable cfg_select! macro (rust-lang/rust#115585) and
+# fails on stable rustc <= 1.94. Bump back to 0.40 once cfg_select is stable.
+rusqlite = { version = "0.39", features = ["bundled"] }
 
 # Parallelization
 rayon = "1.12"

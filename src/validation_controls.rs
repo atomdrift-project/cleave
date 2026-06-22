@@ -563,6 +563,90 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         fix: "Add a normalized section filter, usually text, rdata, data, or rsrc.",
     },
     ValidatorSpec {
+        id: "broad-filetype-cap",
+        category: ValidatorCategory::Policy,
+        display_id: "ft-cap",
+        description: "Trait `for:` targets more file types than its matcher-type cap allows.",
+        fix: "Narrow `for:`, or add a type-qualified allowlist entry (\"<type>:<dir-prefix>\").",
+    },
+    ValidatorSpec {
+        id: "unknown-subdirectory",
+        category: ValidatorCategory::Policy,
+        display_id: "unknown-subdir",
+        description: "Directory is not an allowed subdirectory for its taxonomy tier.",
+        fix: "Move the rules under an allowed subdirectory (see TAXONOMY.md).",
+    },
+    ValidatorSpec {
+        id: "duplicate-second-level-dir",
+        category: ValidatorCategory::Policy,
+        display_id: "dup-2nd-dir",
+        description: "Second-level directory name is duplicated across tiers.",
+        fix: "Rename or consolidate so each second-level directory is unique.",
+    },
+    ValidatorSpec {
+        id: "metadata-hostile-criticality",
+        category: ValidatorCategory::Policy,
+        display_id: "meta-hostile",
+        description: "metadata/ rule declares hostile criticality.",
+        fix: "Lower the criticality or move the detection out of metadata/.",
+    },
+    ValidatorSpec {
+        id: "malware-subcategory",
+        category: ValidatorCategory::Policy,
+        display_id: "malware-subcat",
+        description: "malware/ used as a subcategory of objectives/ or micro-behaviors/.",
+        fix: "Place malware-family rules under the malware/ tier, not as a subcategory.",
+    },
+    ValidatorSpec {
+        id: "wellknown-composite-only",
+        category: ValidatorCategory::Policy,
+        display_id: "wk-comp-only",
+        description: "well-known/ directory contains only composites, no atomic identifier.",
+        fix: "Add an atomic identifier trait for the family/tool in this directory.",
+    },
+    ValidatorSpec {
+        id: "overlapping-conditions",
+        category: ValidatorCategory::Dedup,
+        display_id: "overlap-cond",
+        description: "Composite has overlapping all:/any: conditions.",
+        fix: "Remove the redundant condition leg.",
+    },
+    ValidatorSpec {
+        id: "pure-alias",
+        category: ValidatorCategory::Reuse,
+        display_id: "pure-alias",
+        description: "Trait is a pure alias that adds no detection value.",
+        fix: "Reference the underlying trait directly instead of aliasing it.",
+    },
+    ValidatorSpec {
+        id: "unknown-metric-field",
+        category: ValidatorCategory::Policy,
+        display_id: "unknown-metric",
+        description: "Trait references a metric field this engine does not define.",
+        fix: "Use a known metric field; a newer field degrades gracefully on older engines.",
+    },
+    ValidatorSpec {
+        id: "composite-inline-primitive",
+        category: ValidatorCategory::Reuse,
+        display_id: "inline-prim",
+        description: "Composite inlines a primitive instead of referencing a building block.",
+        fix: "Extract the primitive into an atomic trait and reference it.",
+    },
+    ValidatorSpec {
+        id: "single-trait-composite",
+        category: ValidatorCategory::Reuse,
+        display_id: "single-comp",
+        description: "Single-trait composite adds no value over the referenced trait.",
+        fix: "Reference the trait directly instead of wrapping it in a composite.",
+    },
+    ValidatorSpec {
+        id: "unless-only-composite",
+        category: ValidatorCategory::Reuse,
+        display_id: "unless-comp",
+        description: "Single-trait composite only adds an 'unless' clause.",
+        fix: "Fold the 'unless' clause into the referenced trait or a shared exclusion.",
+    },
+    ValidatorSpec {
         id: "regex-performance",
         category: ValidatorCategory::Policy,
         display_id: "re-perf",
@@ -925,6 +1009,17 @@ mod tests {
             "tier-violation",
             "precision",
             "wellknown-size-filter",
+            // Over-broad `for:` scope is authoring hygiene; a newer bundle that
+            // raises the cap must degrade gracefully on an older engine.
+            "broad-filetype-cap",
+            // Taxonomy/organization checks: structural placement, not loadability.
+            "unknown-subdirectory",
+            "malware-subcategory",
+            "wellknown-composite-only",
+            "pure-alias",
+            // A metric field unknown to this (older) engine is forward-compat
+            // degradation, mirroring `unknown-file-type`.
+            "unknown-metric-field",
             // A file type unknown to this (older) engine is forward-compat
             // degradation, not a load-breaking flaw — soft mode tolerates it.
             "unknown-file-type",

@@ -133,21 +133,46 @@ fn finding_anchors(finding: &Finding, by_id: &FxHashMap<&str, &Finding>) -> Vec<
     anchors
 }
 
-/// All of a finding's local byte anchors `(offset, len)`, file-ordered and
-/// deduped by offset — its own evidence plus its components' (a composite's
-/// "legs"). Falls back to [`fallback_anchor`] when none are local. Unlike
-/// [`finding_anchors`] this keeps every leg, so a composite can be placed at the
-/// first one not already taken by a stronger match.
-fn local_anchors(finding: &Finding, by_id: &FxHashMap<&str, &Finding>) -> Vec<(u64, u32)> {
-    let mut anchors: Vec<(u64, u32)> = finding.evidence.iter().filter_map(local_anchor).collect();
+/// Collect a finding's local leg anchors `(offset, len, confidence)`
+/// transitively: its own evidence plus, recursively, every component it
+/// references and *their* components. A composite is often built from
+/// "aggregator" components — an `any:` of other components, carrying no offset of
+/// their own (cleave can't nest `any:` inside `all:`, so trait authors flatten
+/// through these). A single level then resolves to no leg; the walk descends
+/// until it reaches evidence with a real byte offset. Each anchor keeps the
+/// confidence of the finding whose evidence produced it, so the placement pass
+/// ranks legs by their true evidence strength. `seen` guards reference cycles.
+fn collect_leg_anchors(
+    finding: &Finding,
+    by_id: &FxHashMap<&str, &Finding>,
+    seen: &mut FxHashSet<String>,
+    out: &mut Vec<(u64, u32, f32)>,
+) {
+    if !seen.insert(finding.id.clone()) {
+        return;
+    }
+    for (off, len) in finding.evidence.iter().filter_map(local_anchor) {
+        out.push((off, len, finding.conf));
+    }
     for ref_id in &finding.trait_refs {
         if let Some(component) = by_id.get(ref_id.as_str()) {
-            anchors.extend(component.evidence.iter().filter_map(local_anchor));
+            collect_leg_anchors(component, by_id, seen, out);
         }
     }
-    if anchors.is_empty() {
+}
+
+/// All of a finding's local byte anchors `(offset, len)`, file-ordered and
+/// deduped by offset — its own evidence plus its components' (a composite's
+/// "legs"), resolved transitively. Falls back to [`fallback_anchor`] when none
+/// are local. Unlike [`finding_anchors`] this keeps every leg, so a composite can
+/// be placed at the first one not already taken by a stronger match.
+fn local_anchors(finding: &Finding, by_id: &FxHashMap<&str, &Finding>) -> Vec<(u64, u32)> {
+    let mut legs = Vec::new();
+    collect_leg_anchors(finding, by_id, &mut FxHashSet::default(), &mut legs);
+    if legs.is_empty() {
         return fallback_anchor(finding, by_id);
     }
+    let mut anchors: Vec<(u64, u32)> = legs.into_iter().map(|(off, len, _)| (off, len)).collect();
     anchors.sort_unstable_by_key(|(off, _)| *off);
     anchors.dedup_by_key(|(off, _)| *off);
     anchors
@@ -173,20 +198,8 @@ fn composite_legs(finding: &Finding, by_id: &FxHashMap<&str, &Finding>) -> Vec<(
     /// distinguishing components; a few extra metric legs add nothing.
     const MAX_LEGS: usize = 8;
 
-    let mut legs: Vec<(u64, u32, f32)> = finding
-        .evidence
-        .iter()
-        .filter_map(|e| local_anchor(e).map(|(o, l)| (o, l, finding.conf)))
-        .collect();
-    for ref_id in &finding.trait_refs {
-        if let Some(component) = by_id.get(ref_id.as_str()) {
-            for e in &component.evidence {
-                if let Some((o, l)) = local_anchor(e) {
-                    legs.push((o, l, component.conf));
-                }
-            }
-        }
-    }
+    let mut legs = Vec::new();
+    collect_leg_anchors(finding, by_id, &mut FxHashSet::default(), &mut legs);
     if legs.is_empty() {
         return fallback_anchor(finding, by_id)
             .into_iter()
@@ -333,9 +346,23 @@ fn local_anchor(e: &crate::types::Evidence) -> Option<(u64, u32)> {
     e.byte_offset().map(|o| (o, len_of(e)))
 }
 
-/// Byte length of an evidence match (the matched value), clamped to u32.
+/// Render cap for an anchored window's match length. A *located* metric can
+/// span a whole concealed region (hundreds of KiB); the rendered preview must
+/// stay a few rows, so the anchor length is capped here. The true, uncapped
+/// span still rides the compact span output (`match_len`) for prism/tooling.
+const MAX_ANCHOR_LEN: u64 = 512;
+
+/// Byte length of an evidence match for rendering/placement. Mirrors the
+/// compact span source — `match_len` when set (decoded-layer or located
+/// metrics, where `value` is not the source bytes), else `value.len()` — but
+/// caps it so a large span yields a bounded preview rather than rendering the
+/// entire region.
 fn len_of(e: &crate::types::Evidence) -> u32 {
-    u32::try_from(e.value.len()).unwrap_or(u32::MAX)
+    let raw = match e.match_len {
+        Some(l) => l.min(MAX_ANCHOR_LEN),
+        None => e.value.len() as u64,
+    };
+    u32::try_from(raw).unwrap_or(u32::MAX)
 }
 
 /// Build a per-finding id index for composite component lookup.
@@ -405,10 +432,16 @@ impl<'a> LineIndex<'a> {
     /// The renderer clips this to the terminal width at display time.
     fn raw_line(&self, i: usize) -> &[u8] {
         let start = self.starts.get(i).copied().unwrap_or(self.data.len());
-        let end = self
+        // `starts[i+1]` is the byte after the `\n`; step back over the `\n` and,
+        // on CRLF input, the preceding `\r` too — otherwise the line is one byte
+        // too long and renders a trailing carriage return.
+        let mut end = self
             .starts
             .get(i + 1)
             .map_or(self.data.len(), |n| n.saturating_sub(1));
+        if end > start && self.data.get(end - 1) == Some(&b'\r') {
+            end -= 1;
+        }
         let end = end.max(start).min(start + LINE_STORE_MAX);
         self.data.get(start..end).unwrap_or(&[])
     }
@@ -420,21 +453,60 @@ fn capture_source_lines(
     data: &[u8],
 ) -> Vec<ContextLine> {
     let index = LineIndex::new(data);
+    let last = index.len().saturating_sub(1) as u64;
+    let span = |off: u64, len: u32| (off, off + u64::from(len.max(1)));
 
     let mut windows: Vec<Window> = Vec::new();
-    for finding in shown {
+    // Match span `[start, end)` of every placed note, with its strength, so a
+    // later composite is placed only where no *stronger* match already sits —
+    // mirrors the binary path (`capture_byte_units`) and the per-line dedup.
+    let mut placed: Vec<(u64, u64, f32)> = Vec::new();
+    let push = |windows: &mut Vec<Window>, finding: &Finding, off: u64, len: u32, slot: usize| {
+        let line = index.line_of(off) as u64;
+        let height = MIN_HEIGHTS[slot.min(MAX_MATCHES - 1)];
+        let before = u64::from((height - 1) / 2);
+        let after = u64::from(height - 1) - before;
+        windows.push(Window {
+            lo: line.saturating_sub(before),
+            hi: (line + after).min(last),
+            at: line,
+            note: note_for(finding, off, len),
+        });
+    };
+
+    // Atomic findings anchor at their own offsets (the fixed scaffolding).
+    for finding in shown.iter().filter(|f| f.trait_refs.is_empty()) {
+        let score = finding_score(finding);
         for (slot, (off, len)) in finding_anchors(finding, by_id).into_iter().enumerate() {
-            let line = index.line_of(off) as u64;
-            let height = MIN_HEIGHTS[slot.min(MAX_MATCHES - 1)];
-            let before = u64::from((height - 1) / 2);
-            let after = u64::from(height - 1) - before;
-            let last = index.len().saturating_sub(1) as u64;
-            windows.push(Window {
-                lo: line.saturating_sub(before),
-                hi: (line + after).min(last),
-                at: line,
-                note: note_for(finding, off, len),
+            push(&mut windows, finding, off, len, slot);
+            let (s, e) = span(off, len);
+            placed.push((s, e, score));
+        }
+    }
+
+    // Composites are conclusions spanning several legs (their components). Place
+    // each at its strongest-evidence leg that no equal-or-stronger match already
+    // occupies, so it anchors at its best real location instead of being dropped
+    // when its first leg collides; the other legs keep showing their component
+    // traits. Strongest-first so the higher-severity conclusion claims a
+    // contested leg. (The binary path does the same in `capture_byte_units`.)
+    let mut composites: Vec<&&Finding> =
+        shown.iter().filter(|f| !f.trait_refs.is_empty()).collect();
+    composites.sort_by(|a, b| finding_score(b).total_cmp(&finding_score(a)));
+    for finding in composites {
+        let score = finding_score(finding);
+        let leg = composite_legs(finding, by_id)
+            .into_iter()
+            .find(|&(off, len, _)| {
+                let (s, e) = span(off, len);
+                !placed
+                    .iter()
+                    .any(|&(ps, pe, pscore)| pscore >= score && ps < e && s < pe)
             });
+        if let Some((off, len, _)) = leg {
+            push(&mut windows, finding, off, len, 0);
+            let (s, e) = span(off, len);
+            placed.push((s, e, score));
         }
     }
 

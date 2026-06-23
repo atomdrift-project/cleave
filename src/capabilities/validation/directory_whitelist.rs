@@ -636,6 +636,7 @@ const ALLOWED_SUPPLY_CHAIN: &[&str] = &[
     "install-hook",     // Malicious install/build hooks (setup.py, postinstall)
     "metadata-anomaly", // Suspicious package metadata patterns
     "recon-exfil",      // Reconnaissance and data exfiltration from build env
+    "registry",         // Registry-record risk verdicts (fresh+unadopted, harvester listings)
     "trojanized",       // Trojanized legitimate packages
 ];
 
@@ -717,6 +718,7 @@ const ALLOWED_METADATA: &[&str] = &[
     "library",    // Library/framework detection (react, vue, jquery, etc.)
     "package",    // Package ecosystem metadata & project quality
     "permission", // Declared permissions and extension authority
+    "registry",   // Package-registry record facts (ecosystem, age, adoption, deprecation)
     "signed",     // Code signatures, certificates, entitlements
     "vendor",     // Vendor identification (Apple, Microsoft, FSF, etc.)
 ];

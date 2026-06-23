@@ -578,7 +578,8 @@ pub struct HeaderBadge<'a> {
 
 /// Render the report as a colored, context-centric view per `opts`. Color is
 /// auto-disabled when stdout isn't a terminal (so `… | llm` stays plain text);
-/// in that plain mode a `---^` arrow marks each match instead of bold/color.
+/// that plain mode emits one tab-delimited `SEV LINE[:COL] CODE det:DESC` record
+/// per line instead of bold/color.
 #[must_use]
 pub fn format_context(report: &AnalysisReport, opts: &TinyOpts) -> String {
     format_context_badged(report, opts, HeaderBadge::default())
@@ -861,7 +862,14 @@ fn select_ids<'a>(file: &'a FileAnalysis, opts: &TinyOpts) -> Vec<&'a str> {
     for f in &file.findings {
         // Show each finding only under the file it was located in: an inherited
         // copy (`src` set) is rendered by its origin member, not here.
-        if f.src.is_some() || f.crit < opts.min_crit || !tiny_should_show(f, file) {
+        // Baseline (universal low-signal noise) is dropped from the tiny view:
+        // it crowds the record list without helping the reader reach a verdict.
+        // Component traits stay — they're the source-context counterweight.
+        if f.src.is_some()
+            || f.crit < opts.min_crit
+            || f.crit == Criticality::Baseline
+            || !tiny_should_show(f, file)
+        {
             continue;
         }
         let score = f.conf * f32::from(f.crit as u8);
@@ -1287,9 +1295,10 @@ fn render_source_context(
     term_width: usize,
     colorize: bool,
 ) {
-    // Lines of *leading* context: the line before a match usually carries the
-    // clue, the line after rarely does, so the window is `[hit - before, hit]`.
-    let before = opts.context_lines.map_or(1, |n| n.saturating_sub(1)) as u64;
+    // Symmetric context: `radius` lines on each side of a match, so the window
+    // is `[hit - radius, hit + radius]`. The line after a hit often carries the
+    // continuation (a call's args, an assignment's value) the model needs.
+    let radius = opts.context_lines.map_or(1, |n| n.saturating_sub(1)) as u64;
 
     // Every line carrying a selected trait is a hit (capture already capped the
     // locations per trait — atomic up to 3, composite 1).
@@ -1303,7 +1312,7 @@ fn render_source_context(
         return;
     }
     let marker = comment_marker(&file.file_type);
-    let in_window = |loc: u64| hits.iter().any(|&h| loc <= h && h - loc <= before);
+    let in_window = |loc: u64| hits.iter().any(|&h| loc.abs_diff(h) <= radius);
     let loc_width = file
         .context
         .iter()
@@ -1318,11 +1327,11 @@ fn render_source_context(
 
     // Each shown line carries at most its own strongest trait as a comment —
     // kept deliberately simple, no flowing a second trait onto adjacent lines.
-    let mut prev: Option<u64> = None;
     for line in file.context.iter().filter(|l| in_window(l.loc)) {
-        // Leading-context lines (no match of their own) only earn a row when
-        // they carry real code — skip near-empty ones like a lone `}` or `)`
-        // that add height without context. A hit line always renders.
+        // Context lines (no match of their own) only earn a row when they carry
+        // real code — skip near-empty ones like a lone `}` or `)` that add
+        // height without context. A hit line always renders. The line-number
+        // jump itself shows any skipped gap, so no separator line is emitted.
         if !hits.contains(&line.loc)
             && line
                 .data
@@ -1333,12 +1342,6 @@ fn render_source_context(
         {
             continue;
         }
-        // In the visual view the line-number jump already shows a skip, so no
-        // separator line. The plain (LLM/tiny) view keeps a grep-style `--`.
-        if !colorize && prev.is_some_and(|p| line.loc > p + 1) {
-            out.push_str("--\n");
-        }
-        prev = Some(line.loc);
         let notes: Vec<&Note> = line.notes.iter().collect();
         let comment = notes
             .iter()
@@ -1521,7 +1524,8 @@ fn source_window(
 
 /// Render one source/minified line. Colored: a 1-char severity gutter, the line
 /// number, the code clipped to a fixed width (with its match highlighted), then
-/// an aligned `// desc` comment. Plain: grep-style with a `---^` arrow.
+/// an aligned `// desc` comment. Plain: a tab-delimited `SEV LINE[:COL] CODE
+/// det:DESC` record (no caret line — COL carries the match position).
 #[allow(clippy::too_many_arguments)] // a render primitive; bundling would obscure it
 fn render_source_line(
     out: &mut String,
@@ -1604,25 +1608,43 @@ fn render_source_line(
         return;
     }
 
+    // Plain (tiny/LLM) view: one tab-delimited record per source line —
+    //   SEV \t LINE[:COL] \t CODE \t det: DESC
+    // Severity-led so `grep '^H'` triages and `cut -f` splits the columns. The
+    // code reads as code — never the file's own `#`/`//` comment marker — and a
+    // present description is tagged `det:` to mark it as cleave's detection, not
+    // text that was in the file. COL is the 1-based column of the strongest
+    // match (the caret's information in a fraction of the height); context and
+    // component lines carry no description.
+    let (display, map) = expand_tabs(&raw);
+    let to_disp = |off: u64| -> Option<usize> {
+        map.get(usize::try_from(off.checked_sub(base)?).ok()?)
+            .copied()
+    };
+    let match_disp = comment.and_then(|n| to_disp(n.off));
+    let (b0, b1, lead, trail) = source_window(&display, content_width, match_disp);
+    let slice = display.get(b0..b1).unwrap_or("");
+
+    out.push(comment.map_or('.', |n| n.crit.letter()));
+    out.push('\t');
     out.push_str(&loc_str);
-    out.push(if notes.is_empty() { '-' } else { ':' });
-    out.push(' ');
-    out.push_str(&raw);
-    if let Some(n) = comment {
-        out.push_str(&format!(
-            " {marker} {} {}",
-            n.crit.letter(),
-            terse_description(&n.desc)
-        ));
+    if let Some(col) = match_disp.map(|b| display.get(..b).map_or(1, |s| s.chars().count() + 1)) {
+        out.push(':');
+        out.push_str(&col.to_string());
+    }
+    out.push('\t');
+    if lead {
+        out.push_str("...");
+    }
+    out.push_str(slice);
+    if trail {
+        out.push_str("...");
+    }
+    if let Some(n) = comment.filter(|n| n.crit >= Criticality::Notable) {
+        out.push_str("\tdet: ");
+        out.push_str(&terse_description(&n.desc));
     }
     out.push('\n');
-    if !notes.is_empty() {
-        let prefix = loc_str.chars().count() + 2; // loc + sep + space
-        if let Some(arrow) = arrow_line(&raw, base, notes, prefix) {
-            out.push_str(&arrow);
-            out.push('\n');
-        }
-    }
 }
 
 /// Render one binary window: wrap its raw bytes into `stride`-byte hex|ascii
@@ -1898,7 +1920,6 @@ fn render_no_anchor(
         .collect();
     rest.sort_unstable_by(|a, b| b.crit.cmp(&a.crit).then_with(|| a.id.cmp(&b.id)));
 
-    let marker = comment_marker(&file.file_type);
     let mut seen = HashSet::new();
     for f in rest {
         if !seen.insert(f.id.as_str()) {
@@ -1906,8 +1927,11 @@ fn render_no_anchor(
         }
         let desc = terse_description(&f.desc);
         if !rich {
-            // LLM/tiny view: compact, machine-friendly comment form, unchanged.
-            out.push_str(&format!(". {marker} {} {desc}\n", f.crit.letter()));
+            // LLM/tiny view: same tab-delimited record as a located finding, with
+            // `-` for the (absent) line/column and an empty code column. Should be
+            // rare — a finding that anchored nowhere — but stays greppable
+            // (`grep '^H'`) and `cut`-parseable alongside the located rows.
+            out.push_str(&format!("{}\t-\t\tdet: {desc}\n", f.crit.letter()));
             continue;
         }
         // Terminal view: severity gutter glyph + description, no comment marker.
@@ -2137,38 +2161,6 @@ fn severity_legend(file: &FileAnalysis) -> String {
     } else {
         format!("   {}", parts.join(" "))
     }
-}
-
-/// Build a `---^` pointer line: a caret under where each note's match starts in
-/// `text` (a short `---` shaft leading into it), offset by the line's `prefix`
-/// width. Returns `None` when no match maps into the rendered text.
-fn arrow_line(text: &str, base: u64, notes: &[&Note], prefix: usize) -> Option<String> {
-    let mut cols: Vec<usize> = notes
-        .iter()
-        .filter_map(|n| {
-            let byte_col = usize::try_from(n.off.checked_sub(base)?).ok()?;
-            // Char column so the caret aligns under multi-byte text.
-            text.get(..byte_col).map(|pre| prefix + pre.chars().count())
-        })
-        .collect();
-    if cols.is_empty() {
-        return None;
-    }
-    cols.sort_unstable();
-    cols.dedup();
-
-    let mut buf = vec![' '; cols.last().copied().unwrap_or(0) + 1];
-    for c in cols {
-        buf[c] = '^';
-        // Draw up to three `-` of shaft to the left, stopping at any marker.
-        for d in 1..=3 {
-            match c.checked_sub(d) {
-                Some(i) if buf[i] == ' ' => buf[i] = '-',
-                _ => break,
-            }
-        }
-    }
-    Some(buf.into_iter().collect())
 }
 
 fn tiny_should_show(finding: &Finding, file: &FileAnalysis) -> bool {
@@ -2860,6 +2852,7 @@ mod tests {
             identity: None,
             values_tree: None,
             filefacts_metrics: None,
+            filefacts_metric_spans: None,
             paths: vec![],
             directories: vec![],
             comments: vec![],
@@ -3186,12 +3179,12 @@ mod tests {
         let output = format_tiny(&report);
 
         // No capture pass ran here, so the finding has no context window and
-        // renders as a `.` no-anchor line carrying its description, in the file's
-        // comment marker (`//` for binary). Notable+ no-anchor noise is dropped,
-        // so the fixture is Suspicious. The tiny view shows the basename, not the
-        // full `/test/` path.
+        // renders as a location-less tab-delimited record: severity, `-` for the
+        // absent line/col, empty code, then the `det:`-tagged description.
+        // Notable+ no-anchor noise is dropped, so the fixture is Suspicious. The
+        // tiny view shows the basename, not the full `/test/` path.
         assert!(output.contains("sample.bin\tELF 12KB"));
-        assert!(output.contains(". // S Execute shell commands"));
+        assert!(output.contains("S\t-\t\tdet: Execute shell commands"));
     }
 
     #[test]
@@ -3311,14 +3304,14 @@ mod tests {
 
         let output = format_tiny(&report);
 
-        // No capture pass, so findings render as `.` no-anchor lines — but only
+        // No capture pass, so findings render as location-less records — but only
         // Suspicious+ ones. The Baseline read and both Components are filtered
         // out; only the matched composite (Suspicious) survives.
         assert!(!output.contains("micro-behaviors/fs/read::open"));
         assert!(!output.contains("objectives/execution/loader::fragment"));
         assert!(!output.contains("objectives/execution/loader::unused-fragment"));
-        // No-anchor lines carry the description in the file's comment marker.
-        assert!(output.contains(". // S Matched composite loader"));
+        // No-anchor record: severity, `-` line/col, empty code, `det:` description.
+        assert!(output.contains("S\t-\t\tdet: Matched composite loader"));
     }
 
     #[test]
@@ -3367,9 +3360,11 @@ mod tests {
             },
         ];
         let output = format_tiny(&report);
-        assert!(output.contains("4- ctx before"));
-        // Annotation is the description in the sample's comment marker (`//` for
-        // binary), not the trait-id leaf.
-        assert!(output.contains("5: s = socket() // N socket usage"));
+        // Context row: severity `.`, line number, code — no description.
+        assert!(output.contains(".\t4\tctx before"));
+        // Hit row: severity, `line:col`, code, then the `det:`-tagged description
+        // (not the trait-id leaf).
+        assert!(output.contains("N\t5:"));
+        assert!(output.contains("s = socket()\tdet: socket usage"));
     }
 }

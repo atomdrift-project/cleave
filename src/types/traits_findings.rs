@@ -129,9 +129,12 @@ pub struct ContextLine {
     /// file's `type` field — no per-line flag needed.
     #[serde(rename = "b", with = "crate::types::z85::serde_z85")]
     pub data: Vec<u8>,
-    /// Findings whose match falls on this unit — internal only; not serialized.
-    /// Prism locates matches via `finding.spans` intersection against ctx windows.
-    #[serde(skip)]
+    /// Findings whose match falls on this unit. Serialized (as `n`) so a cached
+    /// report round-trips losslessly — the renderer reads these notes directly,
+    /// and they're rebuilt only during a fresh capture, not on a cache hit.
+    /// Omitted when empty (pure-context lines), so most rows stay lean; public
+    /// consumers (prism) can still locate matches via `finding.spans` × ctx.
+    #[serde(rename = "n", default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<Note>,
 }
 
@@ -175,10 +178,10 @@ pub struct Note {
     /// Match length in bytes (the "Length"); 0 when unknown.
     #[serde(rename = "z", default, skip_serializing_if = "super::is_zero_u32")]
     pub len: u32,
-    /// Finding confidence — internal only (used to rank overlapping matches:
-    /// the highest `conf × crit` wins). Not serialized; the finding's `conf`
-    /// already lives in the `find[]` array, keyed by `id`.
-    #[serde(skip)]
+    /// Finding confidence (used to rank overlapping matches: the highest
+    /// `conf × crit` wins). Serialized (as `cf`) so a cached note round-trips
+    /// with the strength the render-time dedup needs; omitted when zero.
+    #[serde(rename = "cf", default, skip_serializing_if = "super::is_zero_f32")]
     pub conf: f32,
 }
 
@@ -209,11 +212,14 @@ pub struct Finding {
     /// Trait IDs that contributed to this finding (for aggregated findings)
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub trait_refs: Vec<String>,
-    /// Raw per-match evidence produced by the matchers. Internal transient:
-    /// it carries the offsets the context-capture pass consumes, then is
-    /// dropped from output — the merged `context` on the file is the surface
-    /// callers see. Never serialized.
-    #[serde(skip)]
+    /// Raw per-match evidence produced by the matchers — the offsets the
+    /// context-capture pass and the compact `spans` derivation consume. The
+    /// public compact output exposes only the derived `spans`, but the raw
+    /// report serializes evidence (omitted when empty) so a cached report
+    /// round-trips losslessly: a cache hit skips analysis, so without this the
+    /// compact `spans` would come out empty. `alt_value`/internal matcher
+    /// helpers stay skipped — they're consumed during matching, which has run.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub evidence: Vec<Evidence>,
     /// Total match count for density/frequency analysis (may exceed evidence.len())
     #[serde(skip_serializing_if = "is_zero_usize", default)]
@@ -422,8 +428,9 @@ pub struct Evidence {
     /// holds the decoded text but the match occupies the longer *encoded* form in
     /// the source, so the emitted span must use this length, not the decoded
     /// one. `None` means the span length is `value.len()` (the common case).
-    /// Internal matching detail — not part of the serialized surface.
-    #[serde(skip)]
+    /// Serialized (omitted when absent) so a cached evidence item yields the
+    /// same compact `spans` length on a cache hit as on a fresh analysis.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub match_len: Option<u64>,
     /// Secondary value the matcher may try as a fallback. Currently
     /// only populated by the AST cache for `call`-kind nodes, where

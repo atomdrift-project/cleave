@@ -66,6 +66,17 @@ pub(crate) fn merge_filefacts_context(
         for (k, v) in metrics.iter() {
             dest.insert(k.to_string(), v);
         }
+        // Split each located fact's spans into the sidecar at this single
+        // bridge, keyed identically. A metrics matcher then attaches the byte
+        // range to its finding so prism can point at the concealed payload.
+        for (k, fact) in metrics.iter_facts() {
+            if !fact.spans.is_empty() {
+                report
+                    .filefacts_metric_spans
+                    .get_or_insert_with(Default::default)
+                    .insert(k.to_string(), fact.spans.clone());
+            }
+        }
     }
 }
 

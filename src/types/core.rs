@@ -181,6 +181,15 @@ pub struct AnalysisReport {
     /// metric surface — typed projection structs were retired.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub filefacts_metrics: Option<std::collections::BTreeMap<String, f64>>,
+    /// Byte-span provenance for *located* metrics — the spans a metric was
+    /// measured from (e.g. `binary.peak_region_entropy` → the high-entropy
+    /// runs). Keyed by the same metric name as `filefacts_metrics`; populated
+    /// only for metrics that carry spans. The value store keeps its `f64` map
+    /// (and `MetricsExt` helpers); the producer's `Fact{value, spans}` is split
+    /// into the two at the single `merge_filefacts_context` bridge so a metrics
+    /// match can attach the location to its finding for downstream (prism).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub filefacts_metric_spans: Option<std::collections::BTreeMap<String, Vec<filefacts::Span>>>,
     /// Raw paths discovered (complete list)
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub paths: Vec<PathInfo>,
@@ -384,6 +393,7 @@ impl AnalysisReport {
             identity: None,
             values_tree: None,
             filefacts_metrics: None,
+            filefacts_metric_spans: None,
             paths: Vec::new(),
             directories: Vec::new(),
             env_vars: Vec::new(),

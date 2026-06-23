@@ -260,8 +260,12 @@ fn options_hash(options: &AnalysisOptions) -> String {
     // (or on an older rizin) would be served to a run that now has it,
     // hiding the recovered symbols. filefacts' own cache uses the same
     // fingerprint; this keeps the report layer in step.
+    // v=6 → v=7: the raw report now serializes the transient fields the cache
+    // round-trip needs — context-line `notes`, finding `evidence` (compact
+    // `spans`), and `composite_sources` (compact `from`). Older entries lack
+    // them and would render anchorless, so force a re-analysis.
     let key = format!(
-        "v=6,3p={},yara={},r2={},upx={},plat={},hp={},sp={},ps={},fv={},rizin={}",
+        "v=7,3p={},yara={},r2={},upx={},plat={},hp={},sp={},ps={},fv={},rizin={}",
         options.enable_third_party_yara,
         !options.disable_yara,
         !options.disable_radare2,
@@ -549,6 +553,133 @@ mod tests {
         assert_eq!(cached.target.sha256, sha);
         assert_eq!(cached.target.file_type, "elf");
         assert_eq!(cached.version, "3.0");
+    }
+
+    /// A cache hit must reproduce the *outputs* a fresh analysis would — not just
+    /// the report's top-level fields. Several things the outputs are built from
+    /// are transient and rebuilt only during analysis (which a cache hit skips):
+    /// context-line `notes` (render anchoring), finding `evidence` (compact
+    /// `spans`), and `composite_sources` (compact `from`). If any such field is
+    /// dropped by serialization, a cached report renders structurally anchorless.
+    ///
+    /// This guards the whole class generically: a fixture exercising every such
+    /// field is round-tripped through the *real* cache store/load, and both the
+    /// tiny render and the compact JSON must come out byte-identical. A new
+    /// output-feeding field marked `#[serde(skip)]` will fail this test.
+    #[test]
+    fn cache_roundtrip_preserves_rendered_outputs() {
+        use crate::types::file_analysis::CompositeSource;
+        use crate::types::{ContextLine, Criticality, Evidence, Finding, Note};
+
+        let sha = "feedface00";
+        let mut report = test_report(sha);
+
+        let mut fa = test_file_analysis(sha, "python");
+        fa.path = "pkg/x.py".to_string();
+
+        // An atomic finding with evidence offsets → compact `spans`.
+        let mut atom = Finding::capability("micro/exec".to_string(), "exec call".to_string(), 0.9)
+            .with_criticality(Criticality::Suspicious);
+        atom.evidence = vec![Evidence {
+            method: "raw".to_string(),
+            value: "exec(payload)".to_string(),
+            offsets: vec![17],
+            match_len: Some(13),
+            ..Default::default()
+        }];
+
+        // A composite → its provenance lives in `composite_sources` (compact `from`).
+        let composite = Finding::capability(
+            "obj/dropper".to_string(),
+            "decode→exec dropper".to_string(),
+            0.95,
+        )
+        .with_criticality(Criticality::Hostile);
+
+        fa.findings = vec![atom, composite];
+        // Context lines with a note → render anchoring.
+        fa.context = vec![
+            ContextLine {
+                loc: 1,
+                addr: Some(0),
+                data: b"data = b64decode(BLOB)".to_vec(),
+                notes: vec![],
+            },
+            ContextLine {
+                loc: 2,
+                addr: Some(17),
+                data: b"exec(payload)".to_vec(),
+                notes: vec![Note {
+                    crit: Criticality::Suspicious,
+                    id: "micro/exec".to_string(),
+                    desc: "exec call".to_string(),
+                    off: 17,
+                    len: 13,
+                    conf: 0.9,
+                }],
+            },
+        ];
+        fa.composite_sources.insert(
+            "obj/dropper".to_string(),
+            vec![CompositeSource {
+                file: 0,
+                line: Some(2),
+                offset: Some(17),
+            }],
+        );
+        report.files = vec![fa];
+
+        let compact = |r: &AnalysisReport| {
+            serde_json::to_string(&crate::types::compact::compact_from_files(&r.files))
+                .expect("compact serialization")
+        };
+        let tiny_before = crate::output::format_tiny(&report);
+        let compact_before = compact(&report);
+
+        // The fixture must actually exercise the transient fields, else the test
+        // is vacuous — a cache that drops them would still pass on empty data.
+        assert!(
+            compact_before.contains("spans"),
+            "fixture must produce compact spans (from finding evidence): {compact_before}"
+        );
+        assert!(
+            compact_before.contains("\"from\""),
+            "fixture must produce compact `from` (from composite_sources): {compact_before}"
+        );
+        assert!(
+            tiny_before.contains("exec(payload)\tdet: exec call"),
+            "fixture must anchor a note in the render: {tiny_before:?}"
+        );
+
+        // Round-trip through the real cache store/load (zstd + serde, both layers).
+        let conn = test_conn();
+        report_cache_store_conn(&conn, sha, "opts", 1700000000, &report);
+        let restored =
+            report_cache_lookup_conn(&conn, sha, "opts", 1700000000).expect("cache hit expected");
+
+        assert_eq!(
+            tiny_before,
+            crate::output::format_tiny(&restored),
+            "render anchoring (context notes) lost across cache round-trip"
+        );
+        assert_eq!(
+            compact_before,
+            compact(&restored),
+            "compact spans/from lost across cache round-trip"
+        );
+
+        // The per-file cache layer serializes the same FileAnalysis the same way.
+        let fconn = file_analysis_test_conn();
+        file_analysis_cache_store_conn(&fconn, sha, "opts", 1700000000, &report.files[0]);
+        let rfa = file_analysis_cache_lookup_conn(&fconn, sha, "opts", 1700000000)
+            .expect("file cache hit expected");
+        let mut file_restored = test_report(sha);
+        file_restored.files = vec![rfa];
+        assert_eq!(
+            compact_before,
+            compact(&file_restored),
+            "file-analysis cache layer dropped a rendered-output field"
+        );
     }
 
     #[test]

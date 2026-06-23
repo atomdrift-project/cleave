@@ -964,9 +964,16 @@ impl UnifiedSourceAnalyzer {
                         ;
 
                     if !s.is_empty() && s.len() < 10000 {
+                        // `s` is a subslice of `text` after the leading quote/
+                        // bracket bytes are trimmed, so the node start must be
+                        // advanced by that delta — otherwise the recorded offset
+                        // points at the opening quote while `value` excludes it,
+                        // shifting every downstream span one byte left (the span
+                        // would cover `"gzi` instead of `gzip`).
+                        let lead = s.as_ptr() as u64 - text.as_ptr() as u64;
                         report.strings.push(StringInfo {
                             value: s.to_string().into(),
-                            offset: Some(node.start_byte() as u64),
+                            offset: Some(node.start_byte() as u64 + lead),
                             string_type: None,
                             encoding: "utf-8".to_string(),
                             section: Some("ast".to_string()),
@@ -1253,6 +1260,33 @@ if __name__ == "__main__":
         assert!(report.structure.iter().any(|s| s.id.contains("python")));
         assert!(!report.functions.is_empty());
         assert!(!report.strings.is_empty());
+    }
+
+    /// A string literal's recorded offset must point at the first byte of its
+    /// (quote-stripped) value, not at the opening quote. Otherwise a downstream
+    /// span of `[offset, value.len()]` is shifted one byte left and highlights
+    /// `"gzi` instead of `gzip` (regression: lab.atomdrift.org off-by-one).
+    #[test]
+    fn test_string_literal_offset_excludes_quote() {
+        let analyzer = UnifiedSourceAnalyzer::for_file_type(&FileType::JavaScript).unwrap();
+        let path = PathBuf::from("test.js");
+        let code = r#"const algorithm = "gzip";"#;
+        let report = analyzer.analyze_source(&path, code);
+
+        let s = report
+            .strings
+            .iter()
+            .find(|s| &*s.value == "gzip")
+            .expect("expected a 'gzip' string literal");
+        let off = s.offset.expect("string literal should record an offset") as usize;
+        let span = &code.as_bytes()[off..off + s.value.len()];
+        assert_eq!(
+            span,
+            b"gzip",
+            "offset {off} + len {} spans {:?}, expected b\"gzip\"",
+            s.value.len(),
+            String::from_utf8_lossy(span),
+        );
     }
 
     #[test]

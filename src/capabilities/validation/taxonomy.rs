@@ -1708,7 +1708,14 @@ fn broad_filetype_category(cond: &Condition) -> &'static str {
 }
 
 /// Trait path prefixes where 4+ effective platforms are permitted.
-pub(crate) const BROAD_PLATFORM_ALLOWLIST: &[&str] = &["objectives/supply-chain/"];
+pub(crate) const BROAD_PLATFORM_ALLOWLIST: &[&str] = &[
+    "objectives/supply-chain/",
+    // Package-registry record facts (ecosystem, age, adoption, deprecation,
+    // listing description) describe a release independent of OS — a package is
+    // published once and installed everywhere — so they are inherently
+    // all-platform. Narrowing `platforms:` would silently drop coverage.
+    "metadata/registry/",
+];
 
 /// Trait path prefixes where broad file type coverage is permitted.
 ///
@@ -1851,6 +1858,12 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     // source-tree directories, executable names) is inherently multi-format —
     // an app ships as an exe, a tarball, a zip, and source at once.
     "path:well-known/",
+    // Package-registry record facts read the normalized `registry.*` value tree
+    // and metrics that fletch materializes from an upstream listing. That record
+    // is package-level context, not a property of any one member file, so the
+    // matchers run regardless of which file type carries the package.
+    "value:metadata/registry/",
+    "metrics:metadata/registry/",
 ];
 
 /// Returns the effective platform count for a trait.

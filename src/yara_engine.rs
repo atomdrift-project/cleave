@@ -562,8 +562,26 @@ impl YaraEngine {
         }
 
         let started = std::time::Instant::now();
-        if buckets_to_warm.len() == 1 {
-            let _ = self.tier_rules(&buckets_to_warm[0]);
+        // Build the cold buckets SEQUENTIALLY when called from a rayon worker.
+        //
+        // `tier_rules` materializes a bucket through its `OnceLock::get_or_init`,
+        // which parks contending callers on a futex — OUTSIDE rayon's cooperative
+        // scheduler. A nested `par_iter` here spawns the per-bucket builds as
+        // separate rayon jobs, then blocks the caller in the par_iter join waiting
+        // for them; but archive-member analysis already calls in here from the
+        // pool, so under a cold-start burst every worker ends up parked on a cold
+        // cell or in a join, and the spawned builds have no thread left to run on
+        // — a permanent wedge. Sequential warming has no such jobs: each
+        // `get_or_init` winner builds inline on its own live thread and always
+        // completes, so waiters are guaranteed to be released. Lazy per-filetype
+        // loading is unchanged — only the buckets this scan needs are touched.
+        //
+        // Off the pool (no rayon worker context) the nested fan-out is safe, so a
+        // bulk warm there may still parallelize.
+        if buckets_to_warm.len() == 1 || rayon::current_thread_index().is_some() {
+            for bucket in &buckets_to_warm {
+                let _ = self.tier_rules(bucket);
+            }
         } else {
             buckets_to_warm.par_iter().for_each(|bucket| {
                 let _ = self.tier_rules(bucket);

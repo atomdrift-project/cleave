@@ -507,6 +507,18 @@ impl ArchiveAnalyzer {
         file_type: &FileType,
         size_bytes: usize,
     ) -> Option<&'static str> {
+        // Skip the YARA pass for any member with no filetype→tier mapping — an
+        // unidentified blob, or a type with no targeted tier (lockfiles, Clojure,
+        // Beam, ODF, …). Such a member would otherwise scan with a `None` filter
+        // and hit EVERY tier, materializing all per-filetype rule sets into memory
+        // (the cold-start blow-up) for little signal. The member's string / trait
+        // / encoded-payload analysis still runs; only the YARA scan is skipped.
+        // Mirrors the scan-side filter below, which also keys off
+        // `archive_member_yara_filetypes` being empty.
+        if Self::archive_member_yara_filetypes(file_type).is_empty() {
+            return Some("no targeted YARA tier for file type");
+        }
+
         let lower_path = relative_path.to_ascii_lowercase();
         let file_name = Path::new(relative_path)
             .file_name()
@@ -2732,6 +2744,34 @@ mod tests {
             vec!["pe", "exe", "dll", "bat", "ps1"]
         );
         assert!(ArchiveAnalyzer::archive_member_yara_filetypes(&FileType::Unknown).is_empty());
+    }
+
+    #[test]
+    fn archive_member_yara_skip_skips_members_without_targeted_tier() {
+        // Members with no filetype→tier mapping (unidentified blobs, lockfiles,
+        // and types like Clojure/Beam/ODF that carry no targeted tier) would scan
+        // against every tier, so the YARA pass is skipped — their string / trait /
+        // payload analysis still runs. Members with a targeted tier are scanned.
+        for ft in [
+            FileType::Unknown,
+            FileType::YarnLock,
+            FileType::CargoLock,
+            FileType::RequirementsTxt,
+            FileType::Clojure,
+        ] {
+            assert_eq!(
+                ArchiveAnalyzer::archive_member_yara_skip_reason("member", &ft, 1024),
+                Some("no targeted YARA tier for file type"),
+                "{ft:?} should skip YARA",
+            );
+        }
+        for ft in [FileType::Python, FileType::Elf, FileType::Pe] {
+            assert_eq!(
+                ArchiveAnalyzer::archive_member_yara_skip_reason("member", &ft, 1024),
+                None,
+                "{ft:?} should be scanned",
+            );
+        }
     }
 
     #[test]

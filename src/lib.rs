@@ -1828,6 +1828,11 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     // Binary analyzers (MachO, Elf, Pe) use parallel YARA for performance.
     // All other analyzers use analyze_input() for unified data flow.
     let structural_start = std::time::Instant::now();
+    // Default structural phase for every file type. The specialized arms below
+    // (binary struct+yara, archive) refine it; the office / java-class /
+    // package-manifest arms set no phase of their own, so without this they would
+    // report the prior `cleave:stng` phase for their entire structural pass.
+    set_phase(&format!("analyze:{}", file_type.report_file_type()));
     let mut report = match file_type {
         FileType::MachO => {
             set_phase("macho:struct+yara");
@@ -2077,7 +2082,6 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             .analyze_input(&input),
         // All source code languages use the unified analyzer (or generic fallback)
         _ => {
-            set_phase(&format!("analyze:{}", file_type.report_file_type()));
             if let Some(analyzer) =
                 analyzers::analyzer_for_file_type_arc(&file_type, Some(mapper_arc.clone()))
             {
@@ -2355,6 +2359,14 @@ pub struct ScanSummary {
 fn load_scan_resources(
     options: &AnalysisOptions,
 ) -> Result<(Arc<CapabilityMapper>, Option<Arc<yara_engine::YaraEngine>>)> {
+    // Surface this pre-pipeline step in the phase tracker. It runs before
+    // `analyze_file_with_resources_at_depth` reaches its first `set_phase`, and
+    // its `rayon::join` blocks on the shared pool — so a pool-starvation wedge
+    // here would otherwise be reported under the caller's `cleave:init` label
+    // with no hint that it is stuck acquiring shared resources.
+    if let Some(ref tracker) = options.phase {
+        tracker.set("cleave:resources");
+    }
     let (mapper_result, yara_engine) = rayon::join(
         || shared_resources::capability_mapper_with_options(options),
         || {

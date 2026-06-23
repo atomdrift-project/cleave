@@ -814,6 +814,7 @@ impl PackageJsonAnalyzer {
                         s.contains("/.")
                             && !s.contains("node_modules/.bin/")
                             && !s.contains("/.husky")
+                            && !s.contains("/.git/hooks")
                             && !s.starts_with("./.github/")
                             && !s.starts_with(".github/")
                             && !s.contains("../")

@@ -122,16 +122,30 @@ impl super::JavaClassAnalyzer {
             }
 
             // Keylogging
+            let is_java_keystroke_api = s_lower.contains("javax/swing")
+                || s_lower.contains("javax.swing")
+                || s_lower.contains("java/awt/awtkeystroke")
+                || s_lower.contains("java.awt.awtkeystroke")
+                || s_lower.contains("awtkeystroke")
+                || s_lower.contains("javax/swing/keystroke")
+                || s_lower.contains("javax.swing.keystroke")
+                || s_lower == "app_context_keystroke_key"
+                || s_lower == "getkeystroke"
+                || s_lower == "getkeystrokeforevent"
+                || s_lower == "keystroke.java"
+                || s_lower == "awtkeystroke.java"
+                || s_lower == "keystroke.class"
+                || s_lower == "awtkeystroke.class"
+                || s_lower == "keystroke"
+                || s_lower == "keystroke: ";
+
             if s_lower.contains("keylog")
                 || s_lower.contains("key-log")
                 || s_lower.contains("o-keylogger")
                 || (Self::contains_word(&s_lower, "keystroke")
-                    && !s_lower.contains("javax/swing")
-                    && !s_lower.contains("javax.swing")
+                    && !is_java_keystroke_api
                     && !s_lower.contains("jline/console")
-                    && !s_lower.contains("ljline/console")
-                    && s_lower != "keystroke"
-                    && s_lower != "keystroke: ")
+                    && !s_lower.contains("ljline/console"))
             {
                 self.add_capability(
                     report,

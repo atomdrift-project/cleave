@@ -175,10 +175,12 @@ pub struct FileAnalysis {
     /// composite finding id → the archive members whose components it fired on,
     /// with a location where one is known. Computed in `finalize` while the
     /// per-member component findings/notes are still present (they're filtered
-    /// from the output later). Internal — surfaced into the compact output as the
-    /// composite's `srcs` and rendered as the `↳` member trail, so the web UI and
-    /// CLI tie a composite to the files (and offsets) it was based on.
-    #[serde(skip)]
+    /// from the output later). Surfaced into the compact output as the
+    /// composite's `from` (member + line/offset) and rendered as the `↳` member
+    /// trail. Serialized (omitted when empty) so a cached report round-trips
+    /// losslessly: a cache hit skips `finalize`, so without this the compact
+    /// `from` loses its line/offset provenance and the trail disappears.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub composite_sources: std::collections::BTreeMap<String, Vec<CompositeSource>>,
 
     /// Flat structural-kv map. Path → leaf value, using the same

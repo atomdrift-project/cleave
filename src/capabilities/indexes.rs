@@ -1041,6 +1041,11 @@ impl StringMatchIndex {
                             source: "string_extractor".to_string(),
                             value: truncate_evidence(&string_info.value, 120),
                             location: Some(location),
+                            // Exact match: the whole string is the match. The
+                            // span is its full byte length — `value` above may be
+                            // truncated with an ellipsis for display.
+                            offsets: string_info.offset.map(|o| vec![o]).unwrap_or_default(),
+                            match_len: Some(string_info.value.len() as u64),
                             ..Default::default()
                         });
                     }
@@ -1067,6 +1072,11 @@ impl StringMatchIndex {
                                 source: "string_extractor".to_string(),
                                 value: original_pattern.clone(),
                                 location: Some(location),
+                                // Case-insensitive exact match: the whole string
+                                // matched. Span its actual byte length (not the
+                                // pattern's, which can differ under case folding).
+                                offsets: string_info.offset.map(|o| vec![o]).unwrap_or_default(),
+                                match_len: Some(string_info.value.len() as u64),
                                 ..Default::default()
                             });
                         }
@@ -1099,6 +1109,16 @@ impl StringMatchIndex {
                                         24,
                                     ),
                                     location: Some(location),
+                                    // Anchor the span at the match within the
+                                    // string, with its true byte length — the
+                                    // `value` above is a windowed display string
+                                    // (ellipses + surrounding context), so its
+                                    // length is not the match's.
+                                    offsets: string_info
+                                        .offset
+                                        .map(|o| vec![o + mat.start() as u64])
+                                        .unwrap_or_default(),
+                                    match_len: Some((mat.end() - mat.start()) as u64),
                                     ..Default::default()
                                 });
                             }
@@ -1132,6 +1152,16 @@ impl StringMatchIndex {
                                         24,
                                     ),
                                     location: Some(location),
+                                    // Anchor the span at the match within the
+                                    // string, with its true byte length — the
+                                    // `value` above is a windowed display string
+                                    // (ellipses + surrounding context), so its
+                                    // length is not the match's.
+                                    offsets: string_info
+                                        .offset
+                                        .map(|o| vec![o + mat.start() as u64])
+                                        .unwrap_or_default(),
+                                    match_len: Some((mat.end() - mat.start()) as u64),
                                     ..Default::default()
                                 });
                             }

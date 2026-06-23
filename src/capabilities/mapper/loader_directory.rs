@@ -3933,6 +3933,11 @@ impl super::CapabilityMapper {
                 "calls.",
                 "binds.",
                 "members.",
+                // Package-registry record metrics fletch materializes from an
+                // upstream listing (`registry.age_days`, `registry.downloads_recent`,
+                // `registry.downloads_total`, `registry.is_deprecated`). Open key
+                // set owned by the registry-record producer, like `binary.*`.
+                "registry.",
             ];
             let in_filefacts_namespace = |f: &str| EXPOSE_PREFIXES.iter().any(|p| f.starts_with(p));
 

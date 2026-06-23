@@ -295,6 +295,7 @@ mod tests {
         ExtractedString {
             value,
             data_offset: 42,
+            data_len: 0,
             method,
             kind,
             fragments: None,

@@ -66,15 +66,38 @@ pub(crate) fn eval_metrics<'a>(
     }
 
     let evidence = if matched {
+        // A *located* metric carries the byte spans it was measured from (e.g.
+        // `binary.peak_region_entropy` → the high-entropy runs). When present,
+        // anchor the evidence at those spans so the finding points at the bytes
+        // (prism). Otherwise a metric describes the whole file, so anchor at the
+        // header (offset 0) for scope/proximity bucketing.
+        let spans = ctx
+            .report
+            .filefacts_metric_spans
+            .as_ref()
+            .and_then(|m| m.get(field));
+        let (location, offsets, match_len) = match spans.and_then(|s| s.split_first()) {
+            Some((first, _)) => (
+                // Single parseable start offset, matching content-matcher
+                // convention; the span length rides `match_len`. (A range string
+                // would defeat `parse_offset_from_location`.)
+                Some(format!("0x{:x}", first.offset)),
+                spans
+                    .map(|s| s.iter().map(|sp| sp.offset).collect())
+                    .unwrap_or_default(),
+                // The finding location surface collapses to one span today; the
+                // largest run is first, so its length is the representative span.
+                Some(first.len),
+            ),
+            None => (Some("0x0".to_string()), Vec::new(), None),
+        };
         vec![Evidence {
             method: "metrics".to_string(),
             source: "analyzer".to_string(),
             value: format!("{} = {:.2}", field, value),
-            // A metric describes the whole file, not a byte range. Anchor it at
-            // the header (offset 0) so scope/proximity bucketing has a location
-            // to work with; under `scope: file` this collapses to the file-wide
-            // key and pools with sibling evidence.
-            location: Some("0x0".to_string()),
+            location,
+            offsets,
+            match_len,
             ..Default::default()
         }]
     } else {

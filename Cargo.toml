@@ -335,13 +335,9 @@ opt-level = 3
 # triage, including PKGBUILD shell recognition, UDIF/DMG detection, and
 # extensionless PHP/HTML fragments that previously scored as Lua. Remove once
 # the filefacts changes are released upstream.
-#[patch."https://codeberg.org/atomdrift/filefacts.git"]
-#filefacts = { path = "../filefacts" }
 
 # Local override: filefacts' disk cache round-trips `stng::ExtractedString`,
 # which needs `Deserialize` (added locally, not yet released). The patch must
 # live in cleave's root manifest too — filefacts' own [patch] does not apply
 # when cleave is the root crate. Remove once stng is published with the derive
 # and filefacts' pinned revision is bumped.
-#[patch."https://codeberg.org/atomdrift/stng.git"]
-#stng = { path = "../stng" }

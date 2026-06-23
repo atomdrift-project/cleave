@@ -631,6 +631,10 @@ pub(crate) fn eval_comment<'a, 'b>(
                         .unwrap_or_else(|| "0x0".to_string()),
                 ),
                 offsets: c.offset.map(|o| vec![o]).unwrap_or_default(),
+                // Span the whole comment by its true byte length — `value` above
+                // is truncated for display (char-capped, with an ellipsis), so
+                // its length is not the comment's.
+                match_len: Some(v.len() as u64),
                 ..Default::default()
             });
         }
@@ -970,11 +974,21 @@ pub(crate) fn eval_string_literal<'a, 'b>(
                 match_count += 1;
                 // Allocate the evidence string only when actually storing it.
                 if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
+                    // `match_value` is a subslice for word/regex matches; offset
+                    // it within the literal so the location points at the match,
+                    // not the enclosing literal's start (mirrors `eval_text`).
+                    let within = (match_value.as_ptr() as usize)
+                        .saturating_sub(string_info.value.as_ptr() as usize)
+                        as u64;
+                    let location = match string_info.offset {
+                        Some(o) => format!("{:#x}", o.saturating_add(within)),
+                        None => string_info_location(ctx.report, string_info),
+                    };
                     evidence.push(Evidence {
                         method: "string_literal".to_string(),
                         source: "ast".to_string(),
                         value: truncate_evidence_value(match_value),
-                        location: Some(string_info_location(ctx.report, string_info)),
+                        location: Some(location),
                         ..Default::default()
                     });
                 }

@@ -332,9 +332,15 @@ impl GenericAnalyzer {
                     .trim_start_matches('`')
                     .trim_end_matches('`');
                 if !s.is_empty() && s.len() < 10000 {
+                    // `s` is a subslice of `text` after the leading quote bytes
+                    // are trimmed; advance the node start by that delta so the
+                    // offset aligns with the unquoted `value`. Without this the
+                    // offset points at the opening quote while the length is the
+                    // content length, shifting downstream spans one byte left.
+                    let lead = s.as_ptr() as u64 - text.as_ptr() as u64;
                     report.strings.push(StringInfo {
                         value: s.to_string().into(),
-                        offset: Some(node.start_byte() as u64),
+                        offset: Some(node.start_byte() as u64 + lead),
                         string_type: None,
                         encoding: "utf-8".to_string(),
                         section: Some("ast".to_string()),

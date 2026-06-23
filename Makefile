@@ -11,7 +11,7 @@ CARGO_TARGET ?= $(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR),target)
 
 # For sccache, set RUSTC_WRAPPER=sccache in your environment
 
-.PHONY: all build debug release release-lto check-cargo install tarball rollout-bastille test test-fast test-unit lint fmt clean coverage ci install-hooks help regenerate-testdata loadtest bench-build benchmark sampled-benchmark validate tuna tuna-once wolfi wolfi-bootstrap wolfi-build wolfi-test wolfi-shell wolfi-clean wolfi-nuke
+.PHONY: all build debug release release-lto check-cargo install tarball rollout-bastille test test-fast test-unit lint fix fmt clean coverage ci install-hooks help regenerate-testdata loadtest bench-build benchmark sampled-benchmark validate tuna tuna-once wolfi wolfi-bootstrap wolfi-build wolfi-test wolfi-shell wolfi-clean wolfi-nuke
 
 # Default target
 all: build
@@ -31,6 +31,7 @@ help: ## Show this help
 	@echo "  test-fast             - Run tests quickly (skip YARA, lib tests only)"
 	@echo "  test-unit             - Run only unit tests (skip integration tests)"
 	@echo "  fmt                   - Format all code with rustfmt"
+	@echo "  fix                   - Auto-fix clippy lints, then format with rustfmt"
 	@echo "  lint                  - Run code formatting and linting checks"
 	@echo "  coverage              - Generate code coverage report"
 	@echo "  ci                    - Run all CI checks (test + lint)"
@@ -174,6 +175,12 @@ fmt: ## Format all code with rustfmt
 	@echo "Formatting code..."
 	@cargo fmt --all
 	@echo "✓ Code formatted"
+
+fix: ## Auto-fix clippy lints, then format with rustfmt
+	@echo "Applying clippy fixes..."
+	@cargo clippy --fix --workspace --all-targets --all-features --allow-dirty --allow-staged
+	@cargo fmt --all
+	@echo "✓ Fixes applied"
 
 lint: ## Run code formatting and linting checks
 	@echo "Checking formatting..."

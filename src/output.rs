@@ -1418,7 +1418,7 @@ fn render_hex_context(
 fn is_binary_file_type(file_type: &str) -> bool {
     matches!(
         file_type,
-        "elf" | "pe" | "macho" | "java_class" | "python_bytecode" | "beam"
+        "elf" | "pe" | "macho" | "java_class" | "python_bytecode" | "beam" | "wasm"
     )
 }
 

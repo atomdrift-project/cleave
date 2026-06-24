@@ -65,7 +65,10 @@ fn scan_with_trait(fixture_name: &str, fixture: &str, traits_yaml: &str) -> (Tem
 /// carries an annotation with the given severity letter and description.
 fn finding_present(stdout: &str, sev: char, desc: &str) -> bool {
     let needle = format!(" {sev} {desc}");
-    stdout.lines().any(|line| line.contains(&needle))
+    let marker = format!("{sev}\t");
+    stdout
+        .lines()
+        .any(|line| line.contains(desc) && (line.contains(&needle) || line.starts_with(&marker)))
 }
 
 #[test]

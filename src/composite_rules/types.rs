@@ -321,6 +321,9 @@ pub(crate) enum FileType {
     Pyc,
     /// Erlang/Elixir compiled BEAM bytecode (.beam) — binary, string-extracted
     Beam,
+    /// WebAssembly binary module (.wasm) — portable bytecode payload,
+    /// string-extracted (Go/TinyGo/Rust/Emscripten compile target).
+    Wasm,
     /// Unix shell script (bash, sh, zsh, etc.)
     Shell,
     /// Windows batch script (.bat, .cmd)
@@ -620,6 +623,7 @@ impl FileType {
             FileType::Pe,
             FileType::Class,
             FileType::Pyc,
+            FileType::Wasm,
             // Source code formats
             FileType::Shell,
             FileType::Batch,
@@ -726,6 +730,7 @@ impl FileType {
             "java" => FileType::Java,
             "class" | "java_class" | "javaclass" => FileType::Class,
             "pyc" | "python-bytecode" | "pythonbytecode" => FileType::Pyc,
+            "wasm" | "webassembly" => FileType::Wasm,
             "ruby" | "rb" => FileType::Ruby,
             "php" => FileType::Php,
             "csharp" | "cs" => FileType::CSharp,

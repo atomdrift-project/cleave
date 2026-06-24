@@ -183,6 +183,7 @@ pub fn analyzer_for_file_type(
         | FileType::Markdown
         | FileType::Text
         | FileType::Dockerfile
+        | FileType::Wasm
         | FileType::Data => Some(Box::new(
             generic::GenericAnalyzer::new(*file_type).with_capability_mapper(mapper_or_empty),
         )),
@@ -299,6 +300,7 @@ pub(crate) fn analyzer_for_file_type_arc(
         | FileType::Markdown
         | FileType::Text
         | FileType::Dockerfile
+        | FileType::Wasm
         | FileType::Data => Some(Box::new(
             generic::GenericAnalyzer::new(*file_type).with_capability_mapper_arc(mapper_or_empty),
         )),

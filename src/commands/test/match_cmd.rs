@@ -216,6 +216,7 @@ pub fn run(
         FileType::Dockerfile => composite_rules::FileType::Dockerfile,
         FileType::Text => composite_rules::FileType::Text,
         FileType::Data => composite_rules::FileType::Data,
+        FileType::Wasm => composite_rules::FileType::Wasm,
         FileType::Json => composite_rules::FileType::Json,
         FileType::PackageJson => composite_rules::FileType::PackageJson,
         FileType::PackageLockJson => composite_rules::FileType::PackageLockJson,

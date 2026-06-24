@@ -341,3 +341,6 @@ opt-level = 3
 # live in cleave's root manifest too — filefacts' own [patch] does not apply
 # when cleave is the root crate. Remove once stng is published with the derive
 # and filefacts' pinned revision is bumped.
+
+#[patch."https://codeberg.org/atomdrift/filefacts.git"]
+#filefacts = { path = "../filefacts" }

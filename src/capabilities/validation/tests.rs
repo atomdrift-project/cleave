@@ -5586,6 +5586,7 @@ mod excessive_file_types_tests {
             FileType::Pe,
             FileType::Class,
             FileType::Pyc,
+            FileType::Wasm,
         ];
         let source = vec![
             FileType::TypeScript,
@@ -5604,7 +5605,7 @@ mod excessive_file_types_tests {
             FileType::Elixir,
         ];
         let combined: Vec<FileType> = scripts.into_iter().chain(binaries).chain(source).collect();
-        assert_eq!(combined.len(), 31);
+        assert_eq!(combined.len(), 32);
         let traits = vec![trait_with_for("test::multi-group", combined)];
         let result = find_excessive_file_types(&traits, &[]);
         assert!(

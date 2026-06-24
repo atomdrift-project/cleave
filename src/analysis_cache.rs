@@ -647,7 +647,7 @@ mod tests {
             "fixture must produce compact `from` (from composite_sources): {compact_before}"
         );
         assert!(
-            tiny_before.contains("exec(payload)\tdet: exec call"),
+            tiny_before.contains("# S 2:1 exec call"),
             "fixture must anchor a note in the render: {tiny_before:?}"
         );
 

@@ -459,18 +459,22 @@ pub(crate) fn format_jsonl(report: &AnalysisReport) -> Result<String> {
 
 /// Format the report as compact, context-centric text for small LLMs.
 ///
-/// Reuses two conventions every model already knows: `grep -n -C2` for content
-/// (`N:` = a matched line, `N-` = surrounding context, `--` = a gap) and the
-/// compiler diagnostic (`# SEV id desc`) for findings. A location `N` is a
-/// 1-based line number for source, or a hex byte offset for binaries and
-/// minified one-liners. Findings with no positional anchor render as `.` lines.
+/// The code shows as the file's own source (or an ASCII-forward byte window for
+/// binaries), and each finding is announced on a *preceding* comment-marker line —
+/// `{marker} SEV LINE[:COL] desc` — so the annotation reads as a comment describing
+/// the line that immediately follows it, while the source itself stays unaltered.
+/// `SEV` is one of `H`/`S`/`N`/`B`/`C`/`F` (hostile…filtered); `LINE` is a 1-based
+/// line number — or, for a minified one-liner / binary slice, an absolute byte
+/// offset written `@OFFSET`. Context lines carry no annotation and render bare.
 ///
 /// ```text
-/// # ctx: N: hit, N- context, -- gap, . no-loc; src text | hex ascii; trailer # H/S/N/B/C/F id desc
-/// evil.sh <TAB> sh 4.2KB 142
-/// 19- def run():
-/// 20: exec(base64.b64decode(p)) # H exec/eval-b64 decode+exec base64
-/// .        # N metadata/unsigned unsigned binary
+/// # hdr: path<TAB>type size score; per finding, a `{marker} SEV LINE[:COL] desc`
+/// # line (or `@OFFSET` for a byte unit) above the source it describes.
+/// evil.sh <TAB> shell 4.2KB 142
+/// # H 20:1 decode+exec base64
+/// exec(base64.b64decode(p))
+/// # N @0 obfuscator.io bundle
+/// const _0x1=_0x2;function _0x3(){…
 /// ```
 /// The header drawn above each file's context block.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -578,8 +582,9 @@ pub struct HeaderBadge<'a> {
 
 /// Render the report as a colored, context-centric view per `opts`. Color is
 /// auto-disabled when stdout isn't a terminal (so `… | llm` stays plain text);
-/// that plain mode emits one tab-delimited `SEV LINE[:COL] CODE det:DESC` record
-/// per line instead of bold/color.
+/// that plain mode renders each source line unaltered, preceding any line that
+/// carries a finding with a `{marker} SEV LINE[:COL] desc` annotation, instead
+/// of bold/color.
 #[must_use]
 pub fn format_context(report: &AnalysisReport, opts: &TinyOpts) -> String {
     format_context_badged(report, opts, HeaderBadge::default())
@@ -1183,12 +1188,15 @@ fn render_context(
 
 /// Render binary context for the machine/LLM view: each match window as one
 /// ASCII-forward line — printable bytes verbatim, every other byte (and a literal
-/// `<`) as `<xx>` — followed by a `// SEV desc` trailer per finding it carries.
-/// Drops the redundant hex column and byte offsets the terminal view shows.
+/// `<`) as `<xx>` — preceded by a `{marker} SEV desc` annotation line per finding
+/// it carries, so the detections describe the bytes that follow and the window
+/// itself renders unannotated. Drops the redundant hex column and byte offsets
+/// the terminal view shows.
 fn render_ascii_context(out: &mut String, file: &FileAnalysis, selected: &[&str]) {
     use std::fmt::Write;
     let sel: HashSet<&str> = selected.iter().copied().collect();
     let marker = comment_marker(&file.file_type);
+    let mut emitted = false;
     for line in &file.context {
         // Distinct selected findings on this window, strongest first. (Capture
         // already capped locations per trait; merging can pool several here.)
@@ -1201,6 +1209,12 @@ fn render_ascii_context(out: &mut String, file: &FileAnalysis, selected: &[&str]
         if notes.is_empty() {
             continue;
         }
+        // A blank line sets each window apart — from the file-level annotations
+        // above the first one, and from the preceding window after that.
+        if emitted || (!out.is_empty() && !out.ends_with("\n\n")) {
+            out.push('\n');
+        }
+        emitted = true;
         notes.sort_by(|a, b| b.crit.cmp(&a.crit).then_with(|| a.off.cmp(&b.off)));
         // Clip the window to the match span ± a fixed margin, so a large merged
         // window doesn't dump the whole region at the model; `…` marks a trim.
@@ -1214,20 +1228,20 @@ fn render_ascii_context(out: &mut String, file: &FileAnalysis, selected: &[&str]
             .unwrap_or(len);
         let start = lo.saturating_sub(ASCII_CONTEXT);
         let end = (hi + ASCII_CONTEXT).min(len);
+        for n in &notes {
+            let _ = writeln!(
+                out,
+                "{marker} {} {}",
+                n.crit.letter(),
+                terse_description(&n.desc)
+            );
+        }
         if start > 0 {
             out.push('…');
         }
         out.push_str(&ascii_forward(&line.data[start..end]));
         if end < len {
             out.push('…');
-        }
-        for n in notes {
-            let _ = write!(
-                out,
-                "  {marker} {} {}",
-                n.crit.letter(),
-                terse_description(&n.desc)
-            );
         }
         out.push('\n');
     }
@@ -1285,8 +1299,10 @@ fn ascii_forward(data: &[u8]) -> String {
     s
 }
 
-/// Render source/minified context: `grep -n -C2`-style numbered lines with a
-/// `# SEV desc` trailer on each hit.
+/// Render source/minified context: `grep -n -C2`-style windows. Colored: numbered
+/// lines with a `# SEV desc` trailer on each hit. Plain (LLM): each hit's source
+/// line is preceded by a `{marker} SEV LINE[:COL] desc` annotation; context lines
+/// render bare.
 fn render_source_context(
     out: &mut String,
     file: &FileAnalysis,
@@ -1329,7 +1345,38 @@ fn render_source_context(
         return;
     }
     let marker = comment_marker(&file.file_type);
-    let in_window = |loc: u64| hits.iter().any(|&(h, crit)| loc.abs_diff(h) <= radius_for(crit));
+    let in_window = |loc: u64| {
+        hits.iter()
+            .any(|&(h, crit)| loc.abs_diff(h) <= radius_for(crit))
+    };
+    // The LLM view carries no line numbers on source rows, so a jump between two
+    // non-adjacent windows would otherwise read as one continuous block. Merge the
+    // hit windows into clusters once; a row that opens a new cluster gets a blank
+    // line before it, so each finding's context reads as its own paragraph. (The
+    // colored view keeps its line numbers, which already show the gap.)
+    let minimal = matches!(opts.header, HeaderStyle::Minimal);
+    let clusters: Vec<(u64, u64)> = {
+        let mut iv: Vec<(u64, u64)> = hits
+            .iter()
+            .map(|&(h, crit)| {
+                let r = radius_for(crit);
+                (h.saturating_sub(r), h.saturating_add(r))
+            })
+            .collect();
+        iv.sort_unstable_by_key(|&(lo, _)| lo);
+        iv.into_iter().fold(Vec::new(), |mut merged, (lo, hi)| {
+            match merged.last_mut() {
+                Some(last) if lo <= last.1.saturating_add(1) => last.1 = last.1.max(hi),
+                _ => merged.push((lo, hi)),
+            }
+            merged
+        })
+    };
+    let cluster_of = |loc: u64| {
+        clusters
+            .iter()
+            .position(|&(lo, hi)| (lo..=hi).contains(&loc))
+    };
     let loc_width = file
         .context
         .iter()
@@ -1338,8 +1385,8 @@ fn render_source_context(
         .unwrap_or(1);
     // Fixed content column so every comment aligns; long lines truncate to it.
     // Capped so wide terminals spend the surplus on the comment, not the code.
-    // The machine/LLM view (Minimal header) has no terminal to fit and appends
-    // its description as a tab-delimited `det:` field rather than an aligned
+    // The machine/LLM view (Minimal header) has no terminal to fit and carries its
+    // description on a separate preceding annotation line rather than an aligned
     // column, so it reserves nothing for comments and shows a generous window of
     // the line — minified code carries its signal far past column 35.
     let content_width = if matches!(opts.header, HeaderStyle::Minimal) {
@@ -1350,13 +1397,19 @@ fn render_source_context(
             .clamp(24, 100)
     };
 
+    // In the LLM view, set the context off from any file-level annotations
+    // (identity, whole-file findings) already written above it with a blank line.
+    if minimal && !out.is_empty() && !out.ends_with("\n\n") {
+        out.push('\n');
+    }
+
     // Each shown line carries at most its own strongest trait as a comment —
     // kept deliberately simple, no flowing a second trait onto adjacent lines.
+    let mut prev_cluster: Option<usize> = None;
     for line in file.context.iter().filter(|l| in_window(l.loc)) {
         // Context lines (no match of their own) only earn a row when they carry
         // real code — skip near-empty ones like a lone `}` or `)` that add
-        // height without context. A hit line always renders. The line-number
-        // jump itself shows any skipped gap, so no separator line is emitted.
+        // height without context. A hit line always renders.
         if !hits.iter().any(|&(h, _)| h == line.loc)
             && line
                 .data
@@ -1367,6 +1420,12 @@ fn render_source_context(
         {
             continue;
         }
+        // A blank line opens each new window (LLM view only — see `clusters`).
+        let cluster = cluster_of(line.loc);
+        if minimal && prev_cluster.is_some() && prev_cluster != cluster {
+            out.push('\n');
+        }
+        prev_cluster = cluster;
         let notes: Vec<&Note> = line.notes.iter().collect();
         let comment = notes
             .iter()
@@ -1452,7 +1511,8 @@ fn is_binary_file_type(file_type: &str) -> bool {
 fn comment_marker(file_type: &str) -> &'static str {
     match file_type {
         "python" | "shell" | "bash" | "ruby" | "perl" | "r" | "powershell" | "yaml" | "toml"
-        | "makefile" | "dockerfile" | "systemd" | "desktop" | "text" | "ini" | "properties" => "#",
+        | "makefile" | "dockerfile" | "systemd_service" | "desktop_entry" | "text" | "ini"
+        | "properties" => "#",
         "lua" | "sql" | "haskell" | "applescript" | "vbs" | "vba" => "--",
         _ => "//",
     }
@@ -1553,8 +1613,10 @@ fn source_window(
 
 /// Render one source/minified line. Colored: a 1-char severity gutter, the line
 /// number, the code clipped to a fixed width (with its match highlighted), then
-/// an aligned `// desc` comment. Plain: a tab-delimited `SEV LINE[:COL] CODE
-/// det:DESC` record (no caret line — COL carries the match position).
+/// an aligned `// desc` comment. Plain (LLM): the code verbatim, preceded — when
+/// it carries a finding — by a `{marker} SEV LINE[:COL] DESC` annotation line (or
+/// `{marker} SEV @OFFSET DESC` for a minified/byte unit, whose `loc` is a byte
+/// offset rather than a line).
 #[allow(clippy::too_many_arguments)] // a render primitive; bundling would obscure it
 fn render_source_line(
     out: &mut String,
@@ -1637,41 +1699,57 @@ fn render_source_line(
         return;
     }
 
-    // Plain (tiny/LLM) view: one tab-delimited record per source line —
-    //   SEV \t LINE[:COL] \t CODE \t det: DESC
-    // Severity-led so `grep '^H'` triages and `cut -f` splits the columns. The
-    // code reads as code — never the file's own `#`/`//` comment marker — and a
-    // present description is tagged `det:` to mark it as cleave's detection, not
-    // text that was in the file. COL is the 1-based column of the strongest
-    // match (the caret's information in a fraction of the height); context and
-    // component lines carry no description.
+    // Plain (LLM) view: a finding is announced on its own comment-marker line —
+    //   {marker} SEV LINE[:COL] - DESC
+    // placed immediately *before* the source line it describes, which then renders
+    // verbatim (windowed to a fixed width, `...` marking any trim) with no prefix
+    // or trailer. Keeping the code clear of cleave's columns lets the model read it
+    // as the file's own source; the preceding annotation — comment marker, a single
+    // severity letter, the location, then the description — marks it unmistakably
+    // as cleave's detection, not text from the file. COL is the 1-based column of
+    // the strongest match. Context and component lines carry no annotation and
+    // render as bare source.
     let (display, map) = expand_tabs(&raw);
     let to_disp = |off: u64| -> Option<usize> {
         map.get(usize::try_from(off.checked_sub(base)?).ok()?)
             .copied()
     };
     let match_disp = comment.and_then(|n| to_disp(n.off));
+
+    if let Some(n) = comment.filter(|n| n.crit >= Criticality::Notable) {
+        out.push_str(marker);
+        out.push(' ');
+        out.push(n.crit.letter());
+        out.push(' ');
+        if line.addr.is_none() {
+            // A byte-offset unit (a minified one-liner, or a binary slice rendered
+            // as text): `loc` is an absolute byte offset, not a line number, and a
+            // char column within a clipped window is meaningless. Show the match's
+            // absolute offset as `@N` so it never reads as a `line:col`.
+            out.push('@');
+            out.push_str(&n.off.to_string());
+        } else {
+            out.push_str(&loc_str);
+            if let Some(col) =
+                match_disp.map(|b| display.get(..b).map_or(1, |s| s.chars().count() + 1))
+            {
+                out.push(':');
+                out.push_str(&col.to_string());
+            }
+        }
+        out.push(' ');
+        out.push_str(&terse_description(&n.desc));
+        out.push('\n');
+    }
+
     let (b0, b1, lead, trail) = source_window(&display, content_width, match_disp);
     let slice = display.get(b0..b1).unwrap_or("");
-
-    out.push(comment.map_or('.', |n| n.crit.letter()));
-    out.push('\t');
-    out.push_str(&loc_str);
-    if let Some(col) = match_disp.map(|b| display.get(..b).map_or(1, |s| s.chars().count() + 1)) {
-        out.push(':');
-        out.push_str(&col.to_string());
-    }
-    out.push('\t');
     if lead {
         out.push_str("...");
     }
     out.push_str(slice);
     if trail {
         out.push_str("...");
-    }
-    if let Some(n) = comment.filter(|n| n.crit >= Criticality::Notable) {
-        out.push_str("\tdet: ");
-        out.push_str(&terse_description(&n.desc));
     }
     out.push('\n');
 }
@@ -1908,13 +1986,16 @@ fn paint_spans(text: &str, mut spans: Vec<(usize, usize, Criticality)>) -> Strin
     buf
 }
 
-/// Emit selected findings that have *no anchorable location* — a behavior
-/// composite or metric/structural fact with no byte to point at. The terminal
-/// (Rich) view renders each as a severity-tinted gutter glyph and description (no
-/// comment marker — there's no code to comment on), and a cross-file composite
-/// trails the members that contributed to it. The LLM (Minimal) view keeps its
-/// compact `. // SEV desc` comment form. A finding already drawn as a byte/source
-/// window (`windowed`) renders there, not again here.
+/// Emit selected findings that have *no anchorable location of their own* — once
+/// context is captured, that means a cross-file composite (its evidence lives in a
+/// member, so it has no local window) and nothing else: any intra-file finding is
+/// either shown at its offset by the context pass or was dominated there and
+/// dropped, never resurrected here (see the filter below). When no context was
+/// captured at all, every selected finding falls through here, since this is then
+/// the only place they can surface. The terminal (Rich) view renders each as a
+/// severity-tinted gutter glyph and description (no comment marker — there's no
+/// code to comment on), and a cross-file composite trails its contributing
+/// members; the LLM (Minimal) view uses the `{marker} SEV desc` annotation form.
 fn render_no_anchor(
     out: &mut String,
     file: &FileAnalysis,
@@ -1927,12 +2008,19 @@ fn render_no_anchor(
     let sel: HashSet<&str> = selected.iter().copied().collect();
 
     let rich = matches!(opts.header, HeaderStyle::Rich);
-    // Once the terminal view has captured context, an intra-file composite that
-    // isn't windowed was deliberately omitted by the placement pass — every one
-    // of its legs was dominated by a stronger match. Don't resurrect it as a
-    // bare, location-less note. Cross-file composites (they carry a member trail)
-    // and atomic file-global facts still show, and the LLM view keeps everything.
-    let omit_dominated = rich && !file.context.is_empty();
+    // Capture anchors every shown finding — at its own offset, or, for a
+    // file-global fact with no byte to point at, a fallback of offset 0 (see
+    // `context::fallback_anchor`). So once context exists, a finding missing from
+    // `windowed` wasn't location-less; its window was *dominated* by a stronger
+    // overlapping match and dropped by the placement pass. The dominating match
+    // already represents that span, so showing the loser again — here, with no
+    // location — is pure noise. Only the highest-scored finding per span is kept.
+    // Once context exists, the no-anchor block therefore surfaces *only* cross-file
+    // composites (located in a member, shown with a trail, with no local window to
+    // be dominated). Everything else is shown at its offset by the context pass or
+    // was dominated and dropped. When no context was captured at all, the block is
+    // the only way to surface findings, so it keeps them.
+    let captured = !file.context.is_empty();
 
     // Location-less notable traits are noise as bare comments; only surface
     // suspicious+ facts (e.g. "embedded shellcode array").
@@ -1943,9 +2031,7 @@ fn render_no_anchor(
         .filter(|f| {
             f.crit >= floor && sel.contains(f.id.as_str()) && !windowed.contains(f.id.as_str())
         })
-        .filter(|f| {
-            !omit_dominated || f.trait_refs.is_empty() || file.composite_sources.contains_key(&f.id)
-        })
+        .filter(|f| !captured || file.composite_sources.contains_key(&f.id))
         .collect();
     rest.sort_unstable_by(|a, b| b.crit.cmp(&a.crit).then_with(|| a.id.cmp(&b.id)));
 
@@ -1956,11 +2042,12 @@ fn render_no_anchor(
         }
         let desc = terse_description(&f.desc);
         if !rich {
-            // LLM/tiny view: same tab-delimited record as a located finding, with
-            // `-` for the (absent) line/column and an empty code column. Should be
-            // rare — a finding that anchored nowhere — but stays greppable
-            // (`grep '^H'`) and `cut`-parseable alongside the located rows.
-            out.push_str(&format!("{}\t-\t\tdet: {desc}\n", f.crit.letter()));
+            // LLM/tiny view: a whole-file finding that anchored to no line renders
+            // as a bare annotation — `{marker} SEV desc`, no location — matching
+            // the form the located findings use (which insert a `LINE[:COL]`
+            // between the severity and the description). Should be rare.
+            let marker = comment_marker(&file.file_type);
+            out.push_str(&format!("{marker} {} {desc}\n", f.crit.letter()));
             continue;
         }
         // Terminal view: severity gutter glyph + description, no comment marker.
@@ -3182,7 +3269,7 @@ mod tests {
     }
 
     #[test]
-    fn test_format_tiny_includes_description_as_tsv_field() {
+    fn test_format_tiny_renders_location_less_finding_as_annotation() {
         let findings = vec![Finding {
             src: None,
             kind: FindingKind::Capability,
@@ -3208,12 +3295,12 @@ mod tests {
         let output = format_tiny(&report);
 
         // No capture pass ran here, so the finding has no context window and
-        // renders as a location-less tab-delimited record: severity, `-` for the
-        // absent line/col, empty code, then the `det:`-tagged description.
-        // Notable+ no-anchor noise is dropped, so the fixture is Suspicious. The
-        // tiny view shows the basename, not the full `/test/` path.
+        // renders as a location-less annotation line: the comment marker, the
+        // severity letter, then the description (no LINE, since it anchored
+        // nowhere). Notable+ no-anchor noise is dropped, so the fixture is
+        // Suspicious. The tiny view shows the basename, not the full `/test/` path.
         assert!(output.contains("sample.bin\tELF 12KB"));
-        assert!(output.contains("S\t-\t\tdet: Execute shell commands"));
+        assert!(output.contains("// S Execute shell commands"));
     }
 
     #[test]
@@ -3339,8 +3426,8 @@ mod tests {
         assert!(!output.contains("micro-behaviors/fs/read::open"));
         assert!(!output.contains("objectives/execution/loader::fragment"));
         assert!(!output.contains("objectives/execution/loader::unused-fragment"));
-        // No-anchor record: severity, `-` line/col, empty code, `det:` description.
-        assert!(output.contains("S\t-\t\tdet: Matched composite loader"));
+        // No-anchor finding: a bare annotation line — marker, severity, desc.
+        assert!(output.contains("// S Matched composite loader"));
     }
 
     #[test]
@@ -3389,11 +3476,234 @@ mod tests {
             },
         ];
         let output = format_tiny(&report);
-        // Context row: severity `.`, line number, code — no description.
-        assert!(output.contains(".\t4\tctx before"));
-        // Hit row: severity, `line:col`, code, then the `det:`-tagged description
-        // (not the trait-id leaf).
-        assert!(output.contains("N\t5:"));
-        assert!(output.contains("s = socket()\tdet: socket usage"));
+        // Context line: bare source, no annotation and no `LINE`/severity prefix.
+        assert!(output.contains("ctx before"));
+        assert!(!output.contains(".\t4"));
+        // Hit: a `{marker} SEV LINE:COL desc` annotation line (the description,
+        // not the trait-id leaf) immediately above the unaltered source line.
+        assert!(output.contains("// N 5:6 socket usage"));
+        assert!(output.contains("s = socket()"));
+    }
+
+    #[test]
+    fn test_format_tiny_overlapping_notes_show_only_strongest() {
+        // Two traits matching the same span on one line. The capture pass would
+        // collapse them to the strongest (`conf × crit`) via `dedup_notes`; this
+        // guards the render layer downstream of that — even handed both notes, the
+        // LLM view announces only one finding above the (single, unaltered) source
+        // line, never stacking both halves of an overlapping pair.
+        use crate::types::{ContextLine, Note};
+        let report = create_test_report(
+            vec![
+                Finding {
+                    src: None,
+                    kind: FindingKind::Capability,
+                    trait_refs: vec![],
+                    id: "a/strong".to_string(),
+                    desc: "decode+exec".to_string(),
+                    conf: 0.9,
+                    crit: Criticality::Hostile,
+                    mbc: None,
+                    attack: None,
+                    evidence: vec![],
+                    match_count: 0,
+                    source_file: None,
+                },
+                Finding {
+                    src: None,
+                    kind: FindingKind::Capability,
+                    trait_refs: vec![],
+                    id: "b/weak".to_string(),
+                    desc: "exec call".to_string(),
+                    conf: 0.9,
+                    crit: Criticality::Notable,
+                    mbc: None,
+                    attack: None,
+                    evidence: vec![],
+                    match_count: 0,
+                    source_file: None,
+                },
+            ],
+            vec![],
+        );
+        let mut report = report;
+        report.files[0].context = vec![ContextLine {
+            loc: 1,
+            addr: Some(0),
+            data: b"exec(payload)".to_vec(),
+            notes: vec![
+                Note {
+                    crit: Criticality::Hostile,
+                    id: "a/strong".to_string(),
+                    desc: "decode+exec".to_string(),
+                    off: 0,
+                    len: 13,
+                    conf: 0.9,
+                },
+                Note {
+                    crit: Criticality::Notable,
+                    id: "b/weak".to_string(),
+                    desc: "exec call".to_string(),
+                    off: 0,
+                    len: 4,
+                    conf: 0.9,
+                },
+            ],
+        }];
+        let output = format_tiny(&report);
+        // Only the strongest finding is announced, above the lone source line.
+        assert!(output.contains("// H 1:1 decode+exec"), "{output:?}");
+        assert!(!output.contains("b/weak"), "{output:?}");
+        assert!(!output.contains("exec call"), "{output:?}");
+        assert!(output.contains("exec(payload)"), "{output:?}");
+    }
+
+    #[test]
+    fn test_format_tiny_separates_non_contiguous_windows_with_blank_line() {
+        // Two hits far apart are separate windows. Without line numbers on the
+        // source rows, the LLM view must set them apart with a blank line so they
+        // don't read as one run of code; adjacent rows in the same window do not.
+        use crate::types::{ContextLine, Note};
+        let note = |id: &str, off: u64| Note {
+            crit: Criticality::Suspicious,
+            id: id.to_string(),
+            desc: format!("{id} desc"),
+            off,
+            len: 4,
+            conf: 0.9,
+        };
+        let finding = |id: &str| Finding {
+            src: None,
+            kind: FindingKind::Capability,
+            trait_refs: vec![],
+            id: id.to_string(),
+            desc: format!("{id} desc"),
+            conf: 0.9,
+            crit: Criticality::Suspicious,
+            mbc: None,
+            attack: None,
+            evidence: vec![],
+            match_count: 0,
+            source_file: None,
+        };
+        let report = create_test_report(vec![finding("a/one"), finding("b/two")], vec![]);
+        let mut report = report;
+        report.files[0].context = vec![
+            ContextLine {
+                loc: 5,
+                addr: Some(0),
+                data: b"first_hit(x)".to_vec(),
+                notes: vec![note("a/one", 0)],
+            },
+            ContextLine {
+                loc: 50,
+                addr: Some(0),
+                data: b"second_hit(y)".to_vec(),
+                notes: vec![note("b/two", 0)],
+            },
+        ];
+        let output = format_tiny(&report);
+        // The two windows are split by a blank line (source row, blank, annotation).
+        assert!(
+            output.contains("first_hit(x)\n\n// S 50:1"),
+            "windows must be blank-line separated: {output:?}"
+        );
+    }
+
+    #[test]
+    fn test_format_tiny_does_not_resurrect_dominated_finding_location_less() {
+        // Capture anchors every finding (file-global ones fall back to offset 0),
+        // so a finding missing a context note once context exists was *dominated*
+        // by a stronger overlapping match — already represented at that offset. The
+        // LLM view must not bring it back as a location-less note (it would read as
+        // a separate, anchorless finding and duplicate what shows at the offset).
+        use crate::types::{ContextLine, Note};
+        let finding = |id: &str, crit: Criticality| Finding {
+            src: None,
+            kind: FindingKind::Capability,
+            trait_refs: vec![],
+            id: id.to_string(),
+            desc: format!("{id} desc"),
+            conf: 0.9,
+            crit,
+            mbc: None,
+            attack: None,
+            evidence: vec![],
+            match_count: 0,
+            source_file: None,
+        };
+        let report = create_test_report(
+            vec![
+                finding("a/win", Criticality::Hostile),
+                finding("b/dominated", Criticality::Suspicious),
+            ],
+            vec![],
+        );
+        let mut report = report;
+        // Only `a/win` won a window; `b/dominated` was dropped by the overlap pass.
+        report.files[0].context = vec![ContextLine {
+            loc: 7,
+            addr: Some(0),
+            data: b"winner()".to_vec(),
+            notes: vec![Note {
+                crit: Criticality::Hostile,
+                id: "a/win".to_string(),
+                desc: "a/win desc".to_string(),
+                off: 0,
+                len: 6,
+                conf: 0.9,
+            }],
+        }];
+        let output = format_tiny(&report);
+        assert!(output.contains("// H 7:1 a/win desc"), "{output:?}");
+        assert!(!output.contains("b/dominated"), "{output:?}");
+        assert!(!output.contains("dominated desc"), "{output:?}");
+
+        // Same rule for the terminal view: a dominated finding is suppressed
+        // everywhere, never resurrected as a location-less gutter note.
+        let term = format_context(&report, &TinyOpts::terminal());
+        assert!(!term.contains("dominated desc"), "{term:?}");
+    }
+
+    #[test]
+    fn test_format_tiny_byte_unit_annotation_uses_offset_not_line_col() {
+        // A minified/byte window (`addr: None`) has a byte offset for its `loc`, not
+        // a line. Its annotation must read `@OFFSET` (the match's absolute byte
+        // offset), never a `line:col` that would imply a real source line.
+        use crate::types::{ContextLine, Note};
+        let report = create_test_report(
+            vec![Finding {
+                src: None,
+                kind: FindingKind::Capability,
+                trait_refs: vec![],
+                id: "obf/loop".to_string(),
+                desc: "obfuscated loop".to_string(),
+                conf: 0.9,
+                crit: Criticality::Suspicious,
+                mbc: None,
+                attack: None,
+                evidence: vec![],
+                match_count: 0,
+                source_file: None,
+            }],
+            vec![],
+        );
+        let mut report = report;
+        report.files[0].context = vec![ContextLine {
+            loc: 600,
+            addr: None, // byte unit: loc is an offset, not a line
+            data: b"while(!![]){...}".to_vec(),
+            notes: vec![Note {
+                crit: Criticality::Suspicious,
+                id: "obf/loop".to_string(),
+                desc: "obfuscated loop".to_string(),
+                off: 657,
+                len: 11,
+                conf: 0.9,
+            }],
+        }];
+        let output = format_tiny(&report);
+        assert!(output.contains("// S @657 obfuscated loop"), "{output:?}");
+        assert!(!output.contains("600:"), "{output:?}");
     }
 }

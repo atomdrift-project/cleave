@@ -1,6 +1,6 @@
 [package]
 name = "cleave"
-version = "2.1.1"
+version = "2.2.0-beta.1"
 edition = "2024"
 authors = ["The Atomdrift Project"]
 description = "Deep static analysis tool for extracting features from binaries and source code"
@@ -105,7 +105,7 @@ pyinstx = { path = "crates/pyinstx" }
 
 # YARA pattern matching
 yara-classify = { path = "crates/yara-classify" }
-yara-x = { version = "1.18", features = ["rules-profiling"] }
+yara-x = { version = "1.19", features = ["rules-profiling"] }
 
 # Tree-sitter core types only. Per-language grammars (and their parsers)
 # live in filefacts; cleave consumes the cached `tree_sitter::Tree`
@@ -342,5 +342,3 @@ opt-level = 3
 # when cleave is the root crate. Remove once stng is published with the derive
 # and filefacts' pinned revision is bumped.
 
-#[patch."https://codeberg.org/atomdrift/filefacts.git"]
-#filefacts = { path = "../filefacts" }

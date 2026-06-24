@@ -2440,7 +2440,9 @@ impl super::CapabilityMapper {
             // Validate: traits with 4+ effective platforms must be in an allowlisted directory
             tracing::trace!("Checking for over-broad platform scope (4+ effective platforms)");
             let broad_plat = find_broad_platform_traits(&trait_definitions, &rule_source_files);
-            if !broad_plat.is_empty() {
+            if !crate::validation_controls::is_validator_disabled("broad-platform-scope")
+                && !broad_plat.is_empty()
+            {
                 eprintln!(
                     "\n❌ ERROR: {} traits target {} or more platforms",
                     broad_plat.len(),

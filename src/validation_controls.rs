@@ -570,6 +570,20 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         fix: "Narrow `for:`, or add a type-qualified allowlist entry (\"<type>:<dir-prefix>\").",
     },
     ValidatorSpec {
+        id: "broad-platform-scope",
+        category: ValidatorCategory::Policy,
+        display_id: "plat-scope",
+        description: "Trait targets 4+ platforms instead of a platform-neutral technique.",
+        fix: "Narrow the platform scope, or move to an allowlisted directory (objectives/supply-chain/).",
+    },
+    ValidatorSpec {
+        id: "hostile-missing-notable-leg",
+        category: ValidatorCategory::Policy,
+        display_id: "hostile-no-notable",
+        description: "Hostile composite references no notable-or-higher leg, so its capability is buried at the wrong tier.",
+        fix: "Upgrade the best purpose-defining leg to notable per TAXONOMY.md, relocate a mislabelled capability, or delete the composite.",
+    },
+    ValidatorSpec {
         id: "unknown-subdirectory",
         category: ValidatorCategory::Policy,
         display_id: "unknown-subdir",
@@ -1017,6 +1031,10 @@ mod tests {
             "malware-subcategory",
             "wellknown-composite-only",
             "pure-alias",
+            // Platform breadth and tier placement are organization hygiene: the
+            // composite still loads and fires, so soft must downgrade them.
+            "broad-platform-scope",
+            "hostile-missing-notable-leg",
             // A metric field unknown to this (older) engine is forward-compat
             // degradation, mirroring `unknown-file-type`.
             "unknown-metric-field",

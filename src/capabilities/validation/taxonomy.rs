@@ -1634,18 +1634,18 @@ const BROAD_FILETYPE_THRESHOLD_PATH: usize = 4; // full-path matchers — start 
 // that the `unix` umbrella reaches macOS (see resolve_platform_filetype_conflicts).
 // They were recalibrated +1 to absorb that umbrella member rather than penalize
 // legitimately-broad, group-scoped content matchers.
-const BROAD_FILETYPE_THRESHOLD_TEXT: usize = 17; // text / literal / comment
-const BROAD_FILETYPE_THRESHOLD_METRICS: usize = 16; // whole-file metrics
+const BROAD_FILETYPE_THRESHOLD_TEXT: usize = 18; // text / literal / comment (scripts+binaries; binaries gained wasm)
+const BROAD_FILETYPE_THRESHOLD_METRICS: usize = 17; // whole-file metrics (scripts+binaries; binaries gained wasm)
 // A basename matches the *filename*, which is artifact-specific — a filename
 // pattern that fires across many languages is almost always mis-scoped. Kept
 // deliberately tight (mirrors PATH): narrow `for:` to the type(s) the filename
 // implies, or add a `basename:<dir>` allowlist entry for the rare exception.
-const BROAD_FILETYPE_THRESHOLD_BASENAME: usize = 4; // filename patterns — tight
+const BROAD_FILETYPE_THRESHOLD_BASENAME: usize = 5; // filename patterns (binaries gained wasm)
 const BROAD_FILETYPE_THRESHOLD_ENCODED: usize = 11; // decoded-content scan
 const BROAD_FILETYPE_THRESHOLD_SECTION: usize = 6; // binary section names
 const BROAD_FILETYPE_THRESHOLD_YARA: usize = 4; // yara rules (may span container formats)
-const BROAD_FILETYPE_THRESHOLD_SYMBOL: usize = 4; // symbol / syscall tables
-const BROAD_FILETYPE_THRESHOLD_VALUE: usize = 3; // structural value paths
+const BROAD_FILETYPE_THRESHOLD_SYMBOL: usize = 5; // symbol / syscall tables (binaries gained wasm)
+const BROAD_FILETYPE_THRESHOLD_VALUE: usize = 4; // structural value paths (binaries gained wasm)
 const BROAD_FILETYPE_THRESHOLD_RAW: usize = 3; // raw byte scan — native binary family (elf/macho/pe)
 const BROAD_FILETYPE_THRESHOLD_HEX: usize = 3; // hex byte pattern — native binary family (elf/macho/pe)
 const BROAD_FILETYPE_THRESHOLD_AST: usize = 1; // tree-sitter (single grammar)

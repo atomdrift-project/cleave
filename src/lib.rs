@@ -896,9 +896,9 @@ pub fn clear_all_thread_caches() {
 
 /// Pre-warm the YARA engine on a non-rayon thread.
 ///
-/// This blocks until initialization completes. That is intentional: the global
-/// YARA engine must not be first initialized from a rayon worker because rule
-/// loading itself uses rayon internally.
+/// This blocks until initialization completes. That is intentional: it keeps
+/// cold-start latency off rayon workers and avoids relying on the worker-safe
+/// fallback path in rule loading.
 pub fn prefetch_yara_engine(enable_third_party: bool) {
     // Bootstrap the traits archive before compiling rules. On a fresh install the
     // data directory is empty, and without this the prefetch would find zero rules

@@ -194,10 +194,9 @@ pub fn reload_capability_mapper() -> Result<(usize, usize), String> {
 
 /// Get or initialize the global YARA engine.
 ///
-/// **Contract:** must be warmed at least once from a non-rayon thread before any
-/// rayon worker can reach this function. `cleave::prefetch_yara_engine` satisfies
-/// that contract by spawning a `std::thread`, and every cleave/litmus entry point
-/// calls it at startup.
+/// Prefer warming this once from a non-rayon thread before any rayon worker can
+/// reach it. `cleave::prefetch_yara_engine` does that by spawning a
+/// `std::thread`, and cleave/litmus entry points call it at startup.
 ///
 /// Why the contract exists: `load_all_rules` uses rayon `par_iter` internally.
 /// If the first caller to win `get_or_init` is itself a rayon worker, peers call
@@ -207,10 +206,9 @@ pub fn reload_capability_mapper() -> Result<(usize, usize), String> {
 /// Forcing first init onto a non-rayon thread avoids both failure modes without
 /// changing the lock primitive.
 ///
-/// As a safety net, this function logs an error when the contract is violated
-/// (first call from a rayon worker). The call still proceeds so production hosts
-/// aren't killed by a missed init, but the error is loud enough to surface the
-/// regression in logs.
+/// As a safety net, cold rule collection avoids nested rayon work when this
+/// initializer is already running on a rayon worker. That makes missed prefetch
+/// a startup-latency problem instead of a deadlock.
 pub(crate) fn yara_engine(enable_third_party: bool) -> Arc<YaraEngine> {
     let lock = if enable_third_party {
         &YARA_ENGINE_WITH_THIRD_PARTY
@@ -223,14 +221,14 @@ pub(crate) fn yara_engine(enable_third_party: bool) -> Arc<YaraEngine> {
         return engine.clone();
     }
 
-    // Slow path: about to init. Surface contract violations so they don't turn
-    // into silent deadlocks.
+    // Slow path: about to init. Surface missed prefetches because they still
+    // put cold-start latency on a worker, even though cold collection is safe.
     if rayon::current_thread_index().is_some() {
-        tracing::error!(
+        tracing::warn!(
             enable_third_party,
             "yara_engine() first call landed on a rayon worker — prefetch was not \
-             called or ran too late. This is likely to deadlock; call \
-             cleave::prefetch_shared_resources() from a non-rayon thread at startup."
+             called or ran too late; initialization will continue without nested \
+             rayon work, but startup latency may be visible"
         );
     } else {
         tracing::debug!(enable_third_party, "Initializing global YARA engine");

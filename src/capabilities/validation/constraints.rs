@@ -1396,6 +1396,7 @@ pub(crate) fn find_excessive_file_types(
         FileType::Pe,
         FileType::Class,
         FileType::Pyc,
+        FileType::Wasm,
     ];
     let scripts: &[FileType] = &[
         FileType::Shell,

@@ -830,72 +830,78 @@ impl YaraEngine {
             .map(|e| e.path().to_path_buf())
             .collect();
 
-        // Read and parse YAML files in parallel, then collect inline YARA sources.
-        let collected: Vec<(String, String, String)> = yaml_files
-            .par_iter()
-            .flat_map(|path| {
-                let Ok(content) = fs::read_to_string(path) else {
-                    return vec![];
-                };
-                let Ok(doc) = serde_yaml::from_str::<serde_yaml::Value>(&content) else {
-                    return vec![];
-                };
+        let collect_one = |path: &PathBuf| {
+            let Ok(content) = fs::read_to_string(path) else {
+                return vec![];
+            };
+            let Ok(doc) = serde_yaml::from_str::<serde_yaml::Value>(&content) else {
+                return vec![];
+            };
 
-                let defaults_for = match &doc {
-                    serde_yaml::Value::Mapping(m) => {
-                        Self::yaml_string_list(m.get("defaults").and_then(|v| v.get("for")))
-                    }
-                    _ => Vec::new(),
-                };
-
-                let items = match &doc {
-                    serde_yaml::Value::Mapping(m) => m
-                        .get("traits")
-                        .and_then(|v| v.as_sequence())
-                        .map(|s| s.to_vec()),
-                    serde_yaml::Value::Sequence(s) => Some(s.clone()),
-                    _ => None,
-                };
-
-                let Some(items) = items else { return vec![] };
-
-                let mut result = Vec::new();
-                for item in &items {
-                    let Some(id) = item.get("id").and_then(|v| v.as_str()) else {
-                        continue;
-                    };
-                    let Some(if_cond) = item.get("if") else {
-                        continue;
-                    };
-                    if if_cond.get("type").and_then(|v| v.as_str()) != Some("yara") {
-                        continue;
-                    }
-                    let Some(source) = if_cond.get("source").and_then(|v| v.as_str()) else {
-                        continue;
-                    };
-                    let item_for = Self::yaml_string_list(item.get("for"));
-                    let declared_for = if item_for.is_empty() {
-                        defaults_for.clone()
-                    } else {
-                        item_for
-                    };
-                    let namespace = format!("inline.{}", id);
-                    let buckets =
-                        Self::classify_inline_trait_yara_tiers(source, &namespace, &declared_for);
-                    tracing::trace!("Collected inline YARA rule for trait {}", id);
-                    tracing::debug!(
-                        trait_id = id,
-                        buckets = ?buckets,
-                        declared_for = ?declared_for,
-                        "Classified inline YARA rule"
-                    );
-                    for bucket in buckets {
-                        result.push((bucket, namespace.clone(), source.to_string()));
-                    }
+            let defaults_for = match &doc {
+                serde_yaml::Value::Mapping(m) => {
+                    Self::yaml_string_list(m.get("defaults").and_then(|v| v.get("for")))
                 }
-                result
-            })
-            .collect();
+                _ => Vec::new(),
+            };
+
+            let items = match &doc {
+                serde_yaml::Value::Mapping(m) => m
+                    .get("traits")
+                    .and_then(|v| v.as_sequence())
+                    .map(|s| s.to_vec()),
+                serde_yaml::Value::Sequence(s) => Some(s.clone()),
+                _ => None,
+            };
+
+            let Some(items) = items else { return vec![] };
+
+            let mut result = Vec::new();
+            for item in &items {
+                let Some(id) = item.get("id").and_then(|v| v.as_str()) else {
+                    continue;
+                };
+                let Some(if_cond) = item.get("if") else {
+                    continue;
+                };
+                if if_cond.get("type").and_then(|v| v.as_str()) != Some("yara") {
+                    continue;
+                }
+                let Some(source) = if_cond.get("source").and_then(|v| v.as_str()) else {
+                    continue;
+                };
+                let item_for = Self::yaml_string_list(item.get("for"));
+                let declared_for = if item_for.is_empty() {
+                    defaults_for.clone()
+                } else {
+                    item_for
+                };
+                let namespace = format!("inline.{}", id);
+                let buckets =
+                    Self::classify_inline_trait_yara_tiers(source, &namespace, &declared_for);
+                tracing::trace!("Collected inline YARA rule for trait {}", id);
+                tracing::debug!(
+                    trait_id = id,
+                    buckets = ?buckets,
+                    declared_for = ?declared_for,
+                    "Classified inline YARA rule"
+                );
+                for bucket in buckets {
+                    result.push((bucket, namespace.clone(), source.to_string()));
+                }
+            }
+            result
+        };
+
+        // Read and parse YAML files in parallel unless already on a rayon
+        // worker. Cold YARA init may happen from a library caller inside rayon;
+        // starting another rayon pass there can starve the pool while peers wait
+        // on the global YARA singleton.
+        let collected: Vec<(String, String, String)> = if rayon::current_thread_index().is_some() {
+            yaml_files.iter().flat_map(collect_one).collect()
+        } else {
+            yaml_files.par_iter().flat_map(collect_one).collect()
+        };
 
         let mut tier_sources: HashMap<String, Vec<(String, String)>> = HashMap::new();
         let mut namespaces = Vec::with_capacity(collected.len());
@@ -1306,21 +1312,24 @@ impl YaraEngine {
             return (HashMap::new(), HashMap::new(), 0);
         };
 
-        let processed: Vec<SplitSource> = rule_files
-            .par_iter()
-            .filter_map(|path| {
-                let bytes = fs::read(path).ok()?;
-                let raw_source = String::from_utf8_lossy(&bytes);
-                let source = yara_classify::inject_condition_filetype_hints(&raw_source);
-                let split = Self::split_monolithic_by_tier(&source, "traits", re);
-                tracing::trace!(
-                    path = %path.display(),
-                    buckets = ?split.tiers.keys().collect::<Vec<_>>(),
-                    "Collected built-in YARA source"
-                );
-                Some(split)
-            })
-            .collect();
+        let process_one = |path: &PathBuf| {
+            let bytes = fs::read(path).ok()?;
+            let raw_source = String::from_utf8_lossy(&bytes);
+            let source = yara_classify::inject_condition_filetype_hints(&raw_source);
+            let split = Self::split_monolithic_by_tier(&source, "traits", re);
+            tracing::trace!(
+                path = %path.display(),
+                buckets = ?split.tiers.keys().collect::<Vec<_>>(),
+                "Collected built-in YARA source"
+            );
+            Some(split)
+        };
+
+        let processed: Vec<SplitSource> = if rayon::current_thread_index().is_some() {
+            rule_files.iter().filter_map(process_one).collect()
+        } else {
+            rule_files.par_iter().filter_map(process_one).collect()
+        };
 
         let mut tier_sources: HashMap<String, Vec<(String, String)>> = HashMap::new();
         let mut rule_contexts: HashMap<String, RuleContext> = HashMap::new();
@@ -1399,63 +1408,66 @@ impl YaraEngine {
             disabled_stripped: usize,
         }
 
-        // Read and preprocess all files in parallel — namespace derivation, VT filtering,
-        // filetype hint injection, disabled-rule filtering, and tier splitting are all
-        // pure transforms with no shared mutable state.
-        let processed: Vec<Processed> = rule_files
-            .par_iter()
-            .filter_map(|path| {
-                let bytes = fs::read(path).ok()?;
+        let process_one = |path: &PathBuf| {
+            let bytes = fs::read(path).ok()?;
 
-                let namespace = path
-                    .strip_prefix(dir)
-                    .ok()
-                    .and_then(|rel| rel.to_str())
-                    .map(|s| {
-                        let parts: Vec<&str> = s
-                            .split(std::path::MAIN_SEPARATOR)
-                            .filter(|p| !p.is_empty())
-                            .collect();
-                        let mut ns_parts = parts.to_vec();
-                        if let Some(last) = ns_parts.last_mut() {
-                            *last = last.trim_end_matches(".yar").trim_end_matches(".yara");
-                        }
-                        format!("3p.{}", ns_parts.join("."))
-                    })
-                    .unwrap_or_else(|| "3p".to_string());
-
-                let raw_source = String::from_utf8_lossy(&bytes);
-
-                let (raw_source, vt_stripped) = if raw_source.contains("vt.") {
-                    let (filtered, count) = Self::filter_vt_rules(&raw_source, re);
-                    (std::borrow::Cow::Owned(filtered), count)
-                } else {
-                    (raw_source, 0)
-                };
-
-                if raw_source.trim().is_empty() {
-                    return None;
-                }
-
-                let source = yara_classify::inject_condition_filetype_hints(&raw_source);
-
-                let (filtered_source, disabled_stripped) =
-                    Self::filter_disabled_rules(&source, &namespace, &disabled_rules, re);
-
-                if filtered_source.trim().is_empty() {
-                    return None;
-                }
-
-                let split = Self::split_monolithic_by_tier(&filtered_source, &namespace, re);
-                Some(Processed {
-                    path: path.clone(),
-                    namespace,
-                    split,
-                    vt_stripped,
-                    disabled_stripped,
+            let namespace = path
+                .strip_prefix(dir)
+                .ok()
+                .and_then(|rel| rel.to_str())
+                .map(|s| {
+                    let parts: Vec<&str> = s
+                        .split(std::path::MAIN_SEPARATOR)
+                        .filter(|p| !p.is_empty())
+                        .collect();
+                    let mut ns_parts = parts.to_vec();
+                    if let Some(last) = ns_parts.last_mut() {
+                        *last = last.trim_end_matches(".yar").trim_end_matches(".yara");
+                    }
+                    format!("3p.{}", ns_parts.join("."))
                 })
+                .unwrap_or_else(|| "3p".to_string());
+
+            let raw_source = String::from_utf8_lossy(&bytes);
+
+            let (raw_source, vt_stripped) = if raw_source.contains("vt.") {
+                let (filtered, count) = Self::filter_vt_rules(&raw_source, re);
+                (std::borrow::Cow::Owned(filtered), count)
+            } else {
+                (raw_source, 0)
+            };
+
+            if raw_source.trim().is_empty() {
+                return None;
+            }
+
+            let source = yara_classify::inject_condition_filetype_hints(&raw_source);
+
+            let (filtered_source, disabled_stripped) =
+                Self::filter_disabled_rules(&source, &namespace, &disabled_rules, re);
+
+            if filtered_source.trim().is_empty() {
+                return None;
+            }
+
+            let split = Self::split_monolithic_by_tier(&filtered_source, &namespace, re);
+            Some(Processed {
+                path: path.clone(),
+                namespace,
+                split,
+                vt_stripped,
+                disabled_stripped,
             })
-            .collect();
+        };
+
+        // Read and preprocess in parallel unless already on a rayon worker.
+        // The transform is pure, but nested rayon here can deadlock cold YARA
+        // initialization when other workers are waiting on the singleton.
+        let processed: Vec<Processed> = if rayon::current_thread_index().is_some() {
+            rule_files.iter().filter_map(process_one).collect()
+        } else {
+            rule_files.par_iter().filter_map(process_one).collect()
+        };
 
         let mut tier_sources: HashMap<String, Vec<(String, String)>> = HashMap::new();
         let mut rule_contexts: HashMap<String, RuleContext> = HashMap::new();

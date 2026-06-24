@@ -7,10 +7,11 @@
 //! the winner's `par_iter` is dispatching into. Any task the winner steals
 //! while waiting can re-enter `get_or_init` on the same thread and self-lock.
 //!
-//! The contract: warm YARA from a non-rayon thread (`prefetch_shared_resources`
-//! or an equivalent `std::thread::spawn + join`) before any rayon worker calls
-//! into analysis. This test exercises that contract under cold-compile
-//! conditions where the deadlock would reproduce without it.
+//! The invariant: even if a caller forgets to prefetch and the first YARA
+//! initialization happens on a rayon worker, cold rule loading must not start
+//! nested rayon work that can starve the pool. Prefetch is still desirable for
+//! startup latency, but correctness cannot depend on every caller remembering
+//! it.
 //!
 //! Each cargo integration test file runs as its own test binary, so the
 //! `OnceLock` statics are fresh for this process regardless of other tests.
@@ -60,24 +61,10 @@ fn yara_init_does_not_deadlock_under_concurrent_rayon_load() {
             .expect("spawn watchdog");
     }
 
-    // Warm YARA from a non-rayon thread, and synchronously wait for the
-    // initializer to complete. Using `join` rather than
-    // `prefetch_shared_resources` removes the "does prefetch finish before
-    // the par_iter starts?" race from the test itself — the contract under
-    // test is "first init must not happen on a rayon worker," and a joined
-    // `std::thread` trivially satisfies it.
-    let warmup = std::thread::spawn(|| {
-        // Any analyze call triggers the same `yara_engine()` code path that
-        // the deadlock hits in production. The payload is intentionally
-        // trivial — we care about the init path, not the scan.
-        let _ = cleave::analyze_bytes(b"warmup", "warmup.bin", &cleave::AnalysisOptions::default());
-    });
-    warmup.join().expect("warmup thread panicked");
-
-    // Now simulate the observed production scenario: multiple concurrent
-    // rayon workers each calling `analyze_bytes`. With the contract
-    // satisfied above, every call hits the OnceLock fast path. Without it,
-    // this block would deadlock.
+    // Simulate the observed production scenario without any prior warmup:
+    // multiple concurrent rayon workers each call `analyze_bytes`, so one
+    // worker wins the global YARA OnceLock cold init while peers block on it.
+    // The initializer must complete without spawning nested rayon work.
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(8)
         .thread_name(|i| format!("yara-deadlock-test-{i}"))

@@ -1297,22 +1297,39 @@ fn render_source_context(
 ) {
     // Symmetric context: `radius` lines on each side of a match, so the window
     // is `[hit - radius, hit + radius]`. The line after a hit often carries the
-    // continuation (a call's args, an assignment's value) the model needs.
-    let radius = opts.context_lines.map_or(1, |n| n.saturating_sub(1)) as u64;
+    // continuation (a call's args, an assignment's value) the model needs. The
+    // base radius comes from `context_lines`; suspicious/hostile hits always get
+    // at least 2 lines each side, since the strongest findings most need their
+    // surrounding code to be judged in context.
+    let base_radius = opts.context_lines.map_or(1, |n| n.saturating_sub(1)) as u64;
+    let radius_for = |crit: Criticality| {
+        if crit >= Criticality::Suspicious {
+            base_radius.max(2)
+        } else {
+            base_radius
+        }
+    };
 
-    // Every line carrying a selected trait is a hit (capture already capped the
-    // locations per trait — atomic up to 3, composite 1).
-    let hits: HashSet<u64> = file
+    // Each line carrying a selected trait is a hit, paired with the strongest
+    // criticality among its selected notes (capture already capped the locations
+    // per trait — atomic up to 3, composite 1).
+    let hits: Vec<(u64, Criticality)> = file
         .context
         .iter()
-        .filter(|l| l.notes.iter().any(|n| selected.contains(&n.id.as_str())))
-        .map(|l| l.loc)
+        .filter_map(|l| {
+            l.notes
+                .iter()
+                .filter(|n| selected.contains(&n.id.as_str()))
+                .map(|n| n.crit)
+                .max()
+                .map(|crit| (l.loc, crit))
+        })
         .collect();
     if hits.is_empty() {
         return;
     }
     let marker = comment_marker(&file.file_type);
-    let in_window = |loc: u64| hits.iter().any(|&h| loc.abs_diff(h) <= radius);
+    let in_window = |loc: u64| hits.iter().any(|&(h, crit)| loc.abs_diff(h) <= radius_for(crit));
     let loc_width = file
         .context
         .iter()
@@ -1321,9 +1338,17 @@ fn render_source_context(
         .unwrap_or(1);
     // Fixed content column so every comment aligns; long lines truncate to it.
     // Capped so wide terminals spend the surplus on the comment, not the code.
-    let content_width = term_width
-        .saturating_sub(src_prefix(loc_width) + 2 + SRC_COMMENT_BUDGET)
-        .clamp(24, 100);
+    // The machine/LLM view (Minimal header) has no terminal to fit and appends
+    // its description as a tab-delimited `det:` field rather than an aligned
+    // column, so it reserves nothing for comments and shows a generous window of
+    // the line — minified code carries its signal far past column 35.
+    let content_width = if matches!(opts.header, HeaderStyle::Minimal) {
+        SRC_LLM_WIDTH
+    } else {
+        term_width
+            .saturating_sub(src_prefix(loc_width) + 2 + SRC_COMMENT_BUDGET)
+            .clamp(24, 100)
+    };
 
     // Each shown line carries at most its own strongest trait as a comment —
     // kept deliberately simple, no flowing a second trait onto adjacent lines.
@@ -1332,7 +1357,7 @@ fn render_source_context(
         // real code — skip near-empty ones like a lone `}` or `)` that add
         // height without context. A hit line always renders. The line-number
         // jump itself shows any skipped gap, so no separator line is emitted.
-        if !hits.contains(&line.loc)
+        if !hits.iter().any(|&(h, _)| h == line.loc)
             && line
                 .data
                 .iter()
@@ -1439,6 +1464,10 @@ const HEX_COMMENT_BUDGET: usize = 44;
 /// Comment width reserved on source lines — enough that typical descriptions
 /// land in full; the code column takes the rest.
 const SRC_COMMENT_BUDGET: usize = 56;
+/// Source content window for the machine/LLM (Minimal-header) view, where there
+/// is no terminal width to fit. Wide enough that a minified line's match keeps
+/// real surrounding context, while still bounding token cost per line.
+const SRC_LLM_WIDTH: usize = 512;
 /// Fixed columns ahead of a row's hex cells: the 1-char gutter, a space, the
 /// offset, and a two-space separator.
 const fn row_prefix(loc_width: usize) -> usize {

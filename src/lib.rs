@@ -1734,8 +1734,8 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     // single time. Source code (unified/generic) plus the image analyzers
     // (jpeg/png) qualify; binaries take the dedicated arms above, and types
     // with their own parsers (office/java_class) are intentionally excluded.
-    let threads_ctx =
-        file_type.is_source_code() || matches!(file_type, FileType::Jpeg | FileType::Png);
+    let threads_ctx = file_type.is_source_code()
+        || matches!(file_type, FileType::Jpeg | FileType::Png | FileType::Wasm);
     let yara_prefetch = |ftypes: &[&str]| {
         if cancel_for_yara
             .as_ref()

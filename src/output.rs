@@ -580,6 +580,12 @@ pub struct HeaderBadge<'a> {
     pub subtitle: Option<&'a str>,
 }
 
+/// Max files that draw source/hex context in the LLM/tiny view, highest score
+/// first. The long tail still lists its findings as bare notes, but spends no
+/// budget on context windows — mirroring `../prism`, which renders content for
+/// only its top-scoring files.
+const MAX_CONTEXT_FILES: usize = 5;
+
 /// Render the report as a colored, context-centric view per `opts`. Color is
 /// auto-disabled when stdout isn't a terminal (so `… | llm` stays plain text);
 /// that plain mode renders each source line unaltered, preceding any line that
@@ -630,10 +636,37 @@ pub fn format_context_badged(
     // name, overlay notes, "no symbol table", …) adds no signal and floods the
     // context. Root renders first, so its native findings win; near-identical
     // members then collapse. The terminal view keeps per-member detail.
-    let dedup_across_files = matches!(opts.header, HeaderStyle::Minimal);
+    let minimal = matches!(opts.header, HeaderStyle::Minimal);
+    let dedup_across_files = minimal;
+
+    // The LLM/tiny view spends its context budget on only the highest-scoring
+    // files: those render full source/hex windows (and surface every component
+    // line — see `select_ids`), while the long tail still lists its notable+
+    // findings as bare notes but draws no windows. Containers have no content
+    // view of their own (their bytes are packed member data), so they don't
+    // compete for a slot. The terminal view caps nothing.
+    let context_file_ids: HashSet<u32> = if minimal {
+        let mut ranked: Vec<&FileAnalysis> = files
+            .iter()
+            .copied()
+            .filter(|f| !container_paths.contains(f.path.as_str()))
+            .collect();
+        ranked.sort_by_key(|f| std::cmp::Reverse(f.score));
+        ranked
+            .iter()
+            .take(MAX_CONTEXT_FILES)
+            .map(|f| f.id)
+            .collect()
+    } else {
+        HashSet::new()
+    };
+
     let mut seen: HashSet<&str> = HashSet::new();
     for &file in &files {
-        let mut selected = select_ids(file, opts);
+        // Highest-scoring files (and every file in the terminal view) draw
+        // context windows; the tiny view's long tail lists findings without them.
+        let shows_context = !minimal || context_file_ids.contains(&file.id);
+        let mut selected = select_ids(file, opts, minimal && shows_context);
 
         // For an archive container, drop findings that were located more
         // specifically in a member below it (same id, native, deeper). What
@@ -666,7 +699,11 @@ pub fn format_context_badged(
         // for genuine atomic matches on the container's own bytes, never a
         // cross-file composite that merely landed a stray offset. Composites
         // still render as location-less notes. Ordinary files window everything.
-        let context_selected: Vec<&str> = if is_container {
+        let context_selected: Vec<&str> = if !shows_context {
+            // A long-tail file past the context cap: no windows. Its findings
+            // still surface as bare notes (see `render_no_anchor`).
+            Vec::new()
+        } else if is_container {
             selected
                 .iter()
                 .copied()
@@ -710,6 +747,7 @@ pub fn format_context_badged(
             &windowed,
             &id_to_path,
             opts,
+            shows_context,
             colorize,
         );
         render_context(
@@ -860,7 +898,16 @@ fn file_has_output(file: &FileAnalysis) -> bool {
 
 /// The top-`n` finding ids to show, ranked by `crit × conf` (highest first) and
 /// floored at `min_crit` (after the usual component/filtered gating).
-fn select_ids<'a>(file: &'a FileAnalysis, opts: &TinyOpts) -> Vec<&'a str> {
+///
+/// `show_all_components` admits every component trait, not just those a composite
+/// drew on — the LLM/tiny view sets it for the highest-scoring files so all
+/// component lines surface as source context (matching `../prism`). Off, a
+/// component shows only when some composite references it (`tiny_should_show`).
+fn select_ids<'a>(
+    file: &'a FileAnalysis,
+    opts: &TinyOpts,
+    show_all_components: bool,
+) -> Vec<&'a str> {
     // Per id, keep the best score and the highest criticality seen — the
     // latter decides whether the id bypasses the cap.
     let mut scored: HashMap<&str, (f32, Criticality)> = HashMap::new();
@@ -873,7 +920,7 @@ fn select_ids<'a>(file: &'a FileAnalysis, opts: &TinyOpts) -> Vec<&'a str> {
         if f.src.is_some()
             || f.crit < opts.min_crit
             || f.crit == Criticality::Baseline
-            || !tiny_should_show(f, file)
+            || (!show_all_components && !tiny_should_show(f, file))
         {
             continue;
         }
@@ -1325,43 +1372,63 @@ fn render_source_context(
             base_radius
         }
     };
+    let minimal = matches!(opts.header, HeaderStyle::Minimal);
 
-    // Each line carrying a selected trait is a hit, paired with the strongest
-    // criticality among its selected notes (capture already capped the locations
-    // per trait — atomic up to 3, composite 1).
-    let hits: Vec<(u64, Criticality)> = file
+    // In the LLM/tiny view a component trait stands alone unless a composite used
+    // it: a bare component shows a single line (radius 0), while one a composite
+    // drew on earns context sized to that composite's severity — a hostile
+    // composite's building block shows ±2 lines. Map each referenced building
+    // block to the strongest crit that referenced it.
+    let component_ref_crit: HashMap<&str, Criticality> = {
+        let mut m: HashMap<&str, Criticality> = HashMap::new();
+        for f in &file.findings {
+            for ref_id in &f.trait_refs {
+                m.entry(ref_id.as_str())
+                    .and_modify(|c| *c = (*c).max(f.crit))
+                    .or_insert(f.crit);
+            }
+        }
+        m
+    };
+    let radius_of = |n: &Note| -> u64 {
+        if minimal && n.crit == Criticality::Component {
+            component_ref_crit
+                .get(n.id.as_str())
+                .map_or(0, |&c| radius_for(c))
+        } else {
+            radius_for(n.crit)
+        }
+    };
+
+    // Each line carrying a selected trait is a hit, paired with the context
+    // radius its strongest selected note earns (capture already capped the
+    // locations per trait — atomic up to 3, composite 1).
+    let hits: Vec<(u64, u64)> = file
         .context
         .iter()
         .filter_map(|l| {
             l.notes
                 .iter()
                 .filter(|n| selected.contains(&n.id.as_str()))
-                .map(|n| n.crit)
+                .map(&radius_of)
                 .max()
-                .map(|crit| (l.loc, crit))
+                .map(|r| (l.loc, r))
         })
         .collect();
     if hits.is_empty() {
         return;
     }
     let marker = comment_marker(&file.file_type);
-    let in_window = |loc: u64| {
-        hits.iter()
-            .any(|&(h, crit)| loc.abs_diff(h) <= radius_for(crit))
-    };
+    let in_window = |loc: u64| hits.iter().any(|&(h, r)| loc.abs_diff(h) <= r);
     // The LLM view carries no line numbers on source rows, so a jump between two
     // non-adjacent windows would otherwise read as one continuous block. Merge the
     // hit windows into clusters once; a row that opens a new cluster gets a blank
     // line before it, so each finding's context reads as its own paragraph. (The
     // colored view keeps its line numbers, which already show the gap.)
-    let minimal = matches!(opts.header, HeaderStyle::Minimal);
     let clusters: Vec<(u64, u64)> = {
         let mut iv: Vec<(u64, u64)> = hits
             .iter()
-            .map(|&(h, crit)| {
-                let r = radius_for(crit);
-                (h.saturating_sub(r), h.saturating_add(r))
-            })
+            .map(|&(h, r)| (h.saturating_sub(r), h.saturating_add(r)))
             .collect();
         iv.sort_unstable_by_key(|&(lo, _)| lo);
         iv.into_iter().fold(Vec::new(), |mut merged, (lo, hi)| {
@@ -2003,6 +2070,7 @@ fn render_no_anchor(
     windowed: &HashSet<&str>,
     id_to_path: &HashMap<u32, &str>,
     opts: &TinyOpts,
+    context_shown: bool,
     colorize: bool,
 ) {
     let sel: HashSet<&str> = selected.iter().copied().collect();
@@ -2020,11 +2088,21 @@ fn render_no_anchor(
     // be dominated). Everything else is shown at its offset by the context pass or
     // was dominated and dropped. When no context was captured at all, the block is
     // the only way to surface findings, so it keeps them.
-    let captured = !file.context.is_empty();
+    //
+    // A file past the context cap (`context_shown` false) drew no windows even
+    // though it captured context, so the dominance argument doesn't apply: this
+    // block is the only place its findings can surface. Treat it as uncaptured,
+    // and lower the floor to notable so no real detection is lost to the cap.
+    let captured = context_shown && !file.context.is_empty();
 
-    // Location-less notable traits are noise as bare comments; only surface
-    // suspicious+ facts (e.g. "embedded shellcode array").
-    let floor = opts.min_crit.max(Criticality::Suspicious);
+    // Location-less notable traits are noise as bare comments when a window could
+    // have carried them; surface only suspicious+ then. But a capped file has no
+    // window at all, so its notable findings drop to a bare note rather than vanish.
+    let floor = if context_shown {
+        opts.min_crit.max(Criticality::Suspicious)
+    } else {
+        opts.min_crit.max(Criticality::Notable)
+    };
     let mut rest: Vec<&Finding> = file
         .findings
         .iter()
@@ -2789,6 +2867,61 @@ mod tests {
         fa
     }
 
+    /// A source (`python`) file with an explicit score, findings, and pre-built
+    /// context — the inputs the tiny context view ranks and renders from.
+    fn src_file(
+        id: u32,
+        path: &str,
+        score: u32,
+        findings: Vec<Finding>,
+        context: Vec<crate::types::ContextLine>,
+    ) -> FileAnalysis {
+        let mut fa = FileAnalysis::new(
+            id,
+            path.to_string(),
+            "python".to_string(),
+            format!("sha{id}"),
+            100,
+        );
+        fa.score = score;
+        fa.findings = findings;
+        fa.context = context;
+        fa
+    }
+
+    /// A context line at `loc` carrying `data` and an optional single note.
+    fn ctx_line(
+        loc: u64,
+        data: &str,
+        note: Option<crate::types::Note>,
+    ) -> crate::types::ContextLine {
+        crate::types::ContextLine {
+            loc,
+            addr: Some(loc),
+            data: data.as_bytes().to_vec(),
+            notes: note.into_iter().collect(),
+        }
+    }
+
+    fn ctx_note(id: &str, crit: Criticality, loc: u64) -> crate::types::Note {
+        crate::types::Note {
+            crit,
+            id: id.to_string(),
+            desc: format!("{id} desc"),
+            off: loc,
+            len: 4,
+            conf: 0.9,
+        }
+    }
+
+    /// An empty finalized report with `files` swapped in — the tiny view reads
+    /// `report.files` directly, so this drives `format_tiny` from raw files.
+    fn report_with_files(files: Vec<FileAnalysis>) -> AnalysisReport {
+        let mut report = create_test_report(vec![], vec![]);
+        report.files = files;
+        report
+    }
+
     #[test]
     fn container_shows_cross_file_composites_not_member_duplicates() {
         // An archive container re-evaluates member content at container scope, so
@@ -2889,7 +3022,7 @@ mod tests {
             .map(|i| finding_with(&format!("hostile-{i}"), Criticality::Hostile))
             .collect();
         let file = file_with_findings(findings);
-        let selected = select_ids(&file, &TinyOpts::terminal());
+        let selected = select_ids(&file, &TinyOpts::terminal(), false);
         assert_eq!(
             selected.len(),
             60,
@@ -2911,7 +3044,7 @@ mod tests {
             findings.push(finding_with(&format!("hostile-{i}"), Criticality::Hostile));
         }
         let file = file_with_findings(findings);
-        let selected = select_ids(&file, &TinyOpts::terminal());
+        let selected = select_ids(&file, &TinyOpts::terminal(), false);
         assert_eq!(selected.len(), 40, "total capped at 40");
         for i in 0..5 {
             assert!(selected.contains(&format!("sus-{i}").as_str()));
@@ -2938,8 +3071,204 @@ mod tests {
             .map(|i| finding_with(&format!("notable-{i}"), Criticality::Notable))
             .collect();
         let file = file_with_findings(findings);
-        assert_eq!(select_ids(&file, &TinyOpts::terminal()).len(), 40);
-        assert_eq!(select_ids(&file, &TinyOpts::tiny()).len(), 250);
+        assert_eq!(select_ids(&file, &TinyOpts::terminal(), false).len(), 40);
+        assert_eq!(select_ids(&file, &TinyOpts::tiny(), false).len(), 250);
+    }
+
+    #[test]
+    fn tiny_caps_context_to_top_five_scoring_files() {
+        // Six source files, descending score. The top five draw their source
+        // context (the hit line's code shows); the sixth is past the cap, so its
+        // notable finding still surfaces as a bare note but its code never does.
+        let files: Vec<FileAnalysis> = (0..6)
+            .map(|i| {
+                let id = format!("cat/trait::n{i}");
+                let note = ctx_note(&id, Criticality::Notable, 1);
+                src_file(
+                    i,
+                    &format!("/f{i}.py"),
+                    100 - i, // strictly descending: f0 highest, f5 lowest
+                    vec![Finding {
+                        desc: format!("finding desc {i}"),
+                        ..finding_with(&id, Criticality::Notable)
+                    }],
+                    vec![ctx_line(
+                        1,
+                        &format!("CODELINE_{i} = real_work()"),
+                        Some(note),
+                    )],
+                )
+            })
+            .collect();
+        let output = format_tiny(&report_with_files(files));
+
+        // Top five render their code...
+        for i in 0..5 {
+            assert!(
+                output.contains(&format!("CODELINE_{i}")),
+                "file {i} (top-5) should show context\n{output}"
+            );
+        }
+        // ...the sixth does not, but its finding is not lost — it shows as a note.
+        assert!(
+            !output.contains("CODELINE_5"),
+            "file 5 is past the context cap; no window\n{output}"
+        );
+        assert!(
+            output.contains("finding desc 5"),
+            "file 5's finding still surfaces as a bare note\n{output}"
+        );
+    }
+
+    #[test]
+    fn tiny_unmatched_component_shows_single_line() {
+        // A component trait no composite drew on shows only its own line — no
+        // before/after context — even though neighbors carry real code.
+        let notable = ctx_note("cat/n::hit", Criticality::Notable, 1);
+        let comp = ctx_note("blocks/c::lone", Criticality::Component, 10);
+        let file = src_file(
+            0,
+            "/only.py",
+            50,
+            vec![
+                Finding {
+                    desc: "real finding".to_string(),
+                    ..finding_with("cat/n::hit", Criticality::Notable)
+                },
+                finding_with("blocks/c::lone", Criticality::Component),
+            ],
+            vec![
+                ctx_line(1, "anchor = notable_here()", Some(notable)),
+                ctx_line(9, "NEIGHBOR_BEFORE = setup()", None),
+                ctx_line(10, "COMPONENTLINE = import_os()", Some(comp)),
+                ctx_line(11, "NEIGHBOR_AFTER = teardown()", None),
+            ],
+        );
+        let output = format_tiny(&report_with_files(vec![file]));
+        assert!(
+            output.contains("COMPONENTLINE"),
+            "the component's own line shows\n{output}"
+        );
+        assert!(
+            !output.contains("NEIGHBOR_BEFORE") && !output.contains("NEIGHBOR_AFTER"),
+            "an unmatched component gets no surrounding context\n{output}"
+        );
+    }
+
+    #[test]
+    fn tiny_composite_matched_component_widens_to_composite_severity() {
+        // A component a hostile composite drew on earns ±2 lines of context — the
+        // composite's severity, not the component's, sizes the window.
+        let comp = ctx_note("blocks/c::used", Criticality::Component, 10);
+        let composite = Finding {
+            trait_refs: vec!["blocks/c::used".to_string()],
+            ..finding_with("objectives/x::implant", Criticality::Hostile)
+        };
+        let file = src_file(
+            0,
+            "/only.py",
+            90,
+            vec![
+                composite,
+                finding_with("blocks/c::used", Criticality::Component),
+            ],
+            vec![
+                ctx_line(7, "FAR_BEFORE = outside_window()", None),
+                ctx_line(8, "EDGE_BEFORE2 = two_above()", None),
+                ctx_line(9, "EDGE_BEFORE1 = one_above()", None),
+                ctx_line(10, "COMPONENTLINE = the_block()", Some(comp)),
+                ctx_line(11, "EDGE_AFTER1 = one_below()", None),
+                ctx_line(12, "EDGE_AFTER2 = two_below()", None),
+                ctx_line(13, "FAR_AFTER = outside_window()", None),
+            ],
+        );
+        let output = format_tiny(&report_with_files(vec![file]));
+        for inside in [
+            "EDGE_BEFORE2",
+            "EDGE_BEFORE1",
+            "COMPONENTLINE",
+            "EDGE_AFTER1",
+            "EDGE_AFTER2",
+        ] {
+            assert!(
+                output.contains(inside),
+                "{inside} is within ±2 of the matched component\n{output}"
+            );
+        }
+        assert!(
+            !output.contains("FAR_BEFORE") && !output.contains("FAR_AFTER"),
+            "±3 lines stay outside the hostile-sized window\n{output}"
+        );
+    }
+
+    #[test]
+    fn tiny_shows_all_components_only_in_top_five_files() {
+        // An unreferenced component renders as context inside a top-five file, but
+        // a file past the cap keeps the default gating — its lone component is not
+        // resurrected as a note (it sits below the notable bare-note floor).
+        let mut files: Vec<FileAnalysis> = (0..5)
+            .map(|i| {
+                let id = format!("cat/n::f{i}");
+                let note = ctx_note(&id, Criticality::Notable, 1);
+                src_file(
+                    i,
+                    &format!("/top{i}.py"),
+                    100 - i,
+                    vec![Finding {
+                        desc: format!("top finding {i}"),
+                        ..finding_with(&id, Criticality::Notable)
+                    }],
+                    vec![ctx_line(1, &format!("TOPCODE_{i} = work()"), Some(note))],
+                )
+            })
+            .collect();
+
+        // A top-five file additionally carrying an unreferenced component.
+        let in_top = &mut files[0];
+        in_top
+            .findings
+            .push(finding_with("blocks/c::shown", Criticality::Component));
+        in_top.context.push(ctx_line(
+            20,
+            "SHOWN_COMPONENT = side_effect()",
+            Some(ctx_note("blocks/c::shown", Criticality::Component, 20)),
+        ));
+
+        // A sixth file, past the cap, whose only extra signal is a component.
+        files.push(src_file(
+            5,
+            "/tail.py",
+            1,
+            vec![
+                Finding {
+                    desc: "tail notable".to_string(),
+                    ..finding_with("cat/n::tail", Criticality::Notable)
+                },
+                finding_with("blocks/c::hidden", Criticality::Component),
+            ],
+            vec![
+                ctx_line(
+                    1,
+                    "TAILCODE = work()",
+                    Some(ctx_note("cat/n::tail", Criticality::Notable, 1)),
+                ),
+                ctx_line(
+                    20,
+                    "HIDDEN_COMPONENT = side_effect()",
+                    Some(ctx_note("blocks/c::hidden", Criticality::Component, 20)),
+                ),
+            ],
+        ));
+
+        let output = format_tiny(&report_with_files(files));
+        assert!(
+            output.contains("SHOWN_COMPONENT"),
+            "a component in a top-five file renders as context\n{output}"
+        );
+        assert!(
+            !output.contains("HIDDEN_COMPONENT"),
+            "a capped file keeps default component gating\n{output}"
+        );
     }
 
     fn create_test_report(findings: Vec<Finding>, yara_matches: Vec<YaraMatch>) -> AnalysisReport {

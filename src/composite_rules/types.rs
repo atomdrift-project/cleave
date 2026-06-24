@@ -481,6 +481,139 @@ pub(crate) enum FileType {
     Xpi,
 }
 
+impl From<filefacts::FileType> for FileType {
+    /// Map a filefacts identification type onto cleave's trait-routing bucket.
+    ///
+    /// filefacts is the single source of truth for *what a file is*; this enum
+    /// is the coarser vocabulary for *which traits' `for:` applies*. The two
+    /// differ for two reasons, both encoded explicitly here:
+    ///
+    /// 1. Deliberate folding — identities that share one trait surface collapse
+    ///    to one bucket (the three `pkg_*` ecosystems → [`Pkg`], the two `apk_*`
+    ///    → [`Apk`], `typescript` → [`JavaScript`] mirroring `parse_file_types`,
+    ///    `svg` → [`Xml`] since SVG is scanned as XML). The fine-grained label
+    ///    still rides along in the report string for litmus/collimator.
+    /// 2. Lag — identification types cleave has not yet grown a trait bucket for
+    ///    (lockfiles, `src_info`, `registry`, single-file compression, niche
+    ///    archives/documents) route to [`Unknown`], which honours every rule's
+    ///    `for:` without claiming a capability surface.
+    ///
+    /// Every current filefacts variant is mapped explicitly so the routing
+    /// decision is reviewable in one place. filefacts marks its enum
+    /// `#[non_exhaustive]`, so a wildcard is required; a future type cleave has
+    /// not classified routes to `Unknown` rather than dropping out — the same
+    /// safe fallback that the broken hand-rolled string table lacked.
+    fn from(ft: filefacts::FileType) -> Self {
+        use filefacts::FileType as Ff;
+        match ft {
+            // Binaries
+            Ff::MachO => Self::Macho,
+            Ff::Elf => Self::Elf,
+            Ff::Pe => Self::Pe,
+            Ff::JavaClass => Self::Class,
+            Ff::PythonBytecode => Self::Pyc,
+            Ff::Beam => Self::Beam,
+            Ff::Wasm => Self::Wasm,
+            // Scripts / source
+            Ff::Shell => Self::Shell,
+            Ff::Batch => Self::Batch,
+            Ff::Jcl => Self::Jcl,
+            Ff::Vbs => Self::Vbs,
+            Ff::Python => Self::Python,
+            // TypeScript folds to JavaScript: `parse_file_types` routes both to
+            // the same bucket, so analyzed `.ts` files must too or `for:
+            // [javascript]` traits would miss them.
+            Ff::JavaScript | Ff::TypeScript => Self::JavaScript,
+            Ff::Go => Self::Go,
+            Ff::Rust => Self::Rust,
+            Ff::Java => Self::Java,
+            Ff::Ruby => Self::Ruby,
+            Ff::Php => Self::Php,
+            Ff::Perl => Self::Perl,
+            Ff::Lua => Self::Lua,
+            Ff::CSharp => Self::CSharp,
+            Ff::PowerShell => Self::PowerShell,
+            Ff::Swift => Self::Swift,
+            Ff::ObjectiveC => Self::ObjectiveC,
+            Ff::Groovy => Self::Groovy,
+            Ff::Scala => Self::Scala,
+            Ff::Kotlin => Self::Kotlin,
+            Ff::Zig => Self::Zig,
+            Ff::Elixir => Self::Elixir,
+            Ff::Clojure => Self::Clojure,
+            Ff::C => Self::C,
+            Ff::AppleScript => Self::AppleScript,
+            Ff::Makefile => Self::Makefile,
+            Ff::Dockerfile => Self::Dockerfile,
+            // Manifests / config / structured text
+            Ff::PackageJson => Self::PackageJson,
+            Ff::PackageLockJson => Self::PackageLockJson,
+            Ff::VsixManifest => Self::VsixManifest,
+            Ff::ChromeManifest => Self::ChromeManifest,
+            Ff::CargoToml => Self::CargoToml,
+            Ff::PyProjectToml => Self::PyProjectToml,
+            Ff::ComposerJson => Self::ComposerJson,
+            Ff::Json => Self::Json,
+            Ff::Gyp => Self::Gyp,
+            Ff::GithubActions => Self::GithubActions,
+            Ff::SystemdService => Self::SystemdService,
+            Ff::DesktopEntry => Self::DesktopEntry,
+            Ff::Xml | Ff::Svg => Self::Xml,
+            Ff::PkgInfo => Self::PkgInfo,
+            Ff::GoMod => Self::GoMod,
+            // Documents / media
+            Ff::Plist => Self::Plist,
+            Ff::Rtf => Self::Rtf,
+            Ff::OleDoc => Self::OleDoc,
+            Ff::Ooxml => Self::Ooxml,
+            Ff::Lnk => Self::Lnk,
+            Ff::Jpeg => Self::Jpeg,
+            Ff::Png => Self::Png,
+            Ff::Pickle => Self::Pickle,
+            Ff::Pdf => Self::Pdf,
+            Ff::Html => Self::Html,
+            Ff::Markdown => Self::Markdown,
+            Ff::Text => Self::Text,
+            Ff::Data => Self::Data,
+            // Archives / packages
+            Ff::Zip => Self::Zip,
+            Ff::Tar | Ff::TarGz | Ff::TarBz2 | Ff::TarXz | Ff::TarZst => Self::Tar,
+            Ff::Zst => Self::Zst,
+            Ff::SevenZ | Ff::Rar => Self::Archive,
+            Ff::Deb => Self::Deb,
+            Ff::Rpm => Self::Rpm,
+            Ff::PkgMacos | Ff::PkgFreebsd | Ff::PkgArch => Self::Pkg,
+            Ff::Chm => Self::Chm,
+            Ff::Crx => Self::Crx,
+            Ff::Xpi => Self::Xpi,
+            Ff::Whl => Self::Whl,
+            Ff::Gem => Self::Gem,
+            Ff::ApkAndroid | Ff::ApkAlpine => Self::Apk,
+            Ff::Npm => Self::Npm,
+            Ff::Crate => Self::Crate,
+            Ff::Conda => Self::Conda,
+            Ff::Egg => Self::Egg,
+            Ff::Nupkg => Self::Nupkg,
+            Ff::Ipa => Self::Ipa,
+            Ff::Vsix => Self::VsixArchive,
+            Ff::Jar => Self::Jar,
+            // Everything else routes to Unknown — it still honours every
+            // rule's `for:`, it just claims no capability surface until a
+            // dedicated bucket is chosen. This covers types not yet modelled
+            // for trait routing (which resolved to Unknown before this bridge
+            // too, so no regression): lockfiles + dependency text (CargoLock,
+            // GoSum, RequirementsTxt, PoetryLock, PipfileLock, GemfileLock,
+            // ComposerLock, YarnLock, PnpmLock), package metadata (SrcInfo,
+            // Registry), single-file compression (Gz, Bz2, Xz), archives
+            // without a dedicated bucket (Dmg, Cab, Asar, PythonSdist,
+            // OciImage, Xbps, GentooBinpkg), and documents (Odf). The wildcard
+            // is also mandatory because filefacts::FileType is
+            // `#[non_exhaustive]`.
+            _ => Self::Unknown,
+        }
+    }
+}
+
 impl FileType {
     /// Returns true if this file type is source code (not a compiled binary)
     #[must_use]
@@ -715,6 +848,15 @@ impl FileType {
     /// This is the canonical mapping used by both production scanning and test-rules.
     #[must_use]
     pub(crate) fn from_str(file_type: &str) -> FileType {
+        // A report's `type` string is filefacts's canonical `FileType::label()`.
+        // Resolve it through filefacts first so trait routing can never drift
+        // from identification (the cause of the `objective_c`/`github_actions`
+        // detection regression). Author-facing aliases that are not canonical
+        // labels (`objc`, `cpp`, `gomod`, group tokens) fall through to the
+        // explicit table below.
+        if let Some(ft) = filefacts::FileType::from_label(file_type) {
+            return FileType::from(ft);
+        }
         match file_type.to_lowercase().as_str() {
             "elf" | "so" => FileType::Elf,
             "macho" | "dylib" => FileType::Macho,
@@ -1009,6 +1151,64 @@ mod tests {
         assert_eq!(FileType::from_str("class"), FileType::Class);
         assert_eq!(FileType::from_str("java_class"), FileType::Class);
         assert_eq!(FileType::from_str("javaclass"), FileType::Class);
+    }
+
+    /// A report's `type` is filefacts's canonical `FileType::label()`. The
+    /// trait engine resolves that exact string via `from_str` to gate `for:`,
+    /// so every canonical label MUST route to its bucket — never `Unknown`.
+    /// Regression guard for the `objective_c`/`github_actions` detection break
+    /// where labels diverged from cleave's hand-rolled string table.
+    #[test]
+    fn from_str_resolves_canonical_filefacts_labels() {
+        use filefacts::FileType as Ff;
+        // The labels that actually regressed (snake_case diverged from the old
+        // alias spellings the table knew).
+        assert_eq!(
+            FileType::from_str(Ff::ObjectiveC.label()),
+            FileType::ObjectiveC
+        );
+        assert_eq!(
+            FileType::from_str(Ff::GithubActions.label()),
+            FileType::GithubActions
+        );
+        assert_eq!(
+            FileType::from_str(Ff::PythonBytecode.label()),
+            FileType::Pyc
+        );
+        assert_eq!(
+            FileType::from_str(Ff::VsixManifest.label()),
+            FileType::VsixManifest
+        );
+        assert_eq!(
+            FileType::from_str(Ff::ChromeManifest.label()),
+            FileType::ChromeManifest
+        );
+        assert_eq!(FileType::from_str(Ff::OleDoc.label()), FileType::OleDoc);
+        // Deliberate foldings: the report keeps the precise label, routing uses
+        // the coarse bucket.
+        assert_eq!(
+            FileType::from_str(Ff::TypeScript.label()),
+            FileType::JavaScript
+        );
+        assert_eq!(FileType::from_str(Ff::Svg.label()), FileType::Xml);
+        assert_eq!(FileType::from_str(Ff::ApkAndroid.label()), FileType::Apk);
+        assert_eq!(FileType::from_str(Ff::PkgArch.label()), FileType::Pkg);
+        assert_eq!(FileType::from_str(Ff::TarZst.label()), FileType::Tar);
+    }
+
+    /// Author-facing aliases that are NOT canonical labels must still resolve
+    /// through the explicit table (the filefacts pre-pass returns `None` for
+    /// them and falls through).
+    #[test]
+    fn from_str_keeps_author_aliases() {
+        assert_eq!(FileType::from_str("objc"), FileType::ObjectiveC);
+        assert_eq!(
+            FileType::from_str("github-actions"),
+            FileType::GithubActions
+        );
+        assert_eq!(FileType::from_str("cpp"), FileType::C);
+        assert_eq!(FileType::from_str("gomod"), FileType::GoMod);
+        assert_eq!(FileType::from_str("ts"), FileType::JavaScript);
     }
 
     // ==================== Platform Equality Tests ====================

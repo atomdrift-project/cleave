@@ -817,7 +817,7 @@ int main() {
     let actual_type = get_file_type(&json).unwrap_or_else(|| "unknown".to_string());
 
     assert!(
-        check_file_type(&json, "objc"),
+        check_file_type(&json, "objective_c"),
         "Should detect as Objective-C file, got: {}",
         actual_type
     );

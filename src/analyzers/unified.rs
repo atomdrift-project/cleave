@@ -203,8 +203,8 @@ pub(crate) fn config_for_file_type(
             string_node_types: &["line_string_literal", "multi_line_string_literal"],
         }),
         FileType::ObjectiveC => Some(LanguageConfig {
-            name: "objc",
-            file_type: "objc",
+            name: "objective_c",
+            file_type: "objective_c",
             description: "Objective-C source code",
             call_node_types: &["message_expression", "call_expression"],
             function_node_types: &["function_definition", "method_definition"],

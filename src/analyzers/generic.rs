@@ -597,6 +597,6 @@ test.c $(distdir)/runsuite.c | GZIP=$(GZIP_ENV) gzip -c >`echo "$(distdir)" | sh
 
         let report = analyzer.analyze_input(&input).expect("analyze pyc");
 
-        assert_eq!(report.target.file_type, "python-bytecode");
+        assert_eq!(report.target.file_type, "python_bytecode");
     }
 }

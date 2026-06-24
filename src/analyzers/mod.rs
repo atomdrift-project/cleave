@@ -561,44 +561,11 @@ pub(crate) trait FileTypeExt {
 
 impl FileTypeExt for FileType {
     fn report_file_type(&self) -> String {
-        match self {
-            FileType::SystemdService => "systemd".to_string(),
-            FileType::DesktopEntry => "desktop-entry".to_string(),
-            FileType::Xml => "xml".to_string(),
-            FileType::Tar => "tar".to_string(),
-            FileType::TarGz => "tar.gz".to_string(),
-            FileType::TarBz2 => "tar.bz2".to_string(),
-            FileType::TarXz => "tar.xz".to_string(),
-            FileType::TarZst => "tar.zst".to_string(),
-            FileType::SevenZ => "7z".to_string(),
-            // Package types whose snake_case serialization the Debug-lowercase
-            // fallback can't reproduce (it drops the underscore). These strings
-            // are the downstream contract: litmus routes on them and collimator
-            // tokenizes them, so they must match filefacts's serde form exactly.
-            FileType::Gem => "gem".to_string(),
-            FileType::ApkAndroid => "apk_android".to_string(),
-            FileType::ApkAlpine => "apk_alpine".to_string(),
-            FileType::PkgMacos => "pkg_macos".to_string(),
-            FileType::PkgFreebsd => "pkg_freebsd".to_string(),
-            FileType::PkgArch => "pkg_arch".to_string(),
-            // Npm/Crate/Conda/Egg/Nupkg/Ipa/Vsix are single words whose
-            // Debug-lowercase form already matches their snake_case serde token,
-            // so they fall through to the default arm below.
-            FileType::PythonBytecode => "python-bytecode".to_string(),
-            FileType::PackageLockJson => "package-lock.json".to_string(),
-            FileType::Json => "json".to_string(),
-            FileType::Gyp => "gyp".to_string(),
-            // Explicit forms below differ from the Debug-lowercase fallback;
-            // kept here so this stays the single source of truth for the report
-            // type string (generic.rs delegates to it instead of duplicating).
-            FileType::ObjectiveC => "objc".to_string(),
-            FileType::GithubActions => "github-actions".to_string(),
-            FileType::PkgInfo => "pkg-info".to_string(),
-            FileType::GoMod => "go.mod".to_string(),
-            FileType::CargoToml => "cargo.toml".to_string(),
-            FileType::PyProjectToml => "pyproject.toml".to_string(),
-            _ => format!("{:?}", self).to_lowercase(),
-        }
+        // filefacts is the single source of truth for the canonical label.
+        // The report `type`, litmus's routing keys, and collimator's tokens
+        // are all this one string — no separate hand-rolled vocabulary, and
+        // no fragile Debug-lowercase fallback that silently drops underscores.
+        self.label().to_string()
     }
 
     fn yara_filetypes(&self) -> Vec<&'static str> {
@@ -956,12 +923,18 @@ mod tests {
     }
 
     #[test]
-    fn bridge_report_file_type_uses_systemd_alias() {
-        assert_eq!(FileType::SystemdService.report_file_type(), "systemd");
+    fn bridge_report_file_type_delegates_to_filefacts_label() {
+        // The report type is filefacts's canonical label verbatim — no
+        // hand-rolled aliases, no Debug-lowercase mangling.
+        assert_eq!(
+            FileType::SystemdService.report_file_type(),
+            "systemd_service"
+        );
         assert_eq!(
             FileType::PythonBytecode.report_file_type(),
-            "python-bytecode"
+            "python_bytecode"
         );
+        assert_eq!(FileType::ObjectiveC.report_file_type(), "objective_c");
         assert_eq!(FileType::Elf.report_file_type(), "elf");
     }
 }

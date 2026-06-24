@@ -59,16 +59,29 @@ fn scan_with_trait(fixture_name: &str, fixture: &str, traits_yaml: &str) -> (Tem
     (dir, stdout)
 }
 
-/// The context-centric tiny format annotates a finding as
-/// `<marker> <SEV> <description>` (the trait-id leaf was dropped), trailing a
-/// matched line or on a standalone `.` no-anchor line. Returns true if any line
-/// carries an annotation with the given severity letter and description.
+/// The context-centric tiny format announces a finding on a preceding
+/// comment-marker line shaped `{marker} {SEV} {LINE[:COL]|@OFFSET} {desc}`
+/// (e.g. `# N 2:1 bare spawn invocation`, `// H @0 …`); the marker is the
+/// sample language's line comment. Returns true if any line carries such an
+/// annotation with the given severity letter and description.
 fn finding_present(stdout: &str, sev: char, desc: &str) -> bool {
-    let needle = format!(" {sev} {desc}");
-    let marker = format!("{sev}\t");
-    stdout
-        .lines()
-        .any(|line| line.contains(desc) && (line.contains(&needle) || line.starts_with(&marker)))
+    stdout.lines().any(|line| {
+        if !line.contains(desc) {
+            return false;
+        }
+        // Find the standalone severity token (`N`/`H`/…) after the marker, then
+        // require the following token to be a location (`LINE`, `LINE:COL`, or
+        // `@OFFSET`) — the shape that distinguishes an annotation from source.
+        let mut tokens = line.split_whitespace();
+        while let Some(tok) = tokens.next() {
+            if tok.len() == 1 && tok.starts_with(sev) {
+                return tokens.next().is_some_and(|loc| {
+                    loc.starts_with('@') || loc.starts_with(|c: char| c.is_ascii_digit())
+                });
+            }
+        }
+        false
+    })
 }
 
 #[test]

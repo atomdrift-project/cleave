@@ -545,9 +545,9 @@ dependencies = [
 
 [[package]]
 name = "bstr"
-version = "1.12.2"
+version = "1.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a4e308e67087593070530a666f7fe8815cbd2e61d8f5b7313b71b7d721d1dfde"
+checksum = "5cee35f73844aa3014bb606320a6c1f010249dbdf43342fe54b5a4f6a8ed4b79"
 dependencies = [
  "memchr",
  "regex-automata",
@@ -1688,7 +1688,7 @@ dependencies = [
 [[package]]
 name = "filefacts"
 version = "1.1.0"
-source = "git+https://codeberg.org/atomdrift/filefacts.git#21a4f08352071ba05940838904b2372c900626b5"
+source = "git+https://codeberg.org/atomdrift/filefacts.git#a5a5278342b1c92145b17e82ab3f67049a616a2b"
 dependencies = [
  "aho-corasick",
  "cfb 0.10.0",
@@ -2774,9 +2774,9 @@ version = "0.1.0"
 
 [[package]]
 name = "lzxd"
-version = "0.2.6"
+version = "0.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b29dffab797218e12e4df08ef5d15ab9efca2504038b1b32b9b32fc844b39c9"
+checksum = "c17f346186eccb574ba5581acefc514f0c70a642db4f96e245034a0a158a7168"
 
 [[package]]
 name = "mach2"
@@ -3465,9 +3465,9 @@ dependencies = [
 
 [[package]]
 name = "psl"
-version = "2.1.214"
+version = "2.1.215"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9124f6ba3f3aea75e4918fc86c76adfba8c9d289ab36f926f0b6ce4987a9e6a9"
+checksum = "caff7403e06671f170c65dc7bf475ed31d6e108c7e0d2440fb4df8ba56cfded6"
 dependencies = [
  "psl-types",
 ]
@@ -5218,7 +5218,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-clojure"
 version = "0.1.0"
-source = "git+https://codeberg.org/atomdrift/filefacts.git#21a4f08352071ba05940838904b2372c900626b5"
+source = "git+https://codeberg.org/atomdrift/filefacts.git#a5a5278342b1c92145b17e82ab3f67049a616a2b"
 dependencies = [
  "cc",
  "tree-sitter",

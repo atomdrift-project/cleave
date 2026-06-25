@@ -83,15 +83,18 @@ pub fn run(format: &OutputFormat, exclude: Option<&str>, verbose: bool) -> Resul
     run_inner(format, exclude, verbose, soft_env_enabled())
 }
 
-/// Run trait validation in **soft** mode: fail only on flaws that prevent the
-/// bundle from loading or that silently lose detections (unparseable YAML,
-/// uncompilable regex, invalid/unknown file types, duplicate trait ids), plus
-/// the testdata fixture scoring. Authoring-hygiene issues (taxonomy, size,
-/// dedup/reuse, regex style, precision) are reported only, never fatal.
+/// Run trait validation in **soft** mode: fail only on `Hard` problems — those
+/// where a rule won't load or won't fire (unparseable YAML, uncompilable regex,
+/// invalid file types, duplicate trait ids, broken references, impossible
+/// constraints, malformed/empty conditions, self-references), plus the testdata
+/// fixture scoring. Authoring-hygiene issues (taxonomy, size, dedup/reuse, regex
+/// style, precision) and forward-compat cases (unknown file types or metric
+/// fields on an older engine) are reported only, never fatal.
 ///
 /// Intended for trait-bundle gates — `make publish-traits`, the scan worker,
 /// and hopper's local scanner — that must tolerate hygiene debt but reject a
-/// bundle that won't load or won't detect on this engine.
+/// bundle that won't load or won't detect on this engine. The hard set is
+/// defined in one place: `validation_controls::HARD_VALIDATOR_IDS`.
 pub fn run_soft(format: &OutputFormat, exclude: Option<&str>, verbose: bool) -> Result<String> {
     run_inner(format, exclude, verbose, true)
 }
@@ -112,11 +115,11 @@ fn run_inner(
     verbose: bool,
     soft: bool,
 ) -> Result<String> {
-    if soft {
-        validation_controls::set_soft_validation_override(exclude)?;
-    } else {
-        validation_controls::set_disabled_validators_override(exclude)?;
-    }
+    // `--exclude` silences specific validators (the only suppression knob);
+    // `--soft` downgrades every Soft-severity problem to advisory, leaving only
+    // Hard problems (won't load / won't fire) fatal.
+    validation_controls::set_disabled_validators_override(exclude)?;
+    validation_controls::set_soft_validation_mode(soft);
     let (targets, expectations) = collect_targets()?;
 
     // Skip the analysis cache so every run reflects the current trait set,

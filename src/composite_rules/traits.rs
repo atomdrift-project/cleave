@@ -1726,6 +1726,16 @@ impl TraitDefinition {
 pub(crate) enum Scope {
     /// Anywhere within the input given to cleave.
     Outer,
+    /// A fetched package artifact together with its registry metadata
+    /// (`*.registry.json`). Like [`Scope::Outer`] it pools by presence
+    /// (empty key), but it is only ever evaluated on the fetch-driven
+    /// package pass that unions an artifact's findings with its
+    /// registry record's findings — so a `scope: package` composite is
+    /// a no-op on a bare local scan and fires only under `--fetch` /
+    /// `pkg:`. Authored for rules that correlate registry facts
+    /// (deprecated, low downloads, fresh publish) with artifact
+    /// behavior.
+    Package,
     /// Same nearest enclosing archive entry. For evidence that is not
     /// inside an archive, degrades to [`Scope::Outer`] (empty key —
     /// same key as every other non-archive evidence in the input).
@@ -1748,8 +1758,10 @@ impl Scope {
     /// string), so this is allocation-free.
     fn key(self, location: Option<&str>) -> &str {
         match (self, location) {
-            // Outer scope or no location info — all evidence shares one key.
-            (Scope::Outer, _) | (_, None) => "",
+            // Outer/Package scope or no location info — all evidence shares one
+            // key. Package pools by presence; the artifact↔registry boundary it
+            // spans is two separate analyses with no shared location to key on.
+            (Scope::Outer | Scope::Package, _) | (_, None) => "",
             // Leaf: exact location match required.
             (Scope::Leaf, Some(loc)) => strip_byte_offset_location(loc),
             // File: strip any decoded-payload suffix; what remains is
@@ -2210,7 +2222,10 @@ impl CompositeTrait {
         // content script and its manifest/rules JSON). Without this, such a rule
         // would only ever evaluate on a single leaf and never see the pooled
         // cross-entry findings it was written for.
-        let pools_across_archive = matches!(self.scope, Some(Scope::Outer) | Some(Scope::Archive));
+        let pools_across_archive = matches!(
+            self.scope,
+            Some(Scope::Outer | Scope::Archive | Scope::Package)
+        );
         let file_type_match = self.r#for.contains(&FileType::All)
             || self.r#for.contains(&ctx.file_type)
             || ((ctx.file_type == FileType::All || ctx.file_type.is_archive())
@@ -3142,7 +3157,8 @@ impl CompositeTrait {
         tagged_locations: Vec<TaggedLocation>,
     ) -> Option<(Vec<Evidence>, Vec<TaggedLocation>)> {
         let scope = self.scope.unwrap_or_default();
-        if scope == Scope::Outer {
+        if matches!(scope, Scope::Outer | Scope::Package) {
+            // Both pool by presence (empty key) — every item is in one bucket.
             return Some((evidence, tagged_locations));
         }
         let min_distinct = self.min_distinct_conditions();
@@ -3700,6 +3716,30 @@ mod scope_tests {
         ] {
             assert_eq!(Scope::Outer.key(loc), "");
         }
+    }
+
+    #[test]
+    fn package_collapses_every_location_to_empty_string() {
+        // Package pools by presence, exactly like Outer — the artifact↔registry
+        // boundary it spans is two separate analyses with no shared location.
+        for loc in [
+            None,
+            Some("archive:foo.zip!bar.so"),
+            Some("encoding_chain:base64+zlib"),
+            Some("0x1234"),
+        ] {
+            assert_eq!(Scope::Package.key(loc), "");
+        }
+    }
+
+    #[test]
+    fn package_scope_round_trips_through_yaml() {
+        // `scope: package` parses via the serde rename, alongside the other
+        // variants, and serializes back to the same lowercase token.
+        let scope: Scope = serde_yaml::from_str("package").expect("parse scope");
+        assert_eq!(scope, Scope::Package);
+        let token = serde_yaml::to_string(&Scope::Package).expect("serialize scope");
+        assert_eq!(token.trim(), "package");
     }
 
     #[test]

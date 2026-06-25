@@ -56,7 +56,7 @@ pub struct FilefactsView {
     /// (install-hook `curl|sh`, npm `scripts`) is fletch's job and is not
     /// surfaced here — only what filefacts declares.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub references: Vec<filefacts::ExternalRef>,
+    pub references: Vec<filefacts::Reference>,
 }
 
 impl FilefactsView {

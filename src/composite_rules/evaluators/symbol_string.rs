@@ -7,8 +7,8 @@
 //! - String count analysis
 
 use super::{
-    ContentLocationParams, build_regex, resolve_effective_range, resolve_effective_range_opt,
-    symbol_matches, truncate_evidence,
+    ContentLocationParams, build_regex, match_window, resolve_effective_range,
+    resolve_effective_range_opt, symbol_matches, truncate_evidence,
 };
 use crate::composite_rules::condition::{NotException, StringValidator, SymbolKind};
 use crate::composite_rules::context::{ConditionResult, EvaluationContext, StringParams};
@@ -1951,7 +1951,11 @@ pub(crate) fn eval_raw<'a>(
                             match_count += 1;
                         }
                     }
-                    start = abs_pos + 1;
+                    start = search_content[abs_pos..]
+                        .char_indices()
+                        .nth(1)
+                        .map(|(next, _)| abs_pos + next)
+                        .unwrap_or_else(|| search_content.len());
                 }
                 if match_count > 0 && evidence.len() < MAX_EVIDENCE_PER_TRAIT {
                     evidence.push(Evidence {
@@ -1981,11 +1985,10 @@ pub(crate) fn eval_raw<'a>(
                 let mut start = 0;
                 while let Some(pos) = search_content[start..].find(search_pattern.as_ref()) {
                     let abs_pos = start + pos;
-                    let context_start = abs_pos.saturating_sub(50);
-                    let context_end = (abs_pos + search_pattern.len() + 50).min(content.len());
-                    let match_context = &content[context_start..context_end];
+                    let match_context =
+                        match_window(&content, abs_pos, abs_pos + search_pattern.len(), 50);
                     let excluded = not
-                        .map(|excs| excs.iter().any(|e| e.matches(match_context)))
+                        .map(|excs| excs.iter().any(|e| e.matches(&match_context)))
                         .unwrap_or(false);
                     if !excluded {
                         if first_match_offset.is_none() {
@@ -1993,7 +1996,11 @@ pub(crate) fn eval_raw<'a>(
                         }
                         match_count += 1;
                     }
-                    start = abs_pos + 1;
+                    start = search_content[abs_pos..]
+                        .char_indices()
+                        .nth(1)
+                        .map(|(next, _)| abs_pos + next)
+                        .unwrap_or_else(|| search_content.len());
                 }
                 if match_count > 0 && evidence.len() < MAX_EVIDENCE_PER_TRAIT {
                     evidence.push(Evidence {

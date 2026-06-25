@@ -815,6 +815,7 @@ impl ArchiveAnalyzer {
             // filefacts is the string authority and the parser: open the
             // member once and thread it into the analyzer (below) so it is
             // parsed a single time, regardless of member type.
+            let _rizin_disable = skip_rizin_reason.map(|_| filefacts::rizin::scoped_disable());
             let member_ctx =
                 crate::analysis_context::AnalysisContext::open(logical_path, data).ok();
             let stng_strings: std::sync::Arc<[stng::ExtractedString]> = member_ctx

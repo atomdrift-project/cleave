@@ -487,12 +487,32 @@ pub(crate) struct ArchiveAnalyzer {
 /// Decompress a single-file stream into `dest_dir`, applying size and ratio guards.
 ///
 /// The output filename is derived from `archive_path`'s stem (e.g. `foo.gz` → `foo`).
+const MAX_RECURSIVE_DECOMPRESSION_LAYERS: usize = 16;
+
 fn decompress_to_file<R: std::io::Read>(
     mut decoder: R,
     archive_path: &Path,
     dest_dir: &Path,
     compressed_size: u64,
     guard: &guards::ExtractionGuard,
+) -> Result<()> {
+    decompress_to_file_at_depth(
+        &mut decoder,
+        archive_path,
+        dest_dir,
+        compressed_size,
+        guard,
+        0,
+    )
+}
+
+fn decompress_to_file_at_depth<R: std::io::Read>(
+    mut decoder: R,
+    archive_path: &Path,
+    dest_dir: &Path,
+    compressed_size: u64,
+    guard: &guards::ExtractionGuard,
+    decompression_depth: usize,
 ) -> Result<()> {
     let stem = archive_path
         .file_stem()
@@ -505,7 +525,13 @@ fn decompress_to_file<R: std::io::Read>(
     guard.check_compression_ratio(compressed_size, written);
     guard.check_bytes(written, stem);
 
-    extract_decompressed_data_or_write_file(decompressed, stem, dest_dir, guard)
+    extract_decompressed_data_or_write_file(
+        decompressed,
+        stem,
+        dest_dir,
+        guard,
+        decompression_depth,
+    )
 }
 
 fn extract_decompressed_data_or_write_file(
@@ -513,6 +539,7 @@ fn extract_decompressed_data_or_write_file(
     stem: &str,
     dest_dir: &Path,
     guard: &guards::ExtractionGuard,
+    decompression_depth: usize,
 ) -> Result<()> {
     use std::io::Cursor;
 
@@ -550,34 +577,45 @@ fn extract_decompressed_data_or_write_file(
                 guard,
             )
         }
-        FileType::Gz => decompress_to_file(
+        FileType::Gz | FileType::Bz2 | FileType::Xz | FileType::Zst
+            if decompression_depth >= MAX_RECURSIVE_DECOMPRESSION_LAYERS =>
+        {
+            let mut out = File::create(dest_dir.join(stem))?;
+            std::io::Write::write_all(&mut out, &data)?;
+            Ok(())
+        }
+        FileType::Gz => decompress_to_file_at_depth(
             flate2::read::GzDecoder::new(Cursor::new(&data)),
             logical_path,
             dest_dir,
             data.len() as u64,
             guard,
+            decompression_depth + 1,
         ),
-        FileType::Bz2 => decompress_to_file(
+        FileType::Bz2 => decompress_to_file_at_depth(
             bzip2::read::BzDecoder::new(Cursor::new(&data)),
             logical_path,
             dest_dir,
             data.len() as u64,
             guard,
+            decompression_depth + 1,
         ),
-        FileType::Xz => decompress_to_file(
+        FileType::Xz => decompress_to_file_at_depth(
             xz2::read::XzDecoder::new(Cursor::new(&data)),
             logical_path,
             dest_dir,
             data.len() as u64,
             guard,
+            decompression_depth + 1,
         ),
-        FileType::Zst => decompress_to_file(
+        FileType::Zst => decompress_to_file_at_depth(
             zstd::stream::read::Decoder::new(Cursor::new(&data))
                 .context("Failed to create zstd decoder")?,
             logical_path,
             dest_dir,
             data.len() as u64,
             guard,
+            decompression_depth + 1,
         ),
         _ => {
             let mut out = File::create(dest_dir.join(stem))?;

@@ -126,8 +126,10 @@ static YARA_SCANS_DISABLED_AFTER_PANIC: AtomicBool = AtomicBool::new(false);
 
 // Thread-local LRU cache for YARA scanners keyed by `Rules` pointer address.
 // Avoids expensive `Scanner::new()` on every file (wasmtime VM instantiation).
-// Each rayon worker thread caches its own scanners (typically 2: cross-format + file-type).
-// Bounded to prevent memory explosion across many threads.
+// Each rayon worker thread caches its own scanners (one per filetype bucket it
+// touches). The `Rules` behind each key live for the whole process (OnceLock
+// statics), so cached scanners never go stale; the LRU bound is the only thing
+// keeping this from growing without limit, so the cache is never cleared.
 thread_local! {
     static ENGINE_SCANNER_CACHE: RefCell<lru::LruCache<usize, yara_x::Scanner<'static>>> = {
         use std::num::NonZeroUsize;
@@ -135,22 +137,6 @@ thread_local! {
             NonZeroUsize::new(ENGINE_SCANNER_CACHE_SIZE).unwrap_or(NonZeroUsize::MIN);
         RefCell::new(lru::LruCache::new(cache_size))
     };
-}
-
-/// Clear the thread-local engine scanner cache for this thread.
-/// Called during periodic cache cleanup and on hot-reload.
-pub(crate) fn clear_engine_scanner_cache() {
-    ENGINE_SCANNER_CACHE.with(|cache| {
-        let mut cache = cache.borrow_mut();
-        let cleared = cache.len();
-        cache.clear();
-        if cleared > 0 {
-            tracing::debug!(
-                cleared_entries = cleared,
-                "Cleared YARA engine scanner cache"
-            );
-        }
-    });
 }
 
 fn rule_context_key(namespace: &str, rule_name: &str) -> String {

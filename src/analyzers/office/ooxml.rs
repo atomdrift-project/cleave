@@ -19,7 +19,7 @@ pub(crate) struct OoxmlDocument {
     /// Whether VBA macros were found (vbaProject.bin present)
     pub has_vba: bool,
     /// External template references (template injection vector)
-    pub external_refs: Vec<ExternalRef>,
+    pub external_refs: Vec<Reference>,
     /// DDE field codes found
     pub dde_links: Vec<String>,
     /// Embedded objects that contain PE/ELF executables
@@ -70,7 +70,7 @@ impl OoxmlSubtype {
 
 /// An external reference found in relationship files.
 #[derive(Debug, Clone)]
-pub(crate) struct ExternalRef {
+pub(crate) struct Reference {
     pub source: String,
     pub target: String,
     pub rel_type: String,
@@ -369,7 +369,7 @@ fn extract_ascii_strings(data: &[u8], min_len: usize) -> Vec<String> {
 fn find_external_refs<R: OoxmlEntryReader>(
     reader: &mut R,
     entry_names: &[String],
-) -> Vec<ExternalRef> {
+) -> Vec<Reference> {
     let mut refs = Vec::new();
 
     let rels_entries: Vec<String> = entry_names
@@ -394,7 +394,7 @@ fn find_external_refs<R: OoxmlEntryReader>(
                         let target = node.attribute("Target").unwrap_or("").to_string();
                         let rel_type = node.attribute("Type").unwrap_or("").to_string();
                         if !target.is_empty() {
-                            refs.push(ExternalRef {
+                            refs.push(Reference {
                                 source: rels_path.clone(),
                                 target,
                                 rel_type,

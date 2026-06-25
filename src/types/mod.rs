@@ -48,6 +48,7 @@ pub mod filefacts_view;
 pub(crate) mod ml_features;
 pub(crate) mod office_metrics;
 pub(crate) mod paths_env;
+pub(crate) mod reference_graph;
 pub(crate) mod scores;
 pub(crate) mod traits_findings;
 pub(crate) mod z85;

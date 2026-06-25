@@ -342,3 +342,9 @@ opt-level = 3
 # when cleave is the root crate. Remove once stng is published with the derive
 # and filefacts' pinned revision is bumped.
 
+# Local-only override: pick up the unreleased filefacts inter-file `Reference`
+# work (the `RefLocator::Path` / `RefKind::Local` intra-artifact references).
+# Remove once filefacts is released and the git pin above is bumped.
+#[patch."https://codeberg.org/atomdrift/filefacts.git"]
+#filefacts = { path = "../filefacts" }
+

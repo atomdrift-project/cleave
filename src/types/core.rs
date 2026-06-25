@@ -1180,6 +1180,180 @@ impl AnalysisReport {
         }
     }
 
+    /// Tie a file to the report's other files it references, and flag any
+    /// reference to a file that was itself detected hostile/suspicious.
+    ///
+    /// Each [`filefacts`] reference is resolved against the report's files (see
+    /// [`super::reference_graph`]): an external dependency (PURL) matches a
+    /// file whose declared identity carries that package name, a relative path
+    /// matches a sibling member by full path. When a resolved target's verdict
+    /// is suspicious or hostile, the referrer gains a finding:
+    /// - an **external** dependency raises one
+    ///   `objectives/supply-chain/malicious-dependency` finding, one
+    ///   criticality below the target (a hostile dep → a suspicious referrer);
+    /// - an **internal** sibling raises one neutral `metadata/relationship`
+    ///   fact — the bundle's hostility already lives on the bad member, so the
+    ///   referrer is recorded, not re-scored.
+    ///
+    /// The general (benign-included) file→file edge is filled separately on the
+    /// compact `refs` (`compact::link_reference_targets`); this pass adds only
+    /// the flagged-target findings, whose `composite_sources` name the targets.
+    fn link_flagged_references(files: &mut [FileAnalysis]) {
+        use super::file_analysis::CompositeSource;
+        use super::reference_graph as rg;
+        use super::traits_findings::FindingKind;
+        use std::collections::HashMap;
+
+        // Index the report once: declared identity name → file id (external),
+        // full path → file id (internal), and each file's own verdict (its
+        // strongest native finding). Owned keys so the mutable pass is free of
+        // the index's borrow.
+        let mut by_name: HashMap<String, u32> = HashMap::new();
+        let mut by_path: HashMap<String, u32> = HashMap::new();
+        let mut verdict: HashMap<u32, Criticality> = HashMap::new();
+        for f in files.iter() {
+            by_path.entry(f.path.clone()).or_insert(f.id);
+            if let Some(identity) = &f.identity {
+                for name in rg::identity_names(identity) {
+                    by_name.entry(name.to_string()).or_insert(f.id);
+                }
+            }
+            let v = f
+                .findings
+                .iter()
+                .filter(|fd| fd.src.is_none())
+                .map(|fd| fd.crit)
+                .max()
+                .unwrap_or(Criticality::Baseline);
+            verdict.insert(f.id, v);
+        }
+
+        for f in files.iter_mut() {
+            let own_id = f.id;
+            let own_path = f.path.clone();
+            // Snapshot the locators, dropping the immutable `filefacts` borrow
+            // before mutating `findings`.
+            let refs: Vec<(filefacts::RefLocator, u64)> = match &f.filefacts {
+                Some(ff) => ff
+                    .references
+                    .iter()
+                    .map(|r| (r.locator.clone(), r.offset))
+                    .collect(),
+                None => continue,
+            };
+
+            // Flagged targets, deduped, split by edge kind.
+            let mut ext: Vec<(u32, u64, String, Criticality)> = Vec::new();
+            let mut int: Vec<(u32, u64)> = Vec::new();
+            for (locator, offset) in &refs {
+                let (target, external, label) = match locator {
+                    filefacts::RefLocator::Purl(p) => match rg::package_name_from_purl(p) {
+                        Some(name) => (by_name.get(&name).copied(), true, name),
+                        None => continue,
+                    },
+                    filefacts::RefLocator::Path(p) => {
+                        let target = rg::resolve_local_target(&own_path, p, |path| {
+                            by_path.get(path).copied()
+                        });
+                        (target, false, String::new())
+                    }
+                    filefacts::RefLocator::Url(_) => continue,
+                };
+                let Some(tid) = target else { continue };
+                if tid == own_id {
+                    continue;
+                }
+                let tv = verdict.get(&tid).copied().unwrap_or(Criticality::Baseline);
+                if tv < Criticality::Suspicious {
+                    continue;
+                }
+                if external {
+                    if !ext.iter().any(|(id, ..)| *id == tid) {
+                        ext.push((tid, *offset, label, tv));
+                    }
+                } else if !int.iter().any(|(id, _)| *id == tid) {
+                    int.push((tid, *offset));
+                }
+            }
+
+            // External: one supply-chain finding, crit one-below the worst target.
+            if let Some(worst) = ext.iter().map(|(.., v)| *v).max()
+                && let Some(crit) = rg::one_below(worst)
+            {
+                let names = ext
+                    .iter()
+                    .map(|(.., n, _)| n.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let sources = ext
+                    .iter()
+                    .map(|(tid, off, ..)| CompositeSource {
+                        file: *tid,
+                        line: None,
+                        offset: Some(*off),
+                    })
+                    .collect();
+                Self::push_reference_finding(
+                    f,
+                    "objectives/supply-chain/malicious-dependency::references-malicious-component",
+                    FindingKind::Indicator,
+                    crit,
+                    format!("References a flagged dependency: {names}"),
+                    sources,
+                );
+            }
+            // Internal: one neutral metadata fact naming the flagged sibling(s).
+            if !int.is_empty() {
+                let sources = int
+                    .iter()
+                    .map(|(tid, off)| CompositeSource {
+                        file: *tid,
+                        line: None,
+                        offset: Some(*off),
+                    })
+                    .collect();
+                Self::push_reference_finding(
+                    f,
+                    "metadata/relationship::references-flagged-component",
+                    FindingKind::Structural,
+                    Criticality::Baseline,
+                    "References a flagged file in this bundle".to_string(),
+                    sources,
+                );
+            }
+        }
+    }
+
+    /// Add a synthesized reference finding to `file` (idempotent on the id), with
+    /// the flagged targets recorded as its `composite_sources` trail.
+    fn push_reference_finding(
+        file: &mut FileAnalysis,
+        id: &str,
+        kind: super::traits_findings::FindingKind,
+        crit: Criticality,
+        desc: String,
+        sources: Vec<super::file_analysis::CompositeSource>,
+    ) {
+        if file.findings.iter().any(|fd| fd.id == id) {
+            return; // already linked (e.g. a re-finalize)
+        }
+        file.findings.push(Finding {
+            id: id.to_string(),
+            kind,
+            desc,
+            conf: 0.9,
+            crit,
+            trait_refs: Vec::new(),
+            src: None,
+            mbc: None,
+            attack: None,
+            evidence: Vec::new(),
+            match_count: 0,
+            source_file: None,
+        });
+        file.composite_sources.insert(id.to_string(), sources);
+    }
+
     /// Finalize the report for output: populate files[], clear top-level duplicates,
     /// merge metadata into summary, filter internal symbols findings.
     ///
@@ -1258,6 +1432,10 @@ impl AnalysisReport {
         // link a composite to a member, e.g. an install-hook trait on a
         // package.json). Must run before those drops.
         Self::attach_composite_sources(&mut self.files);
+
+        // Flag references to a file that was itself detected hostile/suspicious,
+        // before the score is recomputed so a referrer's verdict reflects it.
+        Self::link_flagged_references(&mut self.files);
 
         for file in &mut self.files {
             file.strip_source_fields();
@@ -1704,6 +1882,140 @@ mod tests {
             match_count: 0,
             source_file: None,
         }
+    }
+
+    fn local_ref(path: &str) -> filefacts::Reference {
+        filefacts::Reference {
+            locator: filefacts::RefLocator::Path(path.to_string()),
+            kind: filefacts::RefKind::Local,
+            source: "package.json:main".to_string(),
+            evidence: path.to_string(),
+            offset: 10,
+            pinned_hash: None,
+            content_sha256: None,
+        }
+    }
+
+    fn dep_ref(purl: &str) -> filefacts::Reference {
+        filefacts::Reference {
+            locator: filefacts::RefLocator::Purl(purl.to_string()),
+            kind: filefacts::RefKind::Dependency,
+            source: "package.json".to_string(),
+            evidence: purl.to_string(),
+            offset: 20,
+            pinned_hash: None,
+            content_sha256: None,
+        }
+    }
+
+    fn file_with_refs(id: u32, path: &str, refs: Vec<filefacts::Reference>) -> FileAnalysis {
+        let mut f = FileAnalysis::new(id, path.to_string(), "json".into(), format!("sha{id}"), 100);
+        f.filefacts = Some(FilefactsView {
+            references: refs,
+            ..Default::default()
+        });
+        f
+    }
+
+    fn named_identity(name: &str) -> filefacts::Identity {
+        filefacts::Identity {
+            name: Some(filefacts::Claim {
+                value: name.to_string(),
+                source: "test".to_string(),
+                verified: false,
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn internal_reference_to_hostile_sibling_raises_neutral_metadata_fact() {
+        let referrer = file_with_refs(
+            0,
+            "pkg.zip!!a/package.json",
+            vec![local_ref("./payload.js")],
+        );
+        let mut payload = FileAnalysis::new(
+            1,
+            "pkg.zip!!a/payload.js".into(),
+            "js".into(),
+            "sha1".into(),
+            50,
+        );
+        payload.findings = vec![test_finding("objectives/evil::x", Criticality::Hostile)];
+        let mut files = vec![referrer, payload];
+
+        AnalysisReport::link_flagged_references(&mut files);
+
+        let f = &files[0];
+        let linked = f
+            .findings
+            .iter()
+            .find(|fd| fd.id == "metadata/relationship::references-flagged-component")
+            .expect("internal edge finding");
+        // Neutral — references the bad sibling, doesn't inherit its severity.
+        assert_eq!(linked.crit, Criticality::Baseline);
+        assert_eq!(
+            f.composite_sources[&linked.id][0].file, 1,
+            "trail names the sibling"
+        );
+    }
+
+    #[test]
+    fn external_dependency_on_hostile_vendored_member_propagates_one_below() {
+        let referrer = file_with_refs(
+            0,
+            "pkg.zip!!package.json",
+            vec![dep_ref("pkg:npm/evil@1.0.0")],
+        );
+        // The dependency is vendored in the bundle and scored hostile.
+        let mut vendored = file_with_refs(1, "pkg.zip!!node_modules/evil/index.js", vec![]);
+        vendored.identity = Some(named_identity("evil"));
+        vendored.findings = vec![test_finding(
+            "well-known/malware/x::y",
+            Criticality::Hostile,
+        )];
+        let mut files = vec![referrer, vendored];
+
+        AnalysisReport::link_flagged_references(&mut files);
+
+        let f = &files[0];
+        let linked = f
+            .findings
+            .iter()
+            .find(|fd| {
+                fd.id == "objectives/supply-chain/malicious-dependency::references-malicious-component"
+            })
+            .expect("supply-chain finding");
+        // Hostile target → suspicious referrer (one criticality below).
+        assert_eq!(linked.crit, Criticality::Suspicious);
+        assert!(
+            linked.desc.contains("evil"),
+            "names the dependency: {}",
+            linked.desc
+        );
+        assert_eq!(f.composite_sources[&linked.id][0].file, 1);
+    }
+
+    #[test]
+    fn reference_to_benign_file_raises_nothing() {
+        let referrer = file_with_refs(0, "pkg.zip!!a/package.json", vec![local_ref("./helper.js")]);
+        let mut helper = FileAnalysis::new(
+            1,
+            "pkg.zip!!a/helper.js".into(),
+            "js".into(),
+            "sha1".into(),
+            50,
+        );
+        helper.findings = vec![test_finding("net/socket", Criticality::Notable)]; // below suspicious
+        let mut files = vec![referrer, helper];
+
+        AnalysisReport::link_flagged_references(&mut files);
+
+        assert!(
+            files[0].findings.is_empty(),
+            "a notable target is not flagged, so no reference finding"
+        );
     }
 
     #[test]

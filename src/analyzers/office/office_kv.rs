@@ -249,7 +249,7 @@ mod tests {
         ClsidMatch, CompObjData, DocumentMetadata, Ole10NativeInfo, Ole2Document, Ole2Subtype,
     };
     use crate::analyzers::office::ooxml::{
-        ExternalRef, OoxmlDocument, OoxmlMetadata, OoxmlSubtype,
+        Reference, OoxmlDocument, OoxmlMetadata, OoxmlSubtype,
     };
 
     fn empty_ole_doc() -> Ole2Document {
@@ -361,14 +361,14 @@ mod tests {
             keywords: Some("invoice".into()),
             category: None,
         };
-        doc.external_refs.push(ExternalRef {
+        doc.external_refs.push(Reference {
             source: "word/_rels/document.xml.rels".into(),
             target: "https://attacker.example/template.dotm".into(),
             rel_type:
                 "http://schemas.openxmlformats.org/officeDocument/2006/relationships/attachedTemplate"
                     .into(),
         });
-        doc.external_refs.push(ExternalRef {
+        doc.external_refs.push(Reference {
             source: "word/_rels/document.xml.rels".into(),
             target: "https://example.com/pixel.gif".into(),
             rel_type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"

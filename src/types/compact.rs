@@ -632,8 +632,9 @@ fn convert_file(file: &super::file_analysis::FileAnalysis, id: u32) -> CompactFi
                 .iter()
                 .map(|r| CompactRef {
                     locator: match &r.locator {
-                        filefacts::RefLocator::Purl(p) => p.clone(),
-                        filefacts::RefLocator::Url(u) => u.clone(),
+                        filefacts::RefLocator::Purl(s)
+                        | filefacts::RefLocator::Url(s)
+                        | filefacts::RefLocator::Path(s) => s.clone(),
                     },
                     kind: ref_kind_str(r.kind).to_string(),
                     offset: r.offset,
@@ -683,6 +684,7 @@ fn ref_kind_str(kind: filefacts::RefKind) -> &'static str {
         filefacts::RefKind::Command => "command",
         filefacts::RefKind::UrlFetch => "url_fetch",
         filefacts::RefKind::Repository => "repository",
+        filefacts::RefKind::Local => "local",
         _ => "undefined",
     }
 }
@@ -725,7 +727,47 @@ fn sanitize_references(files: &mut [CompactFile]) -> usize {
 /// regardless of how the caller built `files[]`. In debug builds a stray
 /// reference trips the assertion at its source; in release it is healed and
 /// logged rather than panicking (library code must not panic).
+/// Fill each reference's `target_file` with the id of the report file it
+/// resolves to — the first-class file→file edge. An external dependency (PURL)
+/// resolves when its package name matches a file's declared identity (a vendored
+/// dependency present in the bundle); a `local` path resolves to a sibling by
+/// full path. Truly-remote references and unmatched paths keep `target_file`
+/// unset. See [`super::reference_graph`].
+fn link_reference_targets(files: &mut [CompactFile]) {
+    use super::reference_graph as rg;
+    use std::collections::HashMap;
+
+    let mut by_name: HashMap<String, u32> = HashMap::new();
+    let mut by_path: HashMap<String, u32> = HashMap::new();
+    for f in files.iter() {
+        by_path.entry(f.path.clone()).or_insert(f.id);
+        if let Some(identity) = &f.identity {
+            for name in rg::identity_names(identity) {
+                by_name.entry(name.to_string()).or_insert(f.id);
+            }
+        }
+    }
+    for f in files.iter_mut() {
+        let own_id = f.id;
+        let own_path = f.path.clone();
+        for r in &mut f.refs {
+            if r.target_file.is_some() {
+                continue;
+            }
+            let target = if r.kind == "local" {
+                rg::resolve_local_target(&own_path, &r.locator, |p| by_path.get(p).copied())
+            } else {
+                rg::package_name_from_purl(&r.locator).and_then(|n| by_name.get(&n).copied())
+            };
+            if let Some(tid) = target.filter(|tid| *tid != own_id) {
+                r.target_file = Some(tid);
+            }
+        }
+    }
+}
+
 fn assemble_report(mut files: Vec<CompactFile>) -> CompactReport {
+    link_reference_targets(&mut files);
     let dangling = sanitize_references(&mut files);
     debug_assert_eq!(
         dangling, 0,

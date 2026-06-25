@@ -1058,6 +1058,43 @@ pub fn analyze_bytes_owned(
     )
 }
 
+/// Evaluate package-scoped composites over the union of a fetched artifact's
+/// findings and its registry metadata's findings, grafting any newly-matched
+/// composite onto the artifact node (the node whose `sha256` is `artifact_sha`).
+/// Returns the number of composite findings grafted.
+///
+/// This is how `--fetch` / `pkg:` lets a `scope: package` (or `scope: outer`)
+/// composite correlate a registry fact — deprecated, low downloads, a fresh
+/// publish date — with a behavior in the artifact bytes, even though the two
+/// were analyzed as separate reports and never share an archive. The caller
+/// owns pairing (which registry record belongs to which artifact); this owns
+/// evaluation and the report mutation. A no-op — returning `Ok(0)` — when
+/// either side is empty or no package/outer composites match.
+///
+/// # Errors
+/// Returns an error if the capability mapper cannot be initialized.
+pub fn graft_package_composites(
+    report: &mut AnalysisReport,
+    artifact_sha: &str,
+    artifact_findings: &[Finding],
+    registry_findings: &[Finding],
+    options: &AnalysisOptions,
+) -> Result<usize> {
+    // Nothing to correlate unless both sides contributed findings.
+    if artifact_findings.is_empty() || registry_findings.is_empty() {
+        return Ok(0);
+    }
+    let mapper = shared_resources::capability_mapper_with_options(options)?;
+    let mut seed = Vec::with_capacity(artifact_findings.len() + registry_findings.len());
+    seed.extend_from_slice(artifact_findings);
+    seed.extend_from_slice(registry_findings);
+    let new_findings = mapper.evaluate_package_composites(&seed);
+    if new_findings.is_empty() {
+        return Ok(0);
+    }
+    Ok(report.graft_findings(artifact_sha, new_findings))
+}
+
 /// Analyze in-memory file data backed by a refcounted [`bytes::Bytes`] buffer,
 /// adopting it without a copy.
 ///

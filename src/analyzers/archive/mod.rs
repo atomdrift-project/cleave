@@ -525,11 +525,13 @@ fn extract_decompressed_data_or_write_file(
         FileType::Tar | FileType::Gem => {
             tar::extract_tar_entries_safe(Cursor::new(data), dest_dir, guard)
         }
-        FileType::TarGz | FileType::Npm | FileType::Crate => tar::extract_tar_entries_safe(
-            flate2::read::GzDecoder::new(Cursor::new(data)),
-            dest_dir,
-            guard,
-        ),
+        FileType::TarGz | FileType::Npm | FileType::Crate | FileType::PythonSdist => {
+            tar::extract_tar_entries_safe(
+                flate2::read::GzDecoder::new(Cursor::new(data)),
+                dest_dir,
+                guard,
+            )
+        }
         FileType::TarBz2 => tar::extract_tar_entries_safe(
             bzip2::read::BzDecoder::new(Cursor::new(data)),
             dest_dir,
@@ -1358,14 +1360,19 @@ impl ArchiveAnalyzer {
             FileType::ApkAlpine => {
                 system_packages::extract_apk_alpine_from_data(data, dest_dir, guard)
             }
-            // Gzip-tar packages: npm `.tgz`, Rust `.crate` — a single gzip
-            // stream wrapping a single tar; recursion analyzes their members
-            // (package.json, Cargo.toml, installed files).
-            FileType::TarGz | FileType::Npm | FileType::Crate => tar::extract_tar_entries_safe(
-                flate2::read::GzDecoder::new(Cursor::new(data)),
-                dest_dir,
-                guard,
-            ),
+            // Gzip-tar packages: npm `.tgz`, Rust `.crate`, Python sdist
+            // `.tar.gz` — a single gzip stream wrapping a single tar; recursion
+            // analyzes their members (package.json, Cargo.toml, setup.py /
+            // PKG-INFO, installed files). filefacts only labels a gzip-tar as an
+            // sdist when it carries a `PKG-INFO` root, so this arm is always a
+            // gzip tarball.
+            FileType::TarGz | FileType::Npm | FileType::Crate | FileType::PythonSdist => {
+                tar::extract_tar_entries_safe(
+                    flate2::read::GzDecoder::new(Cursor::new(data)),
+                    dest_dir,
+                    guard,
+                )
+            }
             FileType::TarBz2 => tar::extract_tar_entries_safe(
                 bzip2::read::BzDecoder::new(Cursor::new(data)),
                 dest_dir,

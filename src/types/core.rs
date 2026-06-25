@@ -412,6 +412,42 @@ impl AnalysisReport {
         file.formula = (!formula.is_empty()).then_some(formula);
     }
 
+    /// Append `findings` to the already-finalized node whose `sha256` matches
+    /// `target_sha`, deduping by finding id, then refresh that node's formula
+    /// and summary (and the report summary) so the additions are reflected
+    /// everywhere a finalized report is read. Returns how many were added.
+    ///
+    /// This is the graft point for the fetch-driven package pass: composite
+    /// findings that correlate a fetched artifact with its registry metadata are
+    /// produced after [`Self::finalize`] and must land on the artifact node
+    /// without re-running the whole finalize. Because each composite carries its
+    /// members in `trait_refs`, [`Self::strip_unmatched_traits`] (which unions
+    /// `trait_refs` across every node) keeps the building-block traits it fired
+    /// on, wherever they live.
+    pub fn graft_findings(&mut self, target_sha: &str, findings: Vec<Finding>) -> usize {
+        let mut added = 0;
+        if let Some(file) = self.files.iter_mut().find(|f| f.sha256 == target_sha) {
+            for finding in findings {
+                if !file
+                    .findings
+                    .iter()
+                    .any(|existing| existing.id == finding.id)
+                {
+                    file.findings.push(finding);
+                    added += 1;
+                }
+            }
+            if added > 0 {
+                Self::refresh_formula(file);
+                file.compute_summary();
+            }
+        }
+        if added > 0 {
+            self.summary = Some(ReportSummary::from_files(&self.files));
+        }
+        added
+    }
+
     /// Merge a per-format kv subtree into `values_tree` under `namespace`.
     /// Preserves existing namespaces; pre-existing non-object trees
     /// are stashed under `_legacy` so we never lose data. Used by
@@ -2118,6 +2154,83 @@ mod tests {
             .map(|f| f.id.as_str())
             .collect();
         assert_eq!(kept, vec!["note/keep"]);
+    }
+
+    #[test]
+    fn graft_findings_places_on_target_and_strip_preserves_cross_node_members() {
+        // The fetch-driven package pass: a composite correlating a fetched
+        // artifact with its registry metadata is grafted onto the artifact node,
+        // but its building-block traits live on two *different* nodes (the
+        // native-addon trait on the artifact, the deprecated trait on the
+        // registry document). `strip_unmatched_traits` unions `trait_refs`
+        // across every node, so both survive even though neither shares a node
+        // with the grafted composite. This is the step that silently breaks if
+        // graft attribution regresses.
+        let mut report = AnalysisReport::new(test_target());
+        let mut artifact = FileAnalysis::new(
+            0,
+            "/pkg.whl".into(),
+            "zip".into(),
+            "artifactsha".into(),
+            2048,
+        );
+        artifact.findings = vec![test_finding(
+            "test/pkg::native-addon",
+            Criticality::Component,
+        )];
+        let mut registry = FileAnalysis::new(
+            1,
+            "/pkg.registry.json".into(),
+            "registry".into(),
+            "registrysha".into(),
+            256,
+        );
+        registry.findings = vec![test_finding("test/pkg::deprecated", Criticality::Component)];
+        report.files = vec![artifact, registry];
+
+        // Graft the package composite onto the artifact node, carrying both
+        // members in `trait_refs` (as `CompositeTrait::evaluate` does).
+        let mut composite =
+            test_finding("test/pkg::deprecated-with-addon", Criticality::Suspicious);
+        composite.trait_refs = vec![
+            "test/pkg::native-addon".into(),
+            "test/pkg::deprecated".into(),
+        ];
+        assert_eq!(report.graft_findings("artifactsha", vec![composite]), 1);
+        // Landed on the artifact node, not the registry node.
+        assert!(
+            report.files[0]
+                .findings
+                .iter()
+                .any(|f| f.id == "test/pkg::deprecated-with-addon"),
+            "composite should graft onto the artifact node"
+        );
+
+        let (components, baselines) = report.strip_unmatched_traits();
+        assert_eq!(
+            (components, baselines),
+            (0, 0),
+            "both component members are referenced by the grafted composite, so none strip"
+        );
+        assert!(
+            report.files[1]
+                .findings
+                .iter()
+                .any(|f| f.id == "test/pkg::deprecated"),
+            "the registry building-block trait must survive on its own node"
+        );
+
+        // A second graft of the same id is deduped (returns 0).
+        let dup = test_finding("test/pkg::deprecated-with-addon", Criticality::Suspicious);
+        assert_eq!(report.graft_findings("artifactsha", vec![dup]), 0);
+        // Grafting onto a sha that isn't present is a no-op.
+        assert_eq!(
+            report.graft_findings(
+                "nosuchsha",
+                vec![test_finding("x::y", Criticality::Notable)]
+            ),
+            0
+        );
     }
 
     #[test]

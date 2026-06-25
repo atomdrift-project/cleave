@@ -1100,10 +1100,15 @@ impl super::CapabilityMapper {
             .filter(|w| w.validator_id == "unknown-file-type")
             .collect();
         if !unknown_ft_warnings.is_empty() {
-            // Soft mode disables `unknown-file-type`: a trait targeting a type this
-            // (older) engine doesn't recognise is forward-compat degradation, so the
-            // rule is skipped rather than failing the whole bundle load.
+            // `unknown-file-type` is a Soft problem: a trait targeting a type this
+            // (older) engine doesn't recognise is forward-compat degradation. It is
+            // fatal for `validate` but not for `validate --soft`, where the rule is
+            // skipped rather than failing the whole bundle load — decided on the same
+            // severity axis as everything else.
+            let fatal = crate::validation_controls::validator_severity("unknown-file-type")
+                >= crate::validation_controls::fatal_severity_threshold();
             if enable_full_validation
+                && fatal
                 && !crate::validation_controls::is_validator_disabled("unknown-file-type")
             {
                 let mut sorted_errors: Vec<&str> = unknown_ft_warnings
@@ -1167,7 +1172,6 @@ impl super::CapabilityMapper {
         let _t_validate = std::time::Instant::now();
 
         // Track whether any fatal errors occurred (for deferred exit)
-        let mut has_fatal_errors = false;
 
         if enable_precision_scoring {
             let precision_warning_start = warnings.len();
@@ -1476,7 +1480,6 @@ impl super::CapabilityMapper {
                 for error in &errors {
                     warnings.push(format!("unknown subdirectory: {error}"));
                 }
-                has_fatal_errors = true;
             }
 
             // Check for YAML files above leaf directories.
@@ -1582,7 +1585,6 @@ impl super::CapabilityMapper {
                     "{} second-level directories duplicated across namespaces",
                     duplicate_dirs.len()
                 ));
-                has_fatal_errors = true;
             }
 
             // Check for banned meaningless directory segments
@@ -1734,10 +1736,13 @@ impl super::CapabilityMapper {
                 } else {
                     eprintln!("   Set CLEAVE_DEBUG=1 to see details\n");
                 }
-                warnings.push(format!(
-                    "{} trait/rule IDs contain invalid characters",
-                    invalid_ids.len()
-                ));
+                warnings.push_id(
+                    "invalid-id-chars",
+                    format!(
+                        "{} trait/rule IDs contain invalid characters",
+                        invalid_ids.len()
+                    ),
+                );
             }
 
             // Self-referencing traits — `if: type: trait, id: <self>`
@@ -1776,10 +1781,13 @@ impl super::CapabilityMapper {
                     }
                 }
                 eprintln!();
-                warnings.push(format!(
-                    "{} self-referencing traits (will never fire)",
-                    self_refs.len()
-                ));
+                warnings.push_id(
+                    "self-reference",
+                    format!(
+                        "{} self-referencing traits (will never fire)",
+                        self_refs.len()
+                    ),
+                );
             }
 
             tracing::trace!("Step 7c/15: Checking for self-referencing composites");
@@ -1813,10 +1821,13 @@ impl super::CapabilityMapper {
                     }
                 }
                 eprintln!();
-                warnings.push(format!(
-                    "{} self-referencing composites (will never fire)",
-                    composite_self_refs.len()
-                ));
+                warnings.push_id(
+                    "self-reference",
+                    format!(
+                        "{} self-referencing composites (will never fire)",
+                        composite_self_refs.len()
+                    ),
+                );
             }
         } // End of enable_full_validation block for steps 3-7
 
@@ -2083,7 +2094,6 @@ impl super::CapabilityMapper {
                     "{} metadata/ rules have hostile criticality (should be in objectives/)",
                     hostile_meta_rules.len()
                 ));
-                has_fatal_errors = true;
             }
 
             // Validate that metadata/ rules do not reference non-metadata tiers
@@ -2320,7 +2330,6 @@ impl super::CapabilityMapper {
                 "{} rules misuse malware/ as a subcategory of objectives/ or micro-behaviors/ (see TAXONOMY.md)",
                 malware_violations.len()
             ));
-                has_fatal_errors = true;
             }
 
             // Validate well-known/ category whitelist
@@ -2469,7 +2478,6 @@ impl super::CapabilityMapper {
                     "{} traits target 4+ platforms (narrow scope or move to allowlisted directory)",
                     broad_plat.len()
                 ));
-                has_fatal_errors = true;
             }
 
             // Validate: traits listing unix alongside linux or macos (redundant — unix is the superset)
@@ -2554,7 +2562,6 @@ impl super::CapabilityMapper {
                     "{} traits exceed the file-type cap for their matcher type (narrow for: or add a type-qualified allowlist entry)",
                     broad_ft.len()
                 ));
-                has_fatal_errors = true;
             }
 
             // Condition-type-specific filetype caps are now enforced by
@@ -2946,7 +2953,6 @@ impl super::CapabilityMapper {
                     "{} composite rules have overlapping all:/any: conditions",
                     overlapping.len()
                 ));
-                has_fatal_errors = true;
             }
 
             // Validate: string vs raw type collisions (same pattern at same criticality)
@@ -3131,10 +3137,13 @@ impl super::CapabilityMapper {
                     }
                 }
                 eprintln!();
-                warnings.push(format!(
-                    "{} composite rules have impossible `needs` values",
-                    impossible_needs.len()
-                ));
+                warnings.push_id(
+                    "impossible-constraint",
+                    format!(
+                        "{} composite rules have impossible `needs` values",
+                        impossible_needs.len()
+                    ),
+                );
             }
 
             // Validate: size_min > size_max (impossible constraint)
@@ -3165,10 +3174,13 @@ impl super::CapabilityMapper {
                     }
                 }
                 eprintln!();
-                warnings.push(format!(
-                    "{} rules have impossible size constraints",
-                    impossible_sizes.len()
-                ));
+                warnings.push_id(
+                    "impossible-constraint",
+                    format!(
+                        "{} rules have impossible size constraints",
+                        impossible_sizes.len()
+                    ),
+                );
             }
 
             // Validate: count_min > count_max (impossible constraint)
@@ -3197,10 +3209,13 @@ impl super::CapabilityMapper {
                     }
                 }
                 eprintln!();
-                warnings.push(format!(
-                    "{} traits have impossible count constraints",
-                    impossible_counts.len()
-                ));
+                warnings.push_id(
+                    "impossible-constraint",
+                    format!(
+                        "{} traits have impossible count constraints",
+                        impossible_counts.len()
+                    ),
+                );
             }
 
             // Validate: empty any:/all: clauses with no other conditions
@@ -3230,10 +3245,13 @@ impl super::CapabilityMapper {
                     }
                 }
                 eprintln!();
-                warnings.push(format!(
-                    "{} composite rules have empty condition clauses",
-                    empty_clauses.len()
-                ));
+                warnings.push_id(
+                    "malformed-condition",
+                    format!(
+                        "{} composite rules have empty condition clauses",
+                        empty_clauses.len()
+                    ),
+                );
             }
 
             // Validate: `needs` without `any:` (silently ignored, likely authoring mistake)
@@ -3259,10 +3277,13 @@ impl super::CapabilityMapper {
                     }
                 }
                 eprintln!();
-                warnings.push(format!(
-                    "{} composite rules have `needs` without `any:`",
-                    needs_without_any.len()
-                ));
+                warnings.push_id(
+                    "malformed-condition",
+                    format!(
+                        "{} composite rules have `needs` without `any:`",
+                        needs_without_any.len()
+                    ),
+                );
             }
 
             // Validate: needs: 0 vacuously matches (any: clause is meaningless)
@@ -3286,10 +3307,13 @@ impl super::CapabilityMapper {
                     }
                 }
                 eprintln!();
-                warnings.push(format!(
-                    "{} composite rules have `needs: 0` (vacuous match)",
-                    needs_zero.len()
-                ));
+                warnings.push_id(
+                    "malformed-condition",
+                    format!(
+                        "{} composite rules have `needs: 0` (vacuous match)",
+                        needs_zero.len()
+                    ),
+                );
             }
 
             // Validate: string/content conditions with no search pattern
@@ -3315,10 +3339,10 @@ impl super::CapabilityMapper {
                     }
                 }
                 eprintln!();
-                warnings.push(format!(
-                    "{} traits have no search pattern",
-                    missing_patterns.len()
-                ));
+                warnings.push_id(
+                    "no-search-pattern",
+                    format!("{} traits have no search pattern", missing_patterns.len()),
+                );
             }
 
             // Validate: patterns too short to be useful (1-2 concrete chars/bytes)
@@ -3350,10 +3374,13 @@ impl super::CapabilityMapper {
                     }
                 }
                 eprintln!();
-                warnings.push(format!(
-                    "{} traits have patterns too short (<3 concrete chars/bytes)",
-                    too_short.len()
-                ));
+                warnings.push_id(
+                    "no-search-pattern",
+                    format!(
+                        "{} traits have patterns too short (<3 concrete chars/bytes)",
+                        too_short.len()
+                    ),
+                );
             }
 
             // Validate: `not:` only used with `regex:` patterns
@@ -3370,10 +3397,10 @@ impl super::CapabilityMapper {
                     eprintln!("   {}", msg);
                 }
                 eprintln!();
-                warnings.push(format!(
-                    "{} traits use `not:` without `regex:`",
-                    invalid_not.len()
-                ));
+                warnings.push_id(
+                    "malformed-condition",
+                    format!("{} traits use `not:` without `regex:`", invalid_not.len()),
+                );
             }
 
             // Validate: KV `exists` alongside value matcher is redundant
@@ -3430,10 +3457,13 @@ impl super::CapabilityMapper {
                     eprintln!("   {}: '{}'", source, rule_id);
                 }
                 eprintln!();
-                warnings.push(format!(
-                    "{} composite rules have proximity on none-only rules (can never match)",
-                    none_prox.len()
-                ));
+                warnings.push_id(
+                    "malformed-condition",
+                    format!(
+                        "{} composite rules have proximity on none-only rules (can never match)",
+                        none_prox.len()
+                    ),
+                );
             }
 
             // Validate: redundant `needs: 1` when only `any:` exists
@@ -3616,7 +3646,6 @@ impl super::CapabilityMapper {
                     "{} traits are pure aliases with no added value",
                     pure_aliases.len()
                 ));
-                has_fatal_errors = true;
             }
 
             // Validate: orphaned component traits not referenced by any rule
@@ -3690,7 +3719,6 @@ impl super::CapabilityMapper {
                     "{} hostile composites reference no notable-or-higher leg",
                     hostile_missing_notable.len()
                 ));
-                has_fatal_errors = true;
             }
 
             // Validate: short patterns that are likely to produce too many false positives
@@ -3872,10 +3900,13 @@ impl super::CapabilityMapper {
                     }
                 }
                 eprintln!();
-                warnings.push(format!(
-                    "{} broken trait references in composite rules",
-                    broken_refs.len()
-                ));
+                warnings.push_id(
+                    "broken-reference",
+                    format!(
+                        "{} broken trait references in composite rules",
+                        broken_refs.len()
+                    ),
+                );
                 for broken_ref in &broken_refs {
                     let location = if let Some(line) = broken_ref.line_hint {
                         format!("{}:{}", broken_ref.source_file, line)
@@ -3891,7 +3922,6 @@ impl super::CapabilityMapper {
                     }
                     warnings.push(detail);
                 }
-                has_fatal_errors = true;
             }
 
             // Validate metric field references
@@ -4011,7 +4041,6 @@ impl super::CapabilityMapper {
                     "{} unknown metric field references in traits",
                     invalid_metric_refs.len()
                 ));
-                has_fatal_errors = true;
             }
 
             // Validate that composite rules only contain trait references (not inline primitives)
@@ -4043,7 +4072,6 @@ impl super::CapabilityMapper {
                     "{} composite rules have inline primitives",
                     inline_errors.len()
                 ));
-                has_fatal_errors = true;
             }
 
             // Validate single-rule composites with identical file types
@@ -4179,7 +4207,6 @@ impl super::CapabilityMapper {
                     "{} single-trait composites add no value",
                     redundant_composites.len()
                 ));
-                has_fatal_errors = true;
             }
 
             if !crate::validation_controls::is_validator_disabled("unless-only-composite")
@@ -4213,7 +4240,6 @@ impl super::CapabilityMapper {
                     "{} single-trait composites only add unless clauses",
                     unless_only_composites.len()
                 ));
-                has_fatal_errors = true;
             }
         } // End of enable_full_validation block for steps 11-15 and post-step validations
 
@@ -4256,7 +4282,6 @@ impl super::CapabilityMapper {
                     eprintln!("   {}", error);
                 }
                 eprintln!("\n   Fix these issues in the YAML files before continuing.\n");
-                has_fatal_errors = true;
             } else {
                 // Forward compatibility at analysis time: a file this build
                 // cannot parse — most often a rule using a condition field, type,
@@ -4287,13 +4312,18 @@ impl super::CapabilityMapper {
             }
         }
 
-        // Disabled validators never cause a fatal failure. Most validators
-        // self-gate at their push site, but legacy/context messages do not, so
-        // drop every disabled-validator issue here before deciding fatality.
-        // This makes the disabled set — including the `--soft` preset — the
-        // single source of truth for pass/fail. (invalid/unknown file types and
-        // regex-compile failures are handled earlier and are unaffected.)
+        // `--exclude` is the only switch that silences a validator; drop those
+        // issues before deciding anything. No validator is disabled by default.
         warnings.retain(|w| !crate::validation_controls::is_validator_disabled(w.validator_id));
+
+        // One axis decides pass/fail: severity. `validate` rejects any problem;
+        // `validate --soft` rejects only Hard ones — those mean a rule won't load
+        // or won't fire (detection lost or wrong). Soft problems are still
+        // reported, just not fatal under --soft. Unparseable YAML is always Hard
+        // (printed above); invalid/unknown file types and uncompilable regex are
+        // handled earlier and bail before reaching here.
+        let threshold = crate::validation_controls::fatal_severity_threshold();
+        let fatal_warnings = warnings.iter().filter(|w| w.severity >= threshold).count();
 
         if enable_full_validation && !warnings.is_empty() {
             use crate::validation_controls::ValidationOutputFormat;
@@ -4311,17 +4341,17 @@ impl super::CapabilityMapper {
                 }
             };
             eprintln!("{rendered}");
-            has_fatal_errors = true;
         }
 
-        // Bail if any fatal errors occurred (parse errors, validation failures, etc.)
-        if has_fatal_errors {
+        // Bail only on problems that meet the threshold. Parse errors are Hard, so
+        // they fail in both `validate` and `validate --soft`.
+        if enable_full_validation && (fatal_warnings > 0 || !parse_errors.is_empty()) {
             eprintln!("\n==> Fix all validation errors before continuing.\n");
             let mut details = Vec::new();
             for e in &parse_errors {
                 details.push(format!("parse error: {e}"));
             }
-            for issue in warnings.iter() {
+            for issue in warnings.iter().filter(|w| w.severity >= threshold) {
                 details.push(format!("validation: {}", issue.compact_message()));
             }
             anyhow::bail!(

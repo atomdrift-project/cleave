@@ -31,6 +31,65 @@ impl ValidatorCategory {
     }
 }
 
+/// How serious a validation problem is.
+///
+/// This is the single axis that decides pass/fail. `validate` rejects any
+/// problem; `validate --soft` rejects only [`Severity::Hard`] ones. The ordering
+/// (`Soft < Hard`) lets the command pick a threshold and fail when a problem
+/// meets it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum Severity {
+    /// The rule loads and fires correctly — it is just badly organized,
+    /// duplicated, or styled. Fatal for `validate`, reported-only for `--soft`.
+    Soft,
+    /// The rule won't load or won't fire as written, so detection is lost or
+    /// wrong. Fatal for both `validate` and `validate --soft`.
+    Hard,
+}
+
+/// Validators whose failure means a rule won't load or won't fire correctly —
+/// detection is lost or wrong. Everything not listed here is authoring hygiene
+/// ([`Severity::Soft`]): the rule works, it is just poorly organized. Keeping the
+/// hard set explicit in one place is the whole pass/fail policy — `validate
+/// --soft` fails on exactly these (plus unparseable YAML and uncompilable regex,
+/// which are structural errors handled before validators run).
+const HARD_VALIDATOR_IDS: &[&str] = &[
+    // A `directory::id` collision silently shadows one definition; references
+    // resolve by id, so a real detection disappears.
+    "duplicate-trait-id",
+    // `for:` names a structurally invalid file type — the rule can never match.
+    "invalid-file-type",
+    // Fixture score regressed past its cap: a measured detection regression.
+    "score-caps",
+    // A trait or composite that references itself never fires.
+    "self-reference",
+    // A composite references a trait id that does not exist — it never fires.
+    "broken-reference",
+    // size/count/needs bounds make the rule unsatisfiable (or always-true).
+    "impossible-constraint",
+    // Nothing concrete to match (empty pattern, or one so short it matches
+    // everything) — the rule cannot produce a meaningful detection.
+    "no-search-pattern",
+    // The condition is structurally broken (e.g. `not:` without `regex:`,
+    // proximity on a none-only rule), so it matches incorrectly.
+    "malformed-condition",
+    // An id with invalid characters can't be referenced, breaking composites.
+    "invalid-id-chars",
+];
+
+/// The severity of a validator, looked up by id. Unknown/legacy ids default to
+/// [`Severity::Soft`]; only the detection-integrity ids in [`HARD_VALIDATOR_IDS`]
+/// are [`Severity::Hard`].
+#[must_use]
+pub(crate) fn validator_severity(id: &str) -> Severity {
+    if HARD_VALIDATOR_IDS.contains(&id) {
+        Severity::Hard
+    } else {
+        Severity::Soft
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ValidatorSpec {
     pub(crate) id: &'static str,
@@ -50,6 +109,7 @@ impl ValidatorSpec {
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct ValidationIssue {
     pub(crate) validator_id: &'static str,
+    pub(crate) severity: Severity,
     pub(crate) label: String,
     pub(crate) category: &'static str,
     pub(crate) display_id: &'static str,
@@ -154,6 +214,7 @@ impl ValidationIssue {
         let spec = validator_spec(validator_id).unwrap_or(&UNKNOWN_VALIDATOR);
         Self {
             validator_id: spec.id,
+            severity: validator_severity(spec.id),
             label: spec.label(),
             category: spec.category.display(),
             display_id: spec.display_id,
@@ -250,43 +311,34 @@ const UNKNOWN_VALIDATOR: ValidatorSpec = ValidatorSpec {
     fix: "Review the validation message and update the trait.",
 };
 
-const DISABLED_VALIDATOR_IDS: &[&str] = &[
-    // Newly added; surfaces a large existing backlog (~2.1k baseline/component rules in
-    // objectives/ or well-known/ that no notable+ detection reaches). Temporarily disabled
-    // so it does not block loading while the backlog is worked down — promote the missing
-    // notable identifier, relocate genuine suppressors, or fix mis-crit'd composites.
-    // Run `cleave validate --exclude ""` to see the full list.
-    "suppression-only-building-block",
-];
-
-/// Validators that stay fatal in `--soft` mode.
-///
-/// Soft validation fails only on flaws that prevent a trait bundle from loading
-/// or that silently lose detections on the engine doing the validating — not on
-/// authoring hygiene (taxonomy depth, size limits, dedup/reuse, regex style,
-/// precision). The always-on hard errors (YAML parse failures, regex that won't
-/// compile) are not validators and remain fatal regardless. Fixture/testdata
-/// scoring is retained via `score-caps`, so a detection regression still fails.
-///
-/// `unknown-file-type` is deliberately *not* retained: a trait targeting a file
-/// type this engine doesn't recognise (e.g. a newer bundle adding `go.mod`) is
-/// exactly the forward-compatibility case soft mode exists for — the rule simply
-/// won't run on this older build, which is graceful degradation, not a flaw in
-/// the bundle. `invalid-file-type` stays fatal because a structurally invalid
-/// type can never match on any engine.
-const SOFT_RETAINED_VALIDATOR_IDS: &[&str] = &[
-    // Two ids collide on the same `directory::id`; one silently shadows the
-    // other, so a real detection is lost.
-    "duplicate-trait-id",
-    // Trait `for:` targets a structurally invalid file type — it can never match
-    // on any engine, so the rule is broken rather than merely ahead of this build.
-    "invalid-file-type",
-    // Fixture score regressed past its cap: detection efficacy, kept in soft so
-    // the testdata corpus still gates the bundle.
-    "score-caps",
-];
-
 static DISABLED_VALIDATOR_OVERRIDE: OnceLock<RwLock<Option<BTreeSet<String>>>> = OnceLock::new();
+
+/// Whether validation runs in `--soft` mode, where only [`Severity::Hard`]
+/// problems are fatal. Set once per process by the `validate` command (or the
+/// `CLEAVE_VALIDATE_SOFT` env toggle) before the mapper loads.
+static SOFT_VALIDATION_MODE: OnceLock<RwLock<bool>> = OnceLock::new();
+
+fn soft_validation_mode_lock() -> &'static RwLock<bool> {
+    SOFT_VALIDATION_MODE.get_or_init(|| RwLock::new(false))
+}
+
+/// Enable or disable soft validation for the rest of the process.
+pub(crate) fn set_soft_validation_mode(on: bool) {
+    if let Ok(mut g) = soft_validation_mode_lock().write() {
+        *g = on;
+    }
+}
+
+/// The pass/fail threshold: in soft mode only [`Severity::Hard`] problems fail;
+/// otherwise any problem (`Soft` or `Hard`) fails.
+#[must_use]
+pub(crate) fn fatal_severity_threshold() -> Severity {
+    if soft_validation_mode_lock().read().is_ok_and(|g| *g) {
+        Severity::Hard
+    } else {
+        Severity::Soft
+    }
+}
 
 /// Output format selector for validation issues emitted during mapper load.
 ///
@@ -730,6 +782,48 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         description: "Fixture score exceeded its regression cap.",
         fix: "Review score changes before adjusting traits or caps.",
     },
+    ValidatorSpec {
+        id: "self-reference",
+        category: ValidatorCategory::Quality,
+        display_id: "self-ref",
+        description: "Trait or composite references itself, so it can never fire.",
+        fix: "Remove the self-reference or point it at the intended other rule.",
+    },
+    ValidatorSpec {
+        id: "broken-reference",
+        category: ValidatorCategory::Quality,
+        display_id: "broken-ref",
+        description: "Composite references a trait id that does not exist.",
+        fix: "Fix the id, or add the missing trait; references resolve by directory::id.",
+    },
+    ValidatorSpec {
+        id: "impossible-constraint",
+        category: ValidatorCategory::Quality,
+        display_id: "impossible",
+        description: "size/count/needs bounds make the rule unsatisfiable or always-true.",
+        fix: "Correct the bounds so the constraint can be met (size_min ≤ size_max, needs ≥ 1, etc.).",
+    },
+    ValidatorSpec {
+        id: "no-search-pattern",
+        category: ValidatorCategory::Quality,
+        display_id: "no-pattern",
+        description: "Trait has no concrete pattern, or one too short to match meaningfully.",
+        fix: "Add a pattern of at least 3 concrete characters/bytes.",
+    },
+    ValidatorSpec {
+        id: "malformed-condition",
+        category: ValidatorCategory::Quality,
+        display_id: "malformed",
+        description: "Condition is structurally broken (e.g. not: without regex:, proximity on a none-only rule).",
+        fix: "Fix the condition so it expresses a valid match.",
+    },
+    ValidatorSpec {
+        id: "invalid-id-chars",
+        category: ValidatorCategory::Quality,
+        display_id: "id-chars",
+        description: "Trait/rule id contains characters that break referencing.",
+        fix: "Use only the allowed id characters so composites can reference it.",
+    },
 ];
 
 #[must_use]
@@ -771,46 +865,6 @@ pub(crate) fn set_disabled_validators_override(ids: Option<&str>) -> Result<()> 
     Ok(())
 }
 
-/// Install the `--soft` disabled set: every validator except the
-/// detection-critical [`SOFT_RETAINED_VALIDATOR_IDS`], unioned with any
-/// caller-supplied `--exclude` ids. After this, soft validation fails only on
-/// flaws that prevent loading or lose detections.
-#[allow(clippy::expect_used)]
-pub(crate) fn set_soft_validation_override(extra_exclude: Option<&str>) -> Result<()> {
-    let disabled = soft_disabled_set(extra_exclude)?;
-    *disabled_validator_override()
-        .write()
-        .expect("validator override lock poisoned") = Some(disabled);
-    Ok(())
-}
-
-/// Build the soft-mode disabled set: every validator except the
-/// detection-critical [`SOFT_RETAINED_VALIDATOR_IDS`], plus any resolved
-/// `extra_exclude` ids. Pure (no global state) so the invariant is unit-testable.
-fn soft_disabled_set(extra_exclude: Option<&str>) -> Result<BTreeSet<String>> {
-    let mut disabled: BTreeSet<String> = VALIDATOR_SPECS
-        .iter()
-        .map(|spec| spec.id)
-        .filter(|id| !SOFT_RETAINED_VALIDATOR_IDS.contains(id))
-        .map(str::to_string)
-        .collect();
-
-    if let Some(ids) = extra_exclude {
-        for raw_id in ids.split(',') {
-            let raw_id = raw_id.trim();
-            if raw_id.is_empty() {
-                continue;
-            }
-            let Some(id) = resolve_validator_id(raw_id) else {
-                bail!("unknown validator in --exclude: {raw_id}");
-            };
-            disabled.insert(id.to_string());
-        }
-    }
-
-    Ok(disabled)
-}
-
 #[must_use]
 pub(crate) fn disabled_validator_specs() -> Vec<&'static ValidatorSpec> {
     VALIDATOR_SPECS
@@ -819,17 +873,20 @@ pub(crate) fn disabled_validator_specs() -> Vec<&'static ValidatorSpec> {
         .collect()
 }
 
+/// Whether a validator has been silenced for this run via `--exclude`.
+///
+/// No validator is disabled by default: `validate` runs every check. Soft mode
+/// does not disable validators — it only changes which severities are fatal (see
+/// [`fatal_severity_threshold`]) — so soft issues are still reported, just not
+/// fatal under `--soft`.
 #[must_use]
 #[allow(clippy::expect_used)]
 pub(crate) fn is_validator_disabled(id: &str) -> bool {
-    if let Some(disabled) = disabled_validator_override()
+    disabled_validator_override()
         .read()
         .expect("validator override lock poisoned")
         .as_ref()
-    {
-        return disabled.contains(id);
-    }
-    DISABLED_VALIDATOR_IDS.contains(&id)
+        .is_some_and(|disabled| disabled.contains(id))
 }
 
 #[derive(Debug, Serialize)]
@@ -1006,16 +1063,32 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::expect_used)]
-    fn soft_set_disables_hygiene_but_keeps_detection_critical() {
-        let disabled = soft_disabled_set(None).expect("soft set");
-
-        // Detection-critical validators stay enabled (absent from the disabled set).
-        for id in SOFT_RETAINED_VALIDATOR_IDS {
-            assert!(!disabled.contains(*id), "{id} must stay fatal in soft mode");
+    fn detection_integrity_validators_are_hard() {
+        // The whole `--soft` policy: these break loading or firing, so they stay
+        // fatal even in soft mode.
+        for id in [
+            "duplicate-trait-id",
+            "invalid-file-type",
+            "score-caps",
+            "self-reference",
+            "broken-reference",
+            "impossible-constraint",
+            "no-search-pattern",
+            "malformed-condition",
+            "invalid-id-chars",
+        ] {
+            assert_eq!(
+                validator_severity(id),
+                Severity::Hard,
+                "{id} must be Hard (fatal in --soft)"
+            );
         }
+    }
 
-        // Representative hygiene validators are downgraded (present in the set).
+    #[test]
+    fn hygiene_validators_are_soft() {
+        // Representative authoring-hygiene checks: the rule loads and fires, so
+        // soft mode downgrades them to advisory.
         for id in [
             "regex-length",
             "brittle-path-pattern",
@@ -1023,42 +1096,45 @@ mod tests {
             "tier-violation",
             "precision",
             "wellknown-size-filter",
-            // Over-broad `for:` scope is authoring hygiene; a newer bundle that
-            // raises the cap must degrade gracefully on an older engine.
             "broad-filetype-cap",
-            // Taxonomy/organization checks: structural placement, not loadability.
             "unknown-subdirectory",
             "malware-subcategory",
             "wellknown-composite-only",
             "pure-alias",
-            // Platform breadth and tier placement are organization hygiene: the
-            // composite still loads and fires, so soft must downgrade them.
             "broad-platform-scope",
             "hostile-missing-notable-leg",
-            // A metric field unknown to this (older) engine is forward-compat
-            // degradation, mirroring `unknown-file-type`.
+            // Forward-compat degradation on older engines, not a load-breaking flaw.
             "unknown-metric-field",
-            // A file type unknown to this (older) engine is forward-compat
-            // degradation, not a load-breaking flaw — soft mode tolerates it.
             "unknown-file-type",
+            // Unknown/legacy ids default to Soft.
+            "validation",
         ] {
-            assert!(disabled.contains(id), "{id} must be non-fatal in soft mode");
+            assert_eq!(
+                validator_severity(id),
+                Severity::Soft,
+                "{id} must be Soft (advisory in --soft)"
+            );
         }
-
-        // Every spec is accounted for: disabled ∪ retained == all specs.
-        assert_eq!(
-            disabled.len() + SOFT_RETAINED_VALIDATOR_IDS.len(),
-            VALIDATOR_SPECS.len()
-        );
     }
 
     #[test]
-    #[allow(clippy::expect_used)]
-    fn soft_set_unions_extra_exclude() {
-        let disabled = soft_disabled_set(Some("score-caps")).expect("soft set");
-        // A retained validator can still be opted out via --exclude on top of soft.
-        assert!(disabled.contains("score-caps"));
-        assert!(soft_disabled_set(Some("not-a-validator")).is_err());
+    fn every_hard_id_has_a_spec() {
+        // Hard ids must render with a real label/fix, not the UNKNOWN fallback.
+        for id in HARD_VALIDATOR_IDS {
+            assert!(
+                validator_spec(id).is_some(),
+                "hard validator {id} needs a ValidatorSpec"
+            );
+        }
+    }
+
+    #[test]
+    fn soft_threshold_only_when_soft_mode() {
+        set_soft_validation_mode(false);
+        assert_eq!(fatal_severity_threshold(), Severity::Soft);
+        set_soft_validation_mode(true);
+        assert_eq!(fatal_severity_threshold(), Severity::Hard);
+        set_soft_validation_mode(false);
     }
 
     #[test]

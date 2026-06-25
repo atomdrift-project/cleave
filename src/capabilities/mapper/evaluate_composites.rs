@@ -620,6 +620,84 @@ impl super::CapabilityMapper {
 
         container_findings
     }
+
+    /// Evaluate package-scoped composites over the union of a fetched
+    /// artifact's findings and its registry metadata's findings.
+    ///
+    /// This is the fetch-driven counterpart to
+    /// [`Self::evaluate_container_composites`]: it lets a composite correlate a
+    /// registry fact (deprecated, low downloads, fresh publish) with a behavior
+    /// in the artifact bytes, even though the two were analyzed separately and
+    /// never share an archive. The "package" is a synthetic, byte-less
+    /// container — there is no on-disk file for the pair — so only
+    /// finding-based composites pool here.
+    ///
+    /// Only composites with `scope: package` or `scope: outer` participate.
+    /// Both pool by presence (empty scope key). `file`/`archive`/`leaf`
+    /// composites are excluded on purpose: by the time the artifact and
+    /// registry reports meet they are both finalized, so their evidence
+    /// locations are gone — a location-keyed scope would collapse every item to
+    /// the empty key and fire spuriously. Returns only newly-matched composite
+    /// findings (none of the `seed_findings` are echoed back).
+    #[must_use]
+    pub(crate) fn evaluate_package_composites(&self, seed_findings: &[Finding]) -> Vec<Finding> {
+        use crate::composite_rules::Scope;
+
+        // Composites that explicitly pool across the artifact↔registry boundary.
+        let package_rules: Vec<&crate::composite_rules::CompositeTrait> = self
+            .composite_rules
+            .iter()
+            .filter(|r| matches!(r.scope, Some(Scope::Package | Scope::Outer)))
+            .collect();
+        if package_rules.is_empty() {
+            return Vec::new();
+        }
+
+        // A synthetic container with no bytes of its own. `FileType::All` lets a
+        // package rule whose `for:` lists leaf types (e.g. `registry`,
+        // `package_json`) still evaluate at this pooled level.
+        let report = AnalysisReport::new(crate::types::TargetInfo {
+            path: String::new(),
+            file_type: "all".to_string(),
+            size_bytes: 0,
+            sha256: String::new(),
+            architectures: None,
+        });
+        let no_bytes: &[u8] = &[];
+
+        let mut combined = seed_findings.to_vec();
+        let mut seen_ids: std::collections::HashSet<String> =
+            combined.iter().map(|f| f.id.clone()).collect();
+        let mut new_findings: Vec<Finding> = Vec::new();
+
+        // Fixed-point loop so a package composite can feed another.
+        const MAX_ITERATIONS: usize = 5;
+        for _ in 0..MAX_ITERATIONS {
+            let ctx = EvaluationContext::new(
+                &report,
+                no_bytes,
+                RuleFileType::All,
+                &self.platforms,
+                Some(&combined),
+                None,
+            );
+            let matched: Vec<Finding> = package_rules
+                .iter()
+                .filter(|rule| !seen_ids.contains(&rule.id))
+                .filter_map(|rule| rule.evaluate(&ctx))
+                .filter(|f| !seen_ids.contains(&f.id))
+                .collect();
+            if matched.is_empty() {
+                break;
+            }
+            for finding in matched {
+                seen_ids.insert(finding.id.clone());
+                combined.push(finding.clone());
+                new_findings.push(finding);
+            }
+        }
+        new_findings
+    }
 }
 
 #[cfg(test)]
@@ -1119,6 +1197,108 @@ composite_rules:
                 .any(|f| f.id == "test/ext::file-exfil"),
             "file-scoped composite must not fire at archive container level, got: {:?}",
             container_findings.iter().map(|f| &f.id).collect::<Vec<_>>()
+        );
+    }
+
+    /// A `scope: package` composite must fire when one member matches a finding
+    /// from the artifact and the other a finding from its registry metadata —
+    /// the two finding sets the package pass unions. A `scope: file` control
+    /// over the same members must NOT fire, proving the pass is filtered to the
+    /// boundary-spanning scopes and that location-stripped findings don't leak
+    /// a file-scoped match.
+    #[allow(clippy::expect_used)]
+    fn package_scope_mapper() -> super::super::CapabilityMapper {
+        let yaml = r#"
+defaults:
+  for: [all]
+  platforms: [all]
+
+traits:
+  - id: "test/pkg::deprecated"
+    desc: "Registry marks package deprecated"
+    crit: notable
+    if:
+      type: text
+      substr: "DEPRECATED_MARKER"
+  - id: "test/pkg::native-addon"
+    desc: "Artifact ships a native addon"
+    crit: notable
+    if:
+      type: text
+      substr: "NATIVE_ADDON_MARKER"
+
+composite_rules:
+  - id: "test/pkg::deprecated-with-addon"
+    desc: "Deprecated package shipping a native addon"
+    crit: suspicious
+    conf: 0.9
+    scope: package
+    all:
+      - id: "test/pkg::deprecated"
+      - id: "test/pkg::native-addon"
+  - id: "test/pkg::file-control"
+    desc: "Same members, file scope (must not span the boundary)"
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: "test/pkg::deprecated"
+      - id: "test/pkg::native-addon"
+"#;
+        let file = write_test_traits(yaml);
+        super::super::CapabilityMapper::from_yaml(file.path()).expect("load package-scope mapper")
+    }
+
+    #[test]
+    fn package_composite_spans_artifact_and_registry() {
+        let mapper = package_scope_mapper();
+        // One finding from the registry metadata report, one from the artifact
+        // report — the union the package pass evaluates over. Evidence carries
+        // no shared location (both reports are finalized), which is exactly the
+        // condition package scope is designed to tolerate.
+        let seed = vec![
+            make_test_finding("test/pkg::deprecated", Criticality::Notable),
+            make_test_finding("test/pkg::native-addon", Criticality::Notable),
+        ];
+
+        let new_findings = mapper.evaluate_package_composites(&seed);
+
+        assert!(
+            new_findings
+                .iter()
+                .any(|f| f.id == "test/pkg::deprecated-with-addon"),
+            "scope: package composite should fire across the artifact↔registry union, got: {:?}",
+            new_findings.iter().map(|f| &f.id).collect::<Vec<_>>()
+        );
+        // The file-scoped control must be excluded by the scope filter — it is
+        // never even evaluated in the package pass.
+        assert!(
+            !new_findings
+                .iter()
+                .any(|f| f.id == "test/pkg::file-control"),
+            "file-scoped composite must not participate in the package pass, got: {:?}",
+            new_findings.iter().map(|f| &f.id).collect::<Vec<_>>()
+        );
+        // Seed findings are not echoed back — only newly-matched composites.
+        assert!(
+            !new_findings
+                .iter()
+                .any(|f| f.id == "test/pkg::deprecated" || f.id == "test/pkg::native-addon"),
+            "package pass must return only new composite findings"
+        );
+    }
+
+    #[test]
+    fn package_pass_is_a_no_op_without_both_members() {
+        let mapper = package_scope_mapper();
+        // Only the registry side present — the artifact member is missing, so
+        // the `all:` composite cannot fire and nothing is returned.
+        let seed = vec![make_test_finding(
+            "test/pkg::deprecated",
+            Criticality::Notable,
+        )];
+        assert!(
+            mapper.evaluate_package_composites(&seed).is_empty(),
+            "package composite must not fire with only one member present"
         );
     }
 }

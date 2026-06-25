@@ -159,9 +159,9 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.102"
+version = "1.0.103"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
+checksum = "2a4385e2e34eb35d6b3efe798b9eb88096925d87726c0798709bf56d9ed84af3"
 
 [[package]]
 name = "apple-xar"
@@ -1688,7 +1688,7 @@ dependencies = [
 [[package]]
 name = "filefacts"
 version = "1.1.0"
-source = "git+https://codeberg.org/atomdrift/filefacts.git#a5a5278342b1c92145b17e82ab3f67049a616a2b"
+source = "git+https://codeberg.org/atomdrift/filefacts.git#a8799824406d1e4b0c0900933028f44922c81e6c"
 dependencies = [
  "aho-corasick",
  "cfb 0.10.0",
@@ -4563,7 +4563,7 @@ dependencies = [
 [[package]]
 name = "stng"
 version = "1.7.0"
-source = "git+https://codeberg.org/atomdrift/stng.git#f94c0579f9210aedc12e237b0eadde4dbf59a9a5"
+source = "git+https://codeberg.org/atomdrift/stng.git#6f0fab3f47422c2046bfd056ea4f5221452a6c6a"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -5218,7 +5218,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-clojure"
 version = "0.1.0"
-source = "git+https://codeberg.org/atomdrift/filefacts.git#a5a5278342b1c92145b17e82ab3f67049a616a2b"
+source = "git+https://codeberg.org/atomdrift/filefacts.git#a8799824406d1e4b0c0900933028f44922c81e6c"
 dependencies = [
  "cc",
  "tree-sitter",

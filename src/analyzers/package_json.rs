@@ -360,6 +360,8 @@ fn is_publish_or_install_lifecycle_script(name: &str) -> bool {
 fn is_known_benign_piped_installer(script: &str) -> bool {
     let normalized = script.trim();
     normalized == "curl https://tinybird.co | sh"
+        || (normalized.contains("https://rustwasm.github.io/wasm-pack/installer/init.sh")
+            && (normalized.contains("| sh") || normalized.contains("| bash")))
 }
 
 impl PackageJsonAnalyzer {

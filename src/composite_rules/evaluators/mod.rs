@@ -225,17 +225,18 @@ pub(crate) fn utf8_view(binary_data: &[u8], range: (usize, usize)) -> std::borro
     }
 }
 
-/// Clear thread-local caches to free memory.
+/// Reset per-file thread-local state between files.
 ///
-/// This should be called periodically during long-running scans to prevent
-/// memory growth from accumulating cache entries across many files.
+/// Called once per file/archive member on the current thread (so under rayon it
+/// must run inside the parallel context). Today this just clears the IP
+/// validator's current-file id; it is intentionally cheap.
 ///
-/// Clears:
-/// - UTF8_CACHE: Thread-local LRU cache of UTF-8 conversions (can hold large strings)
-/// - SCANNER_CACHE: Thread-local YARA scanner cache
-///
-/// Note: This only clears the cache for the CURRENT thread. When using rayon,
-/// call this from within a parallel context to clear caches on worker threads.
+/// Does NOT touch the thread-local YARA scanner cache. That cache is a bounded
+/// `LruCache` whose `Rules` live for the whole process, so its scanners never go
+/// stale and it cannot grow past its bound. Clearing it per member forced a full
+/// `Scanner::new()` (a wasmtime VM instantiation over ~500 rules) on the next
+/// member and dominated archive scan time — the same mistake the AST query cache
+/// note below records. Keep the scanners warm.
 ///
 /// Does NOT touch the process-wide AST query cache. Those `tree_sitter::Query`
 /// entries are keyed by `(FileType, query_str)` and never become stale — wiping
@@ -249,7 +250,6 @@ pub(crate) fn utf8_view(binary_data: &[u8], range: (usize, usize)) -> std::borro
 #[allow(dead_code)] // Exported via lib.rs, false positive from lib/bin split
 pub fn clear_thread_local_caches() {
     crate::ip_validator::clear_current_file_id();
-    crate::yara_engine::clear_engine_scanner_cache();
 }
 
 /// Clear the process-global regex caches.

@@ -630,13 +630,15 @@ const ALLOWED_IMPACT: &[&str] = &[
 ///
 /// Update this list AND TAXONOMY.md when adding new supply-chain categories.
 const ALLOWED_SUPPLY_CHAIN: &[&str] = &[
+    "account-takeover", // Maintainer-account compromise / name hijack (publisher != maintainer)
     "credential-theft", // Stealing credentials from CI/package infra
     "hidden-payload",   // Concealed malicious payloads in packages
     "impersonation",    // Typosquatting, name confusion
     "install-hook",     // Malicious install/build hooks (setup.py, postinstall)
     "metadata-anomaly", // Suspicious package metadata patterns
     "recon-exfil",      // Reconnaissance and data exfiltration from build env
-    "registry",         // Registry-record risk verdicts (fresh+unadopted, harvester listings)
+    "takedown",         // Registry already pulled the package (unpublished/removed)
+    "throwaway",        // Disposable freshly-registered package infrastructure
     "trojanized",       // Trojanized legitimate packages
 ];
 

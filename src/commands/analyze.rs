@@ -130,6 +130,7 @@ pub fn run(config: &AnalyzeConfig<'_>) -> Result<String> {
         // this is still a no-op for server-invoked analyses.
         cancellation: Some(cleave::cancellation::global_flag()),
         phase: None,
+        skip_predicate: None,
     };
 
     // If target is a directory, process files recursively

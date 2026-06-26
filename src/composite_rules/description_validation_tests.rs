@@ -6,8 +6,32 @@
 #[cfg(test)]
 #[allow(clippy::module_inception)]
 mod description_validation_tests {
+    use crate::composite_rules::traits::CompositeTrait;
     use crate::composite_rules::{Arch, Condition, TextQuery, TraitDefinition};
     use crate::types::Criticality;
+
+    #[test]
+    fn composite_description_length() {
+        // Composites get a roomier cap (80) than atomic traits (48): they summarize
+        // a combination, so a one-line description that names a few entities is fine.
+        let comp = |desc: &str| CompositeTrait {
+            id: "test".to_string(),
+            desc: desc.to_string(),
+            ..Default::default()
+        };
+        // ~57 chars — a concise triage line naming entities: allowed.
+        assert!(
+            comp("Benign mass-delete-with-callback (CI, monitoring, guards)")
+                .check_description_quality()
+                .is_none()
+        );
+        // Over 80 — a sentence-length blurb: rejected.
+        let long = "Recognized-benign packages that trip the hidden-listener heuristic — Glide, gettext, and KeePassXC";
+        assert!(long.chars().count() > 80);
+        assert!(comp(long).check_description_quality().is_some());
+        // Empty: rejected.
+        assert!(comp("").check_description_quality().is_some());
+    }
 
     fn create_test_trait_with_desc(desc: &str) -> TraitDefinition {
         TraitDefinition {

@@ -2526,6 +2526,44 @@ impl super::CapabilityMapper {
                 }
             }
 
+            // Composite descriptions must stay short enough for one-line triage.
+            // Atomic traits are length-checked above; composites get a roomier cap.
+            if !crate::validation_controls::is_validator_disabled("long-description") {
+                let mut long_descs: Vec<(String, String)> = Vec::new();
+                for rule in &composite_rules {
+                    if let Some(warning) = rule.check_description_quality() {
+                        let source = rule_source_files
+                            .get(&rule.id)
+                            .cloned()
+                            .unwrap_or_else(|| "unknown".to_string());
+                        long_descs.push((rule.id.clone(), format!("{source}: {warning}")));
+                    }
+                }
+                long_descs.sort_by(|a, b| a.0.cmp(&b.0));
+                if !long_descs.is_empty() {
+                    eprintln!(
+                        "\n❌ ERROR: {} composite description(s) are too long for one-line triage",
+                        long_descs.len()
+                    );
+                    eprintln!(
+                        "   A composite `desc:` should be a concise one-line summary a security engineer can"
+                    );
+                    eprintln!(
+                        "   read at a glance during triage — name the key entities and drop filler.\n"
+                    );
+                    for (id, detail) in &long_descs {
+                        eprintln!("   {detail} ('{id}')");
+                    }
+                    warnings.push_id(
+                        "long-description",
+                        format!(
+                            "{} composite description(s) exceed the one-line triage length cap",
+                            long_descs.len()
+                        ),
+                    );
+                }
+            }
+
             // NOTE: baseline traits are now allowed in objectives/ - they serve as building blocks
             // for composite rules and can be useful even without direct analytical signal.
 

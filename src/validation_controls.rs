@@ -566,6 +566,13 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         fix: "Make it a crit: exception composite (may live anywhere) referenced from unless:/downgrade:, or rename it for what it detects. See TAXONOMY.md.",
     },
     ValidatorSpec {
+        id: "long-description",
+        category: ValidatorCategory::Quality,
+        display_id: "desc-len",
+        description: "Composite description is too long for one-line triage.",
+        fix: "Shorten desc: to a concise one-line summary — name the key entities, drop filler.",
+    },
+    ValidatorSpec {
         id: "regex-case-subsumption",
         category: ValidatorCategory::Dedup,
         display_id: "re-case",

@@ -641,6 +641,26 @@ pub struct AnalysisOptions {
     /// string at key analysis stages so callers (e.g. litmus `/_/requests`) can
     /// report what a stuck request is actually doing.
     pub phase: Option<PhaseTracker>,
+    /// Optional caller-supplied predicate, consulted with a file's sha256 hex
+    /// after it is hashed but before any analysis. Returning `true` skips the
+    /// expensive pipeline and yields a minimal report (target only). Lets a
+    /// caller short-circuit files it already has a verdict for (e.g. a local
+    /// known-good bloom filter) without cleave knowing why. Not part of the
+    /// analysis cache key.
+    pub skip_predicate: Option<SkipPredicate>,
+}
+
+/// Caller-supplied "skip analysis of this file" predicate (see
+/// [`AnalysisOptions::skip_predicate`]). Called with the sha256 hex; `true`
+/// skips analysis. `Arc` so it is cheap to share across the rayon fan-out. A
+/// newtype so [`AnalysisOptions`] can keep deriving `Debug`.
+#[derive(Clone)]
+pub struct SkipPredicate(pub Arc<dyn Fn(&str) -> bool + Send + Sync>);
+
+impl std::fmt::Debug for SkipPredicate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SkipPredicate(..)")
+    }
 }
 
 /// Lightweight handle for reporting the current analysis phase.
@@ -877,6 +897,7 @@ impl Default for AnalysisOptions {
             max_scan_file_size: 600 * 1024 * 1024, // 600 MB default
             cancellation: None,
             phase: None,
+            skip_predicate: None,
         }
     }
 }
@@ -1675,6 +1696,23 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     // matters for large inputs — SHA256 of a 100 MB archive is ~200 ms.
     let sha256_hex =
         precomputed_sha256.unwrap_or_else(|| analyzers::utils::calculate_sha256(file_data));
+
+    // Caller skip hook: consulted with the sha256 right after hashing, before any
+    // analysis. A `true` short-circuits to a minimal target-only report — the
+    // caller (e.g. litmus' known-good bloom filter) already has a verdict and
+    // recognizes the skip by re-checking the sha. Cheaper than the cache lookup,
+    // and bloom-agnostic.
+    if let Some(predicate) = &options.skip_predicate
+        && (predicate.0)(&sha256_hex)
+    {
+        return Ok(AnalysisReport::new(types::TargetInfo {
+            path: path.display().to_string(),
+            file_type: String::new(),
+            size_bytes: file_size,
+            sha256: sha256_hex,
+            architectures: None,
+        }));
+    }
 
     // Set current file ID for IP validation cache
     let file_id = hash_str(&sha256_hex);

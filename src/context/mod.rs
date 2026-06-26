@@ -182,7 +182,7 @@ fn local_anchors(finding: &Finding, by_id: &FxHashMap<&str, &Finding>) -> Vec<(u
 /// Matches [`note_score`] so the placement pass and the per-line dedup agree on
 /// which match is "stronger."
 fn finding_score(finding: &Finding) -> f32 {
-    finding.conf * f32::from(finding.crit as u8)
+    finding.conf * f32::from(finding.crit.rank())
 }
 
 /// A composite's candidate legs `(offset, len, confidence)` — one per local
@@ -716,7 +716,7 @@ fn dedup_notes(notes: &mut Vec<Note>) {
 
 /// Rank for overlap resolution: confidence weighted by criticality level.
 fn note_score(n: &Note) -> f32 {
-    n.conf * f32::from(n.crit as u8)
+    n.conf * f32::from(n.crit.rank())
 }
 
 /// Whether two notes' `[off, off+len)` byte spans overlap (a zero-length match

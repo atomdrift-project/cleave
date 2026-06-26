@@ -809,17 +809,23 @@ pub(crate) fn eval_text<'a, 'b>(
                     // `match_value` is a subslice of the string for word/regex
                     // matches (e.g. `.dll` inside `name.dll`); offset it within
                     // the string so the location points at the match, not the
-                    // enclosing string's start.
+                    // enclosing string's start. A string that carries no offset
+                    // (version-resource/derived entries) still anchors via
+                    // `string_info_location` (its section start, else `0x0`) —
+                    // mirrors the exact-match branch above and `eval_string_literal`,
+                    // so a content match never reaches `fallback_anchor` locationless.
                     let within = (match_value.as_ptr() as usize)
                         .saturating_sub(string_info.value.as_ptr() as usize)
                         as u64;
+                    let location = match string_info.offset {
+                        Some(o) => format!("{:#x}", o.saturating_add(within)),
+                        None => string_info_location(ctx.report, string_info),
+                    };
                     evidence.push(Evidence {
                         method: "text".to_string(),
                         source: "string_extractor".to_string(),
                         value: truncate_evidence_value(match_value),
-                        location: string_info
-                            .offset
-                            .map(|o| format!("{:#x}", o.saturating_add(within))),
+                        location: Some(location),
                         ..Default::default()
                     });
                 }
@@ -892,12 +898,14 @@ fn eval_text_encoded<'a, 'b>(
             // The match lives inside an encoded blob: a sub-offset into the
             // decoded value has no meaning in the source byte space, so anchor at
             // the string's offset and span the *encoded* source bytes — not the
-            // shorter decoded length (see `encoded_source_len`).
+            // shorter decoded length (see `encoded_source_len`). An offset-less
+            // entry still anchors via `string_info_location` (section start, else
+            // `0x0`), so the match never reaches `fallback_anchor` locationless.
             evidence.push(Evidence {
                 method: "text".to_string(),
                 source: "string_extractor".to_string(),
                 value: truncate_evidence_value(match_value),
-                location: string_info.offset.map(|o| format!("{o:#x}")),
+                location: Some(string_info_location(ctx.report, string_info)),
                 match_len: encoded_source_len(string_info.value.len(), &string_info.encoding_chain),
                 ..Default::default()
             });

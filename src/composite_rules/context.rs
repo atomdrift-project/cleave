@@ -85,6 +85,12 @@ pub(crate) struct EvaluationContext<'a> {
     /// lowercasing is byte-position-preserving, so any search sub-range maps to
     /// the same range of this buffer (see [`Self::lower_binary`]).
     pub cached_lower_binary: Arc<OnceLock<Vec<u8>>>,
+    /// True while evaluating a `crit: exception` composite. A directory trait
+    /// reference normally excludes `crit: exception` members (so dropping an
+    /// `objectives/` directory into `all:`/`any:` can't inherit a suppressor), but
+    /// an exception composite is allowed to assemble a directory of exceptions, so
+    /// this re-includes them for that case. See [`super::evaluators::misc::eval_trait`].
+    pub parent_is_exception: bool,
 }
 
 impl<'a> EvaluationContext<'a> {
@@ -157,12 +163,20 @@ impl<'a> EvaluationContext<'a> {
             cached_evidence: None,
             current_trait_idx: None,
             cached_source_utf8,
+            parent_is_exception: false,
         }
     }
 
     /// Set the slow rule threshold
     pub(crate) fn with_slow_rule_ms(mut self, slow_rule_ms: u64) -> Self {
         self.slow_rule_ms = slow_rule_ms;
+        self
+    }
+
+    /// Mark (or unmark) that the rule currently being evaluated is a
+    /// `crit: exception` composite, so directory references may reach exceptions.
+    pub(crate) fn with_parent_exception(mut self, parent_is_exception: bool) -> Self {
+        self.parent_is_exception = parent_is_exception;
         self
     }
 
@@ -388,6 +402,7 @@ impl<'a> EvaluationContext<'a> {
             cached_evidence: None,
             current_trait_idx: None,
             cached_source_utf8: None,
+            parent_is_exception: false,
         }
     }
 }

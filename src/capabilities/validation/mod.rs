@@ -134,17 +134,19 @@ pub(crate) use patterns::{
 pub(crate) use directory_whitelist::validate_directory_structure;
 pub(crate) use taxonomy::{
     BROAD_PLATFORM_ALLOWLIST, MAX_TRAITS_PER_DIRECTORY, ObjectivesWellknownViolation,
-    find_banned_directory_segments, find_broad_filetype_traits, find_broad_platform_traits,
-    find_cap_obj_violations, find_cap_wellknown_violations, find_composite_only_wellknown_files,
-    find_depth_violations, find_duplicate_second_level_directories,
-    find_generic_wellknown_leaf_dirs, find_hostile_cap_rules, find_hostile_meta_rules,
-    find_invalid_trait_ids, find_malware_subcategory_violations, find_meta_missing_section_filter,
-    find_metadata_content_dirs, find_metadata_cross_tier_refs,
+    find_banned_directory_segments, find_benign_misplaced, find_broad_filetype_traits,
+    find_broad_platform_traits, find_cap_obj_violations, find_cap_wellknown_violations,
+    find_composite_only_wellknown_files, find_depth_violations,
+    find_duplicate_second_level_directories, find_exception_atomic_traits,
+    find_exception_inline_conditions, find_exception_non_notable_members,
+    find_exception_positive_refs, find_generic_wellknown_leaf_dirs, find_hostile_cap_rules,
+    find_hostile_meta_rules, find_invalid_trait_ids, find_malware_subcategory_violations,
+    find_meta_missing_section_filter, find_metadata_content_dirs, find_metadata_cross_tier_refs,
     find_objectives_wellknown_violations, find_oversized_trait_directories,
     find_parent_duplicate_segments, find_platform_named_directories, find_redundant_unix_platforms,
     find_suppression_only_building_blocks, find_unanchored_wellknown_composites,
-    find_wellknown_category_violations, find_wellknown_missing_section_filter,
-    find_wellknown_missing_size_filter,
+    find_unreferenced_exceptions, find_wellknown_category_violations,
+    find_wellknown_missing_section_filter, find_wellknown_missing_size_filter,
 };
 
 // Logic constraint validation

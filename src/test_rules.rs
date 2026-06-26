@@ -293,6 +293,7 @@ impl<'a> RuleDebugger<'a> {
             cached_evidence: None,
             current_trait_idx: None,
             cached_source_utf8: std::str::from_utf8(self.binary_data).ok(),
+            parent_is_exception: false,
             cancellation: None,
         }
     }
@@ -651,6 +652,7 @@ impl<'a> RuleDebugger<'a> {
             cached_evidence: None,
             current_trait_idx: None,
             cached_source_utf8: None,
+            parent_is_exception: false,
             cancellation: None,
         };
 
@@ -1260,6 +1262,7 @@ impl<'a> RuleDebugger<'a> {
             cached_evidence: None,
             current_trait_idx: None,
             cached_source_utf8: None,
+            parent_is_exception: false,
             cancellation: None,
         };
 
@@ -1650,6 +1653,7 @@ impl<'a> RuleDebugger<'a> {
             cached_evidence: None,
             current_trait_idx: None,
             cached_source_utf8,
+            parent_is_exception: false,
             cancellation: None,
         };
 
@@ -1781,6 +1785,7 @@ impl<'a> RuleDebugger<'a> {
             cached_evidence: None,
             current_trait_idx: None,
             cached_source_utf8: None,
+            parent_is_exception: false,
             cancellation: None,
         };
 

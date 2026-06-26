@@ -923,7 +923,7 @@ pub fn prefetch_yara_engine(enable_third_party: bool) {
 /// Pre-warm the capability mapper, blocking until it is built and stored.
 ///
 /// Companion to [`prefetch_yara_engine`], and blocking for the same reason: the
-/// mapper's lock-free first-build (see [`shared_resources::capability_mapper`])
+/// mapper's lock-free first-build (see `shared_resources::capability_mapper`)
 /// lets multiple callers build concurrently and discard all but one. If this
 /// returned before the build finished, the immediately-following directory scan
 /// would race it from a rayon worker — both would parse the 32 MB cache and

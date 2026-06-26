@@ -1212,7 +1212,7 @@ fn preferred_binary_tier(
 
 /// Collapse a binary-format alias to the primary file type it is detected as.
 ///
-/// cleave detects a DLL/EXE as [`analyzers::FileType::Pe`], a `.so`/`.ko` as
+/// cleave detects a DLL/EXE as `analyzers::FileType::Pe`, a `.so`/`.ko` as
 /// `Elf`, and a `.dylib`/`.kext` as `MachO`, and `yara_filetypes()` already lists
 /// every alias for that type — so a scan loads `pe.yrc` and `dll.yrc` together.
 /// Bucketing a rule under both is pure duplication; collapse to the primary so
@@ -1747,7 +1747,7 @@ const RULE_FILETYPE_OVERRIDES: &[(&str, &[&str])] = &[
     ("createminidump", &["pe"]),
 ];
 
-/// Look up the curated [`RULE_FILETYPE_OVERRIDES`] table for `rule_name`.
+/// Look up the curated `RULE_FILETYPE_OVERRIDES` table for `rule_name`.
 #[must_use]
 pub fn filetypes_from_override(rule_name: &str) -> Vec<&'static str> {
     let lower = rule_name.to_ascii_lowercase();

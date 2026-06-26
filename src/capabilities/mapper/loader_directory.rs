@@ -18,14 +18,17 @@ use crate::capabilities::validation::{
     check_same_string_different_types, collect_trait_refs_from_rule,
     collect_trait_refs_from_trait_def, find_alternation_merge_candidates,
     find_ast_function_call_should_use_symbol, find_atomic_logic_duplicates,
-    find_banned_directory_segments, find_brittle_path_patterns, find_broad_filetype_traits,
-    find_broad_platform_traits, find_cap_obj_violations, find_cap_wellknown_violations,
-    find_case_insensitive_overlap_issues, find_composite_only_wellknown_files,
-    find_depth_violations, find_duplicate_atomic_traits, find_duplicate_composite_rules,
-    find_duplicate_inline_exclusions, find_duplicate_second_level_directories,
-    find_empty_condition_clauses, find_excessive_file_types, find_excessive_skip_conditions,
-    find_for_only_duplicates, find_generic_wellknown_leaf_dirs, find_hex_binary_missing_section,
-    find_hostile_cap_rules, find_hostile_composites_without_notable_leg, find_hostile_meta_rules,
+    find_banned_directory_segments, find_benign_misplaced, find_brittle_path_patterns,
+    find_broad_filetype_traits, find_broad_platform_traits, find_cap_obj_violations,
+    find_cap_wellknown_violations, find_case_insensitive_overlap_issues,
+    find_composite_only_wellknown_files, find_depth_violations, find_duplicate_atomic_traits,
+    find_duplicate_composite_rules, find_duplicate_inline_exclusions,
+    find_duplicate_second_level_directories, find_empty_condition_clauses,
+    find_exception_atomic_traits, find_exception_inline_conditions,
+    find_exception_non_notable_members, find_exception_positive_refs, find_excessive_file_types,
+    find_excessive_skip_conditions, find_for_only_duplicates, find_generic_wellknown_leaf_dirs,
+    find_hex_binary_missing_section, find_hostile_cap_rules,
+    find_hostile_composites_without_notable_leg, find_hostile_meta_rules,
     find_impossible_count_constraints, find_impossible_needs, find_impossible_size_constraints,
     find_invalid_not_usage, find_invalid_trait_ids, find_kv_exists_with_matcher, find_line_number,
     find_malware_subcategory_violations, find_many_directory_refs,
@@ -41,7 +44,7 @@ use crate::capabilities::validation::{
     find_single_item_clauses, find_slow_regex_patterns, find_string_content_collisions,
     find_string_literal_should_use_text, find_string_pattern_duplicates,
     find_structural_regex_duplicates, find_suppression_only_building_blocks,
-    find_too_short_patterns, find_unanchored_wellknown_composites,
+    find_too_short_patterns, find_unanchored_wellknown_composites, find_unreferenced_exceptions,
     find_wellknown_category_violations, find_wellknown_missing_section_filter,
     find_wellknown_missing_size_filter, precalculate_all_composite_precisions,
     validate_composite_trait_only, validate_directory_structure,
@@ -2297,6 +2300,230 @@ impl super::CapabilityMapper {
                         suppression_only.len()
                     ),
                 );
+            }
+
+            // ---- crit: exception contract ----
+            // A `crit: exception` composite is a benign-context suppressor: composite-only,
+            // referenced only from `unless:`/`downgrade:`, assembled from exactly-`notable`
+            // named traits, and required to be referenced somewhere. See TAXONOMY.md.
+            tracing::trace!("Step 13f/15: Checking crit: exception contract");
+
+            // V1: only composites may be crit: exception.
+            if !crate::validation_controls::is_validator_disabled("exception-atomic") {
+                let atomic_exceptions =
+                    find_exception_atomic_traits(&trait_definitions, &rule_source_files);
+                if !atomic_exceptions.is_empty() {
+                    eprintln!(
+                        "\n❌ ERROR: {} atomic trait(s) declare `crit: exception` — only composites may",
+                        atomic_exceptions.len()
+                    );
+                    eprintln!(
+                        "   `crit: exception` marks a benign-context composite that assembles named traits.\n"
+                    );
+                    for (id, source_file) in &atomic_exceptions {
+                        match find_line_number(source_file, id) {
+                            Some(l) => eprintln!("   {source_file}:{l}: atomic trait '{id}'"),
+                            None => eprintln!("   {source_file}: atomic trait '{id}'"),
+                        }
+                    }
+                    warnings.push_id(
+                        "exception-atomic",
+                        format!(
+                            "{} atomic trait(s) use crit: exception (composite-only)",
+                            atomic_exceptions.len()
+                        ),
+                    );
+                }
+            }
+
+            // V5: every condition in an exception composite must be a named trait ref.
+            if !crate::validation_controls::is_validator_disabled("exception-inline-condition") {
+                let inline = find_exception_inline_conditions(&composite_rules, &rule_source_files);
+                if !inline.is_empty() {
+                    eprintln!(
+                        "\n❌ ERROR: {} inline condition(s) in `crit: exception` composites — named traits only",
+                        inline.len()
+                    );
+                    eprintln!(
+                        "   An exception is a pure assembly of named, `notable` traits; inline matchers carry"
+                    );
+                    eprintln!(
+                        "   no criticality and would bypass the notable-member guarantee. Promote each to a"
+                    );
+                    eprintln!("   named trait and reference it.\n");
+                    for (id, clause, kind, source_file) in &inline {
+                        match find_line_number(source_file, id) {
+                            Some(l) => eprintln!(
+                                "   {source_file}:{l}: '{id}' has an inline `{kind}` in `{clause}:`"
+                            ),
+                            None => eprintln!(
+                                "   {source_file}: '{id}' has an inline `{kind}` in `{clause}:`"
+                            ),
+                        }
+                    }
+                    warnings.push_id(
+                        "exception-inline-condition",
+                        format!(
+                            "{} inline condition(s) in crit: exception composites (named traits only)",
+                            inline.len()
+                        ),
+                    );
+                }
+            }
+
+            // V4: every member of an exception composite must be exactly `notable`.
+            if !crate::validation_controls::is_validator_disabled("exception-member-crit") {
+                let members = find_exception_non_notable_members(
+                    &trait_definitions,
+                    &composite_rules,
+                    &rule_source_files,
+                );
+                if !members.is_empty() {
+                    eprintln!(
+                        "\n❌ ERROR: {} member(s) of `crit: exception` composites are not `notable`",
+                        members.len()
+                    );
+                    eprintln!(
+                        "   A benign pattern is assembled from `notable` (\"defines program purpose\") facts."
+                    );
+                    eprintln!(
+                        "   Members that are baseline/component, or suspicious/hostile, do not belong in one.\n"
+                    );
+                    for (id, member_id, crit, source_file) in &members {
+                        let crit = format!("{crit:?}").to_lowercase();
+                        match find_line_number(source_file, member_id) {
+                            Some(l) => eprintln!(
+                                "   {source_file}:{l}: '{id}' member '{member_id}' is `{crit}`, not `notable`"
+                            ),
+                            None => eprintln!(
+                                "   {source_file}: '{id}' member '{member_id}' is `{crit}`, not `notable`"
+                            ),
+                        }
+                    }
+                    warnings.push_id(
+                        "exception-member-crit",
+                        format!(
+                            "{} member(s) of crit: exception composites are not notable",
+                            members.len()
+                        ),
+                    );
+                }
+            }
+
+            // V2: an exception may only be referenced from unless:/downgrade:, never as
+            // positive evidence (atomic if:, composite all:/any:).
+            if !crate::validation_controls::is_validator_disabled("exception-positive-ref") {
+                let positive = find_exception_positive_refs(
+                    &trait_definitions,
+                    &composite_rules,
+                    &rule_source_files,
+                );
+                if !positive.is_empty() {
+                    eprintln!(
+                        "\n❌ ERROR: {} positive reference(s) to `crit: exception` composites",
+                        positive.len()
+                    );
+                    eprintln!(
+                        "   An exception is a benign-context suppressor — reference it only from `unless:`"
+                    );
+                    eprintln!(
+                        "   or `downgrade:`, never as positive evidence (`all:`/`any:`/atomic `if:`).\n"
+                    );
+                    for (rule_id, ref_id, source_file) in &positive {
+                        match find_line_number(source_file, ref_id) {
+                            Some(l) => eprintln!(
+                                "   {source_file}:{l}: '{rule_id}' references exception '{ref_id}' as positive evidence"
+                            ),
+                            None => eprintln!(
+                                "   {source_file}: '{rule_id}' references exception '{ref_id}' as positive evidence"
+                            ),
+                        }
+                    }
+                    warnings.push_id(
+                        "exception-positive-ref",
+                        format!(
+                            "{} positive reference(s) to crit: exception composites (unless:/downgrade: only)",
+                            positive.len()
+                        ),
+                    );
+                }
+            }
+
+            // V3: an exception that nothing references is dead weight.
+            if !crate::validation_controls::is_validator_disabled("exception-unreferenced") {
+                let unreferenced = find_unreferenced_exceptions(
+                    &trait_definitions,
+                    &composite_rules,
+                    &rule_source_files,
+                );
+                if !unreferenced.is_empty() {
+                    eprintln!(
+                        "\n❌ ERROR: {} `crit: exception` composite(s) are never referenced",
+                        unreferenced.len()
+                    );
+                    eprintln!(
+                        "   An exception exists only to suppress or downgrade a host detection. Reference it"
+                    );
+                    eprintln!("   from some rule's `unless:`/`downgrade:`, or remove it.\n");
+                    for (id, source_file) in &unreferenced {
+                        match find_line_number(source_file, id) {
+                            Some(l) => eprintln!("   {source_file}:{l}: '{id}'"),
+                            None => eprintln!("   {source_file}: '{id}'"),
+                        }
+                    }
+                    warnings.push_id(
+                        "exception-unreferenced",
+                        format!(
+                            "{} crit: exception composite(s) are never referenced",
+                            unreferenced.len()
+                        ),
+                    );
+                }
+            }
+
+            // Benign-suppression rules don't belong in objectives/ or well-known/malware/.
+            // The sanctioned home is a `crit: exception` composite (which may live anywhere).
+            if !crate::validation_controls::is_validator_disabled("benign-misplaced") {
+                let benign =
+                    find_benign_misplaced(&trait_definitions, &composite_rules, &rule_source_files);
+                if !benign.is_empty() {
+                    eprintln!(
+                        "\n❌ ERROR: {} rule(s) read as benign suppression but sit in objectives/ or well-known/malware/",
+                        benign.len()
+                    );
+                    eprintln!(
+                        "   `objectives/` and `well-known/malware/` are for positive detections. A rule whose"
+                    );
+                    eprintln!(
+                        "   id/description reads as suppression (`benign`, `fp-context`, `safety-context`, a"
+                    );
+                    eprintln!(
+                        "   `*-context` / `*-fp` / `*-exceptions` name, `false-positive`, allow/whitelisting) is"
+                    );
+                    eprintln!("   almost certainly");
+                    eprintln!(
+                        "   misorganized per TAXONOMY.md. If it is a benign suppressor, make it a `crit: exception`"
+                    );
+                    eprintln!(
+                        "   composite (which may live anywhere) referenced from the host's `unless:`/`downgrade:`."
+                    );
+                    eprintln!(
+                        "   If it actually detects something, rename it for what its matcher finds.\n"
+                    );
+                    for (id, source_file) in &benign {
+                        match find_line_number(source_file, id) {
+                            Some(l) => eprintln!("   {source_file}:{l}: '{id}'"),
+                            None => eprintln!("   {source_file}: '{id}'"),
+                        }
+                    }
+                    warnings.push_id(
+                        "benign-misplaced",
+                        format!(
+                            "{} benign-suppression rule(s) misplaced in objectives/ or well-known/malware/ (see TAXONOMY.md)",
+                            benign.len()
+                        ),
+                    );
+                }
             }
 
             // NOTE: baseline traits are now allowed in objectives/ - they serve as building blocks

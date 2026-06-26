@@ -8,7 +8,7 @@ use super::ml_features::{
 };
 
 /// The body of an extracted string — an owned UTF-8 `String`. (Truncated to
-/// `MAX_EVIDENCE_VALUE_SIZE` on serialization; see [`serialize_truncated_string`].)
+/// `MAX_EVIDENCE_VALUE_SIZE` on serialization; see `serialize_truncated_string`.)
 ///
 /// A newtype rather than a bare `String` so it can carry the truncating
 /// `Serialize` and the `str`-like trait impls (`Deref`, `AsRef`, `PartialEq`,

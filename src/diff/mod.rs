@@ -8,11 +8,11 @@
 //!
 //! # Pipeline
 //!
-//! 1. Each side is walked into a flat [`DiffUnit`] list using the cached
+//! 1. Each side is walked into a flat `DiffUnit` list using the cached
 //!    [`crate::analyze_file`] pipeline; archive members are flattened to
 //!    units with `archive!!member` paths.
 //! 2. Units are paired by relative path (rename detection deferred).
-//! 3. [`scopes`] computes per-pair `ScopeDiff`s; results are pooled per scope
+//! 3. `scopes` computes per-pair `ScopeDiff`s; results are pooled per scope
 //!    and folded into the report summary.
 //!
 //! Performance comes from the SQLite-backed analysis cache: re-running a diff

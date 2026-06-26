@@ -2,15 +2,15 @@
 //!
 //! Three sections, each in its own submodule:
 //!
-//!   1. [`header`] — single-line header. Common path prefix between old
+//!   1. `header` — single-line header. Common path prefix between old
 //!      and new is dropped so `cleave diff /a/b/v1 /a/b/v2` reads
 //!      `v1 → v2`. Overall ROC and a "N of M files changed" phrase ride
 //!      on the same line.
-//!   2. [`ledger`] — one row per significant file ranked by
+//!   2. `ledger` — one row per significant file ranked by
 //!      `(max trait criticality, ROC)` descending. Per-scope ROCs sit
 //!      in column headers; columns whose every cell is empty are
 //!      omitted.
-//!   3. [`panes`] — per-file detail panes, one per significant file.
+//!   3. `panes` — per-file detail panes, one per significant file.
 //!      Each pane lists only the scopes that actually changed.
 //!
 //! Conventions:
@@ -94,7 +94,8 @@ pub(super) fn crit_rank(c: Criticality) -> i32 {
         Criticality::Notable => 3,
         Criticality::Baseline => 2,
         Criticality::Component => 1,
-        Criticality::Filtered => 0,
+        // Exception is assembly-only and never reaches the diff surface; floor it.
+        Criticality::Exception | Criticality::Filtered => 0,
     }
 }
 
@@ -107,7 +108,7 @@ pub(super) fn crit_dots(c: Criticality) -> colored::ColoredString {
         Criticality::Suspicious => crate::theme::paint_suspicious("●● "),
         Criticality::Notable => crate::theme::paint_notable("●  "),
         Criticality::Baseline => crate::theme::paint_baseline("·  "),
-        Criticality::Component | Criticality::Filtered => "·  ".dimmed(),
+        Criticality::Component | Criticality::Exception | Criticality::Filtered => "·  ".dimmed(),
     }
 }
 
@@ -119,7 +120,7 @@ pub(super) fn paint_crit<S: AsRef<str>>(text: S, c: Criticality) -> colored::Col
         Criticality::Suspicious => crate::theme::paint_suspicious(s),
         Criticality::Notable => crate::theme::paint_notable(s),
         Criticality::Baseline => crate::theme::paint_baseline(s),
-        Criticality::Component | Criticality::Filtered => s.dimmed(),
+        Criticality::Component | Criticality::Exception | Criticality::Filtered => s.dimmed(),
     }
 }
 

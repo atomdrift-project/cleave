@@ -73,6 +73,26 @@ pub(crate) struct RuleDebugResult {
     pub context_info: ContextInfo,
     pub precision: Option<f32>,
     pub precision_details: Vec<String>,
+    /// True when this composite is a bare OR (`any:` with `needs <= 1`, no
+    /// `all:`) that the real mapper filters from output as low-value. Such a
+    /// rule can MATCH here yet never appear in a production scan, so the report
+    /// flags it (see `CapabilityMapper::is_low_value_any_rule`).
+    pub low_value_any: bool,
+}
+
+/// Mirror of `CapabilityMapper::is_low_value_any_rule` for a single rule: a
+/// composite with only an `any:` clause and `needs <= 1` (or a single `any:`
+/// entry) is a plain OR that adds no signal over its matched leg, so the mapper
+/// drops it from findings. test-rules evaluates rules in isolation and does not,
+/// so it surfaces the discrepancy explicitly.
+fn composite_is_low_value_any(composite: &CompositeTrait) -> bool {
+    if composite.all.is_some() {
+        return false;
+    }
+    composite
+        .any
+        .as_ref()
+        .is_some_and(|any| any.len() == 1 || composite.needs.unwrap_or(1) <= 1)
 }
 
 /// Information about the analysis context
@@ -384,6 +404,7 @@ impl<'a> RuleDebugger<'a> {
                 context_info: self.context_info(),
                 precision: Some(precision_value),
                 precision_details: precision_detail_lines(None, Some(trait_def)),
+                low_value_any: false,
             };
         }
 
@@ -415,6 +436,7 @@ impl<'a> RuleDebugger<'a> {
             context_info: self.context_info(),
             precision: Some(precision_value),
             precision_details: precision_detail_lines(None, Some(trait_def)),
+            low_value_any: false,
         }
     }
 
@@ -461,6 +483,7 @@ impl<'a> RuleDebugger<'a> {
                 context_info: self.context_info(),
                 precision: Some(precision_value),
                 precision_details: precision_detail_lines(Some(composite), None),
+                low_value_any: composite_is_low_value_any(composite),
             };
         }
 
@@ -560,6 +583,7 @@ impl<'a> RuleDebugger<'a> {
             context_info: self.context_info(),
             precision: Some(precision_value),
             precision_details: precision_detail_lines(Some(composite), None),
+            low_value_any: composite_is_low_value_any(composite),
         }
     }
 
@@ -2218,6 +2242,17 @@ pub(crate) fn format_debug_output(results: &[RuleDebugResult]) -> String {
         ));
         output.push_str(&format!("  {}\n", result.description.dimmed()));
         output.push_str(&format!("  Requires: {}\n", result.requirements));
+
+        // A bare-OR composite (`any:` with `needs <= 1`, no `all:`) can MATCH
+        // here but is filtered from real scan output as low-value — flag it so a
+        // "matches in test-rules, absent in production" discrepancy is obvious.
+        if result.low_value_any {
+            output.push_str(&format!(
+                "  {} low-value `any:`/`needs<=1` rule — filtered from scan output; \
+                 add an `all:` leg or raise `needs` to keep it\n",
+                "Note:".yellow().bold()
+            ));
+        }
 
         if let Some(precision) = result.precision {
             output.push_str(&format!("  Precision: {:.1}\n", precision));

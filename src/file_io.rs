@@ -179,7 +179,7 @@ pub fn read_file_normalized(path: &Path) -> Result<FileData> {
     }
 }
 
-/// Read a file into an owned Vec<u8>.
+/// Read a file into an owned `Vec<u8>`.
 ///
 /// This is a convenience wrapper that always returns owned data.
 /// Use `read_file_smart` if you want automatic memory-mapping for large files.

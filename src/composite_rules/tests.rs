@@ -342,6 +342,80 @@ fn test_any() {
     assert!(result.is_some());
 }
 
+#[test]
+fn suspicious_composite_directory_ref_drops_exception_keeps_notable() {
+    // A non-exception (here `suspicious`) composite that pulls in a whole
+    // objectives/ directory must see only the notable atomics beneath it; any
+    // `crit: exception` member is silently excluded from the directory expansion,
+    // so folding a directory into `any:`/`all:` can never inherit a suppressor.
+    let target = TargetInfo {
+        path: "/test".to_string(),
+        file_type: "elf".to_string(),
+        size_bytes: 1024,
+        sha256: "test".to_string(),
+        architectures: Some(vec!["x86_64".to_string()]),
+    };
+    let mut report = AnalysisReport::new(target);
+    let mk = |id: &str, crit: Criticality| Finding {
+        src: None,
+        id: id.to_string(),
+        kind: FindingKind::Capability,
+        desc: String::new(),
+        conf: 0.9,
+        crit,
+        mbc: None,
+        attack: None,
+        trait_refs: Vec::new(),
+        evidence: vec![crate::types::Evidence {
+            method: "test".to_string(),
+            source: "test".to_string(),
+            value: "x".to_string(),
+            location: None,
+            ..Default::default()
+        }],
+        match_count: 0,
+        source_file: None,
+    };
+    report
+        .findings
+        .push(mk("objectives/tools::notable-a", Criticality::Notable));
+    report
+        .findings
+        .push(mk("objectives/tools::benign-x", Criticality::Exception));
+    let data: Vec<u8> = vec![];
+    let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None);
+
+    let rule = CompositeTrait {
+        id: "objectives/c2::dir-consumer".to_string(),
+        desc: "Suspicious composite pulling a whole directory".to_string(),
+        crit: Criticality::Suspicious,
+        any: Some(vec![Condition::Trait {
+            id: "objectives/tools".to_string(),
+        }]),
+        ..Default::default()
+    };
+
+    let result = rule
+        .evaluate(&ctx)
+        .expect("directory ref matches the notable atomic");
+    assert!(
+        result
+            .trait_refs
+            .iter()
+            .any(|r| r == "objectives/tools::notable-a"),
+        "notable member must be processed: {:?}",
+        result.trait_refs,
+    );
+    assert!(
+        !result
+            .trait_refs
+            .iter()
+            .any(|r| r == "objectives/tools::benign-x"),
+        "exception member must be silently dropped: {:?}",
+        result.trait_refs,
+    );
+}
+
 // ============================================================================
 // Tests for new directives: not:, unless:, downgrade:
 // ============================================================================

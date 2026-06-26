@@ -9,7 +9,7 @@
 use super::symbol_string::validate_match;
 use crate::composite_rules::condition::StringValidator;
 use crate::composite_rules::context::{ConditionResult, EvaluationContext};
-use crate::types::{Evidence, MAX_EVIDENCE_PER_TRAIT};
+use crate::types::{Criticality, Evidence, MAX_EVIDENCE_PER_TRAIT};
 
 /// Evaluate trait reference condition - check if a trait has already been matched
 ///
@@ -93,6 +93,16 @@ pub(crate) fn eval_trait<'a>(id: &str, ctx: &EvaluationContext<'a>) -> Condition
         // e.g., "anti-static/obfuscation" matches:
         //   - "anti-static/obfuscation::python-hex" (new format)
         //   - "anti-static/obfuscation/python-hex" (legacy format)
+        //
+        // `crit: exception` composites are excluded from directory expansion: a
+        // directory reference is a broad "any trait under here" match, and an
+        // exception is a benign suppressor that must never be inherited as positive
+        // (or any) evidence by accident. For non-exception rules, exceptions are
+        // reachable only by an exact `dir::id` reference (the fast path above) — how
+        // `unless:`/`downgrade:` target them — which is what makes it safe to drop
+        // an `objectives/` directory into an `all:`/`any:` clause. An exception
+        // composite, however, may assemble a directory of exceptions, so it
+        // re-includes them (`parent_is_exception`).
         let prefix_new = format!("{}::", id);
         let prefix_legacy = format!("{}/", id);
         let matching: Vec<_> = ctx
@@ -101,6 +111,7 @@ pub(crate) fn eval_trait<'a>(id: &str, ctx: &EvaluationContext<'a>) -> Condition
             .iter()
             .chain(ctx.additional_findings.into_iter().flatten())
             .filter(|f| f.id.starts_with(&prefix_new) || f.id.starts_with(&prefix_legacy))
+            .filter(|f| ctx.parent_is_exception || f.crit != Criticality::Exception)
             .collect();
 
         if !matching.is_empty() {

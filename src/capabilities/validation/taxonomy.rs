@@ -835,6 +835,462 @@ pub(crate) fn find_suppression_only_building_blocks<'a>(
     violations
 }
 
+// ============================================================================
+// `crit: exception` validation
+//
+// An `exception` is a benign-context composite: a known-good pattern assembled
+// purely from named `notable` traits, referenced only from `unless:`/`downgrade:`
+// clauses to suppress or downgrade a host detection. It is assembly-only and never
+// surfaces in output. The validators below enforce that contract:
+//   V1 `find_exception_atomic_traits`        — only composites may be `crit: exception`
+//   V2 `find_exception_positive_refs`        — never referenced as positive evidence
+//   V3 `find_unreferenced_exceptions`        — must be referenced somewhere (else dead)
+//   V4 `find_exception_non_notable_members`  — every member must be exactly `notable`
+//   V5 `find_exception_inline_conditions`    — every condition must be a named trait ref
+// ============================================================================
+
+/// Iterate `(clause_label, conditions)` over every `Condition` list a composite
+/// carries: `all:`, `any:`, `unless:`, and each `downgrade:` leg. `not:` is a
+/// string-level filter (`NotException`), not a `Condition`, so it is excluded.
+fn composite_condition_lists(rule: &CompositeTrait) -> Vec<(&'static str, &[Condition])> {
+    let mut lists: Vec<(&'static str, &[Condition])> = Vec::new();
+    if let Some(c) = &rule.all {
+        lists.push(("all", c));
+    }
+    if let Some(c) = &rule.any {
+        lists.push(("any", c));
+    }
+    if let Some(c) = &rule.unless {
+        lists.push(("unless", c));
+    }
+    if let Some(d) = &rule.downgrade {
+        if let Some(c) = &d.all {
+            lists.push(("downgrade.all", c));
+        }
+        if let Some(c) = &d.any {
+            lists.push(("downgrade.any", c));
+        }
+        if let Some(c) = &d.none {
+            lists.push(("downgrade.none", c));
+        }
+    }
+    lists
+}
+
+/// The `type:` name of a condition, for diagnostics. Exhaustive so a new
+/// `Condition` variant forces a decision here.
+fn condition_kind(cond: &Condition) -> &'static str {
+    match cond {
+        Condition::Trait { .. } => "trait",
+        Condition::Symbol(_) => "symbol",
+        Condition::Text(_) => "text",
+        Condition::Comment(_) => "comment",
+        Condition::Literal(_) => "literal",
+        Condition::TreeSitter(_) => "tree-sitter",
+        Condition::Yara { .. } => "yara",
+        Condition::Syscall { .. } => "syscall",
+        Condition::Metrics(_) => "metrics",
+        Condition::Hex(_) => "hex",
+        Condition::Raw(_) => "raw",
+        Condition::Section(_) => "section",
+        Condition::Encoded(_) => "encoded",
+        Condition::Path(_) => "path",
+        Condition::Kv(_) => "value",
+    }
+}
+
+/// The composite ids declared `crit: exception`. Atomic exceptions are a V1
+/// violation and are intentionally excluded here — the construct is composite-only.
+fn exception_composite_ids(composite_rules: &[CompositeTrait]) -> std::collections::HashSet<&str> {
+    composite_rules
+        .iter()
+        .filter(|r| r.crit == Criticality::Exception)
+        .map(|r| r.id.as_str())
+        .collect()
+}
+
+fn source_of(rule_source_files: &HashMap<String, String>, id: &str) -> String {
+    rule_source_files
+        .get(id)
+        .cloned()
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+/// The `crit: exception` composites a single trait reference reaches at evaluation
+/// time, mirroring `eval_trait`'s resolution:
+/// - exact (`dir::id`): the exception with that id, if any — reachable from any rule;
+/// - short name (no `/`): exceptions whose id ends with that leaf — reachable from any rule;
+/// - bare directory: exceptions beneath the prefix, but only when the referencing rule
+///   is itself an exception. For every other rule, directory expansion excludes
+///   exceptions, which is what keeps `objectives/` directory references safe.
+fn exceptions_reached_by<'a>(
+    ref_id: &str,
+    from_is_exception: bool,
+    exception_ids: &std::collections::HashSet<&'a str>,
+) -> Vec<&'a str> {
+    let ref_id = ref_id.trim_end_matches('/');
+    if ref_id.contains("::") {
+        return exception_ids.get(ref_id).copied().into_iter().collect();
+    }
+    if !ref_id.contains('/') {
+        let suffix_new = format!("::{ref_id}");
+        let suffix_legacy = format!("/{ref_id}");
+        return exception_ids
+            .iter()
+            .copied()
+            .filter(|e| e.ends_with(&suffix_new) || e.ends_with(&suffix_legacy))
+            .collect();
+    }
+    if !from_is_exception {
+        return Vec::new();
+    }
+    let prefix_new = format!("{ref_id}::");
+    let prefix_legacy = format!("{ref_id}/");
+    exception_ids
+        .iter()
+        .copied()
+        .filter(|e| e.starts_with(&prefix_new) || e.starts_with(&prefix_legacy))
+        .collect()
+}
+
+/// V1: `crit: exception` is composite-only. Atomic trait definitions may not use it.
+///
+/// Returns `(trait_id, source_file)` for each offending atomic trait, sorted by id.
+#[must_use]
+pub(crate) fn find_exception_atomic_traits(
+    trait_definitions: &[TraitDefinition],
+    rule_source_files: &HashMap<String, String>,
+) -> Vec<(String, String)> {
+    let mut violations: Vec<(String, String)> = trait_definitions
+        .iter()
+        .filter(|t| t.crit == Criticality::Exception)
+        .map(|t| (t.id.clone(), source_of(rule_source_files, &t.id)))
+        .collect();
+    violations.sort_by(|a, b| a.0.cmp(&b.0));
+    violations
+}
+
+/// V2: an `exception` may only be referenced from a benign-context clause
+/// (`unless:`/`downgrade:`), never as positive evidence (atomic `if:`, composite
+/// `all:`/`any:`). A positive reference would let a benign pattern drive a
+/// detection, which is backwards.
+///
+/// A reference is flagged when it *reaches* an exception the way evaluation would
+/// (exact `dir::id`, or a short-name leaf), since that pulls a benign pattern in as
+/// positive evidence. A bare-*directory* reference is **not** flagged — directory
+/// expansion excludes exceptions for non-exception rules (see `eval_trait`), so
+/// dropping an `objectives/` directory into `all:`/`any:` can never accidentally
+/// inherit a suppressor. Exception composites are exempt: they may compose other
+/// exceptions, including via a directory of exceptions.
+///
+/// Returns `(referencing_rule_id, exception_ref_id, source_file)` per violation.
+#[must_use]
+pub(crate) fn find_exception_positive_refs(
+    trait_definitions: &[TraitDefinition],
+    composite_rules: &[CompositeTrait],
+    rule_source_files: &HashMap<String, String>,
+) -> Vec<(String, String, String)> {
+    let exception_ids = exception_composite_ids(composite_rules);
+    if exception_ids.is_empty() {
+        return Vec::new();
+    }
+
+    let mut violations: Vec<(String, String, String)> = Vec::new();
+
+    // Atomic `if:` is positive evidence. Atomics are never exceptions (V1), so they
+    // always evaluate as a non-exception parent.
+    for t in trait_definitions {
+        if let Condition::Trait { id } = &t.r#if
+            && !exceptions_reached_by(id, false, &exception_ids).is_empty()
+        {
+            violations.push((
+                t.id.clone(),
+                id.clone(),
+                source_of(rule_source_files, &t.id),
+            ));
+        }
+    }
+
+    // Composite `all:`/`any:` are positive evidence. An exception parent may
+    // reference exceptions positively (deliberate composition), so it is exempt.
+    for r in composite_rules {
+        if r.crit == Criticality::Exception {
+            continue;
+        }
+        for conds in [r.all.as_ref(), r.any.as_ref()].into_iter().flatten() {
+            for cond in conds {
+                if let Condition::Trait { id } = cond
+                    && !exceptions_reached_by(id, false, &exception_ids).is_empty()
+                {
+                    violations.push((
+                        r.id.clone(),
+                        id.clone(),
+                        source_of(rule_source_files, &r.id),
+                    ));
+                }
+            }
+        }
+    }
+
+    violations.sort_by(|a, b| (a.0.as_str(), a.1.as_str()).cmp(&(b.0.as_str(), b.1.as_str())));
+    violations
+}
+
+/// V3: an `exception` exists only to be referenced from some `unless:`/`downgrade:`
+/// clause. One that no rule can reach is dead weight. Reachability mirrors
+/// evaluation: an exact or short-name reference reaches it from any rule, and a
+/// bare-directory reference reaches it only from another exception (directory
+/// expansion excludes exceptions for every other rule). Self-references do not count.
+///
+/// Returns `(exception_id, source_file)` per unreferenced exception, sorted by id.
+#[must_use]
+pub(crate) fn find_unreferenced_exceptions<'a>(
+    trait_definitions: &'a [TraitDefinition],
+    composite_rules: &'a [CompositeTrait],
+    rule_source_files: &HashMap<String, String>,
+) -> Vec<(String, String)> {
+    use std::collections::HashSet;
+
+    let exception_ids = exception_composite_ids(composite_rules);
+    if exception_ids.is_empty() {
+        return Vec::new();
+    }
+
+    // Every `(from_is_exception, referencing_rule_id, ref_id)` across all clauses of
+    // all rules. Atomics are never exceptions; a composite is one iff its crit says so.
+    let mut refs: Vec<(bool, &'a str, &'a str)> = Vec::new();
+    for t in trait_definitions {
+        if let Condition::Trait { id } = &t.r#if {
+            refs.push((false, &t.id, id));
+        }
+        if let Some(unless) = &t.unless {
+            for cond in unless {
+                if let Condition::Trait { id } = cond {
+                    refs.push((false, &t.id, id));
+                }
+            }
+        }
+        if let Some(d) = &t.downgrade {
+            for conds in [d.all.as_ref(), d.any.as_ref(), d.none.as_ref()]
+                .into_iter()
+                .flatten()
+            {
+                for cond in conds {
+                    if let Condition::Trait { id } = cond {
+                        refs.push((false, &t.id, id));
+                    }
+                }
+            }
+        }
+    }
+    for r in composite_rules {
+        let from_is_exception = r.crit == Criticality::Exception;
+        for (_, conds) in composite_condition_lists(r) {
+            for cond in conds {
+                if let Condition::Trait { id } = cond {
+                    refs.push((from_is_exception, &r.id, id));
+                }
+            }
+        }
+    }
+
+    // Mark every exception reached by a reference from some *other* rule, using the
+    // same resolution evaluation uses.
+    let mut referenced: HashSet<&str> = HashSet::new();
+    for (from_is_exception, from_id, ref_id) in refs {
+        for reached in exceptions_reached_by(ref_id, from_is_exception, &exception_ids) {
+            if reached != from_id {
+                referenced.insert(reached);
+            }
+        }
+    }
+
+    let mut violations: Vec<(String, String)> = exception_ids
+        .iter()
+        .filter(|id| !referenced.contains(*id))
+        .map(|id| ((*id).to_string(), source_of(rule_source_files, id)))
+        .collect();
+    violations.sort_by(|a, b| a.0.cmp(&b.0));
+    violations
+}
+
+/// V4: every member an `exception` composite asserts (its `all:`/`any:` references)
+/// must resolve to a rule that is *exactly* `notable` — or another `exception`, since
+/// an exception may compose nested benign patterns. A benign pattern is assembled from
+/// "defines program purpose" facts; building it out of baseline noise, component
+/// fragments, or — worse — `suspicious`/`hostile` legs is incoherent. A bare-directory
+/// member requires every (non-exception) rule beneath the prefix to be `notable`;
+/// exceptions beneath it are ignored, since directory expansion excludes them anyway.
+///
+/// Returns `(exception_id, member_id, member_crit, source_file)` per offending member.
+#[must_use]
+pub(crate) fn find_exception_non_notable_members(
+    trait_definitions: &[TraitDefinition],
+    composite_rules: &[CompositeTrait],
+    rule_source_files: &HashMap<String, String>,
+) -> Vec<(String, String, Criticality, String)> {
+    let exception_ids = exception_composite_ids(composite_rules);
+    if exception_ids.is_empty() {
+        return Vec::new();
+    }
+
+    // id -> crit across every rule, for resolving member references.
+    let mut crit_by_id: HashMap<&str, Criticality> = HashMap::new();
+    for t in trait_definitions {
+        crit_by_id.insert(t.id.as_str(), t.crit);
+    }
+    for r in composite_rules {
+        crit_by_id.insert(r.id.as_str(), r.crit);
+    }
+    let all_ids: Vec<&str> = crit_by_id.keys().copied().collect();
+
+    let mut violations: Vec<(String, String, Criticality, String)> = Vec::new();
+    for rule in composite_rules
+        .iter()
+        .filter(|r| r.crit == Criticality::Exception)
+    {
+        let source = source_of(rule_source_files, &rule.id);
+        // Members = the traits the exception asserts: its `all:`/`any:` references.
+        let members = [rule.all.as_ref(), rule.any.as_ref()]
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|cond| match cond {
+                Condition::Trait { id } => Some(id.as_str()),
+                _ => None,
+            });
+        for member_id in members {
+            if member_id.contains("::") {
+                // A dangling ref (unknown id) is caught by orphan validation, not here.
+                // An exception member is allowed (nested benign composition).
+                if let Some(&crit) = crit_by_id.get(member_id)
+                    && crit != Criticality::Notable
+                    && crit != Criticality::Exception
+                {
+                    violations.push((rule.id.clone(), member_id.to_string(), crit, source.clone()));
+                }
+            } else {
+                // Bare directory: every concrete non-exception rule beneath the prefix
+                // must be notable. Exceptions beneath it are excluded from expansion.
+                let prefix_new = format!("{member_id}::");
+                let prefix_legacy = format!("{member_id}/");
+                for &cid in &all_ids {
+                    if cid.starts_with(&prefix_new) || cid.starts_with(&prefix_legacy) {
+                        let crit = crit_by_id.get(cid).copied().unwrap_or_default();
+                        if crit != Criticality::Notable && crit != Criticality::Exception {
+                            violations.push((
+                                rule.id.clone(),
+                                cid.to_string(),
+                                crit,
+                                source.clone(),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    violations.sort_by(|a, b| (a.0.as_str(), a.1.as_str()).cmp(&(b.0.as_str(), b.1.as_str())));
+    violations
+}
+
+/// V5: an `exception` composite is a pure assembly of named traits — every condition
+/// in every clause (`all:`/`any:`/`unless:`/`downgrade:`) must be a `Condition::Trait`
+/// reference. Inline matchers (`text`/`symbol`/`raw`/…) are rejected: they carry no
+/// criticality, so they would slip past the V4 `notable`-member guarantee.
+///
+/// Returns `(exception_id, clause, condition_kind, source_file)` per inline condition.
+#[must_use]
+pub(crate) fn find_exception_inline_conditions(
+    composite_rules: &[CompositeTrait],
+    rule_source_files: &HashMap<String, String>,
+) -> Vec<(String, String, String, String)> {
+    let mut violations: Vec<(String, String, String, String)> = Vec::new();
+    for rule in composite_rules
+        .iter()
+        .filter(|r| r.crit == Criticality::Exception)
+    {
+        let source = source_of(rule_source_files, &rule.id);
+        for (clause, conds) in composite_condition_lists(rule) {
+            for cond in conds {
+                if !matches!(cond, Condition::Trait { .. }) {
+                    violations.push((
+                        rule.id.clone(),
+                        clause.to_string(),
+                        condition_kind(cond).to_string(),
+                        source.clone(),
+                    ));
+                }
+            }
+        }
+    }
+    violations.sort_by(|a, b| (a.0.as_str(), a.1.as_str()).cmp(&(b.0.as_str(), b.1.as_str())));
+    violations
+}
+
+/// A rule whose id or description reads as a benign-suppression / false-positive
+/// rule does not belong in `objectives/` or `well-known/malware/` — those tiers are
+/// for positive detections. The sanctioned home for a benign pattern is a
+/// `crit: exception` composite (which may live anywhere), so such a composite is
+/// exempt. The markers are the conventions this corpus uses for suppressors:
+/// `benign`, the `<thing>-context` / `fp-context` / `safety-context` family,
+/// `false-positive`, the `-fp` / `-soft-fp` / `-known-fp` and `-exceptions` id
+/// suffixes, and explicit allow/whitelisting.
+///
+/// Returns `(rule_id, source_file)` per misplaced rule, sorted by id.
+#[must_use]
+pub(crate) fn find_benign_misplaced(
+    trait_definitions: &[TraitDefinition],
+    composite_rules: &[CompositeTrait],
+    rule_source_files: &HashMap<String, String>,
+) -> Vec<(String, String)> {
+    // Unambiguous suppression markers, matched in id or description.
+    const MARKERS: &[&str] = &[
+        "benign",
+        "fp-context",
+        "safety-context",
+        "false-positive",
+        "false positive",
+        "allowlist",
+        "whitelist",
+        "known-good",
+    ];
+    // Suppression naming conventions, matched on the id suffix only — these read as
+    // benign-context / false-positive in an id but appear too freely in prose to key
+    // on descriptions. `-fp` covers `-soft-fp` / `-known-fp`; `-exceptions` is an
+    // exclusion list.
+    const ID_SUFFIXES: &[&str] = &["-context", "-fp", "-fps", "-exceptions"];
+
+    let reads_as_suppression = |id: &str, desc: &str| {
+        let id = id.to_ascii_lowercase();
+        let desc = desc.to_ascii_lowercase();
+        MARKERS.iter().any(|m| id.contains(m) || desc.contains(m))
+            || ID_SUFFIXES.iter().any(|s| id.ends_with(s))
+    };
+    // `objectives/...` or `well-known/malware/...` (the rule's own location).
+    let in_forbidden_tier =
+        |id: &str| ref_tier(id) == Some("objectives") || is_wellknown_malware_ref(id);
+
+    let mut violations: Vec<(String, String)> = trait_definitions
+        .iter()
+        .map(|t| (t.id.as_str(), t.desc.as_str(), t.crit))
+        .chain(
+            composite_rules
+                .iter()
+                .map(|r| (r.id.as_str(), r.desc.as_str(), r.crit)),
+        )
+        .filter(|(id, desc, crit)| {
+            *crit != Criticality::Exception
+                && in_forbidden_tier(id)
+                && reads_as_suppression(id, desc)
+        })
+        .map(|(id, _, _)| (id.to_string(), source_of(rule_source_files, id)))
+        .collect();
+    violations.sort_by(|a, b| a.0.cmp(&b.0));
+    violations
+}
+
 /// Find rules that use `malware/` as a subcategory of `objectives/` or `micro-behaviors/`.
 ///
 /// Malware-specific signatures belong in `well-known/malware/`, not as subcategories

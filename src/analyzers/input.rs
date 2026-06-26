@@ -153,7 +153,7 @@ impl<'a> AnalysisInput<'a> {
     }
 
     /// Opens a context on `data` only when one was not threaded in via
-    /// [`with_parsed_ctx`] (and `None` if filefacts rejects the bytes). Pair it
+    /// `with_parsed_ctx` (and `None` if filefacts rejects the bytes). Pair it
     /// with [`parsed_ctx`](Self::parsed_ctx) to get the effective context:
     ///
     /// ```ignore

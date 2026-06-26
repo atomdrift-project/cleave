@@ -9,7 +9,10 @@ fn criticality_to_severity(crit: Criticality) -> Severity {
         Criticality::Hostile => Severity::Hostile,
         Criticality::Suspicious => Severity::Suspicious,
         Criticality::Notable => Severity::Notable,
-        Criticality::Baseline | Criticality::Component | Criticality::Filtered => Severity::Neutral,
+        Criticality::Baseline
+        | Criticality::Component
+        | Criticality::Exception
+        | Criticality::Filtered => Severity::Neutral,
     }
 }
 

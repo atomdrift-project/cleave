@@ -324,7 +324,7 @@ pub enum FileStatus {
 /// type `T`. The `roc` is computed scope-specifically: traits weight by
 /// `criticality.score_weight() * conf`, metrics and kv weight by relative
 /// magnitude of value change, and symbols/strings/sections use raw counts.
-/// See [`crate::diff::scopes`].
+/// See `crate::diff::scopes`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScopeDiff<T> {
     /// Items present only in the new side.

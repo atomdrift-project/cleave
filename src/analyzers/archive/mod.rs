@@ -1047,7 +1047,7 @@ impl ArchiveAnalyzer {
                 }],
             });
             report.seal_archive_metadata_kv();
-            self.evaluate_container_findings(&mut report);
+            self.evaluate_container_findings(&mut report, data);
             return Ok(report);
         }
 
@@ -1082,7 +1082,7 @@ impl ArchiveAnalyzer {
                 }],
             });
             report.seal_archive_metadata_kv();
-            self.evaluate_container_findings(&mut report);
+            self.evaluate_container_findings(&mut report, data);
             return Ok(report);
         }
 
@@ -1147,7 +1147,7 @@ impl ArchiveAnalyzer {
             // or composites like `python-package-with-dll` will never
             // see member basenames.
             report.seal_archive_metadata_kv();
-            self.evaluate_container_findings(&mut report);
+            self.evaluate_container_findings(&mut report, data);
             return Ok(report);
         }
 
@@ -1200,7 +1200,7 @@ impl ArchiveAnalyzer {
                         }],
                     });
                     report.seal_archive_metadata_kv();
-                    self.evaluate_container_findings(&mut report);
+                    self.evaluate_container_findings(&mut report, data);
                     return Ok(report);
                 }
                 return Err(e);
@@ -1265,7 +1265,7 @@ impl ArchiveAnalyzer {
         }
 
         report.seal_archive_metadata_kv();
-        self.evaluate_container_findings(&mut report);
+        self.evaluate_container_findings(&mut report, data);
 
         Ok(report)
     }
@@ -1274,7 +1274,7 @@ impl ArchiveAnalyzer {
     /// the results into `report.findings`. Shared between the in-memory
     /// and temp_dir analysis paths so both produce the same composites
     /// (e.g. `python-package-with-dll`).
-    fn evaluate_container_findings(&self, report: &mut AnalysisReport) {
+    fn evaluate_container_findings(&self, report: &mut AnalysisReport, archive_data: &[u8]) {
         // Cross-member npm consistency: a runtime dependency declared in
         // package.json that no shipped module imports is a phantom dependency
         // — the install-time-payload shape of a hijacked-publisher release
@@ -1291,11 +1291,18 @@ impl ArchiveAnalyzer {
         let Some(mapper) = &self.capability_mapper else {
             return;
         };
+        let archive_atomic_findings =
+            mapper.evaluate_traits_with_ast(report, archive_data, None, None);
+        report
+            .findings
+            .extend(archive_atomic_findings.iter().cloned());
+
         let mut nested_findings: Vec<Finding> = report
             .files
             .iter()
             .flat_map(|f| f.findings.iter().cloned())
             .collect();
+        nested_findings.extend(archive_atomic_findings);
         nested_findings
             .sort_unstable_by(|a, b| b.crit.cmp(&a.crit).then_with(|| b.conf.total_cmp(&a.conf)));
         nested_findings.truncate(50_000);

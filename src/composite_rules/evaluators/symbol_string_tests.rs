@@ -578,6 +578,58 @@ fn test_eval_string_substr_match() {
     assert!(result.matched);
 }
 
+// A `type: text` match against a string that carries no byte offset (e.g. a
+// version-resource / derived entry) must still anchor its evidence at a
+// resolvable location — its section start, else `0x0` — rather than emitting a
+// `None` location. A locationless content match reaches
+// `context::fallback_anchor`, which logs it as a matcher bug ("content match has
+// no file offset"). Regression for that error flood on PE files. The substr form
+// takes `eval_text`'s general matching loop (not the exact fast path).
+#[test]
+fn test_eval_text_offsetless_string_still_anchors() {
+    let mut report = create_test_report();
+    report.strings.push(StringInfo {
+        value: ("EnumSystemLocalesW".to_string()).into(),
+        offset: None,
+        encoding: "utf8".to_string(),
+        string_type: None,
+        section: None,
+        encoding_chain: Vec::new(),
+        fragments: None,
+    });
+    let data = vec![];
+    let ctx = create_test_context(&report, &data);
+
+    let params = StringParams {
+        exact: None,
+        substr: Some(&"EnumSystemLocales".to_string()),
+        regex: None,
+        word: None,
+        case_insensitive: false,
+        is_check: None,
+        section: None,
+        offset: None,
+        offset_range: None,
+        section_offset: None,
+        section_offset_range: None,
+        arch_clamp: None,
+    };
+
+    let result = eval_text(&params, None, &ctx, None);
+
+    assert!(result.matched);
+    // Before the fix this was `None`, stranding the match in `fallback_anchor`.
+    assert!(
+        result.evidence[0].location.is_some(),
+        "offset-less text match must still carry a location"
+    );
+    assert_eq!(
+        result.evidence[0].byte_offset(),
+        Some(0),
+        "no offset and no section resolves to the 0x0 fallback anchor"
+    );
+}
+
 #[test]
 fn test_eval_string_regex_match() {
     let mut report = create_test_report();

@@ -229,6 +229,128 @@ fn test_eval_trait_evidence_propagation() {
     assert_eq!(result.evidence.len(), 2);
 }
 
+fn finding_with_crit(id: &str, crit: Criticality) -> Finding {
+    let mut f = create_test_finding(id);
+    f.crit = crit;
+    f
+}
+
+#[test]
+fn test_eval_trait_directory_excludes_exception() {
+    let mut report = create_test_report("/test/binary");
+    report.findings.push(finding_with_crit(
+        "objectives/tools::notable-id",
+        Criticality::Notable,
+    ));
+    report.findings.push(finding_with_crit(
+        "objectives/tools::benign-pattern",
+        Criticality::Exception,
+    ));
+    let data = vec![];
+    let ctx = EvaluationContext::new(
+        &report,
+        &data,
+        FileType::Elf,
+        &[Platform::Linux],
+        None,
+        None,
+    );
+
+    let result = eval_trait("objectives/tools", &ctx);
+    assert!(
+        result.matched,
+        "the notable trait under the directory matches"
+    );
+    assert!(
+        result
+            .matched_trait_ids
+            .contains(&"objectives/tools::notable-id".to_string())
+    );
+    assert!(
+        !result
+            .matched_trait_ids
+            .contains(&"objectives/tools::benign-pattern".to_string()),
+        "a crit: exception trait must be excluded from directory expansion",
+    );
+}
+
+#[test]
+fn test_eval_trait_directory_of_only_exception_does_not_match() {
+    // The safety property: dropping a directory that contains only a suppressor into
+    // an all:/any: clause matches nothing — the exception is never inherited.
+    let mut report = create_test_report("/test/binary");
+    report.findings.push(finding_with_crit(
+        "objectives/tools::benign-pattern",
+        Criticality::Exception,
+    ));
+    let data = vec![];
+    let ctx = EvaluationContext::new(
+        &report,
+        &data,
+        FileType::Elf,
+        &[Platform::Linux],
+        None,
+        None,
+    );
+
+    let result = eval_trait("objectives/tools", &ctx);
+    assert!(
+        !result.matched,
+        "an exception must not be inherited via directory expansion",
+    );
+}
+
+#[test]
+fn test_eval_trait_exact_ref_still_matches_exception() {
+    // Exact references still reach exceptions — this is how unless:/downgrade: and
+    // deliberate exception composition target them.
+    let mut report = create_test_report("/test/binary");
+    report.findings.push(finding_with_crit(
+        "objectives/tools::benign-pattern",
+        Criticality::Exception,
+    ));
+    let data = vec![];
+    let ctx = EvaluationContext::new(
+        &report,
+        &data,
+        FileType::Elf,
+        &[Platform::Linux],
+        None,
+        None,
+    );
+
+    let result = eval_trait("objectives/tools::benign-pattern", &ctx);
+    assert!(result.matched, "exact reference to an exception must match");
+}
+
+#[test]
+fn test_eval_trait_directory_includes_exception_for_exception_parent() {
+    // An exception composite may assemble a directory of exceptions, so when it is
+    // the rule being evaluated (`parent_is_exception`), directory expansion includes
+    // exception members.
+    let mut report = create_test_report("/test/binary");
+    report.findings.push(finding_with_crit(
+        "objectives/tools::benign-pattern",
+        Criticality::Exception,
+    ));
+    let data = vec![];
+    let ctx = EvaluationContext::new(
+        &report,
+        &data,
+        FileType::Elf,
+        &[Platform::Linux],
+        None,
+        None,
+    )
+    .with_parent_exception(true);
+
+    let result = eval_trait("objectives/tools", &ctx);
+    assert!(
+        result.matched,
+        "an exception parent's directory ref must reach exception members",
+    );
+}
+
 // =============================================================================
 // eval_basename tests
 // =============================================================================

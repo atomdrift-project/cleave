@@ -9,17 +9,17 @@
 //! # Cache Types
 //!
 //! - compiled-rule caches (`yara-rules-*.bin`, `capability-mapper-*.bin`)
-//! - the SQLite analysis-report cache ([`crate::analysis_cache`])
+//! - the SQLite analysis-report cache (`crate::analysis_cache`)
 //!
 //! Rizin disassembly results are no longer cached here: rizin moved into
 //! filefacts, which owns its own cache (`filefacts::cache`). The legacy
-//! `re/` tree is retired by [`maintain_filefacts_cache`].
+//! `re/` tree is retired by `maintain_filefacts_cache`.
 //!
 //! # Cleanup
 //!
 //! Versioned compiled-rule caches are pruned automatically when a new version
 //! is written. The filefacts cache (old schema versions, build-orphaned
-//! entries) is maintained at startup via [`maintain_filefacts_cache`].
+//! entries) is maintained at startup via `maintain_filefacts_cache`.
 
 use anyhow::{Context, Result};
 use std::fs;

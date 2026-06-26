@@ -361,9 +361,13 @@ fn is_default_conf(v: &f32) -> bool {
 
 /// Convert Criticality enum to v4 ordinal (0-5).
 /// 0=filtered, 1=component, 2=baseline, 3=notable, 4=suspicious, 5=hostile
+///
+/// `Exception` is assembly-only — it is stripped before serialization and so never
+/// reaches this encoder. It shares the `0` floor with `Filtered` to keep the existing
+/// v4 ordinals stable (shifting them would break the compact wire format).
 fn crit_to_int(criticality: Criticality) -> u8 {
     match criticality {
-        Criticality::Filtered => 0,
+        Criticality::Filtered | Criticality::Exception => 0,
         Criticality::Component => 1,
         Criticality::Baseline => 2,
         Criticality::Notable => 3,

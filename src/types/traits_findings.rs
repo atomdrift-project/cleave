@@ -144,8 +144,21 @@ mod crit_ordinal {
     use super::Criticality;
     use serde::{Deserialize, Deserializer, Serializer};
 
+    // Stable wire ordinals, decoupled from the enum's `as u8` discriminant so that
+    // inserting a variant (e.g. `Exception`) never shifts the serialized values.
+    // `Exception` takes 6 — past the original 0..=5 range — so existing caches stay
+    // valid. Keep `serialize` and `deserialize` exact inverses.
     pub(super) fn serialize<S: Serializer>(c: &Criticality, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_u8(*c as u8)
+        let ordinal: u8 = match c {
+            Criticality::Filtered => 0,
+            Criticality::Component => 1,
+            Criticality::Baseline => 2,
+            Criticality::Notable => 3,
+            Criticality::Suspicious => 4,
+            Criticality::Hostile => 5,
+            Criticality::Exception => 6,
+        };
+        s.serialize_u8(ordinal)
     }
 
     pub(super) fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Criticality, D::Error> {
@@ -155,6 +168,7 @@ mod crit_ordinal {
             3 => Criticality::Notable,
             4 => Criticality::Suspicious,
             5 => Criticality::Hostile,
+            6 => Criticality::Exception,
             _ => Criticality::Baseline,
         })
     }
@@ -228,7 +242,7 @@ pub struct Finding {
     #[allow(dead_code)] // Populated during trait evaluation, skip-serialized in output
     #[serde(skip_serializing, default)]
     pub source_file: Option<String>,
-    /// Provenance for an inherited finding: the [`FileAnalysis::id`] of the
+    /// Provenance for an inherited finding: the `FileAnalysis::id` of the
     /// embedded child file it was actually located in. `None` for a finding
     /// native to the file that lists it. Set during `finalize` once file ids are
     /// assigned, so consumers can attribute and de-duplicate a finding across the

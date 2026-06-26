@@ -46,9 +46,10 @@ pub(crate) fn downgrade_crit(c: Criticality) -> Criticality {
         Criticality::Hostile => Criticality::Suspicious,
         Criticality::Suspicious => Criticality::Notable,
         Criticality::Notable => Criticality::Baseline,
-        Criticality::Baseline | Criticality::Component | Criticality::Filtered => {
-            Criticality::Component
-        }
+        Criticality::Baseline
+        | Criticality::Component
+        | Criticality::Exception
+        | Criticality::Filtered => Criticality::Component,
     }
 }
 
@@ -2180,6 +2181,17 @@ impl CompositeTrait {
     #[must_use]
     pub(crate) fn evaluate<'a>(&self, ctx: &EvaluationContext<'a>) -> Option<Finding> {
         use super::debug::{DowngradeDebug, ProximityDebug, SkipReason};
+
+        // A `crit: exception` composite may assemble a directory of exceptions, so
+        // re-include exception members in its directory references. Only exceptions
+        // (rare) pay the context clone; every other rule uses `ctx` as-is.
+        let exc_ctx;
+        let ctx = if self.crit == Criticality::Exception {
+            exc_ctx = ctx.clone().with_parent_exception(true);
+            &exc_ctx
+        } else {
+            ctx
+        };
 
         // Composite traits have no count/density filter, so raw/text matching in
         // their conditions can stop at the first match. Restored on drop.

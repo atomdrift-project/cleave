@@ -130,7 +130,7 @@ fn risk_indicator(crit: &Criticality) -> colored::ColoredString {
     use crate::theme;
     match crit {
         Criticality::Filtered => "   ".normal(),
-        Criticality::Component => "  ·".dimmed(),
+        Criticality::Exception | Criticality::Component => "  ·".dimmed(),
         Criticality::Baseline => theme::paint_baseline("  ·"),
         Criticality::Notable => theme::paint_notable("  •"),
         Criticality::Suspicious => theme::paint_suspicious(" ••"),
@@ -924,7 +924,7 @@ fn select_ids<'a>(
         {
             continue;
         }
-        let score = f.conf * f32::from(f.crit as u8);
+        let score = f.conf * f32::from(f.crit.rank());
         scored
             .entry(f.id.as_str())
             .and_modify(|(s, c)| {

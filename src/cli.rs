@@ -177,7 +177,7 @@ pub struct Args {
     pub platforms: String,
 
     /// Directory to extract all analyzed files for external tools or review.
-    /// Files are written to <dir>/<sha256>/<original-path> preserving structure.
+    /// Files are written to `<dir>/<sha256>/<original-path>` preserving structure.
     /// When set, disables in-memory extraction (all files written to disk).
     #[arg(long, value_name = "DIR")]
     pub extract_dir: Option<String>,
@@ -466,7 +466,7 @@ pub enum Command {
         #[arg(required = true)]
         target: String,
 
-        /// Optional value path filter (e.g., "scripts.postinstall", "content_scripts[*].matches",
+        /// Optional value path filter (e.g., "scripts.postinstall", "content_scripts\[*\].matches",
         /// or "core.creator" / "ole.compobj.app_version" for office documents)
         path: Option<String>,
 
@@ -493,7 +493,7 @@ pub enum Command {
         #[arg(required = true)]
         target: String,
 
-        /// Type of search to perform (text, string-literal, string-value [deprecated], symbol, raw, value, hex, encoded, section, metrics)
+        /// Type of search to perform (text, string-literal, string-value \[deprecated\], symbol, raw, value, hex, encoded, section, metrics)
         #[arg(short, long, value_enum, default_value = "text")]
         r#type: SearchType,
 
@@ -505,7 +505,7 @@ pub enum Command {
         #[arg(short, long)]
         pattern: Option<String>,
 
-        /// Path expression for value searches (e.g., "scripts.postinstall", "permissions[*]")
+        /// Path expression for value searches (e.g., "scripts.postinstall", "permissions\[*\]")
         #[arg(long = "path")]
         kv_path: Option<String>,
 

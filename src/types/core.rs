@@ -36,6 +36,7 @@ pub struct ExtractedPayload {
 
 /// Criticality level for traits and capabilities
 /// - Filtered: Matched but wrong file type, preserved for ML analysis
+/// - Exception: Benign-context composite, used only in `unless:`/`downgrade:`; assembly-only, never emitted
 /// - Component: Building block for composites, hidden unless composite fires
 /// - Baseline: Universal baseline noise, low analytical signal
 /// - Notable: Defines program purpose, flag in diffs for supply chain security
@@ -44,24 +45,37 @@ pub struct ExtractedPayload {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Criticality {
+    // Discriminants are pinned explicitly. `Exception` was inserted between
+    // `Filtered` and `Component`; pinning keeps the signal criticalities at the
+    // values they have always had (`Notable=3`, `Suspicious=4`, `Hostile=5`), so
+    // any code that compares a `crit as u8` against a literal threshold (e.g.
+    // "> 2 is real signal") keeps working. Only `Filtered` moved — to -1, the
+    // floor it already occupied semantically. Declaration order still ascends with
+    // the discriminants, so derived `Ord` is unchanged:
+    // `Filtered < Exception < Component < Baseline < Notable < Suspicious < Hostile`.
     /// Matched but wrong file type - preserved for ML analysis
-    Filtered,
+    Filtered = -1,
+    /// Benign-context composite — may only be referenced from `unless:`/`downgrade:`
+    /// clauses and exists purely to assemble a known-good pattern from named
+    /// `notable` traits. Never emitted to output; consumed during matching only.
+    Exception = 0,
     /// Building block for composites - only shown when referenced by a matched composite
-    Component,
+    Component = 1,
     /// Universal baseline noise - low analytical signal
     #[default]
-    Baseline,
+    Baseline = 2,
     /// Defines program purpose - flag in diffs for supply chain security
-    Notable,
+    Notable = 3,
     /// Unusual/evasive behavior - investigate immediately
-    Suspicious,
+    Suspicious = 4,
     /// Almost certainly malicious - very rare
-    Hostile,
+    Hostile = 5,
 }
 
 impl Criticality {
     /// Single-letter tag used in compact/LLM output:
-    /// `H`ostile, `S`uspicious, `N`otable, `B`aseline, `C`omponent, `F`iltered.
+    /// `H`ostile, `S`uspicious, `N`otable, `B`aseline, `C`omponent, `F`iltered,
+    /// `E`xception (assembly-only; not normally emitted).
     #[must_use]
     pub fn letter(self) -> char {
         match self {
@@ -70,6 +84,7 @@ impl Criticality {
             Self::Notable => 'N',
             Self::Baseline => 'B',
             Self::Component => 'C',
+            Self::Exception => 'E',
             Self::Filtered => 'F',
         }
     }
@@ -82,6 +97,23 @@ impl Criticality {
             Self::Suspicious => 40,
             Self::Notable => 1,
             _ => 0,
+        }
+    }
+
+    /// Dense 0..=5 rank used only to break ties when several findings annotate the
+    /// same spot (highest `conf × rank` wins). This is deliberately *not* the enum
+    /// discriminant: a `crit as u8` here would silently shift the moment a variant
+    /// is inserted. `Filtered` and the assembly-only `Exception` both rank 0, the
+    /// floor; the rest keep the original linear ladder.
+    #[must_use]
+    pub fn rank(self) -> u8 {
+        match self {
+            Self::Filtered | Self::Exception => 0,
+            Self::Component => 1,
+            Self::Baseline => 2,
+            Self::Notable => 3,
+            Self::Suspicious => 4,
+            Self::Hostile => 5,
         }
     }
 }
@@ -100,7 +132,7 @@ pub struct AnalysisReport {
         alias = "analysis_timestamp"
     )]
     pub analysis_timestamp: Option<DateTime<Utc>>,
-    /// Information about the target file (cleared after finalize — data lives in files[0])
+    /// Information about the target file (cleared after finalize — data lives in `files[0]`)
     #[serde(skip_serializing_if = "TargetInfo::is_cleared", default)]
     pub target: TargetInfo,
 
@@ -763,7 +795,7 @@ impl AnalysisReport {
     ///
     /// When merging duplicates the surviving entry takes the *max*
     /// criticality and confidence, *sums* `match_count`, and *concatenates*
-    /// `evidence` (capped at [`MAX_EVIDENCE_PER_TRAIT`]) and `trait_refs`
+    /// `evidence` (capped at `MAX_EVIDENCE_PER_TRAIT`) and `trait_refs`
     /// (deduplicated). Order of first appearance is preserved.
     pub fn dedupe_findings(&mut self) {
         dedupe_finding_list(&mut self.findings);
@@ -844,18 +876,30 @@ impl AnalysisReport {
     /// MUST run only after every up-the-chain composite recomputation (archive and
     /// encoding-layer inheritance, container re-evaluation): those parent
     /// composites consume the component/baseline findings as inputs, so stripping
-    /// earlier would stop them firing. See [`Self::attach_composite_sources`],
+    /// earlier would stop them firing. See `Self::attach_composite_sources`,
     /// which deliberately records each composite→member tie *before* this strip
     /// removes the low-tier traits.
     ///
     /// As an exception, a file that would otherwise be left with no
-    /// notable-or-higher finding keeps its [`RESCUE_LOW_TIER_KEEP`] best
+    /// notable-or-higher finding keeps its `RESCUE_LOW_TIER_KEEP` best
     /// low-tier traits. An empty findings list tells a downstream LLM consumer
     /// nothing about the file; a few weak traits at least give it a clue.
     ///
     /// Returns `(components_removed, baselines_removed)`.
     pub fn strip_unmatched_traits(&mut self) -> (usize, usize) {
         use std::collections::HashSet;
+
+        // `crit: exception` composites are assembly-only: they drive `unless:` /
+        // `downgrade:` suppression while composites are evaluated, and by the time
+        // we finalize a report that work is already baked into the surviving
+        // findings' criticalities. They must never surface in output, so drop them
+        // unconditionally here — before the component/baseline strip and its
+        // low-tier rescue, so an exception can never be referenced-rescued or
+        // low-tier-rescued back into the rendered findings.
+        self.findings.retain(|f| f.crit != Criticality::Exception);
+        for file in &mut self.files {
+            file.findings.retain(|f| f.crit != Criticality::Exception);
+        }
 
         // Ids referenced by a fired composite, unioned across every file: a trait
         // is kept regardless of its own criticality if any composite uses it.
@@ -937,7 +981,7 @@ impl AnalysisReport {
             return std::collections::HashSet::new();
         }
 
-        let score = |f: &Finding| f.crit as u8 as f32 * f.conf;
+        let score = |f: &Finding| f32::from(f.crit.rank()) * f.conf;
         let mut candidates: Vec<&Finding> = findings.iter().filter(|f| strippable(f)).collect();
         candidates.sort_by(|a, b| score(b).total_cmp(&score(a)).then(a.id.cmp(&b.id)));
         candidates
@@ -2323,11 +2367,24 @@ mod tests {
 
     #[test]
     fn test_criticality_ordering() {
-        assert!(Criticality::Filtered < Criticality::Component);
+        assert!(Criticality::Filtered < Criticality::Exception);
+        assert!(Criticality::Exception < Criticality::Component);
         assert!(Criticality::Component < Criticality::Baseline);
         assert!(Criticality::Baseline < Criticality::Notable);
         assert!(Criticality::Notable < Criticality::Suspicious);
         assert!(Criticality::Suspicious < Criticality::Hostile);
+        // The load-bearing invariant: an exception is never positive signal, so
+        // every `crit >= Notable` gate excludes it.
+        assert!(Criticality::Exception < Criticality::Notable);
+    }
+
+    #[test]
+    fn test_criticality_exception_serde_roundtrip() {
+        // serde uses the lowercase variant name; `crit: exception` must parse.
+        let json = serde_json::to_string(&Criticality::Exception).unwrap();
+        assert_eq!(json, "\"exception\"");
+        let parsed: Criticality = serde_json::from_str("\"exception\"").unwrap();
+        assert_eq!(parsed, Criticality::Exception);
     }
 
     #[test]

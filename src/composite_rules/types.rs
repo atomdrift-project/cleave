@@ -467,6 +467,8 @@ pub(crate) enum FileType {
     Gem,
     /// Python wheel (.whl)
     Whl,
+    /// Python source distribution (.tar.gz / .zip sdist)
+    PythonSdist,
     /// Debian package (.deb)
     Deb,
     /// RPM package (.rpm)
@@ -587,6 +589,7 @@ impl From<filefacts::FileType> for FileType {
             Ff::Crx => Self::Crx,
             Ff::Xpi => Self::Xpi,
             Ff::Whl => Self::Whl,
+            Ff::PythonSdist => Self::PythonSdist,
             Ff::Gem => Self::Gem,
             Ff::ApkAndroid | Ff::ApkAlpine => Self::Apk,
             Ff::Npm => Self::Npm,
@@ -605,8 +608,8 @@ impl From<filefacts::FileType> for FileType {
             // GoSum, RequirementsTxt, PoetryLock, PipfileLock, GemfileLock,
             // ComposerLock, YarnLock, PnpmLock), package metadata (SrcInfo,
             // Registry), single-file compression (Gz, Bz2, Xz), archives
-            // without a dedicated bucket (Dmg, Cab, Asar, PythonSdist,
-            // OciImage, Xbps, GentooBinpkg), and documents (Odf). The wildcard
+            // without a dedicated bucket (Dmg, Cab, Asar, OciImage, Xbps,
+            // GentooBinpkg), and documents (Odf). The wildcard
             // is also mandatory because filefacts::FileType is
             // `#[non_exhaustive]`.
             _ => Self::Unknown,
@@ -730,6 +733,7 @@ impl FileType {
                 | FileType::Pkg
                 | FileType::Gem
                 | FileType::Whl
+                | FileType::PythonSdist
                 | FileType::Deb
                 | FileType::Rpm
                 | FileType::Crx
@@ -835,6 +839,7 @@ impl FileType {
             FileType::Pkg,
             FileType::Gem,
             FileType::Whl,
+            FileType::PythonSdist,
             FileType::Deb,
             FileType::Rpm,
             FileType::Crx,
@@ -947,6 +952,7 @@ impl FileType {
             "pkg_macos" | "pkg_freebsd" | "pkg_arch" => FileType::Pkg,
             "gem" => FileType::Gem,
             "whl" => FileType::Whl,
+            "python_sdist" | "python-sdist" | "sdist" => FileType::PythonSdist,
             "deb" => FileType::Deb,
             "rpm" => FileType::Rpm,
             "crx" => FileType::Crx,

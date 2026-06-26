@@ -38,6 +38,11 @@ const RULE_EVAL_DEBUG_DURATION: Duration = Duration::from_millis(600);
 /// genuinely useful longer phrasings without inviting sentence-length blurbs.
 const MAX_DESCRIPTION_CHARS: usize = 48;
 
+/// Composite descriptions get more room than atomic traits (48): a composite
+/// summarizes a combination, so it legitimately names a few entities. 80 keeps it
+/// to one scannable triage line while still ruling out sentence-length blurbs.
+const MAX_COMPOSITE_DESCRIPTION_CHARS: usize = 80;
+
 /// Lower a criticality by one level when a downgrade condition fires. Hostile →
 /// Suspicious → Notable → Baseline; anything already at or below Baseline floors
 /// at Component.
@@ -2037,6 +2042,39 @@ impl Default for CompositeTrait {
 }
 
 impl CompositeTrait {
+    /// Check for empty, too-short, or too-long descriptions. Composites get a
+    /// roomier cap than atomic traits ([`MAX_COMPOSITE_DESCRIPTION_CHARS`]) because
+    /// they summarize a combination, but the description must still fit one
+    /// triage line. Returns a warning message if found, `None` otherwise.
+    #[must_use]
+    pub(crate) fn check_description_quality(&self) -> Option<String> {
+        let desc = self.desc.trim();
+
+        if desc.is_empty() {
+            return Some(
+                "desc: field is empty. Write a clear, concise summary of what this composite detects".to_string()
+            );
+        }
+
+        if desc.len() < 5 {
+            return Some(format!(
+                "desc: '{}' is too short ({} chars). Write a clear description.",
+                desc,
+                desc.len()
+            ));
+        }
+
+        let desc_len = desc.chars().count();
+        if desc_len > MAX_COMPOSITE_DESCRIPTION_CHARS {
+            return Some(format!(
+                "desc: '{}' is too long ({} chars) for one-line triage. Keep composite descriptions at {} characters or less.",
+                desc, desc_len, MAX_COMPOSITE_DESCRIPTION_CHARS
+            ));
+        }
+
+        None
+    }
+
     /// Collect the subset of dependent trait IDs that are individually mandatory.
     ///
     /// These IDs are used only for fast prefiltering before full composite evaluation,

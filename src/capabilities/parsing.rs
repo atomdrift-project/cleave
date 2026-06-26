@@ -864,13 +864,14 @@ pub(crate) fn parse_arch(archs: &[String]) -> Vec<Arch> {
 /// Returns an error for invalid criticality values instead of silently defaulting
 pub(crate) fn parse_criticality(s: &str) -> Result<Criticality, String> {
     match s.to_lowercase().as_str() {
+        "exception" => Ok(Criticality::Exception),
         "component" => Ok(Criticality::Component),
         "baseline" => Ok(Criticality::Baseline),
         "notable" => Ok(Criticality::Notable),
         "suspicious" => Ok(Criticality::Suspicious),
         "hostile" | "malicious" => Ok(Criticality::Hostile),
         unknown => Err(format!(
-            "Invalid criticality '{}'. Valid values: component, baseline, notable, suspicious, hostile",
+            "Invalid criticality '{}'. Valid values: exception, component, baseline, notable, suspicious, hostile",
             unknown
         )),
     }

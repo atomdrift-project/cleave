@@ -167,6 +167,15 @@ fn archive_finding(
     }
 }
 
+fn has_builtin_anti_analysis_finding(findings: &[Finding]) -> bool {
+    findings.iter().any(|finding| {
+        finding.id.starts_with("anti-analysis/archive/")
+            || finding
+                .id
+                .starts_with("objectives/anti-analysis/pe-tampering/")
+    })
+}
+
 fn push_archive_hostile_findings(
     report: &mut AnalysisReport,
     hostile_reasons: Vec<HostileArchiveReason>,
@@ -292,7 +301,7 @@ fn push_archive_hostile_findings(
                 ));
             }
             HostileArchiveReason::SymlinkEscape(path) => {
-                if !is_benign_archive_symlink_escape(&path) {
+                if !is_benign_archive_symlink_escape(source, &path) {
                     report.findings.push(archive_finding(
                         "anti-analysis/archive/symlink-escape",
                         "Archive contains symlink that may escape extraction directory".to_string(),
@@ -397,11 +406,25 @@ fn path_looks_synthetic_edge_case(name: &str) -> bool {
     )
 }
 
-fn is_benign_archive_symlink_escape(path: &str) -> bool {
+fn is_benign_archive_symlink_escape(source: &str, path: &str) -> bool {
+    let source = source.trim();
     let path = path.trim();
 
-    (path.contains("/node_gyp_bins/python3") || path.contains("/node_gyp_bins/python"))
+    if (path.contains("/node_gyp_bins/python3") || path.contains("/node_gyp_bins/python"))
         && (path.ends_with("-> /usr/bin/python3") || path.ends_with("-> /usr/bin/python"))
+    {
+        return true;
+    }
+
+    source
+        .split(['/', '\\', '!'])
+        .chain(path.split("->").next().unwrap_or("").split(['/', '\\']))
+        .any(|component| matches!(component, "testdata" | "fixture" | "fixtures"))
+}
+
+fn path_is_fixture_context(path: &str) -> bool {
+    path.split(['/', '\\', '!'])
+        .any(|component| matches!(component, "testdata" | "fixture" | "fixtures"))
 }
 
 fn is_zip_path_edge_case_corpus(file_path: &Path) -> bool {
@@ -1364,8 +1387,18 @@ impl ArchiveAnalyzer {
                 container_file_type,
                 &empty_section_map,
             );
+            if has_builtin_anti_analysis_finding(&file.findings) {
+                mapper.apply_retroactive_unless_suppression_to_findings(&mut file.findings);
+                if path_is_fixture_context(&file.path) {
+                    file.findings
+                        .retain(|finding| finding.id != "anti-analysis/archive/symlink-escape");
+                }
+            }
         }
         report.files = files;
+        if has_builtin_anti_analysis_finding(&report.findings) {
+            mapper.apply_retroactive_unless_suppression_to_findings(&mut report.findings);
+        }
     }
 
     /// Extract an archive from in-memory data into `dest_dir`.

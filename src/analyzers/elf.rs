@@ -183,6 +183,9 @@ impl ElfAnalyzer {
             sha256,
             architectures: None,
         };
+        if !data.starts_with(b"\x7fELF") {
+            return AnalysisReport::new(target);
+        }
 
         let mut report = AnalysisReport::new(target);
         let mut tools_used = vec![];

@@ -12,7 +12,7 @@
 //!    removed if their conditions are now satisfied.
 
 use crate::composite_rules::{Arch, Condition, FileType as RuleFileType, SectionMap};
-use crate::types::{AnalysisReport, Evidence};
+use crate::types::{AnalysisReport, Evidence, Finding};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::HashMap;
 /// Borrowed analysis products shared with the rule engine.
@@ -388,6 +388,13 @@ impl super::CapabilityMapper {
     /// any that should have been suppressed. It loops to a fixed point so cascading
     /// suppressions (A suppresses B which suppresses C) are fully resolved.
     fn apply_retroactive_unless_suppression(&self, report: &mut AnalysisReport) {
+        self.apply_retroactive_unless_suppression_to_findings(&mut report.findings);
+    }
+
+    pub(crate) fn apply_retroactive_unless_suppression_to_findings(
+        &self,
+        findings: &mut Vec<Finding>,
+    ) {
         // Build lookup from qualified ID → Option<&[Condition]> (the unless: list, if any).
         // Covers both atomic traits and composite rules.
         // Trait/composite IDs are qualified at load time (e.g. "well-known/foo::bar-id").
@@ -410,13 +417,15 @@ impl super::CapabilityMapper {
         // Iterate to fixed point: removing a finding can filefacts further suppressions
         // in rules whose `unless:` referenced the just-removed finding.
         loop {
-            let all_ids: FxHashSet<&str> = report.findings.iter().map(|f| f.id.as_str()).collect();
+            let all_ids: FxHashSet<&str> = findings.iter().map(|f| f.id.as_str()).collect();
 
-            let suppressed: FxHashSet<String> = report
-                .findings
+            let suppressed: FxHashSet<String> = findings
                 .iter()
                 .filter_map(|finding| {
-                    let unless_conds = unless_by_id.get(finding.id.as_str())?;
+                    let unless_conds = self
+                        .builtin_finding_hook_ids(&finding.id)
+                        .find_map(|id| unless_by_id.get(id))
+                        .or_else(|| unless_by_id.get(finding.id.as_str()))?;
                     let should_suppress = unless_conds.iter().any(|cond| {
                         if let Condition::Trait { id } = cond {
                             self.unless_trait_id_matches(id, &all_ids)
@@ -437,8 +446,38 @@ impl super::CapabilityMapper {
                 suppressed.len()
             );
 
-            report.findings.retain(|f| !suppressed.contains(&f.id));
+            findings.retain(|f| !suppressed.contains(&f.id));
         }
+    }
+
+    fn builtin_finding_hook_ids<'a>(
+        &'a self,
+        finding_id: &'a str,
+    ) -> impl Iterator<Item = &'a str> {
+        let slug = Self::builtin_finding_hook_slug(finding_id);
+        self.trait_definitions
+            .iter()
+            .map(|t| t.id.as_str())
+            .chain(self.composite_rules.iter().map(|r| r.id.as_str()))
+            .filter(move |id| id.rsplit_once("::").is_some_and(|(_, leaf)| leaf == slug))
+    }
+
+    fn builtin_finding_hook_slug(finding_id: &str) -> String {
+        let mut slug = String::from("builtin-");
+        let mut last_dash = false;
+        for ch in finding_id.chars() {
+            if ch.is_ascii_alphanumeric() {
+                slug.push(ch.to_ascii_lowercase());
+                last_dash = false;
+            } else if !last_dash {
+                slug.push('-');
+                last_dash = true;
+            }
+        }
+        while slug.ends_with('-') {
+            slug.pop();
+        }
+        slug
     }
 
     /// Check whether a trait ID from an `unless:` condition matches any finding in the set.

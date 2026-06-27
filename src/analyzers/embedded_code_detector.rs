@@ -1113,6 +1113,16 @@ fn detect_base64_binary(
     {
         return Vec::new();
     }
+    if matches!(inner_type, "gz" | "zip" | "xz" | "bz2")
+        && parent_path.split(['/', '\\', '!']).any(|component| {
+            matches!(component, "testdata" | "fixture" | "fixtures")
+                || component.ends_with("_test.go")
+                || component.ends_with(".test.js")
+                || component.ends_with(".spec.js")
+        })
+    {
+        return Vec::new();
+    }
     let offset = string_info.offset.unwrap_or(0);
     let virtual_path = format!("{}##base64@{:#x}", parent_path, offset);
     let sha256 = crate::analyzers::utils::calculate_sha256(&decoded);

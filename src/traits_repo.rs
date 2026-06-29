@@ -79,7 +79,7 @@ pub fn resolve_and_ensure() -> Result<PathBuf, String> {
         tracing::debug!("Using traits from data directory: {}", data_dir.display());
         return Ok(data_dir);
     }
-    if let Err(e) = crate::rule_update::update(&data_dir, false) {
+    if let Err(e) = crate::rule_update::update(&data_dir, false, false) {
         return Err(format!(
             "Failed to install traits from the update bucket: {e}\n\nRun 'cleave update-rules' to install."
         ));

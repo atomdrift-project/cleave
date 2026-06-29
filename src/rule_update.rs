@@ -22,6 +22,10 @@ const BASE_URL: &str = "https://updates.atomdrift.org/cleave";
 
 /// Whole-request budget for manifest + bundle downloads.
 const TIMEOUT: Duration = Duration::from_secs(60);
+/// Connect budget — fail fast when the bucket is unreachable so a default
+/// auto-update can't stall on an offline host (the whole-request [`TIMEOUT`]
+/// still covers a slow but reachable download).
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(4);
 
 /// Sidecar recording what the R2 backend installed. The installed tree is a
 /// `git archive` extraction with no `.git`, so the commit/date live here instead.
@@ -80,39 +84,51 @@ fn is_git_managed(dir: &Path) -> bool {
 }
 
 /// Install or refresh the traits compatible with this cleave release.
-pub fn update(dir: &Path, force: bool) -> Result<(), String> {
+pub fn update(dir: &Path, force: bool, quiet: bool) -> Result<(), String> {
     if is_git_managed(dir) {
-        eprintln!(
-            "Traits at {} are git-managed (a checkout or symlink to one); leaving them untouched.\nUse 'git pull' there to update, or remove the directory to switch to bundle updates.",
-            dir.display()
-        );
+        if !quiet {
+            eprintln!(
+                "Traits at {} are git-managed (a checkout or symlink to one); leaving them untouched.\nUse 'git pull' there to update, or remove the directory to switch to bundle updates.",
+                dir.display()
+            );
+        }
         return Ok(());
     }
-    let manifest = fetch_manifest()?;
+    // A quiet refresh of an already-present install is the auto-update path: fail
+    // fast if the bucket is unreachable. A first-ever download — or any explicit,
+    // non-quiet update — stays patient so a slow first fetch still completes.
+    let connect = (quiet && installed(dir).is_some()).then_some(CONNECT_TIMEOUT);
+    let manifest = fetch_manifest(connect)?;
     let (key, source) = resolve(&manifest)?;
     let artifact = artifact_for(&manifest, &key)?;
 
     if !force && installed(dir).is_some_and(|i| i.commit.starts_with(&key)) {
-        eprintln!("Already up to date: {} ({})", key, artifact.date);
-        warn_if_behind(&manifest);
+        if !quiet {
+            eprintln!("Already up to date: {} ({})", key, artifact.date);
+            warn_if_behind(&manifest);
+        }
         return Ok(());
     }
 
-    eprintln!(
-        "Installing traits {} ({}) for cleave {} [{}]...",
-        key,
-        artifact.date,
-        our_version(),
-        source
-    );
+    if !quiet {
+        eprintln!(
+            "Installing traits {} ({}) for cleave {} [{}]...",
+            key,
+            artifact.date,
+            our_version(),
+            source
+        );
+    }
     install(dir, artifact, &source)?;
-    eprintln!(
-        "Traits updated to {} ({}) at {}",
-        key,
-        artifact.date,
-        dir.display()
-    );
-    warn_if_behind(&manifest);
+    if !quiet {
+        eprintln!(
+            "Traits updated to {} ({}) at {}",
+            key,
+            artifact.date,
+            dir.display()
+        );
+        warn_if_behind(&manifest);
+    }
     Ok(())
 }
 
@@ -125,7 +141,7 @@ pub fn check(dir: &Path) -> Result<(), String> {
         );
         return Ok(());
     }
-    let manifest = fetch_manifest()?;
+    let manifest = fetch_manifest(None)?;
     let (key, source) = resolve(&manifest)?;
     let artifact = artifact_for(&manifest, &key)?;
 
@@ -153,7 +169,7 @@ pub fn check(dir: &Path) -> Result<(), String> {
 
 /// Pin to a specific commit, if a bundle for it was published.
 pub fn pin(dir: &Path, commit: &str) -> Result<(), String> {
-    let manifest = fetch_manifest()?;
+    let manifest = fetch_manifest(None)?;
     let key = manifest
         .artifacts
         .keys()
@@ -203,9 +219,9 @@ fn warn_if_behind(m: &Manifest) {
     }
 }
 
-fn fetch_manifest() -> Result<Manifest, String> {
+fn fetch_manifest(connect: Option<Duration>) -> Result<Manifest, String> {
     let url = format!("{BASE_URL}/versions.toml");
-    let text = http_get(&url)?;
+    let text = http_get(&url, connect)?;
     let text = String::from_utf8(text).map_err(|e| format!("manifest is not valid UTF-8: {e}"))?;
     toml::from_str(&text).map_err(|e| format!("parsing manifest {url}: {e}"))
 }
@@ -213,7 +229,8 @@ fn fetch_manifest() -> Result<Manifest, String> {
 /// Download a bundle, verify its sha256, and atomically swap it into `dir`.
 fn install(dir: &Path, artifact: &Artifact, source: &str) -> Result<(), String> {
     let url = format!("{BASE_URL}/{}", artifact.file);
-    let bytes = http_get(&url)?;
+    // Patient: the manifest fetch already reached the bucket.
+    let bytes = http_get(&url, None)?;
 
     let got = hex(Sha256::digest(&bytes).as_slice());
     if got != artifact.sha256 {
@@ -265,12 +282,13 @@ fn sibling(parent: &Path, name: &str) -> PathBuf {
     parent.join(name)
 }
 
-fn http_get(url: &str) -> Result<Vec<u8>, String> {
-    eprintln!("fetching {url}");
-    let client = reqwest::blocking::Client::builder()
-        .timeout(TIMEOUT)
-        .build()
-        .map_err(|e| format!("http client: {e}"))?;
+fn http_get(url: &str, connect: Option<Duration>) -> Result<Vec<u8>, String> {
+    tracing::debug!("fetching {url}");
+    let mut builder = reqwest::blocking::Client::builder().timeout(TIMEOUT);
+    if let Some(connect) = connect {
+        builder = builder.connect_timeout(connect);
+    }
+    let client = builder.build().map_err(|e| format!("http client: {e}"))?;
     let resp = client
         .get(url)
         .send()

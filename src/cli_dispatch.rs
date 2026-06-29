@@ -148,7 +148,7 @@ fn run_update_rules(force: bool, check: bool, pin: Option<String>) -> Result<()>
     } else if check {
         cleave::rule_update::check(&dir).map_err(anyhow::Error::msg)?;
     } else {
-        cleave::rule_update::update(&dir, force).map_err(anyhow::Error::msg)?;
+        cleave::rule_update::update(&dir, force, false).map_err(anyhow::Error::msg)?;
     }
 
     Ok(())

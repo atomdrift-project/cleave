@@ -2457,6 +2457,152 @@ fn load_scan_resources(
     Ok((mapper_result?, yara_engine))
 }
 
+/// Above this file count the work-list is left in directory order and the
+/// largest-first sort is skipped: the sort needs one upfront `stat` per file
+/// (the walk only yields `d_type`, not size), and on huge trees that serial
+/// stat storm costs more than the tail-latency win it buys.
+const MAX_SORT_FILES: usize = 50_000;
+
+/// Order a work-list largest-file-first for longest-processing-time-first
+/// scheduling: per-file analysis cost rises with size, so dispatching the
+/// largest binaries first overlaps them with the long tail of small files
+/// instead of leaving one giant binary running alone on a single core at the
+/// end of the scan. A no-op above [`MAX_SORT_FILES`] (see its rationale).
+fn sort_largest_first(paths: &mut [std::path::PathBuf]) {
+    if paths.len() <= MAX_SORT_FILES {
+        paths.sort_by_cached_key(|p| {
+            std::cmp::Reverse(std::fs::metadata(p).map(|m| m.len()).unwrap_or(0))
+        });
+    }
+}
+
+/// Analyze a single already-discovered file under the shared scan pipeline:
+/// honor cancellation, gate concurrent memory, apply the size and program-type
+/// filters (unless `all_files`), then analyze and deliver the result through
+/// `callback`. A caught analyzer panic surfaces as a [`ScanEvent::File`] with an
+/// `Err` rather than poisoning the rayon pool.
+///
+/// Shared by [`scan_directory`] and [`scan_paths`] so both filter, tally, and
+/// report identically — the only difference between them is how the path list
+/// is produced (an internal walk vs. a caller-supplied list).
+#[allow(clippy::too_many_arguments)]
+fn analyze_one_path<F>(
+    file_path: &Path,
+    options: &AnalysisOptions,
+    mapper: &Arc<CapabilityMapper>,
+    yara_engine: Option<&Arc<yara_engine::YaraEngine>>,
+    all_files: bool,
+    max_scan_size: u64,
+    mem_gate: &scan_mem_gate::ScanMemGate,
+    analyzed: &std::sync::atomic::AtomicUsize,
+    skipped: &std::sync::atomic::AtomicUsize,
+    errors: &std::sync::atomic::AtomicUsize,
+    callback: &F,
+) where
+    F: Fn(ScanEvent) + Sync,
+{
+    use std::sync::atomic::Ordering;
+
+    // Cancellation fast path: once SIGINT has flipped the flag, every remaining
+    // slot returns instantly so the scan drains work already in-flight rather
+    // than starting new files. Inner analyzers (rizin, YARA, tree-sitter) also
+    // observe the flag via options.cancellation for sub-file granularity.
+    if options
+        .cancellation
+        .as_ref()
+        .is_some_and(|c| c.load(Ordering::Relaxed))
+    {
+        skipped.fetch_add(1, Ordering::Relaxed);
+        return;
+    }
+
+    // Bound concurrent memory: a burst of large archives serialises instead of
+    // co-residing and OOM-killing the host. Held until this file is done.
+    let _mem_permit = mem_gate.acquire(std::fs::metadata(file_path).map(|m| m.len()).unwrap_or(0));
+
+    // Catch panics from any analyzer so one malformed file doesn't poison the
+    // rayon thread pool and kill the entire scan.
+    let panic_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // Skip files exceeding the size limit (avoids mmap'ing huge ISOs/disk images).
+        if max_scan_size > 0
+            && let Ok(meta) = std::fs::metadata(file_path)
+            && meta.len() > max_scan_size
+        {
+            tracing::debug!(
+                path = %file_path.display(),
+                size_mb = meta.len() / (1024 * 1024),
+                limit_mb = max_scan_size / (1024 * 1024),
+                "skipping file exceeding --max-file-size limit"
+            );
+            skipped.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+
+        // File-type filtering: read the file once and check type from loaded
+        // data, then hand the same bytes to the analyzer to avoid a second read.
+        if !all_files {
+            let Ok(file_data) = file_io::read_file_smart(file_path) else {
+                tracing::debug!(path = %file_path.display(), "Skipping unreadable file");
+                skipped.fetch_add(1, Ordering::Relaxed);
+                return;
+            };
+            let ft = analyzers::detect_file_type_from_data(file_path, file_data.as_slice());
+            if !analyzers::is_analyzable(file_path, &ft) {
+                tracing::debug!(path = %file_path.display(), file_type = ?ft, "Skipping non-analyzable file");
+                skipped.fetch_add(1, Ordering::Relaxed);
+                return;
+            }
+            let result = analyze_file_with_resources(
+                file_path,
+                options,
+                mapper,
+                yara_engine,
+                Some(file_data),
+            );
+            match &result {
+                Ok(_) => {
+                    analyzed.fetch_add(1, Ordering::Relaxed);
+                }
+                Err(_) => {
+                    errors.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+            callback(ScanEvent::File {
+                path: file_path.to_path_buf(),
+                result: Box::new(result),
+            });
+            // Release wasmtime Scanner VMs on this thread to prevent non-jemalloc
+            // memory accumulation. Each Scanner holds mmap'd VM regions
+            // (~50-100MB) that macOS keeps resident even after munmap (MADV_FREE).
+            composite_rules::evaluators::clear_thread_local_caches();
+            return;
+        }
+
+        let result = analyze_file_with_resources(file_path, options, mapper, yara_engine, None);
+        match &result {
+            Ok(_) => {
+                analyzed.fetch_add(1, Ordering::Relaxed);
+            }
+            Err(_) => {
+                errors.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        callback(ScanEvent::File {
+            path: file_path.to_path_buf(),
+            result: Box::new(result),
+        });
+        composite_rules::evaluators::clear_thread_local_caches();
+    }));
+    if panic_result.is_err() {
+        tracing::error!(path = %file_path.display(), "panic during file analysis (caught)");
+        errors.fetch_add(1, Ordering::Relaxed);
+        callback(ScanEvent::File {
+            path: file_path.to_path_buf(),
+            result: Box::new(Err(anyhow::anyhow!("analysis panicked"))),
+        });
+    }
+}
+
 /// Scan a directory, invoking `callback` for each file as its analysis completes.
 ///
 /// Results stream out of the parallel workers as they finish rather than being
@@ -2527,17 +2673,6 @@ where
 
     let max_scan_size = options.max_scan_file_size;
 
-    // Build the walk iterator once. par_bridge() drives `next()` from worker
-    // threads behind an internal mutex — the walk proceeds lazily as workers
-    // pull, so we never materialize the full PathBuf list. Memory for pending
-    // paths stays bounded to the work-stealing deque depth instead of growing
-    // with total file count.
-    // Above this file count we keep the walk in directory order and skip the
-    // largest-first sort: the sort needs one upfront `stat` per file (the walk
-    // only yields `d_type`, not size), and on huge trees that serial stat storm
-    // costs more than the tail-latency win it buys.
-    const MAX_SORT_FILES: usize = 50_000;
-
     let analyze_files = || {
         // Collect the work-list up front, then dispatch with indexed
         // work-stealing (`into_par_iter`). The previous `par_bridge()` drove
@@ -2582,120 +2717,24 @@ where
             .map(|e| e.path().to_path_buf())
             .collect();
 
-        // Longest-processing-time-first scheduling: per-file analysis cost rises
-        // with size, so dispatching the largest binaries first overlaps them
-        // with the long tail of small files instead of leaving one giant binary
-        // running alone on a single core at the end of the scan.
-        if paths.len() <= MAX_SORT_FILES {
-            paths.sort_by_cached_key(|p| {
-                std::cmp::Reverse(std::fs::metadata(p).map(|m| m.len()).unwrap_or(0))
-            });
-        }
+        sort_largest_first(&mut paths);
 
         let mem_gate = scan_mem_gate::ScanMemGate::new();
         paths.into_par_iter().for_each(|file_path| {
-        // Cancellation fast path: once SIGINT has flipped the flag, every
-        // remaining par_bridge slot returns instantly so the scan drains in
-        // work already in-flight rather than starting new files. Inner
-        // analyzers (rizin, YARA, tree-sitter) also observe the flag via
-        // options.cancellation for sub-file granularity.
-        if options
-            .cancellation
-            .as_ref()
-            .is_some_and(|c| c.load(Ordering::Relaxed))
-        {
-            skipped.fetch_add(1, Ordering::Relaxed);
-            return;
-        }
-
-        // Bound concurrent memory: a burst of large archives serialises instead
-        // of co-residing and OOM-killing the host. Held until this file is done.
-        let _mem_permit =
-            mem_gate.acquire(std::fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0));
-
-        // Catch panics from any analyzer so one malformed file doesn't
-        // poison the rayon thread pool and kill the entire scan.
-        let panic_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        // Skip files exceeding the size limit (avoids mmap'ing huge ISOs/disk images).
-        if max_scan_size > 0
-            && let Ok(meta) = std::fs::metadata(&file_path)
-                && meta.len() > max_scan_size {
-                    tracing::debug!(
-                        path = %file_path.display(),
-                        size_mb = meta.len() / (1024 * 1024),
-                        limit_mb = max_scan_size / (1024 * 1024),
-                        "skipping file exceeding --max-file-size limit"
-                    );
-                    skipped.fetch_add(1, Ordering::Relaxed);
-                    return;
-                }
-
-        // File-type filtering: read the file once and check type from loaded data.
-        // Previously this was done during collection (reading every file twice).
-        if !all_files_flag {
-            let Ok(file_data) = file_io::read_file_smart(&file_path) else {
-                tracing::debug!(path = %file_path.display(), "Skipping unreadable file");
-                skipped.fetch_add(1, Ordering::Relaxed);
-                return;
-            };
-            let ft = analyzers::detect_file_type_from_data(&file_path, file_data.as_slice());
-            if !analyzers::is_analyzable(&file_path, &ft) {
-                tracing::debug!(path = %file_path.display(), file_type = ?ft, "Skipping non-analyzable file");
-                skipped.fetch_add(1, Ordering::Relaxed);
-                return;
-            }
-            // Pass pre-loaded data to avoid a second read
-            let result = analyze_file_with_resources(
+            analyze_one_path(
                 &file_path,
                 options,
                 &mapper,
                 yara_engine.as_ref(),
-                Some(file_data),
+                all_files_flag,
+                max_scan_size,
+                &mem_gate,
+                &analyzed,
+                &skipped,
+                &errors,
+                &callback,
             );
-            match &result {
-                Ok(_) => {
-                    analyzed.fetch_add(1, Ordering::Relaxed);
-                }
-                Err(_) => {
-                    errors.fetch_add(1, Ordering::Relaxed);
-                }
-            }
-            callback(ScanEvent::File {
-                path: file_path.clone(),
-                result: Box::new(result),
-            });
-            // Release wasmtime Scanner VMs on this thread to prevent non-jemalloc
-            // memory accumulation. Each Scanner holds mmap'd VM regions (~50-100MB)
-            // that macOS keeps resident even after munmap (MADV_FREE).
-            composite_rules::evaluators::clear_thread_local_caches();
-            return;
-        }
-
-        let result =
-            analyze_file_with_resources(&file_path, options, &mapper, yara_engine.as_ref(), None);
-        match &result {
-            Ok(_) => {
-                analyzed.fetch_add(1, Ordering::Relaxed);
-            }
-            Err(_) => {
-                errors.fetch_add(1, Ordering::Relaxed);
-            }
-        }
-        callback(ScanEvent::File {
-            path: file_path.clone(),
-            result: Box::new(result),
         });
-        composite_rules::evaluators::clear_thread_local_caches();
-        })); // end catch_unwind
-        if panic_result.is_err() {
-            tracing::error!(path = %file_path.display(), "panic during file analysis (caught)");
-            errors.fetch_add(1, Ordering::Relaxed);
-            callback(ScanEvent::File {
-                path: file_path.clone(),
-                result: Box::new(Err(anyhow::anyhow!("analysis panicked"))),
-            });
-        }
-    })
     };
 
     crate::mem_profile::start_sampler();
@@ -2716,6 +2755,102 @@ where
         skipped = final_skipped,
         errors = final_errors,
         "Directory scan complete"
+    );
+
+    Ok(ScanSummary {
+        total,
+        analyzed: final_analyzed,
+        errors: final_errors,
+    })
+}
+
+/// Analyze a caller-supplied list of already-discovered file paths under the
+/// same pipeline as [`scan_directory`] — the program-type and size filters are
+/// applied and non-analyzable files are silently skipped — but without walking a
+/// directory. The caller owns discovery (typically its own `walkdir` pass),
+/// which lets it report the total file count to a progress UI before analysis
+/// starts: `ScanEvent::Start` carries `Some(paths.len())`, whereas the streamed
+/// [`scan_directory`] walk reports `None` because its total is known only once
+/// the walk finishes.
+///
+/// This is distinct from [`scan_files`], which analyzes every path exactly as
+/// given (no program-type or size filter) for explicitly-named files. Use
+/// `scan_paths` when the paths came from a directory traversal and should be
+/// filtered as if `scan_directory` had walked them itself.
+///
+/// Resources (CapabilityMapper and YARA engine) are loaded once and shared
+/// across workers; results stream through `callback` as each file completes, in
+/// size-descending order (longest-processing-time-first scheduling).
+///
+/// # Errors
+///
+/// Returns `Err` only for setup failures (resource load). Per-file errors,
+/// including caught panics, are delivered through the callback as a
+/// [`ScanEvent::File`] carrying an `Err` result.
+pub fn scan_paths<F>(
+    mut paths: Vec<std::path::PathBuf>,
+    options: &AnalysisOptions,
+    callback: F,
+) -> Result<ScanSummary>
+where
+    F: Fn(ScanEvent) + Sync,
+{
+    use rayon::prelude::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let _disable_guards = AnalysisDisableGuards::from_options(options);
+
+    // Maintain the filefacts disk cache in the background, exactly as
+    // scan_directory does — a caller routing its own walk through scan_paths
+    // instead of scan_directory still expects the cache to be pruned.
+    std::thread::spawn(|| {
+        cache::maintain_filefacts_cache(30 * 24 * 3600);
+    });
+
+    let (mapper, yara_engine) = load_scan_resources(options)?;
+
+    let total = paths.len();
+    // Total is known upfront here (the caller already enumerated the paths), so
+    // a progress UI can render a determinate bar from the first File event.
+    callback(ScanEvent::Start { total: Some(total) });
+
+    let analyzed = AtomicUsize::new(0);
+    let skipped = AtomicUsize::new(0);
+    let errors = AtomicUsize::new(0);
+    let all_files_flag = options.all_files;
+    let max_scan_size = options.max_scan_file_size;
+
+    sort_largest_first(&mut paths);
+
+    crate::mem_profile::start_sampler();
+    let mem_gate = scan_mem_gate::ScanMemGate::new();
+    paths.into_par_iter().for_each(|file_path| {
+        analyze_one_path(
+            &file_path,
+            options,
+            &mapper,
+            yara_engine.as_ref(),
+            all_files_flag,
+            max_scan_size,
+            &mem_gate,
+            &analyzed,
+            &skipped,
+            &errors,
+            &callback,
+        );
+    });
+    crate::mem_profile::report();
+    crate::composite_rules::evaluators::log_regex_cache_stats();
+
+    let final_analyzed = analyzed.load(Ordering::Relaxed);
+    let final_skipped = skipped.load(Ordering::Relaxed);
+    let final_errors = errors.load(Ordering::Relaxed);
+    tracing::info!(
+        provided = total,
+        analyzed = final_analyzed,
+        skipped = final_skipped,
+        errors = final_errors,
+        "Path-list scan complete"
     );
 
     Ok(ScanSummary {

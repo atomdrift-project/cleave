@@ -1469,6 +1469,7 @@ pub(crate) fn find_excessive_file_types(
         FileType::Deb,
         FileType::Rpm,
         FileType::Crx,
+        FileType::Cab,
         FileType::VsixArchive,
         FileType::Xpi,
     ];

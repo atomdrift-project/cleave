@@ -18,7 +18,7 @@ use regex::bytes::{RegexSet, RegexSetBuilder};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::sync::{Arc, RwLock};
 
-const ARCHIVE_FAMILY_TYPES: [RuleFileType; 14] = [
+const ARCHIVE_FAMILY_TYPES: [RuleFileType; 15] = [
     RuleFileType::Archive,
     RuleFileType::Zip,
     RuleFileType::Apk,
@@ -31,6 +31,7 @@ const ARCHIVE_FAMILY_TYPES: [RuleFileType; 14] = [
     RuleFileType::Deb,
     RuleFileType::Rpm,
     RuleFileType::Crx,
+    RuleFileType::Cab,
     RuleFileType::VsixArchive,
     RuleFileType::Xpi,
 ];

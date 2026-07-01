@@ -444,6 +444,7 @@ pub(crate) enum FileType {
     /// Generic ZIP archive
     Zip,
     /// Android application package (.apk)
+    #[serde(alias = "apk_android", alias = "apk_alpine")]
     Apk,
     /// Java archive (.jar, .war, .ear)
     Jar,
@@ -477,6 +478,8 @@ pub(crate) enum FileType {
     Crx,
     /// Compiled HTML Help (.chm)
     Chm,
+    /// Microsoft Cabinet archive (.cab)
+    Cab,
     /// VS Code extension (.vsix archive)
     VsixArchive,
     /// Firefox extension (.xpi)
@@ -586,12 +589,13 @@ impl From<filefacts::FileType> for FileType {
             Ff::Rpm => Self::Rpm,
             Ff::PkgMacos | Ff::PkgFreebsd | Ff::PkgArch => Self::Pkg,
             Ff::Chm => Self::Chm,
+            Ff::Cab => Self::Cab,
             Ff::Crx => Self::Crx,
             Ff::Xpi => Self::Xpi,
             Ff::Whl => Self::Whl,
             Ff::PythonSdist => Self::PythonSdist,
             Ff::Gem => Self::Gem,
-            Ff::ApkAndroid | Ff::ApkAlpine => Self::Apk,
+            Ff::ApkAndroid | Ff::ApkAlpine | Ff::AndroidDex => Self::Apk,
             Ff::Npm => Self::Npm,
             Ff::Crate => Self::Crate,
             Ff::Conda => Self::Conda,
@@ -608,7 +612,7 @@ impl From<filefacts::FileType> for FileType {
             // GoSum, RequirementsTxt, PoetryLock, PipfileLock, GemfileLock,
             // ComposerLock, YarnLock, PnpmLock), package metadata (SrcInfo,
             // Registry), single-file compression (Gz, Bz2, Xz), archives
-            // without a dedicated bucket (Dmg, Cab, Asar, OciImage, Xbps,
+            // without a dedicated bucket (Dmg, Asar, OciImage, Xbps,
             // GentooBinpkg), and documents (Odf). The wildcard
             // is also mandatory because filefacts::FileType is
             // `#[non_exhaustive]`.
@@ -738,6 +742,7 @@ impl FileType {
                 | FileType::Rpm
                 | FileType::Crx
                 | FileType::Chm
+                | FileType::Cab
                 | FileType::VsixArchive
                 | FileType::Xpi
                 | FileType::Ipa
@@ -844,6 +849,7 @@ impl FileType {
             FileType::Rpm,
             FileType::Crx,
             FileType::Chm,
+            FileType::Cab,
             FileType::VsixArchive,
             FileType::Xpi,
         ]
@@ -957,6 +963,7 @@ impl FileType {
             "rpm" => FileType::Rpm,
             "crx" => FileType::Crx,
             "chm" => FileType::Chm,
+            "cab" => FileType::Cab,
             "vsix" => FileType::VsixArchive,
             "xpi" => FileType::Xpi,
             "beam" => FileType::Beam,
@@ -1198,8 +1205,27 @@ mod tests {
         );
         assert_eq!(FileType::from_str(Ff::Svg.label()), FileType::Xml);
         assert_eq!(FileType::from_str(Ff::ApkAndroid.label()), FileType::Apk);
+        assert_eq!(FileType::from_str(Ff::AndroidDex.label()), FileType::Apk);
+        assert_eq!(FileType::from_str(Ff::Cab.label()), FileType::Cab);
         assert_eq!(FileType::from_str(Ff::PkgArch.label()), FileType::Pkg);
         assert_eq!(FileType::from_str(Ff::TarZst.label()), FileType::Tar);
+    }
+
+    #[test]
+    fn yaml_deserializes_filefacts_archive_labels() {
+        #[derive(Deserialize)]
+        struct RuleTarget {
+            #[serde(rename = "for")]
+            file_types: Vec<FileType>,
+        }
+
+        let parsed: RuleTarget =
+            serde_yaml::from_str("for: [apk_android, apk_alpine, cab]").unwrap();
+
+        assert_eq!(
+            parsed.file_types,
+            vec![FileType::Apk, FileType::Apk, FileType::Cab]
+        );
     }
 
     /// Author-facing aliases that are NOT canonical labels must still resolve

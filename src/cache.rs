@@ -162,23 +162,23 @@ pub fn format_age(secs: u64) -> String {
 /// - Linux: ~/.cache/atomdrift/cleave
 /// - Windows: %LOCALAPPDATA%\atomdrift\cleave
 pub fn cache_dir() -> Result<PathBuf> {
-    let mut candidates = Vec::new();
-    if let Some(base_cache) = dirs::cache_dir() {
-        candidates.push(base_cache.join("atomdrift").join("cleave"));
-    }
-    candidates.push(std::env::temp_dir().join("cleave-cache"));
+    let Some(base_cache) = dirs::cache_dir() else {
+        anyhow::bail!("Failed to resolve user cache directory");
+    };
+    let cache_path = base_cache.join("atomdrift").join("cleave");
 
-    for cache_path in candidates {
-        if fs::create_dir_all(&cache_path).is_ok() {
-            let probe = cache_path.join(".write-test");
-            if fs::write(&probe, b"ok").is_ok() {
-                let _ = fs::remove_file(probe);
-                return Ok(cache_path);
-            }
+    if fs::create_dir_all(&cache_path).is_ok() {
+        let probe = cache_path.join(".write-test");
+        if fs::write(&probe, b"ok").is_ok() {
+            let _ = fs::remove_file(probe);
+            return Ok(cache_path);
         }
     }
 
-    anyhow::bail!("Failed to create cache directory")
+    anyhow::bail!(
+        "Failed to create writable cache directory at {}",
+        cache_path.display()
+    )
 }
 
 /// Returns the traits directory path from override, env var, or platform data dir.

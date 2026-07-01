@@ -1321,6 +1321,7 @@ impl PackageJsonAnalyzer {
             "babel-tape-runner",
             "eclint",
             "tslint",
+            "ttypescript",
             "eslint-config-airbnb",
             "eslint-config-prettier",
             "webpack",

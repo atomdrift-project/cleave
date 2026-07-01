@@ -347,4 +347,3 @@ opt-level = 3
 # Remove once filefacts is released and the git pin above is bumped.
 #[patch."https://codeberg.org/atomdrift/filefacts.git"]
 #filefacts = { path = "../filefacts" }
-

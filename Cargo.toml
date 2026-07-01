@@ -345,5 +345,3 @@ opt-level = 3
 # Local-only override: pick up the unreleased filefacts inter-file `Reference`
 # work (the `RefLocator::Path` / `RefKind::Local` intra-artifact references).
 # Remove once filefacts is released and the git pin above is bumped.
-#[patch."https://codeberg.org/atomdrift/filefacts.git"]
-#filefacts = { path = "../filefacts" }

@@ -1212,6 +1212,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::expect_used)]
     fn yaml_deserializes_filefacts_archive_labels() {
         #[derive(Deserialize)]
         struct RuleTarget {
@@ -1219,8 +1220,8 @@ mod tests {
             file_types: Vec<FileType>,
         }
 
-        let parsed: RuleTarget =
-            serde_yaml::from_str("for: [apk_android, apk_alpine, cab]").unwrap();
+        let parsed: RuleTarget = serde_yaml::from_str("for: [apk_android, apk_alpine, cab]")
+            .expect("valid YAML rule target");
 
         assert_eq!(
             parsed.file_types,

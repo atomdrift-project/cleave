@@ -1049,10 +1049,7 @@ fn determine_entitlement_criticality(
     // - allow-jit: allows JIT compilation (code generation at runtime)
     // - debugger: allows attaching to other processes
     // - allow-unsigned-executable-memory: bypasses code signing enforcement
-    // - disable-executable-page-protection: weakens memory protections
-    if entitlement_key.contains("debugger")
-        || entitlement_key.contains("disable-executable-page-protection")
-    {
+    if entitlement_key.contains("debugger") {
         return Criticality::Suspicious;
     }
 

@@ -61,6 +61,28 @@ fn arch_name_from_machine(e_machine: u16) -> String {
     }
 }
 
+fn is_jvm_bundled_native_path(path: &str) -> bool {
+    (path.contains(".jar!") || path.contains(".jar/"))
+        && (path.contains("snappy-java")
+            || path.contains("zstd-jni")
+            || path.contains("lz4-java")
+            || path.contains("rocksdbjni"))
+}
+
+fn raw_elf_machine(data: &[u8]) -> Option<u16> {
+    if data.len() < 20 {
+        return None;
+    }
+    if data.get(0..4) != Some(b"\x7fELF") {
+        return None;
+    }
+    Some(if data.get(5) == Some(&2) {
+        u16::from_be_bytes([data[18], data[19]])
+    } else {
+        u16::from_le_bytes([data[18], data[19]])
+    })
+}
+
 impl ElfAnalyzer {
     /// Push a baseline structural metadata finding with its evidence anchored
     /// at `location` (a hex offset such as the originating section's file
@@ -358,15 +380,22 @@ impl ElfAnalyzer {
                         || data
                             .windows(b"android-gif-drawable".len())
                             .any(|w| w == b"android-gif-drawable");
+                let is_snappy_s390x_native = report.target.path.contains("libsnappyjava.so")
+                    && raw_elf_machine(data) == Some(22);
                 if (data.len() >= 50 * 1024 * 1024 && (has_go_cli_markers || has_linuxbrew_marker))
                     || has_android_gif_drawable_marker
+                    || is_jvm_bundled_native_path(&report.target.path)
+                    || is_snappy_s390x_native
                 {
                     // Very large Linuxbrew/Go CLI builds and some legacy
                     // Android native libraries can carry metadata layouts
                     // filefacts's parser rejects even though the executable is
-                    // otherwise legitimate. Keep the structural anomaly
-                    // visible, but below suspicious for these known-benign
-                    // contexts.
+                    // otherwise legitimate. JVM native-dependency jars also
+                    // ship cross-platform shared libraries that may not parse
+                    // cleanly on the host, including snappy-java's s390x
+                    // native library after archive extraction loses the
+                    // enclosing jar path. Keep the structural anomaly visible,
+                    // but below suspicious for these known-benign contexts.
                     crit = Criticality::Notable;
                 }
             }

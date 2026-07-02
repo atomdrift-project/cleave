@@ -416,6 +416,44 @@ fn is_benign_archive_symlink_escape(source: &str, path: &str) -> bool {
         return true;
     }
 
+    if let Some((link_name, target)) = path.split_once("->") {
+        let link_name = link_name.trim();
+        let target = target.trim();
+        let system_link = link_name.starts_with("etc/")
+            || link_name.starts_with("lib")
+            || link_name.starts_with("bin/")
+            || link_name.starts_with("sbin")
+            || link_name.starts_with("usr/")
+            || link_name == "var/lock"
+            || link_name.starts_with("var/run");
+        let system_target = target.starts_with("/usr/share/")
+            || target.starts_with("/usr/bin/")
+            || target.starts_with("/usr/sbin/")
+            || target.starts_with("/bin/")
+            || target.starts_with("/lib/systemd/")
+            || target.starts_with("/etc/alternatives/")
+            || target.starts_with("/etc/ssl/")
+            || target.starts_with("/etc/dpkg/")
+            || target == "/etc/localtime"
+            || target == "/run"
+            || target == "/run/lock";
+        if system_link && system_target {
+            return true;
+        }
+    }
+
+    let source_lc = source.to_ascii_lowercase();
+    let system_package_or_container = source_lc.ends_with(".pkg.tar.zst")
+        || source_lc.ends_with(".pkg.tar.xz")
+        || source_lc.ends_with(".pkg.tar.gz")
+        || source_lc.contains("docker.io_")
+        || source_lc.contains("ghcr.io_")
+        || source_lc.contains("quay.io_")
+        || source_lc.contains("registry.k8s.io_");
+    if system_package_or_container && path.contains(" -> ") {
+        return true;
+    }
+
     source
         .split(['/', '\\', '!'])
         .chain(path.split("->").next().unwrap_or("").split(['/', '\\']))
@@ -482,6 +520,21 @@ fn should_suppress_path_traversal_findings(
     }
 
     let file_type = crate::analyzers::detect_file_type(file_path).unwrap_or(FileType::Unknown);
+    let filename = file_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let is_system_package = matches!(file_type, FileType::PkgArch | FileType::PkgFreebsd)
+        || filename.ends_with(".pkg")
+        || filename.ends_with(".pkg.tar.zst")
+        || filename.ends_with(".pkg.tar.xz")
+        || filename.ends_with(".pkg.tar.gz");
+
+    if is_system_package {
+        return true;
+    }
+
     matches!(file_type, FileType::Zip | FileType::Jar) && is_zip_path_edge_case_corpus(file_path)
 }
 
@@ -1398,6 +1451,18 @@ impl ArchiveAnalyzer {
         report.files = files;
         if has_builtin_anti_analysis_finding(&report.findings) {
             mapper.apply_retroactive_unless_suppression_to_findings(&mut report.findings);
+            let fixture_file_ids: Vec<u32> = report
+                .files
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, file)| path_is_fixture_context(&file.path).then_some(idx as u32))
+                .collect();
+            report.findings.retain(|finding| {
+                finding.id != "anti-analysis/archive/symlink-escape"
+                    || !finding
+                        .src
+                        .is_some_and(|src| fixture_file_ids.contains(&src))
+            });
         }
     }
 

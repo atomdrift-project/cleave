@@ -642,20 +642,22 @@ pub struct AnalysisOptions {
     /// report what a stuck request is actually doing.
     pub phase: Option<PhaseTracker>,
     /// Optional caller-supplied predicate, consulted with a file's sha256 hex
-    /// after it is hashed but before any analysis. Returning `true` skips the
-    /// expensive pipeline and yields a minimal report (target only). Lets a
-    /// caller short-circuit files it already has a verdict for (e.g. a local
-    /// known-good bloom filter) without cleave knowing why. Not part of the
-    /// analysis cache key.
+    /// and path after it is hashed but before any analysis. Returning `true`
+    /// skips the expensive pipeline and yields a minimal report (target only).
+    /// Lets a caller short-circuit files it already has a verdict for (e.g. a
+    /// local known-good bloom filter) without cleave knowing why; the path is
+    /// supplied so the predicate can consult filesystem metadata (e.g. skip a
+    /// known-good file only while it is unchanged). Not part of the analysis
+    /// cache key.
     pub skip_predicate: Option<SkipPredicate>,
 }
 
 /// Caller-supplied "skip analysis of this file" predicate (see
-/// [`AnalysisOptions::skip_predicate`]). Called with the sha256 hex; `true`
-/// skips analysis. `Arc` so it is cheap to share across the rayon fan-out. A
-/// newtype so [`AnalysisOptions`] can keep deriving `Debug`.
+/// [`AnalysisOptions::skip_predicate`]). Called with the sha256 hex and the
+/// file's path; `true` skips analysis. `Arc` so it is cheap to share across the
+/// rayon fan-out. A newtype so [`AnalysisOptions`] can keep deriving `Debug`.
 #[derive(Clone)]
-pub struct SkipPredicate(pub Arc<dyn Fn(&str) -> bool + Send + Sync>);
+pub struct SkipPredicate(pub Arc<dyn Fn(&str, &Path) -> bool + Send + Sync>);
 
 impl std::fmt::Debug for SkipPredicate {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1703,7 +1705,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     // recognizes the skip by re-checking the sha. Cheaper than the cache lookup,
     // and bloom-agnostic.
     if let Some(predicate) = &options.skip_predicate
-        && (predicate.0)(&sha256_hex)
+        && (predicate.0)(&sha256_hex, path)
     {
         return Ok(AnalysisReport::new(types::TargetInfo {
             path: path.display().to_string(),

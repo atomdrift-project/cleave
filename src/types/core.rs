@@ -1505,6 +1505,19 @@ impl AnalysisReport {
                 }
             }
         }
+        let fixture_file_ids: Vec<u32> = self
+            .files
+            .iter()
+            .filter_map(|file| fixture_path_component(&file.path).then_some(file.id))
+            .collect();
+        for file in &mut self.files {
+            file.findings.retain(|finding| {
+                finding.id != "anti-analysis/archive/symlink-escape"
+                    || !finding
+                        .src
+                        .is_some_and(|src| fixture_file_ids.contains(&src))
+            });
+        }
 
         // Tie each cross-file composite to the members it fired on, while the
         // per-member component findings/notes are still present (the compact
@@ -1792,6 +1805,11 @@ fn note_location(file: &FileAnalysis, id: &str) -> Option<(Option<u64>, Option<u
 fn leaf_member(path: &str) -> &str {
     use super::file_analysis::ARCHIVE_DELIMITER;
     path.rsplit(ARCHIVE_DELIMITER).next().unwrap_or(path)
+}
+
+fn fixture_path_component(path: &str) -> bool {
+    path.split(['/', '\\', '!'])
+        .any(|component| matches!(component, "testdata" | "fixture" | "fixtures"))
 }
 
 /// The archive member an evidence location points at, or `None` when the

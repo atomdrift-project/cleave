@@ -599,12 +599,18 @@ pub fn save_rule_stats(trait_count: usize, composite_count: usize) -> Result<()>
 /// left behind on pre-migration installs. Best-effort; runs in the
 /// background.
 pub(crate) fn maintain_filefacts_cache(max_age_secs: u64) {
-    filefacts::cache::prune_old_versions();
-    filefacts::cache::prune_stale(std::time::Duration::from_secs(max_age_secs));
-    // One-shot cleanup of the legacy radare2 cache; harmless once gone.
-    if let Ok(dir) = cache_dir() {
-        let _ = fs::remove_dir_all(dir.join("re"));
-    }
+    // Detach: the stale-walk stats every entry in the filefacts cache
+    // (potentially many thousands of files), so keep it off the startup
+    // path. Best-effort — a short run that exits before it finishes just
+    // resumes the work next time.
+    std::thread::spawn(move || {
+        filefacts::cache::prune_old_versions();
+        filefacts::cache::prune_stale(std::time::Duration::from_secs(max_age_secs));
+        // One-shot cleanup of the legacy radare2 cache; harmless once gone.
+        if let Ok(dir) = cache_dir() {
+            let _ = fs::remove_dir_all(dir.join("re"));
+        }
+    });
 }
 
 /// Clean up old cache files (keep only current one)

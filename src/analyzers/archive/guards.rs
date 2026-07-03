@@ -35,7 +35,7 @@ pub(crate) const MAX_COMPRESSION_RATIO: u64 = 100;
 /// This keeps the ratio heuristic focused on materially dangerous expansion
 /// rather than compact single-stream fixtures that compress well but remain
 /// under the normal per-file extraction cap.
-pub(crate) const MIN_ZIP_BOMB_UNCOMPRESSED_SIZE: u64 = 100 * 1024 * 1024;
+pub(crate) const MIN_ZIP_BOMB_UNCOMPRESSED_SIZE: u64 = 256 * 1024 * 1024;
 
 /// Per-member forensic metadata captured during extraction.
 ///

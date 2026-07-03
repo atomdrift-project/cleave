@@ -2644,12 +2644,10 @@ where
     let _disable_guards = AnalysisDisableGuards::from_options(options);
 
     // Maintain the filefacts disk cache (which now owns rizin recovery) in
-    // the background: prune old schema versions and entries orphaned by
-    // filefacts rebuilds, and retire the legacy `re/` tree. 30-day max age
-    // matches the server default.
-    std::thread::spawn(|| {
-        cache::maintain_filefacts_cache(30 * 24 * 3600);
-    });
+    // the background: prune old schema versions, evict past the item cap,
+    // and retire the legacy `re/` tree. Self-detaching, so it never blocks
+    // startup.
+    cache::maintain_filefacts_cache();
 
     // Load shared resources once; all rayon workers share them via cheap Arc clones.
     let (mapper, yara_engine) = load_scan_resources(options)?;
@@ -2805,9 +2803,7 @@ where
     // Maintain the filefacts disk cache in the background, exactly as
     // scan_directory does — a caller routing its own walk through scan_paths
     // instead of scan_directory still expects the cache to be pruned.
-    std::thread::spawn(|| {
-        cache::maintain_filefacts_cache(30 * 24 * 3600);
-    });
+    cache::maintain_filefacts_cache();
 
     let (mapper, yara_engine) = load_scan_resources(options)?;
 

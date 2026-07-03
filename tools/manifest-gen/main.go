@@ -61,7 +61,7 @@ func main() {
 	flag.StringVar(&c.artifactPrefix, "artifact-prefix", "",
 		"path prepended to each artifact's `file` in the manifest, relative to the manifest (e.g. \"traits/\")")
 	engineBin := flag.String("engine-bin", "cleave",
-		"comma-separated cargo bin name(s) to build per tag, tried in order; spans a rename across the tag range (e.g. \"litmus,ascan\")")
+		"fallback cargo bin name(s) for tags with no Cargo.toml `default-run` (comma-separated, tried in order); tags that declare `default-run` use it directly")
 	flag.StringVar(&c.traitsEnv, "traits-env", "CLEAVE_TRAITS_DIR",
 		"env var set to the extracted checkout when validating (cleave: CLEAVE_TRAITS_DIR; litmus: LITMUS_MODELS_DIR)")
 	validateArgs := flag.String("validate-args", "validate",
@@ -245,8 +245,18 @@ func ensureEngine(c *config, rel string) (string, bool) {
 	}
 	tag := "v" + rel
 	dir := filepath.Join(c.out, "engines", tag)
-	// A prior run may have cached the binary under any candidate bin name.
-	for _, bin := range c.engineBins {
+	// The default binary target is renamed across releases (…scan -> ascan ->
+	// atomscan). Rather than guess from a fixed candidate list, read the name
+	// straight from that tag's Cargo.toml `default-run` — the authoritative
+	// "default binary target for this version" (read-only `git show`, no
+	// checkout). Fall back to the --engine-bin candidates only for tags that
+	// predate `default-run`.
+	bins := c.engineBins
+	if b := defaultRunBin(c.repo, tag); b != "" {
+		bins = []string{b}
+	}
+	// A prior run may have cached the binary under the resolved bin name.
+	for _, bin := range bins {
 		cached := filepath.Join(dir, bin)
 		if _, err := os.Stat(cached); err == nil {
 			return cached, true
@@ -278,11 +288,11 @@ func ensureEngine(c *config, rel string) (string, bool) {
 	if err != nil {
 		fatal("resolve target dir: %v", err)
 	}
-	// The engine bin was renamed across releases (litmus -> ascan), so any given
-	// tag builds under exactly one candidate name. Try each in order; the first
+	// `bins` is the tag's `default-run` when declared (exactly one name), else
+	// the --engine-bin candidates for older tags. Try each in order; the first
 	// that builds wins. Print a one-line reason per failed attempt so a genuine
 	// breakage is never silently mistaken for "wrong bin name for this tag".
-	for _, bin := range c.engineBins {
+	for _, bin := range bins {
 		logf("building engine %s --bin %s (cargo build --release) ...", tag, bin)
 		build := exec.Command("cargo", "build", "--release", "--bin", bin)
 		build.Dir = src
@@ -301,8 +311,29 @@ func ensureEngine(c *config, rel string) (string, bool) {
 		logf("  cached engine -> %s", cached)
 		return cached, true
 	}
-	logf("  build %s FAILED for all candidate bins %v — skipping release", tag, c.engineBins)
+	logf("  build %s FAILED for all candidate bins %v — skipping release", tag, bins)
 	return "", false
+}
+
+// defaultRunBin returns the `default-run` binary name declared in a tag's
+// Cargo.toml, or "" if the tag predates it. Read-only: `git show <tag>:Cargo.toml`,
+// no checkout. The first `default-run = "…"` line wins (it lives under [package];
+// comments start with '#' and never match after trimming).
+func defaultRunBin(repo, tag string) string {
+	cmd := exec.Command("git", "-C", repo, "show", tag+":Cargo.toml")
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if !strings.HasPrefix(strings.TrimSpace(line), "default-run") {
+			continue
+		}
+		if lhs, rhs, ok := parseAssign(line); ok && lhs == "default-run" {
+			return rhs
+		}
+	}
+	return ""
 }
 
 // buildArtifacts produces a reproducible artifact for every distinct commit any

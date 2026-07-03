@@ -593,20 +593,19 @@ pub fn save_rule_stats(trait_count: usize, composite_count: usize) -> Result<()>
 /// Rizin moved into filefacts, which caches its extraction snapshot
 /// (recovered imports/exports/functions/sections included) keyed by
 /// `(content, filefacts build, rizin config)`. cleave relies on that
-/// cache instead of the old `re/` tree it kept before the migration, so
-/// at startup it prunes superseded schema versions and ages out entries
-/// orphaned by filefacts rebuilds, and removes the now-dead `re/` tree
-/// left behind on pre-migration installs. Best-effort; runs in the
-/// background.
-pub(crate) fn maintain_filefacts_cache(max_age_secs: u64) {
-    // Detach: the stale-walk stats every entry in the filefacts cache
-    // (potentially many thousands of files), so keep it off the startup
-    // path. Best-effort — a short run that exits before it finishes just
-    // resumes the work next time.
-    std::thread::spawn(move || {
-        filefacts::cache::prune_old_versions();
-        filefacts::cache::prune_stale(std::time::Duration::from_secs(max_age_secs));
-        // One-shot cleanup of the legacy radare2 cache; harmless once gone.
+/// cache instead of the old `re/` tree it kept before the migration.
+/// filefacts' `cleanup` prunes superseded schema versions and enforces
+/// its item cap (LRU eviction orphans entries left by earlier filefacts
+/// builds) on its own background thread. cleave adds a one-shot removal
+/// of the now-dead `re/` tree left behind on pre-migration installs.
+/// Best-effort; runs in the background.
+pub(crate) fn maintain_filefacts_cache() {
+    // filefacts::cache::cleanup detaches its own sweep, so it never
+    // blocks startup.
+    filefacts::cache::cleanup();
+    // One-shot cleanup of the legacy radare2 cache; harmless once gone.
+    // Detach: remove_dir_all may walk a large tree on old installs.
+    std::thread::spawn(|| {
         if let Ok(dir) = cache_dir() {
             let _ = fs::remove_dir_all(dir.join("re"));
         }

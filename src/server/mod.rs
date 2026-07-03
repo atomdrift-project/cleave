@@ -160,12 +160,10 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
     });
 
     // Maintain the filefacts disk cache (which now owns rizin recovery) on
-    // startup: prune old schema versions and entries orphaned by filefacts
-    // rebuilds, and retire the legacy `re/` tree. 30-day max age; runs in
-    // the background so it doesn't delay startup.
-    tokio::task::spawn_blocking(|| {
-        crate::cache::maintain_filefacts_cache(30 * 24 * 3600);
-    });
+    // startup: prune old schema versions, evict past the item cap, and
+    // retire the legacy `re/` tree. Self-detaching, so it doesn't delay
+    // startup.
+    crate::cache::maintain_filefacts_cache();
 
     // Spawn background task to clean up stale rate limiter entries
     let cleanup_state = Arc::clone(&state);

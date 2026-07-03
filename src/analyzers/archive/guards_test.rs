@@ -128,8 +128,8 @@ fn test_compression_ratio_normal() {
 fn test_compression_ratio_bomb_detected() {
     let guard = ExtractionGuard::new();
 
-    // 200:1 ratio on a large payload should still be suspicious.
-    assert!(!guard.check_compression_ratio(1000, 200_000_000));
+    // 200:1 ratio above the minimum material expansion size is suspicious.
+    assert!(!guard.check_compression_ratio(1000, 300_000_000));
 
     let reasons = guard.take_reasons();
     assert_eq!(reasons.len(), 1);

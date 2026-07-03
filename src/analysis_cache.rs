@@ -20,9 +20,12 @@
 //! # Eviction
 //!
 //! When the cache exceeds its entry cap, eviction runs down to 90% of the cap
-//! (sorted by last-access time). The check samples 1-in-10 stores so overhead
-//! is bounded while still keeping the cache close to the configured ceiling
-//! on long-running scans (10M+ files over multiple days).
+//! (sorted by last-access time). A store samples the eviction point 1-in-100
+//! and, when it fires, hands the work to a background thread with its own
+//! connection — the `SELECT COUNT(*)` gate and `DELETE` never block the
+//! storing thread. A per-table guard keeps at most one eviction in flight, so
+//! the cache stays close to the ceiling on long-running scans (10M+ files over
+//! multiple days) without ever stalling the hot path.
 
 use crate::AnalysisOptions;
 use crate::cache::{cache_dir, cache_revision};
@@ -32,7 +35,7 @@ use rusqlite::Connection;
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::SystemTime;
 
 /// Maximum number of toplevel report cache entries before eviction triggers.
@@ -207,15 +210,53 @@ fn report_cache_store_conn(
     );
 }
 
-/// Evict oldest entries from the toplevel report cache when over `MAX_REPORT_ENTRIES`.
-/// Deletes down to 90% of the cap so the cache doesn't re-trigger eviction immediately.
-/// Uses a global counter so eviction is distributed across threads without duplication.
-fn maybe_evict_report_cache(conn: &Connection) {
-    let count = REPORT_STORE_COUNT.fetch_add(1, Ordering::Relaxed);
-    if !count.is_multiple_of(EVICTION_CHECK_INTERVAL) {
+/// Guards so at most one background eviction per table runs at a time; a
+/// store that samples the eviction point while one is in flight skips it.
+static REPORT_EVICTING: AtomicBool = AtomicBool::new(false);
+static FILE_ANALYSIS_EVICTING: AtomicBool = AtomicBool::new(false);
+
+/// Run a table eviction on a background thread with its own connection, so
+/// the `SELECT COUNT(*)` gate and `DELETE` never block the storing thread.
+/// No-op if an eviction for this table is already running, caching is
+/// disabled, or the thread/connection cannot be created.
+fn spawn_eviction(guard: &'static AtomicBool, evict: fn(&Connection)) {
+    if guard
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
         return;
     }
+    let Some(path) = db_path().map(Path::to_path_buf) else {
+        guard.store(false, Ordering::Release);
+        return;
+    };
+    let spawned = std::thread::Builder::new()
+        .name("cleave-cache-evict".into())
+        .spawn(move || {
+            if let Ok(conn) = open_connection(&path) {
+                evict(&conn);
+            }
+            guard.store(false, Ordering::Release);
+        });
+    if spawned.is_err() {
+        guard.store(false, Ordering::Release);
+    }
+}
 
+/// Sample the eviction point 1-in-`EVICTION_CHECK_INTERVAL` stores; when it
+/// fires, evict the report cache on a background thread. The global counter
+/// distributes the sampling across threads without duplication.
+fn maybe_evict_report_cache() {
+    let count = REPORT_STORE_COUNT.fetch_add(1, Ordering::Relaxed);
+    if count.is_multiple_of(EVICTION_CHECK_INTERVAL) {
+        spawn_eviction(&REPORT_EVICTING, evict_report_cache);
+    }
+}
+
+/// Evict oldest entries from the toplevel report cache when over
+/// `MAX_REPORT_ENTRIES`, down to 90% of the cap so the cache doesn't
+/// re-trigger eviction immediately. Runs on a background thread.
+fn evict_report_cache(conn: &Connection) {
     let total: i64 = conn
         .query_row("SELECT COUNT(*) FROM toplevel_report_cache", [], |row| {
             row.get(0)
@@ -352,7 +393,7 @@ pub(crate) fn report_cache_store(sha256: &str, options: &AnalysisOptions, report
     };
     with_conn(|conn| {
         report_cache_store_conn(conn, sha256, &opts_hash, traits_ts, report);
-        maybe_evict_report_cache(conn);
+        maybe_evict_report_cache();
     });
 }
 
@@ -382,7 +423,7 @@ pub(crate) fn file_analysis_cache_store(
     };
     with_conn(|conn| {
         file_analysis_cache_store_conn(conn, sha256, &opts_hash, traits_ts, fa);
-        maybe_evict_file_analysis_cache(conn);
+        maybe_evict_file_analysis_cache();
     });
 }
 
@@ -438,14 +479,19 @@ fn file_analysis_cache_store_conn(
     );
 }
 
-/// Evict oldest entries from the file analysis cache when over `MAX_FILE_ANALYSIS_ENTRIES`.
-/// Deletes down to 90% of the cap so the cache doesn't re-trigger eviction immediately.
-fn maybe_evict_file_analysis_cache(conn: &Connection) {
+/// Sample the eviction point 1-in-`EVICTION_CHECK_INTERVAL` stores; when it
+/// fires, evict the file analysis cache on a background thread.
+fn maybe_evict_file_analysis_cache() {
     let count = FILE_ANALYSIS_STORE_COUNT.fetch_add(1, Ordering::Relaxed);
-    if !count.is_multiple_of(EVICTION_CHECK_INTERVAL) {
-        return;
+    if count.is_multiple_of(EVICTION_CHECK_INTERVAL) {
+        spawn_eviction(&FILE_ANALYSIS_EVICTING, evict_file_analysis_cache);
     }
+}
 
+/// Evict oldest entries from the file analysis cache when over
+/// `MAX_FILE_ANALYSIS_ENTRIES`, down to 90% of the cap. Runs on a
+/// background thread.
+fn evict_file_analysis_cache(conn: &Connection) {
     let total: i64 = conn
         .query_row("SELECT COUNT(*) FROM file_analysis_cache", [], |row| {
             row.get(0)

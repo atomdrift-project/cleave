@@ -198,6 +198,162 @@ fn should_skip_unknown_encoded_payload_for_text(
     is_textual && is_noisy_text_encoding
 }
 
+fn should_skip_unknown_svg_path_xor_base64_payload(
+    file_type: &FileType,
+    payload: &types::ExtractedPayload,
+    source: &[u8],
+) -> bool {
+    if payload.detected_type != FileType::Unknown
+        || payload.encoding_chain != ["xor", "base64"]
+        || looks_like_actionable_payload_preview(&payload.preview)
+    {
+        return false;
+    }
+
+    if !matches!(file_type, FileType::JavaScript | FileType::TypeScript) {
+        return false;
+    }
+
+    let offset = payload.original_offset.min(source.len());
+    let start = offset.saturating_sub(8192);
+    let end = offset.saturating_add(8192).min(source.len());
+    let context = String::from_utf8_lossy(&source[start..end]);
+
+    let has_svg_context = context.contains("createElement(\"svg\"")
+        || context.contains("createElement('svg'")
+        || context.contains("viewBox")
+        || context.contains("fillRule")
+        || context.contains("clipRule")
+        || context.contains("dangerouslySetInnerHTML");
+
+    has_svg_context
+        && (looks_like_svg_path_data_fragment(payload.preview.trim())
+            || source_literal_at_offset_looks_like_svg_path(source, offset))
+}
+
+fn looks_like_svg_path_data_fragment(preview: &str) -> bool {
+    if preview.contains("d=\"M")
+        || preview.contains("d:'M")
+        || preview.contains("d:\"M")
+        || preview.contains("viewBox")
+        || preview.contains("clipRule")
+        || preview.contains("fillRule")
+    {
+        return true;
+    }
+
+    let trimmed = preview.trim_matches(|c: char| c == '"' || c == '\'' || c.is_whitespace());
+    if trimmed.len() < 16 || trimmed.contains('{') || trimmed.contains(';') {
+        return false;
+    }
+
+    let mut total = 0usize;
+    let mut allowed = 0usize;
+    let mut digits = 0usize;
+    let mut path_commands = 0usize;
+    let mut alpha_non_path = 0usize;
+
+    for ch in trimmed.chars() {
+        if ch.is_whitespace() {
+            continue;
+        }
+        total += 1;
+        if ch.is_ascii_digit() {
+            digits += 1;
+        }
+        if matches!(
+            ch,
+            'M' | 'm'
+                | 'L'
+                | 'l'
+                | 'H'
+                | 'h'
+                | 'V'
+                | 'v'
+                | 'C'
+                | 'c'
+                | 'S'
+                | 's'
+                | 'Q'
+                | 'q'
+                | 'T'
+                | 't'
+                | 'A'
+                | 'a'
+                | 'Z'
+                | 'z'
+        ) {
+            path_commands += 1;
+        } else if ch.is_ascii_alphabetic() {
+            alpha_non_path += 1;
+        }
+        if ch.is_ascii_digit()
+            || matches!(
+                ch,
+                '.' | '-'
+                    | '+'
+                    | ','
+                    | '"'
+                    | '\''
+                    | 'M'
+                    | 'm'
+                    | 'L'
+                    | 'l'
+                    | 'H'
+                    | 'h'
+                    | 'V'
+                    | 'v'
+                    | 'C'
+                    | 'c'
+                    | 'S'
+                    | 's'
+                    | 'Q'
+                    | 'q'
+                    | 'T'
+                    | 't'
+                    | 'A'
+                    | 'a'
+                    | 'Z'
+                    | 'z'
+            )
+        {
+            allowed += 1;
+        }
+    }
+
+    total > 0
+        && digits >= 6
+        && path_commands >= 1
+        && alpha_non_path == 0
+        && allowed * 100 / total >= 85
+}
+
+fn source_literal_at_offset_looks_like_svg_path(source: &[u8], offset: usize) -> bool {
+    let start = offset.saturating_sub(512);
+    let end = offset.saturating_add(512).min(source.len());
+    let local = &source[start..end];
+    let rel_offset = offset.saturating_sub(start).min(local.len());
+
+    for quote in [b'"', b'\''] {
+        let Some(before) = local[..rel_offset].iter().rposition(|&b| b == quote) else {
+            continue;
+        };
+        let Some(after_rel) = local[rel_offset..].iter().position(|&b| b == quote) else {
+            continue;
+        };
+        let after = rel_offset + after_rel;
+        if after <= before + 1 {
+            continue;
+        }
+        let literal = String::from_utf8_lossy(&local[before + 1..after]);
+        if literal.len() <= 4096 && looks_like_svg_path_data_fragment(&literal) {
+            return true;
+        }
+    }
+
+    false
+}
+
 fn smallest_section_for_offset(
     offset: usize,
     sections: &[types::Section],
@@ -1348,6 +1504,7 @@ pub(crate) fn process_encoded_payloads(
     encoded_payloads: Vec<types::ExtractedPayload>,
     report: &mut types::AnalysisReport,
     path: &std::path::Path,
+    source: &[u8],
     file_type: FileType,
     analysis_depth: u32,
     options: &AnalysisOptions,
@@ -1428,6 +1585,13 @@ pub(crate) fn process_encoded_payloads(
         if should_skip_unknown_encoded_payload_for_text(&file_type, &payload) {
             tracing::debug!(
                 "Skipping unknown encoded fragment in text/source file: {}",
+                payload.preview
+            );
+            continue;
+        }
+        if should_skip_unknown_svg_path_xor_base64_payload(&file_type, &payload, source) {
+            tracing::debug!(
+                "Skipping SVG path fragment misdecoded as xor/base64 payload: {}",
                 payload.preview
             );
             continue;
@@ -2225,6 +2389,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         encoded_payloads,
         &mut report,
         path,
+        file_data,
         file_type,
         analysis_depth,
         options,
@@ -3308,5 +3473,34 @@ mod tests {
             original_offset: 0,
         };
         assert!(should_skip_unknown_url_markup_payload(&payload));
+    }
+
+    #[test]
+    fn test_skip_unknown_svg_path_xor_base64_payload() {
+        let source = br#"function Icon(){return d.createElement("svg",{xmlns:"http://www.w3.org/2000/svg",viewBox:"0 0 20 20"},d.createElement("path",{d:"M14 6c-.762 0-1.52.02-2.271.062C10.157 6.148 9 7.472 9 8.998v2.24c0 1.519 1.147 2.839 2.71 2.935.214.013.428.024.642.034.2.009.385.09.518.224l2.35 2.35a.75.75 0 001.28-.531v-2.07z"}))}"#;
+
+        let payload = types::ExtractedPayload {
+            data: Vec::new(),
+            encoding_chain: vec!["xor".to_string(), "base64".to_string()],
+            detected_type: FileType::Unknown,
+            preview: "<binary data>".to_string(),
+            original_offset: 260,
+        };
+
+        assert!(should_skip_unknown_svg_path_xor_base64_payload(
+            &FileType::JavaScript,
+            &payload,
+            source
+        ));
+
+        let actionable = types::ExtractedPayload {
+            preview: "const a=require('child_process')".to_string(),
+            ..payload
+        };
+        assert!(!should_skip_unknown_svg_path_xor_base64_payload(
+            &FileType::JavaScript,
+            &actionable,
+            source
+        ));
     }
 }

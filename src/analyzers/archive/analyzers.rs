@@ -899,6 +899,7 @@ impl ArchiveAnalyzer {
                     payloads,
                     &mut report,
                     logical_path,
+                    data,
                     *file_type,
                     (self.current_depth + 1) as u32,
                     opts,

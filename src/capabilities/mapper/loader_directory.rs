@@ -116,6 +116,39 @@ fn push_parsing_warning(
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::is_open_filefacts_metric_path;
+
+    #[test]
+    fn filefacts_metric_namespaces_are_open() {
+        for field in [
+            "chm.user_entry_count",
+            "chm.infotype_count",
+            "archive.member_count",
+            "image.width",
+            "wasm.import_count",
+            "registry.downloads_recent",
+        ] {
+            assert!(
+                is_open_filefacts_metric_path(field),
+                "{field} should be accepted as a filefacts metric path"
+            );
+        }
+
+        for field in [
+            "chmx.user_entry_count",
+            "chm_user_entry_count",
+            "xchm.user_entry_count",
+        ] {
+            assert!(
+                !is_open_filefacts_metric_path(field),
+                "{field} should not be accepted as a filefacts metric path"
+            );
+        }
+    }
+}
+
 fn find_non_leaf_yaml_files(yaml_files: &[std::path::PathBuf], root: &Path) -> Vec<String> {
     let mut yaml_dirs: Vec<_> = yaml_files
         .iter()
@@ -192,6 +225,64 @@ fn is_dynamic_metadata_ref(ref_id: &str) -> bool {
     DYNAMIC_PREFIXES
         .iter()
         .any(|prefix| ref_id.starts_with(prefix))
+}
+
+/// Metric paths emitted by filefacts live in cleave's flat
+/// `filefacts_metrics` map (`BTreeMap<String, f64>`). The set of valid keys
+/// inside those namespaces is open: filefacts adds new ones as extractors grow.
+/// The strict known-field check is only for cleave-owned typed metrics and the
+/// explicit language/encoding manifest.
+fn is_open_filefacts_metric_path(field: &str) -> bool {
+    const FILEFACTS_PREFIXES: &[&str] = &[
+        "archive.",
+        "ast.",
+        "binary.",
+        "binds.",
+        "calls.",
+        "chm.",
+        "class.",
+        "comments.",
+        "consistency.",
+        "deb.",
+        "dependencies.",
+        "dmg.",
+        "elf.",
+        "exports.",
+        "file.",
+        "functions.",
+        "gem.",
+        "identifiers.",
+        "image.",
+        "imports.",
+        "jar.",
+        "java_class.",
+        "jpeg.",
+        "json.",
+        "lnk.",
+        "macho.",
+        "members.",
+        "oci.",
+        "office.",
+        "parse.",
+        "pdf.",
+        "pe.",
+        "pickle.",
+        "png.",
+        "pyc.",
+        "registry.",
+        "rtf.",
+        "sections.",
+        "source.",
+        "strings.",
+        "text.",
+        "vsix.",
+        "wasm.",
+        "whl.",
+    ];
+
+    FILEFACTS_PREFIXES
+        .iter()
+        .any(|prefix| field.starts_with(prefix))
 }
 
 fn format_reference_choices(ids: &[String]) -> String {
@@ -4196,53 +4287,11 @@ impl super::CapabilityMapper {
                     .collect();
             let mut invalid_metric_refs = Vec::new();
 
-            // Metric paths emitted by filefacts live in cleave's flat
-            // `filefacts_metrics` map (`BTreeMap<String, f64>`). The set
-            // of valid keys is open — filefacts adds new ones as
-            // extractors grow — so we accept any path under the
-            // namespaces filefacts owns. The strict-whitelist check
-            // below only fires for paths that don't match an
-            // filefacts-owned prefix AND aren't in the explicit
-            // language/encoding manifest.
-            const EXPOSE_PREFIXES: &[&str] = &[
-                "binary.",
-                "pe.",
-                "elf.",
-                "macho.",
-                "java_class.",
-                "sections.",
-                "strings.",
-                "imports.",
-                "exports.",
-                "functions.",
-                "dependencies.",
-                "parse.",
-                "consistency.",
-                // Source-AST metrics filefacts emits inline during the single
-                // walk: counts (`ast.call_count`, `ast.sequence_count`,
-                // `ast.identity_function_count`) and per-operator density
-                // (`ast.op.^`, `ast.op.%`, …). Open key set, like `binary.*`.
-                "ast.",
-                // Symbol-kind counts and derived call-target classification
-                // filefacts emits from the same walk: `calls.count`,
-                // `calls.obfuscated_target_count`, `calls.dynamic_target_count`,
-                // `binds.count`, `members.count`. Open key set.
-                "calls.",
-                "binds.",
-                "members.",
-                // Package-registry record metrics fletch materializes from an
-                // upstream listing (`registry.age_days`, `registry.downloads_recent`,
-                // `registry.downloads_total`, `registry.is_deprecated`). Open key
-                // set owned by the registry-record producer, like `binary.*`.
-                "registry.",
-            ];
-            let in_filefacts_namespace = |f: &str| EXPOSE_PREFIXES.iter().any(|p| f.starts_with(p));
-
             for trait_def in &trait_definitions {
                 if let crate::composite_rules::Condition::Metrics(MetricsQuery { field, .. }) =
                     &trait_def.r#if
                     && !valid_metric_fields.contains(field)
-                    && !in_filefacts_namespace(field)
+                    && !is_open_filefacts_metric_path(field)
                 {
                     let source_file = trait_source_files
                         .get(&trait_def.id)

@@ -1500,6 +1500,7 @@ fn report_from_file_analysis(fa: types::FileAnalysis, path: String) -> types::An
 /// its encoded-payload finding and every trait derived from the decoded
 /// content. Detection must not depend on whether a file was scanned standalone
 /// or as an archive member.
+#[allow(clippy::too_many_arguments)] // an analysis-pipeline pass-through; bundling would obscure it
 pub(crate) fn process_encoded_payloads(
     encoded_payloads: Vec<types::ExtractedPayload>,
     report: &mut types::AnalysisReport,

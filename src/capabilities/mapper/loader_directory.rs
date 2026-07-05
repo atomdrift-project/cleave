@@ -116,39 +116,6 @@ fn push_parsing_warning(
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::is_open_filefacts_metric_path;
-
-    #[test]
-    fn filefacts_metric_namespaces_are_open() {
-        for field in [
-            "chm.user_entry_count",
-            "chm.infotype_count",
-            "archive.member_count",
-            "image.width",
-            "wasm.import_count",
-            "registry.downloads_recent",
-        ] {
-            assert!(
-                is_open_filefacts_metric_path(field),
-                "{field} should be accepted as a filefacts metric path"
-            );
-        }
-
-        for field in [
-            "chmx.user_entry_count",
-            "chm_user_entry_count",
-            "xchm.user_entry_count",
-        ] {
-            assert!(
-                !is_open_filefacts_metric_path(field),
-                "{field} should not be accepted as a filefacts metric path"
-            );
-        }
-    }
-}
-
 fn find_non_leaf_yaml_files(yaml_files: &[std::path::PathBuf], root: &Path) -> Vec<String> {
     let mut yaml_dirs: Vec<_> = yaml_files
         .iter()
@@ -4731,5 +4698,38 @@ impl super::CapabilityMapper {
             platforms: vec![Platform::All],
             slow_rule_ms: Self::DEFAULT_SLOW_RULE_MS,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_open_filefacts_metric_path;
+
+    #[test]
+    fn filefacts_metric_namespaces_are_open() {
+        for field in [
+            "chm.user_entry_count",
+            "chm.infotype_count",
+            "archive.member_count",
+            "image.width",
+            "wasm.import_count",
+            "registry.downloads_recent",
+        ] {
+            assert!(
+                is_open_filefacts_metric_path(field),
+                "{field} should be accepted as a filefacts metric path"
+            );
+        }
+
+        for field in [
+            "chmx.user_entry_count",
+            "chm_user_entry_count",
+            "xchm.user_entry_count",
+        ] {
+            assert!(
+                !is_open_filefacts_metric_path(field),
+                "{field} should not be accepted as a filefacts metric path"
+            );
+        }
     }
 }

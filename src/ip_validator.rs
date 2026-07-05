@@ -65,15 +65,40 @@ fn ip_pattern() -> Option<&'static regex::Regex> {
 /// - Multicast (224.0.0.0/4)
 /// - Reserved (240.0.0.0/4)
 /// - Documentation ranges (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24)
-/// - Version-like (first octet 0-3)
+/// - Version-like (first octet 0-3, or a `.1.1` suffix)
 /// - IPs with any zero octet (technically sometimes routable, but noisy in static binary data)
+///
+/// The version-like rejections are heuristics for *bare* dotted-decimal text
+/// (`1.2.3.4`, `7.18.1.1`), which is far more often a version than a host. When
+/// the address is anchored to a URL scheme (see [`is_external_ip_ctx`]) those
+/// heuristics are skipped, since `http://1.2.3.4/` is unambiguously a host.
+// Default-context (non-URL-anchored) entry point. Production reaches the core
+// through `validate_external_ip_string_ctx`; this named shim is what the unit
+// tests exercise the bare-literal behavior through.
+#[allow(dead_code)]
 #[must_use]
 pub(crate) fn is_external_ip(ip: &Ipv4Addr) -> bool {
+    is_external_ip_ctx(ip, false)
+}
+
+/// Context-aware core of [`is_external_ip`].
+///
+/// When `url_scheme_anchored` is true, the IPv4 literal was found immediately
+/// after a `://` URL scheme (e.g. `http://2.27.62.51/`), which makes it a host
+/// address, not a dotted version string. In that case the version-string
+/// heuristics (first octet ≤ 3, and the `.1.1` "looks like a version" suffix)
+/// are skipped. Every genuinely non-routable range (private, loopback,
+/// link-local, multicast, reserved, documentation, and any zero octet) is still
+/// rejected regardless of context. This recovers real C2 hosts in the routable
+/// 1/2/3.0.0.0/8 blocks (e.g. RIPE `2.0.0.0/8`) without reintroducing bare
+/// version-string false positives.
+#[must_use]
+fn is_external_ip_ctx(ip: &Ipv4Addr, url_scheme_anchored: bool) -> bool {
     let octets = ip.octets();
 
     // Reject any zero octet. These may be technically routable in some cases,
     // but are disproportionately version values or arbitrary bytes in static
-    // analysis output.
+    // analysis output. Enforced even in URL context.
     if octets.contains(&0) {
         return false;
     }
@@ -126,26 +151,33 @@ pub(crate) fn is_external_ip(ip: &Ipv4Addr) -> bool {
         return false;
     }
 
-    // Reject IPs that look like version strings (low first octet often indicates
-    // misinterpreted data, e.g., 1.2.3.4 could be version "1.2.3.4")
-    if octets[0] <= 3 {
-        return false;
-    }
+    // Version-string heuristics. A bare dotted-decimal is far more often a
+    // version than a host, but a URL-scheme-anchored address never is — so
+    // these are skipped when `url_scheme_anchored`.
+    if !url_scheme_anchored {
+        // Reject IPs that look like version strings (low first octet often
+        // indicates misinterpreted data, e.g., 1.2.3.4 could be version "1.2.3.4")
+        if octets[0] <= 3 {
+            return false;
+        }
 
-    // Reject IPs ending in .1.1 - these are almost always version numbers
-    // (e.g., "7.18.1.1" looks like version 7.18.1.1, not a real C2 server)
-    if octets[2] == 1 && octets[3] == 1 {
-        return false;
-    }
+        // Reject IPs ending in .1.1 - these are almost always version numbers
+        // (e.g., "7.18.1.1" looks like version 7.18.1.1, not a real C2 server)
+        if octets[2] == 1 && octets[3] == 1 {
+            return false;
+        }
 
-    // Reject IPs ending in .0.0 - often padding/garbage
-    if octets[2] == 0 && octets[3] == 0 {
-        return false;
-    }
+        // Reject IPs ending in .0.0 - often padding/garbage
+        // (also covered by the zero-octet reject above)
+        if octets[2] == 0 && octets[3] == 0 {
+            return false;
+        }
 
-    // Reject IPs ending in .0.1 - often version strings or test data
-    if octets[2] == 0 && octets[3] == 1 {
-        return false;
+        // Reject IPs ending in .0.1 - often version strings or test data
+        // (also covered by the zero-octet reject above)
+        if octets[2] == 0 && octets[3] == 1 {
+            return false;
+        }
     }
 
     true
@@ -198,8 +230,20 @@ fn parse_octet_fast(s: &str) -> Option<u8> {
 /// (not private/loopback/reserved).
 ///
 /// Returns Some(Ipv4Addr) if the IP is valid and external, None otherwise.
+// Default-context shim over `validate_external_ip_string_ctx`; production calls
+// the ctx form directly (with URL-anchor awareness), so this stays for the
+// bare-literal unit tests. See [`is_external_ip`].
+#[allow(dead_code)]
 #[must_use]
 pub(crate) fn validate_external_ip_string(ip_str: &str) -> Option<Ipv4Addr> {
+    validate_external_ip_string_ctx(ip_str, false)
+}
+
+/// Like [`validate_external_ip_string`], but skips the version-string
+/// heuristics when `url_scheme_anchored` is true (the literal directly follows a
+/// `://` URL scheme). See [`is_external_ip_ctx`].
+#[must_use]
+fn validate_external_ip_string_ctx(ip_str: &str, url_scheme_anchored: bool) -> Option<Ipv4Addr> {
     // Parse all four octets inline using split('.') without collecting to Vec
     let mut octets = [0u8; 4];
     let mut parts = ip_str.split('.');
@@ -213,7 +257,19 @@ pub(crate) fn validate_external_ip_string(ip_str: &str) -> Option<Ipv4Addr> {
 
     let ip = Ipv4Addr::new(octets[0], octets[1], octets[2], octets[3]);
 
-    if is_external_ip(&ip) { Some(ip) } else { None }
+    if is_external_ip_ctx(&ip, url_scheme_anchored) {
+        Some(ip)
+    } else {
+        None
+    }
+}
+
+/// True when the bytes immediately before `start` are a `://` URL scheme
+/// separator — i.e. the IPv4 at `start` is the host of a URL such as
+/// `http://45.33.32.156/` or `socks5://2.27.62.51:1080`. A host address is never
+/// a dotted version string, so the version-string heuristics are relaxed for it.
+fn preceded_by_url_scheme(bytes: &[u8], start: usize) -> bool {
+    start >= 3 && &bytes[start - 3..start] == b"://"
 }
 
 /// Validate an IP address string as a structurally valid IPv4 of any range.
@@ -349,7 +405,10 @@ pub(crate) fn contains_external_ip(text: &str) -> bool {
         if embedded_in_dotted_run(bytes, m.start(), m.end()) {
             continue;
         }
-        if validate_external_ip_string(m.as_str()).is_some() {
+        // A `://`-anchored literal is a URL host, not a version string, so the
+        // version-string heuristics (low first octet, `.1.1` suffix) are relaxed.
+        let url_anchored = preceded_by_url_scheme(bytes, m.start());
+        if validate_external_ip_string_ctx(m.as_str(), url_anchored).is_some() {
             return true;
         }
     }
@@ -447,6 +506,39 @@ mod tests {
         assert!(!is_external_ip(&Ipv4Addr::new(1, 2, 3, 4)));
         assert!(!is_external_ip(&Ipv4Addr::new(2, 0, 0, 1)));
         assert!(!is_external_ip(&Ipv4Addr::new(3, 14, 159, 26)));
+    }
+
+    #[test]
+    fn test_external_ip_url_scheme_context() {
+        // Routable low-first-octet hosts (1/2/3.0.0.0/8) are version-noise in
+        // bare text but are real hosts when anchored to a URL scheme.
+        // Bare/strict path keeps rejecting them:
+        assert!(!is_external_ip(&Ipv4Addr::new(2, 27, 62, 51)));
+        assert!(!is_external_ip(&Ipv4Addr::new(1, 1, 1, 1)));
+        // URL-anchored context accepts the routable address:
+        assert!(is_external_ip_ctx(&Ipv4Addr::new(2, 27, 62, 51), true));
+        assert!(is_external_ip_ctx(&Ipv4Addr::new(1, 1, 1, 1), true));
+        assert!(is_external_ip_ctx(&Ipv4Addr::new(7, 18, 1, 1), true)); // .1.1 suffix
+
+        // Regression: the base58-core clipper's C2 endpoint. Its IPv4 host lives
+        // in RIPE's routable 2.0.0.0/8 and MUST be recognized in a URL.
+        assert!(contains_external_ip("http://2.27.62.51:8080/api/health"));
+        assert!(contains_external_ip("http://2.27.62.51/api"));
+        assert!(contains_external_ip("socks5://3.14.159.26:1080"));
+        assert!(contains_external_ip("https://1.1.1.1/"));
+
+        // Bare (non-URL) low-octet dotted decimals stay treated as versions.
+        assert!(!contains_external_ip("2.27.62.51"));
+        assert!(!contains_external_ip("version 2.27.62.51 released"));
+        assert!(!contains_external_ip("v1.2.3.4"));
+
+        // URL context does NOT override genuinely non-routable ranges.
+        assert!(!contains_external_ip("http://192.168.1.1/admin"));
+        assert!(!contains_external_ip("http://10.0.0.1/"));
+        assert!(!contains_external_ip("http://127.0.0.1/"));
+        assert!(!contains_external_ip("http://169.254.1.1/"));
+        // A zero octet is still rejected even with a scheme.
+        assert!(!contains_external_ip("http://45.0.0.1/"));
     }
 
     #[test]

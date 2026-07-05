@@ -476,6 +476,13 @@ impl AnalysisReport {
         }
         if added > 0 {
             self.summary = Some(ReportSummary::from_files(&self.files));
+            // `finalize()` resolved composite source trails before this graft, so
+            // the just-added package composites have none. Re-run the attribution
+            // (merge, not replace — see `attach_composite_sources`) so each picks
+            // up the `↳ member:line` provenance of the legs it fired on, including
+            // a registry/provenance child linked to this node. Cheap: graft runs
+            // once per correlated artifact, before `strip` drops the legs it reads.
+            Self::attach_composite_sources(&mut self.files);
         }
         added
     }
@@ -1174,8 +1181,16 @@ impl AnalysisReport {
                     };
                     for &mi in idxs {
                         let member = &files[mi];
-                        if mi == ci || !member.path.starts_with(&prefix) {
-                            continue; // not a member below this container
+                        // A source is either an archive member nested under this
+                        // container's path, or a grafted direct child (linked by
+                        // `parent_id`, not path) — e.g. the `*.registry.json`
+                        // provenance node the fetch pass hangs off the artifact.
+                        // A package-scoped composite's registry leg lives on the
+                        // latter, so path-prefix alone would drop it.
+                        let is_member = member.path.starts_with(&prefix);
+                        let is_child = member.parent_id == Some(container.id);
+                        if mi == ci || (!is_member && !is_child) {
+                            continue; // neither a nested member nor a direct child
                         }
                         let entry = by_member
                             .entry(member.id)
@@ -1210,8 +1225,13 @@ impl AnalysisReport {
             }
         }
 
+        // Merge, don't replace: `link_flagged_references` also records
+        // `composite_sources` (for flagged-reference findings, which carry no
+        // `trait_refs` and are skipped above), and a re-run after the fetch graft
+        // (`refresh_composite_sources`) must not clobber those. Keys are finding
+        // ids, so extend refreshes each composite's own entry in place.
         for (ci, map) in resolved {
-            files[ci].composite_sources = map;
+            files[ci].composite_sources.extend(map);
         }
     }
 
@@ -2378,6 +2398,98 @@ mod tests {
             s2.offset,
             Some(0x1234),
             "binary component carries its offset"
+        );
+    }
+
+    #[test]
+    fn graft_reattaches_sources_across_member_and_registry_child() {
+        // The fetch pass shape: a package-scoped composite grafted onto the
+        // artifact node after finalize, whose legs live on (a) an archive member
+        // and (b) a grafted `registry` child that is NOT under the container's
+        // archive path (linked by `parent_id`). Grafting must re-resolve sources
+        // so both legs surface — the member by path, the registry leg by parent.
+        use super::super::file_analysis::ARCHIVE_DELIMITER;
+        use super::super::traits_findings::{ContextLine, Note};
+
+        let mut report = AnalysisReport::new(test_target());
+
+        // Artifact/container node (the graft target).
+        let mut artifact = FileAnalysis::new(
+            0,
+            "/pkg.tgz".into(),
+            "tar.gz".into(),
+            "artifactsha".into(),
+            100,
+        );
+        artifact.findings = vec![];
+
+        // Archive member carrying the code leg, anchored to a source line.
+        let mut member = FileAnalysis::new(
+            1,
+            format!("/pkg.tgz{ARCHIVE_DELIMITER}pkg/install.js"),
+            "javascript".into(),
+            "membersha".into(),
+            20,
+        );
+        member.parent_id = Some(0);
+        member.depth = 1;
+        member.findings = vec![test_finding(
+            "objectives/exfiltration::post",
+            Criticality::Component,
+        )];
+        member.context = vec![ContextLine {
+            loc: 12,
+            addr: Some(200),
+            data: b"fetch(url, {method:'POST'})".to_vec(),
+            notes: vec![Note {
+                crit: Criticality::Component,
+                id: "objectives/exfiltration::post".into(),
+                desc: String::new(),
+                off: 200,
+                len: 5,
+                conf: 0.9,
+            }],
+        }];
+
+        // Registry provenance child: a direct child of the artifact by parent_id,
+        // path is the synthetic registry doc name (NOT under the archive prefix).
+        let mut registry = FileAnalysis::new(
+            2,
+            "be5invis_iosevka.registry.json".into(),
+            "registry".into(),
+            "regsha".into(),
+            64,
+        );
+        registry.parent_id = Some(0);
+        registry.depth = 1;
+        registry.findings = vec![test_finding(
+            "metadata/registry::freshly-published",
+            Criticality::Notable,
+        )];
+
+        report.files = vec![artifact, member, registry];
+
+        // Graft the package composite carrying both legs in trait_refs.
+        let mut composite = test_finding("supply-chain::obfuscated-exfil", Criticality::Hostile);
+        composite.trait_refs = vec![
+            "objectives/exfiltration::post".into(),
+            "metadata/registry::freshly-published".into(),
+        ];
+        assert_eq!(report.graft_findings("artifactsha", vec![composite]), 1);
+
+        // The graft must have re-run source attribution: the composite now trails
+        // both its member (code) leg and its registry (provenance) child.
+        let sources = report.files[0]
+            .composite_sources
+            .get("supply-chain::obfuscated-exfil")
+            .expect("graft re-attached composite sources");
+        assert!(
+            sources.iter().any(|s| s.file == 1 && s.line == Some(12)),
+            "archive-member code leg tracked with its line, got: {sources:?}"
+        );
+        assert!(
+            sources.iter().any(|s| s.file == 2),
+            "registry provenance child tracked via parent_id, got: {sources:?}"
         );
     }
 

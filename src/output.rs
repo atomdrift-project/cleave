@@ -626,8 +626,9 @@ pub fn format_context_badged(
 
     // Cross-file composite provenance was resolved at finalize into each
     // container's `composite_sources` (finding id → member files + locations).
-    // Map member file id → path so those sources render as readable members.
-    let id_to_path: HashMap<u32, &str> = files.iter().map(|f| (f.id, f.path.as_str())).collect();
+    // Map member file id → its analysis so those sources render as readable
+    // members (path for archive members, reconstructed purl for a registry node).
+    let id_to_file: HashMap<u32, &FileAnalysis> = files.iter().map(|f| (f.id, *f)).collect();
 
     let mut out = String::with_capacity(4096);
     let mut emitted = false;
@@ -745,7 +746,7 @@ pub fn format_context_badged(
             file,
             &selected,
             &windowed,
-            &id_to_path,
+            &id_to_file,
             opts,
             shows_context,
             colorize,
@@ -842,11 +843,13 @@ fn native_finding_depths<'a>(files: &[&'a FileAnalysis]) -> HashMap<&'a str, u32
 /// path of each member it drew from, suffixed with a location (`:line` for
 /// source, `@0x<off>` for binary) when one is known. Reads the provenance
 /// resolved at finalize (`file.composite_sources`), resolving member file ids to
-/// paths via `id_to_path`. Empty when the finding isn't a cross-file composite.
+/// their analysis via `id_to_file`. A registry/provenance leg (not an archive
+/// member) renders as `registry/<purl>` instead of a member path. Empty when the
+/// finding isn't a cross-file composite.
 fn composite_source_trail(
     container: &FileAnalysis,
     finding_id: &str,
-    id_to_path: &HashMap<u32, &str>,
+    id_to_file: &HashMap<u32, &FileAnalysis>,
 ) -> Vec<String> {
     use crate::types::file_analysis::ARCHIVE_DELIMITER;
     let Some(sources) = container.composite_sources.get(finding_id) else {
@@ -857,8 +860,17 @@ fn composite_source_trail(
     sources
         .iter()
         .map(|s| {
-            let path = id_to_path.get(&s.file).copied().unwrap_or("?");
-            let rel = path.strip_prefix(&prefix).unwrap_or(path);
+            let Some(&file) = id_to_file.get(&s.file) else {
+                return "?".to_string();
+            };
+            // A registry node is a grafted provenance leg, not an archive member:
+            // show it as `registry/<purl>` rebuilt from its registry.* facts, so
+            // the trail reads as a package identity rather than the synthetic
+            // `*.registry.json` filename.
+            if let Some(purl) = registry_purl(file) {
+                return format!("registry/{purl}");
+            }
+            let rel = file.path.strip_prefix(&prefix).unwrap_or(&file.path);
             let rel = rel.replace(ARCHIVE_DELIMITER, "/");
             match (s.line, s.offset) {
                 (Some(line), _) => format!("{rel}:{line}"),
@@ -867,6 +879,25 @@ fn composite_source_trail(
             }
         })
         .collect()
+}
+
+/// Reconstruct a package URL from a registry node's flattened `registry.*` facts
+/// (`registry.ecosystem`/`name`/`version`, from filefacts). `None` for any
+/// non-registry file. Used to render a package-scoped composite's provenance leg
+/// as `registry/<purl>` in its source trail.
+fn registry_purl(file: &FileAnalysis) -> Option<String> {
+    if file.file_type != "registry" {
+        return None;
+    }
+    let fact = |k: &str| file.kv.get(k).and_then(|v| v.as_str());
+    let ecosystem = fact("registry.ecosystem")?;
+    let name = fact("registry.name")?;
+    let mut purl = format!("pkg:{ecosystem}/{name}");
+    if let Some(version) = fact("registry.version") {
+        purl.push('@');
+        purl.push_str(version);
+    }
+    Some(purl)
 }
 
 /// Append `block` to `out`, indenting every non-empty line by `depth` levels
@@ -2068,7 +2099,7 @@ fn render_no_anchor(
     file: &FileAnalysis,
     selected: &[&str],
     windowed: &HashSet<&str>,
-    id_to_path: &HashMap<u32, &str>,
+    id_to_file: &HashMap<u32, &FileAnalysis>,
     opts: &TinyOpts,
     context_shown: bool,
     colorize: bool,
@@ -2137,7 +2168,7 @@ fn render_no_anchor(
         }
         // A cross-file composite names the members it drew from, aligned under
         // the description on a dim trailing line.
-        let members = composite_source_trail(file, &f.id, id_to_path);
+        let members = composite_source_trail(file, &f.id, id_to_file);
         if !members.is_empty() {
             const MAX_MEMBERS: usize = 5;
             let trail = if members.len() > MAX_MEMBERS {
@@ -2994,6 +3025,107 @@ mod tests {
         assert!(
             !on_container,
             "duplicated member atomic must not render on the container, got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn registry_purl_rebuilds_from_registry_facts() {
+        let mut reg = FileAnalysis::new(
+            0,
+            "be5invis_iosevka.registry.json".to_string(),
+            "registry".to_string(),
+            "sha".to_string(),
+            64,
+        );
+        // Non-registry file: no purl regardless of any kv.
+        let mut js = FileAnalysis::new(1, "/a.js".into(), "javascript".into(), "s2".into(), 8);
+        js.kv
+            .insert("registry.ecosystem".into(), serde_json::json!("github"));
+        assert_eq!(registry_purl(&js), None, "non-registry file yields no purl");
+
+        // A versionless registry node drops the `@version` suffix.
+        reg.kv
+            .insert("registry.ecosystem".into(), serde_json::json!("github"));
+        reg.kv.insert(
+            "registry.name".into(),
+            serde_json::json!("be5invis/iosevka"),
+        );
+        assert_eq!(
+            registry_purl(&reg).as_deref(),
+            Some("pkg:github/be5invis/iosevka")
+        );
+
+        // With a version it is appended.
+        reg.kv
+            .insert("registry.version".into(), serde_json::json!("34.7.0"));
+        assert_eq!(
+            registry_purl(&reg).as_deref(),
+            Some("pkg:github/be5invis/iosevka@34.7.0")
+        );
+
+        // Missing name → no purl (a fact's absence is meaningful).
+        reg.kv.remove("registry.name");
+        assert_eq!(registry_purl(&reg), None);
+    }
+
+    #[test]
+    fn composite_source_trail_shows_member_and_registry_provenance() {
+        use crate::types::file_analysis::{ARCHIVE_DELIMITER, CompositeSource};
+
+        let fid = "supply-chain::obfuscated-exfil";
+        let mut container =
+            FileAnalysis::new(0, "/pkg.tgz".into(), "tar.gz".into(), "s0".into(), 100);
+        container.composite_sources.insert(
+            fid.to_string(),
+            vec![
+                CompositeSource {
+                    file: 1,
+                    line: Some(12),
+                    offset: Some(200),
+                },
+                CompositeSource {
+                    file: 2,
+                    line: None,
+                    offset: Some(0),
+                },
+            ],
+        );
+
+        let member = FileAnalysis::new(
+            1,
+            format!("/pkg.tgz{ARCHIVE_DELIMITER}pkg/install.js"),
+            "javascript".into(),
+            "s1".into(),
+            20,
+        );
+        let mut registry = FileAnalysis::new(
+            2,
+            "be5invis_iosevka.registry.json".into(),
+            "registry".into(),
+            "s2".into(),
+            64,
+        );
+        registry
+            .kv
+            .insert("registry.ecosystem".into(), serde_json::json!("github"));
+        registry.kv.insert(
+            "registry.name".into(),
+            serde_json::json!("be5invis/iosevka"),
+        );
+
+        let id_to_file: HashMap<u32, &FileAnalysis> =
+            [(1u32, &member), (2u32, &registry)].into_iter().collect();
+
+        let trail = composite_source_trail(&container, fid, &id_to_file);
+        // The code leg renders as a member path + line; the provenance leg as a
+        // reconstructed purl, not the synthetic `*.registry.json` filename.
+        assert!(
+            trail.contains(&"pkg/install.js:12".to_string()),
+            "archive member leg with line, got: {trail:?}"
+        );
+        assert!(
+            trail.contains(&"registry/pkg:github/be5invis/iosevka".to_string()),
+            "registry provenance leg as registry/<purl>, got: {trail:?}"
         );
     }
 

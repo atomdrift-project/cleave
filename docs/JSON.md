@@ -16,46 +16,90 @@ For the library that produces these reports, see
 Consumers should treat unknown versions as a hard error.
 
 
-## Compact JSON v7
+## Compact JSON v8
 
-The CLI `--json` output uses compact schema v7. The top-level object is:
+The CLI `--json` output uses compact schema v8 (`src/types/compact.rs`). Each
+`files[]` entry is fully self-contained — splittable for per-file DB storage.
+The top-level object is:
 
 | JSON | Type | Meaning |
 | ---- | ---- | ------- |
-| `v` | string | Compact schema version, currently `"7"`. |
+| `v` | string | Compact schema version, currently `"8"`. |
+| `rev` | string | Traits-repo revision (first 8 chars of commit hash). Omitted if unknown. |
 | `files` | array | Per-file compact records. |
 
-Byte offsets in the compact report carry no `0x` prefix, and each context uses
-its slimmest valid-JSON encoding:
+Byte offsets in the compact report are **bare integers**, not `0x`-prefixed hex
+strings — a standalone JSON integer is smaller than a quoted hex string. (The
+verbose `Trait`/`Function`/`Section` types further down still use `0x`-prefixed
+hex strings; that representation is unchanged.)
 
-- `fact` tuple offsets are **bare integers** (`["__text", 1816, …]`). A standalone
-  JSON integer is smaller than a quoted hex string — the two `"` cost more than
-  hex saves in digits — so numbers win here.
-- A trait's evidence locations (`loc`) are **single strings** of the form
-  `"<file-id>:<offset>"` (e.g. `"7:3718c0"`). The offset is already inside a
-  string, so hex is the compact choice there (fewer digits, no extra quotes).
+### `files[]` entry
 
-(The verbose `Trait`/`Function`/`Section` types further down still use
-`0x`-prefixed hex strings; that representation is unchanged.)
+| JSON | Type | Meaning |
+| ---- | ---- | ------- |
+| `id` | u32 | Sequential file id, referenced by `refs.file` and `from.file`. |
+| `path` | string | File path; archive members use the `!!` delimiter. |
+| `type` | string | File type, e.g. `pe`, `elf`, `macho`, `python`, `zip`. |
+| `sha` | string | SHA-256. |
+| `size` | u64 | File size in bytes. |
+| `risk` | u32 | Weighted risk score. Omitted when 0. |
+| `depth` | u32 | Archive nesting depth. Omitted when 0. |
+| `mol` | string | Molecular formula. Omitted if absent. |
+| `ident` | `Identity` | Normalised identity claims: name, version, signer, trust tier (from filefacts). Omitted if absent. |
+| `traits` | array | Findings, as compact traits (below). Omitted if empty. |
+| `refs` | array | Declared references (deps, URLs, repository) — the file→dependency edges. Omitted if empty. |
+| `ctx` | array | Merged context windows: raw match-highlight bytes in file order. Omitted if empty. |
+| `facts` | object | Dense filefacts-derived facts (below). Omitted if empty. |
 
-Each `files[]` entry keeps cleave verdict data at the file level and packs filefacts data under `fact`. The `fact` object is intentionally not a lossless mirror of the full report; it is the dense, ML/UI-oriented fact surface.
+### Compact trait (`traits[]`)
 
-| `fact` key | Meaning |
-| ---------- | ------- |
-| `id` | File identity/type from filefacts, such as `pe`, `elf`, `macho`, `js`, or `zip`. |
-| `met` | Metrics grouped by prefix: `{"binary":{"overall_entropy":7.12}}` instead of flat `binary.overall_entropy`. |
-| `val` | Residual values only. Typed fact families are not duplicated here. |
-| `str` | Strings as `[offset, encoding, value]`. |
-| `imp` | Imports as `[library, symbol]` or `[library, symbol, offset]`. |
-| `exp` | Exports as `[symbol]` or `[symbol, offset]`. |
-| `fn` | Functions as `[name]`, `[name, offset]`, or `[name, offset, kind]`. |
+| JSON | Type | Meaning |
+| ---- | ---- | ------- |
+| `id` | string | Trait id, e.g. `objectives/execution/shell/bash`. |
+| `crit` | u8 | Criticality ordinal 0–5 (see below). |
+| `desc` | string | Description. Omitted if empty. |
+| `conf` | f32 | Confidence. Omitted when `0.5`. |
+| `mbc` | string | MBC id. Omitted if unset. |
+| `atk` | string | ATT&CK technique. Omitted if unset. |
+| `from` | array | Cross-file composite provenance: `{file, line?, off?}` per contributing member. Omitted when the finding is native to this file. |
+| `spans` | array | Evidence byte spans `[[offset, length], …]`, capped at 8. Locate matches in `ctx` by range intersection. Omitted if empty. |
+
+`from[].line` carries the 1-based source line of a component match when known —
+so a composite that fires across members cites each leg down to the line.
+
+### Compact reference (`refs[]`)
+
+Byte-anchored file→target edges (consumed by prism's galaxy view):
+
+| JSON | Type | Meaning |
+| ---- | ---- | ------- |
+| `to` | string | Locator: a PURL/URL for an external target, or the raw specifier (e.g. `./util`) for an internal one. |
+| `kind` | string | `dependency`, `command`, `url_fetch`, `repository`, … |
+| `off` | u64 | Byte offset of the reference — the citation anchor. |
+| `file` | u32 | When the reference resolves to another file in this bundle, that file's `id` (the intra-bundle file→file edge). Absent for external targets. |
+
+Local references resolve to sibling members via
+`src/types/reference_graph.rs` (relative-path join bounded by the archive
+container, Node-style extension/index resolution). A package registry lookup is
+grafted onto the artifact node as its own `registry` file whose provenance leg a
+package-scoped composite can then reference.
+
+### Compact facts (`facts`)
+
+| JSON | Meaning |
+| ---- | ------- |
+| `metrics` | Metrics tree, floats rounded to 2 dp (from filefacts' flat metric map). |
+| `imp` | Imports as `[library, name]` or `[library, name, ordinal]`. |
+| `exp` | Exports as `[name]` or `[name, forward_to]`. |
+| `funcs` | Functions as `[name]`, `[name, offset]`, or `[name, offset, kind]`. |
 | `sec` | Sections as `[name, file_offset, file_size, entropy, flags]`. |
 | `tgt` | Source AST call targets. |
 | `mbr` | Source AST member chains. |
-| `arg` | Source AST string call arguments as `[callee, value]`. |
-| `err` | Recoverable parse errors as `[kind, stage]`. |
 
-The important invariant is that `fact.val` is residual. If a fact has a typed family (`str`, `imp`, `exp`, `fn`, `sec`, `tgt`, `mbr`, `arg`, or `err`), it must not also be emitted under `fact.val` by default.
+Each field is omitted when empty. The `facts` block is intentionally not a
+lossless mirror of the full report; it is the dense, ML/UI-oriented fact
+surface. Extracted strings are not duplicated here — they surface as the raw
+bytes of the `ctx` context windows.
 
 ## Top-level shape
 
@@ -69,20 +113,21 @@ are omitted from JSON when empty or `None`.
 | `target`              | `TargetInfo`                  | Input metadata: path, type, size, SHA-256, architectures.        |
 | `traits`              | array of `Trait`              | Observable facts. No interpretation.                             |
 | `findings`            | array of `Finding`            | Interpretive conclusions: capabilities, indicators, weaknesses.  |
+| `context`             | array of `ContextLine`        | Merged match-highlight windows: raw bytes in file order.         |
 | `structure`           | array of `StructuralFeature`  | Binary-format properties: packing, entropy, obfuscation.         |
 | `functions`           | array of `Function`           | Disassembled functions with complexity and CFG metrics.          |
 | `strings`             | array of `StringInfo`         | Extracted literals.                                              |
+| `comments`            | array of `StringInfo`         | Source comments extracted from parsed code.                     |
 | `sections`            | array of `Section`            | Binary sections with entropy and permissions.                    |
 | `imports`             | array of `Import`             | Imported symbols.                                                |
 | `exports`             | array of `Export`             | Exported symbols.                                                |
 | `yara_matches`        | array of `YaraMatch`          | YARA rule matches with matched strings.                          |
 | `syscalls`            | array of `SyscallInfo`        | Syscalls observed in disassembly.                                |
-| `binary_properties`   | `BinaryProperties`            | Format-specific: PE manifests and signing, Mach-O entitlements, DWARF producer. |
-| `code_metrics`        | `CodeMetrics`                 | Cyclomatic complexity, nesting depth, CFG stats.                 |
-| `source_code_metrics` | `SourceCodeMetrics`           | Import counts, class counts, function metrics.                   |
-| `overlay_metrics`     | `OverlayMetrics`              | Appended overlay data (self-extracting archives).                |
-| `metrics`             | `Metrics`                     | Unified feature vector for downstream ML.                        |
-| `values_tree`             | JSON object                   | Format-specific metadata: manifest, DWARF, EXIF, etc.            |
+| `filefacts`           | `FilefactsView`               | Format-specific metadata from filefacts: PE manifests and signing, Mach-O entitlements, DWARF producer, etc. |
+| `identity`            | `Identity`                    | Normalised identity claims: name, version, signer, trust tier.   |
+| `values_tree`         | JSON object                   | Format-specific metadata: manifest, DWARF, EXIF, etc.            |
+| `filefacts_metrics`   | object                        | Flat numeric metric map, e.g. `{"binary.overall_entropy": 7.12}`. The sole numeric metric surface. |
+| `filefacts_metric_spans` | object                     | Byte-span provenance for located metrics: metric name → `[Span, …]` where each was measured. |
 | `paths`               | array of `PathInfo`           | Discovered file and directory paths with access patterns.        |
 | `directories`         | array of `DirectoryAccess`    | Paths grouped by parent directory.                               |
 | `env_vars`            | array of `EnvVarInfo`         | Environment variable references.                                 |
@@ -172,6 +217,12 @@ the names. Score weights below are what feeds the litmus model.
 Composite rules combine `Component` traits to produce higher-criticality
 findings; component traits are suppressed from output unless the
 composite fires.
+
+There is one further, assembly-only criticality — `Exception` — used purely as
+a benign-context leg inside composite `unless:`/`downgrade:` clauses (e.g. to
+signal intent that suppresses a match). Exception findings are stripped before
+serialization and never appear in output; in the compact context-note wire
+encoding they would carry ordinal `6`, past the emitted `0..=5` range.
 
 ## Binary-format types
 

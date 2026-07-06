@@ -13,6 +13,9 @@ cleave identifies files by magic bytes, extension, filename, and content heurist
 | Java class | `.class` | Compiled Java bytecode |
 | Python bytecode | `.pyc` | CPython compiled bytecode |
 | Python pickle | `.pkl`, `.pickle`, `.joblib`, `.pt`, `.pth` | Serialized Python object |
+| WebAssembly | `.wasm` | WebAssembly binary module (Go/TinyGo/Rust/Emscripten target) |
+| Android DEX | `.dex` | Dalvik executable bytecode |
+| Erlang/Elixir BEAM | `.beam` | Compiled BEAM VM bytecode |
 | AppleScript (compiled) | `.scpt`, `.applescript` | Compiled AppleScript binary |
 
 ## Source Code
@@ -42,9 +45,12 @@ Parsed with tree-sitter where available; otherwise extension or shebang.
 | Scala | `.scala`, `.sc` |
 | Zig | `.zig` |
 | Elixir | `.ex`, `.exs` |
+| Clojure | `.clj`, `.cljs`, `.cljc`, `.edn`, `.bb` |
 | Batch | `.bat`, `.cmd` |
 | VBScript | `.vbs`, `.vbe`, `.wsf`, `.wsc` |
+| JCL | `.jcl` |
 | Makefile | `Makefile`, `GNUmakefile`, `.mk`, `.mak` |
+| Dockerfile | `Dockerfile`, `Containerfile` |
 
 ## Archives
 

@@ -59,6 +59,15 @@ pub struct CompactFile {
     #[serde(rename = "depth")]
     #[serde(skip_serializing_if = "super::is_zero_u32")]
     pub depth: u32,
+    /// Compact `id` of the archive/container this file was extracted from — the
+    /// structural parent edge, `None` for the root. Lets a downstream consumer
+    /// rebuild the archive tree and identify containers (a file is a container
+    /// iff some file's `pid` points at it) without parsing the `!!`/`!` path
+    /// delimiters, which nest inconsistently. Ids are stable: the compact `id`
+    /// is the source `FileAnalysis.id`, so `pid` indexes `files[]` directly.
+    #[serde(rename = "pid")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent: Option<u32>,
     /// Molecular formula
     #[serde(rename = "mol")]
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -670,6 +679,7 @@ fn convert_file(file: &super::file_analysis::FileAnalysis, id: u32) -> CompactFi
         size: file.size,
         risk: file.score,
         depth: file.depth,
+        parent: file.parent_id,
         formula,
         identity: file.identity.clone(),
         findings: traits,

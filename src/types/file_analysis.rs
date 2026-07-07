@@ -36,11 +36,59 @@ pub struct CompositeSource {
     pub offset: Option<u64>,
 }
 
+/// How a file relates to its structural parent (`parent_id`). The compact
+/// output omits the ordinary containment case (`Member`); a root file is
+/// identified by an absent `pid`, not by a `rel`. Orthogonal to [`Role`]: a
+/// `.SRCINFO` is `Member` (physically in the archive) yet `Role::Sidecar`
+/// (package metadata), while a fetched tarball is `Fetched` yet `Role::Content`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Rel {
+    /// Ordinary archive/container member. Default; omitted from output.
+    #[default]
+    Member,
+    /// Fetched over the network from a reference in the parent (e.g. a PKGBUILD
+    /// `source=()` URL). The resolved locator rides in [`FileAnalysis::via`].
+    Fetched,
+    /// Unpacked or decoded from the parent by a transform (UPX, base64, …).
+    Unpacked,
+    /// A registry/provenance record looked up for the parent package.
+    Registry,
+}
+
+impl Rel {
+    /// Whether this is the default containment edge (omitted from output).
+    pub(crate) fn is_member(&self) -> bool {
+        matches!(self, Rel::Member)
+    }
+}
+
+/// How analysis, ML, and presentation should treat a file. The compact output
+/// omits the ordinary `Content` case. Orthogonal to [`Rel`] — see its note.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Role {
+    /// Real extracted bytes: fully analyzed and byte-scored. Default; omitted.
+    #[default]
+    Content,
+    /// Metadata about its `pid` (registry/provenance/manifest). Analyzed from
+    /// its own canonical bytes — its traits feed the sample's ML features — but
+    /// it is not byte-scored as standalone content.
+    Sidecar,
+}
+
+impl Role {
+    /// Whether this is the default content role (omitted from output).
+    pub(crate) fn is_content(&self) -> bool {
+        matches!(self, Role::Content)
+    }
+}
+
 /// Per-file analysis - the core unit in v2 schema
 ///
 /// Each file (root, archive member, or decoded payload) gets its own entry.
 /// This replaces the recursive sub_reports structure with a flat array.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct FileAnalysis {
     /// Unique ID within this report (sequential, 0-based)
     pub id: u32,
@@ -55,6 +103,19 @@ pub struct FileAnalysis {
 
     /// Nesting depth (0 = root, 1 = archive member, 2 = decoded content, etc.)
     pub depth: u32,
+
+    /// Edge type to `parent_id`: how this file was obtained. Omitted for the
+    /// default containment case. See [`Rel`].
+    #[serde(default, skip_serializing_if = "Rel::is_member")]
+    pub rel: Rel,
+
+    /// For `rel = Fetched`, the resolved locator (URL/PURL) it came from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub via: Option<String>,
+
+    /// Analysis participation. Omitted for `Content`. See [`Role`].
+    #[serde(default, skip_serializing_if = "Role::is_content")]
+    pub role: Role,
 
     /// Detected file type (e.g., "python", "elf", "archive")
     pub file_type: String,
@@ -207,6 +268,9 @@ impl FileAnalysis {
             path,
             parent_id: None,
             depth: 0,
+            rel: Rel::Member,
+            via: None,
+            role: Role::Content,
             file_type,
             arch: None,
             sha256,

@@ -65,12 +65,12 @@ pub use core::{
 
 pub use filefacts_view::FilefactsView;
 
-pub use file_analysis::FileAnalysis;
 #[allow(unused_imports)]
 pub(crate) use file_analysis::{
     ARCHIVE_DELIMITER, ENCODING_DELIMITER, FindingCounts, ReportSummary, encode_archive_path,
     encode_decoded_path,
 };
+pub use file_analysis::{FileAnalysis, Rel, Role};
 
 #[allow(unused_imports)]
 pub use traits_findings::{

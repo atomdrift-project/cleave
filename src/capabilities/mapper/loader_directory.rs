@@ -5,9 +5,6 @@
 //! This is the primary loading method used in production.
 
 use crate::capabilities::error_formatting::enhance_yaml_error;
-use crate::capabilities::indexes::{
-    RawContentRegexIndex, StringMatchIndex, SymbolMatchIndex, TraitIndex,
-};
 use crate::capabilities::models::TraitMappings;
 use crate::capabilities::parsing::{apply_composite_defaults, apply_trait_defaults};
 use crate::capabilities::validation::{
@@ -505,50 +502,10 @@ impl super::CapabilityMapper {
                                     cache_data.composite_rules.len()
                                 );
 
-                                // Rebuild indexes from cached trait definitions (in parallel)
-                                let (
-                                    ((trait_index, string_match_index), symbol_match_index),
-                                    raw_regex_result,
-                                ) = rayon::join(
-                                    || {
-                                        rayon::join(
-                                            || {
-                                                rayon::join(
-                                                    || {
-                                                        TraitIndex::build(
-                                                            &cache_data.trait_definitions,
-                                                        )
-                                                    },
-                                                    || {
-                                                        StringMatchIndex::build(
-                                                            &cache_data.trait_definitions,
-                                                        )
-                                                    },
-                                                )
-                                            },
-                                            || {
-                                                SymbolMatchIndex::build(
-                                                    &cache_data.trait_definitions,
-                                                )
-                                            },
-                                        )
-                                    },
-                                    || {
-                                        RawContentRegexIndex::build(&cache_data.trait_definitions)
-                                            .map_err(|errors| anyhow::anyhow!(errors.join("\n")))
-                                    },
-                                );
-                                let t2 = std::time::Instant::now();
-                                tracing::trace!(
-                                    "Index building took {:?} (StringMatchIndex: {} patterns, RawContentRegexIndex: {} patterns)",
-                                    t2.duration_since(t1),
-                                    string_match_index.total_patterns,
-                                    raw_regex_result
-                                        .as_ref()
-                                        .map(|i| i.total_patterns)
-                                        .unwrap_or(0),
-                                );
-                                let raw_content_regex_index = raw_regex_result?;
+                                // The four match indexes build lazily on the
+                                // first analysis (see `match_indexes`), so a scan
+                                // that only evaluates composites or reads counts
+                                // never pays for them.
 
                                 // Ensure rule stats are up-to-date for banner display
                                 let _ = crate::cache::save_rule_stats(
@@ -574,10 +531,7 @@ impl super::CapabilityMapper {
                                 return Ok(Self {
                                     trait_definitions: cache_data.trait_definitions,
                                     composite_rules: cache_data.composite_rules,
-                                    trait_index,
-                                    string_match_index,
-                                    symbol_match_index,
-                                    raw_content_regex_index,
+                                    indexes: std::sync::Arc::new(std::sync::OnceLock::new()),
                                     trait_id_map,
                                     platforms: vec![Platform::All],
                                     slow_rule_ms: Self::DEFAULT_SLOW_RULE_MS,
@@ -4526,28 +4480,10 @@ impl super::CapabilityMapper {
 
         tracing::trace!("Validation complete");
 
-        // Build all indexes in parallel for better performance
-        tracing::trace!("Building trait indexes (parallel)");
-        let (((trait_index, string_match_index), symbol_match_index), raw_regex_result) =
-            rayon::join(
-                || {
-                    rayon::join(
-                        || {
-                            rayon::join(
-                                || TraitIndex::build(&trait_definitions),
-                                || StringMatchIndex::build(&trait_definitions),
-                            )
-                        },
-                        || SymbolMatchIndex::build(&trait_definitions),
-                    )
-                },
-                || {
-                    RawContentRegexIndex::build(&trait_definitions)
-                        .map_err(|errors| anyhow::anyhow!(errors.join("\n")))
-                },
-            );
-        let raw_content_regex_index = raw_regex_result?;
-        tracing::trace!("Indexes built successfully");
+        // The four match indexes build lazily on the first analysis (see
+        // `match_indexes`); loading only parses and validates traits/composites.
+        // Uncompilable regexes are already caught by validation above, so nothing
+        // is deferred past a point where it could hide an authoring error.
 
         // Unparseable files are fatal during validation but only a warning at
         // analysis time (forward compatibility — see the else branch).
@@ -4690,10 +4626,7 @@ impl super::CapabilityMapper {
         Ok(Self {
             trait_definitions,
             composite_rules,
-            trait_index,
-            string_match_index,
-            symbol_match_index,
-            raw_content_regex_index,
+            indexes: std::sync::Arc::new(std::sync::OnceLock::new()),
             trait_id_map,
             platforms: vec![Platform::All],
             slow_rule_ms: Self::DEFAULT_SLOW_RULE_MS,

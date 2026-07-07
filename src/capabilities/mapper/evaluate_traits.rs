@@ -135,6 +135,7 @@ impl super::CapabilityMapper {
 
         // Use trait index to only evaluate applicable traits
         let applicable_indices: Vec<usize> = self
+            .match_indexes()
             .trait_index
             .get_applicable(&file_type)
             .into_indices_static()
@@ -151,13 +152,14 @@ impl super::CapabilityMapper {
         let all_strings: Vec<&crate::types::StringInfo> =
             report.strings.iter().chain(pseudo_strings.iter()).collect();
 
-        let (string_matched_traits, mut cached_evidence) = if self.string_match_index.has_patterns()
-        {
-            self.string_match_index
-                .find_matches_with_evidence(&all_strings)
-        } else {
-            (FxHashSet::default(), FxHashMap::default())
-        };
+        let (string_matched_traits, mut cached_evidence) =
+            if self.match_indexes().string_match_index.has_patterns() {
+                self.match_indexes()
+                    .string_match_index
+                    .find_matches_with_evidence(&all_strings)
+            } else {
+                (FxHashSet::default(), FxHashMap::default())
+            };
 
         // Run symbol matching ONCE across exact, substr, and regex patterns.
         // Evidence flows into cached_evidence so eval_symbol's FAST PATH 0 can
@@ -166,6 +168,7 @@ impl super::CapabilityMapper {
         // identifier names (see `build_all_symbols`).
         let all_symbols = super::build_all_symbols(report);
         let (symbol_matched_traits, symbol_evidence) = self
+            .match_indexes()
             .symbol_match_index
             .find_matches_with_evidence(&all_symbols);
         let symbol_offsets = super::build_symbol_offset_map(report);
@@ -181,10 +184,14 @@ impl super::CapabilityMapper {
         }
 
         // Also find regex candidates based on literal prefix matching
-        let regex_candidates = self.string_match_index.find_regex_candidates(&all_strings);
+        let regex_candidates = self
+            .match_indexes()
+            .string_match_index
+            .find_regex_candidates(&all_strings);
 
         // Pre-filter using batched regex matching for Content conditions
         let raw_regex_matches = self
+            .match_indexes()
             .raw_content_regex_index
             .find_matches(binary_data, &file_type);
 
@@ -283,8 +290,9 @@ impl super::CapabilityMapper {
     ) -> Vec<Finding> {
         // Compute raw regex matches (this is expensive but necessary if no cache provided)
         let file_type = self.detect_file_type(&report.target.file_type);
-        let raw_regex_matches = if self.raw_content_regex_index.has_patterns() {
-            self.raw_content_regex_index
+        let raw_regex_matches = if self.match_indexes().raw_content_regex_index.has_patterns() {
+            self.match_indexes()
+                .raw_content_regex_index
                 .find_matches(binary_data, &file_type)
         } else {
             FxHashSet::default()
@@ -302,18 +310,20 @@ impl super::CapabilityMapper {
         let pseudo_strings = super::build_string_pseudo_entries(report);
         let all_strings: Vec<&crate::types::StringInfo> =
             report.strings.iter().chain(pseudo_strings.iter()).collect();
-        let (string_matched_traits, mut cached_evidence) = if self.string_match_index.has_patterns()
-        {
-            self.string_match_index
-                .find_matches_with_evidence(&all_strings)
-        } else {
-            (FxHashSet::default(), FxHashMap::default())
-        };
+        let (string_matched_traits, mut cached_evidence) =
+            if self.match_indexes().string_match_index.has_patterns() {
+                self.match_indexes()
+                    .string_match_index
+                    .find_matches_with_evidence(&all_strings)
+            } else {
+                (FxHashSet::default(), FxHashMap::default())
+            };
         // Run symbol matching ONCE across exact, substr, and regex patterns.
         // Haystack spans imports/exports plus filefacts call/member/bind/
         // identifier names (see `build_all_symbols`).
         let all_symbols = super::build_all_symbols(report);
         let (symbol_matched_traits, symbol_evidence) = self
+            .match_indexes()
             .symbol_match_index
             .find_matches_with_evidence(&all_symbols);
         let symbol_offsets = super::build_symbol_offset_map(report);
@@ -328,7 +338,10 @@ impl super::CapabilityMapper {
             }
         }
 
-        let regex_candidates = self.string_match_index.find_regex_candidates(&all_strings);
+        let regex_candidates = self
+            .match_indexes()
+            .string_match_index
+            .find_regex_candidates(&all_strings);
         drop(all_strings);
 
         self.evaluate_traits_filtered_with_cache(
@@ -399,6 +412,7 @@ impl super::CapabilityMapper {
         // Use trait index to only evaluate applicable traits
         // This dramatically reduces work for specific file types
         let mut applicable_indices: Vec<usize> = self
+            .match_indexes()
             .trait_index
             .get_applicable(&file_type)
             .into_indices_static()
@@ -574,27 +588,27 @@ impl super::CapabilityMapper {
                 }
 
                 // Skip indexed exact traits that weren't matched
-                if self.string_match_index.is_exact_trait(idx)
+                if self.match_indexes().string_match_index.is_exact_trait(idx)
                     && !cache.string_matched_traits.contains(&idx)
                 {
                     return None;
                 }
 
                 // Skip indexed substr traits that weren't matched
-                if self.string_match_index.is_substr_trait(idx)
+                if self.match_indexes().string_match_index.is_substr_trait(idx)
                     && !cache.string_matched_traits.contains(&idx)
                 {
                     return None;
                 }
 
                 // Skip indexed symbol traits that weren't matched
-                if self.symbol_match_index.is_symbol_trait(idx)
+                if self.match_indexes().symbol_match_index.is_symbol_trait(idx)
                     && !cache.symbol_matched_traits.contains(&idx)
                 {
                     return None;
                 }
 
-                if self.string_match_index.is_regex_trait(idx)
+                if self.match_indexes().string_match_index.is_regex_trait(idx)
                     && !cache.regex_candidates.contains(&idx)
                 {
                     return None;
@@ -616,7 +630,10 @@ impl super::CapabilityMapper {
                 };
                 if has_content_regex
                     && raw_regex_prefilter_enabled
-                    && self.raw_content_regex_index.is_indexed_trait(idx)
+                    && self
+                        .match_indexes()
+                        .raw_content_regex_index
+                        .is_indexed_trait(idx)
                     && cache.raw_regex_matches.is_some_and(|s| !s.contains(&idx))
                 {
                     return None;

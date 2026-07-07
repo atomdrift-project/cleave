@@ -25,8 +25,8 @@ use anyhow::{Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicI8, Ordering};
-use std::time::SystemTime;
+use std::sync::atomic::{AtomicI8, AtomicU64, Ordering};
+use std::time::{Instant, SystemTime};
 use walkdir::WalkDir;
 
 /// Process-wide override for the analysis-cache skip flag.
@@ -211,37 +211,10 @@ pub fn third_party_path() -> PathBuf {
 /// the YARA compilation cache. Inline `type: yara` conditions embedded in YAML files
 /// require `CLEAVE_SKIP_CACHE=1` to force recompile if they change.
 pub fn most_recent_yar_file() -> Result<(SystemTime, PathBuf)> {
-    let mut most_recent = SystemTime::UNIX_EPOCH;
-    let mut most_recent_path = PathBuf::new();
-
-    let traits_dir = traits_path();
-    if traits_dir.exists() {
-        for entry in WalkDir::new(&traits_dir)
-            .follow_links(true)
-            .into_iter()
-            .flatten()
-        {
-            let path = entry.path();
-            if path.is_file()
-                && path
-                    .extension()
-                    .map(|ext| ext == "yar" || ext == "yara")
-                    .unwrap_or(false)
-                && let Ok(metadata) = fs::metadata(path)
-                && let Ok(mtime) = metadata.modified()
-                && mtime > most_recent
-            {
-                most_recent = mtime;
-                most_recent_path = path.to_path_buf();
-            }
-        }
-    }
-
-    if most_recent == SystemTime::UNIX_EPOCH {
-        anyhow::bail!("No .yar/.yara files found");
-    }
-
-    Ok((most_recent, most_recent_path))
+    traits_scan()
+        .newest_yar
+        .clone()
+        .context("No .yar/.yara files found")
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -278,45 +251,249 @@ fn hash_path_metadata(
     }
 }
 
+/// A walk of the traits tree slow enough to be worth a warning: on a warm local
+/// filesystem the single pass is tens of milliseconds, so anything past this is
+/// a cold cache, a slow/networked filesystem, or a machine under I/O load — the
+/// exact conditions that turn a "should be instant" scan into a multi-second (or
+/// multi-minute) stall. Logging it at `warn` makes that cause visible without
+/// `--verbose`.
+const SLOW_TRAITS_WALK: std::time::Duration = std::time::Duration::from_millis(400);
+
+/// Count of full traits-directory walks this process has performed.
+///
+/// A warm scan should walk the traits tree exactly once — every cache key reads
+/// the memoized [`traits_scan`] bundle. Each walk logs its ordinal, so a second
+/// full traversal in one process (a caller that bypassed the bundle, or a cache
+/// miss forcing a rebuild) is immediately visible in the logs rather than hiding
+/// as unexplained latency.
+static TRAITS_WALK_COUNT: AtomicU64 = AtomicU64::new(0);
+
+/// Everything the rule and mapper cache keys need, gathered in a single pass over
+/// the traits directory.
+///
+/// Previously each cache key walked the tree itself — the mapper key over trait
+/// YAML, the YARA key over `.yar`/`.yara`, the analysis-cache key over every
+/// rule/trait file, plus a stats-display pass — so a warm scan traversed a large
+/// traits checkout four times before it could even consult a cache. This bundles
+/// all of those into one traversal (see [`scan_traits_dir`]); [`traits_scan`]
+/// memoizes it for the process.
+#[derive(Clone, Debug)]
+struct TraitsScan {
+    /// Newest `.yaml`/`.yml` trait file (third-party excluded) and its path.
+    newest_yaml: Option<(SystemTime, PathBuf)>,
+    /// Revision fingerprint over `.yaml`/`.yml` trait files (third-party excluded),
+    /// the mapper cache key.
+    yaml_revision: Option<RuleFilesRevision>,
+    /// Newest `.yar`/`.yara` rule file (third-party included) and its path.
+    newest_yar: Option<(SystemTime, PathBuf)>,
+    /// Revision fingerprint over all rule+trait files (`.yar`/`.yara`/`.yaml`/`.yml`,
+    /// third-party included), plus the newest mtime across them.
+    rule_revision: Option<RuleFilesRevision>,
+}
+
+/// Walk the traits directory once, computing every rule/mapper cache input in a
+/// single pass.
+///
+/// This replaces the four separate per-key walks. It descends everything except
+/// `.git` (which holds no rule files but adds thousands of entries to stat) and
+/// stats each rule/trait file exactly once, versus the two stats — `is_file()`
+/// then `metadata()` — the previous walks did per entry. Skipping only `.git`
+/// (rather than all hidden/underscore dirs) keeps the revision fingerprints
+/// byte-identical to the previous functions, so existing caches are not
+/// invalidated.
+///
+/// A pure function of the directory's contents, so a caller that must observe a
+/// mid-process edit (the tests) calls it directly; [`traits_scan`] memoizes it
+/// for the hot path so a warm scan walks the tree exactly once.
+fn scan_traits_dir(traits_dir: &Path) -> TraitsScan {
+    use rayon::prelude::*;
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let ordinal = TRAITS_WALK_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+    let started = Instant::now();
+
+    let mut newest_yaml = SystemTime::UNIX_EPOCH;
+    let mut newest_yaml_path = PathBuf::new();
+    let mut newest_yar = SystemTime::UNIX_EPOCH;
+    let mut newest_yar_path = PathBuf::new();
+    let mut newest_rule = SystemTime::UNIX_EPOCH;
+
+    let mut yaml_hasher = DefaultHasher::new();
+    let mut rule_hasher = DefaultHasher::new();
+    let mut yaml_count = 0u64;
+    let mut rule_count = 0u64;
+
+    // One matching rule/trait file, classified during the (cheap) directory read
+    // so the (expensive) stat can be deferred and parallelized below.
+    struct Candidate {
+        path: PathBuf,
+        is_yaml: bool,
+        is_yar: bool,
+        third_party: bool,
+    }
+
+    // Phase 1 — walk the tree and collect matching files, in order. This is just
+    // the directory reads (`readdir`); no per-file stat happens yet. Extension and
+    // third-party classification are pure path inspection, so they belong here.
+    let mut candidates: Vec<Candidate> = Vec::new();
+    if traits_dir.exists() {
+        let walker = WalkDir::new(traits_dir)
+            .follow_links(true)
+            .into_iter()
+            .filter_entry(|entry| {
+                // Never descend into `.git`: it carries no rule/trait files yet
+                // dwarfs the trait set in entry count. Everything else is walked,
+                // so the hashed file set (and thus the fingerprint) is unchanged.
+                entry.depth() == 0
+                    || !entry.file_type().is_dir()
+                    || entry.file_name().to_str() != Some(".git")
+            });
+        for entry in walker.flatten() {
+            // `file_type()` comes from the directory read, no extra stat.
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let path = entry.path();
+            let (is_yaml, is_yar) = match path.extension().and_then(|e| e.to_str()) {
+                Some("yaml" | "yml") => (true, false),
+                Some("yar" | "yara") => (false, true),
+                _ => continue,
+            };
+            candidates.push(Candidate {
+                third_party: path.components().any(|c| c.as_os_str() == "third-party"),
+                path: path.to_path_buf(),
+                is_yaml,
+                is_yar,
+            });
+        }
+    }
+    let entries_visited = candidates.len() as u64;
+
+    // Phase 2 — stat every candidate at once. This is the bulk of the wall-clock
+    // and is pure independent I/O, so a parallel map turns ~10k serial stats into
+    // a handful of parallel batches. `collect` preserves order, so phase 3 still
+    // folds the hashers deterministically. (Runs inside `traits_scan`'s memoized
+    // init, which is only ever triggered from the main thread — see there — so
+    // this rayon use cannot re-enter that `OnceLock`.)
+    let metadatas: Vec<Option<fs::Metadata>> = candidates
+        .par_iter()
+        .map(|c| fs::metadata(&c.path).ok())
+        .collect();
+
+    // Phase 3 — fold the fingerprints in walk order. Identical hash inputs and
+    // order to the previous serial walk, so the revision fingerprints are
+    // unchanged (and cached mappers stay valid).
+    let mut files_statted = 0u64;
+    for (c, metadata) in candidates.iter().zip(&metadatas) {
+        let Some(metadata) = metadata else {
+            continue;
+        };
+        files_statted += 1;
+        let mtime = metadata.modified().ok();
+
+        // Analysis-cache revision: every rule/trait file, third-party included.
+        rule_count += 1;
+        hash_path_metadata(&mut rule_hasher, traits_dir, &c.path, metadata);
+        if let Some(m) = mtime
+            && m > newest_rule
+        {
+            newest_rule = m;
+        }
+
+        if c.is_yar
+            && let Some(m) = mtime
+            && m > newest_yar
+        {
+            newest_yar = m;
+            newest_yar_path = c.path.clone();
+        }
+
+        // Mapper revision + newest trait YAML: `.yaml`/`.yml`, third-party excluded.
+        if c.is_yaml && !c.third_party {
+            yaml_count += 1;
+            hash_path_metadata(&mut yaml_hasher, traits_dir, &c.path, metadata);
+            if let Some(m) = mtime
+                && m > newest_yaml
+            {
+                newest_yaml = m;
+                newest_yaml_path = c.path.clone();
+            }
+        }
+    }
+
+    // Fold the counts in exactly as the previous per-key walks did, so the
+    // fingerprints match byte-for-byte.
+    yaml_count.hash(&mut yaml_hasher);
+    rule_count.hash(&mut rule_hasher);
+
+    let elapsed = started.elapsed();
+    if elapsed >= SLOW_TRAITS_WALK {
+        tracing::warn!(
+            walk = ordinal,
+            dir = %traits_dir.display(),
+            entries = entries_visited,
+            stats = files_statted,
+            elapsed_ms = elapsed.as_millis(),
+            "slow traits-directory walk — cold cache, a slow/networked filesystem, or I/O contention"
+        );
+    } else {
+        tracing::debug!(
+            walk = ordinal,
+            dir = %traits_dir.display(),
+            entries = entries_visited,
+            stats = files_statted,
+            yaml_files = yaml_count,
+            rule_files = rule_count,
+            elapsed_ms = elapsed.as_millis(),
+            "walked traits directory"
+        );
+    }
+
+    TraitsScan {
+        newest_yaml: (newest_yaml != SystemTime::UNIX_EPOCH)
+            .then_some((newest_yaml, newest_yaml_path)),
+        yaml_revision: (yaml_count > 0).then(|| RuleFilesRevision {
+            newest_mtime: newest_yaml,
+            fingerprint: yaml_hasher.finish(),
+        }),
+        newest_yar: (newest_yar != SystemTime::UNIX_EPOCH).then_some((newest_yar, newest_yar_path)),
+        rule_revision: (rule_count > 0).then(|| RuleFilesRevision {
+            newest_mtime: newest_rule,
+            fingerprint: rule_hasher.finish(),
+        }),
+    }
+}
+
+/// The single, memoized traits-directory scan for this process.
+///
+/// Every cache key derives from this one traversal. Memoized for the process
+/// because the traits directory does not change under a running scan — the same
+/// assumption the analysis-cache revision and YARA timestamp already made. A
+/// caller that must observe a mid-process edit walks [`scan_traits_dir`]
+/// directly (as the tests do).
+///
+/// The one-time init runs [`scan_traits_dir`], which stats files with rayon, so
+/// it must first be triggered from the main thread — never from inside a rayon
+/// worker, or the parallel stats could steal a task that re-enters this
+/// `OnceLock` and deadlock. Every trigger (mapper cache key, YARA timestamp,
+/// analysis-cache revision, `version_info`) fires during mapper load, which the
+/// worker/server paths force on the main thread via `prefetch_capability_mapper`
+/// and the one-shot paths reach on their own main thread.
+fn traits_scan() -> &'static TraitsScan {
+    static SCAN: OnceLock<TraitsScan> = OnceLock::new();
+    SCAN.get_or_init(|| scan_traits_dir(&traits_path()))
+}
+
 /// Returns the most recently modified `.yaml`/`.yml` trait file and its mtime.
 ///
 /// Excludes the `third-party/` directory (YARA vendor rules, not trait definitions).
 /// Used to determine the capability mapper cache key.
 pub fn most_recent_yaml_file() -> Result<(SystemTime, PathBuf)> {
-    let mut most_recent = SystemTime::UNIX_EPOCH;
-    let mut most_recent_path = PathBuf::new();
-
-    let traits_dir = traits_path();
-    if traits_dir.exists() {
-        for entry in WalkDir::new(&traits_dir)
-            .follow_links(true)
-            .into_iter()
-            .flatten()
-        {
-            let path = entry.path();
-            if path.components().any(|c| c.as_os_str() == "third-party") {
-                continue;
-            }
-            if path.is_file()
-                && path
-                    .extension()
-                    .map(|ext| ext == "yaml" || ext == "yml")
-                    .unwrap_or(false)
-                && let Ok(metadata) = fs::metadata(path)
-                && let Ok(mtime) = metadata.modified()
-                && mtime > most_recent
-            {
-                most_recent = mtime;
-                most_recent_path = path.to_path_buf();
-            }
-        }
-    }
-
-    if most_recent == SystemTime::UNIX_EPOCH {
-        anyhow::bail!("No .yaml/.yml files found");
-    }
-
-    Ok((most_recent, most_recent_path))
+    traits_scan()
+        .newest_yaml
+        .clone()
+        .context("No .yaml/.yml files found")
 }
 
 /// Returns a stable revision fingerprint for YAML trait files.
@@ -324,52 +501,13 @@ pub fn most_recent_yaml_file() -> Result<(SystemTime, PathBuf)> {
 /// This excludes `third-party/` because those files feed the YARA cache, not the
 /// trait mapper. It includes path, file size, and nanosecond mtime so mapper
 /// cache keys change even for same-second edits.
+///
+/// Reads the memoized [`traits_scan`] bundle, so the mapper cache key shares the
+/// single per-process traits walk with every other cache key.
 pub(crate) fn trait_yaml_revision() -> Result<RuleFilesRevision> {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-
-    let mut most_recent = SystemTime::UNIX_EPOCH;
-    let mut hasher = DefaultHasher::new();
-    let mut count = 0u64;
-
-    let traits_dir = traits_path();
-    if traits_dir.exists() {
-        for entry in WalkDir::new(&traits_dir)
-            .follow_links(true)
-            .into_iter()
-            .flatten()
-        {
-            let path = entry.path();
-            if path.components().any(|c| c.as_os_str() == "third-party") {
-                continue;
-            }
-            if path.is_file()
-                && path
-                    .extension()
-                    .map(|ext| ext == "yaml" || ext == "yml")
-                    .unwrap_or(false)
-                && let Ok(metadata) = fs::metadata(path)
-            {
-                count += 1;
-                hash_path_metadata(&mut hasher, &traits_dir, path, &metadata);
-                if let Ok(mtime) = metadata.modified()
-                    && mtime > most_recent
-                {
-                    most_recent = mtime;
-                }
-            }
-        }
-    }
-
-    if most_recent == SystemTime::UNIX_EPOCH {
-        anyhow::bail!("No .yaml/.yml files found");
-    }
-
-    count.hash(&mut hasher);
-    Ok(RuleFilesRevision {
-        newest_mtime: most_recent,
-        fingerprint: hasher.finish(),
-    })
+    traits_scan()
+        .yaml_revision
+        .context("No .yaml/.yml files found")
 }
 
 /// Returns a stable revision fingerprint for all rule and trait files.
@@ -378,56 +516,23 @@ pub(crate) fn trait_yaml_revision() -> Result<RuleFilesRevision> {
 /// kept for human-readable stats, while the fingerprint includes file paths,
 /// sizes, and nanosecond mtimes so same-second edits do not reuse stale cache
 /// entries.
+///
+/// Reads the memoized [`traits_scan`] bundle, so this and every other cache key
+/// share one walk of the traits tree per process.
 pub(crate) fn rule_files_revision() -> Result<RuleFilesRevision> {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-
-    let mut most_recent = SystemTime::UNIX_EPOCH;
-    let mut hasher = DefaultHasher::new();
-    let mut count = 0u64;
-
-    let traits_dir = traits_path();
-    if traits_dir.exists() {
-        for entry in WalkDir::new(&traits_dir)
-            .follow_links(true)
-            .into_iter()
-            .flatten()
-        {
-            let path = entry.path();
-            if path.is_file()
-                && path
-                    .extension()
-                    .map(|ext| ext == "yar" || ext == "yara" || ext == "yaml" || ext == "yml")
-                    .unwrap_or(false)
-                && let Ok(metadata) = fs::metadata(path)
-            {
-                count += 1;
-                hash_path_metadata(&mut hasher, &traits_dir, path, &metadata);
-                if let Ok(mtime) = metadata.modified()
-                    && mtime > most_recent
-                {
-                    most_recent = mtime;
-                }
-            }
-        }
-    }
-
-    if most_recent == SystemTime::UNIX_EPOCH {
-        anyhow::bail!("No YARA/trait files found");
-    }
-
-    count.hash(&mut hasher);
-    Ok(RuleFilesRevision {
-        newest_mtime: most_recent,
-        fingerprint: hasher.finish(),
-    })
+    traits_scan()
+        .rule_revision
+        .context("No YARA/trait files found")
 }
 
 /// Returns the most recent modification time across all rule and trait files.
 ///
 /// Used by rule-stats display. Prefer `rule_files_revision()` for cache keys.
 pub(crate) fn most_recent_yara_mtime() -> Result<SystemTime> {
-    Ok(rule_files_revision()?.newest_mtime)
+    traits_scan()
+        .rule_revision
+        .map(|r| r.newest_mtime)
+        .context("No YARA/trait files found")
 }
 
 /// Returns the modification time of the cleave binary
@@ -671,9 +776,12 @@ mod tests {
         filetime::set_file_mtime(&rule, filetime::FileTime::from_system_time(fixed))
             .expect("set mtime");
 
-        let original = crate::traits_repo::override_dir();
-        crate::traits_repo::set_override_dir(Some(traits_dir.to_path_buf()));
-        let first = rule_files_revision().expect("first revision");
+        // Walk the directory directly (not the memoized `traits_scan`) so both
+        // reads reflect the file as it stands, exercising the same-second
+        // fingerprint change.
+        let first = scan_traits_dir(traits_dir)
+            .rule_revision
+            .expect("first revision");
 
         let mut file = fs::OpenOptions::new()
             .append(true)
@@ -682,9 +790,9 @@ mod tests {
         file.write_all(b"# edit in same second\n").expect("append");
         filetime::set_file_mtime(&rule, filetime::FileTime::from_system_time(fixed))
             .expect("reset mtime");
-        let second = rule_files_revision().expect("second revision");
-
-        crate::traits_repo::set_override_dir(original);
+        let second = scan_traits_dir(traits_dir)
+            .rule_revision
+            .expect("second revision");
 
         assert_eq!(first.newest_mtime, second.newest_mtime);
         assert_ne!(first.fingerprint, second.fingerprint);

@@ -199,6 +199,7 @@ impl super::CapabilityMapper {
 
         // Use trait index to only evaluate applicable traits
         let applicable_indices: Vec<usize> = self
+            .match_indexes()
             .trait_index
             .get_applicable(&file_type)
             .into_indices_static()
@@ -222,14 +223,18 @@ impl super::CapabilityMapper {
                     report.strings.iter().chain(pseudo_strings.iter()).collect();
 
                 // Run string matching ONCE
-                let (traits, evidence) = if self.string_match_index.has_patterns() {
-                    self.string_match_index
+                let (traits, evidence) = if self.match_indexes().string_match_index.has_patterns() {
+                    self.match_indexes()
+                        .string_match_index
                         .find_matches_with_evidence(&all_strings)
                 } else {
                     (FxHashSet::default(), FxHashMap::default())
                 };
 
-                let candidates = self.string_match_index.find_regex_candidates(&all_strings);
+                let candidates = self
+                    .match_indexes()
+                    .string_match_index
+                    .find_regex_candidates(&all_strings);
                 (traits, evidence, candidates)
             } else {
                 (
@@ -247,7 +252,9 @@ impl super::CapabilityMapper {
         let symbol_matched_traits = if all_symbols.is_empty() {
             FxHashSet::default()
         } else {
-            self.symbol_match_index.find_matches(&all_symbols)
+            self.match_indexes()
+                .symbol_match_index
+                .find_matches(&all_symbols)
         };
 
         let _d_strings = t_strings.elapsed();

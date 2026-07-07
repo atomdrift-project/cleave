@@ -4,9 +4,6 @@
 //! including empty mappers for testing, mappers with custom precision thresholds, and
 //! the main production constructor.
 
-use crate::capabilities::indexes::{
-    RawContentRegexIndex, StringMatchIndex, SymbolMatchIndex, TraitIndex,
-};
 use crate::composite_rules::{Platform, platforms_intersect};
 use anyhow::Context;
 
@@ -35,10 +32,7 @@ impl super::CapabilityMapper {
         Self {
             trait_definitions: Vec::new(),
             composite_rules: Vec::new(),
-            trait_index: TraitIndex::new(),
-            string_match_index: StringMatchIndex::default(),
-            symbol_match_index: SymbolMatchIndex::default(),
-            raw_content_regex_index: RawContentRegexIndex::default(),
+            indexes: std::sync::Arc::new(std::sync::OnceLock::new()),
             trait_id_map: std::collections::HashMap::new(),
             platforms: vec![Platform::All],
             slow_rule_ms: Self::DEFAULT_SLOW_RULE_MS,
@@ -95,34 +89,16 @@ impl super::CapabilityMapper {
             platforms
         };
 
-        // `All` intersects every rule, so there is nothing to prune — keep the
-        // indexes the loader already built (or restored from cache).
+        // `All` intersects every rule, so there is nothing to prune — the lazy
+        // indexes will build the full set on first use.
         if self.platforms.contains(&Platform::All) {
             return self;
         }
 
-        // Pattern counts before filtering, so the log can report the reduction
-        // this platform selection buys on the live traits repo.
-        let string_patterns_before = self.string_match_index.total_patterns;
-        let regex_patterns_before = self.raw_content_regex_index.total_patterns;
-
-        self.trait_index = TraitIndex::build_filtered(&self.trait_definitions, &self.platforms);
-        self.string_match_index =
-            StringMatchIndex::build_filtered(&self.trait_definitions, &self.platforms);
-        self.symbol_match_index =
-            SymbolMatchIndex::build_filtered(&self.trait_definitions, &self.platforms);
-        // A filtered rebuild only ever drops patterns from an already-validated
-        // set, so an error here is not expected; keep the full index rather than
-        // panicking in library code if one somehow surfaces.
-        match RawContentRegexIndex::build_filtered(&self.trait_definitions, &self.platforms) {
-            Ok(index) => self.raw_content_regex_index = index,
-            Err(errors) => {
-                tracing::warn!(
-                    "platform-filtered regex index rebuild failed; keeping full index: {}",
-                    errors.join("; ")
-                );
-            }
-        }
+        // Discard any indexes already built for a different platform set; the
+        // next `match_indexes()` rebuilds them filtered to `self.platforms`. The
+        // reduction the filter buys is logged when that build runs.
+        self.indexes = std::sync::Arc::new(std::sync::OnceLock::new());
 
         let traits_total = self.trait_definitions.len();
         let traits_kept = self
@@ -135,11 +111,7 @@ impl super::CapabilityMapper {
             traits_kept,
             traits_total,
             traits_dropped = traits_total - traits_kept,
-            string_patterns_before,
-            string_patterns_after = self.string_match_index.total_patterns,
-            regex_patterns_before,
-            regex_patterns_after = self.raw_content_regex_index.total_patterns,
-            "platform filter applied: trimmed off-platform trait patterns from match indexes"
+            "platform filter set: off-platform trait patterns will be trimmed when indexes build"
         );
 
         self

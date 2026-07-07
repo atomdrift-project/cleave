@@ -110,7 +110,7 @@ traits:
     let (_dir, path) = create_test_yaml(yaml);
 
     let full = CapabilityMapper::from_yaml(&path).unwrap();
-    let full_patterns = full.string_match_index.total_patterns;
+    let full_patterns = full.match_indexes().string_match_index.total_patterns;
     assert_eq!(full.trait_definitions_count(), 2);
 
     let linux = CapabilityMapper::from_yaml(&path)
@@ -124,9 +124,9 @@ traits:
     // ...but the Windows-only pattern is excluded from the match index, so a Linux
     // scan never pays to match it.
     assert!(
-        linux.string_match_index.total_patterns < full_patterns,
+        linux.match_indexes().string_match_index.total_patterns < full_patterns,
         "expected platform filter to drop off-platform patterns: {} !< {}",
-        linux.string_match_index.total_patterns,
+        linux.match_indexes().string_match_index.total_patterns,
         full_patterns
     );
 }

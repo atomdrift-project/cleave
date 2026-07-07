@@ -1110,8 +1110,15 @@ pub fn prefetch_yara_engine(enable_third_party: bool) {
 /// the calling (non-rayon) thread fills the global slot once, so subsequent
 /// `capability_mapper()` calls hit the fast path.
 pub fn prefetch_capability_mapper() {
-    if let Err(e) = shared_resources::capability_mapper() {
-        tracing::warn!(error = %e, "capability mapper prefetch failed");
+    match shared_resources::capability_mapper() {
+        // Force the (now lazily-built) match indexes to build here, on this
+        // non-rayon thread. A directory scan fans out across the rayon pool and
+        // the first worker to match traits would otherwise trigger the build
+        // mid-steal, re-entering the indexes' `OnceLock` and deadlocking. Callers
+        // that never fan out (a one-shot `pkg:`/`url` scan) skip this prefetch, so
+        // a cache-hit scan never builds the indexes at all.
+        Ok(mapper) => mapper.warm_indexes(),
+        Err(e) => tracing::warn!(error = %e, "capability mapper prefetch failed"),
     }
 }
 

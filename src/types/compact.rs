@@ -10,6 +10,7 @@ use serde::ser::{SerializeSeq, SerializeStruct};
 use serde::{Serialize, Serializer};
 
 use super::core::Criticality;
+use super::file_analysis::{Rel, Role};
 
 /// Maximum imports per file in compact output
 const MAX_IMPORTS: usize = 4096;
@@ -68,6 +69,17 @@ pub struct CompactFile {
     #[serde(rename = "pid")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent: Option<u32>,
+    /// Edge type to `pid` — how this file was obtained. Omitted for ordinary
+    /// containment; a root is identified by an absent `pid`. See [`Rel`].
+    #[serde(skip_serializing_if = "Rel::is_member")]
+    pub rel: Rel,
+    /// For `rel = fetched`, the resolved locator it was fetched via.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub via: Option<String>,
+    /// Analysis participation — how ML and presentation treat this node.
+    /// Omitted for content. See [`Role`].
+    #[serde(skip_serializing_if = "Role::is_content")]
+    pub role: Role,
     /// Molecular formula
     #[serde(rename = "mol")]
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -680,6 +692,9 @@ fn convert_file(file: &super::file_analysis::FileAnalysis, id: u32) -> CompactFi
         risk: file.score,
         depth: file.depth,
         parent: file.parent_id,
+        rel: file.rel,
+        via: file.via.clone(),
+        role: file.role,
         formula,
         identity: file.identity.clone(),
         findings: traits,
@@ -841,6 +856,53 @@ mod formula_tests {
         let mut fa = FileAnalysis::new(0, "t.py".into(), "python".into(), "sha".into(), 1);
         fa.findings = findings;
         fa
+    }
+
+    /// Provenance fields serialize sparsely: an ordinary content member emits
+    /// none of them, keeping the common case free of the new keys. `rel` and
+    /// `role` are orthogonal — a fetched dependency is `Content` (no `role`),
+    /// while a registry record is `Sidecar` with no `via`.
+    #[test]
+    fn rel_role_via_serialize_sparsely() {
+        use super::super::file_analysis::{Rel, Role};
+        use super::convert_file;
+
+        let obj = |fa: &FileAnalysis| -> serde_json::Value {
+            let v = serde_json::to_value(convert_file(fa, fa.id));
+            assert!(v.is_ok(), "serialize compact file: {v:?}");
+            v.unwrap_or(serde_json::Value::Null)
+        };
+
+        // Ordinary content member emits none of the provenance keys.
+        let o = obj(&file_with(vec![]));
+        for k in ["rel", "via", "role", "pid"] {
+            assert!(o.get(k).is_none(), "content member should omit {k}");
+        }
+
+        // Fetched dependency: content by role, so `role` stays absent while
+        // `rel`/`via`/`pid` are present.
+        let mut fetched = FileAnalysis::new(1, "4.13.0".into(), "gz".into(), "s".into(), 9);
+        fetched.parent_id = Some(0);
+        fetched.rel = Rel::Fetched;
+        fetched.via = Some("https://example.test/4.13.0.tar.gz".into());
+        let o = obj(&fetched);
+        assert_eq!(o["pid"], json!(0));
+        assert_eq!(o["rel"], json!("fetched"));
+        assert_eq!(o["via"], json!("https://example.test/4.13.0.tar.gz"));
+        assert!(o.get("role").is_none(), "fetched content should omit role");
+
+        // Registry sidecar: `rel`/`role`/`pid` present, no `via`.
+        let mut sidecar = FileAnalysis::new(2, "registry".into(), "registry".into(), "s".into(), 4);
+        sidecar.parent_id = Some(0);
+        sidecar.rel = Rel::Registry;
+        sidecar.role = Role::Sidecar;
+        let o = obj(&sidecar);
+        assert_eq!(o["rel"], json!("registry"));
+        assert_eq!(o["role"], json!("sidecar"));
+        assert!(
+            o.get("via").is_none(),
+            "sidecar without fetch should omit via"
+        );
     }
 
     /// The emit guard must neutralize any cross-file reference that does not

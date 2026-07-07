@@ -3,9 +3,6 @@
 //! This module handles loading capability definitions from a single YAML file,
 //! which is primarily used in tests and for simple configurations.
 
-use crate::capabilities::indexes::{
-    RawContentRegexIndex, StringMatchIndex, SymbolMatchIndex, TraitIndex,
-};
 use crate::capabilities::models::TraitMappings;
 use crate::capabilities::parsing::{apply_composite_defaults, apply_trait_defaults};
 use crate::capabilities::validation::{
@@ -169,22 +166,9 @@ impl super::CapabilityMapper {
             }
         }
 
-        // Build trait index for fast lookup by file type
-        let trait_index = TraitIndex::build(&trait_definitions);
-
-        // Build string match index for batched AC matching
-        let string_match_index = StringMatchIndex::build(&trait_definitions);
-
-        // Build symbol match index for fast symbol matching
-        let symbol_match_index = SymbolMatchIndex::build(&trait_definitions);
-
-        // Build raw content regex index for batched regex matching
-        let raw_content_regex_index = match RawContentRegexIndex::build(&trait_definitions) {
-            Ok(index) => index,
-            Err(errors) => {
-                return Err(anyhow::anyhow!(errors.join("\n")));
-            }
-        };
+        // The four match indexes are built lazily on the first analysis (see
+        // `CapabilityMapper::match_indexes`), so loading only parses traits and
+        // composites here.
 
         // Populate trait_id_map
         let mut trait_id_map = std::collections::HashMap::with_capacity(trait_definitions.len());
@@ -200,10 +184,7 @@ impl super::CapabilityMapper {
         Ok(Self {
             trait_definitions,
             composite_rules,
-            trait_index,
-            string_match_index,
-            symbol_match_index,
-            raw_content_regex_index,
+            indexes: std::sync::Arc::new(std::sync::OnceLock::new()),
             trait_id_map,
             platforms: vec![Platform::All],
             slow_rule_ms: Self::DEFAULT_SLOW_RULE_MS,

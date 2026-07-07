@@ -556,10 +556,16 @@ fn test_system_binary_false_positive_sanity() {
         .unwrap();
 
     let stderr = String::from_utf8_lossy(&output.stderr);
-    // Filter out the debug-build warning that's expected in test profile
+    // Filter out environmental/diagnostic warnings that don't reflect detection
+    // output: the debug-build notice, lazy YARA init, and the cold-cache
+    // traits-walk timing warning (fires under parallel-suite I/O contention).
     let unexpected_stderr: String = stderr
         .lines()
-        .filter(|l| !l.contains("DEBUG binary") && !l.contains("YARA engine not yet initialized"))
+        .filter(|l| {
+            !l.contains("DEBUG binary")
+                && !l.contains("YARA engine not yet initialized")
+                && !l.contains("slow traits-directory walk")
+        })
         .collect::<Vec<_>>()
         .join("\n");
     assert!(

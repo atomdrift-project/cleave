@@ -22,10 +22,48 @@
 //! - **helpers**: Utility functions (file type detection, validation helpers)
 //! - **builder**: Constructor methods (empty, new, with_platforms)
 
+use std::sync::{Arc, OnceLock};
+
 use crate::capabilities::indexes::{
     RawContentRegexIndex, StringMatchIndex, SymbolMatchIndex, TraitIndex,
 };
 use crate::composite_rules::{CompositeTrait, Platform, TraitDefinition};
+
+/// The four match indexes, built together as a pure function of the mapper's
+/// `trait_definitions` and `platforms`. Held behind a [`OnceLock`] so they are
+/// built lazily on the first analysis that needs to match traits — see
+/// [`CapabilityMapper::match_indexes`]. Building them recompiles thousands of
+/// trait regexes (the dominant cold-start cost), so a scan that only evaluates
+/// package composites or reads rule counts — e.g. a warm `pkg:`/`url` scan whose
+/// analyses all hit the report cache — never pays for them.
+#[derive(Debug)]
+pub(super) struct MatchIndexes {
+    pub(super) trait_index: TraitIndex,
+    pub(super) string_match_index: StringMatchIndex,
+    pub(super) symbol_match_index: SymbolMatchIndex,
+    pub(super) raw_content_regex_index: RawContentRegexIndex,
+}
+
+impl MatchIndexes {
+    /// Build all four indexes for `traits` filtered to `platforms`. `[Platform::All]`
+    /// filters nothing, so this reproduces the previous eager construction exactly.
+    fn build(traits: &[TraitDefinition], platforms: &[Platform]) -> Self {
+        let raw_content_regex_index = RawContentRegexIndex::build_filtered(traits, platforms)
+            .unwrap_or_else(|errors| {
+                tracing::warn!(
+                    "raw-content regex index build failed; using empty index: {}",
+                    errors.join("; ")
+                );
+                RawContentRegexIndex::default()
+            });
+        Self {
+            trait_index: TraitIndex::build_filtered(traits, platforms),
+            string_match_index: StringMatchIndex::build_filtered(traits, platforms),
+            symbol_match_index: SymbolMatchIndex::build_filtered(traits, platforms),
+            raw_content_regex_index,
+        }
+    }
+}
 
 /// Maps symbols (function names, library calls) to capability IDs
 /// Also supports trait definitions and composite rules that combine traits
@@ -33,14 +71,10 @@ use crate::composite_rules::{CompositeTrait, Platform, TraitDefinition};
 pub struct CapabilityMapper {
     pub(super) trait_definitions: Vec<TraitDefinition>,
     pub(crate) composite_rules: Vec<CompositeTrait>,
-    /// Index for fast trait lookup by file type
-    pub(super) trait_index: TraitIndex,
-    /// Index for fast batched string matching
-    pub(super) string_match_index: StringMatchIndex,
-    /// Index for fast symbol matching
-    pub(super) symbol_match_index: SymbolMatchIndex,
-    /// Index for batched raw content regex matching
-    pub(super) raw_content_regex_index: RawContentRegexIndex,
+    /// The four trait match indexes, built lazily on the first analysis (see
+    /// [`Self::match_indexes`]). `Arc` so a cloned mapper — the analyzers clone
+    /// it per file — shares a single build rather than repeating it.
+    pub(super) indexes: Arc<OnceLock<MatchIndexes>>,
     /// Maps trait ID -> index in trait_definitions
     #[allow(dead_code)]
     pub(super) trait_id_map: std::collections::HashMap<String, usize>,
@@ -48,6 +82,29 @@ pub struct CapabilityMapper {
     pub(super) platforms: Vec<Platform>,
     /// Warn threshold for slow rule evaluation in milliseconds (default: 4000)
     pub(super) slow_rule_ms: u64,
+}
+
+impl CapabilityMapper {
+    /// The match indexes, built on first use from `trait_definitions`+`platforms`.
+    ///
+    /// Only the trait-matching (analysis) path calls this; composite evaluation
+    /// and rule-count queries do not, so a scan whose analyses all hit the report
+    /// cache never builds them. The build runs rayon internally, so the *first*
+    /// caller must be off the rayon pool (the main thread) — otherwise a worker
+    /// could steal a task that re-enters this `OnceLock` and deadlock. Callers
+    /// that precede a parallel scan warm it up front via `prefetch_capability_mapper`.
+    pub(super) fn match_indexes(&self) -> &MatchIndexes {
+        self.indexes
+            .get_or_init(|| MatchIndexes::build(&self.trait_definitions, &self.platforms))
+    }
+
+    /// Force the lazy match indexes to build now. Callers about to fan a scan out
+    /// across the rayon pool warm them here, on the main thread, so no worker
+    /// triggers the (rayon-internal) build mid-steal and deadlocks on the
+    /// `OnceLock`. Idempotent and cheap once built.
+    pub fn warm_indexes(&self) {
+        let _ = self.match_indexes();
+    }
 }
 
 impl Default for CapabilityMapper {

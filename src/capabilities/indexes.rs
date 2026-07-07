@@ -65,17 +65,13 @@ pub(crate) struct TraitIndex {
 }
 
 impl TraitIndex {
+    #[cfg(test)] // production builds an empty index via `Default`
     pub(crate) fn new() -> Self {
         Self {
             by_file_type: FxHashMap::default(),
             universal: TraitBitSet::default(),
             combined_cache: Arc::new(RwLock::new(FxHashMap::default())),
         }
-    }
-
-    /// Build index from trait definitions (all platforms).
-    pub(crate) fn build(traits: &[TraitDefinition]) -> Self {
-        Self::build_filtered(traits, &[Platform::All])
     }
 
     /// Build index, keeping only traits whose platform set intersects `platforms`.
@@ -319,11 +315,6 @@ pub(crate) struct SymbolMatchIndex {
 }
 
 impl SymbolMatchIndex {
-    /// Build index from trait definitions (all platforms).
-    pub(crate) fn build(traits: &[TraitDefinition]) -> Self {
-        Self::build_filtered(traits, &[Platform::All])
-    }
-
     /// Build index, keeping only traits whose platform set intersects `platforms`.
     /// Off-platform traits keep their absolute index slot but contribute no patterns.
     pub(crate) fn build_filtered(traits: &[TraitDefinition], platforms: &[Platform]) -> Self {
@@ -752,6 +743,7 @@ impl StringMatchIndex {
     /// Build the string match index from trait definitions.
     /// Uses HashSet for O(1) exact matching instead of Aho-Corasick.
     /// Build index from trait definitions (all platforms).
+    #[cfg(test)] // non-filtered convenience; production builds go through build_filtered
     pub(crate) fn build(traits: &[TraitDefinition]) -> Self {
         Self::build_filtered(traits, &[Platform::All])
     }
@@ -1531,6 +1523,7 @@ struct WordPattern {
 
 impl RawContentRegexIndex {
     /// Build index from trait definitions (all platforms).
+    #[cfg(test)] // non-filtered convenience; production builds go through build_filtered
     pub(crate) fn build(traits: &[TraitDefinition]) -> Result<Self, Vec<String>> {
         Self::build_filtered(traits, &[Platform::All])
     }

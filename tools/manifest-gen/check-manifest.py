@@ -65,15 +65,25 @@ def main() -> None:
         if digest != a["sha256"]:
             fail(f"sha256 mismatch for {key!r}: file {digest} != manifest {a['sha256']}")
 
+    # The signature is required by default (a signed release must not ship without
+    # it). CLEAVE_ALLOW_UNSIGNED=1 downgrades this to a warning for the deliberately
+    # unsigned publish path (make publish-traits-cron) — every other check above
+    # still gates the upload.
     sig = os.path.join(dist, "versions.toml.sigstore.json")
-    if not os.path.exists(sig) or os.path.getsize(sig) == 0:
-        fail(f"signature bundle missing or empty: {sig} (sign before publishing)")
+    signed = os.path.exists(sig) and os.path.getsize(sig) > 0
+    if not signed:
+        msg = f"signature bundle missing or empty: {sig} (sign before publishing)"
+        if os.environ.get("CLEAVE_ALLOW_UNSIGNED") == "1":
+            print(f"⚠ {msg} — proceeding UNSIGNED (CLEAVE_ALLOW_UNSIGNED=1)", file=sys.stderr)
+        else:
+            fail(msg)
 
     upgrade = m.get("upgrade", {})
     print(
         f"✓ manifest OK: latest={latest}, "
         f"{len(referenced)} referenced artifact(s) verified (sha256 + present), "
-        f"signature present, {len(upgrade)} release(s) flagged for upgrade"
+        f"signature {'present' if signed else 'ABSENT (unsigned)'}, "
+        f"{len(upgrade)} release(s) flagged for upgrade"
     )
 
 

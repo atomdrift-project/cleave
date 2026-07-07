@@ -349,7 +349,7 @@ publish-traits-cron: ## 30-min timer cycle: skip fast unless traits/source/relea
 	echo "→ change detected (cleave-traits $$traits_short); fast-forwarding + publishing UNSIGNED"; \
 	git -C "$(TRAITS)" merge -q --ff-only "$$traits_tip"; \
 	$(MAKE) gen-manifest ENGINE= VERSIONS=$(VERSIONS) CHANNELS=stable; \
-	$(MAKE) check-manifest; \
+	CLEAVE_ALLOW_UNSIGNED=1 $(MAKE) check-manifest; \
 	$(MAKE) publish-cleave; \
 	mkdir -p "$$(dirname "$(TRAITS_STAMP)")"; \
 	printf '%s\n' "$$stamp" > "$(TRAITS_STAMP)"; \

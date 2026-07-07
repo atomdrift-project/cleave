@@ -305,6 +305,59 @@ publish-traits: ## FULL RELEASE: compat-test HEAD + last (VERSIONS-1) releases �
 	$(MAKE) publish-cleave
 	@echo "✓ publish-traits complete: compat-tested HEAD + last $(shell expr $(VERSIONS) - 1) release(s), signed, verified, uploaded"
 
+# --- Unattended trait publishing (30-min systemd timer via hacks/traiter-linux.sh) --
+# Change-gated wrapper around the publish flow for the timer. It rebuilds+publishes
+# ONLY when one of the three inputs manifest-gen actually keys off has moved since
+# the last successful publish (fingerprinted in TRAITS_STAMP):
+#   1. cleave-traits tip   — new trait commits beyond what the manifest points at
+#   2. cleave source HEAD  — the HEAD engine that validates the `latest` pointer
+#   3. stable release tags — the top-N `v<n>` tags the manifest is keyed by, i.e.
+#                            "new cleave versions" (a plain `main` HEAD stamp would
+#                            miss a tag pushed onto an existing commit)
+# The whole gate is LOCAL and read-only: one lightweight `git fetch` of the small
+# traits repo (cleave source + tags are refreshed by the unit's ExecStartPre), then
+# rev-parse/for-each-ref + a compare — no working-tree mutation, no `release` build,
+# no manifest render on an idle tick. Only a real change fast-forwards and runs the
+# multi-minute compat-test matrix. So an idle 30-min tick costs ~one small fetch.
+#
+# UNSIGNED: it runs gen-manifest WITHOUT SIGN=1, so no cosign/IDENTITY is needed and
+# nothing is written to the public Rekor transparency log. versions.toml ships with
+# no signature bundle, so clients that require a signature will NOT apply the update
+# — i.e. auto-update is effectively disabled until signing is wired up. To turn
+# signing on later, sign in an automated fashion (see the hacks/traiter-linux.sh
+# header) and swap the gen-manifest line below for `SIGN=1 IDENTITY=$(IDENTITY)`
+# plus a `check-manifest IDENTITY=$(IDENTITY)` gate. The R2 upload is idempotent
+# (rclone skips unchanged bundles), so a redundant publish is cheap.
+# Safe to run by hand.
+TRAITS_STAMP ?= $(DIST)/.publish-traits.stamp
+.PHONY: publish-traits-cron deploy-traiter
+publish-traits-cron: ## 30-min timer cycle: skip fast unless traits/source/release-tags moved, else gen+check+publish UNSIGNED
+	@command -v rclone >/dev/null || { echo "publish-traits-cron: rclone not found"; exit 1; }
+	@git -C "$(TRAITS)" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+	  || { echo "publish-traits-cron: TRAITS=$(TRAITS) is not a git checkout — clone cleave-traits there first"; exit 1; }
+	@set -e; \
+	git -C "$(TRAITS)" fetch -q origin 2>/dev/null || echo "publish-traits-cron: WARN fetch $(TRAITS) failed; using cached refs"; \
+	traits_tip=$$(git -C "$(TRAITS)" rev-parse origin/main 2>/dev/null || git -C "$(TRAITS)" rev-parse HEAD); \
+	traits_short=$$(git -C "$(TRAITS)" rev-parse --short "$$traits_tip"); \
+	src_head=$$(git -C . rev-parse HEAD 2>/dev/null || echo nogit); \
+	tagsig=$$(git -C . for-each-ref --format='%(objectname) %(refname:short)' 'refs/tags/v*' 2>/dev/null | awk '$$2 ~ /^v[0-9]/ && $$2 !~ /-/' | sort || true); \
+	stamp=$$(printf 'traits %s\nsrc %s\ntags\n%s\n' "$$traits_tip" "$$src_head" "$$tagsig" | git hash-object --stdin); \
+	if [ -f "$(TRAITS_STAMP)" ] && [ "$$(cat "$(TRAITS_STAMP)" 2>/dev/null)" = "$$stamp" ]; then \
+	  echo "→ no new trait commits or cleave versions since last publish (cleave-traits $$traits_short); skipping"; \
+	  exit 0; \
+	fi; \
+	echo "→ change detected (cleave-traits $$traits_short); fast-forwarding + publishing UNSIGNED"; \
+	git -C "$(TRAITS)" merge -q --ff-only "$$traits_tip"; \
+	$(MAKE) gen-manifest ENGINE= VERSIONS=$(VERSIONS) CHANNELS=stable; \
+	$(MAKE) check-manifest; \
+	$(MAKE) publish-cleave; \
+	mkdir -p "$$(dirname "$(TRAITS_STAMP)")"; \
+	printf '%s\n' "$$stamp" > "$(TRAITS_STAMP)"; \
+	echo "✓ publish-traits-cron complete (unsigned) at $$traits_short"
+
+deploy-traiter: ## Install the unattended 30-min trait-publish systemd timer on THIS host (see hacks/traiter-linux.sh)
+	./hacks/traiter-linux.sh
+
 update-manifest: release ## Build + validate + render a trait-update manifest (RELEASE=x.y.z [CHANNEL=beta] [COMMIT=ref] [SIGN=1 IDENTITY=...])
 	@[ -n "$(RELEASE)" ] || { echo "RELEASE=x.y.z required"; exit 1; }
 	tools/update-manifest/build-manifest.sh \

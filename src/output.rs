@@ -285,6 +285,20 @@ fn terse_description(desc: &str) -> String {
         .to_string()
 }
 
+/// Append the trait/finding id to a plain-view annotation so an LLM reading tiny
+/// output can name the exact trait that fired and locate its file: `desc (id)`,
+/// or a bare `id` when the description is empty. Plain (LLM/tiny) render paths
+/// only — the colored terminal views omit the id to keep the aligned comment
+/// gutter legible.
+#[allow(dead_code)] // Used by binary target
+fn annotate_desc(desc: &str, id: &str) -> String {
+    if desc.is_empty() {
+        id.to_string()
+    } else {
+        format!("{desc} ({id})")
+    }
+}
+
 #[allow(dead_code)] // Used by binary target
 fn format_evidence(finding: &Finding) -> String {
     // Dedupe values, drop blank/whitespace-only lines from each. If any
@@ -461,19 +475,21 @@ pub(crate) fn format_jsonl(report: &AnalysisReport) -> Result<String> {
 ///
 /// The code shows as the file's own source (or an ASCII-forward byte window for
 /// binaries), and each finding is announced on a *preceding* comment-marker line —
-/// `{marker} SEV LINE[:COL] desc` — so the annotation reads as a comment describing
-/// the line that immediately follows it, while the source itself stays unaltered.
-/// `SEV` is one of `H`/`S`/`N`/`B`/`C`/`F` (hostile…filtered); `LINE` is a 1-based
-/// line number — or, for a minified one-liner / binary slice, an absolute byte
-/// offset written `@OFFSET`. Context lines carry no annotation and render bare.
+/// `{marker} SEV LINE[:COL] desc (id)` — so the annotation reads as a comment
+/// describing the line that immediately follows it, while the source itself stays
+/// unaltered. `SEV` is one of `H`/`S`/`N`/`B`/`C`/`F` (hostile…filtered); `LINE` is
+/// a 1-based line number — or, for a minified one-liner / binary slice, an absolute
+/// byte offset written `@OFFSET`; `id` is the trait/finding id that fired, so a
+/// reader can name and locate the exact trait (a bare `id` when `desc` is empty).
+/// Context lines carry no annotation and render bare.
 ///
 /// ```text
-/// # hdr: path<TAB>type size score; per finding, a `{marker} SEV LINE[:COL] desc`
+/// # hdr: path<TAB>type size score; per finding, a `{marker} SEV LINE[:COL] desc (id)`
 /// # line (or `@OFFSET` for a byte unit) above the source it describes.
 /// evil.sh <TAB> shell 4.2KB 142
-/// # H 20:1 decode+exec base64
+/// # H 20:1 decode+exec base64 (exec/decode-exec-base64)
 /// exec(base64.b64decode(p))
-/// # N @0 obfuscator.io bundle
+/// # N @0 obfuscator.io bundle (obfuscation/obfuscator-io)
 /// const _0x1=_0x2;function _0x3(){…
 /// ```
 /// The header drawn above each file's context block.
@@ -1311,7 +1327,7 @@ fn render_ascii_context(out: &mut String, file: &FileAnalysis, selected: &[&str]
                 out,
                 "{marker} {} {}",
                 n.crit.letter(),
-                terse_description(&n.desc)
+                annotate_desc(&terse_description(&n.desc), &n.id)
             );
         }
         if start > 0 {
@@ -1836,7 +1852,7 @@ fn render_source_line(
             }
         }
         out.push(' ');
-        out.push_str(&terse_description(&n.desc));
+        out.push_str(&annotate_desc(&terse_description(&n.desc), &n.id));
         out.push('\n');
     }
 
@@ -1941,7 +1957,7 @@ fn render_hex_unit(
                 out.push_str(&format!(
                     "  {marker} {} {}",
                     n.crit.letter(),
-                    terse_description(&n.desc)
+                    annotate_desc(&terse_description(&n.desc), &n.id)
                 ));
             }
             out.push('\n');
@@ -2156,7 +2172,11 @@ fn render_no_anchor(
             // the form the located findings use (which insert a `LINE[:COL]`
             // between the severity and the description). Should be rare.
             let marker = comment_marker(&file.file_type);
-            out.push_str(&format!("{marker} {} {desc}\n", f.crit.letter()));
+            out.push_str(&format!(
+                "{marker} {} {}\n",
+                f.crit.letter(),
+                annotate_desc(&desc, &f.id)
+            ));
             continue;
         }
         // Terminal view: severity gutter glyph + description, no comment marker.

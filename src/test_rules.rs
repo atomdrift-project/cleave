@@ -561,12 +561,25 @@ impl<'a> RuleDebugger<'a> {
             ));
         }
 
-        // Add proximity info if present
+        // Add proximity info if present. The detail line names where each
+        // condition group landed and what the window must contain, so an author
+        // can see at a glance whether the `all:`/`any:` legs are truly adjacent
+        // (a far-apart `all:` leg no longer slips through on `any:` count alone).
         if let Some(proximity) = eval_debug.proximity {
-            let proximity_desc = format!(
-                "Proximity ({}): max_span={}, satisfied={}",
-                proximity.constraint_type, proximity.max_span, proximity.satisfied
-            );
+            let proximity_desc = if proximity.detail.is_empty() {
+                format!(
+                    "Proximity ({}): max_span={}, satisfied={}",
+                    proximity.constraint_type, proximity.max_span, proximity.satisfied
+                )
+            } else {
+                format!(
+                    "Proximity ({}): max_span={}, satisfied={}\n        {}",
+                    proximity.constraint_type,
+                    proximity.max_span,
+                    proximity.satisfied,
+                    proximity.detail
+                )
+            };
             condition_results.push(ConditionDebugResult::new(
                 proximity_desc,
                 proximity.satisfied,

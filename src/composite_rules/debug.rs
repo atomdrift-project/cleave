@@ -219,6 +219,11 @@ pub(crate) struct ProximityDebug {
     pub max_span: usize,
     /// Whether the constraint was satisfied
     pub satisfied: bool,
+    /// Human-readable explanation of the group requirement and where each
+    /// condition group's evidence actually landed, so an author can see why
+    /// proximity passed or failed (e.g. `all: @ line(s) [106]; any: @ line(s)
+    /// [38] — need every all-leg + 1 any-leg within 1 line`).
+    pub detail: String,
 }
 
 /// Debug info for downgrade evaluation

@@ -2427,11 +2427,16 @@ impl CompositeTrait {
                 };
                 let max_span = self.near_lines.or(self.near_bytes).unwrap_or(0);
                 let satisfied = proximity_result.is_some();
+                let binary_data = ctx.binary_data;
                 ctx.with_debug(|debug| {
+                    // Computed inside the closure so the file-sized line-index
+                    // build only happens when debug output is actually collected.
+                    let detail = self.proximity_debug_detail(&proximity_tags, binary_data);
                     debug.set_proximity(ProximityDebug {
                         constraint_type: constraint_type.to_string(),
                         max_span,
                         satisfied,
+                        detail,
                     });
                 });
             }
@@ -3258,12 +3263,65 @@ impl CompositeTrait {
         Some((filtered_evidence, filtered_tags))
     }
 
+    /// Build the human-readable proximity explanation surfaced by `test-rules`:
+    /// where each condition group's evidence actually landed and what the
+    /// winning window must contain. This makes the pass/fail self-explanatory —
+    /// e.g. `all: @ line(s) [106]; any: @ line(s) [38] — window must hold every
+    /// all-leg (1) + 1/2 any-leg(s) within 1 line(s)` immediately shows an
+    /// author that a fetch and a hidden path 68 lines apart are *not* adjacent.
+    /// Authoring/debug aid only; never called on the scan hot path.
+    fn proximity_debug_detail(
+        &self,
+        tagged_locations: &[TaggedLocation],
+        binary_data: &[u8],
+    ) -> String {
+        let all_count = self.all.as_ref().map_or(0, Vec::len);
+        let any_total = self.any.as_ref().map_or(0, Vec::len);
+        let any_required = self
+            .any
+            .as_ref()
+            .map_or(0, |any| self.needs.unwrap_or(1).min(any.len()));
+
+        let line_starts = build_line_index(binary_data);
+        let mut all_lines = Vec::new();
+        let mut any_lines = Vec::new();
+        for t in tagged_locations {
+            if let Some(line) = tagged_to_line(t, &line_starts) {
+                if t.condition_index < all_count {
+                    all_lines.push(line);
+                } else {
+                    any_lines.push(line);
+                }
+            }
+        }
+        all_lines.sort_unstable();
+        all_lines.dedup();
+        any_lines.sort_unstable();
+        any_lines.dedup();
+
+        let (unit, span) = self
+            .near_lines
+            .map_or_else(|| ("byte", self.near_bytes.unwrap_or(0)), |n| ("line", n));
+        let mut req = Vec::new();
+        if all_count > 0 {
+            req.push(format!("every all-leg ({all_count})"));
+        }
+        if any_required > 0 {
+            req.push(format!("{any_required}/{any_total} any-leg(s)"));
+        }
+        format!(
+            "all: @ line(s) {all_lines:?}; any: @ line(s) {any_lines:?} — window must hold {} within {span} {unit}(s)",
+            req.join(" + ")
+        )
+    }
+
     /// Check if evidence satisfies proximity constraints.
     /// Returns None if constraints fail, otherwise returns the evidence unchanged.
     ///
-    /// When `tagged_locations` is non-empty, proximity requires that a window contains
-    /// evidence from distinct conditions (cross-condition proximity). When empty,
-    /// falls back to counting individual evidence items.
+    /// When `tagged_locations` is non-empty, proximity requires a window that
+    /// reproduces the rule's condition structure: every located `all:` leg plus
+    /// at least `needs` distinct `any:` legs (see `window_satisfies_groups`).
+    /// When empty, falls back to counting individual evidence items.
     fn check_proximity_constraints(
         &self,
         evidence: Vec<Evidence>,
@@ -3279,13 +3337,23 @@ impl CompositeTrait {
         // same count without the `.max(2)` floor.)
         let min_distinct = self.min_distinct_conditions().max(2);
 
+        // Condition indices `< all_count` are `all:` legs (each must fall inside
+        // the winning window); `>= all_count` are `any:` legs (at least
+        // `any_required` distinct ones must). See `window_satisfies_groups`.
+        let all_count = self.all.as_ref().map_or(0, Vec::len);
+        let any_required = self
+            .any
+            .as_ref()
+            .map_or(0, |any| self.needs.unwrap_or(1).min(any.len()));
+
         // Track the winning window range for evidence filtering
         let mut line_window: Option<(usize, usize)> = None;
         let mut byte_window: Option<(u64, u64)> = None;
         let mut line_starts_cache: Option<Vec<usize>> = None;
 
         if !tagged_locations.is_empty() {
-            // Cross-condition proximity: require distinct condition indices in window
+            // Cross-condition proximity: the window must reproduce the rule's
+            // condition structure (all `all:` legs + enough `any:` legs).
             if let Some(max_line_span) = self.near_lines {
                 let line_starts = build_line_index(binary_data);
                 let items: Vec<(usize, usize)> = tagged_locations
@@ -3294,7 +3362,13 @@ impl CompositeTrait {
                         tagged_to_line(t, &line_starts).map(|line| (line, t.condition_index))
                     })
                     .collect();
-                match evidence_within_line_range_grouped(&items, max_line_span, min_distinct) {
+                match evidence_within_line_range_grouped(
+                    &items,
+                    max_line_span,
+                    all_count,
+                    any_required,
+                    min_distinct,
+                ) {
                     Some(window) => line_window = Some(window),
                     None => return None,
                 }
@@ -3306,7 +3380,13 @@ impl CompositeTrait {
                     .iter()
                     .filter_map(|t| tagged_to_byte_offset(t).map(|off| (off, t.condition_index)))
                     .collect();
-                match evidence_within_byte_range_grouped(&items, max_byte_span, min_distinct) {
+                match evidence_within_byte_range_grouped(
+                    &items,
+                    max_byte_span,
+                    all_count,
+                    any_required,
+                    min_distinct,
+                ) {
                     Some(window) => byte_window = Some(window),
                     None => return None,
                 }
@@ -3607,26 +3687,70 @@ fn evidence_within_byte_range(
     None
 }
 
+/// A proximity window is satisfying only when it independently reproduces the
+/// rule's condition structure: it must contain every `all:` condition that
+/// produced a locatable finding (indices `< all_count`) **and** at least
+/// `any_required` distinct `any:` conditions (indices `>= all_count`).
+///
+/// Counting total distinct indices is not sufficient. An `any:` group with
+/// more legs than `needs:` can otherwise supply the whole `min_distinct` count
+/// on its own — two co-located `any:` matches would satisfy proximity while a
+/// far-away `all:` leg escapes the constraint entirely (the "fetch here, hidden
+/// path 60 lines below" false-positive). We only require `all:` legs that
+/// actually produced a location: a position-less `all:` leg (e.g. a file-level
+/// metadata fact) cannot be proximity-constrained and must not block matching.
+fn window_satisfies_groups(
+    seen: &rustc_hash::FxHashSet<usize>,
+    required_all: &rustc_hash::FxHashSet<usize>,
+    all_count: usize,
+    any_required: usize,
+    min_distinct: usize,
+) -> bool {
+    seen.len() >= min_distinct
+        && required_all.iter().all(|idx| seen.contains(idx))
+        && seen.iter().filter(|&&idx| idx >= all_count).count() >= any_required
+}
+
+/// The distinct `all:` condition indices (`< all_count`) that produced a
+/// locatable finding — the legs a proximity window is required to co-locate.
+fn located_all_indices(
+    indices: impl Iterator<Item = usize>,
+    all_count: usize,
+) -> rustc_hash::FxHashSet<usize> {
+    indices.filter(|&idx| idx < all_count).collect()
+}
+
 /// Returns the (start_line, end_line) of the first qualifying window, or None.
 fn evidence_within_line_range_grouped(
     items: &[(usize, usize)], // (line_number, condition_index)
     max_line_span: usize,
+    all_count: usize,
+    any_required: usize,
     min_distinct: usize,
 ) -> Option<(usize, usize)> {
     if items.len() < min_distinct {
         return None;
     }
 
+    let required_all = located_all_indices(items.iter().map(|&(_, idx)| idx), all_count);
+
     let mut sorted: SmallVec<[(usize, usize); MAX_EVIDENCE_PER_TRAIT]> = items.into();
     sorted.sort_unstable_by_key(|&(line, _)| line);
 
-    // Sliding window: find any window of max_line_span with min_distinct condition indices
+    // Sliding window: find any window of max_line_span that reproduces the
+    // rule's condition structure (all `all:` legs + enough `any:` legs).
     for (i, &(start_line, _)) in sorted.iter().enumerate() {
         let mut seen = rustc_hash::FxHashSet::default();
         for &(line, cond_idx) in &sorted[i..] {
             if line - start_line <= max_line_span {
                 seen.insert(cond_idx);
-                if seen.len() >= min_distinct {
+                if window_satisfies_groups(
+                    &seen,
+                    &required_all,
+                    all_count,
+                    any_required,
+                    min_distinct,
+                ) {
                     return Some((start_line, line));
                 }
             } else {
@@ -3642,11 +3766,15 @@ fn evidence_within_line_range_grouped(
 fn evidence_within_byte_range_grouped(
     items: &[(u64, usize)], // (byte_offset, condition_index)
     max_byte_span: usize,
+    all_count: usize,
+    any_required: usize,
     min_distinct: usize,
 ) -> Option<(u64, u64)> {
     if items.len() < min_distinct {
         return None;
     }
+
+    let required_all = located_all_indices(items.iter().map(|&(_, idx)| idx), all_count);
 
     let mut sorted: SmallVec<[(u64, usize); MAX_EVIDENCE_PER_TRAIT]> = items.into();
     sorted.sort_unstable_by_key(|&(offset, _)| offset);
@@ -3656,7 +3784,13 @@ fn evidence_within_byte_range_grouped(
         for &(offset, cond_idx) in &sorted[i..] {
             if (offset - start) <= max_byte_span as u64 {
                 seen.insert(cond_idx);
-                if seen.len() >= min_distinct {
+                if window_satisfies_groups(
+                    &seen,
+                    &required_all,
+                    all_count,
+                    any_required,
+                    min_distinct,
+                ) {
                     return Some((start, offset));
                 }
             } else {
@@ -3938,6 +4072,73 @@ mod scope_tests {
             rule.check_proximity_constraints(evidence, &tags, b"aaaa\nbbbb\ncccc\n")
                 .is_none()
         );
+    }
+
+    /// A symbol condition for building `any:` legs in the group-proximity tests.
+    fn symbol_cond(name: &str) -> Condition {
+        Condition::Symbol(SymbolQuery {
+            exact: Some(name.to_string()),
+            substr: None,
+            regex: None,
+            platforms: None,
+            is_check: None,
+            kind: None,
+            arg: None,
+            args: None,
+            alias: None,
+            not: None,
+        })
+    }
+
+    #[test]
+    fn near_lines_requires_all_leg_not_just_any_group() {
+        // Regression: `all: [x]` + `any: [y, z]` + `near_lines: 1`. The two
+        // co-located `any:` legs alone must NOT satisfy proximity while the
+        // `all:` leg is far away — otherwise a "fetch here, hidden path 60 lines
+        // below" pair fires hostile (the trailofbits/skills devcontainer FP).
+        let mut rule = composite_with(1, None); // all: [x] -> condition index 0
+        rule.any = Some(vec![symbol_cond("y"), symbol_cond("z")]);
+        rule.needs = None; // any needs 1 of 2
+        rule.near_lines = Some(1);
+
+        // all-leg (idx 0) at line 1; both any-legs (idx 1, 2) at line 3.
+        let evidence = vec![
+            ev("embedded@0x1:unknown"),
+            ev("embedded@0xb:unknown"),
+            ev("embedded@0xb:unknown"),
+        ];
+        let tags = vec![
+            tag(0, "embedded@0x1:unknown"),
+            tag(1, "embedded@0xb:unknown"),
+            tag(2, "embedded@0xb:unknown"),
+        ];
+
+        assert!(
+            rule.check_proximity_constraints(evidence, &tags, b"aaaa\nbbbb\ncccc\n")
+                .is_none(),
+            "two co-located any-legs must not satisfy near_lines with the all-leg 2 lines away"
+        );
+    }
+
+    #[test]
+    fn near_lines_accepts_all_leg_beside_one_any_leg() {
+        // Same rule shape, but now the all-leg (line 1) and one any-leg (line 2)
+        // are within the 1-line window — a genuine adjacency that must match.
+        let mut rule = composite_with(1, None);
+        rule.any = Some(vec![symbol_cond("y"), symbol_cond("z")]);
+        rule.needs = None;
+        rule.near_lines = Some(1);
+
+        let evidence = vec![ev("embedded@0x1:unknown"), ev("embedded@0x6:unknown")];
+        let tags = vec![
+            tag(0, "embedded@0x1:unknown"),
+            tag(1, "embedded@0x6:unknown"),
+        ];
+
+        let filtered = rule
+            .check_proximity_constraints(evidence, &tags, b"aaaa\nbbbb\ncccc\n")
+            .expect("all-leg and an any-leg on adjacent lines satisfy near_lines");
+        assert_eq!(filtered.len(), 2);
     }
 
     #[test]

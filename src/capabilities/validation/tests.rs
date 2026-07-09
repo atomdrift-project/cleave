@@ -45,6 +45,8 @@ mod precision_tests {
     #[ignore]
     fn test_precision_count_min_scored() {
         let mut trait_def = create_minimal_trait(Condition::Raw(RawQuery {
+            length_min: None,
+            length_max: None,
             exact: Some("test".to_string()),
             substr: None,
             regex: None,
@@ -77,6 +79,8 @@ mod precision_tests {
     #[ignore]
     fn test_precision_density_scored() {
         let mut trait_def = create_minimal_trait(Condition::Raw(RawQuery {
+            length_min: None,
+            length_max: None,
             exact: Some("test".to_string()),
             substr: None,
             regex: None,
@@ -189,6 +193,8 @@ mod duplicate_tests {
         create_test_trait(
             id,
             Condition::Raw(RawQuery {
+                length_min: None,
+                length_max: None,
                 exact: Some(pattern.to_string()),
                 substr: None,
                 regex: None,
@@ -218,6 +224,8 @@ mod duplicate_tests {
         create_test_trait(
             id,
             Condition::Text(TextQuery {
+                length_min: None,
+                length_max: None,
                 exact: Some(pattern.to_string()),
                 substr: None,
                 regex: None,
@@ -281,6 +289,8 @@ mod duplicate_tests {
         create_test_trait(
             id,
             Condition::Raw(RawQuery {
+                length_min: None,
+                length_max: None,
                 exact: None,
                 substr: Some(pattern.to_string()),
                 regex: None,
@@ -339,6 +349,8 @@ mod duplicate_tests {
         create_test_trait(
             id,
             Condition::Raw(RawQuery {
+                length_min: None,
+                length_max: None,
                 exact: None,
                 substr: None,
                 regex: Some(pattern.to_string()),
@@ -394,6 +406,8 @@ mod duplicate_tests {
         create_test_trait(
             id,
             Condition::Raw(RawQuery {
+                length_min: None,
+                length_max: None,
                 exact: None,
                 substr: None,
                 regex: Some(pattern.to_string()),
@@ -422,6 +436,8 @@ mod duplicate_tests {
         create_test_trait(
             id,
             Condition::Raw(RawQuery {
+                length_min: None,
+                length_max: None,
                 exact: None,
                 substr: None,
                 regex: Some(pattern.to_string()),
@@ -1225,6 +1241,8 @@ mod duplicate_tests {
         let trait1 = create_test_trait_with_conf_crit(
             "test::a",
             Condition::Raw(RawQuery {
+                length_min: None,
+                length_max: None,
                 exact: Some("duplicate".to_string()),
                 substr: None,
                 regex: None,
@@ -1247,6 +1265,8 @@ mod duplicate_tests {
         let trait2 = create_test_trait_with_conf_crit(
             "test::b",
             Condition::Raw(RawQuery {
+                length_min: None,
+                length_max: None,
                 exact: Some("duplicate".to_string()),
                 substr: None,
                 regex: None,
@@ -1280,6 +1300,8 @@ mod duplicate_tests {
         let trait1 = create_test_trait_with_conf_crit(
             "test::a",
             Condition::Raw(RawQuery {
+                length_min: None,
+                length_max: None,
                 exact: Some("AB".to_string()),
                 substr: None,
                 regex: None,
@@ -1302,6 +1324,8 @@ mod duplicate_tests {
         let trait2 = create_test_trait_with_conf_crit(
             "test::b",
             Condition::Raw(RawQuery {
+                length_min: None,
+                length_max: None,
                 exact: Some("\\x41B".to_string()), // Normalizes to "AB"
                 substr: None,
                 regex: None,
@@ -1335,6 +1359,8 @@ mod duplicate_tests {
         let trait1 = create_test_trait_with_conf_crit(
             "test::a",
             Condition::Raw(RawQuery {
+                length_min: None,
+                length_max: None,
                 exact: Some("test".to_string()), // 4 chars
                 substr: None,
                 regex: None,
@@ -1357,6 +1383,8 @@ mod duplicate_tests {
         let trait2 = create_test_trait_with_conf_crit(
             "test::b",
             Condition::Raw(RawQuery {
+                length_min: None,
+                length_max: None,
                 exact: Some("\\x74\\x65\\x73\\x74".to_string()), // 16 chars hex-encoded "test" (diff = 12 > 2)
                 substr: None,
                 regex: None,
@@ -1389,6 +1417,8 @@ mod duplicate_tests {
         let trait1 = create_test_trait_with_conf_crit(
             "test::a",
             Condition::Raw(RawQuery {
+                length_min: None,
+                length_max: None,
                 exact: Some("data".to_string()), // 4 chars
                 substr: None,
                 regex: None,
@@ -1411,6 +1441,8 @@ mod duplicate_tests {
         let trait2 = create_test_trait_with_conf_crit(
             "test::b",
             Condition::Raw(RawQuery {
+                length_min: None,
+                length_max: None,
                 exact: Some("\\x64ata".to_string()), // 7 chars hex-encoded first char (diff = 3 > 2)
                 substr: None,
                 regex: None,
@@ -1444,6 +1476,8 @@ mod duplicate_tests {
         let trait1 = create_test_trait_with_conf_crit(
             "test::a",
             Condition::Raw(RawQuery {
+                length_min: None,
+                length_max: None,
                 exact: Some("pattern".to_string()), // 7 chars
                 substr: None,
                 regex: None,
@@ -1466,6 +1500,8 @@ mod duplicate_tests {
         let trait2 = create_test_trait_with_conf_crit(
             "test::b",
             Condition::Raw(RawQuery {
+                length_min: None,
+                length_max: None,
                 exact: Some("pattern".to_string()), // 7 chars (diff = 0, not >2)
                 substr: None,
                 regex: None,
@@ -1499,6 +1535,8 @@ mod duplicate_tests {
         let trait1 = create_test_trait_with_conf_crit(
             "test::a",
             Condition::Raw(RawQuery {
+                length_min: None,
+                length_max: None,
                 exact: Some("value".to_string()), // 5 chars
                 substr: None,
                 regex: None,
@@ -1521,6 +1559,8 @@ mod duplicate_tests {
         let trait2 = create_test_trait_with_conf_crit(
             "test::b",
             Condition::Raw(RawQuery {
+                length_min: None,
+                length_max: None,
                 exact: Some("\\x76\\x61lue".to_string()), // 11 chars, first 2 chars hex-encoded (diff = 6 > 2)
                 substr: None,
                 regex: None,
@@ -1554,6 +1594,8 @@ mod duplicate_tests {
         let trait1 = create_test_trait_with_conf_crit(
             "test::a",
             Condition::Raw(RawQuery {
+                length_min: None,
+                length_max: None,
                 exact: Some("name".to_string()), // 4 chars
                 substr: None,
                 regex: None,
@@ -1576,6 +1618,8 @@ mod duplicate_tests {
         let trait2 = create_test_trait_with_conf_crit(
             "test::b",
             Condition::Raw(RawQuery {
+                length_min: None,
+                length_max: None,
                 exact: Some("\\x6e\\x61me".to_string()), // 11 chars (diff from trait1 = 7 > 2)
                 substr: None,
                 regex: None,
@@ -1598,6 +1642,8 @@ mod duplicate_tests {
         let trait3 = create_test_trait_with_conf_crit(
             "test::c",
             Condition::Raw(RawQuery {
+                length_min: None,
+                length_max: None,
                 exact: Some("\\x6e\\x61\\x6d\\x65".to_string()), // 16 chars, all hex-encoded (diff from trait1 = 12, from trait2 = 5 > 2)
                 substr: None,
                 regex: None,
@@ -1630,6 +1676,8 @@ mod duplicate_tests {
         let trait1 = create_test_trait_with_conf_crit(
             "test::a",
             Condition::Raw(RawQuery {
+                length_min: None,
+                length_max: None,
                 exact: Some("code".to_string()), // 4 chars
                 substr: None,
                 regex: None,
@@ -1652,6 +1700,8 @@ mod duplicate_tests {
         let trait2 = create_test_trait_with_conf_crit(
             "test::b",
             Condition::Raw(RawQuery {
+                length_min: None,
+                length_max: None,
                 exact: Some("\\x63\\x6fde".to_string()), // 11 chars (diff = 7 > 2)
                 substr: None,
                 regex: None,
@@ -1674,6 +1724,8 @@ mod duplicate_tests {
         let trait3 = create_test_trait_with_conf_crit(
             "test::c",
             Condition::Raw(RawQuery {
+                length_min: None,
+                length_max: None,
                 exact: Some("\\x63\\x6f\\x64\\x65".to_string()), // 16 chars (diff from trait1 = 12 > 2)
                 substr: None,
                 regex: None,
@@ -2016,6 +2068,8 @@ mod duplicate_tests {
             create_test_trait(
                 "test1",
                 Condition::Raw(RawQuery {
+                    length_min: None,
+                    length_max: None,
                     exact: Some("setup.py".to_string()),
                     substr: None,
                     word: None,
@@ -2262,6 +2316,8 @@ mod duplicate_tests {
             create_test_trait_with_conf_crit(
                 "exact_notable",
                 Condition::Raw(RawQuery {
+                    length_min: None,
+                    length_max: None,
                     exact: Some("malware.exe".to_string()),
                     substr: None,
                     regex: None,
@@ -2283,6 +2339,8 @@ mod duplicate_tests {
             create_test_trait_with_conf_crit(
                 "regex_hostile",
                 Condition::Raw(RawQuery {
+                    length_min: None,
+                    length_max: None,
                     exact: None,
                     substr: None,
                     regex: Some("malware\\.exe".to_string()),
@@ -2623,6 +2681,8 @@ mod duplicate_tests {
             create_test_trait_with_conf_crit(
                 "trait_notable",
                 Condition::Raw(RawQuery {
+                    length_min: None,
+                    length_max: None,
                     exact: Some("malicious_pattern".to_string()),
                     substr: None,
                     regex: None,
@@ -2644,6 +2704,8 @@ mod duplicate_tests {
             create_test_trait_with_conf_crit(
                 "trait_hostile",
                 Condition::Raw(RawQuery {
+                    length_min: None,
+                    length_max: None,
                     exact: Some("malicious_pattern".to_string()),
                     substr: None,
                     regex: None,
@@ -2677,6 +2739,8 @@ mod duplicate_tests {
             create_test_trait_with_conf_crit(
                 "trait_low_conf",
                 Condition::Raw(RawQuery {
+                    length_min: None,
+                    length_max: None,
                     exact: Some("test_pattern".to_string()),
                     substr: None,
                     regex: None,
@@ -2698,6 +2762,8 @@ mod duplicate_tests {
             create_test_trait_with_conf_crit(
                 "trait_high_conf",
                 Condition::Raw(RawQuery {
+                    length_min: None,
+                    length_max: None,
                     exact: Some("test_pattern".to_string()),
                     substr: None,
                     regex: None,
@@ -2908,6 +2974,8 @@ mod duplicate_tests {
             create_test_trait_with_conf_crit(
                 "trait_elf_macho",
                 Condition::Raw(RawQuery {
+                    length_min: None,
+                    length_max: None,
                     exact: Some("shared_pattern".to_string()),
                     substr: None,
                     regex: None,
@@ -2929,6 +2997,8 @@ mod duplicate_tests {
             create_test_trait_with_conf_crit(
                 "trait_elf_pe",
                 Condition::Raw(RawQuery {
+                    length_min: None,
+                    length_max: None,
                     exact: Some("shared_pattern".to_string()),
                     substr: None,
                     regex: None,
@@ -2963,6 +3033,8 @@ mod duplicate_tests {
             create_test_trait_with_conf_crit(
                 "trait_macho",
                 Condition::Raw(RawQuery {
+                    length_min: None,
+                    length_max: None,
                     exact: Some("platform_pattern".to_string()),
                     substr: None,
                     regex: None,
@@ -2984,6 +3056,8 @@ mod duplicate_tests {
             create_test_trait_with_conf_crit(
                 "trait_pe",
                 Condition::Raw(RawQuery {
+                    length_min: None,
+                    length_max: None,
                     exact: Some("platform_pattern".to_string()),
                     substr: None,
                     regex: None,
@@ -3018,6 +3092,8 @@ mod duplicate_tests {
             create_test_trait_with_conf_crit(
                 "trait_component",
                 Condition::Raw(RawQuery {
+                    length_min: None,
+                    length_max: None,
                     exact: Some("building_block".to_string()),
                     substr: None,
                     regex: None,
@@ -3039,6 +3115,8 @@ mod duplicate_tests {
             create_test_trait_with_conf_crit(
                 "trait_baseline",
                 Condition::Raw(RawQuery {
+                    length_min: None,
+                    length_max: None,
                     exact: Some("building_block".to_string()),
                     substr: None,
                     regex: None,
@@ -3073,6 +3151,8 @@ mod duplicate_tests {
             create_test_trait_with_conf_crit(
                 "trait_a",
                 Condition::Raw(RawQuery {
+                    length_min: None,
+                    length_max: None,
                     exact: Some("pattern_a".to_string()),
                     substr: None,
                     regex: None,
@@ -3094,6 +3174,8 @@ mod duplicate_tests {
             create_test_trait_with_conf_crit(
                 "trait_b",
                 Condition::Raw(RawQuery {
+                    length_min: None,
+                    length_max: None,
                     exact: Some("pattern_b".to_string()),
                     substr: None,
                     regex: None,
@@ -3155,6 +3237,8 @@ mod duplicate_tests {
         let a = create_test_trait_with_conf_crit(
             "test::comp_a",
             Condition::Raw(RawQuery {
+                length_min: None,
+                length_max: None,
                 exact: None,
                 substr: None,
                 regex: Some(r"eval\s*\([a-z]+\)".to_string()),
@@ -3176,6 +3260,8 @@ mod duplicate_tests {
         let b = create_test_trait_with_conf_crit(
             "test::comp_b",
             Condition::Raw(RawQuery {
+                length_min: None,
+                length_max: None,
                 exact: None,
                 substr: None,
                 regex: Some(r"eval\s*\([A-Z]+\)".to_string()),
@@ -3229,6 +3315,8 @@ mod duplicate_tests {
         let a = create_test_trait_with_conf_crit(
             "test::a",
             Condition::Raw(RawQuery {
+                length_min: None,
+                length_max: None,
                 exact: None,
                 substr: None,
                 regex: Some(r"eval\s*\(\s*[a-z]+\s*\)".to_string()),
@@ -3250,6 +3338,8 @@ mod duplicate_tests {
         let b = create_test_trait_with_conf_crit(
             "test::b",
             Condition::Raw(RawQuery {
+                length_min: None,
+                length_max: None,
                 exact: None,
                 substr: None,
                 regex: Some(r"eval\s*\(\s*[A-Z]+\s*\)".to_string()),
@@ -3319,6 +3409,8 @@ mod pattern_tests {
             mbc: None,
             attack: None,
             r#if: Condition::Raw(RawQuery {
+                length_min: None,
+                length_max: None,
                 exact: None,
                 substr: None,
                 regex: Some(pattern.to_string()),
@@ -3814,6 +3906,8 @@ mod taxonomy_tests {
             mbc: None,
             attack: None,
             r#if: Condition::Raw(crate::composite_rules::RawQuery {
+                length_min: None,
+                length_max: None,
                 exact: Some("needle".to_string()),
                 substr: None,
                 regex: None,
@@ -4088,6 +4182,8 @@ mod constraint_tests {
             mbc: None,
             attack: None,
             r#if: Condition::Raw(RawQuery {
+                length_min: None,
+                length_max: None,
                 exact: Some("test".to_string()),
                 substr: None,
                 regex: None,
@@ -4160,6 +4256,8 @@ mod constraint_tests {
         section_offset_range: Option<(i64, Option<i64>)>,
     ) -> Condition {
         Condition::Raw(RawQuery {
+            length_min: None,
+            length_max: None,
             exact: Some("MZ".to_string()),
             substr: None,
             regex: None,
@@ -4529,8 +4627,8 @@ mod constraint_tests {
                 ne: None,
                 case_insensitive: false,
                 exists: Some(false),
-                size_min: None,
-                size_max: None,
+                length_min: None,
+                length_max: None,
             }),
             size_min: None,
             size_max: None,
@@ -4577,8 +4675,8 @@ mod constraint_tests {
                 ne: None,
                 case_insensitive: false,
                 exists: Some(false),
-                size_min: None,
-                size_max: None,
+                length_min: None,
+                length_max: None,
             }),
             size_min: None,
             size_max: None,
@@ -4969,6 +5067,8 @@ mod autoprefix_tests {
     fn test_collect_refs_from_atomic_trait_ignores_non_trait_conditions() {
         let trait_def = make_trait_def(
             Condition::Raw(RawQuery {
+                length_min: None,
+                length_max: None,
                 exact: Some("marker".to_string()),
                 substr: None,
                 regex: None,
@@ -5224,6 +5324,8 @@ mod orphan_tests {
             mbc: None,
             attack: None,
             r#if: Condition::Raw(RawQuery {
+                length_min: None,
+                length_max: None,
                 exact: Some("test".to_string()),
                 substr: None,
                 regex: None,
@@ -5341,6 +5443,8 @@ mod excessive_file_types_tests {
             mbc: None,
             attack: None,
             r#if: Condition::Raw(RawQuery {
+                length_min: None,
+                length_max: None,
                 exact: Some("test".to_string()),
                 substr: None,
                 regex: None,
@@ -6122,6 +6226,8 @@ mod raw_should_use_string_value_tests {
 
     fn raw_substr(pattern: &str) -> Condition {
         Condition::Raw(RawQuery {
+            length_min: None,
+            length_max: None,
             exact: None,
             substr: Some(pattern.to_string()),
             regex: None,
@@ -6139,6 +6245,8 @@ mod raw_should_use_string_value_tests {
 
     fn raw_regex(pattern: &str) -> Condition {
         Condition::Raw(RawQuery {
+            length_min: None,
+            length_max: None,
             exact: None,
             substr: None,
             regex: Some(pattern.to_string()),
@@ -6227,6 +6335,8 @@ mod raw_should_use_string_value_tests {
         let t = binary_trait(
             "t/offset",
             Condition::Raw(RawQuery {
+                length_min: None,
+                length_max: None,
                 exact: None,
                 substr: Some("long_pattern_here".to_string()),
                 regex: None,
@@ -6251,6 +6361,8 @@ mod raw_should_use_string_value_tests {
         let t = binary_trait(
             "t/section",
             Condition::Raw(RawQuery {
+                length_min: None,
+                length_max: None,
                 exact: None,
                 substr: Some("long_pattern_here".to_string()),
                 regex: None,
@@ -6337,6 +6449,8 @@ mod section_filter_validation_tests {
             mbc: None,
             attack: None,
             r#if: Condition::Text(TextQuery {
+                length_min: None,
+                length_max: None,
                 exact: None,
                 substr: Some("ProjectDiscovery".to_string()),
                 regex: None,
@@ -6526,6 +6640,8 @@ mod ast_function_call_should_use_symbol_tests {
 
     fn text_substr(value: &str) -> Condition {
         Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             exact: None,
             substr: Some(value.to_string()),
             regex: None,
@@ -6544,6 +6660,8 @@ mod ast_function_call_should_use_symbol_tests {
 
     fn text_regex(value: &str) -> Condition {
         Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             exact: None,
             substr: None,
             regex: Some(value.to_string()),

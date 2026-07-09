@@ -126,8 +126,8 @@ pub(crate) use composite::{
 // Pattern quality checks
 pub(crate) use patterns::{
     find_ast_function_call_should_use_symbol, find_brittle_path_patterns,
-    find_non_capturing_groups, find_raw_should_use_text, find_short_pattern_warnings,
-    find_slow_regex_patterns, find_string_literal_should_use_text,
+    find_memory_hungry_regex_patterns, find_non_capturing_groups, find_raw_should_use_text,
+    find_short_pattern_warnings, find_slow_regex_patterns, find_string_literal_should_use_text,
 };
 
 // Taxonomy validation
@@ -154,11 +154,12 @@ pub(crate) use taxonomy::{
 pub(crate) use constraints::{
     find_empty_condition_clauses, find_excessive_file_types, find_excessive_skip_conditions,
     find_hex_binary_missing_section, find_hostile_composites_without_notable_leg,
-    find_impossible_count_constraints, find_impossible_needs, find_impossible_size_constraints,
-    find_invalid_not_usage, find_kv_exists_with_matcher, find_missing_search_patterns,
-    find_needs_without_any, find_needs_zero, find_none_only_with_proximity,
-    find_orphaned_components, find_pure_alias_traits, find_redundant_explicit_defaults,
-    find_redundant_needs_one, find_should_use_defaults, find_too_short_patterns,
+    find_impossible_count_constraints, find_impossible_length_bounds, find_impossible_needs,
+    find_impossible_size_constraints, find_invalid_not_usage, find_kv_exists_with_matcher,
+    find_length_bounds_without_regex, find_missing_search_patterns, find_needs_without_any,
+    find_needs_zero, find_none_only_with_proximity, find_orphaned_components,
+    find_pure_alias_traits, find_redundant_explicit_defaults, find_redundant_needs_one,
+    find_should_use_defaults, find_too_short_patterns,
 };
 
 // Utility functions

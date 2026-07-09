@@ -58,6 +58,8 @@ mod python_aes_import_tests {
             r#for: vec![],
             for_from_groups: false,
             r#if: Condition::Raw(RawQuery {
+                length_min: None,
+                length_max: None,
                 exact: None,
                 substr: None,
                 regex: Some(r"from\s+Crypto\.Cipher\s+import\s+AES".to_string()),

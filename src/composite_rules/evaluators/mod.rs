@@ -144,6 +144,11 @@ impl LeanRegex {
         });
     }
 
+    /// Heap footprint of the compiled engine, for the byte-budgeted store.
+    pub(crate) fn heap_bytes(&self) -> usize {
+        self.meta.memory_usage() + std::mem::size_of::<Self>()
+    }
+
     /// Whether the pattern matches anywhere in `haystack`. Test-only primitive.
     #[cfg(test)]
     pub(crate) fn is_match(&self, haystack: &[u8]) -> bool {
@@ -155,19 +160,20 @@ impl LeanRegex {
     }
 }
 
-/// Bounded LRU cache for ASCII byte-regex engines ([`LeanRegex`]) — matches
-/// directly against raw file bytes, skipping UTF-8 validation. Only ASCII callers
-/// populate it; callers gate on `can_use_byte_matching` before requesting one.
+/// Byte-budgeted LRU cache for ASCII byte-regex engines ([`LeanRegex`]) —
+/// matches directly against raw file bytes, skipping UTF-8 validation. Only
+/// ASCII callers populate it; callers gate on `can_use_byte_matching` before
+/// requesting one.
 type BytesRegexCache =
-    lru::LruCache<(String, bool), std::sync::Arc<LeanRegex>, rustc_hash::FxBuildHasher>;
+    crate::composite_rules::regex_store::BudgetedStore<(String, bool), LeanRegex>;
 static BYTES_REGEX_CACHE: OnceLock<RwLock<BytesRegexCache>> = OnceLock::new();
 
 /// Access the bytes regex cache.
 pub(crate) fn bytes_regex_cache() -> &'static RwLock<BytesRegexCache> {
     BYTES_REGEX_CACHE.get_or_init(|| {
-        RwLock::new(lru::LruCache::with_hasher(
+        RwLock::new(crate::composite_rules::regex_store::BudgetedStore::new(
             REGEX_CACHE_SIZE,
-            rustc_hash::FxBuildHasher,
+            crate::composite_rules::regex_store::raw_budget_bytes(),
         ))
     })
 }

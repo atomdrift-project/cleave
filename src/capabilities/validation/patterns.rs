@@ -10,10 +10,13 @@
 //! for their target domain.
 
 use super::helpers::{find_line_number, is_ast_source_type, is_binary_file_type};
-use crate::composite_rules::{Condition, FileType, KvQuery, TraitDefinition};
+use crate::composite_rules::condition::NotException;
 use crate::composite_rules::{
-    EncodedQuery, HexQuery, LiteralQuery, PathQuery, RawQuery, SectionQuery, SymbolQuery,
-    TextQuery, TreeSitterQuery,
+    CommentQuery, EncodedQuery, HexQuery, LiteralQuery, PathQuery, RawQuery, SectionQuery,
+    SymbolQuery, TextQuery, TreeSitterQuery,
+};
+use crate::composite_rules::{
+    CompositeTrait, Condition, DowngradeConditions, FileType, KvQuery, TraitDefinition,
 };
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -538,6 +541,310 @@ pub(crate) fn find_slow_regex_patterns(traits: &[TraitDefinition], warnings: &mu
                     issues.join(", ")
                 ));
             }
+        }
+    }
+}
+
+/// Per-pattern budget for the resident engine's compiled Thompson NFA, checked
+/// by the `regex-memory` validator. Swept over the full trait corpus (23,251
+/// unique patterns, July 2026): the median resident NFA is ~2 KB, 400 patterns
+/// exceed 32 KB, 55 exceed 64 KB, and 14 exceed this budget — every one a
+/// counted repetition over a broad class (`[\s\S]{0,3000}` gap-spans,
+/// `[A-Za-z0-9+/]{20000,}` mega-runs) that unrolls into one NFA state per
+/// repetition. Two small atoms joined by a `near_lines:`/`near_bytes:`
+/// composite express the same detection for a few KB and scan faster.
+const REGEX_NFA_BUDGET_BYTES: usize = 128 * 1024;
+
+/// The evaluation engines' NFA compile ceiling, mirroring `nfa_size_limit` in
+/// `composite_rules::condition::engine_config`. A pattern whose NFA exceeds
+/// this cannot compile at evaluation time: if no engine compiles the rule
+/// never matches, and if only the Unicode engine fails the rule silently
+/// degrades to no-match on non-ASCII content.
+const REGEX_NFA_RUNTIME_LIMIT_BYTES: usize = 10 * (1 << 20);
+
+/// Build the Thompson NFA for `pattern` the way the evaluation engines do
+/// (implicit-only capture states, the runtime size ceiling). `ascii` selects
+/// the byte-mode engine (`unicode(false)`/`utf8(false)`, as `compile_ascii`
+/// and the raw byte-regex path use); otherwise Unicode `regex::Regex`
+/// semantics. `None` means the engine cannot be built at evaluation time.
+fn engine_nfa_bytes(pattern: &str, ascii: bool) -> Option<usize> {
+    use regex_automata::nfa::thompson;
+    let mut syntax = regex_automata::util::syntax::Config::new();
+    let mut config = thompson::Config::new()
+        .which_captures(thompson::WhichCaptures::Implicit)
+        .nfa_size_limit(Some(REGEX_NFA_RUNTIME_LIMIT_BYTES));
+    if ascii {
+        syntax = syntax.unicode(false).utf8(false);
+        config = config.utf8(false);
+    }
+    thompson::Compiler::new()
+        .configure(config)
+        .syntax(syntax)
+        .build(pattern)
+        .ok()
+        .map(|nfa| nfa.memory_usage())
+}
+
+/// Whether the engines compile an ASCII/byte-mode variant of `pattern` — the
+/// same gate `composite_rules::condition::ascii_compatible` uses. For these
+/// patterns the byte-mode engine is the resident one and the Unicode engine
+/// is built lazily, only for non-ASCII haystacks.
+fn regex_ascii_compatible(pattern: &str) -> bool {
+    pattern.is_ascii()
+        && !pattern.contains("\\u")
+        && !pattern.contains("\\p")
+        && !pattern.contains("\\P")
+}
+
+/// How a rule regex spends engine memory at evaluation time.
+enum RegexMemoryIssue {
+    /// The resident engine compiles but its NFA exceeds the budget.
+    OverBudget(usize),
+    /// No engine compiles under the runtime ceiling — the pattern can never
+    /// match at evaluation time.
+    NeverCompiles,
+    /// The resident byte-mode engine is fine, but the Unicode engine exceeds
+    /// the runtime ceiling — matching silently degrades on non-ASCII content.
+    UnicodeDegrades,
+}
+
+/// Measure `pattern` against the engine memory budget, mirroring
+/// `TraitRegex::compile`: ASCII-compatible patterns are judged by their
+/// resident byte-mode engine (falling back to Unicode when byte-mode won't
+/// build, as the runtime does), and additionally checked for a Unicode engine
+/// too large to ever compile. Returns `None` for patterns that are cheap or
+/// that don't parse (unparseable regexes never reach the engine caches and
+/// belong to other validators).
+fn regex_memory_issue(pattern: &str) -> Option<RegexMemoryIssue> {
+    // NFA size only escapes the O(pattern length) regime through counted
+    // repetition, so brace-free patterns can't approach the budget: the
+    // largest one in the corpus compiles to 8.8 KB resident (~15x headroom).
+    if !pattern.contains('{') {
+        return None;
+    }
+    regex_syntax::parse(pattern).ok()?;
+    let ascii = regex_ascii_compatible(pattern);
+    let resident = if ascii {
+        engine_nfa_bytes(pattern, true).or_else(|| engine_nfa_bytes(pattern, false))
+    } else {
+        engine_nfa_bytes(pattern, false)
+    };
+    match resident {
+        None => Some(RegexMemoryIssue::NeverCompiles),
+        Some(bytes) if bytes > REGEX_NFA_BUDGET_BYTES => Some(RegexMemoryIssue::OverBudget(bytes)),
+        Some(_) if ascii && engine_nfa_bytes(pattern, false).is_none() => {
+            Some(RegexMemoryIssue::UnicodeDegrades)
+        }
+        Some(_) => None,
+    }
+}
+
+/// The `regex:` field of a condition plus its case-insensitivity flag, for
+/// every condition type that hands a regex to the shared engine caches.
+fn condition_regex(condition: &Condition) -> Option<(&str, bool)> {
+    match condition {
+        Condition::Symbol(SymbolQuery { regex, .. }) => regex.as_deref().map(|r| (r, false)),
+        Condition::Text(TextQuery {
+            regex,
+            case_insensitive,
+            ..
+        })
+        | Condition::Raw(RawQuery {
+            regex,
+            case_insensitive,
+            ..
+        })
+        | Condition::Encoded(EncodedQuery {
+            regex,
+            case_insensitive,
+            ..
+        })
+        | Condition::Comment(CommentQuery {
+            regex,
+            case_insensitive,
+            ..
+        })
+        | Condition::Literal(LiteralQuery {
+            regex,
+            case_insensitive,
+            ..
+        })
+        | Condition::TreeSitter(TreeSitterQuery {
+            regex,
+            case_insensitive,
+            ..
+        })
+        | Condition::Section(SectionQuery {
+            regex,
+            case_insensitive,
+            ..
+        })
+        | Condition::Path(PathQuery {
+            regex,
+            case_insensitive,
+            ..
+        })
+        | Condition::Kv(KvQuery {
+            regex,
+            case_insensitive,
+            ..
+        }) => regex.as_deref().map(|r| (r, *case_insensitive)),
+        _ => None,
+    }
+}
+
+/// The structured `not:` exception list attached to a condition, if any.
+/// Exception regexes compile through the same shared cache (case-sensitively).
+fn condition_not_exceptions(condition: &Condition) -> &[NotException] {
+    let (Condition::Text(TextQuery { not, .. })
+    | Condition::Raw(RawQuery { not, .. })
+    | Condition::Encoded(EncodedQuery { not, .. })
+    | Condition::Symbol(SymbolQuery { not, .. })
+    | Condition::Comment(CommentQuery { not, .. })
+    | Condition::Literal(LiteralQuery { not, .. })
+    | Condition::Hex(HexQuery { not, .. })) = condition
+    else {
+        return &[];
+    };
+    not.as_deref().unwrap_or_default()
+}
+
+/// Invoke `f` with every `(pattern, case_insensitive)` regex these exceptions
+/// compile at evaluation time.
+fn for_each_not_exception_regex<'a>(
+    exceptions: &'a [NotException],
+    f: &mut impl FnMut(&'a str, bool),
+) {
+    for exception in exceptions {
+        if let NotException::Structured(structured) = exception
+            && let Some(regex) = &structured.regex
+        {
+            f(regex, false);
+        }
+    }
+}
+
+/// Invoke `f` with every regex a single condition compiles: its `regex:`
+/// field and any inline `not:` exception regexes.
+fn for_each_condition_regex<'a>(condition: &'a Condition, f: &mut impl FnMut(&'a str, bool)) {
+    if let Some((regex, case_insensitive)) = condition_regex(condition) {
+        f(regex, case_insensitive);
+    }
+    for_each_not_exception_regex(condition_not_exceptions(condition), f);
+}
+
+/// Invoke `f` with every regex in a downgrade block's `any:`/`all:`/`none:` legs.
+fn for_each_downgrade_regex<'a>(
+    downgrade: &'a DowngradeConditions,
+    f: &mut impl FnMut(&'a str, bool),
+) {
+    for condition in [&downgrade.any, &downgrade.all, &downgrade.none]
+        .into_iter()
+        .flat_map(|legs| legs.as_deref().unwrap_or_default())
+    {
+        for_each_condition_regex(condition, f);
+    }
+}
+
+/// Detect rule regexes whose compiled engines hog memory.
+///
+/// Every distinct `regex:` in a rule — including `unless:`, `downgrade:`, and
+/// `not:` exception legs — compiles into the process-global engine stores at
+/// evaluation time, and counted repetitions over broad classes unroll into
+/// one NFA state per repetition: a `[\s\S]{0,3000}` gap-span costs hundreds
+/// of KB resident and scans slower, where two small atoms joined by a
+/// `near_lines:`/`near_bytes:` composite express the same detection for a few
+/// KB. Also calls out patterns so large an engine cannot compile them at all
+/// under the runtime ceiling, which silently loses detection.
+pub(crate) fn find_memory_hungry_regex_patterns(
+    traits: &[TraitDefinition],
+    composites: &[CompositeTrait],
+    warnings: &mut Vec<String>,
+) {
+    let mut check = |kind: &str,
+                     id: &str,
+                     defined_in: &std::path::Path,
+                     pattern: &str,
+                     case_insensitive: bool| {
+        // Measure what evaluation compiles: `lazy_regex` prepends `(?i)`.
+        let compiled;
+        let measured = if case_insensitive {
+            compiled = format!("(?i){pattern}");
+            compiled.as_str()
+        } else {
+            pattern
+        };
+        let Some(issue) = regex_memory_issue(measured) else {
+            return;
+        };
+        let source_file = defined_in.to_str().unwrap_or("unknown");
+        let location = match find_line_number(source_file, id) {
+            Some(line) => format!("{source_file}:{line}"),
+            None => source_file.to_string(),
+        };
+        let split_hint = "replace the counted run with a loop plus length_min \
+                          (e.g. `[A-Za-z0-9]+` + `length_min: 4000`), or split the wide gap \
+                          into atomic traits joined by a near_lines/near_bytes composite";
+        warnings.push(match issue {
+            RegexMemoryIssue::OverBudget(bytes) => format!(
+                "Regex memory: {kind} '{id}' in {location} compiles '{pattern}' to a {} KB NFA \
+                 (budget {} KB) — {split_hint}",
+                bytes / 1024,
+                REGEX_NFA_BUDGET_BYTES / 1024,
+            ),
+            RegexMemoryIssue::NeverCompiles => format!(
+                "Regex memory: {kind} '{id}' in {location} has pattern '{pattern}' beyond the \
+                 {} MB engine compile limit — no engine can be built, so it never matches; \
+                 {split_hint}",
+                REGEX_NFA_RUNTIME_LIMIT_BYTES >> 20,
+            ),
+            RegexMemoryIssue::UnicodeDegrades => format!(
+                "Regex memory: {kind} '{id}' in {location} has pattern '{pattern}' whose Unicode \
+                 engine exceeds the {} MB compile limit — matching silently degrades to no-match \
+                 on non-ASCII content; {split_hint}",
+                REGEX_NFA_RUNTIME_LIMIT_BYTES >> 20,
+            ),
+        });
+    };
+
+    for trait_def in traits {
+        let mut report = |pattern: &str, case_insensitive: bool| {
+            check(
+                "trait",
+                &trait_def.id,
+                &trait_def.defined_in,
+                pattern,
+                case_insensitive,
+            );
+        };
+        for_each_condition_regex(&trait_def.r#if, &mut report);
+        for_each_not_exception_regex(trait_def.not.as_deref().unwrap_or_default(), &mut report);
+        for condition in trait_def.unless.as_deref().unwrap_or_default() {
+            for_each_condition_regex(condition, &mut report);
+        }
+        if let Some(downgrade) = &trait_def.downgrade {
+            for_each_downgrade_regex(downgrade, &mut report);
+        }
+    }
+    for rule in composites {
+        let mut report = |pattern: &str, case_insensitive: bool| {
+            check(
+                "composite",
+                &rule.id,
+                &rule.defined_in,
+                pattern,
+                case_insensitive,
+            );
+        };
+        for condition in [&rule.all, &rule.any, &rule.unless]
+            .into_iter()
+            .flat_map(|legs| legs.as_deref().unwrap_or_default())
+        {
+            for_each_condition_regex(condition, &mut report);
+        }
+        for_each_not_exception_regex(rule.not.as_deref().unwrap_or_default(), &mut report);
+        if let Some(downgrade) = &rule.downgrade {
+            for_each_downgrade_regex(downgrade, &mut report);
         }
     }
 }
@@ -1099,7 +1406,100 @@ pub(crate) fn find_brittle_path_patterns(traits: &[TraitDefinition], warnings: &
 
 #[cfg(test)]
 mod tests {
-    use super::{RegexFacts, regex_performance_issues};
+    use super::{
+        REGEX_NFA_BUDGET_BYTES, RegexFacts, RegexMemoryIssue, find_memory_hungry_regex_patterns,
+        regex_memory_issue, regex_performance_issues,
+    };
+    use crate::composite_rules::condition::{NotException, NotExceptionStructured};
+    use crate::composite_rules::{CompositeTrait, Condition, RawQuery, TextQuery, TraitDefinition};
+
+    #[test]
+    fn regex_memory_skips_cheap_and_unparseable_patterns() {
+        // Brace-free patterns can't approach the budget (measured 15x margin).
+        assert!(regex_memory_issue(r"https?://evil\.example/payload").is_none());
+        // Small counted bounds are cheap in the resident byte-mode engine.
+        assert!(regex_memory_issue(r"\w{1,40}").is_none());
+        // Backreferences don't parse under engine syntax — other validators own those.
+        assert!(regex_memory_issue(r"(.)\1{3}").is_none());
+    }
+
+    #[test]
+    fn regex_memory_flags_broad_gap_spans() {
+        // The motivating shape: a wide [\s\S]{0,N} gap between two anchors,
+        // which a near_lines/near_bytes composite expresses for a few KB.
+        assert!(matches!(
+            regex_memory_issue(r"curl[\s\S]{0,4000}\bbackdoor\b"),
+            Some(RegexMemoryIssue::OverBudget(bytes)) if bytes > REGEX_NFA_BUDGET_BYTES
+        ));
+    }
+
+    #[test]
+    fn regex_memory_flags_engine_compile_failures() {
+        // Byte-mode NFA exceeds the 10 MB runtime ceiling too: never matches.
+        assert!(matches!(
+            regex_memory_issue(r"[\s\S]{0,250000}x"),
+            Some(RegexMemoryIssue::NeverCompiles)
+        ));
+        // Resident byte-mode engine is small (~71 KB) but the Unicode engine
+        // is ~15 MB: silently degrades to no-match on non-ASCII haystacks.
+        assert!(matches!(
+            regex_memory_issue(r"\w{1,900}"),
+            Some(RegexMemoryIssue::UnicodeDegrades)
+        ));
+    }
+
+    #[test]
+    fn regex_memory_reaches_unless_and_not_legs() {
+        // The corpus' worst offender hid in an inline exclusion leg, not the
+        // primary `if:` — the walker must reach every regex a rule compiles.
+        let trait_def = TraitDefinition {
+            id: "t".to_string(),
+            r#if: Condition::Text(TextQuery {
+                regex: Some("harmless".to_string()),
+                ..Default::default()
+            }),
+            unless: Some(vec![Condition::Raw(RawQuery {
+                regex: Some(r"curl[\s\S]{0,4000}\bbackdoor\b".to_string()),
+                ..Default::default()
+            })]),
+            ..Default::default()
+        };
+        let composite = CompositeTrait {
+            id: "c".to_string(),
+            not: Some(vec![NotException::Structured(NotExceptionStructured {
+                exact: None,
+                substr: None,
+                regex: Some(r"n[\s\S]{0,200000}\bbackdoor\b".to_string()),
+                lowered_substr: None,
+            })]),
+            ..Default::default()
+        };
+        let mut warnings = Vec::new();
+        find_memory_hungry_regex_patterns(&[trait_def], &[composite], &mut warnings);
+        assert_eq!(warnings.len(), 2);
+        assert!(warnings[0].contains("trait 't'"));
+        assert!(warnings[0].contains("near_lines/near_bytes"));
+        assert!(warnings[1].contains("composite 'c'"));
+    }
+
+    #[test]
+    fn regex_memory_measures_case_insensitive_compile() {
+        // `(?i)` is applied before measuring, exactly as lazy_regex compiles it.
+        let trait_def = TraitDefinition {
+            id: "t".to_string(),
+            r#if: Condition::Text(TextQuery {
+                regex: Some(r"curl[\s\S]{0,4000}\bbackdoor\b".to_string()),
+                case_insensitive: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let mut warnings = Vec::new();
+        find_memory_hungry_regex_patterns(&[trait_def], &[], &mut warnings);
+        assert_eq!(warnings.len(), 1);
+        // The message shows the pattern as authored, without the (?i) prefix.
+        assert!(warnings[0].contains(r"curl[\s\S]{0,4000}"));
+    }
 
     fn issues(pattern: &str, type_label: &'static str) -> Vec<String> {
         regex_performance_issues(&RegexFacts::analyze(pattern, type_label))

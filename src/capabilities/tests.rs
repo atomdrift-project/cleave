@@ -165,6 +165,8 @@ fn test_apply_trait_defaults_applies_all_defaults() {
         unless: None,
         downgrade: None,
         condition: Some(Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             is_check: None,
             exact: Some("test".to_string()),
             regex: None,
@@ -240,6 +242,8 @@ fn test_apply_trait_defaults_trait_overrides_defaults() {
         unless: None,
         downgrade: None,
         condition: Some(Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             is_check: None,
             exact: Some("test".to_string()),
             regex: None,
@@ -312,6 +316,8 @@ fn test_apply_trait_defaults_unset_mbc_with_none() {
         unless: None,
         downgrade: None,
         condition: Some(Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             is_check: None,
             exact: Some("test".to_string()),
             regex: None,
@@ -379,6 +385,8 @@ fn test_apply_trait_defaults_unset_attack_with_none() {
         unless: None,
         downgrade: None,
         condition: Some(Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             is_check: None,
             exact: Some("test".to_string()),
             regex: None,
@@ -446,6 +454,8 @@ fn test_apply_trait_defaults_unset_file_types_with_none() {
         unless: None,
         downgrade: None,
         condition: Some(Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             is_check: None,
             exact: Some("test".to_string()),
             regex: None,
@@ -514,6 +524,8 @@ fn test_apply_trait_defaults_size_and_entropy_from_defaults() {
         unless: None,
         downgrade: None,
         condition: Some(Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             is_check: None,
             exact: Some("test".to_string()),
             regex: None,
@@ -566,6 +578,8 @@ fn test_apply_trait_defaults_size_and_entropy_from_defaults() {
         unless: None,
         downgrade: None,
         condition: Some(Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             is_check: None,
             exact: Some("test".to_string()),
             regex: None,
@@ -640,6 +654,8 @@ fn test_apply_composite_defaults_applies_all_defaults() {
         near_bytes: None,
         scope: None,
         condition: Some(Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             is_check: None,
             exact: Some("test".to_string()),
             regex: None,
@@ -713,6 +729,8 @@ fn test_apply_composite_defaults_unset_with_none() {
         near_bytes: None,
         scope: None,
         condition: Some(Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             is_check: None,
             exact: Some("test".to_string()),
             regex: None,
@@ -1402,6 +1420,8 @@ fn test_precision_recursive_expansion() {
         r#for: vec![RuleFileType::All],
         for_from_groups: false,
         r#if: Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             is_check: None,
             exact: Some("atomic".to_string()),
             regex: None,
@@ -1790,6 +1810,8 @@ fn test_suspicious_precision_threshold_validation() {
         r#for: vec![RuleFileType::All],
         for_from_groups: false,
         all: Some(vec![Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             is_check: None,
             exact: Some("string1".to_string()),
             regex: None,
@@ -1897,6 +1919,8 @@ fn test_atomic_suspicious_precision_threshold_validation() {
         r#for: vec![RuleFileType::All],
         for_from_groups: false,
         r#if: Condition::Raw(RawQuery {
+            length_min: None,
+            length_max: None,
             exact: None,
             substr: Some("x".to_string()),
             regex: None,
@@ -1938,6 +1962,8 @@ fn test_atomic_suspicious_precision_threshold_validation() {
         r#for: vec![RuleFileType::Pe],
         for_from_groups: false,
         r#if: Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             is_check: None,
             exact: Some("CreateProcessW".to_string()),
             regex: None,
@@ -2008,6 +2034,8 @@ fn test_precision_mixed_conditions() {
         r#for: vec![RuleFileType::All],
         for_from_groups: false,
         all: Some(vec![Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             is_check: None,
             exact: Some("string1".to_string()),
             regex: None,
@@ -2028,6 +2056,8 @@ fn test_precision_mixed_conditions() {
         near_bytes: None,
         scope: None,
         unless: Some(vec![Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             is_check: None,
             exact: Some("string4".to_string()),
             regex: None,
@@ -2305,6 +2335,8 @@ fn test_precision_traits_with_size_restrictions() {
         r#for: vec![RuleFileType::All],
         for_from_groups: false,
         r#if: Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             is_check: None,
             exact: Some("pattern1".to_string()),
             regex: None,
@@ -2348,6 +2380,8 @@ fn test_precision_traits_with_size_restrictions() {
         r#for: vec![RuleFileType::All],
         for_from_groups: false,
         r#if: Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             is_check: None,
             exact: Some("pattern2".to_string()),
             regex: None,
@@ -2851,6 +2885,8 @@ fn test_atomic_precision_calibration_spread() {
         r#for: vec![RuleFileType::All],
         for_from_groups: false,
         r#if: Condition::Raw(RawQuery {
+            length_min: None,
+            length_max: None,
             exact: None,
             substr: Some("cmd".to_string()),
             regex: None,
@@ -2948,6 +2984,8 @@ fn test_atomic_precision_long_regex_and_large_not_list_stays_calibrated() {
         ],
         for_from_groups: false,
         r#if: Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             is_check: None,
             exact: None,
             regex: Some(
@@ -3026,6 +3064,8 @@ fn test_scope_filters_do_not_dominate_atomic_precision() {
         ],
         for_from_groups: false,
         r#if: Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             is_check: None,
             exact: Some("HmacSHA256".to_string()),
             regex: None,
@@ -3094,6 +3134,8 @@ fn test_composite_precision_calibration_band() {
         r#for: vec![RuleFileType::Pe],
         for_from_groups: false,
         r#if: Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             is_check: None,
             exact: Some("CreateProcessW".to_string()),
             regex: None,
@@ -3206,6 +3248,8 @@ fn test_composite_prefix_reference_matches_explicit_expansion_precision() {
         r#for: vec![RuleFileType::All],
         for_from_groups: false,
         r#if: Condition::Raw(RawQuery {
+            length_min: None,
+            length_max: None,
             exact: None,
             substr: Some("cmd".to_string()),
             regex: None,
@@ -3410,6 +3454,8 @@ fn test_composite_any_uses_weakest_average_with_breadth_penalty() {
         r#for: vec![RuleFileType::All],
         for_from_groups: false,
         r#if: Condition::Raw(RawQuery {
+            length_min: None,
+            length_max: None,
             exact: None,
             substr: Some("cmd".to_string()),
             regex: None,
@@ -3450,6 +3496,8 @@ fn test_composite_any_uses_weakest_average_with_breadth_penalty() {
         r#for: vec![RuleFileType::Elf],
         for_from_groups: false,
         r#if: Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             is_check: None,
             exact: Some("execve".to_string()),
             regex: None,

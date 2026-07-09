@@ -769,6 +769,13 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         fix: "Add literal focus, split broad scans, or use bounded matchers like kv/symbol.",
     },
     ValidatorSpec {
+        id: "regex-memory",
+        category: ValidatorCategory::Policy,
+        display_id: "re-mem",
+        description: "Regex compiles to an oversized engine that wastes memory and CPU.",
+        fix: "Replace counted runs (`X{4000,}`) with a loop plus length_min (`X+` + `length_min: 4000`); split wide `X{0,N}` gaps into atomic traits joined by a near_lines:/near_bytes: composite.",
+    },
+    ValidatorSpec {
         id: "ast-text-call-performance",
         category: ValidatorCategory::Policy,
         display_id: "ast-call",
@@ -1140,6 +1147,7 @@ mod tests {
         // soft mode downgrades them to advisory.
         for id in [
             "regex-length",
+            "regex-memory",
             "brittle-path-pattern",
             "oversized-dir",
             "tier-violation",

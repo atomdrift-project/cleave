@@ -2368,6 +2368,8 @@ mod tests {
         // `(^|[\\/])…` anchoring spends pipes structurally), so exercise the
         // limit with a content matcher that is subject to it.
         let condition = crate::composite_rules::Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             exact: None,
             substr: None,
             regex: Some("a|b|c|d|e".to_string()),
@@ -2390,6 +2392,8 @@ mod tests {
     #[test]
     fn test_regex_or_symbol_limit_allows_escaped_and_charclass_pipes() {
         let condition = crate::composite_rules::Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             exact: None,
             substr: None,
             regex: Some(r"a\|b|[|]|c|d".to_string()),
@@ -2412,6 +2416,8 @@ mod tests {
     #[test]
     fn test_regex_or_symbol_limit_relaxed_for_data_text_traits() {
         let condition = crate::composite_rules::Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             exact: None,
             substr: None,
             regex: Some("a|b|c|d|e|f|g".to_string()),
@@ -2442,6 +2448,8 @@ mod tests {
     #[test]
     fn test_regex_or_symbol_limit_still_caps_data_text_traits() {
         let condition = crate::composite_rules::Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             exact: None,
             substr: None,
             regex: Some("a|b|c|d|e|f|g|h".to_string()),

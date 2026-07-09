@@ -22,11 +22,11 @@ const REGEX_CACHE_CAP: std::num::NonZeroUsize = {
 };
 
 static REGEX_CACHE: std::sync::LazyLock<
-    std::sync::RwLock<lru::LruCache<String, Arc<TraitRegex>, rustc_hash::FxBuildHasher>>,
+    std::sync::RwLock<super::regex_store::BudgetedStore<String, TraitRegex>>,
 > = std::sync::LazyLock::new(|| {
-    std::sync::RwLock::new(lru::LruCache::with_hasher(
+    std::sync::RwLock::new(super::regex_store::BudgetedStore::new(
         REGEX_CACHE_CAP,
-        rustc_hash::FxBuildHasher,
+        super::regex_store::str_budget_bytes(),
     ))
 });
 
@@ -39,52 +39,181 @@ static REGEX_CACHE: std::sync::LazyLock<
 /// ([`crate::composite_rules::regex_scratch`]) rather than a per-regex ×
 /// per-thread pool retained forever — the pools' eager worst-case-O(NFA)
 /// caches measured ~1.5 GB live on the typescript-package reference scan.
+/// One compiled meta engine plus its scratch-pool identity.
 #[derive(Debug)]
-pub(crate) struct TraitRegex {
+struct Engine {
     re: regex_automata::meta::Regex,
     id: u64,
-    /// The source pattern, kept for diagnostics (`as_str` parity).
+}
+
+impl Engine {
+    fn new(re: regex_automata::meta::Regex) -> Engine {
+        Engine {
+            re,
+            id: super::regex_scratch::next_regex_id(),
+        }
+    }
+}
+
+/// A compiled trait regex for extracted-string / value matching, held as a
+/// **haystack-dispatched engine pair**: for an ASCII pattern, the ASCII-mode
+/// and Unicode-mode engines are provably match-identical on any pure-ASCII
+/// haystack (every semantic difference — `.`, `\w`-family classes, `(?i)`
+/// folding, `\b`, negated classes, empty-match positioning — only manifests
+/// when the haystack contains non-ASCII bytes). Extracted strings are almost
+/// always pure ASCII, so the small ASCII engine (whose classes avoid the
+/// UTF-8 sub-automaton expansion that made Unicode NFAs 5-10× larger and
+/// dominated peak RSS) serves nearly every search, and the full Unicode
+/// engine is compiled lazily, only for patterns that actually meet a
+/// non-ASCII string — where it preserves upstream `regex::Regex` semantics
+/// exactly.
+#[derive(Debug)]
+pub(crate) struct TraitRegex {
+    /// ASCII-mode engine, used when the haystack is pure ASCII. `None` when
+    /// the pattern itself is not ASCII-compatible (then `eager_unicode` is
+    /// set instead).
+    ascii: Option<Engine>,
+    /// The Unicode engine for patterns that have no ASCII form (non-ASCII
+    /// source or `\u`/`\p` escapes — rare and individually cheap). The
+    /// Unicode *twins* of ASCII-compatible patterns are NOT stored here: they
+    /// live in the process-global budgeted [`UNICODE_ENGINES`] store, so that
+    /// content which forces them into existence (JS-heavy inputs where most
+    /// strings carry non-ASCII) cannot grow an unaccounted engine population
+    /// — a per-`TraitRegex` lazy slot escaped the byte budget and measured
+    /// ~1.2 GB on the realworld worker benchmark.
+    eager_unicode: Option<std::sync::Arc<Engine>>,
+    /// The source pattern, kept for diagnostics (`as_str` parity) and the
+    /// lazy Unicode compile.
     pattern: Box<str>,
     /// Minimum haystack length that can possibly match — shorter inputs
     /// return without touching the scratch pool, mirroring the facade's
     /// `is_impossible` pre-check (which it performs before its own pool
     /// access; most candidate strings are shorter than most patterns'
-    /// literals, so this skips the majority of pool roundtrips).
+    /// literals, so this skips the majority of pool roundtrips). A property
+    /// of the pattern, identical for both engines.
     min_len: usize,
 }
 
-impl TraitRegex {
-    /// Compile with `regex::Regex::new` semantics (Unicode classes, UTF-8
-    /// haystack guarantees, 10 MB size limit), with `\w`-family classes
-    /// demoted to ASCII (see [`demote_perl_classes_to_ascii`]).
-    fn compile(pattern: &str) -> Option<TraitRegex> {
-        let mut hir = regex_syntax::parse(pattern).ok()?;
-        if demotable(pattern) && !super::evaluators::regex_unicode_override() {
-            hir = demote_perl_classes_to_ascii(hir);
+/// Process-global, byte-budgeted store of lazily-built Unicode engines for
+/// ASCII-compatible patterns (see [`TraitRegex::eager_unicode`]). Keyed by
+/// pattern; entries are `Arc`-shared so eviction is always safe (an engine in
+/// use stays alive until its search returns; the next non-ASCII haystack just
+/// recompiles it).
+static UNICODE_ENGINES: std::sync::LazyLock<
+    std::sync::RwLock<super::regex_store::BudgetedStore<String, Engine>>,
+> = std::sync::LazyLock::new(|| {
+    std::sync::RwLock::new(super::regex_store::BudgetedStore::new(
+        REGEX_CACHE_CAP,
+        super::regex_store::unicode_budget_bytes(),
+    ))
+});
+
+/// Fetch-or-compile the shared Unicode engine for `pattern`.
+fn shared_unicode_engine(pattern: &str) -> Option<std::sync::Arc<Engine>> {
+    if let Some(arc) = UNICODE_ENGINES
+        .read()
+        .ok()
+        .and_then(|c| c.peek(pattern).cloned())
+    {
+        return Some(arc);
+    }
+    let engine = std::sync::Arc::new(Engine::new(compile_unicode(pattern)?));
+    let size = engine.re.memory_usage() + pattern.len();
+    if let Ok(mut cache) = UNICODE_ENGINES.write() {
+        cache.put(pattern.to_string(), std::sync::Arc::clone(&engine), size);
+    }
+    Some(engine)
+}
+
+/// A borrowed-or-shared engine handle, so the hot ASCII path stays a plain
+/// borrow while store-served Unicode engines carry their `Arc`.
+enum EngineRef<'a> {
+    Borrowed(&'a Engine),
+    Shared(std::sync::Arc<Engine>),
+}
+
+impl EngineRef<'_> {
+    fn get(&self) -> &Engine {
+        match self {
+            EngineRef::Borrowed(e) => e,
+            EngineRef::Shared(a) => a,
         }
-        let re = regex_automata::meta::Regex::builder()
-            .configure(
-                regex_automata::meta::Regex::config()
-                    .utf8_empty(true)
-                    .onepass(false)
-                    .which_captures(regex_automata::nfa::thompson::WhichCaptures::Implicit)
-                    .nfa_size_limit(Some(10 * (1 << 20)))
-                    .hybrid_cache_capacity(super::evaluators::regex_dfa_cache_bytes()),
-            )
-            .build_from_hir(&hir)
-            .ok()?;
-        let min_len = hir.properties().minimum_len().unwrap_or(0);
+    }
+}
+
+/// Shared meta-engine options: no onepass DFA (capture extraction only —
+/// trait evaluation is bounds-only), implicit-only capture states (smaller
+/// NFAs), the facade's 10 MB size limit, and the tunable lazy-DFA budget.
+fn engine_config() -> regex_automata::meta::Config {
+    regex_automata::meta::Regex::config()
+        .onepass(false)
+        .which_captures(regex_automata::nfa::thompson::WhichCaptures::Implicit)
+        .nfa_size_limit(Some(10 * (1 << 20)))
+        .hybrid_cache_capacity(super::evaluators::regex_dfa_cache_bytes())
+}
+
+impl TraitRegex {
+    /// Compile `pattern` with `regex::Regex::new` semantics. ASCII-compatible
+    /// patterns get the small ASCII engine eagerly and defer the Unicode one;
+    /// others (non-ASCII source, `\u`/`\p` escapes, or
+    /// `CLEAVE_REGEX_UNICODE=1`) compile the Unicode engine eagerly.
+    fn compile(pattern: &str) -> Option<TraitRegex> {
+        let min_len = regex_syntax::parse(pattern)
+            .ok()?
+            .properties()
+            .minimum_len()
+            .unwrap_or(0);
+        let ascii = if ascii_compatible(pattern) && !super::evaluators::regex_unicode_override() {
+            compile_ascii(pattern).map(Engine::new)
+        } else {
+            None
+        };
+        let eager_unicode = if ascii.is_none() {
+            // No ASCII engine: the Unicode engine is the only one, so build it
+            // now and fail compile() outright if the pattern is invalid.
+            Some(std::sync::Arc::new(Engine::new(compile_unicode(pattern)?)))
+        } else {
+            None
+        };
         Some(TraitRegex {
-            re,
-            id: super::regex_scratch::next_regex_id(),
+            ascii,
+            eager_unicode,
             pattern: pattern.into(),
             min_len,
         })
     }
 
+    /// The engine for `haystack`: ASCII when both pattern and haystack allow
+    /// it (the overwhelmingly common case), otherwise the Unicode engine —
+    /// inline for Unicode-only patterns, from the budgeted shared store for
+    /// ASCII-compatible ones meeting a non-ASCII haystack.
+    fn engine_for(&self, haystack: &str) -> Option<EngineRef<'_>> {
+        if let Some(ascii) = &self.ascii
+            && haystack.is_ascii()
+        {
+            return Some(EngineRef::Borrowed(ascii));
+        }
+        if let Some(eager) = &self.eager_unicode {
+            return Some(EngineRef::Borrowed(eager));
+        }
+        shared_unicode_engine(&self.pattern).map(EngineRef::Shared)
+    }
+
     /// The source pattern this regex was compiled from.
     pub(crate) fn as_str(&self) -> &str {
         &self.pattern
+    }
+
+    /// Heap footprint of the inline engines, for the byte-budgeted store.
+    /// The shared Unicode twins are accounted by [`UNICODE_ENGINES`] itself,
+    /// so insert-time measurement here is exact.
+    pub(crate) fn heap_bytes(&self) -> usize {
+        let ascii = self.ascii.as_ref().map_or(0, |e| e.re.memory_usage());
+        let unicode = self
+            .eager_unicode
+            .as_ref()
+            .map_or(0, |e| e.re.memory_usage());
+        ascii + unicode + self.pattern.len() + std::mem::size_of::<Self>()
     }
 
     /// Whether the pattern matches anywhere in `haystack`. `earliest(true)`
@@ -94,8 +223,13 @@ impl TraitRegex {
         if haystack.len() < self.min_len {
             return false;
         }
-        super::regex_scratch::with_cache(self.id, &self.re, |cache| {
-            self.re
+        let Some(engine) = self.engine_for(haystack) else {
+            return false;
+        };
+        let engine = engine.get();
+        super::regex_scratch::with_cache(engine.id, &engine.re, |cache| {
+            engine
+                .re
                 .search_half_with(cache, &regex_automata::Input::new(haystack).earliest(true))
                 .is_some()
         })
@@ -103,14 +237,19 @@ impl TraitRegex {
 
     /// Leftmost-first match, returned as a borrow of `haystack` (the span the
     /// facade's `find(..).as_str()` would yield). Spans land on char
-    /// boundaries: Unicode-mode non-empty matches cover whole codepoints and
-    /// `utf8_empty(true)` positions empty matches like the `regex` crate does.
+    /// boundaries: the ASCII engine only ever sees all-boundary ASCII
+    /// haystacks, and the Unicode engine's non-empty matches cover whole
+    /// codepoints with `utf8_empty(true)` positioning empty matches like the
+    /// `regex` crate does.
     pub(crate) fn find_str<'v>(&self, haystack: &'v str) -> Option<&'v str> {
         if haystack.len() < self.min_len {
             return None;
         }
-        super::regex_scratch::with_cache(self.id, &self.re, |cache| {
-            self.re
+        let engine = self.engine_for(haystack)?;
+        let engine = engine.get();
+        super::regex_scratch::with_cache(engine.id, &engine.re, |cache| {
+            engine
+                .re
                 .search_with(cache, &regex_automata::Input::new(haystack))
                 .map(|m| &haystack[m.start()..m.end()])
         })
@@ -128,11 +267,15 @@ impl TraitRegex {
         if haystack.len() < self.min_len {
             return;
         }
-        super::regex_scratch::with_cache(self.id, &self.re, |cache| {
+        let Some(engine) = self.engine_for(haystack) else {
+            return;
+        };
+        let engine = engine.get();
+        super::regex_scratch::with_cache(engine.id, &engine.re, |cache| {
             let mut it =
                 regex_automata::util::iter::Searcher::new(regex_automata::Input::new(haystack));
             loop {
-                let m = it.advance(|input| Ok(self.re.search_with(cache, input)));
+                let m = it.advance(|input| Ok(engine.re.search_with(cache, input)));
                 let Some(m) = m else { return };
                 if !f(m.start(), &haystack[m.start()..m.end()]) {
                     return;
@@ -142,104 +285,37 @@ impl TraitRegex {
     }
 }
 
-/// Whether `pattern` is eligible for ASCII class demotion: pure-ASCII source
-/// with no explicit Unicode escapes (the same gate the byte-regex path uses),
-/// so `\w`/`\d`/`\s` are the only routes to non-ASCII class members.
-fn demotable(pattern: &str) -> bool {
+/// The ASCII-mode engine: byte-level classes (`unicode(false)`) avoid the
+/// UTF-8 sub-automaton expansion entirely. Only ever searched over pure-ASCII
+/// haystacks, where it is match-identical to the Unicode engine.
+fn compile_ascii(pattern: &str) -> Option<regex_automata::meta::Regex> {
+    regex_automata::meta::Regex::builder()
+        .configure(engine_config().utf8_empty(false))
+        .syntax(
+            regex_automata::util::syntax::Config::new()
+                .unicode(false)
+                .utf8(false),
+        )
+        .build(pattern)
+        .ok()
+}
+
+/// The Unicode engine: exact `regex::Regex::new` semantics.
+fn compile_unicode(pattern: &str) -> Option<regex_automata::meta::Regex> {
+    regex_automata::meta::Regex::builder()
+        .configure(engine_config().utf8_empty(true))
+        .build(pattern)
+        .ok()
+}
+
+/// Whether `pattern` can be compiled as an ASCII-mode engine: pure-ASCII
+/// source with no explicit Unicode escapes (the same gate the byte-regex path
+/// uses), so pure-ASCII haystacks match identically in either mode.
+fn ascii_compatible(pattern: &str) -> bool {
     pattern.is_ascii()
         && !pattern.contains("\\u")
         && !pattern.contains("\\p")
         && !pattern.contains("\\P")
-}
-
-/// The non-ASCII portion of a perl class (`\w`, `\d`, `\s`), or an empty class
-/// if parsing fails (which disables demotion rather than erring).
-fn perl_class_nonascii(pat: &str) -> regex_syntax::hir::ClassUnicode {
-    use regex_syntax::hir::{Class, ClassUnicode, HirKind};
-    let empty = ClassUnicode::empty();
-    let Ok(hir) = regex_syntax::parse(pat) else {
-        return empty;
-    };
-    let HirKind::Class(Class::Unicode(mut c)) = hir.into_kind() else {
-        return empty;
-    };
-    let mut non_ascii = ascii_class();
-    non_ascii.negate();
-    c.intersect(&non_ascii);
-    c
-}
-
-/// `[\0-\x7F]` as a `ClassUnicode`.
-fn ascii_class() -> regex_syntax::hir::ClassUnicode {
-    use regex_syntax::hir::{ClassUnicode, ClassUnicodeRange};
-    ClassUnicode::new([ClassUnicodeRange::new('\0', '\x7f')])
-}
-
-/// The exact non-ASCII shapes a class may carry and still be demoted: the
-/// non-ASCII members of `\w`, `\s`, `\d`, and their unions. A class whose
-/// non-ASCII portion equals one of these can only have acquired it from those
-/// perl classes (the pattern source is ASCII), so intersecting the class with
-/// ASCII implements "perl classes are ASCII" precisely — while `.`-like
-/// classes, negations (`[^"]`), and `[\s\S]` carry broader non-ASCII spans,
-/// never match a form, and pass through untouched.
-static DEMOTABLE_NONASCII_FORMS: std::sync::LazyLock<Vec<regex_syntax::hir::ClassUnicode>> =
-    std::sync::LazyLock::new(|| {
-        let w = perl_class_nonascii(r"\w");
-        let s = perl_class_nonascii(r"\s");
-        let d = perl_class_nonascii(r"\d");
-        if w.ranges().is_empty() {
-            return Vec::new();
-        }
-        let mut ws = w.clone();
-        ws.union(&s);
-        let mut ds = d.clone();
-        ds.union(&s);
-        vec![w, s, d, ws, ds]
-    });
-
-/// Rewrite `\w`/`\d`/`\s`-derived classes (including unions with ASCII
-/// literals, e.g. `[\w .-]`) to their ASCII equivalents. In the byte-level NFA
-/// every Unicode class compiles to a UTF-8 sub-automaton — hundreds of states,
-/// multiplied inside `{m,n}` repetitions — which measured ~820 MB of compiled
-/// NFAs at peak on the reference scan and forces searches off the lazy DFA.
-/// This mirrors the raw-content path's `unicode(false)` (E2) for the
-/// extracted-string path, but surgically: only the perl classes change
-/// meaning; `.`, negated classes, and explicit ranges keep Unicode semantics,
-/// and `CLEAVE_REGEX_UNICODE=1` disables demotion entirely.
-fn demote_perl_classes_to_ascii(hir: regex_syntax::hir::Hir) -> regex_syntax::hir::Hir {
-    use regex_syntax::hir::{Class, Hir, HirKind};
-    match hir.into_kind() {
-        HirKind::Class(Class::Unicode(mut cls)) => {
-            let mut non_ascii_part = cls.clone();
-            let mut non_ascii = ascii_class();
-            non_ascii.negate();
-            non_ascii_part.intersect(&non_ascii);
-            if !non_ascii_part.ranges().is_empty()
-                && DEMOTABLE_NONASCII_FORMS.contains(&non_ascii_part)
-            {
-                cls.intersect(&ascii_class());
-            }
-            Hir::class(Class::Unicode(cls))
-        }
-        HirKind::Class(c) => Hir::class(c),
-        HirKind::Concat(subs) => {
-            Hir::concat(subs.into_iter().map(demote_perl_classes_to_ascii).collect())
-        }
-        HirKind::Alternation(subs) => {
-            Hir::alternation(subs.into_iter().map(demote_perl_classes_to_ascii).collect())
-        }
-        HirKind::Repetition(mut rep) => {
-            rep.sub = Box::new(demote_perl_classes_to_ascii(*rep.sub));
-            Hir::repetition(rep)
-        }
-        HirKind::Capture(mut cap) => {
-            cap.sub = Box::new(demote_perl_classes_to_ascii(*cap.sub));
-            Hir::capture(cap)
-        }
-        HirKind::Literal(l) => Hir::literal(l.0),
-        HirKind::Look(l) => Hir::look(l),
-        HirKind::Empty => Hir::empty(),
-    }
 }
 
 pub(crate) fn cached_regex(pattern: &str) -> Option<Arc<TraitRegex>> {
@@ -255,8 +331,9 @@ pub(crate) fn cached_regex(pattern: &str) -> Option<Arc<TraitRegex>> {
     }
     // Compile outside the lock; write-lock only to insert.
     let arc = Arc::new(TraitRegex::compile(pattern)?);
+    let size = arc.heap_bytes();
     if let Ok(mut cache) = REGEX_CACHE.write() {
-        cache.put(pattern.to_string(), Arc::clone(&arc));
+        cache.put(pattern.to_string(), Arc::clone(&arc), size);
     }
     Some(arc)
 }
@@ -265,6 +342,9 @@ pub(crate) fn cached_regex(pattern: &str) -> Option<Arc<TraitRegex>> {
 /// across all threads; call from a single thread under memory pressure.
 pub(crate) fn clear_cached_regex() {
     if let Ok(mut cache) = REGEX_CACHE.write() {
+        cache.clear();
+    }
+    if let Ok(mut cache) = UNICODE_ENGINES.write() {
         cache.clear();
     }
 }
@@ -954,6 +1034,11 @@ enum ConditionTagged {
         word: Option<String>,
         #[serde(default)]
         case_insensitive: bool,
+        /// Byte-length bounds on the regex match span; requires `regex:`.
+        #[serde(default)]
+        length_min: Option<usize>,
+        #[serde(default)]
+        length_max: Option<usize>,
         #[serde(rename = "is", default)]
         is_check: Option<StringValidator>,
         #[serde(default)]
@@ -1166,6 +1251,11 @@ enum ConditionTagged {
         word: Option<String>,
         #[serde(default)]
         case_insensitive: bool,
+        /// Byte-length bounds on the regex match span; requires `regex:`.
+        #[serde(default)]
+        length_min: Option<usize>,
+        #[serde(default)]
+        length_max: Option<usize>,
         /// Optional high-fidelity validation check
         #[serde(rename = "is", default)]
         is_check: Option<StringValidator>,
@@ -1358,7 +1448,7 @@ enum ConditionTagged {
     /// Example: { type: value, path: "permissions", is: "debugger" }
     /// Example: { type: value, path: "scripts.postinstall", substr: "curl" }
     /// Example: { type: value, path: "content_scripts[*].matches", is: "<all_urls>" }
-    /// Example: { type: value, path: "maintainers", size_min: 1, size_max: 1 }
+    /// Example: { type: value, path: "maintainers", length_min: 1, length_max: 1 }
     #[serde(rename = "value")]
     Kv {
         /// Path to navigate using dot notation, [n] for indices, [*] for wildcards
@@ -1402,12 +1492,14 @@ enum ConditionTagged {
         /// Explicit existence check (true = must exist, false = must not exist)
         #[serde(skip_serializing_if = "Option::is_none")]
         exists: Option<bool>,
-        /// Minimum collection size (array elements or object keys)
-        #[serde(skip_serializing_if = "Option::is_none")]
-        size_min: Option<usize>,
-        /// Maximum collection size (array elements or object keys)
-        #[serde(skip_serializing_if = "Option::is_none")]
-        size_max: Option<usize>,
+        /// Minimum len() of the value: string bytes, array elements, or
+        /// object keys. `size_min` is the deprecated spelling.
+        #[serde(alias = "size_min", skip_serializing_if = "Option::is_none")]
+        length_min: Option<usize>,
+        /// Maximum len() of the value (see `length_min`). `size_max` is the
+        /// deprecated spelling.
+        #[serde(alias = "size_max", skip_serializing_if = "Option::is_none")]
+        length_max: Option<usize>,
     },
 }
 
@@ -1502,6 +1594,8 @@ impl From<ConditionDeser> for Condition {
                     regex,
                     word,
                     case_insensitive,
+                    length_min,
+                    length_max,
                     is_check,
                     not,
                     platforms,
@@ -1516,6 +1610,8 @@ impl From<ConditionDeser> for Condition {
                     regex,
                     word,
                     case_insensitive,
+                    length_min,
+                    length_max,
                     is_check,
                     not,
                     platforms,
@@ -1643,6 +1739,8 @@ impl From<ConditionDeser> for Condition {
                     regex,
                     word,
                     case_insensitive,
+                    length_min,
+                    length_max,
                     is_check,
                     not,
                     section,
@@ -1656,6 +1754,8 @@ impl From<ConditionDeser> for Condition {
                     regex,
                     word,
                     case_insensitive,
+                    length_min,
+                    length_max,
                     is_check,
                     not,
                     section,
@@ -1773,8 +1873,8 @@ impl From<ConditionDeser> for Condition {
                     match_mode,
                     case_insensitive,
                     exists,
-                    size_min,
-                    size_max,
+                    length_min,
+                    length_max,
                 } => Condition::Kv(KvQuery {
                     path,
                     exact,
@@ -1785,8 +1885,8 @@ impl From<ConditionDeser> for Condition {
                     match_mode,
                     case_insensitive,
                     exists,
-                    size_min,
-                    size_max,
+                    length_min,
+                    length_max,
                 }),
             },
         }
@@ -1825,6 +1925,8 @@ impl From<Condition> for ConditionTagged {
                 regex,
                 word,
                 case_insensitive,
+                length_min,
+                length_max,
                 is_check,
                 not,
                 platforms,
@@ -1839,6 +1941,8 @@ impl From<Condition> for ConditionTagged {
                 regex,
                 word,
                 case_insensitive,
+                length_min,
+                length_max,
                 is_check,
                 not,
                 platforms,
@@ -1966,6 +2070,8 @@ impl From<Condition> for ConditionTagged {
                 regex,
                 word,
                 case_insensitive,
+                length_min,
+                length_max,
                 is_check,
                 not,
                 section,
@@ -1979,6 +2085,8 @@ impl From<Condition> for ConditionTagged {
                 regex,
                 word,
                 case_insensitive,
+                length_min,
+                length_max,
                 is_check,
                 not,
                 section,
@@ -2080,8 +2188,8 @@ impl From<Condition> for ConditionTagged {
                 match_mode,
                 case_insensitive,
                 exists,
-                size_min,
-                size_max,
+                length_min,
+                length_max,
             }) => ConditionTagged::Kv {
                 path,
                 exact,
@@ -2092,8 +2200,8 @@ impl From<Condition> for ConditionTagged {
                 match_mode,
                 case_insensitive,
                 exists,
-                size_min,
-                size_max,
+                length_min,
+                length_max,
             },
         }
     }
@@ -2240,7 +2348,7 @@ pub(crate) enum Condition {
     /// Example: { type: value, path: "permissions", is: "debugger" }
     /// Example: { type: value, path: "scripts.postinstall", substr: "curl" }
     /// Example: { type: value, path: "content_scripts[*].matches", is: "<all_urls>" }
-    /// Example: { type: value, path: "maintainers", size_min: 1, size_max: 1 }
+    /// Example: { type: value, path: "maintainers", length_min: 1, length_max: 1 }
     /// Example: { type: value, path: "file.basename", ne: "pe.version_info.original_filename" }
     Kv(KvQuery),
 }
@@ -2273,10 +2381,10 @@ pub(crate) struct KvQuery {
     pub case_insensitive: bool,
     /// Explicit existence check (true = must exist, false = must not exist).
     pub exists: Option<bool>,
-    /// Minimum collection size (array elements or object keys).
-    pub size_min: Option<usize>,
-    /// Maximum collection size (array elements or object keys).
-    pub size_max: Option<usize>,
+    /// Minimum len() of the value: string bytes, array elements, or object keys.
+    pub length_min: Option<usize>,
+    /// Maximum len() of the value (see `length_min`).
+    pub length_max: Option<usize>,
 }
 
 /// Payload for `type: text` — byte-scan over extracted strings / raw source text.
@@ -2287,6 +2395,14 @@ pub(crate) struct TextQuery {
     pub regex: Option<String>,
     pub word: Option<String>,
     pub case_insensitive: bool,
+    /// Byte-length bounds on the regex match span; requires `regex:`.
+    /// The cheap way to say "a run of at least N": pair a greedy loop with
+    /// `length_min` instead of a counted repetition (`{4000,}`), which
+    /// unrolls into one NFA state per rep. Keep a small counted floor for
+    /// selectivity (`[A-Za-z0-9]{64,}` + `length_min: 4000`) so the scan
+    /// isn't spent visiting every short run on match-dense content.
+    pub length_min: Option<usize>,
+    pub length_max: Option<usize>,
     pub is_check: Option<StringValidator>,
     pub not: Option<Vec<NotException>>,
     pub platforms: Option<Vec<Platform>>,
@@ -2305,6 +2421,10 @@ pub(crate) struct RawQuery {
     pub regex: Option<String>,
     pub word: Option<String>,
     pub case_insensitive: bool,
+    /// Byte-length bounds on the regex match span; requires `regex:` (see
+    /// [`TextQuery::length_min`]).
+    pub length_min: Option<usize>,
+    pub length_max: Option<usize>,
     pub is_check: Option<StringValidator>,
     pub not: Option<Vec<NotException>>,
     pub section: Option<String>,
@@ -3616,6 +3736,8 @@ mod location_constraint_tests {
     fn test_condition_validate_string_location() {
         // Test that Condition::Text validates location constraints
         let condition = Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             exact: Some("test".to_string()),
             substr: None,
             regex: None,
@@ -3637,6 +3759,8 @@ mod location_constraint_tests {
     fn test_condition_validate_content_location() {
         // Valid content condition with section constraint
         let condition = Condition::Raw(RawQuery {
+            length_min: None,
+            length_max: None,
             exact: Some("test".to_string()),
             substr: None,
             regex: None,
@@ -3660,6 +3784,42 @@ mod location_constraint_tests {
         let result: Result<Option<(i64, Option<i64>)>, _> = serde_yaml::from_str(yaml);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), Some((100, Some(200))));
+    }
+
+    #[test]
+    fn kv_length_bounds_accept_both_spellings() {
+        // Canonical `length_min`/`length_max` and the deprecated `size_min`/
+        // `size_max` aliases parse to the same fields.
+        for yaml in [
+            "type: value\npath: maintainers\nlength_min: 2\nlength_max: 5",
+            "type: value\npath: maintainers\nsize_min: 2\nsize_max: 5",
+        ] {
+            let result: Result<Condition, _> = serde_yaml::from_str(yaml);
+            assert!(result.is_ok(), "failed to parse: {yaml}");
+            assert!(matches!(
+                result.unwrap(),
+                Condition::Kv(KvQuery {
+                    length_min: Some(2),
+                    length_max: Some(5),
+                    ..
+                })
+            ));
+        }
+    }
+
+    #[test]
+    fn text_length_bounds_parse() {
+        let result: Result<Condition, _> =
+            serde_yaml::from_str("type: text\nregex: '[A-Za-z0-9]+'\nlength_min: 4000");
+        assert!(result.is_ok());
+        assert!(matches!(
+            result.unwrap(),
+            Condition::Text(TextQuery {
+                length_min: Some(4000),
+                length_max: None,
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -3877,8 +4037,8 @@ mod backtrack_tests {
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
         assert!(cond.check_greedy_patterns().is_none());
     }
@@ -4318,28 +4478,47 @@ exact: curl
         assert_eq!(super::word_match_start("anything", "", false), None);
     }
 
-    /// ASCII class demotion: perl-class-derived classes go ASCII; `.`-like,
-    /// negated, and `[\s\S]` classes keep Unicode semantics.
+    /// Haystack-dispatched engines: ASCII haystacks use the small ASCII-mode
+    /// engine; non-ASCII haystacks get exact `regex::Regex` Unicode semantics
+    /// from the lazily-built Unicode engine.
     #[test]
-    fn trait_regex_ascii_demotion() {
-        // \w no longer reaches into non-ASCII word chars...
+    fn trait_regex_engine_dispatch() {
+        // Unicode semantics preserved on non-ASCII haystacks (lazy engine).
         let re = super::TraitRegex::compile(r"user\w+").unwrap();
-        assert_eq!(re.find_str("userñx"), None);
+        assert_eq!(re.find_str("userñx"), Some("userñx"));
         assert_eq!(re.find_str("userabc"), Some("userabc"));
-        // ...including inside class unions with ASCII literals.
-        let re = super::TraitRegex::compile(r"[\w .-]{3,}").unwrap();
-        assert_eq!(re.find_str("a b-cñ"), Some("a b-c"));
-        // `.`, negated classes, and [\s\S] still span Unicode.
         let re = super::TraitRegex::compile(r"a.b").unwrap();
         assert_eq!(re.find_str("aéb"), Some("aéb"));
+        assert_eq!(re.find_str("axb"), Some("axb"));
         let re = super::TraitRegex::compile(r#"x[^"]+y"#).unwrap();
         assert_eq!(re.find_str("xéñy"), Some("xéñy"));
-        let re = super::TraitRegex::compile(r"q[\s\S]{2}r").unwrap();
-        assert_eq!(re.find_str("qéér"), Some("qéér"));
-        // Non-ASCII pattern source is never demoted.
+        // ASCII-haystack parity across a semantics-sensitive pattern zoo:
+        // both engines must agree exactly on pure-ASCII input.
+        for pat in [
+            r"user\w+",
+            r"[\w .-]{3,}",
+            r"a.b",
+            r#"x[^"]+y"#,
+            r"q[\s\S]{2}r",
+            r"(?i)PoWeR\s+shell",
+            r"\btoken\b",
+            r"^start.*end$",
+        ] {
+            let re = super::TraitRegex::compile(pat).unwrap();
+            let uni = super::compile_unicode(pat).unwrap();
+            let mut cache = uni.create_cache();
+            for hay in ["user_x a b-c 4", "x'y start token end", "POWER  SHELL", ""] {
+                let ascii_hit = re.find_str(hay);
+                let uni_hit = uni
+                    .search_with(&mut cache, &regex_automata::Input::new(hay))
+                    .map(|m| &hay[m.start()..m.end()]);
+                assert_eq!(ascii_hit, uni_hit, "pattern {pat:?} on {hay:?}");
+            }
+        }
+        // Non-ASCII pattern source: no ASCII engine, Unicode eager.
         let re = super::TraitRegex::compile(r"ñ\w+").unwrap();
         assert!(re.is_match("ñé"));
-        // min_len reflects the compiled (demoted) form.
+        // min_len is engine-independent.
         let re = super::TraitRegex::compile(r"abc\w{2}").unwrap();
         assert_eq!(re.min_len, 5);
         assert!(!re.is_match("abcd"));

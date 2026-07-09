@@ -1303,6 +1303,93 @@ pub(crate) fn find_invalid_not_usage(trait_definitions: &[TraitDefinition]) -> V
     violations
 }
 
+/// Find text/raw conditions with `length_min`/`length_max` but no `regex:`.
+///
+/// The bounds constrain the regex match span (the cheap replacement for
+/// counted repetitions like `{4000,}`); with `exact:`/`substr:`/`word:` the
+/// match length is fixed by the pattern, so bounds are a no-op at best.
+#[must_use]
+pub(crate) fn find_length_bounds_without_regex(
+    trait_definitions: &[TraitDefinition],
+) -> Vec<String> {
+    let mut violations = Vec::new();
+
+    for t in trait_definitions {
+        let invalid = match &t.r#if {
+            Condition::Text(TextQuery {
+                regex,
+                length_min,
+                length_max,
+                ..
+            })
+            | Condition::Raw(RawQuery {
+                regex,
+                length_min,
+                length_max,
+                ..
+            }) => (length_min.is_some() || length_max.is_some()) && regex.is_none(),
+            _ => false,
+        };
+
+        if invalid {
+            violations.push(format!(
+                "{}: `length_min`/`length_max` on text/raw is only valid with `regex:`",
+                t.id,
+            ));
+        }
+    }
+
+    violations
+}
+
+/// Find conditions with `length_min > length_max` — a bound pair no value or
+/// match span can ever satisfy, so the rule never fires.
+///
+/// Returns `(rule_id, min, max)`.
+#[must_use]
+pub(crate) fn find_impossible_length_bounds(
+    trait_definitions: &[TraitDefinition],
+) -> Vec<(String, usize, usize)> {
+    let mut violations = Vec::new();
+
+    for t in trait_definitions {
+        let bounds = match &t.r#if {
+            Condition::Text(TextQuery {
+                length_min,
+                length_max,
+                ..
+            })
+            | Condition::Raw(RawQuery {
+                length_min,
+                length_max,
+                ..
+            })
+            | Condition::Kv(KvQuery {
+                length_min,
+                length_max,
+                ..
+            }) => (*length_min, *length_max),
+            Condition::Section(SectionQuery {
+                length_min,
+                length_max,
+                ..
+            }) => (
+                length_min.map(|min| usize::try_from(min).unwrap_or(usize::MAX)),
+                length_max.map(|max| usize::try_from(max).unwrap_or(usize::MAX)),
+            ),
+            _ => (None, None),
+        };
+
+        if let (Some(min), Some(max)) = bounds
+            && min > max
+        {
+            violations.push((t.id.clone(), min, max));
+        }
+    }
+
+    violations
+}
+
 /// Check if a KV condition has a redundant `exists` field alongside a value matcher.
 fn is_kv_exists_redundant(cond: &Condition) -> bool {
     matches!(

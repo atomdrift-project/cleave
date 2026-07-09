@@ -46,6 +46,8 @@ mod description_validation_tests {
             r#for: vec![],
             for_from_groups: false,
             r#if: Condition::Text(TextQuery {
+                length_min: None,
+                length_max: None,
                 exact: Some("test".to_string()),
                 substr: None,
                 regex: None,

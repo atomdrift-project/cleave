@@ -1199,6 +1199,8 @@ fn powershell_case_trait() -> TraitDefinition {
         })
     };
     let condition = Condition::Text(TextQuery {
+        length_min: None,
+        length_max: None,
         exact: None,
         substr: None,
         regex: Some("[Pp][Oo][Ww][Ee][Rr][Ss][Hh][Ee][Ll][Ll]".to_string()),

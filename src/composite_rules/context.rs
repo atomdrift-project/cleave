@@ -476,6 +476,9 @@ pub(crate) struct StringParams<'a> {
     pub regex: Option<&'a String>,
     pub word: Option<&'a String>,
     pub case_insensitive: bool,
+    /// Byte-length bounds on the matched span; requires `regex:`.
+    pub length_min: Option<usize>,
+    pub length_max: Option<usize>,
     /// For CI conditions this finder was built from the lowercased pattern.
     pub is_check: Option<StringValidator>,
     pub section: Option<&'a String>,

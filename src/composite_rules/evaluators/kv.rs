@@ -86,9 +86,9 @@ pub(crate) struct KvMatcher {
     #[allow(dead_code)]
     pub exists: Option<bool>,
     /// Minimum collection size (array elements or object keys)
-    pub size_min: Option<usize>,
+    pub length_min: Option<usize>,
     /// Maximum collection size (array elements or object keys)
-    pub size_max: Option<usize>,
+    pub length_max: Option<usize>,
 }
 
 impl KvMatcher {
@@ -100,8 +100,8 @@ impl KvMatcher {
         regex: Option<&std::sync::Arc<crate::composite_rules::condition::TraitRegex>>,
         case_insensitive: bool,
         exists: Option<bool>,
-        size_min: Option<usize>,
-        size_max: Option<usize>,
+        length_min: Option<usize>,
+        length_max: Option<usize>,
     ) -> Self {
         // Pre-compute lowercase pattern to avoid allocation per match
         let substr_lower = if case_insensitive {
@@ -116,8 +116,8 @@ impl KvMatcher {
             regex: regex.map(std::sync::Arc::clone),
             case_insensitive,
             exists,
-            size_min,
-            size_max,
+            length_min,
+            length_max,
         }
     }
 
@@ -126,41 +126,26 @@ impl KvMatcher {
     /// For arrays, returns true if any element matches (for string matchers).
     /// For scalars, checks the value directly.
     /// If no matcher is specified (existence check), returns true.
-    /// Also checks size constraints for collections.
+    /// Also checks length constraints: len() of the value — string bytes,
+    /// array elements, or object keys.
     #[must_use]
     pub(crate) fn matches(&self, value: &Value) -> bool {
-        // Check size constraints FIRST (applies to arrays and objects)
-        match value {
-            Value::Array(arr) => {
-                if let Some(min) = self.size_min
-                    && arr.len() < min
-                {
-                    return false;
-                }
-                if let Some(max) = self.size_max
-                    && arr.len() > max
-                {
-                    return false;
-                }
-            }
-            Value::Object(obj) => {
-                if let Some(min) = self.size_min
-                    && obj.len() < min
-                {
-                    return false;
-                }
-                if let Some(max) = self.size_max
-                    && obj.len() > max
-                {
-                    return false;
-                }
-            }
-            _ => {
-                // Scalars - size constraints don't apply
-                // If size constraints are specified on a scalar, fail the match
-                if self.size_min.is_some() || self.size_max.is_some() {
-                    return false;
-                }
+        // Check length constraints FIRST — len() by value shape. Strings use
+        // byte length, replacing the `.{200,4096}`-style regex length proxies
+        // that unrolled into oversized NFAs. Numbers/bools/null have no len(),
+        // so a length bound on them never matches.
+        let len = match value {
+            Value::Array(arr) => Some(arr.len()),
+            Value::Object(obj) => Some(obj.len()),
+            Value::String(s) => Some(s.len()),
+            _ => None,
+        };
+        if self.length_min.is_some() || self.length_max.is_some() {
+            let Some(len) = len else { return false };
+            if self.length_min.is_some_and(|min| len < min)
+                || self.length_max.is_some_and(|max| len > max)
+            {
+                return false;
             }
         }
 
@@ -1540,8 +1525,8 @@ pub(crate) fn evaluate_kv(condition: &Condition, ctx: &EvaluationContext<'_>) ->
         match_mode,
         case_insensitive,
         exists,
-        size_min,
-        size_max,
+        length_min,
+        length_max,
     }) = condition
     else {
         return None;
@@ -1659,14 +1644,14 @@ pub(crate) fn evaluate_kv(condition: &Condition, ctx: &EvaluationContext<'_>) ->
         resolved_regex,
         *case_insensitive,
         *exists,
-        *size_min,
-        *size_max,
+        *length_min,
+        *length_max,
     );
 
     // Check if any value matches
     for value in &values {
         if matcher.matches(value) {
-            let matched_value = format_evidence_value_with_size(value, *size_min, *size_max);
+            let matched_value = format_evidence_value_with_size(value, *length_min, *length_max);
             return Some(Evidence {
                 method: "value".to_string(),
                 source: file_path.display().to_string(),
@@ -1733,8 +1718,8 @@ fn value_tree_companion_offset(ctx: &EvaluationContext<'_>, dotted_path: &str) -
 /// Format a value for evidence display with optional size information.
 fn format_evidence_value_with_size(
     value: &Value,
-    size_min: Option<usize>,
-    size_max: Option<usize>,
+    length_min: Option<usize>,
+    length_max: Option<usize>,
 ) -> String {
     let s = match value {
         Value::String(s) => s.clone(),
@@ -1756,7 +1741,7 @@ fn format_evidence_value_with_size(
     // Only annotate size when the rendered form hides the count: a
     // truncated string, or an object (rendered without bracket-count
     // cues). Arrays render as `[a, b, c]` — the reader counts items.
-    let size_info = if size_min.is_some() || size_max.is_some() {
+    let size_info = if length_min.is_some() || length_max.is_some() {
         match value {
             Value::Array(arr) if truncated.ends_with("...") => {
                 Some(format!("size: {} (array)", arr.len()))
@@ -2037,8 +2022,8 @@ mod tests {
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
         assert!(evaluate_kv(&cond, &ctx).is_some());
 
@@ -2053,8 +2038,8 @@ mod tests {
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
         assert!(evaluate_kv(&cond, &ctx).is_some());
 
@@ -2069,8 +2054,8 @@ mod tests {
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
         assert!(evaluate_kv(&cond, &ctx).is_none());
     }
@@ -2099,8 +2084,8 @@ Author-email: security-research@example.com
             ne: None,
             case_insensitive: true,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
         assert!(evaluate_kv(&cond, &ctx).is_some());
     }
@@ -2511,38 +2496,65 @@ Author-email: security-research@example.com
     // ==========================================================================
 
     #[test]
-    fn test_array_size_min() {
+    fn test_array_length_min() {
         let matcher = KvMatcher {
-            size_min: Some(2),
+            length_min: Some(2),
             ..Default::default()
         };
-        // Array with 3 elements should pass size_min: 2
+        // Array with 3 elements should pass length_min: 2
         assert!(matcher.matches(&json!(["a", "b", "c"])));
-        // Array with 1 element should fail size_min: 2
+        // Array with 1 element should fail length_min: 2
         assert!(!matcher.matches(&json!(["a"])));
-        // Empty array should fail size_min: 2
+        // Empty array should fail length_min: 2
         assert!(!matcher.matches(&json!([])));
     }
 
     #[test]
-    fn test_array_size_max() {
+    fn test_array_length_max() {
         let matcher = KvMatcher {
-            size_max: Some(2),
+            length_max: Some(2),
             ..Default::default()
         };
-        // Array with 1 element should pass size_max: 2
+        // Array with 1 element should pass length_max: 2
         assert!(matcher.matches(&json!(["a"])));
-        // Array with 2 elements should pass size_max: 2
+        // Array with 2 elements should pass length_max: 2
         assert!(matcher.matches(&json!(["a", "b"])));
-        // Array with 3 elements should fail size_max: 2
+        // Array with 3 elements should fail length_max: 2
         assert!(!matcher.matches(&json!(["a", "b", "c"])));
+    }
+
+    #[test]
+    fn test_string_length_bounds() {
+        // len() of a string value is its byte length.
+        let matcher = KvMatcher {
+            length_min: Some(3),
+            ..Default::default()
+        };
+        assert!(matcher.matches(&json!("abcd")));
+        assert!(!matcher.matches(&json!("ab")));
+
+        let matcher = KvMatcher {
+            length_max: Some(3),
+            ..Default::default()
+        };
+        assert!(matcher.matches(&json!("abc")));
+        assert!(!matcher.matches(&json!("abcd")));
+
+        // Non-string scalars have no len(): bounds never match them.
+        let matcher = KvMatcher {
+            length_min: Some(1),
+            ..Default::default()
+        };
+        assert!(!matcher.matches(&json!(42)));
+        assert!(!matcher.matches(&json!(true)));
+        assert!(!matcher.matches(&serde_json::Value::Null));
     }
 
     #[test]
     fn test_array_size_exact() {
         let matcher = KvMatcher {
-            size_min: Some(1),
-            size_max: Some(1),
+            length_min: Some(1),
+            length_max: Some(1),
             ..Default::default()
         };
         // Exactly 1 element should pass
@@ -2556,8 +2568,8 @@ Author-email: security-research@example.com
     #[test]
     fn test_array_size_empty() {
         let matcher = KvMatcher {
-            size_min: Some(0),
-            size_max: Some(0),
+            length_min: Some(0),
+            length_max: Some(0),
             ..Default::default()
         };
         // Empty array should pass
@@ -2567,37 +2579,37 @@ Author-email: security-research@example.com
     }
 
     #[test]
-    fn test_object_size_min() {
+    fn test_object_length_min() {
         let matcher = KvMatcher {
-            size_min: Some(2),
+            length_min: Some(2),
             ..Default::default()
         };
-        // Object with 3 keys should pass size_min: 2
+        // Object with 3 keys should pass length_min: 2
         assert!(matcher.matches(&json!({"a": 1, "b": 2, "c": 3})));
-        // Object with 1 key should fail size_min: 2
+        // Object with 1 key should fail length_min: 2
         assert!(!matcher.matches(&json!({"a": 1})));
-        // Empty object should fail size_min: 2
+        // Empty object should fail length_min: 2
         assert!(!matcher.matches(&json!({})));
     }
 
     #[test]
-    fn test_object_size_max() {
+    fn test_object_length_max() {
         let matcher = KvMatcher {
-            size_max: Some(2),
+            length_max: Some(2),
             ..Default::default()
         };
-        // Object with 1 key should pass size_max: 2
+        // Object with 1 key should pass length_max: 2
         assert!(matcher.matches(&json!({"a": 1})));
-        // Object with 2 keys should pass size_max: 2
+        // Object with 2 keys should pass length_max: 2
         assert!(matcher.matches(&json!({"a": 1, "b": 2})));
-        // Object with 3 keys should fail size_max: 2
+        // Object with 3 keys should fail length_max: 2
         assert!(!matcher.matches(&json!({"a": 1, "b": 2, "c": 3})));
     }
 
     #[test]
     fn test_object_size_empty() {
         let matcher = KvMatcher {
-            size_max: Some(0),
+            length_max: Some(0),
             ..Default::default()
         };
         // Empty object should pass
@@ -2607,13 +2619,14 @@ Author-email: security-research@example.com
     }
 
     #[test]
-    fn test_size_on_scalar_fails() {
+    fn test_length_on_scalar() {
         let matcher = KvMatcher {
-            size_min: Some(1),
+            length_min: Some(1),
             ..Default::default()
         };
-        // Scalars should fail size constraints
-        assert!(!matcher.matches(&json!("string")));
+        // Strings have len() (byte length); other scalars do not and never
+        // satisfy length bounds.
+        assert!(matcher.matches(&json!("string")));
         assert!(!matcher.matches(&json!(123)));
         assert!(!matcher.matches(&json!(true)));
         assert!(!matcher.matches(&json!(null)));
@@ -2624,15 +2637,15 @@ Author-email: security-research@example.com
         // Size constraint + string matching should both apply
         let matcher = KvMatcher {
             substr: Some("alice".to_string()),
-            size_min: Some(1),
-            size_max: Some(2),
+            length_min: Some(1),
+            length_max: Some(2),
             ..Default::default()
         };
         // Array with 1 element containing "alice" should pass
         assert!(matcher.matches(&json!(["alice@example.com"])));
         // Array with 2 elements containing "alice" should pass
         assert!(matcher.matches(&json!(["bob@example.com", "alice@example.com"])));
-        // Array with 3 elements should fail (exceeds size_max)
+        // Array with 3 elements should fail (exceeds length_max)
         assert!(!matcher.matches(&json!([
             "alice@example.com",
             "bob@example.com",
@@ -2662,8 +2675,8 @@ Author-email: security-research@example.com
             ne: None,
             case_insensitive: false,
             exists: Some(false),
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
 
         // "description" doesn't exist, so exists: false should match
@@ -2686,8 +2699,8 @@ Author-email: security-research@example.com
             ne: None,
             case_insensitive: false,
             exists: Some(false),
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
 
         // "description" exists, so exists: false should NOT match
@@ -2710,8 +2723,8 @@ Author-email: security-research@example.com
             ne: None,
             case_insensitive: false,
             exists: Some(true),
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
 
         // "description" exists, so exists: true should match
@@ -2734,8 +2747,8 @@ Author-email: security-research@example.com
             ne: None,
             case_insensitive: false,
             exists: Some(true),
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
 
         // "description" doesn't exist, so exists: true should NOT match
@@ -2765,8 +2778,8 @@ Author-email: security-research@example.com
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: Some(1),
-            size_max: Some(1),
+            length_min: Some(1),
+            length_max: Some(1),
         });
 
         assert!(evaluate_kv_test(&cond, package_json, path).is_some());
@@ -2791,8 +2804,8 @@ Author-email: security-research@example.com
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: Some(0),
+            length_min: None,
+            length_max: Some(0),
         });
 
         assert!(evaluate_kv_test(&cond, package_json, path).is_some());
@@ -2821,8 +2834,8 @@ Author-email: security-research@example.com
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: Some(30),
-            size_max: None,
+            length_min: Some(30),
+            length_max: None,
         });
 
         assert!(evaluate_kv_test(&cond, package_json.as_bytes(), path).is_some());
@@ -2970,8 +2983,8 @@ Author-email: security-research@example.com
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
 
         assert!(evaluate_kv_test(&cond, json_content, Path::new("random.json")).is_none());
@@ -3008,8 +3021,8 @@ Author-email: security-research@example.com
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
 
         assert!(evaluate_kv_test(&cond, yaml_content, Path::new("config.yaml")).is_none());
@@ -3045,8 +3058,8 @@ Author-email: security-research@example.com
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
 
         assert!(evaluate_kv_test(&cond, toml_content, Path::new("config.toml")).is_none());
@@ -3084,8 +3097,8 @@ Author-email: security-research@example.com
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
 
         assert!(evaluate_kv_test(&cond, package_json, Path::new("package.json")).is_some());
@@ -3118,8 +3131,8 @@ Author-email: security-research@example.com
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
 
         assert!(evaluate_kv_test(&cond, cargo_toml, Path::new("Cargo.toml")).is_some());
@@ -3161,8 +3174,8 @@ Author-email: security-research@example.com
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
 
         assert!(evaluate_kv_test(&cond, workflow, Path::new(".github/workflows/ci.yml")).is_some());
@@ -3194,8 +3207,8 @@ Author-email: security-research@example.com
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
 
         assert!(evaluate_kv_test(&cond, valid_json, Path::new("database.json")).is_none());
@@ -3461,8 +3474,8 @@ WantedBy=multi-user.target graphical.target
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
         assert!(evaluate_kv_test(&exec_start, service, path).is_some());
 
@@ -3476,8 +3489,8 @@ WantedBy=multi-user.target graphical.target
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
         assert!(evaluate_kv_test(&ld_preload, service, path).is_some());
 
@@ -3491,8 +3504,8 @@ WantedBy=multi-user.target graphical.target
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
         assert!(evaluate_kv_test(&wanted_by_member, service, path).is_some());
 
@@ -3506,8 +3519,8 @@ WantedBy=multi-user.target graphical.target
             ne: None,
             case_insensitive: false,
             exists: Some(true),
-            size_min: Some(2),
-            size_max: None,
+            length_min: Some(2),
+            length_max: None,
         });
         assert!(evaluate_kv_test(&wanted_by_size, service, path).is_some());
 
@@ -3521,8 +3534,8 @@ WantedBy=multi-user.target graphical.target
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
         assert!(evaluate_kv_test(&old_exec_start, service, path).is_none());
     }
@@ -3541,8 +3554,8 @@ WantedBy=multi-user.target graphical.target
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
         assert!(evaluate_kv_test(&cond, service, path).is_some());
     }
@@ -3561,8 +3574,8 @@ WantedBy=multi-user.target graphical.target
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
         assert!(
             evaluate_kv_test_with_file_type(&cond, service, path, FileType::SystemdService)
@@ -3672,8 +3685,8 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
         assert!(evaluate_kv_test(&env_list_item, service, path).is_some());
 
@@ -3687,8 +3700,8 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
         assert!(evaluate_kv_test(&env_var, service, path).is_some());
 
@@ -3702,8 +3715,8 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
         assert!(evaluate_kv_test(&raw_env, service, path).is_some());
     }
@@ -3734,8 +3747,8 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
         assert!(evaluate_kv_test(&cond, manifest, path).is_some());
 
@@ -3750,8 +3763,8 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
         assert!(evaluate_kv_test(&cond, manifest, path).is_none());
 
@@ -3766,8 +3779,8 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
         assert!(evaluate_kv_test(&cond, manifest, path).is_some());
     }
@@ -3801,8 +3814,8 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
         assert!(evaluate_kv_test(&cond, manifest, path).is_some());
 
@@ -3817,8 +3830,8 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
         assert!(evaluate_kv_test(&cond, manifest, path).is_some());
 
@@ -3833,8 +3846,8 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
         assert!(evaluate_kv_test(&cond, manifest, path).is_some());
     }
@@ -3866,8 +3879,8 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
         assert!(evaluate_kv_test(&cond, package, path).is_some());
 
@@ -3882,8 +3895,8 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
         assert!(evaluate_kv_test(&cond, package, path).is_some());
 
@@ -3898,8 +3911,8 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
         assert!(evaluate_kv_test(&cond, package, path).is_some());
 
@@ -3914,8 +3927,8 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
         assert!(evaluate_kv_test(&cond, package, path).is_none());
     }
@@ -3941,8 +3954,8 @@ name: test
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
         assert!(evaluate_kv_test(&cond, yaml, path).is_some());
     }
@@ -3972,8 +3985,8 @@ openssl = "0.10"
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
         assert!(evaluate_kv_test(&cond, toml, path).is_some());
 
@@ -3988,8 +4001,8 @@ openssl = "0.10"
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
         assert!(evaluate_kv_test(&cond, toml, path).is_none());
 
@@ -4004,8 +4017,8 @@ openssl = "0.10"
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
         assert!(evaluate_kv_test(&cond, toml, path).is_some());
     }
@@ -4030,8 +4043,8 @@ openssl = "0.10"
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
         assert!(evaluate_kv_test(&cond, json, path).is_some());
 
@@ -4046,8 +4059,8 @@ openssl = "0.10"
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
         assert!(evaluate_kv_test(&cond, json, path).is_none());
     }
@@ -4068,8 +4081,8 @@ openssl = "0.10"
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
         assert!(evaluate_kv_test(&cond, json, path).is_some());
 
@@ -4084,8 +4097,8 @@ openssl = "0.10"
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
         assert!(evaluate_kv_test(&cond, json, path).is_some());
     }
@@ -4105,8 +4118,8 @@ openssl = "0.10"
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
         assert!(evaluate_kv_test(&cond, json, path).is_some());
     }
@@ -4126,8 +4139,8 @@ openssl = "0.10"
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
         assert!(evaluate_kv_test(&cond, json, path).is_some());
     }
@@ -4147,8 +4160,8 @@ openssl = "0.10"
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
         // Should not panic, just return no match
         assert!(evaluate_kv_test(&cond, bad, path).is_none());
@@ -4201,8 +4214,8 @@ Author: attacker@evil.com
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
         assert!(evaluate_kv_test(&cond, pkginfo, path).is_some());
 
@@ -4217,8 +4230,8 @@ Author: attacker@evil.com
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
         assert!(evaluate_kv_test(&cond, pkginfo, path).is_some());
 
@@ -4233,8 +4246,8 @@ Author: attacker@evil.com
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
         assert!(evaluate_kv_test(&cond, pkginfo, path).is_some());
 
@@ -4249,8 +4262,8 @@ Author: attacker@evil.com
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
         assert!(evaluate_kv_test(&cond, pkginfo, path).is_some());
 
@@ -4265,8 +4278,8 @@ Author: attacker@evil.com
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
         assert!(evaluate_kv_test(&cond, pkginfo, path).is_none());
     }
@@ -4293,8 +4306,8 @@ Classifier: Programming Language :: Python :: 3
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
         assert!(evaluate_kv_test(&cond, pkginfo, path).is_some());
 
@@ -4309,8 +4322,8 @@ Classifier: Programming Language :: Python :: 3
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
         assert!(evaluate_kv_test(&cond, pkginfo, path).is_some());
     }
@@ -4337,8 +4350,8 @@ Version: 1.0.0
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
         assert!(evaluate_kv_test(&cond, pkginfo, path).is_some());
     }
@@ -4363,8 +4376,8 @@ Author-Email: test@example.com
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
         assert!(evaluate_kv_test(&cond, pkginfo, path).is_some());
     }
@@ -4429,8 +4442,8 @@ Author-Email: test@example.com
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
         assert!(evaluate_kv_test(&cond, plist, path).is_some());
 
@@ -4445,8 +4458,8 @@ Author-Email: test@example.com
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
         assert!(evaluate_kv_test(&cond, plist, path).is_some());
 
@@ -4461,8 +4474,8 @@ Author-Email: test@example.com
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
         assert!(evaluate_kv_test(&cond, plist, path).is_none());
     }
@@ -4494,8 +4507,8 @@ Author-Email: test@example.com
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
         assert!(evaluate_kv_test(&cond_label, plist, path).is_some());
 
@@ -4510,8 +4523,8 @@ Author-Email: test@example.com
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         });
         assert!(evaluate_kv_test(&cond_program, plist, path).is_some());
     }
@@ -4616,8 +4629,8 @@ Author-Email: test@example.com
             ne: None,
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         })
     }
 
@@ -4632,8 +4645,8 @@ Author-Email: test@example.com
             ne: Some(ne.to_string()),
             case_insensitive: false,
             exists: None,
-            size_min: None,
-            size_max: None,
+            length_min: None,
+            length_max: None,
         })
     }
 

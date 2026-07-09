@@ -66,6 +66,7 @@ fn eval_raw<'a>(
         regex,
         word,
         case_insensitive,
+        (None, None),
         external_ip.then_some(crate::composite_rules::condition::StringValidator::ExternalIp),
         not,
         location,
@@ -523,6 +524,8 @@ fn test_eval_string_exact_match() {
     let ctx = create_test_context(&report, &data);
 
     let params = StringParams {
+        length_min: None,
+        length_max: None,
         exact: Some(&"/bin/sh".to_string()),
         substr: None,
         regex: None,
@@ -544,6 +547,131 @@ fn test_eval_string_exact_match() {
 }
 
 #[test]
+fn test_eval_text_regex_length_bounds() {
+    let mut report = create_test_report();
+    report.strings.push(StringInfo {
+        value: ("x".repeat(64)).into(),
+        offset: Some(0x1000),
+        encoding: "utf8".to_string(),
+        string_type: Some(StringType::Path),
+        section: None,
+        encoding_chain: Vec::new(),
+        fragments: None,
+    });
+    let data = vec![];
+    let ctx = create_test_context(&report, &data);
+
+    let regex = "[a-z]+".to_string();
+    let mut params = StringParams {
+        length_min: Some(50),
+        length_max: None,
+        exact: None,
+        substr: None,
+        regex: Some(&regex),
+        word: None,
+        case_insensitive: false,
+        is_check: None,
+        section: None,
+        offset: None,
+        offset_range: None,
+        section_offset: None,
+        section_offset_range: None,
+        arch_clamp: None,
+    };
+    // The 64-byte run satisfies length_min: 50 — the loop+bound idiom that
+    // replaces counted repetitions like `[a-z]{50,}`.
+    assert!(eval_text(&params, None, &ctx, None).matched);
+
+    params.length_min = Some(100);
+    assert!(!eval_text(&params, None, &ctx, None).matched);
+
+    params.length_min = None;
+    params.length_max = Some(10);
+    assert!(!eval_text(&params, None, &ctx, None).matched);
+}
+
+#[test]
+fn test_eval_text_length_bounds_scan_past_short_match() {
+    // A short first match must not shadow a qualifying later run in the
+    // same string: the matcher scans on until a span satisfies the bounds.
+    let mut report = create_test_report();
+    report.strings.push(StringInfo {
+        value: (format!("ab {}", "z".repeat(60))).into(),
+        offset: Some(0x1000),
+        encoding: "utf8".to_string(),
+        string_type: Some(StringType::Path),
+        section: None,
+        encoding_chain: Vec::new(),
+        fragments: None,
+    });
+    let data = vec![];
+    let ctx = create_test_context(&report, &data);
+
+    let regex = "[a-z]+".to_string();
+    let params = StringParams {
+        length_min: Some(50),
+        length_max: None,
+        exact: None,
+        substr: None,
+        regex: Some(&regex),
+        word: None,
+        case_insensitive: false,
+        is_check: None,
+        section: None,
+        offset: None,
+        offset_range: None,
+        section_offset: None,
+        section_offset_range: None,
+        arch_clamp: None,
+    };
+    let result = eval_text(&params, None, &ctx, None);
+    assert!(
+        result.matched,
+        "the 60-byte run after the 2-byte word must match"
+    );
+    assert_eq!(result.evidence[0].value, "z".repeat(60));
+}
+
+#[test]
+fn test_eval_raw_regex_length_bounds() {
+    let report = create_test_report();
+    let data = format!("header {} tail", "A".repeat(40)).into_bytes();
+    let ctx = create_test_context(&report, &data);
+    let location = ContentLocationParams::default();
+    let regex = "A+".to_string();
+
+    let result = super::eval_raw(
+        None,
+        None,
+        Some(&regex),
+        None,
+        false,
+        (Some(30), None),
+        None,
+        None,
+        &location,
+        &ctx,
+        None,
+    );
+    assert!(result.matched, "40-byte run passes length_min: 30");
+
+    let result = super::eval_raw(
+        None,
+        None,
+        Some(&regex),
+        None,
+        false,
+        (Some(50), None),
+        None,
+        None,
+        &location,
+        &ctx,
+        None,
+    );
+    assert!(!result.matched, "40-byte run fails length_min: 50");
+}
+
+#[test]
 fn test_eval_string_substr_match() {
     let mut report = create_test_report();
     report.strings.push(StringInfo {
@@ -559,6 +687,8 @@ fn test_eval_string_substr_match() {
     let ctx = create_test_context(&report, &data);
 
     let params = StringParams {
+        length_min: None,
+        length_max: None,
         exact: None,
         substr: Some(&"evil.com".to_string()),
         regex: None,
@@ -601,6 +731,8 @@ fn test_eval_text_offsetless_string_still_anchors() {
     let ctx = create_test_context(&report, &data);
 
     let params = StringParams {
+        length_min: None,
+        length_max: None,
         exact: None,
         substr: Some(&"EnumSystemLocales".to_string()),
         regex: None,
@@ -647,6 +779,8 @@ fn test_eval_string_regex_match() {
 
     let pattern = r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}".to_string();
     let params = StringParams {
+        length_min: None,
+        length_max: None,
         exact: None,
         substr: None,
         regex: Some(&pattern),
@@ -682,6 +816,8 @@ fn test_eval_string_case_insensitive() {
     let ctx = create_test_context(&report, &data);
 
     let params = StringParams {
+        length_min: None,
+        length_max: None,
         exact: Some(&"createremotethread".to_string()),
         substr: None,
         regex: None,
@@ -718,6 +854,8 @@ fn test_eval_string_not_exception() {
 
     let not_exceptions = vec![NotException::Shorthand("/bin/sh".to_string())];
     let params = StringParams {
+        length_min: None,
+        length_max: None,
         exact: Some(&"/bin/sh".to_string()),
         substr: None,
         regex: None,
@@ -745,6 +883,8 @@ fn test_eval_text_uses_raw_search_for_source_files() {
     let ctx = EvaluationContext::test_only_new(&report, &data, FileType::Shell);
     let pattern = "password marker".to_string();
     let params = StringParams {
+        length_min: None,
+        length_max: None,
         exact: None,
         substr: Some(&pattern),
         regex: None,
@@ -790,6 +930,8 @@ fn test_eval_string_literal_matches_only_ast_strings() {
     let ctx = EvaluationContext::test_only_new(&report, &data, FileType::Python);
     let pattern = "literal_value".to_string();
     let params = StringParams {
+        length_min: None,
+        length_max: None,
         exact: Some(&pattern),
         substr: None,
         regex: None,
@@ -1609,6 +1751,8 @@ fn test_eval_string_match_count_exceeds_evidence_cap() {
 
     let substr_val = "token_match".to_string();
     let params = StringParams {
+        length_min: None,
+        length_max: None,
         exact: None,
         substr: Some(&substr_val),
         regex: None,
@@ -1840,6 +1984,8 @@ fn test_eval_string_external_ip_filters_private() {
 
     let substr = "connect to".to_string();
     let params = StringParams {
+        length_min: None,
+        length_max: None,
         exact: None,
         substr: Some(&substr),
         regex: None,
@@ -1964,6 +2110,8 @@ fn test_eval_string_word_boundary() {
 
     let word = "cat".to_string();
     let params = StringParams {
+        length_min: None,
+        length_max: None,
         exact: None,
         substr: None,
         regex: None,
@@ -2171,6 +2319,8 @@ fn test_eval_string_section_offset_with_section_map() {
     let sec_text = ".text".to_string();
     let sec_data = ".data".to_string();
     let params = StringParams {
+        length_min: None,
+        length_max: None,
         exact: None,
         substr: Some(&substr),
         regex: None,
@@ -2194,6 +2344,8 @@ fn test_eval_string_section_offset_with_section_map() {
     // section .data + range covering [0, 0x100) — should match OTHER at .data+0x50
     let substr2 = "OTHER".to_string();
     let params2 = StringParams {
+        length_min: None,
+        length_max: None,
         exact: None,
         substr: Some(&substr2),
         regex: None,
@@ -2215,6 +2367,8 @@ fn test_eval_string_section_offset_with_section_map() {
 
     // section .text — should NOT find OTHER (it's in .data)
     let params3 = StringParams {
+        length_min: None,
+        length_max: None,
         exact: None,
         substr: Some(&substr2),
         regex: None,
@@ -2348,6 +2502,8 @@ fn test_eval_string_offset_range_filters() {
 
     // offset_range [0, 200) — should match only the string at offset 100
     let params = StringParams {
+        length_min: None,
+        length_max: None,
         exact: None,
         substr: Some(&substr),
         regex: None,
@@ -2370,6 +2526,8 @@ fn test_eval_string_offset_range_filters() {
 
     // offset_range [4000, 6000) — should match only the string at offset 5000
     let params2 = StringParams {
+        length_min: None,
+        length_max: None,
         exact: None,
         substr: Some(&substr),
         regex: None,

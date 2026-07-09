@@ -67,11 +67,6 @@ impl<K: Hash + Eq, V> BudgetedStore<K, V> {
         self.map.len()
     }
 
-    /// Total bytes of compiled engines currently held.
-    pub(crate) fn bytes(&self) -> usize {
-        self.bytes
-    }
-
     pub(crate) fn cap(&self) -> NonZeroUsize {
         self.map.cap()
     }

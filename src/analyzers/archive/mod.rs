@@ -560,6 +560,52 @@ pub(crate) struct ArchiveAnalyzer {
     analysis_options: Option<Arc<crate::AnalysisOptions>>,
 }
 
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ArchiveAnalyzerConfig {
+    sample_extraction: Option<SampleExtractionConfig>,
+    max_memory_file_size: Option<u64>,
+    analysis_options: Option<Arc<crate::AnalysisOptions>>,
+    cancellation: Option<Arc<std::sync::atomic::AtomicBool>>,
+}
+
+impl ArchiveAnalyzerConfig {
+    #[must_use]
+    pub(crate) fn from_analysis_options(options: &crate::AnalysisOptions) -> Self {
+        Self {
+            sample_extraction: options.sample_extraction.clone(),
+            max_memory_file_size: Some(options.max_memory_file_size),
+            analysis_options: Some(Arc::new(options.clone())),
+            cancellation: options.cancellation.clone(),
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn with_cancellation(
+        mut self,
+        flag: Option<Arc<std::sync::atomic::AtomicBool>>,
+    ) -> Self {
+        self.cancellation = flag;
+        self
+    }
+
+    #[must_use]
+    pub(crate) fn apply(&self, mut analyzer: ArchiveAnalyzer) -> ArchiveAnalyzer {
+        if let Some(config) = &self.sample_extraction {
+            analyzer = analyzer.with_sample_extraction(config.clone());
+        }
+        if let Some(size) = self.max_memory_file_size {
+            analyzer = analyzer.with_max_memory_file_size(size);
+        }
+        if let Some(options) = &self.analysis_options {
+            analyzer = analyzer.with_analysis_options(options.clone());
+        }
+        if let Some(flag) = &self.cancellation {
+            analyzer = analyzer.with_cancellation(flag.clone());
+        }
+        analyzer
+    }
+}
+
 /// Decompress a single-file stream into `dest_dir`, applying size and ratio guards.
 ///
 /// The output filename is derived from `archive_path`'s stem (e.g. `foo.gz` → `foo`).
@@ -1897,6 +1943,31 @@ composite_rules:
     fn test_with_depth() {
         let analyzer = ArchiveAnalyzer::new().with_depth(5);
         assert_eq!(analyzer.current_depth, 5);
+    }
+
+    #[test]
+    fn archive_analyzer_config_applies_extract_dir_options() {
+        let extract_dir = tempfile::tempdir().expect("create extract dir");
+        let options = crate::AnalysisOptions {
+            all_files: true,
+            max_memory_file_size: 42,
+            sample_extraction: Some(SampleExtractionConfig::new(
+                extract_dir.path().to_path_buf(),
+            )),
+            ..crate::AnalysisOptions::default()
+        };
+
+        let analyzer =
+            ArchiveAnalyzerConfig::from_analysis_options(&options).apply(ArchiveAnalyzer::new());
+
+        assert!(analyzer.sample_extraction.is_some());
+        assert_eq!(analyzer.max_memory_file_size, 42);
+        assert!(
+            analyzer
+                .analysis_options
+                .as_ref()
+                .is_some_and(|opts| opts.all_files)
+        );
     }
 
     #[test]

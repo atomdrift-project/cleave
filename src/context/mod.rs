@@ -492,7 +492,11 @@ fn capture_source_lines(
     // contested leg. (The binary path does the same in `capture_byte_units`.)
     let mut composites: Vec<&&Finding> =
         shown.iter().filter(|f| !f.trait_refs.is_empty()).collect();
-    composites.sort_by(|a, b| finding_score(b).total_cmp(&finding_score(a)));
+    composites.sort_by(|a, b| {
+        finding_score(b)
+            .total_cmp(&finding_score(a))
+            .then_with(|| a.id.cmp(&b.id))
+    });
     for finding in composites {
         let score = finding_score(finding);
         let leg = composite_legs(finding, by_id)
@@ -590,7 +594,11 @@ fn capture_byte_slices(
     // higher-severity conclusion claims the contested leg.
     let mut composites: Vec<&&Finding> =
         shown.iter().filter(|f| !f.trait_refs.is_empty()).collect();
-    composites.sort_by(|a, b| finding_score(b).total_cmp(&finding_score(a)));
+    composites.sort_by(|a, b| {
+        finding_score(b)
+            .total_cmp(&finding_score(a))
+            .then_with(|| a.id.cmp(&b.id))
+    });
     for finding in composites {
         let score = finding_score(finding);
         let leg = composite_legs(finding, by_id)
@@ -703,7 +711,14 @@ fn dedup_notes(notes: &mut Vec<Note>) {
     notes.dedup_by(|a, b| a.id == b.id);
 
     // Strongest-first, then keep a note only if it doesn't overlap a kept one.
-    notes.sort_unstable_by(|a, b| note_score(b).total_cmp(&note_score(a)));
+    // The id tie-break makes the winner among equal-score overlapping notes
+    // deterministic — without it, the displayed annotation flips with trait
+    // evaluation order (which shifts across builds).
+    notes.sort_unstable_by(|a, b| {
+        note_score(b)
+            .total_cmp(&note_score(a))
+            .then_with(|| a.id.cmp(&b.id))
+    });
     let mut kept: Vec<Note> = Vec::with_capacity(notes.len());
     for n in notes.drain(..) {
         if !kept.iter().any(|k| spans_overlap(k, &n)) {

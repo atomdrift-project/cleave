@@ -29,7 +29,9 @@ use super::guards::{
     MAX_PATH_COMPONENT_LEN, sanitize_entry_path, symlink_escapes,
 };
 use super::utils::{calculate_sha256, find_main_class, is_benign_java_path};
-use crate::analyzers::{AnalysisInput, FileType, FileTypeExt, detect_file_type};
+use crate::analyzers::{
+    AnalysisInput, FileType, FileTypeExt, detect_file_type, detect_file_type_from_path,
+};
 use crate::types::{
     AnalysisReport, ArchiveEntry, FileAnalysis, Finding, TargetInfo, YaraMatch, encode_archive_path,
 };
@@ -105,6 +107,122 @@ struct MemoryArchiveMember {
     data: Vec<u8>,
     file_type: FileType,
     sha256: String,
+    container_kind: Option<String>,
+}
+
+fn archive_entry_metadata(
+    entry_path: String,
+    logical_path: &Path,
+    file_type: &FileType,
+    sha256: String,
+    data: &[u8],
+    container_kind: Option<String>,
+) -> ArchiveEntry {
+    let declared_file_type = detect_file_type_from_path(logical_path);
+    let declared_type =
+        (declared_file_type != FileType::Unknown).then(|| declared_file_type.report_file_type());
+    let extension_type_mismatch = declared_type.is_some() && declared_file_type != *file_type;
+
+    ArchiveEntry {
+        path: entry_path,
+        file_type: file_type.report_file_type(),
+        sha256,
+        size_bytes: data.len() as u64,
+        declared_type,
+        extension_type_mismatch,
+        entropy: byte_entropy(data),
+        magic_prefix: magic_prefix(data),
+        container_kind,
+        ..ArchiveEntry::default()
+    }
+}
+
+fn byte_entropy(data: &[u8]) -> Option<f64> {
+    if data.is_empty() {
+        return None;
+    }
+
+    let mut counts = [0usize; 256];
+    for &byte in data {
+        counts[byte as usize] += 1;
+    }
+
+    let len = data.len() as f64;
+    let entropy = counts
+        .iter()
+        .filter(|&&count| count != 0)
+        .map(|&count| {
+            let p = count as f64 / len;
+            -p * p.log2()
+        })
+        .sum::<f64>();
+
+    Some((entropy * 1000.0).round() / 1000.0)
+}
+
+fn magic_prefix(data: &[u8]) -> Option<String> {
+    if data.is_empty() {
+        return None;
+    }
+
+    let mut out = String::with_capacity(data.len().min(8) * 2);
+    for byte in data.iter().take(8) {
+        use std::fmt::Write;
+        let _ = write!(&mut out, "{byte:02x}");
+    }
+    Some(out)
+}
+
+fn pyinstaller_entry_kind(kind: pyinstx::EntryKind) -> &'static str {
+    match kind {
+        pyinstx::EntryKind::PySource => "py-source",
+        pyinstx::EntryKind::PyModule => "py-module",
+        pyinstx::EntryKind::PyzMember => "pyz-member",
+        pyinstx::EntryKind::Splash => "splash",
+        pyinstx::EntryKind::Binary => "binary",
+    }
+}
+
+fn push_optional_string(
+    obj: &mut serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    value: &Option<String>,
+) {
+    if let Some(value) = value {
+        obj.insert(key.to_string(), serde_json::Value::String(value.clone()));
+    }
+}
+
+fn archive_entry_json(entry: &ArchiveEntry) -> serde_json::Value {
+    let mut obj = serde_json::Map::new();
+    obj.insert("path".into(), serde_json::Value::String(entry.path.clone()));
+    obj.insert(
+        "type".into(),
+        serde_json::Value::String(entry.file_type.clone()),
+    );
+    obj.insert(
+        "sha256".into(),
+        serde_json::Value::String(entry.sha256.clone()),
+    );
+    obj.insert(
+        "size_bytes".into(),
+        serde_json::Value::Number(entry.size_bytes.into()),
+    );
+    push_optional_string(&mut obj, "declared_type", &entry.declared_type);
+    if entry.extension_type_mismatch {
+        obj.insert(
+            "extension_type_mismatch".into(),
+            serde_json::Value::Bool(true),
+        );
+    }
+    if let Some(entropy) = entry.entropy
+        && let Some(number) = serde_json::Number::from_f64(entropy)
+    {
+        obj.insert("entropy".into(), serde_json::Value::Number(number));
+    }
+    push_optional_string(&mut obj, "magic_prefix", &entry.magic_prefix);
+    push_optional_string(&mut obj, "container_kind", &entry.container_kind);
+    serde_json::Value::Object(obj)
 }
 
 /// Streaming accumulator for per-member analysis results.
@@ -1172,6 +1290,7 @@ impl ArchiveAnalyzer {
                 data: file_data,
                 file_type,
                 sha256,
+                container_kind: None,
             };
             if is_jar {
                 jar_members.push(member);
@@ -1400,6 +1519,7 @@ impl ArchiveAnalyzer {
                 data: file_data,
                 file_type,
                 sha256,
+                container_kind: None,
             };
             if is_jar {
                 jar_members.push(member);
@@ -1594,6 +1714,7 @@ impl ArchiveAnalyzer {
                 data: m.data,
                 file_type,
                 sha256,
+                container_kind: None,
             });
         }
 
@@ -1714,6 +1835,7 @@ impl ArchiveAnalyzer {
                 data: file_data.to_vec(),
                 file_type,
                 sha256,
+                container_kind: None,
             };
             window.push(member);
         }
@@ -1813,15 +1935,16 @@ impl ArchiveAnalyzer {
 
         let entry_path = self.format_entry_path(&member.relative_path);
         let archive_location = self.format_evidence_location(&member.relative_path);
-        let entry_metadata = ArchiveEntry {
-            path: entry_path.clone(),
-            file_type: member.file_type.report_file_type(),
-            sha256: member.sha256.clone(),
-            size_bytes: member.data.len() as u64,
-            ..ArchiveEntry::default()
-        };
         let member_start = std::time::Instant::now();
         let logical_path = Path::new(&member.relative_path);
+        let entry_metadata = archive_entry_metadata(
+            entry_path.clone(),
+            logical_path,
+            &member.file_type,
+            member.sha256.clone(),
+            &member.data,
+            member.container_kind.clone(),
+        );
 
         let member_report = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.analyze_extracted_member(
@@ -1932,6 +2055,7 @@ impl ArchiveAnalyzer {
                     data: entry.data.clone(),
                     file_type,
                     sha256,
+                    container_kind: Some(pyinstaller_entry_kind(entry.kind).to_string()),
                 }
             })
             .collect();
@@ -2043,6 +2167,28 @@ impl ArchiveAnalyzer {
                 counts.insert(key, serde_json::Value::from(*n));
             }
             kv.insert("type_counts".into(), serde_json::Value::Object(counts));
+        }
+        if !members.is_empty() {
+            kv.insert(
+                "entries".into(),
+                serde_json::Value::Array(
+                    members
+                        .iter()
+                        .map(|member| {
+                            let entry_path = self.format_entry_path(&member.relative_path);
+                            let metadata = archive_entry_metadata(
+                                entry_path,
+                                Path::new(&member.relative_path),
+                                &member.file_type,
+                                member.sha256.clone(),
+                                &member.data,
+                                member.container_kind.clone(),
+                            );
+                            archive_entry_json(&metadata)
+                        })
+                        .collect(),
+                ),
+            );
         }
         report.merge_kv_subtree("pyinstaller", serde_json::Value::Object(kv));
 
@@ -2258,13 +2404,14 @@ impl ArchiveAnalyzer {
                     crate::analyzers::detect_file_type_from_data(entry.path(), &file_data);
                 let sha256 = calculate_sha256(&file_data);
 
-                let entry_metadata = ArchiveEntry {
-                    path: entry_path.clone(),
-                    file_type: file_type.report_file_type(),
-                    sha256: sha256.clone(),
-                    size_bytes: file_data.len() as u64,
-                    ..ArchiveEntry::default()
-                };
+                let entry_metadata = archive_entry_metadata(
+                    entry_path.clone(),
+                    Path::new(&relative_path),
+                    &file_type,
+                    sha256.clone(),
+                    &file_data,
+                    None,
+                );
 
                 let member_start = std::time::Instant::now();
 
@@ -2394,13 +2541,14 @@ impl ArchiveAnalyzer {
                     crate::analyzers::detect_file_type_from_data(entry.path(), &file_data);
                 let sha256 = calculate_sha256(&file_data);
 
-                let entry_metadata = ArchiveEntry {
-                    path: entry_path.clone(),
-                    file_type: file_type.report_file_type(),
-                    sha256: sha256.clone(),
-                    size_bytes: file_data.len() as u64,
-                    ..ArchiveEntry::default()
-                };
+                let entry_metadata = archive_entry_metadata(
+                    entry_path.clone(),
+                    Path::new(&relative_path),
+                    &file_type,
+                    sha256.clone(),
+                    &file_data,
+                    None,
+                );
 
                 let member_start = std::time::Instant::now();
 
@@ -2587,13 +2735,14 @@ impl ArchiveAnalyzer {
                     crate::analyzers::detect_file_type_from_data(entry.path(), &file_data);
                 let sha256 = calculate_sha256(&file_data);
 
-                let entry_metadata = ArchiveEntry {
-                    path: entry_path.clone(),
-                    file_type: file_type.report_file_type(),
-                    sha256: sha256.clone(),
-                    size_bytes: file_data.len() as u64,
-                    ..ArchiveEntry::default()
-                };
+                let entry_metadata = archive_entry_metadata(
+                    entry_path.clone(),
+                    Path::new(&relative_path),
+                    &file_type,
+                    sha256.clone(),
+                    &file_data,
+                    None,
+                );
 
                 let member_start = std::time::Instant::now();
 
@@ -2731,7 +2880,7 @@ impl ArchiveAnalyzer {
 
 #[cfg(test)]
 mod tests {
-    use super::ArchiveAnalyzer;
+    use super::{ArchiveAnalyzer, archive_entry_json, archive_entry_metadata};
     use crate::analyzers::FileType;
     use std::sync::Arc;
 
@@ -2805,5 +2954,29 @@ mod tests {
             all_files_analyzer.archive_member_analysis_skip_reason(&FileType::Html),
             None
         );
+    }
+
+    #[test]
+    fn archive_entry_metadata_records_extension_type_mismatch() {
+        let data = b"not a valid PE";
+        let entry = archive_entry_metadata(
+            "stage/uusd.exe".to_string(),
+            std::path::Path::new("stage/uusd.exe"),
+            &FileType::Unknown,
+            "sha".to_string(),
+            data,
+            Some("binary".to_string()),
+        );
+
+        assert_eq!(entry.declared_type.as_deref(), Some("pe"));
+        assert!(entry.extension_type_mismatch);
+        assert_eq!(entry.magic_prefix.as_deref(), Some("6e6f742061207661"));
+        assert_eq!(entry.container_kind.as_deref(), Some("binary"));
+        assert!(entry.entropy.is_some());
+
+        let value = archive_entry_json(&entry);
+        assert_eq!(value["declared_type"], "pe");
+        assert_eq!(value["extension_type_mismatch"], true);
+        assert_eq!(value["container_kind"], "binary");
     }
 }

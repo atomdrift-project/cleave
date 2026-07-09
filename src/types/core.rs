@@ -553,6 +553,35 @@ impl AnalysisReport {
                 "size_bytes".into(),
                 serde_json::Value::Number(entry.size_bytes.into()),
             );
+            if let Some(ref declared) = entry.declared_type {
+                obj.insert(
+                    "declared_type".into(),
+                    serde_json::Value::String(declared.clone()),
+                );
+            }
+            if entry.extension_type_mismatch {
+                obj.insert(
+                    "extension_type_mismatch".into(),
+                    serde_json::Value::Bool(true),
+                );
+            }
+            if let Some(entropy) = entry.entropy
+                && let Some(number) = serde_json::Number::from_f64(entropy)
+            {
+                obj.insert("entropy".into(), serde_json::Value::Number(number));
+            }
+            if let Some(ref magic) = entry.magic_prefix {
+                obj.insert(
+                    "magic_prefix".into(),
+                    serde_json::Value::String(magic.clone()),
+                );
+            }
+            if let Some(ref kind) = entry.container_kind {
+                obj.insert(
+                    "container_kind".into(),
+                    serde_json::Value::String(kind.clone()),
+                );
+            }
             if let Some(v) = entry.compressed_size {
                 obj.insert(
                     "compressed_size".into(),
@@ -1912,6 +1941,21 @@ pub struct ArchiveEntry {
     pub sha256: String,
     /// File size in bytes (uncompressed)
     pub size_bytes: u64,
+    /// File type implied by the archive member path/extension, before content validation.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub declared_type: Option<String>,
+    /// True when the path-implied type differs from the content-derived type.
+    #[serde(skip_serializing_if = "is_false", default)]
+    pub extension_type_mismatch: bool,
+    /// Shannon entropy of the uncompressed entry bytes.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub entropy: Option<f64>,
+    /// First bytes of the uncompressed entry as lowercase hex.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub magic_prefix: Option<String>,
+    /// Container-specific member kind, for example a PyInstaller entry kind.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub container_kind: Option<String>,
 
     /// Compressed size in bytes (zip per-entry; tar entries are uncompressed so this matches size_bytes).
     #[serde(skip_serializing_if = "Option::is_none", default)]

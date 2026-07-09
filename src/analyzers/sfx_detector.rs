@@ -9,7 +9,7 @@
 //! Extraction is attempted via system tools (`7zz`/`7z`, `innoextract`) when available.
 //! A detection finding is always emitted even if extraction fails or tooling is absent.
 
-use crate::analyzers::archive::ArchiveAnalyzer;
+use crate::analyzers::archive::{ArchiveAnalyzer, ArchiveAnalyzerConfig};
 use crate::capabilities::CapabilityMapper;
 use crate::types::{AnalysisReport, Criticality, Evidence, Finding, FindingKind};
 use crate::yara_engine::YaraEngine;
@@ -176,6 +176,7 @@ pub(crate) fn analyze_sfx(
     data: &[u8],
     capability_mapper: Option<Arc<CapabilityMapper>>,
     yara_engine: Option<Arc<YaraEngine>>,
+    archive_config: Option<&ArchiveAnalyzerConfig>,
 ) -> SfxResult {
     let marker = match kind {
         SfxKind::Nsis => NSIS_DEADBEEF,
@@ -184,7 +185,14 @@ pub(crate) fn analyze_sfx(
     };
     let marker_offset = memmem::find(data, marker);
 
-    let extraction = try_extract(file_path, data, kind, capability_mapper, yara_engine);
+    let extraction = try_extract(
+        file_path,
+        data,
+        kind,
+        capability_mapper,
+        yara_engine,
+        archive_config,
+    );
     let extracted = extraction.archive_report.is_some();
 
     let extraction_findings = extraction
@@ -261,6 +269,7 @@ fn try_extract(
     kind: SfxKind,
     capability_mapper: Option<Arc<CapabilityMapper>>,
     yara_engine: Option<Arc<YaraEngine>>,
+    archive_config: Option<&ArchiveAnalyzerConfig>,
 ) -> SfxExtraction {
     // PyInstaller path: extract + analyze entirely in memory, no tmpdir.
     if kind == SfxKind::PyInstaller {
@@ -270,6 +279,7 @@ fn try_extract(
                 file_path,
                 capability_mapper,
                 yara_engine,
+                archive_config,
             ),
             inno_diagnostics: vec![],
         };
@@ -311,7 +321,13 @@ fn try_extract(
     }
 
     SfxExtraction {
-        archive_report: analyze_dir(tmp.path(), file_path, capability_mapper, yara_engine),
+        archive_report: analyze_dir(
+            tmp.path(),
+            file_path,
+            capability_mapper,
+            yara_engine,
+            archive_config,
+        ),
         inno_diagnostics,
     }
 }
@@ -321,8 +337,12 @@ fn analyze_pyinstaller_in_memory(
     file_path: &Path,
     capability_mapper: Option<Arc<CapabilityMapper>>,
     yara_engine: Option<Arc<YaraEngine>>,
+    archive_config: Option<&ArchiveAnalyzerConfig>,
 ) -> Option<AnalysisReport> {
     let mut analyzer = ArchiveAnalyzer::new();
+    if let Some(config) = archive_config {
+        analyzer = config.apply(analyzer);
+    }
     if let Some(mapper) = capability_mapper {
         analyzer = analyzer.with_capability_mapper_arc(mapper);
     }
@@ -475,8 +495,12 @@ fn analyze_dir(
     original_path: &Path,
     capability_mapper: Option<Arc<CapabilityMapper>>,
     yara_engine: Option<Arc<YaraEngine>>,
+    archive_config: Option<&ArchiveAnalyzerConfig>,
 ) -> Option<AnalysisReport> {
     let mut analyzer = ArchiveAnalyzer::new();
+    if let Some(config) = archive_config {
+        analyzer = config.apply(analyzer);
+    }
     if let Some(mapper) = capability_mapper {
         analyzer = analyzer.with_capability_mapper_arc(mapper);
     }

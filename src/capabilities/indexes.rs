@@ -304,7 +304,7 @@ pub(crate) struct SymbolMatchIndex {
     /// Per-trait compiled regex for verification after literal-prefilter hit.
     /// Dense Vec indexed by trait_idx (None = not a regex trait). Vec lookup is
     /// ~3× faster than a hashmap here because trait_idx is a dense usize range.
-    trait_regex: Vec<Option<regex::Regex>>,
+    trait_regex: Vec<Option<std::sync::Arc<crate::composite_rules::condition::TraitRegex>>>,
 
     /// Regex traits with no extractable literal prefix, compiled into a single
     /// RegexSet (str-based, unlike the bytes-based one used for raw content
@@ -334,7 +334,9 @@ impl SymbolMatchIndex {
         let mut regex_literal_to_traits: Vec<Vec<usize>> = Vec::new();
 
         // Dense Vec for per-trait regex lookup.
-        let mut trait_regex: Vec<Option<regex::Regex>> = vec![None; num_traits];
+        let mut trait_regex: Vec<
+            Option<std::sync::Arc<crate::composite_rules::condition::TraitRegex>>,
+        > = vec![None; num_traits];
 
         let mut regex_fallback_traits: Vec<usize> = Vec::new();
         let mut regex_fallback_patterns: Vec<String> = Vec::new();
@@ -388,8 +390,7 @@ impl SymbolMatchIndex {
                     // symbol-regex trait (built once, bounded by trait count), so
                     // clone it out of the shared `Arc` here.
                     trait_regex[trait_idx] =
-                        crate::composite_rules::condition::cached_regex(regex_str)
-                            .map(|re| (*re).clone());
+                        crate::composite_rules::condition::cached_regex(regex_str);
                     // Prefer the longest *mandatory* literal anywhere in the
                     // pattern (not just a prefix). A prefix-only extractor dumps
                     // most symbol regexes into the no-literal `RegexSet`, whose

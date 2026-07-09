@@ -2247,6 +2247,9 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             );
             let mut analyzer = analyzers::pe::PEAnalyzer::new()
                 .with_cancellation(options.cancellation.clone())
+                .with_archive_config(
+                    analyzers::archive::ArchiveAnalyzerConfig::from_analysis_options(options),
+                )
                 .with_capability_mapper_arc(mapper_arc.clone());
             // PE analyzer needs YARA engine for overlay/embedded payload analysis
             if let Some(engine) = yara_engine {

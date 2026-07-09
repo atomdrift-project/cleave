@@ -4,7 +4,7 @@
 //! to a PE/ELF/Mach-O stub. This module detects and analyzes such overlays.
 
 use crate::analyzers::Analyzer;
-use crate::analyzers::archive::ArchiveAnalyzer;
+use crate::analyzers::archive::{ArchiveAnalyzer, ArchiveAnalyzerConfig};
 use crate::capabilities::CapabilityMapper;
 use crate::types::{AnalysisReport, Criticality, Evidence, Finding, FindingKind, TargetInfo};
 use crate::yara_engine::YaraEngine;
@@ -85,6 +85,7 @@ pub(crate) fn analyze_overlay(
     binary_path: &str,
     capability_mapper: Option<Arc<CapabilityMapper>>,
     yara_engine: Option<Arc<YaraEngine>>,
+    archive_config: Option<&ArchiveAnalyzerConfig>,
 ) -> Result<Option<OverlayAnalysis>> {
     // Check if overlay contains an archive
     let Some(archive_type) = detect_archive_from_bytes(overlay_data) else {
@@ -109,6 +110,9 @@ pub(crate) fn analyze_overlay(
 
     // Analyze the archive
     let mut analyzer = ArchiveAnalyzer::new();
+    if let Some(config) = archive_config {
+        analyzer = config.apply(analyzer);
+    }
 
     if let Some(mapper) = capability_mapper {
         analyzer = analyzer.with_capability_mapper_arc(mapper);

@@ -443,11 +443,13 @@ impl super::CapabilityMapper {
 
             // Resolve the regex lazily + shared via `lazy_regex` (applies `(?i)`
             // when case-insensitive) rather than storing it per condition.
-            let resolved_regex_owned: Option<std::sync::Arc<regex::Regex>> =
-                regex.as_deref().and_then(|r| {
-                    crate::composite_rules::condition::lazy_regex(Some(r), case_insensitive)
-                });
-            let resolved_regex: Option<&regex::Regex> = resolved_regex_owned.as_deref();
+            let resolved_regex_owned: Option<
+                std::sync::Arc<crate::composite_rules::condition::TraitRegex>,
+            > = regex.as_deref().and_then(|r| {
+                crate::composite_rules::condition::lazy_regex(Some(r), case_insensitive)
+            });
+            let resolved_regex: Option<&crate::composite_rules::condition::TraitRegex> =
+                resolved_regex_owned.as_deref();
 
             for entry_name in entry_names {
                 let target: &str = match scope {

@@ -30,7 +30,6 @@ use crate::analyzers::utils::{MAX_XML_DEPTH, parse_xml_safe};
 use crate::composite_rules::condition::{ArrayQuantifier, Condition, KvQuery};
 use crate::composite_rules::context::EvaluationContext;
 use crate::types::Evidence;
-use regex::Regex;
 use rustc_hash::FxHashMap;
 use serde_json::Value;
 use std::path::Path;
@@ -79,7 +78,7 @@ pub(crate) struct KvMatcher {
     /// Pre-computed lowercase of substr (avoids allocation per match)
     substr_lower: Option<String>,
     /// Require the value to match this compiled regex
-    pub regex: Option<Regex>,
+    pub regex: Option<std::sync::Arc<crate::composite_rules::condition::TraitRegex>>,
     /// If true, perform case-insensitive matching
     pub case_insensitive: bool,
     /// Explicit existence check (Some(true) = must exist, Some(false) = must not exist)
@@ -98,7 +97,7 @@ impl KvMatcher {
     pub(crate) fn new(
         exact: Option<&String>,
         substr: Option<&String>,
-        regex: Option<&Regex>,
+        regex: Option<&std::sync::Arc<crate::composite_rules::condition::TraitRegex>>,
         case_insensitive: bool,
         exists: Option<bool>,
         size_min: Option<usize>,
@@ -114,7 +113,7 @@ impl KvMatcher {
             exact: exact.cloned(),
             substr: substr.cloned(),
             substr_lower,
-            regex: regex.cloned(),
+            regex: regex.map(std::sync::Arc::clone),
             case_insensitive,
             exists,
             size_min,
@@ -1646,10 +1645,12 @@ pub(crate) fn evaluate_kv(condition: &Condition, ctx: &EvaluationContext<'_>) ->
 
     // Resolve the regex once: compiled lazily + shared via `lazy_regex` (applies
     // `(?i)` when case-insensitive) rather than stored per condition.
-    let resolved_regex_owned: Option<std::sync::Arc<regex::Regex>> = regex_str
+    let resolved_regex_owned: Option<
+        std::sync::Arc<crate::composite_rules::condition::TraitRegex>,
+    > = regex_str
         .as_deref()
         .and_then(|r| crate::composite_rules::condition::lazy_regex(Some(r), *case_insensitive));
-    let resolved_regex: Option<&regex::Regex> = resolved_regex_owned.as_deref();
+    let resolved_regex = resolved_regex_owned.as_ref();
 
     // Build matcher
     let matcher = KvMatcher::new(
@@ -2432,7 +2433,7 @@ Author-email: security-research@example.com
 
     #[test]
     fn test_regex_match() {
-        let re = Regex::new(r"curl.*\|.*sh").unwrap();
+        let re = crate::composite_rules::condition::cached_regex(r"curl.*\|.*sh").unwrap();
         let matcher = KvMatcher {
             regex: Some(re),
             ..Default::default()
@@ -2443,7 +2444,7 @@ Author-email: security-research@example.com
 
     #[test]
     fn test_regex_in_array() {
-        let re = Regex::new(r"amazon|ebay").unwrap();
+        let re = crate::composite_rules::condition::cached_regex(r"amazon|ebay").unwrap();
         let matcher = KvMatcher {
             regex: Some(re),
             ..Default::default()

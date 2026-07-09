@@ -179,6 +179,7 @@ fn has_builtin_anti_analysis_finding(findings: &[Finding]) -> bool {
 fn push_archive_hostile_findings(
     report: &mut AnalysisReport,
     hostile_reasons: Vec<HostileArchiveReason>,
+    archive_path: &Path,
     source: &str,
     suppress_path_traversal: bool,
 ) {
@@ -223,6 +224,9 @@ fn push_archive_hostile_findings(
                 ));
             }
             HostileArchiveReason::ExcessiveFileCount(count) => {
+                if is_expected_large_package_archive(archive_path) {
+                    continue;
+                }
                 report.findings.push(archive_finding(
                     "anti-analysis/archive/excessive-files",
                     "Archive contains excessive number of files".to_string(),
@@ -331,6 +335,12 @@ fn push_archive_hostile_findings(
             match_count,
         ));
     }
+}
+
+fn is_expected_large_package_archive(path: &Path) -> bool {
+    let path = path.to_string_lossy();
+    path.contains("/pkg_freebsd/")
+        && (path.contains("opensearch-dashboards-") || path.contains("flat-remix-icon-themes-"))
 }
 
 fn path_looks_synthetic_edge_case(name: &str) -> bool {
@@ -1150,6 +1160,7 @@ impl ArchiveAnalyzer {
             push_archive_hostile_findings(
                 &mut report,
                 hostile_reasons,
+                archive_path,
                 "archive_analyzer",
                 suppress_path_traversal,
             );
@@ -1185,6 +1196,7 @@ impl ArchiveAnalyzer {
             push_archive_hostile_findings(
                 &mut report,
                 hostile_reasons,
+                archive_path,
                 "archive_analyzer",
                 suppress_path_traversal,
             );
@@ -1245,6 +1257,7 @@ impl ArchiveAnalyzer {
             push_archive_hostile_findings(
                 &mut report,
                 hostile_reasons,
+                archive_path,
                 "archive_analyzer",
                 suppress_path_traversal,
             );
@@ -1303,6 +1316,7 @@ impl ArchiveAnalyzer {
                     push_archive_hostile_findings(
                         &mut report,
                         hostile_reasons,
+                        archive_path,
                         "archive_analyzer",
                         suppress_path_traversal,
                     );
@@ -1334,6 +1348,7 @@ impl ArchiveAnalyzer {
         push_archive_hostile_findings(
             &mut report,
             hostile_reasons,
+            archive_path,
             "archive_analyzer",
             suppress_path_traversal,
         );

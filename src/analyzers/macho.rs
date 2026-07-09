@@ -1410,22 +1410,25 @@ impl MachOAnalyzer {
         };
         let mut report = AnalysisReport::new(target);
 
-        if let Some(msg) = parse_failure {
-            report.metadata.errors.push(msg.clone());
-            report.findings.push(Finding {
-                src: None,
-                kind: FindingKind::Structural,
-                id: "anti-analysis/malformed/macho-header".to_string(),
-                desc: format!("Malformed Mach-O header: {}", msg),
-                conf: 1.0,
-                crit: Criticality::Suspicious,
-                mbc: Some("B0001".to_string()),
-                attack: Some("T1027".to_string()),
-                evidence: vec![],
-                match_count: 0,
-                trait_refs: vec![],
-                source_file: None,
-            });
+        let plausible_macho_size = data.len() >= 4096;
+        if plausible_macho_size {
+            if let Some(msg) = parse_failure {
+                report.metadata.errors.push(msg.clone());
+                report.findings.push(Finding {
+                    src: None,
+                    kind: FindingKind::Structural,
+                    id: "anti-analysis/malformed/macho-header".to_string(),
+                    desc: format!("Malformed Mach-O header: {}", msg),
+                    conf: 1.0,
+                    crit: Criticality::Suspicious,
+                    mbc: Some("B0001".to_string()),
+                    attack: Some("T1027".to_string()),
+                    evidence: vec![],
+                    match_count: 0,
+                    trait_refs: vec![],
+                    source_file: None,
+                });
+            }
         }
 
         // Filefacts's rizin recovery already populated the typed

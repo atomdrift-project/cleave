@@ -18,6 +18,7 @@ pub(crate) mod context;
 pub(crate) mod debug;
 pub(crate) mod evaluators;
 pub(crate) mod regex_scratch;
+pub(crate) mod regex_store;
 pub(crate) mod section_map;
 pub(crate) mod traits;
 pub mod types;

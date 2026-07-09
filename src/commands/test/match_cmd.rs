@@ -534,6 +534,8 @@ pub fn run(
                 regex: (method == cli::MatchMethod::Regex).then_some(&pattern_value),
                 word: (method == cli::MatchMethod::Word).then_some(&pattern_value),
                 case_insensitive,
+                length_min: None,
+                length_max: None,
                 is_check,
                 section: section_value.as_ref(),
                 offset,
@@ -650,6 +652,8 @@ pub fn run(
                 regex: (method == cli::MatchMethod::Regex).then_some(&pattern_value),
                 word: (method == cli::MatchMethod::Word).then_some(&pattern_value),
                 case_insensitive,
+                length_min: None,
+                length_max: None,
                 is_check,
                 section: section_value.as_ref(),
                 offset,
@@ -1003,8 +1007,8 @@ pub fn run(
                 ne: None,
                 case_insensitive,
                 exists: kv_exists,
-                size_min: kv_size_min,
-                size_max: kv_size_max,
+                length_min: kv_size_min,
+                length_max: kv_size_max,
             });
 
             // Create minimal context for kv evaluation

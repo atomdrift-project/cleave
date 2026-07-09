@@ -405,6 +405,13 @@ fn symbol_matches_condition(
     false
 }
 
+/// Whether a matched span's byte length satisfies the condition's
+/// `length_min`/`length_max` bounds (always true when neither is set).
+#[inline]
+fn span_length_ok(len: usize, (min, max): (Option<usize>, Option<usize>)) -> bool {
+    min.is_none_or(|min| len >= min) && max.is_none_or(|max| len <= max)
+}
+
 #[inline]
 fn has_string_location_constraint(params: &StringParams<'_>) -> bool {
     params.section.is_some()
@@ -557,6 +564,38 @@ impl<'p> StringMatcher<'p> {
             Self::Never => None,
         }
     }
+
+    /// [`Self::match_value_ref`] under `length_min`/`length_max` bounds:
+    /// returns the first match whose span satisfies them. For regex matchers
+    /// this scans past non-qualifying spans — a first-match-only check would
+    /// miss a qualifying run appearing later in the same string (e.g. `[a-z]+`
+    /// finds a 2-char word before the 5000-char run `length_min` wants).
+    fn match_value_bounded<'v>(
+        &self,
+        value: &'v str,
+        bounds: (Option<usize>, Option<usize>),
+    ) -> Option<&'v str> {
+        if bounds == (None, None) {
+            return self.match_value_ref(value);
+        }
+        match self {
+            Self::Regex(re) => {
+                let mut found = None;
+                re.for_each_find(value, |_, span| {
+                    if span_length_ok(span.len(), bounds) {
+                        found = Some(span);
+                        false
+                    } else {
+                        true
+                    }
+                });
+                found
+            }
+            _ => self
+                .match_value_ref(value)
+                .filter(|span| span_length_ok(span.len(), bounds)),
+        }
+    }
 }
 
 fn cached_text_evidence(cached: &[Evidence]) -> Vec<Evidence> {
@@ -685,6 +724,7 @@ pub(crate) fn eval_text<'a, 'b>(
             params.regex,
             params.word,
             params.case_insensitive,
+            (params.length_min, params.length_max),
             params.is_check,
             trait_not,
             &location,
@@ -711,6 +751,8 @@ pub(crate) fn eval_text<'a, 'b>(
     if !has_location_constraint
         && trait_not.is_none()
         && params.is_check.is_none()
+        && params.length_min.is_none()
+        && params.length_max.is_none()
         && let Some(trait_idx) = ctx.current_trait_idx
         && let Some(cached) = ctx.cached_evidence.and_then(|m| m.get(&trait_idx))
     {
@@ -798,7 +840,9 @@ pub(crate) fn eval_text<'a, 'b>(
             continue;
         }
 
-        if let Some(match_value) = matcher.match_value_ref(&string_info.value) {
+        if let Some(match_value) =
+            matcher.match_value_bounded(&string_info.value, (params.length_min, params.length_max))
+        {
             let excluded_by_not = trait_not
                 .map(|exceptions| exceptions.iter().any(|exc| exc.matches(match_value)))
                 .unwrap_or(false);
@@ -884,7 +928,9 @@ fn eval_text_encoded<'a, 'b>(
             continue;
         }
 
-        let Some(match_value) = matcher.match_value_ref(&string_info.value) else {
+        let Some(match_value) =
+            matcher.match_value_bounded(&string_info.value, (params.length_min, params.length_max))
+        else {
             continue;
         };
         let excluded_by_not = trait_not
@@ -974,7 +1020,9 @@ pub(crate) fn eval_string_literal<'a, 'b>(
             continue;
         }
 
-        if let Some(match_value) = matcher.match_value_ref(&string_info.value) {
+        if let Some(match_value) =
+            matcher.match_value_bounded(&string_info.value, (params.length_min, params.length_max))
+        {
             let excluded_by_not = trait_not
                 .map(|exceptions| exceptions.iter().any(|exc| exc.matches(match_value)))
                 .unwrap_or(false);
@@ -1379,6 +1427,7 @@ pub(crate) fn eval_raw<'a>(
     regex: Option<&String>,
     word: Option<&String>,
     case_insensitive: bool,
+    length_bounds: (Option<usize>, Option<usize>),
     is_check: Option<StringValidator>,
     not: Option<&Vec<NotException>>,
     location: &ContentLocationParams,
@@ -1532,7 +1581,8 @@ pub(crate) fn eval_raw<'a>(
                     // Compile outside the lock; write-lock only to insert.
                     super::compile_bytes_regex(pattern_str, case_insensitive).map(|re| {
                         let arc = std::sync::Arc::new(re);
-                        cache.write().put(key, std::sync::Arc::clone(&arc));
+                        let size = arc.heap_bytes();
+                        cache.write().put(key, std::sync::Arc::clone(&arc), size);
                         arc
                     })
                 }
@@ -1561,6 +1611,9 @@ pub(crate) fn eval_raw<'a>(
                         return false;
                     }
                     idx += 1;
+                    if !span_length_ok(end - start, length_bounds) {
+                        return true;
+                    }
                     let match_bytes = &search_data[start..end];
 
                     // For validators or not filters, convert only the match to string
@@ -1640,6 +1693,9 @@ pub(crate) fn eval_raw<'a>(
                         return false;
                     }
                     idx += 1;
+                    if !span_length_ok(match_str.len(), length_bounds) {
+                        return true;
+                    }
                     // Skip matches that don't pass validation
                     if !validate_match(match_str, is_check) {
                         return true;

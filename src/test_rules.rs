@@ -722,8 +722,8 @@ impl<'a> RuleDebugger<'a> {
                 regex,
                 case_insensitive,
                 exists,
-                size_min,
-                size_max,
+                length_min,
+                length_max,
                 ..
             }) => self.debug_kv_condition(
                 path,
@@ -732,8 +732,8 @@ impl<'a> RuleDebugger<'a> {
                 regex,
                 *case_insensitive,
                 *exists,
-                *size_min,
-                *size_max,
+                *length_min,
+                *length_max,
             ),
             Condition::Hex(HexQuery {
                 pattern,
@@ -1494,8 +1494,8 @@ impl<'a> RuleDebugger<'a> {
         regex: &Option<String>,
         case_insensitive: bool,
         exists: Option<bool>,
-        size_min: Option<usize>,
-        size_max: Option<usize>,
+        length_min: Option<usize>,
+        length_max: Option<usize>,
     ) -> ConditionDebugResult {
         let pattern_desc = if let Some(e) = exact {
             format!("exact: \"{}\"", truncate_string(e, 40))
@@ -1505,12 +1505,12 @@ impl<'a> RuleDebugger<'a> {
             format!("regex: /{}/", truncate_string(r, 40))
         } else if exists == Some(true) {
             "exists".to_string()
-        } else if let (Some(min), Some(max)) = (size_min, size_max) {
-            format!("size {}..{}", min, max)
-        } else if let Some(min) = size_min {
-            format!("size_min {}", min)
-        } else if let Some(max) = size_max {
-            format!("size_max {}", max)
+        } else if let (Some(min), Some(max)) = (length_min, length_max) {
+            format!("len {}..{}", min, max)
+        } else if let Some(min) = length_min {
+            format!("length_min {}", min)
+        } else if let Some(max) = length_max {
+            format!("length_max {}", max)
         } else {
             "(no constraint)".to_string()
         };
@@ -1518,8 +1518,8 @@ impl<'a> RuleDebugger<'a> {
         let desc = format!("value: path=\"{}\" {}", path, pattern_desc);
 
         // Use the actual value evaluator. Earlier this discarded `exists`,
-        // `size_min`, and `size_max` from the parent condition, so a
-        // YAML trait like `type: value, path: …, exists: true, size_min: 1`
+        // `length_min`, and `length_max` from the parent condition, so a
+        // YAML trait like `type: value, path: …, exists: true, length_min: 1`
         // was rebuilt as a no-op match — every value-only trait reported
         // NOT MATCHED in test-rules even when it fired in production.
         let condition = Condition::Kv(KvQuery {
@@ -1532,8 +1532,8 @@ impl<'a> RuleDebugger<'a> {
             ne: None,
             case_insensitive,
             exists,
-            size_min,
-            size_max,
+            length_min,
+            length_max,
         });
 
         // Create evaluation context

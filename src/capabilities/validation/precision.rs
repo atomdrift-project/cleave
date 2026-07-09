@@ -649,8 +649,8 @@ fn score_condition(condition: &Condition) -> f32 {
             regex,
             case_insensitive,
             exists,
-            size_min,
-            size_max,
+            length_min,
+            length_max,
             ..
         }) => {
             score += score_string_value(path);
@@ -658,8 +658,8 @@ fn score_condition(condition: &Condition) -> f32 {
             score += substr.as_deref().map(score_string_value).unwrap_or(0.0);
             score += regex.as_deref().map(score_regex_value).unwrap_or(0.0);
             score += score_presence(exists.as_ref());
-            score += score_presence(size_min.as_ref());
-            score += score_presence(size_max.as_ref());
+            score += score_presence(length_min.as_ref());
+            score += score_presence(length_max.as_ref());
             if *case_insensitive {
                 score *= CASE_INSENSITIVE_MULTIPLIER;
             }

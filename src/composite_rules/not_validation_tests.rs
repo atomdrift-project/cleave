@@ -44,6 +44,8 @@ mod validation_tests {
     #[test]
     fn test_exact_match_should_use_unless() {
         let cond = Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             exact: Some("test".to_string()),
             substr: None,
             regex: None,
@@ -76,6 +78,8 @@ mod validation_tests {
         // substr: "test" should match strings like "testing", "test123", etc.
         // not: ["testing"] should work because "testing" contains "test"
         let cond = Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             exact: None,
             substr: Some("test".to_string()),
             regex: None,
@@ -105,6 +109,8 @@ mod validation_tests {
     fn test_substr_with_invalid_not_exception() {
         // substr: "test" won't match "hurl", so not: ["hurl"] will never apply
         let cond = Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             exact: None,
             substr: Some("test".to_string()),
             regex: None,
@@ -140,6 +146,8 @@ mod validation_tests {
         // substr: "test" should match "testing"
         // not: {exact: "testing"} should work
         let cond = Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             exact: None,
             substr: Some("test".to_string()),
             regex: None,
@@ -172,6 +180,8 @@ mod validation_tests {
         // substr: "test" won't match strings containing "hurl"
         // not: {exact: "hurl"} will never apply
         let cond = Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             exact: None,
             substr: Some("test".to_string()),
             regex: None,
@@ -206,6 +216,8 @@ mod validation_tests {
         // substr: "test" and not: {substr: "testing"}
         // "testing" contains "test", so this should be valid
         let cond = Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             exact: None,
             substr: Some("test".to_string()),
             regex: None,
@@ -238,6 +250,8 @@ mod validation_tests {
         // substr: "test" and not: {substr: "hurl"}
         // No overlap, so the not will never apply
         let cond = Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             exact: None,
             substr: Some("test".to_string()),
             regex: None,
@@ -271,6 +285,8 @@ mod validation_tests {
         // substr: "test" (case insensitive) should match "TESTING"
         // not: ["TESTING"] should work
         let cond = Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             exact: None,
             substr: Some("test".to_string()),
             regex: None,
@@ -298,6 +314,8 @@ mod validation_tests {
         // regex: "c.?rl" matches "crl" and "curl"
         // not: ["curl"] should work
         let cond = Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             exact: None,
             substr: None,
             regex: Some("c.?rl".to_string()),
@@ -325,6 +343,8 @@ mod validation_tests {
         // regex: "c.?rl" matches "crl" and "curl" but not "hurl"
         // not: ["hurl"] will never apply
         let cond = Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             exact: None,
             substr: None,
             regex: Some("c.?rl".to_string()),
@@ -355,6 +375,8 @@ mod validation_tests {
         // regex: "^test$" only matches exactly "test"
         // not: ["testing"] will never apply because "testing" doesn't match "^test$"
         let cond = Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             exact: None,
             substr: None,
             regex: Some("^test$".to_string()),
@@ -384,6 +406,8 @@ mod validation_tests {
     fn test_content_substr_with_not_should_error() {
         // content + substr + not should be an error - behavior is unclear
         let cond = Condition::Raw(RawQuery {
+            length_min: None,
+            length_max: None,
             exact: None,
             substr: Some("test".to_string()),
             regex: None,
@@ -411,6 +435,8 @@ mod validation_tests {
     fn test_content_exact_with_not_should_error() {
         // content + exact + not should be an error - doesn't make sense
         let cond = Condition::Raw(RawQuery {
+            length_min: None,
+            length_max: None,
             exact: Some("test".to_string()),
             substr: None,
             regex: None,
@@ -438,6 +464,8 @@ mod validation_tests {
     fn test_content_regex_with_not_is_ok() {
         // content + regex + not should work (no warning)
         let cond = Condition::Raw(RawQuery {
+            length_min: None,
+            length_max: None,
             exact: None,
             substr: None,
             regex: Some("test.*".to_string()),
@@ -592,6 +620,8 @@ mod criticality_tests {
     fn test_filtered_criticality_should_error() {
         // Criticality::Filtered is internal-only
         let cond = Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             exact: None,
             substr: Some("test".to_string()),
             regex: None,
@@ -655,6 +685,8 @@ mod criticality_tests {
             Criticality::Hostile,
         ] {
             let cond = Condition::Text(TextQuery {
+                length_min: None,
+                length_max: None,
                 exact: None,
                 substr: Some("test".to_string()),
                 regex: None,
@@ -712,6 +744,8 @@ mod constraint_tests {
     #[test]
     fn test_confidence_out_of_range_low() {
         let cond = Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             exact: None,
             substr: Some("test".to_string()),
             regex: None,
@@ -763,6 +797,8 @@ mod constraint_tests {
     #[test]
     fn test_confidence_out_of_range_high() {
         let cond = Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             exact: None,
             substr: Some("test".to_string()),
             regex: None,
@@ -814,6 +850,8 @@ mod constraint_tests {
     #[test]
     fn test_size_max_less_than_min() {
         let cond = Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             exact: None,
             substr: Some("test".to_string()),
             regex: None,
@@ -866,6 +904,8 @@ mod constraint_tests {
     #[test]
     fn test_count_max_less_than_min() {
         let cond = Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             exact: None,
             substr: Some("test".to_string()),
             regex: None,
@@ -918,6 +958,8 @@ mod constraint_tests {
     #[test]
     fn test_per_kb_max_less_than_min() {
         let cond = Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             exact: None,
             substr: Some("test".to_string()),
             regex: None,
@@ -970,6 +1012,8 @@ mod constraint_tests {
     #[test]
     fn test_mutually_exclusive_match_types() {
         let cond = Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             exact: Some("test".to_string()),
             substr: Some("test".to_string()),
             regex: None,
@@ -995,6 +1039,8 @@ mod constraint_tests {
     #[test]
     fn test_valid_constraints() {
         let cond = Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             exact: None,
             substr: Some("test".to_string()),
             regex: None,
@@ -1056,6 +1102,8 @@ mod llm_validation_tests {
     #[test]
     fn test_empty_string_pattern() {
         let cond = Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             exact: Some("".to_string()),
             substr: None,
             regex: None,
@@ -1079,6 +1127,8 @@ mod llm_validation_tests {
     #[test]
     fn test_whitespace_only_pattern() {
         let cond = Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             exact: Some("   ".to_string()),
             substr: None,
             regex: None,
@@ -1102,6 +1152,8 @@ mod llm_validation_tests {
     #[test]
     fn test_short_substr_pattern() {
         let cond = Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             exact: None,
             substr: Some("a".to_string()),
             regex: None,
@@ -1125,6 +1177,8 @@ mod llm_validation_tests {
     #[test]
     fn test_short_word_pattern() {
         let cond = Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             exact: None,
             substr: None,
             regex: None,
@@ -1148,6 +1202,8 @@ mod llm_validation_tests {
     #[test]
     fn test_literal_regex() {
         let cond = Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             exact: None,
             substr: None,
             regex: Some("literalstring".to_string()),
@@ -1176,6 +1232,8 @@ mod llm_validation_tests {
     #[test]
     fn test_regex_with_metacharacters_is_valid() {
         let cond = Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             exact: None,
             substr: None,
             regex: Some("test.*pattern".to_string()),
@@ -1198,6 +1256,8 @@ mod llm_validation_tests {
     #[test]
     fn test_case_insensitive_on_numeric_pattern() {
         let cond = Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             exact: Some("12345".to_string()),
             substr: None,
             regex: None,
@@ -1221,6 +1281,8 @@ mod llm_validation_tests {
     #[test]
     fn test_case_insensitive_on_alpha_pattern() {
         let cond = Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             exact: Some("test".to_string()),
             substr: None,
             regex: None,
@@ -1243,6 +1305,8 @@ mod llm_validation_tests {
     #[test]
     fn test_count_min_zero() {
         let cond = Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             exact: Some("test".to_string()),
             substr: None,
             regex: None,
@@ -1297,6 +1361,8 @@ mod llm_validation_tests {
     #[test]
     fn test_count_min_nonzero() {
         let cond = Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             exact: Some("test".to_string()),
             substr: None,
             regex: None,
@@ -1319,6 +1385,8 @@ mod llm_validation_tests {
     #[test]
     fn test_empty_description() {
         let cond = Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             exact: Some("test".to_string()),
             substr: None,
             regex: None,
@@ -1372,6 +1440,8 @@ mod llm_validation_tests {
         // Placeholder words are now allowed since traits may legitimately
         // detect placeholder text in manifests
         let cond = Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             exact: Some("test".to_string()),
             substr: None,
             regex: None,
@@ -1425,6 +1495,8 @@ mod llm_validation_tests {
     #[test]
     fn test_short_description() {
         let cond = Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             exact: Some("test".to_string()),
             substr: None,
             regex: None,
@@ -1476,6 +1548,8 @@ mod llm_validation_tests {
     #[test]
     fn test_valid_description() {
         let cond = Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             exact: Some("test".to_string()),
             substr: None,
             regex: None,
@@ -1526,6 +1600,8 @@ mod llm_validation_tests {
     #[test]
     fn test_empty_not_array() {
         let cond = Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             exact: None,
             substr: None,
             regex: Some("test.*".to_string()),
@@ -1577,6 +1653,8 @@ mod llm_validation_tests {
     #[test]
     fn test_empty_unless_array() {
         let cond = Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             exact: Some("test".to_string()),
             substr: None,
             regex: None,
@@ -1732,6 +1810,8 @@ mod llm_validation_tests {
     fn test_symbol_regex_valid_substr_no_warning() {
         // Non-symbol condition should not trigger
         let cond = Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
             exact: None,
             substr: None,
             regex: Some(r"\bsetsid\b".to_string()),

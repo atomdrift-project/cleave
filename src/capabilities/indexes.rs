@@ -13,6 +13,22 @@ use crate::composite_rules::{RawQuery, SymbolQuery, TextQuery};
 use crate::types::binary::normalize_symbol;
 use crate::types::{Evidence, MAX_EVIDENCE_PER_TRAIT, StringInfo, deduplicate_evidence};
 use aho_corasick::AhoCorasick;
+
+/// Automaton kind for the index prefilters. Default (`None`) lets aho-corasick
+/// auto-pick — a contiguous DFA at these pattern counts, the fastest and
+/// largest form (~115 MB across the four indexes). `CLEAVE_AC_NFA=1` forces
+/// the contiguous NFA (5-10x smaller, slower per scan) for memory experiments;
+/// the prefilters are among the hottest CPU paths, so the DFA stays the
+/// default unless interleaved wall runs prove the NFA neutral.
+fn ac_kind() -> Option<aho_corasick::AhoCorasickKind> {
+    static KIND: std::sync::OnceLock<Option<aho_corasick::AhoCorasickKind>> =
+        std::sync::OnceLock::new();
+    *KIND.get_or_init(|| {
+        std::env::var("CLEAVE_AC_NFA")
+            .is_ok_and(|v| v == "1")
+            .then_some(aho_corasick::AhoCorasickKind::ContiguousNFA)
+    })
+}
 use rayon::prelude::*;
 use regex::bytes::{RegexSet, RegexSetBuilder};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -429,6 +445,7 @@ impl SymbolMatchIndex {
         let substr_automaton = (!substr_patterns.is_empty())
             .then(|| {
                 AhoCorasick::builder()
+                    .kind(ac_kind())
                     .ascii_case_insensitive(false)
                     .build(&substr_patterns)
                     .ok()
@@ -438,6 +455,7 @@ impl SymbolMatchIndex {
         let regex_literal_automaton = (!regex_literals.is_empty())
             .then(|| {
                 AhoCorasick::builder()
+                    .kind(ac_kind())
                     .ascii_case_insensitive(false)
                     .build(&regex_literals)
                     .ok()
@@ -904,6 +922,7 @@ impl StringMatchIndex {
         // (e.g., "set volume output muted true").
         let substr_automaton = if !substr_patterns.is_empty() {
             AhoCorasick::builder()
+                .kind(ac_kind())
                 .ascii_case_insensitive(false)
                 .build(&substr_patterns)
                 .ok()
@@ -913,6 +932,7 @@ impl StringMatchIndex {
 
         let ci_substr_automaton = if !ci_substr_patterns.is_empty() {
             AhoCorasick::builder()
+                .kind(ac_kind())
                 .ascii_case_insensitive(true)
                 .build(&ci_substr_patterns)
                 .ok()
@@ -923,6 +943,7 @@ impl StringMatchIndex {
         // Build regex literal automaton for pre-filtering (kept as Aho-Corasick)
         let regex_literal_automaton = if !regex_literals.is_empty() {
             AhoCorasick::builder()
+                .kind(ac_kind())
                 .ascii_case_insensitive(false)
                 .build(&regex_literals)
                 .ok()
@@ -1891,6 +1912,7 @@ impl RawContentRegexIndex {
         // Build case-sensitive Aho-Corasick automaton
         let cs_literal_prefilter = if !cs_literal_prefixes.is_empty() {
             AhoCorasick::builder()
+                .kind(ac_kind())
                 .ascii_case_insensitive(false)
                 .build(&cs_literal_prefixes)
                 .ok()
@@ -1901,6 +1923,7 @@ impl RawContentRegexIndex {
         // Build case-insensitive Aho-Corasick automaton
         let ci_literal_prefilter = if !ci_literal_prefixes.is_empty() {
             AhoCorasick::builder()
+                .kind(ac_kind())
                 .ascii_case_insensitive(true)
                 .build(&ci_literal_prefixes)
                 .ok()
@@ -1969,6 +1992,7 @@ impl RawContentRegexIndex {
 
         let cs_word_automaton = if !cs_words.is_empty() {
             AhoCorasick::builder()
+                .kind(ac_kind())
                 .ascii_case_insensitive(false)
                 .build(&cs_words)
                 .ok()
@@ -1978,6 +2002,7 @@ impl RawContentRegexIndex {
 
         let ci_word_automaton = if !ci_words.is_empty() {
             AhoCorasick::builder()
+                .kind(ac_kind())
                 .ascii_case_insensitive(true)
                 .build(&ci_words)
                 .ok()
@@ -2014,6 +2039,7 @@ impl RawContentRegexIndex {
         }
         let cs_substr_automaton = if !cs_substr.is_empty() {
             AhoCorasick::builder()
+                .kind(ac_kind())
                 .ascii_case_insensitive(false)
                 .build(&cs_substr)
                 .ok()
@@ -2022,6 +2048,7 @@ impl RawContentRegexIndex {
         };
         let ci_substr_automaton = if !ci_substr.is_empty() {
             AhoCorasick::builder()
+                .kind(ac_kind())
                 .ascii_case_insensitive(true)
                 .build(&ci_substr)
                 .ok()
@@ -2422,6 +2449,8 @@ mod tests {
             r#for: vec![RuleFileType::All],
             for_from_groups: false,
             r#if: Condition::Raw(RawQuery {
+                length_min: None,
+                length_max: None,
                 exact: None,
                 substr: None,
                 regex: Some("test".to_string()),
@@ -2474,6 +2503,8 @@ mod tests {
             r#for: vec![file_type],
             for_from_groups: false,
             r#if: Condition::Raw(RawQuery {
+                length_min: None,
+                length_max: None,
                 exact: None,
                 substr: None,
                 regex: Some("test".to_string()),
@@ -2533,6 +2564,8 @@ mod tests {
             r#for: vec![RuleFileType::All],
             for_from_groups: false,
             r#if: Condition::Text(TextQuery {
+                length_min: None,
+                length_max: None,
                 exact: None,
                 substr: Some(substr.to_string()),
                 regex: None,
@@ -2590,6 +2623,8 @@ mod tests {
             r#for: vec![RuleFileType::All],
             for_from_groups: false,
             r#if: Condition::Text(TextQuery {
+                length_min: None,
+                length_max: None,
                 exact: None,
                 substr: None,
                 regex: Some(regex.to_string()),

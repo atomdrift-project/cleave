@@ -3415,8 +3415,8 @@ fn is_existence_gate(cond: &Condition) -> bool {
                 && kv.regex.is_none()
                 && kv.eq.is_none()
                 && kv.ne.is_none()
-                && kv.size_min.is_none()
-                && kv.size_max.is_none()
+                && kv.length_min.is_none()
+                && kv.length_max.is_none()
                 && kv.exists != Some(false)
     )
 }

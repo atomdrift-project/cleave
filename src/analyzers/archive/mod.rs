@@ -1477,22 +1477,29 @@ impl ArchiveAnalyzer {
         // reeval evaluator only reads report-level metadata (target.path,
         // values_tree) so this swap is safe.
         let mut files = std::mem::take(&mut report.files);
-        for file in &mut files {
-            mapper.reeval_downgrades_cross_scope(
-                &mut file.findings,
-                &container_snapshot,
-                report,
-                &[],
-                container_file_type,
-                &empty_section_map,
-            );
-            if has_builtin_anti_analysis_finding(&file.findings) {
-                mapper.apply_retroactive_unless_suppression_to_findings(&mut file.findings);
-                if path_is_fixture_context(&file.path) {
-                    file.findings
-                        .retain(|finding| finding.id != "anti-analysis/archive/symlink-escape");
+        // Each file's findings re-evaluate independently against the same
+        // immutable container snapshot, so this parallelizes cleanly — on a
+        // 13k-member archive the serial loop was a single-threaded tail that
+        // ran after all member analysis had finished.
+        {
+            use rayon::prelude::*;
+            files.par_iter_mut().for_each(|file| {
+                mapper.reeval_downgrades_cross_scope(
+                    &mut file.findings,
+                    &container_snapshot,
+                    report,
+                    &[],
+                    container_file_type,
+                    &empty_section_map,
+                );
+                if has_builtin_anti_analysis_finding(&file.findings) {
+                    mapper.apply_retroactive_unless_suppression_to_findings(&mut file.findings);
+                    if path_is_fixture_context(&file.path) {
+                        file.findings
+                            .retain(|finding| finding.id != "anti-analysis/archive/symlink-escape");
+                    }
                 }
-            }
+            });
         }
         report.files = files;
         if has_builtin_anti_analysis_finding(&report.findings) {

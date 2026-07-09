@@ -100,8 +100,26 @@ fn rule_start_re() -> Option<&'static regex::Regex> {
 const MAX_PATTERN_MATCHES: usize = 8;
 
 /// Maximum scanners to cache per thread in the engine tier cache.
-/// Typically 1-3 tiers are scanned per file (cross-format + file-type family), so 4 is generous.
-const ENGINE_SCANNER_CACHE_SIZE: usize = 4;
+///
+/// Sized for the *thread's* working set, not one file's: a rayon worker
+/// interleaves scans from many files (archive-member fan-out, fetched
+/// dependencies) plus tier scans stolen from large payloads' parallel tier
+/// fan-out, so it cycles through most of the tier universe (~75 buckets), not
+/// the 1-3 tiers one file touches. At the old bound of 4 a 13k-member archive
+/// scan recreated scanners ~31,000 times — each a wasmtime store + linker
+/// instantiation that dominated the fetch-phase tail. 64 covers every tier a
+/// thread realistically touches; tune via `CLEAVE_YARA_SCANNER_CACHE`.
+fn engine_scanner_cache_size() -> usize {
+    const DEFAULT: usize = 64;
+    static SIZE: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *SIZE.get_or_init(|| {
+        std::env::var("CLEAVE_YARA_SCANNER_CACHE")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .filter(|&n| n > 0)
+            .unwrap_or(DEFAULT)
+    })
+}
 
 /// Payloads at least this large scan their YARA tiers in parallel; smaller ones
 /// scan sequentially (the rayon task overhead exceeds a tiny scan, and avoids a
@@ -134,7 +152,7 @@ thread_local! {
     static ENGINE_SCANNER_CACHE: RefCell<lru::LruCache<usize, yara_x::Scanner<'static>>> = {
         use std::num::NonZeroUsize;
         let cache_size =
-            NonZeroUsize::new(ENGINE_SCANNER_CACHE_SIZE).unwrap_or(NonZeroUsize::MIN);
+            NonZeroUsize::new(engine_scanner_cache_size()).unwrap_or(NonZeroUsize::MIN);
         RefCell::new(lru::LruCache::new(cache_size))
     };
 }

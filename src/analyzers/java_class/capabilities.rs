@@ -49,6 +49,8 @@ impl super::JavaClassAnalyzer {
         let target_path = report.target.path.to_lowercase();
         let is_sig_stub = target_path.ends_with(".sig") || target_path.contains("ct.sym");
         let is_demo_artifact = target_path.contains("/demo/") || target_path.contains("j2ddemo");
+        let is_plantuml_brotli_dictionary =
+            target_path.contains("net/sourceforge/plantuml/brotli/dictionarydata.class");
 
         // Detect suspicious strings (RAT commands, malware indicators)
         for s in strings {
@@ -80,7 +82,7 @@ impl super::JavaClassAnalyzer {
 
             // Credential/password stealing — high-confidence patterns are hostile,
             // bare "password" in strings is only notable (common in crypto libs, validators)
-            if is_sig_stub || s_lower == "credentials_expired" {
+            if is_sig_stub || is_plantuml_brotli_dictionary || s_lower == "credentials_expired" {
                 continue;
             }
             if s_lower.contains("chrome-pass")

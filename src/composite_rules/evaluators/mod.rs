@@ -56,6 +56,27 @@ mod yara_tests;
 /// Maximum number of regex patterns to cache (sized for ~128K rules, not all use regex)
 const REGEX_CACHE_MAX_SIZE: usize = 16_384;
 
+/// Per-regex lazy-DFA scratch budget in bytes (`RegexBuilder::dfa_size_limit`,
+/// i.e. regex-automata's `hybrid_cache_capacity`). The default is 2 MiB per
+/// compiled regex *per thread that searches with it*; scanning one large
+/// high-entropy input (a 24 MB Go binary) fills thousands of trait-regex
+/// caches to that budget, and because the compiled regexes live in the LRU
+/// caches above, the scratch never shrinks — measured at ~4.2 GB live heap of
+/// a ~5 GB peak RSS. The lazy DFA is purely an optimization: when its cache is
+/// too small it evicts states or the meta engine falls back to another
+/// match-equivalent engine, so results are identical by construction — only
+/// speed is at stake. 256 KiB measured wall-neutral on the trait corpus.
+/// Override with `CLEAVE_REGEX_DFA_KB` (KiB) for tuning experiments.
+pub(crate) fn regex_dfa_cache_bytes() -> usize {
+    static BYTES: OnceLock<usize> = OnceLock::new();
+    *BYTES.get_or_init(|| {
+        std::env::var("CLEAVE_REGEX_DFA_KB")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .map_or(256 * 1024, |kb| kb * 1024)
+    })
+}
+
 /// Global bounded LRU cache for compiled regex patterns to avoid repeated compilation.
 /// Key is (pattern, case_insensitive), value is compiled Regex.
 /// Bounded to prevent unbounded memory growth in long-running processes.
@@ -92,24 +113,45 @@ fn regex_cache() -> &'static RwLock<lru::LruCache<(String, bool), Regex, rustc_h
 /// engine is already a near-optimal prefilter+DFA — so wall-clock priority kept
 /// the meta engine. See `RESOURCE_ROADMAP.md`.)
 pub(crate) struct LeanRegex {
-    meta: regex::bytes::Regex,
+    /// The meta engine, held directly rather than through `regex::bytes::Regex`
+    /// so scratch lives in the byte-budgeted per-thread pool
+    /// ([`crate::composite_rules::regex_scratch`]) instead of a per-regex ×
+    /// per-thread pool retained for the process lifetime, and so the eagerly
+    /// compiled onepass DFA (capture extraction only — never used here) is
+    /// disabled. Match semantics are identical to the facade by construction:
+    /// the `regex` crate is a thin wrapper over this same engine.
+    meta: regex_automata::meta::Regex,
+    /// Scratch-pool identity (see [`crate::composite_rules::regex_scratch`]).
+    id: u64,
 }
 
 impl LeanRegex {
     /// Iterate non-overlapping leftmost-first matches over `haystack`, invoking
     /// `f(start, end)` (byte offsets); `f` returns `false` to stop early.
     pub(crate) fn for_each_match(&self, haystack: &[u8], mut f: impl FnMut(usize, usize) -> bool) {
-        for m in self.meta.find_iter(haystack) {
-            if !f(m.start(), m.end()) {
-                return;
+        crate::composite_rules::regex_scratch::with_cache(self.id, &self.meta, |cache| {
+            // `Searcher` reproduces `find_iter`'s exact iteration protocol,
+            // including the empty-match advancement rules.
+            let mut it =
+                regex_automata::util::iter::Searcher::new(regex_automata::Input::new(haystack));
+            loop {
+                let m = it.advance(|input| Ok(self.meta.search_with(cache, input)));
+                let Some(m) = m else { return };
+                if !f(m.start(), m.end()) {
+                    return;
+                }
             }
-        }
+        });
     }
 
     /// Whether the pattern matches anywhere in `haystack`. Test-only primitive.
     #[cfg(test)]
     pub(crate) fn is_match(&self, haystack: &[u8]) -> bool {
-        self.meta.is_match(haystack)
+        crate::composite_rules::regex_scratch::with_cache(self.id, &self.meta, |cache| {
+            self.meta
+                .search_half_with(cache, &regex_automata::Input::new(haystack).earliest(true))
+                .is_some()
+        })
     }
 }
 
@@ -140,12 +182,55 @@ pub(crate) fn compile_bytes_regex(pattern: &str, case_insensitive: bool) -> Opti
     // engine was measured ~1.85x slower on wall; wall is the priority. The
     // separate `type: text` atom-gating (index side) is what reduces how *often*
     // this runs — the real wall lever — and is engine-independent.
-    let mut builder = regex::bytes::RegexBuilder::new(pattern);
-    builder.case_insensitive(case_insensitive);
-    builder.multi_line(true);
+    // ASCII class semantics (`unicode(false)`): callers gate on
+    // `can_use_byte_matching`, so every pattern here is pure ASCII with no
+    // `\u`/`\p` — but in Unicode mode its `\w`/`\s`/`\d`/`(?i)` classes still
+    // compile into UTF-8 byte sub-automata (hundreds of NFA states apiece,
+    // multiplied inside `{m,n}` repetitions). Those NFAs measured 5.6× larger,
+    // forced the meta engine off the lazy DFA onto the PikeVM (whose scratch is
+    // O(NFA states) per regex per thread — ~2.3 GB live on one 24 MB Go binary),
+    // and searched ~3× slower. On raw bytes, ASCII classes are also the honest
+    // semantic: Unicode mode's `.`/`\w` presume UTF-8-encoded text, which raw
+    // binary content is not. The Unicode fallback is defensive only.
+    let build = |unicode: bool| {
+        // Mirrors `regex::bytes::RegexBuilder` defaults exactly (utf8(false)
+        // syntax, utf8_empty(false), 10 MB nfa size limit), plus the two
+        // bounds-only levers the facade doesn't expose: no onepass DFA and
+        // implicit-only capture states.
+        regex_automata::meta::Regex::builder()
+            .configure(
+                regex_automata::meta::Regex::config()
+                    .utf8_empty(false)
+                    .onepass(false)
+                    .which_captures(regex_automata::nfa::thompson::WhichCaptures::Implicit)
+                    .nfa_size_limit(Some(10 * (1 << 20)))
+                    .hybrid_cache_capacity(regex_dfa_cache_bytes()),
+            )
+            .syntax(
+                regex_automata::util::syntax::Config::new()
+                    .case_insensitive(case_insensitive)
+                    .multi_line(true)
+                    .unicode(unicode)
+                    .utf8(false),
+            )
+            .build(pattern)
+            .ok()
+    };
+    let meta = build(regex_unicode_override()).or_else(|| build(true))?;
     Some(LeanRegex {
-        meta: builder.build().ok()?,
+        meta,
+        id: crate::composite_rules::regex_scratch::next_regex_id(),
     })
+}
+
+/// Whether trait regexes keep full Unicode class semantics (`\w`, `.`, `(?i)`
+/// spanning UTF-8 sequences): restores byte-regex Unicode mode and disables
+/// the string path's ASCII class demotion (see `compile_bytes_regex` and
+/// `condition::demote_perl_classes_to_ascii`). `CLEAVE_REGEX_UNICODE=1`
+/// restores the old Unicode behavior for A/B benchmarking.
+pub(crate) fn regex_unicode_override() -> bool {
+    static UNICODE: OnceLock<bool> = OnceLock::new();
+    *UNICODE.get_or_init(|| std::env::var("CLEAVE_REGEX_UNICODE").is_ok_and(|v| v == "1"))
 }
 
 /// Smallest atom length worth using as a prefilter. Shorter literals occur too
@@ -316,6 +401,7 @@ pub(crate) fn build_regex(pattern: &str, case_insensitive: bool) -> anyhow::Resu
         let mut builder = regex::RegexBuilder::new(pattern);
         builder.case_insensitive(case_insensitive);
         builder.multi_line(true);
+        builder.dfa_size_limit(regex_dfa_cache_bytes());
         builder.build()?
     };
 

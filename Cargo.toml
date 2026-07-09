@@ -172,6 +172,16 @@ cbc = { version = "0.2", features = ["alloc"] }
 # Utilities
 sha2 = "0.11"  # ARM/x86 hardware SHA acceleration is automatic in 0.11 (no feature flag)
 regex = "1.12"
+# Trait-engine regexes are built on the meta engine directly (same engine the
+# `regex` crate wraps, so match semantics are identical) because the facade
+# hides the levers peak RSS depends on: per-engine toggles (the onepass DFA is
+# compiled eagerly but serves only capture extraction, which trait evaluation
+# never does), `which_captures` (Implicit shrinks NFAs; bounds-only matching),
+# explicit scratch caches (`search_with`) instead of a per-regex×thread pool
+# that retains worst-case O(NFA) PikeVM scratch forever, and
+# `Regex/Cache::memory_usage()` for byte-budgeted eviction. Already in the
+# dependency graph via `regex` itself.
+regex-automata = "0.4"
 regex-syntax = "0.8"  # For safe literal extraction from regex patterns (mandatory-atom extraction)
 memchr = "2.8"
 aho-corasick = "1.1"

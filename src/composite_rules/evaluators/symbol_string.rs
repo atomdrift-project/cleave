@@ -194,9 +194,11 @@ pub(crate) fn eval_symbol<'a>(
     // Resolve the symbol regex once. Symbol regex is case-sensitive (no `(?i)`);
     // it's compiled lazily + shared via `cached_regex` rather than stored per
     // condition.
-    let effective_regex_owned: Option<std::sync::Arc<regex::Regex>> =
-        pattern.and_then(|p| crate::composite_rules::condition::cached_regex(p.as_str()));
-    let effective_regex: Option<&regex::Regex> = effective_regex_owned.as_deref();
+    let effective_regex_owned: Option<
+        std::sync::Arc<crate::composite_rules::condition::TraitRegex>,
+    > = pattern.and_then(|p| crate::composite_rules::condition::cached_regex(p.as_str()));
+    let effective_regex: Option<&crate::composite_rules::condition::TraitRegex> =
+        effective_regex_owned.as_deref();
 
     // Decide which symbol categories to walk.  `None` preserves the historical
     // behaviour of matching across all of imports/exports/functions.
@@ -372,7 +374,7 @@ fn symbol_matches_condition(
     exact: Option<&String>,
     substr: Option<&String>,
     pattern: Option<&String>,
-    compiled_regex: Option<&regex::Regex>,
+    compiled_regex: Option<&crate::composite_rules::condition::TraitRegex>,
     compiled_finder: Option<&memchr::memmem::Finder<'static>>,
 ) -> bool {
     // If exact is specified, do strict equality match
@@ -482,7 +484,7 @@ enum StringMatcher<'p> {
         needle: &'p str,
         ac: &'static aho_corasick::AhoCorasick,
     },
-    Regex(std::sync::Arc<regex::Regex>),
+    Regex(std::sync::Arc<crate::composite_rules::condition::TraitRegex>),
     /// Pattern couldn't be resolved (e.g. AC/regex build failed) — never matches.
     Never,
 }
@@ -551,7 +553,7 @@ impl<'p> StringMatcher<'p> {
             Self::WordCi { needle, ac } => {
                 word_match_ci(value, needle, ac).map(|s| &value[s..s + needle.len()])
             }
-            Self::Regex(re) => re.find(value).map(|mat| mat.as_str()),
+            Self::Regex(re) => re.find_str(value),
             Self::Never => None,
         }
     }
@@ -1617,7 +1619,8 @@ pub(crate) fn eval_raw<'a>(
                 };
                 let mut first_match = None;
                 let mut first_offset = None;
-                for (idx, mat) in re.find_iter(&content).enumerate() {
+                let mut idx = 0usize;
+                re.for_each_find(&content, |mat_start, match_str| {
                     // Limit match processing to prevent DoS on pattern-dense files
                     if idx >= MAX_MATCHES_TO_PROCESS {
                         if let Some(trait_id_val) = trait_id {
@@ -1634,30 +1637,28 @@ pub(crate) fn eval_raw<'a>(
                                 "Hit regex-pattern match limit; stopping early"
                             );
                         }
-                        break;
+                        return false;
                     }
-                    let match_str = mat.as_str();
+                    idx += 1;
                     // Skip matches that don't pass validation
                     if !validate_match(match_str, is_check) {
-                        continue;
+                        return true;
                     }
                     // Skip matches that trigger 'not' filters
                     if let Some(not_filters) = not
                         && not_filters.iter().any(|filter| filter.matches(match_str))
                     {
-                        continue;
+                        return true;
                     }
                     match_count += 1;
                     if first_match.is_none() {
                         first_match = Some(match_str.to_string());
-                        first_offset = Some((search_start + mat.start()) as u64);
+                        first_offset = Some((search_start + mat_start) as u64);
                     }
                     // See bytes branch: stop at first match when the count is
                     // unneeded, to avoid scanning the whole file.
-                    if !needs_count {
-                        break;
-                    }
-                }
+                    needs_count
+                });
                 if match_count > 0
                     && evidence.len() < MAX_EVIDENCE_PER_TRAIT
                     && let Some(matched) = first_match

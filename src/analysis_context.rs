@@ -310,6 +310,7 @@ fn archive_entry_from_filefacts_member(member: &filefacts::ArchiveMember) -> Arc
         central_header_offset: member.offsets.central_header,
         crc32: member.crc32,
         encrypted: member.encrypted,
+        ..ArchiveEntry::default()
     }
 }
 

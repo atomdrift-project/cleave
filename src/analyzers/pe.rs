@@ -32,6 +32,7 @@ pub struct PEAnalyzer {
     capability_mapper: Arc<CapabilityMapper>,
     string_extractor: StringExtractor,
     yara_engine: Option<Arc<YaraEngine>>,
+    archive_config: crate::analyzers::archive::ArchiveAnalyzerConfig,
     /// When true, skip scanning for embedded PE/ELF binaries (prevents recursion in sub-analysis).
     skip_embedded_scan: bool,
     /// Per-request cancellation flag.
@@ -222,6 +223,7 @@ impl PEAnalyzer {
             capability_mapper: Arc::new(CapabilityMapper::empty()),
             string_extractor: StringExtractor::new(),
             yara_engine: None,
+            archive_config: crate::analyzers::archive::ArchiveAnalyzerConfig::default(),
             skip_embedded_scan: false,
             cancellation: None,
         }
@@ -240,7 +242,17 @@ impl PEAnalyzer {
         mut self,
         flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     ) -> Self {
+        self.archive_config = self.archive_config.clone().with_cancellation(flag.clone());
         self.cancellation = flag;
+        self
+    }
+
+    #[must_use]
+    pub(crate) fn with_archive_config(
+        mut self,
+        config: crate::analyzers::archive::ArchiveAnalyzerConfig,
+    ) -> Self {
+        self.archive_config = config.with_cancellation(self.cancellation.clone());
         self
     }
 
@@ -923,6 +935,7 @@ impl PEAnalyzer {
                 &report.target.path,
                 Some(self.capability_mapper.clone()),
                 self.yara_engine.clone(),
+                Some(&self.archive_config),
             ) {
                 embedded_archive_count = embedded_archive_count.saturating_add(1);
                 let pe_filename = std::path::Path::new(&report.target.path)
@@ -990,6 +1003,7 @@ impl PEAnalyzer {
                 pe_data,
                 Some(self.capability_mapper.clone()),
                 self.yara_engine.clone(),
+                Some(&self.archive_config),
             );
             report.findings.push(sfx_result.sfx_finding);
             report.findings.extend(sfx_result.extraction_findings);

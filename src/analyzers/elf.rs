@@ -314,6 +314,7 @@ impl ElfAnalyzer {
                     &report.target.path,
                     Some(self.capability_mapper.clone()),
                     None,
+                    None,
                 ) {
                     report.findings.push(ov.sfx_finding);
                     report.findings.extend(ov.archive_report.findings);

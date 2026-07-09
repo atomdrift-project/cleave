@@ -65,6 +65,37 @@ impl MatchIndexes {
     }
 }
 
+/// Where an `unless:`-bearing definition lives, by position — a compact
+/// stand-in for its condition list that avoids a self-referential borrow in
+/// [`UnlessIndex`]. Positions stay valid for the mapper's lifetime: the
+/// definition lists are never mutated after construction (clones copy them
+/// wholesale, and `with_platforms` only filters at index-build time).
+#[derive(Clone, Copy, Debug)]
+pub(super) enum UnlessSource {
+    Trait(usize),
+    Composite(usize),
+}
+
+/// Lookup tables for retroactive `unless:` suppression, a pure function of
+/// the definition lists (platforms don't apply here — the old linear build
+/// ignored them too). See `evaluate_merged.rs` for how findings resolve
+/// through these. `by_id` maps a qualified definition ID to its
+/// `unless:`-bearing definition; `by_hook_leaf` maps a `builtin-*` ID leaf
+/// (e.g. `builtin-macho-fat-binary`) to the first such definition in
+/// traits-then-composites order. Replaces per-finding scans over every
+/// definition that dominated large-archive scans.
+#[derive(Debug, Default)]
+pub(super) struct UnlessIndex {
+    pub(super) by_id: rustc_hash::FxHashMap<String, UnlessSource>,
+    pub(super) by_hook_leaf: rustc_hash::FxHashMap<String, UnlessSource>,
+}
+
+impl UnlessIndex {
+    pub(super) fn is_empty(&self) -> bool {
+        self.by_id.is_empty() && self.by_hook_leaf.is_empty()
+    }
+}
+
 /// Maps symbols (function names, library calls) to capability IDs
 /// Also supports trait definitions and composite rules that combine traits
 #[derive(Clone, Debug)]
@@ -75,6 +106,9 @@ pub struct CapabilityMapper {
     /// [`Self::match_indexes`]). `Arc` so a cloned mapper — the analyzers clone
     /// it per file — shares a single build rather than repeating it.
     pub(super) indexes: Arc<OnceLock<MatchIndexes>>,
+    /// Retroactive `unless:` suppression tables, built lazily on first use
+    /// and, like `indexes`, shared across per-file mapper clones.
+    pub(super) unless_index: Arc<OnceLock<UnlessIndex>>,
     /// Maps trait ID -> index in trait_definitions
     #[allow(dead_code)]
     pub(super) trait_id_map: std::collections::HashMap<String, usize>,

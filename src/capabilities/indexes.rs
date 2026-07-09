@@ -1370,131 +1370,138 @@ impl FileTypeRegexSet {
     /// 1a. Run case-sensitive Aho-Corasick for case-sensitive literal patterns
     /// 1b. Run case-insensitive Aho-Corasick for case-insensitive literal patterns
     /// 1c. Run word boundary Aho-Corasick + byte boundary checks (replaces \b regex)
+    /// 1d. Run substring-atom Aho-Corasick for `type: text` trait candidates
     /// 2. Run individual regexes for patterns with matching literals
     /// 3. Run smaller RegexSet for patterns without literals (unavoidable)
+    ///
+    /// Every sub-pass is an independent full scan over `content` whose results
+    /// merge as set unions, so on large inputs (a container's raw bytes, a big
+    /// binary) the passes run as parallel rayon tasks — each pass is
+    /// byte-identical to its serial run; parallelism is across passes, never
+    /// across content chunks, so match semantics cannot change. Small inputs
+    /// keep the serial path: archive members already saturate the pool via the
+    /// member fan-out, and fork/join overhead would dominate a small scan.
     fn find_matches(&self, content: &[u8]) -> Vec<usize> {
-        let content_len = content.len();
+        const PARALLEL_MIN_BYTES: usize = 4 << 20;
+
         let mut matched_traits: FxHashSet<usize> = FxHashSet::default();
         let mut literal_candidates: FxHashSet<usize> = FxHashSet::default();
 
-        // Step 1a: Find case-sensitive patterns with matching literals
-        // Early exit once all literal patterns have been seen
-        if let Some(ref ac) = self.cs_literal_prefilter {
-            let total_cs_patterns = self.cs_literal_to_patterns.len();
-            let mut seen_literals: FxHashSet<usize> = FxHashSet::default();
-            for mat in ac.find_iter(content) {
-                let literal_idx = mat.pattern().as_usize();
-                if seen_literals.insert(literal_idx) {
-                    if let Some(pattern_indices) = self.cs_literal_to_patterns.get(literal_idx) {
-                        for &pattern_idx in pattern_indices {
-                            literal_candidates.insert(pattern_idx);
-                        }
-                    }
-                    if seen_literals.len() == total_cs_patterns {
-                        break;
-                    }
-                }
+        if content.len() >= PARALLEL_MIN_BYTES {
+            let (((cand_cs, cand_ci), (word_cs, word_ci)), ((sub_cs, sub_ci), no_lit)) =
+                rayon::join(
+                    || {
+                        rayon::join(
+                            || {
+                                rayon::join(
+                                    || {
+                                        Self::ac_first_occurrence_pass(
+                                            self.cs_literal_prefilter.as_ref(),
+                                            &self.cs_literal_to_patterns,
+                                            content,
+                                        )
+                                    },
+                                    || {
+                                        Self::ac_first_occurrence_pass(
+                                            self.ci_literal_prefilter.as_ref(),
+                                            &self.ci_literal_to_patterns,
+                                            content,
+                                        )
+                                    },
+                                )
+                            },
+                            || {
+                                rayon::join(
+                                    || {
+                                        Self::ac_word_boundary_pass(
+                                            self.cs_word_automaton.as_ref(),
+                                            &self.cs_word_to_traits,
+                                            content,
+                                        )
+                                    },
+                                    || {
+                                        Self::ac_word_boundary_pass(
+                                            self.ci_word_automaton.as_ref(),
+                                            &self.ci_word_to_traits,
+                                            content,
+                                        )
+                                    },
+                                )
+                            },
+                        )
+                    },
+                    || {
+                        rayon::join(
+                            || {
+                                rayon::join(
+                                    || {
+                                        Self::ac_first_occurrence_pass(
+                                            self.cs_substr_automaton.as_ref(),
+                                            &self.cs_substr_to_traits,
+                                            content,
+                                        )
+                                    },
+                                    || {
+                                        Self::ac_first_occurrence_pass(
+                                            self.ci_substr_automaton.as_ref(),
+                                            &self.ci_substr_to_traits,
+                                            content,
+                                        )
+                                    },
+                                )
+                            },
+                            || self.no_literal_pass(content),
+                        )
+                    },
+                );
+            literal_candidates.extend(cand_cs);
+            literal_candidates.extend(cand_ci);
+            for s in [word_cs, word_ci, sub_cs, sub_ci] {
+                matched_traits.extend(s);
             }
+            self.verify_literal_candidates(&literal_candidates, &mut matched_traits, content);
+            matched_traits.extend(no_lit);
+            return matched_traits.into_iter().collect();
         }
 
-        // Step 1b: Find case-insensitive patterns with matching literals
-        // The CI automaton was built with lowercased literals and ascii_case_insensitive=true
-        // Early exit once all literal patterns have been seen
-        if let Some(ref ac) = self.ci_literal_prefilter {
-            let total_ci_patterns = self.ci_literal_to_patterns.len();
-            let mut seen_literals: FxHashSet<usize> = FxHashSet::default();
-            for mat in ac.find_iter(content) {
-                let literal_idx = mat.pattern().as_usize();
-                if seen_literals.insert(literal_idx) {
-                    if let Some(pattern_indices) = self.ci_literal_to_patterns.get(literal_idx) {
-                        for &pattern_idx in pattern_indices {
-                            literal_candidates.insert(pattern_idx);
-                        }
-                    }
-                    if seen_literals.len() == total_ci_patterns {
-                        break;
-                    }
-                }
-            }
-        }
+        // Step 1a/1b: patterns with matching case-sensitive / case-insensitive
+        // literals (the CI automaton was built with lowercased literals and
+        // ascii_case_insensitive=true).
+        literal_candidates.extend(Self::ac_first_occurrence_pass(
+            self.cs_literal_prefilter.as_ref(),
+            &self.cs_literal_to_patterns,
+            content,
+        ));
+        literal_candidates.extend(Self::ac_first_occurrence_pass(
+            self.ci_literal_prefilter.as_ref(),
+            &self.ci_literal_to_patterns,
+            content,
+        ));
 
-        // Step 1c: Word boundary patterns via Aho-Corasick + cheap byte checks
-        // Case-sensitive words
-        if let Some(ref ac) = self.cs_word_automaton {
-            for mat in ac.find_iter(content) {
-                let start = mat.start();
-                let end = mat.end();
-                let before_ok = start == 0
-                    || !content[start - 1].is_ascii_alphanumeric() && content[start - 1] != b'_';
-                let after_ok = end == content_len
-                    || !content[end].is_ascii_alphanumeric() && content[end] != b'_';
-                if before_ok && after_ok {
-                    let word_idx = mat.pattern().as_usize();
-                    if let Some(trait_indices) = self.cs_word_to_traits.get(word_idx) {
-                        for &t in trait_indices {
-                            matched_traits.insert(t);
-                        }
-                    }
-                }
-            }
-        }
-        // Case-insensitive words
-        if let Some(ref ac) = self.ci_word_automaton {
-            for mat in ac.find_iter(content) {
-                let start = mat.start();
-                let end = mat.end();
-                let before_ok = start == 0
-                    || !content[start - 1].is_ascii_alphanumeric() && content[start - 1] != b'_';
-                let after_ok = end == content_len
-                    || !content[end].is_ascii_alphanumeric() && content[end] != b'_';
-                if before_ok && after_ok {
-                    let word_idx = mat.pattern().as_usize();
-                    if let Some(trait_indices) = self.ci_word_to_traits.get(word_idx) {
-                        for &t in trait_indices {
-                            matched_traits.insert(t);
-                        }
-                    }
-                }
-            }
-        }
+        // Step 1c: word boundary patterns via Aho-Corasick + cheap byte checks
+        matched_traits.extend(Self::ac_word_boundary_pass(
+            self.cs_word_automaton.as_ref(),
+            &self.cs_word_to_traits,
+            content,
+        ));
+        matched_traits.extend(Self::ac_word_boundary_pass(
+            self.ci_word_automaton.as_ref(),
+            &self.ci_word_to_traits,
+            content,
+        ));
 
         // Step 1d: substring atoms for `type: text` traits — candidate-only, no
         // boundary check, no in-index regex verify (eval_raw's PikeVM verifies).
-        // Mark the trait a candidate on any atom occurrence anywhere in `content`.
-        if let Some(ref ac) = self.cs_substr_automaton {
-            let total = self.cs_substr_to_traits.len();
-            let mut seen: FxHashSet<usize> = FxHashSet::default();
-            for mat in ac.find_iter(content) {
-                let atom_idx = mat.pattern().as_usize();
-                if seen.insert(atom_idx) {
-                    if let Some(trait_indices) = self.cs_substr_to_traits.get(atom_idx) {
-                        for &t in trait_indices {
-                            matched_traits.insert(t);
-                        }
-                    }
-                    if seen.len() == total {
-                        break;
-                    }
-                }
-            }
-        }
-        if let Some(ref ac) = self.ci_substr_automaton {
-            let total = self.ci_substr_to_traits.len();
-            let mut seen: FxHashSet<usize> = FxHashSet::default();
-            for mat in ac.find_iter(content) {
-                let atom_idx = mat.pattern().as_usize();
-                if seen.insert(atom_idx) {
-                    if let Some(trait_indices) = self.ci_substr_to_traits.get(atom_idx) {
-                        for &t in trait_indices {
-                            matched_traits.insert(t);
-                        }
-                    }
-                    if seen.len() == total {
-                        break;
-                    }
-                }
-            }
-        }
+        matched_traits.extend(Self::ac_first_occurrence_pass(
+            self.cs_substr_automaton.as_ref(),
+            &self.cs_substr_to_traits,
+            content,
+        ));
+        matched_traits.extend(Self::ac_first_occurrence_pass(
+            self.ci_substr_automaton.as_ref(),
+            &self.ci_substr_to_traits,
+            content,
+        ));
 
         tracing::trace!(
             "Hybrid prefilter: {} literal candidates, {} no-literal patterns",
@@ -1502,9 +1509,82 @@ impl FileTypeRegexSet {
             self.patterns_without_literals.len()
         );
 
-        // Step 2: Run individual regexes for patterns with matching literals
-        // Skip patterns whose traits are all already matched
-        for &pattern_idx in &literal_candidates {
+        self.verify_literal_candidates(&literal_candidates, &mut matched_traits, content);
+        matched_traits.extend(self.no_literal_pass(content));
+
+        matched_traits.into_iter().collect()
+    }
+
+    /// One Aho-Corasick pass collecting the mapped indices of every distinct
+    /// automaton pattern that occurs in `content`, with early exit once all
+    /// patterns have been seen. Serves steps 1a/1b (literal → candidate
+    /// pattern indices) and 1d (substring atom → trait indices) — both only
+    /// care about first occurrence.
+    fn ac_first_occurrence_pass(
+        ac: Option<&AhoCorasick>,
+        index_map: &[Vec<usize>],
+        content: &[u8],
+    ) -> FxHashSet<usize> {
+        let mut out = FxHashSet::default();
+        let Some(ac) = ac else {
+            return out;
+        };
+        let total = index_map.len();
+        let mut seen: FxHashSet<usize> = FxHashSet::default();
+        for mat in ac.find_iter(content) {
+            let idx = mat.pattern().as_usize();
+            if seen.insert(idx) {
+                if let Some(mapped) = index_map.get(idx) {
+                    out.extend(mapped.iter().copied());
+                }
+                if seen.len() == total {
+                    break;
+                }
+            }
+        }
+        out
+    }
+
+    /// Step 1c: word patterns via Aho-Corasick, keeping only occurrences with
+    /// non-word bytes (or content edges) on both sides.
+    fn ac_word_boundary_pass(
+        ac: Option<&AhoCorasick>,
+        word_to_traits: &[Vec<usize>],
+        content: &[u8],
+    ) -> FxHashSet<usize> {
+        let mut out = FxHashSet::default();
+        let Some(ac) = ac else {
+            return out;
+        };
+        let content_len = content.len();
+        for mat in ac.find_iter(content) {
+            let start = mat.start();
+            let end = mat.end();
+            let before_ok = start == 0
+                || !content[start - 1].is_ascii_alphanumeric() && content[start - 1] != b'_';
+            let after_ok =
+                end == content_len || !content[end].is_ascii_alphanumeric() && content[end] != b'_';
+            if before_ok
+                && after_ok
+                && let Some(trait_indices) = word_to_traits.get(mat.pattern().as_usize())
+            {
+                out.extend(trait_indices.iter().copied());
+            }
+        }
+        out
+    }
+
+    /// Step 2: run individual regexes for candidate patterns, folding their
+    /// traits into `matched_traits`. Candidates whose traits are all already
+    /// matched are skipped — a work-saving check only; the result is the same
+    /// union either way.
+    fn verify_literal_candidates(
+        &self,
+        literal_candidates: &FxHashSet<usize>,
+        matched_traits: &mut FxHashSet<usize>,
+        content: &[u8],
+    ) {
+        for &pattern_idx in literal_candidates {
             if let Some(trait_indices) = self.pattern_to_traits.get(pattern_idx) {
                 if trait_indices.iter().all(|t| matched_traits.contains(t)) {
                     continue;
@@ -1512,27 +1592,25 @@ impl FileTypeRegexSet {
                 if let Some(Some(regex)) = self.individual_regexes.get(pattern_idx)
                     && regex.is_match(content)
                 {
-                    for &t in trait_indices {
-                        matched_traits.insert(t);
-                    }
+                    matched_traits.extend(trait_indices.iter().copied());
                 }
             }
         }
+    }
 
-        // Step 3: Run smaller RegexSet for patterns without literals (unavoidable)
+    /// Step 3: the smaller RegexSet for patterns without literals (unavoidable).
+    fn no_literal_pass(&self, content: &[u8]) -> FxHashSet<usize> {
+        let mut out = FxHashSet::default();
         if let Some(ref no_lit_set) = self.no_literal_regex_set {
             for no_lit_idx in no_lit_set.matches(content).iter() {
                 if let Some(&original_idx) = self.no_literal_to_original.get(no_lit_idx)
                     && let Some(trait_indices) = self.pattern_to_traits.get(original_idx)
                 {
-                    for &t in trait_indices {
-                        matched_traits.insert(t);
-                    }
+                    out.extend(trait_indices.iter().copied());
                 }
             }
         }
-
-        matched_traits.into_iter().collect()
+        out
     }
 }
 

@@ -185,6 +185,7 @@ impl super::CapabilityMapper {
             trait_definitions,
             composite_rules,
             indexes: std::sync::Arc::new(std::sync::OnceLock::new()),
+            unless_index: std::sync::Arc::new(std::sync::OnceLock::new()),
             trait_id_map,
             platforms: vec![Platform::All],
             slow_rule_ms: Self::DEFAULT_SLOW_RULE_MS,

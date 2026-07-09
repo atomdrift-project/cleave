@@ -402,22 +402,8 @@ impl super::CapabilityMapper {
         &self,
         findings: &mut Vec<Finding>,
     ) {
-        // Build lookup from qualified ID → Option<&[Condition]> (the unless: list, if any).
-        // Covers both atomic traits and composite rules.
-        // Trait/composite IDs are qualified at load time (e.g. "well-known/foo::bar-id").
-        let mut unless_by_id: FxHashMap<&str, &[Condition]> = FxHashMap::default();
-        for t in &self.trait_definitions {
-            if let Some(conds) = t.unless.as_deref() {
-                unless_by_id.insert(t.id.as_str(), conds);
-            }
-        }
-        for r in &self.composite_rules {
-            if let Some(conds) = r.unless.as_deref() {
-                unless_by_id.insert(r.id.as_str(), conds);
-            }
-        }
-
-        if unless_by_id.is_empty() {
+        let index = self.unless_index();
+        if index.is_empty() {
             return;
         }
 
@@ -429,10 +415,11 @@ impl super::CapabilityMapper {
             let suppressed: FxHashSet<String> = findings
                 .iter()
                 .filter_map(|finding| {
-                    let unless_conds = self
-                        .builtin_finding_hook_ids(&finding.id)
-                        .find_map(|id| unless_by_id.get(id))
-                        .or_else(|| unless_by_id.get(finding.id.as_str()))?;
+                    let source = (!index.by_hook_leaf.is_empty())
+                        .then(|| Self::builtin_finding_hook_slug(&finding.id))
+                        .and_then(|slug| index.by_hook_leaf.get(&slug))
+                        .or_else(|| index.by_id.get(finding.id.as_str()))?;
+                    let unless_conds = self.unless_conditions(*source);
                     let should_suppress = unless_conds.iter().any(|cond| {
                         if let Condition::Trait { id } = cond {
                             self.unless_trait_id_matches(id, &all_ids)
@@ -457,16 +444,50 @@ impl super::CapabilityMapper {
         }
     }
 
-    fn builtin_finding_hook_ids<'a>(
-        &'a self,
-        finding_id: &'a str,
-    ) -> impl Iterator<Item = &'a str> {
-        let slug = Self::builtin_finding_hook_slug(finding_id);
-        self.trait_definitions
-            .iter()
-            .map(|t| t.id.as_str())
-            .chain(self.composite_rules.iter().map(|r| r.id.as_str()))
-            .filter(move |id| id.rsplit_once("::").is_some_and(|(_, leaf)| leaf == slug))
+    /// The retroactive-suppression tables, built on first use (see
+    /// [`super::UnlessIndex`]). Definition IDs are qualified at load time
+    /// (e.g. "well-known/foo::bar-id") and cover both traits and composites.
+    fn unless_index(&self) -> &super::UnlessIndex {
+        self.unless_index.get_or_init(|| {
+            let mut index = super::UnlessIndex::default();
+            let traits = self
+                .trait_definitions
+                .iter()
+                .enumerate()
+                .filter(|(_, t)| t.unless.is_some())
+                .map(|(i, t)| (t.id.as_str(), super::UnlessSource::Trait(i)));
+            let composites = self
+                .composite_rules
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| r.unless.is_some())
+                .map(|(i, r)| (r.id.as_str(), super::UnlessSource::Composite(i)));
+            for (id, source) in traits.chain(composites) {
+                // Last insert wins: composites shadow a trait sharing their
+                // qualified ID, as in the map this index replaced.
+                index.by_id.insert(id.to_owned(), source);
+                // Hook leaves resolve first-definition-wins, the order the
+                // per-finding linear scan this replaces observed. Only
+                // `builtin-*` leaves can ever equal a hook slug.
+                if let Some((_, leaf)) = id.rsplit_once("::")
+                    && leaf.starts_with("builtin-")
+                {
+                    index.by_hook_leaf.entry(leaf.to_owned()).or_insert(source);
+                }
+            }
+            index
+        })
+    }
+
+    /// The `unless:` list behind an [`super::UnlessSource`] handle. The index
+    /// only stores definitions whose `unless` is present, so the fallback arm
+    /// is unreachable in practice.
+    fn unless_conditions(&self, source: super::UnlessSource) -> &[Condition] {
+        match source {
+            super::UnlessSource::Trait(i) => self.trait_definitions[i].unless.as_deref(),
+            super::UnlessSource::Composite(i) => self.composite_rules[i].unless.as_deref(),
+        }
+        .unwrap_or_default()
     }
 
     fn builtin_finding_hook_slug(finding_id: &str) -> String {

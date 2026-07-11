@@ -533,6 +533,17 @@ pub struct TinyOpts {
     /// corpus label; the terminal view keeps the full path. Archive *members*
     /// are always shown archive-relative (`a.zip/member`) regardless.
     pub basename_root: bool,
+    /// Context-eligible (top-scored) files fill their trait selection with the
+    /// best remaining low-tier (component/baseline) traits — ranked by
+    /// `crit × conf` — until this many traits show in total. Notable+ traits and
+    /// composite-referenced components are always shown and never truncated by
+    /// this budget; the fill only tops up. `0` disables (the terminal view).
+    ///
+    /// This is what keeps an undetected file readable to an LLM consumer: a
+    /// benign binary with nothing notable still shows its strongest low-tier
+    /// traits (imports, capabilities, structure), so a downstream grader can
+    /// judge the program's functionality instead of receiving zero bytes.
+    pub low_tier_fill: usize,
 }
 
 impl TinyOpts {
@@ -555,6 +566,7 @@ impl TinyOpts {
             header: HeaderStyle::Rich,
             color: true,
             basename_root: false,
+            low_tier_fill: 0,
         }
     }
 
@@ -577,6 +589,12 @@ impl TinyOpts {
             // over-calling legitimate-but-aggressive software (installers,
             // archivers). Raising this floor regressed WinRAR benign→hostile.
             min_crit: Criticality::Component,
+            // Every context file shows its top 15 traits even when nothing
+            // notable fired, so a benign binary still reads as *something* —
+            // its strongest imports/capabilities/structure — rather than
+            // rendering empty. An empty render tells the LLM nothing, and a
+            // file wrongly graded hostile could never be talked back down.
+            low_tier_fill: 15,
             ..Self::terminal()
         }
     }
@@ -623,7 +641,7 @@ pub fn format_context_badged(
     let files: Vec<&FileAnalysis> = report
         .files
         .iter()
-        .filter(|f| file_has_output(f) || f.identity.is_some())
+        .filter(|f| file_has_output(f, opts) || f.identity.is_some())
         .collect();
     if files.is_empty() {
         return String::new();
@@ -682,8 +700,15 @@ pub fn format_context_badged(
     for &file in &files {
         // Highest-scoring files (and every file in the terminal view) draw
         // context windows; the tiny view's long tail lists findings without them.
+        // Only those context files earn the low-tier fill — the long tail and
+        // the terminal view (fill 0) keep the strict selection.
         let shows_context = !minimal || context_file_ids.contains(&file.id);
-        let mut selected = select_ids(file, opts, minimal && shows_context);
+        let fill = if minimal && shows_context {
+            opts.low_tier_fill
+        } else {
+            0
+        };
+        let mut selected = select_ids(file, opts, fill);
 
         // For an archive container, drop findings that were located more
         // specifically in a member below it (same id, native, deeper). What
@@ -939,35 +964,46 @@ fn indent_block(out: &mut String, block: &str, depth: u32) {
 }
 
 /// Whether a file contributes anything to the context view.
-fn file_has_output(file: &FileAnalysis) -> bool {
+fn file_has_output(file: &FileAnalysis, opts: &TinyOpts) -> bool {
+    // With a low-tier fill in play, any non-filtered trait can end up shown, so
+    // a file carrying only unreferenced components must survive this gate for
+    // the fill to reach it.
+    if opts.low_tier_fill > 0 {
+        return file
+            .findings
+            .iter()
+            .any(|f| f.crit != Criticality::Filtered);
+    }
     file.findings.iter().any(|f| tiny_should_show(f, file))
 }
 
 /// The top-`n` finding ids to show, ranked by `crit × conf` (highest first) and
 /// floored at `min_crit` (after the usual component/filtered gating).
 ///
-/// `show_all_components` admits every component trait, not just those a composite
-/// drew on — the LLM/tiny view sets it for the highest-scoring files so all
-/// component lines surface as source context (matching `../prism`). Off, a
-/// component shows only when some composite references it (`tiny_should_show`).
-fn select_ids<'a>(
-    file: &'a FileAnalysis,
-    opts: &TinyOpts,
-    show_all_components: bool,
-) -> Vec<&'a str> {
+/// `low_tier_fill` (nonzero for the LLM/tiny view's highest-scoring files) tops
+/// the selection up with the best remaining low-tier traits — components and
+/// baselines alike, ranked by the same `crit × conf` — until that many traits
+/// show in total. The guaranteed set (notable+, and components a composite drew
+/// on) is never truncated by the budget. This is what keeps an undetected file
+/// legible to an LLM: with nothing notable to show, its strongest low-tier
+/// traits still convey what the program *does* (matching `../prism`, whose
+/// headline ranks traits verdict-agnostically).
+fn select_ids<'a>(file: &'a FileAnalysis, opts: &TinyOpts, low_tier_fill: usize) -> Vec<&'a str> {
     // Per id, keep the best score and the highest criticality seen — the
     // latter decides whether the id bypasses the cap.
     let mut scored: HashMap<&str, (f32, Criticality)> = HashMap::new();
     for f in &file.findings {
         // Show each finding only under the file it was located in: an inherited
         // copy (`src` set) is rendered by its origin member, not here.
-        // Baseline (universal low-signal noise) is dropped from the tiny view:
-        // it crowds the record list without helping the reader reach a verdict.
-        // Component traits stay — they're the source-context counterweight.
+        // Baseline (universal low-signal noise) is dropped from the primary
+        // selection: it crowds the record list without helping the reader reach
+        // a verdict. Referenced component traits stay — they're the
+        // source-context counterweight. (Both tiers re-enter below as
+        // `low_tier_fill` candidates.)
         if f.src.is_some()
             || f.crit < opts.min_crit
             || f.crit == Criticality::Baseline
-            || (!show_all_components && !tiny_should_show(f, file))
+            || !tiny_should_show(f, file)
         {
             continue;
         }
@@ -998,6 +1034,34 @@ fn select_ids<'a>(
     }
     let remaining = opts.top_n.saturating_sub(out.len());
     out.extend(filler.into_iter().take(remaining));
+
+    // Top up to `low_tier_fill` with the best low-tier traits the primary pass
+    // excluded (unreferenced components, baselines) — additive only: it never
+    // evicts anything selected above.
+    if out.len() < low_tier_fill {
+        let selected: HashSet<&str> = out.iter().copied().collect();
+        let mut low: HashMap<&str, f32> = HashMap::new();
+        for f in &file.findings {
+            if f.src.is_some()
+                || !matches!(f.crit, Criticality::Component | Criticality::Baseline)
+                || selected.contains(f.id.as_str())
+            {
+                continue;
+            }
+            let score = f.conf * f32::from(f.crit.rank());
+            low.entry(f.id.as_str())
+                .and_modify(|s| *s = s.max(score))
+                .or_insert(score);
+        }
+        let mut low_ranked: Vec<(&str, f32)> = low.into_iter().collect();
+        low_ranked.sort_unstable_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+        out.extend(
+            low_ranked
+                .into_iter()
+                .take(low_tier_fill - out.len())
+                .map(|(id, _)| id),
+        );
+    }
     out
 }
 
@@ -3174,7 +3238,7 @@ mod tests {
             .map(|i| finding_with(&format!("hostile-{i}"), Criticality::Hostile))
             .collect();
         let file = file_with_findings(findings);
-        let selected = select_ids(&file, &TinyOpts::terminal(), false);
+        let selected = select_ids(&file, &TinyOpts::terminal(), 0);
         assert_eq!(
             selected.len(),
             60,
@@ -3196,7 +3260,7 @@ mod tests {
             findings.push(finding_with(&format!("hostile-{i}"), Criticality::Hostile));
         }
         let file = file_with_findings(findings);
-        let selected = select_ids(&file, &TinyOpts::terminal(), false);
+        let selected = select_ids(&file, &TinyOpts::terminal(), 0);
         assert_eq!(selected.len(), 40, "total capped at 40");
         for i in 0..5 {
             assert!(selected.contains(&format!("sus-{i}").as_str()));
@@ -3223,8 +3287,77 @@ mod tests {
             .map(|i| finding_with(&format!("notable-{i}"), Criticality::Notable))
             .collect();
         let file = file_with_findings(findings);
-        assert_eq!(select_ids(&file, &TinyOpts::terminal(), false).len(), 40);
-        assert_eq!(select_ids(&file, &TinyOpts::tiny(), false).len(), 250);
+        assert_eq!(select_ids(&file, &TinyOpts::terminal(), 0).len(), 40);
+        assert_eq!(select_ids(&file, &TinyOpts::tiny(), 0).len(), 250);
+    }
+
+    #[test]
+    fn low_tier_fill_tops_up_to_budget_without_evicting() {
+        // 5 notable + 20 low-tier with a fill of 15: all 5 notable stay, the 10
+        // best low-tier top the selection up to exactly 15.
+        let mut findings: Vec<Finding> = (0..5)
+            .map(|i| finding_with(&format!("notable-{i}"), Criticality::Notable))
+            .collect();
+        for i in 0..10 {
+            findings.push(finding_with(&format!("comp-{i}"), Criticality::Component));
+        }
+        for i in 0..10 {
+            findings.push(finding_with(&format!("base-{i}"), Criticality::Baseline));
+        }
+        let file = file_with_findings(findings);
+        let selected = select_ids(&file, &TinyOpts::tiny(), 15);
+        assert_eq!(selected.len(), 15, "fill tops up to the budget");
+        for i in 0..5 {
+            assert!(selected.contains(&format!("notable-{i}").as_str()));
+        }
+        // Baseline outranks Component (crit 2 vs 1), so at equal confidence the
+        // 10 baselines win the fill slots.
+        for i in 0..10 {
+            assert!(selected.contains(&format!("base-{i}").as_str()));
+        }
+
+        // A file already at/over the budget with real signal takes no fill.
+        let findings = (0..20)
+            .map(|i| finding_with(&format!("notable-{i}"), Criticality::Notable))
+            .collect();
+        let file = file_with_findings(findings);
+        assert_eq!(select_ids(&file, &TinyOpts::tiny(), 15).len(), 20);
+    }
+
+    #[test]
+    fn undetected_file_renders_low_tier_in_tiny_but_not_terminal() {
+        // A benign file with only low-tier traits: the LLM/tiny view must show
+        // its top traits (an empty payload tells a downstream grader nothing),
+        // while the human terminal view stays quiet as before.
+        let comp = finding_with("micro/fs::readdir", Criticality::Component);
+        let base = finding_with("meta/build::debuglink", Criticality::Baseline);
+        let file = src_file(
+            0,
+            "/bin/fake",
+            1,
+            vec![comp, base],
+            vec![
+                ctx_line(1, "readdir(dirp);", Some(ctx_note("micro/fs::readdir", Criticality::Component, 1))),
+                ctx_line(2, "debuglink(section);", Some(ctx_note("meta/build::debuglink", Criticality::Baseline, 2))),
+            ],
+        );
+        let report = report_with_files(vec![file]);
+
+        let tiny = format_context(&report, &TinyOpts::tiny());
+        assert!(
+            tiny.contains("readdir(dirp);"),
+            "tiny view surfaces low-tier context, got: {tiny:?}"
+        );
+        assert!(
+            tiny.contains("debuglink(section);"),
+            "baseline context surfaces too, got: {tiny:?}"
+        );
+
+        let terminal = format_context(&report, &TinyOpts::terminal());
+        assert!(
+            terminal.is_empty(),
+            "terminal view stays quiet for an undetected file, got: {terminal:?}"
+        );
     }
 
     #[test]

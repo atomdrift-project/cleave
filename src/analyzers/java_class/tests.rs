@@ -292,6 +292,55 @@ mod tests {
     }
 
     #[test]
+    fn test_upload_metadata_is_not_data_exfiltration() {
+        let analyzer = JavaClassAnalyzer::new();
+        let class_refs: Vec<String> = vec![];
+        let strings = vec![
+            "aws.s3.upload_id".to_string(),
+            "AWS_S3_UPLOAD_ID".to_string(),
+        ];
+        let mut report = AnalysisReport::new(TargetInfo {
+            path: "/tmp/io/opentelemetry/semconv/AwsIncubatingAttributes.class".to_string(),
+            file_type: "java_class".to_string(),
+            size_bytes: 0,
+            sha256: String::new(),
+            architectures: None,
+        });
+
+        analyzer.detect_capabilities_from_facts(&class_refs, &strings, &mut report);
+
+        assert!(
+            report.findings.iter().all(|f| f.id != "exfiltration/data"),
+            "upload metadata should not imply exfiltration: {:?}",
+            report.findings.iter().map(|f| &f.id).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_explicit_exfiltration_vocabulary_is_detected() {
+        let analyzer = JavaClassAnalyzer::new();
+        let class_refs: Vec<String> = vec![];
+        let strings = vec!["exfiltrate collected data".to_string()];
+        let mut report = AnalysisReport::new(TargetInfo {
+            path: "/tmp/app/Transfer.class".to_string(),
+            file_type: "java_class".to_string(),
+            size_bytes: 0,
+            sha256: String::new(),
+            architectures: None,
+        });
+
+        analyzer.detect_capabilities_from_facts(&class_refs, &strings, &mut report);
+
+        assert!(
+            report.findings.iter().any(|f| {
+                f.id == "exfiltration/data" && f.desc == "Data exfiltration reference"
+            }),
+            "explicit exfiltration vocabulary should remain detected: {:?}",
+            report.findings.iter().map(|f| &f.id).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
     fn test_static_dictionary_text_is_not_java_dropper() {
         let analyzer = JavaClassAnalyzer::new();
         let class_refs = vec![

@@ -1,6 +1,6 @@
 [package]
 name = "cleave"
-version = "2.3.0-beta.1"
+version = "2.3.0"
 edition = "2024"
 authors = ["The Atomdrift Project"]
 description = "Deep static analysis tool for extracting features from binaries and source code"
@@ -363,3 +363,7 @@ opt-level = 3
 # fix lands upstream (bytecodealliance/wasmtime#5499) and yara-x bumps past it.
 [patch.crates-io]
 wasmtime = { git = "https://github.com/tstromberg/wasmtime.git", branch = "freebsd-aarch64-43.0.2" }
+
+# Local-only override: pick up the unreleased filefacts CLR enrichment
+# (pe.clr.strong_name_signed / mvid / metadata_version / streams). Remove once
+# the change is pushed and the git pin above is bumped.

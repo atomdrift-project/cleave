@@ -29,13 +29,15 @@ const MIN_HEIGHTS: [u32; MAX_EV_LOCS] = [5, 3, 2, 1, 1, 1, 1, 1];
 const LINE_CLIP: usize = 120;
 /// Max raw bytes stored per source line; the renderer clips to terminal width.
 const LINE_STORE_MAX: usize = 1024;
-/// Raw bytes captured before a binary match — roughly one hex row of lead-in.
-const HEX_CONTEXT_BEFORE: u64 = 16;
-/// Raw bytes captured after a binary match. Wider than the lead-in (two rows'
-/// worth) so a match near the window's end still has a full row of trailing
-/// bytes: the renderer then keeps note-bearing rows full and clips the leftover
-/// note-less tail, rather than emitting a ragged stub.
-const HEX_CONTEXT_AFTER: u64 = 32;
+/// Raw bytes captured before a binary match — enough to serve the LLM view's
+/// full clip (`output::ASCII_CONTEXT`); the terminal view renders only
+/// match-bearing rows out of it, so the wider capture costs it nothing.
+const HEX_CONTEXT_BEFORE: u64 = 96;
+/// Raw bytes captured after a binary match. Wider than the lead-in (half an
+/// ASCII row extra) so a match near the window's end still has a full row of
+/// trailing bytes: the renderer then keeps note-bearing rows full and clips the
+/// leftover note-less tail, rather than emitting a ragged stub.
+const HEX_CONTEXT_AFTER: u64 = 128;
 
 /// Half-width (bytes) of a minified one-liner slice; the rendered slice is then
 /// clipped to [`LINE_CLIP`] characters, so this just needs to exceed it.

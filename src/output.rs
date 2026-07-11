@@ -1412,7 +1412,7 @@ fn render_ascii_context(out: &mut String, file: &FileAnalysis, selected: &[&str]
 
 /// Bytes of context shown on each side of the match span in the ASCII-forward
 /// (machine/LLM) binary view.
-const ASCII_CONTEXT: usize = 48;
+const ASCII_CONTEXT: usize = 96;
 
 /// Bytes per gutter-prefixed row in the ASCII-forward view. Wider than xxd's 16
 /// so the escaped stream stays token-cheap for a model, while every row still

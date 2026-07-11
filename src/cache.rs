@@ -640,8 +640,12 @@ pub(crate) fn mapper_cache_key() -> Result<String> {
     let version = env!("CARGO_PKG_VERSION");
     let dir_tag = traits_dir_tag();
 
+    // v7: CompositeTrait gained `rollup` (variant-rollup output exemption). A
+    // cache written by a pre-rollup build of the same crate version would
+    // deserialize with every rollup flag defaulted to false, silently
+    // re-filtering the rollup composites from output — bump on schema change.
     Ok(format!(
-        "capability-mapper-v6-{version}-{dir_tag}-{timestamp}-{fingerprint:016x}.bin"
+        "capability-mapper-v7-{version}-{dir_tag}-{timestamp}-{fingerprint:016x}.bin"
     ))
 }
 

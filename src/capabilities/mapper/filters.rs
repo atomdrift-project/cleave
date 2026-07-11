@@ -20,12 +20,6 @@ impl super::CapabilityMapper {
     pub fn is_low_value_any_rule(&self, finding_id: &str) -> bool {
         // Find the composite rule with this ID
         if let Some(rule) = self.composite_rules.iter().find(|r| r.id == finding_id) {
-            // An explicit variant rollup is the behavior-level finding that
-            // carries the criticality for its lower-tier legs — never
-            // low-value, whatever its shape.
-            if rule.rollup {
-                return false;
-            }
             // A rule is only low-value if it's a simple OR (any: with needs: 1)
             // and has no other positive conditions (all:).
             if rule.all.is_some() {

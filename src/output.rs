@@ -1330,10 +1330,10 @@ fn render_context(
     colorize: bool,
 ) {
     if is_binary_file_type(&file.file_type) {
-        // The machine/LLM view (Minimal header) renders binary windows as a
-        // single ASCII-forward line — no hex column, no offsets — which a local
-        // model reads far more cheaply than a hex|ascii dump. The terminal view
-        // keeps the hex|ascii rows.
+        // The machine/LLM view (Minimal header) renders binary windows as
+        // ASCII-forward rows with an xxd-style offset gutter — no hex column —
+        // which a local model reads far more cheaply than a hex|ascii dump.
+        // The terminal view keeps the hex|ascii rows.
         if matches!(opts.header, HeaderStyle::Minimal) {
             render_ascii_context(out, file, selected);
         } else {
@@ -1344,12 +1344,14 @@ fn render_context(
     }
 }
 
-/// Render binary context for the machine/LLM view: each match window as one
-/// ASCII-forward line — printable bytes verbatim, every other byte (and a literal
-/// `<`) as `<xx>` — preceded by a `{marker} SEV desc` annotation line per finding
-/// it carries, so the detections describe the bytes that follow and the window
-/// itself renders unannotated. Drops the redundant hex column and byte offsets
-/// the terminal view shows.
+/// Render binary context for the machine/LLM view: each match window as
+/// ASCII-forward rows — printable bytes verbatim, non-printables as C-string
+/// escapes — preceded by a `{marker} SEV desc` annotation line per finding it
+/// carries, so the detections describe the bytes that follow and the window
+/// itself renders unannotated. Every row opens with an xxd-style gutter (the
+/// absolute byte offset of its first byte, 8 hex digits and a colon), so any
+/// byte is addressable without the terminal view's hex column, and a clipped
+/// window needs no `…` marker — the gutter says where the bytes sit.
 fn render_ascii_context(out: &mut String, file: &FileAnalysis, selected: &[&str]) {
     use std::fmt::Write;
     let sel: HashSet<&str> = selected.iter().copied().collect();
@@ -1394,20 +1396,28 @@ fn render_ascii_context(out: &mut String, file: &FileAnalysis, selected: &[&str]
                 annotate_desc(&terse_description(&n.desc), &n.id)
             );
         }
-        if start > 0 {
-            out.push('…');
+        let mut row = start;
+        while row < end {
+            let row_end = (row + ASCII_ROW).min(end);
+            let _ = writeln!(
+                out,
+                "{:08x}: {}",
+                line.loc + row as u64,
+                ascii_forward(&line.data[row..row_end])
+            );
+            row = row_end;
         }
-        out.push_str(&ascii_forward(&line.data[start..end]));
-        if end < len {
-            out.push('…');
-        }
-        out.push('\n');
     }
 }
 
 /// Bytes of context shown on each side of the match span in the ASCII-forward
-/// (machine/LLM) binary view, before the window is elided with `…`.
-const ASCII_CONTEXT: usize = 24;
+/// (machine/LLM) binary view.
+const ASCII_CONTEXT: usize = 48;
+
+/// Bytes per gutter-prefixed row in the ASCII-forward view. Wider than xxd's 16
+/// so the escaped stream stays token-cheap for a model, while every row still
+/// carries an addressable offset.
+const ASCII_ROW: usize = 64;
 
 /// Minimum `<printable>\0` pairs to treat a run as UTF-16LE ASCII and collapse
 /// it to text. PE version-info / Authenticode strings are UTF-16LE and sit at

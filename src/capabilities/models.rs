@@ -126,10 +126,6 @@ pub(crate) struct RawCompositeRule {
     /// Minimum number of conditions that must match (for `any` lists)
     #[serde(default)]
     pub(crate) needs: Option<usize>,
-    /// Intentional variant rollup: exempt from the low-value simple-OR output
-    /// filter (see `CompositeTrait::rollup`)
-    #[serde(default)]
-    pub(crate) rollup: bool,
     // Single condition (for simple composite rules)
     #[serde(default, alias = "if")]
     pub(crate) condition: Option<crate::composite_rules::Condition>,

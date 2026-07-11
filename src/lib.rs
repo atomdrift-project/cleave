@@ -154,6 +154,32 @@ fn looks_like_actionable_payload_preview(preview: &str) -> bool {
     markers.iter().any(|marker| preview.contains(marker))
 }
 
+fn looks_like_actionable_source_payload_preview(preview: &str) -> bool {
+    let preview = preview.trim_start();
+    let leading_markers = [
+        "<?php",
+        "function ",
+        "import ",
+        "from ",
+        "const ",
+        "let ",
+        "var ",
+        "curl ",
+        "wget ",
+        "powershell",
+        "cmd.exe",
+        "bash ",
+        "sh ",
+    ];
+
+    preview.starts_with("#!/")
+        || leading_markers
+            .iter()
+            .any(|marker| preview.starts_with(marker))
+        || preview.contains("http://")
+        || preview.contains("https://")
+}
+
 fn is_benign_unicode_escape_payload(payload: &types::ExtractedPayload) -> bool {
     if !payload
         .encoding_chain
@@ -181,9 +207,7 @@ fn should_skip_unknown_encoded_payload_for_text(
     file_type: &FileType,
     payload: &types::ExtractedPayload,
 ) -> bool {
-    if payload.detected_type != FileType::Unknown
-        || looks_like_actionable_payload_preview(&payload.preview)
-    {
+    if payload.detected_type != FileType::Unknown {
         return false;
     }
 
@@ -192,10 +216,22 @@ fn should_skip_unknown_encoded_payload_for_text(
             file_type,
             FileType::Markdown | FileType::Text | FileType::Data
         );
-    let is_noisy_text_encoding = payload.encoding_chain.len() == 1
-        && matches!(payload.encoding_chain[0].as_str(), "xor" | "url");
+    if !is_textual {
+        return false;
+    }
 
-    is_textual && is_noisy_text_encoding
+    if payload
+        .encoding_chain
+        .first()
+        .is_some_and(|encoding| encoding == "xor")
+    {
+        return !looks_like_actionable_source_payload_preview(&payload.preview);
+    }
+
+    let is_noisy_text_encoding = payload.encoding_chain == ["url"]
+        && !looks_like_actionable_payload_preview(&payload.preview);
+
+    is_noisy_text_encoding
 }
 
 fn should_skip_unknown_svg_path_xor_base64_payload(
@@ -3484,6 +3520,43 @@ mod tests {
             original_offset: 0,
         };
         assert!(should_skip_unknown_url_markup_payload(&payload));
+    }
+
+    #[test]
+    fn test_skip_unknown_xor_noise_in_source() {
+        let payload = |encoding_chain: &[&str], preview: &str| types::ExtractedPayload {
+            data: Vec::new(),
+            encoding_chain: encoding_chain
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect(),
+            detected_type: FileType::Unknown,
+            preview: preview.to_string(),
+            original_offset: 703,
+        };
+        let xor_noise = payload(&["xor"], "n#!,,h5n%80/243l3l5l5n%80/243l4()3i=2%45");
+        assert!(should_skip_unknown_encoded_payload_for_text(
+            &FileType::JavaScript,
+            &xor_noise
+        ));
+
+        let nested_binary = payload(&["xor", "base64"], "<binary data>");
+        assert!(should_skip_unknown_encoded_payload_for_text(
+            &FileType::JavaScript,
+            &nested_binary
+        ));
+
+        let shell_payload = payload(&["xor"], "#!/bin/sh\ncurl https://example.test/p");
+        assert!(!should_skip_unknown_encoded_payload_for_text(
+            &FileType::JavaScript,
+            &shell_payload
+        ));
+
+        let javascript_payload = payload(&["xor"], "const payload = fetch('https://example.test')");
+        assert!(!should_skip_unknown_encoded_payload_for_text(
+            &FileType::JavaScript,
+            &javascript_payload
+        ));
     }
 
     #[test]

@@ -246,21 +246,17 @@ impl super::JavaClassAnalyzer {
                 );
             }
 
-            // File operations. Skip strings that look like Java class refs / type
-            // descriptors (e.g. "org/apache/tomcat/util/http/fileupload/...") — these
-            // are framework package paths, not exfiltration intent.
+            // Explicit exfiltration vocabulary. Generic upload and file-manager strings
+            // are ordinary application/framework metadata (for example OpenTelemetry's
+            // `aws.s3.upload_id`) and do not establish data-theft intent.
             let looks_like_class_path = s.contains('/') || s.starts_with('L') && s.ends_with(';');
             if !looks_like_class_path
-                && (s_lower.contains("file-manager")
-                    || s_lower.contains("browse-file")
-                    || s_lower.contains("upload")
-                    || s_lower.contains("exfiltrate")
-                    || Self::contains_word(&s_lower, "exfil"))
+                && (s_lower.contains("exfiltrate") || Self::contains_word(&s_lower, "exfil"))
             {
                 self.add_capability(
                     report,
                     "exfiltration/data",
-                    "Data exfiltration capability",
+                    "Data exfiltration reference",
                     s,
                     Criticality::Notable,
                 );

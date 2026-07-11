@@ -1349,9 +1349,9 @@ fn render_context(
 /// escapes — preceded by a `{marker} SEV desc` annotation line per finding it
 /// carries, so the detections describe the bytes that follow and the window
 /// itself renders unannotated. Every row opens with an xxd-style gutter (the
-/// absolute byte offset of its first byte, 8 hex digits and a colon), so any
-/// byte is addressable without the terminal view's hex column, and a clipped
-/// window needs no `…` marker — the gutter says where the bytes sit.
+/// absolute byte offset of its first byte in unpadded hex, then a colon), so
+/// any byte is addressable without the terminal view's hex column, and a
+/// clipped window needs no `…` marker — the gutter says where the bytes sit.
 fn render_ascii_context(out: &mut String, file: &FileAnalysis, selected: &[&str]) {
     use std::fmt::Write;
     let sel: HashSet<&str> = selected.iter().copied().collect();
@@ -1401,7 +1401,7 @@ fn render_ascii_context(out: &mut String, file: &FileAnalysis, selected: &[&str]
             let row_end = (row + ASCII_ROW).min(end);
             let _ = writeln!(
                 out,
-                "{:08x}: {}",
+                "{:x}: {}",
                 line.loc + row as u64,
                 ascii_forward(&line.data[row..row_end])
             );

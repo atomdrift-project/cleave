@@ -1071,6 +1071,7 @@ pub(crate) fn apply_composite_defaults(
         all: requires_all,
         any: raw.any,
         needs: raw.needs,
+        rollup: raw.rollup,
         near_lines: raw.near_lines,
         near_bytes: raw.near_bytes,
         scope: raw.scope,

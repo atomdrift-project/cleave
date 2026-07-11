@@ -23,8 +23,15 @@ enum Target {
         min_hostile: usize,
         min_suspicious: usize,
     },
-    /// Known-benign sample whose root-file score must stay under a per-file cap.
-    Benign { path: PathBuf, cap: u32 },
+    /// Known-benign sample whose root-file score must stay under a per-file cap
+    /// — and at or above a per-file floor, so the identity/functionality traits
+    /// a benign program legitimately carries (usage surface, purpose-defining
+    /// syscalls) can't silently regress to invisible.
+    Benign {
+        path: PathBuf,
+        cap: u32,
+        min_score: u32,
+    },
     /// Walked-hostile sample (e.g. `testdata/drop-exec/`, `testdata/reverse-shell/`).
     /// Every file under the corpus directory must satisfy the configured score
     /// and/or hostile-finding floors — like the inverse of the does-nothing walk.
@@ -398,6 +405,7 @@ fn collect_benign_fixtures(dir: &Path, caps: &[BenignCap], out: &mut Vec<Target>
         out.push(Target::Benign {
             path: dir.join(&entry.name),
             cap: entry.cap,
+            min_score: entry.min_score,
         });
     }
     validate_fixture_table(dir, caps.iter().map(|entry| entry.name.as_str()), "benign")
@@ -562,9 +570,13 @@ fn evaluate(
                     failed += 1;
                 }
             }
-            Target::Benign { path, cap } => {
+            Target::Benign {
+                path,
+                cap,
+                min_score,
+            } => {
                 stats.benign_total += 1;
-                if disable_score_caps || judge_benign(&path, cap, &report) {
+                if disable_score_caps || judge_benign(&path, cap, min_score, &report) {
                     stats.benign_passed += 1;
                 } else {
                     failed += 1;
@@ -733,13 +745,14 @@ fn judge_hostile(
 }
 
 /// Judge a known-benign fixture root file. Returns `true` if it passes.
-fn judge_benign(path: &Path, cap: u32, report: &AnalysisReport) -> bool {
+fn judge_benign(path: &Path, cap: u32, min_score: u32, report: &AnalysisReport) -> bool {
     let Some(file) = report.files.first() else {
         eprintln!("❌ {}: analysis produced no files", path.display());
         return false;
     };
     let misleading = misleading_benign_findings(report);
     if file.score <= cap
+        && file.score >= min_score
         && file.score < Criticality::Suspicious.score_weight()
         && misleading.is_empty()
     {
@@ -748,6 +761,16 @@ fn judge_benign(path: &Path, cap: u32, report: &AnalysisReport) -> bool {
 
     if file.score > cap {
         eprintln!("❌ {}: score {} > cap {cap}", path.display(), file.score);
+    }
+    // The floor guards a benign program's legitimate identity/functionality
+    // traits (usage surface, purpose-defining syscalls) from silently
+    // regressing to invisible — an empty render tells an LLM or diff nothing.
+    if file.score < min_score {
+        eprintln!(
+            "❌ {}: score {} < minimum {min_score}",
+            path.display(),
+            file.score
+        );
     }
     if file.score >= Criticality::Suspicious.score_weight() {
         eprintln!(
@@ -820,6 +843,11 @@ struct HostileExpectation {
 struct BenignCap {
     name: String,
     cap: u32,
+    /// Score floor (default 0): a real benign program still carries its
+    /// identity/functionality notables (usage surface, purpose-defining
+    /// syscalls); this catches them silently regressing to invisible.
+    #[serde(default)]
+    min_score: u32,
 }
 
 #[derive(Debug, Deserialize)]

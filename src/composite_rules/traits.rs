@@ -1980,6 +1980,18 @@ pub(crate) struct CompositeTrait {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub needs: Option<usize>,
 
+    /// Mark an intentional variant rollup: a simple-OR (`any:` with `needs` 1)
+    /// composite that deduplicates interchangeable symbol variants
+    /// (getxattr/fgetxattr/lgetxattr → one `xattr-get`) and carries the
+    /// behavior's criticality as the single surfaced finding, its legs staying
+    /// lower-tier building blocks. Exempts the rule from the low-value
+    /// simple-OR output filter ([`is_low_value_any_rule`]), which would
+    /// otherwise drop it from scan output.
+    ///
+    /// [`is_low_value_any_rule`]: crate::capabilities::CapabilityMapper::is_low_value_any_rule
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub rollup: bool,
+
     /// Proximity constraint: at least count_min findings must be within N lines
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub near_lines: Option<usize>,
@@ -2039,6 +2051,7 @@ impl Default for CompositeTrait {
             all: None,
             any: None,
             needs: None,
+            rollup: false,
             near_lines: None,
             near_bytes: None,
             scope: None,

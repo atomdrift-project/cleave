@@ -57,19 +57,17 @@ pub(crate) fn capture(report: &mut AnalysisReport, data: &[u8], file_type: FileT
     // references it pick up the recovered position.
     anchor_orphan_symbol_matches(&mut report.findings, data);
 
-    // Only capture context for findings that will be shown: skip Filtered noise
-    // and Component building blocks unless a composite references them. Mirrors
-    // the output `tiny_should_show` policy so context and rendering agree.
-    let referenced: FxHashSet<&str> = report
-        .findings
-        .iter()
-        .flat_map(|f| f.trait_refs.iter().map(String::as_str))
-        .collect();
+    // Capture context for every finding that can render: only Filtered noise is
+    // skipped. Components are captured whether or not a composite references
+    // them — the LLM/tiny view's low-tier fill (`TinyOpts::low_tier_fill`) shows
+    // a top-scored file's best component/baseline traits even when nothing
+    // notable fired, and a trait without captured context would render as
+    // nothing there. Baselines were always captured; this aligns components.
     let by_id = index_by_id(&report.findings);
     let shown: Vec<&Finding> = report
         .findings
         .iter()
-        .filter(|f| should_show(f, &referenced))
+        .filter(|f| should_show(f))
         .collect();
     if shown.is_empty() {
         return;
@@ -89,14 +87,12 @@ pub(crate) fn capture(report: &mut AnalysisReport, data: &[u8], file_type: FileT
     report.context = context;
 }
 
-/// Whether a finding contributes context: Filtered is hidden; a Component is
-/// shown only when a composite references it.
-fn should_show(finding: &Finding, referenced: &FxHashSet<&str>) -> bool {
-    match finding.crit {
-        Criticality::Filtered => false,
-        Criticality::Component => referenced.contains(finding.id.as_str()),
-        _ => true,
-    }
+/// Whether a finding contributes context: everything except Filtered noise.
+/// Low-tier traits are captured too — whether the render shows them is the
+/// output layer's call (`select_ids` / `low_tier_fill`), and it can only show
+/// what was captured.
+fn should_show(finding: &Finding) -> bool {
+    finding.crit != Criticality::Filtered
 }
 
 /// How a byte-anchored window renders its content.

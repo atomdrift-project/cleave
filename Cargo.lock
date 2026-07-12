@@ -816,7 +816,7 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
 name = "cleave"
-version = "2.3.0"
+version = "2.3.1-beta.0"
 dependencies = [
  "aes 0.9.1",
  "aho-corasick",
@@ -1340,9 +1340,9 @@ dependencies = [
 
 [[package]]
 name = "daachorse"
-version = "3.0.2"
+version = "3.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "99251f238b74cd219a86fe6ea9328308ebb223fcbb5b8eb5aa400b847a41dded"
+checksum = "5614204febbc33cc07a2806aa6440b904ac012b68eecc37f4493ea4a76455a3d"
 
 [[package]]
 name = "darling"
@@ -1688,7 +1688,7 @@ dependencies = [
 [[package]]
 name = "filefacts"
 version = "1.2.0"
-source = "git+https://codeberg.org/atomdrift/filefacts.git#b11324f69924e22db4e1dc719b2b1d4159412b02"
+source = "git+https://codeberg.org/atomdrift/filefacts.git#2e1f9f96a4e2983a3c34e8ff3a80b3e62957695e"
 dependencies = [
  "aho-corasick",
  "cfb 0.10.0",
@@ -4588,7 +4588,7 @@ dependencies = [
 [[package]]
 name = "stng"
 version = "1.7.1"
-source = "git+https://codeberg.org/atomdrift/stng.git#7a0d0e3b933115f1be2f839b7d4749a02ac1dd08"
+source = "git+https://codeberg.org/atomdrift/stng.git#8f0a83eedb7f6f3aaee71ea9de319819461a5d4d"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -5188,9 +5188,9 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter"
-version = "0.26.10"
+version = "0.26.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3c343ed63e3f5c64d1acdecb5d2c13d4e169cb5fde0052106ebaa6c6f27f9e55"
+checksum = "af1c71c1c4cc0920b20d6b0f6572e7682cd07a6a2faec71067a31fa394c586df"
 dependencies = [
  "cc",
  "regex",
@@ -5243,7 +5243,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-clojure"
 version = "0.1.0"
-source = "git+https://codeberg.org/atomdrift/filefacts.git#b11324f69924e22db4e1dc719b2b1d4159412b02"
+source = "git+https://codeberg.org/atomdrift/filefacts.git#2e1f9f96a4e2983a3c34e8ff3a80b3e62957695e"
 dependencies = [
  "cc",
  "tree-sitter",

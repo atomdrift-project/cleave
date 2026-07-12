@@ -1,7 +1,7 @@
 #!/bin/sh
 # cleave pre-commit hook: block the commit unless the tree is clean.
 #
-#   1. no active [patch.*] local overrides in Cargo.toml (e.g. ../filefacts)
+#   1. no active local path overrides in Cargo.toml (e.g. ../filefacts)
 #   2. `make lint` passes
 #   3. `make validate` passes (`cleave validate` exits 0)
 #   4. `make test` passes
@@ -13,11 +13,14 @@ set -e
 repo_root=$(git rev-parse --show-toplevel)
 cd "$repo_root"
 
-# 1. Reject uncommented [patch...] sections in Cargo.toml. These point at local
-#    sibling checkouts (../filefacts, ../stng) and must never be committed.
-if grep -nE '^[[:space:]]*\[patch' Cargo.toml >/dev/null 2>&1; then
-	echo "pre-commit: active [patch.*] local override found in Cargo.toml:" >&2
-	grep -nE '^[[:space:]]*\[patch' Cargo.toml >&2
+# 1. Reject active local path overrides in Cargo.toml. Local dev sometimes
+#    repoints a dep at a sibling checkout (filefacts = { path = "../filefacts" })
+#    or adds a [patch] entry doing the same; those must never be committed.
+#    Committed git-based patches (e.g. the [patch.crates-io] wasmtime fork) and
+#    workspace-relative paths (crates/*, src/lib.rs) are fine.
+if grep -nE '^[[:space:]]*[^#[:space:]].*path[[:space:]]*=[[:space:]]*"\.\.' Cargo.toml >/dev/null 2>&1; then
+	echo "pre-commit: active local path override (\"../\") found in Cargo.toml:" >&2
+	grep -nE '^[[:space:]]*[^#[:space:]].*path[[:space:]]*=[[:space:]]*"\.\.' Cargo.toml >&2
 	echo "Comment it out before committing (or use --no-verify to bypass)." >&2
 	exit 1
 fi

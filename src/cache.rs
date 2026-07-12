@@ -745,7 +745,46 @@ pub fn cleanup_old_caches(current_cache: &Path) -> Result<()> {
         }
     }
 
+    // Prune superseded capability-mapper caches. Only the newest is ever loaded,
+    // but stale crate-version and trait-mtime variants (each a multi-MB
+    // serialized mapper) accumulate forever otherwise — the one gap with no
+    // existing cleanup. Keep the most recent by mtime, drop the rest, bounding
+    // this cache to a single file.
+    prune_all_but_newest(&cache_dir, "capability-mapper-");
+
     Ok(())
+}
+
+/// In `dir`, keep only the newest file whose name starts with `prefix` and
+/// delete the others. Best-effort: unreadable entries and failed removals are
+/// ignored, never surfaced as an error.
+fn prune_all_but_newest(dir: &Path, prefix: &str) {
+    let Ok(read_dir) = fs::read_dir(dir) else {
+        return;
+    };
+    let mut matches: Vec<(PathBuf, SystemTime)> = read_dir
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with(prefix))
+        })
+        .map(|p| {
+            let mtime = fs::metadata(&p)
+                .and_then(|m| m.modified())
+                .unwrap_or(SystemTime::UNIX_EPOCH);
+            (p, mtime)
+        })
+        .collect();
+    if matches.len() <= 1 {
+        return;
+    }
+    // Retire everything but the single newest entry.
+    matches.sort_by_key(|(_, mtime)| *mtime);
+    for (path, _) in &matches[..matches.len() - 1] {
+        let _ = fs::remove_file(path);
+    }
 }
 
 #[cfg(test)]
@@ -850,6 +889,41 @@ mod tests {
         let temp_path = PathBuf::from("/nonexistent/cache/file.bin");
         // Should not panic with nonexistent path
         let _ = cleanup_old_caches(&temp_path);
+    }
+
+    #[test]
+    fn prune_all_but_newest_keeps_only_the_newest() {
+        let dir = std::env::temp_dir().join(format!("cleave-mapper-prune-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        // Three superseded mapper caches at distinct mtimes, plus an unrelated
+        // file that must survive the prune.
+        for (name, hours_old) in [
+            ("capability-mapper-old.bin", 3u64),
+            ("capability-mapper-mid.bin", 2),
+            ("capability-mapper-new.bin", 1),
+        ] {
+            let f = fs::File::create(dir.join(name)).unwrap();
+            f.set_modified(SystemTime::now() - Duration::from_secs(hours_old * 3600))
+                .unwrap();
+        }
+        fs::write(dir.join("yara-rules-v4-x-builtin"), b"keep").unwrap();
+
+        prune_all_but_newest(&dir, "capability-mapper-");
+
+        assert!(!dir.join("capability-mapper-old.bin").exists());
+        assert!(!dir.join("capability-mapper-mid.bin").exists());
+        assert!(
+            dir.join("capability-mapper-new.bin").exists(),
+            "the newest mapper cache is retained"
+        );
+        assert!(
+            dir.join("yara-rules-v4-x-builtin").exists(),
+            "non-matching files are untouched"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

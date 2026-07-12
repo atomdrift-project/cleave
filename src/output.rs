@@ -1376,8 +1376,12 @@ fn render_ascii_context(out: &mut String, file: &FileAnalysis, selected: &[&str]
         }
         emitted = true;
         notes.sort_by(|a, b| b.crit.cmp(&a.crit).then_with(|| a.off.cmp(&b.off)));
-        // Clip the window to the match span ± a fixed margin, so a large merged
-        // window doesn't dump the whole region at the model; `…` marks a trim.
+        // Clip the window to the match span ± a criticality-sized margin, so a
+        // large merged window doesn't dump the whole region at the model; `…` marks
+        // a trim. The block is sized by its strongest detection (`notes` is
+        // strongest-first), asymmetric — more trailing than leading, since a
+        // payload runs forward from the match. Capture reserved this many bytes.
+        let (before, after) = notes[0].crit.hex_context();
         let len = line.data.len();
         let within = |off: u64| (off.saturating_sub(line.loc) as usize).min(len);
         let lo = notes.iter().map(|n| within(n.off)).min().unwrap_or(0);
@@ -1386,8 +1390,8 @@ fn render_ascii_context(out: &mut String, file: &FileAnalysis, selected: &[&str]
             .map(|n| within(n.off + u64::from(n.len.max(1))))
             .max()
             .unwrap_or(len);
-        let start = lo.saturating_sub(ASCII_CONTEXT);
-        let end = (hi + ASCII_CONTEXT).min(len);
+        let start = lo.saturating_sub(before as usize);
+        let end = (hi + after as usize).min(len);
         for n in &notes {
             let _ = writeln!(
                 out,
@@ -1409,10 +1413,6 @@ fn render_ascii_context(out: &mut String, file: &FileAnalysis, selected: &[&str]
         }
     }
 }
-
-/// Bytes of context shown on each side of the match span in the ASCII-forward
-/// (machine/LLM) binary view.
-const ASCII_CONTEXT: usize = 96;
 
 /// Bytes per gutter-prefixed row in the ASCII-forward view. Wider than xxd's 16
 /// so the escaped stream stays token-cheap for a model, while every row still
@@ -1501,12 +1501,14 @@ fn render_source_context(
         by_crit.max(base_radius)
     };
 
-    // In the LLM/tiny view a component trait stands alone unless a composite used
-    // it: a bare component shows a single line (radius 0), while one a composite
-    // drew on earns context sized to that composite's severity — a hostile
-    // composite's building block shows ±2 lines. Map each referenced building
-    // block to the strongest crit that referenced it.
-    let component_ref_crit: HashMap<&str, Criticality> = {
+    // In the LLM/tiny view a trait a composite drew on is sized by the stronger
+    // of its own severity and the conclusion's: a notable atomic that's evidence
+    // for a hostile composite reads with the hostile window, so the model sees the
+    // code the verdict rests on — not the narrower context its own severity would
+    // earn. A bare component (referenced by nothing) still stands alone as a
+    // single line. Map each referenced leg to the strongest crit that referenced
+    // it. (Capture reserves the same width — see `leg_crit` in context::capture.)
+    let referrer_crit: HashMap<&str, Criticality> = {
         let mut m: HashMap<&str, Criticality> = HashMap::new();
         for f in &file.findings {
             for ref_id in &f.trait_refs {
@@ -1518,12 +1520,15 @@ fn render_source_context(
         m
     };
     let radius_of = |n: &Note| -> u64 {
-        if minimal && n.crit == Criticality::Component {
-            component_ref_crit
-                .get(n.id.as_str())
-                .map_or(0, |&c| radius_for(c))
-        } else {
-            radius_for(n.crit)
+        if !minimal {
+            return radius_for(n.crit);
+        }
+        match referrer_crit.get(n.id.as_str()) {
+            // Sized by the stronger of the leg's own severity and its composite's.
+            Some(&c) => radius_for(c.max(n.crit)),
+            // A bare component stands alone; any other lone trait uses its own.
+            None if n.crit == Criticality::Component => 0,
+            None => radius_for(n.crit),
         }
     };
 
@@ -2949,6 +2954,7 @@ pub(crate) fn format_terminal(report: &AnalysisReport) -> String {
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used)]
 mod tests {
     use super::*;
     use crate::types::{AnalysisReport, Evidence, FindingKind, TargetInfo, YaraMatch};
@@ -3051,6 +3057,43 @@ mod tests {
         let mut report = create_test_report(vec![], vec![]);
         report.files = files;
         report
+    }
+
+    /// A binary (`elf`) file with a score, findings, and pre-built byte context —
+    /// what the tiny binary (ASCII-forward) view renders from.
+    fn bin_file(
+        id: u32,
+        score: u32,
+        findings: Vec<Finding>,
+        context: Vec<crate::types::ContextLine>,
+    ) -> FileAnalysis {
+        let mut fa = FileAnalysis::new(
+            id,
+            format!("/mal{id}.bin"),
+            "elf".to_string(),
+            format!("sha{id}"),
+            4096,
+        );
+        fa.score = score;
+        fa.findings = findings;
+        fa.context = context;
+        fa
+    }
+
+    /// A raw-byte context unit starting at byte offset `loc`, carrying `notes`
+    /// (each note's `off` is an absolute file offset). `addr: None` marks it a
+    /// byte unit rather than a source line.
+    fn byte_unit(
+        loc: u64,
+        data: &[u8],
+        notes: Vec<crate::types::Note>,
+    ) -> crate::types::ContextLine {
+        crate::types::ContextLine {
+            loc,
+            addr: None,
+            data: data.to_vec(),
+            notes,
+        }
     }
 
     #[test]
@@ -3353,8 +3396,16 @@ mod tests {
             1,
             vec![comp, base],
             vec![
-                ctx_line(1, "readdir(dirp);", Some(ctx_note("micro/fs::readdir", Criticality::Component, 1))),
-                ctx_line(2, "debuglink(section);", Some(ctx_note("meta/build::debuglink", Criticality::Baseline, 2))),
+                ctx_line(
+                    1,
+                    "readdir(dirp);",
+                    Some(ctx_note("micro/fs::readdir", Criticality::Component, 1)),
+                ),
+                ctx_line(
+                    2,
+                    "debuglink(section);",
+                    Some(ctx_note("meta/build::debuglink", Criticality::Baseline, 2)),
+                ),
             ],
         );
         let report = report_with_files(vec![file]);
@@ -3491,6 +3542,181 @@ mod tests {
         assert!(
             !output.contains("FAR_BEFORE") && !output.contains("FAR_AFTER"),
             "±6 lines stay outside the hostile-sized window\n{output}"
+        );
+    }
+
+    #[test]
+    fn tiny_notable_leg_widens_to_hostile_composite() {
+        // The general rule beyond components: any atomic leg a stronger composite
+        // drew on renders with the composite's window. A *notable* leg (own radius
+        // ±3) that's evidence for a hostile composite shows ±5, so the model sees
+        // the code the hostile verdict rests on.
+        let leg = ctx_note("cap/n::leg", Criticality::Notable, 10);
+        let composite = Finding {
+            trait_refs: vec!["cap/n::leg".to_string()],
+            ..finding_with("objectives/x::implant", Criticality::Hostile)
+        };
+        let file = src_file(
+            0,
+            "/only.py",
+            90,
+            vec![composite, finding_with("cap/n::leg", Criticality::Notable)],
+            vec![
+                ctx_line(4, "FAR_BEFORE = outside_window()", None),
+                ctx_line(5, "EDGE_BEFORE5 = five_above()", None),
+                ctx_line(10, "LEGLINE = the_leg()", Some(leg)),
+                ctx_line(15, "EDGE_AFTER5 = five_below()", None),
+                ctx_line(16, "FAR_AFTER = outside_window()", None),
+            ],
+        );
+        let output = format_tiny(&report_with_files(vec![file]));
+        for inside in ["EDGE_BEFORE5", "LEGLINE", "EDGE_AFTER5"] {
+            assert!(
+                output.contains(inside),
+                "{inside} is within the inherited hostile ±5 window\n{output}"
+            );
+        }
+        assert!(
+            !output.contains("FAR_BEFORE") && !output.contains("FAR_AFTER"),
+            "±6 lines stay outside the inherited hostile window\n{output}"
+        );
+    }
+
+    #[test]
+    fn tiny_unreferenced_notable_keeps_own_radius() {
+        // Control for the leg-widening rule: a notable atomic no composite
+        // references keeps its own ±3 window — lines at ±4 are dropped. Without
+        // this contrast the inherited ±5 above would prove nothing.
+        let solo = ctx_note("cap/n::solo", Criticality::Notable, 10);
+        let file = src_file(
+            0,
+            "/only.py",
+            90,
+            vec![finding_with("cap/n::solo", Criticality::Notable)],
+            vec![
+                ctx_line(6, "OUT_BEFORE4 = four_above()", None),
+                ctx_line(7, "IN_BEFORE3 = three_above()", None),
+                ctx_line(10, "SOLOLINE = the_solo()", Some(solo)),
+                ctx_line(13, "IN_AFTER3 = three_below()", None),
+                ctx_line(14, "OUT_AFTER4 = four_below()", None),
+            ],
+        );
+        let output = format_tiny(&report_with_files(vec![file]));
+        for inside in ["IN_BEFORE3", "SOLOLINE", "IN_AFTER3"] {
+            assert!(output.contains(inside), "{inside} within own ±3\n{output}");
+        }
+        assert!(
+            !output.contains("OUT_BEFORE4") && !output.contains("OUT_AFTER4"),
+            "±4 lines stay outside the notable-sized window\n{output}"
+        );
+    }
+
+    #[test]
+    fn tiny_leg_keeps_own_radius_when_stronger_than_composite() {
+        // The window is the *stronger* of the leg's own severity and the
+        // composite's — never a downgrade. A suspicious leg (±4) referenced by a
+        // merely notable composite (±3) keeps its own ±4.
+        let leg = ctx_note("cap/s::leg", Criticality::Suspicious, 10);
+        let composite = Finding {
+            trait_refs: vec!["cap/s::leg".to_string()],
+            ..finding_with("objectives/y::pattern", Criticality::Notable)
+        };
+        let file = src_file(
+            0,
+            "/only.py",
+            90,
+            vec![
+                composite,
+                finding_with("cap/s::leg", Criticality::Suspicious),
+            ],
+            vec![
+                ctx_line(6, "IN_BEFORE4 = four_above()", None),
+                ctx_line(10, "LEGLINE = the_leg()", Some(leg)),
+                ctx_line(14, "IN_AFTER4 = four_below()", None),
+                ctx_line(15, "OUT_AFTER5 = five_below()", None),
+            ],
+        );
+        let output = format_tiny(&report_with_files(vec![file]));
+        for inside in ["IN_BEFORE4", "LEGLINE", "IN_AFTER4"] {
+            assert!(output.contains(inside), "{inside} within own ±4\n{output}");
+        }
+        assert!(
+            !output.contains("OUT_AFTER5"),
+            "±5 stays out — a notable composite must not shrink a suspicious leg\n{output}"
+        );
+    }
+
+    #[test]
+    fn tiny_binary_lists_all_descriptions_ahead_of_merged_block() {
+        // The binary (ASCII-forward) interpret view's model: a single merged byte
+        // window carrying multiple traits lists *all* their descriptions ahead of
+        // the block ("here's what we detected in these bytes"), strongest-first,
+        // then the unannotated byte rows.
+        let data: Vec<u8> = (0u8..80).collect(); // bytes 0x41.. render as ABC… in-block
+        let file = bin_file(
+            0,
+            90,
+            vec![
+                finding_with("net/connect", Criticality::Notable),
+                finding_with("exec/shell", Criticality::Suspicious),
+            ],
+            vec![byte_unit(
+                0,
+                &data,
+                vec![
+                    ctx_note("net/connect", Criticality::Notable, 20),
+                    ctx_note("exec/shell", Criticality::Suspicious, 40),
+                ],
+            )],
+        );
+        let output = format_tiny(&report_with_files(vec![file]));
+
+        let s_desc = output
+            .find("exec/shell desc")
+            .expect("suspicious desc shown");
+        let n_desc = output.find("net/connect desc").expect("notable desc shown");
+        let block = output.find("ABCDEFG").expect("byte block rendered");
+        // Strongest description leads, and both precede the byte block.
+        assert!(s_desc < n_desc, "strongest description first:\n{output}");
+        assert!(
+            n_desc < block,
+            "every description precedes the block's bytes:\n{output}"
+        );
+    }
+
+    #[test]
+    fn tiny_binary_separates_independent_blocks() {
+        // Two non-overlapping byte windows render as separate blocks, each with its
+        // own detection listed ahead of it, in file order.
+        let file = bin_file(
+            0,
+            90,
+            vec![
+                finding_with("first/hit", Criticality::Suspicious),
+                finding_with("second/hit", Criticality::Hostile),
+            ],
+            vec![
+                byte_unit(
+                    0,
+                    b"AAAAAAAAAAAAAAAA",
+                    vec![ctx_note("first/hit", Criticality::Suspicious, 4)],
+                ),
+                byte_unit(
+                    4096,
+                    b"BBBBBBBBBBBBBBBB",
+                    vec![ctx_note("second/hit", Criticality::Hostile, 4100)],
+                ),
+            ],
+        );
+        let output = format_tiny(&report_with_files(vec![file]));
+
+        let a_desc = output.find("first/hit desc").expect("block A described");
+        let a_bytes = output.find("AAAAAAAA").expect("block A bytes");
+        let b_desc = output.find("second/hit desc").expect("block B described");
+        let b_bytes = output.find("BBBBBBBB").expect("block B bytes");
+        assert!(
+            a_desc < a_bytes && a_bytes < b_desc && b_desc < b_bytes,
+            "each block's description leads its own bytes, blocks in file order:\n{output}"
         );
     }
 

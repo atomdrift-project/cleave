@@ -137,6 +137,26 @@ impl Criticality {
             Self::Exception | Self::Filtered => 0,
         }
     }
+
+    /// Bytes of context `(before, after)` a binary/hex match reserves and renders
+    /// around itself. The binary analogue of [`context_radius`], but asymmetric:
+    /// far more trailing than leading context, since a payload (shellcode, an
+    /// unpacked stub, a config blob) runs *forward* from the match. As with the
+    /// source path the strongest findings earn the widest window; the single
+    /// source of truth for both capture (which reserves the bytes) and the LLM
+    /// render (which clips to them). `Exception`/`Filtered` never reach the binary
+    /// view, so they carry no margin.
+    #[must_use]
+    pub fn hex_context(self) -> (u64, u64) {
+        match self {
+            Self::Hostile => (128, 256),
+            Self::Suspicious => (96, 192),
+            Self::Notable => (64, 128),
+            Self::Baseline => (48, 96),
+            Self::Component => (32, 64),
+            Self::Exception | Self::Filtered => (0, 0),
+        }
+    }
 }
 
 /// Main analysis output structure

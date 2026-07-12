@@ -65,10 +65,16 @@ const EVICTION_TARGET_DENOMINATOR: i64 = 10;
 /// never dropped for age alone. 30 days.
 const MAX_IDLE_SECS: i64 = 30 * 24 * 60 * 60;
 
-/// Disk ceiling for the cache DB. Over this, a background `VACUUM` returns the
-/// pages that eviction freed to the OS. The count caps keep the DB well under
-/// this in practice; this is the hard backstop. 2 GiB.
+/// Byte ceiling for the cache DB's live data. Enforced by evicting the
+/// least-recently-used rows once a table's blobs exceed its share — not by
+/// VACUUM (which can't delete live rows, and stalls concurrent writers while it
+/// rewrites a multi-GB WAL DB). SQLite reuses the pages freed by eviction, so
+/// the file stops growing even though it isn't shrunk back on disk. 2 GiB.
 const MAX_DB_BYTES: i64 = 2 * 1024 * 1024 * 1024;
+
+/// Each of the two cache tables is bounded to half of [`MAX_DB_BYTES`], so their
+/// combined live data stays within the ceiling.
+const MAX_TABLE_BYTES: i64 = MAX_DB_BYTES / 2;
 
 /// Global store counter for report cache eviction scheduling, shared across all threads.
 static REPORT_STORE_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -267,20 +273,44 @@ fn evict_idle(conn: &Connection, table: &str) {
     }
 }
 
-/// If the cache DB has grown past [`MAX_DB_BYTES`] on disk, `VACUUM` to reclaim
-/// the pages eviction freed. Best-effort — `VACUUM` needs a brief exclusive lock
-/// and simply no-ops if it can't take it.
-fn enforce_db_size(conn: &Connection) {
-    let page_count: i64 = conn
-        .query_row("PRAGMA page_count", [], |r| r.get(0))
+/// Keep `table`'s live data within its byte share ([`MAX_TABLE_BYTES`]) by
+/// deleting the least-recently-used rows (by `last_accessed`). The row count to
+/// delete is estimated from the mean entry size — approximate, but eviction is
+/// sampled repeatedly and converges. `blob` is the size-bearing column;
+/// `table`/`blob` are trusted module literals, never user input. Best-effort.
+fn enforce_table_bytes(conn: &Connection, table: &str, blob: &str, max_bytes: i64) {
+    let used: i64 = conn
+        .query_row(
+            &format!("SELECT COALESCE(SUM(LENGTH({blob})), 0) FROM {table}"),
+            [],
+            |r| r.get(0),
+        )
         .unwrap_or(0);
-    let page_size: i64 = conn
-        .query_row("PRAGMA page_size", [], |r| r.get(0))
+    let target = max_bytes / 10 * 9;
+    if used <= target {
+        return;
+    }
+    let count: i64 = conn
+        .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
         .unwrap_or(0);
-    if page_count.saturating_mul(page_size) > MAX_DB_BYTES
-        && let Err(e) = conn.execute_batch("VACUUM")
+    let avg = used.checked_div(count).unwrap_or(0).max(1);
+    let to_delete = (used - target) / avg;
+    if to_delete <= 0 {
+        return;
+    }
+    if let Ok(n) = conn.execute(
+        &format!(
+            "DELETE FROM {table} WHERE rowid IN
+             (SELECT rowid FROM {table} ORDER BY last_accessed ASC LIMIT ?1)"
+        ),
+        rusqlite::params![to_delete],
+    ) && n > 0
     {
-        tracing::debug!("cache VACUUM skipped: {e}");
+        tracing::info!(
+            deleted = n,
+            table,
+            "Evicted cache entries over the byte cap"
+        );
     }
 }
 
@@ -322,7 +352,7 @@ fn evict_report_cache(conn: &Connection) {
         }
     }
 
-    enforce_db_size(conn);
+    enforce_table_bytes(conn, "toplevel_report_cache", "report", MAX_TABLE_BYTES);
 }
 
 /// Compute a short deterministic hash of the result-affecting analysis options.
@@ -562,11 +592,16 @@ fn evict_file_analysis_cache(conn: &Connection) {
         }
     }
 
-    enforce_db_size(conn);
+    enforce_table_bytes(
+        conn,
+        "file_analysis_cache",
+        "file_analysis",
+        MAX_TABLE_BYTES,
+    );
 }
 
 #[cfg(test)]
-#[allow(clippy::expect_used)]
+#[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crate::types::FileAnalysis;
@@ -658,6 +693,42 @@ mod tests {
             remaining,
             vec!["fresh".to_string()],
             "the entry idle past 30d is evicted; the fresh one is kept"
+        );
+    }
+
+    #[test]
+    fn enforce_table_bytes_evicts_least_recently_used_over_cap() {
+        let conn = test_conn();
+        let now = unix_timestamp();
+        // Five 400-byte reports (2000 bytes total), last_accessed oldest→newest.
+        for (i, age_days) in [5i64, 4, 3, 2, 1].into_iter().enumerate() {
+            conn.execute(
+                "INSERT INTO toplevel_report_cache
+                 (sha256, options_hash, traits_timestamp, report, created_at, last_accessed)
+                 VALUES (?1, 'h', 0, ?2, 0, ?3)",
+                rusqlite::params![
+                    format!("s{i}"),
+                    vec![0u8; 400],
+                    now - age_days * 24 * 60 * 60
+                ],
+            )
+            .expect("insert");
+        }
+
+        // Cap 1000 → target 900; the mean-size estimate sheds the oldest rows.
+        enforce_table_bytes(&conn, "toplevel_report_cache", "report", 1000);
+
+        let remaining: Vec<String> = conn
+            .prepare("SELECT sha256 FROM toplevel_report_cache ORDER BY last_accessed")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            remaining,
+            vec!["s2".to_string(), "s3".to_string(), "s4".to_string()],
+            "the least-recently-used entries are evicted first, newest kept"
         );
     }
 

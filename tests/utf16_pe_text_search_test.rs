@@ -6,8 +6,8 @@
 use std::path::PathBuf;
 
 fn assert_text_match(pattern: &str) {
-    let sample = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/dotnet_utf16_clipboard.dll");
+    let sample =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dotnet_utf16_clipboard.dll");
     let output = assert_cmd::cargo_bin_cmd!("cleave")
         .env("CLEAVE_SKIP_CACHE", "1")
         .args([

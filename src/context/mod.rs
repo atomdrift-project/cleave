@@ -3,10 +3,12 @@
 //! annotated with the findings that touch it.
 //!
 //! This is the output surface that replaces raw per-finding [`Evidence`]. Each
-//! finding contributes up to [`MAX_MATCHES`] anchored windows (the first match
-//! gets the most context, later ones less — [`MIN_HEIGHTS`]); all windows are
-//! then merged so a line two traits share is emitted once with two notes, and a
-//! composite spanning regions just annotates several lines.
+//! finding contributes up to [`ATOMIC_MAX_MATCHES`] anchored windows sized by its
+//! criticality ([`Criticality::context_radius`]) — the strongest findings get the
+//! widest window, and repeat matches of one trait taper (the first gets the most
+//! context, later ones less); all windows are then merged so a line two traits
+//! share is emitted once with two notes, and a composite spanning regions just
+//! annotates several lines.
 //!
 //! [`Evidence`]: crate::types::Evidence
 
@@ -17,14 +19,8 @@ use crate::types::{
     AnalysisReport, ContextLine, Criticality, Finding, Note, traits_findings::MAX_EV_LOCS,
 };
 
-/// Maximum match windows kept per finding (the rest are dropped). A composite
-/// shows only its first location; an atomic trait up to [`MAX_EV_LOCS`].
-const MAX_MATCHES: usize = MAX_EV_LOCS;
 /// Locations shown for an atomic trait that matches in several places.
 const ATOMIC_MAX_MATCHES: usize = MAX_EV_LOCS;
-/// Minimum source-line window height per match, richest first. Merging can
-/// grow a window beyond these minima.
-const MIN_HEIGHTS: [u32; MAX_EV_LOCS] = [5, 3, 2, 1, 1, 1, 1, 1];
 /// Max rendered characters for a minified slice (clipped, `…`-elided).
 const LINE_CLIP: usize = 120;
 /// Max raw bytes stored per source line; the renderer clips to terminal width.
@@ -461,9 +457,14 @@ fn capture_source_lines(
     let mut placed: Vec<(u64, u64, f32)> = Vec::new();
     let push = |windows: &mut Vec<Window>, finding: &Finding, off: u64, len: u32, slot: usize| {
         let line = index.line_of(off) as u64;
-        let height = MIN_HEIGHTS[slot.min(MAX_MATCHES - 1)];
-        let before = u64::from((height - 1) / 2);
-        let after = u64::from(height - 1) - before;
+        // Window height keys on criticality (the strongest findings earn the
+        // widest window — `Criticality::context_radius`), then tapers one line
+        // per side for each repeat match of the same trait, richest first, down
+        // to the anchor line alone. Merging can still grow a window past this.
+        let base = 2 * finding.crit.context_radius() + 1;
+        let height = base.saturating_sub(2 * slot as u64).max(1);
+        let before = (height - 1) / 2;
+        let after = (height - 1) - before;
         windows.push(Window {
             lo: line.saturating_sub(before),
             hi: (line + after).min(last),

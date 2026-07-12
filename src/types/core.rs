@@ -116,6 +116,27 @@ impl Criticality {
             Self::Hostile => 5,
         }
     }
+
+    /// Per-side source-line context radius: how many lines above and below a hit
+    /// render around it, so a window is `[hit - radius, hit + radius]`. The
+    /// strongest findings earn the widest window — a hostile hit's verdict most
+    /// depends on the code surrounding it, a baseline's least. This is the single
+    /// source of truth shared by context capture (which reserves this many lines)
+    /// and the LLM/tiny render (which draws them); the two must not drift. A bare
+    /// `Component`/`Exception`/`Filtered` renders as a single line regardless
+    /// (radius 0) — a component a composite drew on instead inherits that
+    /// composite's radius at the call site.
+    #[must_use]
+    pub fn context_radius(self) -> u64 {
+        match self {
+            Self::Hostile => 5,
+            Self::Suspicious => 4,
+            Self::Notable => 3,
+            Self::Component => 2,
+            Self::Baseline => 1,
+            Self::Exception | Self::Filtered => 0,
+        }
+    }
 }
 
 /// Main analysis output structure

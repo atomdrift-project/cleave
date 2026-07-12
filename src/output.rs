@@ -1479,21 +1479,27 @@ fn render_source_context(
     term_width: usize,
     colorize: bool,
 ) {
-    // Symmetric context: `radius` lines on each side of a match, so the window
-    // is `[hit - radius, hit + radius]`. The line after a hit often carries the
+    let minimal = matches!(opts.header, HeaderStyle::Minimal);
+    // Symmetric context: `radius` lines on each side of a match, so the window is
+    // `[hit - radius, hit + radius]`. The line after a hit often carries the
     // continuation (a call's args, an assignment's value) the model needs. The
-    // base radius comes from `context_lines`; suspicious/hostile hits always get
-    // at least 2 lines each side, since the strongest findings most need their
-    // surrounding code to be judged in context.
+    // LLM/tiny view scales the radius by criticality — the strongest findings,
+    // whose verdict most depends on their surrounding code, get the widest window
+    // (hostile ±5 … baseline ±1, via `Criticality::context_radius`); capture
+    // reserves exactly this many lines. The terminal view keeps its tighter,
+    // line-numbered windows (suspicious/hostile ±2, else the base). `context_lines`
+    // acts as a floor either way.
     let base_radius = opts.context_lines.map_or(1, |n| n.saturating_sub(1)) as u64;
     let radius_for = |crit: Criticality| {
-        if crit >= Criticality::Suspicious {
-            base_radius.max(2)
+        let by_crit = if minimal {
+            crit.context_radius()
+        } else if crit >= Criticality::Suspicious {
+            2
         } else {
-            base_radius
-        }
+            0
+        };
+        by_crit.max(base_radius)
     };
-    let minimal = matches!(opts.header, HeaderStyle::Minimal);
 
     // In the LLM/tiny view a component trait stands alone unless a composite used
     // it: a bare component shows a single line (radius 0), while one a composite
@@ -3452,7 +3458,7 @@ mod tests {
 
     #[test]
     fn tiny_composite_matched_component_widens_to_composite_severity() {
-        // A component a hostile composite drew on earns ±2 lines of context — the
+        // A component a hostile composite drew on earns ±5 lines of context — the
         // composite's severity, not the component's, sizes the window.
         let comp = ctx_note("blocks/c::used", Criticality::Component, 10);
         let composite = Finding {
@@ -3468,31 +3474,23 @@ mod tests {
                 finding_with("blocks/c::used", Criticality::Component),
             ],
             vec![
-                ctx_line(7, "FAR_BEFORE = outside_window()", None),
-                ctx_line(8, "EDGE_BEFORE2 = two_above()", None),
-                ctx_line(9, "EDGE_BEFORE1 = one_above()", None),
+                ctx_line(4, "FAR_BEFORE = outside_window()", None),
+                ctx_line(5, "EDGE_BEFORE5 = five_above()", None),
                 ctx_line(10, "COMPONENTLINE = the_block()", Some(comp)),
-                ctx_line(11, "EDGE_AFTER1 = one_below()", None),
-                ctx_line(12, "EDGE_AFTER2 = two_below()", None),
-                ctx_line(13, "FAR_AFTER = outside_window()", None),
+                ctx_line(15, "EDGE_AFTER5 = five_below()", None),
+                ctx_line(16, "FAR_AFTER = outside_window()", None),
             ],
         );
         let output = format_tiny(&report_with_files(vec![file]));
-        for inside in [
-            "EDGE_BEFORE2",
-            "EDGE_BEFORE1",
-            "COMPONENTLINE",
-            "EDGE_AFTER1",
-            "EDGE_AFTER2",
-        ] {
+        for inside in ["EDGE_BEFORE5", "COMPONENTLINE", "EDGE_AFTER5"] {
             assert!(
                 output.contains(inside),
-                "{inside} is within ±2 of the matched component\n{output}"
+                "{inside} is within ±5 of the matched component\n{output}"
             );
         }
         assert!(
             !output.contains("FAR_BEFORE") && !output.contains("FAR_AFTER"),
-            "±3 lines stay outside the hostile-sized window\n{output}"
+            "±6 lines stay outside the hostile-sized window\n{output}"
         );
     }
 

@@ -60,6 +60,16 @@ const EVICTION_CHECK_INTERVAL: u64 = 100;
 const EVICTION_TARGET_NUMERATOR: i64 = 9;
 const EVICTION_TARGET_DENOMINATOR: i64 = 10;
 
+/// Evict entries idle longer than this regardless of the count cap, so nothing
+/// lingers indefinitely. Keyed on `last_accessed`, so a still-used entry is
+/// never dropped for age alone. 30 days.
+const MAX_IDLE_SECS: i64 = 30 * 24 * 60 * 60;
+
+/// Disk ceiling for the cache DB. Over this, a background `VACUUM` returns the
+/// pages that eviction freed to the OS. The count caps keep the DB well under
+/// this in practice; this is the hard backstop. 2 GiB.
+const MAX_DB_BYTES: i64 = 2 * 1024 * 1024 * 1024;
+
 /// Global store counter for report cache eviction scheduling, shared across all threads.
 static REPORT_STORE_COUNT: AtomicU64 = AtomicU64::new(0);
 
@@ -243,6 +253,37 @@ fn spawn_eviction(guard: &'static AtomicBool, evict: fn(&Connection)) {
     }
 }
 
+/// Delete entries in `table` not accessed within [`MAX_IDLE_SECS`] (the 30-day
+/// TTL). Best-effort; `table` is a trusted literal from this module, never user
+/// input, so the interpolation is safe.
+fn evict_idle(conn: &Connection, table: &str) {
+    let cutoff = unix_timestamp() - MAX_IDLE_SECS;
+    if let Ok(n) = conn.execute(
+        &format!("DELETE FROM {table} WHERE last_accessed < ?1"),
+        rusqlite::params![cutoff],
+    ) && n > 0
+    {
+        tracing::info!(deleted = n, table, "Evicted cache entries past 30d TTL");
+    }
+}
+
+/// If the cache DB has grown past [`MAX_DB_BYTES`] on disk, `VACUUM` to reclaim
+/// the pages eviction freed. Best-effort — `VACUUM` needs a brief exclusive lock
+/// and simply no-ops if it can't take it.
+fn enforce_db_size(conn: &Connection) {
+    let page_count: i64 = conn
+        .query_row("PRAGMA page_count", [], |r| r.get(0))
+        .unwrap_or(0);
+    let page_size: i64 = conn
+        .query_row("PRAGMA page_size", [], |r| r.get(0))
+        .unwrap_or(0);
+    if page_count.saturating_mul(page_size) > MAX_DB_BYTES
+        && let Err(e) = conn.execute_batch("VACUUM")
+    {
+        tracing::debug!("cache VACUUM skipped: {e}");
+    }
+}
+
 /// Sample the eviction point 1-in-`EVICTION_CHECK_INTERVAL` stores; when it
 /// fires, evict the report cache on a background thread. The global counter
 /// distributes the sampling across threads without duplication.
@@ -257,6 +298,8 @@ fn maybe_evict_report_cache() {
 /// `MAX_REPORT_ENTRIES`, down to 90% of the cap so the cache doesn't
 /// re-trigger eviction immediately. Runs on a background thread.
 fn evict_report_cache(conn: &Connection) {
+    evict_idle(conn, "toplevel_report_cache");
+
     let total: i64 = conn
         .query_row("SELECT COUNT(*) FROM toplevel_report_cache", [], |row| {
             row.get(0)
@@ -278,6 +321,8 @@ fn evict_report_cache(conn: &Connection) {
             );
         }
     }
+
+    enforce_db_size(conn);
 }
 
 /// Compute a short deterministic hash of the result-affecting analysis options.
@@ -492,6 +537,8 @@ fn maybe_evict_file_analysis_cache() {
 /// `MAX_FILE_ANALYSIS_ENTRIES`, down to 90% of the cap. Runs on a
 /// background thread.
 fn evict_file_analysis_cache(conn: &Connection) {
+    evict_idle(conn, "file_analysis_cache");
+
     let total: i64 = conn
         .query_row("SELECT COUNT(*) FROM file_analysis_cache", [], |row| {
             row.get(0)
@@ -514,6 +561,8 @@ fn evict_file_analysis_cache(conn: &Connection) {
             );
         }
     }
+
+    enforce_db_size(conn);
 }
 
 #[cfg(test)]
@@ -581,6 +630,35 @@ mod tests {
             sha256.to_string(),
             512,
         )
+    }
+
+    #[test]
+    fn evict_idle_drops_only_entries_past_ttl() {
+        let conn = test_conn();
+        let now = unix_timestamp();
+        // One entry last accessed just past the 30-day TTL, one accessed now.
+        conn.execute(
+            "INSERT INTO toplevel_report_cache
+             (sha256, options_hash, traits_timestamp, report, created_at, last_accessed)
+             VALUES ('stale', 'h', 0, x'00', 0, ?1), ('fresh', 'h', 0, x'00', 0, ?2)",
+            rusqlite::params![now - MAX_IDLE_SECS - 1, now],
+        )
+        .expect("insert");
+
+        evict_idle(&conn, "toplevel_report_cache");
+
+        let remaining: Vec<String> = conn
+            .prepare("SELECT sha256 FROM toplevel_report_cache")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            remaining,
+            vec!["fresh".to_string()],
+            "the entry idle past 30d is evicted; the fresh one is kept"
+        );
     }
 
     #[test]

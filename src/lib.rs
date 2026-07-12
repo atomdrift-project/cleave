@@ -228,10 +228,7 @@ fn should_skip_unknown_encoded_payload_for_text(
         return !looks_like_actionable_source_payload_preview(&payload.preview);
     }
 
-    let is_noisy_text_encoding = payload.encoding_chain == ["url"]
-        && !looks_like_actionable_payload_preview(&payload.preview);
-
-    is_noisy_text_encoding
+    payload.encoding_chain == ["url"] && !looks_like_actionable_payload_preview(&payload.preview)
 }
 
 fn should_skip_unknown_svg_path_xor_base64_payload(

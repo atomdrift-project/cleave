@@ -25,15 +25,6 @@ const ATOMIC_MAX_MATCHES: usize = MAX_EV_LOCS;
 const LINE_CLIP: usize = 120;
 /// Max raw bytes stored per source line; the renderer clips to terminal width.
 const LINE_STORE_MAX: usize = 1024;
-/// Raw bytes captured before a binary match — enough to serve the LLM view's
-/// full clip (`output::ASCII_CONTEXT`); the terminal view renders only
-/// match-bearing rows out of it, so the wider capture costs it nothing.
-const HEX_CONTEXT_BEFORE: u64 = 96;
-/// Raw bytes captured after a binary match. Wider than the lead-in (half an
-/// ASCII row extra) so a match near the window's end still has a full row of
-/// trailing bytes: the renderer then keeps note-bearing rows full and clips the
-/// leftover note-less tail, rather than emitting a ragged stub.
-const HEX_CONTEXT_AFTER: u64 = 128;
 
 /// Half-width (bytes) of a minified one-liner slice; the rendered slice is then
 /// clipped to [`LINE_CLIP`] characters, so this just needs to exceed it.
@@ -62,11 +53,7 @@ pub(crate) fn capture(report: &mut AnalysisReport, data: &[u8], file_type: FileT
     // notable fired, and a trait without captured context would render as
     // nothing there. Baselines were always captured; this aligns components.
     let by_id = index_by_id(&report.findings);
-    let shown: Vec<&Finding> = report
-        .findings
-        .iter()
-        .filter(|f| should_show(f))
-        .collect();
+    let shown: Vec<&Finding> = report.findings.iter().filter(|f| should_show(f)).collect();
     if shown.is_empty() {
         return;
     }
@@ -441,6 +428,22 @@ impl<'a> LineIndex<'a> {
     }
 }
 
+/// Strongest composite criticality referencing each leg id. An atomic trait a
+/// stronger composite drew on is sized — in both the line and byte context modes
+/// — by that composite's severity rather than its own lower one, so the evidence
+/// behind a hostile conclusion renders with the conclusion's context.
+fn referring_crit<'a>(shown: &[&'a Finding]) -> FxHashMap<&'a str, Criticality> {
+    let mut m: FxHashMap<&'a str, Criticality> = FxHashMap::default();
+    for f in shown.iter().filter(|f| !f.trait_refs.is_empty()) {
+        for r in &f.trait_refs {
+            m.entry(r.as_str())
+                .and_modify(|c| *c = (*c).max(f.crit))
+                .or_insert(f.crit);
+        }
+    }
+    m
+}
+
 fn capture_source_lines(
     shown: &[&Finding],
     by_id: &FxHashMap<&str, &Finding>,
@@ -455,13 +458,20 @@ fn capture_source_lines(
     // later composite is placed only where no *stronger* match already sits —
     // mirrors the binary path (`capture_byte_units`) and the per-line dedup.
     let mut placed: Vec<(u64, u64, f32)> = Vec::new();
-    let push = |windows: &mut Vec<Window>, finding: &Finding, off: u64, len: u32, slot: usize| {
+    let push = |windows: &mut Vec<Window>,
+                finding: &Finding,
+                crit: Criticality,
+                off: u64,
+                len: u32,
+                slot: usize| {
         let line = index.line_of(off) as u64;
         // Window height keys on criticality (the strongest findings earn the
         // widest window — `Criticality::context_radius`), then tapers one line
         // per side for each repeat match of the same trait, richest first, down
-        // to the anchor line alone. Merging can still grow a window past this.
-        let base = 2 * finding.crit.context_radius() + 1;
+        // to the anchor line alone. `crit` may exceed the finding's own severity:
+        // an atomic leg inherits a stronger composite's (see `leg_crit`). Merging
+        // can still grow a window past this.
+        let base = 2 * crit.context_radius() + 1;
         let height = base.saturating_sub(2 * slot as u64).max(1);
         let before = (height - 1) / 2;
         let after = (height - 1) - before;
@@ -473,11 +483,21 @@ fn capture_source_lines(
         });
     };
 
-    // Atomic findings anchor at their own offsets (the fixed scaffolding).
+    // An atomic leg a stronger composite drew on reserves that composite's wider
+    // window, so its evidence renders with the conclusion's severity rather than
+    // its own lower one; the render (`radius_of` in output.rs) mirrors this so the
+    // reserved lines actually show.
+    let leg_crit = referring_crit(shown);
+
+    // Atomic findings anchor at their own offsets (the fixed scaffolding). A leg a
+    // stronger composite drew on is sized by that composite's severity.
     for finding in shown.iter().filter(|f| f.trait_refs.is_empty()) {
         let score = finding_score(finding);
+        let crit = leg_crit
+            .get(finding.id.as_str())
+            .map_or(finding.crit, |&c| c.max(finding.crit));
         for (slot, (off, len)) in finding_anchors(finding, by_id).into_iter().enumerate() {
-            push(&mut windows, finding, off, len, slot);
+            push(&mut windows, finding, crit, off, len, slot);
             let (s, e) = span(off, len);
             placed.push((s, e, score));
         }
@@ -507,7 +527,7 @@ fn capture_source_lines(
                     .any(|&(ps, pe, pscore)| pscore >= score && ps < e && s < pe)
             });
         if let Some((off, len, _)) = leg {
-            push(&mut windows, finding, off, len, 0);
+            push(&mut windows, finding, finding.crit, off, len, 0);
             let (s, e) = span(off, len);
             placed.push((s, e, score));
         }
@@ -545,14 +565,15 @@ fn capture_byte_slices(
     let total = data.len() as u64;
 
     // `[off, off+len)` widened to the render's context margin, plus the match
-    // anchor `at`.
-    let bounds = |off: u64, len: u32| match render {
+    // anchor `at`. In hex mode the margin keys on criticality (asymmetric — more
+    // trailing than leading, since a payload runs forward from the match), so the
+    // strongest matches reserve the widest window; overlapping windows merge into
+    // one segment, which `render_hex_segment` emits as a single raw-byte unit.
+    let bounds = |crit: Criticality, off: u64, len: u32| match render {
         Render::Hex => {
-            // A row of lead-in and two rows of trailing context; overlapping
-            // windows merge into one segment, which `render_hex_segment` emits as
-            // a single raw-byte unit.
-            let lo = off.saturating_sub(HEX_CONTEXT_BEFORE);
-            let hi = (off + u64::from(len) + HEX_CONTEXT_AFTER).min(total);
+            let (before, after) = crit.hex_context();
+            let lo = off.saturating_sub(before);
+            let hi = (off + u64::from(len) + after).min(total);
             (lo, hi, off)
         }
         Render::Text => (
@@ -562,17 +583,25 @@ fn capture_byte_slices(
         ),
     };
 
+    // An atomic leg a stronger composite drew on reserves that composite's wider
+    // window (the byte analogue of the line path); the render clips to match.
+    let leg_crit = referring_crit(shown);
+
     let mut windows: Vec<Window> = Vec::new();
     // Match span `[start, end)` of every placed note, with its strength. A later
     // composite is placed only where no *stronger* match already sits.
     let mut placed: Vec<(u64, u64, f32)> = Vec::new();
     let span = |off: u64, len: u32| (off, off + u64::from(len.max(1)));
 
-    // Atomic findings anchor at their own offsets (the fixed scaffolding).
+    // Atomic findings anchor at their own offsets (the fixed scaffolding). A leg a
+    // stronger composite drew on is sized by that composite's severity.
     for finding in shown.iter().filter(|f| f.trait_refs.is_empty()) {
         let score = finding_score(finding);
+        let crit = leg_crit
+            .get(finding.id.as_str())
+            .map_or(finding.crit, |&c| c.max(finding.crit));
         for (off, len) in finding_anchors(finding, by_id) {
-            let (lo, hi, at) = bounds(off, len);
+            let (lo, hi, at) = bounds(crit, off, len);
             windows.push(Window {
                 lo,
                 hi,
@@ -609,7 +638,7 @@ fn capture_byte_slices(
                     .any(|&(ps, pe, pscore)| pscore >= score && ps < e && s < pe)
             });
         if let Some((off, len, _)) = leg {
-            let (lo, hi, at) = bounds(off, len);
+            let (lo, hi, at) = bounds(finding.crit, off, len);
             windows.push(Window {
                 lo,
                 hi,
@@ -836,6 +865,7 @@ fn clip(text: &str, col: Option<usize>, max: usize) -> String {
 }
 
 #[cfg(test)]
+#[allow(clippy::panic)]
 mod tests {
     use super::*;
     use crate::types::{Evidence, FindingKind, TargetInfo};
@@ -1033,6 +1063,52 @@ mod tests {
     }
 
     #[test]
+    fn atomic_leg_reserves_stronger_composites_window() {
+        // A notable atomic leg (its own radius is ±3) that a hostile composite drew
+        // on reserves the hostile ±5 window at its own location — so the render has
+        // the wider context to show. The composite's stronger leg sits far away
+        // (line 25), where it anchors, so the widening at line 7 can only come from
+        // the leg inheriting the composite's severity, not the composite's own
+        // window landing nearby.
+        let data: Vec<u8> = (1..=30)
+            .flat_map(|n| format!("L{n:02}\n").into_bytes())
+            .collect();
+        // Fixed-width `LNN\n` rows (4 bytes): line N (1-based) starts at (N-1)*4.
+        let near = finding("cap/near", Criticality::Notable, &[24]); // line 7
+        let mut far = finding("cap/far", Criticality::Notable, &[96]); // line 25
+        far.conf = 0.95; // the composite's most-confident leg — it anchors here
+        let mut composite = finding("obj/implant", Criticality::Hostile, &[]);
+        composite.trait_refs = vec!["cap/near".to_string(), "cap/far".to_string()];
+
+        let mut r = report(vec![near, far, composite]);
+        capture(&mut r, &data, FileType::Python);
+
+        // The near leg renders its own note at line 7 (the composite anchored at 25).
+        assert!(
+            line(&r.context, 7).is_some_and(|c| c.notes.iter().any(|n| n.id == "cap/near")),
+            "near leg renders at line 7: {:?}",
+            r.context
+        );
+        // Line 7 ±5 (the inherited hostile window) is reserved — the ±3 notable
+        // window alone (lines 4..=10) would omit lines 2 and 12.
+        assert!(
+            line(&r.context, 2).is_some(),
+            "±5 lead-in reserved: {:?}",
+            r.context
+        );
+        assert!(
+            line(&r.context, 12).is_some(),
+            "±5 trailing reserved: {:?}",
+            r.context
+        );
+        assert!(
+            line(&r.context, 1).is_none(),
+            "±6 stays outside: {:?}",
+            r.context
+        );
+    }
+
+    #[test]
     fn overlapping_traits_keep_highest_conf_times_level() {
         let data = b"exec(payload)\n"; // both match at offset 0
         let mut hi = finding("a/strong", Criticality::Hostile, &[0]);
@@ -1094,5 +1170,88 @@ mod tests {
         // match (the renderer wraps it into rows at display time).
         let hit = r.context.iter().find(|c| !c.notes.is_empty());
         assert!(matches!(hit, Some(c) if c.addr.is_none() && c.data.contains(&16u8)));
+    }
+
+    #[test]
+    fn binary_window_scales_with_criticality() {
+        // A hostile binary match reserves a far wider byte window than a component
+        // one — `Criticality::hex_context` (128/256 vs 32/64). The two matches sit
+        // far apart so their windows stay separate.
+        let data = vec![0u8; 1024];
+        let hostile = finding("mal/exec", Criticality::Hostile, &[500]);
+        let component = finding("cap/str", Criticality::Component, &[100]);
+        let mut r = report(vec![hostile, component]);
+        capture(&mut r, &data, FileType::Elf);
+
+        let block = |id: &str| {
+            r.context
+                .iter()
+                .find(|c| c.notes.iter().any(|n| n.id == id))
+                .unwrap_or_else(|| panic!("no block for {id}: {:?}", r.context))
+        };
+        // Lead-in (`before`) scales with severity: hostile 128, component 32.
+        assert_eq!(block("mal/exec").loc, 500 - 128);
+        assert_eq!(block("cap/str").loc, 100 - 32);
+        // Total window (before + after) scales too: (128+256) − (32+64) = 288 bytes,
+        // independent of the match length (which is equal for both).
+        let delta = block("mal/exec").data.len() as i64 - block("cap/str").data.len() as i64;
+        assert_eq!(
+            delta,
+            (128 + 256) - (32 + 64),
+            "window size scales with criticality: {:?}",
+            r.context
+        );
+    }
+
+    #[test]
+    fn binary_overlapping_traits_keep_strongest() {
+        // Two traits matching the same bytes collapse to the strongest
+        // (`conf × crit`) — the line path's dedup, here in hex mode.
+        let data = vec![0u8; 512];
+        let strong = finding("mal/exec", Criticality::Hostile, &[100]);
+        let weak = finding("cap/str", Criticality::Notable, &[100]);
+        let mut r = report(vec![strong, weak]);
+        capture(&mut r, &data, FileType::Elf);
+
+        let ids: Vec<&str> = r
+            .context
+            .iter()
+            .flat_map(|c| &c.notes)
+            .map(|n| n.id.as_str())
+            .collect();
+        assert!(ids.contains(&"mal/exec"), "strongest kept: {:?}", r.context);
+        assert!(
+            !ids.contains(&"cap/str"),
+            "weaker overlapping trait dropped: {:?}",
+            r.context
+        );
+    }
+
+    #[test]
+    fn binary_atomic_leg_reserves_stronger_composites_window() {
+        // The byte analogue of `atomic_leg_reserves_stronger_composites_window`: a
+        // notable atomic leg a hostile composite drew on reserves the hostile byte
+        // window (lead-in 128, not notable's 64). The composite anchors at its
+        // stronger far leg (offset 100), so the widening at offset 800 is the leg's
+        // own inherited severity.
+        let data = vec![0u8; 2048];
+        let near = finding("cap/near", Criticality::Notable, &[800]);
+        let mut far = finding("cap/far", Criticality::Notable, &[100]);
+        far.conf = 0.95; // the composite's most-confident leg — it anchors here
+        let mut composite = finding("obj/implant", Criticality::Hostile, &[]);
+        composite.trait_refs = vec!["cap/near".to_string(), "cap/far".to_string()];
+        let mut r = report(vec![near, far, composite]);
+        capture(&mut r, &data, FileType::Elf);
+
+        let near_block = r
+            .context
+            .iter()
+            .find(|c| c.notes.iter().any(|n| n.id == "cap/near"));
+        assert_eq!(
+            near_block.map(|c| c.loc),
+            Some(800 - 128),
+            "near leg inherits the hostile 128-byte lead-in: {:?}",
+            r.context
+        );
     }
 }

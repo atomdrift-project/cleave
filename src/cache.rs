@@ -22,6 +22,7 @@
 //! entries) is maintained at startup via `maintain_filefacts_cache`.
 
 use anyhow::{Context, Result};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -745,46 +746,70 @@ pub fn cleanup_old_caches(current_cache: &Path) -> Result<()> {
         }
     }
 
-    // Prune superseded capability-mapper caches. Only the newest is ever loaded,
-    // but stale crate-version and trait-mtime variants (each a multi-MB
-    // serialized mapper) accumulate forever otherwise — the one gap with no
-    // existing cleanup. Keep the most recent by mtime, drop the rest, bounding
-    // this cache to a single file.
-    prune_all_but_newest(&cache_dir, "capability-mapper-");
+    // Prune superseded capability-mapper caches (stale crate-version and
+    // trait-mtime variants accumulate otherwise — each a multi-MB file, the one
+    // gap with no existing cleanup).
+    prune_superseded_mappers(&cache_dir);
 
     Ok(())
 }
 
-/// In `dir`, keep only the newest file whose name starts with `prefix` and
-/// delete the others. Best-effort: unreadable entries and failed removals are
-/// ignored, never surfaced as an error.
-fn prune_all_but_newest(dir: &Path, prefix: &str) {
+/// Prune superseded capability-mapper caches. Each traits-dir (plus crate
+/// version) has its own mapper *family* — files sharing the
+/// `capability-mapper-v7-{version}-{dir_tag}` prefix and differing only in the
+/// trailing `-{timestamp}-{fingerprint}`. Only the newest of a family is ever
+/// loaded, so keep that one and delete the older members. Pruning is strictly
+/// *within* a family: a valid current mapper belonging to a different
+/// `--traits-dir` is left untouched, preserving the `dir_tag` isolation the
+/// cache key builds in. Best-effort.
+fn prune_superseded_mappers(dir: &Path) {
+    use std::collections::hash_map::Entry;
+
     let Ok(read_dir) = fs::read_dir(dir) else {
         return;
     };
-    let mut matches: Vec<(PathBuf, SystemTime)> = read_dir
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| {
-            p.file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with(prefix))
-        })
-        .map(|p| {
-            let mtime = fs::metadata(&p)
-                .and_then(|m| m.modified())
-                .unwrap_or(SystemTime::UNIX_EPOCH);
-            (p, mtime)
-        })
-        .collect();
-    if matches.len() <= 1 {
-        return;
+    let mut newest: HashMap<String, (PathBuf, SystemTime)> = HashMap::new();
+    let mut superseded: Vec<PathBuf> = Vec::new();
+    for entry in read_dir.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if !name.starts_with("capability-mapper-") {
+            continue;
+        }
+        let family = mapper_family(name).to_string();
+        let mtime = fs::metadata(&path)
+            .and_then(|m| m.modified())
+            .unwrap_or(SystemTime::UNIX_EPOCH);
+        match newest.entry(family) {
+            Entry::Occupied(mut slot) => {
+                if mtime > slot.get().1 {
+                    // Newer member: retire the previous newest of this family.
+                    let (old_path, _) = slot.insert((path, mtime));
+                    superseded.push(old_path);
+                } else {
+                    superseded.push(path);
+                }
+            }
+            Entry::Vacant(slot) => {
+                slot.insert((path, mtime));
+            }
+        }
     }
-    // Retire everything but the single newest entry.
-    matches.sort_by_key(|(_, mtime)| *mtime);
-    for (path, _) in &matches[..matches.len() - 1] {
+    for path in superseded {
         let _ = fs::remove_file(path);
     }
+}
+
+/// The mapper *family* for a filename: everything before the trailing
+/// `-{timestamp}-{fingerprint}.bin`, i.e. the
+/// `capability-mapper-v7-{version}-{dir_tag}` prefix a given traits-dir's mappers
+/// share. Timestamp and fingerprint carry no `-`, so the family is the name with
+/// its last two dash-separated fields stripped.
+fn mapper_family(name: &str) -> &str {
+    let stem = name.strip_suffix(".bin").unwrap_or(name);
+    stem.rsplitn(3, '-').nth(2).unwrap_or(stem)
 }
 
 #[cfg(test)]
@@ -892,35 +917,51 @@ mod tests {
     }
 
     #[test]
-    fn prune_all_but_newest_keeps_only_the_newest() {
+    fn mapper_family_strips_timestamp_and_fingerprint() {
+        assert_eq!(
+            mapper_family("capability-mapper-v7-2.3.0-aaaaaaaa-100-000000000000000a.bin"),
+            "capability-mapper-v7-2.3.0-aaaaaaaa"
+        );
+        // A pre-release version keeps its internal dash inside the family.
+        assert_eq!(
+            mapper_family("capability-mapper-v7-2.3.0-rc1-bbbbbbbb-200-000000000000000b.bin"),
+            "capability-mapper-v7-2.3.0-rc1-bbbbbbbb"
+        );
+    }
+
+    #[test]
+    fn prune_superseded_mappers_keeps_newest_per_family() {
         let dir = std::env::temp_dir().join(format!("cleave-mapper-prune-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
 
-        // Three superseded mapper caches at distinct mtimes, plus an unrelated
-        // file that must survive the prune.
-        for (name, hours_old) in [
-            ("capability-mapper-old.bin", 3u64),
-            ("capability-mapper-mid.bin", 2),
-            ("capability-mapper-new.bin", 1),
-        ] {
+        // Family A (dir_tag aaaaaaaa): an old and a new version. Family B
+        // (dir_tag bbbbbbbb): a single, still-valid mapper for another
+        // traits-dir — it must survive even though it is older than A's newest.
+        let a_old = "capability-mapper-v7-2.3.0-aaaaaaaa-100-000000000000000a.bin";
+        let a_new = "capability-mapper-v7-2.3.0-aaaaaaaa-300-000000000000000b.bin";
+        let b_one = "capability-mapper-v7-2.3.0-bbbbbbbb-200-000000000000000c.bin";
+        for (name, hours_old) in [(a_old, 3u64), (b_one, 2), (a_new, 1)] {
             let f = fs::File::create(dir.join(name)).unwrap();
             f.set_modified(SystemTime::now() - Duration::from_secs(hours_old * 3600))
                 .unwrap();
         }
         fs::write(dir.join("yara-rules-v4-x-builtin"), b"keep").unwrap();
 
-        prune_all_but_newest(&dir, "capability-mapper-");
+        prune_superseded_mappers(&dir);
 
-        assert!(!dir.join("capability-mapper-old.bin").exists());
-        assert!(!dir.join("capability-mapper-mid.bin").exists());
         assert!(
-            dir.join("capability-mapper-new.bin").exists(),
-            "the newest mapper cache is retained"
+            !dir.join(a_old).exists(),
+            "superseded family-A version pruned"
+        );
+        assert!(dir.join(a_new).exists(), "current family-A mapper retained");
+        assert!(
+            dir.join(b_one).exists(),
+            "another traits-dir's mapper is never pruned across families"
         );
         assert!(
             dir.join("yara-rules-v4-x-builtin").exists(),
-            "non-matching files are untouched"
+            "non-mapper files are untouched"
         );
 
         let _ = fs::remove_dir_all(&dir);

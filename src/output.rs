@@ -1265,6 +1265,7 @@ fn trust_text(id: &filefacts::Identity, colorize: bool) -> String {
         Trust::CaSigned => "ca-signed",
         Trust::SelfSigned => "self-signed",
         Trust::AdHoc => "ad-hoc",
+        Trust::Unverified => "signed-unverified",
         Trust::Unsigned => "unsigned",
         _ => "unknown",
     };

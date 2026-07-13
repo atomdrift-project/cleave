@@ -1083,7 +1083,9 @@ impl PackageJsonAnalyzer {
             }
 
             // Check for typosquatting of popular packages
-            if let Some(original) = self.check_typosquat(name) {
+            if let Some(original) = self.check_typosquat(name)
+                && Self::npm_alias_target(version) != Some(original)
+            {
                 report.add_finding(
                     Finding::indicator(
                         "supply-chain/typosquat".to_string(),
@@ -1514,6 +1516,20 @@ impl PackageJsonAnalyzer {
         None
     }
 
+    fn npm_alias_target(version: &str) -> Option<&str> {
+        let alias = version.strip_prefix("npm:")?;
+        if alias.starts_with('@') {
+            let package_end = alias.find('/')? + 1;
+            let version_start = alias[package_end..]
+                .find('@')
+                .map(|offset| package_end + offset)
+                .unwrap_or(alias.len());
+            Some(&alias[..version_start])
+        } else {
+            Some(alias.split_once('@').map_or(alias, |(name, _)| name))
+        }
+    }
+
     fn extract_urls(&self, text: &str) -> Vec<String> {
         fn url_pattern() -> Option<&'static regex::Regex> {
             static RE: OnceLock<Option<regex::Regex>> = OnceLock::new();
@@ -1718,6 +1734,29 @@ mod tests {
         assert!(analyzer.check_typosquat("axio").is_some());
         assert!(analyzer.check_typosquat("reac").is_some());
         assert!(analyzer.check_typosquat("lodash").is_none()); // Legitimate
+    }
+
+    #[test]
+    fn test_npm_alias_to_typosquat_target_is_not_flagged() {
+        let content = r#"{
+            "name": "legacy-typescript-consumer",
+            "version": "1.0.0",
+            "devDependencies": {
+                "typescript3": "npm:typescript@^3.1.6"
+            }
+        }"#;
+
+        let analyzer = PackageJsonAnalyzer::new();
+        let report = analyzer
+            .analyze_package(Path::new("package.json"), content)
+            .unwrap();
+
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|finding| finding.id == "supply-chain/typosquat")
+        );
     }
 
     #[test]

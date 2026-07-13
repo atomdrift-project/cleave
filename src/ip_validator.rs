@@ -65,7 +65,7 @@ fn ip_pattern() -> Option<&'static regex::Regex> {
 /// - Multicast (224.0.0.0/4)
 /// - Reserved (240.0.0.0/4)
 /// - Documentation ranges (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24)
-/// - Version-like (first octet 0-3, or a `.1.1` suffix)
+/// - Version-like (first three octets all single-digit, or a `.1.1` suffix)
 /// - IPs with any zero octet (technically sometimes routable, but noisy in static binary data)
 ///
 /// The version-like rejections are heuristics for *bare* dotted-decimal text
@@ -86,12 +86,13 @@ pub(crate) fn is_external_ip(ip: &Ipv4Addr) -> bool {
 /// When `url_scheme_anchored` is true, the IPv4 literal was found immediately
 /// after a `://` URL scheme (e.g. `http://2.27.62.51/`), which makes it a host
 /// address, not a dotted version string. In that case the version-string
-/// heuristics (first octet ≤ 3, and the `.1.1` "looks like a version" suffix)
-/// are skipped. Every genuinely non-routable range (private, loopback,
-/// link-local, multicast, reserved, documentation, and any zero octet) is still
-/// rejected regardless of context. This recovers real C2 hosts in the routable
-/// 1/2/3.0.0.0/8 blocks (e.g. RIPE `2.0.0.0/8`) without reintroducing bare
-/// version-string false positives.
+/// heuristics (first three octets all single-digit, and the `.1.1` "looks like a
+/// version" suffix) are skipped. Every genuinely non-routable range (private,
+/// loopback, link-local, multicast, reserved, documentation, and any zero octet)
+/// is still rejected regardless of context. A bare host with a two- or
+/// three-digit octet in its first three (`3.147.61.167`, `2.27.62.51`) is now
+/// accepted; only all-single-digit quads (`1.2.3.4`, `8.8.8.8`) need a URL to be
+/// recovered, since bare they are indistinguishable from version strings.
 #[must_use]
 fn is_external_ip_ctx(ip: &Ipv4Addr, url_scheme_anchored: bool) -> bool {
     let octets = ip.octets();
@@ -155,9 +156,13 @@ fn is_external_ip_ctx(ip: &Ipv4Addr, url_scheme_anchored: bool) -> bool {
     // version than a host, but a URL-scheme-anchored address never is — so
     // these are skipped when `url_scheme_anchored`.
     if !url_scheme_anchored {
-        // Reject IPs that look like version strings (low first octet often
-        // indicates misinterpreted data, e.g., 1.2.3.4 could be version "1.2.3.4")
-        if octets[0] <= 3 {
+        // Reject dotted decimals whose first three octets are all single-digit —
+        // `1.2.3.4`, `2.3.4.5`, `8.8.8.8` read as version strings in bare text. A
+        // genuine host almost always carries a two- or three-digit octet in the
+        // first three (`3.147.61.167`, `2.27.62.51`), so this keeps real routable
+        // ranges (incl. AWS 3.0.0.0/8) while dropping the version noise. A
+        // `://`-anchored literal is a host regardless and skips this entirely.
+        if octets[0] < 10 && octets[1] < 10 && octets[2] < 10 {
             return false;
         }
 
@@ -421,28 +426,25 @@ mod tests {
 
     #[test]
     fn test_external_ip_public() {
-        // Public IPs should be external
-        assert!(is_external_ip(&Ipv4Addr::new(8, 8, 8, 8)));
+        // Public IPs with a multi-digit octet in the first three are external.
         assert!(is_external_ip(&Ipv4Addr::new(45, 33, 32, 156)));
         assert!(is_external_ip(&Ipv4Addr::new(104, 16, 132, 229)));
     }
 
     #[test]
     fn test_external_ip_common_dns_servers() {
-        // Common public DNS servers should be detected as external
-        // Google DNS - most commonly seen in malware C2
-        assert!(is_external_ip(&Ipv4Addr::new(8, 8, 8, 8)));
-        assert!(is_external_ip(&Ipv4Addr::new(8, 8, 4, 4)));
-        // Quad9 DNS
-        assert!(is_external_ip(&Ipv4Addr::new(9, 9, 9, 9)));
-        // OpenDNS
+        // OpenDNS (208.67.x) has multi-digit octets, so it is external even bare.
         assert!(is_external_ip(&Ipv4Addr::new(208, 67, 222, 222)));
         assert!(is_external_ip(&Ipv4Addr::new(208, 67, 220, 220)));
 
-        // Note: Cloudflare DNS (1.1.1.1, 1.0.0.1) is rejected because first octet <= 3
-        // filters version-like strings. This is an acceptable trade-off since:
-        // 1. Version strings like "1.2.3.4" are very common false positives
-        // 2. Google DNS (8.8.8.8) is far more commonly seen in malware
+        // Google (8.8.8.8/8.8.4.4), Quad9 (9.9.9.9) and Cloudflare (1.1.1.1) have
+        // all-single-digit first-three octets, so bare they read as version
+        // strings and are rejected. A `://`-anchored form is still recovered
+        // (see test_external_ip_url_scheme_context), and these DNS resolvers are
+        // weak C2 indicators anyway.
+        assert!(!is_external_ip(&Ipv4Addr::new(8, 8, 8, 8)));
+        assert!(!is_external_ip(&Ipv4Addr::new(8, 8, 4, 4)));
+        assert!(!is_external_ip(&Ipv4Addr::new(9, 9, 9, 9)));
         assert!(!is_external_ip(&Ipv4Addr::new(1, 1, 1, 1)));
         assert!(!is_external_ip(&Ipv4Addr::new(1, 0, 0, 1)));
     }
@@ -502,35 +504,42 @@ mod tests {
 
     #[test]
     fn test_external_ip_version_like_rejected() {
-        // Low first octet (version-like) should be rejected
+        // All-single-digit first-three octets read as version strings in bare text.
         assert!(!is_external_ip(&Ipv4Addr::new(1, 2, 3, 4)));
+        assert!(!is_external_ip(&Ipv4Addr::new(2, 3, 4, 5)));
+        // 2.0.0.1 is rejected for its zero octets.
         assert!(!is_external_ip(&Ipv4Addr::new(2, 0, 0, 1)));
-        assert!(!is_external_ip(&Ipv4Addr::new(3, 14, 159, 26)));
+        // A two- or three-digit octet in the first three marks a real host,
+        // accepted even bare (AWS 3.0.0.0/8, RIPE 2.0.0.0/8).
+        assert!(is_external_ip(&Ipv4Addr::new(3, 147, 61, 167)));
+        assert!(is_external_ip(&Ipv4Addr::new(3, 14, 159, 26)));
+        assert!(is_external_ip(&Ipv4Addr::new(2, 27, 62, 51)));
     }
 
     #[test]
     fn test_external_ip_url_scheme_context() {
-        // Routable low-first-octet hosts (1/2/3.0.0.0/8) are version-noise in
-        // bare text but are real hosts when anchored to a URL scheme.
+        // All-single-digit quads are version-noise in bare text but real hosts
+        // when anchored to a URL scheme.
         // Bare/strict path keeps rejecting them:
-        assert!(!is_external_ip(&Ipv4Addr::new(2, 27, 62, 51)));
+        assert!(!is_external_ip(&Ipv4Addr::new(2, 3, 4, 5)));
         assert!(!is_external_ip(&Ipv4Addr::new(1, 1, 1, 1)));
         // URL-anchored context accepts the routable address:
-        assert!(is_external_ip_ctx(&Ipv4Addr::new(2, 27, 62, 51), true));
+        assert!(is_external_ip_ctx(&Ipv4Addr::new(2, 3, 4, 5), true));
         assert!(is_external_ip_ctx(&Ipv4Addr::new(1, 1, 1, 1), true));
         assert!(is_external_ip_ctx(&Ipv4Addr::new(7, 18, 1, 1), true)); // .1.1 suffix
 
-        // Regression: the base58-core clipper's C2 endpoint. Its IPv4 host lives
-        // in RIPE's routable 2.0.0.0/8 and MUST be recognized in a URL.
+        // Regression: the base58-core clipper's C2 endpoint (RIPE 2.0.0.0/8). Its
+        // 27/62 octets make it a real host even bare, and of course in a URL.
         assert!(contains_external_ip("http://2.27.62.51:8080/api/health"));
         assert!(contains_external_ip("http://2.27.62.51/api"));
+        assert!(contains_external_ip("2.27.62.51"));
         assert!(contains_external_ip("socks5://3.14.159.26:1080"));
         assert!(contains_external_ip("https://1.1.1.1/"));
 
-        // Bare (non-URL) low-octet dotted decimals stay treated as versions.
-        assert!(!contains_external_ip("2.27.62.51"));
-        assert!(!contains_external_ip("version 2.27.62.51 released"));
+        // Bare all-single-digit dotted decimals stay treated as versions.
+        assert!(!contains_external_ip("version 1.2.3.4 released"));
         assert!(!contains_external_ip("v1.2.3.4"));
+        assert!(!contains_external_ip("8.8.8.8"));
 
         // URL context does NOT override genuinely non-routable ranges.
         assert!(!contains_external_ip("http://192.168.1.1/admin"));
@@ -567,9 +576,11 @@ mod tests {
 
     #[test]
     fn test_validate_external_ip_string() {
-        // Valid external IP
-        assert!(validate_external_ip_string("8.8.8.8").is_some());
+        // Valid external IP (multi-digit octet in the first three)
         assert!(validate_external_ip_string("45.33.32.156").is_some());
+        assert!(validate_external_ip_string("3.147.61.167").is_some());
+        // All-single-digit first-three octets read as a version string.
+        assert!(validate_external_ip_string("8.8.8.8").is_none());
         assert!(validate_external_ip_string("12.5.12.0").is_none());
         assert!(validate_external_ip_string("33.6.0.2").is_none());
 

@@ -1837,7 +1837,7 @@ fn test_eval_encoded_external_ip_filter() {
     let mut report = create_test_report();
     // String with external IP
     report.strings.push(StringInfo {
-        value: ("connect 8.8.8.8:443".to_string()).into(),
+        value: ("connect 45.33.32.156:443".to_string()).into(),
         offset: Some(0x1000),
         encoding: "utf8".to_string(),
         string_type: None,
@@ -1877,9 +1877,9 @@ fn test_eval_encoded_external_ip_filter() {
     );
 
     assert!(result.matched);
-    // Only the external IP (8.8.8.8) should match
+    // Only the external IP (45.33.32.156) should match
     assert_eq!(result.match_count, 1);
-    assert!(result.evidence[0].value.contains("8.8.8.8"));
+    assert!(result.evidence[0].value.contains("45.33.32.156"));
 }
 
 #[test]
@@ -1971,7 +1971,7 @@ fn test_eval_string_external_ip_filters_private() {
     });
     // Add string containing an external IP — should be kept
     report.strings.push(StringInfo {
-        value: ("connect to 8.8.8.8:53".to_string()).into(),
+        value: ("connect to 45.33.32.156:53".to_string()).into(),
         offset: Some(0x2000),
         encoding: "utf8".to_string(),
         string_type: None,
@@ -2018,7 +2018,7 @@ fn test_eval_raw_external_ip_filters_private() {
     let mut content = Vec::new();
     content.extend_from_slice(b"private 192.168.1.1 only");
     content.extend_from_slice(&[b'x'; 300]);
-    content.extend_from_slice(b"external 8.8.8.8 done");
+    content.extend_from_slice(b"external 45.33.32.156 done");
     let ctx = create_test_context(&report, &content);
 
     let location = ContentLocationParams::default();
@@ -2048,7 +2048,7 @@ fn test_eval_raw_external_ip_filters_private() {
 fn test_eval_raw_external_ip_keeps_external() {
     let report = create_test_report();
     // Content where the substring appears near an external IP
-    let content = b"connect 8.8.8.8 done";
+    let content = b"connect 45.33.32.156 done";
     let ctx = create_test_context(&report, content.as_ref());
 
     let location = ContentLocationParams::default();

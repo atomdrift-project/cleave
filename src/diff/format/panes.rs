@@ -227,6 +227,7 @@ fn trust_word(t: filefacts::Trust) -> &'static str {
         filefacts::Trust::CaSigned => "ca-signed",
         filefacts::Trust::SelfSigned => "self-signed",
         filefacts::Trust::AdHoc => "ad-hoc",
+        filefacts::Trust::Unverified => "signed-unverified",
         filefacts::Trust::Unsigned => "unsigned",
         _ => "unknown",
     }

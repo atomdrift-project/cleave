@@ -406,7 +406,11 @@ impl ChromeManifestAnalyzer {
             report.add_finding(
                 Finding::indicator(
                     format!("micro-behaviors/browser-extension/host-access/{host}::granted"),
-                    format!("Granted host access to {host}"),
+                    if host == "all-urls" {
+                        "Manifest grants access to all URL origins".to_string()
+                    } else {
+                        format!("Manifest grants access to {host}")
+                    },
                     0.95,
                 )
                 .with_criticality(Criticality::Notable)
@@ -438,12 +442,19 @@ impl ChromeManifestAnalyzer {
             "idle",
             "unlimitedStorage",
         ];
+        // These established YAML traits are canonical and participate in
+        // taxonomy composites. Avoid emitting a second dynamic finding for
+        // the same manifest value.
+        const YAML_BACKED: &[&str] = &["activeTab", "scripting", "storage"];
 
         let mut seen: BTreeSet<String> = BTreeSet::new();
         for perm in &manifest.permissions {
             let serde_json::Value::String(perm) = perm else {
                 continue;
             };
+            if YAML_BACKED.contains(&perm.as_str()) {
+                continue;
+            }
             // API permission names are pure alphanumeric; match-pattern / host
             // / `<all_urls>` entries are routed to analyze_host_access instead.
             if !perm.chars().all(|c| c.is_ascii_alphanumeric()) {
@@ -631,6 +642,12 @@ mod tests {
             .unwrap();
 
         assert_eq!(report.target.file_type, "chrome-manifest");
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|f| f.id == "micro-behaviors/browser-extension/permission/storage::declared")
+        );
     }
 
     #[test]

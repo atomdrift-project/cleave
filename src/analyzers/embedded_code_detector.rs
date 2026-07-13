@@ -704,13 +704,15 @@ fn is_top_level_self_detection(
     is_encoded: bool,
     offset: u64,
     file_type: &FileType,
+    host_file_type: Option<&FileType>,
 ) -> bool {
     if is_encoded || offset != 0 {
         return false;
     }
-    let host_type = detect_file_type_from_path(Path::new(parent_path));
-    host_type == *file_type
-        || is_sibling_language(&host_type, file_type)
+    let path_type = detect_file_type_from_path(Path::new(parent_path));
+    let host_type = host_file_type.unwrap_or(&path_type);
+    *host_type == *file_type
+        || is_sibling_language(host_type, file_type)
         || host_type.is_source_code()
 }
 
@@ -869,7 +871,7 @@ pub fn analyze_embedded_string(
     // `interp -c "<code>"` invocation is genuinely a different embedded language
     // (and was size/self bypassed deliberately), so it is never self-detection.
     if inline_code.is_none()
-        && is_top_level_self_detection(parent_path, is_encoded, offset, &file_type)
+        && is_top_level_self_detection(parent_path, is_encoded, offset, &file_type, host_file_type)
     {
         anyhow::bail!("Top-level source self-detected as embedded code");
     }
@@ -1833,25 +1835,37 @@ mod tests {
             "archive.zip!!src/ParseException.php",
             false,
             0,
-            &FileType::Php
+            &FileType::Php,
+            None,
         ));
         assert!(!is_top_level_self_detection(
             "archive.zip!!src/ParseException.php",
             true,
             0,
-            &FileType::Php
+            &FileType::Php,
+            None,
         ));
         assert!(!is_top_level_self_detection(
             "archive.zip!!src/ParseException.php",
             false,
             32,
-            &FileType::Php
+            &FileType::Php,
+            None,
         ));
         assert!(is_top_level_self_detection(
             "archive.zip!!src/ParseException.php",
             false,
             0,
-            &FileType::JavaScript
+            &FileType::JavaScript,
+            None,
+        ));
+
+        assert!(is_top_level_self_detection(
+            "agildodock.install",
+            false,
+            0,
+            &FileType::Shell,
+            Some(&FileType::Shell),
         ));
     }
 
@@ -1861,7 +1875,8 @@ mod tests {
             "include/sound/sdca_function.h",
             false,
             0,
-            &FileType::Shell
+            &FileType::Shell,
+            None,
         ));
     }
 

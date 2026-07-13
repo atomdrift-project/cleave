@@ -1704,6 +1704,8 @@ pub(crate) fn process_encoded_payloads(
             "Encoded detached signature data".to_string()
         } else if is_unknown_unicode_escape {
             "Decoded unicode-escape content".to_string()
+        } else if payload.encoding_chain.as_slice() == ["url"] {
+            "Percent-encoded content decoded".to_string()
         } else {
             format!(
                 "Encoded payload detected: {}",

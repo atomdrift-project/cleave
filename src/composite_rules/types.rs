@@ -472,6 +472,10 @@ pub(crate) enum FileType {
     PythonSdist,
     /// Debian package (.deb)
     Deb,
+    /// Unix static library (.a). Native object code, so it routes with the
+    /// `binaries` family — NOT the archive family (which would apply zip/jar
+    /// content rules to its uncompressed `ar` member bytes).
+    StaticLib,
     /// RPM package (.rpm)
     Rpm,
     /// Chrome extension (.crx)
@@ -586,6 +590,7 @@ impl From<filefacts::FileType> for FileType {
             Ff::Zst => Self::Zst,
             Ff::SevenZ | Ff::Rar => Self::Archive,
             Ff::Deb => Self::Deb,
+            Ff::StaticLib => Self::StaticLib,
             Ff::Rpm => Self::Rpm,
             Ff::PkgMacos | Ff::PkgFreebsd | Ff::PkgArch => Self::Pkg,
             Ff::Chm => Self::Chm,
@@ -766,6 +771,7 @@ impl FileType {
             FileType::Class,
             FileType::Pyc,
             FileType::Wasm,
+            FileType::StaticLib,
             // Source code formats
             FileType::Shell,
             FileType::Batch,
@@ -872,6 +878,7 @@ impl FileType {
             "elf" | "so" => FileType::Elf,
             "macho" | "dylib" => FileType::Macho,
             "pe" | "exe" | "dll" => FileType::Pe,
+            "static-lib" | "staticlib" | "a" => FileType::StaticLib,
             "shell" | "shellscript" | "shell_script" => FileType::Shell,
             "batch" | "bat" | "cmd" => FileType::Batch,
             "jcl" => FileType::Jcl,
@@ -1209,6 +1216,23 @@ mod tests {
         assert_eq!(FileType::from_str(Ff::Cab.label()), FileType::Cab);
         assert_eq!(FileType::from_str(Ff::PkgArch.label()), FileType::Pkg);
         assert_eq!(FileType::from_str(Ff::TarZst.label()), FileType::Tar);
+        // A `.a` static library routes to its own StaticLib bucket (a native
+        // binary), NOT to Deb (the `ar`-magic sibling) or Unknown.
+        assert_eq!(
+            FileType::from_str(Ff::StaticLib.label()),
+            FileType::StaticLib
+        );
+    }
+
+    #[test]
+    fn static_lib_is_a_binary_not_an_archive() {
+        // A static library is native object code: it must not carry the
+        // archive-family `for:` bypass (which applied zip/jar content rules to
+        // its uncompressed `ar` member bytes), and it must be reachable via the
+        // `static-lib`/`a` tokens.
+        assert!(!FileType::StaticLib.is_archive());
+        assert_eq!(FileType::from_str("static-lib"), FileType::StaticLib);
+        assert_eq!(FileType::from_str("a"), FileType::StaticLib);
     }
 
     #[test]

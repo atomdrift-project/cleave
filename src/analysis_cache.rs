@@ -380,8 +380,12 @@ fn options_hash(options: &AnalysisOptions) -> String {
     // round-trip needs — context-line `notes`, finding `evidence` (compact
     // `spans`), and `composite_sources` (compact `from`). Older entries lack
     // them and would render anchorless, so force a re-analysis.
+    // v=7 → v=8: `ContextLine` is now uniformly byte-addressed — `loc` is always a
+    // byte offset (never a line number), `addr` is gone, and textual chunks carry
+    // derived `line`/`col`. Older entries encode `loc` as a line number, which the
+    // new renderer would misread as an offset, so force a re-analysis.
     let key = format!(
-        "v=7,3p={},yara={},r2={},upx={},plat={},hp={},sp={},ps={},fv={},rizin={}",
+        "v=8,3p={},yara={},r2={},upx={},plat={},hp={},sp={},ps={},fv={},rizin={}",
         options.enable_third_party_yara,
         !options.disable_yara,
         !options.disable_radare2,
@@ -795,14 +799,16 @@ mod tests {
         // Context lines with a note → render anchoring.
         fa.context = vec![
             ContextLine {
-                loc: 1,
-                addr: Some(0),
+                loc: 0,
+                line: Some(1),
+                col: Some(1),
                 data: b"data = b64decode(BLOB)".to_vec(),
                 notes: vec![],
             },
             ContextLine {
-                loc: 2,
-                addr: Some(17),
+                loc: 17,
+                line: Some(2),
+                col: Some(1),
                 data: b"exec(payload)".to_vec(),
                 notes: vec![Note {
                     crit: Criticality::Suspicious,

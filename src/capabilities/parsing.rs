@@ -406,6 +406,7 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                     RuleFileType::Class,
                     RuleFileType::Pyc,
                     RuleFileType::Wasm,
+                    RuleFileType::StaticLib,
                 ],
                 "scripts" => vec![
                     RuleFileType::Shell,
@@ -492,6 +493,7 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 "elf" | "so" => vec![RuleFileType::Elf],
                 "macho" | "dylib" => vec![RuleFileType::Macho],
                 "pe" | "dll" => vec![RuleFileType::Pe],
+                "static-lib" | "staticlib" | "a" => vec![RuleFileType::StaticLib],
                 // Scripting languages (fullname + extension)
                 "shell" | "sh" => vec![RuleFileType::Shell],
                 "batch" | "bat" | "cmd" => vec![RuleFileType::Batch],

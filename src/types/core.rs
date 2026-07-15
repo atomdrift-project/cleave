@@ -1875,14 +1875,21 @@ fn merge_finding(existing: &mut Finding, new: Finding) {
 }
 
 /// Location of the first context note for finding `id` in `file`, as
-/// `(line, offset)`. `line` is the 1-based source line for text units (those
-/// carrying an `addr`); `offset` is the match's byte offset. Returns `None` when
-/// no note pins the finding — e.g. a metric or manifest-field-presence trait.
+/// `(line, offset)`. `line` is the 1-based source line for textual chunks (those
+/// carrying a `line`), advanced from the chunk's start past any newlines before
+/// the match; `offset` is the match's byte offset. Returns `None` when no note
+/// pins the finding — e.g. a metric or manifest-field-presence trait.
 fn note_location(file: &FileAnalysis, id: &str) -> Option<(Option<u64>, Option<u64>)> {
     for line in &file.context {
         for note in &line.notes {
             if note.id == id {
-                let src_line = line.addr.map(|_| line.loc);
+                let src_line = line.line.map(|start| {
+                    let rel = usize::try_from(note.off.saturating_sub(line.loc))
+                        .unwrap_or(usize::MAX)
+                        .min(line.data.len());
+                    let extra = line.data[..rel].iter().filter(|&&b| b == b'\n').count() as u64;
+                    start + extra
+                });
                 return Some((src_line, Some(note.off)));
             }
         }
@@ -2426,8 +2433,9 @@ mod tests {
         m1.depth = 1;
         m1.findings = vec![test_finding("comp/manifest", Criticality::Component)];
         m1.context = vec![ContextLine {
-            loc: 3,         // source line 3
-            addr: Some(40), // byte offset of the line → source unit
+            loc: 40, // byte offset of the chunk start
+            line: Some(3),
+            col: Some(1),
             data: b"  \"preinstall\": \"node x\"".to_vec(),
             notes: vec![Note {
                 crit: Criticality::Component,
@@ -2451,7 +2459,8 @@ mod tests {
         m2.findings = vec![test_finding("comp/payload", Criticality::Suspicious)];
         m2.context = vec![ContextLine {
             loc: 0x1234,
-            addr: None, // byte-addressed (binary) → no source line
+            line: None, // byte-addressed (binary) → no source line/col
+            col: None,
             data: vec![0u8; 4],
             notes: vec![Note {
                 crit: Criticality::Suspicious,
@@ -2523,8 +2532,9 @@ mod tests {
             Criticality::Component,
         )];
         member.context = vec![ContextLine {
-            loc: 12,
-            addr: Some(200),
+            loc: 200,
+            line: Some(12),
+            col: Some(1),
             data: b"fetch(url, {method:'POST'})".to_vec(),
             notes: vec![Note {
                 crit: Criticality::Component,

@@ -364,6 +364,11 @@ opt-level = 3
 [patch.crates-io]
 wasmtime = { git = "https://github.com/tstromberg/wasmtime.git", branch = "freebsd-aarch64-43.0.2" }
 
+# Local-only override: pick up the unreleased filefacts static-library (.a)
+# identification fix — a Unix `ar` archive whose first member is not
+# `debian-binary` is now typed `static-lib`, not `deb`. Remove once filefacts
+# is released and the git pin above is bumped.
+
 # Local-only override: pick up the unreleased filefacts CLR enrichment
 # (pe.clr.strong_name_signed / mvid / metadata_version / streams). Remove once
 # the change is pushed and the git pin above is bumped.

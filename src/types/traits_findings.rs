@@ -101,31 +101,35 @@ fn is_zero_usize(n: &usize) -> bool {
 // (value/method) is synthesizable from the content slice if ever needed.
 // ========================================================================
 
-/// One unit of merged context: the raw matched bytes of a source line or a
-/// binary window. Analysis emits the bytes; the hex-or-text rendering is a
-/// render-time concern. A unit with no notes is pure context (`-` in tiny
-/// output); a unit with notes is a hit (`:`).
+/// One unit of merged context: a contiguous run of raw file bytes plus the
+/// findings whose match falls inside it. Analysis emits the bytes; rendering
+/// them as text or a hex+ascii dump is a render-time concern derived from the
+/// file's `type`. A unit with no notes is pure context (`-` in tiny output); a
+/// unit with notes is a hit (`:`).
 ///
-/// Two orthogonal fields describe a unit beyond its bytes:
-/// - `addr` is the **addressing**: `Some` ⇒ `loc` is a 1-based source line
-///   number and `addr` is that line's byte offset; `None` ⇒ `loc` is already a
-///   byte offset (binary window or minified slice).
-/// - `hex` is the **presentation**: `true` ⇒ render `data` as a `hex  ascii`
-///   dump; `false` ⇒ decode `data` as UTF-8 text. These are independent — a
-///   minified slice is byte-addressed (`addr: None`) yet shown as text.
-///
-/// A finding's highlight spans `note.off - addr.unwrap_or(loc) .. + note.len`.
+/// `loc` is the absolute byte offset of `data[0]` — always, for binary and text
+/// alike, never a line number. `line` and `col` are its 1-based source
+/// position, present for textual chunks and absent for binaries; they are a
+/// derived label for byte-blind consumers. A note's own position is `line`/`col`
+/// advanced by the newlines and columns between `data[0]` and `note.off`, and
+/// its highlight spans `note.off - loc .. note.off - loc + note.len`.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ContextLine {
-    /// Line number (1-based, source) when `addr` is set; byte offset otherwise.
+    /// Absolute byte offset of `data[0]`. Always a byte offset — binary and
+    /// text alike; never a line number.
     #[serde(rename = "ln")]
     pub loc: u64,
-    /// Byte offset of this source line's first byte. Absent for byte-addressed
-    /// units (binary/minified), where `ln` is already the byte offset.
-    #[serde(rename = "addr", default, skip_serializing_if = "Option::is_none")]
-    pub addr: Option<u64>,
+    /// 1-based source line of `data[0]`. `Some` for textual chunks; `None` for
+    /// binary windows, which carry no line structure.
+    #[serde(rename = "line", default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<u64>,
+    /// 1-based column of `data[0]` within its line. `Some` for textual chunks;
+    /// `None` for binary. Exceeds 1 when the chunk is a mid-line slice of an
+    /// ultra-long line.
+    #[serde(rename = "col", default, skip_serializing_if = "Option::is_none")]
+    pub col: Option<u64>,
     /// Raw content bytes, Z85-encoded. Binary files render as hex+ascii;
-    /// source lines render as decoded text. Render mode is derived from the
+    /// textual files render as decoded text. Render mode is derived from the
     /// file's `type` field — no per-line flag needed.
     #[serde(rename = "b", with = "crate::types::z85::serde_z85")]
     pub data: Vec<u8>,

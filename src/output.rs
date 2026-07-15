@@ -1341,7 +1341,7 @@ fn render_context(
             render_hex_context(out, file, selected, term_width, opts.full_context, colorize);
         }
     } else {
-        render_source_context(out, file, selected, opts, term_width, colorize);
+        render_text_chunks(out, file, selected, opts, term_width, colorize);
     }
 }
 
@@ -1468,11 +1468,76 @@ fn ascii_forward(data: &[u8]) -> String {
     s
 }
 
-/// Render source/minified context: `grep -n -C2`-style windows. Colored: numbered
-/// lines with a `# SEV desc` trailer on each hit. Plain (LLM): each hit's source
-/// line is preceded by a `{marker} SEV LINE[:COL] desc` annotation; context lines
-/// render bare.
-fn render_source_context(
+/// A physical line within a textual chunk: its absolute byte range in the file
+/// and the 1-based source position of its first content byte. Splitting a
+/// byte-addressed chunk into these rows is what lets one renderer serve both a
+/// normal multi-line window (numbered lines) and a slice of an ultra-long line
+/// (a single pseudo-line labelled `line:col`).
+struct ChunkRow {
+    /// Absolute byte offset of the row's first content byte.
+    off: u64,
+    /// 1-based source line.
+    line: u64,
+    /// 1-based column of the first content byte (>1 for a mid-line slice).
+    col: u64,
+    /// Byte range `[start, end)` of the row's content in `chunk.data`, excluding
+    /// any trailing `\r`/`\n`.
+    start: usize,
+    end: usize,
+    /// Absolute offset where the next row begins — the exclusive upper bound for
+    /// assigning a note to this row.
+    cover_end: u64,
+}
+
+/// Split a textual chunk into physical rows. The first row starts at the chunk's
+/// own `line`/`col` (which may be mid-line, when the chunk slices an ultra-long
+/// line); each subsequent row begins at column 1 on the next line.
+fn chunk_rows(chunk: &ContextLine) -> Vec<ChunkRow> {
+    let base = chunk.loc;
+    let mut line = chunk.line.unwrap_or(0);
+    let mut col = chunk.col.unwrap_or(1);
+    let data = &chunk.data;
+    let mut rows = Vec::new();
+    let mut start = 0usize;
+    for i in 0..data.len() {
+        if data[i] == b'\n' {
+            // Drop a CRLF's `\r` so the row doesn't render a trailing carriage return.
+            let end = if i > start && data[i - 1] == b'\r' {
+                i - 1
+            } else {
+                i
+            };
+            rows.push(ChunkRow {
+                off: base + start as u64,
+                line,
+                col,
+                start,
+                end,
+                cover_end: base + i as u64 + 1,
+            });
+            start = i + 1;
+            line += 1;
+            col = 1;
+        }
+    }
+    rows.push(ChunkRow {
+        off: base + start as u64,
+        line,
+        col,
+        start,
+        end: data.len(),
+        cover_end: base + data.len() as u64,
+    });
+    rows
+}
+
+/// Render textual context: every stored chunk is an already-sized byte window.
+/// Each chunk is split into physical rows and rendered `grep -n`-style — numbered
+/// lines with a `# SEV desc` trailer on hits (colored) or a `{marker} SEV
+/// line:col desc` annotation before each hit (LLM). A chunk that is a slice of an
+/// ultra-long line has a single row, rendered as one `line:col` pseudo-line
+/// clipped to the content width with `…` marking the trimmed sides.
+fn render_text_chunks(
     out: &mut String,
     file: &FileAnalysis,
     selected: &[&str],
@@ -1481,115 +1546,35 @@ fn render_source_context(
     colorize: bool,
 ) {
     let minimal = matches!(opts.header, HeaderStyle::Minimal);
-    // Symmetric context: `radius` lines on each side of a match, so the window is
-    // `[hit - radius, hit + radius]`. The line after a hit often carries the
-    // continuation (a call's args, an assignment's value) the model needs. The
-    // LLM/tiny view scales the radius by criticality — the strongest findings,
-    // whose verdict most depends on their surrounding code, get the widest window
-    // (hostile ±5 … baseline ±1, via `Criticality::context_radius`); capture
-    // reserves exactly this many lines. The terminal view keeps its tighter,
-    // line-numbered windows (suspicious/hostile ±2, else the base). `context_lines`
-    // acts as a floor either way.
-    let base_radius = opts.context_lines.map_or(1, |n| n.saturating_sub(1)) as u64;
-    let radius_for = |crit: Criticality| {
-        let by_crit = if minimal {
-            crit.context_radius()
-        } else if crit >= Criticality::Suspicious {
-            2
-        } else {
-            0
-        };
-        by_crit.max(base_radius)
-    };
+    let sel: HashSet<&str> = selected.iter().copied().collect();
+    let marker = comment_marker(&file.file_type);
 
-    // In the LLM/tiny view a trait a composite drew on is sized by the stronger
-    // of its own severity and the conclusion's: a notable atomic that's evidence
-    // for a hostile composite reads with the hostile window, so the model sees the
-    // code the verdict rests on — not the narrower context its own severity would
-    // earn. A bare component (referenced by nothing) still stands alone as a
-    // single line. Map each referenced leg to the strongest crit that referenced
-    // it. (Capture reserves the same width — see `leg_crit` in context::capture.)
-    let referrer_crit: HashMap<&str, Criticality> = {
-        let mut m: HashMap<&str, Criticality> = HashMap::new();
-        for f in &file.findings {
-            for ref_id in &f.trait_refs {
-                m.entry(ref_id.as_str())
-                    .and_modify(|c| *c = (*c).max(f.crit))
-                    .or_insert(f.crit);
-            }
-        }
-        m
-    };
-    let radius_of = |n: &Note| -> u64 {
-        if !minimal {
-            return radius_for(n.crit);
-        }
-        match referrer_crit.get(n.id.as_str()) {
-            // Sized by the stronger of the leg's own severity and its composite's.
-            Some(&c) => radius_for(c.max(n.crit)),
-            // A bare component stands alone; any other lone trait uses its own.
-            None if n.crit == Criticality::Component => 0,
-            None => radius_for(n.crit),
-        }
-    };
-
-    // Each line carrying a selected trait is a hit, paired with the context
-    // radius its strongest selected note earns (capture already capped the
-    // locations per trait — atomic up to 3, composite 1).
-    let hits: Vec<(u64, u64)> = file
+    // Chunks carrying a selected match; a chunk with only unselected notes draws
+    // no window.
+    let shown: Vec<&ContextLine> = file
         .context
         .iter()
-        .filter_map(|l| {
-            l.notes
-                .iter()
-                .filter(|n| selected.contains(&n.id.as_str()))
-                .map(&radius_of)
-                .max()
-                .map(|r| (l.loc, r))
-        })
+        .filter(|c| c.notes.iter().any(|n| sel.contains(n.id.as_str())))
         .collect();
-    if hits.is_empty() {
+    if shown.is_empty() {
         return;
     }
-    let marker = comment_marker(&file.file_type);
-    let in_window = |loc: u64| hits.iter().any(|&(h, r)| loc.abs_diff(h) <= r);
-    // The LLM view carries no line numbers on source rows, so a jump between two
-    // non-adjacent windows would otherwise read as one continuous block. Merge the
-    // hit windows into clusters once; a row that opens a new cluster gets a blank
-    // line before it, so each finding's context reads as its own paragraph. (The
-    // colored view keeps its line numbers, which already show the gap.)
-    let clusters: Vec<(u64, u64)> = {
-        let mut iv: Vec<(u64, u64)> = hits
-            .iter()
-            .map(|&(h, r)| (h.saturating_sub(r), h.saturating_add(r)))
-            .collect();
-        iv.sort_unstable_by_key(|&(lo, _)| lo);
-        iv.into_iter().fold(Vec::new(), |mut merged, (lo, hi)| {
-            match merged.last_mut() {
-                Some(last) if lo <= last.1.saturating_add(1) => last.1 = last.1.max(hi),
-                _ => merged.push((lo, hi)),
-            }
-            merged
-        })
-    };
-    let cluster_of = |loc: u64| {
-        clusters
-            .iter()
-            .position(|&(lo, hi)| (lo..=hi).contains(&loc))
-    };
-    let loc_width = file
-        .context
+
+    // Gutter width spans the widest line number across shown chunks.
+    let loc_width = shown
         .iter()
-        .map(|l| l.loc.to_string().len())
+        .map(|c| {
+            let last = c.line.unwrap_or(0) + c.data.iter().filter(|b| **b == b'\n').count() as u64;
+            last.max(1).to_string().len()
+        })
         .max()
         .unwrap_or(1);
-    // Fixed content column so every comment aligns; long lines truncate to it.
-    // Capped so wide terminals spend the surplus on the comment, not the code.
-    // The machine/LLM view (Minimal header) has no terminal to fit and carries its
-    // description on a separate preceding annotation line rather than an aligned
-    // column, so it reserves nothing for comments and shows a generous window of
-    // the line — minified code carries its signal far past column 35.
-    let content_width = if matches!(opts.header, HeaderStyle::Minimal) {
+
+    // Fixed content column so comments align; long lines truncate to it. The
+    // machine/LLM view has no terminal to fit and carries its description on a
+    // preceding annotation line, so it shows a generous window of the code —
+    // minified code carries its signal far past column 35.
+    let content_width = if minimal {
         SRC_LLM_WIDTH
     } else {
         term_width
@@ -1597,51 +1582,62 @@ fn render_source_context(
             .clamp(24, 100)
     };
 
-    // In the LLM view, set the context off from any file-level annotations
-    // (identity, whole-file findings) already written above it with a blank line.
+    // Set the context off from any file-level annotations above it (LLM view).
     if minimal && !out.is_empty() && !out.ends_with("\n\n") {
         out.push('\n');
     }
 
-    // Each shown line carries at most its own strongest trait as a comment —
-    // kept deliberately simple, no flowing a second trait onto adjacent lines.
-    let mut prev_cluster: Option<usize> = None;
-    for line in file.context.iter().filter(|l| in_window(l.loc)) {
-        // Context lines (no match of their own) only earn a row when they carry
-        // real code — skip near-empty ones like a lone `}` or `)` that add
-        // height without context. A hit line always renders.
-        if !hits.iter().any(|&(h, _)| h == line.loc)
-            && line
-                .data
-                .iter()
-                .filter(|b| !b.is_ascii_whitespace())
-                .count()
-                < 6
-        {
-            continue;
-        }
-        // A blank line opens each new window (LLM view only — see `clusters`).
-        let cluster = cluster_of(line.loc);
-        if minimal && prev_cluster.is_some() && prev_cluster != cluster {
+    let mut emitted = false;
+    for chunk in shown {
+        // A blank line sets each window apart as its own paragraph.
+        if emitted && !out.ends_with("\n\n") {
             out.push('\n');
         }
-        prev_cluster = cluster;
-        let notes: Vec<&Note> = line.notes.iter().collect();
-        let comment = notes
-            .iter()
-            .copied()
-            .max_by_key(|n| (n.crit, std::cmp::Reverse(n.off)));
-        render_source_line(
-            out,
-            line,
-            &notes,
-            comment,
-            marker,
-            loc_width,
-            content_width,
-            term_width,
-            colorize,
-        );
+        emitted = true;
+
+        // The window ends mid-line (its last row is a clipped tail) when the chunk
+        // stops before a newline and more file follows — then that row earns a
+        // trailing `…`.
+        let chunk_end = chunk.loc + chunk.data.len() as u64;
+        let cut_right = chunk.data.last() != Some(&b'\n') && chunk_end < file.size;
+        let rows = chunk_rows(chunk);
+        let last = rows.len().saturating_sub(1);
+        for (idx, row) in rows.iter().enumerate() {
+            let bytes = &chunk.data[row.start..row.end];
+            // Notes whose match starts within this row's byte span.
+            let notes: Vec<&Note> = chunk
+                .notes
+                .iter()
+                .filter(|n| {
+                    sel.contains(n.id.as_str()) && n.off >= row.off && n.off < row.cover_end
+                })
+                .collect();
+            // A context row (no match of its own) earns a line only when it carries
+            // real code — skip near-empty ones like a lone `}` that add height
+            // without context. A hit row always renders.
+            if notes.is_empty() && bytes.iter().filter(|b| !b.is_ascii_whitespace()).count() < 6 {
+                continue;
+            }
+            let comment = notes
+                .iter()
+                .copied()
+                .max_by_key(|n| (n.crit, std::cmp::Reverse(n.off)));
+            render_source_line(
+                out,
+                bytes,
+                row.off,
+                row.line,
+                row.col,
+                idx == last && cut_right,
+                &notes,
+                comment,
+                marker,
+                loc_width,
+                content_width,
+                term_width,
+                colorize,
+            );
+        }
     }
 }
 
@@ -1811,16 +1807,21 @@ fn source_window(
     (byte_at(w0), byte_at(w1), lead, trail)
 }
 
-/// Render one source/minified line. Colored: a 1-char severity gutter, the line
-/// number, the code clipped to a fixed width (with its match highlighted), then
-/// an aligned `// desc` comment. Plain (LLM): the code verbatim, preceded — when
-/// it carries a finding — by a `{marker} SEV LINE[:COL] DESC` annotation line (or
-/// `{marker} SEV @OFFSET DESC` for a minified/byte unit, whose `loc` is a byte
-/// offset rather than a line).
+/// Render one physical source row (a slice of a textual chunk). Colored: a
+/// 1-char severity gutter, the line number, the code clipped to a fixed width
+/// (with its match highlighted), then an aligned `// desc` comment. Plain (LLM):
+/// the code verbatim, preceded — when it carries a finding — by a `{marker} SEV
+/// LINE:COL DESC` annotation line. `byte_base`/`line_no`/`col_base` are the
+/// absolute offset and 1-based source position of the row's first byte;
+/// `cut_right` marks a row whose source line continues past the captured window.
 #[allow(clippy::too_many_arguments)] // a render primitive; bundling would obscure it
 fn render_source_line(
     out: &mut String,
-    line: &ContextLine,
+    data: &[u8],
+    byte_base: u64,
+    line_no: u64,
+    col_base: u64,
+    cut_right: bool,
     notes: &[&Note],
     comment: Option<&Note>,
     marker: &str,
@@ -1829,9 +1830,13 @@ fn render_source_line(
     term_width: usize,
     colorize: bool,
 ) {
-    let raw = String::from_utf8_lossy(&line.data);
-    let base = line.addr.unwrap_or(line.loc);
-    let loc_str = line.loc.to_string();
+    let raw = String::from_utf8_lossy(data);
+    let base = byte_base;
+    let loc_str = line_no.to_string();
+    // A mid-line row (the chunk sliced into an ultra-long line) lost its left
+    // side; a `cut_right` row loses its right — mark each with a `…` even when the
+    // content itself fits the width.
+    let cut_left = col_base > 1;
 
     if colorize {
         // Expand tabs to spaces so a character's count equals its display width
@@ -1855,7 +1860,8 @@ fn render_source_line(
         // Clip the code to the fixed content column so comments line up, keeping
         // the primary match in view.
         let match_byte = notes.first().and_then(|n| to_disp(n.off));
-        let (b0, b1, lead, trail) = source_window(&display, content_width, match_byte);
+        let (b0, b1, win_lead, win_trail) = source_window(&display, content_width, match_byte);
+        let (lead, trail) = (win_lead || cut_left, win_trail || cut_right);
         let slice = display.get(b0..b1).unwrap_or("");
         let spans: Vec<(usize, usize, Criticality)> = notes
             .iter()
@@ -1900,15 +1906,16 @@ fn render_source_line(
     }
 
     // Plain (LLM) view: a finding is announced on its own comment-marker line —
-    //   {marker} SEV LINE[:COL] - DESC
-    // placed immediately *before* the source line it describes, which then renders
+    //   {marker} SEV LINE:COL - DESC
+    // placed immediately *before* the source row it describes, which then renders
     // verbatim (windowed to a fixed width, `...` marking any trim) with no prefix
     // or trailer. Keeping the code clear of cleave's columns lets the model read it
     // as the file's own source; the preceding annotation — comment marker, a single
     // severity letter, the location, then the description — marks it unmistakably
     // as cleave's detection, not text from the file. COL is the 1-based column of
-    // the strongest match. Context and component lines carry no annotation and
-    // render as bare source.
+    // the strongest match, offset by the row's own starting column (a mid-line
+    // slice of a long line starts past column 1). Context and component rows carry
+    // no annotation and render as bare source.
     let (display, map) = expand_tabs(&raw);
     let to_disp = |off: u64| -> Option<usize> {
         map.get(usize::try_from(off.checked_sub(base)?).ok()?)
@@ -1921,28 +1928,20 @@ fn render_source_line(
         out.push(' ');
         out.push(n.crit.letter());
         out.push(' ');
-        if line.addr.is_none() {
-            // A byte-offset unit (a minified one-liner, or a binary slice rendered
-            // as text): `loc` is an absolute byte offset, not a line number, and a
-            // char column within a clipped window is meaningless. Show the match's
-            // absolute offset as `@N` so it never reads as a `line:col`.
-            out.push('@');
-            out.push_str(&n.off.to_string());
-        } else {
-            out.push_str(&loc_str);
-            if let Some(col) =
-                match_disp.map(|b| display.get(..b).map_or(1, |s| s.chars().count() + 1))
-            {
-                out.push(':');
-                out.push_str(&col.to_string());
-            }
+        out.push_str(&loc_str);
+        if let Some(col) =
+            match_disp.map(|b| col_base + display.get(..b).map_or(0, |s| s.chars().count() as u64))
+        {
+            out.push(':');
+            out.push_str(&col.to_string());
         }
         out.push(' ');
         out.push_str(&annotate_desc(&terse_description(&n.desc), &n.id));
         out.push('\n');
     }
 
-    let (b0, b1, lead, trail) = source_window(&display, content_width, match_disp);
+    let (b0, b1, win_lead, win_trail) = source_window(&display, content_width, match_disp);
+    let (lead, trail) = (win_lead || cut_left, win_trail || cut_right);
     let slice = display.get(b0..b1).unwrap_or("");
     if lead {
         out.push_str("...");
@@ -2228,13 +2227,18 @@ fn render_no_anchor(
     // and lower the floor to notable so no real detection is lost to the cap.
     let captured = context_shown && !file.context.is_empty();
 
-    // Location-less notable traits are noise as bare comments when a window could
-    // have carried them; surface only suspicious+ then. But a capped file has no
-    // window at all, so its notable findings drop to a bare note rather than vanish.
-    let floor = if context_shown {
-        opts.min_crit.max(Criticality::Suspicious)
-    } else {
-        opts.min_crit.max(Criticality::Notable)
+    // A location-less finding has no honest byte chunk, so this is its only
+    // output surface. Keep notable+ regardless of whether other findings in the
+    // file captured context.
+    let floor = opts.min_crit.max(Criticality::Notable);
+    let has_local_offset = |f: &Finding| {
+        f.evidence.iter().any(|e| {
+            e.byte_offset().is_some()
+                && !e
+                    .location
+                    .as_deref()
+                    .is_some_and(|location| location.starts_with("archive:"))
+        })
     };
     let mut rest: Vec<&Finding> = file
         .findings
@@ -2242,7 +2246,7 @@ fn render_no_anchor(
         .filter(|f| {
             f.crit >= floor && sel.contains(f.id.as_str()) && !windowed.contains(f.id.as_str())
         })
-        .filter(|f| !captured || file.composite_sources.contains_key(&f.id))
+        .filter(|f| !captured || file.composite_sources.contains_key(&f.id) || !has_local_offset(f))
         .collect();
     rest.sort_unstable_by(|a, b| b.crit.cmp(&a.crit).then_with(|| a.id.cmp(&b.id)));
 
@@ -3027,7 +3031,8 @@ mod tests {
         fa
     }
 
-    /// A context line at `loc` carrying `data` and an optional single note.
+    /// A single-line textual chunk whose byte offset and display line both equal
+    /// `loc` (the note's `off` lands on `data[0]`), carrying an optional note.
     fn ctx_line(
         loc: u64,
         data: &str,
@@ -3035,7 +3040,8 @@ mod tests {
     ) -> crate::types::ContextLine {
         crate::types::ContextLine {
             loc,
-            addr: Some(loc),
+            line: Some(loc),
+            col: Some(1),
             data: data.as_bytes().to_vec(),
             notes: note.into_iter().collect(),
         }
@@ -3082,8 +3088,8 @@ mod tests {
     }
 
     /// A raw-byte context unit starting at byte offset `loc`, carrying `notes`
-    /// (each note's `off` is an absolute file offset). `addr: None` marks it a
-    /// byte unit rather than a source line.
+    /// (each note's `off` is an absolute file offset). No `line`/`col` marks it a
+    /// binary byte unit rather than a textual chunk.
     fn byte_unit(
         loc: u64,
         data: &[u8],
@@ -3091,7 +3097,8 @@ mod tests {
     ) -> crate::types::ContextLine {
         crate::types::ContextLine {
             loc,
-            addr: None,
+            line: None,
+            col: None,
             data: data.to_vec(),
             notes,
         }
@@ -3508,144 +3515,11 @@ mod tests {
         );
     }
 
-    #[test]
-    fn tiny_composite_matched_component_widens_to_composite_severity() {
-        // A component a hostile composite drew on earns ±5 lines of context — the
-        // composite's severity, not the component's, sizes the window.
-        let comp = ctx_note("blocks/c::used", Criticality::Component, 10);
-        let composite = Finding {
-            trait_refs: vec!["blocks/c::used".to_string()],
-            ..finding_with("objectives/x::implant", Criticality::Hostile)
-        };
-        let file = src_file(
-            0,
-            "/only.py",
-            90,
-            vec![
-                composite,
-                finding_with("blocks/c::used", Criticality::Component),
-            ],
-            vec![
-                ctx_line(4, "FAR_BEFORE = outside_window()", None),
-                ctx_line(5, "EDGE_BEFORE5 = five_above()", None),
-                ctx_line(10, "COMPONENTLINE = the_block()", Some(comp)),
-                ctx_line(15, "EDGE_AFTER5 = five_below()", None),
-                ctx_line(16, "FAR_AFTER = outside_window()", None),
-            ],
-        );
-        let output = format_tiny(&report_with_files(vec![file]));
-        for inside in ["EDGE_BEFORE5", "COMPONENTLINE", "EDGE_AFTER5"] {
-            assert!(
-                output.contains(inside),
-                "{inside} is within ±5 of the matched component\n{output}"
-            );
-        }
-        assert!(
-            !output.contains("FAR_BEFORE") && !output.contains("FAR_AFTER"),
-            "±6 lines stay outside the hostile-sized window\n{output}"
-        );
-    }
-
-    #[test]
-    fn tiny_notable_leg_widens_to_hostile_composite() {
-        // The general rule beyond components: any atomic leg a stronger composite
-        // drew on renders with the composite's window. A *notable* leg (own radius
-        // ±3) that's evidence for a hostile composite shows ±5, so the model sees
-        // the code the hostile verdict rests on.
-        let leg = ctx_note("cap/n::leg", Criticality::Notable, 10);
-        let composite = Finding {
-            trait_refs: vec!["cap/n::leg".to_string()],
-            ..finding_with("objectives/x::implant", Criticality::Hostile)
-        };
-        let file = src_file(
-            0,
-            "/only.py",
-            90,
-            vec![composite, finding_with("cap/n::leg", Criticality::Notable)],
-            vec![
-                ctx_line(4, "FAR_BEFORE = outside_window()", None),
-                ctx_line(5, "EDGE_BEFORE5 = five_above()", None),
-                ctx_line(10, "LEGLINE = the_leg()", Some(leg)),
-                ctx_line(15, "EDGE_AFTER5 = five_below()", None),
-                ctx_line(16, "FAR_AFTER = outside_window()", None),
-            ],
-        );
-        let output = format_tiny(&report_with_files(vec![file]));
-        for inside in ["EDGE_BEFORE5", "LEGLINE", "EDGE_AFTER5"] {
-            assert!(
-                output.contains(inside),
-                "{inside} is within the inherited hostile ±5 window\n{output}"
-            );
-        }
-        assert!(
-            !output.contains("FAR_BEFORE") && !output.contains("FAR_AFTER"),
-            "±6 lines stay outside the inherited hostile window\n{output}"
-        );
-    }
-
-    #[test]
-    fn tiny_unreferenced_notable_keeps_own_radius() {
-        // Control for the leg-widening rule: a notable atomic no composite
-        // references keeps its own ±3 window — lines at ±4 are dropped. Without
-        // this contrast the inherited ±5 above would prove nothing.
-        let solo = ctx_note("cap/n::solo", Criticality::Notable, 10);
-        let file = src_file(
-            0,
-            "/only.py",
-            90,
-            vec![finding_with("cap/n::solo", Criticality::Notable)],
-            vec![
-                ctx_line(6, "OUT_BEFORE4 = four_above()", None),
-                ctx_line(7, "IN_BEFORE3 = three_above()", None),
-                ctx_line(10, "SOLOLINE = the_solo()", Some(solo)),
-                ctx_line(13, "IN_AFTER3 = three_below()", None),
-                ctx_line(14, "OUT_AFTER4 = four_below()", None),
-            ],
-        );
-        let output = format_tiny(&report_with_files(vec![file]));
-        for inside in ["IN_BEFORE3", "SOLOLINE", "IN_AFTER3"] {
-            assert!(output.contains(inside), "{inside} within own ±3\n{output}");
-        }
-        assert!(
-            !output.contains("OUT_BEFORE4") && !output.contains("OUT_AFTER4"),
-            "±4 lines stay outside the notable-sized window\n{output}"
-        );
-    }
-
-    #[test]
-    fn tiny_leg_keeps_own_radius_when_stronger_than_composite() {
-        // The window is the *stronger* of the leg's own severity and the
-        // composite's — never a downgrade. A suspicious leg (±4) referenced by a
-        // merely notable composite (±3) keeps its own ±4.
-        let leg = ctx_note("cap/s::leg", Criticality::Suspicious, 10);
-        let composite = Finding {
-            trait_refs: vec!["cap/s::leg".to_string()],
-            ..finding_with("objectives/y::pattern", Criticality::Notable)
-        };
-        let file = src_file(
-            0,
-            "/only.py",
-            90,
-            vec![
-                composite,
-                finding_with("cap/s::leg", Criticality::Suspicious),
-            ],
-            vec![
-                ctx_line(6, "IN_BEFORE4 = four_above()", None),
-                ctx_line(10, "LEGLINE = the_leg()", Some(leg)),
-                ctx_line(14, "IN_AFTER4 = four_below()", None),
-                ctx_line(15, "OUT_AFTER5 = five_below()", None),
-            ],
-        );
-        let output = format_tiny(&report_with_files(vec![file]));
-        for inside in ["IN_BEFORE4", "LEGLINE", "IN_AFTER4"] {
-            assert!(output.contains(inside), "{inside} within own ±4\n{output}");
-        }
-        assert!(
-            !output.contains("OUT_AFTER5"),
-            "±5 stays out — a notable composite must not shrink a suspicious leg\n{output}"
-        );
-    }
+    // Window sizing by inherited composite severity — a leg rendered with its
+    // stronger composite's radius — is decided at capture time now, and covered by
+    // `context::tests::{textual,binary}_atomic_leg_reserves_stronger_composites_window`.
+    // The render layer emits every row of the captured chunk, so the former
+    // per-line radius tests here have no rendering decision left to exercise.
 
     #[test]
     fn tiny_binary_lists_all_descriptions_ahead_of_merged_block() {
@@ -4301,31 +4175,27 @@ mod tests {
             }],
             vec![],
         );
-        // Inject context directly (the capture pass needs file bytes).
+        // Inject one byte-window chunk spanning a context line and the hit line;
+        // the renderer splits it into physical rows (the capture pass needs file
+        // bytes). Line 4 "ctx before" is bytes 40..50, then '\n', then line 5
+        // "s = socket()" at byte 51; the match's 'o' sits at byte 56 → column 6.
         let mut report = report;
-        report.files[0].context = vec![
-            ContextLine {
-                loc: 4,
-                addr: Some(40),
-                data: b"ctx before".to_vec(),
-                notes: vec![],
-            },
-            ContextLine {
-                loc: 5,
-                addr: Some(55),
-                data: b"s = socket()".to_vec(),
-                notes: vec![Note {
-                    crit: Criticality::Notable,
-                    id: "net/socket".to_string(),
-                    desc: "socket usage".to_string(),
-                    off: 60,
-                    len: 8,
-                    conf: 0.8,
-                }],
-            },
-        ];
+        report.files[0].context = vec![ContextLine {
+            loc: 40,
+            line: Some(4),
+            col: Some(1),
+            data: b"ctx before\ns = socket()".to_vec(),
+            notes: vec![Note {
+                crit: Criticality::Notable,
+                id: "net/socket".to_string(),
+                desc: "socket usage".to_string(),
+                off: 56,
+                len: 6,
+                conf: 0.8,
+            }],
+        }];
         let output = format_tiny(&report);
-        // Context line: bare source, no annotation and no `LINE`/severity prefix.
+        // Context row: bare source, no annotation and no `LINE`/severity prefix.
         assert!(output.contains("ctx before"));
         assert!(!output.contains(".\t4"));
         // Hit: a `{marker} SEV LINE:COL desc` annotation line (the description,
@@ -4377,8 +4247,9 @@ mod tests {
         );
         let mut report = report;
         report.files[0].context = vec![ContextLine {
-            loc: 1,
-            addr: Some(0),
+            loc: 0,
+            line: Some(1),
+            col: Some(1),
             data: b"exec(payload)".to_vec(),
             notes: vec![
                 Note {
@@ -4439,16 +4310,18 @@ mod tests {
         let mut report = report;
         report.files[0].context = vec![
             ContextLine {
-                loc: 5,
-                addr: Some(0),
-                data: b"first_hit(x)".to_vec(),
+                loc: 0,
+                line: Some(5),
+                col: Some(1),
+                data: b"first_hit(x)\n".to_vec(),
                 notes: vec![note("a/one", 0)],
             },
             ContextLine {
-                loc: 50,
-                addr: Some(0),
-                data: b"second_hit(y)".to_vec(),
-                notes: vec![note("b/two", 0)],
+                loc: 200,
+                line: Some(50),
+                col: Some(1),
+                data: b"second_hit(y)\n".to_vec(),
+                notes: vec![note("b/two", 200)],
             },
         ];
         let output = format_tiny(&report);
@@ -4461,12 +4334,12 @@ mod tests {
 
     #[test]
     fn test_format_tiny_does_not_resurrect_dominated_finding_location_less() {
-        // Capture anchors every finding (file-global ones fall back to offset 0),
-        // so a finding missing a context note once context exists was *dominated*
-        // by a stronger overlapping match — already represented at that offset. The
-        // LLM view must not bring it back as a location-less note (it would read as
-        // a separate, anchorless finding and duplicate what shows at the offset).
-        use crate::types::{ContextLine, Note};
+        // A finding that *has* a byte offset but is missing from the windows was
+        // dominated by a stronger overlapping match at that span — already
+        // represented there. The LLM view must not bring it back as a location-less
+        // note (it would read as a separate, anchorless finding and duplicate what
+        // shows at the offset).
+        use crate::types::{ContextLine, Evidence, Note};
         let finding = |id: &str, crit: Criticality| Finding {
             src: None,
             kind: FindingKind::Capability,
@@ -4481,18 +4354,20 @@ mod tests {
             match_count: 0,
             source_file: None,
         };
+        // `b/dominated` matched at byte 0 (same span as `a/win`), so it has a local
+        // offset — the mark of a dominated finding, not a location-less one.
+        let mut dominated = finding("b/dominated", Criticality::Suspicious);
+        dominated.evidence = vec![Evidence::new("m", "s", "x").with_offset(0)];
         let report = create_test_report(
-            vec![
-                finding("a/win", Criticality::Hostile),
-                finding("b/dominated", Criticality::Suspicious),
-            ],
+            vec![finding("a/win", Criticality::Hostile), dominated],
             vec![],
         );
         let mut report = report;
         // Only `a/win` won a window; `b/dominated` was dropped by the overlap pass.
         report.files[0].context = vec![ContextLine {
-            loc: 7,
-            addr: Some(0),
+            loc: 0,
+            line: Some(7),
+            col: Some(1),
             data: b"winner()".to_vec(),
             notes: vec![Note {
                 crit: Criticality::Hostile,
@@ -4515,10 +4390,11 @@ mod tests {
     }
 
     #[test]
-    fn test_format_tiny_byte_unit_annotation_uses_offset_not_line_col() {
-        // A minified/byte window (`addr: None`) has a byte offset for its `loc`, not
-        // a line. Its annotation must read `@OFFSET` (the match's absolute byte
-        // offset), never a `line:col` that would imply a real source line.
+    fn test_format_tiny_long_line_slice_shows_line_col() {
+        // A slice of an ultra-long single line renders as a pseudo-line labelled
+        // `line:col`. The chunk starts mid-line (byte 600, column 601), so the
+        // match at byte 606 is column 601 + 6 = 607 on line 1, and a leading `…`
+        // marks the clipped left side.
         use crate::types::{ContextLine, Note};
         let report = create_test_report(
             vec![Finding {
@@ -4540,19 +4416,23 @@ mod tests {
         let mut report = report;
         report.files[0].context = vec![ContextLine {
             loc: 600,
-            addr: None, // byte unit: loc is an offset, not a line
+            line: Some(1),
+            col: Some(601),
             data: b"while(!![]){...}".to_vec(),
             notes: vec![Note {
                 crit: Criticality::Suspicious,
                 id: "obf/loop".to_string(),
                 desc: "obfuscated loop".to_string(),
-                off: 657,
-                len: 11,
+                off: 606,
+                len: 4,
                 conf: 0.9,
             }],
         }];
         let output = format_tiny(&report);
-        assert!(output.contains("// S @657 obfuscated loop"), "{output:?}");
-        assert!(!output.contains("600:"), "{output:?}");
+        assert!(output.contains("// S 1:607 obfuscated loop"), "{output:?}");
+        assert!(
+            output.contains("..."),
+            "leading ellipsis marks the clip: {output:?}"
+        );
     }
 }

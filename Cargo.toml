@@ -1,6 +1,6 @@
 [package]
 name = "cleave"
-version = "2.3.1-beta.0"
+version = "2.4.0-beta.0"
 edition = "2024"
 authors = ["The Atomdrift Project"]
 description = "Deep static analysis tool for extracting features from binaries and source code"

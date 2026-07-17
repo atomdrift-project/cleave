@@ -126,24 +126,45 @@ rollout-bastille: ## Deploy to Bastille jails (BUILD=jail RUN=jail)
 	@[ -n "$(BUILD)" ] && [ -n "$(RUN)" ] || { echo "Usage: make rollout-bastille BUILD=<build-jail> RUN=<run-jail>"; exit 1; }
 	./hacks/rollout-bastille.sh "$(BUILD)" "$(RUN)"
 
-# Keep filefacts' on-by-default extraction cache out of the test runs so they
-# stay hermetic (no reads/writes to the shared user cache dir).
+# Keep the extraction/analysis caches out of the test runs so they stay hermetic
+# (no reads/writes to the shared user cache dir — a stale entry there could
+# otherwise mask or fabricate a finding across runs). See docs/FAST_SAFE_TESTING_PLAN.md.
 test test-fast test-unit: export FILEFACTS_CACHE := 0
+test test-fast test-unit: export CLEAVE_SKIP_CACHE := 1
+
+# Integration-test modules that mutate process-global state (traits override dir,
+# analysis skip-overrides, env vars) and MUST run isolated under nextest — never
+# in the shared `cargo test --test it` process, where their leaked state corrupts
+# sibling tests. Kept in sync with `support::ISOLATED_MODULES`; the
+# `shared_bucket_has_no_global_state_mutation` guard test fails if they drift.
+IT_ISOLATED := archive_determinism_test archive_tmp_regression binary_traits_test \
+	embedded_code_detection_test subfile_pipeline_test symbol_extraction_test \
+	tiny_manifest_value_traits_test trait_migration_regression_test \
+	utf16_text_normalization_test yara_init_no_deadlock
+empty :=
+space := $(empty) $(empty)
+IT_SKIP := $(foreach m,$(IT_ISOLATED),--skip $(m)::)
+IT_ISOLATED_RE := $(subst $(space),::|,$(IT_ISOLATED))::
 
 test: ## Run all tests (unit + integration)
-	@echo "Running all tests (hybrid: nextest + cargo test for state-sharing tests)..."
+	@echo "Running all tests (consolidated integration crate: shared libtest + isolated nextest)..."
 	@echo ""
 	@cargo build --quiet
-	@# Run state-sharing tests with cargo test (Lazy sharing saves ~100s)
-	@echo "Phase 1: Running state-sharing tests with cargo test..."
-	@cargo test --test utf16_support_test --test embedded_code_detection_test -- --test-threads=1
+	@# Phase 1: the ~200 pure integration tests share ONE libtest process (one
+	@# capability-mapper build instead of one-per-test), ~20s vs ~10min.
+	@echo "Phase 1: shared-process integration tests (cargo test)..."
+	@cargo test --test it -- $(IT_SKIP)
 	@echo ""
-	@# Run remaining tests with nextest for parallelism
-	@echo "Phase 2: Running parallel tests with nextest..."
+	@# Phase 2: lib + workspace tests AND the global-state integration modules,
+	@# each isolated in its own process by nextest. The filter runs everything
+	@# outside the `it` binary plus only the isolated `it` modules (the shared
+	@# ones already ran in Phase 1).
+	@echo "Phase 2: isolated integration + lib/workspace tests (nextest)..."
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
-		cargo nextest run --workspace -E 'not (binary(utf16_support_test) | binary(embedded_code_detection_test))'; \
+		cargo nextest run --workspace -E 'not binary(it) | test(/$(IT_ISOLATED_RE)/)'; \
 	else \
-		cargo test --workspace; \
+		echo "  cargo-nextest not found; running the isolated modules serialized..."; \
+		cargo test --workspace -- --test-threads=1; \
 	fi
 	@echo ""
 	@echo "✓ All tests passed"

@@ -2,18 +2,10 @@
 
 use std::fs;
 use std::io::Write;
-use std::sync::{Mutex, OnceLock};
-
-fn env_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-}
 
 #[test]
 fn zip_analysis_does_not_extract_to_tmpdir_by_default() -> anyhow::Result<()> {
-    let _guard = env_lock()
-        .lock()
-        .map_err(|e| anyhow::anyhow!("env lock poisoned: {e}"))?;
+    let _guard = crate::support::global_lock();
 
     let work = tempfile::tempdir()?;
     let tmp = work.path().join("tmp");

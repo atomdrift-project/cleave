@@ -43,10 +43,11 @@ ExecuteGlobal compiledCode\r\n";
 fn assert_utf16_matches_utf8(utf16_bytes: &[u8], label: &str) {
     // Keep the test deterministic across engine rebuilds: the analysis cache is
     // keyed on file SHA + traits revision (not the engine build), so a stale
-    // pre-fix entry could otherwise mask a regression.
-    unsafe {
-        std::env::set_var("CLEAVE_SKIP_CACHE", "1");
-    }
+    // pre-fix entry could otherwise mask a regression. Serialize and restore the
+    // env var so a shared-process run (`cargo test --test it`) can't leak
+    // cache-skipping into a concurrent test.
+    let _guard = crate::support::global_lock();
+    let _skip_cache = crate::support::EnvVarGuard::set("CLEAVE_SKIP_CACHE", "1");
 
     let opts = AnalysisOptions::default();
     let utf8 = analyze_bytes(SCRIPT.as_bytes(), "sample.vbs", &opts).unwrap();

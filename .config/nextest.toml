@@ -25,5 +25,6 @@ retries = 0
 [profile.fast]
 test-threads = "num-cpus"
 fail-fast = true
-# Filter out slow integration tests
+# Filter out slow integration tests (all live in the consolidated `it` crate;
+# these substrings still match their `<module>::<test>` paths).
 # Run with: cargo nextest run --profile fast -E 'not test(/symbol_extraction|utf16|trait_strictness/)'

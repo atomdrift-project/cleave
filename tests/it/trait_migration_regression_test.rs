@@ -7,13 +7,6 @@
 //! `cleave facts` symbol/call/member projections that replace the per-member
 //! tree-sitter cursor walk.
 
-use std::sync::{Mutex, OnceLock};
-
-fn env_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-}
-
 /// The sibling `cleave-traits` checkout (this crate is `<workspace>/cleave`).
 fn traits_dir() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../cleave-traits")
@@ -24,7 +17,7 @@ fn traits_dir() -> std::path::PathBuf {
 /// The traits-dir override is process-wide, so the env lock serializes access.
 #[allow(clippy::expect_used)]
 fn fires(id_suffix: &str, name: &str, src: &str) -> bool {
-    let _guard = env_lock().lock().expect("env lock poisoned");
+    let _guard = crate::support::global_lock();
     let td = traits_dir();
     if !td.is_dir() {
         // No local traits checkout (e.g. packaged-crate CI) — skip rather than
@@ -115,8 +108,8 @@ fn alias_import_traits_fire_only_on_aliased_imports() {
 #[test]
 fn ast_density_metric_migrations_fire() {
     assert!(
-        fires("::xor-bitwise-op", "x.py", "x = a ^ b\n"),
-        "a `^` operator must fire xor-bitwise-op via ast.op.xor",
+        fires("::py-keyword-xor", "x.py", "x = a ^ b\n"),
+        "a `^` operator must fire py-keyword-xor via ast.op.xor",
     );
     assert!(
         fires(

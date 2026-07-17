@@ -9,13 +9,6 @@
 //! contract so the optimization can't quietly return and re-break it.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use std::sync::{Mutex, OnceLock};
-
-fn env_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-}
-
 /// The sibling `cleave-traits` checkout (this crate is `<workspace>/cleave`).
 fn traits_dir() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../cleave-traits")
@@ -26,7 +19,7 @@ fn traits_dir() -> std::path::PathBuf {
 /// is present, e.g. packaged-crate CI. The traits-dir override is process-wide,
 /// so the env lock serializes access.
 fn fired_ids(name: &str, src: &str) -> Option<Vec<String>> {
-    let _guard = env_lock().lock().expect("env lock poisoned");
+    let _guard = crate::support::global_lock();
     let td = traits_dir();
     if !td.is_dir() {
         eprintln!("skipping: traits dir {} not found", td.display());

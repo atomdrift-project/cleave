@@ -664,6 +664,25 @@ pub fn format_context_badged(
     // members (path for archive members, reconstructed purl for a registry node).
     let id_to_file: HashMap<u32, &FileAnalysis> = files.iter().map(|f| (f.id, *f)).collect();
 
+    /// The id of the fetched-subtree root at or above `file`, or `None` when it
+    /// belongs to the sample's own tree.
+    ///
+    /// A graft root carries `Rel::Fetched`; everything beneath it is an ordinary
+    /// member of that payload, so membership is inherited by walking parents. The
+    /// walk is bounded by the file count so a crafted report with a parent cycle
+    /// terminates instead of spinning.
+    fn fetched_root_of(file: &FileAnalysis, by_id: &HashMap<u32, &FileAnalysis>) -> Option<u32> {
+        use crate::types::Rel;
+        let mut cur = file;
+        for _ in 0..by_id.len() {
+            if cur.rel == Rel::Fetched {
+                return Some(cur.id);
+            }
+            cur = *by_id.get(&cur.parent_id?)?;
+        }
+        None
+    }
+
     let mut out = String::with_capacity(4096);
     let mut emitted = false;
     // The machine/LLM view shows each distinct finding once across the whole
@@ -696,7 +715,23 @@ pub fn format_context_badged(
         HashSet::new()
     };
 
-    let mut seen: HashSet<&str> = HashSet::new();
+    // Which artifact each file belongs to: the id of the fetched-subtree root
+    // above it, or None for the sample's own files. A fetched payload is a
+    // separate artifact that happens to be rendered here — someone else's
+    // package, with its own author and its own findings.
+    let artifact_of: HashMap<u32, Option<u32>> = files
+        .iter()
+        .map(|f| (f.id, fetched_root_of(f, &id_to_file)))
+        .collect();
+
+    // Dedup is per artifact, not per report. Collapsing repeats across a
+    // sample's own members is the point — the same product name or "no symbol
+    // table" across a hundred of them is noise. Collapsing them across an
+    // artifact boundary is not: a fetched dependency firing the same finding is
+    // a second, independent occurrence, and since the root renders first it was
+    // the dependency's copy that got dropped. That silently deleted a hostile
+    // finding from the block of the artifact that actually carried it.
+    let mut seen_by_artifact: HashMap<Option<u32>, HashSet<&str>> = HashMap::new();
     for &file in &files {
         // Highest-scoring files (and every file in the terminal view) draw
         // context windows; the tiny view's long tail lists findings without them.
@@ -728,6 +763,9 @@ pub fn format_context_badged(
         // Done after container filtering so the surviving, container-specific
         // ids are what register as seen.
         if dedup_across_files {
+            let seen = seen_by_artifact
+                .entry(artifact_of.get(&file.id).copied().flatten())
+                .or_default();
             selected.retain(|&id| seen.insert(id));
         }
 
@@ -2983,6 +3021,81 @@ mod tests {
         );
         // Ordinary paths are not embedded markers.
         assert_eq!(embedded_label("alvr/deps", 100), None);
+    }
+
+    /// The machine view collapses a finding repeated across a sample's own
+    /// members — the same "no symbol table" across a hundred of them is noise.
+    /// A fetched dependency is not one of those members: it is a separate
+    /// artifact with its own author, and its firing the same finding is a second
+    /// independent occurrence. Because the root renders first, the copy that got
+    /// dropped was the dependency's — silently deleting a hostile finding from
+    /// the block of the artifact that actually carried it.
+    #[test]
+    fn dedup_does_not_cross_a_fetched_artifact_boundary() {
+        let shared = "objectives/exec/install-hook";
+        let mut root = src_file(
+            0,
+            "wrapper.tgz",
+            5,
+            vec![finding_with(shared, Criticality::Suspicious)],
+            vec![],
+        );
+        root.depth = 0;
+
+        // An ordinary member of the sample: its repeat is noise, still collapsed.
+        let mut member = src_file(
+            1,
+            "wrapper.tgz!!lib/a.js",
+            4,
+            vec![finding_with(shared, Criticality::Suspicious)],
+            vec![],
+        );
+        member.depth = 1;
+        member.parent_id = Some(0);
+
+        // A fetched dependency, and one of its own members.
+        let mut dep = src_file(
+            2,
+            "pkg:npm/evil@1.0.0",
+            4,
+            vec![finding_with(shared, Criticality::Hostile)],
+            vec![],
+        );
+        dep.depth = 1;
+        dep.parent_id = Some(0);
+        dep.rel = crate::types::Rel::Fetched;
+        let mut dep_member = src_file(
+            3,
+            "pkg:npm/evil@1.0.0!!index.js",
+            3,
+            vec![finding_with(shared, Criticality::Hostile)],
+            vec![],
+        );
+        dep_member.depth = 2;
+        dep_member.parent_id = Some(2);
+
+        let report = report_with_files(vec![root, member, dep, dep_member]);
+        let tiny = format_context(&report, &TinyOpts::tiny());
+
+        // Containers collapse their findings into the member that carries them,
+        // so the two blocks that render are the sample's member and the
+        // dependency's. The criticality marker tells them apart: S is the
+        // sample's copy, H the dependency's. Deduped across the boundary, the
+        // sample renders first and H disappears entirely.
+        assert!(
+            tiny.contains("# H "),
+            "the dependency's own finding was deduped away against the sample's: {tiny:?}",
+        );
+        assert_eq!(
+            tiny.matches("# H ").count(),
+            1,
+            "dedup still collapses repeats inside the dependency: {tiny:?}",
+        );
+        assert_eq!(
+            tiny.matches("# S ").count(),
+            1,
+            "dedup still collapses repeats inside the sample: {tiny:?}",
+        );
     }
 
     fn finding_with(id: &str, crit: Criticality) -> Finding {

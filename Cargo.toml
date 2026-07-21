@@ -2,6 +2,9 @@
 name = "cleave"
 version = "2.4.0-beta.0"
 edition = "2024"
+# Build on any rustc within ~2 releases of current stable; edition 2024 implies
+# the MSRV-aware resolver, so this also caps dependency versions.
+rust-version = "1.94"
 authors = ["The Atomdrift Project"]
 description = "Deep static analysis tool for extracting features from binaries and source code"
 license = "Apache-2.0"

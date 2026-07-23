@@ -1147,56 +1147,83 @@ impl AnalysisReport {
             .map(|(idx, file)| (file.path.clone(), idx))
             .collect();
 
+        // Sort key: deepest wrappers first, so findings propagate level by
+        // level — a child merges into its immediate wrapper before that
+        // wrapper is itself merged (as a child) into the next level up.
+        let level_of = |file: &FileAnalysis| (file.depth, wrapper_delimiter_count(&file.path));
         let mut child_indices: Vec<usize> = self
             .files
             .iter()
             .enumerate()
             .filter_map(|(idx, file)| immediate_wrapper_path(&file.path).map(|_| idx))
             .collect();
-        child_indices.sort_by_key(|&idx| {
-            std::cmp::Reverse((
-                self.files[idx].depth,
-                wrapper_delimiter_count(&self.files[idx].path),
-            ))
-        });
+        child_indices.sort_by_key(|&idx| std::cmp::Reverse(level_of(&self.files[idx])));
 
+        // Merge one level at a time, batching every child of the same parent
+        // into a single extend + dedupe. The per-child variant re-deduplicated
+        // the parent's entire findings list (evidence dedup included) once per
+        // child — on a 63k-member archive whose members share one wrapper,
+        // that is 63k full-list dedups of the same accumulating list, and it
+        // made this pass dominate archive scans (2026-07-23: 2,865 s for a
+        // corpus that scans in 337 s as loose files). Batching is safe because
+        // a parent's own upward merge always happens at a strictly later
+        // level than everything it receives (its (depth, delimiter) key is
+        // strictly below its children's), so flushing at level boundaries
+        // preserves the propagation order.
         let mut changed = FxHashSet::default();
-        for child_idx in child_indices {
-            let Some(parent_path) = immediate_wrapper_path(&self.files[child_idx].path) else {
-                continue;
-            };
-            let Some(&parent_idx) = path_to_index.get(parent_path) else {
-                continue;
-            };
-            if parent_idx == child_idx || self.files[child_idx].findings.is_empty() {
-                continue;
-            }
+        let mut pending: FxHashMap<usize, Vec<Finding>> = FxHashMap::default();
+        let mut i = 0;
+        while i < child_indices.len() {
+            let level = level_of(&self.files[child_indices[i]]);
+            while i < child_indices.len() {
+                let child_idx = child_indices[i];
+                if level_of(&self.files[child_idx]) != level {
+                    break;
+                }
+                i += 1;
+                let Some(parent_path) = immediate_wrapper_path(&self.files[child_idx].path) else {
+                    continue;
+                };
+                let Some(&parent_idx) = path_to_index.get(parent_path) else {
+                    continue;
+                };
+                if parent_idx == child_idx || self.files[child_idx].findings.is_empty() {
+                    continue;
+                }
 
-            // Stamp the inherited copies with the child's file id so consumers
-            // can tell a wrapper finding bubbled up from a member (and from which
-            // one), and de-duplicate the view by attributing it to its origin.
-            // Preserve any deeper `src` already set (a finding inherited through
-            // several wrapper layers keeps pointing at where it was located).
-            let child_id = self.files[child_idx].id;
-            let child_findings: Vec<Finding> = self.files[child_idx]
-                .findings
-                .iter()
-                .cloned()
-                .map(|mut f| {
-                    f.src.get_or_insert(child_id);
-                    f
-                })
-                .collect();
-            let parent = &mut self.files[parent_idx];
-            parent.findings.extend(child_findings);
-            dedupe_finding_list(&mut parent.findings);
-            Self::refresh_formula(parent);
-            parent.compute_summary();
-            changed.insert(parent_idx);
+                // Stamp the inherited copies with the child's file id so consumers
+                // can tell a wrapper finding bubbled up from a member (and from which
+                // one), and de-duplicate the view by attributing it to its origin.
+                // Preserve any deeper `src` already set (a finding inherited through
+                // several wrapper layers keeps pointing at where it was located).
+                let child_id = self.files[child_idx].id;
+                pending.entry(parent_idx).or_default().extend(
+                    self.files[child_idx].findings.iter().cloned().map(|mut f| {
+                        f.src.get_or_insert(child_id);
+                        f
+                    }),
+                );
+                changed.insert(parent_idx);
+            }
+            // Flush the level: one extend + one dedupe per parent, however many
+            // children contributed.
+            for (parent_idx, findings) in pending.drain() {
+                let parent = &mut self.files[parent_idx];
+                parent.findings.extend(findings);
+                dedupe_finding_list(&mut parent.findings);
+            }
         }
 
         let mut changed: Vec<usize> = changed.into_iter().collect();
         changed.sort_unstable();
+        // Formula and summary are derived views — nothing in the upward
+        // propagation reads them — so refresh each changed parent once at the
+        // end rather than once per contributing child.
+        for &idx in &changed {
+            let parent = &mut self.files[idx];
+            Self::refresh_formula(parent);
+            parent.compute_summary();
+        }
         changed
     }
 

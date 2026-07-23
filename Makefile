@@ -329,7 +329,12 @@ publish-traits: ## FULL RELEASE: compat-test HEAD + last (VERSIONS-1) releases â
 	$(MAKE) publish-cleave
 	@echo "âœ“ publish-traits complete: compat-tested HEAD + last $(shell expr $(VERSIONS) - 1) release(s), signed, verified, uploaded"
 
-# --- Unattended trait publishing (30-min systemd timer via hacks/traiter-linux.sh) --
+# --- Unattended trait publishing (30-min systemd timer) ----------------------
+# The timer that drives this target is installed by hacks/traiter-linux.sh in the
+# TRAITS repo (isotope13-dev/traits-dev), not here: provisioning is traits-repo
+# policy, while the manifest primitives below are cleave's and are shared with
+# scan's publish-models. The unit runs `make publish-traits-cron` with this
+# checkout as its WorkingDirectory.
 # Change-gated wrapper around the publish flow for the timer. It rebuilds+publishes
 # ONLY when one of the three inputs manifest-gen actually keys off has moved since
 # the last successful publish (fingerprinted in TRAITS_STAMP):
@@ -348,13 +353,14 @@ publish-traits: ## FULL RELEASE: compat-test HEAD + last (VERSIONS-1) releases â
 # nothing is written to the public Rekor transparency log. versions.toml ships with
 # no signature bundle, so clients that require a signature will NOT apply the update
 # â€” i.e. auto-update is effectively disabled until signing is wired up. To turn
-# signing on later, sign in an automated fashion (see the hacks/traiter-linux.sh
-# header) and swap the gen-manifest line below for `SIGN=1 IDENTITY=$(IDENTITY)`
+# signing on later, sign in an automated fashion (see the traits repo's
+# hacks/traiter-linux.sh header) and swap the gen-manifest line below for
+# `SIGN=1 IDENTITY=$(IDENTITY)`
 # plus a `check-manifest IDENTITY=$(IDENTITY)` gate. The R2 upload is idempotent
 # (rclone skips unchanged bundles), so a redundant publish is cheap.
 # Safe to run by hand.
 TRAITS_STAMP ?= $(DIST)/.publish-traits.stamp
-.PHONY: publish-traits-cron deploy-traiter
+.PHONY: publish-traits-cron
 publish-traits-cron: ## 30-min timer cycle: skip fast unless traits/source/release-tags moved, else gen+check+publish UNSIGNED
 	@command -v rclone >/dev/null || { echo "publish-traits-cron: rclone not found"; exit 1; }
 	@git -C "$(TRAITS)" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
@@ -378,9 +384,6 @@ publish-traits-cron: ## 30-min timer cycle: skip fast unless traits/source/relea
 	mkdir -p "$$(dirname "$(TRAITS_STAMP)")"; \
 	printf '%s\n' "$$stamp" > "$(TRAITS_STAMP)"; \
 	echo "âœ“ publish-traits-cron complete (unsigned) at $$traits_short"
-
-deploy-traiter: ## Install the unattended 30-min trait-publish systemd timer on THIS host (see hacks/traiter-linux.sh)
-	./hacks/traiter-linux.sh
 
 update-manifest: release ## Build + validate + render a trait-update manifest (RELEASE=x.y.z [CHANNEL=beta] [COMMIT=ref] [SIGN=1 IDENTITY=...])
 	@[ -n "$(RELEASE)" ] || { echo "RELEASE=x.y.z required"; exit 1; }

@@ -41,7 +41,7 @@ archs:
   - x86_64
 
 annotations:
-  org.opencontainers.image.source: https://codeberg.org/atomdrift/cleave
+  org.opencontainers.image.source: https://github.com/atomdrift-project/cleave
   org.opencontainers.image.title: cleave
   org.opencontainers.image.description: Deep static analysis tool for binaries and source code
   org.opencontainers.image.licenses: Apache-2.0

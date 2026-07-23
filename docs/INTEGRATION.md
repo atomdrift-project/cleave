@@ -35,7 +35,7 @@ path.
 
 ## Upstream
 
-[Litmus](https://codeberg.org/atomdrift/litmus) is the canonical
+[Litmus](https://github.com/atomdrift-project/litmus) is the canonical
 consumer: it embeds the library, exposes its own HTTP and worker
 modes, and wraps each `AnalysisReport` as the `raw` field of a
 classification envelope. See its

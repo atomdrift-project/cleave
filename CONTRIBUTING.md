@@ -2,7 +2,7 @@
 
 Thanks for your interest in contributing! Whether you're writing your first detection rule or submitting a complex engine feature, we're glad you're here.
 
-cleave is hosted on Codeberg. We accept contributions via pull requests.
+cleave is hosted on GitHub. We accept contributions via pull requests.
 
 ## Getting Started
 

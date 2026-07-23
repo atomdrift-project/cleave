@@ -2,10 +2,10 @@
   <img src="media/logo.svg" alt="cleave" width="240">
 </p>
 
-cleave answers one question — *what can this program do?* It extracts capabilities from binaries, source, and archives, scoring each against **[80,000+ behavior rules](https://codeberg.org/atomdrift/cleave-traits)** aligned to [MBC](https://github.com/MBCProject/mbc-markdown) and [ATT&CK](https://attack.mitre.org/). Apache-2.0, no telemetry.
+cleave answers one question — *what can this program do?* It extracts capabilities from binaries, source, and archives, scoring each against **[80,000+ behavior rules](https://github.com/atomdrift-project/traits)** aligned to [MBC](https://github.com/MBCProject/mbc-markdown) and [ATT&CK](https://attack.mitre.org/). Apache-2.0, no telemetry.
 
 - **Interactive supply-chain & malware triage.** Run on a release, a suspicious sample, or a directory of dropped files. `cleave diff old/ new/` highlights new capabilities, tampered headers, and provenance anomalies between versions.
-- **Feature extraction for ML/AI pipelines.** Stable JSON schema, deterministic output, SHA256-keyed cache. [litmus](https://codeberg.org/atomdrift/litmus) is the reference downstream classifier.
+- **Feature extraction for ML/AI pipelines.** Stable JSON schema, deterministic output, SHA256-keyed cache. [litmus](https://github.com/atomdrift-project/litmus) is the reference downstream classifier.
 
 ## Screenshots
 
@@ -49,7 +49,7 @@ Known to run awesomely on illumos, OpenBSD, FreeBSD, Linux, and macOS.
 ## Design
 
 - **Capabilities, not verdicts.** Findings ranked `baseline` → `hostile`, organized roughly based on the [Malware Behavior Catalog](https://github.com/MBCProject/mbc-markdown).
-- **Layered unpacking.** UPX, embedded binaries, base64/hex/AES/XOR via [stng](https://codeberg.org/atomdrift/stng).
+- **Layered unpacking.** UPX, embedded binaries, base64/hex/AES/XOR via [stng](https://github.com/atomdrift-project/stng).
 - **Deep header inspection.** PE manifests/signing, Mach-O codesign/entitlements, DWARF, Go build info, embedded plists.
 - **Automated RE.** [rizin](https://github.com/rizinorg/rizin)-driven disassembly and xrefs on ELF/Mach-O/PE.
 - **Deterministic.** JSONL streaming, SHA256-keyed cache, AST via tree-sitter, YAML & YARA-X for signatures.
@@ -63,9 +63,9 @@ Known to run awesomely on illumos, OpenBSD, FreeBSD, Linux, and macOS.
 
 ## Rules
 
-- [cleave-traits](https://codeberg.org/atomdrift/cleave-traits)
-- [RULES.md](https://codeberg.org/atomdrift/cleave-traits/src/branch/main/RULES.md)
-- [TAXONOMY.md](https://codeberg.org/atomdrift/cleave-traits/src/branch/main/TAXONOMY.md)
+- [cleave-traits](https://github.com/atomdrift-project/traits)
+- [RULES.md](https://github.com/atomdrift-project/traits/src/branch/main/RULES.md)
+- [TAXONOMY.md](https://github.com/atomdrift-project/traits/src/branch/main/TAXONOMY.md)
 
 ## Related Projects
 

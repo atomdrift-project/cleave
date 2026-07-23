@@ -339,6 +339,7 @@ publish-traits: ## FULL RELEASE: compat-test HEAD + last (VERSIONS-1) releases �
 # ONLY when one of the three inputs manifest-gen actually keys off has moved since
 # the last successful publish (fingerprinted in TRAITS_STAMP):
 #   1. cleave-traits tip   — new trait commits beyond what the manifest points at
+#                            (in mirror mode: the embargo cutoff, not the tip)
 #   2. cleave source HEAD  — the HEAD engine that validates the `latest` pointer
 #   3. stable release tags — the top-N `v<n>` tags the manifest is keyed by, i.e.
 #                            "new cleave versions" (a plain `main` HEAD stamp would
@@ -359,15 +360,34 @@ publish-traits: ## FULL RELEASE: compat-test HEAD + last (VERSIONS-1) releases �
 # plus a `check-manifest IDENTITY=$(IDENTITY)` gate. The R2 upload is idempotent
 # (rclone skips unchanged bundles), so a redundant publish is cheap.
 # Safe to run by hand.
+#
+# PUBLIC MIRROR (opt-in): setting TRAITS_PUBLIC_REMOTE to a git remote name on
+# $(TRAITS) turns the cycle into an embargoed public-first publisher:
+#   * only commits at least TRAITS_EMBARGO old are eligible (rev-list --before
+#     on origin/main), so the private repo keeps a quarantine window in which a
+#     bad commit can be fixed before anything about it becomes public;
+#   * the eligible cutoff is pushed to TRAITS_PUBLIC_REMOTE BEFORE the R2 upload
+#     and the manifest is rendered from THAT commit, so R2 never ships a bundle
+#     whose source commit is not already public — bundle filenames and the
+#     versions.toml `commit` keys stay auditable against the mirror by SHA.
+# The mirror push is fast-forward-only and a failure aborts the cycle before R2:
+# never rewrite private history older than TRAITS_EMBARGO, or every cycle fails
+# until the mirror is reconciled by hand.
 TRAITS_STAMP ?= $(DIST)/.publish-traits.stamp
+TRAITS_PUBLIC_REMOTE ?=
+TRAITS_EMBARGO ?= 72 hours
 .PHONY: publish-traits-cron
-publish-traits-cron: ## 30-min timer cycle: skip fast unless traits/source/release-tags moved, else gen+check+publish UNSIGNED
+publish-traits-cron: ## 30-min timer cycle: skip fast unless traits/source/release-tags moved, else [mirror+]gen+check+publish UNSIGNED
 	@command -v rclone >/dev/null || { echo "publish-traits-cron: rclone not found"; exit 1; }
 	@git -C "$(TRAITS)" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
 	  || { echo "publish-traits-cron: TRAITS=$(TRAITS) is not a git checkout — clone cleave-traits there first"; exit 1; }
 	@set -e; \
 	git -C "$(TRAITS)" fetch -q origin 2>/dev/null || echo "publish-traits-cron: WARN fetch $(TRAITS) failed; using cached refs"; \
 	traits_tip=$$(git -C "$(TRAITS)" rev-parse origin/main 2>/dev/null || git -C "$(TRAITS)" rev-parse HEAD); \
+	if [ -n "$(TRAITS_PUBLIC_REMOTE)" ]; then \
+	  traits_tip=$$(git -C "$(TRAITS)" rev-list -1 --before="$(TRAITS_EMBARGO) ago" "$$traits_tip"); \
+	  [ -n "$$traits_tip" ] || { echo "publish-traits-cron: no trait commit older than $(TRAITS_EMBARGO) yet; skipping"; exit 0; }; \
+	fi; \
 	traits_short=$$(git -C "$(TRAITS)" rev-parse --short "$$traits_tip"); \
 	src_head=$$(git -C . rev-parse HEAD 2>/dev/null || echo nogit); \
 	tagsig=$$(git -C . for-each-ref --format='%(objectname) %(refname:short)' 'refs/tags/v*' 2>/dev/null | awk '$$2 ~ /^v[0-9]/ && $$2 !~ /-/' | sort || true); \
@@ -376,8 +396,14 @@ publish-traits-cron: ## 30-min timer cycle: skip fast unless traits/source/relea
 	  echo "→ no new trait commits or cleave versions since last publish (cleave-traits $$traits_short); skipping"; \
 	  exit 0; \
 	fi; \
-	echo "→ change detected (cleave-traits $$traits_short); fast-forwarding + publishing UNSIGNED"; \
-	git -C "$(TRAITS)" merge -q --ff-only "$$traits_tip"; \
+	if [ -n "$(TRAITS_PUBLIC_REMOTE)" ]; then \
+	  echo "→ change detected (cleave-traits $$traits_short); mirroring to $(TRAITS_PUBLIC_REMOTE), then publishing UNSIGNED"; \
+	  git -C "$(TRAITS)" push -q "$(TRAITS_PUBLIC_REMOTE)" "$$traits_tip:refs/heads/main"; \
+	  git -C "$(TRAITS)" reset --hard -q "$$traits_tip"; \
+	else \
+	  echo "→ change detected (cleave-traits $$traits_short); fast-forwarding + publishing UNSIGNED"; \
+	  git -C "$(TRAITS)" merge -q --ff-only "$$traits_tip"; \
+	fi; \
 	$(MAKE) gen-manifest ENGINE= VERSIONS=$(VERSIONS) CHANNELS=stable; \
 	CLEAVE_ALLOW_UNSIGNED=1 $(MAKE) check-manifest; \
 	$(MAKE) publish-cleave; \

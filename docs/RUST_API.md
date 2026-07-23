@@ -12,7 +12,7 @@ run `cleave --help`. For the HTTP server, see
 [../FILE_FORMATS.md](../FILE_FORMATS.md); this document does not
 duplicate it.
 
-Cleave is also a library dependency of [litmus](https://codeberg.org/atomdrift/litmus);
+Cleave is also a library dependency of [litmus](https://github.com/atomdrift-project/litmus);
 litmus's response envelope embeds an `AnalysisReport` as the `raw`
 field.
 
@@ -120,7 +120,7 @@ Members land under `extract_dir/<sha256[0:6]>/<relative-path>`.
 
 | Variable                  | Effect                                                         |
 | ------------------------- | -------------------------------------------------------------- |
-| `CLEAVE_TRAITS_DIR`       | Path to the [cleave-traits](https://codeberg.org/atomdrift/cleave-traits) checkout. Required at first call. |
+| `CLEAVE_TRAITS_DIR`       | Path to the [cleave-traits](https://github.com/atomdrift-project/traits) checkout. Required at first call. |
 | `CLEAVE_RAYON_THREADS`    | Rayon pool size. Default is system parallelism.                |
 | `CLEAVE_SKIP_CACHE`       | `1` disables both the analysis cache and the YARA match cache. |
 | `CLEAVE_SKIP_YARA_CACHE`  | `1` disables the YARA match cache only.                        |

@@ -60,13 +60,13 @@ no VM in between.
 ## How local dev differs from upstream Wolfi
 
 `melange.yaml` declares a `git-checkout` step that pulls the cleave
-source from codeberg at a pinned commit. That's what upstream Wolfi CI
+source from GitHub at a pinned commit. That's what upstream Wolfi CI
 runs. Locally, `build.sh` passes `--source-dir` to melange, which
 replaces the checkout with a bind-mount of the working tree. This lets
-you iterate on the package definition without pushing to codeberg, and
+you iterate on the package definition without pushing to GitHub, and
 keeps the upstream pipeline reproducible.
 
-The `cleave-traits` subpackage still fetches from codeberg via
+The `cleave-traits` subpackage still fetches from GitHub via
 `git-checkout` (~1MB; melange caches it under `~/.cache/cleave-wolfi`).
 
 ## Upstream blocker: filefacts path dep
@@ -79,7 +79,7 @@ must go. Pick one:
   no other consumers.
 - **Publish filefacts to crates.io**, then switch to `filefacts = "0.1"`.
 - **Switch to a git dep**: `filefacts = { git =
-  "https://codeberg.org/atomdrift/filefacts", tag = "v0.1.0" }`.
+  "https://github.com/atomdrift-project/filefacts", tag = "v0.1.0" }`.
 
 The local build works around this by rsyncing both repos into a staging
 dir, so you can iterate on the package definition today and unblock the
@@ -88,7 +88,7 @@ upstream PR once the dep shape is fixed.
 ## Submitting upstream
 
 1. Resolve the filefacts dep above.
-2. Tag a cleave release (`vX.Y.Z` on codeberg).
+2. Tag a cleave release (`vX.Y.Z` on GitHub).
 2. Update `melange.yaml`:
    - `package.version` → new version (drop the `v` prefix).
    - `expected-commit` in the first `git-checkout` → the tag's commit SHA.

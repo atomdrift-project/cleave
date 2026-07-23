@@ -53,7 +53,7 @@ pipeline:
   # the upstream tag. Upstream wolfi-dev/os keeps it.
   - uses: git-checkout
     with:
-      repository: https://codeberg.org/atomdrift/cleave
+      repository: https://github.com/atomdrift-project/cleave
       tag: v${{package.version}}
       expected-commit: c36812c913c0879b712a6c525ecf4b18663469e8
   # LOCAL_BUILD_STRIP_END
@@ -74,7 +74,7 @@ subpackages:
     pipeline:
       - uses: git-checkout
         with:
-          repository: https://codeberg.org/atomdrift/cleave-traits
+          repository: https://github.com/atomdrift-project/traits
           branch: main
           expected-commit: 06e4151848ae0a6378c22a8d22a5f9e4e763278d
           destination: traits-src

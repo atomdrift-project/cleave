@@ -90,7 +90,7 @@ cleave-macros = { path = "cleave-macros" }
 # tree-sitter, or the structured-format parsers directly — every parse
 # is materialised once via filefacts::open() and reused via the typed
 # views on `ParsedFile`.
-filefacts = { git = "https://codeberg.org/atomdrift/filefacts.git" }
+filefacts = { git = "https://github.com/atomdrift-project/filefacts.git" }
 
 cfb = "0.14"  # Microsoft OLE2/CFBF compound document parsing
 
@@ -153,7 +153,7 @@ cab = "0.6"
 # Pinned to the fork carrying the LZMA/ULMO codec work (PR pending upstream at
 # citruz/dmgwiz). default-features = false drops the crypto (openssl/ring) and
 # cli (clap) features cleave doesn't use.
-dmgwiz = { git = "https://github.com/tstromberg/dmgwiz.git", default-features = false }
+dmgwiz = { git = "https://github.com/atomdrift-project/dmgwiz.git", default-features = false }
 lzx = { path = "crates/lzx" }
 # Pinned to 0.39 because rusqlite 0.40 pulls libsqlite3-sys 0.38, whose build
 # script uses the still-unstable cfg_select! macro (rust-lang/rust#115585) and
@@ -211,7 +211,7 @@ libc = "0.2"          # For FreeBSD sysctl thread info and other OS APIs
 memmap2 = "0.9"  # Memory-mapped file I/O for large files
 smallvec = "1.15"  # Stack-allocated vectors for small collections
 encoding_rs = "0.8"  # Character encoding detection and conversion
-stng = { git = "https://codeberg.org/atomdrift/stng.git" }  # String extraction
+stng = { git = "https://github.com/atomdrift-project/stng.git" }  # String extraction
 
 # Logging (tracing is the modern standard, more powerful than log+env_logger)
 tracing = "0.1"
@@ -366,6 +366,12 @@ opt-level = 3
 # fix lands upstream (bytecodealliance/wasmtime#5499) and yara-x bumps past it.
 [patch.crates-io]
 wasmtime = { git = "https://github.com/tstromberg/wasmtime.git", branch = "freebsd-aarch64-43.0.2" }
+
+# filefacts still pins stng via its old codeberg URL; redirect it to the
+# github repo so a single `stng` resolves workspace-wide (codeberg->github).
+# Remove once filefacts' stng dependency is updated and its pin is bumped.
+[patch."https://codeberg.org/atomdrift/stng.git"]
+stng = { git = "https://github.com/atomdrift-project/stng.git" }
 
 # Local-only override: pick up the unreleased filefacts static-library (.a)
 # identification fix — a Unix `ar` archive whose first member is not

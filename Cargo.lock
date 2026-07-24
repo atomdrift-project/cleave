@@ -816,7 +816,7 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
 name = "cleave"
-version = "2.4.0-beta.1"
+version = "2.4.0"
 dependencies = [
  "aes 0.9.1",
  "aho-corasick",
@@ -3465,9 +3465,9 @@ dependencies = [
 
 [[package]]
 name = "psl"
-version = "2.1.220"
+version = "2.1.221"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "de177021aa731f88221b3ae411cb89d70f66e51487c26ef9c9f65fc7250c22e8"
+checksum = "131e7bc39f71eb433f96399150b9e6729908dab3640467a3e90d5c5a77831568"
 dependencies = [
  "psl-types",
 ]
@@ -4067,9 +4067,9 @@ dependencies = [
 
 [[package]]
 name = "rustls-pki-types"
-version = "1.15.0"
+version = "1.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "764899a24af3980067ee14bc143654f297b22eaebfe3c7b6b211920a5a59b046"
+checksum = "2f4925028c7eb5d1fcdaf196971378ed9d2c1c4efc7dc5d011256f76c99c0a96"
 dependencies = [
  "web-time",
  "zeroize",

@@ -163,7 +163,7 @@ impl CanonicalTree {
                     // has a value range of [0, 16].
                     let code = pretree.decode_element(bitstream)?;
                     if code > 16 {
-                        return Err(DecodeFailed::InvalidPretreeElement(code))?;
+                        return Err(DecodeFailed::InvalidPretreeElement(code));
                     }
 
                     let value = (17 + self.path_lengths[i] - code as u8) % 17;

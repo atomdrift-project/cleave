@@ -2279,13 +2279,11 @@ impl YaraEngine {
         // Apply config-based criticality for third-party rules
         // Returns None if the rule is disabled via config
         if is_third_party {
-            match crate::third_party_config::third_party_criticality(
+            // Returns None (via `?`) if the rule is disabled via config.
+            crit = crate::third_party_config::third_party_criticality(
                 &namespace,
                 trait_id.as_deref(),
-            ) {
-                Some(config_crit) => crit = config_crit,
-                None => return None, // Rule disabled
-            }
+            )?;
         }
 
         Some(YaraMatch {

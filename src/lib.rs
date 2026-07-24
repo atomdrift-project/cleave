@@ -367,7 +367,7 @@ fn source_literal_at_offset_looks_like_svg_path(source: &[u8], offset: usize) ->
     let local = &source[start..end];
     let rel_offset = offset.saturating_sub(start).min(local.len());
 
-    for quote in [b'"', b'\''] {
+    for quote in *b"\"'" {
         let Some(before) = local[..rel_offset].iter().rposition(|&b| b == quote) else {
             continue;
         };

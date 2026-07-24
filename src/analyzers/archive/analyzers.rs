@@ -320,6 +320,42 @@ impl MemberAccumulator {
         }
     }
 
+    /// Merge another accumulator's state after this one's — the pipelined
+    /// window driver appends any inline-folded remainder (consumer-death
+    /// fallback, or a fully inline run) to the consumer's aggregate, with the
+    /// same per-id max-crit/conf and YARA dedup rules as [`Self::fold`].
+    fn absorb(&mut self, other: MemberAccumulator) {
+        use std::collections::hash_map::Entry;
+        self.distinct_finding_ids.extend(other.distinct_finding_ids);
+        for ym in other.collected_yara {
+            if self.collected_yara.len() >= 1_000 {
+                break;
+            }
+            if !self.collected_yara.iter().any(|m| m.rule == ym.rule) {
+                self.collected_yara.push(ym);
+            }
+        }
+        for (id, f) in other.collected_traits {
+            match self.collected_traits.entry(id) {
+                Entry::Occupied(mut entry) => {
+                    let existing = entry.get_mut();
+                    if (f.crit, f.conf.total_cmp(&existing.conf))
+                        > (existing.crit, std::cmp::Ordering::Equal)
+                    {
+                        *existing = f;
+                    }
+                }
+                Entry::Vacant(entry) => {
+                    entry.insert(f);
+                }
+            }
+        }
+        self.collected_archive_entries
+            .extend(other.collected_archive_entries);
+        self.collected_files.extend(other.collected_files);
+        self.files_analyzed += other.files_analyzed;
+    }
+
     /// Sort the collected member files by descending peak severity, then cap the
     /// count. Generic archives surface their most severe members first under a
     /// hard ceiling; formats that keep insertion order simply don't call this.
@@ -439,6 +475,29 @@ fn member_window_count() -> usize {
         .unwrap_or(DEFAULT)
 }
 
+/// Whether window flushes hand off to a pipelined consumer thread. Requires at
+/// least two rayon workers: the producer is usually itself a pool worker, and
+/// while it is parked in a channel send it cannot steal work — on a 1-thread
+/// pool the consumer's par_iter would then never be executed and both sides
+/// would wait forever. Kill switch: `CLEAVE_PIPELINE_MEMBER_WINDOWS=0` (also
+/// how a single binary A/Bs the pipeline in benchmarks).
+fn pipeline_member_windows() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        std::env::var("CLEAVE_PIPELINE_MEMBER_WINDOWS").as_deref() != Ok("0")
+            && rayon::current_num_threads() >= 2
+    })
+}
+
+/// The pipelined half of a [`MemberWindow`]: a consumer thread (scoped, so it
+/// may borrow the analyzer) that analyzes each window it receives and folds
+/// the results in arrival order — which is send order, so member order is
+/// preserved exactly as in the inline path.
+struct WindowPipeline<'scope> {
+    tx: std::sync::mpsc::SyncSender<Vec<MemoryArchiveMember>>,
+    handle: std::thread::ScopedJoinHandle<'scope, MemberAccumulator>,
+}
+
 /// Byte-windowed member analysis driver.
 ///
 /// Members are pushed in; when the resident window exceeds the byte budget or
@@ -447,7 +506,16 @@ fn member_window_count() -> usize {
 /// the per-window report transient, replacing the old all-members-resident
 /// depth-0 path (which held every member's data and report at once) and the
 /// fully-serial depth>=1 path with one memory-bounded, parallel path.
-struct MemberWindow<'a> {
+///
+/// With a scope (see [`MemberWindow::new_in`]) the flush is pipelined: a
+/// consumer thread analyzes and folds window N while the producer inflates
+/// window N+1. Decompression is inherently serial per archive, and the
+/// blocking flush made it strictly alternate with analysis — the pool sat
+/// idle while the producer inflated and vice versa, which on a 63k-member
+/// archive left ~30% of even an 8-core box unused (2026-07-24 typed
+/// benchmark). The bounded channel keeps at most one window in flight, so
+/// resident bytes stay within one window budget of the inline path.
+struct MemberWindow<'a, 'scope> {
     analyzer: &'a ArchiveAnalyzer,
     acc: MemberAccumulator,
     window: Vec<MemoryArchiveMember>,
@@ -456,9 +524,10 @@ struct MemberWindow<'a> {
     max_count: usize,
     total: usize,
     slow_log_label: &'static str,
+    pipeline: Option<WindowPipeline<'scope>>,
 }
 
-impl<'a> MemberWindow<'a> {
+impl<'a: 'scope, 'scope> MemberWindow<'a, 'scope> {
     fn new(analyzer: &'a ArchiveAnalyzer, slow_log_label: &'static str) -> Self {
         Self {
             analyzer,
@@ -469,7 +538,41 @@ impl<'a> MemberWindow<'a> {
             max_count: member_window_count(),
             total: 0,
             slow_log_label,
+            pipeline: None,
         }
+    }
+
+    /// Like [`MemberWindow::new`], but flushes hand windows to a consumer
+    /// thread spawned on `scope` (when pipelining is enabled), overlapping the
+    /// producer's decompression with member analysis. The caller's producer
+    /// loop simply runs inside `std::thread::scope(|s| ...)`; every early exit
+    /// drops this struct and with it the channel sender, so the consumer
+    /// always terminates and the scope never hangs on join.
+    fn new_in(
+        scope: &'scope std::thread::Scope<'scope, '_>,
+        analyzer: &'a ArchiveAnalyzer,
+        slow_log_label: &'static str,
+    ) -> Self {
+        let mut this = Self::new(analyzer, slow_log_label);
+        if !pipeline_member_windows() {
+            return this;
+        }
+        let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<MemoryArchiveMember>>(1);
+        let handle = scope.spawn(move || {
+            let mut acc = MemberAccumulator::default();
+            while let Ok(batch) = rx.recv() {
+                let parallel = analyzer.members_run_parallel(batch.len());
+                let results = par_filter_map_members(&batch, parallel, |member| {
+                    analyzer.analyze_one_member(member, slow_log_label)
+                });
+                for result in results {
+                    acc.fold(result);
+                }
+            }
+            acc
+        });
+        this.pipeline = Some(WindowPipeline { tx, handle });
+        this
     }
 
     /// Add a member, flushing the window first if it is already full.
@@ -483,9 +586,25 @@ impl<'a> MemberWindow<'a> {
     }
 
     /// Analyze the current window in parallel, fold results, drop the buffers.
+    /// Pipelined: hand the window to the consumer (blocking while one window
+    /// is already in flight — that backpressure is the memory bound). Inline:
+    /// analyze and fold here, exactly the pre-pipeline behavior.
     fn flush(&mut self) {
         if self.window.is_empty() {
             return;
+        }
+        if let Some(pipeline) = &self.pipeline {
+            let batch = std::mem::take(&mut self.window);
+            self.window_bytes = 0;
+            if let Err(send_err) = pipeline.tx.send(batch) {
+                // Consumer died (panicked). Fold this window inline so the
+                // scan still completes; the join in finalize propagates the
+                // panic for visibility.
+                self.window = send_err.0;
+                self.pipeline = None;
+            } else {
+                return;
+            }
         }
         let analyzer = self.analyzer;
         let label = self.slow_log_label;
@@ -509,8 +628,21 @@ impl<'a> MemberWindow<'a> {
         tools_used: Vec<String>,
     ) {
         self.flush();
-        self.acc
-            .finalize(report, start, archive_label, tools_used, self.total);
+        let mut acc = match self.pipeline.take() {
+            Some(WindowPipeline { tx, handle }) => {
+                drop(tx); // consumer's recv loop ends
+                match handle.join() {
+                    Ok(acc) => acc,
+                    Err(panic) => std::panic::resume_unwind(panic),
+                }
+            }
+            None => MemberAccumulator::default(),
+        };
+        // Inline-path folds (non-pipelined runs, or a fallback after consumer
+        // death) merge after the pipelined ones; in normal operation exactly
+        // one of the two accumulators is non-empty.
+        acc.absorb(self.acc);
+        acc.finalize(report, start, archive_label, tools_used, self.total);
     }
 }
 
@@ -1175,61 +1307,82 @@ impl ArchiveAnalyzer {
             crate::analyzers::detect_file_type(archive_path),
             Ok(FileType::Jar)
         );
-        let mut window = MemberWindow::new(self, "filefacts ZIP index");
-        let mut jar_members: Vec<MemoryArchiveMember> = Vec::new();
+        // The scope hosts the window's pipelined consumer; every exit path
+        // (including the mid-loop `return Ok(false)` fallbacks) drops the
+        // window and its channel before the scope joins, so it cannot hang.
+        std::thread::scope(|scope| -> Result<bool> {
+            let mut window = MemberWindow::new_in(scope, self, "filefacts ZIP index");
+            let mut jar_members: Vec<MemoryArchiveMember> = Vec::new();
 
-        for entry in indexed_entries {
-            if self.is_cancelled() {
-                anyhow::bail!("Analysis cancelled during ZIP member read");
-            }
-            if !guard.check_file_count() {
-                anyhow::bail!(
-                    "Exceeded maximum file count ({})",
-                    super::guards::MAX_FILE_COUNT
-                );
-            }
-
-            let entry_name = entry.path.clone();
-            if entry_name.len() > MAX_PATH_COMPONENT_LEN {
-                guard.add_hostile_reason(HostileArchiveReason::ExcessiveEntryName {
-                    len: entry_name.len(),
-                    preview: entry_name.chars().take(80).collect(),
-                });
-            }
-
-            let Some(outpath) = sanitize_entry_path(&entry_name, fake_root) else {
-                guard.add_hostile_reason(HostileArchiveReason::PathTraversal(entry_name));
-                continue;
-            };
-            let relative_path = outpath
-                .strip_prefix(fake_root)
-                .unwrap_or(&outpath)
-                .to_string_lossy()
-                .replace('\\', "/");
-            let entry_type_label = entry.entry_type.as_deref().unwrap_or("regular");
-
-            if entry_type_label == "directory" {
-                continue;
-            }
-
-            if entry.encrypted {
-                anyhow::bail!("Password required to decrypt file");
-            }
-
-            if entry_type_label == "symlink" {
-                let target = super::zip::read_indexed_zip_member(data, entry, 4096)
-                    .ok()
-                    .and_then(|bytes| String::from_utf8(bytes).ok());
-                if let Some(target_str) = target.as_deref()
-                    && symlink_escapes(&outpath, target_str, fake_root)
-                {
-                    guard.add_hostile_reason(HostileArchiveReason::SymlinkEscape(format!(
-                        "{} -> {}",
-                        entry_name, target_str
-                    )));
+            for entry in indexed_entries {
+                if self.is_cancelled() {
+                    anyhow::bail!("Analysis cancelled during ZIP member read");
                 }
+                if !guard.check_file_count() {
+                    anyhow::bail!(
+                        "Exceeded maximum file count ({})",
+                        super::guards::MAX_FILE_COUNT
+                    );
+                }
+
+                let entry_name = entry.path.clone();
+                if entry_name.len() > MAX_PATH_COMPONENT_LEN {
+                    guard.add_hostile_reason(HostileArchiveReason::ExcessiveEntryName {
+                        len: entry_name.len(),
+                        preview: entry_name.chars().take(80).collect(),
+                    });
+                }
+
+                let Some(outpath) = sanitize_entry_path(&entry_name, fake_root) else {
+                    guard.add_hostile_reason(HostileArchiveReason::PathTraversal(entry_name));
+                    continue;
+                };
+                let relative_path = outpath
+                    .strip_prefix(fake_root)
+                    .unwrap_or(&outpath)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                let entry_type_label = entry.entry_type.as_deref().unwrap_or("regular");
+
+                if entry_type_label == "directory" {
+                    continue;
+                }
+
+                if entry.encrypted {
+                    anyhow::bail!("Password required to decrypt file");
+                }
+
+                if entry_type_label == "symlink" {
+                    let target = super::zip::read_indexed_zip_member(data, entry, 4096)
+                        .ok()
+                        .and_then(|bytes| String::from_utf8(bytes).ok());
+                    if let Some(target_str) = target.as_deref()
+                        && symlink_escapes(&outpath, target_str, fake_root)
+                    {
+                        guard.add_hostile_reason(HostileArchiveReason::SymlinkEscape(format!(
+                            "{} -> {}",
+                            entry_name, target_str
+                        )));
+                    }
+                    guard.record_member_metadata(super::guards::ExtractedMemberMetadata {
+                        archive_path: relative_path,
+                        compressed_size: entry.compressed_size,
+                        compression_method: entry.compression_method.clone(),
+                        mtime_unix: entry.mtime_unix,
+                        mode_octal: entry.mode_octal,
+                        uid: entry.uid,
+                        gid: entry.gid,
+                        uname: entry.uname.clone(),
+                        gname: entry.gname.clone(),
+                        entry_type: Some(entry_type_label.to_string()),
+                        linkname: target,
+                        host_os: entry.host_os.clone(),
+                    });
+                    continue;
+                }
+
                 guard.record_member_metadata(super::guards::ExtractedMemberMetadata {
-                    archive_path: relative_path,
+                    archive_path: relative_path.clone(),
                     compressed_size: entry.compressed_size,
                     compression_method: entry.compression_method.clone(),
                     mtime_unix: entry.mtime_unix,
@@ -1239,80 +1392,65 @@ impl ArchiveAnalyzer {
                     uname: entry.uname.clone(),
                     gname: entry.gname.clone(),
                     entry_type: Some(entry_type_label.to_string()),
-                    linkname: target,
+                    linkname: entry.linkname.clone(),
                     host_os: entry.host_os.clone(),
                 });
-                continue;
+
+                let compressed = entry.compressed_size.unwrap_or(0);
+                let uncompressed = entry.size_bytes;
+                if !guard.check_compression_ratio(compressed, uncompressed) {
+                    continue;
+                }
+                if uncompressed > MAX_FILE_SIZE {
+                    guard.add_hostile_reason(HostileArchiveReason::ExcessiveFileSize {
+                        file: entry_name,
+                        size: uncompressed,
+                    });
+                    continue;
+                }
+
+                let Ok(file_data) = super::zip::read_indexed_zip_member(data, entry, MAX_FILE_SIZE)
+                else {
+                    return Ok(false);
+                };
+                let written = file_data.len() as u64;
+                if !guard.check_bytes(written, &relative_path) {
+                    anyhow::bail!("Exceeded maximum total extraction size");
+                }
+
+                let logical_path = Path::new(&relative_path);
+                let file_type =
+                    crate::analyzers::detect_file_type_from_data(logical_path, &file_data);
+                let sha256 = calculate_sha256(&file_data);
+                let member = MemoryArchiveMember {
+                    relative_path,
+                    data: file_data,
+                    file_type,
+                    sha256,
+                    container_kind: None,
+                };
+                if is_jar {
+                    jar_members.push(member);
+                } else {
+                    window.push(member);
+                }
             }
 
-            guard.record_member_metadata(super::guards::ExtractedMemberMetadata {
-                archive_path: relative_path.clone(),
-                compressed_size: entry.compressed_size,
-                compression_method: entry.compression_method.clone(),
-                mtime_unix: entry.mtime_unix,
-                mode_octal: entry.mode_octal,
-                uid: entry.uid,
-                gid: entry.gid,
-                uname: entry.uname.clone(),
-                gname: entry.gname.clone(),
-                entry_type: Some(entry_type_label.to_string()),
-                linkname: entry.linkname.clone(),
-                host_os: entry.host_os.clone(),
-            });
-
-            let compressed = entry.compressed_size.unwrap_or(0);
-            let uncompressed = entry.size_bytes;
-            if !guard.check_compression_ratio(compressed, uncompressed) {
-                continue;
-            }
-            if uncompressed > MAX_FILE_SIZE {
-                guard.add_hostile_reason(HostileArchiveReason::ExcessiveFileSize {
-                    file: entry_name,
-                    size: uncompressed,
-                });
-                continue;
-            }
-
-            let Ok(file_data) = super::zip::read_indexed_zip_member(data, entry, MAX_FILE_SIZE)
-            else {
-                return Ok(false);
-            };
-            let written = file_data.len() as u64;
-            if !guard.check_bytes(written, &relative_path) {
-                anyhow::bail!("Exceeded maximum total extraction size");
-            }
-
-            let logical_path = Path::new(&relative_path);
-            let file_type = crate::analyzers::detect_file_type_from_data(logical_path, &file_data);
-            let sha256 = calculate_sha256(&file_data);
-            let member = MemoryArchiveMember {
-                relative_path,
-                data: file_data,
-                file_type,
-                sha256,
-                container_kind: None,
-            };
             if is_jar {
-                jar_members.push(member);
+                self.analyze_jar_members_in_memory(&jar_members, archive_path, report, start);
             } else {
-                window.push(member);
+                window.finalize(
+                    report,
+                    start,
+                    "ZIP archive",
+                    vec![
+                        "archive_analyzer".to_string(),
+                        "filefacts_zip_index".to_string(),
+                    ],
+                );
             }
-        }
-
-        if is_jar {
-            self.analyze_jar_members_in_memory(&jar_members, archive_path, report, start);
-        } else {
-            window.finalize(
-                report,
-                start,
-                "ZIP archive",
-                vec![
-                    "archive_analyzer".to_string(),
-                    "filefacts_zip_index".to_string(),
-                ],
-            );
-        }
-        Ok(true)
+            Ok(true)
+        })
     }
 
     /// Analyze ZIP/JAR-style archives without materializing the whole archive
@@ -1359,77 +1497,101 @@ impl ArchiveAnalyzer {
             crate::analyzers::detect_file_type(archive_path),
             Ok(FileType::Jar)
         );
-        let mut window = MemberWindow::new(self, "memory ZIP");
-        let mut jar_members: Vec<MemoryArchiveMember> = Vec::new();
+        // Scope for the window's pipelined consumer; all exit paths drop the
+        // window (and its sender) before the join.
+        std::thread::scope(|scope| -> Result<()> {
+            let mut window = MemberWindow::new_in(scope, self, "memory ZIP");
+            let mut jar_members: Vec<MemoryArchiveMember> = Vec::new();
 
-        for i in 0..archive.len() {
-            if self.is_cancelled() {
-                anyhow::bail!("Analysis cancelled during ZIP member read");
-            }
-            if !guard.check_file_count() {
-                anyhow::bail!(
-                    "Exceeded maximum file count ({})",
-                    super::guards::MAX_FILE_COUNT
-                );
-            }
-
-            let mut entry = archive.by_index(i)?;
-            let entry_name = entry.name().to_string();
-            if entry_name.len() > MAX_PATH_COMPONENT_LEN {
-                guard.add_hostile_reason(HostileArchiveReason::ExcessiveEntryName {
-                    len: entry_name.len(),
-                    preview: entry_name.chars().take(80).collect(),
-                });
-            }
-
-            let Some(outpath) = sanitize_entry_path(&entry_name, fake_root) else {
-                guard.add_hostile_reason(HostileArchiveReason::PathTraversal(entry_name));
-                continue;
-            };
-            let relative_path = outpath
-                .strip_prefix(fake_root)
-                .unwrap_or(&outpath)
-                .to_string_lossy()
-                .replace('\\', "/");
-
-            // Capture forensic metadata from the central-directory header
-            // before any reads consume the entry. linkname is set in the
-            // symlink branch below; non-symlink/non-dir entries record here.
-            let entry_compressed_size = entry.compressed_size();
-            let entry_compression = super::zip::format_zip_compression(entry.compression());
-            let entry_mtime = entry
-                .last_modified()
-                .and_then(super::zip::zip_datetime_to_unix);
-            let entry_mode_octal = entry.unix_mode();
-            let entry_is_dir = entry.is_dir();
-            let entry_is_symlink = entry.unix_mode().is_some_and(|m| m & 0o170000 == 0o120000);
-            let entry_type_label = if entry_is_dir {
-                "directory"
-            } else if entry_is_symlink {
-                "symlink"
-            } else {
-                "regular"
-            };
-
-            if let Some(mode) = entry.unix_mode()
-                && mode & 0o170000 == 0o120000
-            {
-                let mut target_buf = Vec::new();
-                let mut limited = LimitedReader::new(&mut entry, 4096);
-                let mut linkname_capture: Option<String> = None;
-                if let Ok(read_size) = limited.read_to_end(&mut target_buf)
-                    && read_size > 0
-                    && read_size < 4096
-                    && let Ok(target_str) = String::from_utf8(target_buf)
-                {
-                    if symlink_escapes(&outpath, &target_str, fake_root) {
-                        guard.add_hostile_reason(HostileArchiveReason::SymlinkEscape(format!(
-                            "{} -> {}",
-                            entry_name, target_str
-                        )));
-                    }
-                    linkname_capture = Some(target_str);
+            for i in 0..archive.len() {
+                if self.is_cancelled() {
+                    anyhow::bail!("Analysis cancelled during ZIP member read");
                 }
+                if !guard.check_file_count() {
+                    anyhow::bail!(
+                        "Exceeded maximum file count ({})",
+                        super::guards::MAX_FILE_COUNT
+                    );
+                }
+
+                let mut entry = archive.by_index(i)?;
+                let entry_name = entry.name().to_string();
+                if entry_name.len() > MAX_PATH_COMPONENT_LEN {
+                    guard.add_hostile_reason(HostileArchiveReason::ExcessiveEntryName {
+                        len: entry_name.len(),
+                        preview: entry_name.chars().take(80).collect(),
+                    });
+                }
+
+                let Some(outpath) = sanitize_entry_path(&entry_name, fake_root) else {
+                    guard.add_hostile_reason(HostileArchiveReason::PathTraversal(entry_name));
+                    continue;
+                };
+                let relative_path = outpath
+                    .strip_prefix(fake_root)
+                    .unwrap_or(&outpath)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+
+                // Capture forensic metadata from the central-directory header
+                // before any reads consume the entry. linkname is set in the
+                // symlink branch below; non-symlink/non-dir entries record here.
+                let entry_compressed_size = entry.compressed_size();
+                let entry_compression = super::zip::format_zip_compression(entry.compression());
+                let entry_mtime = entry
+                    .last_modified()
+                    .and_then(super::zip::zip_datetime_to_unix);
+                let entry_mode_octal = entry.unix_mode();
+                let entry_is_dir = entry.is_dir();
+                let entry_is_symlink = entry.unix_mode().is_some_and(|m| m & 0o170000 == 0o120000);
+                let entry_type_label = if entry_is_dir {
+                    "directory"
+                } else if entry_is_symlink {
+                    "symlink"
+                } else {
+                    "regular"
+                };
+
+                if let Some(mode) = entry.unix_mode()
+                    && mode & 0o170000 == 0o120000
+                {
+                    let mut target_buf = Vec::new();
+                    let mut limited = LimitedReader::new(&mut entry, 4096);
+                    let mut linkname_capture: Option<String> = None;
+                    if let Ok(read_size) = limited.read_to_end(&mut target_buf)
+                        && read_size > 0
+                        && read_size < 4096
+                        && let Ok(target_str) = String::from_utf8(target_buf)
+                    {
+                        if symlink_escapes(&outpath, &target_str, fake_root) {
+                            guard.add_hostile_reason(HostileArchiveReason::SymlinkEscape(format!(
+                                "{} -> {}",
+                                entry_name, target_str
+                            )));
+                        }
+                        linkname_capture = Some(target_str);
+                    }
+                    guard.record_member_metadata(super::guards::ExtractedMemberMetadata {
+                        archive_path: relative_path.clone(),
+                        compressed_size: Some(entry_compressed_size),
+                        compression_method: Some(entry_compression),
+                        mtime_unix: entry_mtime,
+                        mode_octal: entry_mode_octal,
+                        uid: None,
+                        gid: None,
+                        uname: None,
+                        gname: None,
+                        entry_type: Some(entry_type_label.to_string()),
+                        linkname: linkname_capture,
+                        host_os: None,
+                    });
+                    continue;
+                }
+
+                if entry.is_dir() {
+                    continue;
+                }
+
                 guard.record_member_metadata(super::guards::ExtractedMemberMetadata {
                     archive_path: relative_path.clone(),
                     compressed_size: Some(entry_compressed_size),
@@ -1441,104 +1603,85 @@ impl ArchiveAnalyzer {
                     uname: None,
                     gname: None,
                     entry_type: Some(entry_type_label.to_string()),
-                    linkname: linkname_capture,
+                    linkname: None,
                     host_os: None,
                 });
-                continue;
-            }
+                if entry.encrypted() {
+                    anyhow::bail!("Password required to decrypt file");
+                }
 
-            if entry.is_dir() {
-                continue;
-            }
-
-            guard.record_member_metadata(super::guards::ExtractedMemberMetadata {
-                archive_path: relative_path.clone(),
-                compressed_size: Some(entry_compressed_size),
-                compression_method: Some(entry_compression),
-                mtime_unix: entry_mtime,
-                mode_octal: entry_mode_octal,
-                uid: None,
-                gid: None,
-                uname: None,
-                gname: None,
-                entry_type: Some(entry_type_label.to_string()),
-                linkname: None,
-                host_os: None,
-            });
-            if entry.encrypted() {
-                anyhow::bail!("Password required to decrypt file");
-            }
-
-            let compressed = entry.compressed_size();
-            let uncompressed = entry.size();
-            if !guard.check_compression_ratio(compressed, uncompressed) {
-                continue;
-            }
-            if uncompressed > MAX_FILE_SIZE {
-                guard.add_hostile_reason(HostileArchiveReason::ExcessiveFileSize {
-                    file: entry_name,
-                    size: uncompressed,
-                });
-                continue;
-            }
-
-            let mut file_data = Vec::with_capacity(uncompressed.min(16 * 1024 * 1024) as usize);
-            let written = if let Some(c) = guard.cancellation() {
-                let mut cancellable = CancellableReader::new(&mut entry, c);
-                let mut limited = LimitedReader::new(&mut cancellable, MAX_FILE_SIZE);
-                let n = limited.read_to_end(&mut file_data)? as u64;
-                if limited.is_limited() {
+                let compressed = entry.compressed_size();
+                let uncompressed = entry.size();
+                if !guard.check_compression_ratio(compressed, uncompressed) {
+                    continue;
+                }
+                if uncompressed > MAX_FILE_SIZE {
                     guard.add_hostile_reason(HostileArchiveReason::ExcessiveFileSize {
-                        file: relative_path.clone(),
-                        size: MAX_FILE_SIZE,
+                        file: entry_name,
+                        size: uncompressed,
                     });
                     continue;
                 }
-                n
-            } else {
-                let mut limited = LimitedReader::new(&mut entry, MAX_FILE_SIZE);
-                let n = limited.read_to_end(&mut file_data)? as u64;
-                if limited.is_limited() {
-                    guard.add_hostile_reason(HostileArchiveReason::ExcessiveFileSize {
-                        file: relative_path.clone(),
-                        size: MAX_FILE_SIZE,
-                    });
-                    continue;
+
+                let mut file_data = Vec::with_capacity(uncompressed.min(16 * 1024 * 1024) as usize);
+                let written = if let Some(c) = guard.cancellation() {
+                    let mut cancellable = CancellableReader::new(&mut entry, c);
+                    let mut limited = LimitedReader::new(&mut cancellable, MAX_FILE_SIZE);
+                    let n = limited.read_to_end(&mut file_data)? as u64;
+                    if limited.is_limited() {
+                        guard.add_hostile_reason(HostileArchiveReason::ExcessiveFileSize {
+                            file: relative_path.clone(),
+                            size: MAX_FILE_SIZE,
+                        });
+                        continue;
+                    }
+                    n
+                } else {
+                    let mut limited = LimitedReader::new(&mut entry, MAX_FILE_SIZE);
+                    let n = limited.read_to_end(&mut file_data)? as u64;
+                    if limited.is_limited() {
+                        guard.add_hostile_reason(HostileArchiveReason::ExcessiveFileSize {
+                            file: relative_path.clone(),
+                            size: MAX_FILE_SIZE,
+                        });
+                        continue;
+                    }
+                    n
+                };
+                if !guard.check_bytes(written, &relative_path) {
+                    anyhow::bail!("Exceeded maximum total extraction size");
                 }
-                n
-            };
-            if !guard.check_bytes(written, &relative_path) {
-                anyhow::bail!("Exceeded maximum total extraction size");
+
+                let logical_path = Path::new(&relative_path);
+                let file_type =
+                    crate::analyzers::detect_file_type_from_data(logical_path, &file_data);
+                let sha256 = calculate_sha256(&file_data);
+                let member = MemoryArchiveMember {
+                    relative_path,
+                    data: file_data,
+                    file_type,
+                    sha256,
+                    container_kind: None,
+                };
+                if is_jar {
+                    jar_members.push(member);
+                } else {
+                    window.push(member);
+                }
             }
 
-            let logical_path = Path::new(&relative_path);
-            let file_type = crate::analyzers::detect_file_type_from_data(logical_path, &file_data);
-            let sha256 = calculate_sha256(&file_data);
-            let member = MemoryArchiveMember {
-                relative_path,
-                data: file_data,
-                file_type,
-                sha256,
-                container_kind: None,
-            };
             if is_jar {
-                jar_members.push(member);
+                self.analyze_jar_members_in_memory(&jar_members, archive_path, report, start);
             } else {
-                window.push(member);
+                window.finalize(
+                    report,
+                    start,
+                    "ZIP archive",
+                    vec!["archive_analyzer".to_string(), "in_memory_zip".to_string()],
+                );
             }
-        }
-
-        if is_jar {
-            self.analyze_jar_members_in_memory(&jar_members, archive_path, report, start);
-        } else {
-            window.finalize(
-                report,
-                start,
-                "ZIP archive",
-                vec!["archive_analyzer".to_string(), "in_memory_zip".to_string()],
-            );
-        }
-        Ok(())
+            Ok(())
+        })
     }
 
     fn analyze_jar_members_in_memory(
@@ -1760,93 +1903,99 @@ impl ArchiveAnalyzer {
     ) -> Result<()> {
         let entries = super::asar::collect_entries(data)?;
         let fake_root = Path::new("/__cleave_archive__");
-        let mut window = MemberWindow::new(self, "memory ASAR");
+        // Scope for the window's pipelined consumer; all exit paths drop the
+        // window (and its sender) before the join.
+        std::thread::scope(|scope| -> Result<()> {
+            let mut window = MemberWindow::new_in(scope, self, "memory ASAR");
 
-        for entry in entries {
-            if self.is_cancelled() {
-                anyhow::bail!("Analysis cancelled during ASAR member read");
-            }
-            if !guard.check_file_count() {
-                anyhow::bail!(
-                    "Exceeded maximum file count ({})",
-                    super::guards::MAX_FILE_COUNT
-                );
-            }
-            if entry.path.len() > MAX_PATH_COMPONENT_LEN {
-                guard.add_hostile_reason(HostileArchiveReason::ExcessiveEntryName {
-                    len: entry.path.len(),
-                    preview: entry.path.chars().take(80).collect(),
+            for entry in entries {
+                if self.is_cancelled() {
+                    anyhow::bail!("Analysis cancelled during ASAR member read");
+                }
+                if !guard.check_file_count() {
+                    anyhow::bail!(
+                        "Exceeded maximum file count ({})",
+                        super::guards::MAX_FILE_COUNT
+                    );
+                }
+                if entry.path.len() > MAX_PATH_COMPONENT_LEN {
+                    guard.add_hostile_reason(HostileArchiveReason::ExcessiveEntryName {
+                        len: entry.path.len(),
+                        preview: entry.path.chars().take(80).collect(),
+                    });
+                }
+
+                let Some(outpath) = sanitize_entry_path(&entry.path, fake_root) else {
+                    guard.add_hostile_reason(HostileArchiveReason::PathTraversal(entry.path));
+                    continue;
+                };
+                let relative_path = outpath
+                    .strip_prefix(fake_root)
+                    .unwrap_or(&outpath)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+
+                if entry.size > MAX_FILE_SIZE {
+                    guard.add_hostile_reason(HostileArchiveReason::ExcessiveFileSize {
+                        file: entry.path,
+                        size: entry.size,
+                    });
+                    continue;
+                }
+
+                let start_offset = usize::try_from(entry.data_offset).map_err(|e| {
+                    anyhow::anyhow!("ASAR member offset exceeds addressable memory: {e}")
+                })?;
+                let member_size = usize::try_from(entry.size).map_err(|e| {
+                    anyhow::anyhow!("ASAR member size exceeds addressable memory: {e}")
+                })?;
+                let end_offset = start_offset
+                    .checked_add(member_size)
+                    .ok_or_else(|| anyhow::anyhow!("ASAR member range overflow"))?;
+                let Some(file_data) = data.get(start_offset..end_offset) else {
+                    anyhow::bail!("ASAR member extends past end of file: {}", relative_path);
+                };
+                if !guard.check_bytes(file_data.len() as u64, &relative_path) {
+                    anyhow::bail!("Exceeded maximum total extraction size");
+                }
+
+                guard.record_member_metadata(super::guards::ExtractedMemberMetadata {
+                    archive_path: relative_path.clone(),
+                    compressed_size: Some(entry.size),
+                    compression_method: Some("stored".to_string()),
+                    mtime_unix: None,
+                    mode_octal: None,
+                    uid: None,
+                    gid: None,
+                    uname: None,
+                    gname: None,
+                    entry_type: Some("regular".to_string()),
+                    linkname: None,
+                    host_os: None,
                 });
+
+                let logical_path = Path::new(&relative_path);
+                let file_type =
+                    crate::analyzers::detect_file_type_from_data(logical_path, file_data);
+                let sha256 = calculate_sha256(file_data);
+                let member = MemoryArchiveMember {
+                    relative_path,
+                    data: file_data.to_vec(),
+                    file_type,
+                    sha256,
+                    container_kind: None,
+                };
+                window.push(member);
             }
 
-            let Some(outpath) = sanitize_entry_path(&entry.path, fake_root) else {
-                guard.add_hostile_reason(HostileArchiveReason::PathTraversal(entry.path));
-                continue;
-            };
-            let relative_path = outpath
-                .strip_prefix(fake_root)
-                .unwrap_or(&outpath)
-                .to_string_lossy()
-                .replace('\\', "/");
-
-            if entry.size > MAX_FILE_SIZE {
-                guard.add_hostile_reason(HostileArchiveReason::ExcessiveFileSize {
-                    file: entry.path,
-                    size: entry.size,
-                });
-                continue;
-            }
-
-            let start_offset = usize::try_from(entry.data_offset).map_err(|e| {
-                anyhow::anyhow!("ASAR member offset exceeds addressable memory: {e}")
-            })?;
-            let member_size = usize::try_from(entry.size)
-                .map_err(|e| anyhow::anyhow!("ASAR member size exceeds addressable memory: {e}"))?;
-            let end_offset = start_offset
-                .checked_add(member_size)
-                .ok_or_else(|| anyhow::anyhow!("ASAR member range overflow"))?;
-            let Some(file_data) = data.get(start_offset..end_offset) else {
-                anyhow::bail!("ASAR member extends past end of file: {}", relative_path);
-            };
-            if !guard.check_bytes(file_data.len() as u64, &relative_path) {
-                anyhow::bail!("Exceeded maximum total extraction size");
-            }
-
-            guard.record_member_metadata(super::guards::ExtractedMemberMetadata {
-                archive_path: relative_path.clone(),
-                compressed_size: Some(entry.size),
-                compression_method: Some("stored".to_string()),
-                mtime_unix: None,
-                mode_octal: None,
-                uid: None,
-                gid: None,
-                uname: None,
-                gname: None,
-                entry_type: Some("regular".to_string()),
-                linkname: None,
-                host_os: None,
-            });
-
-            let logical_path = Path::new(&relative_path);
-            let file_type = crate::analyzers::detect_file_type_from_data(logical_path, file_data);
-            let sha256 = calculate_sha256(file_data);
-            let member = MemoryArchiveMember {
-                relative_path,
-                data: file_data.to_vec(),
-                file_type,
-                sha256,
-                container_kind: None,
-            };
-            window.push(member);
-        }
-
-        window.finalize(
-            report,
-            start,
-            "ASAR archive",
-            vec!["archive_analyzer".to_string(), "in_memory_asar".to_string()],
-        );
-        Ok(())
+            window.finalize(
+                report,
+                start,
+                "ASAR archive",
+                vec!["archive_analyzer".to_string(), "in_memory_asar".to_string()],
+            );
+            Ok(())
+        })
     }
 
     /// Run the par_iter analysis + aggregation over a prebuilt

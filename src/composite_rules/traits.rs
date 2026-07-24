@@ -805,7 +805,7 @@ impl TraitDefinition {
                 }
             }
             // For hex patterns, validate exceptions match
-            Condition::Hex(HexQuery { pattern: _, .. }) => {
+            Condition::Hex(HexQuery { .. }) => {
                 // For hex patterns, we should validate that not: exceptions make sense
                 // Since hex matching is complex, we'll do a basic check
                 // Hex patterns match byte sequences, so not: exceptions should be regex-based
@@ -3384,16 +3384,13 @@ impl CompositeTrait {
                         tagged_to_line(t, &line_starts).map(|line| (line, t.condition_index))
                     })
                     .collect();
-                match evidence_within_line_range_grouped(
+                line_window = Some(evidence_within_line_range_grouped(
                     &items,
                     max_line_span,
                     all_count,
                     any_required,
                     min_distinct,
-                ) {
-                    Some(window) => line_window = Some(window),
-                    None => return None,
-                }
+                )?);
                 line_starts_cache = Some(line_starts);
             }
 
@@ -3402,38 +3399,33 @@ impl CompositeTrait {
                     .iter()
                     .filter_map(|t| tagged_to_byte_offset(t).map(|off| (off, t.condition_index)))
                     .collect();
-                match evidence_within_byte_range_grouped(
+                byte_window = Some(evidence_within_byte_range_grouped(
                     &items,
                     max_byte_span,
                     all_count,
                     any_required,
                     min_distinct,
-                ) {
-                    Some(window) => byte_window = Some(window),
-                    None => return None,
-                }
+                )?);
             }
         } else {
             // Fallback: no condition tags (shouldn't happen for composites, but safe default)
             if let Some(max_line_span) = self.near_lines {
                 let line_starts = build_line_index(binary_data);
-                match evidence_within_line_range(
+                line_window = Some(evidence_within_line_range(
                     &evidence,
                     max_line_span,
                     min_distinct,
                     &line_starts,
-                ) {
-                    Some(window) => line_window = Some(window),
-                    None => return None,
-                }
+                )?);
                 line_starts_cache = Some(line_starts);
             }
 
             if let Some(max_byte_span) = self.near_bytes {
-                match evidence_within_byte_range(&evidence, max_byte_span, min_distinct) {
-                    Some(window) => byte_window = Some(window),
-                    None => return None,
-                }
+                byte_window = Some(evidence_within_byte_range(
+                    &evidence,
+                    max_byte_span,
+                    min_distinct,
+                )?);
             }
         }
 

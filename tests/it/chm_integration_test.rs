@@ -218,7 +218,7 @@ fn softpeak_live_real_sample_fires_campaign_composite() {
     let must_fire = [
         // The HTML-Help ShortCut auto-fire composite should hit at
         // file-level (CHM container) and bubble up.
-        "objectives/command-and-control/dropper/delivery/chm::htmlhelp-shortcut-cmd-dropper",
+        "objectives/command-and-control/dropper/delivery/chm::htmlhelp-shortcut-process-dropper",
         // The SoftpeakLive C2 host atom.
         "well-known/malware/dropper/softpeak-live::softpeak-live-host",
         // The full campaign composite.

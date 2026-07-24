@@ -246,10 +246,9 @@ pub(crate) fn extract_username_from_pdb(pdb_path: &str) -> Option<String> {
     let forward_idx = lower.find(":/users/");
     let (start, sep) = if let Some(idx) = backslash_idx {
         (idx + ":\\users\\".len(), '\\')
-    } else if let Some(idx) = forward_idx {
-        (idx + ":/users/".len(), '/')
     } else {
-        return None;
+        let idx = forward_idx?;
+        (idx + ":/users/".len(), '/')
     };
     let rest = &p[start..];
     let (user, _) = split_first_component(rest, sep)?;

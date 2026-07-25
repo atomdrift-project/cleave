@@ -436,8 +436,18 @@ struct MemberCounts {
 
 /// Resident-byte budget for one member window. Caps how much decompressed
 /// member data co-resides; tunable via `CLEAVE_MEMBER_WINDOW_MB`.
+///
+/// Window sizing is a memory/straggler tradeoff: every window ends by waiting
+/// on its slowest member, so the idle cost of that straggler is paid once per
+/// window. Small windows spend a large fraction of wall waiting — on a
+/// 16k-member TypeScript corpus (8 cores, 2026-07-24) the old 256-member/32 MB
+/// windows held the whole scan to 4.3 of 8 cores, and raising the caps to
+/// 2048/256 MB cut wall 40% (777 s -> 464 s) with identical output and +3%
+/// RSS. The count cap is the binding one for small-member archives (2048 of
+/// those members ≈ 31 MB); the byte budget only doubles so worker fleets with
+/// dozens of concurrent archive scans don't gain 8x transients.
 fn member_window_bytes() -> usize {
-    const DEFAULT_MB: usize = 32;
+    const DEFAULT_MB: usize = 64;
     std::env::var("CLEAVE_MEMBER_WINDOW_MB")
         .ok()
         .and_then(|s| s.parse::<usize>().ok())
@@ -467,7 +477,7 @@ fn nested_parallel_min_members() -> usize {
 /// (each window's `par_iter` collects this many full reports before folding)
 /// independent of member size; tunable via `CLEAVE_MEMBER_WINDOW_COUNT`.
 fn member_window_count() -> usize {
-    const DEFAULT: usize = 256;
+    const DEFAULT: usize = 2048;
     std::env::var("CLEAVE_MEMBER_WINDOW_COUNT")
         .ok()
         .and_then(|s| s.parse::<usize>().ok())
@@ -484,7 +494,14 @@ fn member_window_count() -> usize {
 fn pipeline_member_windows() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| {
-        std::env::var("CLEAVE_PIPELINE_MEMBER_WINDOWS").as_deref() != Ok("0")
+        // Opt-in (=1), not opt-out: measured 2026-07-24 on the typed corpus,
+        // handing windows to the consumer thread was a wash at 63k members and
+        // 24% SLOWER at 16k — the consumer is an external thread rayon won't
+        // run pool work on, and the producer parked in a channel send is a
+        // worker the pool loses outright. The window-size defaults above are
+        // what actually recover the barrier idle; revisit this gate only with
+        // fresh numbers showing a win.
+        std::env::var("CLEAVE_PIPELINE_MEMBER_WINDOWS").as_deref() == Ok("1")
             && rayon::current_num_threads() >= 2
     })
 }

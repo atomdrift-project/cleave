@@ -1434,15 +1434,21 @@ impl ArchiveAnalyzer {
             .findings
             .extend(archive_atomic_findings.iter().cloned());
 
-        let mut nested_findings: Vec<Finding> = report
+        // Rank by reference, then clone only the survivors. A container's
+        // members can carry far more than the 50k cap between them (63k
+        // TypeScript members produce several hundred thousand), and cloning
+        // every one — evidence vectors included — just to drop 90% of them at
+        // the truncate was pure waste in the single-threaded finalize path.
+        const MAX_NESTED_FINDINGS: usize = 50_000;
+        let mut ranked: Vec<&Finding> = report
             .files
             .iter()
-            .flat_map(|f| f.findings.iter().cloned())
+            .flat_map(|f| f.findings.iter())
+            .chain(archive_atomic_findings.iter())
             .collect();
-        nested_findings.extend(archive_atomic_findings);
-        nested_findings
-            .sort_unstable_by(|a, b| b.crit.cmp(&a.crit).then_with(|| b.conf.total_cmp(&a.conf)));
-        nested_findings.truncate(50_000);
+        ranked.sort_unstable_by(|a, b| b.crit.cmp(&a.crit).then_with(|| b.conf.total_cmp(&a.conf)));
+        ranked.truncate(MAX_NESTED_FINDINGS);
+        let mut nested_findings: Vec<Finding> = ranked.into_iter().cloned().collect();
 
         let entry_names: Vec<String> = report
             .archive_contents

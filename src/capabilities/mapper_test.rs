@@ -1235,3 +1235,52 @@ composite_rules:
         "composite depending on raw source text traits should also fire"
     );
 }
+
+/// Regression guard: building the match indexes must not happen while the
+/// `indexes` `OnceLock` is held.
+///
+/// `MatchIndexes::build` fans out across the global rayon pool. While the cell
+/// was filled with `get_or_init(|| MatchIndexes::build(..))`, every rayon worker
+/// that reached trait matching parked on the cell waiting for the winner, and the
+/// winner sat waiting for a free worker to finish its parallel build — a cycle
+/// with no way out. In production a traits reload republished an unwarmed mapper
+/// mid-scan, the first build landed with the pool already saturated, and workers
+/// wedged for days while still heartbeating.
+///
+/// This saturates the pool with callers of the cell plus one off-pool caller (the
+/// shape a reload creates) and requires the whole set to finish. The timeout turns
+/// a reintroduced deadlock into a failure instead of a hung CI job.
+#[test]
+fn match_indexes_survives_saturated_rayon_pool() {
+    let mapper = std::sync::Arc::new(CapabilityMapper::new_without_validation());
+    let callers = rayon::current_num_threads().max(2);
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let spawned = std::sync::Arc::clone(&mapper);
+    std::thread::spawn(move || {
+        // `scope` blocks this off-pool thread on a rayon latch, so the pool must
+        // make progress for it to return — exactly the production dependency.
+        rayon::scope(|s| {
+            for _ in 0..callers {
+                let m = std::sync::Arc::clone(&spawned);
+                s.spawn(move |_| {
+                    let _ = m.match_indexes();
+                });
+            }
+        });
+        let _ = spawned.match_indexes();
+        let _ = tx.send(());
+    });
+
+    assert!(
+        rx.recv_timeout(std::time::Duration::from_secs(120)).is_ok(),
+        "match_indexes deadlocked with every rayon worker contending on the cell"
+    );
+
+    // All callers must agree on one published set of indexes.
+    let ptr = std::ptr::from_ref(mapper.match_indexes());
+    assert!(
+        std::ptr::eq(ptr, std::ptr::from_ref(mapper.match_indexes())),
+        "match_indexes must publish a single shared build"
+    );
+}

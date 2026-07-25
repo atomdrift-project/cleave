@@ -13,11 +13,14 @@ use std::sync::{Arc, Mutex};
 // Archive Bomb Protection Constants
 // =============================================================================
 
-/// Maximum size of a single decompressed file (1 GB)
-pub(crate) const MAX_FILE_SIZE: u64 = 1024 * 1024 * 1024;
+/// Maximum size of a single decompressed file (20 GB). Raised from 1 GB to admit
+/// members of full OS images (ISO/UDF, DMG, install.wim/squashfs), which the
+/// os-image feed acquires as good-baseline corpora.
+pub(crate) const MAX_FILE_SIZE: u64 = 20 * 1024 * 1024 * 1024;
 
-/// Maximum total extraction size (7 GB)
-pub(crate) const MAX_TOTAL_SIZE: u64 = 7 * 1024 * 1024 * 1024;
+/// Maximum total extraction size (20 GB). Raised from 7 GB for the same reason;
+/// a multi-GB install ISO expands to roughly its own size.
+pub(crate) const MAX_TOTAL_SIZE: u64 = 20 * 1024 * 1024 * 1024;
 
 /// Maximum number of files to extract
 pub(crate) const MAX_FILE_COUNT: usize = 100_000;

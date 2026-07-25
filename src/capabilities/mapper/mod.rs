@@ -123,19 +123,41 @@ impl CapabilityMapper {
     ///
     /// Only the trait-matching (analysis) path calls this; composite evaluation
     /// and rule-count queries do not, so a scan whose analyses all hit the report
-    /// cache never builds them. The build runs rayon internally, so the *first*
-    /// caller must be off the rayon pool (the main thread) — otherwise a worker
-    /// could steal a task that re-enters this `OnceLock` and deadlock. Callers
-    /// that precede a parallel scan warm it up front via `prefetch_capability_mapper`.
+    /// cache never builds them.
+    ///
+    /// The build deliberately runs *before* the `OnceLock` is touched.
+    /// [`MatchIndexes::build`] fans out across the global rayon pool, and every
+    /// rayon worker that reaches trait matching calls this function — so holding
+    /// the cell across the build parks the whole pool on it and starves the very
+    /// workers the build is waiting for.
+    ///
+    /// Forcing the first build off the rayon pool is *not* sufficient on its own:
+    /// an off-pool winner still needs a free worker to finish, and a pool already
+    /// parked on this cell can never provide one. That is the production deadlock
+    /// this shape prevents — a traits reload republishes an unwarmed mapper
+    /// mid-scan, so the first build routinely lands mid-flight rather than at
+    /// startup, with the pool already saturated.
+    ///
+    /// Cost: callers racing the first build each build their own copy and all but
+    /// one discards it — redundant CPU in a narrow window, in exchange for a shape
+    /// in which no thread ever waits on another thread's build. `warm_indexes`
+    /// collapses that window for callers that know they are about to fan out.
     pub(super) fn match_indexes(&self) -> &MatchIndexes {
-        self.indexes
-            .get_or_init(|| MatchIndexes::build(&self.trait_definitions, &self.platforms))
+        // Fast path: already built.
+        if let Some(built) = self.indexes.get() {
+            return built;
+        }
+        let built = MatchIndexes::build(&self.trait_definitions, &self.platforms);
+        // The closure only moves an already-built value, so a racing caller
+        // blocks for a move rather than for a multi-second parallel build.
+        self.indexes.get_or_init(|| built)
     }
 
-    /// Force the lazy match indexes to build now. Callers about to fan a scan out
-    /// across the rayon pool warm them here, on the main thread, so no worker
-    /// triggers the (rayon-internal) build mid-steal and deadlocks on the
-    /// `OnceLock`. Idempotent and cheap once built.
+    /// Force the lazy match indexes to build now, on the calling thread.
+    ///
+    /// Callers about to fan a scan out across the rayon pool warm them here so the
+    /// pool does not perform redundant concurrent builds. Correctness no longer
+    /// depends on this — see [`Self::match_indexes`]. Idempotent and cheap once built.
     pub fn warm_indexes(&self) {
         let _ = self.match_indexes();
     }

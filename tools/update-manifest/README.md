@@ -32,7 +32,7 @@ to R2 first; until then, run this per release line with that line's engine.
 
 ```sh
 tools/update-manifest/build-manifest.sh \
-  --traits ../cleave-traits --commit HEAD \
+  --traits ../traits-dev --commit HEAD \
   --release 2.0.0 --channel beta \
   --engine ./target/debug/cleave --out ./dist
 ```
@@ -43,7 +43,7 @@ Add `--sign --identity releaser@<project>.iam.gserviceaccount.com` to sign.
 Or via make:
 
 ```sh
-make update-manifest TRAITS=../cleave-traits COMMIT=HEAD RELEASE=2.0.0 CHANNEL=beta
+make update-manifest TRAITS=../traits-dev COMMIT=HEAD RELEASE=2.0.0 CHANNEL=beta
 ```
 
 ## Signing note

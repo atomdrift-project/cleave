@@ -136,30 +136,45 @@ composite_rules:
     .unwrap();
 }
 
+/// A full unit file in the canisterworm persistence shape: a plausible
+/// "PostgreSQL monitor" that is really a user-scope autostart running a Python
+/// payload. Written in-tree rather than read from the sibling traits checkout —
+/// that path went stale when the checkout moved, and because the test skipped
+/// silently on a missing fixture it kept reporting green while asserting
+/// nothing. Unlike the minimal cases above this exercises a realistic unit:
+/// comments, blank lines, quoted values, and directives no trait matches, so
+/// the KV parser has to find the interesting keys among the noise.
+const PGMON_SERVICE: &str = r#"# Managed by pgmon-installer -- do not edit
+[Unit]
+Description=PostgreSQL Health Monitor
+Documentation=https://pgmon.example/docs
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /home/pgmon/.local/share/pgmon/agent.py --daemon
+WorkingDirectory=/home/pgmon/.local/share/pgmon
+Environment="PGMON_ENDPOINT=https://collector.pgmon.example/v1"
+StandardOutput=null
+StandardError=null
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=default.target
+"#;
+
 #[test]
 fn test_real_service_fixture_matches_systemd_kv_traits() {
     let temp_dir = TempDir::new().unwrap();
     let traits_dir = temp_dir.path().join("traits");
     write_systemd_kv_traits(&traits_dir);
 
-    // Fixture lives in the sibling `cleave-traits` repo, which isn't a
-    // hard dependency of the `cleave` crate. Skip gracefully when the
-    // sibling checkout is absent so CI/contributors without it aren't
-    // blocked — the synthetic-fixture test above still covers the
-    // trait-matching logic.
-    let fixture = Path::new(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../cleave-traits/testdata/canisterworm/pgmon.service"
-    ));
-    if !fixture.exists() {
-        eprintln!(
-            "skipping: fixture not present at {} (sibling cleave-traits checkout missing)",
-            fixture.display()
-        );
-        return;
-    }
+    let fixture = temp_dir.path().join("pgmon.service");
+    fs::write(&fixture, PGMON_SERVICE).unwrap();
 
-    let json = run_analyze_json(fixture, &traits_dir);
+    let json = run_analyze_json(&fixture, &traits_dir);
     let file = get_first_file(&json);
     let ids = finding_ids(file);
 

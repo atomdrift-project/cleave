@@ -44,6 +44,7 @@ mod test_match_location_test;
 mod tiny_manifest_value_traits_test;
 mod trait_migration_regression_test;
 mod trait_strictness_test;
+mod traits_override_isolation_test;
 mod utf16_pe_text_search_test;
 mod utf16_support_test;
 mod utf16_text_normalization_test;

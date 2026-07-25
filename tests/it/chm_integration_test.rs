@@ -200,17 +200,17 @@ fn synthetic_chm_has_no_dropper_findings() {
 //  Real-sample tests — gated on file presence
 // ────────────────────────────────────────────────────────────────────
 
-const SOFTPEAK_PATH: &str =
-    "/Users/t/data/bad/dissect-malware/pe/2026.SoftpeakLive/payment instruction.987976.pdf.chm";
-const PSTOOLS_PATH: &str = "/Users/t/data/good/dissect-random/Pstools.chm";
+/// The real SoftpeakLive dropper, vendored in-tree (11 KB). It used to be read
+/// from a hardcoded `/Users/t/...` path, so on any host but that one the test
+/// skipped silently and reported green while asserting nothing.
+const SOFTPEAK_PATH: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/malware/payment instruction.987976.pdf.chm"
+);
 
 #[test]
 fn softpeak_live_real_sample_fires_campaign_composite() {
     let path = Path::new(SOFTPEAK_PATH);
-    if !path.exists() {
-        eprintln!("skipping: SoftpeakLive sample not present at {SOFTPEAK_PATH}");
-        return;
-    }
     let out = run_cleave_json(path);
     let f = first_file(&out);
     let trait_ids: Vec<String> = trait_ids(f);
@@ -229,34 +229,6 @@ fn softpeak_live_real_sample_fires_campaign_composite() {
             trait_ids.iter().any(|id| id == needle),
             "expected SoftpeakLive sample to fire {needle}; got {trait_ids:?}"
         );
-    }
-}
-
-#[test]
-fn pstools_real_sample_has_no_dropper_findings() {
-    let path = Path::new(PSTOOLS_PATH);
-    if !path.exists() {
-        eprintln!("skipping: Pstools sample not present at {PSTOOLS_PATH}");
-        return;
-    }
-    // Iterate every file in the report (the parent CHM and every
-    // member file) and assert none of them carry the htmlhelp dropper
-    // composites or the SoftpeakLive trait family.
-    let out = run_cleave_json(path);
-    let files = out["fs"].as_array().cloned().unwrap_or_default();
-    for f in &files {
-        let path = f["path"].as_str().unwrap_or("");
-        for t in f["ts"].as_array().cloned().unwrap_or_default() {
-            let id = t["i"].as_str().unwrap_or("");
-            assert!(
-                !id.contains("htmlhelp-shortcut-cmd-dropper"),
-                "Pstools fired {id} on {path}"
-            );
-            assert!(
-                !id.contains("softpeak-live"),
-                "Pstools fired {id} on {path}"
-            );
-        }
     }
 }
 

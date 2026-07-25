@@ -26,6 +26,7 @@ pub(crate) const ISOLATED_MODULES: &[&str] = &[
     "symbol_extraction_test",
     "tiny_manifest_value_traits_test",
     "trait_migration_regression_test",
+    "traits_override_isolation_test",
     "utf16_text_normalization_test",
     "yara_init_no_deadlock",
 ];
@@ -137,47 +138,28 @@ fn shared_bucket_has_no_global_state_mutation() {
     );
 }
 
-/// Resolve the sibling traits checkout that fixture-driven tests analyze against.
+/// Report that a test is skipping because a fixture the host doesn't have is
+/// missing. Callers `return` (or fall through an `else`) immediately after.
 ///
-/// Checked in order: `CLEAVE_TEST_TRAITS_DIR`, `../traits-dev`, `../cleave-traits`
-/// (the pre-2026-07 name). Returns `None` only when none exists — a real
-/// situation on a packaged-crate build, where these tests cannot run.
+/// Every skip goes through here for two reasons. It prints one greppable marker,
+/// so `cargo test -- --nocapture 2>&1 | grep SKIP:` is an honest inventory of
+/// what the suite did *not* check on this host. And `CLEAVE_TEST_REQUIRE_FIXTURES=1`
+/// turns every skip into a failure, so a machine that is supposed to have the
+/// fixtures (CI, a release box) cannot quietly lose coverage when one goes
+/// missing.
 ///
-/// Prefer [`require_traits_dir`] at a test's first line. A bare `None` check that
-/// returns early makes a skipped test indistinguishable from a passing one: when
-/// this directory moved to `../traits-dev`, six tests silently stopped asserting
-/// anything and the suite still reported green, which cost a day of chasing
-/// "flaky" behaviour that was really tests blinking in and out of existence.
-pub(crate) fn traits_dir() -> Option<std::path::PathBuf> {
-    if let Ok(dir) = std::env::var("CLEAVE_TEST_TRAITS_DIR") {
-        let p = std::path::PathBuf::from(dir);
-        return p.is_dir().then_some(p);
-    }
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    ["../traits-dev", "../cleave-traits"]
-        .iter()
-        .map(|rel| root.join(rel))
-        .find(|p| p.is_dir())
-}
-
-/// The traits checkout, or a loud failure naming where it was looked for.
-///
-/// Set `CLEAVE_TEST_ALLOW_NO_TRAITS=1` to downgrade to a skip — for packaged-crate
-/// CI, where the sibling repo genuinely is not on disk. That is an explicit opt-out
-/// rather than the default, so a checkout that moves on a developer's machine
-/// breaks the build instead of quietly hollowing out the tests that need it.
-pub(crate) fn require_traits_dir() -> Option<std::path::PathBuf> {
-    if let Some(dir) = traits_dir() {
-        return Some(dir);
-    }
+/// This exists because skips used to be bare `eprintln!` + `return`, which makes
+/// a skipped test indistinguishable from a passing one. When the sibling traits
+/// checkout moved, six tests stopped asserting anything and the suite still
+/// reported green — a day went into chasing "flaky" behaviour that was really
+/// tests blinking in and out of existence. Prefer removing the external
+/// dependency outright (see `tiny_manifest_value_traits_test`, which now writes
+/// its own trait fixtures) over skipping; skip only for genuinely
+/// unredistributable inputs such as malware samples.
+pub(crate) fn skip_missing(what: &str) {
     assert!(
-        std::env::var("CLEAVE_TEST_ALLOW_NO_TRAITS").as_deref() == Ok("1"),
-        "traits checkout not found (looked for $CLEAVE_TEST_TRAITS_DIR, \
-         ../traits-dev, ../cleave-traits relative to {}). These tests assert against \
-         real traits and cannot run without it. Clone it, point \
-         CLEAVE_TEST_TRAITS_DIR at it, or set CLEAVE_TEST_ALLOW_NO_TRAITS=1 to skip.",
-        env!("CARGO_MANIFEST_DIR"),
+        std::env::var("CLEAVE_TEST_REQUIRE_FIXTURES").as_deref() != Ok("1"),
+        "required fixture missing: {what} (CLEAVE_TEST_REQUIRE_FIXTURES=1)",
     );
-    eprintln!("skipping: no traits checkout (CLEAVE_TEST_ALLOW_NO_TRAITS=1)");
-    None
+    eprintln!("SKIP: {what}");
 }

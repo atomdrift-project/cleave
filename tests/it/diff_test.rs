@@ -28,7 +28,7 @@ fn options() -> AnalysisOptions {
 #[test]
 fn diff_same_file_has_zero_roc() {
     if !Path::new(ELF).exists() {
-        eprintln!("skipping diff_same_file_has_zero_roc: {ELF} fixture not present");
+        crate::support::skip_missing(&format!("diff_same_file_has_zero_roc: {ELF}"));
         return;
     }
     let report = diff_paths(
@@ -58,7 +58,7 @@ fn diff_same_file_has_zero_roc() {
 #[test]
 fn diff_elf_vs_macho_behavior() {
     if !Path::new(ELF).exists() || !Path::new(MACHO).exists() {
-        eprintln!("skipping diff_elf_vs_macho_behavior: ELF/Mach-O fixtures not present");
+        crate::support::skip_missing(&format!("diff_elf_vs_macho_behavior: {ELF} / {MACHO}"));
         return;
     }
     // ── changes are detected at top level ──

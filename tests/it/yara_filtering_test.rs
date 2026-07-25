@@ -320,7 +320,7 @@ fn test_scan_multi_filetype_directory() {
 
     // This test verifies CLI multi-file handling and file-type
     // classification — not specific trait matches. Skip traits so a
-    // broken installed rule set (the `cleave-traits` repo can drift
+    // broken installed rule set (the traits repo can drift
     // between schema versions) doesn't cause the binary to bail.
     let output = assert_cmd::cargo_bin_cmd!("cleave")
         .env("CLEAVE_BUILTIN_YARA_ONLY", "1") // Skip third-party YARA for faster tests

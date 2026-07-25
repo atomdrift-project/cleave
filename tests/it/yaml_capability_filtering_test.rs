@@ -323,7 +323,7 @@ fn test_rules_without_filetype_are_universal() {
     fs::write(&js_file, "console.log('javascript');\n").unwrap();
 
     // Analyze all three files. Skip traits to insulate the test from
-    // parse errors in the user's installed `cleave-traits` checkout —
+    // parse errors in the user's installed traits checkout —
     // this test only checks JSON structure and file-type classification,
     // not trait content.
     for file in &[sh_file, py_file, js_file] {
@@ -436,7 +436,7 @@ fn test_platform_and_filetype_constraints_together() {
 
     let output = assert_cmd::cargo_bin_cmd!("cleave")
         .env("CLEAVE_SKIP_YARA", "1")
-        .env("CLEAVE_SKIP_TRAITS", "1") // insulate from cleave-traits schema drift
+        .env("CLEAVE_SKIP_TRAITS", "1") // insulate from traits-repo schema drift
         .args(["--json", "analyze", script.to_str().unwrap()])
         .output()
         .unwrap();

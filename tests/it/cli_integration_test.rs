@@ -546,7 +546,7 @@ fn test_system_binary_false_positive_sanity() {
     let binary = r"C:\Windows\System32\attrib.exe";
 
     if !Path::new(binary).exists() {
-        eprintln!("skipping: {binary} not found");
+        crate::support::skip_missing(&format!("{binary} not present"));
         return;
     }
 

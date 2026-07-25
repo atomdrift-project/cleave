@@ -64,9 +64,6 @@ samples/
 .claude/
 
 
-tests/fixtures/*.elf
-tests/fixtures/*.exe
-tests/fixtures/*.macho
 tools/trait-basher/trait-basher
 tools/trait-basher/trait-basher-debug
 tools/trait-basher/.gocache/

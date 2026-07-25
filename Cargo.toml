@@ -344,21 +344,6 @@ opt-level = 3
 
 
 
-# Local override to pick up unpublished filefacts identification fixes used by
-# triage, including PKGBUILD shell recognition, UDIF/DMG detection, and
-# extensionless PHP/HTML fragments that previously scored as Lua. Remove once
-# the filefacts changes are released upstream.
-
-# Local override: filefacts' disk cache round-trips `stng::ExtractedString`,
-# which needs `Deserialize` (added locally, not yet released). The patch must
-# live in cleave's root manifest too — filefacts' own [patch] does not apply
-# when cleave is the root crate. Remove once stng is published with the derive
-# and filefacts' pinned revision is bumped.
-
-# Local-only override: pick up the unreleased filefacts inter-file `Reference`
-# work (the `RefLocator::Path` / `RefKind::Local` intra-artifact references).
-# Remove once filefacts is released and the git pin above is bumped.
-
 # FreeBSD/aarch64 support for wasmtime's signal trap handler, pulled in
 # transitively via yara-x (cleave -> yara-x -> wasmtime 43.0.2). Upstream
 # 43.0.2 lacks the freebsd/aarch64 arm in store_handler_in_ucontext, so the
@@ -373,11 +358,3 @@ wasmtime = { git = "https://github.com/tstromberg/wasmtime.git", branch = "freeb
 [patch."https://codeberg.org/atomdrift/stng.git"]
 stng = { git = "https://github.com/atomdrift-project/stng.git" }
 
-# Local-only override: pick up the unreleased filefacts static-library (.a)
-# identification fix — a Unix `ar` archive whose first member is not
-# `debian-binary` is now typed `static-lib`, not `deb`. Remove once filefacts
-# is released and the git pin above is bumped.
-
-# Local-only override: pick up the unreleased filefacts CLR enrichment
-# (pe.clr.strong_name_signed / mvid / metadata_version / streams). Remove once
-# the change is pushed and the git pin above is bumped.

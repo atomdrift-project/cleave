@@ -17,7 +17,7 @@
 #                     [--no-validate]
 #
 # Example:
-#   build-manifest.sh --traits ../cleave-traits --commit HEAD \
+#   build-manifest.sh --traits ../traits-dev --commit HEAD \
 #       --release 2.0.0 --channel beta \
 #       --engine ./target/debug/cleave --out ./dist
 #

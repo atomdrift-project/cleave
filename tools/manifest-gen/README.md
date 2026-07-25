@@ -43,7 +43,7 @@ cd tools/manifest-gen && GOWORK=off go build -o manifest-gen .
 
 ```sh
 tools/manifest-gen/manifest-gen \
-  --traits ../cleave-traits --repo . \
+  --traits ../traits-dev --repo . \
   --engine ./target/release/cleave --out ./dist \
   --releases 2 --commits 10 --soak-days 7
 ```
@@ -58,7 +58,7 @@ magnitude slower.
 
 | Flag | Default | Meaning |
 |------|---------|---------|
-| `--traits` | `../cleave-traits` | traits git repo |
+| `--traits` | `../traits-dev` | traits git repo |
 | `--repo` | `.` | engine repo (for release tags) |
 | `--engine` | `./target/release/cleave` | validation oracle |
 | `--out` | `dist` | artifacts + manifest output |

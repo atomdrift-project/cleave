@@ -3734,26 +3734,20 @@ rule DITEKSHEN_INDICATOR_KB_CERT_066276Af2F2C7E246D3B1Cab1B4Aa42E : FILE
         );
     }
 
+    /// Pins two real YARAForge cert rules whose only PE signal is a
+    /// `pe.signatures[...]` reference — the shape that used to classify as
+    /// `Unknown`. The rule text lives in-repo (extracted verbatim from the
+    /// third-party bundle) rather than being read out of a sibling traits
+    /// checkout, so this asserts on every host instead of silently skipping
+    /// wherever that checkout is absent.
     #[test]
     fn test_exact_third_party_cert_examples_classify_as_pe() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join("..")
-            .join("..")
-            .join("cleave-traits")
-            .join("third-party")
-            .join("YARAForge")
-            .join("yara-rules-full.yar");
-        if !path.exists() {
-            return;
-        }
-
-        let source = std::fs::read_to_string(&path).expect("read YARAForge rules");
+        let source = include_str!("../tests/fixtures/yaraforge_cert_rules.yar");
         for target in [
             "REVERSINGLABS_Cert_Blocklist_0332D5C942869Bdcabf5A8266197Cd14",
             "DITEKSHEN_INDICATOR_KB_CERT_066276Af2F2C7E246D3B1Cab1B4Aa42E",
         ] {
-            let (_, _, rule_text) = split_rules(&source)
+            let (_, _, rule_text) = split_rules(source)
                 .into_iter()
                 .find(|(name, is_private, _)| !*is_private && name == target)
                 .expect("target rule present");
@@ -3890,6 +3884,16 @@ rule DITEKSHEN_INDICATOR_KB_CERT_066276Af2F2C7E246D3B1Cab1B4Aa42E : FILE
         None
     }
 
+    /// Opt-in diagnostic sweep over an entire third-party rule corpus, reporting
+    /// how the classifier tiers it. Permanently `#[ignore]`d: it needs the full
+    /// bundle (tens of thousands of rules, far too large to vendor), and it
+    /// prints a census rather than asserting a fixed expectation. Point it at a
+    /// traits checkout with `CLEAVE_TRAITS_DIR=/path/to/traits cargo test -p
+    /// yara-classify -- --ignored --nocapture audit_third_party`. The
+    /// classification behaviour this inspects is asserted for real by
+    /// `test_tier_classification_fixtures` and
+    /// `test_exact_third_party_cert_examples_classify_as_pe`, both of which run
+    /// off in-repo fixtures.
     #[test]
     #[ignore]
     fn test_audit_third_party_residual_tiers() {
@@ -3912,16 +3916,16 @@ rule DITEKSHEN_INDICATOR_KB_CERT_066276Af2F2C7E246D3B1Cab1B4Aa42E : FILE
             }
         }
 
-        let traits_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join("..")
-            .join("..")
-            .join("cleave-traits")
-            .join("third-party");
-
-        if !traits_dir.exists() {
+        let Some(traits_dir) = std::env::var_os("CLEAVE_TRAITS_DIR")
+            .map(|d| std::path::PathBuf::from(d).join("third-party"))
+            .filter(|d| d.exists())
+        else {
+            eprintln!(
+                "SKIP: audit_third_party_residual_tiers — set CLEAVE_TRAITS_DIR to a traits \
+                 checkout containing third-party/"
+            );
             return;
-        }
+        };
 
         let mut files = Vec::new();
         collect_rule_files(&traits_dir, &mut files);

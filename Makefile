@@ -140,6 +140,7 @@ test test-fast test-unit: export CLEAVE_SKIP_CACHE := 1
 IT_ISOLATED := archive_determinism_test archive_tmp_regression binary_traits_test \
 	embedded_code_detection_test subfile_pipeline_test symbol_extraction_test \
 	tiny_manifest_value_traits_test trait_migration_regression_test \
+	traits_override_isolation_test \
 	utf16_text_normalization_test yara_init_no_deadlock
 empty :=
 space := $(empty) $(empty)
@@ -160,11 +161,24 @@ test: ## Run all tests (unit + integration)
 	@# outside the `it` binary plus only the isolated `it` modules (the shared
 	@# ones already ran in Phase 1).
 	@echo "Phase 2: isolated integration + lib/workspace tests (nextest)..."
+	@# Without nextest, `cargo test --workspace` puts every `it` test in ONE
+	@# process — exactly what IT_ISOLATED forbids, and it fails: whichever module
+	@# loads traits first wins the process-global mapper, so the others evaluate
+	@# against the wrong rules and the failing set shifts with thread scheduling.
+	@# The fallback therefore spawns one process per isolated module itself.
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
 		cargo nextest run --workspace -E 'not binary(it) | test(/$(IT_ISOLATED_RE)/)'; \
 	else \
-		echo "  cargo-nextest not found; running the isolated modules serialized..."; \
-		cargo test --workspace -- --test-threads=1; \
+		echo "  cargo-nextest not found; running lib/workspace tests, then one process per isolated module..."; \
+		: "--test-threads=1: a few lib tests (e.g. test_reload_rollback_on_bad_traits)"; \
+		: "point CLEAVE_TRAITS_DIR at a temp dir, which nextest isolates per process"; \
+		: "but a shared process leaks into any test analyzing concurrently."; \
+		cargo test --workspace --lib --bins -- --test-threads=1 || exit 1; \
+		cargo test -p scpt --tests -- --test-threads=1 || exit 1; \
+		for m in $(IT_ISOLATED); do \
+			echo "  --- $$m"; \
+			cargo test --quiet --test it -- "$$m::" || exit 1; \
+		done; \
 	fi
 	@echo ""
 	@echo "✓ All tests passed"
@@ -237,7 +251,7 @@ validate: ## Validate trait definitions (for: restrictions, taxonomy, precision,
 	CLEAVE_TRAITS_DIR=$(TRAITS) ./$(CARGO_TARGET)/debug/$(BINARY) validate
 	@echo "✓ Validation passed"
 
-TRAITS ?= ../cleave-traits
+TRAITS ?= ../traits-dev
 COMMIT ?= HEAD
 CHANNEL ?= beta
 DIST ?= dist
@@ -380,7 +394,7 @@ TRAITS_EMBARGO ?= 72 hours
 publish-traits-cron: ## 30-min timer cycle: skip fast unless traits/source/release-tags moved, else [mirror+]gen+check+publish UNSIGNED
 	@command -v rclone >/dev/null || { echo "publish-traits-cron: rclone not found"; exit 1; }
 	@git -C "$(TRAITS)" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
-	  || { echo "publish-traits-cron: TRAITS=$(TRAITS) is not a git checkout — clone cleave-traits there first"; exit 1; }
+	  || { echo "publish-traits-cron: TRAITS=$(TRAITS) is not a git checkout — clone the traits repo there first"; exit 1; }
 	@set -e; \
 	git -C "$(TRAITS)" fetch -q origin 2>/dev/null || echo "publish-traits-cron: WARN fetch $(TRAITS) failed; using cached refs"; \
 	traits_tip=$$(git -C "$(TRAITS)" rev-parse origin/main 2>/dev/null || git -C "$(TRAITS)" rev-parse HEAD); \

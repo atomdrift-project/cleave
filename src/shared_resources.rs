@@ -178,6 +178,13 @@ pub fn reload_capability_mapper() -> Result<(usize, usize), String> {
     let trait_count = mapper.trait_definitions_count();
     let composite_count = mapper.composite_rules_count();
 
+    // Build the match indexes here, on this (non-rayon) caller, before the new
+    // mapper becomes reachable. A reload lands mid-scan with the rayon pool
+    // already busy, so publishing it unwarmed makes every in-flight analysis race
+    // its own copy of a multi-second parallel build. `match_indexes` keeps that
+    // race deadlock-free; warming here keeps it from happening at all.
+    mapper.warm_indexes();
+
     let mut guard = CAPABILITY_MAPPER.write();
     *guard = Some(Arc::new(mapper));
     drop(guard);

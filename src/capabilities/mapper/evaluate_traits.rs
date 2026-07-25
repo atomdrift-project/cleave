@@ -271,6 +271,10 @@ impl super::CapabilityMapper {
                 None,
             );
 
+            if dep_findings.is_empty() {
+                break;
+            }
+
             let mut new_added = false;
             for f in dep_findings {
                 // Dedup against both scopes the clone used to merge: what the

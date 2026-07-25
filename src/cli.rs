@@ -192,8 +192,9 @@ pub struct Args {
     pub max_file_mem: u64,
 
     /// Maximum file size (in MB) to scan during directory analysis.
-    /// Files larger than this are skipped. Default: 600 MB (0 = no limit).
-    #[arg(long, value_name = "MB", default_value_t = 600)]
+    /// Files larger than this are skipped. Default: 20480 MB / 20 GB (0 = no limit).
+    /// Sized to admit full OS images (ISO/UDF, DMG) from the os-image feed.
+    #[arg(long, value_name = "MB", default_value_t = 20480)]
     pub max_file_size: u64,
 
     /// Warn when a single rule takes longer than this many milliseconds to evaluate.

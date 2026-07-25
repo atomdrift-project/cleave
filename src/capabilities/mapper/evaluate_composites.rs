@@ -32,22 +32,41 @@ impl super::CapabilityMapper {
         // Determine file type from report (platform comes from self.platform)
         let file_type = self.detect_file_type(&report.target.file_type);
 
-        // The three fixed-point passes below run the identical filter chain
-        // (skip already-seen ids, require the rule's traits to have matched,
-        // evaluate, drop dupes). Extracted once so each loop reads as what it
-        // does instead of repeating six lines of plumbing.
+        // A container report aggregates tens of thousands of members' strings,
+        // kv, and evidence, and evaluating the rule set over that value pool is
+        // the dominant single-threaded finalize cost — 2026-07-24: ~330 s of a
+        // 1,870 s DefinitelyTyped archive scan sat here, stack-attributed to
+        // TraitRegex::find_str under eval_string_literal. Rules within one
+        // fixed-point iteration are independent (each sees the same immutable
+        // ctx snapshot; new findings land only after the collect), so large
+        // reports fan the rule loop across the pool. Small files stay
+        // sequential: their per-rule work is microseconds and rayon's fan-out
+        // overhead would dominate — which is the regime the old always-serial
+        // loop was written for.
+        let parallel_rules = report.files.len() >= 32 || report.strings.len() >= 20_000;
         let eval_rules = |rules: &[&crate::composite_rules::CompositeTrait],
                           seen_ids: &std::collections::HashSet<String>,
                           matched_bits: &TraitBitSet,
                           ctx: &EvaluationContext<'_>|
          -> Vec<Finding> {
-            rules
-                .iter()
-                .filter(|rule| !seen_ids.contains(&rule.id))
-                .filter(|rule| matched_bits.contains_all(&rule.required_trait_indices))
-                .filter_map(|rule| rule.evaluate(ctx))
-                .filter(|f| !seen_ids.contains(&f.id))
-                .collect()
+            use rayon::prelude::*;
+            if parallel_rules {
+                rules
+                    .par_iter()
+                    .filter(|rule| !seen_ids.contains(&rule.id))
+                    .filter(|rule| matched_bits.contains_all(&rule.required_trait_indices))
+                    .filter_map(|rule| rule.evaluate(ctx))
+                    .filter(|f| !seen_ids.contains(&f.id))
+                    .collect()
+            } else {
+                rules
+                    .iter()
+                    .filter(|rule| !seen_ids.contains(&rule.id))
+                    .filter(|rule| matched_bits.contains_all(&rule.required_trait_indices))
+                    .filter_map(|rule| rule.evaluate(ctx))
+                    .filter(|f| !seen_ids.contains(&f.id))
+                    .collect()
+            }
         };
 
         // Pre-allocate capacity for findings to reduce reallocations

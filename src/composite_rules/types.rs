@@ -588,7 +588,7 @@ impl From<filefacts::FileType> for FileType {
             Ff::Zip => Self::Zip,
             Ff::Tar | Ff::TarGz | Ff::TarBz2 | Ff::TarXz | Ff::TarZst => Self::Tar,
             Ff::Zst => Self::Zst,
-            Ff::SevenZ | Ff::Rar => Self::Archive,
+            Ff::SevenZ | Ff::Rar | Ff::Iso => Self::Archive,
             Ff::Deb => Self::Deb,
             Ff::StaticLib => Self::StaticLib,
             Ff::Rpm => Self::Rpm,

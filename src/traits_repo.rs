@@ -27,10 +27,25 @@ fn traits_dir_override_lock() -> &'static RwLock<Option<PathBuf>> {
 /// Set a process-wide override for the traits directory.
 ///
 /// Takes precedence over `CLEAVE_TRAITS_DIR`. Pass `None` to clear.
+///
+/// Drops any cached capability mapper, since it was built from the previous
+/// directory. Without that, the mapper — a process-wide singleton keyed on
+/// nothing — keeps serving the first traits directory any caller happened to
+/// load, and every later override is silently ignored: analyses still run, just
+/// against the wrong rules. Invalidation is lazy, so calling this before the
+/// first analysis (the CLI's `--traits-dir`) costs nothing.
 pub fn set_override_dir(dir: Option<PathBuf>) {
     if let Ok(mut guard) = traits_dir_override_lock().write() {
         *guard = dir;
     }
+    // Deliberately outside the guard scope: rebuilding a mapper or re-walking
+    // the traits tree resolves the traits dir, so holding the override lock
+    // across invalidation would invert the lock order against a concurrent build.
+    crate::shared_resources::invalidate_capability_mapper();
+    // The analysis/YARA cache keys carry a fingerprint of the traits tree. It is
+    // memoized per process, so without this a scan after the switch is served
+    // from cache under the previous directory's fingerprint.
+    crate::cache::invalidate_traits_scan();
 }
 
 /// Returns the active override, if any.

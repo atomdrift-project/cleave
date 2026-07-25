@@ -25,7 +25,7 @@ use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicI8, AtomicU64, Ordering};
 use std::time::{Instant, SystemTime};
 use walkdir::WalkDir;
@@ -466,24 +466,55 @@ fn scan_traits_dir(traits_dir: &Path) -> TraitsScan {
     }
 }
 
-/// The single, memoized traits-directory scan for this process.
+/// The memoized traits-directory scan, or `None` before the first scan and
+/// after [`invalidate_traits_scan`].
+static TRAITS_SCAN: parking_lot::RwLock<Option<Arc<TraitsScan>>> = parking_lot::RwLock::new(None);
+
+/// Memoized cache timestamp derived from [`TRAITS_SCAN`].
+static CACHE_TIMESTAMP: parking_lot::RwLock<Option<SystemTime>> = parking_lot::RwLock::new(None);
+
+/// Memoized cache revision fingerprint derived from [`TRAITS_SCAN`].
+static CACHE_REVISION: parking_lot::RwLock<Option<RuleFilesRevision>> =
+    parking_lot::RwLock::new(None);
+
+/// Drop the memoized traits scan, and the cache keys derived from it, so the
+/// next lookup re-walks the tree.
 ///
-/// Every cache key derives from this one traversal. Memoized for the process
-/// because the traits directory does not change under a running scan — the same
-/// assumption the analysis-cache revision and YARA timestamp already made. A
-/// caller that must observe a mid-process edit walks [`scan_traits_dir`]
-/// directly (as the tests do).
+/// Called when the traits source changes (see [`crate::traits_repo::set_override_dir`]
+/// and [`crate::shared_resources::reload_capability_mapper`]). Every cache key —
+/// analysis, mapper, YARA — derives from this bundle, so a stale one means a
+/// re-scan after a rule update is served from cache under the *old* rules'
+/// fingerprint and the update silently doesn't take effect.
+pub(crate) fn invalidate_traits_scan() {
+    *TRAITS_SCAN.write() = None;
+    *CACHE_TIMESTAMP.write() = None;
+    *CACHE_REVISION.write() = None;
+}
+
+/// The memoized traits-directory scan.
 ///
-/// The one-time init runs [`scan_traits_dir`], which stats files with rayon, so
-/// it must first be triggered from the main thread — never from inside a rayon
-/// worker, or the parallel stats could steal a task that re-enters this
-/// `OnceLock` and deadlock. Every trigger (mapper cache key, YARA timestamp,
-/// analysis-cache revision, `version_info`) fires during mapper load, which the
-/// worker/server paths force on the main thread via `prefetch_capability_mapper`
-/// and the one-shot paths reach on their own main thread.
-fn traits_scan() -> &'static TraitsScan {
-    static SCAN: OnceLock<TraitsScan> = OnceLock::new();
-    SCAN.get_or_init(|| scan_traits_dir(&traits_path()))
+/// Every cache key derives from this one traversal, so it is walked once and
+/// reused — a large traits checkout used to be traversed four times per scan
+/// before any cache could be consulted. It stays valid until the traits source
+/// changes, which is what [`invalidate_traits_scan`] signals; a caller that must
+/// observe an arbitrary mid-process edit walks [`scan_traits_dir`] directly (as
+/// the tests do).
+///
+/// Built with no lock held. [`scan_traits_dir`] stats files with rayon, and a
+/// rayon worker can steal an unrelated analysis task that re-enters here, so any
+/// lock held across the build would deadlock against itself. Concurrent first
+/// callers may each build a copy; the first writer wins and the rest are dropped.
+fn traits_scan() -> Arc<TraitsScan> {
+    // Scoped so the read guard is released before the build below, which
+    // re-enters this function through rayon.
+    {
+        if let Some(scan) = TRAITS_SCAN.read().as_ref() {
+            return Arc::clone(scan);
+        }
+    }
+    let scan = Arc::new(scan_traits_dir(&traits_path()));
+    let mut guard = TRAITS_SCAN.write();
+    Arc::clone(guard.get_or_insert(scan))
 }
 
 /// Returns the most recently modified `.yaml`/`.yml` trait file and its mtime.
@@ -554,23 +585,26 @@ pub(crate) fn binary_mtime() -> Result<SystemTime> {
 /// Falls back to binary mtime only when no rule files exist at all
 /// (true production builds with embedded rules).
 pub(crate) fn cache_timestamp() -> Result<SystemTime> {
-    static CACHED: OnceLock<SystemTime> = OnceLock::new();
-    if let Some(&ts) = CACHED.get() {
+    let cached = *CACHE_TIMESTAMP.read();
+    if let Some(ts) = cached {
         return Ok(ts);
     }
+    // Built with no lock held: the underlying traits walk uses rayon, which can
+    // steal a task that re-enters here.
     let ts = match most_recent_yara_mtime() {
         Ok(mtime) => mtime,
         Err(_) => binary_mtime()?,
     };
-    Ok(*CACHED.get_or_init(|| ts))
+    Ok(*CACHE_TIMESTAMP.write().get_or_insert(ts))
 }
 
 /// Returns the active rule/trait revision fingerprint for cache invalidation.
 pub(crate) fn cache_revision() -> Result<RuleFilesRevision> {
-    static CACHED: OnceLock<RuleFilesRevision> = OnceLock::new();
-    if let Some(&revision) = CACHED.get() {
+    let cached = *CACHE_REVISION.read();
+    if let Some(revision) = cached {
         return Ok(revision);
     }
+    // Built with no lock held, as in `cache_timestamp`.
     let revision = match rule_files_revision() {
         Ok(revision) => revision,
         Err(_) => {
@@ -581,7 +615,7 @@ pub(crate) fn cache_revision() -> Result<RuleFilesRevision> {
             }
         }
     };
-    Ok(*CACHED.get_or_init(|| revision))
+    Ok(*CACHE_REVISION.write().get_or_insert(revision))
 }
 
 /// Generate a cache key based on the newest `.yar`/`.yara` file mtime and third-party flag.

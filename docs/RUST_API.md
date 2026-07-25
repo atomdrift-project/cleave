@@ -120,7 +120,7 @@ Members land under `extract_dir/<sha256[0:6]>/<relative-path>`.
 
 | Variable                  | Effect                                                         |
 | ------------------------- | -------------------------------------------------------------- |
-| `CLEAVE_TRAITS_DIR`       | Path to the [cleave-traits](https://github.com/atomdrift-project/traits) checkout. Required at first call. |
+| `CLEAVE_TRAITS_DIR`       | Path to the [traits](https://github.com/atomdrift-project/traits) checkout. Required at first call. |
 | `CLEAVE_RAYON_THREADS`    | Rayon pool size. Default is system parallelism.                |
 | `CLEAVE_SKIP_CACHE`       | `1` disables both the analysis cache and the YARA match cache. |
 | `CLEAVE_SKIP_YARA_CACHE`  | `1` disables the YARA match cache only.                        |

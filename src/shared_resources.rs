@@ -42,6 +42,18 @@ pub(crate) fn skip_traits_requested() -> bool {
 static CAPABILITY_MAPPER: parking_lot::RwLock<Option<Arc<CapabilityMapper>>> =
     parking_lot::RwLock::new(None);
 
+/// Drop the cached global CapabilityMapper so the next request rebuilds it.
+///
+/// Called when the traits source changes (see [`crate::traits_repo::set_override_dir`]).
+/// The mapper is a process-wide singleton keyed on nothing, so without this the
+/// first caller's traits directory wins for the life of the process and every
+/// later override is silently ignored — the analysis still runs, against the
+/// wrong rules. Invalidation is lazy (`None`, not a rebuild) so pointing at a
+/// traits dir during startup stays free.
+pub(crate) fn invalidate_capability_mapper() {
+    *CAPABILITY_MAPPER.write() = None;
+}
+
 /// Global lazy-loaded YARA engine (with third-party rules enabled)
 static YARA_ENGINE_WITH_THIRD_PARTY: OnceLock<Arc<YaraEngine>> = OnceLock::new();
 
@@ -138,6 +150,12 @@ pub(crate) fn capability_mapper() -> anyhow::Result<Arc<CapabilityMapper>> {
 /// mapper remains active and an error is returned.
 pub fn reload_capability_mapper() -> Result<(usize, usize), String> {
     tracing::info!("Reloading CapabilityMapper from disk");
+
+    // A reload exists because the traits on disk changed. The cache keys carry a
+    // fingerprint of that tree, memoized per process, so without dropping it the
+    // freshly loaded rules would be applied only to files not already cached —
+    // every previously scanned file keeps its pre-update verdict.
+    crate::cache::invalidate_traits_scan();
 
     if skip_traits_requested() {
         let mapper = CapabilityMapper::empty();

@@ -1659,7 +1659,12 @@ impl ArchiveAnalyzer {
             FileType::Rpm => {
                 system_packages::extract_rpm_from_reader(Cursor::new(data), dest_dir, guard)
             }
-            FileType::SevenZ => {
+            // 7-Zip handles both its native container and optical-disc images
+            // (ISO 9660 with Joliet/Rock Ridge, and UDF). The ISO path is the
+            // fallback for images arriving outside forager, which explodes them
+            // itself; a huge image still hits the extraction guards, so
+            // forager-side explosion stays the primary path.
+            FileType::SevenZ | FileType::Iso => {
                 system_packages::extract_7z_from_data(data, dest_dir, guard, &self.zip_passwords)
             }
             FileType::PkgMacos => system_packages::extract_pkg_from_reader(

@@ -29,7 +29,7 @@ use std::path::Path;
 /// we test what the host can extract, not require every one).
 fn analyze_report(path: &Path) -> Option<Value> {
     if !path.exists() {
-        eprintln!("skipping: fixture {} not present", path.display());
+        crate::support::skip_missing(&path.display().to_string());
         return None;
     }
     let mut cmd = assert_cmd::cargo_bin_cmd!("cleave");

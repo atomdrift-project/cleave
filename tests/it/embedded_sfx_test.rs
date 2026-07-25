@@ -149,7 +149,7 @@ fn sfx_marker_detection() {
             &stdout[..stdout.len().min(2000)]
         );
     } else {
-        eprintln!("skipping CAB sub-assertion: missing tests/fixtures/test.exe");
+        crate::support::skip_missing("CAB sub-assertion: tests/fixtures/test.exe");
     }
 }
 
@@ -216,7 +216,7 @@ fn embedded_binary_scanning() {
 
     // 3. & 4. Real ELF with another ELF appended.
     let Ok(elf_host) = fs::read("tests/fixtures/test.elf") else {
-        eprintln!("skipping ELF sub-cases: missing tests/fixtures/test.elf");
+        crate::support::skip_missing("ELF sub-cases: tests/fixtures/test.elf");
         return;
     };
     let mut combo = elf_host.clone();
@@ -361,7 +361,7 @@ fn false_positive_regressions() {
             "False positive: {count} 'binary/embedded/pe' findings on clean test.exe"
         );
     } else {
-        eprintln!("skipping clean-PE sub-case: missing tests/fixtures/test.exe");
+        crate::support::skip_missing("clean-PE sub-case: tests/fixtures/test.exe");
     }
 
     // Clean ELF: no embedded ELF finding.
@@ -373,7 +373,7 @@ fn false_positive_regressions() {
             "False positive: {count} 'binary/embedded/elf' findings on clean test.elf"
         );
     } else {
-        eprintln!("skipping clean-ELF sub-case: missing tests/fixtures/test.elf");
+        crate::support::skip_missing("clean-ELF sub-case: tests/fixtures/test.elf");
     }
 
     // Benign deploy script with short base64: no base64-binary finding.

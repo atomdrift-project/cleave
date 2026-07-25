@@ -1058,7 +1058,7 @@ impl OfficeAnalyzer {
         // XLM (Excel 4.0 macro) substring counts.  Computed once and
         // reused both by the existing inline finding thresholds and by
         // the `office.xlm` metric struct emitted at the end of the
-        // function.  Once equivalent traits land in `cleave-traits/`,
+        // function.  Once equivalent traits land in the traits repo,
         // the inline finding pushes can be removed and the counts will
         // continue to be exposed via metrics for trait authors.
         let xlm_formula_fill = excel_macrosheet_xml.matches("FORMULA.FILL").count();

@@ -53,7 +53,7 @@ type config struct {
 
 func main() {
 	var c config
-	flag.StringVar(&c.traits, "traits", "../cleave-traits", "path to the cleave-traits git repo")
+	flag.StringVar(&c.traits, "traits", "../traits-dev", "path to the traits git repo")
 	flag.StringVar(&c.repo, "repo", ".", "path to the cleave (engine) git repo")
 	flag.StringVar(&c.engineOverride, "engine", "", "use this binary for ALL releases instead of building per tag (testing)")
 	flag.StringVar(&c.headEngine, "head-engine", "", "current/HEAD build used to validate the `latest` pointer (the newest bundle that works for HEAD); empty = no latest validation")

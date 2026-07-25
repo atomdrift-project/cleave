@@ -44,7 +44,7 @@ fn full_options() -> cleave::AnalysisOptions {
 
 /// Representative binary samples used across multiple benchmark groups.
 const CORE_SAMPLES: &[(&str, &str)] = &[
-    ("pe_test_exe_2.5mb", "tests/fixtures/test.exe"),
+    ("pe_test_exe_10kb", "tests/fixtures/test.exe"),
     (
         "go_linux_amd64_2.3mb",
         "tests/fixtures/lang_strings/go_linux_amd64",
@@ -114,7 +114,7 @@ fn bench_analyze_yara(c: &mut Criterion) {
     g.measurement_time(Duration::from_secs(20));
 
     let samples: &[(&str, &str)] = &[
-        ("pe_test_exe_2.5mb", "tests/fixtures/test.exe"),
+        ("pe_test_exe_10kb", "tests/fixtures/test.exe"),
         (
             "go_linux_amd64_2.3mb",
             "tests/fixtures/lang_strings/go_linux_amd64",
@@ -156,7 +156,7 @@ fn bench_analyze_full(c: &mut Criterion) {
     g.measurement_time(Duration::from_secs(30));
 
     let samples: &[(&str, &str)] = &[
-        ("pe_test_exe_2.5mb", "tests/fixtures/test.exe"),
+        ("pe_test_exe_10kb", "tests/fixtures/test.exe"),
         (
             "go_linux_amd64_2.3mb",
             "tests/fixtures/lang_strings/go_linux_amd64",
@@ -190,7 +190,7 @@ fn bench_analyze_file_cached(c: &mut Criterion) {
     g.measurement_time(Duration::from_secs(15));
 
     let samples: &[(&str, &str)] = &[
-        ("pe_test_exe_2.5mb", "tests/fixtures/test.exe"),
+        ("pe_test_exe_10kb", "tests/fixtures/test.exe"),
         (
             "go_linux_amd64_2.3mb",
             "tests/fixtures/lang_strings/go_linux_amd64",
@@ -233,7 +233,7 @@ fn bench_analyze_file_uncached(c: &mut Criterion) {
     g.measurement_time(Duration::from_secs(15));
 
     let samples: &[(&str, &str)] = &[
-        ("pe_test_exe_2.5mb", "tests/fixtures/test.exe"),
+        ("pe_test_exe_10kb", "tests/fixtures/test.exe"),
         (
             "go_linux_amd64_2.3mb",
             "tests/fixtures/lang_strings/go_linux_amd64",

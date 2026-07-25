@@ -28,6 +28,44 @@ pub(crate) struct TraitEvalCache<'a> {
     pub ast_kind_cache: Option<FxHashMap<String, Vec<Evidence>>>,
 }
 
+/// Which half of the trait set one filtered pass evaluates, plus any findings
+/// that are not in the report yet but must be visible to `trait:` conditions.
+///
+/// The two travel together because they are the same question asked twice: the
+/// dependent pass exists to react to what the independent pass just found, so
+/// it needs those findings in scope. Carrying them here — rather than handing
+/// evaluation a report clone with the findings spliced in — matters at
+/// container scope, where cloning an archive report copies every member's
+/// `FileAnalysis` and strings (2026-07-24: gigabytes per call on a
+/// 63k-member archive, and a top single-threaded finalize cost).
+#[derive(Clone, Copy)]
+pub(crate) struct TraitPass<'a> {
+    /// `false` evaluates traits WITHOUT `trait:` dependencies, `true` those WITH.
+    pub dependent_only: bool,
+    /// Findings the report does not carry yet; `EvaluationContext` folds these
+    /// into its finding-id index, so `trait:` conditions see them exactly as if
+    /// they had been appended to `report.findings`.
+    pub extra_findings: Option<&'a [Finding]>,
+}
+
+impl<'a> TraitPass<'a> {
+    /// Traits with no `trait:` dependency — nothing earlier to observe.
+    pub(crate) fn independent() -> Self {
+        Self {
+            dependent_only: false,
+            extra_findings: None,
+        }
+    }
+
+    /// Traits with a `trait:` dependency, observing `extra` on top of the report.
+    pub(crate) fn dependent(extra: Option<&'a [Finding]>) -> Self {
+        Self {
+            dependent_only: true,
+            extra_findings: extra,
+        }
+    }
+}
+
 use super::get_relative_source_file;
 
 impl super::CapabilityMapper {
@@ -212,41 +250,34 @@ impl super::CapabilityMapper {
             binary_data,
             cached_ast,
             inline_yara,
-            false,
+            TraitPass::independent(),
             &cache,
             None,
         );
 
-        // Pass 2: Evaluate dependent traits (iteratively until fixed point)
-        let mut report_with_findings = report.clone();
-        report_with_findings
-            .findings
-            .extend(findings.iter().cloned());
-
+        // Pass 2: Evaluate dependent traits (iteratively until fixed point).
+        // `findings` doubles as the extra-findings scope: it holds pass 1's
+        // results plus everything later iterations add, which is exactly what
+        // the previous report clone spliced into `report.findings`.
         const MAX_ITERATIONS: usize = 10;
         for _ in 0..MAX_ITERATIONS {
             let dep_findings = self.evaluate_traits_filtered_with_cache(
-                &report_with_findings,
+                report,
                 binary_data,
                 cached_ast,
                 inline_yara,
-                true,
+                TraitPass::dependent(Some(&findings)),
                 &cache,
                 None,
             );
 
-            if dep_findings.is_empty() {
-                break;
-            }
-
             let mut new_added = false;
             for f in dep_findings {
-                if !report_with_findings
-                    .findings
-                    .iter()
-                    .any(|existing| existing.id == f.id)
+                // Dedup against both scopes the clone used to merge: what the
+                // report already carried, and what this call has accumulated.
+                if !findings.iter().any(|existing| existing.id == f.id)
+                    && !report.findings.iter().any(|existing| existing.id == f.id)
                 {
-                    report_with_findings.findings.push(f.clone());
                     findings.push(f);
                     new_added = true;
                 }
@@ -349,7 +380,10 @@ impl super::CapabilityMapper {
             binary_data,
             cached_ast,
             inline_yara,
-            dependent_only,
+            TraitPass {
+                dependent_only,
+                extra_findings: None,
+            },
             &TraitEvalCache {
                 raw_regex_matches: Some(&raw_regex_matches),
                 section_map: &section_map,
@@ -373,10 +407,14 @@ impl super::CapabilityMapper {
         binary_data: &[u8],
         cached_ast: Option<&tree_sitter::Tree>,
         inline_yara: Option<&HashMap<String, Vec<Evidence>>>,
-        dependent_only: bool,
+        pass: TraitPass<'_>,
         cache: &TraitEvalCache<'_>,
         cancellation: Option<&std::sync::atomic::AtomicBool>,
     ) -> Vec<Finding> {
+        let TraitPass {
+            dependent_only,
+            extra_findings,
+        } = pass;
         // Determine file type from report
         let file_type = self.detect_file_type(&report.target.file_type);
         let use_string_prefilters = !file_type.uses_raw_text_search();
@@ -386,12 +424,12 @@ impl super::CapabilityMapper {
             binary_data,
             file_type,
             &self.platforms,
-            None,
+            extra_findings,
             cached_ast,
         )
         .with_section_map(cache.section_map)
         .with_cached_evidence(Some(cache.cached_evidence))
-        .with_deadline(std::time::Instant::now() + std::time::Duration::from_secs(90))
+        .with_deadline(std::time::Instant::now() + std::time::Duration::from_secs(180))
         .with_slow_rule_ms(self.slow_rule_ms);
 
         if let Some(flag) = cancellation {

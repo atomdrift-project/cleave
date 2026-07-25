@@ -32,6 +32,43 @@ impl super::CapabilityMapper {
         // Determine file type from report (platform comes from self.platform)
         let file_type = self.detect_file_type(&report.target.file_type);
 
+        // A container report aggregates tens of thousands of members' strings,
+        // kv, and evidence, and evaluating the rule set over that value pool is
+        // the dominant single-threaded finalize cost — 2026-07-24: ~330 s of a
+        // 1,870 s DefinitelyTyped archive scan sat here, stack-attributed to
+        // TraitRegex::find_str under eval_string_literal. Rules within one
+        // fixed-point iteration are independent (each sees the same immutable
+        // ctx snapshot; new findings land only after the collect), so large
+        // reports fan the rule loop across the pool. Small files stay
+        // sequential: their per-rule work is microseconds and rayon's fan-out
+        // overhead would dominate — which is the regime the old always-serial
+        // loop was written for.
+        let parallel_rules = report.files.len() >= 32 || report.strings.len() >= 20_000;
+        let eval_rules = |rules: &[&crate::composite_rules::CompositeTrait],
+                          seen_ids: &std::collections::HashSet<String>,
+                          matched_bits: &TraitBitSet,
+                          ctx: &EvaluationContext<'_>|
+         -> Vec<Finding> {
+            use rayon::prelude::*;
+            if parallel_rules {
+                rules
+                    .par_iter()
+                    .filter(|rule| !seen_ids.contains(&rule.id))
+                    .filter(|rule| matched_bits.contains_all(&rule.required_trait_indices))
+                    .filter_map(|rule| rule.evaluate(ctx))
+                    .filter(|f| !seen_ids.contains(&f.id))
+                    .collect()
+            } else {
+                rules
+                    .iter()
+                    .filter(|rule| !seen_ids.contains(&rule.id))
+                    .filter(|rule| matched_bits.contains_all(&rule.required_trait_indices))
+                    .filter_map(|rule| rule.evaluate(ctx))
+                    .filter(|f| !seen_ids.contains(&f.id))
+                    .collect()
+            }
+        };
+
         // Pre-allocate capacity for findings to reduce reallocations
         let mut all_findings: Vec<Finding> = Vec::with_capacity(100);
         let mut seen_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -94,14 +131,9 @@ impl super::CapabilityMapper {
                 ctx = ctx.with_arch_ranges(ranges);
             }
 
-            // Evaluate positive rules (sequential to avoid nested rayon overhead for small files)
-            let new_findings: Vec<Finding> = positive_rules
-                .iter()
-                .filter(|rule| !seen_ids.contains(&rule.id))
-                .filter(|rule| matched_bits.contains_all(&rule.required_trait_indices))
-                .filter_map(|rule| rule.evaluate(&ctx))
-                .filter(|f| !seen_ids.contains(&f.id))
-                .collect();
+            // Evaluate positive rules (parallel only for container-scale reports)
+            let new_findings: Vec<Finding> =
+                eval_rules(&positive_rules, &seen_ids, &matched_bits, &ctx);
 
             if new_findings.is_empty() {
                 break;
@@ -144,13 +176,8 @@ impl super::CapabilityMapper {
                 ctx = ctx.with_arch_ranges(ranges);
             }
 
-            let negative_findings: Vec<Finding> = negative_rules
-                .iter()
-                .filter(|rule| !seen_ids.contains(&rule.id))
-                .filter(|rule| matched_bits.contains_all(&rule.required_trait_indices))
-                .filter_map(|rule| rule.evaluate(&ctx))
-                .filter(|f| !seen_ids.contains(&f.id))
-                .collect();
+            let negative_findings: Vec<Finding> =
+                eval_rules(&negative_rules, &seen_ids, &matched_bits, &ctx);
 
             if negative_findings.is_empty() {
                 break;
@@ -182,13 +209,8 @@ impl super::CapabilityMapper {
                     ctx = ctx.with_arch_ranges(ranges);
                 }
 
-                let new_findings: Vec<Finding> = positive_rules
-                    .iter()
-                    .filter(|rule| !seen_ids.contains(&rule.id))
-                    .filter(|rule| matched_bits.contains_all(&rule.required_trait_indices))
-                    .filter_map(|rule| rule.evaluate(&ctx))
-                    .filter(|f| !seen_ids.contains(&f.id))
-                    .collect();
+                let new_findings: Vec<Finding> =
+                    eval_rules(&positive_rules, &seen_ids, &matched_bits, &ctx);
 
                 if new_findings.is_empty() {
                     break;

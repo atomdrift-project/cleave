@@ -30,10 +30,8 @@ pub(crate) fn eval_trait<'a>(id: &str, ctx: &EvaluationContext<'a>) -> Condition
     // Fast path: exact match using O(1) index lookup
     if ctx.has_finding_exact(id) {
         let evidence: Vec<_> = ctx
-            .report
             .findings
             .iter()
-            .chain(ctx.additional_findings.into_iter().flatten())
             .filter(|f| f.id == id)
             .flat_map(|f| f.evidence.iter().cloned())
             .take(MAX_EVIDENCE_PER_TRAIT)
@@ -63,10 +61,8 @@ pub(crate) fn eval_trait<'a>(id: &str, ctx: &EvaluationContext<'a>) -> Condition
         let suffix_new = format!("::{}", id);
         let suffix_legacy = format!("/{}", id);
         let matching: Vec<_> = ctx
-            .report
             .findings
             .iter()
-            .chain(ctx.additional_findings.into_iter().flatten())
             .filter(|f| f.id.ends_with(&suffix_new) || f.id.ends_with(&suffix_legacy))
             .collect();
 
@@ -106,10 +102,8 @@ pub(crate) fn eval_trait<'a>(id: &str, ctx: &EvaluationContext<'a>) -> Condition
         let prefix_new = format!("{}::", id);
         let prefix_legacy = format!("{}/", id);
         let matching: Vec<_> = ctx
-            .report
             .findings
             .iter()
-            .chain(ctx.additional_findings.into_iter().flatten())
             .filter(|f| f.id.starts_with(&prefix_new) || f.id.starts_with(&prefix_legacy))
             .filter(|f| ctx.parent_is_exception || f.crit != Criticality::Exception)
             .collect();

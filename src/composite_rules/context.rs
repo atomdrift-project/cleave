@@ -14,6 +14,69 @@ use std::time::Instant;
 
 use crate::hash_str;
 
+/// Every finding an evaluation may match against, as one value.
+///
+/// Two sources feed it: the report's own findings, and findings that are not on
+/// the report — the output of an earlier fixed-point iteration, or an archive's
+/// member findings raised into container scope. Consumers only ever want the
+/// union, so the union is what this hands out. As two separate fields, every
+/// read site re-derived that union by hand; a site that forgot the second half
+/// produced a silent detection miss in precisely the cases hardest to notice
+/// (container and fixed-point evaluation, never a plain single-file scan).
+#[derive(Debug, Clone)]
+pub(crate) struct FindingScope<'a> {
+    own: &'a [Finding],
+    extra: &'a [Finding],
+    /// Hashed ids of both halves, so a lookup for an id nothing produced costs
+    /// one hash instead of a full scan. `None` means always scan.
+    id_hashes: Option<Arc<FxHashSet<u64>>>,
+}
+
+impl<'a> FindingScope<'a> {
+    /// Scope over `own` plus `extra`, indexed for fast negative lookups.
+    pub(crate) fn new(own: &'a [Finding], extra: Option<&'a [Finding]>) -> Self {
+        let extra = extra.unwrap_or(&[]);
+        let mut id_hashes = FxHashSet::default();
+        for finding in own.iter().chain(extra) {
+            id_hashes.insert(hash_str(&finding.id));
+        }
+        Self {
+            own,
+            extra,
+            id_hashes: Some(Arc::new(id_hashes)),
+        }
+    }
+
+    /// Scope with a caller-supplied index — or `None` to skip the shortcut and
+    /// scan every lookup, which is what the rule-authoring tools want.
+    pub(crate) fn with_index(
+        own: &'a [Finding],
+        extra: Option<&'a [Finding]>,
+        id_hashes: Option<Arc<FxHashSet<u64>>>,
+    ) -> Self {
+        Self {
+            own,
+            extra: extra.unwrap_or(&[]),
+            id_hashes,
+        }
+    }
+
+    /// Every finding in scope, both halves, in report-then-extra order.
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &Finding> {
+        self.own.iter().chain(self.extra)
+    }
+
+    /// Whether any finding in scope has exactly this id.
+    pub(crate) fn contains_id(&self, id: &str) -> bool {
+        if let Some(ref hashes) = self.id_hashes
+            && !hashes.contains(&hash_str(id))
+        {
+            return false;
+        }
+        self.iter().any(|f| f.id == id)
+    }
+}
+
 /// Context for evaluating composite rules
 #[derive(Debug, Clone)]
 pub(crate) struct EvaluationContext<'a> {
@@ -27,12 +90,11 @@ pub(crate) struct EvaluationContext<'a> {
     pub platforms: &'a [Platform],
     /// CPU architecture(s) of the file being analyzed (derived from report.target.architectures)
     pub arch: Arc<[Arch]>,
-    /// Additional findings from previous evaluation iterations (for composite chaining)
-    pub additional_findings: Option<&'a [Finding]>,
+    /// Every finding in scope for this evaluation — the report's own plus any
+    /// not stored on it. Read through this, never `report.findings`.
+    pub findings: FindingScope<'a>,
     /// Cached parsed AST (to avoid re-parsing for each ast_pattern trait)
     pub cached_ast: Option<&'a tree_sitter::Tree>,
-    /// Cached index of finding ID hashes for fast O(1) trait lookups.
-    pub finding_id_index: Option<Arc<FxHashSet<u64>>>,
     /// Optional debug collector - None for hot path, Some during test-rules
     pub debug_collector: Option<&'a DebugCollector>,
     /// Section map for location-constrained matching (lazy-initialized)
@@ -104,16 +166,6 @@ impl<'a> EvaluationContext<'a> {
         additional_findings: Option<&'a [Finding]>,
         cached_ast: Option<&'a tree_sitter::Tree>,
     ) -> Self {
-        let mut index = FxHashSet::default();
-        for finding in &report.findings {
-            index.insert(hash_str(&finding.id));
-        }
-        if let Some(additional) = additional_findings {
-            for finding in additional {
-                index.insert(hash_str(&finding.id));
-            }
-        }
-
         let arch: Arc<[Arch]> = report
             .target
             .architectures
@@ -142,9 +194,8 @@ impl<'a> EvaluationContext<'a> {
             file_type,
             platforms,
             arch,
-            additional_findings,
+            findings: FindingScope::new(&report.findings, additional_findings),
             cached_ast,
-            finding_id_index: Some(Arc::new(index)),
             debug_collector: None,
             section_map: None,
             inline_yara_results: None,
@@ -247,15 +298,7 @@ impl<'a> EvaluationContext<'a> {
     #[must_use]
     #[cfg(test)]
     pub(crate) fn with_additional_findings(mut self, findings: &'a [Finding]) -> Self {
-        self.additional_findings = Some(findings);
-        let mut index = FxHashSet::default();
-        for finding in &self.report.findings {
-            index.insert(hash_str(&finding.id));
-        }
-        for finding in findings {
-            index.insert(hash_str(&finding.id));
-        }
-        self.finding_id_index = Some(Arc::new(index));
+        self.findings = FindingScope::new(&self.report.findings, Some(findings));
         self
     }
 
@@ -355,16 +398,7 @@ impl<'a> EvaluationContext<'a> {
     /// Check if a finding ID exists (exact match only)
     #[must_use]
     pub(crate) fn has_finding_exact(&self, id: &str) -> bool {
-        if let Some(ref index) = self.finding_id_index
-            && !index.contains(&hash_str(id))
-        {
-            return false;
-        }
-        self.report.findings.iter().any(|f| f.id == id)
-            || self
-                .additional_findings
-                .map(|af| af.iter().any(|f| f.id == id))
-                .unwrap_or(false)
+        self.findings.contains_id(id)
     }
 
     /// Create a dummy context for tests
@@ -381,9 +415,8 @@ impl<'a> EvaluationContext<'a> {
             file_type,
             platforms: &[],
             arch: vec![Arch::All].into(),
-            additional_findings: None,
+            findings: FindingScope::with_index(&report.findings, None, None),
             cached_ast: None,
-            finding_id_index: None,
             debug_collector: None,
             section_map: None,
             inline_yara_results: None,

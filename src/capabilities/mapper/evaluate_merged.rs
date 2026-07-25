@@ -290,7 +290,7 @@ impl super::CapabilityMapper {
             binary_data,
             cached_ast,
             inline_yara,
-            false,
+            crate::capabilities::mapper::evaluate_traits::TraitPass::independent(),
             &cache,
             cancellation,
         );
@@ -318,7 +318,9 @@ impl super::CapabilityMapper {
                 binary_data,
                 cached_ast,
                 inline_yara,
-                true,
+                // The merged path pushes each pass's findings straight into
+                // `report`, so the report itself is already the full scope.
+                crate::capabilities::mapper::evaluate_traits::TraitPass::dependent(None),
                 &cache,
                 cancellation,
             );

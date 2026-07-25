@@ -913,17 +913,33 @@ impl AnalysisReport {
     /// Returns the number of findings removed.
     pub fn filter_findings<F>(&mut self, predicate: F) -> usize
     where
-        F: Fn(&Finding) -> bool,
+        F: Fn(&Finding) -> bool + Sync,
     {
+        use rayon::prelude::*;
+
         let initial_count =
             self.findings.len() + self.files.iter().map(|f| f.findings.len()).sum::<usize>();
 
         // Filter top-level findings
         self.findings.retain(&predicate);
 
-        // Filter findings in files array (v2 schema)
-        for file in &mut self.files {
-            file.findings.retain(&predicate);
+        // Filter findings in files array (v2 schema). Each file's findings and
+        // its derived formula/summary depend only on that file, so both passes
+        // fan out. Archive containers carry tens of thousands of members, and
+        // walking them twice single-threaded — once to retain, once to refresh —
+        // showed up as half the remaining finalize tail (2026-07-24 stack
+        // sampling, 3 of 6 in-tail samples across this retain and the
+        // `filter_findings_for_formula` call inside `refresh_formula`). Below
+        // that size the fan-out costs more than the walk.
+        let parallel = self.files.len() >= 32;
+        if parallel {
+            self.files
+                .par_iter_mut()
+                .for_each(|file| file.findings.retain(&predicate));
+        } else {
+            for file in &mut self.files {
+                file.findings.retain(&predicate);
+            }
         }
 
         let final_count =
@@ -933,9 +949,16 @@ impl AnalysisReport {
 
         // Recompute per-file summaries and report summary after filtering
         if removed > 0 {
-            for file in &mut self.files {
-                Self::refresh_formula(file);
-                file.compute_summary();
+            if parallel {
+                self.files.par_iter_mut().for_each(|file| {
+                    Self::refresh_formula(file);
+                    file.compute_summary();
+                });
+            } else {
+                for file in &mut self.files {
+                    Self::refresh_formula(file);
+                    file.compute_summary();
+                }
             }
             self.summary = Some(ReportSummary::from_files(&self.files));
         }
@@ -997,40 +1020,68 @@ impl AnalysisReport {
                 && !referenced.contains(&f.id)
         };
 
-        let mut components = 0usize;
-        let mut baselines = 0usize;
-        let mut tally = |f: &Finding| match f.crit {
-            Criticality::Component => components += 1,
-            Criticality::Baseline => baselines += 1,
+        use rayon::prelude::*;
+        let tally = |f: &Finding, c: &mut usize, b: &mut usize| match f.crit {
+            Criticality::Component => *c += 1,
+            Criticality::Baseline => *b += 1,
             _ => {}
         };
 
         // Top-level findings are cleared at finalize and never serve as the
         // per-file LLM clue, so they follow the base rule with no rescue.
+        let mut components = 0usize;
+        let mut baselines = 0usize;
         self.findings.retain(|f| {
             let keep = !strippable(f);
             if !keep {
-                tally(f);
+                tally(f, &mut components, &mut baselines);
             }
             keep
         });
 
         // Per file: rescue the best low-tier traits when nothing else survives.
-        for file in &mut self.files {
+        // A file's strip reads only that file plus the shared `referenced` set,
+        // so archives fan out and each worker tallies locally — the counts are
+        // summed after, rather than funnelled through one shared closure. Same
+        // split (and threshold) as `filter_findings`.
+        let strip_file = |file: &mut FileAnalysis| -> (usize, usize) {
             let rescued = Self::rescue_low_tier(&file.findings, &strippable);
+            let (mut c, mut b) = (0usize, 0usize);
             file.findings.retain(|f| {
                 let keep = !strippable(f) || rescued.contains(&f.id);
                 if !keep {
-                    tally(f);
+                    tally(f, &mut c, &mut b);
                 }
                 keep
             });
-        }
+            (c, b)
+        };
+        let parallel = self.files.len() >= 32;
+        let (file_components, file_baselines) = if parallel {
+            self.files
+                .par_iter_mut()
+                .map(strip_file)
+                .reduce(|| (0, 0), |a, x| (a.0 + x.0, a.1 + x.1))
+        } else {
+            self.files
+                .iter_mut()
+                .map(strip_file)
+                .fold((0, 0), |a, x| (a.0 + x.0, a.1 + x.1))
+        };
+        components += file_components;
+        baselines += file_baselines;
 
         if components + baselines > 0 {
-            for file in &mut self.files {
-                Self::refresh_formula(file);
-                file.compute_summary();
+            if parallel {
+                self.files.par_iter_mut().for_each(|file| {
+                    Self::refresh_formula(file);
+                    file.compute_summary();
+                });
+            } else {
+                for file in &mut self.files {
+                    Self::refresh_formula(file);
+                    file.compute_summary();
+                }
             }
             self.summary = Some(ReportSummary::from_files(&self.files));
             tracing::debug!(
@@ -1259,11 +1310,57 @@ impl AnalysisReport {
             }
         }
 
+        // Invert containment ONCE: file index → member set, from every path
+        // ancestor (each ARCHIVE_DELIMITER boundary) plus the parent_id link.
+        // The membership test below is then a set probe instead of a
+        // per-candidate path prefix compare, and files with no members skip
+        // resolution outright. The old shape tested every carrier of a
+        // component id against every composite-bearing file's path: leaf
+        // members (which have no children, so the ubiquitous early-break never
+        // fired) each scanned the full carrier list — on a 63k-member archive
+        // with ~8k manifest composites, ~10^8 string compares that made this
+        // pass the dominant single-thread finalize cost (2026-07-24: the bulk
+        // of a ~330 s tail on a 1,870 s scan; 8/14 tail stack samples).
+        use rustc_hash::FxHashSet;
+        let path_to_index: FxHashMap<&str, usize> = files
+            .iter()
+            .enumerate()
+            .map(|(i, f)| (f.path.as_str(), i))
+            .collect();
+        let id_to_index: FxHashMap<u32, usize> =
+            files.iter().enumerate().map(|(i, f)| (f.id, i)).collect();
+        let mut members_of: FxHashMap<usize, FxHashSet<usize>> = FxHashMap::default();
+        for (mi, member) in files.iter().enumerate() {
+            let p = member.path.as_str();
+            let mut pos = 0;
+            while let Some(off) = p[pos..].find(ARCHIVE_DELIMITER) {
+                let boundary = pos + off;
+                if let Some(&ci) = path_to_index.get(&p[..boundary])
+                    && ci != mi
+                {
+                    members_of.entry(ci).or_default().insert(mi);
+                }
+                pos = boundary + ARCHIVE_DELIMITER.len();
+            }
+            // A grafted direct child (linked by `parent_id`, not path) — e.g.
+            // the `*.registry.json` provenance node the fetch pass hangs off
+            // the artifact. A package-scoped composite's registry leg lives on
+            // this link, so path ancestry alone would drop it.
+            if let Some(pid) = member.parent_id
+                && let Some(&ci) = id_to_index.get(&pid)
+                && ci != mi
+            {
+                members_of.entry(ci).or_default().insert(mi);
+            }
+        }
+
         // Borrow `files` immutably to resolve, collect owned results, then write
         // back — the resolution reads every file while we build per-container maps.
         let mut resolved: Vec<(usize, BTreeMap<String, Vec<CompositeSource>>)> = Vec::new();
         for (ci, container) in files.iter().enumerate() {
-            let prefix = format!("{}{}", container.path, ARCHIVE_DELIMITER);
+            let Some(member_set) = members_of.get(&ci) else {
+                continue; // no nested members or grafted children — nothing to resolve
+            };
             let mut per_finding: BTreeMap<String, Vec<CompositeSource>> = BTreeMap::new();
             for finding in &container.findings {
                 if finding.trait_refs.is_empty() {
@@ -1277,18 +1374,10 @@ impl AnalysisReport {
                         continue;
                     };
                     for &mi in idxs {
-                        let member = &files[mi];
-                        // A source is either an archive member nested under this
-                        // container's path, or a grafted direct child (linked by
-                        // `parent_id`, not path) — e.g. the `*.registry.json`
-                        // provenance node the fetch pass hangs off the artifact.
-                        // A package-scoped composite's registry leg lives on the
-                        // latter, so path-prefix alone would drop it.
-                        let is_member = member.path.starts_with(&prefix);
-                        let is_child = member.parent_id == Some(container.id);
-                        if mi == ci || (!is_member && !is_child) {
+                        if mi == ci || !member_set.contains(&mi) {
                             continue; // neither a nested member nor a direct child
                         }
+                        let member = &files[mi];
                         let entry = by_member
                             .entry(member.id)
                             .or_insert_with(|| CompositeSource {

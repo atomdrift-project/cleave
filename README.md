@@ -2,10 +2,10 @@
   <img src="media/logo.svg" alt="cleave" width="240">
 </p>
 
-cleave answers one question — *what can this program do?* It extracts capabilities from binaries, source, and archives, scoring each against **[80,000+ behavior rules](https://github.com/atomdrift-project/traits)** aligned to [MBC](https://github.com/MBCProject/mbc-markdown) and [ATT&CK](https://attack.mitre.org/). Apache-2.0, no telemetry.
+cleave answers one question — *what can this program do?* It extracts capabilities from binaries, source, and archives, scoring each against **[92,000+ behavior rules](https://github.com/atomdrift-project/traits)** aligned to [MBC](https://github.com/MBCProject/mbc-markdown) and [ATT&CK](https://attack.mitre.org/). Apache-2.0, no telemetry.
 
 - **Interactive supply-chain & malware triage.** Run on a release, a suspicious sample, or a directory of dropped files. `cleave diff old/ new/` highlights new capabilities, tampered headers, and provenance anomalies between versions.
-- **Feature extraction for ML/AI pipelines.** Stable JSON schema, deterministic output, SHA256-keyed cache. [litmus](https://github.com/atomdrift-project/litmus) is the reference downstream classifier.
+- **Feature extraction for ML/AI pipelines.** Stable JSON schema, deterministic output, SHA256-keyed cache. [scan](https://github.com/atomdrift-project/scan) is the reference downstream classifier.
 
 ## Screenshots
 
@@ -19,7 +19,7 @@ diff (the infamous xzutils case)
 
 ## What cleave analyzes
 
-- **Binaries**: Mach-O, ELF, PE, WebAssembly, MSI, CHM, PyInstaller, Java `.class`, Android DEX, Python `.pyc`, Python pickle, Erlang/Elixir BEAM, compiled AppleScript
+- **Binaries**: Mach-O, ELF, PE, WebAssembly, MSI, CHM, PyInstaller, Java `.class`, Android DEX, Python `.pyc`, Python pickle, Erlang/Elixir BEAM, compiled AppleScript, static libs (`.a`)
 - **Source** (~24 langs, tree-sitter): Python, JS/TS, Go, Rust, C/C++, Java, Kotlin, C#, Swift, ObjC, Ruby, PHP, Perl, Lua, Shell, PowerShell, Groovy, Scala, Zig, Elixir, Clojure, Batch, VBScript, Makefile, Dockerfile
 - **Archives** (recursive): zip, tar (gz/bz2/xz/zst), 7z, rar, cab, jar/war, deb, rpm, pkg, apk, gem, crate, whl, nupkg, phar, vsix, xpi, crx, ipa, epub
 - **Documents & data**: PDF, RTF, LNK, Office (OLE2 + OOXML), OpenDocument, plist, HTML, XML, Markdown, PNG/JPEG, package manifests, GitHub Actions, systemd units, XDG `.desktop`
@@ -63,9 +63,9 @@ Known to run awesomely on illumos, OpenBSD, FreeBSD, Linux, and macOS.
 
 ## Rules
 
-- [cleave-traits](https://github.com/atomdrift-project/traits)
-- [RULES.md](https://github.com/atomdrift-project/traits/src/branch/main/RULES.md)
-- [TAXONOMY.md](https://github.com/atomdrift-project/traits/src/branch/main/TAXONOMY.md)
+- [traits](https://github.com/atomdrift-project/traits)
+- [RULES.md](https://github.com/atomdrift-project/traits/blob/main/RULES.md)
+- [TAXONOMY.md](https://github.com/atomdrift-project/traits/blob/main/TAXONOMY.md)
 
 ## Related Projects
 

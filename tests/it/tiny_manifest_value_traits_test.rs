@@ -9,22 +9,13 @@
 //! contract so the optimization can't quietly return and re-break it.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-/// The sibling `cleave-traits` checkout (this crate is `<workspace>/cleave`).
-fn traits_dir() -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../cleave-traits")
-}
-
 /// Analyze `src` as a file named `name` against the local traits checkout and
 /// return every fired trait id. Returns `None` (skip) when no traits checkout
 /// is present, e.g. packaged-crate CI. The traits-dir override is process-wide,
 /// so the env lock serializes access.
 fn fired_ids(name: &str, src: &str) -> Option<Vec<String>> {
     let _guard = crate::support::global_lock();
-    let td = traits_dir();
-    if !td.is_dir() {
-        eprintln!("skipping: traits dir {} not found", td.display());
-        return None;
-    }
+    let td = crate::support::require_traits_dir()?;
     cleave::traits_repo::set_override_dir(Some(td));
     let opts = cleave::AnalysisOptions::default();
     let report = cleave::analyze_bytes(src.as_bytes(), name, &opts).expect("analyze");

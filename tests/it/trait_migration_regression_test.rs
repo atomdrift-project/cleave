@@ -7,11 +7,6 @@
 //! `cleave facts` symbol/call/member projections that replace the per-member
 //! tree-sitter cursor walk.
 
-/// The sibling `cleave-traits` checkout (this crate is `<workspace>/cleave`).
-fn traits_dir() -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../cleave-traits")
-}
-
 /// Analyze `src` as a file named `name` against the local traits checkout and
 /// report whether any fired trait id ends with `id_suffix` (e.g. `::mss-grab`).
 /// The traits-dir override is process-wide, so the env lock serializes access.

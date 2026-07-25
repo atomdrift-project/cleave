@@ -136,3 +136,48 @@ fn shared_bucket_has_no_global_state_mutation() {
         offenders.join("\n  "),
     );
 }
+
+/// Resolve the sibling traits checkout that fixture-driven tests analyze against.
+///
+/// Checked in order: `CLEAVE_TEST_TRAITS_DIR`, `../traits-dev`, `../cleave-traits`
+/// (the pre-2026-07 name). Returns `None` only when none exists — a real
+/// situation on a packaged-crate build, where these tests cannot run.
+///
+/// Prefer [`require_traits_dir`] at a test's first line. A bare `None` check that
+/// returns early makes a skipped test indistinguishable from a passing one: when
+/// this directory moved to `../traits-dev`, six tests silently stopped asserting
+/// anything and the suite still reported green, which cost a day of chasing
+/// "flaky" behaviour that was really tests blinking in and out of existence.
+pub(crate) fn traits_dir() -> Option<std::path::PathBuf> {
+    if let Ok(dir) = std::env::var("CLEAVE_TEST_TRAITS_DIR") {
+        let p = std::path::PathBuf::from(dir);
+        return p.is_dir().then_some(p);
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    ["../traits-dev", "../cleave-traits"]
+        .iter()
+        .map(|rel| root.join(rel))
+        .find(|p| p.is_dir())
+}
+
+/// The traits checkout, or a loud failure naming where it was looked for.
+///
+/// Set `CLEAVE_TEST_ALLOW_NO_TRAITS=1` to downgrade to a skip — for packaged-crate
+/// CI, where the sibling repo genuinely is not on disk. That is an explicit opt-out
+/// rather than the default, so a checkout that moves on a developer's machine
+/// breaks the build instead of quietly hollowing out the tests that need it.
+pub(crate) fn require_traits_dir() -> Option<std::path::PathBuf> {
+    if let Some(dir) = traits_dir() {
+        return Some(dir);
+    }
+    assert!(
+        std::env::var("CLEAVE_TEST_ALLOW_NO_TRAITS").as_deref() == Ok("1"),
+        "traits checkout not found (looked for $CLEAVE_TEST_TRAITS_DIR, \
+         ../traits-dev, ../cleave-traits relative to {}). These tests assert against \
+         real traits and cannot run without it. Clone it, point \
+         CLEAVE_TEST_TRAITS_DIR at it, or set CLEAVE_TEST_ALLOW_NO_TRAITS=1 to skip.",
+        env!("CARGO_MANIFEST_DIR"),
+    );
+    eprintln!("skipping: no traits checkout (CLEAVE_TEST_ALLOW_NO_TRAITS=1)");
+    None
+}

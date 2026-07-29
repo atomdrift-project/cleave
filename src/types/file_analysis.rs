@@ -366,15 +366,16 @@ impl FileAnalysis {
     /// Drop fields that the compact output (`compact::convert_file`) never
     /// reads. Every report consumer — the CLI, the cleave server, and litmus's
     /// feature extractor — serializes through `compact_from_files`, which pulls
-    /// only findings, strings, imports, exports, functions, sections, metrics,
-    /// and kv. The fields cleared here are populated during analysis but never
-    /// serialized, so on a member-heavy archive (thousands of members) they
-    /// accumulate into multiple GB of live, unused memory. Clearing them per
-    /// member, after aggregation has copied out the findings it needs, leaves
-    /// the compact output byte-for-byte identical.
+    /// only findings, imports, exports, functions, sections, metrics, kv, and
+    /// the already-rendered context. The fields cleared here are populated
+    /// during analysis but never serialized, so on a member-heavy archive
+    /// (thousands of members) they accumulate into multiple GB of live, unused
+    /// memory. Clearing them per member, after matching has materialized
+    /// findings and context, leaves the compact output byte-for-byte identical.
     pub(crate) fn clear_unserialized_fields(&mut self) {
         self.traits = Vec::new();
         self.structure = Vec::new();
+        self.strings = Vec::new();
         self.yara_matches = Vec::new();
         self.syscalls = Vec::new();
         self.paths = Vec::new();

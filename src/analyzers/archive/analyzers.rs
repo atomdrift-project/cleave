@@ -303,12 +303,14 @@ impl MemberAccumulator {
         }
 
         // Member strings (URLs/IPs/base64) are deliberately NOT hoisted onto the
-        // parent. Each member keeps its own strings on its FileAnalysis record;
-        // pulling them up made the parent's `type: text` trait evaluation re-match
-        // member content with no way to attribute it back, producing findings on
-        // the archive itself (e.g. a `jsonkeeper.com` URL decoded from a member)
-        // with member-relative offsets meaningless in the archive's byte space.
-        // Only traits roll up to the parent — carrying their member `from`.
+        // parent. Matching has already materialized every useful result as a
+        // finding, so clear_unserialized_member_fields dropped the extracted
+        // strings before this fold. Pulling them up made the parent's `type:
+        // text` evaluation re-match member content with no way to attribute it
+        // back, producing findings on the archive itself (e.g. a
+        // `jsonkeeper.com` URL decoded from a member) with member-relative
+        // offsets meaningless in the archive's byte space. Only traits roll up
+        // to the parent — carrying their member `from`.
         self.collected_files.push(file_entry);
         self.collected_archive_entries.extend(archive_contents);
         for mut nested_file in nested_files {

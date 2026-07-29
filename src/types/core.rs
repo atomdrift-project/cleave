@@ -1444,18 +1444,20 @@ impl AnalysisReport {
     /// Drop the analysis fields that nothing downstream consumes, the moment a
     /// member's analysis (matching) is complete.
     ///
-    /// `traits`, `structure`, `yara_matches`, `syscalls`, `paths`,
+    /// `traits`, `structure`, `strings`, `yara_matches`, `syscalls`, `paths`,
     /// `directories`, and `env_vars` are produced by analyzers and matched
     /// against during trait evaluation, but the compact output
-    /// (`compact::convert_file`) never serializes them and `finalize()` drops
-    /// the top-level copies. On an archive with thousands of members, retaining
-    /// them per member until the end accumulates multiple GB of live, unused
-    /// memory. Clearing them here — right after the member's matching finishes,
-    /// before the result is collected — keeps the compact output identical
-    /// (yara findings are already folded into `findings` during analysis).
+    /// (`compact::convert_file`) never serializes them and archive-scope
+    /// evaluation consumes only the member's matched `findings`. On an archive
+    /// with thousands of members, retaining them until the end accumulates
+    /// multiple GB of live, unused memory. Clearing them here — right after the
+    /// member's matching finishes, before the result is collected — keeps the
+    /// compact output identical (render context and YARA findings have already
+    /// been materialized into `context` / `findings`).
     pub(crate) fn clear_unserialized_member_fields(&mut self) {
         self.traits = Vec::new();
         self.structure = Vec::new();
+        self.strings = Vec::new();
         self.yara_matches = Vec::new();
         self.syscalls = Vec::new();
         self.paths = Vec::new();
@@ -2208,6 +2210,49 @@ mod tests {
             match_count: 0,
             source_file: None,
         }
+    }
+
+    #[test]
+    fn clear_unserialized_member_fields_drops_strings_after_matching() {
+        let string = StringInfo {
+            value: "secret retained by old member pipeline".to_string().into(),
+            offset: Some(7),
+            encoding: "utf-8".to_string(),
+            string_type: None,
+            section: None,
+            encoding_chain: Vec::new(),
+            fragments: None,
+        };
+        let mut report = AnalysisReport::new(test_target());
+        report.strings.push(string.clone());
+        report.findings.push(test_finding(
+            "behavior/member::matched",
+            Criticality::Notable,
+        ));
+        let mut nested = FileAnalysis::new(
+            1,
+            "nested.js".to_string(),
+            "javascript".to_string(),
+            "nested-sha".to_string(),
+            42,
+        );
+        nested.strings.push(string);
+        nested.findings.push(test_finding(
+            "behavior/nested::matched",
+            Criticality::Suspicious,
+        ));
+        report.files.push(nested);
+
+        report.clear_unserialized_member_fields();
+
+        assert!(report.strings.is_empty());
+        assert!(report.files[0].strings.is_empty());
+        assert_eq!(report.findings.len(), 1, "matched traits remain");
+        assert_eq!(
+            report.files[0].findings.len(),
+            1,
+            "nested matched traits remain"
+        );
     }
 
     fn local_ref(path: &str) -> filefacts::Reference {

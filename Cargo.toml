@@ -113,7 +113,7 @@ yara-x = { version = "1.19", features = ["rules-profiling"] }
 # Tree-sitter core types only. Per-language grammars (and their parsers)
 # live in filefacts; cleave consumes the cached `tree_sitter::Tree`
 # filefacts exposes via `ParsedFile::source_ast()`.
-tree-sitter = "0.26"
+tree-sitter = "0.27"
 streaming-iterator = "0.1"
 
 # Zero-copy byte buffer — lets callers hand cleave a refcounted `Bytes`
@@ -351,6 +351,22 @@ opt-level = 3
 # fix lands upstream (bytecodealliance/wasmtime#5499) and yara-x bumps past it.
 [patch.crates-io]
 wasmtime = { git = "https://github.com/tstromberg/wasmtime.git", branch = "freebsd-aarch64-43.0.2" }
+
+# illumos support for tree-sitter's vendored endian.h. Its only illumos arm
+# tests __illumos__, which illumos-gcc predefines but cross-rs's
+# x86_64-unknown-illumos-gcc does not, so the build hits
+# "#error platform not supported" at endian.h:238. The fork adds a __sun arm
+# over <sys/byteorder.h>; __sun is predefined by every compiler targeting
+# illumos or Solaris.
+#
+# Both crates must come from the fork together: the fork's tree-sitter uses
+# its in-tree tree-sitter-language, and `links = "tree-sitter-language"`
+# permits only one copy in the graph. Note the fork is 0.27.0, which is
+# unpublished — crates.io tops out at 0.26.11 — so this patch is load-bearing
+# for resolution, not just for the fix. Remove once the PR lands upstream and
+# a release carries it.
+tree-sitter = { git = "https://github.com/tstromberg/tree-sitter", branch = "master" }
+tree-sitter-language = { git = "https://github.com/tstromberg/tree-sitter", branch = "master" }
 
 # filefacts still pins stng via its old codeberg URL; redirect it to the
 # github repo so a single `stng` resolves workspace-wide (codeberg->github).

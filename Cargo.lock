@@ -1688,7 +1688,7 @@ dependencies = [
 [[package]]
 name = "filefacts"
 version = "1.3.0"
-source = "git+https://github.com/atomdrift-project/filefacts.git#10b2cad158b03931661fc0f72cc36eb587694291"
+source = "git+https://github.com/atomdrift-project/filefacts.git#0b59290777cebbf4d2b22e9d9c858c4b678089ce"
 dependencies = [
  "aho-corasick",
  "cfb 0.10.0",
@@ -4578,7 +4578,7 @@ dependencies = [
 [[package]]
 name = "stng"
 version = "1.8.0"
-source = "git+https://github.com/atomdrift-project/stng.git#129fba07774e57de2ff593c08218a37e8778ceb6"
+source = "git+https://github.com/atomdrift-project/stng.git#f7ec4a902a5715ab1134ea0a2c9b921ccba2306d"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -5191,13 +5191,11 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter"
-version = "0.26.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "af1c71c1c4cc0920b20d6b0f6572e7682cd07a6a2faec71067a31fa394c586df"
+version = "0.27.0"
+source = "git+https://github.com/tstromberg/tree-sitter?branch=master#5b21a777ada8ac7d3b448b3e4aebfe827d020a70"
 dependencies = [
  "cc",
  "regex",
- "regex-syntax",
  "serde_json",
  "streaming-iterator",
  "tree-sitter-language",
@@ -5246,7 +5244,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-clojure"
 version = "0.1.0"
-source = "git+https://github.com/atomdrift-project/filefacts.git#10b2cad158b03931661fc0f72cc36eb587694291"
+source = "git+https://github.com/atomdrift-project/filefacts.git#0b59290777cebbf4d2b22e9d9c858c4b678089ce"
 dependencies = [
  "cc",
  "tree-sitter",
@@ -5315,9 +5313,8 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter-language"
-version = "0.1.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "009994f150cc0cd50ff54917d5bc8bffe8cad10ca10d81c34da2ec421ae61782"
+version = "0.1.8"
+source = "git+https://github.com/tstromberg/tree-sitter?branch=master#5b21a777ada8ac7d3b448b3e4aebfe827d020a70"
 
 [[package]]
 name = "tree-sitter-lua"

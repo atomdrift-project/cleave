@@ -8,7 +8,7 @@
 #[cfg(all(
     unix,
     feature = "jemalloc",
-    not(any(target_os = "freebsd", target_os = "dragonfly"))
+    not(any(target_os = "freebsd", target_os = "dragonfly", target_os = "netbsd"))
 ))]
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;

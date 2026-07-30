@@ -143,7 +143,7 @@ fn try_extract_dunder_import_alias<'a>(
     // Extract the module name from first string argument
     let args = right.child_by_field_name("arguments")?;
     for i in 0..args.child_count() {
-        if let Some(arg) = args.child(i as u32)
+        if let Some(arg) = args.child(i)
             && arg.kind() == "string"
             && let Some(module) = extract_string_content(&arg, source)
         {
@@ -350,7 +350,7 @@ fn get_full_identifier_bounded<'a>(
             .child_by_field_name("property")
             .or_else(|| node.child_by_field_name("field"))
             .or_else(|| node.child_by_field_name("index"))
-            .or_else(|| node.child(node.child_count().saturating_sub(1) as u32))?;
+            .or_else(|| node.child(node.child_count().saturating_sub(1)))?;
 
         if let (Some(obj_name), Some(mut prop_name)) = (
             get_full_identifier_bounded(&object, source, depth + 1),

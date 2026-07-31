@@ -245,7 +245,7 @@ fn install(dir: &Path, artifact: &Artifact, source: &str) -> Result<(), String> 
 
     let staging = sibling(parent, ".cleave-traits-staging");
     let backup = sibling(parent, ".cleave-traits-backup");
-    let _ = std::fs::remove_dir_all(&staging);
+    remove_any(&staging);
     std::fs::create_dir_all(&staging).map_err(|e| format!("create staging: {e}"))?;
 
     let decoder = zstd::stream::read::Decoder::new(Cursor::new(&bytes))
@@ -263,19 +263,41 @@ fn install(dir: &Path, artifact: &Artifact, source: &str) -> Result<(), String> 
     let rendered = toml::to_string(&meta).map_err(|e| format!("rendering sidecar: {e}"))?;
     std::fs::write(staging.join(SIDECAR), rendered).map_err(|e| format!("writing sidecar: {e}"))?;
 
-    // Atomic swap: move old aside, move staging in, drop old. Restore on failure.
-    let _ = std::fs::remove_dir_all(&backup);
-    if dir.exists() {
-        std::fs::rename(dir, &backup).map_err(|e| format!("backing up old traits: {e}"))?;
+    swap_into_place(&staging, dir, &backup)
+}
+
+/// Replace `dir` with `staging`, keeping a rollback copy at `backup`.
+///
+/// Existence is probed with `symlink_metadata`, not `exists`: a *dangling*
+/// symlink at `dir` — e.g. a hand-made pointer to a traits checkout that has
+/// since moved — reports as absent to `exists()`, so the old path was left in
+/// place and renaming the staging directory onto it failed with `ENOTDIR`,
+/// wedging every install until the link was removed by hand.
+fn swap_into_place(staging: &Path, dir: &Path, backup: &Path) -> Result<(), String> {
+    remove_any(backup);
+    if std::fs::symlink_metadata(dir).is_ok() {
+        std::fs::rename(dir, backup).map_err(|e| format!("backing up old traits: {e}"))?;
     }
-    if let Err(e) = std::fs::rename(&staging, dir) {
-        if backup.exists() {
-            let _ = std::fs::rename(&backup, dir);
+    if let Err(e) = std::fs::rename(staging, dir) {
+        if std::fs::symlink_metadata(backup).is_ok() {
+            let _ = std::fs::rename(backup, dir);
         }
         return Err(format!("installing traits: {e}"));
     }
-    let _ = std::fs::remove_dir_all(&backup);
+    remove_any(backup);
     Ok(())
+}
+
+/// Best-effort removal of `path`, whatever it is.
+///
+/// `remove_dir_all` fails on a symlink, and a stale link left behind blocks the
+/// swap, so dispatch on the link's own type rather than its target's.
+fn remove_any(path: &Path) {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.is_dir() => drop(std::fs::remove_dir_all(path)),
+        Ok(_) => drop(std::fs::remove_file(path)),
+        Err(_) => {}
+    }
 }
 
 fn sibling(parent: &Path, name: &str) -> PathBuf {
@@ -308,4 +330,64 @@ fn hex(bytes: &[u8]) -> String {
         s.push(HEX[(b & 0x0f) as usize] as char);
     }
     s
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    /// Stage a directory holding a single marker file.
+    fn staged(root: &Path) -> PathBuf {
+        let staging = root.join(".cleave-traits-staging");
+        std::fs::create_dir_all(staging.join("objectives")).unwrap();
+        std::fs::write(staging.join("marker"), "new").unwrap();
+        staging
+    }
+
+    #[test]
+    fn swap_replaces_existing_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("traits");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("stale"), "old").unwrap();
+
+        let staging = staged(tmp.path());
+        swap_into_place(&staging, &dir, &tmp.path().join(".cleave-traits-backup")).unwrap();
+
+        assert!(dir.join("marker").is_file());
+        assert!(!dir.join("stale").exists(), "old tree should be gone");
+        assert!(!staging.exists(), "staging should have been moved");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn swap_replaces_dangling_symlink() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("traits");
+        std::os::unix::fs::symlink(tmp.path().join("gone"), &dir).unwrap();
+        assert!(!dir.exists(), "precondition: the link resolves to nothing");
+
+        let staging = staged(tmp.path());
+        swap_into_place(&staging, &dir, &tmp.path().join(".cleave-traits-backup")).unwrap();
+
+        assert!(std::fs::symlink_metadata(&dir).unwrap().is_dir());
+        assert!(dir.join("marker").is_file());
+    }
+
+    #[test]
+    fn swap_leaves_no_backup_behind() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("traits");
+        let backup = tmp.path().join(".cleave-traits-backup");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(backup.join("leftover")).unwrap();
+
+        swap_into_place(&staged(tmp.path()), &dir, &backup).unwrap();
+
+        assert!(
+            !backup.exists(),
+            "backup should be dropped after a good swap"
+        );
+    }
 }

@@ -108,9 +108,13 @@ fn shard_for(id: u64) -> &'static Shard {
 
 /// Steal a parked cache for `id`, if any thread left one.
 fn global_take(id: u64) -> Option<Entry> {
-    let mut shard = shard_for(id).lock();
-    let stack = shard.get_mut(&id)?;
-    let entry = stack.pop()?;
+    // The shard lock covers the stacks only; the byte counter is a separate
+    // atomic, so it is updated after the guard drops to keep the critical
+    // section a bare probe + pop.
+    let entry = {
+        let mut shard = shard_for(id).lock();
+        shard.get_mut(&id)?.pop()?
+    };
     GLOBAL_BYTES.fetch_sub(entry.size, Ordering::Relaxed);
     Some(entry)
 }
@@ -129,13 +133,19 @@ fn global_park(id: u64, mut entry: Entry) {
     {
         return;
     }
+    let size = entry.size;
     let mut shard = shard_for(id).lock();
     let stack = shard.entry(id).or_default();
-    if stack.len() >= PER_REGEX_CAP {
-        return;
+    let parked = stack.len() < PER_REGEX_CAP;
+    if parked {
+        stack.push(entry);
     }
-    GLOBAL_BYTES.fetch_add(entry.size, Ordering::Relaxed);
-    stack.push(entry);
+    // Release before touching the global counter: the shard guard protects the
+    // stacks, and the counter is a separate atomic.
+    drop(shard);
+    if parked {
+        GLOBAL_BYTES.fetch_add(size, Ordering::Relaxed);
+    }
 }
 
 /// This thread's most recent (regex id, cache): repeat searches with one

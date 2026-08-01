@@ -196,11 +196,11 @@ checksum = "d67af77d68a931ecd5cbd8a3b5987d63a1d1d1278f7f6a60ae33db485cdebb69"
 
 [[package]]
 name = "ar_archive_writer"
-version = "0.5.2"
+version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4087686b4b0a3427190bae57a1d9a478dbb2d40c5dc1bd6e2b6d797913bdd348"
+checksum = "73cd58deff2140a0a8eae87e417bd01db68a33e148aa93d1e8cd837e55e312b6"
 dependencies = [
- "object 0.37.3",
+ "object 0.39.1",
 ]
 
 [[package]]
@@ -776,9 +776,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.6.4"
+version = "4.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d91e0c145792ef73a6ad36d27c75ac09f1832222a3c209689d90f534685ee5b7"
+checksum = "301b56658598e48f3648647ac6fc887be7e7108eddfa4e9b63fcf3ec58c0cadf"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -786,9 +786,9 @@ dependencies = [
 
 [[package]]
 name = "clap_builder"
-version = "4.6.2"
+version = "4.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f09628afdcc538b57f3c6341e9c8e9970f18e4a481690a64974d7023bd33548b"
+checksum = "94a65403d1a1bd28f7dc68eb8506e8874808ee5eecb59298de588e2e1407a078"
 dependencies = [
  "anstream",
  "anstyle",
@@ -1064,7 +1064,7 @@ dependencies = [
 [[package]]
 name = "cranelift-assembler-x64"
 version = "0.130.2"
-source = "git+https://github.com/tstromberg/wasmtime.git?branch=freebsd-aarch64-43.0.2#7179bb4295d37cba7d3c1333b12089eab064f651"
+source = "git+https://github.com/tstromberg/wasmtime.git?branch=freebsd-aarch64-43.0.2#529bf1efee6cd969928d24159e9081235f367baf"
 dependencies = [
  "cranelift-assembler-x64-meta",
 ]
@@ -1072,7 +1072,7 @@ dependencies = [
 [[package]]
 name = "cranelift-assembler-x64-meta"
 version = "0.130.2"
-source = "git+https://github.com/tstromberg/wasmtime.git?branch=freebsd-aarch64-43.0.2#7179bb4295d37cba7d3c1333b12089eab064f651"
+source = "git+https://github.com/tstromberg/wasmtime.git?branch=freebsd-aarch64-43.0.2#529bf1efee6cd969928d24159e9081235f367baf"
 dependencies = [
  "cranelift-srcgen",
 ]
@@ -1080,7 +1080,7 @@ dependencies = [
 [[package]]
 name = "cranelift-bforest"
 version = "0.130.2"
-source = "git+https://github.com/tstromberg/wasmtime.git?branch=freebsd-aarch64-43.0.2#7179bb4295d37cba7d3c1333b12089eab064f651"
+source = "git+https://github.com/tstromberg/wasmtime.git?branch=freebsd-aarch64-43.0.2#529bf1efee6cd969928d24159e9081235f367baf"
 dependencies = [
  "cranelift-entity",
  "wasmtime-internal-core",
@@ -1089,7 +1089,7 @@ dependencies = [
 [[package]]
 name = "cranelift-bitset"
 version = "0.130.2"
-source = "git+https://github.com/tstromberg/wasmtime.git?branch=freebsd-aarch64-43.0.2#7179bb4295d37cba7d3c1333b12089eab064f651"
+source = "git+https://github.com/tstromberg/wasmtime.git?branch=freebsd-aarch64-43.0.2#529bf1efee6cd969928d24159e9081235f367baf"
 dependencies = [
  "serde",
  "serde_derive",
@@ -1099,7 +1099,7 @@ dependencies = [
 [[package]]
 name = "cranelift-codegen"
 version = "0.130.2"
-source = "git+https://github.com/tstromberg/wasmtime.git?branch=freebsd-aarch64-43.0.2#7179bb4295d37cba7d3c1333b12089eab064f651"
+source = "git+https://github.com/tstromberg/wasmtime.git?branch=freebsd-aarch64-43.0.2#529bf1efee6cd969928d24159e9081235f367baf"
 dependencies = [
  "bumpalo",
  "cranelift-assembler-x64",
@@ -1126,7 +1126,7 @@ dependencies = [
 [[package]]
 name = "cranelift-codegen-meta"
 version = "0.130.2"
-source = "git+https://github.com/tstromberg/wasmtime.git?branch=freebsd-aarch64-43.0.2#7179bb4295d37cba7d3c1333b12089eab064f651"
+source = "git+https://github.com/tstromberg/wasmtime.git?branch=freebsd-aarch64-43.0.2#529bf1efee6cd969928d24159e9081235f367baf"
 dependencies = [
  "cranelift-assembler-x64-meta",
  "cranelift-codegen-shared",
@@ -1138,12 +1138,12 @@ dependencies = [
 [[package]]
 name = "cranelift-codegen-shared"
 version = "0.130.2"
-source = "git+https://github.com/tstromberg/wasmtime.git?branch=freebsd-aarch64-43.0.2#7179bb4295d37cba7d3c1333b12089eab064f651"
+source = "git+https://github.com/tstromberg/wasmtime.git?branch=freebsd-aarch64-43.0.2#529bf1efee6cd969928d24159e9081235f367baf"
 
 [[package]]
 name = "cranelift-control"
 version = "0.130.2"
-source = "git+https://github.com/tstromberg/wasmtime.git?branch=freebsd-aarch64-43.0.2#7179bb4295d37cba7d3c1333b12089eab064f651"
+source = "git+https://github.com/tstromberg/wasmtime.git?branch=freebsd-aarch64-43.0.2#529bf1efee6cd969928d24159e9081235f367baf"
 dependencies = [
  "arbitrary",
 ]
@@ -1151,7 +1151,7 @@ dependencies = [
 [[package]]
 name = "cranelift-entity"
 version = "0.130.2"
-source = "git+https://github.com/tstromberg/wasmtime.git?branch=freebsd-aarch64-43.0.2#7179bb4295d37cba7d3c1333b12089eab064f651"
+source = "git+https://github.com/tstromberg/wasmtime.git?branch=freebsd-aarch64-43.0.2#529bf1efee6cd969928d24159e9081235f367baf"
 dependencies = [
  "cranelift-bitset",
  "serde",
@@ -1162,7 +1162,7 @@ dependencies = [
 [[package]]
 name = "cranelift-frontend"
 version = "0.130.2"
-source = "git+https://github.com/tstromberg/wasmtime.git?branch=freebsd-aarch64-43.0.2#7179bb4295d37cba7d3c1333b12089eab064f651"
+source = "git+https://github.com/tstromberg/wasmtime.git?branch=freebsd-aarch64-43.0.2#529bf1efee6cd969928d24159e9081235f367baf"
 dependencies = [
  "cranelift-codegen",
  "log",
@@ -1173,12 +1173,12 @@ dependencies = [
 [[package]]
 name = "cranelift-isle"
 version = "0.130.2"
-source = "git+https://github.com/tstromberg/wasmtime.git?branch=freebsd-aarch64-43.0.2#7179bb4295d37cba7d3c1333b12089eab064f651"
+source = "git+https://github.com/tstromberg/wasmtime.git?branch=freebsd-aarch64-43.0.2#529bf1efee6cd969928d24159e9081235f367baf"
 
 [[package]]
 name = "cranelift-native"
 version = "0.130.2"
-source = "git+https://github.com/tstromberg/wasmtime.git?branch=freebsd-aarch64-43.0.2#7179bb4295d37cba7d3c1333b12089eab064f651"
+source = "git+https://github.com/tstromberg/wasmtime.git?branch=freebsd-aarch64-43.0.2#529bf1efee6cd969928d24159e9081235f367baf"
 dependencies = [
  "cranelift-codegen",
  "libc",
@@ -1188,7 +1188,7 @@ dependencies = [
 [[package]]
 name = "cranelift-srcgen"
 version = "0.130.2"
-source = "git+https://github.com/tstromberg/wasmtime.git?branch=freebsd-aarch64-43.0.2#7179bb4295d37cba7d3c1333b12089eab064f651"
+source = "git+https://github.com/tstromberg/wasmtime.git?branch=freebsd-aarch64-43.0.2#529bf1efee6cd969928d24159e9081235f367baf"
 
 [[package]]
 name = "crc"
@@ -1688,7 +1688,7 @@ dependencies = [
 [[package]]
 name = "filefacts"
 version = "1.3.0"
-source = "git+https://github.com/atomdrift-project/filefacts.git#692d6f13e7354636ad0f09affd74aab447b56ac6"
+source = "git+https://github.com/atomdrift-project/filefacts.git#79b9df3aeef3f555f68534be48060b1f5b8ce20e"
 dependencies = [
  "aho-corasick",
  "cfb 0.10.0",
@@ -3043,6 +3043,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "object"
+version = "0.39.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2e5a6c098c7a3b6547378093f5cc30bc54fd361ce711e05293a5cc589562739b"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
 name = "oid-registry"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3491,7 +3500,7 @@ dependencies = [
 [[package]]
 name = "pulley-interpreter"
 version = "43.0.2"
-source = "git+https://github.com/tstromberg/wasmtime.git?branch=freebsd-aarch64-43.0.2#7179bb4295d37cba7d3c1333b12089eab064f651"
+source = "git+https://github.com/tstromberg/wasmtime.git?branch=freebsd-aarch64-43.0.2#529bf1efee6cd969928d24159e9081235f367baf"
 dependencies = [
  "cranelift-bitset",
  "log",
@@ -3502,7 +3511,7 @@ dependencies = [
 [[package]]
 name = "pulley-macros"
 version = "43.0.2"
-source = "git+https://github.com/tstromberg/wasmtime.git?branch=freebsd-aarch64-43.0.2#7179bb4295d37cba7d3c1333b12089eab064f651"
+source = "git+https://github.com/tstromberg/wasmtime.git?branch=freebsd-aarch64-43.0.2#529bf1efee6cd969928d24159e9081235f367baf"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4578,7 +4587,7 @@ dependencies = [
 [[package]]
 name = "stng"
 version = "1.8.0"
-source = "git+https://github.com/atomdrift-project/stng.git#27af94b8f727130093c5df70e75c4106cc281591"
+source = "git+https://github.com/atomdrift-project/stng.git#9921e3308fdbfc1cebb736cf85351deb1930c24f"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -5244,7 +5253,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-clojure"
 version = "0.1.0"
-source = "git+https://github.com/atomdrift-project/filefacts.git#692d6f13e7354636ad0f09affd74aab447b56ac6"
+source = "git+https://github.com/atomdrift-project/filefacts.git#79b9df3aeef3f555f68534be48060b1f5b8ce20e"
 dependencies = [
  "cc",
  "tree-sitter",
@@ -5774,7 +5783,7 @@ dependencies = [
 [[package]]
 name = "wasmtime"
 version = "43.0.2"
-source = "git+https://github.com/tstromberg/wasmtime.git?branch=freebsd-aarch64-43.0.2#7179bb4295d37cba7d3c1333b12089eab064f651"
+source = "git+https://github.com/tstromberg/wasmtime.git?branch=freebsd-aarch64-43.0.2#529bf1efee6cd969928d24159e9081235f367baf"
 dependencies = [
  "addr2line 0.26.1",
  "async-trait",
@@ -5810,7 +5819,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-environ"
 version = "43.0.2"
-source = "git+https://github.com/tstromberg/wasmtime.git?branch=freebsd-aarch64-43.0.2#7179bb4295d37cba7d3c1333b12089eab064f651"
+source = "git+https://github.com/tstromberg/wasmtime.git?branch=freebsd-aarch64-43.0.2#529bf1efee6cd969928d24159e9081235f367baf"
 dependencies = [
  "anyhow",
  "cranelift-bforest",
@@ -5836,7 +5845,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-internal-core"
 version = "43.0.2"
-source = "git+https://github.com/tstromberg/wasmtime.git?branch=freebsd-aarch64-43.0.2#7179bb4295d37cba7d3c1333b12089eab064f651"
+source = "git+https://github.com/tstromberg/wasmtime.git?branch=freebsd-aarch64-43.0.2#529bf1efee6cd969928d24159e9081235f367baf"
 dependencies = [
  "hashbrown 0.16.1",
  "libm",
@@ -5846,7 +5855,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-internal-cranelift"
 version = "43.0.2"
-source = "git+https://github.com/tstromberg/wasmtime.git?branch=freebsd-aarch64-43.0.2#7179bb4295d37cba7d3c1333b12089eab064f651"
+source = "git+https://github.com/tstromberg/wasmtime.git?branch=freebsd-aarch64-43.0.2#529bf1efee6cd969928d24159e9081235f367baf"
 dependencies = [
  "cfg-if",
  "cranelift-codegen",
@@ -5872,7 +5881,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-internal-fiber"
 version = "43.0.2"
-source = "git+https://github.com/tstromberg/wasmtime.git?branch=freebsd-aarch64-43.0.2#7179bb4295d37cba7d3c1333b12089eab064f651"
+source = "git+https://github.com/tstromberg/wasmtime.git?branch=freebsd-aarch64-43.0.2#529bf1efee6cd969928d24159e9081235f367baf"
 dependencies = [
  "cc",
  "cfg-if",
@@ -5886,7 +5895,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-internal-jit-debug"
 version = "43.0.2"
-source = "git+https://github.com/tstromberg/wasmtime.git?branch=freebsd-aarch64-43.0.2#7179bb4295d37cba7d3c1333b12089eab064f651"
+source = "git+https://github.com/tstromberg/wasmtime.git?branch=freebsd-aarch64-43.0.2#529bf1efee6cd969928d24159e9081235f367baf"
 dependencies = [
  "cc",
  "wasmtime-internal-versioned-export-macros",
@@ -5895,7 +5904,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-internal-jit-icache-coherence"
 version = "43.0.2"
-source = "git+https://github.com/tstromberg/wasmtime.git?branch=freebsd-aarch64-43.0.2#7179bb4295d37cba7d3c1333b12089eab064f651"
+source = "git+https://github.com/tstromberg/wasmtime.git?branch=freebsd-aarch64-43.0.2#529bf1efee6cd969928d24159e9081235f367baf"
 dependencies = [
  "cfg-if",
  "libc",
@@ -5906,7 +5915,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-internal-unwinder"
 version = "43.0.2"
-source = "git+https://github.com/tstromberg/wasmtime.git?branch=freebsd-aarch64-43.0.2#7179bb4295d37cba7d3c1333b12089eab064f651"
+source = "git+https://github.com/tstromberg/wasmtime.git?branch=freebsd-aarch64-43.0.2#529bf1efee6cd969928d24159e9081235f367baf"
 dependencies = [
  "cfg-if",
  "cranelift-codegen",
@@ -5918,7 +5927,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-internal-versioned-export-macros"
 version = "43.0.2"
-source = "git+https://github.com/tstromberg/wasmtime.git?branch=freebsd-aarch64-43.0.2#7179bb4295d37cba7d3c1333b12089eab064f651"
+source = "git+https://github.com/tstromberg/wasmtime.git?branch=freebsd-aarch64-43.0.2#529bf1efee6cd969928d24159e9081235f367baf"
 dependencies = [
  "proc-macro2",
  "quote",

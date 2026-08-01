@@ -96,11 +96,25 @@ fn env_mb(var: &str, default_mb: usize) -> usize {
         * 1024
 }
 
+/// Default store budget scaled to the machine: 1/16th of physical memory,
+/// clamped between `floor_mb` (the old fixed default, kept on small hosts and
+/// when memory detection fails) and 2 GiB. A deep-dependency worker corpus
+/// whose compiled working set exceeded the fixed budgets spent a third of its
+/// wall clock evicting and recompiling engines; 2 GiB removed the thrash and
+/// doubling past it measured no further gain.
+fn scaled_default_mb(floor_mb: usize) -> usize {
+    const CEILING_MB: usize = 2048;
+    let scaled = crate::memory_tracker::total_memory()
+        .and_then(|b| usize::try_from(b / 16 / (1024 * 1024)).ok())
+        .unwrap_or(0);
+    scaled.clamp(floor_mb, CEILING_MB)
+}
+
 /// Budget for the extracted-string (unicode `TraitRegex`) store.
 /// `CLEAVE_REGEX_STR_MB` overrides.
 pub(crate) fn str_budget_bytes() -> usize {
     static BYTES: OnceLock<usize> = OnceLock::new();
-    *BYTES.get_or_init(|| env_mb("CLEAVE_REGEX_STR_MB", 512))
+    *BYTES.get_or_init(|| env_mb("CLEAVE_REGEX_STR_MB", scaled_default_mb(512)))
 }
 
 /// Budget for the raw-content (`LeanRegex` byte engine) store.
@@ -116,5 +130,5 @@ pub(crate) fn raw_budget_bytes() -> usize {
 /// overrides.
 pub(crate) fn unicode_budget_bytes() -> usize {
     static BYTES: OnceLock<usize> = OnceLock::new();
-    *BYTES.get_or_init(|| env_mb("CLEAVE_REGEX_UNI_MB", 384))
+    *BYTES.get_or_init(|| env_mb("CLEAVE_REGEX_UNI_MB", scaled_default_mb(384)))
 }

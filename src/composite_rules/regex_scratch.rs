@@ -1,4 +1,5 @@
-//! Per-thread, byte-budgeted pool of regex scratch caches.
+//! Byte-budgeted regex scratch caches: a lock-free per-thread hot slot over a
+//! global, sharded parking pool.
 //!
 //! The `regex` crate keeps one lazily-created `Cache` per regex *per thread
 //! that ever searched with it*, inside a pool owned by the `Regex` — so a
@@ -7,38 +8,56 @@
 //! (the PikeVM's sparse sets plus the lazy DFA's eager minimum), which
 //! measured in the gigabytes on binary-heavy scans.
 //!
-//! This pool inverts the ownership: the compiled `meta::Regex` carries no
-//! scratch at all (only the explicit-cache `search_with` APIs are used), and
-//! each thread holds a small LRU of caches keyed by regex identity, bounded
-//! by *bytes*. Hot patterns keep their warm lazy-DFA cache; cold ones are
-//! dropped and re-created on demand (cache creation is cheap relative to a
-//! search that needs it). Nested use of the same regex on one thread — e.g. a
-//! `not:` exception evaluated inside a match callback — simply builds a
-//! second transient cache for the inner call and keeps the newer one.
+//! An earlier revision inverted that ownership into a per-thread byte-budgeted
+//! LRU. That bounded memory, but kept creation per *(thread, regex)*: on a
+//! 64-thread pool evaluating thousands of trait regexes, `create_cache` alone
+//! measured 16% of a JS-heavy scan's CPU, and no per-thread budget helps —
+//! each thread's working set is the whole trait corpus, while the
+//! *simultaneous* demand for any one regex is a handful of threads.
+//!
+//! So the pool is global: each thread keeps only a one-entry hot slot (repeat
+//! searches with the same regex stay lock-free), and on a regex switch the
+//! demoted cache parks in a sharded global pool keyed by regex identity. A
+//! thread that needs a regex steals a parked cache before creating one, so
+//! live cache count tracks concurrent use, not thread count. Shard locks are
+//! held for a hash probe plus a `Vec` push/pop; threads contend only when
+//! they switch onto the same shard at the same instant. Nested use of the
+//! same regex on one thread — e.g. a `not:` exception evaluated inside a
+//! match callback — simply builds a second transient cache for the inner
+//! call and keeps the newer one.
 
 use std::cell::RefCell;
-use std::num::NonZeroUsize;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
+use parking_lot::Mutex;
 use regex_automata::meta;
+use rustc_hash::FxHashMap;
 
-/// Secondary bound on entries per thread; the byte budget is the real limit.
-const SCRATCH_COUNT_CAP: NonZeroUsize = {
-    #[allow(clippy::expect_used)]
-    NonZeroUsize::new(1024).expect("cap is non-zero")
-};
-
-/// Per-thread scratch budget in bytes. `CLEAVE_REGEX_SCRATCH_MB` overrides
-/// (default 24 MiB — comfortably above the per-file working set measured on
-/// trait-heavy scans, so steady-state eviction is rare).
-fn budget_bytes() -> usize {
+/// Global pool budget in bytes. Default scales with the machine, like the
+/// compiled-engine store budgets: 1/32nd of physical memory, clamped to
+/// [512 MiB, 4 GiB] — 512 MiB on a ≤16 GiB host, the full measured win on a
+/// big one (a 3 GiB working set recovered all of a JS-heavy scan's
+/// `create_cache` CPU; 512 MiB about two-thirds of it at less RSS than the
+/// per-thread design this pool replaced). Memory-detection failure keeps the
+/// floor. An explicit `CLEAVE_REGEX_SCRATCH_MB` (per-thread MiB, times
+/// available parallelism) is honored literally, no clamp.
+fn global_budget_bytes() -> usize {
     static BYTES: OnceLock<usize> = OnceLock::new();
     *BYTES.get_or_init(|| {
-        std::env::var("CLEAVE_REGEX_SCRATCH_MB")
+        const FLOOR: usize = 512 * 1024 * 1024;
+        const CEILING: usize = 4 * 1024 * 1024 * 1024;
+        let threads = std::thread::available_parallelism().map_or(8, std::num::NonZero::get);
+        match std::env::var("CLEAVE_REGEX_SCRATCH_MB")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
-            .map_or(24 * 1024 * 1024, |mb| mb * 1024 * 1024)
+        {
+            Some(mb) => (mb * 1024 * 1024).saturating_mul(threads),
+            None => crate::memory_tracker::total_memory()
+                .and_then(|bytes| usize::try_from(bytes / 32).ok())
+                .unwrap_or(0)
+                .clamp(FLOOR, CEILING),
+        }
     })
 }
 
@@ -52,7 +71,7 @@ pub(crate) fn next_regex_id() -> u64 {
 /// A parked cache with staleness-tolerant size accounting: `size` is
 /// re-measured only every [`REMEASURE_EVERY`] parks (a cache's usage only
 /// moves when the lazy DFA learns new transitions, which tapers off fast on
-/// a warm cache), so the common park is a hash insert with no traversal.
+/// a warm cache), so the common park is a hash probe with no traversal.
 struct Entry {
     cache: meta::Cache,
     size: usize,
@@ -62,103 +81,182 @@ struct Entry {
 /// How many parks between `memory_usage()` re-measurements.
 const REMEASURE_EVERY: u32 = 32;
 
-struct Pool {
-    /// Identity of the cache in the hot slot (or last held there);
-    /// `u64::MAX` = never set.
-    hot_id: u64,
-    /// One-entry fast path: trait evaluation searches with the same regex
-    /// many times in a row (one pattern across a file's strings), and the
-    /// hot slot turns those into a compare + `Option::take` instead of LRU
-    /// hashing plus `memory_usage()` accounting — which measured as a ~40%
-    /// user-CPU regression when paid per search. The hot cache is exempt
-    /// from the byte budget while it sits here (a single cache, bounded by
-    /// the per-regex hybrid capacity).
-    hot: Option<Entry>,
-    caches: lru::LruCache<u64, Entry, rustc_hash::FxBuildHasher>,
-    bytes: usize,
+/// Shard count for the global pool: enough that a wide rayon pool rarely
+/// collides on one lock.
+const GLOBAL_SHARDS: usize = 64;
+
+/// Parked caches one regex may hold. Live cache count per regex tracks its
+/// peak concurrent use; beyond this cap a returning cache is dropped rather
+/// than parked (creation covers the rare wider burst).
+const PER_REGEX_CAP: usize = 8;
+
+/// Bytes currently parked across all shards. Checked-out caches are
+/// unaccounted, exactly as the previous design's hot slot was.
+static GLOBAL_BYTES: AtomicUsize = AtomicUsize::new(0);
+
+type Shard = Mutex<FxHashMap<u64, Vec<Entry>>>;
+
+fn shards() -> &'static [Shard; GLOBAL_SHARDS] {
+    static SHARDS: OnceLock<[Shard; GLOBAL_SHARDS]> = OnceLock::new();
+    SHARDS.get_or_init(|| std::array::from_fn(|_| Mutex::new(FxHashMap::default())))
 }
 
-impl Pool {
-    fn new() -> Self {
-        Self {
-            hot_id: u64::MAX,
-            hot: None,
-            caches: lru::LruCache::with_hasher(SCRATCH_COUNT_CAP, rustc_hash::FxBuildHasher),
-            bytes: 0,
-        }
-    }
+#[allow(clippy::cast_possible_truncation)]
+fn shard_for(id: u64) -> &'static Shard {
+    &shards()[id as usize % GLOBAL_SHARDS]
+}
 
-    fn take(&mut self, id: u64) -> Option<Entry> {
-        let entry = self.caches.pop(&id)?;
-        self.bytes = self.bytes.saturating_sub(entry.size);
-        Some(entry)
-    }
+/// Steal a parked cache for `id`, if any thread left one.
+fn global_take(id: u64) -> Option<Entry> {
+    let mut shard = shard_for(id).lock();
+    let stack = shard.get_mut(&id)?;
+    let entry = stack.pop()?;
+    GLOBAL_BYTES.fetch_sub(entry.size, Ordering::Relaxed);
+    Some(entry)
+}
 
-    /// Park a cache in the LRU under the byte budget.
-    fn park(&mut self, id: u64, mut entry: Entry) {
-        entry.parks = entry.parks.wrapping_add(1);
-        if entry.parks.is_multiple_of(REMEASURE_EVERY) || entry.size == 0 {
-            entry.size = entry.cache.memory_usage();
-        }
-        let size = entry.size;
-        if let Some(evicted) = self.caches.push(id, entry) {
-            // push() returns the displaced LRU entry (or the replaced value).
-            self.bytes = self.bytes.saturating_sub(evicted.1.size);
-        }
-        self.bytes += size;
-        while self.bytes > budget_bytes() && self.caches.len() > 1 {
-            match self.caches.pop_lru() {
-                Some((_, evicted)) => self.bytes = self.bytes.saturating_sub(evicted.size),
-                None => break,
-            }
-        }
+/// Park a finished cache for other threads, subject to the global byte budget
+/// and the per-regex cap; over either limit the cache is simply dropped.
+fn global_park(id: u64, mut entry: Entry) {
+    entry.parks = entry.parks.wrapping_add(1);
+    if entry.parks.is_multiple_of(REMEASURE_EVERY) || entry.size == 0 {
+        entry.size = entry.cache.memory_usage();
     }
+    if GLOBAL_BYTES
+        .load(Ordering::Relaxed)
+        .saturating_add(entry.size)
+        > global_budget_bytes()
+    {
+        return;
+    }
+    let mut shard = shard_for(id).lock();
+    let stack = shard.entry(id).or_default();
+    if stack.len() >= PER_REGEX_CAP {
+        return;
+    }
+    GLOBAL_BYTES.fetch_add(entry.size, Ordering::Relaxed);
+    stack.push(entry);
+}
 
-    /// Return a finished cache: back into the hot slot when it is still ours
-    /// and free, otherwise into the LRU (nested/interleaved use).
-    fn finish(&mut self, id: u64, entry: Entry) {
-        if self.hot_id == id && self.hot.is_none() {
-            self.hot = Some(entry);
-        } else {
-            self.park(id, entry);
-        }
-    }
+/// This thread's most recent (regex id, cache): repeat searches with one
+/// regex — the overwhelmingly common pattern in trait evaluation — never
+/// touch a lock.
+struct HotSlot {
+    id: u64,
+    entry: Option<Entry>,
 }
 
 thread_local! {
-    static POOL: RefCell<Pool> = RefCell::new(Pool::new());
+    static HOT: RefCell<HotSlot> = const {
+        RefCell::new(HotSlot {
+            id: u64::MAX,
+            entry: None,
+        })
+    };
 }
 
-/// Run `f` with a scratch cache for regex `id`, reusing this thread's parked
-/// cache when present and parking it (subject to the byte budget) afterwards.
+/// Run `f` with a scratch cache for regex `id`: this thread's hot cache when
+/// the id matches, else a cache stolen from the global pool, else a fresh one.
+/// The demoted hot cache parks globally so another thread can steal it.
 pub(crate) fn with_cache<R>(id: u64, re: &meta::Regex, f: impl FnOnce(&mut meta::Cache) -> R) -> R {
     // Fast path: repeat use of this thread's most recent regex.
-    let hot = POOL.with(|p| {
-        let mut p = p.borrow_mut();
-        if p.hot_id == id { p.hot.take() } else { None }
+    let hot = HOT.with(|h| {
+        let mut h = h.borrow_mut();
+        if h.id == id { h.entry.take() } else { None }
     });
     if let Some(mut entry) = hot {
         let result = f(&mut entry.cache);
-        POOL.with(|p| p.borrow_mut().finish(id, entry));
+        finish(id, entry);
         return result;
     }
-    // Slow path: demote the current hot cache to the LRU and promote this id.
-    let mut entry = POOL
-        .with(|p| {
-            let mut p = p.borrow_mut();
-            if let Some(prev) = p.hot.take() {
-                let prev_id = p.hot_id;
-                p.park(prev_id, prev);
-            }
-            p.hot_id = id;
-            p.take(id)
-        })
-        .unwrap_or_else(|| Entry {
-            cache: re.create_cache(),
-            size: 0,
-            parks: 0,
-        });
+    // Slow path: demote the current hot cache to the global pool, then steal
+    // or create one for this id.
+    let stolen = HOT.with(|h| {
+        let mut h = h.borrow_mut();
+        if let Some(prev) = h.entry.take() {
+            let prev_id = h.id;
+            global_park(prev_id, prev);
+        }
+        h.id = id;
+        global_take(id)
+    });
+    let mut entry = stolen.unwrap_or_else(|| Entry {
+        cache: re.create_cache(),
+        size: 0,
+        parks: 0,
+    });
     let result = f(&mut entry.cache);
-    POOL.with(|p| p.borrow_mut().finish(id, entry));
+    finish(id, entry);
     result
+}
+
+/// Return a finished cache: back into the hot slot when it is still ours and
+/// free, otherwise into the global pool (nested/interleaved use of the same
+/// regex on one thread built a transient second cache; the newer one wins
+/// the slot).
+fn finish(id: u64, entry: Entry) {
+    let parked = HOT.with(|h| {
+        let mut h = h.borrow_mut();
+        if h.id == id && h.entry.is_none() {
+            h.entry = Some(entry);
+            None
+        } else {
+            Some(entry)
+        }
+    });
+    if let Some(entry) = parked {
+        global_park(id, entry);
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    fn engine(pattern: &str) -> meta::Regex {
+        meta::Regex::new(pattern).unwrap()
+    }
+
+    #[test]
+    fn hot_slot_reuses_and_switch_parks_globally() {
+        let a = engine("foo[a-z]+");
+        let b = engine("bar[0-9]+");
+        let (ida, idb) = (next_regex_id(), next_regex_id());
+        // Repeat use of one regex, then a switch, then back: every call must
+        // see a working cache regardless of which layer supplied it.
+        assert!(with_cache(ida, &a, |c| a
+            .search_half_with(c, &regex_automata::Input::new("foobar"))
+            .is_some()));
+        assert!(with_cache(ida, &a, |c| a
+            .search_half_with(c, &regex_automata::Input::new("foox"))
+            .is_some()));
+        assert!(with_cache(idb, &b, |c| b
+            .search_half_with(c, &regex_automata::Input::new("bar12"))
+            .is_some()));
+        assert!(with_cache(ida, &a, |c| a
+            .search_half_with(c, &regex_automata::Input::new("fooy"))
+            .is_some()));
+        // After the switches at least one demoted cache is parked for
+        // stealing (this thread's hot slot holds `ida`; `idb` was demoted).
+        assert!(global_take(idb).is_some());
+    }
+
+    #[test]
+    fn nested_same_regex_use_builds_a_transient_cache() {
+        let a = engine("qu+x");
+        let id = next_regex_id();
+        let hit = with_cache(id, &a, |outer| {
+            let outer_hit = a
+                .search_half_with(outer, &regex_automata::Input::new("quux"))
+                .is_some();
+            // Nested call with the hot slot's cache checked out.
+            let inner_hit = with_cache(id, &a, |inner| {
+                a.search_half_with(inner, &regex_automata::Input::new("qux"))
+                    .is_some()
+            });
+            outer_hit && inner_hit
+        });
+        assert!(hit);
+    }
 }

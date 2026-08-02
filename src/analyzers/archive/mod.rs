@@ -37,6 +37,9 @@ use utils::calculate_sha256;
 /// Default maximum file size to keep in memory (100 MB)
 pub(crate) const DEFAULT_MAX_MEMORY_FILE_SIZE: u64 = 100 * 1024 * 1024;
 const MAX_ARCHIVE_PATH_TRAVERSAL_EVIDENCE: usize = 10;
+/// Extraction notes attached as evidence to the incomplete-archive finding.
+/// The rest still reach `metadata.errors`; this only bounds the rendered set.
+const MAX_INCOMPLETE_ARCHIVE_EVIDENCE: usize = 5;
 const MIN_PATH_CORPUS_ENTRY_COUNT: usize = 32;
 const MIN_PATH_CORPUS_TRAVERSAL_ENTRIES: usize = 4;
 const MIN_PATH_CORPUS_EDGE_CASE_ENTRIES: usize = 24;
@@ -174,6 +177,64 @@ fn has_builtin_anti_analysis_finding(findings: &[Finding]) -> bool {
                 .id
                 .starts_with("objectives/anti-analysis/pe-tampering/")
     })
+}
+
+/// Drain the guard's non-fatal extraction notes into the report, raising one
+/// finding when any were recorded.
+///
+/// An archive we could only read part of is worth surfacing — truncating a
+/// container is a cheap way past a scanner that bails on a bad member, which is
+/// exactly the failure this recovery path exists for — but it is also the
+/// everyday shape of an interrupted download. So it lands at `Notable`
+/// ([`Criticality::score_weight`] 1, against 40 for suspicious): visible in the
+/// trait list and the LLM render, without nudging a benign sample's verdict.
+///
+/// The `anti-analysis/malformed/` family is deliberate, matching the ELF and
+/// Mach-O header-parse findings. `anti-analysis/archive/` would trip
+/// [`has_builtin_anti_analysis_finding`]'s retroactive-suppression pass, which
+/// exists for hostile-container findings, not for "the bytes ran out".
+fn drain_extraction_notes(report: &mut AnalysisReport, guard: &ExtractionGuard) {
+    let notes = guard.take_extraction_notes();
+    if notes.is_empty() {
+        return;
+    }
+
+    let evidence = notes
+        .iter()
+        .take(MAX_INCOMPLETE_ARCHIVE_EVIDENCE)
+        .map(|note| Evidence {
+            method: "archive_extraction".to_string(),
+            source: "archive_analyzer".to_string(),
+            value: note.clone(),
+            location: None,
+            ..Default::default()
+        })
+        .collect();
+
+    report.findings.push(Finding {
+        src: None,
+        kind: FindingKind::Structural,
+        trait_refs: vec![],
+        id: "anti-analysis/malformed/archive-incomplete".to_string(),
+        desc: format!(
+            "Archive could only be read in part ({} extraction {})",
+            notes.len(),
+            if notes.len() == 1 {
+                "problem"
+            } else {
+                "problems"
+            }
+        ),
+        conf: 1.0,
+        crit: Criticality::Notable,
+        mbc: None,
+        attack: None,
+        evidence,
+        match_count: notes.len(),
+        source_file: None,
+    });
+
+    report.metadata.errors.extend(notes);
 }
 
 fn push_archive_hostile_findings(
@@ -638,6 +699,56 @@ fn decompress_to_file<R: std::io::Read>(
     )
 }
 
+/// Decode `reader` to exhaustion, keeping whatever came out before a truncated
+/// or corrupt stream cut it short.
+///
+/// A single-file compressed stream is decoded entirely in memory before any of
+/// it reaches `dest_dir`, so propagating the read error would throw away every
+/// byte recovered so far and leave the extraction directory empty — which
+/// `analyze_archive_with_data` can only report as a total analysis failure. A
+/// truncated `.gz` therefore used to yield no verdict at all, even when the
+/// decoded prefix was a complete tar minus its last member. That is both a
+/// routine collection artifact and a cheap way to make a scanner give up, so
+/// the prefix is what we analyze: those bytes decoded successfully and are as
+/// genuine as any others. Only a stream that yields nothing is a hard error —
+/// there is nothing to fall back to, and the caller should hear why.
+fn decode_stream_tolerant<R: std::io::Read>(
+    reader: &mut R,
+    stem: &str,
+    guard: &guards::ExtractionGuard,
+) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    // Matches the tar extractor's chunk: small enough to check cancellation
+    // promptly on a stream that decodes for minutes.
+    let mut buf = [0u8; 65536];
+    loop {
+        if guard.is_cancelled() {
+            anyhow::bail!("cancelled");
+        }
+        match std::io::Read::read(reader, &mut buf) {
+            Ok(0) => return Ok(out),
+            Ok(n) => out.extend_from_slice(&buf[..n]),
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e) if out.is_empty() => {
+                return Err(anyhow::Error::new(e).context(format!("Failed to decompress: {stem}")));
+            }
+            Err(e) => {
+                tracing::debug!(
+                    stem,
+                    decoded_bytes = out.len(),
+                    error = %e,
+                    "compressed stream ended early; analyzing the decoded prefix",
+                );
+                guard.add_extraction_note(format!(
+                    "{stem}: compressed stream ended early after {} bytes ({e}); analyzed the decoded prefix",
+                    out.len()
+                ));
+                return Ok(out);
+            }
+        }
+    }
+}
+
 fn decompress_to_file_at_depth<R: std::io::Read>(
     mut decoder: R,
     archive_path: &Path,
@@ -651,8 +762,7 @@ fn decompress_to_file_at_depth<R: std::io::Read>(
         .and_then(|s| s.to_str())
         .unwrap_or("extracted");
     let mut limited = guards::LimitedReader::new(&mut decoder, guards::MAX_FILE_SIZE);
-    let mut decompressed = Vec::new();
-    std::io::Read::read_to_end(&mut limited, &mut decompressed)?;
+    let decompressed = decode_stream_tolerant(&mut limited, stem, guard)?;
     let written = decompressed.len() as u64;
     guard.check_compression_ratio(compressed_size, written);
     guard.check_bytes(written, stem);
@@ -1154,6 +1264,7 @@ impl ArchiveAnalyzer {
 
         if matches!(file_type, FileType::Chm) {
             self.analyze_chm_archive_in_memory(data, archive_path, &mut report, start, &guard)?;
+            drain_extraction_notes(&mut report, &guard);
             let hostile_reasons = guard.take_reasons();
             let suppress_path_traversal =
                 should_suppress_path_traversal_findings(archive_path, &hostile_reasons);
@@ -1190,6 +1301,7 @@ impl ArchiveAnalyzer {
             if !member_metadata.is_empty() {
                 merge_archive_member_metadata(&mut report, member_metadata);
             }
+            drain_extraction_notes(&mut report, &guard);
             let hostile_reasons = guard.take_reasons();
             let suppress_path_traversal =
                 should_suppress_path_traversal_findings(archive_path, &hostile_reasons);
@@ -1251,6 +1363,7 @@ impl ArchiveAnalyzer {
             if !member_metadata.is_empty() {
                 merge_archive_member_metadata(&mut report, member_metadata);
             }
+            drain_extraction_notes(&mut report, &guard);
             let hostile_reasons = guard.take_reasons();
             let suppress_path_traversal =
                 should_suppress_path_traversal_findings(archive_path, &hostile_reasons);
@@ -1309,8 +1422,17 @@ impl ArchiveAnalyzer {
                 .into_iter()
                 .filter_map(std::result::Result::ok)
                 .count();
+            if extracted_count > 0 {
+                // Extraction stopped early but landed members on disk — those
+                // are analyzed below. Record why the rest are missing so a
+                // partial unpack is not read as a complete one.
+                guard.add_extraction_note(format!(
+                    "archive extraction stopped after {extracted_count} entries: {e}"
+                ));
+            }
             if extracted_count == 0 {
                 if preserved_7z_metadata {
+                    drain_extraction_notes(&mut report, &guard);
                     let suppress_path_traversal =
                         should_suppress_path_traversal_findings(archive_path, &hostile_reasons);
                     push_archive_hostile_findings(
@@ -1342,6 +1464,8 @@ impl ArchiveAnalyzer {
                 return Err(e);
             }
         }
+
+        drain_extraction_notes(&mut report, &guard);
 
         let suppress_path_traversal =
             should_suppress_path_traversal_findings(archive_path, &hostile_reasons);
@@ -3813,6 +3937,273 @@ traits:
             let content = std::fs::read(path).unwrap();
             assert!(!content.is_empty(), "extracted file should not be empty");
         }
+    }
+
+    /// Build a gzip-wrapped tar of `members`, then cut it off after
+    /// `keep_fraction` of its bytes.
+    ///
+    /// `Compression::none()` keeps the deflate stream as stored blocks so the
+    /// surviving prefix decodes to real tar bytes — with default compression a
+    /// small fixture is one block that yields nothing until its end, which is
+    /// not the shape being tested.
+    fn truncated_tar_gz(members: &[(&str, usize)], keep_fraction: f64) -> Vec<u8> {
+        use flate2::Compression;
+        use flate2::write::GzEncoder;
+        use tar::Builder;
+
+        let mut whole = Vec::new();
+        {
+            let enc = GzEncoder::new(&mut whole, Compression::none());
+            let mut builder = Builder::new(enc);
+            for (name, size) in members {
+                // Printable filler so the extracted members look like text to
+                // the member analyzers rather than unclassifiable binary.
+                let content = vec![b'A'; *size];
+                let mut header = tar::Header::new_gnu();
+                header.set_path(name).unwrap();
+                header.set_size(content.len() as u64);
+                header.set_mode(0o644);
+                header.set_cksum();
+                builder.append(&header, &content[..]).unwrap();
+            }
+            builder.into_inner().unwrap().finish().unwrap();
+        }
+
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let keep = (whole.len() as f64 * keep_fraction) as usize;
+        whole.truncate(keep);
+        whole
+    }
+
+    /// A truncated gzip stream is the 2026-08-01 production failure: an
+    /// extensionless blob, gzip magic, tar inside, cut off mid-member. It used
+    /// to abort the whole analysis with "unexpected end of file" and emit no
+    /// result at all, discarding megabytes of already-decoded members.
+    #[test]
+    fn truncated_gzip_analyzes_decoded_prefix() {
+        #[allow(clippy::expect_used)]
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        // No extension, exactly like a content-addressed blob on disk: the type
+        // comes from the magic bytes, which routes to the single-stream gzip
+        // path rather than the tar.gz one.
+        let blob_path = temp_dir.path().join("deadbeefcafe");
+        let truncated = truncated_tar_gz(
+            &[
+                ("alpha.txt", 40_000),
+                ("beta.txt", 40_000),
+                ("gamma.txt", 40_000),
+            ],
+            0.5,
+        );
+        std::fs::write(&blob_path, &truncated).unwrap();
+
+        // Sanity: the fixture really is undecodable as a whole stream.
+        {
+            use std::io::Read;
+            let mut sink = Vec::new();
+            let err = flate2::read::GzDecoder::new(&truncated[..])
+                .read_to_end(&mut sink)
+                .unwrap_err();
+            assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof);
+            assert!(!sink.is_empty(), "fixture should decode a usable prefix");
+        }
+
+        let analyzer =
+            ArchiveAnalyzer::new().with_analysis_options(Arc::new(crate::AnalysisOptions {
+                all_files: true,
+                ..crate::AnalysisOptions::default()
+            }));
+        #[allow(clippy::expect_used)]
+        let report = analyzer
+            .analyze(&blob_path)
+            .expect("truncated gzip should still produce a report");
+
+        let paths: Vec<&str> = report.files.iter().map(|f| f.path.as_str()).collect();
+        assert!(
+            paths.iter().any(|p| p.contains("alpha.txt")),
+            "members ahead of the cut should be analyzed, got: {paths:?}"
+        );
+        assert!(
+            report
+                .metadata
+                .errors
+                .iter()
+                .any(|e| e.contains("ended early") || e.contains("stopped after")),
+            "the partial decode should be recorded, got: {:?}",
+            report.metadata.errors
+        );
+        let incomplete = report
+            .findings
+            .iter()
+            .find(|f| f.id == "anti-analysis/malformed/archive-incomplete")
+            .expect("a partial read should raise the incomplete-archive finding");
+        assert_eq!(
+            incomplete.crit,
+            Criticality::Notable,
+            "an incomplete read is visible, not a verdict"
+        );
+        assert!(
+            !incomplete.evidence.is_empty(),
+            "the finding should carry the extraction notes as evidence"
+        );
+    }
+
+    /// The counterpart: a clean archive must not pick up the finding.
+    #[test]
+    fn intact_tar_gz_raises_no_incomplete_finding() {
+        #[allow(clippy::expect_used)]
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let path = temp_dir.path().join("intact.tar.gz");
+        // keep_fraction 1.0 — the same fixture, uncut.
+        std::fs::write(
+            &path,
+            truncated_tar_gz(&[("alpha.txt", 4_000), ("beta.txt", 4_000)], 1.0),
+        )
+        .unwrap();
+
+        let analyzer =
+            ArchiveAnalyzer::new().with_analysis_options(Arc::new(crate::AnalysisOptions {
+                all_files: true,
+                ..crate::AnalysisOptions::default()
+            }));
+        #[allow(clippy::expect_used)]
+        let report = analyzer.analyze(&path).expect("analyze intact tar.gz");
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|f| f.id == "anti-analysis/malformed/archive-incomplete"),
+            "an intact archive must not be flagged incomplete, errors: {:?}",
+            report.metadata.errors
+        );
+    }
+
+    /// The recovery is for streams that yield something. A file that is gzip by
+    /// magic but decodes to nothing has no prefix to fall back on, and the
+    /// caller is better served by the error than by an empty report.
+    #[test]
+    fn gzip_yielding_nothing_is_still_an_error() {
+        #[allow(clippy::expect_used)]
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let blob_path = temp_dir.path().join("headeronly");
+        // A bare gzip header: enough to be typed as gzip, no deflate data.
+        std::fs::write(
+            &blob_path,
+            [0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03],
+        )
+        .unwrap();
+
+        let analyzer = ArchiveAnalyzer::new();
+        assert!(
+            analyzer.analyze(&blob_path).is_err(),
+            "a gzip stream that decodes to nothing should stay an error"
+        );
+    }
+
+    /// Same shape one level down: a `.tar.gz` truncated mid-member routes
+    /// through the tar extractor, which writes members to disk as it goes, so
+    /// the partial-extraction fallback keeps the ones ahead of the cut.
+    #[test]
+    fn truncated_tar_gz_keeps_members_ahead_of_the_cut() {
+        #[allow(clippy::expect_used)]
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let path = temp_dir.path().join("package.tar.gz");
+        std::fs::write(
+            &path,
+            truncated_tar_gz(&[("alpha.txt", 40_000), ("beta.txt", 40_000)], 0.6),
+        )
+        .unwrap();
+
+        let analyzer =
+            ArchiveAnalyzer::new().with_analysis_options(Arc::new(crate::AnalysisOptions {
+                all_files: true,
+                ..crate::AnalysisOptions::default()
+            }));
+        #[allow(clippy::expect_used)]
+        let report = analyzer
+            .analyze(&path)
+            .expect("truncated tar.gz should still produce a report");
+        let paths: Vec<&str> = report.files.iter().map(|f| f.path.as_str()).collect();
+        assert!(
+            paths.iter().any(|p| p.contains("alpha.txt")),
+            "members ahead of the cut should be analyzed, got: {paths:?}"
+        );
+    }
+
+    /// The in-memory ZIP path holds every member in RAM, so there is no
+    /// temp_dir for the partial-extraction fallback to salvage. A member that
+    /// fails to read must cost that member only.
+    #[test]
+    fn truncated_zip_analyzes_readable_members() {
+        use ::zip::write::SimpleFileOptions;
+
+        #[allow(clippy::expect_used)]
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let path = temp_dir.path().join("truncated.zip");
+
+        // Incompressible members, so each one occupies a large, findable span
+        // of the file and corrupting a byte range lands in a payload rather
+        // than in a header.
+        let mut lcg: u32 = 0x1234_5678;
+        let mut noise = |len: usize| -> Vec<u8> {
+            (0..len)
+                .map(|_| {
+                    lcg = lcg.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                    (lcg >> 24) as u8
+                })
+                .collect()
+        };
+
+        let member_len = 40_000;
+        let mut whole = Vec::new();
+        {
+            let mut writer = ::zip::ZipWriter::new(std::io::Cursor::new(&mut whole));
+            let options =
+                SimpleFileOptions::default().compression_method(::zip::CompressionMethod::Deflated);
+            for name in ["alpha.txt", "beta.txt", "gamma.txt"] {
+                writer.start_file(name, options).unwrap();
+                std::io::Write::write_all(&mut writer, &noise(member_len)).unwrap();
+            }
+            writer.finish().unwrap();
+        }
+        assert!(
+            whole.len() > 2 * member_len,
+            "members must stay incompressible for the corruption offset to land in a payload"
+        );
+
+        // Shred a span inside the first member's deflate stream. The central
+        // directory and the other members' payloads keep their offsets, so the
+        // archive still opens and exactly one member fails to read.
+        let mut damaged = whole.clone();
+        for byte in &mut damaged[1_000..member_len / 2] {
+            *byte ^= 0xff;
+        }
+        std::fs::write(&path, &damaged).unwrap();
+
+        let analyzer =
+            ArchiveAnalyzer::new().with_analysis_options(Arc::new(crate::AnalysisOptions {
+                all_files: true,
+                ..crate::AnalysisOptions::default()
+            }));
+        #[allow(clippy::expect_used)]
+        let report = analyzer
+            .analyze(&path)
+            .expect("a damaged ZIP should still produce a report");
+        assert!(
+            !report.files.is_empty(),
+            "readable ZIP members should still be analyzed"
+        );
+        // Without this the test could pass on an archive that simply opened
+        // cleanly: the note proves a member really did fail and was contained.
+        assert!(
+            report
+                .metadata
+                .errors
+                .iter()
+                .any(|e| e.contains("member stream failed") || e.contains("unreadable")),
+            "the failed member should be recorded, got: {:?}",
+            report.metadata.errors
+        );
     }
 
     #[test]

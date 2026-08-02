@@ -48,6 +48,40 @@ use tracing::{debug, trace};
 // since scanners are thread-local and a separate pool doubled the thread count.
 // The global pool's work-stealing scheduler naturally balances archive and non-archive work.
 
+/// Read one in-memory archive member into `out`, keeping whatever decoded when
+/// the member's stream fails partway.
+///
+/// Returns the byte count read, or `None` when the member produced nothing at
+/// all — the caller skips those, since there is no content to analyze. A
+/// genuinely empty member returns `Some(0)` and is kept.
+///
+/// Corrupt and truncated members are the norm in a malware corpus, and the
+/// in-memory container paths hold every member in RAM rather than on disk, so
+/// there is nothing for `analyze_archive_with_data`'s partial-extraction
+/// fallback to recover if one bad member aborts the walk.
+fn read_member_tolerant<R: Read>(
+    reader: &mut R,
+    relative_path: &str,
+    guard: &ExtractionGuard,
+    out: &mut Vec<u8>,
+) -> Option<u64> {
+    let mut buf = [0u8; 65536];
+    loop {
+        match reader.read(&mut buf) {
+            Ok(0) => return Some(out.len() as u64),
+            Ok(n) => out.extend_from_slice(&buf[..n]),
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e) => {
+                guard.add_extraction_note(format!(
+                    "{relative_path}: member stream failed after {} bytes ({e})",
+                    out.len()
+                ));
+                return (!out.is_empty()).then_some(out.len() as u64);
+            }
+        }
+    }
+}
+
 /// Filter-map `items` in parallel for the top archive, sequentially for nested
 /// archives.
 ///
@@ -1337,11 +1371,16 @@ impl ArchiveAnalyzer {
                 if self.is_cancelled() {
                     anyhow::bail!("Analysis cancelled during ZIP member read");
                 }
+                // Stop at the member cap rather than failing: the members read
+                // so far are analyzed by the `finalize` below, and
+                // `check_file_count` has already recorded the hostile reason
+                // that makes the truncation visible as a finding.
                 if !guard.check_file_count() {
-                    anyhow::bail!(
-                        "Exceeded maximum file count ({})",
+                    guard.add_extraction_note(format!(
+                        "stopped after the {} member cap",
                         super::guards::MAX_FILE_COUNT
-                    );
+                    ));
+                    break;
                 }
 
                 let entry_name = entry.path.clone();
@@ -1367,8 +1406,10 @@ impl ArchiveAnalyzer {
                     continue;
                 }
 
+                // One encrypted member does not make the rest unreadable.
                 if entry.encrypted {
-                    anyhow::bail!("Password required to decrypt file");
+                    guard.add_extraction_note(format!("{entry_name}: encrypted, skipped"));
+                    continue;
                 }
 
                 if entry_type_label == "symlink" {
@@ -1433,8 +1474,13 @@ impl ArchiveAnalyzer {
                     return Ok(false);
                 };
                 let written = file_data.len() as u64;
+                // Same as the member cap: stop, keep, and let the recorded
+                // hostile reason speak for the archive.
                 if !guard.check_bytes(written, &relative_path) {
-                    anyhow::bail!("Exceeded maximum total extraction size");
+                    guard.add_extraction_note(
+                        "stopped at the total extraction size cap".to_string(),
+                    );
+                    break;
                 }
 
                 let logical_path = Path::new(&relative_path);
@@ -1527,13 +1573,25 @@ impl ArchiveAnalyzer {
                     anyhow::bail!("Analysis cancelled during ZIP member read");
                 }
                 if !guard.check_file_count() {
-                    anyhow::bail!(
-                        "Exceeded maximum file count ({})",
+                    guard.add_extraction_note(format!(
+                        "stopped after the {} member cap",
                         super::guards::MAX_FILE_COUNT
-                    );
+                    ));
+                    break;
                 }
 
-                let mut entry = archive.by_index(i)?;
+                // A member whose local header is unreadable (truncated tail,
+                // corrupt central directory) costs us that member, not the
+                // archive: this path analyzes in memory with no temp_dir for
+                // `analyze_archive_with_data` to fall back on, so bailing here
+                // would discard every member already read.
+                let mut entry = match archive.by_index(i) {
+                    Ok(entry) => entry,
+                    Err(e) => {
+                        guard.add_extraction_note(format!("ZIP member {i} unreadable: {e}"));
+                        continue;
+                    }
+                };
                 let entry_name = entry.name().to_string();
                 if entry_name.len() > MAX_PATH_COMPONENT_LEN {
                     guard.add_hostile_reason(HostileArchiveReason::ExcessiveEntryName {
@@ -1626,7 +1684,8 @@ impl ArchiveAnalyzer {
                     host_os: None,
                 });
                 if entry.encrypted() {
-                    anyhow::bail!("Password required to decrypt file");
+                    guard.add_extraction_note(format!("{entry_name}: encrypted, skipped"));
+                    continue;
                 }
 
                 let compressed = entry.compressed_size();
@@ -1643,32 +1702,40 @@ impl ArchiveAnalyzer {
                 }
 
                 let mut file_data = Vec::with_capacity(uncompressed.min(16 * 1024 * 1024) as usize);
-                let written = if let Some(c) = guard.cancellation() {
+                // A member's deflate stream can end early or fail its CRC while
+                // the members around it are intact. Keep what decoded and move
+                // on: the bytes are genuine, and there is no on-disk fallback
+                // here to salvage the archive if we abort.
+                let read_outcome = if let Some(c) = guard.cancellation() {
                     let mut cancellable = CancellableReader::new(&mut entry, c);
                     let mut limited = LimitedReader::new(&mut cancellable, MAX_FILE_SIZE);
-                    let n = limited.read_to_end(&mut file_data)? as u64;
-                    if limited.is_limited() {
-                        guard.add_hostile_reason(HostileArchiveReason::ExcessiveFileSize {
-                            file: relative_path.clone(),
-                            size: MAX_FILE_SIZE,
-                        });
-                        continue;
-                    }
-                    n
+                    let n =
+                        read_member_tolerant(&mut limited, &relative_path, guard, &mut file_data);
+                    (n, limited.is_limited())
                 } else {
                     let mut limited = LimitedReader::new(&mut entry, MAX_FILE_SIZE);
-                    let n = limited.read_to_end(&mut file_data)? as u64;
-                    if limited.is_limited() {
-                        guard.add_hostile_reason(HostileArchiveReason::ExcessiveFileSize {
-                            file: relative_path.clone(),
-                            size: MAX_FILE_SIZE,
-                        });
-                        continue;
-                    }
-                    n
+                    let n =
+                        read_member_tolerant(&mut limited, &relative_path, guard, &mut file_data);
+                    (n, limited.is_limited())
+                };
+                if read_outcome.1 {
+                    guard.add_hostile_reason(HostileArchiveReason::ExcessiveFileSize {
+                        file: relative_path.clone(),
+                        size: MAX_FILE_SIZE,
+                    });
+                    continue;
+                }
+                // `None` is a member that produced nothing before failing —
+                // there is no content to analyze, so skip it. A genuinely empty
+                // member reads back as `Some(0)` and is kept, as before.
+                let Some(written) = read_outcome.0 else {
+                    continue;
                 };
                 if !guard.check_bytes(written, &relative_path) {
-                    anyhow::bail!("Exceeded maximum total extraction size");
+                    guard.add_extraction_note(
+                        "stopped at the total extraction size cap".to_string(),
+                    );
+                    break;
                 }
 
                 let logical_path = Path::new(&relative_path);
@@ -1853,10 +1920,11 @@ impl ArchiveAnalyzer {
         let mut members = Vec::with_capacity(raw_members.len());
         for m in raw_members {
             if !guard.check_file_count() {
-                anyhow::bail!(
-                    "Exceeded maximum file count ({})",
+                guard.add_extraction_note(format!(
+                    "stopped after the {} member cap",
                     super::guards::MAX_FILE_COUNT
-                );
+                ));
+                break;
             }
             if m.data.len() as u64 > super::guards::MAX_FILE_SIZE {
                 guard.add_hostile_reason(HostileArchiveReason::ExcessiveFileSize {
@@ -1866,7 +1934,8 @@ impl ArchiveAnalyzer {
                 continue;
             }
             if !guard.check_bytes(m.data.len() as u64, &m.relative_path) {
-                anyhow::bail!("Exceeded maximum total extraction size");
+                guard.add_extraction_note("stopped at the total extraction size cap".to_string());
+                break;
             }
             let logical = Path::new(&m.relative_path);
             let file_type = crate::analyzers::detect_file_type_from_data(logical, &m.data);
@@ -1932,10 +2001,11 @@ impl ArchiveAnalyzer {
                     anyhow::bail!("Analysis cancelled during ASAR member read");
                 }
                 if !guard.check_file_count() {
-                    anyhow::bail!(
-                        "Exceeded maximum file count ({})",
+                    guard.add_extraction_note(format!(
+                        "stopped after the {} member cap",
                         super::guards::MAX_FILE_COUNT
-                    );
+                    ));
+                    break;
                 }
                 if entry.path.len() > MAX_PATH_COMPONENT_LEN {
                     guard.add_hostile_reason(HostileArchiveReason::ExcessiveEntryName {
@@ -1971,11 +2041,21 @@ impl ArchiveAnalyzer {
                 let end_offset = start_offset
                     .checked_add(member_size)
                     .ok_or_else(|| anyhow::anyhow!("ASAR member range overflow"))?;
+                // A truncated ASAR keeps a valid header, so every member past
+                // the cut addresses bytes that aren't there. Skip those and
+                // analyze the ones that are — bailing would throw away the
+                // members already read, with no temp_dir to recover them from.
                 let Some(file_data) = data.get(start_offset..end_offset) else {
-                    anyhow::bail!("ASAR member extends past end of file: {}", relative_path);
+                    guard.add_extraction_note(format!(
+                        "{relative_path}: ASAR member extends past end of file"
+                    ));
+                    continue;
                 };
                 if !guard.check_bytes(file_data.len() as u64, &relative_path) {
-                    anyhow::bail!("Exceeded maximum total extraction size");
+                    guard.add_extraction_note(
+                        "stopped at the total extraction size cap".to_string(),
+                    );
+                    break;
                 }
 
                 guard.record_member_metadata(super::guards::ExtractedMemberMetadata {

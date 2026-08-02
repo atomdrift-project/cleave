@@ -40,6 +40,13 @@ pub(crate) const MAX_COMPRESSION_RATIO: u64 = 100;
 /// under the normal per-file extraction cap.
 pub(crate) const MIN_ZIP_BOMB_UNCOMPRESSED_SIZE: u64 = 256 * 1024 * 1024;
 
+/// Maximum non-fatal extraction notes retained per archive.
+///
+/// A single corrupt container can fail on every one of its members, so the
+/// note list is capped and the overflow summarized rather than letting a
+/// 200,000-entry ZIP push 200,000 strings into the report.
+pub(crate) const MAX_EXTRACTION_NOTES: usize = 32;
+
 /// Per-member forensic metadata captured during extraction.
 ///
 /// Fields are populated from the archive container format (tar headers, ZIP
@@ -107,6 +114,15 @@ pub(crate) struct ExtractionGuard {
     file_count: AtomicUsize,
     hostile_reasons: Mutex<Vec<HostileArchiveReason>>,
     member_metadata: Mutex<Vec<ExtractedMemberMetadata>>,
+    /// Non-fatal extraction notes: a stream that ended mid-decode, a member
+    /// that could not be read. Recorded so a partial extraction is visible in
+    /// the report instead of passing for a complete one. Unlike
+    /// [`HostileArchiveReason`] these never become findings — truncation is a
+    /// collection artifact as often as it is an evasion attempt, and scoring it
+    /// would move every partially-downloaded archive off benign.
+    extraction_notes: Mutex<Vec<String>>,
+    /// Count of notes beyond [`MAX_EXTRACTION_NOTES`], summarized on drain.
+    dropped_notes: AtomicUsize,
     /// Per-request cancellation flag from the server. When set, extraction
     /// stops at the next entry boundary via `check_file_count()`.
     cancellation: Option<Arc<AtomicBool>>,
@@ -115,13 +131,7 @@ pub(crate) struct ExtractionGuard {
 impl ExtractionGuard {
     #[cfg(test)]
     pub(crate) fn new() -> Self {
-        Self {
-            total_bytes: AtomicU64::new(0),
-            file_count: AtomicUsize::new(0),
-            hostile_reasons: Mutex::new(Vec::new()),
-            member_metadata: Mutex::new(Vec::new()),
-            cancellation: None,
-        }
+        Self::with_cancellation(None)
     }
 
     /// Create a guard with a cancellation flag from the server.
@@ -131,6 +141,8 @@ impl ExtractionGuard {
             file_count: AtomicUsize::new(0),
             hostile_reasons: Mutex::new(Vec::new()),
             member_metadata: Mutex::new(Vec::new()),
+            extraction_notes: Mutex::new(Vec::new()),
+            dropped_notes: AtomicUsize::new(0),
             cancellation: flag,
         }
     }
@@ -158,6 +170,34 @@ impl ExtractionGuard {
             .lock()
             .map(|mut r| std::mem::take(&mut *r))
             .unwrap_or_default()
+    }
+
+    /// Record a non-fatal extraction problem — a member skipped, a stream that
+    /// ended early. The caller has already recovered; this only makes the gap
+    /// visible in `report.metadata.errors`.
+    pub(crate) fn add_extraction_note(&self, note: String) {
+        if let Ok(mut notes) = self.extraction_notes.lock() {
+            if notes.len() >= MAX_EXTRACTION_NOTES {
+                self.dropped_notes.fetch_add(1, Ordering::Relaxed);
+                return;
+            }
+            notes.push(note);
+        }
+    }
+
+    /// Drain the extraction notes, appending a summary line when the cap
+    /// dropped any.
+    pub(crate) fn take_extraction_notes(&self) -> Vec<String> {
+        let mut notes = self
+            .extraction_notes
+            .lock()
+            .map(|mut n| std::mem::take(&mut *n))
+            .unwrap_or_default();
+        let dropped = self.dropped_notes.swap(0, Ordering::Relaxed);
+        if dropped > 0 {
+            notes.push(format!("archive extraction: {dropped} further problems"));
+        }
+        notes
     }
 
     /// Record forensic metadata for an archive entry. Called from per-format

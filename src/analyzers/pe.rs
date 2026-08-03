@@ -98,29 +98,64 @@ fn looks_like_dos_executable(data: &[u8]) -> bool {
         && header_size < data.len()
 }
 
-fn dn_extract_cn(dn: &str) -> Option<String> {
-    for raw in dn.split(',') {
+/// Split a distinguished name into its RDN segments, honouring RFC 4514
+/// escapes and resolving them in the returned values.
+///
+/// A comma inside an attribute value is encoded `\,`, so splitting on every
+/// comma truncates the value and strands the escape character: `O=Postman\,
+/// Inc.` yielded `Postman\`, which reached analysts as the signer name
+/// "Postman\" and as the finding id `metadata/signed/leaf::postman\`.
+fn dn_split(dn: &str) -> Vec<String> {
+    let mut segments = Vec::new();
+    let mut current = String::new();
+    let mut chars = dn.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            ',' => segments.push(std::mem::take(&mut current)),
+            '\\' => match chars.next() {
+                // `\XX`: a two-digit hex escape.
+                Some(hi)
+                    if hi.is_ascii_hexdigit()
+                        && chars.peek().is_some_and(char::is_ascii_hexdigit) =>
+                {
+                    let lo = chars.next().unwrap_or('0');
+                    let byte = hi.to_digit(16).unwrap_or(0) * 16 + lo.to_digit(16).unwrap_or(0);
+                    current.push(char::from_u32(byte).unwrap_or('?'));
+                }
+                // `\<char>`: the character stands for itself.
+                Some(escaped) => current.push(escaped),
+                None => {}
+            },
+            _ => current.push(c),
+        }
+    }
+    segments.push(current);
+    segments
+}
+
+/// Pull the first value of `attr` from a DN. Attribute names are matched
+/// case-insensitively — RFC 4514 names are case-insensitive and x509-cert
+/// canonicalises to upper-case, but we don't rely on the canonicalisation.
+fn dn_extract(dn: &str, attr: &str) -> Option<String> {
+    for raw in dn_split(dn) {
         let seg = raw.trim();
-        // Accept `CN=…` case-insensitively — RFC 4514 attributes are
-        // case-insensitive and x509-cert canonicalises to upper-case
-        // but we don't rely on the canonicalisation.
-        if let Some(rest) = seg.strip_prefix("CN=").or_else(|| seg.strip_prefix("cn=")) {
-            return Some(rest.trim().to_string());
+        let Some((name, value)) = seg.split_once('=') else {
+            continue;
+        };
+        if name.eq_ignore_ascii_case(attr) {
+            return Some(value.trim().to_string());
         }
     }
     None
 }
 
-/// Pull the first O attribute from a DN string. Same comma-split as
-/// `dn_extract_cn`; returns `None` when the DN doesn't carry one.
+fn dn_extract_cn(dn: &str) -> Option<String> {
+    dn_extract(dn, "CN")
+}
+
+/// Pull the first O attribute from a DN string; `None` when absent.
 fn dn_extract_o(dn: &str) -> Option<String> {
-    for raw in dn.split(',') {
-        let seg = raw.trim();
-        if let Some(rest) = seg.strip_prefix("O=").or_else(|| seg.strip_prefix("o=")) {
-            return Some(rest.trim().to_string());
-        }
-    }
-    None
+    dn_extract(dn, "O")
 }
 
 impl PEAnalyzer {
@@ -1991,6 +2026,47 @@ mod tests {
         assert_eq!(
             super::dn_extract_cn("cn=acme corp").as_deref(),
             Some("acme corp"),
+        );
+    }
+
+    #[test]
+    fn dn_extract_honours_escaped_commas() {
+        // Real Authenticode subjects escape the comma in a company suffix.
+        // Splitting on every comma truncated these to "Postman\" / "RARE
+        // IDEAS\", which surfaced verbatim as the signer name and finding id.
+        let postman = r"CN=Postman\, Inc.,O=Postman\, Inc.,L=San Francisco,C=US";
+        assert_eq!(
+            super::dn_extract_o(postman).as_deref(),
+            Some("Postman, Inc.")
+        );
+        assert_eq!(
+            super::dn_extract_cn(postman).as_deref(),
+            Some("Postman, Inc."),
+        );
+        assert_eq!(
+            super::dn_extract_o(r"O=RARE IDEAS\, LLC,C=US").as_deref(),
+            Some("RARE IDEAS, LLC"),
+        );
+
+        // An *unescaped* comma still separates RDNs, so subjects that do not
+        // escape the suffix keep their existing (truncated) value and the
+        // finding ids built from them are unchanged.
+        assert_eq!(
+            super::dn_extract_o("O=CPUID, Inc.,C=FR").as_deref(),
+            Some("CPUID"),
+        );
+
+        // Other RFC 4514 escapes resolve to the literal character, and `\XX`
+        // hex pairs decode.
+        assert_eq!(
+            super::dn_extract_o(r"O=Widgets \+ Co\=Ltd").as_deref(),
+            Some("Widgets + Co=Ltd"),
+        );
+        assert_eq!(super::dn_extract_o(r"O=A\2CB").as_deref(), Some("A,B"));
+        // A trailing lone backslash must not panic.
+        assert_eq!(
+            super::dn_extract_o(r"O=Trailing\").as_deref(),
+            Some("Trailing")
         );
     }
 }

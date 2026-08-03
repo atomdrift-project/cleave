@@ -280,14 +280,49 @@ pub(crate) fn best_mandatory_atom(pattern: &str) -> Option<Vec<u8>> {
     (best.len() >= MIN_ATOM_LEN).then_some(best)
 }
 
-/// Log compiled-regex cache occupancy (unicode meta-engine cache + bytes cache).
+/// Log compiled-regex store occupancy and churn. `*_evictions` near
+/// `*_inserts` means the working set exceeds that store's byte budget and
+/// engines recompile per use instead of being reused — the signature of
+/// budget thrash on archive scans.
 #[allow(dead_code)] // called from lib.rs end-of-scan path
 pub(crate) fn log_regex_cache_stats() {
     let uni = REGEX_CACHE.get().map_or(0, |c| c.read().len());
-    let bytes = BYTES_REGEX_CACHE.get().map_or(0, |c| c.read().len());
+    let (bytes_len, bytes_bytes, bytes_inserts, bytes_evictions, bytes_replacements, bytes_budget) =
+        BYTES_REGEX_CACHE.get().map_or((0, 0, 0, 0, 0, 0), |c| {
+            let c = c.read();
+            (
+                c.len(),
+                c.bytes(),
+                c.inserts(),
+                c.evictions(),
+                c.replacements(),
+                c.budget(),
+            )
+        });
+    let [
+        (str_len, str_bytes, str_inserts, str_evictions, str_replacements, str_budget),
+        (tw_len, tw_bytes, tw_inserts, tw_evictions, tw_replacements, tw_budget),
+    ] = crate::composite_rules::condition::regex_store_stats();
     tracing::info!(
-        unicode_cache_entries = uni,
-        bytes_cache_entries = bytes,
+        legacy_unicode_entries = uni,
+        bytes_entries = bytes_len,
+        bytes_mb = bytes_bytes / (1 << 20),
+        bytes_budget_mb = bytes_budget / (1 << 20),
+        bytes_inserts,
+        bytes_evictions,
+        bytes_replacements,
+        str_entries = str_len,
+        str_mb = str_bytes / (1 << 20),
+        str_budget_mb = str_budget / (1 << 20),
+        str_inserts,
+        str_evictions,
+        str_replacements,
+        twin_entries = tw_len,
+        twin_mb = tw_bytes / (1 << 20),
+        twin_budget_mb = tw_budget / (1 << 20),
+        twin_inserts = tw_inserts,
+        twin_evictions = tw_evictions,
+        twin_replacements = tw_replacements,
         "regex cache stats"
     );
 }

@@ -32,7 +32,7 @@ fn ac_kind() -> Option<aho_corasick::AhoCorasickKind> {
 use rayon::prelude::*;
 use regex::bytes::{RegexSet, RegexSetBuilder};
 use rustc_hash::{FxHashMap, FxHashSet};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 
 const ARCHIVE_FAMILY_TYPES: [RuleFileType; 15] = [
     RuleFileType::Archive,
@@ -413,8 +413,7 @@ impl SymbolMatchIndex {
                     // per-symbol PikeVM `which_overlapping` scan was the single
                     // biggest CPU hotspot (profiled). An inner-literal atom lets
                     // the cheap Aho-Corasick prefilter cover them instead.
-                    let atom = crate::composite_rules::evaluators::best_mandatory_atom(regex_str)
-                        .and_then(|b| String::from_utf8(b).ok());
+                    let atom = super::derivation_memo::mandatory_atom_utf8(regex_str);
                     match atom {
                         Some(literal) => {
                             let normalized = normalize_symbol(&literal);
@@ -806,6 +805,7 @@ impl StringMatchIndex {
         // trait's literal across all cores up front; the order-dependent dedup
         // loop below just looks the result up. Behavior-identical to calling
         // extract_regex_literal inline, only parallelized off the serial path.
+        let t_extract = std::time::Instant::now();
         let regex_literal_by_trait: FxHashMap<usize, Option<String>> = traits
             .par_iter()
             .enumerate()
@@ -817,11 +817,13 @@ impl StringMatchIndex {
                     Condition::Text(TextQuery {
                         regex: Some(regex_str),
                         ..
-                    }) => Some((trait_idx, Self::extract_regex_literal(regex_str))),
+                    }) => Some((trait_idx, super::derivation_memo::prefix_literal(regex_str))),
                     _ => None,
                 }
             })
             .collect();
+        let extract_ms = t_extract.elapsed().as_millis() as u64;
+        let t_rest = std::time::Instant::now();
 
         for (trait_idx, trait_def) in traits.iter().enumerate() {
             if !platforms_intersect(&trait_def.platforms, platforms) {
@@ -983,6 +985,11 @@ impl StringMatchIndex {
             regex_traits_without_literals,
             total_patterns,
         };
+        tracing::debug!(
+            extract_ms,
+            rest_ms = t_rest.elapsed().as_millis() as u64,
+            "string match index phase timing"
+        );
         tracing::debug!(
             "Built StringMatchIndex: {} exact, {} ci_exact, {} substr, {} ci_substr, {} regex literals",
             index.exact_patterns.len(),
@@ -1316,8 +1323,13 @@ struct FileTypeRegexSet {
     pattern_to_traits: Vec<Vec<usize>>,
     /// Original pattern strings for debugging/profiling
     patterns: Vec<String>,
-    /// Individual compiled regexes for patterns WITH extractable literals
-    individual_regexes: Vec<Option<Arc<regex::bytes::Regex>>>,
+    /// Per-pattern verifier regexes, compiled on first atom hit. Eagerly
+    /// compiling every raw pattern cost ~300 ms per process start; only
+    /// patterns whose literal atoms actually appear in scanned content are
+    /// ever needed. A pattern that fails to compile stays `None` (warned
+    /// once) — strictly better than the old behavior, where one bad pattern
+    /// discarded the whole index.
+    individual_regexes: Vec<OnceLock<Option<Arc<regex::bytes::Regex>>>>,
     /// Smaller RegexSet for ONLY patterns without extractable literals
     no_literal_regex_set: Option<RegexSet>,
     /// Maps no_literal_regex_set index -> original pattern index
@@ -1589,7 +1601,24 @@ impl FileTypeRegexSet {
                 if trait_indices.iter().all(|t| matched_traits.contains(t)) {
                     continue;
                 }
-                if let Some(Some(regex)) = self.individual_regexes.get(pattern_idx)
+                // Race-don't-block: concurrent first users each compile and the
+                // first `set` wins. `get_or_init` would serialize the pile-up of
+                // rayon workers hitting a popular pattern during warmup — the
+                // same idled-cores trap the bytes-regex cache documents (its
+                // per-key OnceLock experiment raised wall ~35%).
+                let slot = &self.individual_regexes[pattern_idx];
+                if slot.get().is_none() {
+                    let pattern = &self.patterns[pattern_idx];
+                    let compiled = match regex::bytes::Regex::new(pattern) {
+                        Ok(re) => Some(Arc::new(re)),
+                        Err(e) => {
+                            tracing::warn!(pattern, error = %e, "raw content pattern failed to compile; skipping");
+                            None
+                        }
+                    };
+                    let _ = slot.set(compiled);
+                }
+                if let Some(Some(regex)) = slot.get()
                     && regex.is_match(content)
                 {
                     matched_traits.extend(trait_indices.iter().copied());
@@ -1624,16 +1653,13 @@ struct WordPattern {
 impl RawContentRegexIndex {
     /// Build index from trait definitions (all platforms).
     #[cfg(test)] // non-filtered convenience; production builds go through build_filtered
-    pub(crate) fn build(traits: &[TraitDefinition]) -> Result<Self, Vec<String>> {
+    pub(crate) fn build(traits: &[TraitDefinition]) -> Self {
         Self::build_filtered(traits, &[Platform::All])
     }
 
     /// Build index, keeping only traits whose platform set intersects `platforms`.
     /// Off-platform traits keep their absolute index slot but contribute no patterns.
-    pub(crate) fn build_filtered(
-        traits: &[TraitDefinition],
-        platforms: &[Platform],
-    ) -> Result<Self, Vec<String>> {
+    pub(crate) fn build_filtered(traits: &[TraitDefinition], platforms: &[Platform]) -> Self {
         // Group patterns by file type
         let mut by_file_type_patterns: FxHashMap<RuleFileType, Vec<(String, usize)>> =
             FxHashMap::default();
@@ -1646,7 +1672,6 @@ impl RawContentRegexIndex {
         let mut by_file_type_substr: FxHashMap<RuleFileType, Vec<WordPattern>> =
             FxHashMap::default();
         let mut universal_substr: Vec<WordPattern> = Vec::new();
-        let mut errors = Vec::new();
 
         for (trait_idx, trait_def) in traits.iter().enumerate() {
             if !platforms_intersect(&trait_def.platforms, platforms) {
@@ -1736,8 +1761,7 @@ impl RawContentRegexIndex {
                     // just a prefix — otherwise ~half of `type: text` patterns are
                     // ungated and re-scan every source file. Skip non-UTF-8 atoms
                     // (the substring AC is built from `String`s); they stay ungated.
-                    let atom = crate::composite_rules::evaluators::best_mandatory_atom(regex_str)
-                        .and_then(|b| String::from_utf8(b).ok());
+                    let atom = super::derivation_memo::mandatory_atom_utf8(regex_str);
                     if let Some(literal) = atom {
                         let make = || WordPattern {
                             word: literal.clone(),
@@ -1759,28 +1783,13 @@ impl RawContentRegexIndex {
             }
         }
 
-        let mut unique_patterns = FxHashSet::default();
-        for (pattern, _) in &universal_patterns {
-            unique_patterns.insert(pattern.clone());
-        }
-        for bucket_patterns in by_file_type_patterns.values() {
-            for (pattern, _) in bucket_patterns {
-                unique_patterns.insert(pattern.clone());
-            }
-        }
-        let unique_patterns: Vec<String> = unique_patterns.into_iter().collect();
-        let shared_individual_regexes: FxHashMap<String, Arc<regex::bytes::Regex>> =
-            unique_patterns
-                .into_par_iter()
-                .filter_map(|pattern| {
-                    regex::bytes::Regex::new(&pattern)
-                        .ok()
-                        .map(Arc::new)
-                        .map(|compiled| (pattern, compiled))
-                })
-                .collect();
+        // Verifier regexes are no longer pre-compiled here — each
+        // `FileTypeRegexSet` slot compiles lazily on its first atom hit (see
+        // `verify_literal_candidates`), so a scan pays only for the patterns
+        // its content actually triggers.
+        let t_fts = std::time::Instant::now();
 
-        // Build regex sets for each file type in parallel, collecting errors
+        // Build regex sets for each file type in parallel
         // Collect all file types that need building
         let all_file_types: FxHashSet<RuleFileType> = by_file_type_patterns
             .keys()
@@ -1800,49 +1809,29 @@ impl RawContentRegexIndex {
         let results: Vec<_> = ft_data
             .into_par_iter()
             .map(|(ft, patterns, words, substr)| {
-                (
-                    ft,
-                    Self::build_regex_set(
-                        &patterns,
-                        &words,
-                        &substr,
-                        traits,
-                        Some(&shared_individual_regexes),
-                    ),
-                )
+                (ft, Self::build_regex_set(&patterns, &words, &substr))
             })
             .collect();
 
         let mut by_file_type = FxHashMap::default();
         for (ft, result) in results {
-            match result {
-                Ok(Some(set)) => {
-                    by_file_type.insert(ft, set);
-                }
-                Ok(None) => {}
-                Err(mut e) => errors.append(&mut e),
+            if let Some(set) = result {
+                by_file_type.insert(ft, set);
             }
         }
+        let fts_ms = t_fts.elapsed().as_millis() as u64;
+        let t_universal = std::time::Instant::now();
 
         // Build universal patterns (can run in parallel with file-type-specific building
         // but kept separate for clarity)
-        let universal = match Self::build_regex_set(
-            &universal_patterns,
-            &universal_words,
-            &universal_substr,
-            traits,
-            Some(&shared_individual_regexes),
-        ) {
-            Ok(set) => set,
-            Err(mut e) => {
-                errors.append(&mut e);
-                None
-            }
-        };
-
-        if !errors.is_empty() {
-            return Err(errors);
-        }
+        let universal =
+            Self::build_regex_set(&universal_patterns, &universal_words, &universal_substr);
+        tracing::debug!(
+            fts_ms,
+            universal_ms = t_universal.elapsed().as_millis() as u64,
+            file_types = by_file_type.len(),
+            "raw-content regex index built"
+        );
 
         // Track only traits/patterns that were successfully indexed for pre-filtering.
         let mut indexed_traits = FxHashSet::default();
@@ -1910,23 +1899,21 @@ impl RawContentRegexIndex {
             }
         }
 
-        Ok(Self {
+        Self {
             by_file_type,
             universal,
             indexed_traits,
             total_patterns,
-        })
+        }
     }
 
     fn build_regex_set(
         patterns: &[(String, usize)],
         words: &[WordPattern],
         substr: &[WordPattern],
-        traits: &[TraitDefinition],
-        shared_individual_regexes: Option<&FxHashMap<String, Arc<regex::bytes::Regex>>>,
-    ) -> Result<Option<FileTypeRegexSet>, Vec<String>> {
+    ) -> Option<FileTypeRegexSet> {
         if patterns.is_empty() && words.is_empty() && substr.is_empty() {
-            return Ok(None);
+            return None;
         }
 
         // Group traits by unique pattern to avoid redundancy
@@ -1958,7 +1945,7 @@ impl RawContentRegexIndex {
             // Check if pattern is case-insensitive (starts with (?i))
             let is_case_insensitive = pattern.starts_with("(?i)");
 
-            if let Some(literal) = StringMatchIndex::extract_regex_literal(pattern) {
+            if let Some(literal) = super::derivation_memo::prefix_literal(pattern) {
                 if is_case_insensitive {
                     // Case-insensitive: lowercase the literal for matching
                     let lower_literal = literal.to_lowercase();
@@ -2009,19 +1996,10 @@ impl RawContentRegexIndex {
             None
         };
 
-        // Pre-compile individual regexes for patterns WITH literals (used after Aho-Corasick match)
-        let individual_regexes: Vec<Option<Arc<regex::bytes::Regex>>> =
-            if let Some(shared_individual_regexes) = shared_individual_regexes {
-                pattern_strs
-                    .iter()
-                    .map(|pattern| shared_individual_regexes.get(pattern).cloned())
-                    .collect()
-            } else {
-                pattern_strs
-                    .par_iter()
-                    .map(|p| regex::bytes::Regex::new(p).ok().map(Arc::new))
-                    .collect()
-            };
+        // Verifier regexes compile lazily on first atom hit (see
+        // `verify_literal_candidates`); allocate the empty slots.
+        let individual_regexes: Vec<OnceLock<Option<Arc<regex::bytes::Regex>>>> =
+            (0..pattern_strs.len()).map(|_| OnceLock::new()).collect();
 
         // Build smaller RegexSet for ONLY patterns without extractable literals
         let no_literal_patterns: Vec<&str> = patterns_without_literals
@@ -2136,7 +2114,7 @@ impl RawContentRegexIndex {
 
         // If there are no regex patterns (only word/substr patterns), build a minimal set
         if pattern_strs.is_empty() {
-            return Ok(Some(FileTypeRegexSet {
+            return Some(FileTypeRegexSet {
                 pattern_to_traits: Vec::new(),
                 patterns: Vec::new(),
                 individual_regexes: Vec::new(),
@@ -2155,33 +2133,15 @@ impl RawContentRegexIndex {
                 cs_substr_to_traits,
                 ci_substr_automaton,
                 ci_substr_to_traits,
-            }));
+            });
         }
 
-        // Validate patterns — any that failed individual compilation are errors
-        let mut errors = Vec::new();
-        for (i, compiled) in individual_regexes.iter().enumerate() {
-            if compiled.is_none() {
-                // Try again to get the error message
-                if let Err(re_err) = regex::bytes::Regex::new(&pattern_strs[i]) {
-                    for trait_idx in &pattern_to_traits[i] {
-                        let trait_def = &traits[*trait_idx];
-                        errors.push(format!(
-                            "trait '{}' in \"{}\": invalid regex pattern: '{}' ({})",
-                            trait_def.id,
-                            trait_def.defined_in.display(),
-                            pattern_strs[i],
-                            re_err
-                        ));
-                    }
-                }
-            }
-        }
-        if !errors.is_empty() {
-            return Err(errors);
-        }
-
-        Ok(Some(FileTypeRegexSet {
+        // Pattern validity is no longer checked here. Verifiers compile
+        // lazily; an invalid pattern warns and skips itself at eval time
+        // instead of (as before) failing this build and silently degrading
+        // the ENTIRE raw-content index to empty. Author-grade validation
+        // belongs to `cleave validate`.
+        Some(FileTypeRegexSet {
             pattern_to_traits,
             patterns: pattern_strs,
             individual_regexes,
@@ -2200,7 +2160,7 @@ impl RawContentRegexIndex {
             cs_substr_to_traits,
             ci_substr_automaton,
             ci_substr_to_traits,
-        }))
+        })
     }
 
     pub(crate) fn has_patterns(&self) -> bool {
@@ -2482,7 +2442,7 @@ mod tests {
 
     #[test]
     fn test_raw_content_regex_index_build_empty() {
-        let index = RawContentRegexIndex::build(&[]).unwrap();
+        let index = RawContentRegexIndex::build(&[]);
 
         assert!(!index.has_patterns());
         assert_eq!(index.total_patterns, 0);
@@ -2490,7 +2450,7 @@ mod tests {
 
     #[test]
     fn test_raw_content_regex_index_has_applicable_patterns_empty() {
-        let index = RawContentRegexIndex::build(&[]).unwrap();
+        let index = RawContentRegexIndex::build(&[]);
 
         assert!(!index.has_applicable_patterns(&[]));
         assert!(!index.has_applicable_patterns(&[0, 1, 2]));
@@ -2498,7 +2458,7 @@ mod tests {
 
     #[test]
     fn test_raw_content_regex_index_is_indexed_trait_empty() {
-        let index = RawContentRegexIndex::build(&[]).unwrap();
+        let index = RawContentRegexIndex::build(&[]);
 
         assert!(!index.is_indexed_trait(0));
         assert!(!index.is_indexed_trait(100));
@@ -2506,7 +2466,7 @@ mod tests {
 
     #[test]
     fn test_raw_content_regex_index_find_matches_empty() {
-        let index = RawContentRegexIndex::build(&[]).unwrap();
+        let index = RawContentRegexIndex::build(&[]);
         let content = b"some content";
 
         let matches = index.find_matches(content, &RuleFileType::All);
@@ -2558,7 +2518,7 @@ mod tests {
             ..Default::default()
         };
 
-        let index = RawContentRegexIndex::build(&[trait_def]).unwrap();
+        let index = RawContentRegexIndex::build(&[trait_def]);
         // Content with invalid UTF-8 and the target string
         let content = &[0xFF, b't', b'e', b's', b't', 0xFE];
 
@@ -2568,7 +2528,7 @@ mod tests {
     }
 
     #[test]
-    fn test_raw_content_regex_index_shares_compiled_regexes_across_buckets() {
+    fn test_raw_content_regex_index_lazy_verifiers_match_per_bucket() {
         let make_raw_regex_trait = |id: &str, file_type: RuleFileType| TraitDefinition {
             id: id.to_string(),
             desc: id.to_string(),
@@ -2615,15 +2575,24 @@ mod tests {
         let index = RawContentRegexIndex::build(&[
             make_raw_regex_trait("js", RuleFileType::JavaScript),
             make_raw_regex_trait("py", RuleFileType::Python),
-        ])
-        .unwrap();
+        ]);
 
+        // Verifier regexes are lazy: slots start empty and compile on first
+        // atom hit (formerly they were eagerly compiled and Arc-shared across
+        // buckets — the eager pass cost ~300 ms of every process start).
         let js_set = index.by_file_type.get(&RuleFileType::JavaScript).unwrap();
         let py_set = index.by_file_type.get(&RuleFileType::Python).unwrap();
-        let js_regex = js_set.individual_regexes[0].as_ref().unwrap();
-        let py_regex = py_set.individual_regexes[0].as_ref().unwrap();
+        assert!(js_set.individual_regexes[0].get().is_none());
+        assert!(py_set.individual_regexes[0].get().is_none());
 
-        assert!(Arc::ptr_eq(js_regex, py_regex));
+        // A find_matches pass over content containing the literal atom must
+        // trigger compilation and match in each bucket independently.
+        let js_matches = index.find_matches(b"some test content", &RuleFileType::JavaScript);
+        let py_matches = index.find_matches(b"some test content", &RuleFileType::Python);
+        assert!(!js_matches.is_empty());
+        assert!(!py_matches.is_empty());
+        assert!(js_set.individual_regexes[0].get().is_some());
+        assert!(py_set.individual_regexes[0].get().is_some());
     }
 
     // ==================== Overlapping Substr Match Tests ====================

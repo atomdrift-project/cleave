@@ -1168,6 +1168,16 @@ pub fn prefetch_shared_resources(enable_third_party: bool) {
     prefetch_capability_mapper();
 }
 
+/// Log end-of-scan engine statistics at `info`: per-phase thread-time (and
+/// heap totals under the `memprofile` feature) plus compiled-regex store
+/// occupancy/churn. For embedders like scan whose single-payload path doesn't
+/// go through cleave's own batch entry points, which log these themselves.
+pub fn log_scan_stats() {
+    crate::mem_profile::report_scan_stats();
+    crate::composite_rules::evaluators::log_regex_cache_stats();
+    crate::composite_rules::trait_timing::report(40);
+}
+
 /// Analyze a single file and return a detailed report.
 ///
 /// This is the main entry point for analyzing files programmatically.
@@ -2952,7 +2962,7 @@ where
     crate::mem_profile::start_sampler();
     analyze_files();
 
-    crate::mem_profile::report();
+    crate::mem_profile::report_scan_stats();
     crate::composite_rules::evaluators::log_regex_cache_stats();
 
     let total = walked.load(Ordering::Relaxed);
@@ -3049,7 +3059,7 @@ where
             &callback,
         );
     });
-    crate::mem_profile::report();
+    crate::mem_profile::report_scan_stats();
     crate::composite_rules::evaluators::log_regex_cache_stats();
 
     let final_analyzed = analyzed.load(Ordering::Relaxed);

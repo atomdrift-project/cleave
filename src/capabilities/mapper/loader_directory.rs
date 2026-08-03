@@ -463,46 +463,23 @@ impl super::CapabilityMapper {
                                     cache_data.composite_rules.len()
                                 );
 
-                                // Re-compile regexes in parallel (not serialized due to #[serde(skip)])
-                                // Use rayon to parallelize regex compilation across traits and composites
-                                let t0 = std::time::Instant::now();
-                                rayon::join(
-                                    || {
-                                        cache_data
-                                                .trait_definitions
-                                                .par_iter_mut()
-                                                .for_each(|trait_def| {
-                                                    if let Err(e) = trait_def.precompile_regexes() {
-                                                        tracing::warn!(
-                                                            "Failed to compile regex for cached trait {}: {}",
-                                                            trait_def.id,
-                                                            e
-                                                        );
-                                                    }
-                                                });
-                                    },
-                                    || {
-                                        cache_data
-                                                .composite_rules
-                                                .par_iter_mut()
-                                                .for_each(|rule| {
-                                                    if let Err(e) = rule.precompile_regexes() {
-                                                        tracing::warn!(
-                                                            "Failed to compile regex for cached composite {}: {}",
-                                                            rule.id,
-                                                            e
-                                                        );
-                                                    }
-                                                });
-                                    },
-                                );
-                                let t1 = std::time::Instant::now();
-                                tracing::trace!(
-                                    "Regex precompilation took {:?} ({} traits, {} composites)",
-                                    t1.duration_since(t0),
-                                    cache_data.trait_definitions.len(),
-                                    cache_data.composite_rules.len()
-                                );
+                                // `precompile_regexes` is deliberately NOT re-run here. On this
+                                // path every pattern already passed it when the cache was written
+                                // (the YAML load fails on invalid patterns before serializing),
+                                // and its regex compiles are validation-only — eval resolves
+                                // compiled regexes lazily through the shared caches (see
+                                // `cached_regex`), so the compiled objects were discarded.
+                                // Re-validating 58k+ traits burned ~2.6 s wall (~40 CPU-s) per
+                                // process start. The one piece of real state it rebuilt is the
+                                // `not:` exceptions' pre-lowered memo (#[serde(skip)]), which is
+                                // cheap string work — kept below.
+                                for trait_def in &mut cache_data.trait_definitions {
+                                    if let Some(ref mut exceptions) = trait_def.not {
+                                        for exc in exceptions.iter_mut() {
+                                            exc.precompile();
+                                        }
+                                    }
+                                }
 
                                 // The four match indexes build lazily on the
                                 // first analysis (see `match_indexes`), so a scan

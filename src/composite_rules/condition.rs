@@ -338,6 +338,39 @@ pub(crate) fn cached_regex(pattern: &str) -> Option<Arc<TraitRegex>> {
     Some(arc)
 }
 
+/// Occupancy and churn stats for the two condition-level stores, for the
+/// end-of-scan cache log: (entries, bytes, inserts, evictions) for the str
+/// `TraitRegex` store and the shared Unicode-twin store.
+pub(crate) fn regex_store_stats() -> [(usize, usize, u64, u64, u64, usize); 2] {
+    let str_stats = REGEX_CACHE
+        .read()
+        .map(|c| {
+            (
+                c.len(),
+                c.bytes(),
+                c.inserts(),
+                c.evictions(),
+                c.replacements(),
+                c.budget(),
+            )
+        })
+        .unwrap_or_default();
+    let uni_stats = UNICODE_ENGINES
+        .read()
+        .map(|c| {
+            (
+                c.len(),
+                c.bytes(),
+                c.inserts(),
+                c.evictions(),
+                c.replacements(),
+                c.budget(),
+            )
+        })
+        .unwrap_or_default();
+    [str_stats, uni_stats]
+}
+
 /// Clear the process-global lazy regex cache (see [`cached_regex`]). Shared
 /// across all threads; call from a single thread under memory pressure.
 pub(crate) fn clear_cached_regex() {

@@ -48,18 +48,32 @@ impl MatchIndexes {
     /// Build all four indexes for `traits` filtered to `platforms`. `[Platform::All]`
     /// filters nothing, so this reproduces the previous eager construction exactly.
     fn build(traits: &[TraitDefinition], platforms: &[Platform]) -> Self {
-        let raw_content_regex_index = RawContentRegexIndex::build_filtered(traits, platforms)
-            .unwrap_or_else(|errors| {
-                tracing::warn!(
-                    "raw-content regex index build failed; using empty index: {}",
-                    errors.join("; ")
-                );
-                RawContentRegexIndex::default()
-            });
+        let t0 = std::time::Instant::now();
+        let raw_content_regex_index = RawContentRegexIndex::build_filtered(traits, platforms);
+        let t_raw = t0.elapsed();
+        let t1 = std::time::Instant::now();
+        let trait_index = TraitIndex::build_filtered(traits, platforms);
+        let t_trait = t1.elapsed();
+        let t2 = std::time::Instant::now();
+        let string_match_index = StringMatchIndex::build_filtered(traits, platforms);
+        let t_string = t2.elapsed();
+        let t3 = std::time::Instant::now();
+        let symbol_match_index = SymbolMatchIndex::build_filtered(traits, platforms);
+        let t_symbol = t3.elapsed();
+        tracing::debug!(
+            raw_regex_ms = t_raw.as_millis() as u64,
+            trait_ms = t_trait.as_millis() as u64,
+            string_ms = t_string.as_millis() as u64,
+            symbol_ms = t_symbol.as_millis() as u64,
+            "match indexes built"
+        );
+        // Index builds are the only computers of pattern derivations; flush any
+        // new ones so the next process starts warm.
+        super::derivation_memo::persist();
         Self {
-            trait_index: TraitIndex::build_filtered(traits, platforms),
-            string_match_index: StringMatchIndex::build_filtered(traits, platforms),
-            symbol_match_index: SymbolMatchIndex::build_filtered(traits, platforms),
+            trait_index,
+            string_match_index,
+            symbol_match_index,
             raw_content_regex_index,
         }
     }

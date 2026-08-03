@@ -309,18 +309,29 @@ impl super::CapabilityMapper {
         // until no new findings are produced (handles chained dependencies: A -> B -> C)
         let t_eval2 = std::time::Instant::now();
         const MAX_ITERATIONS: usize = 10; // Prevent infinite loops
-        for _ in 0..MAX_ITERATIONS {
+        let mut changed: Vec<String> = Vec::new();
+        for iteration in 0..MAX_ITERATIONS {
             if cancellation.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed)) {
                 break;
             }
+            let pass = if iteration == 0 {
+                // The merged path pushes each pass's findings straight into
+                // `report`, so the report itself is already the full scope.
+                crate::capabilities::mapper::evaluate_traits::TraitPass::dependent(None)
+            } else {
+                // Re-iterations only re-run traits the previous round's new
+                // findings could affect (`seen` is the settled set: a settled
+                // trait's re-evaluation would be deduped away below anyway).
+                crate::capabilities::mapper::evaluate_traits::TraitPass::dependent_rescan(
+                    None, &changed, &seen,
+                )
+            };
             let dependent_findings = self.evaluate_traits_filtered_with_cache(
                 report,
                 binary_data,
                 cached_ast,
                 inline_yara,
-                // The merged path pushes each pass's findings straight into
-                // `report`, so the report itself is already the full scope.
-                crate::capabilities::mapper::evaluate_traits::TraitPass::dependent(None),
+                pass,
                 &cache,
                 cancellation,
             );
@@ -329,19 +340,20 @@ impl super::CapabilityMapper {
                 break;
             }
 
-            let mut added_any = false;
+            let mut new_ids = Vec::new();
             for finding in dependent_findings {
                 if !seen.contains(finding.id.as_str()) {
                     seen.insert(finding.id.clone());
+                    new_ids.push(finding.id.clone());
                     report.push_finding_capped(finding);
-                    added_any = true;
                 }
             }
 
             // If no new findings were added, we've reached a fixed point
-            if !added_any {
+            if new_ids.is_empty() {
                 break;
             }
+            changed = new_ids;
         }
         let _d_eval2 = t_eval2.elapsed();
 

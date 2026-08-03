@@ -56,6 +56,72 @@ impl Phase {
     ];
 }
 
+/// Always-on per-phase thread-time accounting (the `memprofile` feature gates
+/// only the jemalloc heap side). Each thread charges the wall time between its
+/// phase transitions to the phase that was active; summed over worker threads
+/// this approximates CPU time per phase, at the cost of two `Instant` reads
+/// per transition (~tens of ns). Answers "where did the scan's CPU go —
+/// extract, per-member analysis, string/raw eval, or aggregation?" without a
+/// profiler attached.
+mod time_imp {
+    use super::Phase;
+    use std::cell::RefCell;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::Instant;
+
+    static PHASE_NANOS: [AtomicU64; Phase::COUNT] = [const { AtomicU64::new(0) }; Phase::COUNT];
+
+    struct Ctx {
+        phase: Phase,
+        last: Instant,
+    }
+
+    thread_local! {
+        static CTX: RefCell<Option<Ctx>> = const { RefCell::new(None) };
+    }
+
+    /// Charge time since the last transition to the current phase, then switch
+    /// to `p`. Returns the previous phase for the guard to restore.
+    pub(super) fn enter(p: Phase) -> Phase {
+        CTX.with(|c| {
+            let mut slot = c.borrow_mut();
+            let now = Instant::now();
+            let ctx = slot.get_or_insert_with(|| Ctx {
+                phase: Phase::Other,
+                last: now,
+            });
+            PHASE_NANOS[ctx.phase as usize].fetch_add(
+                now.duration_since(ctx.last).as_nanos() as u64,
+                Ordering::Relaxed,
+            );
+            let prev = ctx.phase;
+            ctx.phase = p;
+            ctx.last = now;
+            prev
+        })
+    }
+
+    pub(super) fn report() {
+        for (nanos, name) in PHASE_NANOS.iter().zip(Phase::NAMES) {
+            let ns = nanos.load(Ordering::Relaxed);
+            if ns > 0 {
+                tracing::info!(
+                    phase = name,
+                    thread_seconds = ns / 1_000_000_000,
+                    "phase thread-time totals"
+                );
+            }
+        }
+    }
+}
+
+/// Log per-phase thread-time (always available) and, with the `memprofile`
+/// feature, per-phase heap totals. One line per phase at `info`.
+pub fn report_scan_stats() {
+    time_imp::report();
+    report();
+}
+
 #[cfg(feature = "memprofile")]
 pub use imp::{PhaseGuard, phase, report, start_sampler};
 
@@ -141,6 +207,7 @@ mod imp {
     /// re-charge their own windows.
     #[must_use]
     pub fn phase(p: Phase) -> PhaseGuard {
+        super::time_imp::enter(p);
         let prev = with_ctx(|ctx| {
             checkpoint(ctx);
             let prev = ctx.phase;
@@ -153,6 +220,7 @@ mod imp {
 
     impl Drop for PhaseGuard {
         fn drop(&mut self) {
+            super::time_imp::enter(self.prev);
             with_ctx(|ctx| {
                 checkpoint(ctx);
                 ctx.phase = self.prev;
@@ -220,15 +288,27 @@ pub use noop::{PhaseGuard, phase, report, start_sampler};
 mod noop {
     use super::Phase;
 
-    /// Zero-sized no-op guard when `memprofile` is disabled.
+    /// Guard that restores the previous phase for the thread-time accounting;
+    /// the heap side is compiled out without `memprofile`.
     #[derive(Debug)]
-    pub struct PhaseGuard;
+    pub struct PhaseGuard {
+        prev: Phase,
+    }
 
-    /// No-op phase marker when `memprofile` is disabled.
+    /// Phase marker: heap accounting is a no-op without `memprofile`, but
+    /// thread-time per phase is still recorded (see `time_imp`).
     #[inline]
     #[must_use]
-    pub fn phase(_p: Phase) -> PhaseGuard {
-        PhaseGuard
+    pub fn phase(p: Phase) -> PhaseGuard {
+        PhaseGuard {
+            prev: super::time_imp::enter(p),
+        }
+    }
+
+    impl Drop for PhaseGuard {
+        fn drop(&mut self) {
+            super::time_imp::enter(self.prev);
+        }
     }
 
     /// No-op when `memprofile` is disabled.

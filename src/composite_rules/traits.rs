@@ -866,6 +866,38 @@ impl TraitDefinition {
         false
     }
 
+    /// The bare `trait:` reference ids this definition's evaluation reads —
+    /// the same coverage [`Self::has_trait_dependency`] classifies on (top-level
+    /// `if`, `unless`, and `downgrade` lists; nested conditions are not
+    /// classified as dependencies there either). Used by the dependent-pass
+    /// worklist to skip re-evaluating traits whose referenced findings did not
+    /// change in the previous iteration.
+    pub(crate) fn trait_ref_ids(&self) -> Vec<&str> {
+        let mut refs = Vec::new();
+        fn add<'a>(cond: &'a Condition, refs: &mut Vec<&'a str>) {
+            if let Condition::Trait { id } = cond {
+                refs.push(id.as_str());
+            }
+        }
+        add(&self.r#if, &mut refs);
+        if let Some(ref unless) = self.unless {
+            for cond in unless {
+                add(cond, &mut refs);
+            }
+        }
+        if let Some(ref downgrade) = self.downgrade {
+            for conds in [&downgrade.any, &downgrade.all, &downgrade.none]
+                .into_iter()
+                .flatten()
+            {
+                for cond in conds {
+                    add(cond, &mut refs);
+                }
+            }
+        }
+        refs
+    }
+
     /// Whether this trait's evaluation needs the exact `match_count` — i.e. it
     /// has a count/density filter. When false, raw/text matching may stop at the
     /// first match (the dominant RSS lever; see `eval_raw`'s `needs_count`). The
@@ -1064,6 +1096,13 @@ impl TraitDefinition {
         if duration > RULE_EVAL_DEBUG_DURATION {
             tracing::info!("slow rule: {} took {}ms", self.id, duration.as_millis(),);
         }
+
+        // Aggregate per-trait time across the whole scan (env-gated: a map
+        // update per evaluation). A single per-eval duration under the slow
+        // thresholds is invisible, but 10 ms × thousands of archive members is
+        // where archive wall time actually goes — `CLEAVE_TRAIT_TIMING=1`
+        // surfaces the top offenders at end of scan.
+        crate::composite_rules::trait_timing::record(&self.id, duration);
 
         // Warn log: rules exceeding the user-configurable slow_rule_ms threshold
         let warn_threshold = Duration::from_millis(ctx.slow_rule_ms);

@@ -46,6 +46,16 @@ pub(crate) struct TraitPass<'a> {
     /// into its finding-id index, so `trait:` conditions see them exactly as if
     /// they had been appended to `report.findings`.
     pub extra_findings: Option<&'a [Finding]>,
+    /// Worklist narrowing for fixed-point iterations ≥ 2: the finding ids the
+    /// PREVIOUS iteration added. When set, only traits with a `trait:` ref
+    /// those ids could satisfy are re-evaluated — an unchanged input can't
+    /// change an unmatched trait's result. `None` (the first pass) evaluates
+    /// every dependent trait.
+    pub changed_ids: Option<&'a [String]>,
+    /// Trait ids that already produced a finding. Paired with `changed_ids`:
+    /// re-evaluating them is pure waste, because the fixed-point loops dedup
+    /// by id and would discard whatever they return.
+    pub settled_ids: Option<&'a rustc_hash::FxHashSet<String>>,
 }
 
 impl<'a> TraitPass<'a> {
@@ -54,6 +64,8 @@ impl<'a> TraitPass<'a> {
         Self {
             dependent_only: false,
             extra_findings: None,
+            changed_ids: None,
+            settled_ids: None,
         }
     }
 
@@ -62,8 +74,48 @@ impl<'a> TraitPass<'a> {
         Self {
             dependent_only: true,
             extra_findings: extra,
+            changed_ids: None,
+            settled_ids: None,
         }
     }
+
+    /// A fixed-point re-iteration: like [`Self::dependent`], but narrowed to
+    /// traits affected by `changed` and not already settled.
+    pub(crate) fn dependent_rescan(
+        extra: Option<&'a [Finding]>,
+        changed: &'a [String],
+        settled: &'a rustc_hash::FxHashSet<String>,
+    ) -> Self {
+        Self {
+            dependent_only: true,
+            extra_findings: extra,
+            changed_ids: Some(changed),
+            settled_ids: Some(settled),
+        }
+    }
+}
+
+/// Whether newly-added finding id `f` could satisfy the `trait:` reference `r`
+/// — mirrors `eval_trait`'s exact/suffix/prefix semantics (the
+/// Exception-criticality narrowing is deliberately ignored: erring toward
+/// re-evaluation is always safe).
+fn finding_could_affect_ref(r: &str, f: &str) -> bool {
+    let r = r.trim_end_matches('/');
+    if f == r {
+        return true;
+    }
+    // Specific references (`dir::id`) match exactly only.
+    if r.contains("::") {
+        return false;
+    }
+    if !r.contains('/') {
+        // Short name: same-directory suffix reference.
+        return f.len() > r.len()
+            && f.ends_with(r)
+            && matches!(f.as_bytes()[f.len() - r.len() - 1], b':' | b'/');
+    }
+    // Directory path: any trait under it.
+    f.len() > r.len() && f.starts_with(r) && matches!(f.as_bytes()[r.len()], b':' | b'/')
 }
 
 use super::get_relative_source_file;
@@ -260,13 +312,31 @@ impl super::CapabilityMapper {
         // results plus everything later iterations add, which is exactly what
         // the previous report clone spliced into `report.findings`.
         const MAX_ITERATIONS: usize = 10;
-        for _ in 0..MAX_ITERATIONS {
+        // Dedup scope for the loop below: everything the report already
+        // carried plus everything this call accumulates. Doubles as the
+        // settled set for re-iterations — a settled trait's re-evaluation
+        // would be deduped away, so it's skipped at the filter.
+        let mut settled: rustc_hash::FxHashSet<String> = report
+            .findings
+            .iter()
+            .map(|f| f.id.clone())
+            .chain(findings.iter().map(|f| f.id.clone()))
+            .collect();
+        let mut changed: Vec<String> = Vec::new();
+        for iteration in 0..MAX_ITERATIONS {
+            let pass = if iteration == 0 {
+                TraitPass::dependent(Some(&findings))
+            } else {
+                // Re-iterations only re-run traits the previous round's new
+                // findings could affect; everything else is provably unchanged.
+                TraitPass::dependent_rescan(Some(&findings), &changed, &settled)
+            };
             let dep_findings = self.evaluate_traits_filtered_with_cache(
                 report,
                 binary_data,
                 cached_ast,
                 inline_yara,
-                TraitPass::dependent(Some(&findings)),
+                pass,
                 &cache,
                 None,
             );
@@ -275,21 +345,19 @@ impl super::CapabilityMapper {
                 break;
             }
 
-            let mut new_added = false;
+            let mut new_ids = Vec::new();
             for f in dep_findings {
-                // Dedup against both scopes the clone used to merge: what the
-                // report already carried, and what this call has accumulated.
-                if !findings.iter().any(|existing| existing.id == f.id)
-                    && !report.findings.iter().any(|existing| existing.id == f.id)
-                {
+                if !settled.contains(&f.id) {
+                    settled.insert(f.id.clone());
+                    new_ids.push(f.id.clone());
                     findings.push(f);
-                    new_added = true;
                 }
             }
 
-            if !new_added {
+            if new_ids.is_empty() {
                 break;
             }
+            changed = new_ids;
         }
 
         findings
@@ -387,6 +455,8 @@ impl super::CapabilityMapper {
             TraitPass {
                 dependent_only,
                 extra_findings: None,
+                changed_ids: None,
+                settled_ids: None,
             },
             &TraitEvalCache {
                 raw_regex_matches: Some(&raw_regex_matches),
@@ -418,6 +488,8 @@ impl super::CapabilityMapper {
         let TraitPass {
             dependent_only,
             extra_findings,
+            changed_ids,
+            settled_ids,
         } = pass;
         // Determine file type from report
         let file_type = self.detect_file_type(&report.target.file_type);
@@ -478,12 +550,27 @@ impl super::CapabilityMapper {
             });
         }
 
-        // Further filter by dependency status
+        // Further filter by dependency status; on fixed-point re-iterations,
+        // additionally to the worklist — traits already settled, or whose
+        // `trait:` refs none of the newly-added ids could satisfy, cannot
+        // produce a new deduped finding, so re-running them is pure waste.
         let filtered_indices: Vec<usize> = applicable_indices
             .into_iter()
             .filter(|&idx| {
                 let trait_def = &self.trait_definitions[idx];
-                trait_def.has_trait_dependency() == dependent_only
+                if trait_def.has_trait_dependency() != dependent_only {
+                    return false;
+                }
+                if let Some(changed) = changed_ids {
+                    if settled_ids.is_some_and(|s| s.contains(&trait_def.id)) {
+                        return false;
+                    }
+                    return trait_def
+                        .trait_ref_ids()
+                        .iter()
+                        .any(|r| changed.iter().any(|f| finding_could_affect_ref(r, f)));
+                }
+                true
             })
             .collect();
 

@@ -25,6 +25,15 @@ pub(crate) struct BudgetedStore<K: Hash + Eq, V> {
     map: lru::LruCache<K, (Arc<V>, usize), rustc_hash::FxBuildHasher>,
     bytes: usize,
     budget: usize,
+    /// Lifetime insert count — with `evictions`, tells budget-thrash
+    /// (evictions ≈ inserts means the working set exceeds the budget and
+    /// engines recompile per use) apart from a warm steady state.
+    inserts: u64,
+    /// Lifetime count of entries evicted to stay under the byte budget.
+    evictions: u64,
+    /// Lifetime count of same-key replacements — racing threads that both
+    /// missed and compiled the same pattern.
+    replacements: u64,
 }
 
 impl<K: Hash + Eq, V> BudgetedStore<K, V> {
@@ -33,6 +42,9 @@ impl<K: Hash + Eq, V> BudgetedStore<K, V> {
             map: lru::LruCache::with_hasher(count_cap, rustc_hash::FxBuildHasher),
             bytes: 0,
             budget,
+            inserts: 0,
+            evictions: 0,
+            replacements: 0,
         }
     }
 
@@ -50,14 +62,24 @@ impl<K: Hash + Eq, V> BudgetedStore<K, V> {
 
     /// Insert under the byte budget, evicting oldest entries past it.
     pub(crate) fn put(&mut self, key: K, value: Arc<V>, size: usize) {
+        self.inserts += 1;
+        let at_cap = self.map.len() == usize::from(self.map.cap());
         if let Some((_, evicted)) = self.map.push(key, (value, size)) {
             // push() returns the displaced LRU entry (or the replaced value).
             self.bytes = self.bytes.saturating_sub(evicted.1);
+            if at_cap {
+                self.evictions += 1;
+            } else {
+                self.replacements += 1;
+            }
         }
         self.bytes += size;
         while self.bytes > self.budget && self.map.len() > 1 {
             match self.map.pop_lru() {
-                Some((_, (_, evicted))) => self.bytes = self.bytes.saturating_sub(evicted),
+                Some((_, (_, evicted))) => {
+                    self.bytes = self.bytes.saturating_sub(evicted);
+                    self.evictions += 1;
+                }
                 None => break,
             }
         }
@@ -65,6 +87,26 @@ impl<K: Hash + Eq, V> BudgetedStore<K, V> {
 
     pub(crate) fn len(&self) -> usize {
         self.map.len()
+    }
+
+    pub(crate) fn bytes(&self) -> usize {
+        self.bytes
+    }
+
+    pub(crate) fn budget(&self) -> usize {
+        self.budget
+    }
+
+    pub(crate) fn inserts(&self) -> u64 {
+        self.inserts
+    }
+
+    pub(crate) fn evictions(&self) -> u64 {
+        self.evictions
+    }
+
+    pub(crate) fn replacements(&self) -> u64 {
+        self.replacements
     }
 
     pub(crate) fn cap(&self) -> NonZeroUsize {

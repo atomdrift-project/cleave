@@ -369,9 +369,3 @@ wasmtime = { git = "https://github.com/tstromberg/wasmtime.git", branch = "freeb
 tree-sitter = { git = "https://github.com/tree-sitter/tree-sitter", rev = "963b5a5a971021359cf091a63d4f1286bc319643" }
 tree-sitter-language = { git = "https://github.com/tree-sitter/tree-sitter", rev = "963b5a5a971021359cf091a63d4f1286bc319643" }
 
-# filefacts still pins stng via its old codeberg URL; redirect it to the
-# github repo so a single `stng` resolves workspace-wide (codeberg->github).
-# Remove once filefacts' stng dependency is updated and its pin is bumped.
-[patch."https://codeberg.org/atomdrift/stng.git"]
-stng = { git = "https://github.com/atomdrift-project/stng.git" }
-

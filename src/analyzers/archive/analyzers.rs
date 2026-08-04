@@ -1118,9 +1118,20 @@ impl ArchiveAnalyzer {
             // filefacts is the string authority and the parser: open the
             // member once and thread it into the analyzer (below) so it is
             // parsed a single time, regardless of member type.
-            let _rizin_disable = skip_rizin_reason.map(|_| filefacts::rizin::scoped_disable());
-            let member_ctx =
-                crate::analysis_context::AnalysisContext::open(logical_path, data).ok();
+            // Thread-local, and scoped to the parse itself. This skip is a
+            // per-member decision, but `scoped_disable` mutes rizin for the
+            // whole PROCESS — and members fan out across rayon, so muting it
+            // here stripped symbols and metrics from whatever binary another
+            // thread happened to be parsing at that instant (measured: an ARM
+            // ELF silently lost `binary.leaf_func_count`, dropping a trait and
+            // moving its ML score). Worker mode analyses several samples
+            // concurrently in one process, so the blast radius reached
+            // unrelated jobs.
+            let member_ctx = {
+                let _rizin_disable =
+                    skip_rizin_reason.map(|_| filefacts::rizin::scoped_disable_current_thread());
+                crate::analysis_context::AnalysisContext::open(logical_path, data).ok()
+            };
             let stng_strings: std::sync::Arc<[stng::ExtractedString]> = member_ctx
                 .as_ref()
                 .map(crate::analysis_context::AnalysisContext::text_rows)

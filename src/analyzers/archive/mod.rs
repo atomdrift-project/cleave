@@ -5,6 +5,7 @@ mod asar;
 mod guards;
 #[cfg(test)]
 mod guards_test;
+mod iso;
 mod system_packages;
 mod tar;
 pub(crate) mod utils;
@@ -1400,7 +1401,13 @@ impl ArchiveAnalyzer {
         }
 
         let temp_dir = tempfile::tempdir().context("Failed to create temporary directory")?;
-        let extraction_result = self.extract_from_data(data, archive_path, temp_dir.path(), &guard);
+        let extraction_result = self.extract_from_data(
+            data,
+            archive_path,
+            temp_dir.path(),
+            &guard,
+            &filefacts_archive_entries,
+        );
 
         let hostile_reasons = guard.take_reasons();
 
@@ -1415,6 +1422,24 @@ impl ArchiveAnalyzer {
                     "7z extraction failed; preserved encrypted directory metadata: {e}"
                 ));
                 preserved_7z_metadata = true;
+            }
+            // An optical-disc image describes itself before it is unpacked:
+            // filefacts has already merged the volume descriptors, the
+            // namespace comparison, and the unclaimed-space accounting into
+            // this report. Erroring out would discard all of it and report
+            // nothing at all for the image cleave was least able to read —
+            // which is exactly the image worth describing. Degrade to a
+            // container-only report instead.
+            let preserved_iso_facts = matches!(file_type, FileType::Iso)
+                && report
+                    .filefacts
+                    .as_ref()
+                    .is_some_and(|ff| ff.values.get("iso").is_some());
+            if preserved_iso_facts {
+                report
+                    .metadata
+                    .errors
+                    .push(format!("ISO member extraction failed: {e}"));
             }
 
             let extracted_count = walkdir::WalkDir::new(temp_dir.path())
@@ -1431,7 +1456,7 @@ impl ArchiveAnalyzer {
                 ));
             }
             if extracted_count == 0 {
-                if preserved_7z_metadata {
+                if preserved_7z_metadata || preserved_iso_facts {
                     drain_extraction_notes(&mut report, &guard);
                     let suppress_path_traversal =
                         should_suppress_path_traversal_findings(archive_path, &hostile_reasons);
@@ -1676,6 +1701,7 @@ impl ArchiveAnalyzer {
         archive_path: &Path,
         dest_dir: &Path,
         guard: &ExtractionGuard,
+        filefacts_members: &[ArchiveEntry],
     ) -> Result<()> {
         use std::io::Cursor;
 
@@ -1783,13 +1809,15 @@ impl ArchiveAnalyzer {
             FileType::Rpm => {
                 system_packages::extract_rpm_from_reader(Cursor::new(data), dest_dir, guard)
             }
-            // 7-Zip handles both its native container and optical-disc images
-            // (ISO 9660 with Joliet/Rock Ridge, and UDF). The ISO path is the
-            // fallback for images arriving outside forager, which explodes them
-            // itself; a huge image still hits the extraction guards, so
-            // forager-side explosion stays the primary path.
-            FileType::SevenZ | FileType::Iso => {
+            FileType::SevenZ => {
                 system_packages::extract_7z_from_data(data, dest_dir, guard, &self.zip_passwords)
+            }
+            // Optical-disc image. Members are uncompressed sector runs, so
+            // extraction copies the extents filefacts already located while
+            // reading the ISO 9660 / UDF directory tree — no decoder, and no
+            // second parse of the image.
+            FileType::Iso => {
+                iso::extract_iso_from_data(data, filefacts_members, dest_dir, guard)
             }
             FileType::PkgMacos => system_packages::extract_pkg_from_reader(
                 Cursor::new(data),

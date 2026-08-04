@@ -644,6 +644,11 @@ impl FileTypeExt for FileType {
             FileType::PkgFreebsd => vec!["pkg", "freebsd", "archive"],
             FileType::PkgArch => vec!["pkg", "arch", "archive"],
             FileType::SevenZ => vec!["7z", "archive"],
+            // Optical-disc images route to the archive YARA tier. Their
+            // members are analyzed on their own, but an image can also be
+            // reached as a payload (a PE overlay, a zip member), and those
+            // paths scan the container itself.
+            FileType::Iso => vec!["iso", "archive"],
             FileType::Rar => vec!["rar", "archive"],
             FileType::Deb => vec!["deb", "archive"],
             FileType::Rpm => vec!["rpm", "archive"],

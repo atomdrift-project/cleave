@@ -484,6 +484,12 @@ pub(crate) enum FileType {
     Chm,
     /// Microsoft Cabinet archive (.cab)
     Cab,
+    /// Optical-disc image (.iso) — ISO 9660 and/or UDF. Its own bucket
+    /// rather than part of [`FileType::Archive`] because the `iso.*` facts
+    /// its rules read exist on no other container, and because an image is
+    /// a filesystem: members are addressable sector runs, not compressed
+    /// entries, so the archive-family content rules do not apply to it.
+    Iso,
     /// VS Code extension (.vsix archive)
     VsixArchive,
     /// Firefox extension (.xpi)
@@ -588,7 +594,8 @@ impl From<filefacts::FileType> for FileType {
             Ff::Zip => Self::Zip,
             Ff::Tar | Ff::TarGz | Ff::TarBz2 | Ff::TarXz | Ff::TarZst => Self::Tar,
             Ff::Zst => Self::Zst,
-            Ff::SevenZ | Ff::Rar | Ff::Iso => Self::Archive,
+            Ff::SevenZ | Ff::Rar => Self::Archive,
+            Ff::Iso => Self::Iso,
             Ff::Deb => Self::Deb,
             Ff::StaticLib => Self::StaticLib,
             Ff::Rpm => Self::Rpm,
@@ -748,6 +755,7 @@ impl FileType {
                 | FileType::Crx
                 | FileType::Chm
                 | FileType::Cab
+                | FileType::Iso
                 | FileType::VsixArchive
                 | FileType::Xpi
                 | FileType::Ipa

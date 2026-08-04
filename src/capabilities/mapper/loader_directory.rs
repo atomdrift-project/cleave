@@ -220,6 +220,7 @@ fn is_open_filefacts_metric_path(field: &str) -> bool {
         "identifiers.",
         "image.",
         "imports.",
+        "iso.",
         "jar.",
         "java_class.",
         "jpeg.",

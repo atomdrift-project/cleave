@@ -592,6 +592,7 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 "crx" => vec![RuleFileType::Crx],
                 "chm" => vec![RuleFileType::Chm],
                 "cab" => vec![RuleFileType::Cab],
+                "iso" => vec![RuleFileType::Iso],
                 "vsix-archive" => vec![RuleFileType::VsixArchive],
                 "xpi" => vec![RuleFileType::Xpi],
                 "zst" => vec![RuleFileType::Zst],

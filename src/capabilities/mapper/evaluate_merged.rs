@@ -92,17 +92,57 @@ impl super::CapabilityMapper {
     /// against a multi-MB string exceeds the benefit.
     /// Pre-compute raw content regex matches once for the binary.
     ///
-    /// Benchmarking shows the batched approach (Aho-Corasick + RegexSet over all 5285
-    /// patterns) costs ~400ms/MB — needing ~4100 trait skips to break even, but only
-    /// 2249 indexed traits exist. Individual per-trait `bytes::Regex` evaluation is
-    /// consistently cheaper, so this is disabled. Returns `None` to let each trait
-    /// evaluate its own regex individually.
+    /// Run the raw-content atom prefilter over `binary_data`, so trait
+    /// evaluation can skip every content-regex trait whose mandatory atom is
+    /// absent.
+    ///
+    /// This was disabled for a while ("~400ms/MB, only 2249 indexed traits,
+    /// individual evaluation is consistently cheaper") — a benchmark from a
+    /// warm, long-running process where every trait regex was already
+    /// compiled. In the per-invocation model a skipped trait avoids a
+    /// multi-ms engine *compile*, not just a scan: a 1 KB shell script
+    /// evaluated ~4,900 content regexes (~37 CPU-s) with the prefilter off.
+    /// The atom paths added since (mandatory-atom words, candidate-only
+    /// substrings for `type: text`) also index far more traits than the 2249
+    /// that benchmark could skip.
     pub(crate) fn precompute_raw_regex_matches(
         &self,
-        _binary_data: &[u8],
-        _file_type: &RuleFileType,
+        binary_data: &[u8],
+        file_type: &RuleFileType,
     ) -> Option<FxHashSet<usize>> {
-        None
+        if std::env::var_os("CLEAVE_DISABLE_RAW_GATE").is_some() {
+            return None;
+        }
+        // Gate only content below the measured profitability boundary.
+        // A 16-sample sweep across the 1-16 MB band (2026-08-04, scripts /
+        // Mach-O / PE / archives / ISO) showed raw-text content winning up to
+        // ~3 MB (a 2.2 MB .py: -25% wall AND -25% CPU) and flipping to a
+        // small loss at 4.5 MB; binary/compressed content is neutral-to-loss
+        // above ~4 MB (a 7.9 MB PE: +11% wall). 3 MiB is ~66% of the 4.5 MB
+        // flip point — conservative so the gate never trades one machine's
+        // wall for the shared box's CPU. Larger content returns None: exact
+        // pre-gate behavior. `CLEAVE_RAW_GATE_MAX_KB` overrides.
+        let max_bytes = std::env::var("CLEAVE_RAW_GATE_MAX_KB")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .map_or(3 << 20, |kb| kb << 10);
+        if binary_data.len() > max_bytes {
+            return None;
+        }
+        let index = &self.match_indexes().raw_content_regex_index;
+        if !index.has_patterns() {
+            return None;
+        }
+        let matches = index.find_matches(binary_data, file_type);
+        if std::env::var_os("CLEAVE_GATE_DEBUG").is_some() {
+            eprintln!(
+                "GATE-PRECOMPUTE bytes={} file_type={:?} matches={}",
+                binary_data.len(),
+                file_type,
+                matches.len()
+            );
+        }
+        Some(matches)
     }
     /// Evaluate all rules (atomic traits + composite rules) and merge findings into the report.
     /// This is the correct, foolproof way to evaluate traits that ensures evidence propagates

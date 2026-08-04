@@ -38,6 +38,7 @@ pub(crate) use mapper::AnalysisBorrow;
 #[allow(unreachable_pub)]
 pub use mapper::CapabilityMapper;
 pub(crate) use mapper::evaluate_merged::merge_filefacts_context;
+pub(crate) use mapper::evaluate_traits::log_raw_gate_stats;
 
 // Test module needs access to internal types
 #[cfg(test)]

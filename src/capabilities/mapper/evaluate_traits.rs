@@ -95,6 +95,26 @@ impl<'a> TraitPass<'a> {
     }
 }
 
+/// Raw-content gate telemetry (logged by `log_raw_gate_stats` at end of scan):
+/// how many trait evaluations had a gateable content regex, how many of those
+/// were actually covered by the raw index, and how many were skipped.
+pub(crate) static RAW_GATE_ELIGIBLE: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+pub(crate) static RAW_GATE_INDEXED: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+pub(crate) static RAW_GATE_SKIPPED: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// Log the raw-content gate counters at `info`.
+pub(crate) fn log_raw_gate_stats() {
+    tracing::info!(
+        eligible = RAW_GATE_ELIGIBLE.load(std::sync::atomic::Ordering::Relaxed),
+        indexed = RAW_GATE_INDEXED.load(std::sync::atomic::Ordering::Relaxed),
+        skipped = RAW_GATE_SKIPPED.load(std::sync::atomic::Ordering::Relaxed),
+        "raw-content gate stats"
+    );
+}
+
 /// Whether newly-added finding id `f` could satisfy the `trait:` reference `r`
 /// — mirrors `eval_trait`'s exact/suffix/prefix semantics (the
 /// Exception-criticality narrowing is deliberately ignored: erring toward
@@ -581,9 +601,13 @@ impl super::CapabilityMapper {
         // Use pre-computed raw regex matches (passed in from caller)
         let raw_regex_prefilter_enabled = cache.raw_regex_matches.is_some();
 
-        let has_any_matches = !cache.string_matched_traits.is_empty()
-            || cache.raw_regex_matches.is_some_and(|s| !s.is_empty())
-            || !cache.regex_candidates.is_empty();
+        // Deliberately excludes `raw_regex_matches`: it is a skip-set for the
+        // per-trait gate below, not a signal survey. Counting it here made
+        // enabling the raw prefilter defeat the tiny-file short-circuit (a
+        // sub-100-byte `export {};` stub suddenly grew 12 metadata findings),
+        // changing detections as a side effect of a performance switch.
+        let has_any_matches =
+            !cache.string_matched_traits.is_empty() || !cache.regex_candidates.is_empty();
 
         // For dependent traits, we can't skip based on string matches alone
         // because the trait: condition might match even if strings don't.
@@ -742,12 +766,22 @@ impl super::CapabilityMapper {
                 {
                     return None;
                 }
+            }
 
-                // `type: raw` always searches raw content; `type: text` searches
-                // raw content only on `uses_raw_text_search` files (else it reads
-                // extracted strings, which this raw-content prefilter can't gate).
-                // Both are gated by the raw-content atom prefilter (text via the
-                // candidate-only substring/word path — see `RawContentRegexIndex`).
+            // `type: raw` always searches raw content; `type: text` searches
+            // raw content only on `uses_raw_text_search` files (else it reads
+            // extracted strings, which this raw-content prefilter can't gate).
+            // Both are gated by the raw-content atom prefilter (text via the
+            // candidate-only substring/word path — see `RawContentRegexIndex`).
+            //
+            // Deliberately OUTSIDE the `use_string_prefilters` guard above: the
+            // raw-content index scans the raw bytes, so its gate is sound for
+            // every file type — including the raw-text sources whose extracted-
+            // string prefilters are unsound. It used to sit inside that guard,
+            // which made it dead code for exactly the raw-text files the
+            // candidate-substring path was built for: a 1 KB shell script
+            // evaluated all ~4,900 applicable content regexes ungated.
+            if !dependent_only {
                 let has_content_regex = match &trait_def.r#if {
                     Condition::Raw(RawQuery { regex: Some(_), .. })
                     | Condition::Raw(RawQuery { word: Some(_), .. }) => true,
@@ -757,6 +791,16 @@ impl super::CapabilityMapper {
                     }
                     _ => false,
                 };
+                if has_content_regex {
+                    RAW_GATE_ELIGIBLE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if self
+                        .match_indexes()
+                        .raw_content_regex_index
+                        .is_indexed_trait(idx)
+                    {
+                        RAW_GATE_INDEXED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
                 if has_content_regex
                     && raw_regex_prefilter_enabled
                     && self
@@ -765,6 +809,20 @@ impl super::CapabilityMapper {
                         .is_indexed_trait(idx)
                     && cache.raw_regex_matches.is_some_and(|s| !s.contains(&idx))
                 {
+                    RAW_GATE_SKIPPED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if let Some(filter) = std::env::var_os("CLEAVE_GATE_DEBUG") {
+                        let filter = filter.to_string_lossy();
+                        if filter == "1" || trait_def.id.contains(filter.as_ref()) {
+                            eprintln!(
+                                "GATE-SKIP {} buckets=[{}] eval_ft={:?}",
+                                trait_def.id,
+                                self.match_indexes()
+                                    .raw_content_regex_index
+                                    .debug_trait_buckets(idx),
+                                file_type
+                            );
+                        }
+                    }
                     return None;
                 }
             }

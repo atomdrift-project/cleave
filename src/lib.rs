@@ -1175,6 +1175,7 @@ pub fn prefetch_shared_resources(enable_third_party: bool) {
 pub fn log_scan_stats() {
     crate::mem_profile::report_scan_stats();
     crate::composite_rules::evaluators::log_regex_cache_stats();
+    crate::capabilities::log_raw_gate_stats();
     crate::composite_rules::trait_timing::report(40);
 }
 

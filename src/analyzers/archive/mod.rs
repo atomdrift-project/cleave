@@ -1254,7 +1254,12 @@ impl ArchiveAnalyzer {
             crate::capabilities::merge_filefacts_context(&mut report, &ctx);
         }
 
-        if is_zip_container(file_type) {
+        // Seed the member list from filefacts. For an image this is the only
+        // complete view of what it holds: a member cleave cannot identify is
+        // dropped from the report, so a name-matching rule would never see the
+        // lure that named it. The extraction pass merges its own per-member
+        // metadata onto these entries by path rather than appending duplicates.
+        if is_zip_container(file_type) || matches!(file_type, FileType::Iso) {
             report.archive_contents.extend(
                 filefacts_archive_entries
                     .iter()
@@ -1816,9 +1821,7 @@ impl ArchiveAnalyzer {
             // extraction copies the extents filefacts already located while
             // reading the ISO 9660 / UDF directory tree — no decoder, and no
             // second parse of the image.
-            FileType::Iso => {
-                iso::extract_iso_from_data(data, filefacts_members, dest_dir, guard)
-            }
+            FileType::Iso => iso::extract_iso_from_data(data, filefacts_members, dest_dir, guard),
             FileType::PkgMacos => system_packages::extract_pkg_from_reader(
                 Cursor::new(data),
                 data.len() as u64,

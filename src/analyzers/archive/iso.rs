@@ -172,13 +172,7 @@ mod tests {
         image[2048..2053].copy_from_slice(b"MZ\x90\x00\x03");
         let dir = tempfile::tempdir().unwrap();
         let guard = ExtractionGuard::new();
-        extract_iso_from_data(
-            &image,
-            &[entry("setup.exe", 2048, 5)],
-            dir.path(),
-            &guard,
-        )
-        .unwrap();
+        extract_iso_from_data(&image, &[entry("setup.exe", 2048, 5)], dir.path(), &guard).unwrap();
         assert_eq!(
             fs::read(dir.path().join("setup.exe")).unwrap(),
             b"MZ\x90\x00\x03"

@@ -14,6 +14,7 @@ use crate::types::{
     StructuralFeature, TargetInfo,
 };
 use anyhow::{Context, Result};
+use sha2::{Digest, Sha256, Sha384};
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
@@ -250,12 +251,10 @@ impl MachOAnalyzer {
         let structure_ms = _t.elapsed().as_millis();
 
         // Code-signature identity/trust/entitlement findings. filefacts
-        // already decoded the signature into its typed
-        // `macho.code_signature.*` view and normalized `Identity`; we
-        // only project those facts into findings rather than re-parsing
-        // the blob.
+        // supplies the decoded metadata; cleave additionally verifies the
+        // CodeDirectory page hashes against the bytes being analyzed.
         let _t = std::time::Instant::now();
-        self.generate_signature_findings_from_ctx(ctx, &mut report);
+        self.generate_signature_findings_from_ctx(ctx, data, &mut report);
         let sig_findings_ms = _t.elapsed().as_millis();
 
         let _t = std::time::Instant::now();
@@ -546,16 +545,21 @@ impl MachOAnalyzer {
     }
 
     /// Project filefacts's parsed code signature into identity/trust and
-    /// entitlement findings. cleave does **not** re-parse the signature
-    /// blob: filefacts already decoded it into the typed
-    /// `macho.code_signature.*` view and the normalized [`Identity`], and
-    /// it reports the `LC_CODE_SIGNATURE` blob's file offset via
+    /// entitlement findings. filefacts decodes the typed metadata and
+    /// normalized [`Identity`]; cleave only walks the CodeDirectory enough to
+    /// verify its signed page hashes against `data`. filefacts reports the
+    /// `LC_CODE_SIGNATURE` blob's file offset via
     /// `macho.code_signature_offset` and the identifier string's offset via
     /// `macho.code_signature.identifier_offset`. We read those facts and
     /// anchor each finding at the offset of the thing it describes.
     ///
     /// [`Identity`]: filefacts::Identity
-    fn generate_signature_findings_from_ctx(&self, ctx: &Ctx<'_>, report: &mut AnalysisReport) {
+    fn generate_signature_findings_from_ctx(
+        &self,
+        ctx: &Ctx<'_>,
+        data: &[u8],
+        report: &mut AnalysisReport,
+    ) {
         let values = ctx.parsed.values();
         // The `LC_CODE_SIGNATURE` blob offset is present iff the binary is
         // signed. Without it there's nothing to attribute — unsigned
@@ -583,9 +587,187 @@ impl MachOAnalyzer {
             &identity,
             entitlements,
         );
+        if let CodeDirectoryIntegrity::Invalid {
+            mismatched,
+            checked,
+        } = verify_code_directory_hashes(data, sig_offset as usize)
+        {
+            report.findings.push(signature_finding(
+                "metadata/signed/integrity::macho-code-directory-invalid".to_string(),
+                "Mach-O code signature content is invalid".to_string(),
+                Criticality::Suspicious,
+                "code_directory_hashes",
+                format!("{mismatched} of {checked} signed code pages do not match"),
+                &format!("0x{sig_offset:x}"),
+            ));
+        }
     }
 
     // AMOS cipher detection/decryption removed - now handled by stng library internally
+}
+
+/// Outcome of checking the supported CodeDirectory page-hash tables in an
+/// embedded Mach-O signature. Unsupported algorithms or scatter tables are
+/// deliberately silent: absence of verification is not proof of tampering.
+#[derive(Debug, PartialEq, Eq)]
+enum CodeDirectoryIntegrity {
+    Valid { checked: usize },
+    Invalid { mismatched: usize, checked: usize },
+    Unsupported,
+    Malformed,
+}
+
+/// Verify SHA-256/SHA-384 CodeDirectory page hashes. Modern Developer ID
+/// signatures use these algorithms; legacy SHA-1 and scatter-vector layouts
+/// remain unsupported rather than being guessed at.
+fn verify_code_directory_hashes(data: &[u8], sig_offset: usize) -> CodeDirectoryIntegrity {
+    const EMBEDDED_SIGNATURE: u32 = 0xfade_0cc0;
+    const DETACHED_SIGNATURE: u32 = 0xfade_0cc1;
+    const CODE_DIRECTORY: u32 = 0xfade_0c02;
+
+    let Some(magic) = read_be_u32(data, sig_offset) else {
+        return CodeDirectoryIntegrity::Malformed;
+    };
+    if !matches!(magic, EMBEDDED_SIGNATURE | DETACHED_SIGNATURE) {
+        return CodeDirectoryIntegrity::Malformed;
+    }
+    let Some(total_len) = read_be_u32(data, sig_offset + 4).map(|v| v as usize) else {
+        return CodeDirectoryIntegrity::Malformed;
+    };
+    let Some(sig_end) = sig_offset.checked_add(total_len) else {
+        return CodeDirectoryIntegrity::Malformed;
+    };
+    if total_len < 12 || sig_end > data.len() {
+        return CodeDirectoryIntegrity::Malformed;
+    }
+    let Some(count) = read_be_u32(data, sig_offset + 8).map(|v| v as usize) else {
+        return CodeDirectoryIntegrity::Malformed;
+    };
+    let Some(index_end) = count.checked_mul(8).and_then(|n| n.checked_add(12)) else {
+        return CodeDirectoryIntegrity::Malformed;
+    };
+    if index_end > total_len {
+        return CodeDirectoryIntegrity::Malformed;
+    }
+
+    let mut checked = 0usize;
+    let mut mismatched = 0usize;
+    let mut saw_supported = false;
+    for i in 0..count {
+        let index = sig_offset + 12 + i * 8;
+        let Some(blob_rel) = read_be_u32(data, index + 4).map(|v| v as usize) else {
+            return CodeDirectoryIntegrity::Malformed;
+        };
+        if blob_rel.checked_add(8).is_none_or(|end| end > total_len) {
+            return CodeDirectoryIntegrity::Malformed;
+        }
+        let Some(blob_start) = sig_offset.checked_add(blob_rel) else {
+            return CodeDirectoryIntegrity::Malformed;
+        };
+        if read_be_u32(data, blob_start) != Some(CODE_DIRECTORY) {
+            continue;
+        }
+        let Some(blob_len) = read_be_u32(data, blob_start + 4).map(|v| v as usize) else {
+            return CodeDirectoryIntegrity::Malformed;
+        };
+        let Some(blob_end) = blob_start.checked_add(blob_len) else {
+            return CodeDirectoryIntegrity::Malformed;
+        };
+        if blob_len < 44 || blob_end > sig_end {
+            return CodeDirectoryIntegrity::Malformed;
+        }
+        let blob = &data[blob_start..blob_end];
+        let version = read_be_u32(blob, 8).unwrap_or(0);
+        let hash_offset = read_be_u32(blob, 16).unwrap_or(0) as usize;
+        let slots = read_be_u32(blob, 28).unwrap_or(0) as usize;
+        let mut code_limit = read_be_u32(blob, 32).unwrap_or(0) as usize;
+        let hash_size = blob[36] as usize;
+        let hash_type = blob[37];
+        let page_log2 = blob[39];
+
+        // Scatter-vector CodeDirectories describe non-contiguous ranges and
+        // require a different slot-to-file mapping.
+        if version >= 0x0002_0100 && read_be_u32(blob, 44).unwrap_or(0) != 0 {
+            continue;
+        }
+        if version >= 0x0002_0300 && blob.len() >= 64 {
+            let limit64 = read_be_u64(blob, 56).unwrap_or(0);
+            if limit64 != 0 {
+                let Ok(limit) = usize::try_from(limit64) else {
+                    return CodeDirectoryIntegrity::Malformed;
+                };
+                code_limit = limit;
+            }
+        }
+        if code_limit > data.len() || hash_size == 0 {
+            return CodeDirectoryIntegrity::Malformed;
+        }
+        let page_size = if page_log2 == 0 {
+            code_limit.max(1)
+        } else if page_log2 < usize::BITS as u8 {
+            1usize << page_log2
+        } else {
+            return CodeDirectoryIntegrity::Malformed;
+        };
+        let expected_slots = code_limit.div_ceil(page_size);
+        if slots != expected_slots {
+            return CodeDirectoryIntegrity::Malformed;
+        }
+        let Some(hash_end) = slots
+            .checked_mul(hash_size)
+            .and_then(|n| hash_offset.checked_add(n))
+        else {
+            return CodeDirectoryIntegrity::Malformed;
+        };
+        if hash_offset < 44 || hash_end > blob.len() {
+            return CodeDirectoryIntegrity::Malformed;
+        }
+        let digest_len = match hash_type {
+            2 | 3 => 32,
+            4 => 48,
+            _ => continue,
+        };
+        if hash_size > digest_len {
+            return CodeDirectoryIntegrity::Malformed;
+        }
+        saw_supported = true;
+        for slot in 0..slots {
+            let start = slot * page_size;
+            let end = start.saturating_add(page_size).min(code_limit);
+            let actual = match hash_type {
+                2 | 3 => Sha256::digest(&data[start..end]).to_vec(),
+                4 => Sha384::digest(&data[start..end]).to_vec(),
+                _ => return CodeDirectoryIntegrity::Unsupported,
+            };
+            let stored_start = hash_offset + slot * hash_size;
+            let stored = &blob[stored_start..stored_start + hash_size];
+            checked += 1;
+            if stored != &actual[..hash_size] {
+                mismatched += 1;
+            }
+        }
+    }
+
+    if !saw_supported {
+        CodeDirectoryIntegrity::Unsupported
+    } else if mismatched > 0 {
+        CodeDirectoryIntegrity::Invalid {
+            mismatched,
+            checked,
+        }
+    } else {
+        CodeDirectoryIntegrity::Valid { checked }
+    }
+}
+
+fn read_be_u32(data: &[u8], offset: usize) -> Option<u32> {
+    let bytes: [u8; 4] = data.get(offset..offset.checked_add(4)?)?.try_into().ok()?;
+    Some(u32::from_be_bytes(bytes))
+}
+
+fn read_be_u64(data: &[u8], offset: usize) -> Option<u64> {
+    let bytes: [u8; 8] = data.get(offset..offset.checked_add(8)?)?.try_into().ok()?;
+    Some(u64::from_be_bytes(bytes))
 }
 
 /// Shift a hex-string file offset (`"0x5078"`) in place by `delta`,
@@ -901,12 +1083,12 @@ fn describe_entitlement(key: &str) -> String {
         // Code Execution & Security
         (
             "cs.disable-library-validation",
-            "Disable library validation",
+            "Allows libraries without signature validation",
         ),
-        ("cs.allow-jit", "Allow JIT compilation"),
+        ("cs.allow-jit", "Allows JIT-compiled executable memory"),
         (
             "cs.allow-unsigned-executable-memory",
-            "Allow unsigned executable memory",
+            "Allows unsigned executable memory",
         ),
         ("cs.debugger", "Debugger entitlement"),
         // Process & XPC
@@ -930,7 +1112,21 @@ fn describe_entitlement(key: &str) -> String {
         ("private.security.storage", "Private security storage"),
         // File/Sandbox Access
         ("sandbox.read-write", "Sandbox read-write"),
+        (
+            "files.user-selected.read-write",
+            "Can read and modify user-selected files",
+        ),
         ("home-directory", "Home directory access"),
+        // Network client/server entitlement names are otherwise reduced by the
+        // fallback to the unhelpful one-word labels "Client" and "Server".
+        (
+            "security.network.client",
+            "Can make outbound network connections",
+        ),
+        (
+            "security.network.server",
+            "Can accept incoming network connections",
+        ),
     ];
 
     for (key_part, desc) in descriptions {
@@ -1596,6 +1792,73 @@ mod tests {
         PathBuf::from("tests/fixtures/test.macho")
     }
 
+    fn put_be_u32(buf: &mut [u8], offset: usize, value: u32) {
+        buf[offset..offset + 4].copy_from_slice(&value.to_be_bytes());
+    }
+
+    /// Minimal two-page SHA-256 CodeDirectory wrapped in an embedded-signature
+    /// SuperBlob. The signed bytes precede the signature, as in a real Mach-O.
+    fn code_directory_fixture(tampered: bool) -> (Vec<u8>, usize) {
+        const PAGE: usize = 4096;
+        const CODE_LEN: usize = PAGE * 2;
+        const CD_HEADER: usize = 44;
+        const HASH_SIZE: usize = 32;
+        const CD_LEN: usize = CD_HEADER + HASH_SIZE * 2;
+        const SUPER_HEADER: usize = 20;
+
+        let mut data = vec![b'A'; CODE_LEN];
+        let mut cd = vec![0u8; CD_LEN];
+        put_be_u32(&mut cd, 0, 0xfade_0c02);
+        put_be_u32(&mut cd, 4, CD_LEN as u32);
+        put_be_u32(&mut cd, 8, 0x0002_0000);
+        put_be_u32(&mut cd, 16, CD_HEADER as u32);
+        put_be_u32(&mut cd, 28, 2);
+        put_be_u32(&mut cd, 32, CODE_LEN as u32);
+        cd[36] = HASH_SIZE as u8;
+        cd[37] = 2; // SHA-256
+        cd[39] = 12; // 4096-byte pages
+        for page in 0..2 {
+            let digest = Sha256::digest(&data[page * PAGE..(page + 1) * PAGE]);
+            let hash_start = CD_HEADER + page * HASH_SIZE;
+            cd[hash_start..hash_start + HASH_SIZE].copy_from_slice(&digest);
+        }
+
+        let mut superblob = vec![0u8; SUPER_HEADER];
+        put_be_u32(&mut superblob, 0, 0xfade_0cc0);
+        put_be_u32(&mut superblob, 4, (SUPER_HEADER + CD_LEN) as u32);
+        put_be_u32(&mut superblob, 8, 1);
+        put_be_u32(&mut superblob, 12, 0); // CodeDirectory slot
+        put_be_u32(&mut superblob, 16, SUPER_HEADER as u32);
+        superblob.extend_from_slice(&cd);
+        let sig_offset = data.len();
+        data.extend_from_slice(&superblob);
+        if tampered {
+            data[PAGE + 17] ^= 0xff;
+        }
+        (data, sig_offset)
+    }
+
+    #[test]
+    fn code_directory_page_hashes_validate() {
+        let (data, sig_offset) = code_directory_fixture(false);
+        assert_eq!(
+            verify_code_directory_hashes(&data, sig_offset),
+            CodeDirectoryIntegrity::Valid { checked: 2 }
+        );
+    }
+
+    #[test]
+    fn code_directory_page_hashes_detect_tampering() {
+        let (data, sig_offset) = code_directory_fixture(true);
+        assert_eq!(
+            verify_code_directory_hashes(&data, sig_offset),
+            CodeDirectoryIntegrity::Invalid {
+                mismatched: 1,
+                checked: 2
+            }
+        );
+    }
+
     fn report_with_offsets() -> AnalysisReport {
         let target = crate::types::TargetInfo {
             path: "/tmp/fat".to_string(),
@@ -2166,17 +2429,29 @@ mod tests {
         // Test that describe_entitlement handles various entitlement keys
         assert_eq!(
             describe_entitlement("com.apple.security.cs.disable-library-validation"),
-            "Disable library validation"
+            "Allows libraries without signature validation"
         );
         assert_eq!(
             describe_entitlement("com.apple.security.cs.allow-jit"),
-            "Allow JIT compilation"
+            "Allows JIT-compiled executable memory"
         );
         assert_eq!(
             describe_entitlement("personal-information.location"),
             "Location data access"
         );
         assert_eq!(describe_entitlement("device.camera"), "Camera access");
+        assert_eq!(
+            describe_entitlement("com.apple.security.network.client"),
+            "Can make outbound network connections"
+        );
+        assert_eq!(
+            describe_entitlement("com.apple.security.network.server"),
+            "Can accept incoming network connections"
+        );
+        assert_eq!(
+            describe_entitlement("com.apple.security.files.user-selected.read-write"),
+            "Can read and modify user-selected files"
+        );
         assert_eq!(
             describe_entitlement("com.apple.developer.team-identifier"),
             "Team identifier"

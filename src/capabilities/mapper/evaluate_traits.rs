@@ -105,8 +105,19 @@ pub(crate) static RAW_GATE_INDEXED: std::sync::atomic::AtomicUsize =
 pub(crate) static RAW_GATE_SKIPPED: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 
+/// Gate telemetry is opt-in (`CLEAVE_PHASE_STATS=1`): the counters below sit
+/// in the per-trait loop (13M+ increments on a large archive), and a shared
+/// atomic RMW per evaluation is cache-line ping-pong across every worker.
+fn gate_stats_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("CLEAVE_PHASE_STATS").is_ok_and(|v| v == "1"))
+}
+
 /// Log the raw-content gate counters at `info`.
 pub(crate) fn log_raw_gate_stats() {
+    if !gate_stats_enabled() {
+        return;
+    }
     tracing::info!(
         eligible = RAW_GATE_ELIGIBLE.load(std::sync::atomic::Ordering::Relaxed),
         indexed = RAW_GATE_INDEXED.load(std::sync::atomic::Ordering::Relaxed),
@@ -799,7 +810,7 @@ impl super::CapabilityMapper {
                     }
                     _ => false,
                 };
-                if has_content_regex {
+                if has_content_regex && gate_stats_enabled() {
                     RAW_GATE_ELIGIBLE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     if self
                         .match_indexes()
@@ -817,7 +828,9 @@ impl super::CapabilityMapper {
                         .is_indexed_trait(idx)
                     && cache.raw_regex_matches.is_some_and(|s| !s.contains(&idx))
                 {
-                    RAW_GATE_SKIPPED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if gate_stats_enabled() {
+                        RAW_GATE_SKIPPED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
                     if let Some(filter) = std::env::var_os("CLEAVE_GATE_DEBUG") {
                         let filter = filter.to_string_lossy();
                         if filter == "1" || trait_def.id.contains(filter.as_ref()) {

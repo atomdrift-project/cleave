@@ -781,7 +781,15 @@ impl super::CapabilityMapper {
             // which made it dead code for exactly the raw-text files the
             // candidate-substring path was built for: a 1 KB shell script
             // evaluated all ~4,900 applicable content regexes ungated.
-            if !dependent_only {
+            //
+            // Applies to the dependent pass too (unlike the string-index
+            // gates): a trait is "dependent" because of `trait:` refs in its
+            // `unless`/`downgrade` lists, but those only matter once the
+            // top-level `if` matches — and a content `if` whose mandatory
+            // atom is absent cannot match, no matter what other findings
+            // exist. The dependent pass re-runs per fixed-point iteration, so
+            // this skip pays multiple times per member.
+            {
                 let has_content_regex = match &trait_def.r#if {
                     Condition::Raw(RawQuery { regex: Some(_), .. })
                     | Condition::Raw(RawQuery { word: Some(_), .. }) => true,

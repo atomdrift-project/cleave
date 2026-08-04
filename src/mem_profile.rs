@@ -56,8 +56,8 @@ impl Phase {
     ];
 }
 
-/// Always-on per-phase thread-time accounting (the `memprofile` feature gates
-/// only the jemalloc heap side). Each thread charges the wall time between its
+/// Opt-in per-phase thread-time accounting (`CLEAVE_PHASE_STATS=1`; the
+/// `memprofile` feature gates only the jemalloc heap side). Each thread charges
 /// phase transitions to the phase that was active; summed over worker threads
 /// this approximates CPU time per phase, at the cost of two `Instant` reads
 /// per transition (~tens of ns). Answers "where did the scan's CPU go —
@@ -71,6 +71,19 @@ mod time_imp {
 
     static PHASE_NANOS: [AtomicU64; Phase::COUNT] = [const { AtomicU64::new(0) }; Phase::COUNT];
 
+    /// Phase accounting is opt-in (`CLEAVE_PHASE_STATS=1`).
+    ///
+    /// [`enter`] runs at the top of every `eval_*` — millions of times per
+    /// archive scan — and each call costs two clock reads plus a `fetch_add`
+    /// on this shared array, i.e. cache-line ping-pong across every rayon
+    /// worker. That is far too expensive to leave on for a diagnostic: the
+    /// counters are only ever read by `log_scan_stats`. Off, `enter` is one
+    /// acquire load and a return.
+    pub(super) fn enabled() -> bool {
+        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *ON.get_or_init(|| std::env::var("CLEAVE_PHASE_STATS").is_ok_and(|v| v == "1"))
+    }
+
     struct Ctx {
         phase: Phase,
         last: Instant,
@@ -83,6 +96,9 @@ mod time_imp {
     /// Charge time since the last transition to the current phase, then switch
     /// to `p`. Returns the previous phase for the guard to restore.
     pub(super) fn enter(p: Phase) -> Phase {
+        if !enabled() {
+            return Phase::Other;
+        }
         CTX.with(|c| {
             let mut slot = c.borrow_mut();
             let now = Instant::now();
@@ -102,6 +118,9 @@ mod time_imp {
     }
 
     pub(super) fn report() {
+        if !enabled() {
+            return;
+        }
         for (nanos, name) in PHASE_NANOS.iter().zip(Phase::NAMES) {
             let ns = nanos.load(Ordering::Relaxed);
             if ns > 0 {

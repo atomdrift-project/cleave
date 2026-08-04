@@ -117,12 +117,30 @@ fn shared_unicode_engine(pattern: &str) -> Option<std::sync::Arc<Engine>> {
     {
         return Some(arc);
     }
-    let engine = std::sync::Arc::new(Engine::new(compile_unicode(pattern)?));
-    let size = engine.re.memory_usage() + pattern.len();
-    if let Ok(mut cache) = UNICODE_ENGINES.write() {
-        cache.put(pattern.to_string(), std::sync::Arc::clone(&engine), size);
+    // Unicode twins are the most expensive compiles of the three stores
+    // (UTF-8 sub-automata), so deduping the warmup race matters most here.
+    static CLAIMS: super::compile_claim::ClaimSet = super::compile_claim::ClaimSet::new();
+    let compile_and_put = || {
+        let engine = std::sync::Arc::new(Engine::new(compile_unicode(pattern)?));
+        let size = engine.re.memory_usage() + pattern.len();
+        if let Ok(mut cache) = UNICODE_ENGINES.write() {
+            cache.put(pattern.to_string(), std::sync::Arc::clone(&engine), size);
+        }
+        Some(engine)
+    };
+    let kh = super::compile_claim::ClaimSet::hash_key(&pattern);
+    if let Some(_guard) = CLAIMS.try_claim(kh) {
+        compile_and_put()
+    } else if let Some(hit) = CLAIMS.wait_for(|| {
+        UNICODE_ENGINES
+            .read()
+            .ok()
+            .and_then(|c| c.peek(pattern).cloned())
+    }) {
+        Some(hit)
+    } else {
+        compile_and_put()
     }
-    Some(engine)
 }
 
 /// A borrowed-or-shared engine handle, so the hot ASCII path stays a plain
@@ -329,13 +347,31 @@ pub(crate) fn cached_regex(pattern: &str) -> Option<Arc<TraitRegex>> {
     {
         return Some(arc);
     }
-    // Compile outside the lock; write-lock only to insert.
-    let arc = Arc::new(TraitRegex::compile(pattern)?);
-    let size = arc.heap_bytes();
-    if let Ok(mut cache) = REGEX_CACHE.write() {
-        cache.put(pattern.to_string(), Arc::clone(&arc), size);
+    // Miss: claim the key so racing workers pick up one compile instead of
+    // each duplicating it; bounded fallback compiles independently if the
+    // claimant is slow (see `compile_claim`).
+    static CLAIMS: super::compile_claim::ClaimSet = super::compile_claim::ClaimSet::new();
+    let compile_and_put = || {
+        let arc = Arc::new(TraitRegex::compile(pattern)?);
+        let size = arc.heap_bytes();
+        if let Ok(mut cache) = REGEX_CACHE.write() {
+            cache.put(pattern.to_string(), Arc::clone(&arc), size);
+        }
+        Some(arc)
+    };
+    let kh = super::compile_claim::ClaimSet::hash_key(&pattern);
+    if let Some(_guard) = CLAIMS.try_claim(kh) {
+        compile_and_put()
+    } else if let Some(hit) = CLAIMS.wait_for(|| {
+        REGEX_CACHE
+            .read()
+            .ok()
+            .and_then(|c| c.peek(pattern).cloned())
+    }) {
+        Some(hit)
+    } else {
+        compile_and_put()
     }
-    Some(arc)
 }
 
 /// Occupancy and churn stats for the two condition-level stores, for the

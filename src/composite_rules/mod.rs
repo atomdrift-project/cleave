@@ -13,6 +13,7 @@
 //! - `ast_kinds`: Abstract AST kind to tree-sitter node type mapping
 
 pub(crate) mod ast_kinds;
+pub(crate) mod compile_claim;
 pub(crate) mod condition;
 pub(crate) mod context;
 pub(crate) mod debug;

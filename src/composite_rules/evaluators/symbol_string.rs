@@ -1573,18 +1573,32 @@ pub(crate) fn eval_raw<'a>(
             // Clone the `Arc`, never the `Regex`: a `Regex` clone gets a cold
             // lazy-DFA cache and rebuilds every DFA state on first search; the
             // shared `Arc` reuses the warm instance across members/threads.
+            // On a miss, claim the key so racing workers pick up this compile
+            // instead of duplicating it (see `compile_claim`); the bounded
+            // fallback still compiles independently if the claimant is slow.
+            static CLAIMS: crate::composite_rules::compile_claim::ClaimSet =
+                crate::composite_rules::compile_claim::ClaimSet::new();
+            let compile_and_put = |key: (String, bool)| {
+                super::compile_bytes_regex(pattern_str, case_insensitive).map(|re| {
+                    let arc = std::sync::Arc::new(re);
+                    let size = arc.heap_bytes();
+                    cache.write().put(key, std::sync::Arc::clone(&arc), size);
+                    arc
+                })
+            };
             let lean: Option<std::sync::Arc<super::LeanRegex>> = {
                 let cached = cache.read().peek(&key).cloned();
                 if cached.is_some() {
                     cached
                 } else {
-                    // Compile outside the lock; write-lock only to insert.
-                    super::compile_bytes_regex(pattern_str, case_insensitive).map(|re| {
-                        let arc = std::sync::Arc::new(re);
-                        let size = arc.heap_bytes();
-                        cache.write().put(key, std::sync::Arc::clone(&arc), size);
-                        arc
-                    })
+                    let kh = crate::composite_rules::compile_claim::ClaimSet::hash_key(&key);
+                    if let Some(_guard) = CLAIMS.try_claim(kh) {
+                        compile_and_put(key)
+                    } else if let Some(hit) = CLAIMS.wait_for(|| cache.read().peek(&key).cloned()) {
+                        Some(hit)
+                    } else {
+                        compile_and_put(key)
+                    }
                 }
             };
 

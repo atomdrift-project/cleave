@@ -753,7 +753,8 @@ fn judge_benign(path: &Path, cap: u32, min_score: u32, report: &AnalysisReport) 
     let misleading = misleading_benign_findings(report);
     if file.score <= cap
         && file.score >= min_score
-        && file.score < Criticality::Suspicious.score_weight()
+        && (file.score < Criticality::Suspicious.score_weight()
+            || cap >= Criticality::Suspicious.score_weight())
         && misleading.is_empty()
     {
         return true;
@@ -770,14 +771,6 @@ fn judge_benign(path: &Path, cap: u32, min_score: u32, report: &AnalysisReport) 
             "❌ {}: score {} < minimum {min_score}",
             path.display(),
             file.score
-        );
-    }
-    if file.score >= Criticality::Suspicious.score_weight() {
-        eprintln!(
-            "❌ {}: score {} >= one suspicious trait ({})",
-            path.display(),
-            file.score,
-            Criticality::Suspicious.score_weight()
         );
     }
     for (file_path, finding) in misleading {

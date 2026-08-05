@@ -34,8 +34,7 @@ not uploaded and no API key or GPU is required.
 ### Homebrew on macOS or Linux
 
 ```bash
-brew tap atomdrift/tap https://github.com/atomdrift-project/homebrew-tap.git
-brew install atomdrift/tap/cleave
+brew install atomdrift-project/tap/cleave
 ```
 
 ### Build from source

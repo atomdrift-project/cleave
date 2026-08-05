@@ -103,13 +103,22 @@ fn push_parsing_warning(
             format!("{warning} (in {path_str})")
         };
         warnings.push_id("regex-length", message);
+    } else if warning.contains("count_min with regex alternation") {
+        let message = if warning.contains(" (in ") {
+            warning
+        } else {
+            format!("{warning} (in {path_str})")
+        };
+        warnings.push_id("count-min-regex-alternation", message);
     } else if warning.contains("too many '|' symbols")
         || warning.contains("simple alphanumeric alternation chain")
     {
-        warnings.push_id(
-            "simple-alternation-chain",
-            format!("{warning} (in {path_str})"),
-        );
+        let message = if warning.contains(" (in ") {
+            warning
+        } else {
+            format!("{warning} (in {path_str})")
+        };
+        warnings.push_id("simple-alternation-chain", message);
     } else {
         warnings.push_legacy(warning);
     }

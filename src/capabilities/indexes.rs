@@ -34,27 +34,9 @@ use regex::bytes::{RegexSet, RegexSetBuilder};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::sync::{Arc, OnceLock, RwLock};
 
-const ARCHIVE_FAMILY_TYPES: [RuleFileType; 15] = [
-    RuleFileType::Archive,
-    RuleFileType::Zip,
-    RuleFileType::Apk,
-    RuleFileType::Jar,
-    RuleFileType::Tar,
-    RuleFileType::Npm,
-    RuleFileType::Nupkg,
-    RuleFileType::Gem,
-    RuleFileType::Whl,
-    RuleFileType::Deb,
-    RuleFileType::Rpm,
-    RuleFileType::Crx,
-    RuleFileType::Cab,
-    RuleFileType::VsixArchive,
-    RuleFileType::Xpi,
-];
-
 fn archive_family_types(file_type: &RuleFileType) -> &'static [RuleFileType] {
     if file_type == &RuleFileType::All || file_type.is_archive() {
-        &ARCHIVE_FAMILY_TYPES
+        RuleFileType::archive_family_types()
     } else {
         &[]
     }

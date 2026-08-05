@@ -1,5 +1,6 @@
 //! Core types for composite rules: Platform and FileType enums.
 
+use cleave_macros::EnumVariants;
 use serde::{Deserialize, Serialize};
 
 /// CPU architecture filter for trait rules.
@@ -300,12 +301,15 @@ pub fn platforms_intersect(rule: &[Platform], filters: &[Platform]) -> bool {
 }
 
 /// File type specifier for rule targeting
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Hash, PartialOrd, Ord, EnumVariants,
+)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum FileType {
     /// Applies to all file types
     All,
     /// Generic archive/container when the analyzer does not filefacts a subtype
+    #[archive]
     Archive,
     /// Analyzer could not classify the file beyond opaque/unknown content
     Unknown,
@@ -399,8 +403,26 @@ pub(crate) enum FileType {
     PackageJson,
     /// npm package-lock.json lockfile
     PackageLockJson,
+    /// Cargo dependency lockfile (Cargo.lock)
+    CargoLock,
+    /// Python pip requirements file (requirements.txt)
+    RequirementsTxt,
+    /// Python Poetry lockfile (poetry.lock)
+    PoetryLock,
+    /// Python Pipenv lockfile (Pipfile.lock)
+    PipfileLock,
+    /// Ruby Bundler lockfile (Gemfile.lock)
+    GemfileLock,
+    /// PHP Composer lockfile (composer.lock)
+    ComposerLock,
+    /// Yarn dependency lockfile (yarn.lock)
+    YarnLock,
+    /// pnpm dependency lockfile (pnpm-lock.yaml)
+    PnpmLock,
     /// Go module dependency manifest (go.mod)
     GoMod,
+    /// Go module checksum database (go.sum)
+    GoSum,
     /// Chrome extension manifest.json
     ChromeManifest,
     /// VS Code extension manifest (extension.vsixmanifest)
@@ -421,6 +443,10 @@ pub(crate) enum FileType {
     ComposerJson,
     /// Python package metadata (PKG-INFO, METADATA)
     PkgInfo,
+    /// Arch/AUR package metadata (.SRCINFO)
+    SrcInfo,
+    /// Normalized package-registry metadata
+    Registry,
     /// Apple Property List (.plist)
     Plist,
     /// Rich Text Format (.rtf)
@@ -429,9 +455,12 @@ pub(crate) enum FileType {
     OleDoc,
     /// Modern Microsoft Office document (OOXML: .docx, .xlsx, .pptx)
     Ooxml,
+    /// OpenDocument Format document (.odt, .ods, .odp, .odg)
+    Odf,
     /// Windows Shell Link (.lnk)
     Lnk,
     /// iOS App Package (.ipa) - not extractable by cleave
+    #[archive]
     Ipa,
     /// JPEG image
     Jpeg,
@@ -442,57 +471,98 @@ pub(crate) enum FileType {
     /// PDF document
     Pdf,
     /// Generic ZIP archive
+    #[archive]
     Zip,
     /// Android application package (.apk)
     #[serde(alias = "apk_android", alias = "apk_alpine")]
     Apk,
     /// Java archive (.jar, .war, .ear)
+    #[archive]
     Jar,
     /// Tar archive (.tar, .tar.gz, .tgz, etc.)
+    #[archive]
     Tar,
     /// Zstandard-compressed single file (.zst, not a tar)
     Zst,
+    /// Gzip-compressed single file (.gz, not a tar)
+    Gz,
+    /// Bzip2-compressed single file (.bz2, not a tar)
+    Bz2,
+    /// XZ-compressed single file (.xz, not a tar)
+    Xz,
     /// npm package (.tgz)
+    #[archive]
     Npm,
     /// NuGet package (.nupkg)
+    #[archive]
     Nupkg,
     /// Rust crate (.crate)
+    #[archive]
     Crate,
     /// conda package (.conda)
+    #[archive]
     Conda,
     /// Python egg (.egg)
+    #[archive]
     Egg,
     /// OS installer package (.pkg) — macOS (xar), FreeBSD/Arch (compressed tar)
+    #[archive]
     Pkg,
+    /// Apple disk image (.dmg, UDIF container)
+    #[archive]
+    Dmg,
     /// Ruby gem (.gem)
+    #[archive]
     Gem,
     /// Python wheel (.whl)
+    #[archive]
     Whl,
     /// Python source distribution (.tar.gz / .zip sdist)
+    #[archive]
     PythonSdist,
     /// Debian package (.deb)
+    #[archive]
     Deb,
     /// Unix static library (.a). Native object code, so it routes with the
     /// `binaries` family — NOT the archive family (which would apply zip/jar
     /// content rules to its uncompressed `ar` member bytes).
     StaticLib,
     /// RPM package (.rpm)
+    #[archive]
     Rpm,
     /// Chrome extension (.crx)
+    #[archive]
     Crx,
     /// Compiled HTML Help (.chm)
+    #[archive]
     Chm,
     /// Microsoft Cabinet archive (.cab)
+    #[archive]
     Cab,
     /// Optical-disc image (.iso) — ISO 9660 and/or UDF. Its own bucket
     /// rather than part of [`FileType::Archive`] because the `iso.*` facts
     /// its rules read exist on no other container, and because an image is
     /// a filesystem: members are addressable sector runs, not compressed
     /// entries, so the archive-family content rules do not apply to it.
+    #[archive]
     Iso,
+    /// OCI / Docker container image archive
+    #[archive]
+    OciImage,
+    /// Void Linux package (.xbps)
+    #[archive]
+    Xbps,
+    /// Gentoo binary package (.gpkg.tar)
+    #[archive]
+    GentooBinpkg,
+    /// Electron ASAR application archive (.asar)
+    #[archive]
+    Asar,
     /// VS Code extension (.vsix archive)
+    #[archive]
     VsixArchive,
     /// Firefox extension (.xpi)
+    #[archive]
     Xpi,
 }
 
@@ -508,10 +578,10 @@ impl From<filefacts::FileType> for FileType {
     ///    → [`Apk`], `typescript` → [`JavaScript`] mirroring `parse_file_types`,
     ///    `svg` → [`Xml`] since SVG is scanned as XML). The fine-grained label
     ///    still rides along in the report string for litmus/collimator.
-    /// 2. Lag — identification types cleave has not yet grown a trait bucket for
-    ///    (lockfiles, `src_info`, `registry`, single-file compression, niche
-    ///    archives/documents) route to [`Unknown`], which honours every rule's
-    ///    `for:` without claiming a capability surface.
+    /// 2. Deliberate fallback — only filefacts types without a corresponding
+    ///    routing bucket (including future non-exhaustive variants) route to
+    ///    [`Unknown`], which honours every rule's `for:` without claiming a
+    ///    capability surface.
     ///
     /// Every current filefacts variant is mapped explicitly so the routing
     /// decision is reviewable in one place. filefacts marks its enum
@@ -563,6 +633,14 @@ impl From<filefacts::FileType> for FileType {
             // Manifests / config / structured text
             Ff::PackageJson => Self::PackageJson,
             Ff::PackageLockJson => Self::PackageLockJson,
+            Ff::CargoLock => Self::CargoLock,
+            Ff::RequirementsTxt => Self::RequirementsTxt,
+            Ff::PoetryLock => Self::PoetryLock,
+            Ff::PipfileLock => Self::PipfileLock,
+            Ff::GemfileLock => Self::GemfileLock,
+            Ff::ComposerLock => Self::ComposerLock,
+            Ff::YarnLock => Self::YarnLock,
+            Ff::PnpmLock => Self::PnpmLock,
             Ff::VsixManifest => Self::VsixManifest,
             Ff::ChromeManifest => Self::ChromeManifest,
             Ff::CargoToml => Self::CargoToml,
@@ -575,12 +653,16 @@ impl From<filefacts::FileType> for FileType {
             Ff::DesktopEntry => Self::DesktopEntry,
             Ff::Xml | Ff::Svg => Self::Xml,
             Ff::PkgInfo => Self::PkgInfo,
+            Ff::SrcInfo => Self::SrcInfo,
+            Ff::Registry => Self::Registry,
             Ff::GoMod => Self::GoMod,
+            Ff::GoSum => Self::GoSum,
             // Documents / media
             Ff::Plist => Self::Plist,
             Ff::Rtf => Self::Rtf,
             Ff::OleDoc => Self::OleDoc,
             Ff::Ooxml => Self::Ooxml,
+            Ff::Odf => Self::Odf,
             Ff::Lnk => Self::Lnk,
             Ff::Jpeg => Self::Jpeg,
             Ff::Png => Self::Png,
@@ -593,6 +675,9 @@ impl From<filefacts::FileType> for FileType {
             // Archives / packages
             Ff::Zip => Self::Zip,
             Ff::Tar | Ff::TarGz | Ff::TarBz2 | Ff::TarXz | Ff::TarZst => Self::Tar,
+            Ff::Gz => Self::Gz,
+            Ff::Bz2 => Self::Bz2,
+            Ff::Xz => Self::Xz,
             Ff::Zst => Self::Zst,
             Ff::SevenZ | Ff::Rar => Self::Archive,
             Ff::Iso => Self::Iso,
@@ -600,8 +685,13 @@ impl From<filefacts::FileType> for FileType {
             Ff::StaticLib => Self::StaticLib,
             Ff::Rpm => Self::Rpm,
             Ff::PkgMacos | Ff::PkgFreebsd | Ff::PkgArch => Self::Pkg,
+            Ff::Dmg => Self::Dmg,
             Ff::Chm => Self::Chm,
             Ff::Cab => Self::Cab,
+            Ff::OciImage => Self::OciImage,
+            Ff::Xbps => Self::Xbps,
+            Ff::GentooBinpkg => Self::GentooBinpkg,
+            Ff::Asar => Self::Asar,
             Ff::Crx => Self::Crx,
             Ff::Xpi => Self::Xpi,
             Ff::Whl => Self::Whl,
@@ -616,18 +706,9 @@ impl From<filefacts::FileType> for FileType {
             Ff::Ipa => Self::Ipa,
             Ff::Vsix => Self::VsixArchive,
             Ff::Jar => Self::Jar,
-            // Everything else routes to Unknown — it still honours every
-            // rule's `for:`, it just claims no capability surface until a
-            // dedicated bucket is chosen. This covers types not yet modelled
-            // for trait routing (which resolved to Unknown before this bridge
-            // too, so no regression): lockfiles + dependency text (CargoLock,
-            // GoSum, RequirementsTxt, PoetryLock, PipfileLock, GemfileLock,
-            // ComposerLock, YarnLock, PnpmLock), package metadata (SrcInfo,
-            // Registry), single-file compression (Gz, Bz2, Xz), archives
-            // without a dedicated bucket (Dmg, Asar, OciImage, Xbps,
-            // GentooBinpkg), and documents (Odf). The wildcard
-            // is also mandatory because filefacts::FileType is
-            // `#[non_exhaustive]`.
+            // The wildcard is mandatory because filefacts::FileType is
+            // `#[non_exhaustive]`; unknown future types safely route to
+            // Unknown until they are assigned a deliberate bucket.
             _ => Self::Unknown,
         }
     }
@@ -714,7 +795,16 @@ impl FileType {
                 self,
                 FileType::PackageJson
                     | FileType::PackageLockJson
+                    | FileType::CargoLock
+                    | FileType::RequirementsTxt
+                    | FileType::PoetryLock
+                    | FileType::PipfileLock
+                    | FileType::GemfileLock
+                    | FileType::ComposerLock
+                    | FileType::YarnLock
+                    | FileType::PnpmLock
                     | FileType::GoMod
+                    | FileType::GoSum
                     | FileType::Json
                     | FileType::ChromeManifest
                     | FileType::VsixManifest
@@ -726,40 +816,11 @@ impl FileType {
                     | FileType::Xml
                     | FileType::ComposerJson
                     | FileType::PkgInfo
+                    | FileType::SrcInfo
+                    | FileType::Registry
                     | FileType::Plist
                     | FileType::Text
             )
-    }
-
-    /// Returns true if this file type is an archive or compressed container.
-    #[must_use]
-    pub(crate) fn is_archive(&self) -> bool {
-        matches!(
-            self,
-            FileType::Archive
-                | FileType::Zip
-                | FileType::Apk
-                | FileType::Jar
-                | FileType::Tar
-                | FileType::Npm
-                | FileType::Nupkg
-                | FileType::Crate
-                | FileType::Conda
-                | FileType::Egg
-                | FileType::Pkg
-                | FileType::Gem
-                | FileType::Whl
-                | FileType::PythonSdist
-                | FileType::Deb
-                | FileType::Rpm
-                | FileType::Crx
-                | FileType::Chm
-                | FileType::Cab
-                | FileType::Iso
-                | FileType::VsixArchive
-                | FileType::Xpi
-                | FileType::Ipa
-        )
     }
 
     /// Returns true if this file type typically has a section structure (ELF, Mach-O, PE)
@@ -771,102 +832,10 @@ impl FileType {
     /// Returns a list of all concrete file types (excluding All)
     #[must_use]
     pub(crate) fn all_concrete_variants() -> Vec<FileType> {
-        vec![
-            // Binary formats
-            FileType::Elf,
-            FileType::Macho,
-            FileType::Pe,
-            FileType::Class,
-            FileType::Pyc,
-            FileType::Wasm,
-            FileType::StaticLib,
-            // Source code formats
-            FileType::Shell,
-            FileType::Batch,
-            FileType::Jcl,
-            FileType::Python,
-            FileType::JavaScript,
-            FileType::TypeScript,
-            FileType::Rust,
-            FileType::Java,
-            FileType::Ruby,
-            FileType::C,
-            FileType::Cpp,
-            FileType::Go,
-            FileType::Php,
-            FileType::CSharp,
-            FileType::Lua,
-            FileType::Perl,
-            FileType::PowerShell,
-            FileType::Swift,
-            FileType::ObjectiveC,
-            FileType::Groovy,
-            FileType::Kotlin,
-            FileType::Scala,
-            FileType::Zig,
-            FileType::Elixir,
-            FileType::AppleScript,
-            FileType::Vbs,
-            FileType::Html,
-            FileType::Markdown,
-            FileType::Makefile,
-            FileType::Dockerfile,
-            FileType::Text,
-            FileType::Data,
-            FileType::Json,
-            // Manifest/config formats
-            FileType::PackageJson,
-            FileType::PackageLockJson,
-            FileType::GoMod,
-            FileType::ChromeManifest,
-            FileType::VsixManifest,
-            FileType::CargoToml,
-            FileType::PyProjectToml,
-            FileType::GithubActions,
-            FileType::SystemdService,
-            FileType::DesktopEntry,
-            FileType::Xml,
-            FileType::ComposerJson,
-            FileType::PkgInfo,
-            FileType::Plist,
-            FileType::Rtf,
-            FileType::OleDoc,
-            FileType::Ooxml,
-            FileType::Lnk,
-            // Archive/installer formats
-            FileType::Ipa,
-            // Image formats
-            FileType::Jpeg,
-            FileType::Png,
-            // Serialized data
-            FileType::Pickle,
-            // Document formats
-            FileType::Pdf,
-            FileType::Unknown,
-            // Archive/container formats
-            FileType::Archive,
-            FileType::Zip,
-            FileType::Apk,
-            FileType::Jar,
-            FileType::Tar,
-            FileType::Zst,
-            FileType::Npm,
-            FileType::Nupkg,
-            FileType::Crate,
-            FileType::Conda,
-            FileType::Egg,
-            FileType::Pkg,
-            FileType::Gem,
-            FileType::Whl,
-            FileType::PythonSdist,
-            FileType::Deb,
-            FileType::Rpm,
-            FileType::Crx,
-            FileType::Chm,
-            FileType::Cab,
-            FileType::VsixArchive,
-            FileType::Xpi,
-        ]
+        Self::all_variants()
+            .into_iter()
+            .filter(|file_type| *file_type != FileType::All)
+            .collect()
     }
 
     /// Parse a file type string into a FileType enum variant.
@@ -1224,6 +1193,15 @@ mod tests {
         assert_eq!(FileType::from_str(Ff::Cab.label()), FileType::Cab);
         assert_eq!(FileType::from_str(Ff::PkgArch.label()), FileType::Pkg);
         assert_eq!(FileType::from_str(Ff::TarZst.label()), FileType::Tar);
+        assert_eq!(FileType::from_str(Ff::Dmg.label()), FileType::Dmg);
+        assert_eq!(FileType::from_str(Ff::Asar.label()), FileType::Asar);
+        assert_eq!(FileType::from_str(Ff::OciImage.label()), FileType::OciImage);
+        assert_eq!(FileType::from_str(Ff::Xbps.label()), FileType::Xbps);
+        assert_eq!(
+            FileType::from_str(Ff::GentooBinpkg.label()),
+            FileType::GentooBinpkg
+        );
+        assert_eq!(FileType::from_str(Ff::Odf.label()), FileType::Odf);
         // A `.a` static library routes to its own StaticLib bucket (a native
         // binary), NOT to Deb (the `ar`-magic sibling) or Unknown.
         assert_eq!(
@@ -1241,6 +1219,19 @@ mod tests {
         assert!(!FileType::StaticLib.is_archive());
         assert_eq!(FileType::from_str("static-lib"), FileType::StaticLib);
         assert_eq!(FileType::from_str("a"), FileType::StaticLib);
+    }
+
+    #[test]
+    fn archive_family_is_generated_from_enum_markers() {
+        let family = FileType::archive_family_types();
+        assert!(family.contains(&FileType::Dmg));
+        assert!(family.contains(&FileType::Asar));
+        assert!(family.contains(&FileType::OciImage));
+        assert!(family.contains(&FileType::Xbps));
+        assert!(family.contains(&FileType::GentooBinpkg));
+        assert!(FileType::Dmg.is_archive());
+        assert!(!FileType::Gz.is_archive());
+        assert!(!FileType::StaticLib.is_archive());
     }
 
     #[test]

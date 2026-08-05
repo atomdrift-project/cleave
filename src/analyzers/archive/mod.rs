@@ -792,7 +792,7 @@ fn extract_decompressed_data_or_write_file(
 
     let logical_path = Path::new(stem);
     match crate::analyzers::detect_file_type_from_data(logical_path, &data) {
-        FileType::Tar | FileType::Gem => {
+        FileType::Tar | FileType::Gem | FileType::OciImage | FileType::GentooBinpkg => {
             tar::extract_tar_entries_safe(Cursor::new(data), dest_dir, guard)
         }
         FileType::TarGz | FileType::Npm | FileType::Crate | FileType::PythonSdist => {
@@ -812,7 +812,7 @@ fn extract_decompressed_data_or_write_file(
             dest_dir,
             guard,
         ),
-        FileType::TarZst | FileType::PkgArch | FileType::PkgFreebsd => {
+        FileType::TarZst | FileType::PkgArch | FileType::PkgFreebsd | FileType::Xbps => {
             tar::extract_tar_entries_safe(
                 zstd::stream::read::Decoder::new(Cursor::new(data))
                     .context("Failed to create zstd decoder")?,
@@ -1723,7 +1723,7 @@ impl ArchiveAnalyzer {
             // A gem is an uncompressed `ustar` tar (members: metadata.gz,
             // data.tar.gz, checksums.yaml.gz); recursion descends into
             // data.tar.gz for the installed files.
-            FileType::Tar | FileType::Gem => {
+            FileType::Tar | FileType::Gem | FileType::OciImage | FileType::GentooBinpkg => {
                 tar::extract_tar_entries_safe(Cursor::new(data), dest_dir, guard)
             }
             // Alpine/Wolfi `.apk`: several gzip streams concatenated (control +
@@ -1756,7 +1756,7 @@ impl ArchiveAnalyzer {
                 guard,
             ),
             // zstd-tar packages: generic `.tar.zst`, Arch and FreeBSD `.pkg*`.
-            FileType::TarZst | FileType::PkgArch | FileType::PkgFreebsd => {
+            FileType::TarZst | FileType::PkgArch | FileType::PkgFreebsd | FileType::Xbps => {
                 tar::extract_tar_entries_safe(
                     zstd::stream::read::Decoder::new(Cursor::new(data))
                         .context("Failed to create zstd decoder")?,

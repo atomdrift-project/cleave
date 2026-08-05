@@ -263,7 +263,13 @@ pub(crate) fn apply_trait_defaults(
     // large alternation should be decomposed into independently meaningful
     // conditions.
     let warn_start = warnings.len();
-    check_regex_length(&raw.id, &condition, Some(path), warnings);
+    check_regex_length_with_reuse(
+        &raw.id,
+        &condition,
+        Some(path),
+        warnings,
+        raw.count_min.is_some(),
+    );
     if raw.count_min.is_some() {
         check_count_min_regex_alternation(&raw.id, &condition, warnings);
     }
@@ -281,19 +287,19 @@ pub(crate) fn apply_trait_defaults(
         if let Some(ref any) = downgrade.any {
             for (idx, cond) in any.iter().enumerate() {
                 let ctx = format!("{} downgrade.any[{}]", raw.id, idx);
-                check_regex_length(&ctx, cond, Some(path), warnings);
+                check_regex_length_with_reuse(&ctx, cond, Some(path), warnings, false);
             }
         }
         if let Some(ref all) = downgrade.all {
             for (idx, cond) in all.iter().enumerate() {
                 let ctx = format!("{} downgrade.all[{}]", raw.id, idx);
-                check_regex_length(&ctx, cond, Some(path), warnings);
+                check_regex_length_with_reuse(&ctx, cond, Some(path), warnings, false);
             }
         }
         if let Some(ref none) = downgrade.none {
             for (idx, cond) in none.iter().enumerate() {
                 let ctx = format!("{} downgrade.none[{}]", raw.id, idx);
-                check_regex_length(&ctx, cond, Some(path), warnings);
+                check_regex_length_with_reuse(&ctx, cond, Some(path), warnings, false);
             }
         }
     }
@@ -1035,7 +1041,7 @@ pub(crate) fn apply_composite_defaults(
         if let Some(conds) = conditions {
             for (idx, cond) in conds.iter().enumerate() {
                 let ctx = format!("{} {}[{}]", raw.id, clause_name, idx);
-                check_regex_length(&ctx, cond, Some(path), warnings);
+                check_regex_length_with_reuse(&ctx, cond, Some(path), warnings, false);
             }
         }
     };
@@ -1265,6 +1271,16 @@ fn check_regex_length(
     source_path: Option<&std::path::Path>,
     warnings: &mut Vec<String>,
 ) {
+    check_regex_length_with_reuse(trait_id, condition, source_path, warnings, true);
+}
+
+fn check_regex_length_with_reuse(
+    trait_id: &str,
+    condition: &crate::composite_rules::Condition,
+    source_path: Option<&std::path::Path>,
+    warnings: &mut Vec<String>,
+    enforce_reuse: bool,
+) {
     use crate::composite_rules::{Condition, PathQuery};
 
     if let Some(pattern) = condition_regex(condition) {
@@ -1290,7 +1306,8 @@ fn check_regex_length(
         // pipes before any content) and alternate over extensions/dir names;
         // "decompose into multiple traits" doesn't fit a path-structure matcher,
         // so they are exempt from the alternation-chain check.
-        if or_symbol_count > max_or_symbols
+        if enforce_reuse
+            && or_symbol_count > max_or_symbols
             && !matches!(condition, Condition::Path(PathQuery { .. }))
             && !crate::validation_controls::is_validator_disabled("simple-alternation-chain")
         {
@@ -1300,7 +1317,8 @@ fn check_regex_length(
             ));
         }
 
-        if is_simple_alphanumeric_or_chain(pattern)
+        if enforce_reuse
+            && is_simple_alphanumeric_or_chain(pattern)
             && !crate::validation_controls::is_validator_disabled("simple-alternation-chain")
         {
             // `\b`-anchored alternatives match whole words, so each maps cleanly

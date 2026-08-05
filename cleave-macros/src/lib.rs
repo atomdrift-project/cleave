@@ -8,6 +8,49 @@ use proc_macro_crate::{crate_name, FoundCrate};
 use quote::quote;
 use syn::{parse_macro_input, Data, DeriveInput, Fields};
 
+/// Derive the routing-enum inventory and its archive-family membership.
+///
+/// The enum remains the single declaration site for Cleave's file-type
+/// vocabulary. Mark archive/container variants with `#[archive]`; this derive
+/// generates the concrete inventory, `is_archive`, and the family slice used
+/// by trait parsing and indexing.
+#[proc_macro_derive(EnumVariants, attributes(archive))]
+pub fn derive_enum_variants(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    let name = &input.ident;
+    let Data::Enum(data_enum) = &input.data else {
+        return syn::Error::new_spanned(name, "EnumVariants can only be derived for enums")
+            .to_compile_error()
+            .into();
+    };
+
+    let variants: Vec<_> = data_enum.variants.iter().map(|v| &v.ident).collect();
+    let archive_variants: Vec<_> = data_enum
+        .variants
+        .iter()
+        .filter(|v| v.attrs.iter().any(|attr| attr.path().is_ident("archive")))
+        .map(|v| &v.ident)
+        .collect();
+
+    let expanded = quote! {
+        impl #name {
+            pub(crate) fn all_variants() -> Vec<Self> {
+                vec![ #(Self::#variants),* ]
+            }
+
+            pub(crate) fn is_archive(&self) -> bool {
+                matches!(self, #(Self::#archive_variants)|*)
+            }
+
+            pub(crate) const fn archive_family_types() -> &'static [Self] {
+                &[ #(Self::#archive_variants),* ]
+            }
+        }
+    };
+
+    TokenStream::from(expanded)
+}
+
 /// Derive macro for ValidFieldPaths trait
 ///
 /// Automatically extracts all public field names from a struct and implements

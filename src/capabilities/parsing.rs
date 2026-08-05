@@ -405,6 +405,7 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                     RuleFileType::Pe,
                     RuleFileType::Class,
                     RuleFileType::Pyc,
+                    RuleFileType::Beam,
                     RuleFileType::Wasm,
                     RuleFileType::StaticLib,
                 ],
@@ -442,7 +443,16 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 "manifests" => vec![
                     RuleFileType::PackageJson,
                     RuleFileType::PackageLockJson,
+                    RuleFileType::CargoLock,
+                    RuleFileType::RequirementsTxt,
+                    RuleFileType::PoetryLock,
+                    RuleFileType::PipfileLock,
+                    RuleFileType::GemfileLock,
+                    RuleFileType::ComposerLock,
+                    RuleFileType::YarnLock,
+                    RuleFileType::PnpmLock,
                     RuleFileType::GoMod,
+                    RuleFileType::GoSum,
                     RuleFileType::Gyp,
                     RuleFileType::ChromeManifest,
                     RuleFileType::VsixManifest,
@@ -454,6 +464,8 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                     RuleFileType::Xml,
                     RuleFileType::ComposerJson,
                     RuleFileType::PkgInfo,
+                    RuleFileType::SrcInfo,
+                    RuleFileType::Registry,
                     RuleFileType::Plist,
                     RuleFileType::Lnk,
                     RuleFileType::Dockerfile,
@@ -466,28 +478,11 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                     RuleFileType::Text,
                     RuleFileType::OleDoc,
                     RuleFileType::Ooxml,
+                    RuleFileType::Odf,
                 ],
                 "images" | "media" => vec![RuleFileType::Jpeg, RuleFileType::Png],
                 "ipa" => vec![RuleFileType::Ipa],
-                "archives" => vec![
-                    RuleFileType::Archive,
-                    RuleFileType::Zip,
-                    RuleFileType::Apk,
-                    RuleFileType::Jar,
-                    RuleFileType::Tar,
-                    RuleFileType::Npm,
-                    RuleFileType::Nupkg,
-                    RuleFileType::Gem,
-                    RuleFileType::Whl,
-                    RuleFileType::PythonSdist,
-                    RuleFileType::Deb,
-                    RuleFileType::Rpm,
-                    RuleFileType::Crx,
-                    RuleFileType::Cab,
-                    RuleFileType::VsixArchive,
-                    RuleFileType::Xpi,
-                    RuleFileType::Ipa,
-                ],
+                "archives" => RuleFileType::archive_family_types().to_vec(),
                 "unknown" => vec![RuleFileType::Unknown],
                 // Binary formats
                 "elf" | "so" => vec![RuleFileType::Elf],
@@ -597,8 +592,16 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 "xpi" => vec![RuleFileType::Xpi],
                 "zst" => vec![RuleFileType::Zst],
                 _ => {
-                    warnings.push(format!("Unknown file type: '{}'", name));
-                    vec![]
+                    // Keep the file-type vocabulary in `composite_rules::types`
+                    // (which is bridged to filefacts) rather than requiring a
+                    // second match arm here whenever filefacts gains a type.
+                    let parsed = RuleFileType::from_str(&lower_name);
+                    if parsed == RuleFileType::Unknown && lower_name != "unknown" {
+                        warnings.push(format!("Unknown file type: '{}'", name));
+                        vec![]
+                    } else {
+                        vec![parsed]
+                    }
                 }
             };
 
@@ -1924,6 +1927,39 @@ mod tests {
         assert!(result.types.contains(&RuleFileType::Python));
         assert!(result.types.contains(&RuleFileType::JavaScript));
         assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn test_parse_file_types_new_filefacts_labels_without_parser_arms() {
+        let mut warnings = Vec::new();
+        let result = parse_file_types(
+            &[
+                "dmg".to_string(),
+                "asar".to_string(),
+                "oci_image".to_string(),
+                "xbps".to_string(),
+                "gentoo_binpkg".to_string(),
+                "cargo.lock".to_string(),
+            ],
+            &mut warnings,
+        );
+
+        assert!(result.types.contains(&RuleFileType::Dmg));
+        assert!(result.types.contains(&RuleFileType::Asar));
+        assert!(result.types.contains(&RuleFileType::OciImage));
+        assert!(result.types.contains(&RuleFileType::Xbps));
+        assert!(result.types.contains(&RuleFileType::GentooBinpkg));
+        assert!(result.types.contains(&RuleFileType::CargoLock));
+        assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+    }
+
+    #[test]
+    fn test_archives_group_uses_generated_archive_family() {
+        let mut warnings = Vec::new();
+        let result = parse_file_types(&["archives".to_string()], &mut warnings);
+
+        assert_eq!(result.types, RuleFileType::archive_family_types().to_vec());
+        assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
     }
 
     #[test]

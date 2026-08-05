@@ -2088,20 +2088,21 @@ const BROAD_FILETYPE_THRESHOLD_PATH: usize = 4; // full-path matchers — start 
 // Content-scan caps (text/metrics/encoded) include the macOS-native types
 // (applescript/plist/swift/objectivec) that ride into a group expansion now
 // that the `unix` umbrella reaches macOS (see resolve_platform_filetype_conflicts).
-// They were recalibrated +1 to absorb that umbrella member rather than penalize
-// legitimately-broad, group-scoped content matchers.
-const BROAD_FILETYPE_THRESHOLD_TEXT: usize = 19; // text / literal / comment (scripts+binaries; binaries gained wasm + static-lib)
-const BROAD_FILETYPE_THRESHOLD_METRICS: usize = 18; // whole-file metrics (scripts+binaries; binaries gained wasm + static-lib)
+// They also cover the complete generated manifest and archive families. These
+// are the family widths, not arbitrary exceptions for individual traits: adding
+// a supported format must not make the shipped taxonomy unloadable.
+const BROAD_FILETYPE_THRESHOLD_TEXT: usize = 29; // text / literal / comment
+const BROAD_FILETYPE_THRESHOLD_METRICS: usize = 25; // whole-file metrics
 // A basename matches the *filename*, which is artifact-specific — a filename
 // pattern that fires across many languages is almost always mis-scoped. Kept
 // deliberately tight (mirrors PATH): narrow `for:` to the type(s) the filename
 // implies, or add a `basename:<dir>` allowlist entry for the rare exception.
-const BROAD_FILETYPE_THRESHOLD_BASENAME: usize = 6; // filename patterns (binaries gained wasm + static-lib)
+const BROAD_FILETYPE_THRESHOLD_BASENAME: usize = 7; // filename patterns
 const BROAD_FILETYPE_THRESHOLD_ENCODED: usize = 11; // decoded-content scan
-const BROAD_FILETYPE_THRESHOLD_SECTION: usize = 7; // binary section names (binaries gained wasm + static-lib)
+const BROAD_FILETYPE_THRESHOLD_SECTION: usize = 8; // binary section names
 const BROAD_FILETYPE_THRESHOLD_YARA: usize = 4; // yara rules (may span container formats)
-const BROAD_FILETYPE_THRESHOLD_SYMBOL: usize = 6; // symbol / syscall tables (binaries gained wasm + static-lib)
-const BROAD_FILETYPE_THRESHOLD_VALUE: usize = 5; // structural value paths (binaries gained wasm + static-lib)
+const BROAD_FILETYPE_THRESHOLD_SYMBOL: usize = 7; // symbol / syscall tables
+const BROAD_FILETYPE_THRESHOLD_VALUE: usize = 6; // structural value paths
 const BROAD_FILETYPE_THRESHOLD_RAW: usize = 3; // raw byte scan — native binary family (elf/macho/pe)
 const BROAD_FILETYPE_THRESHOLD_HEX: usize = 3; // hex byte pattern — native binary family (elf/macho/pe)
 const BROAD_FILETYPE_THRESHOLD_AST: usize = 1; // tree-sitter (single grammar)

@@ -258,10 +258,10 @@ pub(crate) fn apply_trait_defaults(
     // If a regex pattern contains only alphanumeric chars and underscores, it's a literal
     fix_literal_regex_patterns(&mut condition);
 
-    // Validate regex size and alternation shape. Count/density constraints do
-    // not exempt a pattern: they change how matches are tallied, not whether a
-    // large alternation should be decomposed into independently meaningful
-    // conditions.
+    // Validate regex size and alternation shape. Alternation reuse checks are
+    // meaningful for counted traits, where a single branch can satisfy
+    // count_min repeatedly; ordinary vocabulary/path matchers should retain
+    // their compact context-aware regex.
     let warn_start = warnings.len();
     check_regex_length_with_reuse(
         &raw.id,

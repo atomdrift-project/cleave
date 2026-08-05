@@ -74,6 +74,10 @@ const HARD_VALIDATOR_IDS: &[&str] = &[
     // The condition is structurally broken (e.g. `not:` without `regex:`,
     // proximity on a none-only rule), so it matches incorrectly.
     "malformed-condition",
+    // count_min totals occurrences across all regex alternatives, so repeated
+    // hits on one branch can incorrectly satisfy a rule intended to require
+    // distinct signals.
+    "count-min-regex-alternation",
     // An id with invalid characters can't be referenced, breaking composites.
     "invalid-id-chars",
 ];
@@ -431,6 +435,13 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         display_id: "alt-chain",
         description: "Simple alternatives should be reusable atoms.",
         fix: "Split alternatives into atoms and join with a composite.",
+    },
+    ValidatorSpec {
+        id: "count-min-regex-alternation",
+        category: ValidatorCategory::Quality,
+        display_id: "count-re-alt",
+        description: "count_min on a regex alternation counts repeated branches, not distinct alternatives.",
+        fix: "Split alternatives into atomic conditions and use a composite with any: and needs:.",
     },
     ValidatorSpec {
         id: "case-insensitive-no-effect",
@@ -1131,6 +1142,7 @@ mod tests {
             "impossible-constraint",
             "no-search-pattern",
             "malformed-condition",
+            "count-min-regex-alternation",
             "invalid-id-chars",
         ] {
             assert_eq!(

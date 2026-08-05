@@ -6,11 +6,11 @@
 //! - Supporting the "none" keyword to explicitly unset defaults
 
 use crate::composite_rules::types::Arch;
-use crate::composite_rules::{CompositeTrait, FileType as RuleFileType, Platform, TraitDefinition};
 use crate::composite_rules::{
-    EncodedQuery, LiteralQuery, PathQuery, RawQuery, SectionQuery, SymbolQuery, TextQuery,
-    TreeSitterQuery,
+    CommentQuery, EncodedQuery, LiteralQuery, PathQuery, RawQuery, SectionQuery, SymbolQuery,
+    TextQuery, TreeSitterQuery,
 };
+use crate::composite_rules::{CompositeTrait, FileType as RuleFileType, Platform, TraitDefinition};
 use crate::types::Criticality;
 use std::collections::HashSet;
 
@@ -258,28 +258,21 @@ pub(crate) fn apply_trait_defaults(
     // If a regex pattern contains only alphanumeric chars and underscores, it's a literal
     fix_literal_regex_patterns(&mut condition);
 
-    // Validation: regex patterns must not exceed 80 bytes.
+    // Validate regex size and alternation shape. Count/density constraints do
+    // not exempt a pattern: they change how matches are tallied, not whether a
+    // large alternation should be decomposed into independently meaningful
+    // conditions.
     let warn_start = warnings.len();
-    // A count/density-bearing trait measures token-family frequency (one signal),
-    // so it is exempt from the alternation-decomposition warnings on its main
-    // condition. Nested unless:/downgrade: conditions are boolean and still checked.
-    let exempt_decomposition = raw.count_min.is_some()
-        || raw.count_max.is_some()
-        || raw.per_kb_min.is_some()
-        || raw.per_kb_max.is_some();
-    check_regex_length(
-        &raw.id,
-        &condition,
-        Some(path),
-        exempt_decomposition,
-        warnings,
-    );
+    check_regex_length(&raw.id, &condition, Some(path), warnings);
+    if raw.count_min.is_some() {
+        check_count_min_regex_alternation(&raw.id, &condition, warnings);
+    }
 
     // Also check regex patterns in unless: conditions
     if let Some(ref unless_conditions) = raw.unless {
         for (idx, cond) in unless_conditions.iter().enumerate() {
             let ctx = format!("{} unless[{}]", raw.id, idx);
-            check_regex_length(&ctx, cond, Some(path), false, warnings);
+            check_regex_length(&ctx, cond, Some(path), warnings);
         }
     }
 
@@ -288,19 +281,19 @@ pub(crate) fn apply_trait_defaults(
         if let Some(ref any) = downgrade.any {
             for (idx, cond) in any.iter().enumerate() {
                 let ctx = format!("{} downgrade.any[{}]", raw.id, idx);
-                check_regex_length(&ctx, cond, Some(path), false, warnings);
+                check_regex_length(&ctx, cond, Some(path), warnings);
             }
         }
         if let Some(ref all) = downgrade.all {
             for (idx, cond) in all.iter().enumerate() {
                 let ctx = format!("{} downgrade.all[{}]", raw.id, idx);
-                check_regex_length(&ctx, cond, Some(path), false, warnings);
+                check_regex_length(&ctx, cond, Some(path), warnings);
             }
         }
         if let Some(ref none) = downgrade.none {
             for (idx, cond) in none.iter().enumerate() {
                 let ctx = format!("{} downgrade.none[{}]", raw.id, idx);
-                check_regex_length(&ctx, cond, Some(path), false, warnings);
+                check_regex_length(&ctx, cond, Some(path), warnings);
             }
         }
     }
@@ -1042,7 +1035,7 @@ pub(crate) fn apply_composite_defaults(
         if let Some(conds) = conditions {
             for (idx, cond) in conds.iter().enumerate() {
                 let ctx = format!("{} {}[{}]", raw.id, clause_name, idx);
-                check_regex_length(&ctx, cond, Some(path), false, warnings);
+                check_regex_length(&ctx, cond, Some(path), warnings);
             }
         }
     };
@@ -1270,33 +1263,18 @@ fn check_regex_length(
     trait_id: &str,
     condition: &crate::composite_rules::Condition,
     source_path: Option<&std::path::Path>,
-    // When true, suppress the two ML-decomposition warnings (alternation-chain
-    // and too-many-`|`). A `count_min`/`count_max`/`per_kb` trait measures the
-    // FREQUENCY of a token family — one density signal, not N separable
-    // capabilities — so decomposing its alternation into `any:` atoms is wrong:
-    // a finding-reference composite cannot reconstruct the total match count
-    // (referenced atoms short-circuit at the first match). The 80-byte length
-    // check still applies. Mirrors the existing `path`-matcher exemption.
-    exempt_decomposition: bool,
     warnings: &mut Vec<String>,
 ) {
-    use crate::composite_rules::{Condition, KvQuery};
+    use crate::composite_rules::{Condition, PathQuery};
 
-    let regex = match condition {
-        Condition::Symbol(SymbolQuery { regex, .. })
-        | Condition::Text(TextQuery { regex, .. })
-        | Condition::Literal(LiteralQuery { regex, .. })
-        | Condition::Raw(RawQuery { regex, .. })
-        | Condition::TreeSitter(TreeSitterQuery { regex, .. })
-        | Condition::Section(SectionQuery { regex, .. })
-        | Condition::Encoded(EncodedQuery { regex, .. })
-        | Condition::Path(PathQuery { regex, .. })
-        | Condition::Kv(KvQuery { regex, .. }) => regex.as_deref(),
-        _ => None,
-    };
-
-    if let Some(pattern) = regex {
+    if let Some(pattern) = condition_regex(condition) {
+        // Comment matchers intentionally combine a short cue with a bounded
+        // vocabulary/proximity expression; splitting these into independent
+        // comment atoms would lose the context that prevents ordinary prose
+        // false positives.
+        let comment_context_pattern = matches!(condition, Condition::Comment(_));
         if pattern.len() > MAX_REGEX_LENGTH_BYTES
+            && !comment_context_pattern
             && !crate::validation_controls::is_validator_disabled("regex-length")
         {
             warnings.push(regex_length_warning(trait_id, pattern));
@@ -1313,7 +1291,6 @@ fn check_regex_length(
         // "decompose into multiple traits" doesn't fit a path-structure matcher,
         // so they are exempt from the alternation-chain check.
         if or_symbol_count > max_or_symbols
-            && !exempt_decomposition
             && !matches!(condition, Condition::Path(PathQuery { .. }))
             && !crate::validation_controls::is_validator_disabled("simple-alternation-chain")
         {
@@ -1324,7 +1301,6 @@ fn check_regex_length(
         }
 
         if is_simple_alphanumeric_or_chain(pattern)
-            && !exempt_decomposition
             && !crate::validation_controls::is_validator_disabled("simple-alternation-chain")
         {
             // `\b`-anchored alternatives match whole words, so each maps cleanly
@@ -1340,6 +1316,44 @@ fn check_regex_length(
             ));
         }
     }
+}
+
+fn condition_regex(condition: &crate::composite_rules::Condition) -> Option<&str> {
+    use crate::composite_rules::{Condition, KvQuery};
+
+    match condition {
+        Condition::Symbol(SymbolQuery { regex, .. })
+        | Condition::Text(TextQuery { regex, .. })
+        | Condition::Comment(CommentQuery { regex, .. })
+        | Condition::Literal(LiteralQuery { regex, .. })
+        | Condition::Raw(RawQuery { regex, .. })
+        | Condition::TreeSitter(TreeSitterQuery { regex, .. })
+        | Condition::Section(SectionQuery { regex, .. })
+        | Condition::Encoded(EncodedQuery { regex, .. })
+        | Condition::Path(PathQuery { regex, .. })
+        | Condition::Kv(KvQuery { regex, .. }) => regex.as_deref(),
+        _ => None,
+    }
+}
+
+fn check_count_min_regex_alternation(
+    trait_id: &str,
+    condition: &crate::composite_rules::Condition,
+    warnings: &mut Vec<String>,
+) {
+    let Some(pattern) = condition_regex(condition) else {
+        return;
+    };
+    if count_regex_or_symbols(pattern) == 0
+        || crate::validation_controls::is_validator_disabled("count-min-regex-alternation")
+    {
+        return;
+    }
+
+    warnings.push(format!(
+        "Trait '{}': count_min with regex alternation may count repeated matches of the same alternative and may not behave as intended. Split the alternatives into atomic conditions and combine them with a composite using `any:` and `needs:`: {:?}",
+        trait_id, pattern
+    ));
 }
 
 fn regex_length_warning(trait_id: &str, pattern: &str) -> String {
@@ -2344,7 +2358,7 @@ mod tests {
             dirname: false,
         });
         let mut warnings = Vec::new();
-        super::check_regex_length("test-trait", &condition, None, false, &mut warnings);
+        super::check_regex_length("test-trait", &condition, None, &mut warnings);
         assert!(warnings.is_empty());
     }
 
@@ -2361,7 +2375,7 @@ mod tests {
             dirname: false,
         });
         let mut warnings = Vec::new();
-        super::check_regex_length("test-trait", &condition, None, false, &mut warnings);
+        super::check_regex_length("test-trait", &condition, None, &mut warnings);
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("regex pattern exceeds 90 bytes"));
         assert!(warnings[0].contains("91 bytes"));
@@ -2387,7 +2401,7 @@ mod tests {
             dirname: false,
         });
         let mut warnings = Vec::new();
-        super::check_regex_length("test-trait", &condition, None, false, &mut warnings);
+        super::check_regex_length("test-trait", &condition, None, &mut warnings);
         assert!(warnings.is_empty());
     }
 
@@ -2397,7 +2411,7 @@ mod tests {
             id: "some-trait-id".to_string(),
         };
         let mut warnings = Vec::new();
-        super::check_regex_length("test-trait", &condition, None, false, &mut warnings);
+        super::check_regex_length("test-trait", &condition, None, &mut warnings);
         assert!(warnings.is_empty());
     }
 
@@ -2424,7 +2438,7 @@ mod tests {
             section_offset_range: None,
         });
         let mut warnings = Vec::new();
-        super::check_regex_length("test-trait", &condition, None, false, &mut warnings);
+        super::check_regex_length("test-trait", &condition, None, &mut warnings);
         assert!(warnings.iter().any(|w| w.contains("too many '|' symbols")));
     }
 
@@ -2448,7 +2462,7 @@ mod tests {
             section_offset_range: None,
         });
         let mut warnings = Vec::new();
-        super::check_regex_length("test-trait", &condition, None, false, &mut warnings);
+        super::check_regex_length("test-trait", &condition, None, &mut warnings);
         assert!(!warnings.iter().any(|w| w.contains("too many '|' symbols")));
     }
 
@@ -2478,7 +2492,6 @@ mod tests {
             Some(std::path::Path::new(
                 "micro-behaviors/data/text/llm/action/traits.yaml",
             )),
-            false,
             &mut warnings,
         );
         assert!(!warnings.iter().any(|w| w.contains("too many '|' symbols")));
@@ -2510,7 +2523,6 @@ mod tests {
             Some(std::path::Path::new(
                 "micro-behaviors/data/text/llm/action/traits.yaml",
             )),
-            false,
             &mut warnings,
         );
         assert!(warnings.iter().any(|w| w.contains("too many '|' symbols")));
@@ -2528,7 +2540,7 @@ mod tests {
             dirname: false,
         });
         let mut warnings = Vec::new();
-        super::check_regex_length("test-trait", &condition, None, false, &mut warnings);
+        super::check_regex_length("test-trait", &condition, None, &mut warnings);
         assert!(
             warnings
                 .iter()
@@ -2537,24 +2549,72 @@ mod tests {
     }
 
     #[test]
-    fn test_count_density_trait_exempt_from_alternation_warning() {
-        // A `count_min`/`per_kb` trait measures token-family FREQUENCY (one
-        // density signal), so its alternation must not be flagged for `any:`
-        // decomposition — a finding-reference composite can't reconstruct the
-        // total match count. `exempt_decomposition = true` suppresses both
-        // decomposition warnings while keeping the length check.
+    fn test_count_density_trait_not_exempt_from_alternation_warning() {
         let condition = crate::composite_rules::Condition::Text(TextQuery {
             regex: Some(r"\b(MODE_GCM|MODE_CTR)\b".to_string()),
             ..Default::default()
         });
         let mut warnings = Vec::new();
-        super::check_regex_length("test-trait", &condition, None, true, &mut warnings);
+        super::check_regex_length("test-trait", &condition, None, &mut warnings);
         assert!(
-            !warnings
+            warnings
                 .iter()
                 .any(|w| w.contains("simple alphanumeric alternation chain")),
-            "count/density traits must be exempt from alternation decomposition: {warnings:?}"
+            "count/density traits must follow the normal alternation policy: {warnings:?}"
         );
+    }
+
+    #[test]
+    fn test_count_min_regex_alternation_warns_about_repeated_branch_counts() {
+        let condition = crate::composite_rules::Condition::Literal(LiteralQuery {
+            regex: Some("^(location|screen)=".to_string()),
+            ..Default::default()
+        });
+        let mut warnings = Vec::new();
+        super::check_count_min_regex_alternation("profile-fields", &condition, &mut warnings);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("may count repeated matches of the same alternative"));
+        assert!(warnings[0].contains("`any:` and `needs:`"));
+    }
+
+    #[test]
+    fn test_apply_trait_defaults_rejects_count_min_regex_alternation() {
+        let mut raw = make_raw_trait("profile-fields", Some(vec!["javascript".to_string()]));
+        raw.count_min = Some(3);
+        raw.condition = Some(crate::composite_rules::Condition::Literal(LiteralQuery {
+            regex: Some("^(location|screen)=".to_string()),
+            ..Default::default()
+        }));
+        let mut warnings = Vec::new();
+        super::apply_trait_defaults(
+            raw,
+            &super::super::models::TraitDefaults::default(),
+            &mut warnings,
+            std::path::Path::new("profile-fields.yaml"),
+            true,
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| warning.contains("count_min with regex alternation")),
+            "expected count_min/alternation warning, got: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn test_count_min_regex_alternation_ignores_literal_pipes() {
+        for pattern in [r"a\|b", r"[|]"] {
+            let condition = crate::composite_rules::Condition::Text(TextQuery {
+                regex: Some(pattern.to_string()),
+                ..Default::default()
+            });
+            let mut warnings = Vec::new();
+            super::check_count_min_regex_alternation("literal-pipe", &condition, &mut warnings);
+            assert!(
+                warnings.is_empty(),
+                "literal pipe was treated as alternation: {pattern}"
+            );
+        }
     }
 
     #[test]
@@ -2566,7 +2626,7 @@ mod tests {
             ..Default::default()
         });
         let mut warnings = Vec::new();
-        super::check_regex_length("test-trait", &condition, None, false, &mut warnings);
+        super::check_regex_length("test-trait", &condition, None, &mut warnings);
         let warning = warnings
             .iter()
             .find(|w| w.contains("simple alphanumeric alternation chain"))
@@ -2585,7 +2645,7 @@ mod tests {
             ..Default::default()
         });
         let mut warnings = Vec::new();
-        super::check_regex_length("test-trait", &condition, None, false, &mut warnings);
+        super::check_regex_length("test-trait", &condition, None, &mut warnings);
         assert!(
             warnings
                 .iter()
@@ -2613,7 +2673,7 @@ mod tests {
             dirname: false,
         });
         let mut warnings = Vec::new();
-        super::check_regex_length("test-trait", &condition, None, false, &mut warnings);
+        super::check_regex_length("test-trait", &condition, None, &mut warnings);
         assert!(
             !warnings
                 .iter()

@@ -2649,9 +2649,20 @@ impl ArchiveAnalyzer {
                 let entry_path = self.format_entry_path(&relative_path);
                 let archive_location = self.format_evidence_location(&relative_path);
 
-                let file_data = {
+                // Map large members instead of reading them. This closure runs
+                // on every rayon worker at once and nothing bounds how much
+                // member data is resident here — unlike the in-memory path,
+                // which meters itself through `member_window_bytes`. A read is
+                // anonymous dirty memory the kernel cannot reclaim, and
+                // installers carry members far larger than that budget (see
+                // MEMORY_EXPERIMENTS.md: one sample held ~1.4 GB of member
+                // `Vec<u8>` live at once). `read_file_smart` maps above 10 MiB
+                // and reads smaller members inline; it does NOT normalize
+                // encoding, so the bytes — and with them the sha256 and the
+                // detected type — are identical to the previous `fs::read`.
+                let member_data = {
                     let _extract = crate::mem_profile::phase(crate::mem_profile::Phase::Extract);
-                    match std::fs::read(entry.path()) {
+                    match crate::file_io::read_file_smart(entry.path()) {
                         Ok(data) => data,
                         Err(e) => {
                             debug!("Failed to read archive member {}: {}", entry_path, e);
@@ -2659,16 +2670,17 @@ impl ArchiveAnalyzer {
                         }
                     }
                 };
+                let file_data: &[u8] = member_data.as_slice();
                 let file_type =
-                    crate::analyzers::detect_file_type_from_data(entry.path(), &file_data);
-                let sha256 = calculate_sha256(&file_data);
+                    crate::analyzers::detect_file_type_from_data(entry.path(), file_data);
+                let sha256 = calculate_sha256(file_data);
 
                 let entry_metadata = archive_entry_metadata(
                     entry_path.clone(),
                     Path::new(&relative_path),
                     &file_type,
                     sha256.clone(),
-                    &file_data,
+                    file_data,
                     None,
                 );
 
@@ -2679,7 +2691,7 @@ impl ArchiveAnalyzer {
                     self.analyze_extracted_member(
                         entry.path(),
                         &relative_path,
-                        &file_data,
+                        file_data,
                         &file_type,
                         &sha256,
                     )
@@ -2786,9 +2798,20 @@ impl ArchiveAnalyzer {
                 let entry_path = self.format_entry_path(&relative_path);
                 let archive_location = self.format_evidence_location(&relative_path);
 
-                let file_data = {
+                // Map large members instead of reading them. This closure runs
+                // on every rayon worker at once and nothing bounds how much
+                // member data is resident here — unlike the in-memory path,
+                // which meters itself through `member_window_bytes`. A read is
+                // anonymous dirty memory the kernel cannot reclaim, and
+                // installers carry members far larger than that budget (see
+                // MEMORY_EXPERIMENTS.md: one sample held ~1.4 GB of member
+                // `Vec<u8>` live at once). `read_file_smart` maps above 10 MiB
+                // and reads smaller members inline; it does NOT normalize
+                // encoding, so the bytes — and with them the sha256 and the
+                // detected type — are identical to the previous `fs::read`.
+                let member_data = {
                     let _extract = crate::mem_profile::phase(crate::mem_profile::Phase::Extract);
-                    match std::fs::read(entry.path()) {
+                    match crate::file_io::read_file_smart(entry.path()) {
                         Ok(data) => data,
                         Err(e) => {
                             debug!("Failed to read archive member {}: {}", entry_path, e);
@@ -2796,16 +2819,17 @@ impl ArchiveAnalyzer {
                         }
                     }
                 };
+                let file_data: &[u8] = member_data.as_slice();
                 let file_type =
-                    crate::analyzers::detect_file_type_from_data(entry.path(), &file_data);
-                let sha256 = calculate_sha256(&file_data);
+                    crate::analyzers::detect_file_type_from_data(entry.path(), file_data);
+                let sha256 = calculate_sha256(file_data);
 
                 let entry_metadata = archive_entry_metadata(
                     entry_path.clone(),
                     Path::new(&relative_path),
                     &file_type,
                     sha256.clone(),
-                    &file_data,
+                    file_data,
                     None,
                 );
 
@@ -2816,7 +2840,7 @@ impl ArchiveAnalyzer {
                     self.analyze_extracted_member(
                         entry.path(),
                         &relative_path,
-                        &file_data,
+                        file_data,
                         &file_type,
                         &sha256,
                     )
@@ -2980,9 +3004,20 @@ impl ArchiveAnalyzer {
                 let entry_path = self.format_entry_path(&relative_path);
                 let archive_location = self.format_evidence_location(&relative_path);
 
-                let file_data = {
+                // Map large members instead of reading them. This closure runs
+                // on every rayon worker at once and nothing bounds how much
+                // member data is resident here — unlike the in-memory path,
+                // which meters itself through `member_window_bytes`. A read is
+                // anonymous dirty memory the kernel cannot reclaim, and
+                // installers carry members far larger than that budget (see
+                // MEMORY_EXPERIMENTS.md: one sample held ~1.4 GB of member
+                // `Vec<u8>` live at once). `read_file_smart` maps above 10 MiB
+                // and reads smaller members inline; it does NOT normalize
+                // encoding, so the bytes — and with them the sha256 and the
+                // detected type — are identical to the previous `fs::read`.
+                let member_data = {
                     let _extract = crate::mem_profile::phase(crate::mem_profile::Phase::Extract);
-                    match std::fs::read(entry.path()) {
+                    match crate::file_io::read_file_smart(entry.path()) {
                         Ok(data) => data,
                         Err(e) => {
                             debug!("Failed to read archive member {}: {}", entry_path, e);
@@ -2990,16 +3025,17 @@ impl ArchiveAnalyzer {
                         }
                     }
                 };
+                let file_data: &[u8] = member_data.as_slice();
                 let file_type =
-                    crate::analyzers::detect_file_type_from_data(entry.path(), &file_data);
-                let sha256 = calculate_sha256(&file_data);
+                    crate::analyzers::detect_file_type_from_data(entry.path(), file_data);
+                let sha256 = calculate_sha256(file_data);
 
                 let entry_metadata = archive_entry_metadata(
                     entry_path.clone(),
                     Path::new(&relative_path),
                     &file_type,
                     sha256.clone(),
-                    &file_data,
+                    file_data,
                     None,
                 );
 
@@ -3010,7 +3046,7 @@ impl ArchiveAnalyzer {
                     self.analyze_extracted_member(
                         entry.path(),
                         &relative_path,
-                        &file_data,
+                        file_data,
                         &file_type,
                         &sha256,
                     )
@@ -3051,7 +3087,7 @@ impl ArchiveAnalyzer {
                         None => relative_path.clone(),
                     };
                     config
-                        .extract(&sha256, &extract_relative_path, &file_data)
+                        .extract(&sha256, &extract_relative_path, file_data)
                         .map(|path| path.display().to_string())
                 });
 

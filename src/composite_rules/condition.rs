@@ -55,35 +55,23 @@ impl Engine {
     }
 }
 
-/// A compiled trait regex for extracted-string / value matching, held as a
-/// **haystack-dispatched engine pair**: for an ASCII pattern, the ASCII-mode
-/// and Unicode-mode engines are provably match-identical on any pure-ASCII
-/// haystack (every semantic difference — `.`, `\w`-family classes, `(?i)`
-/// folding, `\b`, negated classes, empty-match positioning — only manifests
-/// when the haystack contains non-ASCII bytes). Extracted strings are almost
-/// always pure ASCII, so the small ASCII engine (whose classes avoid the
-/// UTF-8 sub-automaton expansion that made Unicode NFAs 5-10× larger and
-/// dominated peak RSS) serves nearly every search, and the full Unicode
-/// engine is compiled lazily, only for patterns that actually meet a
-/// non-ASCII string — where it preserves upstream `regex::Regex` semantics
-/// exactly.
+/// A compiled trait regex, held as a **single byte-searching engine**.
+///
+/// `regex_automata` always searches bytes; `unicode` is a parse-time flag, not
+/// a second implementation. So one engine serves every haystack and there is no
+/// per-search dispatch — [`Self::compile`] picks the syntax config once.
+///
+/// Byte semantics are the default, matching YARA (yara-x parses every rule with
+/// `unicode(false).utf8(false)`): the automata skip UTF-8 sub-automaton
+/// expansion, which made Unicode NFAs 5-10x larger and dominated peak RSS. The
+/// cost is that `\w`, `.`, `\s` and `\b` are ASCII-only against non-ASCII
+/// content — a deliberate trade (2026-08-06), and the one YARA rules have
+/// always lived with.
 #[derive(Debug)]
 pub(crate) struct TraitRegex {
-    /// ASCII-mode engine, used when the haystack is pure ASCII. `None` when
-    /// the pattern itself is not ASCII-compatible (then `eager_unicode` is
-    /// set instead).
-    ascii: Option<Engine>,
-    /// The Unicode engine for patterns that have no ASCII form (non-ASCII
-    /// source or `\u`/`\p` escapes — rare and individually cheap). The
-    /// Unicode *twins* of ASCII-compatible patterns are NOT stored here: they
-    /// live in the process-global budgeted [`UNICODE_ENGINES`] store, so that
-    /// content which forces them into existence (JS-heavy inputs where most
-    /// strings carry non-ASCII) cannot grow an unaccounted engine population
-    /// — a per-`TraitRegex` lazy slot escaped the byte budget and measured
-    /// ~1.2 GB on the realworld worker benchmark.
-    eager_unicode: Option<std::sync::Arc<Engine>>,
-    /// The source pattern, kept for diagnostics (`as_str` parity) and the
-    /// lazy Unicode compile.
+    /// The one compiled engine, byte-searching in either syntax mode.
+    engine: Engine,
+    /// The source pattern, kept for diagnostics (`as_str` parity).
     pattern: Box<str>,
     /// Minimum haystack length that can possibly match — shorter inputs
     /// return without touching the scratch pool, mirroring the facade's
@@ -92,71 +80,6 @@ pub(crate) struct TraitRegex {
     /// literals, so this skips the majority of pool roundtrips). A property
     /// of the pattern, identical for both engines.
     min_len: usize,
-}
-
-/// Process-global, byte-budgeted store of lazily-built Unicode engines for
-/// ASCII-compatible patterns (see [`TraitRegex::eager_unicode`]). Keyed by
-/// pattern; entries are `Arc`-shared so eviction is always safe (an engine in
-/// use stays alive until its search returns; the next non-ASCII haystack just
-/// recompiles it).
-static UNICODE_ENGINES: std::sync::LazyLock<
-    std::sync::RwLock<super::regex_store::BudgetedStore<String, Engine>>,
-> = std::sync::LazyLock::new(|| {
-    std::sync::RwLock::new(super::regex_store::BudgetedStore::new(
-        REGEX_CACHE_CAP,
-        super::regex_store::unicode_budget_bytes(),
-    ))
-});
-
-/// Fetch-or-compile the shared Unicode engine for `pattern`.
-fn shared_unicode_engine(pattern: &str) -> Option<std::sync::Arc<Engine>> {
-    if let Some(arc) = UNICODE_ENGINES
-        .read()
-        .ok()
-        .and_then(|c| c.peek(pattern).cloned())
-    {
-        return Some(arc);
-    }
-    // Unicode twins are the most expensive compiles of the three stores
-    // (UTF-8 sub-automata), so deduping the warmup race matters most here.
-    static CLAIMS: super::compile_claim::ClaimSet = super::compile_claim::ClaimSet::new();
-    let compile_and_put = || {
-        let engine = std::sync::Arc::new(Engine::new(compile_unicode(pattern)?));
-        let size = engine.re.memory_usage() + pattern.len();
-        if let Ok(mut cache) = UNICODE_ENGINES.write() {
-            cache.put(pattern.to_string(), std::sync::Arc::clone(&engine), size);
-        }
-        Some(engine)
-    };
-    let kh = super::compile_claim::ClaimSet::hash_key(&pattern);
-    if let Some(_guard) = CLAIMS.try_claim(kh) {
-        compile_and_put()
-    } else if let Some(hit) = CLAIMS.wait_for(|| {
-        UNICODE_ENGINES
-            .read()
-            .ok()
-            .and_then(|c| c.peek(pattern).cloned())
-    }) {
-        Some(hit)
-    } else {
-        compile_and_put()
-    }
-}
-
-/// A borrowed-or-shared engine handle, so the hot ASCII path stays a plain
-/// borrow while store-served Unicode engines carry their `Arc`.
-enum EngineRef<'a> {
-    Borrowed(&'a Engine),
-    Shared(std::sync::Arc<Engine>),
-}
-
-impl EngineRef<'_> {
-    fn get(&self) -> &Engine {
-        match self {
-            EngineRef::Borrowed(e) => e,
-            EngineRef::Shared(a) => a,
-        }
-    }
 }
 
 /// Shared meta-engine options: no onepass DFA (capture extraction only —
@@ -171,60 +94,42 @@ fn engine_config() -> regex_automata::meta::Config {
 }
 
 impl TraitRegex {
-    /// Compile `pattern` with `regex::Regex::new` semantics. ASCII-compatible
-    /// patterns get the small ASCII engine eagerly and defer the Unicode one;
-    /// others (non-ASCII source, `\u`/`\p` escapes, or
-    /// `CLEAVE_REGEX_UNICODE=1`) compile the Unicode engine eagerly.
+    /// Compile `pattern` into one byte-searching engine.
+    ///
+    /// Byte semantics first: those automata are far smaller, and non-ASCII
+    /// literals still work because `unicode(false)` compiles them to their
+    /// UTF-8 bytes. `unicode(true)` is the fallback for the patterns that
+    /// genuinely need codepoint semantics — `\p{..}` classes and non-ASCII
+    /// ranges, which fail to parse in byte mode — and it also yields a
+    /// byte-searching engine, so nothing downstream changes.
     fn compile(pattern: &str) -> Option<TraitRegex> {
         let min_len = regex_syntax::parse(pattern)
             .ok()?
             .properties()
             .minimum_len()
             .unwrap_or(0);
-        let ascii = if ascii_compatible(pattern) && !super::evaluators::regex_unicode_override() {
-            compile_ascii(pattern).map(Engine::new)
+        // Non-ASCII patterns keep codepoint semantics. Byte mode matches their
+        // literals fine (they compile to UTF-8 bytes) but silently stops folding
+        // their case under `(?i)`, and the corpus relies on that for
+        // impersonation traits — `(?i)…Майкрософт` must still match
+        // `майкрософт`. At 69 of 30,817 patterns this is free: one flag at
+        // compile time, no runtime branch, no second engine.
+        //
+        // The `\p{..}`-and-ranges patterns are ASCII *source* but cannot parse
+        // in byte mode at all, so they take the same fallback via `or_else`.
+        let engine = if super::evaluators::regex_unicode_override() || !pattern.is_ascii() {
+            compile_codepoint(pattern)?
         } else {
-            None
-        };
-        let eager_unicode = if ascii.is_none() {
-            // No ASCII engine: the Unicode engine is the only one, so build it
-            // now and fail compile() outright if the pattern is invalid.
-            Some(std::sync::Arc::new(Engine::new(compile_unicode(pattern)?)))
-        } else {
-            None
+            match compile_bytes(pattern) {
+                Some(re) => re,
+                None => compile_codepoint(pattern)?,
+            }
         };
         Some(TraitRegex {
-            ascii,
-            eager_unicode,
+            engine: Engine::new(engine),
             pattern: pattern.into(),
             min_len,
         })
-    }
-
-    /// The engine for `haystack`: ASCII when both pattern and haystack allow
-    /// it (the overwhelmingly common case), otherwise the Unicode engine —
-    /// inline for Unicode-only patterns, from the budgeted shared store for
-    /// ASCII-compatible ones meeting a non-ASCII haystack.
-    fn engine_for(&self, haystack: &str) -> Option<EngineRef<'_>> {
-        self.engine_for_known(haystack.is_ascii())
-    }
-
-    /// [`Self::engine_for`] with the haystack's ASCII-ness already determined.
-    ///
-    /// `haystack_is_ascii` is a *proof*, not a hint: `false` only ever selects
-    /// the Unicode engine, which has exact `regex::Regex` semantics for any
-    /// haystack, so an unknown-or-false answer is always sound — it just gives
-    /// up the faster path.
-    fn engine_for_known(&self, haystack_is_ascii: bool) -> Option<EngineRef<'_>> {
-        if let Some(ascii) = &self.ascii
-            && haystack_is_ascii
-        {
-            return Some(EngineRef::Borrowed(ascii));
-        }
-        if let Some(eager) = &self.eager_unicode {
-            return Some(EngineRef::Borrowed(eager));
-        }
-        shared_unicode_engine(&self.pattern).map(EngineRef::Shared)
     }
 
     /// The source pattern this regex was compiled from.
@@ -232,16 +137,9 @@ impl TraitRegex {
         &self.pattern
     }
 
-    /// Heap footprint of the inline engines, for the byte-budgeted store.
-    /// The shared Unicode twins are accounted by [`UNICODE_ENGINES`] itself,
-    /// so insert-time measurement here is exact.
+    /// Heap footprint of the engine, for the byte-budgeted store.
     pub(crate) fn heap_bytes(&self) -> usize {
-        let ascii = self.ascii.as_ref().map_or(0, |e| e.re.memory_usage());
-        let unicode = self
-            .eager_unicode
-            .as_ref()
-            .map_or(0, |e| e.re.memory_usage());
-        ascii + unicode + self.pattern.len() + std::mem::size_of::<Self>()
+        self.engine.re.memory_usage() + self.pattern.len() + std::mem::size_of::<Self>()
     }
 
     /// Whether the pattern matches anywhere in `haystack`. `earliest(true)`
@@ -251,10 +149,7 @@ impl TraitRegex {
         if haystack.len() < self.min_len {
             return false;
         }
-        let Some(engine) = self.engine_for(haystack) else {
-            return false;
-        };
-        let engine = engine.get();
+        let engine = &self.engine;
         super::regex_scratch::with_cache(engine.id, &engine.re, |cache| {
             engine
                 .re
@@ -263,33 +158,23 @@ impl TraitRegex {
         })
     }
 
-    /// Leftmost-first match, returned as a borrow of `haystack` (the span the
-    /// facade's `find(..).as_str()` would yield). Spans land on char
-    /// boundaries: the ASCII engine only ever sees all-boundary ASCII
-    /// haystacks, and the Unicode engine's non-empty matches cover whole
-    /// codepoints with `utf8_empty(true)` positioning empty matches like the
-    /// `regex` crate does.
+    /// Leftmost-first match, returned as a borrow of `haystack`.
     ///
-    /// Engine selection needs an O(haystack) ASCII scan, and it is the
-    /// *haystack* that determines the answer, not the pattern — so matching one
-    /// string against many patterns would rescan it once per pattern. Callers
-    /// pass the answer in; those holding a haystack across many patterns
-    /// compute it once (see `EvaluationContext::string_is_ascii`).
-    pub(crate) fn find_str<'v>(
-        &self,
-        haystack: &'v str,
-        haystack_is_ascii: bool,
-    ) -> Option<&'v str> {
+    /// A byte-mode engine can in principle end a match mid-codepoint (`.` and
+    /// negated classes match single bytes), so the span is taken with `get`
+    /// rather than indexing: a match that does not land on char boundaries
+    /// yields `None` instead of panicking. Pure-ASCII haystacks — nearly all
+    /// extracted strings — can never hit that case.
+    pub(crate) fn find_str<'v>(&self, haystack: &'v str) -> Option<&'v str> {
         if haystack.len() < self.min_len {
             return None;
         }
-        let engine = self.engine_for_known(haystack_is_ascii)?;
-        let engine = engine.get();
+        let engine = &self.engine;
         super::regex_scratch::with_cache(engine.id, &engine.re, |cache| {
             engine
                 .re
                 .search_with(cache, &regex_automata::Input::new(haystack))
-                .map(|m| &haystack[m.start()..m.end()])
+                .and_then(|m| haystack.get(m.start()..m.end()))
         })
     }
 
@@ -298,27 +183,26 @@ impl TraitRegex {
     /// Iteration protocol (including empty-match advancement) matches the
     /// facade's `find_iter` — both are built on `util::iter::Searcher`.
     ///
-    /// `haystack_is_ascii` selects the engine; see [`Self::find_str`].
+    /// Spans are taken with `get`; see [`Self::find_str`] on char boundaries.
     pub(crate) fn for_each_find<'v>(
         &self,
         haystack: &'v str,
-        haystack_is_ascii: bool,
         mut f: impl FnMut(usize, &'v str) -> bool,
     ) {
         if haystack.len() < self.min_len {
             return;
         }
-        let Some(engine) = self.engine_for_known(haystack_is_ascii) else {
-            return;
-        };
-        let engine = engine.get();
+        let engine = &self.engine;
         super::regex_scratch::with_cache(engine.id, &engine.re, |cache| {
             let mut it =
                 regex_automata::util::iter::Searcher::new(regex_automata::Input::new(haystack));
             loop {
                 let m = it.advance(|input| Ok(engine.re.search_with(cache, input)));
                 let Some(m) = m else { return };
-                if !f(m.start(), &haystack[m.start()..m.end()]) {
+                let Some(span) = haystack.get(m.start()..m.end()) else {
+                    continue;
+                };
+                if !f(m.start(), span) {
                     return;
                 }
             }
@@ -326,10 +210,12 @@ impl TraitRegex {
     }
 }
 
-/// The ASCII-mode engine: byte-level classes (`unicode(false)`) avoid the
-/// UTF-8 sub-automaton expansion entirely. Only ever searched over pure-ASCII
-/// haystacks, where it is match-identical to the Unicode engine.
-fn compile_ascii(pattern: &str) -> Option<regex_automata::meta::Regex> {
+/// Byte-mode compile: byte-level classes (`unicode(false)`) avoid the UTF-8
+/// sub-automaton expansion entirely. Nearly every pattern gets this, and it is
+/// the semantics YARA itself uses. `None` means the pattern cannot be expressed
+/// in byte mode (`\p{..}` classes, non-ASCII ranges) — the signal for
+/// [`TraitRegex::compile`] to fall back to [`compile_codepoint`].
+fn compile_bytes(pattern: &str) -> Option<regex_automata::meta::Regex> {
     regex_automata::meta::Regex::builder()
         .configure(engine_config().utf8_empty(false))
         .syntax(
@@ -341,22 +227,13 @@ fn compile_ascii(pattern: &str) -> Option<regex_automata::meta::Regex> {
         .ok()
 }
 
-/// The Unicode engine: exact `regex::Regex::new` semantics.
-fn compile_unicode(pattern: &str) -> Option<regex_automata::meta::Regex> {
+/// Codepoint-mode compile: exact `regex::Regex::new` semantics. Still searches
+/// bytes — only the *parsing* differs — so callers are identical either way.
+fn compile_codepoint(pattern: &str) -> Option<regex_automata::meta::Regex> {
     regex_automata::meta::Regex::builder()
         .configure(engine_config().utf8_empty(true))
         .build(pattern)
         .ok()
-}
-
-/// Whether `pattern` can be compiled as an ASCII-mode engine: pure-ASCII
-/// source with no explicit Unicode escapes (the same gate the byte-regex path
-/// uses), so pure-ASCII haystacks match identically in either mode.
-fn ascii_compatible(pattern: &str) -> bool {
-    pattern.is_ascii()
-        && !pattern.contains("\\u")
-        && !pattern.contains("\\p")
-        && !pattern.contains("\\P")
 }
 
 pub(crate) fn cached_regex(pattern: &str) -> Option<Arc<TraitRegex>> {
@@ -397,11 +274,11 @@ pub(crate) fn cached_regex(pattern: &str) -> Option<Arc<TraitRegex>> {
     }
 }
 
-/// Occupancy and churn stats for the two condition-level stores, for the
-/// end-of-scan cache log: (entries, bytes, inserts, evictions) for the str
-/// `TraitRegex` store and the shared Unicode-twin store.
-pub(crate) fn regex_store_stats() -> [(usize, usize, u64, u64, u64, usize); 2] {
-    let str_stats = REGEX_CACHE
+/// Occupancy and churn stats for the condition-level `TraitRegex` store, for
+/// the end-of-scan cache log: (entries, bytes, inserts, evictions,
+/// replacements, budget).
+pub(crate) fn regex_store_stats() -> (usize, usize, u64, u64, u64, usize) {
+    REGEX_CACHE
         .read()
         .map(|c| {
             (
@@ -413,30 +290,13 @@ pub(crate) fn regex_store_stats() -> [(usize, usize, u64, u64, u64, usize); 2] {
                 c.budget(),
             )
         })
-        .unwrap_or_default();
-    let uni_stats = UNICODE_ENGINES
-        .read()
-        .map(|c| {
-            (
-                c.len(),
-                c.bytes(),
-                c.inserts(),
-                c.evictions(),
-                c.replacements(),
-                c.budget(),
-            )
-        })
-        .unwrap_or_default();
-    [str_stats, uni_stats]
+        .unwrap_or_default()
 }
 
 /// Clear the process-global lazy regex cache (see [`cached_regex`]). Shared
 /// across all threads; call from a single thread under memory pressure.
 pub(crate) fn clear_cached_regex() {
     if let Ok(mut cache) = REGEX_CACHE.write() {
-        cache.clear();
-    }
-    if let Ok(mut cache) = UNICODE_ENGINES.write() {
         cache.clear();
     }
 }
@@ -4570,22 +4430,16 @@ exact: curl
         assert_eq!(super::word_match_start("anything", "", false), None);
     }
 
-    /// Haystack-dispatched engines: ASCII haystacks use the small ASCII-mode
-    /// engine; non-ASCII haystacks get exact `regex::Regex` Unicode semantics
-    /// from the lazily-built Unicode engine.
+    /// One byte-searching engine per pattern, selected at compile time.
+    ///
+    /// Pins the deliberate 2026-08-06 semantic change: pure-ASCII patterns get
+    /// byte semantics (YARA's model), while patterns carrying non-ASCII text
+    /// keep codepoint semantics so `(?i)` still folds their case.
     #[test]
-    fn trait_regex_engine_dispatch() {
-        // Unicode semantics preserved on non-ASCII haystacks (lazy engine).
-        let re = super::TraitRegex::compile(r"user\w+").unwrap();
-        assert_eq!(re.find_str("userñx", false), Some("userñx"));
-        assert_eq!(re.find_str("userabc", true), Some("userabc"));
-        let re = super::TraitRegex::compile(r"a.b").unwrap();
-        assert_eq!(re.find_str("aéb", false), Some("aéb"));
-        assert_eq!(re.find_str("axb", true), Some("axb"));
-        let re = super::TraitRegex::compile(r#"x[^"]+y"#).unwrap();
-        assert_eq!(re.find_str("xéñy", false), Some("xéñy"));
-        // ASCII-haystack parity across a semantics-sensitive pattern zoo:
-        // both engines must agree exactly on pure-ASCII input.
+    fn trait_regex_engine_selection() {
+        // ASCII pattern + ASCII haystack: identical to the Unicode engine
+        // across a semantics-sensitive pattern zoo. This is the invariant that
+        // makes the change safe for the overwhelming majority of scans.
         for pat in [
             r"user\w+",
             r"[\w .-]{3,}",
@@ -4597,19 +4451,45 @@ exact: curl
             r"^start.*end$",
         ] {
             let re = super::TraitRegex::compile(pat).unwrap();
-            let uni = super::compile_unicode(pat).unwrap();
+            let uni = super::compile_codepoint(pat).unwrap();
             let mut cache = uni.create_cache();
             for hay in ["user_x a b-c 4", "x'y start token end", "POWER  SHELL", ""] {
-                let ascii_hit = re.find_str(hay, hay.is_ascii());
                 let uni_hit = uni
                     .search_with(&mut cache, &regex_automata::Input::new(hay))
                     .map(|m| &hay[m.start()..m.end()]);
-                assert_eq!(ascii_hit, uni_hit, "pattern {pat:?} on {hay:?}");
+                assert_eq!(re.find_str(hay), uni_hit, "pattern {pat:?} on {hay:?}");
             }
         }
-        // Non-ASCII pattern source: no ASCII engine, Unicode eager.
+
+        // ASCII pattern + NON-ASCII haystack: byte semantics. `\w` and `.` no
+        // longer span a multi-byte codepoint. This is the accepted trade.
+        let re = super::TraitRegex::compile(r"user\w+").unwrap();
+        assert_eq!(re.find_str("userabc"), Some("userabc"));
+        assert_eq!(
+            re.find_str("userñx"),
+            None,
+            "\\w is ASCII-only in byte mode"
+        );
+        let re = super::TraitRegex::compile(r"a.b").unwrap();
+        assert_eq!(re.find_str("axb"), Some("axb"));
+        assert_eq!(re.find_str("aéb"), None, ". matches one byte in byte mode");
+        // Negated classes still span whole codepoints: they match any byte.
+        let re = super::TraitRegex::compile(r#"x[^"]+y"#).unwrap();
+        assert_eq!(re.find_str("xéñy"), Some("xéñy"));
+
+        // Non-ASCII pattern: codepoint semantics preserved, `(?i)` still folds.
+        // This is what keeps the impersonation traits working.
+        let re = super::TraitRegex::compile(r"(?i)Майкрософт").unwrap();
+        assert_eq!(re.find_str("майкрософт"), Some("майкрософт"));
         let re = super::TraitRegex::compile(r"ñ\w+").unwrap();
         assert!(re.is_match("ñé"));
+
+        // Patterns that cannot parse in byte mode take the same fallback.
+        let re = super::TraitRegex::compile(r"\p{Han}{2,}").unwrap();
+        assert_eq!(re.find_str("ab漢字cd"), Some("漢字"));
+        let re = super::TraitRegex::compile(r"[Ѐ-ӿ]+").unwrap();
+        assert_eq!(re.find_str("ab Привет cd"), Some("Привет"));
+
         // min_len is engine-independent.
         let re = super::TraitRegex::compile(r"abc\w{2}").unwrap();
         assert_eq!(re.min_len, 5);

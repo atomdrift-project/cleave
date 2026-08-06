@@ -299,10 +299,8 @@ pub(crate) fn log_regex_cache_stats() {
                 c.budget(),
             )
         });
-    let [
-        (str_len, str_bytes, str_inserts, str_evictions, str_replacements, str_budget),
-        (tw_len, tw_bytes, tw_inserts, tw_evictions, tw_replacements, tw_budget),
-    ] = crate::composite_rules::condition::regex_store_stats();
+    let (str_len, str_bytes, str_inserts, str_evictions, str_replacements, str_budget) =
+        crate::composite_rules::condition::regex_store_stats();
     tracing::info!(
         legacy_unicode_entries = uni,
         bytes_entries = bytes_len,
@@ -317,12 +315,6 @@ pub(crate) fn log_regex_cache_stats() {
         str_inserts,
         str_evictions,
         str_replacements,
-        twin_entries = tw_len,
-        twin_mb = tw_bytes / (1 << 20),
-        twin_budget_mb = tw_budget / (1 << 20),
-        twin_inserts = tw_inserts,
-        twin_evictions = tw_evictions,
-        twin_replacements = tw_replacements,
         "regex cache stats"
     );
 }

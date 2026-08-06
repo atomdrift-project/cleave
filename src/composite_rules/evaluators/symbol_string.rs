@@ -541,10 +541,7 @@ impl<'p> StringMatcher<'p> {
     /// and `exact:` return the whole value. Callers clone only when actually storing
     /// evidence (≤ `MAX_EVIDENCE_PER_TRAIT`), so match-counting and `not:`/`is:`
     /// filtering on non-stored matches cost zero allocations.
-    /// `value_is_ascii` is only consulted by the regex arm, which uses it to
-    /// select an engine — a selection that would otherwise rescan `value` once
-    /// per pattern tested against it.
-    fn match_value_ref<'v>(&self, value: &'v str, value_is_ascii: bool) -> Option<&'v str> {
+    fn match_value_ref<'v>(&self, value: &'v str) -> Option<&'v str> {
         use crate::composite_rules::condition::{word_match_ci, word_match_cs};
         match self {
             Self::Exact { needle, ci } => {
@@ -563,7 +560,7 @@ impl<'p> StringMatcher<'p> {
             Self::WordCi { needle, ac } => {
                 word_match_ci(value, needle, ac).map(|s| &value[s..s + needle.len()])
             }
-            Self::Regex(re) => re.find_str(value, value_is_ascii),
+            Self::Regex(re) => re.find_str(value),
             Self::Never => None,
         }
     }
@@ -577,15 +574,14 @@ impl<'p> StringMatcher<'p> {
         &self,
         value: &'v str,
         bounds: (Option<usize>, Option<usize>),
-        value_is_ascii: bool,
     ) -> Option<&'v str> {
         if bounds == (None, None) {
-            return self.match_value_ref(value, value_is_ascii);
+            return self.match_value_ref(value);
         }
         match self {
             Self::Regex(re) => {
                 let mut found = None;
-                re.for_each_find(value, value_is_ascii, |_, span| {
+                re.for_each_find(value, |_, span| {
                     if span_length_ok(span.len(), bounds) {
                         found = Some(span);
                         false
@@ -596,7 +592,7 @@ impl<'p> StringMatcher<'p> {
                 found
             }
             _ => self
-                .match_value_ref(value, value_is_ascii)
+                .match_value_ref(value)
                 .filter(|span| span_length_ok(span.len(), bounds)),
         }
     }
@@ -839,16 +835,14 @@ pub(crate) fn eval_text<'a, 'b>(
     let mut evidence = Vec::new();
     let mut match_count = 0usize;
 
-    for (string_idx, string_info) in ctx.report.strings.iter().enumerate() {
+    for string_info in &ctx.report.strings {
         if !offset_in_range(string_info.offset, effective_range) {
             continue;
         }
 
-        if let Some(match_value) = matcher.match_value_bounded(
-            &string_info.value,
-            (params.length_min, params.length_max),
-            ctx.string_is_ascii(string_idx),
-        ) {
+        if let Some(match_value) =
+            matcher.match_value_bounded(&string_info.value, (params.length_min, params.length_max))
+        {
             let excluded_by_not = trait_not
                 .map(|exceptions| exceptions.iter().any(|exc| exc.matches(match_value)))
                 .unwrap_or(false);
@@ -934,11 +928,9 @@ fn eval_text_encoded<'a, 'b>(
             continue;
         }
 
-        let Some(match_value) = matcher.match_value_bounded(
-            &string_info.value,
-            (params.length_min, params.length_max),
-            ctx.string_is_ascii(idx as usize),
-        ) else {
+        let Some(match_value) =
+            matcher.match_value_bounded(&string_info.value, (params.length_min, params.length_max))
+        else {
             continue;
         };
         let excluded_by_not = trait_not
@@ -1020,7 +1012,7 @@ pub(crate) fn eval_string_literal<'a, 'b>(
     let mut evidence = Vec::new();
     let mut match_count = 0usize;
 
-    for (string_idx, string_info) in ctx.report.strings.iter().enumerate() {
+    for string_info in &ctx.report.strings {
         if string_info.section.as_deref() != Some("ast") {
             continue;
         }
@@ -1028,11 +1020,9 @@ pub(crate) fn eval_string_literal<'a, 'b>(
             continue;
         }
 
-        if let Some(match_value) = matcher.match_value_bounded(
-            &string_info.value,
-            (params.length_min, params.length_max),
-            ctx.string_is_ascii(string_idx),
-        ) {
+        if let Some(match_value) =
+            matcher.match_value_bounded(&string_info.value, (params.length_min, params.length_max))
+        {
             let excluded_by_not = trait_not
                 .map(|exceptions| exceptions.iter().any(|exc| exc.matches(match_value)))
                 .unwrap_or(false);
@@ -1698,7 +1688,7 @@ pub(crate) fn eval_raw<'a>(
                 let mut first_match = None;
                 let mut first_offset = None;
                 let mut idx = 0usize;
-                re.for_each_find(&content, content.is_ascii(), |mat_start, match_str| {
+                re.for_each_find(&content, |mat_start, match_str| {
                     // Limit match processing to prevent DoS on pattern-dense files
                     if idx >= MAX_MATCHES_TO_PROCESS {
                         if let Some(trait_id_val) = trait_id {

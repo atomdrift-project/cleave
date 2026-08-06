@@ -127,6 +127,11 @@ pub(crate) struct EvaluationContext<'a> {
     /// without the raw pass ever seeing it. Built once per file; empty (the
     /// common case) makes the encoded pass a single is-empty check.
     pub encoded_string_indices: Arc<OnceLock<Vec<u32>>>,
+    /// Per-`report.strings` "value is pure ASCII" bits, computed once per file.
+    /// Regex engine selection needs this answer for every (pattern, string)
+    /// pair, and it depends only on the string — so without the cache a long
+    /// literal is rescanned once per pattern it is tested against.
+    pub cached_string_ascii: Arc<OnceLock<Vec<bool>>>,
     /// Hard deadline for rule evaluation.
     pub deadline: Option<Instant>,
     /// Cooperative cancellation flag (set by litmus timeout).
@@ -147,6 +152,13 @@ pub(crate) struct EvaluationContext<'a> {
     /// lowercasing is byte-position-preserving, so any search sub-range maps to
     /// the same range of this buffer (see [`Self::lower_binary`]).
     pub cached_lower_binary: Arc<OnceLock<Vec<u8>>>,
+    /// Lossy UTF-8 view of the *whole* `binary_data`, built at most once per
+    /// file and shared across every full-range Unicode condition. Only used
+    /// where `cached_source_utf8` is absent — i.e. non-source content, which is
+    /// where `from_utf8_lossy` actually allocates. Rebuilding it per rule cost
+    /// both CPU (a 487 MB disk image spent ~185 CPU-s re-transcoding) and peak
+    /// RSS (one transient copy per concurrent rule instead of one shared).
+    pub cached_lossy_utf8: Arc<OnceLock<String>>,
     /// True while evaluating a `crit: exception` composite. A directory trait
     /// reference normally excludes `crit: exception` members (so dropping an
     /// `objectives/` directory into `all:`/`any:` can't inherit a suppressor), but
@@ -203,6 +215,8 @@ impl<'a> EvaluationContext<'a> {
             cached_kv_parsed: Arc::new(OnceLock::new()),
             cached_kv_offsets: Arc::new(OnceLock::new()),
             cached_lower_binary: Arc::new(OnceLock::new()),
+            cached_lossy_utf8: Arc::new(OnceLock::new()),
+            cached_string_ascii: Arc::new(OnceLock::new()),
             ast_kind_cache: None,
             string_exact_index: Arc::new(OnceLock::new()),
             string_exact_index_ci: Arc::new(OnceLock::new()),
@@ -336,6 +350,40 @@ impl<'a> EvaluationContext<'a> {
             .get_or_init(|| self.binary_data.to_ascii_lowercase())
     }
 
+    /// Whether `report.strings[idx]`'s value is pure ASCII, scanned once per
+    /// file. Out-of-range answers `false`, which is always sound: `false`
+    /// merely selects the exact-semantics Unicode engine.
+    pub(crate) fn string_is_ascii(&self, idx: usize) -> bool {
+        self.cached_string_ascii
+            .get_or_init(|| {
+                self.report
+                    .strings
+                    .iter()
+                    .map(|s| s.value.is_ascii())
+                    .collect()
+            })
+            .get(idx)
+            .copied()
+            .unwrap_or(false)
+    }
+
+    /// UTF-8 view of the entire `binary_data`, built at most once per file.
+    ///
+    /// Byte-identical to `evaluators::utf8_view(binary_data, (0, len))`: valid
+    /// UTF-8 borrows, invalid bytes get the same U+FFFD substitutions, so match
+    /// spans and offsets are unchanged — only the number of times the
+    /// conversion runs differs. Sub-ranges must keep calling `utf8_view`: a
+    /// lossy conversion of a slice is not in general a slice of the lossy
+    /// conversion (an invalid sequence straddling the boundary transcodes
+    /// differently).
+    pub(crate) fn full_utf8(&self) -> &str {
+        if let Some(s) = self.cached_source_utf8 {
+            return s;
+        }
+        self.cached_lossy_utf8
+            .get_or_init(|| String::from_utf8_lossy(self.binary_data).into_owned())
+    }
+
     pub(crate) fn get_string_exact_index(&self) -> &FxHashMap<String, Vec<u32>> {
         self.string_exact_index.get_or_init(|| {
             let mut index: FxHashMap<String, Vec<u32>> = FxHashMap::default();
@@ -424,6 +472,8 @@ impl<'a> EvaluationContext<'a> {
             cached_kv_parsed: Arc::new(OnceLock::new()),
             cached_kv_offsets: Arc::new(OnceLock::new()),
             cached_lower_binary: Arc::new(OnceLock::new()),
+            cached_lossy_utf8: Arc::new(OnceLock::new()),
+            cached_string_ascii: Arc::new(OnceLock::new()),
             ast_kind_cache: None,
             string_exact_index: Arc::new(OnceLock::new()),
             string_exact_index_ci: Arc::new(OnceLock::new()),

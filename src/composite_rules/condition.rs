@@ -206,8 +206,18 @@ impl TraitRegex {
     /// inline for Unicode-only patterns, from the budgeted shared store for
     /// ASCII-compatible ones meeting a non-ASCII haystack.
     fn engine_for(&self, haystack: &str) -> Option<EngineRef<'_>> {
+        self.engine_for_known(haystack.is_ascii())
+    }
+
+    /// [`Self::engine_for`] with the haystack's ASCII-ness already determined.
+    ///
+    /// `haystack_is_ascii` is a *proof*, not a hint: `false` only ever selects
+    /// the Unicode engine, which has exact `regex::Regex` semantics for any
+    /// haystack, so an unknown-or-false answer is always sound — it just gives
+    /// up the faster path.
+    fn engine_for_known(&self, haystack_is_ascii: bool) -> Option<EngineRef<'_>> {
         if let Some(ascii) = &self.ascii
-            && haystack.is_ascii()
+            && haystack_is_ascii
         {
             return Some(EngineRef::Borrowed(ascii));
         }
@@ -259,11 +269,21 @@ impl TraitRegex {
     /// haystacks, and the Unicode engine's non-empty matches cover whole
     /// codepoints with `utf8_empty(true)` positioning empty matches like the
     /// `regex` crate does.
-    pub(crate) fn find_str<'v>(&self, haystack: &'v str) -> Option<&'v str> {
+    ///
+    /// Engine selection needs an O(haystack) ASCII scan, and it is the
+    /// *haystack* that determines the answer, not the pattern — so matching one
+    /// string against many patterns would rescan it once per pattern. Callers
+    /// pass the answer in; those holding a haystack across many patterns
+    /// compute it once (see `EvaluationContext::string_is_ascii`).
+    pub(crate) fn find_str<'v>(
+        &self,
+        haystack: &'v str,
+        haystack_is_ascii: bool,
+    ) -> Option<&'v str> {
         if haystack.len() < self.min_len {
             return None;
         }
-        let engine = self.engine_for(haystack)?;
+        let engine = self.engine_for_known(haystack_is_ascii)?;
         let engine = engine.get();
         super::regex_scratch::with_cache(engine.id, &engine.re, |cache| {
             engine
@@ -277,15 +297,18 @@ impl TraitRegex {
     /// `f(start_offset, matched_span)`; `f` returns `false` to stop early.
     /// Iteration protocol (including empty-match advancement) matches the
     /// facade's `find_iter` — both are built on `util::iter::Searcher`.
+    ///
+    /// `haystack_is_ascii` selects the engine; see [`Self::find_str`].
     pub(crate) fn for_each_find<'v>(
         &self,
         haystack: &'v str,
+        haystack_is_ascii: bool,
         mut f: impl FnMut(usize, &'v str) -> bool,
     ) {
         if haystack.len() < self.min_len {
             return;
         }
-        let Some(engine) = self.engine_for(haystack) else {
+        let Some(engine) = self.engine_for_known(haystack_is_ascii) else {
             return;
         };
         let engine = engine.get();
@@ -4554,13 +4577,13 @@ exact: curl
     fn trait_regex_engine_dispatch() {
         // Unicode semantics preserved on non-ASCII haystacks (lazy engine).
         let re = super::TraitRegex::compile(r"user\w+").unwrap();
-        assert_eq!(re.find_str("userñx"), Some("userñx"));
-        assert_eq!(re.find_str("userabc"), Some("userabc"));
+        assert_eq!(re.find_str("userñx", false), Some("userñx"));
+        assert_eq!(re.find_str("userabc", true), Some("userabc"));
         let re = super::TraitRegex::compile(r"a.b").unwrap();
-        assert_eq!(re.find_str("aéb"), Some("aéb"));
-        assert_eq!(re.find_str("axb"), Some("axb"));
+        assert_eq!(re.find_str("aéb", false), Some("aéb"));
+        assert_eq!(re.find_str("axb", true), Some("axb"));
         let re = super::TraitRegex::compile(r#"x[^"]+y"#).unwrap();
-        assert_eq!(re.find_str("xéñy"), Some("xéñy"));
+        assert_eq!(re.find_str("xéñy", false), Some("xéñy"));
         // ASCII-haystack parity across a semantics-sensitive pattern zoo:
         // both engines must agree exactly on pure-ASCII input.
         for pat in [
@@ -4577,7 +4600,7 @@ exact: curl
             let uni = super::compile_unicode(pat).unwrap();
             let mut cache = uni.create_cache();
             for hay in ["user_x a b-c 4", "x'y start token end", "POWER  SHELL", ""] {
-                let ascii_hit = re.find_str(hay);
+                let ascii_hit = re.find_str(hay, hay.is_ascii());
                 let uni_hit = uni
                     .search_with(&mut cache, &regex_automata::Input::new(hay))
                     .map(|m| &hay[m.start()..m.end()]);

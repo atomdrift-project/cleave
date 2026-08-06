@@ -1714,34 +1714,48 @@ impl FileTypeRegexSet {
         matched_traits: &mut FxHashSet<usize>,
         content: &[u8],
     ) {
-        for &pattern_idx in literal_candidates {
-            if let Some(trait_indices) = self.pattern_to_traits.get(pattern_idx) {
-                if trait_indices.iter().all(|t| matched_traits.contains(t)) {
-                    continue;
-                }
-                // Race-don't-block: concurrent first users each compile and the
-                // first `set` wins. `get_or_init` would serialize the pile-up of
-                // rayon workers hitting a popular pattern during warmup — the
-                // same idled-cores trap the bytes-regex cache documents (its
-                // per-key OnceLock experiment raised wall ~35%).
-                let slot = &self.individual_regexes[pattern_idx];
-                if slot.get().is_none() {
-                    let pattern = &self.patterns[pattern_idx];
-                    let compiled = match regex::bytes::Regex::new(pattern) {
-                        Ok(re) => Some(Arc::new(re)),
-                        Err(e) => {
-                            tracing::warn!(pattern, error = %e, "raw content pattern failed to compile; skipping");
-                            None
-                        }
-                    };
-                    let _ = slot.set(compiled);
-                }
-                if let Some(Some(regex)) = slot.get()
-                    && regex.is_match(content)
-                {
-                    matched_traits.extend(trait_indices.iter().copied());
-                }
+        // Each candidate verifies against the WHOLE content, so on a large
+        // input every one is a full scan and they add up to a single-threaded
+        // tail. They are independent — the already-matched skip below is a
+        // work-saving check, not a dependency (the docstring's "same union
+        // either way") — so a read-only snapshot of `matched_traits` is a
+        // sound basis for it and the verifies can run concurrently.
+        const PARALLEL_MIN_BYTES: usize = 1 << 20;
+        let verify = |&pattern_idx: &usize| -> Option<&[usize]> {
+            let trait_indices = self.pattern_to_traits.get(pattern_idx)?;
+            if trait_indices.iter().all(|t| matched_traits.contains(t)) {
+                return None;
             }
+            // Race-don't-block: concurrent first users each compile and the
+            // first `set` wins. `get_or_init` would serialize the pile-up of
+            // rayon workers hitting a popular pattern during warmup — the
+            // same idled-cores trap the bytes-regex cache documents (its
+            // per-key OnceLock experiment raised wall ~35%).
+            let slot = &self.individual_regexes[pattern_idx];
+            if slot.get().is_none() {
+                let pattern = &self.patterns[pattern_idx];
+                let compiled = match regex::bytes::Regex::new(pattern) {
+                    Ok(re) => Some(Arc::new(re)),
+                    Err(e) => {
+                        tracing::warn!(pattern, error = %e, "raw content pattern failed to compile; skipping");
+                        None
+                    }
+                };
+                let _ = slot.set(compiled);
+            }
+            match slot.get() {
+                Some(Some(regex)) if regex.is_match(content) => Some(trait_indices),
+                _ => None,
+            }
+        };
+
+        if content.len() >= PARALLEL_MIN_BYTES && literal_candidates.len() > 1 {
+            use rayon::prelude::*;
+            let hits: Vec<&[usize]> = literal_candidates.par_iter().filter_map(verify).collect();
+            matched_traits.extend(hits.into_iter().flatten().copied());
+        } else {
+            let hits: Vec<&[usize]> = literal_candidates.iter().filter_map(verify).collect();
+            matched_traits.extend(hits.into_iter().flatten().copied());
         }
     }
 
@@ -2343,35 +2357,48 @@ impl RawContentRegexIndex {
 
     /// Find matches using only patterns applicable to the given file type.
     /// Uses Aho-Corasick literal prefix pre-filtering to skip RegexSet when possible.
+    ///
+    /// The universal set, the file-type set and the archive-family sets are
+    /// independent scans over the same bytes whose results are unioned, so on
+    /// large content they run concurrently. Each set already fans its own
+    /// sub-passes out (see [`FileTypeRegexSet::find_matches`]), but those
+    /// fan-outs were serialized behind one another: a container's raw bytes
+    /// (hundreds of MB) paid every set's slowest pass end to end.
     pub(crate) fn find_matches(
         &self,
         binary_data: &[u8],
         file_type: &RuleFileType,
     ) -> FxHashSet<usize> {
+        const PARALLEL_MIN_BYTES: usize = 4 << 20;
+
+        let sets: Vec<&FileTypeRegexSet> = self
+            .universal
+            .iter()
+            .chain(self.by_file_type.get(file_type))
+            .chain(
+                archive_family_types(file_type)
+                    .iter()
+                    .filter_map(|ft| self.by_file_type.get(ft)),
+            )
+            .collect();
+
+        if binary_data.len() >= PARALLEL_MIN_BYTES && sets.len() > 1 {
+            use rayon::prelude::*;
+            return sets
+                .par_iter()
+                .map(|set| set.find_matches(binary_data))
+                .reduce(Vec::new, |mut a, mut b| {
+                    a.append(&mut b);
+                    a
+                })
+                .into_iter()
+                .collect();
+        }
+
         let mut matching_traits = FxHashSet::default();
-
-        // Match universal patterns (with literal pre-filtering)
-        if let Some(ref universal) = self.universal {
-            for trait_idx in universal.find_matches(binary_data) {
-                matching_traits.insert(trait_idx);
-            }
+        for set in sets {
+            matching_traits.extend(set.find_matches(binary_data));
         }
-
-        // Match file-type-specific patterns (with literal pre-filtering)
-        if let Some(ft_set) = self.by_file_type.get(file_type) {
-            for trait_idx in ft_set.find_matches(binary_data) {
-                matching_traits.insert(trait_idx);
-            }
-        }
-
-        for archive_ft in archive_family_types(file_type) {
-            if let Some(ft_set) = self.by_file_type.get(archive_ft) {
-                for trait_idx in ft_set.find_matches(binary_data) {
-                    matching_traits.insert(trait_idx);
-                }
-            }
-        }
-
         matching_traits
     }
 }

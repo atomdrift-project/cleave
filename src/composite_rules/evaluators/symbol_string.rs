@@ -541,7 +541,10 @@ impl<'p> StringMatcher<'p> {
     /// and `exact:` return the whole value. Callers clone only when actually storing
     /// evidence (≤ `MAX_EVIDENCE_PER_TRAIT`), so match-counting and `not:`/`is:`
     /// filtering on non-stored matches cost zero allocations.
-    fn match_value_ref<'v>(&self, value: &'v str) -> Option<&'v str> {
+    /// `value_is_ascii` is only consulted by the regex arm, which uses it to
+    /// select an engine — a selection that would otherwise rescan `value` once
+    /// per pattern tested against it.
+    fn match_value_ref<'v>(&self, value: &'v str, value_is_ascii: bool) -> Option<&'v str> {
         use crate::composite_rules::condition::{word_match_ci, word_match_cs};
         match self {
             Self::Exact { needle, ci } => {
@@ -560,7 +563,7 @@ impl<'p> StringMatcher<'p> {
             Self::WordCi { needle, ac } => {
                 word_match_ci(value, needle, ac).map(|s| &value[s..s + needle.len()])
             }
-            Self::Regex(re) => re.find_str(value),
+            Self::Regex(re) => re.find_str(value, value_is_ascii),
             Self::Never => None,
         }
     }
@@ -574,14 +577,15 @@ impl<'p> StringMatcher<'p> {
         &self,
         value: &'v str,
         bounds: (Option<usize>, Option<usize>),
+        value_is_ascii: bool,
     ) -> Option<&'v str> {
         if bounds == (None, None) {
-            return self.match_value_ref(value);
+            return self.match_value_ref(value, value_is_ascii);
         }
         match self {
             Self::Regex(re) => {
                 let mut found = None;
-                re.for_each_find(value, |_, span| {
+                re.for_each_find(value, value_is_ascii, |_, span| {
                     if span_length_ok(span.len(), bounds) {
                         found = Some(span);
                         false
@@ -592,7 +596,7 @@ impl<'p> StringMatcher<'p> {
                 found
             }
             _ => self
-                .match_value_ref(value)
+                .match_value_ref(value, value_is_ascii)
                 .filter(|span| span_length_ok(span.len(), bounds)),
         }
     }
@@ -835,14 +839,16 @@ pub(crate) fn eval_text<'a, 'b>(
     let mut evidence = Vec::new();
     let mut match_count = 0usize;
 
-    for string_info in &ctx.report.strings {
+    for (string_idx, string_info) in ctx.report.strings.iter().enumerate() {
         if !offset_in_range(string_info.offset, effective_range) {
             continue;
         }
 
-        if let Some(match_value) =
-            matcher.match_value_bounded(&string_info.value, (params.length_min, params.length_max))
-        {
+        if let Some(match_value) = matcher.match_value_bounded(
+            &string_info.value,
+            (params.length_min, params.length_max),
+            ctx.string_is_ascii(string_idx),
+        ) {
             let excluded_by_not = trait_not
                 .map(|exceptions| exceptions.iter().any(|exc| exc.matches(match_value)))
                 .unwrap_or(false);
@@ -928,9 +934,11 @@ fn eval_text_encoded<'a, 'b>(
             continue;
         }
 
-        let Some(match_value) =
-            matcher.match_value_bounded(&string_info.value, (params.length_min, params.length_max))
-        else {
+        let Some(match_value) = matcher.match_value_bounded(
+            &string_info.value,
+            (params.length_min, params.length_max),
+            ctx.string_is_ascii(idx as usize),
+        ) else {
             continue;
         };
         let excluded_by_not = trait_not
@@ -1012,7 +1020,7 @@ pub(crate) fn eval_string_literal<'a, 'b>(
     let mut evidence = Vec::new();
     let mut match_count = 0usize;
 
-    for string_info in &ctx.report.strings {
+    for (string_idx, string_info) in ctx.report.strings.iter().enumerate() {
         if string_info.section.as_deref() != Some("ast") {
             continue;
         }
@@ -1020,9 +1028,11 @@ pub(crate) fn eval_string_literal<'a, 'b>(
             continue;
         }
 
-        if let Some(match_value) =
-            matcher.match_value_bounded(&string_info.value, (params.length_min, params.length_max))
-        {
+        if let Some(match_value) = matcher.match_value_bounded(
+            &string_info.value,
+            (params.length_min, params.length_max),
+            ctx.string_is_ascii(string_idx),
+        ) {
             let excluded_by_not = trait_not
                 .map(|exceptions| exceptions.iter().any(|exc| exc.matches(match_value)))
                 .unwrap_or(false);
@@ -1676,18 +1686,19 @@ pub(crate) fn eval_raw<'a>(
             // patterns reach here. A compile failure (unreachable for corpus
             // patterns, which compiled before) simply yields no matches.
             if let Some(re) = crate::composite_rules::condition::cached_regex(pattern_str) {
-                // Reuse the per-member UTF-8 view validated once at ctx construction
-                // (source types); only re-validate for sub-ranges or non-source members.
-                let content: std::borrow::Cow<'_, str> = match ctx.cached_source_utf8 {
-                    Some(s) if search_start == 0 && search_end == ctx.binary_data.len() => {
-                        std::borrow::Cow::Borrowed(s)
-                    }
-                    _ => super::utf8_view(ctx.binary_data, (search_start, search_end)),
-                };
+                // Reuse the whole-file UTF-8 view built once at ctx construction
+                // (source types) or on first use (everything else); only
+                // re-validate for sub-ranges.
+                let content: std::borrow::Cow<'_, str> =
+                    if search_start == 0 && search_end == ctx.binary_data.len() {
+                        std::borrow::Cow::Borrowed(ctx.full_utf8())
+                    } else {
+                        super::utf8_view(ctx.binary_data, (search_start, search_end))
+                    };
                 let mut first_match = None;
                 let mut first_offset = None;
                 let mut idx = 0usize;
-                re.for_each_find(&content, |mat_start, match_str| {
+                re.for_each_find(&content, content.is_ascii(), |mat_start, match_str| {
                     // Limit match processing to prevent DoS on pattern-dense files
                     if idx >= MAX_MATCHES_TO_PROCESS {
                         if let Some(trait_id_val) = trait_id {
@@ -1988,14 +1999,15 @@ pub(crate) fn eval_raw<'a>(
             }
         } else {
             // Unicode pattern - fall back to cached UTF-8 conversion
-            // Reuse the per-member UTF-8 view validated once at ctx construction
-            // (source types); only re-validate for sub-ranges or non-source members.
-            let content: std::borrow::Cow<'_, str> = match ctx.cached_source_utf8 {
-                Some(s) if search_start == 0 && search_end == ctx.binary_data.len() => {
-                    std::borrow::Cow::Borrowed(s)
-                }
-                _ => super::utf8_view(ctx.binary_data, (search_start, search_end)),
-            };
+            // Reuse the whole-file UTF-8 view built once at ctx construction
+            // (source types) or on first use (everything else); only
+            // re-validate for sub-ranges.
+            let content: std::borrow::Cow<'_, str> =
+                if search_start == 0 && search_end == ctx.binary_data.len() {
+                    std::borrow::Cow::Borrowed(ctx.full_utf8())
+                } else {
+                    super::utf8_view(ctx.binary_data, (search_start, search_end))
+                };
 
             if is_check.is_some() {
                 // For validator validation, we need to find actual match positions

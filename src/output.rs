@@ -544,6 +544,29 @@ pub struct TinyOpts {
     /// traits (imports, capabilities, structure), so a downstream grader can
     /// judge the program's functionality instead of receiving zero bytes.
     pub low_tier_fill: usize,
+    /// Focused selection and rendering (litmus's compact terminal view).
+    /// `Some(fc)` changes two things:
+    ///   - selection: when a file carries any finding at or above `fc`, only
+    ///     those findings — plus the components they reference via
+    ///     `trait_refs` (their composite legs) — are candidates. A file with
+    ///     nothing at `fc` selects as usual, so an unremarkable file keeps its
+    ///     notable context.
+    ///   - windows: only rows carrying a *selected* match render (a merged
+    ///     capture window no longer drags unselected neighbors along), and a
+    ///     hit at or above `fc` keeps at least one following row/line of
+    ///     context — the continuation tends to carry the payoff.
+    ///
+    /// `None` (every built-in preset) renders as before.
+    pub focus_crit: Option<Criticality>,
+    /// Card layout (litmus's terminal view). The caller prints the artifact's
+    /// own header (verdict rule, name, hash), so cleave renders only the body:
+    /// the root file gets *no* header or divider rule, every file renders
+    /// flat (no depth indent), members open with a `📄 path · TYPE · size`
+    /// line, and colorized rows drop the `H`/`S` severity gutter — the tinted
+    /// comment marker carries severity instead. Plain (piped) rows keep their
+    /// severity letters, which are the only carrier without color. `false`
+    /// (every built-in preset) renders as before.
+    pub card: bool,
 }
 
 impl TinyOpts {
@@ -567,6 +590,8 @@ impl TinyOpts {
             color: true,
             basename_root: false,
             low_tier_fill: 0,
+            focus_crit: None,
+            card: false,
         }
     }
 
@@ -759,6 +784,23 @@ pub fn format_context_badged(
             });
         }
 
+        // Card layout: a file earns its block only by carrying focus-grade
+        // evidence. A member with nothing at `focus_crit` — routine imports,
+        // metadata — prints nothing; the artifact's flagged files are the
+        // story, and the quiet ones are noise inside a flagged card.
+        if opts.card
+            && let Some(fc) = opts.focus_crit
+        {
+            let sel: HashSet<&str> = selected.iter().copied().collect();
+            let flagged = file
+                .findings
+                .iter()
+                .any(|f| f.crit >= fc && sel.contains(f.id.as_str()));
+            if !flagged {
+                continue;
+            }
+        }
+
         // Collapse findings already shown by an earlier file in the LLM view.
         // Done after container filtering so the surviving, container-specific
         // ids are what register as seen.
@@ -842,8 +884,10 @@ pub fn format_context_badged(
         // Skip a file whose body came out empty: a lone header advertising
         // counts with nothing beneath it is noise. A container is kept even when
         // empty — its header anchors the members nested below it — as is a file
-        // with an identity headline worth showing.
-        if body.trim().is_empty() && file.identity.is_none() && !is_container {
+        // with an identity headline worth showing. In the card layout the
+        // caller's own artifact header is the anchor, so an empty root (or
+        // container) has nothing to add and is skipped outright.
+        if body.trim().is_empty() && (opts.card || (file.identity.is_none() && !is_container)) {
             continue;
         }
 
@@ -860,12 +904,23 @@ pub fn format_context_badged(
         emitted = true;
 
         let mut block = String::new();
-        match opts.header {
-            HeaderStyle::Rich => rich_header(&mut block, file, eff_width, adorn, &body),
-            HeaderStyle::Minimal => minimal_header(&mut block, file, opts.basename_root),
+        if opts.card {
+            // Card layout: the caller already printed the artifact's header, so
+            // the root file contributes body only; members open with a light
+            // `📄 path · TYPE · size` line. No divider rules, no depth indent.
+            if file.depth > 0 {
+                card_header(&mut block, file, colorize);
+            }
+            block.push_str(&body);
+            out.push_str(&block);
+        } else {
+            match opts.header {
+                HeaderStyle::Rich => rich_header(&mut block, file, eff_width, adorn, &body),
+                HeaderStyle::Minimal => minimal_header(&mut block, file, opts.basename_root),
+            }
+            block.push_str(&body);
+            indent_block(&mut out, &block, file.depth);
         }
-        block.push_str(&body);
-        indent_block(&mut out, &block, file.depth);
     }
     // Trailing blank line so consecutive file entries are separated — both
     // archive members (looped above) and separate per-file outputs streamed by
@@ -1027,6 +1082,27 @@ fn file_has_output(file: &FileAnalysis, opts: &TinyOpts) -> bool {
 /// traits still convey what the program *does* (matching `../prism`, whose
 /// headline ranks traits verdict-agnostically).
 fn select_ids<'a>(file: &'a FileAnalysis, opts: &TinyOpts, low_tier_fill: usize) -> Vec<&'a str> {
+    // Focused mode: when the file carries any native finding at or above
+    // `focus_crit`, the candidate set narrows to those findings plus the
+    // traits they reference (`trait_refs` — a composite's legs). Legs bypass
+    // `min_crit` so a referenced component can appear beside its composite.
+    let focus_legs: Option<HashSet<&str>> = opts.focus_crit.and_then(|fc| {
+        let focused: Vec<&Finding> = file
+            .findings
+            .iter()
+            .filter(|f| f.src.is_none() && f.crit >= fc)
+            .collect();
+        if focused.is_empty() {
+            return None;
+        }
+        Some(
+            focused
+                .iter()
+                .flat_map(|f| f.trait_refs.iter().map(String::as_str))
+                .collect(),
+        )
+    });
+
     // Per id, keep the best score and the highest criticality seen — the
     // latter decides whether the id bypasses the cap.
     let mut scored: HashMap<&str, (f32, Criticality)> = HashMap::new();
@@ -1038,11 +1114,14 @@ fn select_ids<'a>(file: &'a FileAnalysis, opts: &TinyOpts, low_tier_fill: usize)
         // a verdict. Referenced component traits stay — they're the
         // source-context counterweight. (Both tiers re-enter below as
         // `low_tier_fill` candidates.)
-        if f.src.is_some()
-            || f.crit < opts.min_crit
-            || f.crit == Criticality::Baseline
-            || !tiny_should_show(f, file)
-        {
+        if f.src.is_some() || !tiny_should_show(f, file) {
+            continue;
+        }
+        if let (Some(legs), Some(fc)) = (&focus_legs, opts.focus_crit) {
+            if f.crit < fc && !legs.contains(f.id.as_str()) {
+                continue;
+            }
+        } else if f.crit < opts.min_crit || f.crit == Criticality::Baseline {
             continue;
         }
         let score = f.conf * f32::from(f.crit.rank());
@@ -1376,7 +1455,7 @@ fn render_context(
         if matches!(opts.header, HeaderStyle::Minimal) {
             render_ascii_context(out, file, selected);
         } else {
-            render_hex_context(out, file, selected, term_width, opts.full_context, colorize);
+            render_hex_context(out, file, selected, term_width, opts, colorize);
         }
     } else {
         render_text_chunks(out, file, selected, opts, term_width, colorize);
@@ -1611,12 +1690,18 @@ fn render_text_chunks(
     // Fixed content column so comments align; long lines truncate to it. The
     // machine/LLM view has no terminal to fit and carries its description on a
     // preceding annotation line, so it shows a generous window of the code —
-    // minified code carries its signal far past column 35.
+    // minified code carries its signal far past column 35. The card layout's
+    // 3-space lead is two columns wider than the severity gutter.
+    let prefix = if opts.card {
+        CARD_ROW_LEAD.len() + loc_width + 2
+    } else {
+        src_prefix(loc_width)
+    };
     let content_width = if minimal {
         SRC_LLM_WIDTH
     } else {
         term_width
-            .saturating_sub(src_prefix(loc_width) + 2 + SRC_COMMENT_BUDGET)
+            .saturating_sub(prefix + 2 + SRC_COMMENT_BUDGET)
             .clamp(24, 100)
     };
 
@@ -1627,8 +1712,10 @@ fn render_text_chunks(
 
     let mut emitted = false;
     for chunk in shown {
-        // A blank line sets each window apart as its own paragraph.
-        if emitted && !out.ends_with("\n\n") {
+        // A blank line sets each window apart as its own paragraph — except in
+        // the card layout, where the line-number gaps already mark the jumps
+        // and the block stays one compact unit.
+        if emitted && !opts.card && !out.ends_with("\n\n") {
             out.push('\n');
         }
         emitted = true;
@@ -1640,6 +1727,12 @@ fn render_text_chunks(
         let cut_right = chunk.data.last() != Some(&b'\n') && chunk_end < file.size;
         let rows = chunk_rows(chunk);
         let last = rows.len().saturating_sub(1);
+        // In focused mode a hit at or above `focus_crit` keeps one following
+        // line of real code — but only when the hit fit on a single line
+        // (`hit_rows` counts consecutive hit lines; a two-line hit has shown
+        // its continuation already). Every other note-less row is dropped;
+        // near-empty rows — a lone `}`, a blank — don't satisfy the trail.
+        let mut hit_rows = 0usize;
         for (idx, row) in rows.iter().enumerate() {
             let bytes = &chunk.data[row.start..row.end];
             // Notes whose match starts within this row's byte span.
@@ -1653,8 +1746,23 @@ fn render_text_chunks(
             // A context row (no match of its own) earns a line only when it carries
             // real code — skip near-empty ones like a lone `}` that add height
             // without context. A hit row always renders.
-            if notes.is_empty() && bytes.iter().filter(|b| !b.is_ascii_whitespace()).count() < 6 {
-                continue;
+            let real_code = bytes.iter().filter(|b| !b.is_ascii_whitespace()).count() >= 6;
+            if notes.is_empty() {
+                if opts.focus_crit.is_some() {
+                    if !(hit_rows == 1 && real_code) {
+                        continue;
+                    }
+                    hit_rows = 0;
+                } else if !real_code {
+                    continue;
+                }
+            } else if opts
+                .focus_crit
+                .is_some_and(|fc| notes.iter().any(|n| n.crit >= fc))
+            {
+                hit_rows += 1;
+            } else {
+                hit_rows = 0;
             }
             let comment = notes
                 .iter()
@@ -1674,6 +1782,7 @@ fn render_text_chunks(
                 content_width,
                 term_width,
                 colorize,
+                opts.card,
             );
         }
     }
@@ -1687,7 +1796,7 @@ fn render_hex_context(
     file: &FileAnalysis,
     selected: &[&str],
     term_width: usize,
-    full_context: bool,
+    opts: &TinyOpts,
     colorize: bool,
 ) {
     let sel: HashSet<&str> = selected.iter().copied().collect();
@@ -1719,14 +1828,7 @@ fn render_hex_context(
     for &i in &show {
         let line = &file.context[i];
         render_hex_unit(
-            out,
-            line,
-            stride,
-            marker,
-            loc_width,
-            term_width,
-            full_context,
-            colorize,
+            out, line, &sel, stride, marker, loc_width, term_width, opts, colorize,
         );
     }
 }
@@ -1767,6 +1869,11 @@ const SRC_LLM_WIDTH: usize = 512;
 const fn row_prefix(loc_width: usize) -> usize {
     1 + 1 + loc_width + 2
 }
+
+/// Row lead in the card layout: a single space, so the *left-justified*
+/// location column starts directly under the `📄` glyph — every row's first
+/// digit lands in the same column instead of drifting with the offset width.
+const CARD_ROW_LEAD: &str = " ";
 /// Fixed columns ahead of a source line's code: the 1-char gutter abuts the
 /// offset (no space — they read as one unit), then a two-space separator.
 const fn src_prefix(loc_width: usize) -> usize {
@@ -1867,6 +1974,7 @@ fn render_source_line(
     content_width: usize,
     term_width: usize,
     colorize: bool,
+    card: bool,
 ) {
     let raw = String::from_utf8_lossy(data);
     let base = byte_base;
@@ -1886,13 +1994,21 @@ fn render_source_line(
                 .copied()
         };
 
-        let top = notes
-            .iter()
-            .copied()
-            .max_by_key(|n| (n.crit, std::cmp::Reverse(n.off)));
-        // Gutter and line number read as one unit — no space between them.
-        out.push_str(&gutter_glyph(top.map(|n| n.crit), true));
-        out.push_str(&format!("{loc_str:>loc_width$}").bright_black().to_string());
+        if card {
+            // Card rows carry no severity gutter — the tinted comment marker
+            // is the severity carrier — and the line number is left-justified
+            // so every row's first digit shares a column.
+            out.push_str(CARD_ROW_LEAD);
+            out.push_str(&format!("{loc_str:<loc_width$}").bright_black().to_string());
+        } else {
+            let top = notes
+                .iter()
+                .copied()
+                .max_by_key(|n| (n.crit, std::cmp::Reverse(n.off)));
+            // Gutter and line number read as one unit — no space between them.
+            out.push_str(&gutter_glyph(top.map(|n| n.crit), true));
+            out.push_str(&format!("{loc_str:>loc_width$}").bright_black().to_string());
+        }
         out.push_str("  ");
 
         // Clip the code to the fixed content column so comments line up, keeping
@@ -1928,7 +2044,12 @@ fn render_source_line(
         if let Some(n) = comment {
             out.push_str(&" ".repeat(content_width.saturating_sub(visible) + 2));
             let (r, g, b) = crit_rgb(n.crit);
-            let used = src_prefix(loc_width) + content_width + 2 + marker.chars().count() + 1;
+            let prefix = if card {
+                CARD_ROW_LEAD.len() + loc_width + 2
+            } else {
+                src_prefix(loc_width)
+            };
+            let used = prefix + content_width + 2 + marker.chars().count() + 1;
             // 2-col right margin so the line never reaches the terminal edge.
             let budget = term_width.saturating_sub(used + 2).max(8);
             out.push_str(&marker.truecolor(r, g, b).to_string());
@@ -1999,38 +2120,71 @@ fn render_source_line(
 fn render_hex_unit(
     out: &mut String,
     line: &ContextLine,
+    sel: &HashSet<&str>,
     stride: usize,
     marker: &str,
     loc_width: usize,
     term_width: usize,
-    full_context: bool,
+    opts: &TinyOpts,
     colorize: bool,
 ) {
-    let spans: Vec<(u64, u64, Criticality)> = line
+    let full_context = opts.full_context;
+    // Focused mode narrows this renderer's world to the selected notes: they
+    // drive the byte highlights, the row filter, and the gutter comments. A
+    // merged capture window then no longer annotates unselected neighbors.
+    let notes: Vec<&Note> = line
         .notes
+        .iter()
+        .filter(|n| opts.focus_crit.is_none() || sel.contains(n.id.as_str()))
+        .collect();
+    let spans: Vec<(u64, u64, Criticality)> = notes
         .iter()
         .map(|n| (n.off, n.off + u64::from(n.len.max(1)), n.crit))
         .collect();
     let cells_w = hex_cells_width(stride);
     // Column where the comment text starts, and the width left for it. A 2-col
-    // right margin keeps the line clear of the terminal edge (no wrap).
-    let comment_col = row_prefix(loc_width) + cells_w + 2 + marker.len() + 1;
+    // right margin keeps the line clear of the terminal edge (no wrap). The
+    // card layout swaps the severity gutter for a 3-space lead (one wider).
+    let prefix = if opts.card {
+        CARD_ROW_LEAD.len() + loc_width + 2
+    } else {
+        row_prefix(loc_width)
+    };
+    let comment_col = prefix + cells_w + 2 + marker.len() + 1;
     let desc_budget = term_width.saturating_sub(comment_col + 2).max(8);
 
+    // In focused mode a hit at or above `focus_crit` keeps one row of trailing
+    // context — but only when the hit itself fit on a single row. A match span
+    // that already continues onto a second row has shown its continuation;
+    // adding a third row past it is padding. `hit_rows` counts the consecutive
+    // rendered rows of the current hit; a trail fires only from exactly one.
+    let mut hit_rows = 0usize;
     for chunk_start in (0..line.data.len()).step_by(stride) {
         let row = &line.data[chunk_start..(chunk_start + stride).min(line.data.len())];
         let row_base = line.loc + chunk_start as u64;
         let row_end = row_base + row.len() as u64;
         // Matches intersecting this row, strongest first — drives the gutter.
-        let mut row_notes: Vec<&Note> = line
-            .notes
+        let mut row_notes: Vec<&Note> = notes
             .iter()
+            .copied()
             .filter(|n| n.off < row_end && row_base < n.off + u64::from(n.len.max(1)))
             .collect();
         row_notes.sort_by(|a, b| b.crit.cmp(&a.crit).then_with(|| a.off.cmp(&b.off)));
+        let trail_here = row_notes.is_empty() && hit_rows == 1;
+        if row_notes.is_empty() {
+            hit_rows = 0;
+        } else if opts
+            .focus_crit
+            .is_some_and(|fc| row_notes.iter().any(|n| n.crit >= fc))
+        {
+            hit_rows += 1;
+        } else {
+            hit_rows = 0;
+        }
         // Without surrounding context (litmus), emit only rows that carry a
-        // match — full rows, just none of the padding rows around them.
-        if !full_context && row_notes.is_empty() {
+        // match — full rows, just none of the padding rows around them — plus
+        // the single trailing row a one-row focused hit earned.
+        if !full_context && row_notes.is_empty() && !trail_here {
             continue;
         }
         // A short trailing row (the leftover tail of the captured context) is a
@@ -2038,7 +2192,7 @@ fn render_hex_unit(
         // full and the columns line up; a note-bearing tail is kept and padded to
         // full width below (the wider trailing capture means notes rarely land
         // here, but a match at end-of-file still can).
-        if row.len() < stride && row_notes.is_empty() {
+        if row.len() < stride && row_notes.is_empty() && !trail_here {
             continue;
         }
         // The comment shows once, on the row where the match begins — not
@@ -2050,13 +2204,21 @@ fn render_hex_unit(
         let loc_str = format!("{row_base:x}");
 
         if colorize {
-            let top = row_notes
-                .iter()
-                .copied()
-                .max_by_key(|n| (n.crit, std::cmp::Reverse(n.off)));
-            out.push_str(&gutter_glyph(top.map(|n| n.crit), true));
-            out.push(' ');
-            out.push_str(&format!("{loc_str:>loc_width$}").bright_black().to_string());
+            if opts.card {
+                // Card rows carry no severity gutter — the tinted comment
+                // marker is the severity carrier — and the location column is
+                // left-justified so every row's first digit shares a column.
+                out.push_str(CARD_ROW_LEAD);
+                out.push_str(&format!("{loc_str:<loc_width$}").bright_black().to_string());
+            } else {
+                let top = row_notes
+                    .iter()
+                    .copied()
+                    .max_by_key(|n| (n.crit, std::cmp::Reverse(n.off)));
+                out.push_str(&gutter_glyph(top.map(|n| n.crit), true));
+                out.push(' ');
+                out.push_str(&format!("{loc_str:>loc_width$}").bright_black().to_string());
+            }
             out.push_str("  ");
             let (cells, width) = hex_cells(row, row_base, &spans, stride, true);
             out.push_str(&cells);
@@ -2267,8 +2429,14 @@ fn render_no_anchor(
 
     // A location-less finding has no honest byte chunk, so this is its only
     // output surface. Keep notable+ regardless of whether other findings in the
-    // file captured context.
-    let floor = opts.min_crit.max(Criticality::Notable);
+    // file captured context. Focused mode is stricter: a note with no location
+    // to anchor it earns a line only at focus criticality or above — a
+    // location-less notable (e.g. a container's archive-shape observation) is
+    // exactly the noise the focused view exists to drop.
+    let floor = match opts.focus_crit {
+        Some(fc) => fc,
+        None => opts.min_crit.max(Criticality::Notable),
+    };
     let has_local_offset = |f: &Finding| {
         f.evidence.iter().any(|e| {
             e.byte_offset().is_some()
@@ -2391,6 +2559,49 @@ fn embedded_label(segment: &str, size: u64) -> Option<String> {
 /// With a [`HeaderBadge`] (litmus): a single lean line `stamp path · type
 /// trailer`, plus the badge's subtitle beneath. Then a rule sized to the widest
 /// line of the header and the `body` it sits above (capped at the terminal).
+/// Card-layout member header: ` 📄 path · TYPE · size` — bright path shown
+/// relative to the artifact (the container is already named by the caller's
+/// header above, so repeating it per member is pure noise), dim type and size,
+/// no formula, no severity legend.
+fn card_header(out: &mut String, file: &FileAnalysis, colorize: bool) {
+    use crate::types::file_analysis::ARCHIVE_DELIMITER;
+    // Everything after the first archive delimiter is the artifact-relative
+    // member path; deeper nesting reads as `/`.
+    let path = match file.path.split_once(ARCHIVE_DELIMITER) {
+        Some((_, members)) => members.replace(ARCHIVE_DELIMITER, "/"),
+        None => tiny_path(&file.path, true),
+    };
+    let mut meta = format!("\u{00b7} {}", display_file_type(&file.file_type));
+    let size = card_size(file.size);
+    if !size.is_empty() {
+        meta.push_str(&format!(" \u{00b7} {size}"));
+    }
+    if colorize {
+        out.push_str(&format!(
+            " \u{1f4c4} {} {}\n",
+            path.bright_white().bold(),
+            meta.bright_black(),
+        ));
+    } else {
+        out.push_str(&format!(" \u{1f4c4} {path} {meta}\n"));
+    }
+}
+
+/// One-decimal human size for card headers (`5.4KB`, `42.6KB`) — matches the
+/// artifact header litmus prints above, so the two levels read as one system.
+fn card_size(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = 1024 * KB;
+    const GB: u64 = 1024 * MB;
+    match bytes {
+        0 => String::new(),
+        b if b >= GB => format!("{:.1}GB", b as f64 / GB as f64),
+        b if b >= MB => format!("{:.1}MB", b as f64 / MB as f64),
+        b if b >= KB => format!("{:.1}KB", b as f64 / KB as f64),
+        b => format!("{b}B"),
+    }
+}
+
 fn rich_header(
     out: &mut String,
     file: &FileAnalysis,
@@ -2489,11 +2700,13 @@ fn rich_header(
     // the indentation already sets them apart, and a rule per member is just
     // clutter. The top-level file keeps its rule as a clear section break.
     if file.depth == 0 {
-        // Size the rule to the widest line it divides — the header, its subtitle,
-        // and the body beneath — so the divider is only as wide as it needs to be.
+        // Size the rule to the widest line it divides — the header, its subtitle
+        // (measured per line: callers may stack several, e.g. an interpretation
+        // above a hash), and the body beneath — so the divider is only as wide
+        // as it needs to be.
         let mut rule_w = visible_width(&header_line);
-        if let Some(sub) = badge.subtitle {
-            rule_w = rule_w.max(visible_width(sub));
+        for line in badge.subtitle.iter().flat_map(|s| s.lines()) {
+            rule_w = rule_w.max(visible_width(line));
         }
         for line in body.lines() {
             rule_w = rule_w.max(visible_width(line));
@@ -2678,9 +2891,10 @@ pub(crate) fn parse_jsonl(jsonl: &str) -> Result<AnalysisReport> {
     Ok(report)
 }
 
-/// Get terminal width, defaulting to 100 if unavailable
-#[allow(dead_code)] // Used by binary target
-fn terminal_width() -> usize {
+/// Get terminal width, defaulting to 100 if unavailable. Public so litmus can
+/// size its card rules to the same width this module sizes rows to.
+#[must_use]
+pub fn terminal_width() -> usize {
     terminal_size::terminal_size()
         .map(|(w, _)| w.0 as usize)
         .unwrap_or(100)
@@ -3215,6 +3429,192 @@ mod tests {
             data: data.to_vec(),
             notes,
         }
+    }
+
+    /// litmus's focused terminal knobs: hard cap of 5, selection narrowed to
+    /// suspicious+ and their legs, colorless for deterministic assertions.
+    fn focused_opts() -> TinyOpts {
+        TinyOpts {
+            top_n: 5,
+            always_crit: None,
+            focus_crit: Some(Criticality::Suspicious),
+            context_lines: Some(1),
+            full_context: false,
+            color: false,
+            ..TinyOpts::terminal()
+        }
+    }
+
+    #[test]
+    fn focused_selection_keeps_suspicious_plus_legs_only() {
+        // A hostile composite, the component leg it references (anchored to a
+        // source line), and an unreferenced notable. Focused selection keeps
+        // the composite and its windowed leg; the bystander notable is dropped.
+        let composite = Finding {
+            trait_refs: vec!["c2/leg".to_string()],
+            ..finding_with("objectives/c2/implant", Criticality::Hostile)
+        };
+        let leg = finding_with("c2/leg", Criticality::Component);
+        let bystander = finding_with("misc/loose-notable", Criticality::Notable);
+        let leg_ctx = ctx_line(
+            1,
+            "import socket_beacon",
+            Some(ctx_note("c2/leg", Criticality::Component, 1)),
+        );
+        let report = report_with_files(vec![src_file(
+            0,
+            "/a.py",
+            5,
+            vec![composite, leg, bystander],
+            vec![leg_ctx],
+        )]);
+
+        let out = format_context(&report, &focused_opts());
+        assert!(out.contains("c2/implant"), "{out:?}");
+        assert!(out.contains("import socket_beacon"), "{out:?}");
+        assert!(!out.contains("misc/loose-notable"), "{out:?}");
+    }
+
+    #[test]
+    fn focused_locationless_stays_suspicious_and_above() {
+        // A location-less notable — a container's archive-shape observation,
+        // say — has no window to anchor it, and the focused view refuses to
+        // surface it as a floating note. A location-less *hostile* (a
+        // cross-file composite) still renders: that's the verdict's evidence.
+        let report = report_with_files(vec![src_file(
+            0,
+            "/b.py",
+            2,
+            vec![
+                finding_with("objectives/c2/implant", Criticality::Hostile),
+                finding_with("misc/loose-notable", Criticality::Notable),
+            ],
+            vec![],
+        )]);
+        let out = format_context(&report, &focused_opts());
+        assert!(out.contains("c2/implant"), "{out:?}");
+        assert!(!out.contains("misc/loose-notable"), "{out:?}");
+    }
+
+    #[test]
+    fn focused_file_without_flags_keeps_windowed_notables() {
+        // Nothing at focus_crit fired: selection falls back to the ordinary
+        // notable view, so an unremarkable file is not silenced — but only
+        // through its windows; a location-less notable stays dropped.
+        let anchored = finding_with("misc/anchored-notable", Criticality::Notable);
+        let floating = finding_with("misc/floating-notable", Criticality::Notable);
+        let ctx = ctx_line(
+            1,
+            "import ctypes",
+            Some(ctx_note("misc/anchored-notable", Criticality::Notable, 1)),
+        );
+        let report = report_with_files(vec![src_file(
+            0,
+            "/b.py",
+            2,
+            vec![anchored, floating],
+            vec![ctx],
+        )]);
+        let out = format_context(&report, &focused_opts());
+        assert!(out.contains("import ctypes"), "{out:?}");
+        assert!(!out.contains("misc/floating-notable"), "{out:?}");
+    }
+
+    #[test]
+    fn focused_two_row_hit_earns_no_third_row() {
+        // A hostile span that already continues onto a second hex row has
+        // shown its continuation — no trailing row is added after it. A
+        // one-row hit still keeps its single trail.
+        // 20 matched bytes: two rows at a 16-byte stride (span shows its own
+        // continuation, no trail) or one row + one trail at a wider stride —
+        // exactly two rows either way. Three means a trail was padded onto an
+        // already-multi-row span.
+        let long_hit = finding_with("objectives/spans-two-rows", Criticality::Hostile);
+        let mut note = ctx_note("objectives/spans-two-rows", Criticality::Hostile, 0);
+        note.len = 20;
+        let mut file = bin_file(
+            0,
+            9,
+            vec![long_hit],
+            vec![byte_unit(0, &[0x42; 64], vec![note])],
+        );
+        file.file_type = "elf".to_string();
+        let report = report_with_files(vec![file]);
+        let out = format_context(&report, &focused_opts());
+        let hex_rows = out.lines().filter(|l| l.contains("42 42 42")).count();
+        assert_eq!(hex_rows, 2, "{out:?}");
+    }
+
+    #[test]
+    fn focused_cap_is_hard_even_for_hostile() {
+        // Seven hostiles at descending confidence: only the strongest five
+        // render — always_crit: None means nothing bypasses top_n.
+        let findings: Vec<Finding> = (0..7)
+            .map(|i| Finding {
+                conf: 0.99 - 0.05 * i as f32,
+                ..finding_with(&format!("objectives/h{i}"), Criticality::Hostile)
+            })
+            .collect();
+        let report = report_with_files(vec![src_file(0, "/c.py", 9, findings, vec![])]);
+        let out = format_context(&report, &focused_opts());
+        for i in 0..5 {
+            assert!(out.contains(&format!("objectives/h{i}\n")), "{out:?}");
+        }
+        for i in 5..7 {
+            assert!(!out.contains(&format!("objectives/h{i}\n")), "{out:?}");
+        }
+    }
+
+    #[test]
+    fn focused_hex_window_drops_unselected_notes_and_keeps_a_trail() {
+        // One merged 64-byte window: a hostile note at its head, an unselected
+        // notable's note further down. Focused rendering keeps the hit row and
+        // one trailing row; the notable neither renders a row nor a comment.
+        let hostile = finding_with("objectives/h", Criticality::Hostile);
+        let mut file = bin_file(
+            0,
+            9,
+            vec![hostile],
+            vec![byte_unit(
+                0,
+                &[0x41; 64],
+                vec![
+                    ctx_note("objectives/h", Criticality::Hostile, 0),
+                    ctx_note("misc/loose-notable", Criticality::Notable, 48),
+                ],
+            )],
+        );
+        file.file_type = "elf".to_string();
+        let report = report_with_files(vec![file]);
+        let out = format_context(&report, &focused_opts());
+        assert!(out.contains("objectives/h desc"), "{out:?}");
+        assert!(!out.contains("misc/loose-notable"), "{out:?}");
+        // Hit row plus at least one trailing context row of hex cells.
+        let hex_rows = out.lines().filter(|l| l.contains("41 41 41")).count();
+        assert!(
+            hex_rows >= 2,
+            "expected hit row + trail, got {hex_rows}: {out:?}"
+        );
+    }
+
+    #[test]
+    fn focused_source_trail_skips_near_empty_and_stops_after_one_line() {
+        // A hostile hit keeps the next *real* line (the lone `}` is skipped);
+        // rows past the trail are dropped even though the chunk carries them.
+        let hostile = finding_with("objectives/h", Criticality::Hostile);
+        let chunk = crate::types::ContextLine {
+            loc: 0,
+            line: Some(1),
+            col: Some(1),
+            data: b"sudo ./payload run\n}\ninstall -Dm755 target\nunrelated trailing line\n"
+                .to_vec(),
+            notes: vec![ctx_note("objectives/h", Criticality::Hostile, 0)],
+        };
+        let report = report_with_files(vec![src_file(0, "/d.sh", 9, vec![hostile], vec![chunk])]);
+        let out = format_context(&report, &focused_opts());
+        assert!(out.contains("sudo ./payload run"), "{out:?}");
+        assert!(out.contains("install -Dm755 target"), "{out:?}");
+        assert!(!out.contains("unrelated trailing line"), "{out:?}");
     }
 
     #[test]

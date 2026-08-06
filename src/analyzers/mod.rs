@@ -422,30 +422,87 @@ pub(crate) fn detect_file_type_from_data(file_path: &Path, file_data: &[u8]) -> 
         .unwrap_or(FileType::Unknown)
 }
 
-fn sniff_script_type_from_content(data: &[u8]) -> Option<FileType> {
-    let text = if let Some(decoded) = decode_probable_utf16le(data) {
-        decoded
-    } else {
-        String::from_utf8_lossy(data).into_owned()
-    };
-    let lower = text.to_ascii_lowercase();
+/// VBScript idioms, lowercase ASCII spelling. A file is called VBScript when
+/// [`VBS_MARKER_THRESHOLD`] *distinct* markers appear anywhere in it.
+const VBS_MARKERS: [&str; 8] = [
+    "on error resume next",
+    "createobject(",
+    "createobject (",
+    "wscript.shell",
+    "wscript.scriptfullname",
+    "function ",
+    "end function",
+    ".run ",
+];
 
-    let vbscript_markers = [
-        "on error resume next",
-        "createobject(",
-        "createobject (",
-        "wscript.shell",
-        "wscript.scriptfullname",
-        "function ",
-        "end function",
-        ".run ",
-    ];
-    let hits = vbscript_markers
-        .iter()
-        .filter(|marker| lower.contains(**marker))
-        .count();
-    if hits >= 3 {
-        return Some(FileType::Vbs);
+const VBS_MARKER_THRESHOLD: u32 = 3;
+
+/// Markers in both ASCII and UTF-16LE spelling: pattern `i` is
+/// `VBS_MARKERS[i]`, pattern `i + VBS_MARKERS.len()` is its wide form, so
+/// `index % VBS_MARKERS.len()` recovers the marker either way. Matching is
+/// ASCII-case-insensitive, which leaves the wide form's interleaved NULs
+/// untouched.
+fn vbs_marker_automaton() -> Option<&'static aho_corasick::AhoCorasick> {
+    static AUTOMATON: std::sync::OnceLock<Option<aho_corasick::AhoCorasick>> =
+        std::sync::OnceLock::new();
+    AUTOMATON
+        .get_or_init(|| {
+            let ascii = VBS_MARKERS.iter().map(|m| m.as_bytes().to_vec());
+            let wide = VBS_MARKERS
+                .iter()
+                .map(|m| m.bytes().flat_map(|b| [b, 0]).collect::<Vec<u8>>());
+            aho_corasick::AhoCorasick::builder()
+                .ascii_case_insensitive(true)
+                .build(ascii.chain(wide).collect::<Vec<_>>())
+                .ok()
+        })
+        .as_ref()
+}
+
+/// Largest input the script sniff will look at; `CLEAVE_SCRIPT_SNIFF_MAX_KB`
+/// overrides. See [`sniff_script_type_from_content`] for why it is capped.
+fn script_sniff_max_bytes() -> usize {
+    const DEFAULT_KB: usize = 4 * 1024;
+    static MAX: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *MAX.get_or_init(|| {
+        std::env::var("CLEAVE_SCRIPT_SNIFF_MAX_KB")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(DEFAULT_KB)
+            .saturating_mul(1024)
+    })
+}
+
+/// Last-resort VBScript sniff, for content that magic bytes, extension, and
+/// filefacts' prefix heuristics all left unidentified.
+///
+/// Scans the raw bytes once for VBScript idioms in both ASCII and UTF-16LE
+/// spelling, case-insensitively — the needle is transcoded, never the
+/// haystack, the same way stng matches wide strings. Overlapping iteration is
+/// required: markers nest (`end function` contains `function `), and
+/// non-overlapping matching would let the outer one consume the inner one's
+/// occurrence, which is not what "does this marker appear?" means.
+///
+/// **Capped by size**, because this sniff's precision collapses as inputs grow.
+/// Several markers are generic (`function `, `.run `), so the chance that a
+/// large file contains three of them *somewhere* approaches 1 regardless of
+/// what it holds. A 1.5 GB APFS partition image inside a `.dmg` hit exactly
+/// `function `, `end function`, and `.run ` — at offsets 157 MB, 268 MB and
+/// 397 MB, none within 100 MB of another — and was analyzed as VBScript, which
+/// pushed the whole disk image through the source-code path. Delivered
+/// VBScript is kilobytes; a file over the cap is not a script this fallback
+/// was built to catch, and both the magic and extension paths still see it.
+fn sniff_script_type_from_content(data: &[u8]) -> Option<FileType> {
+    if data.len() > script_sniff_max_bytes() {
+        return None;
+    }
+
+    let mut seen: u32 = 0;
+    for m in vbs_marker_automaton()?.find_overlapping_iter(data) {
+        seen |= 1 << (m.pattern().as_usize() % VBS_MARKERS.len());
+        if seen.count_ones() >= VBS_MARKER_THRESHOLD {
+            return Some(FileType::Vbs);
+        }
     }
 
     None
@@ -456,33 +513,6 @@ fn is_dotenv_name(path: &Path) -> bool {
         return false;
     };
     name == ".env" || name == ".env.backup" || name.starts_with(".env.backup.")
-}
-
-fn decode_probable_utf16le(data: &[u8]) -> Option<String> {
-    if data.len() < 16 {
-        return None;
-    }
-    let pairs = data.len() / 2;
-    let sample_pairs = pairs.min(4096);
-    let mut nul_high = 0usize;
-    let mut printable_low = 0usize;
-    for chunk in data.chunks_exact(2).take(sample_pairs) {
-        if chunk[1] == 0 {
-            nul_high += 1;
-        }
-        if chunk[0].is_ascii_graphic() || chunk[0].is_ascii_whitespace() {
-            printable_low += 1;
-        }
-    }
-    if nul_high * 100 / sample_pairs < 60 || printable_low * 100 / sample_pairs < 50 {
-        return None;
-    }
-
-    let units = data
-        .chunks_exact(2)
-        .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
-        .collect::<Vec<_>>();
-    String::from_utf16(&units).ok()
 }
 
 fn looks_like_pe_image(data: &[u8]) -> bool {
@@ -863,6 +893,54 @@ mod tests {
         let mut f = tempfile::NamedTempFile::with_suffix(".py").unwrap();
         f.write_all(b"import os\n").unwrap();
         assert_eq!(detect_file_type(f.path()).unwrap(), FileType::Python);
+    }
+
+    /// The sniff's contract: distinct-marker counting (not occurrence
+    /// counting), both encodings, and a size cap that keeps generic markers
+    /// scattered across a large binary from adding up to a script verdict.
+    #[test]
+    fn script_sniff_counts_distinct_markers_in_either_encoding() {
+        let vbs = b"Set sh = CreateObject(\"WScript.Shell\")\r\nsh.Run \"calc\", 0\r\n";
+        assert_eq!(sniff_script_type_from_content(vbs), Some(FileType::Vbs));
+
+        let wide: Vec<u8> = String::from_utf8_lossy(vbs)
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        assert_eq!(sniff_script_type_from_content(&wide), Some(FileType::Vbs));
+
+        // One marker repeated is one marker, not three.
+        assert_eq!(
+            sniff_script_type_from_content(b"createobject( createobject( createobject("),
+            None
+        );
+
+        // `end function` must not consume the `function ` inside it: with
+        // non-overlapping matching this pair plus `.run ` would count 2, not 3.
+        assert_eq!(
+            sniff_script_type_from_content(b"End Function (x)\r\nsh.Run \"x\"\r\n"),
+            Some(FileType::Vbs)
+        );
+
+        // The dmg case: the three generic markers, far apart, in a blob larger
+        // than any delivered script. Size is the *only* difference between
+        // these two — same markers, same spacing, one over the cap.
+        let planted = |len: usize| {
+            let mut blob = vec![b'\n'; len];
+            let step = len / 4;
+            blob[step..step + 9].copy_from_slice(b"function ");
+            blob[2 * step..2 * step + 12].copy_from_slice(b"end function");
+            blob[3 * step..3 * step + 5].copy_from_slice(b".run ");
+            blob
+        };
+        assert_eq!(
+            sniff_script_type_from_content(&planted(1024 * 1024)),
+            Some(FileType::Vbs)
+        );
+        assert_eq!(
+            sniff_script_type_from_content(&planted(6 * 1024 * 1024)),
+            None
+        );
     }
 
     #[test]

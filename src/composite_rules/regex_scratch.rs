@@ -36,23 +36,33 @@ use rustc_hash::FxHashMap;
 
 /// Global pool budget in bytes. Default scales with the machine, like the
 /// compiled-engine store budgets: 1/32nd of physical memory, clamped to
-/// [512 MiB, 4 GiB] — 512 MiB on a ≤16 GiB host, the full measured win on a
-/// big one (a 3 GiB working set recovered all of a JS-heavy scan's
-/// `create_cache` CPU; 512 MiB about two-thirds of it at less RSS than the
-/// per-thread design this pool replaced). Memory-detection failure keeps the
-/// floor. An explicit `CLEAVE_REGEX_SCRATCH_MB` (per-thread MiB, times
-/// available parallelism) is honored literally, no clamp.
+/// [512 MiB, 4 GiB] on 64-bit hosts. A 32-bit address space uses [64 MiB,
+/// 512 MiB] instead; scratch retention is only a performance cache and should
+/// not crowd the scanner's working set on constrained ARM systems. On 64-bit,
+/// a 3 GiB working set recovered all of a JS-heavy scan's `create_cache` CPU;
+/// 512 MiB recovered about two-thirds at less RSS than the per-thread design
+/// this pool replaced. Memory-detection failure keeps the appropriate floor.
+/// An explicit `CLEAVE_REGEX_SCRATCH_MB` (per-thread MiB, times available
+/// parallelism) is honored literally up to the address space limit.
 fn global_budget_bytes() -> usize {
     static BYTES: OnceLock<usize> = OnceLock::new();
     *BYTES.get_or_init(|| {
-        const FLOOR: usize = 512 * 1024 * 1024;
-        const CEILING: usize = 4 * 1024 * 1024 * 1024;
+        const FLOOR: usize = if usize::BITS >= 64 {
+            512 * 1024 * 1024
+        } else {
+            64 * 1024 * 1024
+        };
+        const CEILING: usize = if usize::BITS >= 64 {
+            (4_u64 * 1024 * 1024 * 1024) as usize
+        } else {
+            512 * 1024 * 1024
+        };
         let threads = std::thread::available_parallelism().map_or(8, std::num::NonZero::get);
         match std::env::var("CLEAVE_REGEX_SCRATCH_MB")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
         {
-            Some(mb) => (mb * 1024 * 1024).saturating_mul(threads),
+            Some(mb) => mb.saturating_mul(1024 * 1024).saturating_mul(threads),
             None => crate::memory_tracker::total_memory()
                 .and_then(|bytes| usize::try_from(bytes / 32).ok())
                 .unwrap_or(0)

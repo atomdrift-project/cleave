@@ -127,11 +127,6 @@ pub(crate) struct EvaluationContext<'a> {
     /// without the raw pass ever seeing it. Built once per file; empty (the
     /// common case) makes the encoded pass a single is-empty check.
     pub encoded_string_indices: Arc<OnceLock<Vec<u32>>>,
-    /// Per-`report.strings` "value is pure ASCII" bits, computed once per file.
-    /// Regex engine selection needs this answer for every (pattern, string)
-    /// pair, and it depends only on the string — so without the cache a long
-    /// literal is rescanned once per pattern it is tested against.
-    pub cached_string_ascii: Arc<OnceLock<Vec<bool>>>,
     /// Hard deadline for rule evaluation.
     pub deadline: Option<Instant>,
     /// Cooperative cancellation flag (set by litmus timeout).
@@ -216,7 +211,6 @@ impl<'a> EvaluationContext<'a> {
             cached_kv_offsets: Arc::new(OnceLock::new()),
             cached_lower_binary: Arc::new(OnceLock::new()),
             cached_lossy_utf8: Arc::new(OnceLock::new()),
-            cached_string_ascii: Arc::new(OnceLock::new()),
             ast_kind_cache: None,
             string_exact_index: Arc::new(OnceLock::new()),
             string_exact_index_ci: Arc::new(OnceLock::new()),
@@ -350,23 +344,6 @@ impl<'a> EvaluationContext<'a> {
             .get_or_init(|| self.binary_data.to_ascii_lowercase())
     }
 
-    /// Whether `report.strings[idx]`'s value is pure ASCII, scanned once per
-    /// file. Out-of-range answers `false`, which is always sound: `false`
-    /// merely selects the exact-semantics Unicode engine.
-    pub(crate) fn string_is_ascii(&self, idx: usize) -> bool {
-        self.cached_string_ascii
-            .get_or_init(|| {
-                self.report
-                    .strings
-                    .iter()
-                    .map(|s| s.value.is_ascii())
-                    .collect()
-            })
-            .get(idx)
-            .copied()
-            .unwrap_or(false)
-    }
-
     /// UTF-8 view of the entire `binary_data`, built at most once per file.
     ///
     /// Byte-identical to `evaluators::utf8_view(binary_data, (0, len))`: valid
@@ -473,7 +450,6 @@ impl<'a> EvaluationContext<'a> {
             cached_kv_offsets: Arc::new(OnceLock::new()),
             cached_lower_binary: Arc::new(OnceLock::new()),
             cached_lossy_utf8: Arc::new(OnceLock::new()),
-            cached_string_ascii: Arc::new(OnceLock::new()),
             ast_kind_cache: None,
             string_exact_index: Arc::new(OnceLock::new()),
             string_exact_index_ci: Arc::new(OnceLock::new()),

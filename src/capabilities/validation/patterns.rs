@@ -564,7 +564,7 @@ const REGEX_NFA_RUNTIME_LIMIT_BYTES: usize = 10 * (1 << 20);
 
 /// Build the Thompson NFA for `pattern` the way the evaluation engines do
 /// (implicit-only capture states, the runtime size ceiling). `ascii` selects
-/// the byte-mode engine (`unicode(false)`/`utf8(false)`, as `compile_ascii`
+/// the byte-mode engine (`unicode(false)`/`utf8(false)`, as `compile_bytes`
 /// and the raw byte-regex path use); otherwise Unicode `regex::Regex`
 /// semantics. `None` means the engine cannot be built at evaluation time.
 fn engine_nfa_bytes(pattern: &str, ascii: bool) -> Option<usize> {

@@ -165,12 +165,3 @@ pub(crate) fn raw_budget_bytes() -> usize {
     static BYTES: OnceLock<usize> = OnceLock::new();
     *BYTES.get_or_init(|| env_mb("CLEAVE_REGEX_RAW_MB", 256))
 }
-
-/// Budget for the shared lazy Unicode engine store (the Unicode twins of
-/// ASCII-compatible patterns, built only when a non-ASCII haystack arrives —
-/// JS-heavy corpora materialize most of them). `CLEAVE_REGEX_UNI_MB`
-/// overrides.
-pub(crate) fn unicode_budget_bytes() -> usize {
-    static BYTES: OnceLock<usize> = OnceLock::new();
-    *BYTES.get_or_init(|| env_mb("CLEAVE_REGEX_UNI_MB", scaled_default_mb(384)))
-}

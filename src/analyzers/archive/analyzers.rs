@@ -2696,7 +2696,18 @@ impl ArchiveAnalyzer {
                         &sha256,
                     )
                 })) {
-                    Ok(Ok(Some(r))) => Some(r),
+                    Ok(Ok(Some(mut r))) => {
+                        // Matching is done; drop the fields nothing downstream
+                        // reads so they don't pile up across the archive's
+                        // members — the same release the windowed member path
+                        // performs. These disk-walk paths never did, so every
+                        // member of a jar/generic archive kept its traits,
+                        // strings, structure, YARA matches, syscalls, paths,
+                        // directories and env vars live until the whole scan
+                        // finished (57 857 members on the MiniMax sample).
+                        r.clear_unserialized_member_fields();
+                        Some(r)
+                    }
                     Ok(Ok(None)) => None,
                     Ok(Err(e)) => {
                         debug!("Failed to analyze archive member {}: {}", entry_path, e);
@@ -2845,7 +2856,18 @@ impl ArchiveAnalyzer {
                         &sha256,
                     )
                 })) {
-                    Ok(Ok(Some(r))) => Some(r),
+                    Ok(Ok(Some(mut r))) => {
+                        // Matching is done; drop the fields nothing downstream
+                        // reads so they don't pile up across the archive's
+                        // members — the same release the windowed member path
+                        // performs. These disk-walk paths never did, so every
+                        // member of a jar/generic archive kept its traits,
+                        // strings, structure, YARA matches, syscalls, paths,
+                        // directories and env vars live until the whole scan
+                        // finished (57 857 members on the MiniMax sample).
+                        r.clear_unserialized_member_fields();
+                        Some(r)
+                    }
                     Ok(Ok(None)) => None,
                     Ok(Err(e)) => {
                         debug!("Failed to analyze archive member {}: {}", entry_path, e);
@@ -3051,7 +3073,18 @@ impl ArchiveAnalyzer {
                         &sha256,
                     )
                 })) {
-                    Ok(Ok(Some(r))) => Some(r),
+                    Ok(Ok(Some(mut r))) => {
+                        // Matching is done; drop the fields nothing downstream
+                        // reads so they don't pile up across the archive's
+                        // members — the same release the windowed member path
+                        // performs. These disk-walk paths never did, so every
+                        // member of a jar/generic archive kept its traits,
+                        // strings, structure, YARA matches, syscalls, paths,
+                        // directories and env vars live until the whole scan
+                        // finished (57 857 members on the MiniMax sample).
+                        r.clear_unserialized_member_fields();
+                        Some(r)
+                    }
                     Ok(Ok(None)) => None,
                     Ok(Err(e)) => {
                         debug!("Failed to analyze archive member {}: {}", entry_path, e);

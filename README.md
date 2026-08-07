@@ -51,6 +51,11 @@ For deeper binary analysis, install
 [Rizin](https://github.com/rizinorg/rizin). [UPX](https://upx.github.io/) is
 optional and adds runtime unpacking for supported files.
 
+For archive and disk-image extraction, install upstream
+[7-Zip](https://7-zip.org/) (`brew install sevenzip`, `apt install 7zip`)
+rather than `p7zip` — its `7z` cannot read APFS, so `.dmg` contents go
+unscanned. cleave prefers `7zz` and falls back to `7z`.
+
 ### First run
 
 ```bash

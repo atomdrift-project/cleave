@@ -343,6 +343,27 @@ pub(crate) const MAX_EVIDENCE_PER_TRAIT: usize = 64;
 /// Maximum match locations stored in JSON output and used for context windows.
 pub(crate) const MAX_EV_LOCS: usize = 8;
 
+/// The bounded, sanitized form of an evidence value — what serialization
+/// emits. `None` when the value is already within bounds and clean.
+///
+/// The truncated form (content + `...[truncated]`) fits within
+/// `MAX_EVIDENCE_VALUE_SIZE`, which makes bounding idempotent: a value
+/// already bounded at member-fold time passes through serialization
+/// unchanged. (The content budget is the marker's 14 bytes below the cap;
+/// it was previously 12, so historically-truncated values shift by 2
+/// bytes of content — a v3-only cosmetic change, evidence text never
+/// reaches the compact schema.)
+pub(crate) fn bound_evidence_value(value: &str) -> Option<String> {
+    let clean = sanitize_evidence_for_json(value);
+    let v = clean.as_deref().unwrap_or(value);
+    if v.len() <= MAX_EVIDENCE_VALUE_SIZE {
+        return clean;
+    }
+    // Truncate at a valid UTF-8 boundary; marker included, total stays ≤ cap.
+    let truncated = truncate_str(v, MAX_EVIDENCE_VALUE_SIZE - 14);
+    Some(format!("{truncated}...[truncated]"))
+}
+
 /// Serialize evidence value, truncating to MAX_EVIDENCE_VALUE_SIZE.
 /// Strips null bytes (\0) which are common in strings extracted from malware
 /// binaries but cannot be stored in PostgreSQL JSONB.
@@ -350,15 +371,9 @@ fn serialize_truncated_value<S>(value: &str, serializer: S) -> Result<S::Ok, S::
 where
     S: serde::Serializer,
 {
-    let clean = sanitize_evidence_for_json(value);
-    let v = clean.as_ref().map_or(value, |s| s.as_str());
-    if v.len() <= MAX_EVIDENCE_VALUE_SIZE {
-        serializer.serialize_str(v)
-    } else {
-        // Truncate at a valid UTF-8 boundary
-        let truncated = truncate_str(v, MAX_EVIDENCE_VALUE_SIZE - 12);
-        let with_marker = format!("{}...[truncated]", truncated);
-        serializer.serialize_str(&with_marker)
+    match bound_evidence_value(value) {
+        Some(bounded) => serializer.serialize_str(&bounded),
+        None => serializer.serialize_str(value),
     }
 }
 
@@ -399,7 +414,7 @@ pub(crate) fn truncate_evidence_value(value: &str) -> String {
 }
 
 /// Maximum number of byte offsets to include in JSON output
-const MAX_OFFSETS_IN_JSON: usize = 8;
+pub(crate) const MAX_OFFSETS_IN_JSON: usize = 8;
 
 /// Serialize byte offsets, truncating to MAX_OFFSETS_IN_JSON
 fn serialize_truncated_offsets<S>(offsets: &[u64], serializer: S) -> Result<S::Ok, S::Error>
@@ -634,7 +649,31 @@ pub(crate) fn deduplicate_evidence(evidence: Vec<Evidence>) -> Vec<Evidence> {
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used)]
 mod tests {
+
+    /// Fold-time bounding must be idempotent with serialization: the bounded
+    /// form re-bounds to itself, so a member bounded at fold serializes
+    /// byte-identically to one bounded only on the wire.
+    #[test]
+    fn bound_evidence_value_is_idempotent() {
+        let long = "x".repeat(MAX_EVIDENCE_VALUE_SIZE * 2);
+        let bounded = bound_evidence_value(&long).expect("over-cap value is bounded");
+        assert!(bounded.len() <= MAX_EVIDENCE_VALUE_SIZE);
+        assert!(bounded.ends_with("...[truncated]"));
+        assert_eq!(
+            bound_evidence_value(&bounded),
+            None,
+            "already-bounded value passes through untouched"
+        );
+
+        assert_eq!(bound_evidence_value("short"), None);
+        assert_eq!(
+            bound_evidence_value("nul\0led").as_deref(),
+            Some("nulled"),
+            "sanitization applies below the cap too"
+        );
+    }
     use super::*;
 
     // ==================== TraitKind Tests ====================

@@ -102,7 +102,9 @@ pub use types::SampleExtractionConfig;
 pub use types::traits_findings::{Evidence, Finding, FindingKind, Trait, TraitKind};
 
 // Re-export cache management functions
-pub use shared_resources::{reload_capability_mapper, set_skip_traits_override};
+pub use shared_resources::{
+    reload_capability_mapper, set_compact_member_retention, set_skip_traits_override,
+};
 
 /// Pre-compile all YARA rules into portable, per-tier `.yrc` files plus a
 /// `manifest.json` in `out_dir` — the producer side run offline by the

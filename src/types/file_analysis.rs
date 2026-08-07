@@ -381,6 +381,26 @@ impl FileAnalysis {
         self.paths = Vec::new();
         self.directories = Vec::new();
         self.env_vars = Vec::new();
+        // Matching is complete, so bound what each finding's evidence still
+        // owns to what serialization can ever emit. `value` is unbounded at
+        // capture but truncated to MAX_EVIDENCE_VALUE_SIZE on the wire;
+        // offsets beyond MAX_OFFSETS_IN_JSON are never serialized and the
+        // compact `spans` cap is the same 8; `alt_value` is an internal
+        // matcher fallback consumed during matching. Across a member-heavy
+        // archive the unbounded forms pile up per retained member.
+        for f in &mut self.findings {
+            for e in &mut f.evidence {
+                e.alt_value = None;
+                if e.offsets.len() > super::traits_findings::MAX_OFFSETS_IN_JSON {
+                    e.offsets
+                        .truncate(super::traits_findings::MAX_OFFSETS_IN_JSON);
+                    e.offsets.shrink_to_fit();
+                }
+                if let Some(bounded) = super::traits_findings::bound_evidence_value(&e.value) {
+                    e.value = bounded;
+                }
+            }
+        }
     }
 
     pub(crate) fn strip_source_fields(&mut self) {

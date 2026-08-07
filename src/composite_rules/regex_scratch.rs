@@ -34,28 +34,28 @@ use parking_lot::Mutex;
 use regex_automata::meta;
 use rustc_hash::FxHashMap;
 
-/// Global pool budget in bytes. Default scales with the machine, like the
-/// compiled-engine store budgets: 1/32nd of physical memory, clamped to
-/// [512 MiB, 4 GiB] on 64-bit hosts. A 32-bit address space uses [64 MiB,
-/// 512 MiB] instead; scratch retention is only a performance cache and should
-/// not crowd the scanner's working set on constrained ARM systems. On 64-bit,
-/// a 3 GiB working set recovered all of a JS-heavy scan's `create_cache` CPU;
-/// 512 MiB recovered about two-thirds at less RSS than the per-thread design
-/// this pool replaced. Memory-detection failure keeps the appropriate floor.
-/// An explicit `CLEAVE_REGEX_SCRATCH_MB` (per-thread MiB, times available
-/// parallelism) is honored literally up to the address space limit.
+/// Global pool budget in bytes: a flat 512 MiB on 64-bit hosts (64 MiB on a
+/// 32-bit address space, where scratch must not crowd the scanner's working
+/// set). An explicit `CLEAVE_REGEX_SCRATCH_MB` (per-thread MiB, times
+/// available parallelism) is honored literally.
+///
+/// This replaced a machine-scaled default (1/32 of physical RAM clamped to
+/// [512 MiB, 4 GiB]) after measurement showed the pool should be sized by
+/// the *workload*, not the host: on a 64 GB box the old default held 2 GiB
+/// of scratch, and on the 57k-member MiniMax archive the sweep read
+/// 2 GiB → 12,817 MiB peak / 505.9 s; 512 MiB → 11,575 / 468.0 (wall
+/// *faster* — smaller pool, better locality); 128 MiB → 10,850 / 579.2
+/// (+14% wall, the create_cache churn the pool exists to avoid). 512 MiB is
+/// the knee, and it matches the earlier finding that 512 MiB recovers about
+/// two-thirds of a JS-heavy scan's `create_cache` CPU — the remaining third
+/// was not worth 1.2 GB of RSS on any measured sample.
 fn global_budget_bytes() -> usize {
     static BYTES: OnceLock<usize> = OnceLock::new();
     *BYTES.get_or_init(|| {
-        const FLOOR: usize = if usize::BITS >= 64 {
+        const DEFAULT: usize = if usize::BITS >= 64 {
             512 * 1024 * 1024
         } else {
             64 * 1024 * 1024
-        };
-        const CEILING: usize = if usize::BITS >= 64 {
-            (4_u64 * 1024 * 1024 * 1024) as usize
-        } else {
-            512 * 1024 * 1024
         };
         let threads = std::thread::available_parallelism().map_or(8, std::num::NonZero::get);
         match std::env::var("CLEAVE_REGEX_SCRATCH_MB")
@@ -63,10 +63,7 @@ fn global_budget_bytes() -> usize {
             .and_then(|v| v.parse::<usize>().ok())
         {
             Some(mb) => mb.saturating_mul(1024 * 1024).saturating_mul(threads),
-            None => crate::memory_tracker::total_memory()
-                .and_then(|bytes| usize::try_from(bytes / 32).ok())
-                .unwrap_or(0)
-                .clamp(FLOOR, CEILING),
+            None => DEFAULT,
         }
     })
 }

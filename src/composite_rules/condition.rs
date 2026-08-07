@@ -2339,6 +2339,31 @@ pub(crate) struct KvQuery {
     pub length_max: Option<usize>,
 }
 
+impl Condition {
+    /// Record the lowercased `<filename>::` sibling basenames this
+    /// condition's kv paths reference. Only `type: value` queries can reach
+    /// a sibling file's flattened `kv`; every other variant contributes
+    /// nothing. Feeds the member-retention gate: a member whose basename no
+    /// rule references can drop its `kv` when it folds
+    /// (see `shared_resources::kv_sibling_basename_referenced`).
+    pub(crate) fn collect_kv_sibling_basenames(
+        &self,
+        out: &mut std::collections::BTreeSet<String>,
+    ) {
+        let Self::Kv(q) = self else { return };
+        for path in [Some(q.path.as_str()), q.eq.as_deref(), q.ne.as_deref()]
+            .into_iter()
+            .flatten()
+        {
+            if let (Some(name), _) =
+                crate::composite_rules::evaluators::kv::split_qualified_path(path)
+            {
+                out.insert(name.to_ascii_lowercase());
+            }
+        }
+    }
+}
+
 /// Payload for `type: text` — byte-scan over extracted strings / raw source text.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct TextQuery {

@@ -7,7 +7,7 @@
 
 use crate::capabilities::CapabilityMapper;
 use crate::yara_engine::YaraEngine;
-use std::sync::atomic::{AtomicI8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI8, Ordering};
 use std::sync::{Arc, OnceLock};
 
 /// Process-wide override for the trait-loading skip flag.
@@ -36,6 +36,37 @@ pub(crate) fn skip_traits_requested() -> bool {
         -1 => false,
         _ => std::env::var("CLEAVE_SKIP_TRAITS").is_ok(),
     }
+}
+
+/// Process-wide member-retention mode, set once at startup by callers that
+/// consume only the compact projection of member nodes (scan's pipeline).
+/// When on, fields that exist solely for the full v3 schema are dropped as
+/// each member folds into its container: `kv` (except on files a loaded rule
+/// reaches via a `<filename>::` sibling path) and `filefacts.values`. On a
+/// member-heavy archive those two fields are pure ballast — retained across
+/// tens of thousands of members for an output shape that is never rendered.
+/// Default off: cleave's own CLI and every v3 consumer keep full output.
+static COMPACT_MEMBER_RETENTION: AtomicBool = AtomicBool::new(false);
+
+/// Enable or disable compact member retention for the rest of the process.
+/// Intended to be called once at startup, before any analysis.
+pub fn set_compact_member_retention(enabled: bool) {
+    COMPACT_MEMBER_RETENTION.store(enabled, Ordering::Relaxed);
+}
+
+pub(crate) fn compact_member_retention() -> bool {
+    COMPACT_MEMBER_RETENTION.load(Ordering::Relaxed)
+}
+
+/// Whether any loaded rule reads `<basename>::…` from a sibling file's
+/// flattened `kv`. False when no mapper is loaded: no rules, no readers.
+pub(crate) fn kv_sibling_basename_referenced(basename: &str) -> bool {
+    let guard = CAPABILITY_MAPPER.read();
+    guard.as_ref().is_some_and(|m| {
+        m.kv_sibling_basenames()
+            .iter()
+            .any(|n| n.eq_ignore_ascii_case(basename))
+    })
 }
 
 /// Global CapabilityMapper behind a RwLock for hot-reload support.

@@ -21,7 +21,7 @@ use crate::composite_rules::{
     CompositeTrait, Condition, FileType, KvQuery, Platform, TraitDefinition,
 };
 use crate::types::Criticality;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Platform and language names that should not appear as directory segments.
 /// These names indicate implementation details rather than behavioral classifications.
@@ -209,6 +209,13 @@ pub(crate) const MAX_TRAITS_PER_DIRECTORY: usize = 80;
 /// platform/language directory ban.
 pub(crate) const OVERSIZED_DIRECTORY_EXCEPTIONS: &[&str] =
     &["objectives/command-and-control/reverse-shell/dup"];
+
+/// Maximum number of immediate subdirectories allowed in one directory.
+/// Past this, a level has stopped being a taxonomy and become a flat list:
+/// authors can no longer tell whether a sibling already covers their case, and
+/// the directory feature the ML pipeline reads degenerates into one bucket per
+/// entry. Split with an intermediate grouping layer.
+pub(crate) const MAX_SUBDIRECTORIES_PER_DIRECTORY: usize = 150;
 
 /// Validate that a trait ID contains only valid characters.
 /// Valid characters are: alphanumerics, dashes, and underscores.
@@ -1648,6 +1655,37 @@ pub(crate) fn find_oversized_trait_directories(
         .collect();
 
     violations.sort_by_key(|v| std::cmp::Reverse(v.1)); // Sort by count descending
+    violations
+}
+
+/// Find directories whose immediate subdirectories exceed
+/// [`MAX_SUBDIRECTORIES_PER_DIRECTORY`] and need another grouping layer.
+///
+/// `trait_dirs` holds the directories that directly contain traits; every
+/// ancestor level is derived from those paths, so a wide level is caught
+/// wherever it sits in the tree.
+///
+/// Returns: `Vec<(directory_path, subdirectory_count)>`, widest first.
+#[must_use]
+pub(crate) fn find_wide_trait_directories(trait_dirs: &[String]) -> Vec<(String, usize)> {
+    // Map each ancestor path to the set of its immediate child segments.
+    let mut children: HashMap<&str, HashSet<&str>> = HashMap::new();
+    for dir in trait_dirs {
+        for (sep, _) in dir.match_indices('/') {
+            let rest = &dir[sep + 1..];
+            let child = rest.split('/').next().unwrap_or(rest);
+            children.entry(&dir[..sep]).or_default().insert(child);
+        }
+    }
+
+    let mut violations: Vec<(String, usize)> = children
+        .into_iter()
+        .filter(|(_, kids)| kids.len() > MAX_SUBDIRECTORIES_PER_DIRECTORY)
+        .map(|(dir, kids)| (dir.to_string(), kids.len()))
+        .collect();
+
+    // Widest first, then lexicographic so the report is stable run to run.
+    violations.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
     violations
 }
 

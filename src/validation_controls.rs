@@ -493,6 +493,13 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         fix: "Split by language/platform-neutral technique so ML can group similar behavior; use platform dirs only when the technique requires them.",
     },
     ValidatorSpec {
+        id: "wide-dir",
+        category: ValidatorCategory::Policy,
+        display_id: "wide-dir",
+        description: "Directory has too many immediate subdirectories to navigate or group.",
+        fix: "Add an intermediate grouping layer (ecosystem, vendor, or family) so each level stays browsable.",
+    },
+    ValidatorSpec {
         id: "leaf-yaml",
         category: ValidatorCategory::Policy,
         display_id: "leaf-yaml",
@@ -1162,6 +1169,7 @@ mod tests {
             "regex-memory",
             "brittle-path-pattern",
             "oversized-dir",
+            "wide-dir",
             "tier-violation",
             "precision",
             "wellknown-size-filter",

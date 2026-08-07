@@ -8,10 +8,10 @@ use crate::capabilities::error_formatting::enhance_yaml_error;
 use crate::capabilities::models::TraitMappings;
 use crate::capabilities::parsing::{apply_composite_defaults, apply_trait_defaults};
 use crate::capabilities::validation::{
-    BROAD_PLATFORM_ALLOWLIST, MAX_TRAITS_PER_DIRECTORY, ObjectivesWellknownViolation,
-    autoprefix_trait_refs, check_basename_pattern_duplicates, check_exact_contained_by_substr,
-    check_overlapping_regex_patterns, check_regex_alternative_subsets,
-    check_regex_or_overlapping_exact, check_regex_should_be_exact,
+    BROAD_PLATFORM_ALLOWLIST, MAX_SUBDIRECTORIES_PER_DIRECTORY, MAX_TRAITS_PER_DIRECTORY,
+    ObjectivesWellknownViolation, autoprefix_trait_refs, check_basename_pattern_duplicates,
+    check_exact_contained_by_substr, check_overlapping_regex_patterns,
+    check_regex_alternative_subsets, check_regex_or_overlapping_exact, check_regex_should_be_exact,
     check_same_string_different_types, collect_trait_refs_from_rule,
     collect_trait_refs_from_trait_def, find_alternation_merge_candidates,
     find_ast_function_call_should_use_symbol, find_atomic_logic_duplicates,
@@ -45,9 +45,10 @@ use crate::capabilities::validation::{
     find_suppression_only_building_blocks, find_too_short_patterns,
     find_unanchored_wellknown_composites, find_unreferenced_exceptions,
     find_wellknown_category_violations, find_wellknown_missing_section_filter,
-    find_wellknown_missing_size_filter, precalculate_all_composite_precisions,
-    validate_composite_trait_only, validate_directory_structure,
-    validate_hostile_composite_precision, validate_hostile_trait_precision,
+    find_wellknown_missing_size_filter, find_wide_trait_directories,
+    precalculate_all_composite_precisions, validate_composite_trait_only,
+    validate_directory_structure, validate_hostile_composite_precision,
+    validate_hostile_trait_precision,
 };
 use crate::composite_rules::MetricsQuery;
 use crate::composite_rules::{
@@ -1604,6 +1605,42 @@ impl super::CapabilityMapper {
                     "{} second-level directories duplicated across namespaces",
                     duplicate_dirs.len()
                 ));
+            }
+
+            // Check for levels that fan out into an unbrowsable flat list
+            tracing::trace!("Step 3c/15: Checking for wide directories");
+            let wide_dirs = find_wide_trait_directories(&dir_list);
+            if !wide_dirs.is_empty()
+                && !crate::validation_controls::is_validator_disabled("wide-dir")
+            {
+                eprintln!(
+                    "\n❌ ERROR: {} directories have more than {} immediate subdirectories",
+                    wide_dirs.len(),
+                    MAX_SUBDIRECTORIES_PER_DIRECTORY
+                );
+                eprintln!(
+                    "   Why: at this width the level is a flat list, not a taxonomy — authors can't"
+                );
+                eprintln!(
+                    "   see whether a sibling already covers their case, and the directory feature"
+                );
+                eprintln!("   the ML pipeline reads degenerates into one bucket per entry.");
+                eprintln!(
+                    "   Add an intermediate grouping layer (ecosystem, vendor, or family) and move"
+                );
+                eprintln!("   the existing subdirectories under it.\n");
+                for (dir_path, count) in &wide_dirs {
+                    eprintln!("   {}: {} subdirectories", dir_path, count);
+                }
+                eprintln!();
+                warnings.push_id(
+                    "wide-dir",
+                    format!(
+                        "{} directories exceed {} immediate subdirectories (add a grouping layer)",
+                        wide_dirs.len(),
+                        MAX_SUBDIRECTORIES_PER_DIRECTORY
+                    ),
+                );
             }
 
             // Check for banned meaningless directory segments

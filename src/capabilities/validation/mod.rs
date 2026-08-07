@@ -133,10 +133,10 @@ pub(crate) use patterns::{
 // Taxonomy validation
 pub(crate) use directory_whitelist::validate_directory_structure;
 pub(crate) use taxonomy::{
-    BROAD_PLATFORM_ALLOWLIST, MAX_TRAITS_PER_DIRECTORY, ObjectivesWellknownViolation,
-    find_banned_directory_segments, find_benign_misplaced, find_broad_filetype_traits,
-    find_broad_platform_traits, find_cap_obj_violations, find_cap_wellknown_violations,
-    find_composite_only_wellknown_files, find_depth_violations,
+    BROAD_PLATFORM_ALLOWLIST, MAX_SUBDIRECTORIES_PER_DIRECTORY, MAX_TRAITS_PER_DIRECTORY,
+    ObjectivesWellknownViolation, find_banned_directory_segments, find_benign_misplaced,
+    find_broad_filetype_traits, find_broad_platform_traits, find_cap_obj_violations,
+    find_cap_wellknown_violations, find_composite_only_wellknown_files, find_depth_violations,
     find_duplicate_second_level_directories, find_exception_atomic_traits,
     find_exception_inline_conditions, find_exception_non_notable_members,
     find_exception_positive_refs, find_generic_wellknown_leaf_dirs, find_hostile_cap_rules,
@@ -147,6 +147,7 @@ pub(crate) use taxonomy::{
     find_suppression_only_building_blocks, find_unanchored_wellknown_composites,
     find_unreferenced_exceptions, find_wellknown_category_violations,
     find_wellknown_missing_section_filter, find_wellknown_missing_size_filter,
+    find_wide_trait_directories,
 };
 
 // Logic constraint validation

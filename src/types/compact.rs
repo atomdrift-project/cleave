@@ -7,13 +7,23 @@
 use std::collections::{BTreeMap, HashMap};
 
 use serde::ser::{SerializeSeq, SerializeStruct};
-use serde::{Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::core::Criticality;
 use super::file_analysis::{Rel, Role};
 
 /// Maximum imports per file in compact output
 const MAX_IMPORTS: usize = 4096;
+
+/// Current compact schema version. `CompactReport::version` is a
+/// `&'static str` that always reports the version this build emits, so it is
+/// never read from the wire — a decoded report re-encodes as the current
+/// schema, not the one it was written with.
+const SCHEMA_VERSION: &str = "8";
+
+fn current_schema_version() -> &'static str {
+    SCHEMA_VERSION
+}
 
 /// Default confidence value (omitted from output)
 const DEFAULT_CONF: f32 = 0.5;
@@ -23,14 +33,16 @@ const DEFAULT_CONF: f32 = 0.5;
 // ========================================================================
 
 /// Top-level v7 report
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct CompactReport {
     /// Schema version — always "8"
     #[serde(rename = "v")]
+    #[serde(skip_deserializing, default = "current_schema_version")]
     pub version: &'static str,
     /// Traits repo revision (first 8 chars of commit hash)
     #[serde(rename = "rev")]
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub traits_version: Option<String>,
     /// Files array
     #[serde(rename = "files")]
@@ -38,7 +50,7 @@ pub struct CompactReport {
 }
 
 /// Per-file analysis in v7 schema
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct CompactFile {
     /// Sequential file ID
     pub id: u32,
@@ -55,10 +67,12 @@ pub struct CompactFile {
     /// Weighted risk score
     #[serde(rename = "risk")]
     #[serde(skip_serializing_if = "super::is_zero_u32")]
+    #[serde(default)]
     pub risk: u32,
     /// Archive nesting depth (omit when 0)
     #[serde(rename = "depth")]
     #[serde(skip_serializing_if = "super::is_zero_u32")]
+    #[serde(default)]
     pub depth: u32,
     /// Compact `id` of the archive/container this file was extracted from — the
     /// structural parent edge, `None` for the root. Lets a downstream consumer
@@ -68,48 +82,58 @@ pub struct CompactFile {
     /// is the source `FileAnalysis.id`, so `pid` indexes `files[]` directly.
     #[serde(rename = "pid")]
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub parent: Option<u32>,
     /// Edge type to `pid` — how this file was obtained. Omitted for ordinary
     /// containment; a root is identified by an absent `pid`. See [`Rel`].
     #[serde(skip_serializing_if = "Rel::is_member")]
+    #[serde(default)]
     pub rel: Rel,
     /// For `rel = fetched`, the resolved locator it was fetched via.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub via: Option<String>,
     /// Analysis participation — how ML and presentation treat this node.
     /// Omitted for content. See [`Role`].
     #[serde(skip_serializing_if = "Role::is_content")]
+    #[serde(default)]
     pub role: Role,
     /// Molecular formula
     #[serde(rename = "mol")]
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub formula: Option<String>,
     /// Normalized identity claims: name, version, signer, trust tier.
     #[serde(rename = "ident")]
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub identity: Option<filefacts::Identity>,
     /// Traits (findings)
     #[serde(rename = "traits")]
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub findings: Vec<CompactTrait>,
     /// External references this file declares (deps, URLs, repository), each
     /// with its byte offset — the file→dependency edges of the galaxy view.
     #[serde(rename = "refs")]
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub refs: Vec<CompactRef>,
     /// Merged context windows: raw bytes in file order for match highlighting.
     /// Render mode (hex vs text) is derived from the file's `type` field.
     #[serde(rename = "ctx")]
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub context: Vec<crate::types::ContextLine>,
     /// Dense filefacts-derived facts.
     #[serde(rename = "facts")]
     #[serde(skip_serializing_if = "CompactFacts::is_empty")]
-    facts: CompactFacts,
+    #[serde(default)]
+    pub facts: CompactFacts,
 }
 
 /// A finding/trait in compact form
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct CompactTrait {
     /// Trait identifier (e.g., "objectives/execution/shell/bash")
     #[serde(rename = "id")]
@@ -120,18 +144,22 @@ pub struct CompactTrait {
     /// Description
     #[serde(rename = "desc")]
     #[serde(skip_serializing_if = "String::is_empty")]
+    #[serde(default)]
     pub description: String,
     /// Confidence (omit when 0.5)
     #[serde(rename = "conf")]
     #[serde(skip_serializing_if = "is_default_conf")]
+    #[serde(default)]
     pub confidence: f32,
     /// MBC (Malware Behavior Catalog) ID
     #[serde(rename = "mbc")]
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub mbc: Option<String>,
     /// MITRE ATT&CK Technique ID
     #[serde(rename = "atk")]
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub attack: Option<String>,
     /// Source files this finding came from. A single-entry vec means the
     /// finding was inherited from that embedded member; multiple entries means
@@ -139,6 +167,7 @@ pub struct CompactTrait {
     /// Omitted when the finding is native to this file.
     #[serde(rename = "from")]
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub from: Vec<CompactSource>,
     /// Evidence locations: `[[offset, length], ...]` byte spans, capped at 8.
     /// Locate matching content in `ctx` via range intersection:
@@ -146,19 +175,21 @@ pub struct CompactTrait {
     /// contains this finding's match. Omitted when empty.
     #[serde(rename = "spans")]
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub ev: Vec<[u64; 2]>,
 }
 
 /// One member a cross-file composite drew from, in compact form.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct CompactSource {
     /// Contributing member's `files[]` id.
     pub file: u32,
     /// 1-based source line of the component match, when known.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub line: Option<u64>,
     /// Byte offset of the component match, when known.
-    #[serde(rename = "off", skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "off", skip_serializing_if = "Option::is_none", default)]
     pub offset: Option<u64>,
 }
 
@@ -172,7 +203,7 @@ pub struct CompactSource {
 /// intra-bundle references (a relative `require`/`import`, an HTML `src`, a
 /// manifest pointing at a sibling) — work that currently lives in prism — those
 /// file→file edges ride the same list instead of being re-derived downstream.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct CompactRef {
     /// The reference text/locator: a PURL or URL for an external target, or the
     /// raw specifier (e.g. `./util`) for an internal one.
@@ -191,26 +222,28 @@ pub struct CompactRef {
 }
 
 /// Dense filefacts-backed fact block for compact v7.
-#[derive(Debug)]
-struct CompactFacts {
+#[derive(Debug, Default)]
+pub struct CompactFacts {
     /// Metrics (nested structure, floats rounded to 2dp).
-    metrics: Option<RoundedMetrics>,
+    pub metrics: Option<RoundedMetrics>,
     /// Imports as tuples: [library, name] or [library, name, ordinal].
-    imports: Vec<CompactImport>,
+    pub imports: Vec<CompactImport>,
     /// Exports as tuples: [name] or [name, forward_to].
-    exports: Vec<CompactExport>,
+    pub exports: Vec<CompactExport>,
     /// Functions as tuples: [name], [name, offset], or [name, offset, kind].
-    functions: Vec<CompactFunction>,
+    pub functions: Vec<CompactFunction>,
     /// Sections as tuples: [name, file_offset, file_size, entropy, flags].
-    sections: Vec<CompactSection>,
+    pub sections: Vec<CompactSection>,
     /// AST targets.
-    targets: Vec<String>,
+    pub targets: Vec<String>,
     /// AST members.
-    members: Vec<String>,
+    pub members: Vec<String>,
 }
 
 impl CompactFacts {
-    fn is_empty(&self) -> bool {
+    /// Whether every fact slot is empty (the block is then omitted).
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
         self.metrics.is_none()
             && self.imports.is_empty()
             && self.exports.is_empty()
@@ -260,11 +293,15 @@ impl Serialize for CompactFacts {
     }
 }
 
+/// One import, encoded as `[library, name]` or `[library, name, ordinal]`.
 #[derive(Debug)]
-struct CompactImport {
-    library: String,
-    name: String,
-    ordinal: Option<u64>,
+pub struct CompactImport {
+    /// Library the symbol is imported from (e.g. `kernel32.dll`).
+    pub library: String,
+    /// Imported symbol name.
+    pub name: String,
+    /// Ordinal, when the import is by ordinal rather than name.
+    pub ordinal: Option<u64>,
 }
 
 impl Serialize for CompactImport {
@@ -283,10 +320,13 @@ impl Serialize for CompactImport {
     }
 }
 
+/// One export, encoded as `[name]` or `[name, forward_to]`.
 #[derive(Debug)]
-struct CompactExport {
-    name: String,
-    forward_to: Option<String>,
+pub struct CompactExport {
+    /// Exported symbol name.
+    pub name: String,
+    /// Target when this export forwards to another module's symbol.
+    pub forward_to: Option<String>,
 }
 
 impl Serialize for CompactExport {
@@ -304,11 +344,17 @@ impl Serialize for CompactExport {
     }
 }
 
+/// One function, encoded as `[name]`, `[name, offset]` or
+/// `[name, offset, kind]` — `offset` occupies the slot before `kind`, so a
+/// function carrying a kind always carries an offset slot too.
 #[derive(Debug)]
-struct CompactFunction {
-    name: String,
-    offset: Option<u64>,
-    kind: Option<String>,
+pub struct CompactFunction {
+    /// Function name.
+    pub name: String,
+    /// File offset of the function, when known.
+    pub offset: Option<u64>,
+    /// Coarse kind label (e.g. `export`), when known.
+    pub kind: Option<String>,
 }
 
 impl Serialize for CompactFunction {
@@ -335,13 +381,20 @@ impl Serialize for CompactFunction {
     }
 }
 
+/// One binary section, encoded as
+/// `[name, offset, size, entropy, flags]` — always five elements.
 #[derive(Debug)]
-struct CompactSection {
-    name: String,
-    offset: u64,
-    size: u64,
-    entropy: f64,
-    flags: String,
+pub struct CompactSection {
+    /// Section name (e.g. `.text`).
+    pub name: String,
+    /// File offset of the section's data.
+    pub offset: u64,
+    /// Section size on disk, in bytes.
+    pub size: u64,
+    /// Shannon entropy of the section's bytes.
+    pub entropy: f64,
+    /// Permission/characteristic flags, as a short string (e.g. `rx`).
+    pub flags: String,
 }
 
 impl Serialize for CompactSection {
@@ -369,6 +422,172 @@ impl Serialize for RoundedMetrics {
         S: Serializer,
     {
         self.0.serialize(serializer)
+    }
+}
+
+// ========================================================================
+// Deserialization — exact inverses of the hand-written encoders above
+// ========================================================================
+//
+// The six types above encode as *positional, variable-length* sequences
+// (`[library, name]` vs `[library, name, ordinal]`) or as a struct that omits
+// empty fields, so `#[derive(Deserialize)]` cannot reproduce them. These
+// impls exist so a compact report can be read back into its typed form
+// instead of a `serde_json::Value` DOM — the featurizer's DOM walk is what
+// forces a multi-GB tree to exist for a report whose serialized form is a
+// few hundred MB (see MEMORY_EXPERIMENTS.md, N2).
+//
+// Every impl is paired with a round-trip test below; a shape change to an
+// encoder must be mirrored here or that test fails.
+
+/// Read a positional tuple whose trailing elements are optional.
+macro_rules! seq_next {
+    ($seq:expr, $ty:ty) => {
+        $seq.next_element::<$ty>()?
+    };
+}
+
+impl<'de> Deserialize<'de> for CompactImport {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct V;
+        impl<'de> serde::de::Visitor<'de> for V {
+            type Value = CompactImport;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("[library, name] or [library, name, ordinal]")
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> Result<Self::Value, A::Error> {
+                use serde::de::Error as _;
+                let library = seq_next!(seq, String).ok_or_else(|| A::Error::missing_field("library"))?;
+                let name = seq_next!(seq, String).ok_or_else(|| A::Error::missing_field("name"))?;
+                Ok(CompactImport {
+                    library,
+                    name,
+                    ordinal: seq_next!(seq, u64),
+                })
+            }
+        }
+        d.deserialize_seq(V)
+    }
+}
+
+impl<'de> Deserialize<'de> for CompactExport {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct V;
+        impl<'de> serde::de::Visitor<'de> for V {
+            type Value = CompactExport;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("[name] or [name, forward_to]")
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> Result<Self::Value, A::Error> {
+                use serde::de::Error as _;
+                let name = seq_next!(seq, String).ok_or_else(|| A::Error::missing_field("name"))?;
+                Ok(CompactExport {
+                    name,
+                    forward_to: seq_next!(seq, String),
+                })
+            }
+        }
+        d.deserialize_seq(V)
+    }
+}
+
+impl<'de> Deserialize<'de> for CompactFunction {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct V;
+        impl<'de> serde::de::Visitor<'de> for V {
+            type Value = CompactFunction;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("[name], [name, offset] or [name, offset, kind]")
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> Result<Self::Value, A::Error> {
+                use serde::de::Error as _;
+                let name = seq_next!(seq, String).ok_or_else(|| A::Error::missing_field("name"))?;
+                Ok(CompactFunction {
+                    name,
+                    offset: seq_next!(seq, u64),
+                    kind: seq_next!(seq, String),
+                })
+            }
+        }
+        d.deserialize_seq(V)
+    }
+}
+
+impl<'de> Deserialize<'de> for CompactSection {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct V;
+        impl<'de> serde::de::Visitor<'de> for V {
+            type Value = CompactSection;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("[name, offset, size, entropy, flags]")
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> Result<Self::Value, A::Error> {
+                use serde::de::Error as _;
+                let need = |field| A::Error::missing_field(field);
+                Ok(CompactSection {
+                    name: seq_next!(seq, String).ok_or_else(|| need("name"))?,
+                    offset: seq_next!(seq, u64).ok_or_else(|| need("offset"))?,
+                    size: seq_next!(seq, u64).ok_or_else(|| need("size"))?,
+                    entropy: seq_next!(seq, f64).ok_or_else(|| need("entropy"))?,
+                    flags: seq_next!(seq, String).ok_or_else(|| need("flags"))?,
+                })
+            }
+        }
+        d.deserialize_seq(V)
+    }
+}
+
+impl<'de> Deserialize<'de> for RoundedMetrics {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        // Values are already rounded on the wire; reading them back must not
+        // round again (rounding is not idempotent-safe to reapply blindly).
+        serde_json::Value::deserialize(d).map(RoundedMetrics)
+    }
+}
+
+impl<'de> Deserialize<'de> for CompactFacts {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        /// Mirrors the encoder's keys; every field is omitted when empty, so
+        /// all are optional here.
+        #[derive(Deserialize)]
+        struct Wire {
+            #[serde(default)]
+            metrics: Option<RoundedMetrics>,
+            #[serde(default)]
+            imp: Vec<CompactImport>,
+            #[serde(default)]
+            exp: Vec<CompactExport>,
+            #[serde(default)]
+            funcs: Vec<CompactFunction>,
+            #[serde(default)]
+            sec: Vec<CompactSection>,
+            #[serde(default)]
+            tgt: Vec<String>,
+            #[serde(default)]
+            mbr: Vec<String>,
+        }
+        let w = Wire::deserialize(d)?;
+        Ok(CompactFacts {
+            metrics: w.metrics,
+            imports: w.imp,
+            exports: w.exp,
+            functions: w.funcs,
+            sections: w.sec,
+            targets: w.tgt,
+            members: w.mbr,
+        })
     }
 }
 
@@ -813,9 +1032,195 @@ fn assemble_report(mut files: Vec<CompactFile>) -> CompactReport {
     let traits_version =
         crate::traits_repo::version().map(|v| if v.len() > 5 { v[..5].to_string() } else { v });
     CompactReport {
-        version: "8",
+        version: SCHEMA_VERSION,
         traits_version,
         files,
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod wire_roundtrip_tests {
+    use super::*;
+
+    /// Encode with the hand-written `Serialize`, decode with the hand-written
+    /// `Deserialize`, and require the wire form to be stable across the round
+    /// trip. These encoders emit *positional, variable-length* tuples, so a
+    /// decoder that mis-orders or mis-counts elements is silently wrong rather
+    /// than an error — which would corrupt ML features, not crash. Re-encoding
+    /// and comparing JSON catches that.
+    fn roundtrip<T>(value: &T) -> serde_json::Value
+    where
+        T: Serialize + for<'de> Deserialize<'de>,
+    {
+        let encoded = serde_json::to_value(value).expect("encode");
+        let decoded: T = serde_json::from_value(encoded.clone()).expect("decode");
+        let re_encoded = serde_json::to_value(&decoded).expect("re-encode");
+        assert_eq!(encoded, re_encoded, "wire form changed across round trip");
+        encoded
+    }
+
+    #[test]
+    fn import_roundtrips_with_and_without_ordinal() {
+        let short = roundtrip(&CompactImport {
+            library: "kernel32.dll".into(),
+            name: "VirtualAlloc".into(),
+            ordinal: None,
+        });
+        assert_eq!(short, serde_json::json!(["kernel32.dll", "VirtualAlloc"]));
+
+        let long = roundtrip(&CompactImport {
+            library: "ws2_32.dll".into(),
+            name: "connect".into(),
+            ordinal: Some(4),
+        });
+        assert_eq!(long, serde_json::json!(["ws2_32.dll", "connect", 4]));
+    }
+
+    #[test]
+    fn export_roundtrips_with_and_without_forward() {
+        assert_eq!(
+            roundtrip(&CompactExport {
+                name: "start".into(),
+                forward_to: None,
+            }),
+            serde_json::json!(["start"])
+        );
+        assert_eq!(
+            roundtrip(&CompactExport {
+                name: "puts".into(),
+                forward_to: Some("msvcrt.puts".into()),
+            }),
+            serde_json::json!(["puts", "msvcrt.puts"])
+        );
+    }
+
+    /// `offset` is positionally before `kind`, so a function carrying a kind
+    /// always carries an offset slot too — the decoder must not read the kind
+    /// string into the offset.
+    #[test]
+    fn function_roundtrips_at_each_arity() {
+        assert_eq!(
+            roundtrip(&CompactFunction {
+                name: "main".into(),
+                offset: None,
+                kind: None,
+            }),
+            serde_json::json!(["main"])
+        );
+        assert_eq!(
+            roundtrip(&CompactFunction {
+                name: "main".into(),
+                offset: Some(4096),
+                kind: None,
+            }),
+            serde_json::json!(["main", 4096])
+        );
+        assert_eq!(
+            roundtrip(&CompactFunction {
+                name: "main".into(),
+                offset: Some(4096),
+                kind: Some("export".into()),
+            }),
+            serde_json::json!(["main", 4096, "export"])
+        );
+    }
+
+    #[test]
+    fn section_roundtrips_all_five_positions() {
+        assert_eq!(
+            roundtrip(&CompactSection {
+                name: ".text".into(),
+                offset: 1024,
+                size: 2048,
+                entropy: 6.5,
+                flags: "rx".into(),
+            }),
+            serde_json::json!([".text", 1024, 2048, 6.5, "rx"])
+        );
+    }
+
+    /// The whole point of the decoders: a real report, built the way emit
+    /// builds one, must survive the wire round trip byte-for-byte. This is the
+    /// guarantee the typed featurizer depends on — if it does not hold, reading
+    /// a report typed instead of as a `serde_json::Value` would silently change
+    /// ML features rather than fail.
+    #[test]
+    fn full_report_roundtrips_byte_for_byte() {
+        use super::super::file_analysis::FileAnalysis;
+        use super::super::traits_findings::Finding;
+        use super::super::{Criticality, FindingKind};
+
+        let mut fa = FileAnalysis::new(
+            0,
+            "pkg.zip!!lib/mod.py".to_string(),
+            "python".to_string(),
+            "a".repeat(64),
+            4096,
+        );
+        let mut finding = Finding::new(
+            "objectives/execution/shell".into(),
+            FindingKind::Capability,
+            "spawns a shell".into(),
+            0.9,
+        );
+        finding.crit = Criticality::Suspicious;
+        fa.findings.push(finding);
+        fa.depth = 1;
+        fa.parent_id = Some(0);
+
+        let report = compact_from_files(&[fa]);
+        let encoded = serde_json::to_string(&report).expect("encode");
+        let decoded: CompactReport = serde_json::from_str(&encoded).expect("decode");
+        assert_eq!(
+            encoded,
+            serde_json::to_string(&decoded).expect("re-encode"),
+            "a full compact report did not survive the wire round trip"
+        );
+        assert_eq!(decoded.files.len(), 1);
+        assert_eq!(decoded.files[0].findings.len(), 1);
+        assert_eq!(decoded.version, SCHEMA_VERSION);
+    }
+
+    /// Every `CompactFacts` field is omitted when empty, so the decoder must
+    /// default each one rather than fail — and an all-empty block must survive
+    /// as all-empty.
+    #[test]
+    fn facts_roundtrips_sparse_and_populated() {
+        let empty = CompactFacts {
+            metrics: None,
+            imports: Vec::new(),
+            exports: Vec::new(),
+            functions: Vec::new(),
+            sections: Vec::new(),
+            targets: Vec::new(),
+            members: Vec::new(),
+        };
+        assert_eq!(roundtrip(&empty), serde_json::json!({}));
+
+        let populated = CompactFacts {
+            metrics: Some(RoundedMetrics(serde_json::json!({"binary": {"entropy": 6.5}}))),
+            imports: vec![CompactImport {
+                library: "libc".into(),
+                name: "execve".into(),
+                ordinal: None,
+            }],
+            exports: Vec::new(),
+            functions: vec![CompactFunction {
+                name: "f".into(),
+                offset: Some(1),
+                kind: None,
+            }],
+            sections: Vec::new(),
+            targets: vec!["os.system".into()],
+            members: vec!["a.b".into()],
+        };
+        let wire = roundtrip(&populated);
+        // Field *names* are part of the contract the featurizer reads.
+        let obj = wire.as_object().unwrap();
+        assert!(obj.contains_key("metrics") && obj.contains_key("imp"));
+        assert!(obj.contains_key("funcs") && obj.contains_key("tgt") && obj.contains_key("mbr"));
+        assert!(!obj.contains_key("exp"), "empty fields stay omitted");
     }
 }
 

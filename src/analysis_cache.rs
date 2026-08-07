@@ -384,8 +384,12 @@ fn options_hash(options: &AnalysisOptions) -> String {
     // byte offset (never a line number), `addr` is gone, and textual chunks carry
     // derived `line`/`col`. Older entries encode `loc` as a line number, which the
     // new renderer would misread as an offset, so force a re-analysis.
+    // `cm=` separates compact-member-retention entries: the two modes fold
+    // members with different retained fields (`kv`, `filefacts.values`), so
+    // an entry written in one mode would change the other mode's output.
     let key = format!(
-        "v=8,3p={},yara={},r2={},upx={},plat={},hp={},sp={},ps={},fv={},rizin={}",
+        "v=8,cm={},3p={},yara={},r2={},upx={},plat={},hp={},sp={},ps={},fv={},rizin={}",
+        crate::shared_resources::compact_member_retention(),
         options.enable_third_party_yara,
         !options.disable_yara,
         !options.disable_radare2,

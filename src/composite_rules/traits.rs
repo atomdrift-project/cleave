@@ -177,6 +177,25 @@ pub(crate) struct DowngradeConditions {
     pub needs: Option<usize>,
 }
 
+impl DowngradeConditions {
+    /// Forward to every held condition — see
+    /// [`Condition::collect_kv_sibling_basenames`].
+    pub(crate) fn collect_kv_sibling_basenames(
+        &self,
+        out: &mut std::collections::BTreeSet<String>,
+    ) {
+        for c in self
+            .any
+            .iter()
+            .flatten()
+            .chain(self.all.iter().flatten())
+            .chain(self.none.iter().flatten())
+        {
+            c.collect_kv_sibling_basenames(out);
+        }
+    }
+}
+
 /// Definition of an atomic observable trait
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]

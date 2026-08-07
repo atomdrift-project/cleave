@@ -647,11 +647,14 @@ const ALLOWED_SUPPLY_CHAIN: &[&str] = &[
 /// These represent specific named entities the system can identify by fingerprint:
 /// - malware/ — malicious families
 /// - unwanted/ — potentially unwanted software and riskware families
-/// - tool/   — security/sysadmin/RE tooling and dual-use binaries
+/// - dual-use/ — legitimate software with abuse-relevant capabilities
+/// - tool/   — security/sysadmin/development/RE tooling
 /// - app/    — end-user applications
 /// - lib/    — libraries and frameworks
 /// - game/   — games and game engines
-const ALLOWED_WELL_KNOWN: &[&str] = &["malware", "unwanted", "tool", "app", "lib", "game"];
+const ALLOWED_WELL_KNOWN: &[&str] = &[
+    "malware", "unwanted", "dual-use", "tool", "app", "lib", "game",
+];
 
 /// Allowed subdirectories in well-known/malware/
 ///
@@ -694,10 +697,62 @@ const ALLOWED_TOOLS: &[&str] = &[
     "browser",             // Browser-based tools and extensions
     "detection",           // Detection and scanning tools
     "development",         // Developer tooling (IDEs, build systems, package managers)
-    "dual-use",            // Legitimate tools commonly abused (LOLBins, netcat, etc.)
+    "forensics",           // Memory, disk, and incident-forensics tools
     "offensive",           // Offensive security / red team tools
     "reverse-engineering", // RE tools (disassemblers, debuggers, decompilers)
     "sysadmin",            // System administration tools
+];
+
+/// Allowed subdirectories in well-known/dual-use/
+///
+/// Categories describe the legitimate capability that makes the named software
+/// relevant to security review. Update this list AND TAXONOMY.md together.
+const ALLOWED_DUAL_USE: &[&str] = &[
+    "access-control",
+    "credentials",
+    "tunnel",
+    "packaging",
+    "remote-admin",
+    "transfer",
+];
+
+/// Allowed subdirectories in well-known/app/
+const ALLOWED_APPS: &[&str] = &[
+    "ai",
+    "browser",
+    "browser-extension",
+    "communication",
+    "publishing",
+    "data",
+    "development",
+    "enterprise",
+    "finance",
+    "infrastructure",
+    "media",
+    "network",
+    "productivity",
+    "security",
+    "storage",
+    "system",
+    "utility",
+];
+
+/// Allowed subdirectories in well-known/lib/
+const ALLOWED_LIBS: &[&str] = &[
+    "ai",
+    "cloud",
+    "core",
+    "crypto",
+    "data",
+    "development",
+    "format",
+    "media",
+    "network",
+    "platform",
+    "runtime",
+    "native",
+    "ui",
+    "web",
 ];
 
 /// Allowed top-level subdirectories in metadata/
@@ -832,6 +887,7 @@ const ALLOWED_METADATA_PACKAGE: &[&str] = &[
     "quality",        // Quality signals
     "scripts",        // Package scripts
     "testing",        // Testing detection
+    "tooling",        // Benign package-manager, bundler, and generated-source contexts
     "versioning",     // Version detection
 ];
 
@@ -1240,7 +1296,7 @@ pub(crate) fn validate_directory_structure(traits_path: &Path) -> Result<(), Vec
                     errors.push(format!(
                         "Unknown well-known/ subdirectory: '{}'\n  \
                          This rule is misplaced according to TAXONOMY.md.\n  \
-                         well-known/ may only contain: malware, tool, app, lib, game.\n  \
+                         well-known/ may only contain: malware, unwanted, dual-use, tool, app, lib, game.\n  \
                          There is almost certainly a better existing directory for this trait.",
                         dir_name
                     ));
@@ -1283,6 +1339,45 @@ pub(crate) fn validate_directory_structure(traits_path: &Path) -> Result<(), Vec
                          There is almost certainly a better existing directory for this trait.",
                         dir_name
                     ));
+                }
+            }
+        }
+    }
+
+    // Check well-known/dual-use/ subdirectories
+    if let Ok(entries) = std::fs::read_dir(traits_path.join("well-known/dual-use")) {
+        for entry in entries.flatten() {
+            if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+                let dir_name = entry.file_name().to_string_lossy().to_string();
+                if !ALLOWED_DUAL_USE.contains(&dir_name.as_str()) {
+                    errors.push(format!(
+                        "Unknown well-known/dual-use/ subdirectory: '{}'\n  \
+                         This rule is misplaced according to TAXONOMY.md.\n  \
+                         dual-use/ categories describe the legitimate abuse-relevant capability.\n  \
+                         Unwanted software → well-known/unwanted/.\n  \
+                         Professional tools → well-known/tool/.\n  \
+                         There is almost certainly a better existing directory for this trait.",
+                        dir_name
+                    ));
+                }
+            }
+        }
+    }
+
+    for (kind, allowed) in [("app", ALLOWED_APPS), ("lib", ALLOWED_LIBS)] {
+        if let Ok(entries) = std::fs::read_dir(traits_path.join("well-known").join(kind)) {
+            for entry in entries.flatten() {
+                if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+                    let dir_name = entry.file_name().to_string_lossy().to_string();
+                    if !allowed.contains(&dir_name.as_str()) {
+                        errors.push(format!(
+                            "Unknown well-known/{}/ subdirectory: '{}'\n  \
+                             This rule is misplaced according to TAXONOMY.md.\n  \
+                             {}/ categories must describe the named software's primary role.\n  \
+                             There is almost certainly a better existing directory for this trait.",
+                            kind, dir_name, kind
+                        ));
+                    }
                 }
             }
         }

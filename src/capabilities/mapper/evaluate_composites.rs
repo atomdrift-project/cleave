@@ -1350,4 +1350,44 @@ composite_rules:
             "package composite must not fire with only one member present"
         );
     }
+
+    /// The sibling-basename walk that drives compact-member kv retention:
+    /// `<filename>::` prefixes anywhere in a kv path (main, eq, ne) are
+    /// collected lowercased; rules with no sibling reference contribute
+    /// nothing, so the empty set is the common case.
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn kv_sibling_basenames_collects_referenced_files_only() {
+        let yaml = r#"
+defaults:
+  for: [all]
+
+traits:
+  - id: "test/kv::plain-value"
+    desc: "no sibling reference"
+    crit: baseline
+    if:
+      type: value
+      path: "scripts.postinstall"
+      exists: true
+
+composite_rules:
+  - id: "test/kv::sibling-eq"
+    desc: "cross-file identity check"
+    crit: notable
+    all:
+      - type: value
+        path: "markdown.first_heading"
+        eq: "Package.JSON::name"
+"#;
+        let file = write_test_traits(yaml);
+        let mapper =
+            super::super::CapabilityMapper::from_yaml(file.path()).expect("load kv mapper");
+        let names = mapper.kv_sibling_basenames();
+        assert_eq!(
+            names.iter().cloned().collect::<Vec<_>>(),
+            vec!["package.json".to_string()],
+            "eq sibling prefix collected lowercased; plain paths contribute nothing"
+        );
+    }
 }

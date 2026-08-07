@@ -25,15 +25,12 @@ fn current_schema_version() -> &'static str {
     SCHEMA_VERSION
 }
 
-/// Default confidence value (omitted from output)
-const DEFAULT_CONF: f32 = 0.5;
-
 // ========================================================================
 // Compact output types (v7 schema)
 // ========================================================================
 
 /// Top-level v7 report
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompactReport {
     /// Schema version — always "8"
     #[serde(rename = "v")]
@@ -47,10 +44,42 @@ pub struct CompactReport {
     /// Files array
     #[serde(rename = "files")]
     pub files: Vec<CompactFile>,
+    /// Fetch edges (`source_sha256 → content_sha256`, one per reference) for a
+    /// consumer that retrieved referenced content and grafted it into this
+    /// report. Report-level rather than per-file because a fetch is a per-event
+    /// observation, so it never falsely dedups when content is exploded by hash.
+    ///
+    /// Opaque `Value`s: the record shape belongs to the fetching layer, which
+    /// cleave does not depend on. The list is one small object per fetch.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
+    pub fetched: Vec<serde_json::Value>,
+    /// Directory the analyzed archive's members were extracted into, when the
+    /// caller kept them on disk for a downstream consumer to open. Absent on
+    /// ordinary runs, which extract to a temporary directory and discard it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub extracted_path: Option<String>,
+}
+
+/// An empty report of the current schema — no files, no fetch edges. Hand-written
+/// rather than derived so `version` reports the schema this build emits; a derived
+/// `Default` would leave it the empty string and produce a report claiming no
+/// schema at all.
+impl Default for CompactReport {
+    fn default() -> Self {
+        Self {
+            version: SCHEMA_VERSION,
+            traits_version: None,
+            files: Vec::new(),
+            fetched: Vec::new(),
+            extracted_path: None,
+        }
+    }
 }
 
 /// Per-file analysis in v7 schema
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CompactFile {
     /// Sequential file ID
     pub id: u32,
@@ -64,11 +93,13 @@ pub struct CompactFile {
     /// File size in bytes
     #[serde(rename = "size")]
     pub size: u64,
-    /// Weighted risk score
+    /// Weighted risk score. Signed because `-1` is the sentinel scan writes for
+    /// an archive member it listed but never analyzed; a `u32` here made such a
+    /// report fail to deserialize.
     #[serde(rename = "risk")]
-    #[serde(skip_serializing_if = "super::is_zero_u32")]
+    #[serde(skip_serializing_if = "super::is_zero_i64")]
     #[serde(default)]
-    pub risk: u32,
+    pub risk: i64,
     /// Archive nesting depth (omit when 0)
     #[serde(rename = "depth")]
     #[serde(skip_serializing_if = "super::is_zero_u32")]
@@ -133,7 +164,7 @@ pub struct CompactFile {
 }
 
 /// A finding/trait in compact form
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CompactTrait {
     /// Trait identifier (e.g., "objectives/execution/shell/bash")
     #[serde(rename = "id")]
@@ -146,9 +177,21 @@ pub struct CompactTrait {
     #[serde(skip_serializing_if = "String::is_empty")]
     #[serde(default)]
     pub description: String,
-    /// Confidence (omit when 0.5)
+    /// Confidence, always emitted.
+    ///
+    /// It used to be omitted at 0.5 (and 0.0), which saved ~2% of findings
+    /// twelve bytes each and cost far more than that: the round trip was lossy,
+    /// and each reader invented its own value for the absence — 0.5 in one
+    /// place, 1.0 in the featurizer and collimator. A finding scored 0.5 was
+    /// therefore read as 1.0 downstream, clearing a 0.65 inclusion gate it
+    /// should have failed. Writing the number is cheaper than agreeing on what
+    /// its absence meant.
+    ///
+    /// A missing `conf` (only reports from builds that omitted it) decodes to
+    /// 0.0, which reads as "no confidence recorded" and falls below every
+    /// downstream inclusion gate — the same side of every threshold as the 0.5
+    /// those builds meant, without a surprising default to remember.
     #[serde(rename = "conf")]
-    #[serde(skip_serializing_if = "is_default_conf")]
     #[serde(default)]
     pub confidence: f32,
     /// MBC (Malware Behavior Catalog) ID
@@ -177,10 +220,33 @@ pub struct CompactTrait {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     #[serde(default)]
     pub ev: Vec<[u64; 2]>,
+    /// Machine-readable identity of a dependency this finding is about, set by a
+    /// consumer that resolved the reference and graded what it fetched. `desc`
+    /// carries the same facts as prose for a human or an LLM; this is the copy a
+    /// program reads to link the finding to a specific artifact without parsing
+    /// the sentence. `None` for ordinary findings, which are about the file
+    /// itself.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub dep: Option<CompactDep>,
+}
+
+/// The dependency a [`CompactTrait::dep`] finding refers to: what named it, what
+/// bytes came back, and what those bytes turned out to be.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompactDep {
+    /// Resolved PURL or URL the dependency was fetched via.
+    pub locator: String,
+    /// SHA256 of the fetched content, so a consumer can link straight to the
+    /// dependency's own analysis.
+    pub sha: String,
+    /// Detected file type of the fetched content.
+    #[serde(rename = "type")]
+    pub file_type: String,
 }
 
 /// One member a cross-file composite drew from, in compact form.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompactSource {
     /// Contributing member's `files[]` id.
     pub file: u32,
@@ -203,7 +269,7 @@ pub struct CompactSource {
 /// intra-bundle references (a relative `require`/`import`, an HTML `src`, a
 /// manifest pointing at a sibling) — work that currently lives in prism — those
 /// file→file edges ride the same list instead of being re-derived downstream.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompactRef {
     /// The reference text/locator: a PURL or URL for an external target, or the
     /// raw specifier (e.g. `./util`) for an internal one.
@@ -222,7 +288,7 @@ pub struct CompactRef {
 }
 
 /// Dense filefacts-backed fact block for compact v7.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct CompactFacts {
     /// Metrics (nested structure, floats rounded to 2dp).
     pub metrics: Option<RoundedMetrics>,
@@ -294,7 +360,7 @@ impl Serialize for CompactFacts {
 }
 
 /// One import, encoded as `[library, name]` or `[library, name, ordinal]`.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CompactImport {
     /// Library the symbol is imported from (e.g. `kernel32.dll`).
     pub library: String,
@@ -321,7 +387,7 @@ impl Serialize for CompactImport {
 }
 
 /// One export, encoded as `[name]` or `[name, forward_to]`.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CompactExport {
     /// Exported symbol name.
     pub name: String,
@@ -347,7 +413,7 @@ impl Serialize for CompactExport {
 /// One function, encoded as `[name]`, `[name, offset]` or
 /// `[name, offset, kind]` — `offset` occupies the slot before `kind`, so a
 /// function carrying a kind always carries an offset slot too.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CompactFunction {
     /// Function name.
     pub name: String,
@@ -383,7 +449,7 @@ impl Serialize for CompactFunction {
 
 /// One binary section, encoded as
 /// `[name, offset, size, entropy, flags]` — always five elements.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CompactSection {
     /// Section name (e.g. `.text`).
     pub name: String,
@@ -413,7 +479,7 @@ impl Serialize for CompactSection {
 }
 
 /// Wrapper for metrics that rounds floats to 2dp during serialization
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RoundedMetrics(pub serde_json::Value);
 
 impl Serialize for RoundedMetrics {
@@ -460,7 +526,8 @@ impl<'de> Deserialize<'de> for CompactImport {
                 mut seq: A,
             ) -> Result<Self::Value, A::Error> {
                 use serde::de::Error as _;
-                let library = seq_next!(seq, String).ok_or_else(|| A::Error::missing_field("library"))?;
+                let library =
+                    seq_next!(seq, String).ok_or_else(|| A::Error::missing_field("library"))?;
                 let name = seq_next!(seq, String).ok_or_else(|| A::Error::missing_field("name"))?;
                 Ok(CompactImport {
                     library,
@@ -594,10 +661,6 @@ impl<'de> Deserialize<'de> for CompactFacts {
 // ========================================================================
 // Helpers
 // ========================================================================
-
-fn is_default_conf(v: &f32) -> bool {
-    (*v - DEFAULT_CONF).abs() < f32::EPSILON || *v == 0.0
-}
 
 /// Convert Criticality enum to v4 ordinal (0-5).
 /// 0=filtered, 1=component, 2=baseline, 3=notable, 4=suspicious, 5=hostile
@@ -792,6 +855,7 @@ fn convert_file(file: &super::file_analysis::FileAnalysis, id: u32) -> CompactFi
                     attack: finding.attack.clone(),
                     from,
                     ev: ev_spans,
+                    dep: None,
                 },
             );
         }
@@ -908,7 +972,7 @@ fn convert_file(file: &super::file_analysis::FileAnalysis, id: u32) -> CompactFi
         file_type: file.file_type.clone(),
         sha: file.sha256.clone(),
         size: file.size,
-        risk: file.score,
+        risk: i64::from(file.score),
         depth: file.depth,
         parent: file.parent_id,
         rel: file.rel,
@@ -1035,6 +1099,8 @@ fn assemble_report(mut files: Vec<CompactFile>) -> CompactReport {
         version: SCHEMA_VERSION,
         traits_version,
         files,
+        fetched: Vec::new(),
+        extracted_path: None,
     }
 }
 
@@ -1145,6 +1211,27 @@ mod wire_roundtrip_tests {
     /// guarantee the typed featurizer depends on — if it does not hold, reading
     /// a report typed instead of as a `serde_json::Value` would silently change
     /// ML features rather than fail.
+    /// `scan` marks an archive member it listed but never analyzed with
+    /// `risk: -1`. That is a real value on the wire, so the typed schema must
+    /// accept it — with `risk: u32` this input failed to deserialize outright,
+    /// and the other round-trip tests missed it because their fixtures were
+    /// all non-negative.
+    #[test]
+    fn negative_risk_sentinel_roundtrips() {
+        let wire = serde_json::json!({
+            "v": "8",
+            "files": [{
+                "id": 1, "path": "a.zip!!m.bin", "type": "data",
+                "sha": "b".repeat(64), "size": 10, "depth": 1, "risk": -1
+            }]
+        });
+        let decoded: CompactReport =
+            serde_json::from_value(wire).expect("unanalyzed-member report must decode");
+        assert_eq!(decoded.files[0].risk, -1);
+        let re = serde_json::to_value(&decoded).expect("re-encode");
+        assert_eq!(re["files"][0]["risk"], serde_json::json!(-1));
+    }
+
     #[test]
     fn full_report_roundtrips_byte_for_byte() {
         use super::super::file_analysis::FileAnalysis;
@@ -1199,7 +1286,9 @@ mod wire_roundtrip_tests {
         assert_eq!(roundtrip(&empty), serde_json::json!({}));
 
         let populated = CompactFacts {
-            metrics: Some(RoundedMetrics(serde_json::json!({"binary": {"entropy": 6.5}}))),
+            metrics: Some(RoundedMetrics(
+                serde_json::json!({"binary": {"entropy": 6.5}}),
+            )),
             imports: vec![CompactImport {
                 library: "libc".into(),
                 name: "execve".into(),

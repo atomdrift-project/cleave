@@ -1812,10 +1812,14 @@ impl AnalysisReport {
         // Flatten the values tree into `kv` (the serialized form). The nested
         // tree itself is NOT retained on the file: `kv` is the single output
         // representation, and the only structural reader (`type: value` sibling
-        // lookups, diff) now reads `kv`.
-        if let Some(tree) = self.values_tree.as_deref() {
+        // lookups, diff) now reads `kv`. In compact-member mode the flatten is
+        // skipped entirely for files no rule can reach — see `retain_folded_kv`.
+        if let Some(tree) = self.values_tree.as_deref()
+            && retain_folded_kv(&file.path)
+        {
             flatten_kv_for_output(tree, &mut file.kv);
         }
+        drop_unread_folded_fields(&mut file);
         file
     }
 
@@ -1859,11 +1863,56 @@ impl AnalysisReport {
 
         file.populate_file_metrics();
         // `kv` is the single retained representation — see `to_file_analysis`.
-        if let Some(tree) = self.values_tree.as_deref() {
+        if let Some(tree) = self.values_tree.as_deref()
+            && retain_folded_kv(&file.path)
+        {
             flatten_kv_for_output(tree, &mut file.kv);
         }
+        drop_unread_folded_fields(&mut file);
         (file, nested_files, archive_contents)
     }
+}
+
+/// Drop folded-file payloads that have no reader in compact-member mode.
+/// `filefacts.values` is a full clone of the structural value tree; its
+/// consumers — this file's own `type: value` conditions and the host-format
+/// extractors — all run during the file's own evaluation, which is complete
+/// by fold time. Compact output reads `symbols` and `references` from the
+/// view, never `values`, so in compact mode the tree is ballast. No-op in
+/// full-retention mode: the v3 schema serializes it.
+fn drop_unread_folded_fields(file: &mut FileAnalysis) {
+    if !crate::shared_resources::compact_member_retention() {
+        return;
+    }
+    if let Some(view) = file.filefacts.as_mut() {
+        view.values = serde_json::Value::Null;
+    }
+    // Sub-notable findings never render as finding rows on any compact-path
+    // surface (terminal focus starts at notable; compact traits carry no
+    // evidence text — spans come from offsets), so their evidence values are
+    // ballast once matching is done. Notable+ values are kept: the terminal
+    // evidence column reads them. Baseline/component noise dominates finding
+    // counts on member-heavy archives, so this is most of the weight.
+    for f in &mut file.findings {
+        if f.crit < Criticality::Notable {
+            for e in &mut f.evidence {
+                e.value = String::new();
+            }
+        }
+    }
+}
+
+/// Whether `path`'s flattened `kv` can ever be read again once this file
+/// folds into its container. Always true in full-retention mode (the v3
+/// schema serializes `kv`); in compact mode, true only when a loaded rule
+/// reaches this file by basename via a `<filename>::` sibling kv path.
+fn retain_folded_kv(path: &str) -> bool {
+    if !crate::shared_resources::compact_member_retention() {
+        return true;
+    }
+    // Mirror `sibling_path_matches`: the final `/`, `\`, or `!` component.
+    let basename = path.rsplit(['/', '\\', '!']).next().unwrap_or(path);
+    crate::shared_resources::kv_sibling_basename_referenced(basename)
 }
 
 /// Flatten a JSON kv tree into the per-file output map. Nested

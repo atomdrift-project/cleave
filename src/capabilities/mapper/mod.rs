@@ -123,6 +123,11 @@ pub struct CapabilityMapper {
     /// Retroactive `unless:` suppression tables, built lazily on first use
     /// and, like `indexes`, shared across per-file mapper clones.
     pub(super) unless_index: Arc<OnceLock<UnlessIndex>>,
+    /// Lowercased `<filename>::` sibling basenames referenced by any loaded
+    /// rule's kv paths, computed once on first use. The member-retention
+    /// gate reads this to decide which members must keep their flattened
+    /// `kv` after folding (see `shared_resources`).
+    pub(super) kv_sibling_basenames: Arc<OnceLock<std::collections::BTreeSet<String>>>,
     /// Maps trait ID -> index in trait_definitions
     #[allow(dead_code)]
     pub(super) trait_id_map: std::collections::HashMap<String, usize>,
@@ -165,6 +170,42 @@ impl CapabilityMapper {
         // The closure only moves an already-built value, so a racing caller
         // blocks for a move rather than for a multi-second parallel build.
         self.indexes.get_or_init(|| built)
+    }
+
+    /// The lowercased sibling basenames the loaded rule set can read via
+    /// `<filename>::` kv paths — the only member basenames whose flattened
+    /// `kv` is consulted after the member folds into its container.
+    pub(crate) fn kv_sibling_basenames(&self) -> &std::collections::BTreeSet<String> {
+        self.kv_sibling_basenames.get_or_init(|| {
+            let mut out = std::collections::BTreeSet::new();
+            for t in &self.trait_definitions {
+                t.r#if.collect_kv_sibling_basenames(&mut out);
+                for c in t.unless.iter().flatten() {
+                    c.collect_kv_sibling_basenames(&mut out);
+                }
+                if let Some(d) = &t.downgrade {
+                    d.collect_kv_sibling_basenames(&mut out);
+                }
+            }
+            for r in &self.composite_rules {
+                for c in r
+                    .all
+                    .iter()
+                    .flatten()
+                    .chain(r.any.iter().flatten())
+                    .chain(r.unless.iter().flatten())
+                {
+                    c.collect_kv_sibling_basenames(&mut out);
+                }
+                if let Some(d) = &r.downgrade {
+                    d.collect_kv_sibling_basenames(&mut out);
+                }
+            }
+            if !out.is_empty() {
+                tracing::debug!(basenames = ?out, "kv sibling basenames referenced by loaded rules");
+            }
+            out
+        })
     }
 
     /// Force the lazy match indexes to build now, on the calling thread.

@@ -166,7 +166,6 @@ const BANNED_DIRECTORY_SEGMENTS: &[&str] = &[
     "things", // obviously bad
     "tools",
     "tool",
-    "tooling",
     "type",    // too vague
     "types",   // dumping ground
     "utils",   // too vague
@@ -1572,7 +1571,7 @@ pub(crate) fn find_parent_duplicate_segments(trait_dirs: &[String]) -> Vec<(Stri
     for dir_path in trait_dirs {
         let segments: Vec<&str> = dir_path.split('/').collect();
 
-        for window in segments.windows(2) {
+        for (segment_index, window) in segments.windows(2).enumerate() {
             let parent = window[0].to_lowercase();
             let child = window[1].to_lowercase();
 
@@ -1604,9 +1603,22 @@ pub(crate) fn find_parent_duplicate_segments(trait_dirs: &[String]) -> Vec<(Stri
                     break;
                 }
 
-                // Check for abbreviations: child is a prefix of parent
-                // e.g., "execution" contains "exec", "credential-access" contains "cred"
-                if parent.starts_with(&child) || child.starts_with(&parent) {
+                // Product names naturally begin with their category noun (DataEase,
+                // MediaForge, BrowserStack). Exact and plural duplicates above
+                // still apply at this boundary; only prefix-abbreviation matching does not.
+                if segments.first() == Some(&"well-known") && segment_index == 2 {
+                    continue;
+                }
+
+                // Check short abbreviations: "exec"/"execution", "cred"/"credential-access".
+                // A fully spelled category may naturally recur in a product name,
+                // such as well-known/app/browser/browserstack.
+                let (shorter, longer) = if parent.len() <= child.len() {
+                    (&parent, &child)
+                } else {
+                    (&child, &parent)
+                };
+                if shorter.len() <= 5 && longer.starts_with(shorter) {
                     // Check if this path is in the exceptions list
                     if !PARENT_DUPLICATE_EXCEPTIONS
                         .iter()
@@ -1724,10 +1736,57 @@ const WELL_KNOWN_TOOL_CATEGORIES: &[&str] = &[
     "browser",
     "detection",
     "development",
-    "dual-use",
+    "forensics",
     "offensive",
     "reverse-engineering",
     "sysadmin",
+];
+
+/// Allowed second-level categories under `well-known/dual-use/`.
+const WELL_KNOWN_DUAL_USE_CATEGORIES: &[&str] = &[
+    "access-control",
+    "credentials",
+    "tunnel",
+    "packaging",
+    "remote-admin",
+    "transfer",
+];
+
+const WELL_KNOWN_APP_CATEGORIES: &[&str] = &[
+    "ai",
+    "browser",
+    "browser-extension",
+    "communication",
+    "publishing",
+    "data",
+    "development",
+    "enterprise",
+    "finance",
+    "infrastructure",
+    "media",
+    "network",
+    "productivity",
+    "security",
+    "storage",
+    "system",
+    "utility",
+];
+
+const WELL_KNOWN_LIB_CATEGORIES: &[&str] = &[
+    "ai",
+    "cloud",
+    "core",
+    "crypto",
+    "data",
+    "development",
+    "format",
+    "media",
+    "network",
+    "platform",
+    "runtime",
+    "native",
+    "ui",
+    "web",
 ];
 
 /// Allowed top-level categories under `well-known/`.
@@ -1735,11 +1794,13 @@ const WELL_KNOWN_TOOL_CATEGORIES: &[&str] = &[
 /// Kept in sync with `ALLOWED_WELL_KNOWN` in directory_whitelist.rs. Anything outside
 /// this set is reported by the directory whitelist; this list is reused here to scope
 /// second-level subcategory checks.
-const WELL_KNOWN_TOP_LEVEL: &[&str] = &["malware", "unwanted", "tool", "app", "lib", "game"];
+const WELL_KNOWN_TOP_LEVEL: &[&str] = &[
+    "malware", "unwanted", "dual-use", "tool", "app", "lib", "game",
+];
 
 /// Validate that well-known/<category>/ only contains whitelisted second-level
-/// subcategories where one is defined (currently malware/ and tool/). The app/, lib/,
-/// game/, and unwanted/ buckets have no fixed subcategory list and are ignored here.
+/// subcategories where one is defined (malware/, dual-use/, app/, lib/, and tool/).
+/// The game/ and unwanted/ buckets have no fixed subcategory list and are ignored here.
 ///
 /// Returns `(directory_path, unknown_category)` for violations.
 #[must_use]
@@ -1765,6 +1826,9 @@ pub(crate) fn find_wellknown_category_violations(trait_dirs: &[String]) -> Vec<(
 
         let (allowed, category) = match parts[1] {
             "malware" => (WELL_KNOWN_MALWARE_CATEGORIES, parts[2]),
+            "dual-use" => (WELL_KNOWN_DUAL_USE_CATEGORIES, parts[2]),
+            "app" => (WELL_KNOWN_APP_CATEGORIES, parts[2]),
+            "lib" => (WELL_KNOWN_LIB_CATEGORIES, parts[2]),
             "tool" => (WELL_KNOWN_TOOL_CATEGORIES, parts[2]),
             _ => continue,
         };
@@ -2637,5 +2701,36 @@ mod content_dir_tests {
             "metadata/vendor",
         ]);
         assert!(find_metadata_content_dirs(&input).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod parent_duplicate_tests {
+    use super::find_parent_duplicate_segments;
+
+    fn dirs(v: &[&str]) -> Vec<String> {
+        v.iter().map(ToString::to_string).collect()
+    }
+
+    #[test]
+    fn flags_exact_plural_and_short_abbreviation_duplicates() {
+        let input = dirs(&[
+            "micro-behaviors/execution/execution",
+            "objectives/credential/credentials",
+            "micro-behaviors/process/exec/execution",
+        ]);
+        assert_eq!(find_parent_duplicate_segments(&input).len(), 3);
+    }
+
+    #[test]
+    fn allows_full_category_word_in_specific_product_name() {
+        let input = dirs(&[
+            "well-known/app/browser/browserstack",
+            "well-known/app/network/networkmanager",
+            "well-known/app/data/dataease",
+            "well-known/lib/data/datalevin",
+            "well-known/app/media/mediaforge",
+        ]);
+        assert!(find_parent_duplicate_segments(&input).is_empty());
     }
 }

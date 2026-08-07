@@ -523,6 +523,7 @@ impl super::CapabilityMapper {
                                     composite_rules: cache_data.composite_rules,
                                     indexes: std::sync::Arc::new(std::sync::OnceLock::new()),
                                     unless_index: std::sync::Arc::new(std::sync::OnceLock::new()),
+                                    kv_sibling_basenames: std::sync::Arc::default(),
                                     trait_id_map,
                                     platforms: vec![Platform::All],
                                     slow_rule_ms: Self::DEFAULT_SLOW_RULE_MS,
@@ -2659,13 +2660,13 @@ impl super::CapabilityMapper {
                     wk_category_violations.len()
                 );
                 eprintln!(
-                    "   Only whitelisted subcategories are allowed under well-known/malware/ and well-known/tool/:\n"
+                    "   Only whitelisted subcategories are allowed under well-known/malware/, well-known/dual-use/, well-known/app/, well-known/lib/, and well-known/tool/:\n"
                 );
                 for (dir_path, category) in &wk_category_violations {
                     eprintln!("   {}: unknown category '{}'", dir_path, category);
                 }
                 eprintln!(
-                    "\n   Add the category to WELL_KNOWN_MALWARE_CATEGORIES or WELL_KNOWN_TOOL_CATEGORIES in taxonomy.rs if legitimate."
+                    "\n   Add the category to the corresponding WELL_KNOWN_*_CATEGORIES list in taxonomy.rs if legitimate."
                 );
                 warnings.push(format!(
                     "{} unknown categories under well-known/",
@@ -4727,6 +4728,7 @@ impl super::CapabilityMapper {
             composite_rules,
             indexes: std::sync::Arc::new(std::sync::OnceLock::new()),
             unless_index: std::sync::Arc::new(std::sync::OnceLock::new()),
+            kv_sibling_basenames: std::sync::Arc::default(),
             trait_id_map,
             platforms: vec![Platform::All],
             slow_rule_ms: Self::DEFAULT_SLOW_RULE_MS,

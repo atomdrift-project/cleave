@@ -57,8 +57,8 @@ pub(crate) mod z85;
 // These re-exports are part of the public library API even if not used directly in the binary
 #[allow(unused_imports)]
 pub use compact::{
-    CompactExport, CompactFacts, CompactFile, CompactFunction, CompactImport, CompactReport,
-    CompactSection, CompactTrait, RoundedMetrics, compact_from_files,
+    CompactDep, CompactExport, CompactFacts, CompactFile, CompactFunction, CompactImport,
+    CompactReport, CompactSection, CompactTrait, RoundedMetrics, compact_from_files,
 };
 #[allow(unused_imports)]
 pub use core::{

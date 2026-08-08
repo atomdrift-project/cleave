@@ -456,9 +456,9 @@ mod tests {
     fn make_finding(id: &str, crit: Criticality) -> Finding {
         Finding {
             src: None,
-            id: id.to_string(),
+            id: id.to_string().into(),
             kind: FindingKind::Capability,
-            desc: format!("test {id}"),
+            desc: format!("test {id}").into(),
             conf: 0.9,
             crit,
             mbc: None,

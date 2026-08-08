@@ -100,7 +100,7 @@ fn collect_leg_anchors(
     seen: &mut FxHashSet<String>,
     out: &mut Vec<(u64, u32, f32)>,
 ) {
-    if !seen.insert(finding.id.clone()) {
+    if !seen.insert(finding.id.clone().to_string()) {
         return;
     }
     for (off, len) in finding.evidence.iter().filter_map(local_anchor) {
@@ -795,7 +795,7 @@ mod tests {
         let mut comp_b = finding("comp/b", Criticality::Component, &[100]);
         comp_b.conf = 0.8;
         let mut composite = finding("obj/composite", Criticality::Suspicious, &[]);
-        composite.trait_refs = vec!["comp/a".to_string(), "comp/b".to_string()];
+        composite.trait_refs = vec!["comp/a".to_string().into(), "comp/b".to_string().into()];
 
         let mut r = report(vec![strong, comp_a, comp_b, composite]);
         capture(&mut r, &data, FileType::Elf);
@@ -827,7 +827,7 @@ mod tests {
         let mut comp = finding("comp/only", Criticality::Component, &[10]);
         comp.conf = 0.9;
         let mut composite = finding("obj/dominated", Criticality::Suspicious, &[]);
-        composite.trait_refs = vec!["comp/only".to_string()];
+        composite.trait_refs = vec!["comp/only".to_string().into()];
 
         let mut r = report(vec![strong, comp, composite]);
         capture(&mut r, &data, FileType::Elf);
@@ -846,9 +846,9 @@ mod tests {
     fn composite_inherits_component_offset() {
         let data = b"a\nb\nopen(f)\nexec(p)\nc\n"; // "open" line 3 (off 4), "exec" line 4 (off 11)
         let mut comp = finding("comp/open", Criticality::Component, &[4]);
-        comp.desc = "open".to_string();
+        comp.desc = "open".to_string().into();
         let mut composite = finding("obj/loader", Criticality::Suspicious, &[]);
-        composite.trait_refs = vec!["comp/open".to_string()];
+        composite.trait_refs = vec!["comp/open".to_string().into()];
         let mut r = report(vec![comp, composite]);
         capture(&mut r, data, FileType::Python);
 
@@ -870,7 +870,7 @@ mod tests {
         let mut far = finding("cap/far", Criticality::Notable, &[100]);
         far.conf = 0.95; // the composite's most-confident leg — it anchors here
         let mut composite = finding("obj/implant", Criticality::Hostile, &[]);
-        composite.trait_refs = vec!["cap/near".to_string(), "cap/far".to_string()];
+        composite.trait_refs = vec!["cap/near".to_string().into(), "cap/far".to_string().into()];
 
         let mut r = report(vec![near, far, composite]);
         capture(&mut r, &data, FileType::Python);
@@ -1025,7 +1025,7 @@ mod tests {
         let mut far = finding("cap/far", Criticality::Notable, &[100]);
         far.conf = 0.95; // the composite's most-confident leg — it anchors here
         let mut composite = finding("obj/implant", Criticality::Hostile, &[]);
-        composite.trait_refs = vec!["cap/near".to_string(), "cap/far".to_string()];
+        composite.trait_refs = vec!["cap/near".to_string().into(), "cap/far".to_string().into()];
         let mut r = report(vec![near, far, composite]);
         capture(&mut r, &data, FileType::Elf);
 

@@ -892,9 +892,9 @@ fn test_report_with_findings(findings: Vec<Finding>) -> AnalysisReport {
 fn test_finding(id: &str) -> Finding {
     Finding {
         src: None,
-        id: id.to_string(),
+        id: id.to_string().into(),
         kind: FindingKind::Capability,
-        desc: format!("Test finding {}", id),
+        desc: format!("Test finding {}", id).into(),
         conf: 0.9,
         crit: Criticality::Notable,
         mbc: None,

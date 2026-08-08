@@ -118,7 +118,7 @@ fn analyze_file_for_overlaps(
                     trait_ranges.push(TraitRange {
                         offset,
                         length,
-                        trait_id: finding.id.clone(),
+                        trait_id: finding.id.clone().to_string(),
                     });
                 }
             }

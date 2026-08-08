@@ -159,7 +159,7 @@ fn fired_ids(name: &str, src: &str) -> Vec<String> {
     let opts = cleave::AnalysisOptions::default();
     let report = cleave::analyze_bytes(src.as_bytes(), name, &opts).expect("analyze");
     cleave::traits_repo::set_override_dir(None);
-    report.findings.iter().map(|f| f.id.clone()).collect()
+    report.findings.iter().map(|f| f.id.to_string()).collect()
 }
 
 /// A 46-byte `package.json` (well under the 100-byte short-circuit, zero

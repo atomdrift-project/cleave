@@ -159,8 +159,8 @@ fn archive_finding(
         src: None,
         kind: FindingKind::Capability,
         trait_refs: vec![],
-        id: id.to_string(),
-        desc,
+        id: id.into(),
+        desc: desc.into(),
         conf: 0.9,
         crit,
         mbc: None,
@@ -216,7 +216,7 @@ fn drain_extraction_notes(report: &mut AnalysisReport, guard: &ExtractionGuard) 
         src: None,
         kind: FindingKind::Structural,
         trait_refs: vec![],
-        id: "anti-analysis/malformed/archive-incomplete".to_string(),
+        id: "anti-analysis/malformed/archive-incomplete".to_string().into(),
         desc: format!(
             "Archive could only be read in part ({} extraction {})",
             notes.len(),
@@ -225,7 +225,7 @@ fn drain_extraction_notes(report: &mut AnalysisReport, guard: &ExtractionGuard) 
             } else {
                 "problems"
             }
-        ),
+        ).into(),
         conf: 1.0,
         crit: Criticality::Notable,
         mbc: None,
@@ -323,8 +323,8 @@ fn push_archive_hostile_findings(
                     src: None,
                     kind: FindingKind::Capability,
                     trait_refs: vec![],
-                    id: "anti-analysis/archive/large-file".to_string(),
-                    desc: "Archive contains excessively large file".to_string(),
+                    id: "anti-analysis/archive/large-file".to_string().into(),
+                    desc: "Archive contains excessively large file".to_string().into(),
                     conf: 0.9,
                     crit: Criticality::Notable,
                     mbc: None,

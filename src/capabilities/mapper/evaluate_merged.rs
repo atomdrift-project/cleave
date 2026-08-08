@@ -301,7 +301,7 @@ impl super::CapabilityMapper {
 
         // Build a seen-IDs set once from existing report findings, then keep it up-to-date
         // as we merge — O(1) per lookup instead of O(n) linear scan.
-        let mut seen: FxHashSet<String> = report.findings.iter().map(|f| f.id.clone()).collect();
+        let mut seen: FxHashSet<crate::types::Istr> = report.findings.iter().map(|f| f.id.clone()).collect();
 
         // Step 1: Evaluate independent atomic traits (no trait: dependencies)
         // These can be evaluated in parallel without worrying about order
@@ -338,7 +338,7 @@ impl super::CapabilityMapper {
         // Merge independent findings into report
         for finding in independent_findings {
             if !seen.contains(finding.id.as_str()) {
-                seen.insert(finding.id.clone());
+                seen.insert(finding.id.clone().to_string().into());
                 report.push_finding_capped(finding);
             }
         }
@@ -349,7 +349,7 @@ impl super::CapabilityMapper {
         // until no new findings are produced (handles chained dependencies: A -> B -> C)
         let t_eval2 = std::time::Instant::now();
         const MAX_ITERATIONS: usize = 10; // Prevent infinite loops
-        let mut changed: Vec<String> = Vec::new();
+        let mut changed: Vec<crate::types::Istr> = Vec::new();
         for iteration in 0..MAX_ITERATIONS {
             if cancellation.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed)) {
                 break;
@@ -383,7 +383,7 @@ impl super::CapabilityMapper {
             let mut new_ids = Vec::new();
             for finding in dependent_findings {
                 if !seen.contains(finding.id.as_str()) {
-                    seen.insert(finding.id.clone());
+                    seen.insert(finding.id.clone().to_string().into());
                     new_ids.push(finding.id.clone());
                     report.push_finding_capped(finding);
                 }
@@ -411,7 +411,7 @@ impl super::CapabilityMapper {
         // Merge composite findings into report
         for finding in composite_findings {
             if !seen.contains(finding.id.as_str()) {
-                seen.insert(finding.id.clone());
+                seen.insert(finding.id.clone().to_string().into());
                 report.push_finding_capped(finding);
             }
         }
@@ -466,7 +466,7 @@ impl super::CapabilityMapper {
         loop {
             let all_ids: FxHashSet<&str> = findings.iter().map(|f| f.id.as_str()).collect();
 
-            let suppressed: FxHashSet<String> = findings
+            let suppressed: FxHashSet<crate::types::Istr> = findings
                 .iter()
                 .filter_map(|finding| {
                     let source = (!index.by_hook_leaf.is_empty())
@@ -494,7 +494,7 @@ impl super::CapabilityMapper {
                 suppressed.len()
             );
 
-            findings.retain(|f| !suppressed.contains(&f.id));
+            findings.retain(|f| !suppressed.contains(f.id.as_str()));
         }
     }
 

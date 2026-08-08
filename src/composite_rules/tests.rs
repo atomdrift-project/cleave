@@ -360,9 +360,9 @@ fn suspicious_composite_directory_ref_drops_exception_keeps_notable() {
     let mut report = AnalysisReport::new(target);
     let mk = |id: &str, crit: Criticality| Finding {
         src: None,
-        id: id.to_string(),
+        id: id.to_string().into(),
         kind: FindingKind::Capability,
-        desc: String::new(),
+        desc: String::new().into(),
         conf: 0.9,
         crit,
         mbc: None,
@@ -674,9 +674,9 @@ fn test_unless_directive_skips_trait() {
     // Add a finding that would trigger unless condition
     let findings = vec![Finding {
         src: None,
-        id: "file/signed/apple".to_string(),
+        id: "file/signed/apple".to_string().into(),
         kind: FindingKind::Capability,
-        desc: "Apple signed binary".to_string(),
+        desc: "Apple signed binary".to_string().into(),
         conf: 1.0,
         crit: Criticality::Baseline,
         mbc: None,
@@ -795,9 +795,9 @@ fn test_downgrade_to_notable() {
     // Add finding for downgrade condition
     let findings = vec![Finding {
         src: None,
-        id: "file/type/shell-script".to_string(),
+        id: "file/type/shell-script".to_string().into(),
         kind: FindingKind::Capability,
-        desc: "Shell script".to_string(),
+        desc: "Shell script".to_string().into(),
         conf: 1.0,
         crit: Criticality::Baseline,
         mbc: None,
@@ -876,9 +876,9 @@ fn test_downgrade_one_level() {
 
     let findings = vec![Finding {
         src: None,
-        id: "file/path/test-fixtures".to_string(),
+        id: "file/path/test-fixtures".to_string().into(),
         kind: FindingKind::Capability,
-        desc: "Test fixture".to_string(),
+        desc: "Test fixture".to_string().into(),
         conf: 1.0,
         crit: Criticality::Baseline,
         mbc: None,
@@ -1013,9 +1013,9 @@ fn test_downgrade_from_hostile() {
     // Add finding that will trigger downgrade
     let findings = vec![Finding {
         src: None,
-        id: "file/type/shell-script".to_string(),
+        id: "file/type/shell-script".to_string().into(),
         kind: FindingKind::Capability,
-        desc: "Shell script".to_string(),
+        desc: "Shell script".to_string().into(),
         conf: 1.0,
         crit: Criticality::Baseline,
         mbc: None,
@@ -1110,9 +1110,9 @@ fn test_all_three_directives_combined() {
     // Add finding for downgrade
     let findings = vec![Finding {
         src: None,
-        id: "file/type/test".to_string(),
+        id: "file/type/test".to_string().into(),
         kind: FindingKind::Capability,
-        desc: "Test file".to_string(),
+        desc: "Test file".to_string().into(),
         conf: 1.0,
         crit: Criticality::Baseline,
         mbc: None,
@@ -1987,9 +1987,9 @@ fn test_composite_unless_skips_rule() {
     // Add a finding that would trigger the unless condition
     let findings = vec![Finding {
         src: None,
-        id: "file/signed/apple".to_string(),
+        id: "file/signed/apple".to_string().into(),
         kind: FindingKind::Capability,
-        desc: "Apple signed binary".to_string(),
+        desc: "Apple signed binary".to_string().into(),
         conf: 1.0,
         crit: Criticality::Baseline,
         mbc: None,
@@ -3019,9 +3019,9 @@ fn test_all_and_any_without_needs_requires_one_any() {
 fn finding_at_line(id: &str, line: usize, col: usize) -> Finding {
     Finding {
         src: None,
-        id: id.to_string(),
+        id: id.to_string().into(),
         kind: FindingKind::Capability,
-        desc: format!("Test finding at line {}", line),
+        desc: format!("Test finding at line {}", line).into(),
         conf: 1.0,
         crit: Criticality::Baseline,
         mbc: None,
@@ -3044,9 +3044,9 @@ fn finding_at_line(id: &str, line: usize, col: usize) -> Finding {
 fn finding_at_offset(id: &str, offset: u64) -> Finding {
     Finding {
         src: None,
-        id: id.to_string(),
+        id: id.to_string().into(),
         kind: FindingKind::Capability,
-        desc: format!("Test finding at offset {}", offset),
+        desc: format!("Test finding at offset {}", offset).into(),
         conf: 1.0,
         crit: Criticality::Baseline,
         mbc: None,
@@ -3545,9 +3545,9 @@ fn test_near_lines_no_location_evidence_fails() {
     let findings = vec![
         Finding {
             src: None,
-            id: "trait-a".to_string(),
+            id: "trait-a".to_string().into(),
             kind: FindingKind::Capability,
-            desc: "No location".to_string(),
+            desc: "No location".to_string().into(),
             conf: 1.0,
             crit: Criticality::Baseline,
             mbc: None,
@@ -3565,9 +3565,9 @@ fn test_near_lines_no_location_evidence_fails() {
         },
         Finding {
             src: None,
-            id: "trait-b".to_string(),
+            id: "trait-b".to_string().into(),
             kind: FindingKind::Capability,
-            desc: "No location".to_string(),
+            desc: "No location".to_string().into(),
             conf: 1.0,
             crit: Criticality::Baseline,
             mbc: None,
@@ -3603,9 +3603,9 @@ fn test_near_lines_hex_offset_location() {
         // Hex offset 0x05 = byte 5 = start of line 2
         Finding {
             src: None,
-            id: "trait-a".to_string(),
+            id: "trait-a".to_string().into(),
             kind: FindingKind::Capability,
-            desc: "Hex loc".to_string(),
+            desc: "Hex loc".to_string().into(),
             conf: 1.0,
             crit: Criticality::Baseline,
             mbc: None,
@@ -3624,9 +3624,9 @@ fn test_near_lines_hex_offset_location() {
         // Hex offset 0x0f = byte 15 = start of line 4
         Finding {
             src: None,
-            id: "trait-b".to_string(),
+            id: "trait-b".to_string().into(),
             kind: FindingKind::Capability,
-            desc: "Hex loc".to_string(),
+            desc: "Hex loc".to_string().into(),
             conf: 1.0,
             crit: Criticality::Baseline,
             mbc: None,
@@ -3808,9 +3808,9 @@ fn test_downgrade_combined_all_and_none_blocked_by_none() {
     // Add finding for none: condition — this should BLOCK the downgrade
     let findings = vec![Finding {
         src: None,
-        id: "file/type/binary".to_string(),
+        id: "file/type/binary".to_string().into(),
         kind: FindingKind::Capability,
-        desc: "Binary file".to_string(),
+        desc: "Binary file".to_string().into(),
         conf: 1.0,
         crit: Criticality::Baseline,
         mbc: None,
@@ -4002,9 +4002,9 @@ fn test_downgrade_needs_threshold_not_met() {
     // Only one finding present (socket)
     let findings = vec![Finding {
         src: None,
-        id: "test/socket".to_string(),
+        id: "test/socket".to_string().into(),
         kind: FindingKind::Capability,
-        desc: "Socket".to_string(),
+        desc: "Socket".to_string().into(),
         conf: 1.0,
         crit: Criticality::Baseline,
         mbc: None,
@@ -4092,9 +4092,9 @@ fn test_downgrade_needs_threshold_met() {
     let findings = vec![
         Finding {
             src: None,
-            id: "test/socket".to_string(),
+            id: "test/socket".to_string().into(),
             kind: FindingKind::Capability,
-            desc: "Socket".to_string(),
+            desc: "Socket".to_string().into(),
             conf: 1.0,
             crit: Criticality::Baseline,
             mbc: None,
@@ -4106,9 +4106,9 @@ fn test_downgrade_needs_threshold_met() {
         },
         Finding {
             src: None,
-            id: "test/connect".to_string(),
+            id: "test/connect".to_string().into(),
             kind: FindingKind::Capability,
-            desc: "Connect".to_string(),
+            desc: "Connect".to_string().into(),
             conf: 1.0,
             crit: Criticality::Baseline,
             mbc: None,
@@ -4207,9 +4207,9 @@ fn test_composite_downgrade_all_match() {
     let findings = vec![
         Finding {
             src: None,
-            id: "file/type/shell-script".to_string(),
+            id: "file/type/shell-script".to_string().into(),
             kind: FindingKind::Capability,
-            desc: "Shell script".to_string(),
+            desc: "Shell script".to_string().into(),
             conf: 1.0,
             crit: Criticality::Baseline,
             mbc: None,
@@ -4221,9 +4221,9 @@ fn test_composite_downgrade_all_match() {
         },
         Finding {
             src: None,
-            id: "file/path/test-fixtures".to_string(),
+            id: "file/path/test-fixtures".to_string().into(),
             kind: FindingKind::Capability,
-            desc: "Test fixture".to_string(),
+            desc: "Test fixture".to_string().into(),
             conf: 1.0,
             crit: Criticality::Baseline,
             mbc: None,
@@ -4309,9 +4309,9 @@ fn test_composite_downgrade_none_blocks() {
     // Provide a finding that matches the downgrade.none condition — should block downgrade
     let findings = vec![Finding {
         src: None,
-        id: "file/signed/apple".to_string(),
+        id: "file/signed/apple".to_string().into(),
         kind: FindingKind::Capability,
-        desc: "Apple-signed binary".to_string(),
+        desc: "Apple-signed binary".to_string().into(),
         conf: 1.0,
         crit: Criticality::Baseline,
         mbc: None,
@@ -4392,9 +4392,9 @@ fn test_composite_downgrade_none_blocks() {
 fn finding_at_lines(id: &str, lines: &[(usize, usize)]) -> Finding {
     Finding {
         src: None,
-        id: id.to_string(),
+        id: id.to_string().into(),
         kind: FindingKind::Capability,
-        desc: format!("Multi-evidence finding {}", id),
+        desc: format!("Multi-evidence finding {}", id).into(),
         conf: 1.0,
         crit: Criticality::Baseline,
         mbc: None,
@@ -4700,9 +4700,9 @@ fn test_proximity_filters_evidence_to_window() {
 fn member_finding(id: &str) -> Finding {
     Finding {
         src: None,
-        id: id.to_string(),
+        id: id.to_string().into(),
         kind: FindingKind::Capability,
-        desc: format!("member {id}"),
+        desc: format!("member {id}").into(),
         conf: 0.9,
         crit: Criticality::Component,
         mbc: None,

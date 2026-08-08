@@ -53,18 +53,18 @@ impl super::CapabilityMapper {
             if parallel_rules {
                 rules
                     .par_iter()
-                    .filter(|rule| !seen_ids.contains(&rule.id))
+                    .filter(|rule| !seen_ids.contains(rule.id.as_str()))
                     .filter(|rule| matched_bits.contains_all(&rule.required_trait_indices))
                     .filter_map(|rule| rule.evaluate(ctx))
-                    .filter(|f| !seen_ids.contains(&f.id))
+                    .filter(|f| !seen_ids.contains(f.id.as_str()))
                     .collect()
             } else {
                 rules
                     .iter()
-                    .filter(|rule| !seen_ids.contains(&rule.id))
+                    .filter(|rule| !seen_ids.contains(rule.id.as_str()))
                     .filter(|rule| matched_bits.contains_all(&rule.required_trait_indices))
                     .filter_map(|rule| rule.evaluate(ctx))
-                    .filter(|f| !seen_ids.contains(&f.id))
+                    .filter(|f| !seen_ids.contains(f.id.as_str()))
                     .collect()
             }
         };
@@ -76,8 +76,8 @@ impl super::CapabilityMapper {
         // Track which composite IDs have already matched (including original findings)
         let mut matched_bits = TraitBitSet::with_capacity(self.trait_definitions.len());
         for finding in &report.findings {
-            seen_ids.insert(finding.id.clone());
-            if let Some(&idx) = self.trait_id_map.get(&finding.id) {
+            seen_ids.insert(finding.id.clone().to_string());
+            if let Some(&idx) = self.trait_id_map.get(finding.id.as_str()) {
                 matched_bits.insert(idx);
             }
         }
@@ -141,8 +141,8 @@ impl super::CapabilityMapper {
 
             // Add new findings to the accumulated set
             for finding in new_findings {
-                seen_ids.insert(finding.id.clone());
-                if let Some(&idx) = self.trait_id_map.get(&finding.id) {
+                seen_ids.insert(finding.id.clone().to_string());
+                if let Some(&idx) = self.trait_id_map.get(finding.id.as_str()) {
                     matched_bits.insert(idx);
                 }
                 all_findings.push(finding);
@@ -184,8 +184,8 @@ impl super::CapabilityMapper {
             }
             drop(ctx);
             for finding in negative_findings {
-                seen_ids.insert(finding.id.clone());
-                if let Some(&idx) = self.trait_id_map.get(&finding.id) {
+                seen_ids.insert(finding.id.clone().to_string());
+                if let Some(&idx) = self.trait_id_map.get(finding.id.as_str()) {
                     matched_bits.insert(idx);
                 }
                 all_findings.push(finding);
@@ -217,8 +217,8 @@ impl super::CapabilityMapper {
                 }
                 drop(ctx);
                 for finding in new_findings {
-                    seen_ids.insert(finding.id.clone());
-                    if let Some(&idx) = self.trait_id_map.get(&finding.id) {
+                    seen_ids.insert(finding.id.clone().to_string());
+                    if let Some(&idx) = self.trait_id_map.get(finding.id.as_str()) {
                         matched_bits.insert(idx);
                     }
                     all_findings.push(finding);
@@ -538,9 +538,9 @@ impl super::CapabilityMapper {
                 let trait_def = pt.trait_def;
                 Some(Finding {
                     src: None,
-                    id: trait_def.id.clone(),
+                    id: trait_def.id.clone().into(),
                     kind: FindingKind::Indicator,
-                    desc: trait_def.desc.clone(),
+                    desc: trait_def.desc.clone().into(),
                     conf: trait_def.conf,
                     crit: trait_def.crit,
                     mbc: trait_def.mbc.clone(),
@@ -579,13 +579,13 @@ impl super::CapabilityMapper {
         let mut seen_ids: rustc_hash::FxHashSet<String> = rustc_hash::FxHashSet::default();
         let mut matched_bits = TraitBitSet::with_capacity(self.trait_definitions.len());
         for finding in &container_report.findings {
-            seen_ids.insert(finding.id.clone());
-            if let Some(&idx) = self.trait_id_map.get(&finding.id) {
+            seen_ids.insert(finding.id.clone().to_string());
+            if let Some(&idx) = self.trait_id_map.get(finding.id.as_str()) {
                 matched_bits.insert(idx);
             }
         }
         for finding in nested_findings {
-            if let Some(&idx) = self.trait_id_map.get(&finding.id) {
+            if let Some(&idx) = self.trait_id_map.get(finding.id.as_str()) {
                 matched_bits.insert(idx);
             }
         }
@@ -605,12 +605,12 @@ impl super::CapabilityMapper {
             .trait_definitions
             .iter()
             .filter_map(|trait_def| trait_def.evaluate(&parent_trait_ctx))
-            .filter(|f| !seen_ids.contains(&f.id))
+            .filter(|f| !seen_ids.contains(f.id.as_str()))
             .collect();
 
         for finding in &container_findings {
-            seen_ids.insert(finding.id.clone());
-            if let Some(&idx) = self.trait_id_map.get(&finding.id) {
+            seen_ids.insert(finding.id.clone().to_string());
+            if let Some(&idx) = self.trait_id_map.get(finding.id.as_str()) {
                 matched_bits.insert(idx);
             }
         }
@@ -639,7 +639,7 @@ impl super::CapabilityMapper {
                 .composite_rules
                 .iter()
                 .filter_map(|rule| rule.evaluate(&ctx))
-                .filter(|f| !seen_ids.contains(&f.id))
+                .filter(|f| !seen_ids.contains(f.id.as_str()))
                 .collect();
 
             if new_findings.is_empty() {
@@ -647,7 +647,7 @@ impl super::CapabilityMapper {
             }
 
             for finding in new_findings {
-                seen_ids.insert(finding.id.clone());
+                seen_ids.insert(finding.id.clone().to_string());
                 combined_findings.push(finding.clone());
                 container_findings.push(finding);
             }
@@ -715,7 +715,7 @@ impl super::CapabilityMapper {
         let no_bytes: &[u8] = &[];
 
         let mut combined = seed_findings.to_vec();
-        let mut seen_ids: std::collections::HashSet<String> =
+        let mut seen_ids: std::collections::HashSet<crate::types::Istr> =
             combined.iter().map(|f| f.id.clone()).collect();
         let mut new_findings: Vec<Finding> = Vec::new();
 
@@ -732,15 +732,15 @@ impl super::CapabilityMapper {
             );
             let matched: Vec<Finding> = package_rules
                 .iter()
-                .filter(|rule| !seen_ids.contains(&rule.id))
+                .filter(|rule| !seen_ids.contains(rule.id.as_str()))
                 .filter_map(|rule| rule.evaluate(&ctx))
-                .filter(|f| !seen_ids.contains(&f.id))
+                .filter(|f| !seen_ids.contains(f.id.as_str()))
                 .collect();
             if matched.is_empty() {
                 break;
             }
             for finding in matched {
-                seen_ids.insert(finding.id.clone());
+                seen_ids.insert(finding.id.clone().to_string().into());
                 combined.push(finding.clone());
                 new_findings.push(finding);
             }
@@ -1390,4 +1390,34 @@ composite_rules:
             "eq sibling prefix collected lowercased; plain paths contribute nothing"
         );
     }
+
+    /// `TraitRefIndex` must be a superset of `eval_trait`'s matching: exact
+    /// ids, short-name suffix matches, and directory-prefix matches all count
+    /// as "possibly referenced".
+    #[test]
+    fn trait_ref_index_mirrors_eval_trait_matching() {
+        use crate::capabilities::mapper::TraitRefIndex;
+        let raw: std::collections::BTreeSet<String> = [
+            "a/b::exact",       // exact only
+            "terminate",        // short: matches final segment
+            "anti/obfuscation", // directory: matches boundary prefixes
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+        let idx = TraitRefIndex::build(raw);
+
+        assert!(idx.possibly_referenced("a/b::exact"));
+        assert!(!idx.possibly_referenced("a/b::other"));
+
+        assert!(idx.possibly_referenced("execution/process::terminate"));
+        assert!(idx.possibly_referenced("execution/process/terminate"));
+        assert!(!idx.possibly_referenced("execution/process::terminated"));
+
+        assert!(idx.possibly_referenced("anti/obfuscation::python-hex"));
+        assert!(idx.possibly_referenced("anti/obfuscation/python-hex"));
+        assert!(idx.possibly_referenced("anti/obfuscation"));
+        assert!(!idx.possibly_referenced("anti/obfuscation-extra::x"));
+    }
+
 }

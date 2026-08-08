@@ -23,7 +23,7 @@ pub fn formula_from_findings(findings: &[Finding]) -> String {
     let inputs: Vec<FindingInput> = findings
         .iter()
         .map(|f| FindingInput {
-            id: f.id.clone(),
+            id: f.id.clone().to_string(),
             severity: criticality_to_severity(f.crit),
         })
         .collect();
@@ -39,9 +39,9 @@ mod tests {
     fn test_finding(id: &str, crit: Criticality) -> Finding {
         Finding {
             src: None,
-            id: id.to_string(),
+            id: id.to_string().into(),
             kind: FindingKind::Capability,
-            desc: "Test".to_string(),
+            desc: "Test".to_string().into(),
             conf: 0.9,
             crit,
             mbc: None,

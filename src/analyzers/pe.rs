@@ -765,9 +765,9 @@ impl PEAnalyzer {
             };
             report.findings.push(Finding {
                 src: None,
-                id: "objectives/anti-analysis/pe-tampering/corrupted-header".to_string(),
+                id: "objectives/anti-analysis/pe-tampering/corrupted-header".to_string().into(),
                 kind: FindingKind::Structural,
-                desc: msg.to_string(),
+                desc: msg.to_string().into(),
                 conf,
                 crit,
                 mbc: Some("B0001".to_string()),
@@ -828,14 +828,14 @@ impl PEAnalyzer {
         {
             report.findings.push(Finding {
                 src: None,
-                id: "metadata/strings-truncated".to_string(),
+                id: "metadata/strings-truncated".to_string().into(),
                 kind: FindingKind::Structural,
                 desc: format!(
                     "String extraction truncated due to limits (count: {}, total bytes: {} MB)",
                     crate::strings::MAX_STRINGS_PER_FILE,
                     crate::strings::MAX_TOTAL_STRING_BYTES / (1024 * 1024)
                 )
-                .to_string(),
+                .to_string().into(),
                 conf: 1.0,
                 crit: Criticality::Notable,
                 mbc: None,
@@ -895,9 +895,9 @@ impl PEAnalyzer {
                     .replace(")", "");
                 report.findings.push(Finding {
                     src: None,
-                    id: format!("metadata/signed/unknown::{}", normalized),
+                    id: format!("metadata/signed/unknown::{}", normalized).into(),
                     kind: FindingKind::Capability,
-                    desc: format!("Authenticode chain CN: {}", cn),
+                    desc: format!("Authenticode chain CN: {}", cn).into(),
                     conf: 1.0,
                     crit: Criticality::Notable,
                     mbc: None,
@@ -924,9 +924,9 @@ impl PEAnalyzer {
                         .replace(")", "");
                     report.findings.push(Finding {
                         src: None,
-                        id: format!("metadata/signed/leaf::{}", primary_norm),
+                        id: format!("metadata/signed/leaf::{}", primary_norm).into(),
                         kind: FindingKind::Capability,
-                        desc: format!("Signed by {}", primary),
+                        desc: format!("Signed by {}", primary).into(),
                         conf: 1.0,
                         crit: Criticality::Notable,
                         mbc: None,
@@ -1285,12 +1285,12 @@ impl PEAnalyzer {
 
             findings.push(Finding {
                 src: None,
-                id: "objectives/anti-analysis/pe-tampering/junk-prefix".to_string(),
+                id: "objectives/anti-analysis/pe-tampering/junk-prefix".to_string().into(),
                 kind: FindingKind::Structural,
                 desc: format!(
                     "PE has {} bytes prepended before MZ header (anti-analysis)",
                     offset
-                ),
+                ).into(),
                 conf: 1.0,
                 crit: Criticality::Hostile,
                 mbc: Some("B0001".to_string()), // Executable Code Obfuscation
@@ -1318,9 +1318,9 @@ impl PEAnalyzer {
         if let Some(bsjb_offset) = self.find_signature(data, b"BSJB") {
             findings.push(Finding {
                 src: None,
-                id: "objectives/anti-analysis/pe-tampering/dotnet-invalid-pe".to_string(),
+                id: "objectives/anti-analysis/pe-tampering/dotnet-invalid-pe".to_string().into(),
                 kind: FindingKind::Structural,
-                desc: ".NET assembly (BSJB signature) with corrupted/missing PE header".to_string(),
+                desc: ".NET assembly (BSJB signature) with corrupted/missing PE header".to_string().into(),
                 conf: 0.95,
                 crit: Criticality::Hostile,
                 mbc: Some("B0001".to_string()),
@@ -1368,7 +1368,7 @@ impl PEAnalyzer {
             if byte_val != 0 && count > header_len * 2 / 5 {
                 findings.push(Finding {
                     src: None,
-                    id: "objectives/anti-analysis/pe-tampering/byte-injection".to_string(),
+                    id: "objectives/anti-analysis/pe-tampering/byte-injection".to_string().into(),
                     kind: FindingKind::Structural,
                     desc: format!(
                         "PE header has excessive 0x{:02X} bytes ({} of {} = {:.1}%)",
@@ -1376,7 +1376,7 @@ impl PEAnalyzer {
                         count,
                         header_len,
                         count as f32 / header_len as f32 * 100.0
-                    ),
+                    ).into(),
                     conf: 0.9,
                     crit: Criticality::Suspicious,
                     mbc: Some("B0001".to_string()),
@@ -1404,12 +1404,12 @@ impl PEAnalyzer {
             let sig = &data[pe_sig_offset..pe_sig_offset + 4];
             if sig != b"PE\x00\x00" && !looks_like_dos_executable(data) {
                 findings.push(Finding { src: None,
-                    id: "objectives/anti-analysis/pe-tampering/pe-signature-corrupted".to_string(),
+                    id: "objectives/anti-analysis/pe-tampering/pe-signature-corrupted".to_string().into(),
                     kind: FindingKind::Structural,
                     desc: format!(
                         "PE signature corrupted: expected PE\\x00\\x00, got {:02X} {:02X} {:02X} {:02X}",
                         sig[0], sig[1], sig[2], sig[3]
-                    ),
+                    ).into(),
                     conf: 0.85,
                     crit: Criticality::Suspicious,
                     mbc: Some("B0001".to_string()),

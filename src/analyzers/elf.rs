@@ -290,9 +290,9 @@ impl ElfAnalyzer {
                 if overlay.starts_with(SQUASHFS_LE) || overlay.starts_with(SQUASHFS_BE) {
                     report.findings.push(crate::types::Finding {
                         src: None,
-                        id: "file/sfx/appimage".to_string(),
+                        id: "file/sfx/appimage".to_string().into(),
                         kind: crate::types::FindingKind::Structural,
-                        desc: "Squashfs filesystem appended after ELF image (AppImage)".to_string(),
+                        desc: "Squashfs filesystem appended after ELF image (AppImage)".to_string().into(),
                         conf: 1.0,
                         crit: crate::types::Criticality::Notable,
                         mbc: None,
@@ -403,8 +403,8 @@ impl ElfAnalyzer {
             report.findings.push(Finding {
                 src: None,
                 kind: FindingKind::Structural,
-                id: "anti-analysis/malformed/elf-header".to_string(),
-                desc: format!("Malformed ELF header or section headers: {err_msg}"),
+                id: "anti-analysis/malformed/elf-header".to_string().into(),
+                desc: format!("Malformed ELF header or section headers: {err_msg}").into(),
                 conf: 1.0,
                 crit,
                 mbc: Some("B0001".to_string()),
@@ -553,14 +553,14 @@ impl ElfAnalyzer {
         {
             report.findings.push(Finding {
                 src: None,
-                id: "metadata/strings-truncated".to_string(),
+                id: "metadata/strings-truncated".to_string().into(),
                 kind: FindingKind::Structural,
                 desc: format!(
                     "String extraction truncated due to limits (count: {}, total bytes: {} MB)",
                     crate::strings::MAX_STRINGS_PER_FILE,
                     crate::strings::MAX_TOTAL_STRING_BYTES / (1024 * 1024)
                 )
-                .to_string(),
+                .to_string().into(),
                 conf: 1.0,
                 crit: Criticality::Notable,
                 mbc: None,
@@ -592,9 +592,9 @@ impl ElfAnalyzer {
         if !is_core_dump {
             report.findings.push(Finding {
                 src: None,
-                id: "metadata/unsigned".to_string(),
+                id: "metadata/unsigned".to_string().into(),
                 kind: FindingKind::Capability,
-                desc: "Binary is not digitally signed".to_string(),
+                desc: "Binary is not digitally signed".to_string().into(),
                 conf: 1.0,
                 crit: Criticality::Baseline,
                 mbc: None,

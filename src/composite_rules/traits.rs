@@ -70,7 +70,7 @@ fn condition_count_weight(condition: &Condition, result: &ConditionResult) -> us
         let distinct: rustc_hash::FxHashSet<&str> = result
             .matched_trait_ids
             .iter()
-            .map(String::as_str)
+            .map(crate::types::Istr::as_str)
             .collect();
         return distinct.len().max(1);
     }
@@ -192,6 +192,19 @@ impl DowngradeConditions {
             .chain(self.none.iter().flatten())
         {
             c.collect_kv_sibling_basenames(out);
+        }
+    }
+
+    /// Forward to every held condition — see [`Condition::collect_trait_refs`].
+    pub(crate) fn collect_trait_refs(&self, out: &mut std::collections::BTreeSet<String>) {
+        for c in self
+            .any
+            .iter()
+            .flatten()
+            .chain(self.all.iter().flatten())
+            .chain(self.none.iter().flatten())
+        {
+            c.collect_trait_refs(out);
         }
     }
 }
@@ -1079,13 +1092,13 @@ impl TraitDefinition {
 
             let timeout_warning = Finding {
                 src: None,
-                id: "objectives/anti-analysis/analysis-bomb/rule-timeout".to_string(),
+                id: "objectives/anti-analysis/analysis-bomb/rule-timeout".to_string().into(),
                 desc: format!(
                     "Rule evaluation timeout: {} took {}ms (limit: {}ms)",
                     self.id,
                     duration.as_millis(),
                     MAX_RULE_EVAL_DURATION.as_millis()
-                ),
+                ).into(),
                 crit: Criticality::Suspicious,
                 kind: FindingKind::Indicator,
                 conf: 0.9,
@@ -1248,9 +1261,9 @@ impl TraitDefinition {
 
             Some(Finding {
                 src: None,
-                id: self.id.clone(),
+                id: self.id.clone().into(),
                 kind: FindingKind::Capability,
-                desc: self.desc.clone(),
+                desc: self.desc.clone().into(),
                 conf: self.conf,
                 crit: final_crit,
                 mbc: self.mbc.clone(),
@@ -2556,13 +2569,13 @@ impl CompositeTrait {
 
                 return Some(Finding {
                     src: None,
-                    id: "objectives/anti-analysis/analysis-bomb/rule-timeout".to_string(),
+                    id: "objectives/anti-analysis/analysis-bomb/rule-timeout".to_string().into(),
                     desc: format!(
                         "Composite rule evaluation timeout: {} took {}ms (limit: {}ms)",
                         self.id,
                         duration.as_millis(),
                         MAX_RULE_EVAL_DURATION.as_millis()
-                    ),
+                    ).into(),
                     crit: Criticality::Suspicious,
                     kind: FindingKind::Indicator,
                     conf: 0.9,
@@ -2588,9 +2601,9 @@ impl CompositeTrait {
 
             Some(Finding {
                 src: None,
-                id: self.id.clone(),
+                id: self.id.clone().into(),
                 kind: FindingKind::Capability,
-                desc: self.desc.clone(),
+                desc: self.desc.clone().into(),
                 conf: self.conf,
                 crit: final_crit,
                 mbc: self.mbc.clone(),

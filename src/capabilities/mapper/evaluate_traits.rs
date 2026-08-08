@@ -51,11 +51,11 @@ pub(crate) struct TraitPass<'a> {
     /// those ids could satisfy are re-evaluated — an unchanged input can't
     /// change an unmatched trait's result. `None` (the first pass) evaluates
     /// every dependent trait.
-    pub changed_ids: Option<&'a [String]>,
+    pub changed_ids: Option<&'a [crate::types::Istr]>,
     /// Trait ids that already produced a finding. Paired with `changed_ids`:
     /// re-evaluating them is pure waste, because the fixed-point loops dedup
     /// by id and would discard whatever they return.
-    pub settled_ids: Option<&'a rustc_hash::FxHashSet<String>>,
+    pub settled_ids: Option<&'a rustc_hash::FxHashSet<crate::types::Istr>>,
 }
 
 impl<'a> TraitPass<'a> {
@@ -83,8 +83,8 @@ impl<'a> TraitPass<'a> {
     /// traits affected by `changed` and not already settled.
     pub(crate) fn dependent_rescan(
         extra: Option<&'a [Finding]>,
-        changed: &'a [String],
-        settled: &'a rustc_hash::FxHashSet<String>,
+        changed: &'a [crate::types::Istr],
+        settled: &'a rustc_hash::FxHashSet<crate::types::Istr>,
     ) -> Self {
         Self {
             dependent_only: true,
@@ -347,13 +347,13 @@ impl super::CapabilityMapper {
         // carried plus everything this call accumulates. Doubles as the
         // settled set for re-iterations — a settled trait's re-evaluation
         // would be deduped away, so it's skipped at the filter.
-        let mut settled: rustc_hash::FxHashSet<String> = report
+        let mut settled: rustc_hash::FxHashSet<crate::types::Istr> = report
             .findings
             .iter()
             .map(|f| f.id.clone())
             .chain(findings.iter().map(|f| f.id.clone()))
             .collect();
-        let mut changed: Vec<String> = Vec::new();
+        let mut changed: Vec<crate::types::Istr> = Vec::new();
         for iteration in 0..MAX_ITERATIONS {
             let pass = if iteration == 0 {
                 TraitPass::dependent(Some(&findings))
@@ -378,8 +378,8 @@ impl super::CapabilityMapper {
 
             let mut new_ids = Vec::new();
             for f in dep_findings {
-                if !settled.contains(&f.id) {
-                    settled.insert(f.id.clone());
+                if !settled.contains(f.id.as_str()) {
+                    settled.insert(f.id.clone().to_string().into());
                     new_ids.push(f.id.clone());
                     findings.push(f);
                 }
@@ -593,7 +593,7 @@ impl super::CapabilityMapper {
                     return false;
                 }
                 if let Some(changed) = changed_ids {
-                    if settled_ids.is_some_and(|s| s.contains(&trait_def.id)) {
+                    if settled_ids.is_some_and(|s| s.contains(trait_def.id.as_str())) {
                         return false;
                     }
                     return trait_def
@@ -694,8 +694,8 @@ impl super::CapabilityMapper {
                     {
                         return Some(Finding {
                             src: None,
-                            id: trait_def.id.clone(),
-                            desc: trait_def.desc.clone(),
+                            id: trait_def.id.clone().into(),
+                            desc: trait_def.desc.clone().into(),
                             conf: trait_def.conf,
                             crit: trait_def.crit,
                             mbc: trait_def.mbc.clone(),
@@ -735,8 +735,8 @@ impl super::CapabilityMapper {
                     {
                         return Some(Finding {
                             src: None,
-                            id: trait_def.id.clone(),
-                            desc: trait_def.desc.clone(),
+                            id: trait_def.id.clone().into(),
+                            desc: trait_def.desc.clone().into(),
                             conf: trait_def.conf,
                             crit: trait_def.crit,
                             mbc: trait_def.mbc.clone(),

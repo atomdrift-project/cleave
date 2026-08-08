@@ -816,8 +816,8 @@ mod tests {
                 data: b"exec(payload)".to_vec(),
                 notes: vec![Note {
                     crit: Criticality::Suspicious,
-                    id: "micro/exec".to_string(),
-                    desc: "exec call".to_string(),
+                    id: "micro/exec".to_string().into(),
+                    desc: "exec call".to_string().into(),
                     off: 17,
                     len: 13,
                     conf: 0.9,

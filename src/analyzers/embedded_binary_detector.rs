@@ -216,11 +216,11 @@ pub(crate) fn finding_for(binary: &EmbeddedBinary, parent_path: &str) -> Finding
     Finding {
         src: None,
         kind: FindingKind::Capability,
-        id: format!("binary/embedded/{}", binary.kind.as_str()),
+        id: format!("binary/embedded/{}", binary.kind.as_str()).into(),
         desc: format!(
             "Embedded {} binary at file offset {:#x} (~{} bytes)",
             type_upper, binary.offset, binary.estimated_size,
-        ),
+        ).into(),
         conf: 0.9,
         crit: Criticality::Notable,
         mbc: None,

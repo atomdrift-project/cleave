@@ -128,6 +128,11 @@ pub struct CapabilityMapper {
     /// gate reads this to decide which members must keep their flattened
     /// `kv` after folding (see `shared_resources`).
     pub(super) kv_sibling_basenames: Arc<OnceLock<std::collections::BTreeSet<String>>>,
+    /// Index of every trait id the loaded rules can reference (exact,
+    /// short-suffix, or directory-prefix — mirroring `eval_trait`), computed
+    /// once on first use. The member-fold early strip keeps any finding this
+    /// index can reach.
+    pub(super) trait_ref_index: Arc<OnceLock<TraitRefIndex>>,
     /// Maps trait ID -> index in trait_definitions
     #[allow(dead_code)]
     pub(super) trait_id_map: std::collections::HashMap<String, usize>,
@@ -135,6 +140,73 @@ pub struct CapabilityMapper {
     pub(super) platforms: Vec<Platform>,
     /// Warn threshold for slow rule evaluation in milliseconds (default: 4000)
     pub(super) slow_rule_ms: u64,
+}
+
+/// Every trait id the loaded rule set can reference through a
+/// `type: trait` condition, split by `eval_trait`'s three match modes:
+/// exact ids, short names (matched against a finding id's final segment),
+/// and directory prefixes (matched against a finding id's `/`-and-`::`
+/// boundary prefixes). `possibly_referenced` answers "could any rule ever
+/// match this finding id" in a handful of hash probes — a conservative
+/// superset of what actually fires, which is exactly what the early strip
+/// needs to be output-identical.
+#[derive(Debug, Default)]
+pub(crate) struct TraitRefIndex {
+    exact: rustc_hash::FxHashSet<String>,
+    short: rustc_hash::FxHashSet<String>,
+    dirs: rustc_hash::FxHashSet<String>,
+}
+
+impl TraitRefIndex {
+    fn build(raw: std::collections::BTreeSet<String>) -> Self {
+        let mut idx = Self::default();
+        for id in raw {
+            if id.contains("::") {
+                idx.exact.insert(id);
+            } else if id.contains('/') {
+                // Directory refs also match exactly (legacy flat ids).
+                idx.dirs.insert(id.clone());
+                idx.exact.insert(id);
+            } else {
+                idx.short.insert(id);
+            }
+        }
+        idx
+    }
+
+    /// Whether any loaded rule's trait reference can match `id`.
+    pub(crate) fn possibly_referenced(&self, id: &str) -> bool {
+        if self.exact.contains(id) {
+            return true;
+        }
+        // Short refs match the final segment (after the last `::`, else the
+        // last `/`).
+        let last = id
+            .rsplit_once("::")
+            .map_or(id, |(_, v)| v)
+            .rsplit('/')
+            .next()
+            .unwrap_or(id);
+        if self.short.contains(last) {
+            return true;
+        }
+        // Directory refs match any boundary prefix: `a/b` reaches `a/b::x`
+        // and `a/b/x`.
+        if let Some((base, _)) = id.split_once("::")
+            && self.dirs.contains(base)
+        {
+            return true;
+        }
+        let mut pos = 0;
+        while let Some(off) = id[pos..].find('/') {
+            let boundary = pos + off;
+            if self.dirs.contains(&id[..boundary]) {
+                return true;
+            }
+            pos = boundary + 1;
+        }
+        false
+    }
 }
 
 impl CapabilityMapper {
@@ -205,6 +277,38 @@ impl CapabilityMapper {
                 tracing::debug!(basenames = ?out, "kv sibling basenames referenced by loaded rules");
             }
             out
+        })
+    }
+
+    /// The referenced-trait index for the member-fold early strip. See
+    /// [`TraitRefIndex`].
+    pub(crate) fn trait_ref_index(&self) -> &TraitRefIndex {
+        self.trait_ref_index.get_or_init(|| {
+            let mut raw = std::collections::BTreeSet::new();
+            for t in &self.trait_definitions {
+                t.r#if.collect_trait_refs(&mut raw);
+                for c in t.unless.iter().flatten() {
+                    c.collect_trait_refs(&mut raw);
+                }
+                if let Some(d) = &t.downgrade {
+                    d.collect_trait_refs(&mut raw);
+                }
+            }
+            for r in &self.composite_rules {
+                for c in r
+                    .all
+                    .iter()
+                    .flatten()
+                    .chain(r.any.iter().flatten())
+                    .chain(r.unless.iter().flatten())
+                {
+                    c.collect_trait_refs(&mut raw);
+                }
+                if let Some(d) = &r.downgrade {
+                    d.collect_trait_refs(&mut raw);
+                }
+            }
+            TraitRefIndex::build(raw)
         })
     }
 

@@ -39,7 +39,7 @@ struct AggregatedFinding {
     /// The best (highest criticality) finding
     best: Finding,
     /// All trait IDs that matched in this directory
-    matched_traits: Vec<String>,
+    matched_traits: Vec<crate::types::Istr>,
 }
 
 /// Aggregate findings by directory path, keeping highest criticality (then highest conf)
@@ -113,7 +113,7 @@ pub(crate) fn aggregate_findings_by_directory(findings: &[Finding]) -> Vec<Findi
         .into_values()
         .map(|agg| {
             let mut result = agg.best;
-            result.id = agg.directory;
+            result.id = agg.directory.into();
             result.trait_refs = agg.matched_traits;
             result
         })
@@ -1098,7 +1098,7 @@ fn select_ids<'a>(file: &'a FileAnalysis, opts: &TinyOpts, low_tier_fill: usize)
         Some(
             focused
                 .iter()
-                .flat_map(|f| f.trait_refs.iter().map(String::as_str))
+                .flat_map(|f| f.trait_refs.iter().map(crate::types::Istr::as_str))
                 .collect(),
         )
     });
@@ -2452,7 +2452,7 @@ fn render_no_anchor(
         .filter(|f| {
             f.crit >= floor && sel.contains(f.id.as_str()) && !windowed.contains(f.id.as_str())
         })
-        .filter(|f| !captured || file.composite_sources.contains_key(&f.id) || !has_local_offset(f))
+        .filter(|f| !captured || file.composite_sources.contains_key(f.id.as_str()) || !has_local_offset(f))
         .collect();
     rest.sort_unstable_by(|a, b| b.crit.cmp(&a.crit).then_with(|| a.id.cmp(&b.id)));
 
@@ -3011,7 +3011,7 @@ pub(crate) fn format_terminal(report: &AnalysisReport) -> String {
             .findings
             .iter()
             .filter(|f| f.crit >= Criticality::Notable && f.conf >= 0.5)
-            .flat_map(|f| f.trait_refs.iter().map(String::as_str))
+            .flat_map(|f| f.trait_refs.iter().map(crate::types::Istr::as_str))
             .collect();
 
         let pre_filtered: Vec<Finding> = file
@@ -3317,8 +3317,8 @@ mod tests {
             src: None,
             kind: FindingKind::Capability,
             trait_refs: vec![],
-            id: id.to_string(),
-            desc: id.to_string(),
+            id: id.to_string().into(),
+            desc: id.to_string().into(),
             conf: 0.9,
             crit,
             mbc: None,
@@ -3377,8 +3377,8 @@ mod tests {
     fn ctx_note(id: &str, crit: Criticality, loc: u64) -> crate::types::Note {
         crate::types::Note {
             crit,
-            id: id.to_string(),
-            desc: format!("{id} desc"),
+            id: id.to_string().into(),
+            desc: format!("{id} desc").into(),
             off: loc,
             len: 4,
             conf: 0.9,
@@ -3451,7 +3451,7 @@ mod tests {
         // source line), and an unreferenced notable. Focused selection keeps
         // the composite and its windowed leg; the bystander notable is dropped.
         let composite = Finding {
-            trait_refs: vec!["c2/leg".to_string()],
+            trait_refs: vec!["c2/leg".to_string().into()],
             ..finding_with("objectives/c2/implant", Criticality::Hostile)
         };
         let leg = finding_with("c2/leg", Criticality::Component);
@@ -3624,7 +3624,7 @@ mod tests {
         // copies of member findings (also native on the member). The container
         // must surface the former and drop the latter, which renders on the member.
         let composite = Finding {
-            trait_refs: vec!["a".to_string(), "b".to_string()],
+            trait_refs: vec!["a".to_string().into(), "b".to_string().into()],
             ..finding_with(
                 "objectives/supply-chain/install-hook::native-implant",
                 Criticality::Hostile,
@@ -3962,7 +3962,7 @@ mod tests {
                     &format!("/f{i}.py"),
                     100 - i, // strictly descending: f0 highest, f5 lowest
                     vec![Finding {
-                        desc: format!("finding desc {i}"),
+                        desc: format!("finding desc {i}").into(),
                         ..finding_with(&id, Criticality::Notable)
                     }],
                     vec![ctx_line(
@@ -4005,7 +4005,7 @@ mod tests {
             50,
             vec![
                 Finding {
-                    desc: "real finding".to_string(),
+                    desc: "real finding".to_string().into(),
                     ..finding_with("cat/n::hit", Criticality::Notable)
                 },
                 finding_with("blocks/c::lone", Criticality::Component),
@@ -4122,7 +4122,7 @@ mod tests {
                     &format!("/top{i}.py"),
                     100 - i,
                     vec![Finding {
-                        desc: format!("top finding {i}"),
+                        desc: format!("top finding {i}").into(),
                         ..finding_with(&id, Criticality::Notable)
                     }],
                     vec![ctx_line(1, &format!("TOPCODE_{i} = work()"), Some(note))],
@@ -4148,7 +4148,7 @@ mod tests {
             1,
             vec![
                 Finding {
-                    desc: "tail notable".to_string(),
+                    desc: "tail notable".to_string().into(),
                     ..finding_with("cat/n::tail", Criticality::Notable)
                 },
                 finding_with("blocks/c::hidden", Criticality::Component),
@@ -4239,8 +4239,8 @@ mod tests {
                 src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![],
-                id: "execution/shell::bash-variant".to_string(),
-                desc: "Execute bash".to_string(),
+                id: "execution/shell::bash-variant".to_string().into(),
+                desc: "Execute bash".to_string().into(),
                 conf: 0.9,
                 crit: Criticality::Hostile,
                 mbc: None,
@@ -4253,8 +4253,8 @@ mod tests {
                 src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![],
-                id: "net/http::get-variant".to_string(),
-                desc: "HTTP GET request".to_string(),
+                id: "net/http::get-variant".to_string().into(),
+                desc: "HTTP GET request".to_string().into(),
                 conf: 0.8,
                 crit: Criticality::Suspicious,
                 mbc: None,
@@ -4279,8 +4279,8 @@ mod tests {
                 src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![],
-                id: "execution/shell::bash-variant".to_string(),
-                desc: "Execute bash".to_string(),
+                id: "execution/shell::bash-variant".to_string().into(),
+                desc: "Execute bash".to_string().into(),
                 conf: 0.7,
                 crit: Criticality::Suspicious,
                 mbc: None,
@@ -4293,8 +4293,8 @@ mod tests {
                 src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![],
-                id: "execution/shell::sh-variant".to_string(),
-                desc: "Execute sh".to_string(),
+                id: "execution/shell::sh-variant".to_string().into(),
+                desc: "Execute sh".to_string().into(),
                 conf: 0.7,
                 crit: Criticality::Hostile,
                 mbc: None,
@@ -4319,8 +4319,8 @@ mod tests {
                 src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![],
-                id: "execution/shell::bash-variant".to_string(),
-                desc: "Execute bash".to_string(),
+                id: "execution/shell::bash-variant".to_string().into(),
+                desc: "Execute bash".to_string().into(),
                 conf: 0.6,
                 crit: Criticality::Hostile,
                 mbc: None,
@@ -4333,8 +4333,8 @@ mod tests {
                 src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![],
-                id: "execution/shell::sh-variant".to_string(),
-                desc: "Execute sh".to_string(),
+                id: "execution/shell::sh-variant".to_string().into(),
+                desc: "Execute sh".to_string().into(),
                 conf: 0.9,
                 crit: Criticality::Hostile,
                 mbc: None,
@@ -4396,8 +4396,8 @@ mod tests {
             src: None,
             kind: FindingKind::Capability,
             trait_refs: vec![],
-            id: "test".to_string(),
-            desc: "Test trait".to_string(),
+            id: "test".to_string().into(),
+            desc: "Test trait".to_string().into(),
             conf: 0.8,
             crit: Criticality::Notable,
             mbc: None,
@@ -4415,8 +4415,8 @@ mod tests {
             src: None,
             kind: FindingKind::Capability,
             trait_refs: vec![],
-            id: "test".to_string(),
-            desc: "Test".to_string(),
+            id: "test".to_string().into(),
+            desc: "Test".to_string().into(),
             conf: 0.8,
             crit: Criticality::Notable,
             mbc: None,
@@ -4458,8 +4458,8 @@ mod tests {
             src: None,
             kind: FindingKind::Capability,
             trait_refs: vec![],
-            id: "micro-behaviors/execution/shell".to_string(),
-            desc: "Execute shell commands".to_string(),
+            id: "micro-behaviors/execution/shell".to_string().into(),
+            desc: "Execute shell commands".to_string().into(),
             conf: 0.9,
             crit: Criticality::Hostile,
             mbc: None,
@@ -4479,8 +4479,8 @@ mod tests {
             src: None,
             kind: FindingKind::Indicator,
             trait_refs: vec![],
-            id: "third_party/Sekoia/Backdoor/Lin/Bpfdoor".to_string(),
-            desc: "Detect the BPFDoor backdoor".to_string(),
+            id: "third_party/Sekoia/Backdoor/Lin/Bpfdoor".to_string().into(),
+            desc: "Detect the BPFDoor backdoor".to_string().into(),
             conf: 0.95,
             crit: Criticality::Hostile,
             mbc: None,
@@ -4510,8 +4510,8 @@ mod tests {
             src: None,
             kind: FindingKind::Capability,
             trait_refs: vec![],
-            id: "micro-behaviors/process/create/shell::bash".to_string(),
-            desc: "Execute shell commands".to_string(),
+            id: "micro-behaviors/process/create/shell::bash".to_string().into(),
+            desc: "Execute shell commands".to_string().into(),
             conf: 0.9,
             crit: Criticality::Suspicious,
             mbc: None,
@@ -4576,8 +4576,8 @@ mod tests {
                 src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![],
-                id: "micro-behaviors/fs/read::open".to_string(),
-                desc: "Open file for reading".to_string(),
+                id: "micro-behaviors/fs/read::open".to_string().into(),
+                desc: "Open file for reading".to_string().into(),
                 conf: 0.8,
                 crit: Criticality::Baseline,
                 mbc: None,
@@ -4590,8 +4590,8 @@ mod tests {
                 src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![],
-                id: "micro-behaviors/fs/read::open".to_string(),
-                desc: "Open file for reading".to_string(),
+                id: "micro-behaviors/fs/read::open".to_string().into(),
+                desc: "Open file for reading".to_string().into(),
                 conf: 0.8,
                 crit: Criticality::Baseline,
                 mbc: None,
@@ -4610,8 +4610,8 @@ mod tests {
                 src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![],
-                id: "objectives/execution/loader::fragment".to_string(),
-                desc: "Loader fragment".to_string(),
+                id: "objectives/execution/loader::fragment".to_string().into(),
+                desc: "Loader fragment".to_string().into(),
                 conf: 0.7,
                 crit: Criticality::Component,
                 mbc: None,
@@ -4624,8 +4624,8 @@ mod tests {
                 src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![],
-                id: "objectives/execution/loader::unused-fragment".to_string(),
-                desc: "Unused loader fragment".to_string(),
+                id: "objectives/execution/loader::unused-fragment".to_string().into(),
+                desc: "Unused loader fragment".to_string().into(),
                 conf: 0.7,
                 crit: Criticality::Component,
                 mbc: None,
@@ -4638,11 +4638,11 @@ mod tests {
                 src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![
-                    "micro-behaviors/fs/read::open".to_string(),
-                    "objectives/execution/loader::fragment".to_string(),
+                    "micro-behaviors/fs/read::open".to_string().into(),
+                    "objectives/execution/loader::fragment".to_string().into(),
                 ],
-                id: "objectives/execution/loader::matched-composite".to_string(),
-                desc: "Matched composite loader".to_string(),
+                id: "objectives/execution/loader::matched-composite".to_string().into(),
+                desc: "Matched composite loader".to_string().into(),
                 conf: 0.95,
                 crit: Criticality::Suspicious,
                 mbc: None,
@@ -4676,8 +4676,8 @@ mod tests {
                 src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![],
-                id: "net/socket".to_string(),
-                desc: "socket usage".to_string(),
+                id: "net/socket".to_string().into(),
+                desc: "socket usage".to_string().into(),
                 conf: 0.8,
                 crit: Criticality::Notable,
                 mbc: None,
@@ -4700,8 +4700,8 @@ mod tests {
             data: b"ctx before\ns = socket()".to_vec(),
             notes: vec![Note {
                 crit: Criticality::Notable,
-                id: "net/socket".to_string(),
-                desc: "socket usage".to_string(),
+                id: "net/socket".to_string().into(),
+                desc: "socket usage".to_string().into(),
                 off: 56,
                 len: 6,
                 conf: 0.8,
@@ -4731,8 +4731,8 @@ mod tests {
                     src: None,
                     kind: FindingKind::Capability,
                     trait_refs: vec![],
-                    id: "a/strong".to_string(),
-                    desc: "decode+exec".to_string(),
+                    id: "a/strong".to_string().into(),
+                    desc: "decode+exec".to_string().into(),
                     conf: 0.9,
                     crit: Criticality::Hostile,
                     mbc: None,
@@ -4745,8 +4745,8 @@ mod tests {
                     src: None,
                     kind: FindingKind::Capability,
                     trait_refs: vec![],
-                    id: "b/weak".to_string(),
-                    desc: "exec call".to_string(),
+                    id: "b/weak".to_string().into(),
+                    desc: "exec call".to_string().into(),
                     conf: 0.9,
                     crit: Criticality::Notable,
                     mbc: None,
@@ -4767,16 +4767,16 @@ mod tests {
             notes: vec![
                 Note {
                     crit: Criticality::Hostile,
-                    id: "a/strong".to_string(),
-                    desc: "decode+exec".to_string(),
+                    id: "a/strong".to_string().into(),
+                    desc: "decode+exec".to_string().into(),
                     off: 0,
                     len: 13,
                     conf: 0.9,
                 },
                 Note {
                     crit: Criticality::Notable,
-                    id: "b/weak".to_string(),
-                    desc: "exec call".to_string(),
+                    id: "b/weak".to_string().into(),
+                    desc: "exec call".to_string().into(),
                     off: 0,
                     len: 4,
                     conf: 0.9,
@@ -4799,8 +4799,8 @@ mod tests {
         use crate::types::{ContextLine, Note};
         let note = |id: &str, off: u64| Note {
             crit: Criticality::Suspicious,
-            id: id.to_string(),
-            desc: format!("{id} desc"),
+            id: id.to_string().into(),
+            desc: format!("{id} desc").into(),
             off,
             len: 4,
             conf: 0.9,
@@ -4809,8 +4809,8 @@ mod tests {
             src: None,
             kind: FindingKind::Capability,
             trait_refs: vec![],
-            id: id.to_string(),
-            desc: format!("{id} desc"),
+            id: id.to_string().into(),
+            desc: format!("{id} desc").into(),
             conf: 0.9,
             crit: Criticality::Suspicious,
             mbc: None,
@@ -4857,8 +4857,8 @@ mod tests {
             src: None,
             kind: FindingKind::Capability,
             trait_refs: vec![],
-            id: id.to_string(),
-            desc: format!("{id} desc"),
+            id: id.to_string().into(),
+            desc: format!("{id} desc").into(),
             conf: 0.9,
             crit,
             mbc: None,
@@ -4884,8 +4884,8 @@ mod tests {
             data: b"winner()".to_vec(),
             notes: vec![Note {
                 crit: Criticality::Hostile,
-                id: "a/win".to_string(),
-                desc: "a/win desc".to_string(),
+                id: "a/win".to_string().into(),
+                desc: "a/win desc".to_string().into(),
                 off: 0,
                 len: 6,
                 conf: 0.9,
@@ -4914,8 +4914,8 @@ mod tests {
                 src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![],
-                id: "obf/loop".to_string(),
-                desc: "obfuscated loop".to_string(),
+                id: "obf/loop".to_string().into(),
+                desc: "obfuscated loop".to_string().into(),
                 conf: 0.9,
                 crit: Criticality::Suspicious,
                 mbc: None,
@@ -4934,8 +4934,8 @@ mod tests {
             data: b"while(!![]){...}".to_vec(),
             notes: vec![Note {
                 crit: Criticality::Suspicious,
-                id: "obf/loop".to_string(),
-                desc: "obfuscated loop".to_string(),
+                id: "obf/loop".to_string().into(),
+                desc: "obfuscated loop".to_string().into(),
                 off: 606,
                 len: 4,
                 conf: 0.9,

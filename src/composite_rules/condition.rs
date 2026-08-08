@@ -2346,6 +2346,16 @@ impl Condition {
     /// nothing. Feeds the member-retention gate: a member whose basename no
     /// rule references can drop its `kv` when it folds
     /// (see `shared_resources::kv_sibling_basename_referenced`).
+    /// Record the trait ids this condition can reference, for the
+    /// early-strip keep-set. Mirrors `eval_trait`'s matching exactly: an id
+    /// is stored raw (trailing `/` trimmed); classification into
+    /// exact / short-suffix / directory-prefix happens at index build.
+    pub(crate) fn collect_trait_refs(&self, out: &mut std::collections::BTreeSet<String>) {
+        if let Self::Trait { id } = self {
+            out.insert(id.trim_end_matches('/').to_string());
+        }
+    }
+
     pub(crate) fn collect_kv_sibling_basenames(
         &self,
         out: &mut std::collections::BTreeSet<String>,

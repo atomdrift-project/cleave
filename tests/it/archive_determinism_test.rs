@@ -169,7 +169,7 @@ fn archive_member_findings_are_deterministic() -> anyhow::Result<()> {
             .files
             .iter()
             .flat_map(|f| f.findings.iter())
-            .map(|finding| finding.id.clone())
+            .map(|finding| finding.id.to_string())
             .collect();
         trait_sets.push(set);
     }

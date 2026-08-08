@@ -36,9 +36,9 @@ fn xor_dir() -> PathBuf {
 
 /// Every finding id in the report — top-level plus any nested member.
 fn all_finding_ids(r: &AnalysisReport) -> Vec<String> {
-    let mut ids: Vec<String> = r.findings.iter().map(|f| f.id.clone()).collect();
+    let mut ids: Vec<String> = r.findings.iter().map(|f| f.id.to_string()).collect();
     for m in &r.files {
-        ids.extend(m.findings.iter().map(|f| f.id.clone()));
+        ids.extend(m.findings.iter().map(|f| f.id.to_string()));
     }
     ids
 }

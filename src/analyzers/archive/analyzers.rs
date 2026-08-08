@@ -313,7 +313,7 @@ impl MemberAccumulator {
         file_entry.extracted_path = result.extracted_path.clone();
 
         for f in &file_entry.findings {
-            self.distinct_finding_ids.insert(f.id.clone());
+            self.distinct_finding_ids.insert(f.id.clone().to_string());
             let mut new_finding = f.clone();
             for evidence in &mut new_finding.evidence {
                 match &evidence.location {
@@ -325,7 +325,7 @@ impl MemberAccumulator {
                 }
             }
             self.collected_traits
-                .entry(new_finding.id.clone())
+                .entry(new_finding.id.clone().to_string())
                 .and_modify(|existing| {
                     if (new_finding.crit, new_finding.conf.total_cmp(&existing.conf))
                         > (existing.crit, std::cmp::Ordering::Equal)
@@ -416,9 +416,9 @@ impl MemberAccumulator {
         };
         // Dedup against what the container already holds via sets, not a linear
         // rescan per item (archives can carry thousands of distinct findings).
-        let mut seen_ids: HashSet<String> = report.findings.iter().map(|f| f.id.clone()).collect();
+        let mut seen_ids: HashSet<crate::types::Istr> = report.findings.iter().map(|f| f.id.clone()).collect();
         for (_, t) in self.collected_traits {
-            if seen_ids.insert(t.id.clone()) {
+            if seen_ids.insert(t.id.clone().to_string().into()) {
                 report.findings.push(t);
             }
         }

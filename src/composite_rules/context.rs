@@ -506,7 +506,7 @@ pub(crate) struct ConditionResult {
     pub match_count: usize,
     pub warnings: Vec<AnalysisWarning>,
     pub precision: f32,
-    pub matched_trait_ids: Vec<String>,
+    pub matched_trait_ids: Vec<crate::types::Istr>,
 }
 
 impl ConditionResult {

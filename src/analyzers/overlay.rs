@@ -129,8 +129,8 @@ pub(crate) fn analyze_overlay(
                 src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![],
-                id: format!("file/archive/self-extracting/{}", archive_type),
-                desc: format!("Self-extracting archive ({})", archive_type.to_uppercase()),
+                id: format!("file/archive/self-extracting/{}", archive_type).into(),
+                desc: format!("Self-extracting archive ({})", archive_type.to_uppercase()).into(),
                 conf: 1.0, // We're certain based on magic bytes
                 crit: Criticality::Notable,
                 mbc: None,
@@ -162,11 +162,11 @@ pub(crate) fn analyze_overlay(
                 id: format!(
                     "file/archive/self-extracting/{}/extraction-failed",
                     archive_type
-                ),
+                ).into(),
                 desc: format!(
                     "Self-extracting archive ({}) - extraction failed",
                     archive_type.to_uppercase()
-                ),
+                ).into(),
                 conf: 0.9,
                 crit: Criticality::Notable,
                 mbc: None,

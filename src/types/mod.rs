@@ -39,6 +39,7 @@ pub(crate) mod diff;
 pub mod field_paths;
 pub(crate) mod file_analysis;
 pub mod filefacts_view;
+pub mod istr;
 // Retired with the cleave→filefacts migration (now sourced from filefacts's
 // flat metric map under their respective namespaces — `file.*`,
 // `image.*`/`jpeg.*`/`png.*`, `lnk.*`, `pdf.*`, `text.*`/
@@ -56,6 +57,7 @@ pub(crate) mod z85;
 // Re-export all public types to maintain API compatibility
 // These re-exports are part of the public library API even if not used directly in the binary
 #[allow(unused_imports)]
+pub use istr::Istr;
 pub use compact::{
     CompactDep, CompactExport, CompactFacts, CompactFile, CompactFunction, CompactImport,
     CompactReport, CompactSection, CompactTrait, RoundedMetrics, compact_from_files,

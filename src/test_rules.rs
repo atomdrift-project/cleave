@@ -2495,9 +2495,9 @@ composite_rules:
     fn create_test_finding(id: &str) -> Finding {
         Finding {
             src: None,
-            id: id.to_string(),
+            id: id.to_string().into(),
             kind: FindingKind::Capability,
-            desc: format!("Test finding: {}", id),
+            desc: format!("Test finding: {}", id).into(),
             conf: 0.9,
             crit: crate::types::Criticality::Notable,
             mbc: None,

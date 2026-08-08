@@ -924,7 +924,7 @@ fn collect_overlap_findings(
                                 .push(TraitRange {
                                     offset,
                                     length,
-                                    trait_id: finding.id.clone(),
+                                    trait_id: finding.id.clone().to_string(),
                                 });
                         }
                     }

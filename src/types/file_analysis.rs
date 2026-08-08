@@ -328,7 +328,7 @@ impl FileAnalysis {
         let referenced_components: FxHashSet<&str> = self
             .findings
             .iter()
-            .flat_map(|f| f.trait_refs.iter().map(String::as_str))
+            .flat_map(|f| f.trait_refs.iter().map(crate::types::Istr::as_str))
             .collect();
 
         for finding in &self.findings {
@@ -451,7 +451,7 @@ impl FileAnalysis {
 }
 
 /// Finding counts by criticality
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(PartialEq, Eq, Debug, Clone, Serialize, Deserialize, Default)]
 pub struct FindingCounts {
     /// Number of hostile findings
     #[serde(default, skip_serializing_if = "is_zero")]

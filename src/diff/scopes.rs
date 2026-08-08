@@ -83,10 +83,10 @@ fn finding_score(f: &Finding) -> f32 {
 fn trait_change(f: &Finding) -> TraitChange {
     let trait_section = f.id.split('/').next().unwrap_or_default().to_string();
     TraitChange {
-        id: f.id.clone(),
+        id: f.id.clone().to_string(),
         trait_section,
         crit: f.crit,
-        desc: f.desc.clone(),
+        desc: f.desc.clone().to_string(),
         count: f.match_count as u32,
     }
 }
@@ -754,9 +754,9 @@ mod tests {
     fn finding(id: &str, crit: Criticality) -> Finding {
         Finding {
             src: None,
-            id: id.to_string(),
+            id: id.to_string().into(),
             kind: FindingKind::Capability,
-            desc: format!("desc {id}"),
+            desc: format!("desc {id}").into(),
             conf: 0.9,
             crit,
             mbc: None,

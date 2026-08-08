@@ -767,8 +767,8 @@ where
             src: None,
             kind: types::FindingKind::Capability,
             trait_refs: vec![],
-            id: cap_id,
-            desc: yara_match.desc.clone(),
+            id: cap_id.into(),
+            desc: yara_match.desc.clone().into(),
             conf: 0.9,
             crit,
             mbc: yara_match.mbc.clone(),
@@ -1774,9 +1774,9 @@ pub(crate) fn process_encoded_payloads(
             id: format!(
                 "metadata/encoded-payload/{}",
                 payload.encoding_chain.join("-")
-            ),
+            ).into(),
             kind: types::FindingKind::Structural,
-            desc,
+            desc: desc.into(),
             conf: 0.9,
             crit,
             mbc: None,
@@ -1814,12 +1814,12 @@ pub(crate) fn process_encoded_payloads(
             );
             report.findings.push(types::Finding {
                 src: None,
-                id: "objectives/anti-static/obfuscation/multi-layer/deep-nesting".to_string(),
+                id: "objectives/anti-static/obfuscation/multi-layer/deep-nesting".to_string().into(),
                 kind: types::FindingKind::Indicator,
                 desc: format!(
                     "Encoded payload nesting exceeds {MAX_ANALYSIS_DEPTH} layers, \
                      a technique used to resist automated analysis"
-                ),
+                ).into(),
                 conf: 0.95,
                 crit: types::Criticality::Suspicious,
                 mbc: Some("OB0002".to_string()),
@@ -1861,7 +1861,7 @@ pub(crate) fn process_encoded_payloads(
                 }
 
                 // Merge findings from payload analysis
-                let existing: std::collections::HashSet<String> =
+                let existing: std::collections::HashSet<crate::types::Istr> =
                     report.findings.iter().map(|f| f.id.clone()).collect();
                 for finding in payload_report.findings {
                     if !existing.contains(finding.id.as_str()) {
@@ -2531,7 +2531,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         match engine.scan_bytes_to_findings(file_data, filter) {
             Ok((matches, findings)) => {
                 report.yara_matches = matches;
-                let existing: std::collections::HashSet<String> =
+                let existing: std::collections::HashSet<crate::types::Istr> =
                     report.findings.iter().map(|f| f.id.clone()).collect();
                 for finding in findings {
                     if !existing.contains(finding.id.as_str()) {
@@ -2569,14 +2569,14 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     // on one. A trait referenced by a composite is, by definition, not low value:
     // it's what ties that composite to the file (and offset) it fired on, so
     // dropping it would erase the composite's cross-file provenance.
-    let composite_referenced: std::collections::HashSet<String> = report
+    let composite_referenced: std::collections::HashSet<crate::types::Istr> = report
         .findings
         .iter()
         .chain(report.files.iter().flat_map(|f| f.findings.iter()))
         .flat_map(|f| f.trait_refs.iter().cloned())
         .collect();
     let removed = report.filter_findings(|f| {
-        !capability_mapper.is_low_value_any_rule(&f.id) || composite_referenced.contains(&f.id)
+        !capability_mapper.is_low_value_any_rule(&f.id) || composite_referenced.contains(f.id.as_str())
     });
     if removed > 0 {
         tracing::debug!("Filtered {} low-value composite 'any' rules", removed);

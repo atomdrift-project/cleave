@@ -323,14 +323,14 @@ impl MachOAnalyzer {
         {
             report.findings.push(Finding {
                 src: None,
-                id: "metadata/strings-truncated".to_string(),
+                id: "metadata/strings-truncated".to_string().into(),
                 kind: FindingKind::Structural,
                 desc: format!(
                     "String extraction truncated due to limits (count: {}, total bytes: {} MB)",
                     crate::strings::MAX_STRINGS_PER_FILE,
                     crate::strings::MAX_TOTAL_STRING_BYTES / (1024 * 1024)
                 )
-                .to_string(),
+                .to_string().into(),
                 conf: 1.0,
                 crit: Criticality::Notable,
                 mbc: None,
@@ -1022,8 +1022,8 @@ fn signature_finding(
         src: None,
         kind: FindingKind::Capability,
         trait_refs: vec![],
-        id,
-        desc,
+        id: id.into(),
+        desc: desc.into(),
         conf: 1.0,
         crit,
         mbc: None,
@@ -1612,8 +1612,8 @@ impl MachOAnalyzer {
             report.findings.push(Finding {
                 src: None,
                 kind: FindingKind::Structural,
-                id: "anti-analysis/malformed/macho-header".to_string(),
-                desc: format!("Malformed Mach-O header: {}", msg),
+                id: "anti-analysis/malformed/macho-header".to_string().into(),
+                desc: format!("Malformed Mach-O header: {}", msg).into(),
                 conf: 1.0,
                 crit: Criticality::Suspicious,
                 mbc: Some("B0001".to_string()),
@@ -1929,8 +1929,8 @@ mod tests {
     fn rebase_slice_offsets_shifts_finding_evidence() {
         let mut report = report_with_offsets();
         report.findings.push(Finding {
-            id: "metadata/signed/id::com.apple.ls".to_string(),
-            desc: "Identifier: com.apple.ls".to_string(),
+            id: "metadata/signed/id::com.apple.ls".to_string().into(),
+            desc: "Identifier: com.apple.ls".to_string().into(),
             evidence: vec![
                 Evidence {
                     location: Some("0x739b".to_string()),

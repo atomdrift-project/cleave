@@ -827,7 +827,7 @@ fn convert_file(file: &super::file_analysis::FileAnalysis, id: u32) -> CompactFi
             // Build `from`: composite sources take priority; fall back to the
             // scalar `src` for a single inherited finding.
             let from: Vec<CompactSource> =
-                if let Some(srcs) = file.composite_sources.get(&finding.id) {
+                if let Some(srcs) = file.composite_sources.get(finding.id.as_str()) {
                     srcs.iter()
                         .map(|s| CompactSource {
                             file: s.file,
@@ -847,9 +847,9 @@ fn convert_file(file: &super::file_analysis::FileAnalysis, id: u32) -> CompactFi
             trait_map.insert(
                 &finding.id,
                 CompactTrait {
-                    id: finding.id.clone(),
+                    id: finding.id.clone().to_string(),
                     criticality: crit_to_int(finding.crit),
-                    description: finding.desc.clone(),
+                    description: finding.desc.clone().to_string(),
                     confidence: finding.conf,
                     mbc: finding.mbc.clone(),
                     attack: finding.attack.clone(),
@@ -1325,9 +1325,9 @@ mod wire_roundtrip_tests {
             4096,
         );
         let mut finding = Finding::new(
-            "objectives/execution/shell".into(),
+            "objectives/execution/shell",
             FindingKind::Capability,
-            "spawns a shell".into(),
+            "spawns a shell",
             0.9,
         );
         finding.crit = Criticality::Suspicious;
@@ -1405,9 +1405,9 @@ mod formula_tests {
     fn finding(id: &str, crit: Criticality, conf: f32) -> Finding {
         Finding {
             src: None,
-            id: id.to_string(),
+            id: id.to_string().into(),
             kind: FindingKind::Capability,
-            desc: "test".to_string(),
+            desc: "test".to_string().into(),
             conf,
             crit,
             mbc: None,

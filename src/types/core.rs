@@ -1003,7 +1003,7 @@ impl AnalysisReport {
 
         // Ids referenced by a fired composite, unioned across every file: a trait
         // is kept regardless of its own criticality if any composite uses it.
-        let mut referenced: HashSet<String> = HashSet::new();
+        let mut referenced: HashSet<crate::types::Istr> = HashSet::new();
         for finding in &self.findings {
             referenced.extend(finding.trait_refs.iter().cloned());
         }
@@ -1017,7 +1017,7 @@ impl AnalysisReport {
         // references it.
         let strippable = |f: &Finding| {
             matches!(f.crit, Criticality::Component | Criticality::Baseline)
-                && !referenced.contains(&f.id)
+                && !referenced.contains(f.id.as_str())
         };
 
         use rayon::prelude::*;
@@ -1048,7 +1048,7 @@ impl AnalysisReport {
             let rescued = Self::rescue_low_tier(&file.findings, &strippable);
             let (mut c, mut b) = (0usize, 0usize);
             file.findings.retain(|f| {
-                let keep = !strippable(f) || rescued.contains(&f.id);
+                let keep = !strippable(f) || rescued.contains(f.id.as_str());
                 if !keep {
                     tally(f, &mut c, &mut b);
                 }
@@ -1101,7 +1101,10 @@ impl AnalysisReport {
     ///
     /// Candidates rank best-first by score (criticality × confidence), with the
     /// trait id as a deterministic final tiebreak.
-    fn rescue_low_tier<F>(findings: &[Finding], strippable: &F) -> std::collections::HashSet<String>
+    fn rescue_low_tier<F>(
+        findings: &[Finding],
+        strippable: &F,
+    ) -> std::collections::HashSet<crate::types::Istr>
     where
         F: Fn(&Finding) -> bool,
     {
@@ -1403,7 +1406,7 @@ impl AnalysisReport {
                     }
                 }
                 if !ubiquitous && !by_member.is_empty() {
-                    per_finding.insert(finding.id.clone(), by_member.into_values().collect());
+                    per_finding.insert(finding.id.clone().to_string(), by_member.into_values().collect());
                 }
             }
             if !per_finding.is_empty() {
@@ -1626,9 +1629,9 @@ impl AnalysisReport {
             return; // already linked (e.g. a re-finalize)
         }
         file.findings.push(Finding {
-            id: id.to_string(),
+            id: id.to_string().into(),
             kind,
-            desc,
+            desc: desc.into(),
             conf: 0.9,
             crit,
             trait_refs: Vec::new(),
@@ -1870,8 +1873,79 @@ impl AnalysisReport {
         }
         drop_unread_folded_fields(&mut file);
         precompact_member_facts(&mut file);
+        early_strip_member_findings(&mut file);
         (file, nested_files, archive_contents)
     }
+}
+
+/// In compact-member mode, drop a folded member's baseline/filtered findings
+/// that nothing can ever read again — the fold-time version of the
+/// end-of-scan `strip_unmatched_traits`, which otherwise retains them across
+/// the entire archive ramp only to delete them at output.
+///
+/// Output-identical by keeping a superset of every later consumer's read set:
+/// - **notable+ and component/exception findings**: kept wholesale (component
+///   reachability via `for_from_groups` grouping is not indexable here — v1
+///   strips only `Baseline`/`Filtered`).
+/// - **anything a loaded rule could reference** (`TraitRefIndex`): kept, so
+///   container composites, `unless:`/`downgrade:` and the end-strip's
+///   `referenced` set see everything they see today.
+/// - **each 3-level group's max score contributor**: kept, so
+///   `compute_summary`'s per-group-max risk score recomputes to the same
+///   value at finalize (baselines score `0.2 × conf` through a group max).
+/// - **the file's top-3 sub-notables by `rank × conf`**: kept, so
+///   `rescue_low_tier` (which rescues exactly that top-3 when a file has no
+///   notable findings) selects the same set.
+///
+/// The end-strip still runs and removes whatever this kept conservatively.
+fn early_strip_member_findings(file: &mut FileAnalysis) {
+    if !crate::shared_resources::compact_member_retention() {
+        return;
+    }
+    early_strip_impl(file, crate::shared_resources::trait_possibly_referenced);
+}
+
+/// The pure strip behind [`early_strip_member_findings`], parameterized on
+/// the reference oracle so tests exercise the keep-set logic without touching
+/// process-global state.
+fn early_strip_impl(file: &mut FileAnalysis, possibly_referenced: impl Fn(&str) -> bool) {
+    let strippable =
+        |f: &Finding| matches!(f.crit, Criticality::Baseline | Criticality::Filtered);
+    if !file.findings.iter().any(&strippable) {
+        return;
+    }
+    // Group-max representatives, by the same contribution compute_summary
+    // uses for baselines (0.2 × conf, max per 3-level group). Filtered
+    // findings contribute nothing to score; the shared rule keeps at most
+    // one extra per group, which is harmless.
+    let mut group_max: rustc_hash::FxHashMap<String, (usize, f32)> =
+        rustc_hash::FxHashMap::default();
+    // Rescue's ordering among strippables, to mirror `rescue_low_tier`.
+    let mut top: Vec<(usize, f32)> = Vec::new();
+    for (i, f) in file.findings.iter().enumerate() {
+        if !strippable(f) {
+            continue;
+        }
+        let contribution = 0.2 * f.conf;
+        let base = f.id.split("::").next().unwrap_or(&f.id);
+        let group = base.split('/').take(3).collect::<Vec<_>>().join("/");
+        let e = group_max.entry(group).or_insert((i, f32::MIN));
+        if contribution > e.1 {
+            *e = (i, contribution);
+        }
+        top.push((i, f32::from(f.crit.rank()) * f.conf));
+    }
+    top.sort_by(|a, b| b.1.total_cmp(&a.1));
+    top.truncate(3);
+    let mut keep: rustc_hash::FxHashSet<usize> = group_max.values().map(|&(i, _)| i).collect();
+    keep.extend(top.iter().map(|&(i, _)| i));
+
+    let mut idx = 0;
+    file.findings.retain(|f| {
+        let i = idx;
+        idx += 1;
+        !strippable(f) || keep.contains(&i) || possibly_referenced(&f.id)
+    });
 }
 
 /// In compact-member mode, project a folded member's fact vectors into their
@@ -2028,9 +2102,9 @@ fn dedupe_finding_list(findings: &mut Vec<Finding>) {
     let original = std::mem::take(findings);
     let mut id_to_index: FxHashMap<String, usize> = FxHashMap::default();
     for f in original {
-        match id_to_index.get(&f.id) {
+        match id_to_index.get(f.id.as_str()) {
             None => {
-                id_to_index.insert(f.id.clone(), findings.len());
+                id_to_index.insert(f.id.clone().to_string(), findings.len());
                 findings.push(f);
             }
             Some(&idx) => merge_finding(&mut findings[idx], f),
@@ -2275,9 +2349,9 @@ mod tests {
     fn test_finding(id: &str, crit: Criticality) -> Finding {
         Finding {
             src: None,
-            id: id.to_string(),
+            id: id.to_string().into(),
             kind: FindingKind::Capability,
-            desc: format!("Test finding {}", id),
+            desc: format!("Test finding {}", id).into(),
             conf: 0.9,
             crit,
             mbc: None,
@@ -2404,7 +2478,7 @@ mod tests {
         // Neutral — references the bad sibling, doesn't inherit its severity.
         assert_eq!(linked.crit, Criticality::Baseline);
         assert_eq!(
-            f.composite_sources[&linked.id][0].file, 1,
+            f.composite_sources[linked.id.as_str()][0].file, 1,
             "trail names the sibling"
         );
     }
@@ -2442,7 +2516,7 @@ mod tests {
             "names the dependency: {}",
             linked.desc
         );
-        assert_eq!(f.composite_sources[&linked.id][0].file, 1);
+        assert_eq!(f.composite_sources[linked.id.as_str()][0].file, 1);
     }
 
     #[test]
@@ -2678,7 +2752,7 @@ mod tests {
             notes: vec![Note {
                 crit: Criticality::Component,
                 id: "comp/manifest".into(),
-                desc: String::new(),
+                desc: String::new().into(),
                 off: 40,
                 len: 5,
                 conf: 0.9,
@@ -2703,7 +2777,7 @@ mod tests {
             notes: vec![Note {
                 crit: Criticality::Suspicious,
                 id: "comp/payload".into(),
-                desc: String::new(),
+                desc: String::new().into(),
                 off: 0x1234,
                 len: 4,
                 conf: 0.9,
@@ -2777,7 +2851,7 @@ mod tests {
             notes: vec![Note {
                 crit: Criticality::Component,
                 id: "objectives/exfiltration::post".into(),
-                desc: String::new(),
+                desc: String::new().into(),
                 off: 200,
                 len: 5,
                 conf: 0.9,
@@ -3549,5 +3623,96 @@ mod tests {
             archive.get("timing").is_none(),
             "timing block should be absent when no mtimes were captured"
         );
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod early_strip_tests {
+    use super::*;
+    use crate::types::traits_findings::FindingKind;
+
+    fn finding(id: &str, crit: Criticality, conf: f32) -> Finding {
+        let mut f = Finding::new(id.to_string(), FindingKind::Capability, String::new(), conf);
+        f.crit = crit;
+        f
+    }
+
+    fn member_with(findings: Vec<Finding>) -> FileAnalysis {
+        let mut fa = FileAnalysis::new(
+            1,
+            "pkg.zip!!m.js".to_string(),
+            "javascript".to_string(),
+            "a".repeat(64),
+            100,
+        );
+        fa.findings = findings;
+        fa
+    }
+
+    /// The early strip's whole claim: the risk score recomputes identically
+    /// from the kept subset, because each 3-level group's max baseline
+    /// contribution survives.
+    #[test]
+    fn score_recomputes_identically_after_strip() {
+        let mut full = member_with(vec![
+            finding("a/b/c::one", Criticality::Baseline, 0.9),
+            finding("a/b/c::two", Criticality::Baseline, 0.5),
+            finding("a/b/c::three", Criticality::Baseline, 0.7),
+            finding("d/e/f::one", Criticality::Baseline, 0.6),
+            finding("d/e/f/deep::x", Criticality::Baseline, 0.8),
+            finding("g/h/i::keep", Criticality::Notable, 0.9),
+        ]);
+        let mut stripped = full.clone();
+        early_strip_impl(&mut stripped, |_| false);
+
+        full.compute_summary();
+        stripped.compute_summary();
+        assert_eq!(
+            full.score, stripped.score,
+            "group-max reps must preserve the per-group score maxima"
+        );
+        assert_eq!(full.counts, stripped.counts, "counts only track notable+");
+        assert!(
+            stripped.findings.len() < 6,
+            "something must actually have been stripped"
+        );
+    }
+
+    /// `rescue_low_tier` rescues the top-3 sub-notables of a file with no
+    /// notable findings; the strip must keep at least that top-3.
+    #[test]
+    fn rescue_top3_survive_strip() {
+        let mut fa = member_with(vec![
+            finding("a/b/c::r1", Criticality::Baseline, 0.9),
+            finding("a/b/c::r2", Criticality::Baseline, 0.8),
+            finding("a/b/c::r3", Criticality::Baseline, 0.7),
+            finding("a/b/c::gone", Criticality::Baseline, 0.1),
+        ]);
+        early_strip_impl(&mut fa, |_| false);
+        let ids: Vec<&str> = fa.findings.iter().map(|f| f.id.as_str()).collect();
+        assert!(ids.contains(&"a/b/c::r1"));
+        assert!(ids.contains(&"a/b/c::r2"));
+        assert!(ids.contains(&"a/b/c::r3"));
+        assert!(!ids.contains(&"a/b/c::gone"), "non-top, non-max rep drops");
+    }
+
+    /// Rule-referenceable findings are untouchable regardless of rank, and
+    /// non-strippable criticalities are never considered.
+    #[test]
+    fn referenced_and_higher_crits_are_kept() {
+        let mut fa = member_with(vec![
+            finding("x/y/z::referenced", Criticality::Baseline, 0.05),
+            finding("x/y/z::a", Criticality::Baseline, 0.9),
+            finding("x/y/z::b", Criticality::Baseline, 0.8),
+            finding("x/y/z::c", Criticality::Baseline, 0.7),
+            finding("comp/one::c", Criticality::Component, 0.1),
+            finding("exc/one::e", Criticality::Exception, 0.1),
+        ]);
+        early_strip_impl(&mut fa, |id| id == "x/y/z::referenced");
+        let ids: Vec<&str> = fa.findings.iter().map(|f| f.id.as_str()).collect();
+        assert!(ids.contains(&"x/y/z::referenced"), "oracle-kept survives");
+        assert!(ids.contains(&"comp/one::c"), "components untouched in v1");
+        assert!(ids.contains(&"exc/one::e"), "exceptions untouched in v1");
     }
 }

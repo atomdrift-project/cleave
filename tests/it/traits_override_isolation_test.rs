@@ -51,7 +51,7 @@ fn fired_ids(traits_dir: &std::path::Path) -> Vec<String> {
     let opts = cleave::AnalysisOptions::default();
     let report =
         cleave::analyze_bytes(MANIFEST.as_bytes(), "package.json", &opts).expect("analyze");
-    report.findings.iter().map(|f| f.id.clone()).collect()
+    report.findings.iter().map(|f| f.id.to_string()).collect()
 }
 
 #[test]

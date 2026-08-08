@@ -217,8 +217,8 @@ fn build_finding(kind: SfxKind, extracted: bool, marker_offset: Option<usize>) -
     Finding {
         src: None,
         kind: FindingKind::Capability,
-        id: kind.finding_id().to_string(),
-        desc: kind.description().to_string(),
+        id: kind.finding_id().to_string().into(),
+        desc: kind.description().to_string().into(),
         conf: if extracted { 1.0 } else { 0.9 },
         crit: Criticality::Notable,
         mbc: None,
@@ -244,8 +244,8 @@ fn build_innoextract_finding(diagnostic: &InnoExtractDiagnostic) -> Finding {
     Finding {
         src: None,
         kind: FindingKind::Capability,
-        id: diagnostic.kind.id().to_string(),
-        desc: diagnostic.kind.desc().to_string(),
+        id: diagnostic.kind.id().to_string().into(),
+        desc: diagnostic.kind.desc().to_string().into(),
         conf: diagnostic.kind.conf(),
         crit: diagnostic.kind.crit(),
         mbc: None,

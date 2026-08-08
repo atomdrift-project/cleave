@@ -45,9 +45,9 @@ fn create_test_context<'a>(
 fn create_test_finding(id: &str) -> Finding {
     Finding {
         src: None,
-        id: id.to_string(),
+        id: id.to_string().into(),
         kind: FindingKind::Capability,
-        desc: format!("Test finding: {}", id),
+        desc: format!("Test finding: {}", id).into(),
         conf: 0.9,
         crit: Criticality::Notable,
         mbc: None,
@@ -264,12 +264,12 @@ fn test_eval_trait_directory_excludes_exception() {
     assert!(
         result
             .matched_trait_ids
-            .contains(&"objectives/tools::notable-id".to_string())
+            .contains(&crate::types::Istr::from("objectives/tools::notable-id"))
     );
     assert!(
         !result
             .matched_trait_ids
-            .contains(&"objectives/tools::benign-pattern".to_string()),
+            .contains(&crate::types::Istr::from("objectives/tools::benign-pattern")),
         "a crit: exception trait must be excluded from directory expansion",
     );
 }

@@ -209,9 +209,9 @@ fn test_finding_constructor() {
 
     let finding = Finding {
         src: None,
-        id: "net/socket".to_string(),
+        id: "net/socket".to_string().into(),
         kind: FindingKind::Capability,
-        desc: "Network socket".to_string(),
+        desc: "Network socket".to_string().into(),
         conf: 1.0,
         crit: Criticality::Baseline,
         mbc: None,

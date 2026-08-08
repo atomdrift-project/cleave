@@ -764,9 +764,9 @@ fn code_snippet(value: &str) -> String {
 fn generate_embedded_language_trait(detected_lang: &FileType, offset: u64, value: &str) -> Finding {
     Finding {
         src: None,
-        id: format!("metadata/lang/embedded::{}", lang_name(detected_lang)),
+        id: format!("metadata/lang/embedded::{}", lang_name(detected_lang)).into(),
         kind: crate::types::FindingKind::Capability,
-        desc: format!("{} code embedded in string", lang_name(detected_lang)),
+        desc: format!("{} code embedded in string", lang_name(detected_lang)).into(),
         conf: 1.0,
         crit: Criticality::Baseline,
         mbc: None,
@@ -794,9 +794,9 @@ fn generate_encoded_layer_traits(encoding_chain: &[String], offset: u64) -> Vec<
         .iter()
         .map(|encoding| Finding {
             src: None,
-            id: format!("metadata/lang/encoded/{encoding}"),
+            id: format!("metadata/lang/encoded/{encoding}").into(),
             kind: crate::types::FindingKind::Capability,
-            desc: format!("Code recovered from {encoding}-encoded layer"),
+            desc: format!("Code recovered from {encoding}-encoded layer").into(),
             conf: 1.0,
             crit: Criticality::Baseline,
             mbc: None,
@@ -1132,13 +1132,13 @@ fn detect_base64_binary(
     let finding = Finding {
         src: None,
         kind: FindingKind::Capability,
-        id: format!("binary/embedded/base64-{}", inner_type),
+        id: format!("binary/embedded/base64-{}", inner_type).into(),
         desc: format!(
             "Base64-encoded {} payload ({} bytes decoded) at offset {:#x}",
             inner_type.to_uppercase(),
             decoded.len(),
             offset,
-        ),
+        ).into(),
         conf: 0.85,
         crit: Criticality::Suspicious,
         mbc: None,
@@ -1312,12 +1312,12 @@ fn detect_powershell_encoded_command(
     report.findings.push(Finding {
         src: None,
         kind: FindingKind::Capability,
-        id: "binary/embedded/base64-powershell".to_string(),
+        id: "binary/embedded/base64-powershell".to_string().into(),
         desc: format!(
             "PowerShell -EncodedCommand payload ({} chars decoded) at offset {:#x}",
             decoded.len(),
             offset
-        ),
+        ).into(),
         conf: 0.95,
         crit: Criticality::Suspicious,
         mbc: None,

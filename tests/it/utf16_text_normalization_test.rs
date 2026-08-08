@@ -30,7 +30,7 @@ fn utf16be_with_bom(s: &str) -> Vec<u8> {
 }
 
 fn finding_ids(report: &AnalysisReport) -> BTreeSet<String> {
-    report.findings.iter().map(|f| f.id.clone()).collect()
+    report.findings.iter().map(|f| f.id.to_string()).collect()
 }
 
 // A small VBScript exercising single-line `type: text` patterns (ExecuteGlobal

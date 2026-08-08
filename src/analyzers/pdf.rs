@@ -171,7 +171,7 @@ impl PdfAnalyzer {
             match analyzer.analyze_input(&input) {
                 Ok(mut sub_report) => {
                     let sub_findings = std::mem::take(&mut sub_report.findings);
-                    let mut by_id: HashMap<String, usize> = report
+                    let mut by_id: HashMap<crate::types::Istr, usize> = report
                         .findings
                         .iter()
                         .enumerate()
@@ -185,7 +185,7 @@ impl PdfAnalyzer {
                                 None => location_prefix.clone(),
                             });
                         }
-                        match by_id.get(&finding.id) {
+                        match by_id.get(finding.id.as_str()) {
                             Some(&idx) => {
                                 let existing = &report.findings[idx];
                                 if (finding.crit, finding.conf.total_cmp(&existing.conf))
@@ -195,7 +195,7 @@ impl PdfAnalyzer {
                                 }
                             }
                             None => {
-                                by_id.insert(finding.id.clone(), report.findings.len());
+                                by_id.insert(finding.id.clone().to_string().into(), report.findings.len());
                                 report.findings.push(finding);
                             }
                         }

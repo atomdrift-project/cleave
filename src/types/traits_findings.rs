@@ -184,12 +184,12 @@ pub struct Note {
     /// Criticality of the annotating finding.
     #[serde(rename = "c", with = "crit_ordinal")]
     pub crit: Criticality,
-    /// Finding identifier.
+    /// Finding identifier. Interned: shares the finding's allocation.
     #[serde(rename = "i")]
-    pub id: String,
-    /// Human-readable description (may be empty).
-    #[serde(rename = "d", default, skip_serializing_if = "String::is_empty")]
-    pub desc: String,
+    pub id: super::Istr,
+    /// Human-readable description (may be empty). Interned.
+    #[serde(rename = "d", default, skip_serializing_if = "super::Istr::is_empty")]
+    pub desc: super::Istr,
     /// Exact byte offset of the match (the "Location").
     #[serde(rename = "o")]
     pub off: u64,
@@ -207,14 +207,15 @@ pub struct Note {
 /// Findings represent what we CONCLUDE from traits (capabilities, threats, behaviors)
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct Finding {
-    /// Finding identifier using / delimiter (e.g., "command-and-control/hardcoded-ip", "net/socket")
-    pub id: String,
+    /// Finding identifier using / delimiter (e.g., "command-and-control/hardcoded-ip", "net/socket").
+    /// Interned: a report holds each distinct id once, however many findings carry it.
+    pub id: super::Istr,
     /// Kind of finding (capability, structural, indicator, weakness)
     #[serde(default, skip_serializing_if = "FindingKind::is_default")]
     pub kind: FindingKind,
-    /// Human-readable description (empty for compact internal findings)
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub desc: String,
+    /// Human-readable description (empty for compact internal findings). Interned.
+    #[serde(default, skip_serializing_if = "super::Istr::is_empty")]
+    pub desc: super::Istr,
     /// Confidence score (0.5 = heuristic, 1.0 = definitive)
     #[serde(alias = "confidence", default)]
     pub conf: f32,
@@ -227,9 +228,10 @@ pub struct Finding {
     /// MITRE ATT&CK Technique ID
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub attack: Option<String>,
-    /// Trait IDs that contributed to this finding (for aggregated findings)
+    /// Trait IDs that contributed to this finding (for aggregated findings).
+    /// Interned — these are the same ids the findings themselves carry.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub trait_refs: Vec<String>,
+    pub trait_refs: Vec<super::Istr>,
     /// Raw per-match evidence produced by the matchers — the offsets the
     /// context-capture pass and the compact `spans` derivation consume. The
     /// public compact output exposes only the derived `spans`, but the raw
@@ -259,11 +261,16 @@ pub struct Finding {
 impl Finding {
     /// Create a new finding with the given identifier, kind, description, and confidence
     #[must_use]
-    pub fn new(id: String, kind: FindingKind, desc: String, conf: f32) -> Self {
+    pub fn new(
+        id: impl Into<super::Istr>,
+        kind: FindingKind,
+        desc: impl Into<super::Istr>,
+        conf: f32,
+    ) -> Self {
         Self {
-            id,
+            id: id.into(),
             kind,
-            desc,
+            desc: desc.into(),
             conf,
             crit: Criticality::Baseline,
             mbc: None,

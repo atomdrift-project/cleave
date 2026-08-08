@@ -58,6 +58,16 @@ pub(crate) fn compact_member_retention() -> bool {
     COMPACT_MEMBER_RETENTION.load(Ordering::Relaxed)
 }
 
+/// Whether any loaded rule's `type: trait` reference could match finding id
+/// `id` (conservative superset — see `TraitRefIndex`). False with no mapper:
+/// no rules, no references.
+pub(crate) fn trait_possibly_referenced(id: &str) -> bool {
+    let guard = CAPABILITY_MAPPER.read();
+    guard
+        .as_ref()
+        .is_some_and(|m| m.trait_ref_index().possibly_referenced(id))
+}
+
 /// Whether any loaded rule reads `<basename>::…` from a sibling file's
 /// flattened `kv`. False when no mapper is loaded: no rules, no readers.
 pub(crate) fn kv_sibling_basename_referenced(basename: &str) -> bool {

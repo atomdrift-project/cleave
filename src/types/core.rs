@@ -1869,7 +1869,35 @@ impl AnalysisReport {
             flatten_kv_for_output(tree, &mut file.kv);
         }
         drop_unread_folded_fields(&mut file);
+        precompact_member_facts(&mut file);
         (file, nested_files, archive_contents)
+    }
+}
+
+/// In compact-member mode, project a folded member's fact vectors into their
+/// compact form now and drop the sources. Nothing between the fold and compact
+/// conversion reads them — finalize's cross-file passes consume findings,
+/// identity and `filefacts.references`, all of which stay — and holding tens
+/// of thousands of members' symbol tables through the archive ramp measured
+/// ~0.4 GB of the benchmark peak. `filefacts.symbols` is consumed into the
+/// `tgt`/`mbr` sets by the same projection; `references` are kept for
+/// `link_flagged_references`. Root files never come through this path (they
+/// fold via `to_file_analysis`), so full-fidelity output is unaffected.
+fn precompact_member_facts(file: &mut FileAnalysis) {
+    if !crate::shared_resources::compact_member_retention() {
+        return;
+    }
+    // Metrics stay flat: precompacting them was measured a regression — the
+    // nested 2dp-rounded `Value` tree costs ~4× the flat `BTreeMap<String,f64>`
+    // per member (537 MB of retained trees on the benchmark peak), so the
+    // rounding happens at convert time as it always did.
+    file.precompact_facts = Some(super::compact::compact_facts_from_parts(file, false));
+    file.imports = Vec::new();
+    file.exports = Vec::new();
+    file.functions = Vec::new();
+    file.sections = Vec::new();
+    if let Some(view) = file.filefacts.as_mut() {
+        view.symbols = Vec::new();
     }
 }
 

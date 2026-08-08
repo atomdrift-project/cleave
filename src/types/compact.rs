@@ -866,6 +866,97 @@ fn convert_file(file: &super::file_analysis::FileAnalysis, id: u32) -> CompactFi
         .filter_map(|id| trait_map.remove(id))
         .collect();
 
+    let mut facts = file
+        .precompact_facts
+        .clone()
+        .unwrap_or_else(|| compact_facts_from(file));
+    // A fold-time projection leaves metrics unset (see
+    // `compact_facts_from_parts`); round the retained flat map now.
+    if facts.metrics.is_none() {
+        facts.metrics = file
+            .filefacts_metrics
+            .as_ref()
+            .map(nest_flat_metrics)
+            .map(round_json_floats)
+            .map(RoundedMetrics);
+    }
+
+    // Compute formula if not already present. Use the canonical filter so the
+    // JSON `f` field stays in lockstep with the CLI header — both must reflect
+    // notable-or-higher findings only.
+    let formula = file.formula.clone().or_else(|| {
+        let filtered = crate::output::filter_findings_for_formula(&file.findings);
+        let f = crate::malecule_bridge::formula_from_findings(&filtered);
+        (!f.is_empty()).then_some(f)
+    });
+
+    // External references this file declares, byte-anchored, for the galaxy
+    // view. Read straight from the filefacts view so every reference (fetched
+    // or not) is attributed to the file that named it.
+    let refs: Vec<CompactRef> = file
+        .filefacts
+        .as_ref()
+        .map(|ff| {
+            ff.references
+                .iter()
+                .map(|r| CompactRef {
+                    locator: match &r.locator {
+                        filefacts::RefLocator::Purl(s)
+                        | filefacts::RefLocator::Url(s)
+                        | filefacts::RefLocator::Path(s) => s.clone(),
+                    },
+                    kind: ref_kind_str(r.kind).to_string(),
+                    offset: r.offset,
+                    // External today; intra-bundle resolution (prism's job for
+                    // now) will fill this when it moves into cleave.
+                    target_file: None,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    CompactFile {
+        id,
+        path: file.path.clone(),
+        file_type: file.file_type.clone(),
+        sha: file.sha256.clone(),
+        size: file.size,
+        risk: i64::from(file.score),
+        depth: file.depth,
+        parent: file.parent_id,
+        rel: file.rel,
+        via: file.via.clone(),
+        role: file.role,
+        formula,
+        identity: file.identity.clone(),
+        findings: traits,
+        refs,
+        context: file.context.clone(),
+        facts,
+    }
+}
+
+/// Project a file's fact-bearing collections into the compact `facts` block:
+/// dense capped tuples for imports/exports/functions/sections, 2dp-rounded
+/// nested metrics, and the AST target/member string sets.
+///
+/// Called at convert time on the full-fidelity path. In compact-member mode
+/// the member fold calls it early (see `FileAnalysis::precompact_facts`) so
+/// the typed source vectors can be dropped while the rest of the archive
+/// analyzes — the output is identical by construction, it is the same
+/// function either way.
+pub(crate) fn compact_facts_from(file: &super::file_analysis::FileAnalysis) -> CompactFacts {
+    compact_facts_from_parts(file, true)
+}
+
+/// The projection behind [`compact_facts_from`]. `with_metrics: false` leaves
+/// `metrics` unset for a fold-time caller that keeps the flat
+/// `filefacts_metrics` map instead — the nested rounded `Value` tree is ~4×
+/// the flat map's weight, so it is only built at convert time.
+pub(crate) fn compact_facts_from_parts(
+    file: &super::file_analysis::FileAnalysis,
+    with_metrics: bool,
+) -> CompactFacts {
     // Flatten symbol-like collections into dense tuples, capped to prevent oversized output.
     let imports: Vec<CompactImport> = file
         .imports
@@ -913,50 +1004,19 @@ fn convert_file(file: &super::file_analysis::FileAnalysis, id: u32) -> CompactFi
 
     // Round metrics floats to 2dp. Only the flat filefacts_metrics map
     // survives — typed projections were retired.
-    let metrics = file
-        .filefacts_metrics
-        .as_ref()
-        .map(nest_flat_metrics)
-        .map(round_json_floats)
-        .map(RoundedMetrics);
-
-    // Compute formula if not already present. Use the canonical filter so the
-    // JSON `f` field stays in lockstep with the CLI header — both must reflect
-    // notable-or-higher findings only.
-    let formula = file.formula.clone().or_else(|| {
-        let filtered = crate::output::filter_findings_for_formula(&file.findings);
-        let f = crate::malecule_bridge::formula_from_findings(&filtered);
-        (!f.is_empty()).then_some(f)
-    });
-
-    // External references this file declares, byte-anchored, for the galaxy
-    // view. Read straight from the filefacts view so every reference (fetched
-    // or not) is attributed to the file that named it.
-    let refs: Vec<CompactRef> = file
-        .filefacts
-        .as_ref()
-        .map(|ff| {
-            ff.references
-                .iter()
-                .map(|r| CompactRef {
-                    locator: match &r.locator {
-                        filefacts::RefLocator::Purl(s)
-                        | filefacts::RefLocator::Url(s)
-                        | filefacts::RefLocator::Path(s) => s.clone(),
-                    },
-                    kind: ref_kind_str(r.kind).to_string(),
-                    offset: r.offset,
-                    // External today; intra-bundle resolution (prism's job for
-                    // now) will fill this when it moves into cleave.
-                    target_file: None,
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    let metrics = if with_metrics {
+        file.filefacts_metrics
+            .as_ref()
+            .map(nest_flat_metrics)
+            .map(round_json_floats)
+            .map(RoundedMetrics)
+    } else {
+        None
+    };
 
     let (targets, members) = compact_ast(file);
 
-    let facts = CompactFacts {
+    CompactFacts {
         metrics,
         imports,
         exports,
@@ -964,26 +1024,6 @@ fn convert_file(file: &super::file_analysis::FileAnalysis, id: u32) -> CompactFi
         sections,
         targets,
         members,
-    };
-
-    CompactFile {
-        id,
-        path: file.path.clone(),
-        file_type: file.file_type.clone(),
-        sha: file.sha256.clone(),
-        size: file.size,
-        risk: i64::from(file.score),
-        depth: file.depth,
-        parent: file.parent_id,
-        rel: file.rel,
-        via: file.via.clone(),
-        role: file.role,
-        formula,
-        identity: file.identity.clone(),
-        findings: traits,
-        refs,
-        context: file.context.clone(),
-        facts,
     }
 }
 
@@ -1107,6 +1147,45 @@ fn assemble_report(mut files: Vec<CompactFile>) -> CompactReport {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod wire_roundtrip_tests {
+
+    /// A member whose facts were projected at fold time must convert to the
+    /// same CompactFile as one converted directly — same function either way,
+    /// pinned so a future divergence fails instead of silently changing output.
+    #[test]
+    fn precompacted_member_converts_identically() {
+        let mut fa = crate::FileAnalysis {
+            id: 1,
+            path: "pkg.zip!!lib.dll".to_string(),
+            file_type: "pe".to_string(),
+            sha256: "a".repeat(64),
+            size: 4096,
+            depth: 1,
+            ..Default::default()
+        };
+        fa.imports = vec![crate::types::Import {
+            symbol: "CreateProcessW".to_string(),
+            library: Some("kernel32.dll".to_string()),
+            ..Default::default()
+        }];
+        fa.filefacts_metrics = Some(std::collections::BTreeMap::from([(
+            "binary.overall_entropy".to_string(),
+            7.123_456,
+        )]));
+
+        let direct = compact_from_files(&[fa.clone()]);
+
+        let mut folded = fa;
+        // Mirror `precompact_member_facts`: metrics stay flat until convert.
+        folded.precompact_facts = Some(compact_facts_from_parts(&folded, false));
+        folded.imports = Vec::new();
+        let via_fold = compact_from_files(&[folded]);
+
+        assert_eq!(
+            serde_json::to_value(&direct).expect("direct"),
+            serde_json::to_value(&via_fold).expect("folded"),
+            "fold-time projection must not change the compact output"
+        );
+    }
     use super::*;
 
     /// Encode with the hand-written `Serialize`, decode with the hand-written

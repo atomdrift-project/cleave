@@ -244,6 +244,15 @@ pub struct FileAnalysis {
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub composite_sources: std::collections::BTreeMap<String, Vec<CompositeSource>>,
 
+    /// Facts already projected to the compact form at member-fold time
+    /// (compact-member mode only), so the typed source vectors above can be
+    /// dropped while the archive's remaining members analyze.
+    /// `compact::convert_file` consumes this when present; `None` on the
+    /// full-fidelity path. Serialized (as `pf`) so an analysis-cache round
+    /// trip keeps the facts a later compact conversion needs.
+    #[serde(rename = "pf", default, skip_serializing_if = "Option::is_none")]
+    pub precompact_facts: Option<super::compact::CompactFacts>,
+
     /// Flat structural-kv map. Path → leaf value, using the same
     /// `a.b[0].c` notation as `cleave value`. Auto-populated at
     /// `finalize()` time from the analyzer's `values_tree`. Type-default
@@ -299,6 +308,7 @@ impl FileAnalysis {
             formula: None,
             composite_sources: std::collections::BTreeMap::new(),
             kv: std::collections::BTreeMap::new(),
+            precompact_facts: None,
         }
     }
 

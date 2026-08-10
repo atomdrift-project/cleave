@@ -80,6 +80,48 @@ pub mod server;
 /// constant always reflects cleave's `Cargo.toml`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Recommended jemalloc configuration for any binary that runs cleave's
+/// analysis over a sustained workload.
+///
+/// `retain:false` is the load-bearing setting. jemalloc defaults it to `true`
+/// on 64-bit Linux: a freed extent keeps its address space and is decommitted
+/// with `mprotect(PROT_NONE)` rather than unmapped. Every decommit splits a
+/// VMA, and archive-member analysis frees variable-sized buffers continuously,
+/// so the kernel mapping count climbs without bound while RSS stays flat. On
+/// 2026-08-10 an atomscan worker reached `vm.max_map_count` (1048576) in ~12
+/// minutes; `mmap` then returns `ENOMEM`, Rust's allocator gets a null back and
+/// `handle_alloc_error` aborts the process with `memory allocation of N bytes
+/// failed` — a message that reads like OOM but is not (RSS was 19-36 GB against
+/// a 108 GiB cgroup limit, with no OOM kill). Unmapping instead lets adjacent
+/// free ranges coalesce, so the count stays bounded. `muzzy_decay_ms:0` makes
+/// this worse under the default, because purging eagerly is what punches the
+/// holes.
+///
+/// Four arenas suit a bounded analysis pool and avoid multiplying dirty extents
+/// across jemalloc's CPU-scaled default; one-second dirty decay returns
+/// transient allocations promptly.
+///
+/// A `malloc_conf` symbol is per-process, so a library cannot install this on a
+/// host binary's behalf. Binaries opt in by pointing the allocator's config
+/// symbol at this string — see cleave's own `main.rs` for the pattern. Runtime
+/// configuration still wins: jemalloc applies its compiled-in string first,
+/// then `/etc/malloc.conf`, then the environment, with later sources overriding
+/// earlier ones per key. NB: `tikv-jemallocator` builds jemalloc with the
+/// `_rjem_` prefix, so the environment variable is `_RJEM_MALLOC_CONF`; plain
+/// `MALLOC_CONF` is read by the system allocator and silently ignored here.
+/// `background_thread` is requested only off Apple: jemalloc compiles
+/// `JEMALLOC_BACKGROUND_THREAD` for non-Mach-O ABIs only (`configure.ac`:
+/// `abi != macho`), so on Apple targets asking for one writes `<jemalloc>:
+/// option background_thread currently supports pthread only` to stderr before
+/// `main` — above every run, and impossible to suppress from Rust.
+#[cfg(target_vendor = "apple")]
+pub const JEMALLOC_CONF: &std::ffi::CStr =
+    c"narenas:4,dirty_decay_ms:1000,muzzy_decay_ms:0,retain:false";
+/// See the Apple-gated definition above.
+#[cfg(not(target_vendor = "apple"))]
+pub const JEMALLOC_CONF: &std::ffi::CStr =
+    c"narenas:4,dirty_decay_ms:1000,muzzy_decay_ms:0,retain:false,background_thread:true";
+
 // Re-export commonly used types at crate root
 use analyzers::FileTypeExt;
 pub use analyzers::{AnalysisInput, Analyzer, FileType, detect_file_type};

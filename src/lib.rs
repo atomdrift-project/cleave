@@ -771,8 +771,8 @@ where
             desc: yara_match.desc.clone().into(),
             conf: 0.9,
             crit,
-            mbc: yara_match.mbc.clone(),
-            attack: yara_match.attack.clone(),
+            mbc: yara_match.mbc.as_deref().map(Into::into),
+            attack: yara_match.attack.as_deref().map(Into::into),
             evidence,
             match_count: 0,
             source_file: None,
@@ -1774,7 +1774,8 @@ pub(crate) fn process_encoded_payloads(
             id: format!(
                 "metadata/encoded-payload/{}",
                 payload.encoding_chain.join("-")
-            ).into(),
+            )
+            .into(),
             kind: types::FindingKind::Structural,
             desc: desc.into(),
             conf: 0.9,
@@ -1814,16 +1815,19 @@ pub(crate) fn process_encoded_payloads(
             );
             report.findings.push(types::Finding {
                 src: None,
-                id: "objectives/anti-static/obfuscation/multi-layer/deep-nesting".to_string().into(),
+                id: "objectives/anti-static/obfuscation/multi-layer/deep-nesting"
+                    .to_string()
+                    .into(),
                 kind: types::FindingKind::Indicator,
                 desc: format!(
                     "Encoded payload nesting exceeds {MAX_ANALYSIS_DEPTH} layers, \
                      a technique used to resist automated analysis"
-                ).into(),
+                )
+                .into(),
                 conf: 0.95,
                 crit: types::Criticality::Suspicious,
-                mbc: Some("OB0002".to_string()),
-                attack: Some("T1027".to_string()),
+                mbc: Some("OB0002".into()),
+                attack: Some("T1027".into()),
                 trait_refs: vec![],
                 evidence: vec![types::Evidence {
                     method: "structural".to_string(),
@@ -2093,7 +2097,9 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     // analyzer (avoiding a second parse). Mirrors `stng_scan`'s `(_, elapsed)`.
     let open_ctx_strings = || {
         let t = std::time::Instant::now();
-        let ctx = crate::analysis_context::AnalysisContext::open(path, file_data).ok();
+        let ctx = crate::analysis_context::AnalysisContext::open(path, file_data)
+            .map(|c| c.with_cancellation(options.cancellation.as_deref()))
+            .ok();
         let strings = ctx
             .as_ref()
             .map(crate::analysis_context::AnalysisContext::text_rows)
@@ -2464,7 +2470,9 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         let ctx = match file_ctx.as_ref() {
             Some(ctx) => Some(ctx),
             None => {
-                fresh = crate::analysis_context::AnalysisContext::open(path, file_data).ok();
+                fresh = crate::analysis_context::AnalysisContext::open(path, file_data)
+                    .map(|c| c.with_cancellation(options.cancellation.as_deref()))
+                    .ok();
                 fresh.as_ref()
             }
         };
@@ -2576,7 +2584,8 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         .flat_map(|f| f.trait_refs.iter().cloned())
         .collect();
     let removed = report.filter_findings(|f| {
-        !capability_mapper.is_low_value_any_rule(&f.id) || composite_referenced.contains(f.id.as_str())
+        !capability_mapper.is_low_value_any_rule(&f.id)
+            || composite_referenced.contains(f.id.as_str())
     });
     if removed > 0 {
         tracing::debug!("Filtered {} low-value composite 'any' rules", removed);

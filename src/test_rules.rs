@@ -2166,9 +2166,18 @@ fn evaluate_condition_simple(
             },
             ctx,
         ),
-        Condition::Syscall { name, number, arch } => {
-            eval_syscall(name.as_ref(), number.as_ref(), arch.as_ref(), ctx)
-        }
+        Condition::Syscall {
+            name,
+            number,
+            arch,
+            args,
+        } => eval_syscall(
+            name.as_deref(),
+            number.as_deref(),
+            arch.as_deref(),
+            args,
+            ctx,
+        ),
         Condition::Path(PathQuery {
             exact,
             substr,

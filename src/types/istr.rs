@@ -45,6 +45,22 @@ fn intern(s: &str) -> Arc<str> {
     }
     if pool.len() >= SWEEP_THRESHOLD {
         pool.retain(|e| Arc::strong_count(e) > 1);
+        // Staying large after a sweep means a high-cardinality field is being
+        // interned, so the pool pins strings that would otherwise be freed —
+        // `Finding::source_file` did this (one member path per member) and cost
+        // ~0.3-1.2 GB. Warn once; past the threshold every intern re-sweeps.
+        let live = pool.len();
+        if live >= SWEEP_THRESHOLD / 2 {
+            static WARNED: std::sync::Once = std::sync::Once::new();
+            WARNED.call_once(|| {
+                tracing::warn!(
+                    live,
+                    "istr: intern pool stayed large after sweep — a high-cardinality \
+                     field is likely being interned; Istr is for low-cardinality \
+                     identifiers only"
+                );
+            });
+        }
     }
     let arc: Arc<str> = Arc::from(s);
     pool.insert(Arc::clone(&arc));

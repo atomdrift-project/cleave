@@ -537,12 +537,20 @@ pub struct MatchedString {
     pub value: String,
 }
 
-/// Syscall information extracted from binary
+/// One direct-syscall site extracted from a binary.
+///
+/// The sole producer is the ELF analyzer, projecting filefacts's
+/// `elf.syscalls_direct[]`, which resolves everything here but `desc` — it
+/// carries no descriptions, so that field stays empty.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SyscallInfo {
-    /// Address where syscall instruction occurs
+    /// Byte offset into the file of this record's *first* call site. Identical
+    /// calls at several addresses collapse into one record, so this anchors the
+    /// finding at real bytes without claiming to be the only site. 0 when
+    /// unresolved — no real syscall sits at offset 0.
     pub address: u64,
-    /// Syscall number (architecture-dependent)
+    /// Syscall number, meaningful only against this record's `arch` — the same
+    /// number names different calls on x86-64 and aarch64. 0 when unresolved.
     pub number: u32,
     /// Resolved syscall name (e.g., "read", "write", "socket")
     pub name: String,
@@ -550,6 +558,11 @@ pub struct SyscallInfo {
     pub desc: String,
     /// Architecture (e.g., "x86", "x86_64", "mips", "arm")
     pub arch: String,
+    /// Resolved immediate argument-register values in syscall-ABI order
+    /// (`None` where the argument isn't a constant). Empty when unresolved.
+    /// The `type: syscall` matcher's `arg:` predicate reads these.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<Option<u64>>,
 }
 
 /// Metadata about the analysis run itself

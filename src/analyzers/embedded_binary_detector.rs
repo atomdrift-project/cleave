@@ -220,11 +220,12 @@ pub(crate) fn finding_for(binary: &EmbeddedBinary, parent_path: &str) -> Finding
         desc: format!(
             "Embedded {} binary at file offset {:#x} (~{} bytes)",
             type_upper, binary.offset, binary.estimated_size,
-        ).into(),
+        )
+        .into(),
         conf: 0.9,
         crit: Criticality::Notable,
         mbc: None,
-        attack: Some("T1027.009".to_string()), // Embedded Payloads
+        attack: Some("T1027.009".into()), // Embedded Payloads
         evidence: vec![Evidence {
             method: "header_validation".to_string(),
             source: "embedded_binary_detector".to_string(),

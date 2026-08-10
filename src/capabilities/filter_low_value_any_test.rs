@@ -453,8 +453,8 @@ mod tests {
             desc: "Important finding".to_string().into(),
             conf: 0.95,
             crit: Criticality::Hostile,
-            mbc: Some("B0030".to_string()),
-            attack: Some("T1505".to_string()),
+            mbc: Some("B0030".into()),
+            attack: Some("T1505".into()),
             evidence: vec![Evidence {
                 method: "test".to_string(),
                 source: "test".to_string(),

@@ -543,8 +543,8 @@ impl super::CapabilityMapper {
                     desc: trait_def.desc.clone().into(),
                     conf: trait_def.conf,
                     crit: trait_def.crit,
-                    mbc: trait_def.mbc.clone(),
-                    attack: trait_def.attack.clone(),
+                    mbc: trait_def.mbc.as_deref().map(Into::into),
+                    attack: trait_def.attack.as_deref().map(Into::into),
                     trait_refs: vec![],
                     evidence: vec![Evidence {
                         method: "basename".to_string(),
@@ -1419,5 +1419,4 @@ composite_rules:
         assert!(idx.possibly_referenced("anti/obfuscation"));
         assert!(!idx.possibly_referenced("anti/obfuscation-extra::x"));
     }
-
 }

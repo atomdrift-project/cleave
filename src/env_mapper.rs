@@ -315,7 +315,9 @@ pub(crate) fn analyze_and_link_env_vars(report: &mut AnalysisReport) {
         // Mark env vars that contributed to this trait
         for env_var in &mut env_vars {
             if trait_obj.evidence.iter().any(|e| e.value == env_var.name) {
-                env_var.referenced_by_traits.push(trait_obj.id.clone().to_string());
+                env_var
+                    .referenced_by_traits
+                    .push(trait_obj.id.clone().to_string());
             }
         }
     }

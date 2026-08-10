@@ -72,7 +72,8 @@ pub(crate) fn eval_trait<'a>(id: &str, ctx: &EvaluationContext<'a>) -> Condition
                 .flat_map(|f| f.evidence.iter().cloned())
                 .take(MAX_EVIDENCE_PER_TRAIT)
                 .collect();
-            let matched_ids: Vec<crate::types::Istr> = matching.iter().map(|f| f.id.clone()).collect();
+            let matched_ids: Vec<crate::types::Istr> =
+                matching.iter().map(|f| f.id.clone()).collect();
             let match_count = evidence.len();
 
             return ConditionResult {
@@ -114,7 +115,8 @@ pub(crate) fn eval_trait<'a>(id: &str, ctx: &EvaluationContext<'a>) -> Condition
                 .flat_map(|f| f.evidence.iter().cloned())
                 .take(MAX_EVIDENCE_PER_TRAIT)
                 .collect();
-            let matched_ids: Vec<crate::types::Istr> = matching.iter().map(|f| f.id.clone()).collect();
+            let matched_ids: Vec<crate::types::Istr> =
+                matching.iter().map(|f| f.id.clone()).collect();
             let match_count = evidence.len();
 
             return ConditionResult {

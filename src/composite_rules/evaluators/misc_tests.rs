@@ -267,9 +267,9 @@ fn test_eval_trait_directory_excludes_exception() {
             .contains(&crate::types::Istr::from("objectives/tools::notable-id"))
     );
     assert!(
-        !result
-            .matched_trait_ids
-            .contains(&crate::types::Istr::from("objectives/tools::benign-pattern")),
+        !result.matched_trait_ids.contains(&crate::types::Istr::from(
+            "objectives/tools::benign-pattern"
+        )),
         "a crit: exception trait must be excluded from directory expansion",
     );
 }

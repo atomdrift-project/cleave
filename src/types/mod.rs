@@ -56,8 +56,6 @@ pub(crate) mod z85;
 
 // Re-export all public types to maintain API compatibility
 // These re-exports are part of the public library API even if not used directly in the binary
-#[allow(unused_imports)]
-pub use istr::Istr;
 pub use compact::{
     CompactDep, CompactExport, CompactFacts, CompactFile, CompactFunction, CompactImport,
     CompactReport, CompactSection, CompactTrait, RoundedMetrics, compact_from_files,
@@ -67,6 +65,8 @@ pub use core::{
     AnalysisReport, ArchiveEntry, Criticality, ExtractedPayload, MetricsExt, TargetInfo,
     flatten_into_metrics, kv_set_path,
 };
+#[allow(unused_imports)]
+pub use istr::Istr;
 
 pub use filefacts_view::FilefactsView;
 

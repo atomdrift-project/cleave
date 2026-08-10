@@ -476,7 +476,12 @@ fn score_condition(condition: &Condition) -> f32 {
         Condition::Yara { source, .. } => {
             score += score_regex_value(source);
         }
-        Condition::Syscall { name, number, arch } => {
+        Condition::Syscall {
+            name,
+            number,
+            arch,
+            args,
+        } => {
             if let Some(names) = name {
                 for value in names {
                     score += score_string_value(value);
@@ -490,6 +495,9 @@ fn score_condition(condition: &Condition) -> f32 {
                     score += score_string_value(value);
                 }
             }
+            // Argument-value predicates narrow the match well beyond the name,
+            // so each earns precision like a matched parameter.
+            score += PARAM_UNIT * (args.len() as f32);
             // count_min, count_max, per_kb_min, per_kb_max now scored at trait level
         }
         Condition::Metrics(MetricsQuery {

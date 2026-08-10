@@ -314,7 +314,14 @@ fn walk_files(root: &Path) -> Result<Vec<(PathBuf, String)>> {
     for entry in WalkDir::new(root)
         .follow_links(true)
         .into_iter()
-        .filter_entry(|e| !e.file_name().to_string_lossy().starts_with(".git"))
+        // Skip the object store itself — thousands of entries, no analyzable
+        // content. Match the name exactly: a `starts_with(".git")` prefix also
+        // swallowed `.github`, hiding every workflow file from the diff, along
+        // with `.gitignore` and `.gitattributes`. Nothing else hidden is
+        // excluded; a dot in front of a name is not a reason to stop looking
+        // at it, and `.github/workflows` is where a supply-chain change to CI
+        // lands.
+        .filter_entry(|e| !(e.file_type().is_dir() && e.file_name() == ".git"))
     {
         let entry = entry.context("failed to read directory entry")?;
         if !entry.file_type().is_file() {
@@ -618,6 +625,51 @@ fn build_envelope(old_path: &str, new_path: &str, diff: DiffReportV1) -> Analysi
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    /// `.git` is skipped because it is thousands of files of object store, not
+    /// because it starts with a dot. The distinction is load-bearing: a prefix
+    /// match on `.git` also swallowed `.github`, so every CI workflow — where a
+    /// supply-chain change to the build lands — was invisible to a directory
+    /// diff, along with `.gitignore` and `.gitattributes`.
+    #[test]
+    fn walk_skips_the_git_store_but_not_dot_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        for (path, body) in [
+            (".github/workflows/ci.yml", "uses: actions/checkout@v4\n"),
+            (".git/objects/ab/cdef", "object store\n"),
+            (".git/config", "[core]\n"),
+            (".gitignore", "target/\n"),
+            (".config/tool.toml", "k = 1\n"),
+            ("src/main.rs", "fn main() {}\n"),
+        ] {
+            let full = root.join(path);
+            std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+            std::fs::write(&full, body).unwrap();
+        }
+
+        let found: Vec<String> = walk_files(root)
+            .unwrap()
+            .into_iter()
+            .map(|(_, rel)| rel.replace('\\', "/"))
+            .collect();
+
+        assert!(
+            !found.iter().any(|p| p.starts_with(".git/")),
+            "the object store must stay out of the diff: {found:?}"
+        );
+        for expected in [
+            ".github/workflows/ci.yml",
+            ".gitignore",
+            ".config/tool.toml",
+            "src/main.rs",
+        ] {
+            assert!(
+                found.iter().any(|p| p == expected),
+                "{expected} must be analyzed, got {found:?}"
+            );
+        }
+    }
 
     #[test]
     fn scope_mask_parse_default() {

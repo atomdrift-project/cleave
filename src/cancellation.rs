@@ -3,9 +3,30 @@
 //! The CLI scan path runs entirely on rayon workers with no tokio runtime, so
 //! `tokio::signal` isn't available. We install a tiny `libc::signal` handler
 //! that flips a `OnceLock<Arc<AtomicBool>>`; the scan worker closure checks
-//! the flag before pulling the next file, and inner analyzers (rizin, YARA,
-//! tree-sitter) already respect the `AnalysisOptions.cancellation` `Arc`
-//! when it's populated.
+//! the flag before pulling the next file.
+//!
+//! Cancellation is observed *between* units of work, never inside one. cleave's
+//! own analyzers take the `AnalysisOptions.cancellation` `Arc` through
+//! `with_cancellation` and poll it at their phase boundaries, and the YARA
+//! prefetch declines to start a scan once the flag is set. The three
+//! long-running leaf workers, however, do not observe it while running:
+//!
+//! - **tree-sitter** — *does* observe it. `AnalysisContext::with_cancellation`
+//!   hands the flag to filefacts, whose parse polls it and abandons the tree,
+//!   degrading to a `source.ast_unavailable.parse_cancelled` diagnostic. A
+//!   15 s wall budget backs it up when no flag is supplied.
+//! - **rizin** — does not. cleave's `radare2/mod.rs` propagated cancellation,
+//!   but it was retired in the filefacts migration and `filefacts::rizin` has
+//!   not picked it up (tracked there as #75c). Bounded instead by its own hard
+//!   timeout and process-group kill, so it stops on its own; the flag just
+//!   doesn't make it stop *sooner*.
+//! - **YARA** — an in-flight scan runs to yara-x's cooperative `set_timeout`
+//!   (20 min); the flag only prevents a scan that hasn't begun.
+//!
+//! So a cancelled run stops scheduling promptly and abandons the one leaf that
+//! could otherwise run long in-process, but a rizin child or an in-flight YARA
+//! scan still costs its own timeout. The CLI's second SIGINT force-exits; a
+//! server has no such escape and pays that timeout.
 //!
 //! Server mode uses `tokio::signal::ctrl_c()` separately and should not call
 //! `install_signal_handlers()` — tokio would clobber our handler anyway.

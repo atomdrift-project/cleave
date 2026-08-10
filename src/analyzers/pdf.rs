@@ -195,7 +195,10 @@ impl PdfAnalyzer {
                                 }
                             }
                             None => {
-                                by_id.insert(finding.id.clone().to_string().into(), report.findings.len());
+                                by_id.insert(
+                                    finding.id.clone().to_string().into(),
+                                    report.findings.len(),
+                                );
                                 report.findings.push(finding);
                             }
                         }

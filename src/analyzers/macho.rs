@@ -330,7 +330,8 @@ impl MachOAnalyzer {
                     crate::strings::MAX_STRINGS_PER_FILE,
                     crate::strings::MAX_TOTAL_STRING_BYTES / (1024 * 1024)
                 )
-                .to_string().into(),
+                .to_string()
+                .into(),
                 conf: 1.0,
                 crit: Criticality::Notable,
                 mbc: None,
@@ -1616,8 +1617,8 @@ impl MachOAnalyzer {
                 desc: format!("Malformed Mach-O header: {}", msg).into(),
                 conf: 1.0,
                 crit: Criticality::Suspicious,
-                mbc: Some("B0001".to_string()),
-                attack: Some("T1027".to_string()),
+                mbc: Some("B0001".into()),
+                attack: Some("T1027".into()),
                 evidence: vec![],
                 match_count: 0,
                 trait_refs: vec![],

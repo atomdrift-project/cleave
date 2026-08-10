@@ -162,11 +162,13 @@ pub(crate) fn analyze_overlay(
                 id: format!(
                     "file/archive/self-extracting/{}/extraction-failed",
                     archive_type
-                ).into(),
+                )
+                .into(),
                 desc: format!(
                     "Self-extracting archive ({}) - extraction failed",
                     archive_type.to_uppercase()
-                ).into(),
+                )
+                .into(),
                 conf: 0.9,
                 crit: Criticality::Notable,
                 mbc: None,

@@ -416,7 +416,8 @@ impl MemberAccumulator {
         };
         // Dedup against what the container already holds via sets, not a linear
         // rescan per item (archives can carry thousands of distinct findings).
-        let mut seen_ids: HashSet<crate::types::Istr> = report.findings.iter().map(|f| f.id.clone()).collect();
+        let mut seen_ids: HashSet<crate::types::Istr> =
+            report.findings.iter().map(|f| f.id.clone()).collect();
         for (_, t) in self.collected_traits {
             if seen_ids.insert(t.id.clone().to_string().into()) {
                 report.findings.push(t);

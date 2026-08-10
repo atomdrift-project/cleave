@@ -568,7 +568,10 @@ impl OfficeAnalyzer {
                                 }
                             }
                             None => {
-                                by_id.insert(finding.id.clone().to_string().into(), report.findings.len());
+                                by_id.insert(
+                                    finding.id.clone().to_string().into(),
+                                    report.findings.len(),
+                                );
                                 report.findings.push(finding);
                             }
                         }
@@ -679,7 +682,10 @@ impl OfficeAnalyzer {
                                 }
                             }
                             None => {
-                                by_id.insert(finding.id.clone().to_string().into(), report.findings.len());
+                                by_id.insert(
+                                    finding.id.clone().to_string().into(),
+                                    report.findings.len(),
+                                );
                                 report.findings.push(finding);
                             }
                         }
@@ -768,7 +774,8 @@ impl OfficeAnalyzer {
                 desc: format!(
                     "OLE2 document contains VBA macros ({module_count} modules: {})",
                     module_names.join(", ")
-                ).into(),
+                )
+                .into(),
                 conf: 1.0,
                 crit: if module_count == 0 {
                     Criticality::Notable
@@ -776,7 +783,7 @@ impl OfficeAnalyzer {
                     Criticality::Suspicious
                 },
                 mbc: None,
-                attack: Some("T1059.005".to_string()),
+                attack: Some("T1059.005".into()),
                 trait_refs: vec![],
                 evidence: vec![],
                 match_count: 0,
@@ -803,18 +810,20 @@ impl OfficeAnalyzer {
             findings.push(Finding {
                 src: None,
                 id: "objectives/command-and-control/dropper/payload::embedded-executable"
-                    .to_string().into(),
+                    .to_string()
+                    .into(),
                 kind: FindingKind::Indicator,
                 desc: format!(
                     "Embedded {:?} payload in OLE2 stream: {} ({} bytes)",
                     exec.kind,
                     exec.stream_path,
                     exec.data.len()
-                ).into(),
+                )
+                .into(),
                 conf: 0.95,
                 crit: Criticality::Notable,
                 mbc: None,
-                attack: Some("T1027.006".to_string()),
+                attack: Some("T1027.006".into()),
                 trait_refs: vec![],
                 evidence: vec![],
                 match_count: 0,
@@ -837,7 +846,9 @@ impl OfficeAnalyzer {
             };
             findings.push(Finding {
                 src: None,
-                id: "metadata/format/embedded::ole10-native-object".to_string().into(),
+                id: "metadata/format/embedded::ole10-native-object"
+                    .to_string()
+                    .into(),
                 kind: FindingKind::Structural,
                 desc: desc.into(),
                 conf: 1.0,
@@ -860,7 +871,8 @@ impl OfficeAnalyzer {
                 desc: format!(
                     "{} (CLSID: {}) on {}",
                     clsid_match.description, clsid_match.clsid, clsid_match.storage_path
-                ).into(),
+                )
+                .into(),
                 conf: 1.0,
                 // `module_count` is only in scope inside the
                 // `if doc.has_vba` block above; for dangerous-CLSID
@@ -1001,7 +1013,8 @@ impl OfficeAnalyzer {
                 desc: format!(
                     "OOXML document contains VBA macros ({module_count} modules: {})",
                     module_names.join(", ")
-                ).into(),
+                )
+                .into(),
                 conf: 1.0,
                 crit: if module_count == 0 {
                     Criticality::Notable
@@ -1009,7 +1022,7 @@ impl OfficeAnalyzer {
                     Criticality::Suspicious
                 },
                 mbc: None,
-                attack: Some("T1059.005".to_string()),
+                attack: Some("T1059.005".into()),
                 trait_refs: vec![],
                 evidence: vec![],
                 match_count: 0,
@@ -1020,7 +1033,9 @@ impl OfficeAnalyzer {
                 has_word_vba_doc = true;
                 findings.push(Finding {
                     src: None,
-                    id: "metadata/document/office/markup::ooxml-word-vba-document".to_string().into(),
+                    id: "metadata/document/office/markup::ooxml-word-vba-document"
+                        .to_string()
+                        .into(),
                     kind: FindingKind::Structural,
                     desc: "OOXML Word VBA document".to_string().into(),
                     conf: 0.99,
@@ -1168,7 +1183,8 @@ impl OfficeAnalyzer {
                 findings.push(Finding {
                     src: None,
                     id: "well-known/malware/trojan/trickbot::accept-conflict-and-advance-marker"
-                        .to_string().into(),
+                        .to_string()
+                        .into(),
                     kind: FindingKind::Indicator,
                     desc: "AcceptConflictAndAdvance marker".to_string().into(),
                     conf: 0.99,
@@ -1205,16 +1221,18 @@ impl OfficeAnalyzer {
                 src: None,
                 id:
                     "objectives/command-and-control/infrastructure/ip::hardcoded-ipv4-port-list-any"
-                        .to_string().into(),
+                        .to_string()
+                        .into(),
                 kind: FindingKind::Indicator,
                 desc: format!(
                     "Multiple hardcoded external IPv4 endpoints ({})",
                     endpoints.len()
-                ).into(),
+                )
+                .into(),
                 conf: 0.9,
                 crit: Criticality::Suspicious,
-                mbc: Some("B0030".to_string()),
-                attack: Some("T1071.001".to_string()),
+                mbc: Some("B0030".into()),
+                attack: Some("T1071.001".into()),
                 trait_refs: vec![],
                 evidence: vec![],
                 match_count: endpoints.len(),
@@ -1239,13 +1257,15 @@ impl OfficeAnalyzer {
         {
             findings.push(Finding {
                 src: None,
-                id: "well-known/malware/trojan/trickbot::concealed-word-vba-loader".to_string().into(),
+                id: "well-known/malware/trojan/trickbot::concealed-word-vba-loader"
+                    .to_string()
+                    .into(),
                 kind: FindingKind::Indicator,
                 desc: "TrickBot concealed Word VBA loader".to_string().into(),
                 conf: 0.995,
                 crit: Criticality::Hostile,
                 mbc: None,
-                attack: Some("T1204.002".to_string()),
+                attack: Some("T1204.002".into()),
                 trait_refs: vec![],
                 evidence: vec![],
                 match_count: 0,
@@ -1277,7 +1297,9 @@ impl OfficeAnalyzer {
 
             findings.push(Finding {
                 src: None,
-                id: "objectives/execution/interpreter::template-injection".to_string().into(),
+                id: "objectives/execution/interpreter::template-injection"
+                    .to_string()
+                    .into(),
                 kind: FindingKind::Indicator,
                 desc: format!(
                     "External reference in {}: {} (type: {})",
@@ -1288,11 +1310,12 @@ impl OfficeAnalyzer {
                         .rsplit('/')
                         .next()
                         .unwrap_or(&ext_ref.rel_type)
-                ).into(),
+                )
+                .into(),
                 conf: 0.9,
                 crit,
                 mbc: None,
-                attack: Some("T1221".to_string()),
+                attack: Some("T1221".into()),
                 trait_refs: vec![],
                 evidence: vec![],
                 match_count: 0,
@@ -1304,13 +1327,15 @@ impl OfficeAnalyzer {
         for dde in &doc.dde_links {
             findings.push(Finding {
                 src: None,
-                id: "objectives/execution/interpreter::dde-execution".to_string().into(),
+                id: "objectives/execution/interpreter::dde-execution"
+                    .to_string()
+                    .into(),
                 kind: FindingKind::Indicator,
                 desc: format!("DDE field code detected: {dde}").into(),
                 conf: 0.85,
                 crit: Criticality::Hostile,
                 mbc: None,
-                attack: Some("T1559.002".to_string()),
+                attack: Some("T1559.002".into()),
                 trait_refs: vec![],
                 evidence: vec![],
                 match_count: 0,
@@ -1324,13 +1349,14 @@ impl OfficeAnalyzer {
             findings.push(Finding {
                 src: None,
                 id: "objectives/command-and-control/dropper/payload::embedded-executable"
-                    .to_string().into(),
+                    .to_string()
+                    .into(),
                 kind: FindingKind::Indicator,
                 desc: format!("Embedded executable in OOXML entry: {entry}").into(),
                 conf: 0.95,
                 crit: Criticality::Notable,
                 mbc: None,
-                attack: Some("T1027.006".to_string()),
+                attack: Some("T1027.006".into()),
                 trait_refs: vec![],
                 evidence: vec![],
                 match_count: 0,
@@ -1540,7 +1566,9 @@ fn add_metadata_findings(meta: &ole2::DocumentMetadata, findings: &mut Vec<Findi
     if !meta_parts.is_empty() {
         findings.push(Finding {
             src: None,
-            id: "metadata/format/properties::doc-properties".to_string().into(),
+            id: "metadata/format/properties::doc-properties"
+                .to_string()
+                .into(),
             kind: FindingKind::Structural,
             desc: format!("Document metadata: {}", meta_parts.join(", ")).into(),
             conf: 1.0,

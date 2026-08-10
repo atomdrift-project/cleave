@@ -301,7 +301,8 @@ impl super::CapabilityMapper {
 
         // Build a seen-IDs set once from existing report findings, then keep it up-to-date
         // as we merge — O(1) per lookup instead of O(n) linear scan.
-        let mut seen: FxHashSet<crate::types::Istr> = report.findings.iter().map(|f| f.id.clone()).collect();
+        let mut seen: FxHashSet<crate::types::Istr> =
+            report.findings.iter().map(|f| f.id.clone()).collect();
 
         // Step 1: Evaluate independent atomic traits (no trait: dependencies)
         // These can be evaluated in parallel without worrying about order

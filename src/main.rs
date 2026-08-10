@@ -13,6 +13,41 @@
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
+/// Compile-time jemalloc tuning, read once at allocator initialization.
+///
+/// See [`cleave::JEMALLOC_CONF`] for why each option is set — in particular why
+/// `retain:false` is load-bearing: without it a long-running scan's kernel
+/// mapping count climbs until `mmap` returns `ENOMEM` and the process aborts,
+/// with RSS nowhere near any limit. `iter-files` and a long `scan` run hit this
+/// the same way a worker does, so the CLI needs it too.
+///
+/// Runtime configuration still wins: jemalloc applies its compiled-in string
+/// first, then `/etc/malloc.conf`, then the environment, with later sources
+/// overriding earlier ones per key. The environment variable is
+/// `_RJEM_MALLOC_CONF` — `tikv-jemallocator` builds jemalloc with the `_rjem_`
+/// prefix, so plain `MALLOC_CONF` is silently ignored.
+///
+/// Guarded by the same cfg as the allocator itself, so on builds using the
+/// system allocator this symbol is never read.
+#[cfg(all(
+    unix,
+    feature = "jemalloc",
+    not(any(target_os = "freebsd", target_os = "dragonfly", target_os = "netbsd"))
+))]
+mod jemalloc_conf {
+    /// A `Sync` wrapper so a raw `*const c_char` can live in a static;
+    /// jemalloc reads the pointer, it is never written after link time.
+    #[repr(transparent)]
+    struct SyncPtr(*const std::os::raw::c_char);
+    // SAFETY: the pointer targets a NUL-terminated 'static CStr and is never
+    // mutated, so sharing it across threads is sound.
+    unsafe impl Sync for SyncPtr {}
+
+    #[allow(non_upper_case_globals)]
+    #[unsafe(no_mangle)]
+    static _rjem_malloc_conf: SyncPtr = SyncPtr(cleave::JEMALLOC_CONF.as_ptr());
+}
+
 mod cli_bootstrap;
 mod cli_dispatch;
 

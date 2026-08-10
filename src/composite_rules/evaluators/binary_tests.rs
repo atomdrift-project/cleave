@@ -308,13 +308,112 @@ fn test_eval_syscall_by_name() {
         address: 0x1000,
         desc: "Execute program".to_string(),
         arch: "x86_64".to_string(),
+        args: Vec::new(),
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);
 
-    let result = eval_syscall(Some(&vec!["execve".to_string()]), None, None, &ctx);
+    let result = eval_syscall(Some(&["execve".to_string()]), None, None, &[], &ctx);
     assert!(result.matched);
     assert!(result.evidence[0].value.contains("execve"));
+}
+
+/// Evidence anchors at the syscall's file offset so the finding can render
+/// context at real bytes — and claims no position when the offset is unknown,
+/// rather than pointing every syscall at byte 0.
+#[test]
+fn test_eval_syscall_evidence_anchors_at_file_offset() {
+    let mut report = create_test_report();
+    report.syscalls.push(SyscallInfo {
+        name: "mprotect".to_string(),
+        number: 10,
+        address: 0x4a,
+        desc: String::new(),
+        arch: "x86_64".to_string(),
+        args: vec![None, None, Some(7)],
+    });
+    let data = vec![];
+    let ctx = create_test_context(&report, &data);
+    let names = vec!["mprotect".to_string()];
+
+    let anchored = eval_syscall(Some(&names), None, None, &[], &ctx);
+    assert_eq!(anchored.evidence[0].offsets, vec![0x4a]);
+    assert_eq!(anchored.evidence[0].location.as_deref(), Some("0x4a"));
+    assert_eq!(anchored.evidence[0].value, "mprotect(?, ?, 0x7)");
+
+    // An unresolved offset must not become a claim about byte 0.
+    let mut unknown = create_test_report();
+    unknown.syscalls.push(SyscallInfo {
+        name: "mprotect".to_string(),
+        number: 10,
+        address: 0,
+        desc: String::new(),
+        arch: "x86_64".to_string(),
+        args: Vec::new(),
+    });
+    let ctx = create_test_context(&unknown, &data);
+    let result = eval_syscall(Some(&names), None, None, &[], &ctx);
+    assert!(result.matched, "the match itself does not need an offset");
+    assert!(result.evidence[0].offsets.is_empty());
+    assert!(result.evidence[0].location.is_none());
+}
+
+#[test]
+fn test_eval_syscall_arg_mask_discriminates() {
+    use crate::composite_rules::condition::SyscallArg;
+    let mut report = create_test_report();
+    // mprotect with prot = PROT_READ|WRITE|EXEC (7) in arg 2.
+    report.syscalls.push(SyscallInfo {
+        name: "mprotect".to_string(),
+        number: 10,
+        address: 0x1000,
+        desc: String::new(),
+        arch: "x86_64".to_string(),
+        args: vec![None, None, Some(7)],
+    });
+    let data = vec![];
+    let ctx = create_test_context(&report, &data);
+    let names = vec!["mprotect".to_string()];
+
+    // PROT_EXEC (0x4) bit is set -> matches.
+    let exec = [SyscallArg {
+        index: 2,
+        mask: Some(4),
+        value: None,
+    }];
+    assert!(eval_syscall(Some(&names), None, None, &exec, &ctx).matched);
+
+    // A bit that isn't set (0x8) -> no match, even though the name matches.
+    let other = [SyscallArg {
+        index: 2,
+        mask: Some(8),
+        value: None,
+    }];
+    assert!(!eval_syscall(Some(&names), None, None, &other, &ctx).matched);
+
+    // An argument index that wasn't resolved -> no match.
+    let unresolved = [SyscallArg {
+        index: 0,
+        mask: Some(4),
+        value: None,
+    }];
+    assert!(!eval_syscall(Some(&names), None, None, &unresolved, &ctx).matched);
+
+    // Conjunction: both predicates must hold on the same record. arg 2 is 7
+    // (has PROT_EXEC) but there is no arg 3, so a second predicate fails.
+    let two = [
+        SyscallArg {
+            index: 2,
+            mask: Some(4),
+            value: None,
+        },
+        SyscallArg {
+            index: 3,
+            mask: Some(32),
+            value: None,
+        },
+    ];
+    assert!(!eval_syscall(Some(&names), None, None, &two, &ctx).matched);
 }
 
 #[test]
@@ -326,11 +425,12 @@ fn test_eval_syscall_by_number() {
         address: 0x2000,
         desc: "Create socket".to_string(),
         arch: "x86_64".to_string(),
+        args: Vec::new(),
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);
 
-    let result = eval_syscall(None, Some(&vec![41]), None, &ctx);
+    let result = eval_syscall(None, Some(&[41]), None, &[], &ctx);
     assert!(result.matched);
 }
 
@@ -343,6 +443,7 @@ fn test_eval_syscall_by_arch() {
         address: 0x3000,
         desc: "Exit process".to_string(),
         arch: "x86_64".to_string(),
+        args: Vec::new(),
     });
     report.syscalls.push(SyscallInfo {
         name: "exit".to_string(),
@@ -350,14 +451,16 @@ fn test_eval_syscall_by_arch() {
         address: 0x4000,
         desc: "Exit process".to_string(),
         arch: "aarch64".to_string(),
+        args: Vec::new(),
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);
 
     let result = eval_syscall(
-        Some(&vec!["exit".to_string()]),
+        Some(&["exit".to_string()]),
         None,
-        Some(&vec!["x86_64".to_string()]),
+        Some(&["x86_64".to_string()]),
+        &[],
         &ctx,
     );
     assert!(result.matched);
@@ -373,6 +476,7 @@ fn test_eval_syscall_min_count() {
         address: 0x1000,
         desc: "Read from file".to_string(),
         arch: "x86_64".to_string(),
+        args: Vec::new(),
     });
     report.syscalls.push(SyscallInfo {
         name: "read".to_string(),
@@ -380,12 +484,13 @@ fn test_eval_syscall_min_count() {
         address: 0x2000,
         desc: "Read from file".to_string(),
         arch: "x86_64".to_string(),
+        args: Vec::new(),
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);
 
     // With 2 read syscalls, should match
-    let result = eval_syscall(Some(&vec!["read".to_string()]), None, None, &ctx);
+    let result = eval_syscall(Some(&["read".to_string()]), None, None, &[], &ctx);
     assert!(result.matched);
     assert_eq!(result.evidence.len(), 2); // Both read syscalls matched
 }
@@ -399,11 +504,12 @@ fn test_eval_syscall_no_match() {
         address: 0x1000,
         desc: "Read from file".to_string(),
         arch: "x86_64".to_string(),
+        args: Vec::new(),
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);
 
-    let result = eval_syscall(Some(&vec!["ptrace".to_string()]), None, None, &ctx);
+    let result = eval_syscall(Some(&["ptrace".to_string()]), None, None, &[], &ctx);
     assert!(!result.matched);
 }
 
@@ -416,6 +522,7 @@ fn test_eval_syscall_combined_filters() {
         address: 0x1000,
         desc: "Create socket".to_string(),
         arch: "x86_64".to_string(),
+        args: Vec::new(),
     });
     report.syscalls.push(SyscallInfo {
         name: "socket".to_string(),
@@ -423,15 +530,17 @@ fn test_eval_syscall_combined_filters() {
         address: 0x2000,
         desc: "Create socket".to_string(),
         arch: "aarch64".to_string(),
+        args: Vec::new(),
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);
 
     // Match socket syscall #41 on x86_64
     let result = eval_syscall(
-        Some(&vec!["socket".to_string()]),
-        Some(&vec![41]),
-        Some(&vec!["x86_64".to_string()]),
+        Some(&["socket".to_string()]),
+        Some(&[41]),
+        Some(&["x86_64".to_string()]),
+        &[],
         &ctx,
     );
     assert!(result.matched);
@@ -677,24 +786,27 @@ fn test_eval_syscall_arch_exact_match() {
         address: 0x1000,
         desc: "Exit process".to_string(),
         arch: "x86_64".to_string(),
+        args: Vec::new(),
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);
 
     // "x86_64" should match exactly
     let result = eval_syscall(
-        Some(&vec!["exit".to_string()]),
+        Some(&["exit".to_string()]),
         None,
-        Some(&vec!["x86_64".to_string()]),
+        Some(&["x86_64".to_string()]),
+        &[],
         &ctx,
     );
     assert!(result.matched, "Exact arch match should succeed");
 
     // "x86" should NOT match "x86_64" (no substring matching)
     let result = eval_syscall(
-        Some(&vec!["exit".to_string()]),
+        Some(&["exit".to_string()]),
         None,
-        Some(&vec!["x86".to_string()]),
+        Some(&["x86".to_string()]),
+        &[],
         &ctx,
     );
     assert!(
@@ -704,9 +816,10 @@ fn test_eval_syscall_arch_exact_match() {
 
     // "64" should NOT match "x86_64"
     let result = eval_syscall(
-        Some(&vec!["exit".to_string()]),
+        Some(&["exit".to_string()]),
         None,
-        Some(&vec!["64".to_string()]),
+        Some(&["64".to_string()]),
+        &[],
         &ctx,
     );
     assert!(
@@ -1172,13 +1285,14 @@ fn test_eval_syscall_empty_lists_no_match() {
         address: 0x1000,
         desc: "Read from file".to_string(),
         arch: "x86_64".to_string(),
+        args: Vec::new(),
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);
 
     // Empty name list — should not match anything
     let empty_names: Vec<String> = vec![];
-    let result = eval_syscall(Some(&empty_names), None, None, &ctx);
+    let result = eval_syscall(Some(&empty_names), None, None, &[], &ctx);
     assert!(
         !result.matched,
         "Empty name list should not match any syscalls"
@@ -1186,7 +1300,7 @@ fn test_eval_syscall_empty_lists_no_match() {
 
     // Empty number list — should not match anything
     let empty_numbers: Vec<u32> = vec![];
-    let result = eval_syscall(None, Some(&empty_numbers), None, &ctx);
+    let result = eval_syscall(None, Some(&empty_numbers), None, &[], &ctx);
     assert!(
         !result.matched,
         "Empty number list should not match any syscalls"

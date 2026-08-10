@@ -1138,11 +1138,12 @@ fn detect_base64_binary(
             inner_type.to_uppercase(),
             decoded.len(),
             offset,
-        ).into(),
+        )
+        .into(),
         conf: 0.85,
         crit: Criticality::Suspicious,
         mbc: None,
-        attack: Some("T1027.009".to_string()),
+        attack: Some("T1027.009".into()),
         evidence: vec![Evidence {
             method: "base64_magic_detection".to_string(),
             source: "embedded_code_detector".to_string(),
@@ -1317,11 +1318,12 @@ fn detect_powershell_encoded_command(
             "PowerShell -EncodedCommand payload ({} chars decoded) at offset {:#x}",
             decoded.len(),
             offset
-        ).into(),
+        )
+        .into(),
         conf: 0.95,
         crit: Criticality::Suspicious,
         mbc: None,
-        attack: Some("T1059.001".to_string()),
+        attack: Some("T1059.001".into()),
         evidence: vec![Evidence {
             method: "base64_utf16le_decode".to_string(),
             source: "embedded_code_detector".to_string(),

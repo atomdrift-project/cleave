@@ -35,6 +35,22 @@ impl<'a> AnalysisContext<'a> {
         })
     }
 
+    /// Forward the request's cancellation flag to filefacts, so a long
+    /// tree-sitter parse is abandoned when the caller gives up rather than
+    /// running to its own wall budget. `None` leaves the context uncancellable,
+    /// which is the right default for callers with no request to cancel.
+    ///
+    /// Only the tree-sitter parse observes this; rizin is bounded by its own
+    /// timeout and process-group kill instead. See
+    /// [`filefacts::ParsedFile::with_cancellation`].
+    #[must_use]
+    pub fn with_cancellation(mut self, flag: Option<&'a std::sync::atomic::AtomicBool>) -> Self {
+        if let Some(flag) = flag {
+            self.parsed = self.parsed.with_cancellation(flag);
+        }
+        self
+    }
+
     /// Open `content` forcing a caller-known `file_type`, bypassing
     /// detection. For embedded code whose language is already known but
     /// whose virtual path / extracted body carries no detectable shebang,

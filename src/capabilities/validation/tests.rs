@@ -6921,6 +6921,7 @@ mod exception_validation_tests {
             name: Some(vec!["socket".to_string()]),
             number: None,
             arch: None,
+            args: Vec::new(),
         }
     }
 

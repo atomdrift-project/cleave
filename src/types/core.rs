@@ -1406,7 +1406,10 @@ impl AnalysisReport {
                     }
                 }
                 if !ubiquitous && !by_member.is_empty() {
-                    per_finding.insert(finding.id.clone().to_string(), by_member.into_values().collect());
+                    per_finding.insert(
+                        finding.id.clone().to_string(),
+                        by_member.into_values().collect(),
+                    );
                 }
             }
             if !per_finding.is_empty() {
@@ -1909,8 +1912,7 @@ fn early_strip_member_findings(file: &mut FileAnalysis) {
 /// the reference oracle so tests exercise the keep-set logic without touching
 /// process-global state.
 fn early_strip_impl(file: &mut FileAnalysis, possibly_referenced: impl Fn(&str) -> bool) {
-    let strippable =
-        |f: &Finding| matches!(f.crit, Criticality::Baseline | Criticality::Filtered);
+    let strippable = |f: &Finding| matches!(f.crit, Criticality::Baseline | Criticality::Filtered);
     if !file.findings.iter().any(&strippable) {
         return;
     }
@@ -2478,7 +2480,8 @@ mod tests {
         // Neutral — references the bad sibling, doesn't inherit its severity.
         assert_eq!(linked.crit, Criticality::Baseline);
         assert_eq!(
-            f.composite_sources[linked.id.as_str()][0].file, 1,
+            f.composite_sources[linked.id.as_str()][0].file,
+            1,
             "trail names the sibling"
         );
     }

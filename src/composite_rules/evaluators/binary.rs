@@ -7,6 +7,7 @@
 //! - Import combinations (required + suspicious patterns)
 
 use super::build_regex;
+use crate::composite_rules::condition::SyscallArg;
 use crate::composite_rules::context::{ConditionResult, EvaluationContext};
 use crate::types::{Evidence, MAX_EVIDENCE_PER_TRAIT};
 
@@ -303,12 +304,14 @@ pub(crate) fn eval_section<'a>(
     }
 }
 
-/// Evaluate syscall condition - matches syscalls detected via radare2 analysis
+/// Evaluate a syscall condition against the direct-syscall sites filefacts
+/// resolved from raw `syscall`/`svc` instructions.
 #[must_use]
 pub(crate) fn eval_syscall<'a>(
-    name: Option<&Vec<String>>,
-    number: Option<&Vec<u32>>,
-    arch: Option<&Vec<String>>,
+    name: Option<&[String]>,
+    number: Option<&[u32]>,
+    arch: Option<&[String]>,
+    args: &[SyscallArg],
     ctx: &EvaluationContext<'a>,
 ) -> ConditionResult {
     let mut evidence = Vec::new();
@@ -317,23 +320,34 @@ pub(crate) fn eval_syscall<'a>(
     for syscall in &ctx.report.syscalls {
         let name_match = name.is_none_or(|names| names.contains(&syscall.name));
         let number_match = number.is_none_or(|nums| nums.contains(&syscall.number));
-        let arch_match = arch.is_none_or(|archs| {
-            archs
-                .iter()
-                .any(|a| syscall.arch.to_lowercase() == a.to_lowercase())
-        });
+        // Arch labels are ASCII, so compare in place rather than lowercasing
+        // both sides into fresh Strings once per syscall per candidate arch.
+        let arch_match =
+            arch.is_none_or(|archs| archs.iter().any(|a| a.eq_ignore_ascii_case(&syscall.arch)));
+        // Every arg predicate must hold on the *same* syscall record.
+        let arg_match = args.iter().all(|p| p.matches(&syscall.args));
 
-        if name_match && number_match && arch_match {
+        if name_match && number_match && arch_match && arg_match {
             match_count += 1;
             if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
+                // Render only what the producer actually resolved: the name and
+                // whichever argument immediates were constants (`?` otherwise).
+                let shown_args: Vec<String> = syscall
+                    .args
+                    .iter()
+                    .map(|a| a.map_or_else(|| "?".to_string(), |v| format!("0x{v:x}")))
+                    .collect();
+                // Anchor at the record's first call site. A file offset of 0 is
+                // impossible for a syscall (that is the ELF magic), so it means
+                // "unresolved" — claim no position rather than pointing every
+                // syscall finding at byte 0.
+                let at = (syscall.address != 0).then_some(syscall.address);
                 evidence.push(Evidence {
                     method: "syscall".to_string(),
-                    source: "radare2".to_string(),
-                    value: format!(
-                        "{}({}) at 0x{:x}",
-                        syscall.name, syscall.number, syscall.address
-                    ),
-                    location: Some(format!("0x{:x}", syscall.address)),
+                    source: "filefacts".to_string(),
+                    value: format!("{}({})", syscall.name, shown_args.join(", ")),
+                    location: at.map(|a| format!("0x{a:x}")),
+                    offsets: at.into_iter().collect(),
                     ..Default::default()
                 });
             }
@@ -352,6 +366,9 @@ pub(crate) fn eval_syscall<'a>(
         precision += 0.5;
     }
     if arch.is_some() {
+        precision += 0.5;
+    }
+    if !args.is_empty() {
         precision += 0.5;
     }
 

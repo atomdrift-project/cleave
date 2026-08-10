@@ -2452,7 +2452,9 @@ fn render_no_anchor(
         .filter(|f| {
             f.crit >= floor && sel.contains(f.id.as_str()) && !windowed.contains(f.id.as_str())
         })
-        .filter(|f| !captured || file.composite_sources.contains_key(f.id.as_str()) || !has_local_offset(f))
+        .filter(|f| {
+            !captured || file.composite_sources.contains_key(f.id.as_str()) || !has_local_offset(f)
+        })
         .collect();
     rest.sort_unstable_by(|a, b| b.crit.cmp(&a.crit).then_with(|| a.id.cmp(&b.id)));
 
@@ -4510,7 +4512,9 @@ mod tests {
             src: None,
             kind: FindingKind::Capability,
             trait_refs: vec![],
-            id: "micro-behaviors/process/create/shell::bash".to_string().into(),
+            id: "micro-behaviors/process/create/shell::bash"
+                .to_string()
+                .into(),
             desc: "Execute shell commands".to_string().into(),
             conf: 0.9,
             crit: Criticality::Suspicious,
@@ -4624,7 +4628,9 @@ mod tests {
                 src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![],
-                id: "objectives/execution/loader::unused-fragment".to_string().into(),
+                id: "objectives/execution/loader::unused-fragment"
+                    .to_string()
+                    .into(),
                 desc: "Unused loader fragment".to_string().into(),
                 conf: 0.7,
                 crit: Criticality::Component,
@@ -4641,7 +4647,9 @@ mod tests {
                     "micro-behaviors/fs/read::open".to_string().into(),
                     "objectives/execution/loader::fragment".to_string().into(),
                 ],
-                id: "objectives/execution/loader::matched-composite".to_string().into(),
+                id: "objectives/execution/loader::matched-composite"
+                    .to_string()
+                    .into(),
                 desc: "Matched composite loader".to_string().into(),
                 conf: 0.95,
                 crit: Criticality::Suspicious,

@@ -614,7 +614,7 @@ impl PackageJsonAnalyzer {
                     0.95,
                 )
                 .with_criticality(Criticality::Suspicious)
-                .with_attack("T1027".to_string())
+                .with_attack("T1027")
                 .with_evidence(vec![Evidence {
                     method: "pattern".to_string(),
                     source: "package.json".to_string(),
@@ -634,7 +634,7 @@ impl PackageJsonAnalyzer {
                     0.90,
                 )
                 .with_criticality(Criticality::Suspicious)
-                .with_attack("T1027".to_string())
+                .with_attack("T1027")
                 .with_evidence(vec![Evidence {
                     method: "pattern".to_string(),
                     source: "package.json".to_string(),
@@ -672,7 +672,7 @@ impl PackageJsonAnalyzer {
                     0.95,
                 )
                 .with_criticality(Criticality::Suspicious)
-                .with_attack("T1195.002".to_string())
+                .with_attack("T1195.002")
                 .with_evidence(vec![Evidence {
                     method: "pattern".to_string(),
                     source: "package.json".to_string(),
@@ -732,7 +732,7 @@ impl PackageJsonAnalyzer {
                         0.95,
                     )
                     .with_criticality(Criticality::Hostile)
-                    .with_attack("T1041".to_string())
+                    .with_attack("T1041")
                     .with_evidence(vec![Evidence {
                         method: "pattern".to_string(),
                         source: "package.json".to_string(),
@@ -767,8 +767,8 @@ impl PackageJsonAnalyzer {
                         0.95,
                     )
                     .with_criticality(Criticality::Hostile)
-                    .with_attack("T1105".to_string())
-                    .with_mbc("B0024".to_string())
+                    .with_attack("T1105")
+                    .with_mbc("B0024")
                     .with_evidence(vec![Evidence {
                         method: "pattern".to_string(),
                         source: "package.json".to_string(),
@@ -794,7 +794,7 @@ impl PackageJsonAnalyzer {
                         0.95,
                     )
                     .with_criticality(Criticality::Hostile)
-                    .with_attack("T1059".to_string())
+                    .with_attack("T1059")
                     .with_evidence(vec![Evidence {
                         method: "pattern".to_string(),
                         source: "package.json".to_string(),
@@ -835,7 +835,7 @@ impl PackageJsonAnalyzer {
                             0.85,
                         )
                         .with_criticality(Criticality::Suspicious)
-                        .with_attack("T1564.001".to_string())
+                        .with_attack("T1564.001")
                         .with_evidence(vec![Evidence {
                             method: "pattern".to_string(),
                             source: "package.json".to_string(),
@@ -860,7 +860,7 @@ impl PackageJsonAnalyzer {
                         0.75,
                     )
                     .with_criticality(Criticality::Notable)
-                    .with_attack("T1071.001".to_string())
+                    .with_attack("T1071.001")
                     .with_evidence(vec![Evidence {
                         method: "pattern".to_string(),
                         source: "package.json".to_string(),
@@ -884,7 +884,7 @@ impl PackageJsonAnalyzer {
                             0.8,
                         )
                         .with_criticality(Criticality::Notable)
-                        .with_attack("T1071.001".to_string())
+                        .with_attack("T1071.001")
                         .with_evidence(vec![Evidence {
                             method: "heuristic".to_string(),
                             source: "package.json".to_string(),

@@ -765,13 +765,15 @@ impl PEAnalyzer {
             };
             report.findings.push(Finding {
                 src: None,
-                id: "objectives/anti-analysis/pe-tampering/corrupted-header".to_string().into(),
+                id: "objectives/anti-analysis/pe-tampering/corrupted-header"
+                    .to_string()
+                    .into(),
                 kind: FindingKind::Structural,
                 desc: msg.to_string().into(),
                 conf,
                 crit,
-                mbc: Some("B0001".to_string()),
-                attack: Some("T1027".to_string()),
+                mbc: Some("B0001".into()),
+                attack: Some("T1027".into()),
                 trait_refs: vec![],
                 evidence: vec![Evidence {
                     method: "parse-failure".to_string(),
@@ -835,7 +837,8 @@ impl PEAnalyzer {
                     crate::strings::MAX_STRINGS_PER_FILE,
                     crate::strings::MAX_TOTAL_STRING_BYTES / (1024 * 1024)
                 )
-                .to_string().into(),
+                .to_string()
+                .into(),
                 conf: 1.0,
                 crit: Criticality::Notable,
                 mbc: None,
@@ -1285,16 +1288,19 @@ impl PEAnalyzer {
 
             findings.push(Finding {
                 src: None,
-                id: "objectives/anti-analysis/pe-tampering/junk-prefix".to_string().into(),
+                id: "objectives/anti-analysis/pe-tampering/junk-prefix"
+                    .to_string()
+                    .into(),
                 kind: FindingKind::Structural,
                 desc: format!(
                     "PE has {} bytes prepended before MZ header (anti-analysis)",
                     offset
-                ).into(),
+                )
+                .into(),
                 conf: 1.0,
                 crit: Criticality::Hostile,
-                mbc: Some("B0001".to_string()), // Executable Code Obfuscation
-                attack: Some("T1027".to_string()), // Obfuscated Files or Information
+                mbc: Some("B0001".into()),    // Executable Code Obfuscation
+                attack: Some("T1027".into()), // Obfuscated Files or Information
                 trait_refs: vec![],
                 evidence: vec![Evidence {
                     method: "header-analysis".to_string(),
@@ -1318,13 +1324,17 @@ impl PEAnalyzer {
         if let Some(bsjb_offset) = self.find_signature(data, b"BSJB") {
             findings.push(Finding {
                 src: None,
-                id: "objectives/anti-analysis/pe-tampering/dotnet-invalid-pe".to_string().into(),
+                id: "objectives/anti-analysis/pe-tampering/dotnet-invalid-pe"
+                    .to_string()
+                    .into(),
                 kind: FindingKind::Structural,
-                desc: ".NET assembly (BSJB signature) with corrupted/missing PE header".to_string().into(),
+                desc: ".NET assembly (BSJB signature) with corrupted/missing PE header"
+                    .to_string()
+                    .into(),
                 conf: 0.95,
                 crit: Criticality::Hostile,
-                mbc: Some("B0001".to_string()),
-                attack: Some("T1027".to_string()),
+                mbc: Some("B0001".into()),
+                attack: Some("T1027".into()),
                 trait_refs: vec![],
                 evidence: vec![Evidence {
                     method: "signature".to_string(),
@@ -1368,7 +1378,9 @@ impl PEAnalyzer {
             if byte_val != 0 && count > header_len * 2 / 5 {
                 findings.push(Finding {
                     src: None,
-                    id: "objectives/anti-analysis/pe-tampering/byte-injection".to_string().into(),
+                    id: "objectives/anti-analysis/pe-tampering/byte-injection"
+                        .to_string()
+                        .into(),
                     kind: FindingKind::Structural,
                     desc: format!(
                         "PE header has excessive 0x{:02X} bytes ({} of {} = {:.1}%)",
@@ -1376,11 +1388,12 @@ impl PEAnalyzer {
                         count,
                         header_len,
                         count as f32 / header_len as f32 * 100.0
-                    ).into(),
+                    )
+                    .into(),
                     conf: 0.9,
                     crit: Criticality::Suspicious,
-                    mbc: Some("B0001".to_string()),
-                    attack: Some("T1027".to_string()),
+                    mbc: Some("B0001".into()),
+                    attack: Some("T1027".into()),
                     trait_refs: vec![],
                     evidence: vec![Evidence {
                         method: "frequency-analysis".to_string(),
@@ -1412,8 +1425,8 @@ impl PEAnalyzer {
                     ).into(),
                     conf: 0.85,
                     crit: Criticality::Suspicious,
-                    mbc: Some("B0001".to_string()),
-                    attack: Some("T1027".to_string()),
+                    mbc: Some("B0001".into()),
+                    attack: Some("T1027".into()),
                     trait_refs: vec![],
                     evidence: vec![Evidence {
                         method: "signature".to_string(),

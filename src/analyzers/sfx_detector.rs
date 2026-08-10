@@ -222,7 +222,7 @@ fn build_finding(kind: SfxKind, extracted: bool, marker_offset: Option<usize>) -
         conf: if extracted { 1.0 } else { 0.9 },
         crit: Criticality::Notable,
         mbc: None,
-        attack: Some("T1059".to_string()),
+        attack: Some("T1059".into()),
         evidence: vec![Evidence {
             method: "marker_detection".to_string(),
             source: "sfx_detector".to_string(),
@@ -249,7 +249,7 @@ fn build_innoextract_finding(diagnostic: &InnoExtractDiagnostic) -> Finding {
         conf: diagnostic.kind.conf(),
         crit: diagnostic.kind.crit(),
         mbc: None,
-        attack: Some("T1027.009".to_string()),
+        attack: Some("T1027.009".into()),
         evidence: vec![Evidence {
             method: "innoextract".to_string(),
             source: "sfx_detector".to_string(),

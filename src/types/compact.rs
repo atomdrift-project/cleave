@@ -847,12 +847,12 @@ fn convert_file(file: &super::file_analysis::FileAnalysis, id: u32) -> CompactFi
             trait_map.insert(
                 &finding.id,
                 CompactTrait {
-                    id: finding.id.clone().to_string(),
+                    id: finding.id.to_string(),
                     criticality: crit_to_int(finding.crit),
-                    description: finding.desc.clone().to_string(),
+                    description: finding.desc.to_string(),
                     confidence: finding.conf,
-                    mbc: finding.mbc.clone(),
-                    attack: finding.attack.clone(),
+                    mbc: finding.mbc.as_deref().map(str::to_owned),
+                    attack: finding.attack.as_deref().map(str::to_owned),
                     from,
                     ev: ev_spans,
                     dep: None,

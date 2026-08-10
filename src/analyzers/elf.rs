@@ -12,7 +12,7 @@ use crate::entropy::EntropyLevel;
 use crate::strings::StringExtractor;
 use crate::types::{
     AnalysisReport, Criticality, Evidence, Finding, FindingKind, Section, StructuralFeature,
-    TargetInfo,
+    SyscallInfo, TargetInfo,
 };
 use crate::yara_engine::YaraEngine;
 use anyhow::{Context, Result};
@@ -244,6 +244,7 @@ impl ElfAnalyzer {
             self.fill_structure_from_ctx(ctx, data, &mut report);
             self.fill_dynamic_symbols_from_ctx(ctx, &mut report);
             self.fill_sections_from_ctx(ctx, &mut report);
+            self.fill_syscalls_from_ctx(ctx, &mut report);
             let struct_ms = struct_start.elapsed().as_millis();
             tracing::info!(
                 path = %analysis_path.display(),
@@ -292,7 +293,9 @@ impl ElfAnalyzer {
                         src: None,
                         id: "file/sfx/appimage".to_string().into(),
                         kind: crate::types::FindingKind::Structural,
-                        desc: "Squashfs filesystem appended after ELF image (AppImage)".to_string().into(),
+                        desc: "Squashfs filesystem appended after ELF image (AppImage)"
+                            .to_string()
+                            .into(),
                         conf: 1.0,
                         crit: crate::types::Criticality::Notable,
                         mbc: None,
@@ -407,8 +410,8 @@ impl ElfAnalyzer {
                 desc: format!("Malformed ELF header or section headers: {err_msg}").into(),
                 conf: 1.0,
                 crit,
-                mbc: Some("B0001".to_string()),
-                attack: Some("T1027".to_string()),
+                mbc: Some("B0001".into()),
+                attack: Some("T1027".into()),
                 evidence: vec![],
                 match_count: 0,
                 trait_refs: vec![],
@@ -560,7 +563,8 @@ impl ElfAnalyzer {
                     crate::strings::MAX_STRINGS_PER_FILE,
                     crate::strings::MAX_TOTAL_STRING_BYTES / (1024 * 1024)
                 )
-                .to_string().into(),
+                .to_string()
+                .into(),
                 conf: 1.0,
                 crit: Criticality::Notable,
                 mbc: None,
@@ -801,6 +805,73 @@ impl ElfAnalyzer {
                 });
             }
         }
+    }
+
+    /// Project filefacts's direct-syscall inventory (`elf.syscalls_direct[]`,
+    /// resolved from raw `syscall`/`svc` instructions that bypass the libc
+    /// wrapper) into `report.syscalls`, which the `type: syscall` trait matcher
+    /// reads. Each record is `{name, number, args}`; `args` carries the resolved
+    /// immediate argument values (`null` where non-constant) so an `arg:`
+    /// predicate can match a flag like `PROT_EXEC`. Syscall numbers are
+    /// arch-specific, so a `number:` rule should pin `arch:` alongside it.
+    /// `offset` is the file offset of the record's first call site, which is
+    /// what anchors a syscall finding to real bytes; only `desc` has no source.
+    ///
+    /// The caps below are defence in depth, not redundancy: filefacts bounds its
+    /// own site set, but every record here costs three heap allocations, and the
+    /// input is a hostile binary. A parser bound that regresses upstream must not
+    /// become unbounded scanner memory downstream.
+    fn fill_syscalls_from_ctx(&self, ctx: &Ctx<'_>, report: &mut AnalysisReport) {
+        /// Matches filefacts's own per-binary candidate budget.
+        const MAX_SITES: usize = 4096;
+        /// Linux syscall ABI argument count.
+        const MAX_ARGS: usize = 6;
+
+        let values = ctx.parsed.values();
+        let Some(records) = values.get("elf.syscalls_direct").and_then(|v| v.as_array()) else {
+            return;
+        };
+        if records.len() > MAX_SITES {
+            tracing::warn!(
+                found = records.len(),
+                kept = MAX_SITES,
+                "elf.syscalls_direct exceeded the ingest cap; truncating"
+            );
+        }
+        let arch = values
+            .get("elf.syscalls_arch")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        report
+            .syscalls
+            .extend(records.iter().take(MAX_SITES).filter_map(|rec| {
+                Some(SyscallInfo {
+                    // Both absent on records cached before the producer emitted
+                    // them; 0 then means "unknown", exactly as it did before.
+                    address: rec
+                        .get("offset")
+                        .and_then(serde_json::Value::as_u64)
+                        .unwrap_or(0),
+                    number: rec
+                        .get("number")
+                        .and_then(serde_json::Value::as_u64)
+                        .and_then(|n| u32::try_from(n).ok())
+                        .unwrap_or(0),
+                    name: rec.get("name")?.as_str()?.to_string(),
+                    desc: String::new(),
+                    arch: arch.to_string(),
+                    args: rec
+                        .get("args")
+                        .and_then(|v| v.as_array())
+                        .map(|a| {
+                            a.iter()
+                                .take(MAX_ARGS)
+                                .map(serde_json::Value::as_u64)
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                })
+            }));
     }
 }
 
@@ -1109,6 +1180,63 @@ mod tests {
 
     fn test_elf_path() -> PathBuf {
         PathBuf::from("tests/fixtures/test.elf")
+    }
+
+    /// End-to-end through filefacts: a direct `mprotect` site must arrive with
+    /// its *number* populated, not just its name. `number` was silently 0 for
+    /// every syscall until the producer emitted it, which made any rule
+    /// filtering on `number:` match nothing at all.
+    #[test]
+    fn direct_syscall_projection_carries_number_and_args() {
+        use std::io::Write;
+
+        // mov edx, 7 (PROT_READ|WRITE|EXEC); mov eax, 10 (mprotect); syscall
+        let code = [
+            0xBA, 0x07, 0x00, 0x00, 0x00, 0xB8, 0x0A, 0x00, 0x00, 0x00, 0x0F, 0x05,
+        ];
+        // Minimal ELF64 LE with one executable PROGBITS section holding `code`.
+        const EH: usize = 64;
+        const SH: usize = 64;
+        let shtab = EH + code.len();
+        let mut buf = vec![0u8; shtab + 2 * SH];
+        buf[0..4].copy_from_slice(&[0x7f, b'E', b'L', b'F']);
+        buf[4] = 2; // ELFCLASS64
+        buf[5] = 1; // ELFDATA2LSB
+        buf[6] = 1; // EV_CURRENT
+        buf[16..18].copy_from_slice(&2u16.to_le_bytes()); // ET_EXEC
+        buf[18..20].copy_from_slice(&62u16.to_le_bytes()); // EM_X86_64
+        buf[20..24].copy_from_slice(&1u32.to_le_bytes()); // e_version
+        buf[40..48].copy_from_slice(&(shtab as u64).to_le_bytes()); // e_shoff
+        buf[52..54].copy_from_slice(&(EH as u16).to_le_bytes()); // e_ehsize
+        buf[58..60].copy_from_slice(&(SH as u16).to_le_bytes()); // e_shentsize
+        buf[60..62].copy_from_slice(&2u16.to_le_bytes()); // e_shnum
+        buf[EH..EH + code.len()].copy_from_slice(&code);
+        let sh = shtab + SH; // [0] is the mandatory null header
+        buf[sh + 4..sh + 8].copy_from_slice(&1u32.to_le_bytes()); // SHT_PROGBITS
+        buf[sh + 8..sh + 16].copy_from_slice(&0x4u64.to_le_bytes()); // SHF_EXECINSTR
+        buf[sh + 24..sh + 32].copy_from_slice(&(EH as u64).to_le_bytes()); // sh_offset
+        buf[sh + 32..sh + 40].copy_from_slice(&(code.len() as u64).to_le_bytes()); // sh_size
+
+        let mut f = tempfile::Builder::new()
+            .suffix(".elf")
+            .tempfile()
+            .expect("temp file");
+        f.write_all(&buf).expect("write synthetic ELF");
+        f.flush().expect("flush");
+
+        let report = ElfAnalyzer::new().analyze(f.path()).expect("analyze");
+        let sc = report
+            .syscalls
+            .iter()
+            .find(|s| s.name == "mprotect")
+            .expect("the direct mprotect site must be projected");
+        assert_eq!(sc.number, 10, "number must survive into SyscallInfo");
+        assert_eq!(sc.arch, "x86_64");
+        assert_eq!(sc.args.get(2), Some(&Some(7)), "prot arg carries PROT_RWX");
+        // Section starts at file offset 64, `0F 05` is 10 bytes in. Must be the
+        // absolute file offset — a section-relative 10 would anchor findings to
+        // the wrong bytes.
+        assert_eq!(sc.address, 74, "address must be a file offset");
     }
 
     #[test]

@@ -1092,17 +1092,20 @@ impl TraitDefinition {
 
             let timeout_warning = Finding {
                 src: None,
-                id: "objectives/anti-analysis/analysis-bomb/rule-timeout".to_string().into(),
+                id: "objectives/anti-analysis/analysis-bomb/rule-timeout"
+                    .to_string()
+                    .into(),
                 desc: format!(
                     "Rule evaluation timeout: {} took {}ms (limit: {}ms)",
                     self.id,
                     duration.as_millis(),
                     MAX_RULE_EVAL_DURATION.as_millis()
-                ).into(),
+                )
+                .into(),
                 crit: Criticality::Suspicious,
                 kind: FindingKind::Indicator,
                 conf: 0.9,
-                mbc: Some("B0003.005".to_string()), // Obfuscated Files or Information: Analysis Evasion
+                mbc: Some("B0003.005".into()), // Obfuscated Files or Information: Analysis Evasion
                 attack: None,
                 trait_refs: vec![],
                 evidence: vec![crate::types::Evidence {
@@ -1266,8 +1269,8 @@ impl TraitDefinition {
                 desc: self.desc.clone().into(),
                 conf: self.conf,
                 crit: final_crit,
-                mbc: self.mbc.clone(),
-                attack: self.attack.clone(),
+                mbc: self.mbc.as_deref().map(Into::into),
+                attack: self.attack.as_deref().map(Into::into),
                 trait_refs: vec![],
                 evidence: result.evidence,
                 match_count: result.match_count,
@@ -1583,10 +1586,21 @@ impl TraitDefinition {
                     eval_yara_inline(source, namespace.as_deref(), compiled.as_ref(), ctx)
                 )
             }
-            Condition::Syscall { name, number, arch } => {
+            Condition::Syscall {
+                name,
+                number,
+                arch,
+                args,
+            } => {
                 timed_eval!(
                     "syscall",
-                    eval_syscall(name.as_ref(), number.as_ref(), arch.as_ref(), ctx)
+                    eval_syscall(
+                        name.as_deref(),
+                        number.as_deref(),
+                        arch.as_deref(),
+                        args,
+                        ctx
+                    )
                 )
             }
             Condition::Metrics(MetricsQuery {
@@ -2569,17 +2583,20 @@ impl CompositeTrait {
 
                 return Some(Finding {
                     src: None,
-                    id: "objectives/anti-analysis/analysis-bomb/rule-timeout".to_string().into(),
+                    id: "objectives/anti-analysis/analysis-bomb/rule-timeout"
+                        .to_string()
+                        .into(),
                     desc: format!(
                         "Composite rule evaluation timeout: {} took {}ms (limit: {}ms)",
                         self.id,
                         duration.as_millis(),
                         MAX_RULE_EVAL_DURATION.as_millis()
-                    ).into(),
+                    )
+                    .into(),
                     crit: Criticality::Suspicious,
                     kind: FindingKind::Indicator,
                     conf: 0.9,
-                    mbc: Some("B0003.005".to_string()), // Obfuscated Files or Information: Analysis Evasion
+                    mbc: Some("B0003.005".into()), // Obfuscated Files or Information: Analysis Evasion
                     attack: None,
                     trait_refs: vec![],
                     evidence: vec![crate::types::Evidence {
@@ -2606,8 +2623,8 @@ impl CompositeTrait {
                 desc: self.desc.clone().into(),
                 conf: self.conf,
                 crit: final_crit,
-                mbc: self.mbc.clone(),
-                attack: self.attack.clone(),
+                mbc: self.mbc.as_deref().map(Into::into),
+                attack: self.attack.as_deref().map(Into::into),
                 trait_refs: result.matched_trait_ids.clone(),
                 evidence,
                 match_count: 0, // not meaningful for composites
@@ -3035,10 +3052,21 @@ impl CompositeTrait {
                     eval_yara_inline(source, namespace.as_deref(), compiled.as_ref(), ctx)
                 )
             }
-            Condition::Syscall { name, number, arch } => {
+            Condition::Syscall {
+                name,
+                number,
+                arch,
+                args,
+            } => {
                 timed_eval!(
                     "syscall",
-                    eval_syscall(name.as_ref(), number.as_ref(), arch.as_ref(), ctx)
+                    eval_syscall(
+                        name.as_deref(),
+                        number.as_deref(),
+                        arch.as_deref(),
+                        args,
+                        ctx
+                    )
                 )
             }
             Condition::Metrics(MetricsQuery {

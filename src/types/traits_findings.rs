@@ -222,12 +222,12 @@ pub struct Finding {
     /// Criticality level
     #[serde(default)]
     pub crit: Criticality,
-    /// MBC (Malware Behavior Catalog) ID
+    /// MBC (Malware Behavior Catalog) ID. Interned — static per trait.
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub mbc: Option<String>,
-    /// MITRE ATT&CK Technique ID
+    pub mbc: Option<super::Istr>,
+    /// MITRE ATT&CK Technique ID. Interned — static per trait.
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub attack: Option<String>,
+    pub attack: Option<super::Istr>,
     /// Trait IDs that contributed to this finding (for aggregated findings).
     /// Interned — these are the same ids the findings themselves carry.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
@@ -244,7 +244,14 @@ pub struct Finding {
     /// Total match count for density/frequency analysis (may exceed evidence.len())
     #[serde(skip_serializing_if = "is_zero_usize", default)]
     pub match_count: usize,
-    /// Source file path (relative to traits directory) where this trait/rule was defined
+    /// Source file path where this trait/rule was defined.
+    ///
+    /// NOT interned, deliberately: several analyzers (embedded-code, subfile)
+    /// set this to the *analyzed member's* path rather than a rule path, so it
+    /// is one distinct string per member. Interning it pinned ~55k member paths
+    /// in the pool's strong refs and cost ~0.3-1.2 GB on the benchmark — the
+    /// opposite of the intended effect. Only low-cardinality fields belong in
+    /// `Istr`.
     #[allow(dead_code)] // Populated during trait evaluation, skip-serialized in output
     #[serde(skip_serializing, default)]
     pub source_file: Option<String>,
@@ -310,15 +317,15 @@ impl Finding {
 
     /// Attach a Malware Behavior Catalog (MBC) identifier to this finding
     #[must_use]
-    pub fn with_mbc(mut self, mbc: String) -> Self {
-        self.mbc = Some(mbc);
+    pub fn with_mbc(mut self, mbc: &str) -> Self {
+        self.mbc = Some(mbc.into());
         self
     }
 
     /// Attach a MITRE ATT&CK technique identifier to this finding
     #[must_use]
-    pub fn with_attack(mut self, attack: String) -> Self {
-        self.attack = Some(attack);
+    pub fn with_attack(mut self, attack: &str) -> Self {
+        self.attack = Some(attack.into());
         self
     }
 
@@ -860,18 +867,18 @@ mod tests {
 
     #[test]
     fn test_finding_with_mbc() {
-        let f = Finding::capability("test".to_string(), "desc".to_string(), 0.9)
-            .with_mbc("B0015.001".to_string());
+        let f =
+            Finding::capability("test".to_string(), "desc".to_string(), 0.9).with_mbc("B0015.001");
 
-        assert_eq!(f.mbc, Some("B0015.001".to_string()));
+        assert_eq!(f.mbc, Some(crate::types::Istr::from("B0015.001")));
     }
 
     #[test]
     fn test_finding_with_attack() {
         let f = Finding::capability("test".to_string(), "desc".to_string(), 0.9)
-            .with_attack("T1059.001".to_string());
+            .with_attack("T1059.001");
 
-        assert_eq!(f.attack, Some("T1059.001".to_string()));
+        assert_eq!(f.attack, Some(crate::types::Istr::from("T1059.001")));
     }
 
     #[test]
@@ -895,13 +902,13 @@ mod tests {
     fn test_finding_builder_chain() {
         let f = Finding::capability("net/http".to_string(), "HTTP client".to_string(), 0.95)
             .with_criticality(Criticality::Suspicious)
-            .with_mbc("C0002".to_string())
-            .with_attack("T1071.001".to_string());
+            .with_mbc("C0002")
+            .with_attack("T1071.001");
 
         assert_eq!(f.id, "net/http");
         assert_eq!(f.crit, Criticality::Suspicious);
-        assert_eq!(f.mbc, Some("C0002".to_string()));
-        assert_eq!(f.attack, Some("T1071.001".to_string()));
+        assert_eq!(f.mbc, Some(crate::types::Istr::from("C0002")));
+        assert_eq!(f.attack, Some(crate::types::Istr::from("T1071.001")));
     }
 
     // ==================== truncate_str Tests ====================

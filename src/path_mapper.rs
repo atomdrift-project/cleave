@@ -314,7 +314,8 @@ pub(crate) fn analyze_and_link_paths(report: &mut AnalysisReport) {
         // Mark paths that contributed to this trait based on evidence
         for path in &mut paths {
             if trait_obj.evidence.iter().any(|e| e.value == path.path) {
-                path.referenced_by_traits.push(trait_obj.id.clone().to_string());
+                path.referenced_by_traits
+                    .push(trait_obj.id.clone().to_string());
             }
         }
     }

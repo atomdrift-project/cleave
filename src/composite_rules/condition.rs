@@ -887,6 +887,33 @@ impl AliasFilter {
     }
 }
 
+/// Predicate on one resolved syscall argument (see `Condition::Syscall`). The
+/// argument is identified by its syscall-ABI `index` (0 = first arg); a match
+/// requires the argument to be a resolved constant satisfying every stated test:
+/// `mask` — every bit of `mask` is set (`v & mask == mask`), for flag words like
+/// `PROT_EXEC`; `value` — exact equality, for enumerated arguments.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SyscallArg {
+    pub index: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mask: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<u64>,
+}
+
+impl SyscallArg {
+    /// Whether one syscall's resolved argument list satisfies this predicate.
+    /// An unresolved argument never matches: absence of a constant is not
+    /// evidence of the constant a rule is asking about.
+    pub(crate) fn matches(&self, args: &[Option<u64>]) -> bool {
+        let Some(&Some(v)) = args.get(self.index) else {
+            return false;
+        };
+        self.mask.is_none_or(|m| v & m == m) && self.value.is_none_or(|want| v == want)
+    }
+}
+
 /// Internal tagged enum for serializing/deserializing conditions with explicit `type` field
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
@@ -1145,6 +1172,8 @@ enum ConditionTagged {
         number: Option<Vec<u32>>,
         #[serde(default)]
         arch: Option<Vec<String>>,
+        #[serde(default)]
+        args: Vec<SyscallArg>,
     },
     Metrics {
         field: String,
@@ -1652,9 +1681,17 @@ impl From<ConditionDeser> for Condition {
                     compiled: None,
                     namespace: None,
                 },
-                ConditionTagged::Syscall { name, number, arch } => {
-                    Condition::Syscall { name, number, arch }
-                }
+                ConditionTagged::Syscall {
+                    name,
+                    number,
+                    arch,
+                    args,
+                } => Condition::Syscall {
+                    name,
+                    number,
+                    arch,
+                    args,
+                },
                 ConditionTagged::Metrics {
                     field,
                     min,
@@ -1983,9 +2020,17 @@ impl From<Condition> for ConditionTagged {
                 compiled: _,
                 namespace: _,
             } => ConditionTagged::Yara { source },
-            Condition::Syscall { name, number, arch } => {
-                ConditionTagged::Syscall { name, number, arch }
-            }
+            Condition::Syscall {
+                name,
+                number,
+                arch,
+                args,
+            } => ConditionTagged::Syscall {
+                name,
+                number,
+                arch,
+                args,
+            },
             Condition::Metrics(MetricsQuery {
                 field,
                 min,
@@ -2255,6 +2300,10 @@ pub(crate) enum Condition {
         /// Architecture filter (e.g., "mips", "x86_64", "arm")
         #[serde(skip_serializing_if = "Option::is_none")]
         arch: Option<Vec<String>>,
+        /// Predicates on resolved arguments, ANDed against the *same* syscall
+        /// record (e.g. `prot & PROT_EXEC` and `flags & MAP_ANONYMOUS`).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        args: Vec<SyscallArg>,
     },
 
     /// Check computed metrics for obfuscation/anomaly detection

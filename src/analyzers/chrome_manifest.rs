@@ -573,7 +573,7 @@ impl ChromeManifestAnalyzer {
                     0.9,
                 )
                 .with_criticality(Criticality::Suspicious)
-                .with_attack("T1195.002".to_string())
+                .with_attack("T1195.002")
                 .with_evidence(vec![Evidence {
                     method: "parser".to_string(),
                     source: "manifest.json".to_string(),

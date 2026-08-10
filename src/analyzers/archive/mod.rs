@@ -216,7 +216,9 @@ fn drain_extraction_notes(report: &mut AnalysisReport, guard: &ExtractionGuard) 
         src: None,
         kind: FindingKind::Structural,
         trait_refs: vec![],
-        id: "anti-analysis/malformed/archive-incomplete".to_string().into(),
+        id: "anti-analysis/malformed/archive-incomplete"
+            .to_string()
+            .into(),
         desc: format!(
             "Archive could only be read in part ({} extraction {})",
             notes.len(),
@@ -225,7 +227,8 @@ fn drain_extraction_notes(report: &mut AnalysisReport, guard: &ExtractionGuard) 
             } else {
                 "problems"
             }
-        ).into(),
+        )
+        .into(),
         conf: 1.0,
         crit: Criticality::Notable,
         mbc: None,

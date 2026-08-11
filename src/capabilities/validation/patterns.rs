@@ -503,6 +503,63 @@ pub(crate) fn find_non_capturing_groups(traits: &[TraitDefinition], warnings: &m
     }
 }
 
+/// Whether cleave's regex engine can parse `pattern` under either config the
+/// runtime tries — byte-mode (`compile_bytes`) first, then Unicode. Lookaround
+/// (`(?=…)`, `(?!…)`, `(?<=…)`, `(?<!…)`) and backreferences (`\1`, `\k<name>`)
+/// parse under neither, because the `regex`/`regex-automata` family omits them
+/// to guarantee linear-time matching. A byte-oriented pattern that only the
+/// byte-mode parser accepts (`\xFF`) still passes, so this never mistakes one
+/// for an incompatible feature.
+fn regex_engine_accepts(pattern: &str) -> bool {
+    let byte_mode = regex_syntax::ParserBuilder::new()
+        .unicode(false)
+        .utf8(false)
+        .build()
+        .parse(pattern)
+        .is_ok();
+    byte_mode || regex_syntax::parse(pattern).is_ok()
+}
+
+/// Reject regex patterns cleave's engine cannot compile — chiefly lookaround
+/// and backreferences (see [`regex_engine_accepts`]).
+///
+/// This is a *silent* failure otherwise: the condition never compiles, so the
+/// trait never fires, and no other check notices — the `regex-memory` validator
+/// only inspects counted-repetition patterns (those with `{`), which lookaround
+/// patterns rarely are. A detection-integrity error (`Severity::Hard`), not a
+/// style nit: the rule is dead as written.
+pub(crate) fn find_incompatible_regex_features(
+    traits: &[TraitDefinition],
+    errors: &mut Vec<String>,
+) {
+    for trait_def in traits {
+        let Some(pattern) = substr_regex_fields(&trait_def.r#if).and_then(|(_, r, _)| r) else {
+            continue;
+        };
+        if regex_engine_accepts(pattern) {
+            continue;
+        }
+        let source_file = trait_def
+            .defined_in
+            .to_str()
+            .unwrap_or("unknown")
+            .to_string();
+        let location = match find_line_number(&source_file, &trait_def.id) {
+            Some(line) => format!("{source_file}:{line}"),
+            None => source_file,
+        };
+        errors.push(format!(
+            "Uncompilable regex: trait '{}' in {} has a pattern the engine cannot compile \
+             ('{}'), so the condition silently never matches. Usual causes: lookaround \
+             ((?=…), (?!…), (?<=…), (?<!…)) and backreferences (unsupported by the linear-time \
+             engine — rewrite with \\b / an anchored alternation, or split into composite legs \
+             joined by near_lines/near_bytes), or an over-escaped pattern (`\\\\b` in a \
+             single-quoted YAML string is a literal backslash, not a word boundary — use `\\b`).",
+            trait_def.id, location, pattern
+        ));
+    }
+}
+
 /// Detect regex patterns that are likely to be expensive with Rust's regex engine.
 ///
 /// Rust regex does not suffer catastrophic backtracking, so this policy focuses

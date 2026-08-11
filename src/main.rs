@@ -5,36 +5,43 @@
 
 #![allow(unreachable_pub)]
 
-#[cfg(all(
-    unix,
-    feature = "jemalloc",
-    not(any(target_os = "freebsd", target_os = "dragonfly", target_os = "netbsd"))
-))]
-#[global_allocator]
-static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
-
-/// Compile-time jemalloc tuning, read once at allocator initialization.
+/// jemalloc, plus the compile-time tuning it reads at initialization.
 ///
-/// See [`cleave::JEMALLOC_CONF`] for why each option is set — in particular why
-/// `retain:false` is load-bearing: without it a long-running scan's kernel
-/// mapping count climbs until `mmap` returns `ENOMEM` and the process aborts,
-/// with RSS nowhere near any limit. `iter-files` and a long `scan` run hit this
-/// the same way a worker does, so the CLI needs it too.
+/// Allocator and configuration share one `cfg` so they cannot drift apart: a
+/// build that swaps in the system allocator must not leave a `_rjem_malloc_conf`
+/// symbol behind, and one that uses jemalloc must never be left unconfigured.
+/// The excluded targets match atomscan's, and are the platforms where this
+/// crate does not link tikv-jemallocator; on FreeBSD the *system* malloc is
+/// jemalloc, but it reads the unprefixed `MALLOC_CONF` / `/etc/malloc.conf`, so
+/// this symbol would not reach it anyway.
+///
+/// See [`cleave::JEMALLOC_CONF`] for what each option buys. In short: on 64-bit
+/// Linux jemalloc defaults `retain` to true, which fragments the address space
+/// until `mmap` returns `ENOMEM` and the process aborts with RSS nowhere near
+/// any limit. `iter-files` and a long `scan` hit that the same way a worker
+/// does, so the CLI needs the tuning too.
 ///
 /// Runtime configuration still wins: jemalloc applies its compiled-in string
 /// first, then `/etc/malloc.conf`, then the environment, with later sources
 /// overriding earlier ones per key. The environment variable is
 /// `_RJEM_MALLOC_CONF` — `tikv-jemallocator` builds jemalloc with the `_rjem_`
 /// prefix, so plain `MALLOC_CONF` is silently ignored.
-///
-/// Guarded by the same cfg as the allocator itself, so on builds using the
-/// system allocator this symbol is never read.
 #[cfg(all(
     unix,
     feature = "jemalloc",
-    not(any(target_os = "freebsd", target_os = "dragonfly", target_os = "netbsd"))
+    not(any(
+        target_os = "freebsd",
+        target_os = "dragonfly",
+        target_os = "netbsd",
+        target_os = "openbsd",
+        target_os = "illumos",
+        target_os = "solaris",
+    ))
 ))]
-mod jemalloc_conf {
+mod jemalloc {
+    #[global_allocator]
+    static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
     /// A `Sync` wrapper so a raw `*const c_char` can live in a static;
     /// jemalloc reads the pointer, it is never written after link time.
     #[repr(transparent)]

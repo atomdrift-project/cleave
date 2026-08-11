@@ -50,6 +50,157 @@ fn is_dll_from_ctx(ctx: &Ctx<'_>) -> bool {
         .is_some_and(|c| c & 0x2000 != 0)
 }
 
+/// The data directory a standard PE section name is *reserved for*. Only
+/// names with a rigid, single-purpose convention are listed: `.text`,
+/// `.rdata` and `.data` are deliberately absent because real toolchains
+/// legitimately park imports, TLS, debug and load-config data in all three,
+/// and a packer's invented name (`UPX1`, `.vmp0`) is absent because an
+/// unfamiliar name claims nothing.
+///
+/// This is what makes `pe.directory_section_mismatch_count` a lie detector
+/// rather than a novelty detector: it fires only when a section's name is
+/// reserved for one directory while it actually holds a *different* one.
+fn section_name_reserved_for(name: &str) -> Option<&'static str> {
+    match name {
+        ".rsrc" => Some("resource"),
+        ".reloc" => Some("base_relocation"),
+        ".edata" => Some("export"),
+        ".idata" => Some("import"),
+        ".pdata" => Some("exception"),
+        ".tls" => Some("tls"),
+        ".didat" => Some("delay_import"),
+        _ => None,
+    }
+}
+
+/// Classify one section's bytes as natural-language prose rather than code
+/// or structured data.
+///
+/// Trailing zero padding to `FileAlignment` is trimmed first — it is an
+/// artifact of the layout, not content — and sections too short to judge
+/// return false. The three ratios separate the two populations by a wide
+/// margin on real binaries: prose runs ~0.99 printable, ~0.15 spaces,
+/// ~0.80 letters, while compiled code and structured tables sit below 0.67,
+/// 0.02 and 0.46 respectively. Thresholds are set in the empty middle.
+fn section_is_prose(bytes: &[u8]) -> bool {
+    let trimmed = {
+        let end = bytes.iter().rposition(|&b| b != 0).map_or(0, |i| i + 1);
+        &bytes[..end]
+    };
+    // Below this a run of ASCII is as likely to be a string table fragment
+    // as a document, and the ratios get noisy.
+    if trimmed.len() < 256 {
+        return false;
+    }
+    let len = trimmed.len() as f64;
+    let mut printable = 0u64;
+    let mut spaces = 0u64;
+    let mut letters = 0u64;
+    for &b in trimmed {
+        if (0x20..0x7f).contains(&b) || b == b'\t' || b == b'\n' || b == b'\r' {
+            printable += 1;
+        }
+        if b == b' ' {
+            spaces += 1;
+        }
+        if b.is_ascii_alphabetic() {
+            letters += 1;
+        }
+    }
+    printable as f64 / len >= 0.95 && spaces as f64 / len >= 0.08 && letters as f64 / len >= 0.60
+}
+
+/// Derived PE layout metrics: the shape of the *container*, independent of
+/// what the code inside it does.
+///
+/// These exist because a PE can be restructured — padded, renamed,
+/// stuffed — without a single instruction changing, and every behavioural
+/// signal cleave has will keep describing the original, benign program.
+/// The 2026-08-08 VirusSign sample
+/// (702e2b42f58ac93fa622db6161bdd116a5ce6fd7c59e7e733dc64d19ac2c2832) is
+/// the worked example: a genuine Sysinternals RootkitRevealer 1.70 build,
+/// stock MSVC CRT entry, no packer, whose container had been given a
+/// 10 MB `SizeOfHeaders` (97% of the file is a zero hole the loader maps),
+/// its section names shuffled off their contents, ten sections stuffed with
+/// Oracle and Microsoft licence-agreement prose (two of them flagged
+/// executable), its Authenticode stripped and its checksum zeroed. cleave
+/// scored it 29/benign; ClamAV and VirusTotal (23/68) called it malware.
+///
+/// Emitted onto the flat metric map alongside filefacts's own `pe.*` keys,
+/// same as the recursive-scan counters below.
+fn layout_metrics(ctx: &Ctx<'_>, pe_data: &[u8], report: &mut AnalysisReport) {
+    use crate::types::core::MetricsExt;
+
+    let values = ctx.parsed.values();
+    let file_size = pe_data.len() as u64;
+
+    // SizeOfHeaders against the file. The PE spec only requires it to cover
+    // the headers and be a FileAlignment multiple; nothing bounds it above,
+    // so inflating it and inserting the matching filler moves every section
+    // deep into the file while leaving a loadable image. Even a PE with the
+    // conventional 96-section maximum needs under 8 KB of headers, so any
+    // large value here is a deliberate choice, and the ratio says whether
+    // the file is mostly program or mostly filler.
+    let headers_size = values
+        .get("pe.headers_size")
+        .and_then(serde_json::Value::as_u64);
+
+    // Data directories parked in a section reserved for a different one.
+    let mismatches = values
+        .get("pe.declared_data_directories")
+        .and_then(serde_json::Value::as_array)
+        .map_or(0u64, |dirs| {
+            dirs.iter()
+                .filter(|d| {
+                    let Some(name) = d.get("name").and_then(serde_json::Value::as_str) else {
+                        return false;
+                    };
+                    let Some(section) = d.get("section").and_then(serde_json::Value::as_str) else {
+                        return false;
+                    };
+                    section_name_reserved_for(section).is_some_and(|owner| owner != name)
+                })
+                .count() as u64
+        });
+
+    // Sections whose bytes are prose. Counted twice: once overall, and once
+    // for the sections the loader will map executable — text in a page
+    // marked CODE|EXECUTE is not a resource that happens to be misfiled, it
+    // is a section whose declared purpose its contents cannot serve.
+    let mut prose = 0u64;
+    let mut prose_exec = 0u64;
+    for section in ctx.parsed.sections() {
+        let start = usize::try_from(section.file_offset).unwrap_or(usize::MAX);
+        let len = usize::try_from(section.file_size).unwrap_or(0);
+        let Some(end) = start.checked_add(len).filter(|e| *e <= pe_data.len()) else {
+            continue;
+        };
+        if !section_is_prose(&pe_data[start..end]) {
+            continue;
+        }
+        prose += 1;
+        if section.flags.iter().any(|f| f == "executable") {
+            prose_exec += 1;
+        }
+    }
+
+    let flat = report
+        .filefacts_metrics
+        .get_or_insert_with(Default::default);
+    if let Some(headers_size) = headers_size {
+        flat.set_u("pe.headers_size_bytes", headers_size);
+        if file_size > 0 {
+            flat.set_f(
+                "pe.headers_size_ratio",
+                headers_size as f64 / file_size as f64,
+            );
+        }
+    }
+    flat.set_u("pe.directory_section_mismatch_count", mismatches);
+    flat.set_u("pe.prose_section_count", prose);
+    flat.set_u("pe.executable_prose_section_count", prose_exec);
+}
+
 /// Read the certificate-table range `(offset, end)` from filefacts's
 /// emitted `pe.data_directories[]`. Returns `None` when the
 /// directory is absent, empty, or extends past the file end.
@@ -1033,6 +1184,10 @@ impl PEAnalyzer {
         }
 
         // NSIS / Inno Setup detection
+        let pe_filename = std::path::Path::new(&report.target.path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("binary.exe");
         let detected_sfx_kind = crate::analyzers::sfx_detector::detect_sfx(pe_data);
         if let Some(sfx_kind) = detected_sfx_kind {
             let sfx_result = crate::analyzers::sfx_detector::analyze_sfx(
@@ -1049,6 +1204,22 @@ impl PEAnalyzer {
                 embedded_archive_count = embedded_archive_count.saturating_add(1);
                 report.findings.extend(archive_report.findings);
                 report.files.extend(archive_report.files);
+                // Preserve the complete extracted-member inventory, including
+                // data files that are not promoted to separate analyses unless
+                // --all-files is enabled. Prefixing here records the installer
+                // as the immediate provenance parent.
+                for mut entry in archive_report.archive_contents {
+                    if !entry
+                        .path
+                        .contains(crate::types::file_analysis::ARCHIVE_DELIMITER)
+                    {
+                        entry.path = crate::types::file_analysis::encode_archive_path(
+                            pe_filename,
+                            &entry.path,
+                        );
+                    }
+                    report.archive_contents.push(entry);
+                }
                 // Merge per-format kv subtrees from the inner archive report
                 // (e.g. `pyinstaller.*`) into the host PE's values_tree so they
                 // surface in the host's `k` field at finalize time.
@@ -1212,6 +1383,14 @@ impl PEAnalyzer {
                 }
                 report.findings.push(finding);
             }
+        }
+
+        // Container-shape metrics, on the same flat map for the same reason:
+        // filefacts reports the header fields verbatim, deriving what they mean
+        // against each other is cleave's job. Gated on a successful parse —
+        // the values these read are absent on the fallback path.
+        if filefacts_ok {
+            layout_metrics(ctx, pe_data, &mut report);
         }
 
         // Emit recursive-scan counters. Embedded-binary detection is
@@ -1535,6 +1714,56 @@ mod tests {
 
     fn test_pe_path() -> PathBuf {
         PathBuf::from("tests/fixtures/test.exe")
+    }
+
+    /// A section name reserved for one directory identifies that directory;
+    /// the general-purpose names and any invented name claim nothing, which
+    /// is what keeps `pe.directory_section_mismatch_count` from firing on
+    /// ordinary packers.
+    #[test]
+    fn reserved_section_names_only_cover_single_purpose_sections() {
+        assert_eq!(section_name_reserved_for(".rsrc"), Some("resource"));
+        assert_eq!(section_name_reserved_for(".reloc"), Some("base_relocation"));
+        assert_eq!(section_name_reserved_for(".tls"), Some("tls"));
+        for shared in [".text", ".rdata", ".data", "UPX1", ".vmp0", ""] {
+            assert_eq!(
+                section_name_reserved_for(shared),
+                None,
+                "{shared} must claim no directory"
+            );
+        }
+    }
+
+    /// Prose vs. code, at the ratios measured on the sample that motivated
+    /// the metric: its stuffed sections ran ~0.99 printable / ~0.15 space /
+    /// ~0.80 letters, its real code section 0.32 / 0.005 / 0.19.
+    #[test]
+    fn prose_sections_separate_from_code_and_padding() {
+        let prose = b"You may make a single copy of the software for backup purposes, and use \
+            that backup copy as described in this agreement. If you are seeking a refund, and \
+            you cannot obtain one where you acquired the software, contact the manufacturer. "
+            .repeat(4);
+        assert!(section_is_prose(&prose));
+
+        // Alignment padding must not drag the ratios down: same content, then
+        // zeroes out to a 4 KiB page.
+        let mut padded = prose.clone();
+        padded.resize(4096, 0);
+        assert!(section_is_prose(&padded));
+
+        // x86 opcode soup: printable-ish bytes but almost no spaces.
+        let code: Vec<u8> = (0..2048u32)
+            .map(|i| (i.wrapping_mul(37) % 251) as u8)
+            .collect();
+        assert!(!section_is_prose(&code));
+
+        // An all-zero section trims to nothing rather than scoring as text.
+        assert!(!section_is_prose(&[0u8; 4096]));
+
+        // Too short to judge: a lone string, not a document.
+        assert!(!section_is_prose(
+            b"the quick brown fox jumps over the lazy dog"
+        ));
     }
 
     #[test]

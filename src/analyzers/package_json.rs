@@ -747,8 +747,13 @@ impl PackageJsonAnalyzer {
             // Interpreter execution (perl/python/ruby/node) moved to YAML:
             // objectives/supply-chain/install-hook/capability/interpreter/.
 
-            // Check for download-and-execute pattern
-            if (script.contains("curl") || script.contains("wget"))
+            // Check for download-and-execute pattern, in the lifecycle hooks npm
+            // runs on the victim's machine. Outside them the same shape is the
+            // codegen idiom — `@a2a-js/sdk`'s manual `generate` script fetches a
+            // JSON schema and feeds it to a checked-in generator, which read as a
+            // hostile dropper and made a stock Kibana image a false positive.
+            if is_publish_or_install_lifecycle_script(name)
+                && (script.contains("curl") || script.contains("wget"))
                 && script.contains("&&")
                 && (script.contains("perl ")
                     || script.contains("python")

@@ -14,6 +14,7 @@ use crate::capabilities::CapabilityMapper;
 use crate::types::{AnalysisReport, Criticality, Evidence, Finding, FindingKind};
 use crate::yara_engine::YaraEngine;
 use memchr::memmem;
+use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -292,12 +293,27 @@ fn try_extract(
         };
     };
 
+    // Archive members are commonly analyzed from an in-memory byte buffer. In
+    // that case `file_path` is the member's logical name (for example
+    // `setup.exe`), not a file the external extractor can open. Materialize the
+    // bytes only when Cleave does not have a matching on-disk backing file, and
+    // keep the temporary file alive until extraction completes.
+    let Ok(materialized_input) = materialize_extraction_input(file_path, data) else {
+        return SfxExtraction {
+            archive_report: None,
+            inno_diagnostics: vec![],
+        };
+    };
+    let extraction_path = materialized_input
+        .as_ref()
+        .map_or(file_path, tempfile::NamedTempFile::path);
+
     let mut inno_diagnostics = vec![];
     let extracted = match kind {
-        SfxKind::Nsis => run_7z(file_path, tmp.path()),
+        SfxKind::Nsis => run_7z(extraction_path, tmp.path()),
         SfxKind::InnoSetup => {
             if tool_available("innoextract") {
-                let result = run_innoextract(file_path, tmp.path());
+                let result = run_innoextract(extraction_path, tmp.path());
                 inno_diagnostics = result.diagnostics;
                 result.extracted
             } else {
@@ -332,6 +348,25 @@ fn try_extract(
     }
 }
 
+/// Return a temporary, extractor-readable copy when `file_path` is only a
+/// logical archive-member path. A real backing file with the expected length is
+/// used directly to avoid copying large standalone installers.
+fn materialize_extraction_input(
+    file_path: &Path,
+    data: &[u8],
+) -> std::io::Result<Option<tempfile::NamedTempFile>> {
+    if std::fs::metadata(file_path)
+        .is_ok_and(|metadata| metadata.is_file() && metadata.len() == data.len() as u64)
+    {
+        return Ok(None);
+    }
+
+    let mut materialized = tempfile::Builder::new().suffix(".exe").tempfile()?;
+    materialized.write_all(data)?;
+    materialized.flush()?;
+    Ok(Some(materialized))
+}
+
 fn analyze_pyinstaller_in_memory(
     data: &[u8],
     file_path: &Path,
@@ -343,6 +378,7 @@ fn analyze_pyinstaller_in_memory(
     if let Some(config) = archive_config {
         analyzer = config.apply(analyzer);
     }
+    analyzer = analyzer.with_all_files_members();
     if let Some(mapper) = capability_mapper {
         analyzer = analyzer.with_capability_mapper_arc(mapper);
     }
@@ -501,6 +537,7 @@ fn analyze_dir(
     if let Some(config) = archive_config {
         analyzer = config.apply(analyzer);
     }
+    analyzer = analyzer.with_all_files_members();
     if let Some(mapper) = capability_mapper {
         analyzer = analyzer.with_capability_mapper_arc(mapper);
     }
@@ -566,6 +603,37 @@ mod tests {
     #[test]
     fn test_detect_none_on_empty() {
         assert_eq!(detect_sfx(&[]), None);
+    }
+
+    #[test]
+    fn materializes_in_memory_archive_member_for_external_extractor() -> std::io::Result<()> {
+        let data = b"installer bytes that only exist in memory";
+        let logical_path = Path::new("nested/path/that/does/not/exist/setup.exe");
+
+        let Some(materialized) = materialize_extraction_input(logical_path, data)? else {
+            return Err(std::io::Error::other(
+                "a nonexistent logical path requires a temporary file",
+            ));
+        };
+
+        assert_eq!(std::fs::read(materialized.path())?, data);
+        assert_eq!(
+            materialized.path().extension().and_then(|ext| ext.to_str()),
+            Some("exe")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn uses_matching_real_backing_file_without_materializing() -> std::io::Result<()> {
+        let mut backing = tempfile::NamedTempFile::new()?;
+        backing.write_all(b"real installer bytes")?;
+        backing.flush()?;
+
+        let materialized = materialize_extraction_input(backing.path(), b"real installer bytes")?;
+
+        assert!(materialized.is_none());
+        Ok(())
     }
 
     #[test]

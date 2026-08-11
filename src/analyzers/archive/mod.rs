@@ -1030,6 +1030,34 @@ impl ArchiveAnalyzer {
         self
     }
 
+    /// Promote every recovered member to a separate analysis record.
+    ///
+    /// Installer payloads use this because their data/config/resource members
+    /// are part of the delivered artifact and must remain individually visible,
+    /// even when the outer CLI scan did not request `--all-files` globally.
+    #[must_use]
+    pub(crate) fn with_all_files_members(mut self) -> Self {
+        let mut options = self
+            .analysis_options
+            .as_deref()
+            .cloned()
+            .unwrap_or_default();
+        options.all_files = true;
+        self.analysis_options = Some(Arc::new(options));
+        self
+    }
+
+    /// Capture the settings a member analyzer must pass to an archive nested
+    /// inside that member (for example an Inno installer inside a ZIP).
+    pub(crate) fn child_archive_config(&self) -> ArchiveAnalyzerConfig {
+        ArchiveAnalyzerConfig {
+            sample_extraction: self.sample_extraction.clone(),
+            max_memory_file_size: Some(self.max_memory_file_size),
+            analysis_options: self.analysis_options.clone(),
+            cancellation: self.cancelled.clone(),
+        }
+    }
+
     /// Create a copy of this analyzer with the sample_extraction config updated
     /// to use the given archive SHA256 for extraction directory grouping.
     #[allow(dead_code)] // Used by binary target

@@ -126,8 +126,9 @@ pub(crate) use composite::{
 // Pattern quality checks
 pub(crate) use patterns::{
     find_ast_function_call_should_use_symbol, find_brittle_path_patterns,
-    find_memory_hungry_regex_patterns, find_non_capturing_groups, find_raw_should_use_text,
-    find_short_pattern_warnings, find_slow_regex_patterns, find_string_literal_should_use_text,
+    find_incompatible_regex_features, find_memory_hungry_regex_patterns, find_non_capturing_groups,
+    find_raw_should_use_text, find_short_pattern_warnings, find_slow_regex_patterns,
+    find_string_literal_should_use_text,
 };
 
 // Taxonomy validation

@@ -80,6 +80,9 @@ const HARD_VALIDATOR_IDS: &[&str] = &[
     "count-min-regex-alternation",
     // An id with invalid characters can't be referenced, breaking composites.
     "invalid-id-chars",
+    // The pattern uses lookaround/backreferences the linear-time engine can't
+    // compile, so the condition silently never matches — the rule is dead.
+    "incompatible-regex",
 ];
 
 /// The severity of a validator, looked up by id. Unknown/legacy ids default to
@@ -407,6 +410,15 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         display_id: "re-group",
         description: "Regex has grouping that does not change meaning.",
         fix: "Remove the unnecessary group.",
+    },
+    ValidatorSpec {
+        id: "incompatible-regex",
+        category: ValidatorCategory::Quality,
+        display_id: "re-incompatible",
+        description: "Regex does not compile with the engine (lookaround/backreference, \
+                      or an over-escaped pattern), so the rule silently never fires.",
+        fix: "Rewrite with \\b or an anchored alternation; unescape `\\\\b`→`\\b`; or split \
+              into composite legs.",
     },
     ValidatorSpec {
         id: "brittle-path-pattern",

@@ -27,9 +27,9 @@ use crate::capabilities::validation::{
     find_hex_binary_missing_section, find_hostile_cap_rules,
     find_hostile_composites_without_notable_leg, find_hostile_meta_rules,
     find_impossible_count_constraints, find_impossible_length_bounds, find_impossible_needs,
-    find_impossible_size_constraints, find_invalid_not_usage, find_invalid_trait_ids,
-    find_kv_exists_with_matcher, find_length_bounds_without_regex, find_line_number,
-    find_malware_subcategory_violations, find_many_directory_refs,
+    find_impossible_size_constraints, find_incompatible_regex_features, find_invalid_not_usage,
+    find_invalid_trait_ids, find_kv_exists_with_matcher, find_length_bounds_without_regex,
+    find_line_number, find_malware_subcategory_violations, find_many_directory_refs,
     find_memory_hungry_regex_patterns, find_meta_missing_section_filter,
     find_metadata_content_dirs, find_metadata_cross_tier_refs, find_missing_search_patterns,
     find_needs_without_any, find_needs_zero, find_non_capturing_groups,
@@ -1334,6 +1334,17 @@ impl super::CapabilityMapper {
                 });
             }
             tracing::trace!("Step 1h2 completed in {:?}", step_start.elapsed());
+
+            // Reject regexes the linear-time engine can't compile (lookaround,
+            // backreferences) — a silently-dead condition, so this is Hard.
+            let step_start = std::time::Instant::now();
+            tracing::trace!("Step 1h2a/15: Detecting engine-incompatible regex features");
+            if !crate::validation_controls::is_validator_disabled("incompatible-regex") {
+                warnings.collect_as("incompatible-regex", |warnings| {
+                    find_incompatible_regex_features(&trait_definitions, warnings);
+                });
+            }
+            tracing::trace!("Step 1h2a completed in {:?}", step_start.elapsed());
 
             // Detect brittle `type: path` / `type: basename` search patterns
             let step_start = std::time::Instant::now();

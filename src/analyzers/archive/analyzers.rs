@@ -33,7 +33,8 @@ use crate::analyzers::{
     AnalysisInput, FileType, FileTypeExt, detect_file_type, detect_file_type_from_path,
 };
 use crate::types::{
-    AnalysisReport, ArchiveEntry, FileAnalysis, Finding, TargetInfo, YaraMatch, encode_archive_path,
+    ARCHIVE_DELIMITER, AnalysisReport, ArchiveEntry, FileAnalysis, Finding, TargetInfo, YaraMatch,
+    encode_archive_path,
 };
 use anyhow::Result;
 use rayon::prelude::*;
@@ -346,11 +347,13 @@ impl MemberAccumulator {
         // offsets meaningless in the archive's byte space. Only traits roll up
         // to the parent — carrying their member `from`.
         self.collected_files.push(file_entry);
-        self.collected_archive_entries.extend(archive_contents);
+        self.collected_archive_entries
+            .extend(archive_contents.into_iter().map(|mut entry| {
+                entry.path = rebase_nested_archive_entry_path(&result.entry_path, &entry.path);
+                entry
+            }));
         for mut nested_file in nested_files {
-            if !nested_file.path.contains("!!") {
-                nested_file.path = encode_archive_path(&result.entry_path, &nested_file.path);
-            }
+            nested_file.path = rebase_nested_file_path(&result.entry_path, &nested_file.path);
             nested_file.depth += 1;
             self.collected_files.push(nested_file);
         }
@@ -461,6 +464,63 @@ impl MemberAccumulator {
         report.metadata.analysis_duration_ms = start.elapsed().as_millis() as u64;
         report.metadata.tools_used = tools_used;
     }
+}
+
+/// Rebase a child's file-analysis path beneath the member path known by its
+/// parent.
+///
+/// Nested analyzers only know their local root (`setup.exe!!payload.dll`), while
+/// the enclosing archive knows the complete path (`bundle.zip!!setup.exe`).
+/// Replacing that local root retains every deeper segment without losing the
+/// outer provenance chain.
+fn rebase_nested_file_path(parent: &str, child: &str) -> String {
+    // ArchiveEntry paths use the legacy single-`!` separator, whereas the flat
+    // FileAnalysis tree uses `!!`. Reports folded from nested analyzers can
+    // therefore arrive in either spelling; canonicalize both before rebasing.
+    let parent = parent
+        .split('!')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>()
+        .join(ARCHIVE_DELIMITER);
+    let child = child
+        .split('!')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>()
+        .join(ARCHIVE_DELIMITER);
+    let complete_prefix = format!("{parent}{ARCHIVE_DELIMITER}");
+    if child.starts_with(&complete_prefix) {
+        return child;
+    }
+
+    let local_child = child
+        .split_once(ARCHIVE_DELIMITER)
+        .map_or(child.as_str(), |(_, nested)| nested);
+    encode_archive_path(&parent, local_child)
+}
+
+/// Rebase archive inventory metadata, whose nested-path separator is a single
+/// `!`. Embedded PE analyzers expose `!!` paths, so normalize those at the
+/// archive boundary as well.
+fn rebase_nested_archive_entry_path(parent: &str, child: &str) -> String {
+    let parent = parent
+        .split('!')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>()
+        .join("!");
+    let child = child
+        .split('!')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>()
+        .join("!");
+    let complete_prefix = format!("{parent}!");
+    if child.starts_with(&complete_prefix) {
+        return child;
+    }
+
+    let local_child = child
+        .split_once('!')
+        .map_or(child.as_str(), |(_, nested)| nested);
+    format!("{parent}!{local_child}")
 }
 
 /// Per-archive tallies returned by [`MemberAccumulator::merge_into`] — each
@@ -1086,9 +1146,30 @@ impl ArchiveAnalyzer {
                         .map(Some)
                 }
             }
-        } else if let Some(analyzer) =
-            crate::analyzers::analyzer_for_file_type_arc(file_type, self.capability_mapper.clone())
-        {
+        } else if let Some(analyzer) = {
+            // The generic factory intentionally creates PE analyzers with
+            // standalone defaults. Archive-member PEs need the enclosing
+            // request's archive settings so an installer nested inside a ZIP
+            // inherits --all-files, extraction output, memory limits, YARA,
+            // and cancellation for its own payloads.
+            if *file_type == FileType::Pe {
+                let mut pe = crate::analyzers::pe::PEAnalyzer::new()
+                    .with_capability_mapper_arc(self.capability_mapper.clone().unwrap_or_else(
+                        || std::sync::Arc::new(crate::capabilities::CapabilityMapper::empty()),
+                    ))
+                    .with_cancellation(self.cancelled.clone())
+                    .with_archive_config(self.child_archive_config());
+                if let Some(yara) = self.yara_engine.clone() {
+                    pe = pe.with_yara_arc(yara);
+                }
+                Some(Box::new(pe) as Box<dyn crate::analyzers::Analyzer>)
+            } else {
+                crate::analyzers::analyzer_for_file_type_arc(
+                    file_type,
+                    self.capability_mapper.clone(),
+                )
+            }
+        } {
             let extract_payloads = Self::should_extract_archive_payloads(file_type);
             let skip_rizin_reason =
                 Self::archive_member_rizin_skip_reason(relative_path, file_type);
@@ -3209,7 +3290,10 @@ impl ArchiveAnalyzer {
 
 #[cfg(test)]
 mod tests {
-    use super::{ArchiveAnalyzer, archive_entry_json, archive_entry_metadata};
+    use super::{
+        ArchiveAnalyzer, archive_entry_json, archive_entry_metadata,
+        rebase_nested_archive_entry_path, rebase_nested_file_path,
+    };
     use crate::analyzers::FileType;
     use std::sync::Arc;
 
@@ -3282,6 +3366,44 @@ mod tests {
         assert_eq!(
             all_files_analyzer.archive_member_analysis_skip_reason(&FileType::Html),
             None
+        );
+    }
+
+    #[test]
+    fn nested_file_paths_retain_the_complete_provenance_chain() {
+        assert_eq!(
+            rebase_nested_file_path("bundle.zip!!setup.exe", "setup.exe!!app/bin/payload.dll"),
+            "bundle.zip!!setup.exe!!app/bin/payload.dll"
+        );
+        assert_eq!(
+            rebase_nested_file_path(
+                "bundle.zip!!setup.exe",
+                "bundle.zip!!setup.exe!!app/bin/payload.dll"
+            ),
+            "bundle.zip!!setup.exe!!app/bin/payload.dll"
+        );
+        assert_eq!(
+            rebase_nested_file_path("bundle.zip!!setup.exe", "payload.dll"),
+            "bundle.zip!!setup.exe!!payload.dll"
+        );
+        assert_eq!(
+            rebase_nested_file_path("bundle.zip!setup.exe", "setup.exe!!payload.dll"),
+            "bundle.zip!!setup.exe!!payload.dll"
+        );
+    }
+
+    #[test]
+    fn nested_archive_entry_paths_keep_the_inventory_separator() {
+        assert_eq!(
+            rebase_nested_archive_entry_path("inner.tar.gz", "inner.tar.gz!script.sh"),
+            "inner.tar.gz!script.sh"
+        );
+        assert_eq!(
+            rebase_nested_archive_entry_path(
+                "bundle.zip!setup.exe",
+                "setup.exe!!app/bin/payload.dll"
+            ),
+            "bundle.zip!setup.exe!app/bin/payload.dll"
         );
     }
 

@@ -1667,16 +1667,21 @@ impl AnalysisReport {
             // Files were pre-populated by archive/payload analyzers
             // Renumber IDs and insert root file at position 0
             let root_path = self.target.path.clone();
+            let archive_root_prefix =
+                format!("{}{}", root_path, super::file_analysis::ARCHIVE_DELIMITER);
             for (idx, file) in self.files.iter_mut().enumerate() {
                 file.id = (idx + 1) as u32; // Shift IDs to make room for root
                 if file.depth == 1 && file.parent_id.is_none() {
                     file.parent_id = Some(0); // Point to root
                 }
                 // Ensure paths have proper archive prefix (!! for archives, ## for decoded)
-                if !file.path.contains("!!")
-                    && !file.path.contains("##")
-                    && !file.path.starts_with(&root_path)
-                {
+                let needs_root_prefix =
+                    if file.path.contains(super::file_analysis::ARCHIVE_DELIMITER) {
+                        !file.path.starts_with(&archive_root_prefix)
+                    } else {
+                        !file.path.contains("##") && !file.path.starts_with(&root_path)
+                    };
+                if needs_root_prefix {
                     file.path = super::file_analysis::encode_archive_path(&root_path, &file.path);
                 }
             }
@@ -2405,6 +2410,33 @@ mod tests {
             report.files[0].findings.len(),
             1,
             "nested matched traits remain"
+        );
+    }
+
+    #[test]
+    fn finalize_rebases_a_local_nested_archive_chain_under_the_root() {
+        let mut report = AnalysisReport::new(TargetInfo {
+            path: "/samples/bundle.zip".to_string(),
+            file_type: "zip".to_string(),
+            size_bytes: 100,
+            sha256: "bundle-sha".to_string(),
+            architectures: None,
+        });
+        let mut child = FileAnalysis::new(
+            0,
+            "setup.exe!!app/bin/payload.dll".to_string(),
+            "pe".to_string(),
+            "payload-sha".to_string(),
+            42,
+        );
+        child.depth = 2;
+        report.files.push(child);
+
+        report.finalize();
+
+        assert_eq!(
+            report.files[1].path,
+            "/samples/bundle.zip!!setup.exe!!app/bin/payload.dll"
         );
     }
 

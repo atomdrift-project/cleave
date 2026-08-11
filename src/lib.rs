@@ -83,19 +83,56 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Recommended jemalloc configuration for any binary that runs cleave's
 /// analysis over a sustained workload.
 ///
-/// `retain:false` is the load-bearing setting. jemalloc defaults it to `true`
-/// on 64-bit Linux: a freed extent keeps its address space and is decommitted
-/// with `mprotect(PROT_NONE)` rather than unmapped. Every decommit splits a
-/// VMA, and archive-member analysis frees variable-sized buffers continuously,
-/// so the kernel mapping count climbs without bound while RSS stays flat. On
-/// 2026-08-10 an atomscan worker reached `vm.max_map_count` (1048576) in ~12
-/// minutes; `mmap` then returns `ENOMEM`, Rust's allocator gets a null back and
-/// `handle_alloc_error` aborts the process with `memory allocation of N bytes
-/// failed` — a message that reads like OOM but is not (RSS was 19-36 GB against
-/// a 108 GiB cgroup limit, with no OOM kill). Unmapping instead lets adjacent
-/// free ranges coalesce, so the count stays bounded. `muzzy_decay_ms:0` makes
-/// this worse under the default, because purging eagerly is what punches the
-/// holes.
+/// Without it, a long-running analysis exhausts `vm.max_map_count` and dies:
+/// `mmap` starts returning `ENOMEM`, Rust's allocator gets a null back and
+/// `handle_alloc_error` aborts with `memory allocation of N bytes failed` — a
+/// message that reads like OOM but is not (on 2026-08-10 an atomscan worker hit
+/// this with RSS at 19-36 GB against a 108 GiB cgroup limit and no OOM kill).
+///
+/// Two settings together bound the mapping count, and neither suffices alone:
+///
+/// - `retain:false`. jemalloc defaults it to `true` on 64-bit Linux, where a
+///   freed extent keeps its address space and is decommitted with
+///   `mprotect(PROT_NONE)` rather than unmapped. Every decommit splits a VMA.
+/// - A long `muzzy_decay_ms`. With retain off, jemalloc unmaps freed extents
+///   and re-mmaps small ones, so live extents scatter into separate VMAs
+///   instead. Purging rarely lets them be reused in place.
+///
+/// Measured on a live worker, 10 minutes per config after a full restart
+/// (2026-08-10), archive-heavy workload:
+///
+/// | config                            | mappings  | growth/min | RSS   |
+/// |-----------------------------------|-----------|------------|-------|
+/// | `retain:false,muzzy_decay_ms:-1`  |     7,501 |       +360 | 37 GB |
+/// | `retain:false`                    |   366,585 |    +32,109 | 17 GB |
+/// | `retain:true,dirty=10s,muzzy=10s` |   531,228 |    +47,664 | 37 GB |
+/// | unconfigured (control)            | 1,034,683 |    +74,935 | 29 GB |
+///
+/// The control reached the 1048576 ceiling inside ten minutes, reproducing the
+/// abort. Only the first row plateaus; the others merely grow more slowly.
+///
+/// `-1` (never purge) wins on mappings but not overall: muzzy pages are never
+/// returned, so RSS climbs toward the true peak working set — ~10 GB over 20
+/// minutes and 68-74 GB over 13 hours, against a 72 GB worker budget. A second
+/// 20-minute round under verified load compared decay values (2026-08-11):
+///
+/// | `muzzy_decay_ms` | mappings         | RSS                      |
+/// |------------------|------------------|--------------------------|
+/// | `600000` (10 min)| ~83,000, flat    | ~4.5 GB, stable/declining|
+/// | `-1` (never)     | ~8,000, flat     | ~10 GB, climbing         |
+/// | `60000` (1 min)  | ~350,000, noisy  | ~15-21 GB                |
+///
+/// `600000` is the chosen point: more mappings than `-1`, in exchange for RSS
+/// that holds steady instead of growing into the memory budget. Purging often
+/// (`60000`) is the worst of both — it reintroduces the unmap/remap churn.
+///
+/// Treat the absolute counts as load-dependent, not as constants. The same
+/// `600000` config that plateaued near 83,000 in the table above settled around
+/// 500,000 (oscillating 484k-612k, RSS 23-27 GB) when the worker was draining a
+/// 3.7 M-item backlog after an outage. What holds across load is the shape: the
+/// count oscillates around a plateau instead of climbing. Size the ceiling for
+/// the busy case — under that backlog the stock 1048576 limit would have left
+/// under 2x margin.
 ///
 /// Four arenas suit a bounded analysis pool and avoid multiplying dirty extents
 /// across jemalloc's CPU-scaled default; one-second dirty decay returns
@@ -116,11 +153,11 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// `main` — above every run, and impossible to suppress from Rust.
 #[cfg(target_vendor = "apple")]
 pub const JEMALLOC_CONF: &std::ffi::CStr =
-    c"narenas:4,dirty_decay_ms:1000,muzzy_decay_ms:0,retain:false";
+    c"narenas:4,dirty_decay_ms:1000,muzzy_decay_ms:600000,retain:false";
 /// See the Apple-gated definition above.
 #[cfg(not(target_vendor = "apple"))]
 pub const JEMALLOC_CONF: &std::ffi::CStr =
-    c"narenas:4,dirty_decay_ms:1000,muzzy_decay_ms:0,retain:false,background_thread:true";
+    c"narenas:4,dirty_decay_ms:1000,muzzy_decay_ms:600000,retain:false,background_thread:true";
 
 // Re-export commonly used types at crate root
 use analyzers::FileTypeExt;

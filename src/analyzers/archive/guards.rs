@@ -22,8 +22,10 @@ pub(crate) const MAX_FILE_SIZE: u64 = 20 * 1024 * 1024 * 1024;
 /// a multi-GB install ISO expands to roughly its own size.
 pub(crate) const MAX_TOTAL_SIZE: u64 = 20 * 1024 * 1024 * 1024;
 
-/// Maximum number of files to extract
-pub(crate) const MAX_FILE_COUNT: usize = 100_000;
+/// Maximum number of files to extract. Large application container images can
+/// legitimately exceed 100,000 entries (Kibana 9.4 contains about 137,000), so
+/// retain the anti-abuse guard with enough headroom for normal distributions.
+pub(crate) const MAX_FILE_COUNT: usize = 350_000;
 
 /// Maximum ZIP central directory entries. The zip crate allocates per-entry
 /// during `ZipArchive::new()`, so a crafted ZIP claiming billions of entries

@@ -33,9 +33,10 @@ use crate::types::AnalysisReport;
 use crate::types::FileAnalysis;
 use rusqlite::Connection;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Condvar, Mutex, OnceLock, Weak};
 use std::time::SystemTime;
 
 /// Maximum number of toplevel report cache entries before eviction triggers.
@@ -84,6 +85,171 @@ static FILE_ANALYSIS_STORE_COUNT: AtomicU64 = AtomicU64::new(0);
 
 /// Database path, resolved once at first use. `None` means caching is disabled.
 static DB_PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
+
+/// A report analysis can be expensive enough that two sides of a diff reach
+/// the persistent cache miss at the same time. Keep those callers in one
+/// in-process "single flight": one runs the pipeline, the others wait for
+/// its report instead of analyzing identical bytes a second time.
+///
+/// Weak values are intentional. Completed flights remain discoverable while a
+/// waiter is still holding the result, but the map does not retain reports or
+/// flight state after the last caller releases it.
+#[derive(Clone, Hash, PartialEq, Eq)]
+struct FlightKey {
+    kind: String,
+    sha256: String,
+    options_hash: String,
+    traits_revision: i64,
+}
+
+struct FlightResult {
+    done: bool,
+    report: Option<Arc<AnalysisReport>>,
+}
+
+struct FlightState {
+    result: Mutex<FlightResult>,
+    wake: Condvar,
+}
+
+static IN_FLIGHT: OnceLock<Mutex<HashMap<FlightKey, Weak<FlightState>>>> = OnceLock::new();
+
+/// The role a caller holds while analyzing one content hash.
+pub(crate) struct ReportFlight {
+    key: FlightKey,
+    state: Arc<FlightState>,
+    owner: bool,
+    completed: bool,
+}
+
+impl ReportFlight {
+    pub(crate) fn is_owner(&self) -> bool {
+        self.owner
+    }
+
+    /// Wait for the owner and clone its report. Returns `None` when this
+    /// caller is the owner or when the owner failed, in which case the caller
+    /// should retry acquisition and perform the analysis itself.
+    pub(crate) fn wait(&self) -> Option<AnalysisReport> {
+        if self.owner {
+            return None;
+        }
+        let mut result = self
+            .state
+            .result
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        while !result.done {
+            result = self
+                .state
+                .wake
+                .wait(result)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+        result.report.as_deref().cloned()
+    }
+
+    /// Publish the completed report to waiters and release the flight. The
+    /// report is copied once into an Arc; waiters then clone the cheap Arc
+    /// payload into their path-restamped result.
+    pub(crate) fn complete(mut self, report: Option<&AnalysisReport>) {
+        if !self.owner || self.completed {
+            return;
+        }
+        {
+            let mut result = self
+                .state
+                .result
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            result.report = report.map(|r| Arc::new(r.clone()));
+            result.done = true;
+            drop(result);
+            self.state.wake.notify_all();
+        }
+        remove_flight(&self.key, &self.state);
+        self.completed = true;
+    }
+}
+
+impl Drop for ReportFlight {
+    fn drop(&mut self) {
+        if !self.owner || self.completed {
+            return;
+        }
+        let mut result = self
+            .state
+            .result
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        result.done = true;
+        self.state.wake.notify_all();
+        drop(result);
+        remove_flight(&self.key, &self.state);
+    }
+}
+
+fn remove_flight(key: &FlightKey, state: &Arc<FlightState>) {
+    let flights = IN_FLIGHT.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut flights = flights
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if flights
+        .get(key)
+        .and_then(Weak::upgrade)
+        .is_some_and(|current| Arc::ptr_eq(&current, state))
+    {
+        flights.remove(key);
+    }
+}
+
+/// Acquire the in-process single-flight slot for a content hash.
+pub(crate) fn acquire_report_flight(sha256: &str, options: &AnalysisOptions) -> ReportFlight {
+    acquire_flight("report", sha256, options)
+}
+
+/// Acquire a single-flight slot for an archive member. The key intentionally
+/// follows the persistent file-analysis cache: identical bytes share one
+/// analysis regardless of the member name or detected type.
+pub(crate) fn acquire_member_flight(sha256: &str, options: &AnalysisOptions) -> ReportFlight {
+    acquire_flight("member", sha256, options)
+}
+
+fn acquire_flight(kind: &str, sha256: &str, options: &AnalysisOptions) -> ReportFlight {
+    let key = FlightKey {
+        kind: kind.to_string(),
+        sha256: sha256.to_string(),
+        options_hash: options_hash(options),
+        traits_revision: traits_revision_key().unwrap_or_default(),
+    };
+    let flights = IN_FLIGHT.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut flights = flights
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(state) = flights.get(&key).and_then(Weak::upgrade) {
+        return ReportFlight {
+            key,
+            state,
+            owner: false,
+            completed: false,
+        };
+    }
+    let state = Arc::new(FlightState {
+        result: Mutex::new(FlightResult {
+            done: false,
+            report: None,
+        }),
+        wake: Condvar::new(),
+    });
+    flights.insert(key.clone(), Arc::downgrade(&state));
+    drop(flights);
+    ReportFlight {
+        key,
+        state,
+        owner: true,
+        completed: false,
+    }
+}
 
 // Per-thread SQLite connection. Initialized lazily on first use.
 thread_local! {
@@ -673,6 +839,77 @@ mod tests {
             sha256.to_string(),
             512,
         )
+    }
+
+    #[test]
+    fn report_flight_shares_one_completed_report() {
+        let sha = "single-flight-regression-unique";
+        let options = AnalysisOptions::default();
+        let owner = acquire_report_flight(sha, &options);
+        assert!(owner.is_owner());
+
+        let follower = acquire_report_flight(sha, &options);
+        assert!(!follower.is_owner());
+
+        let report = test_report(sha);
+        owner.complete(Some(&report));
+
+        let shared = follower.wait().expect("follower should receive report");
+        assert_eq!(shared.target.sha256, sha);
+        assert_eq!(shared.target.file_type, "elf");
+    }
+
+    #[test]
+    fn report_flights_deduplicate_members_without_merging_hashes() {
+        let options = AnalysisOptions::default();
+        let first = acquire_member_flight("member-sha-a", &options);
+        let second = acquire_member_flight("member-sha-b", &options);
+        let archive_peer = acquire_member_flight("member-sha-a", &options);
+
+        assert!(first.is_owner(), "first member hash owns its analysis");
+        assert!(
+            second.is_owner(),
+            "a different member hash analyzes independently"
+        );
+        assert!(
+            !archive_peer.is_owner(),
+            "same member hash joins the flight"
+        );
+
+        let report_a = test_report("member-sha-a");
+        let report_b = test_report("member-sha-b");
+        first.complete(Some(&report_a));
+        second.complete(Some(&report_b));
+
+        assert_eq!(archive_peer.wait().unwrap().target.sha256, "member-sha-a");
+    }
+
+    #[test]
+    fn report_flight_shares_member_analysis_between_concurrent_archives() {
+        use std::sync::{Arc, Barrier, mpsc};
+        use std::thread;
+
+        let options = AnalysisOptions::default();
+        let owner = acquire_member_flight("shared-member-sha", &options);
+        assert!(owner.is_owner());
+
+        let barrier = Arc::new(Barrier::new(2));
+        let (tx, rx) = mpsc::channel();
+        thread::scope(|scope| {
+            let barrier_for_archive = Arc::clone(&barrier);
+            let options_for_archive = options.clone();
+            scope.spawn(move || {
+                let archive_peer = acquire_member_flight("shared-member-sha", &options_for_archive);
+                assert!(!archive_peer.is_owner());
+                barrier_for_archive.wait();
+                tx.send(archive_peer.wait().map(|report| report.target.sha256))
+                    .unwrap();
+            });
+
+            barrier.wait();
+            owner.complete(Some(&test_report("shared-member-sha")));
+            assert_eq!(rx.recv().unwrap().as_deref(), Some("shared-member-sha"));
+        });
     }
 
     #[test]

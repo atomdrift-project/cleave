@@ -1030,6 +1030,84 @@ impl ArchiveAnalyzer {
         file_type: &FileType,
         sha256: &str,
     ) -> Result<Option<AnalysisReport>> {
+        // Archive members do not pass through `analyze_file`, so the
+        // toplevel SHA cache cannot deduplicate them. Reuse the cross-context
+        // FileAnalysis cache where safe, and single-flight the first analysis
+        // when duplicate members arrive concurrently (within one archive or
+        // from two archives in a diff).
+        let default_options;
+        let options = if let Some(options) = self.analysis_options.as_deref() {
+            options
+        } else {
+            default_options = crate::AnalysisOptions::default();
+            &default_options
+        };
+        let is_archive = file_type.is_archive();
+        if !is_archive
+            && let Some(fa) = crate::analysis_cache::file_analysis_cache_lookup(sha256, options)
+        {
+            let mut report = crate::report_from_file_analysis(fa, relative_path.to_string());
+            crate::restamp_path_derived_values(&mut report, Path::new(relative_path));
+            tracing::debug!(sha256, relative_path, "Archive member cache hit");
+            return Ok(Some(report));
+        }
+
+        let flight = crate::analysis_cache::acquire_member_flight(sha256, options);
+        if !flight.is_owner() {
+            if let Some(mut report) = flight.wait() {
+                report.target.path = relative_path.to_string();
+                crate::restamp_path_derived_values(&mut report, Path::new(relative_path));
+                tracing::debug!(sha256, relative_path, "Archive member single-flight hit");
+                return Ok(Some(report));
+            }
+            // The owner failed before publishing a report. Retry once through
+            // the normal path so a waiter is not turned into a false success.
+            return self.analyze_extracted_member(
+                file_path,
+                relative_path,
+                data,
+                file_type,
+                sha256,
+            );
+        }
+
+        let result = self.analyze_extracted_member_uncached(
+            file_path,
+            relative_path,
+            data,
+            file_type,
+            sha256,
+        );
+        match &result {
+            Ok(Some(report)) => {
+                // Archive reports contain nested members whose paths depend on
+                // the containing archive, so retain only ordinary members in
+                // the persistent cross-context cache. The in-process flight
+                // still shares full archive reports between simultaneous users.
+                if !is_archive {
+                    let mut fa = report.to_file_analysis(0);
+                    fa.path.clear();
+                    fa.id = 0;
+                    fa.parent_id = None;
+                    fa.depth = 0;
+                    fa.extracted_path = None;
+                    crate::analysis_cache::file_analysis_cache_store(sha256, options, &fa);
+                }
+                flight.complete(Some(report));
+            }
+            Ok(None) | Err(_) => flight.complete(None),
+        }
+        result
+    }
+
+    fn analyze_extracted_member_uncached(
+        &self,
+        file_path: &Path,
+        relative_path: &str,
+        data: &[u8],
+        file_type: &FileType,
+        sha256: &str,
+    ) -> Result<Option<AnalysisReport>> {
         if self.is_cancelled() {
             anyhow::bail!("Analysis cancelled");
         }

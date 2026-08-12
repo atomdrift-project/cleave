@@ -1658,7 +1658,7 @@ fn analyze_file_with_resources_and_sha256<P: AsRef<Path>>(
 /// in the cached values tree describe the cache donor, not the file being
 /// analyzed. Observed symptom: `cleave diff` of two identical files reported a
 /// phantom `file.basename` change against an unrelated donor's name.
-fn restamp_path_derived_values(report: &mut AnalysisReport, path: &Path) {
+pub(crate) fn restamp_path_derived_values(report: &mut AnalysisReport, path: &Path) {
     let Some(file_values) = report
         .values_tree
         .as_deref_mut()
@@ -1682,7 +1682,10 @@ fn restamp_path_derived_values(report: &mut AnalysisReport, path: &Path) {
 }
 
 /// Synthesize an `AnalysisReport` from a cached `FileAnalysis` (cross-context file cache hit).
-fn report_from_file_analysis(fa: types::FileAnalysis, path: String) -> types::AnalysisReport {
+pub(crate) fn report_from_file_analysis(
+    fa: types::FileAnalysis,
+    path: String,
+) -> types::AnalysisReport {
     use types::TargetInfo;
     let target = TargetInfo {
         path,
@@ -2132,6 +2135,45 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             file_size,
             analysis_start.elapsed(),
         );
+        return Ok(report);
+    }
+
+    // Two sides of a directory/archive diff commonly reach this point with
+    // the same SHA256 at the same time. The persistent cache cannot prevent
+    // that first-wave race, so single-flight identical analyses in-process.
+    let flight = loop {
+        let flight = analysis_cache::acquire_report_flight(&sha256_hex, options);
+        if flight.is_owner() {
+            break flight;
+        }
+        if let Some(mut report) = flight.wait() {
+            report.target.path = path.display().to_string();
+            report.analysis_timestamp = Some(chrono::Utc::now());
+            restamp_path_derived_values(&mut report, path);
+            tracing::debug!(sha256 = %sha256_hex, "Analysis single-flight hit");
+            memory_tracker::log_after_file_processing(
+                path.to_str().unwrap_or("unknown"),
+                file_size,
+                analysis_start.elapsed(),
+            );
+            return Ok(report);
+        }
+        // The owner failed. Its Drop released the slot; retry so this caller
+        // can provide the normal error (or successful fallback) itself.
+    };
+
+    // Recheck persistent caches after becoming owner. A non-overlapping
+    // caller may have completed between the first lookup and acquisition.
+    if let Some(mut cached_report) = analysis_cache::report_cache_lookup(&sha256_hex, options) {
+        cached_report.target.path = path.display().to_string();
+        cached_report.analysis_timestamp = Some(chrono::Utc::now());
+        restamp_path_derived_values(&mut cached_report, path);
+        flight.complete(None);
+        return Ok(cached_report);
+    }
+    if let Some(fa) = analysis_cache::file_analysis_cache_lookup(&sha256_hex, options) {
+        let report = report_from_file_analysis(fa, path.display().to_string());
+        flight.complete(None);
         return Ok(report);
     }
 
@@ -2788,6 +2830,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
 
     // Store result in analysis cache for future lookups
     analysis_cache::report_cache_store(&sha256_hex, options, &report);
+    flight.complete(Some(&report));
 
     Ok(report)
 }

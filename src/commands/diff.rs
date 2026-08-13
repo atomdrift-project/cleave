@@ -32,6 +32,7 @@ pub fn run(
         &options,
         mask,
         limit_changes,
+        cleave::diff::UnchangedMembers::Skip,
     )?;
 
     match format {

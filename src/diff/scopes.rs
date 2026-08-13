@@ -370,6 +370,16 @@ pub(crate) fn kv_flat_from_map(
 fn is_redundant_kv_path(path: &str) -> bool {
     path.starts_with("source.imports[")
         || path.starts_with("source.exports[")
+        // An archive's own member listing is positional — indexed by pack order
+        // — and each entry carries per-member mtime, offsets, and entropy: none
+        // of it stable across a repack, and every member is already a first-class
+        // unit in the diff carrying its own content facts. `member_count`
+        // likewise reports how many members a run enumerated, which drifts with
+        // resource pressure, not a content property. Diffing any of it turns a
+        // byte-identical nested archive into phantom churn; a real add/remove
+        // still shows up as its own added/removed member unit.
+        || path.starts_with("archive.members[")
+        || path == "archive.member_count"
         || path == "file.basename"
         || path == "file.stem"
 }

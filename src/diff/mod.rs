@@ -140,6 +140,25 @@ impl Default for ScopeMask {
     }
 }
 
+/// Whether an archive diff analyzes members that are byte-identical on both
+/// sides.
+///
+/// [`Skip`](Self::Skip) is the fast default: an unchanged member cannot change
+/// the diff, so it is hashed but not analyzed. On a large package with a small
+/// delta — a release where two of several hundred members moved — this is the
+/// difference between analyzing every member and analyzing only the few that
+/// changed. [`Analyze`](Self::Analyze) restores full analysis of unchanged
+/// members; it is slower, but lets an unchanged-but-hostile member (a persistent
+/// loader beside a refreshed payload carrier) still surface its behavioral
+/// formula as differential context.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnchangedMembers {
+    /// Skip analysis of members identical on both sides (fast; the default).
+    Skip,
+    /// Analyze every member, including unchanged ones (slower; thorough).
+    Analyze,
+}
+
 /// All inputs to a per-pair diff for a single logical file. Bundles the
 /// fields each scope needs so scope functions take a single argument.
 ///
@@ -191,6 +210,8 @@ impl DiffUnit {
 /// `scope_mask` selects which of the six scopes to compute; excluded scopes
 /// are absent from the report. `limit_changes` caps the per-scope item lists
 /// for output legibility — the underlying counts and ROCs are unaffected.
+/// `unchanged` selects whether members identical on both sides of an archive
+/// diff are analyzed (see [`UnchangedMembers`]).
 ///
 /// # Errors
 ///
@@ -202,6 +223,7 @@ pub fn diff_paths(
     options: &AnalysisOptions,
     scope_mask: ScopeMask,
     limit_changes: usize,
+    unchanged: UnchangedMembers,
 ) -> Result<AnalysisReport> {
     if !old.exists() {
         return Err(anyhow!("old path does not exist: {}", old.display()));
@@ -227,6 +249,25 @@ pub fn diff_paths(
         && crate::analyzers::detect_file_type(old).is_ok_and(|kind| kind.is_archive())
         && crate::analyzers::detect_file_type(new).is_ok_and(|kind| kind.is_archive());
     let (old_units, new_units) = if archive_pair {
+        // Members byte-identical on both sides cannot affect the diff, yet
+        // analyzing them dominates runtime when a large package carries a tiny
+        // delta. In `Skip` mode, a cheap pass hashes every member on each side
+        // without analyzing it (`member_shas`); the real pass below then skips
+        // members whose sha appears on both sides. Skipped members still surface
+        // as empty units, pair up, and resolve to `Unchanged` — the report is
+        // identical to `Analyze`'s minus the unchanged-hostile visibility case.
+        let skip_opts;
+        let options = match unchanged {
+            UnchangedMembers::Analyze => options,
+            UnchangedMembers::Skip => {
+                let old_shas = member_shas(old, options)?;
+                let new_shas = member_shas(new, options)?;
+                let unchanged: std::collections::HashSet<String> =
+                    old_shas.intersection(&new_shas).cloned().collect();
+                skip_opts = with_member_skip(options, unchanged);
+                &skip_opts
+            }
+        };
         (
             collect_units(old, options, canonical_root)?,
             collect_units(new, options, canonical_root)?,
@@ -324,6 +365,49 @@ fn collect_units(
             root.display()
         ))
     }
+}
+
+/// The sha256 of every member of an archive, computed without analyzing them.
+///
+/// Uses the same extraction path the real analysis uses — so the member set and
+/// hashes match exactly — but installs a `skip_predicate` that spares only the
+/// archive root (whose members must still be enumerated) and short-circuits
+/// every member to a hash-only minimal report. The archive's own report is not
+/// cached (a skip_predicate makes it non-canonical; see `analyze_file`), so this
+/// enumeration cannot poison the real pass that follows.
+fn member_shas(
+    archive: &Path,
+    options: &AnalysisOptions,
+) -> Result<std::collections::HashSet<String>> {
+    let root = archive.to_path_buf();
+    let mut opts = options.clone();
+    // Spare only the root: `analyze_file` consults the predicate with the
+    // archive's own path, while members are consulted with their in-archive
+    // relative path. Skipping the root would stop extraction before a single
+    // member was enumerated; skipping every member is exactly the hash-only
+    // pass we want. Discriminating by path avoids hashing the whole archive
+    // just to recognize its root.
+    opts.skip_predicate = Some(crate::SkipPredicate(std::sync::Arc::new(
+        move |_sha: &str, path: &Path| path != root,
+    )));
+    let report = crate::analyze_file(archive, &opts)?;
+    Ok(report.files.iter().map(|f| f.sha256.clone()).collect())
+}
+
+/// Clone `options` with a `skip_predicate` that skips any member whose sha is in
+/// `unchanged`, composed with (OR-ed onto) any predicate the caller already set.
+fn with_member_skip(
+    options: &AnalysisOptions,
+    unchanged: std::collections::HashSet<String>,
+) -> AnalysisOptions {
+    let existing = options.skip_predicate.clone();
+    let mut opts = options.clone();
+    opts.skip_predicate = Some(crate::SkipPredicate(std::sync::Arc::new(
+        move |sha: &str, path: &Path| {
+            unchanged.contains(sha) || existing.as_ref().is_some_and(|p| (p.0)(sha, path))
+        },
+    )));
+    opts
 }
 
 /// Recognized analyzable files under `root`, paired with their relative path.

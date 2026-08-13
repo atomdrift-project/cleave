@@ -1042,6 +1042,27 @@ impl ArchiveAnalyzer {
             default_options = crate::AnalysisOptions::default();
             &default_options
         };
+        // Caller skip hook, mirroring the top-level check in
+        // `analyze_file_with_resources_at_depth`: consulted with the member's
+        // sha256 and in-archive path after hashing, before any analysis or
+        // caching. A `true` yields a minimal target-only report so the member
+        // still appears (carrying its sha) for diff pairing, but its expensive
+        // pipeline never runs. `diff_paths` uses this to skip members that are
+        // byte-identical on both sides of an archive diff. Returning here before
+        // the member caches keeps the pruned report out of them.
+        if let Some(predicate) = &options.skip_predicate
+            && (predicate.0)(sha256, Path::new(relative_path))
+        {
+            tracing::debug!(sha256, relative_path, "Archive member skipped by predicate");
+            return Ok(Some(AnalysisReport::new(TargetInfo {
+                path: relative_path.to_string(),
+                file_type: file_type.report_file_type(),
+                size_bytes: data.len() as u64,
+                sha256: sha256.to_string(),
+                architectures: None,
+            })));
+        }
+
         let is_archive = file_type.is_archive();
         if !is_archive
             && let Some(fa) = crate::analysis_cache::file_analysis_cache_lookup(sha256, options)

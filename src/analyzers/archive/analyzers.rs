@@ -1458,16 +1458,51 @@ impl ArchiveAnalyzer {
             .as_ref()
             .is_some_and(|opts| opts.all_files)
         {
-            // all_files=true: still track the file even without a dedicated analyzer.
-            // This ensures extraction and path recording work for data/text types.
+            // `all_files` promises analysis, not merely a path ledger. Treat an
+            // unclassified blob as generic data so data-oriented facts and
+            // traits can inspect decompressed payloads that have no extension.
+            // This is especially important for single-stream archives: their
+            // decoded child often has a bare stem even when it contains the
+            // interesting structure.
+            let effective_type = if *file_type == FileType::Unknown {
+                FileType::Data
+            } else {
+                *file_type
+            };
             let target = TargetInfo {
                 path: relative_path.to_string(),
-                file_type: file_type.report_file_type(),
+                file_type: effective_type.report_file_type(),
                 size_bytes: data.len() as u64,
                 sha256: sha256.to_string(),
                 architectures: None,
             };
-            Ok(Some(AnalysisReport::new(target)))
+            let mut report = AnalysisReport::new(target);
+            let logical_path = Path::new(relative_path);
+            let ctx = crate::analysis_context::AnalysisContext::open(logical_path, data).ok();
+            if let Some(ctx) = ctx.as_ref() {
+                report.strings = crate::strings::StringExtractor::default()
+                    .convert_stng_strings(&ctx.text_rows());
+                let view = crate::types::FilefactsView::from_ctx(ctx);
+                if !view.is_empty() {
+                    report.filefacts = Some(view);
+                }
+                report.identity = ctx.identity();
+                crate::capabilities::merge_filefacts_context(&mut report, ctx);
+            }
+            if let Some(mapper) = self.capability_mapper.as_ref() {
+                mapper.evaluate_and_merge_findings_with_precomputed(
+                    &mut report,
+                    data,
+                    crate::capabilities::AnalysisBorrow::with_filefacts(None, ctx.as_ref()),
+                    None,
+                    None,
+                    None,
+                    self.cancelled.as_deref(),
+                );
+            }
+            report.dedupe_findings();
+            crate::context::capture(&mut report, data, effective_type);
+            Ok(Some(report))
         } else {
             Err(anyhow::anyhow!("Unsupported file type: {:?}", file_type))
         };

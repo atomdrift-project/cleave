@@ -4349,8 +4349,11 @@ traits:
     fn test_extract_dir_standalone_lzma() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let extract_dir = tempfile::tempdir().expect("create extract dir");
-        let lzma_path = temp_dir.path().join("payload.sh.lzma");
-        let original_content = b"#!/bin/sh\nprintf '%s\\n' decoded\n";
+        // A bare stem deliberately leaves the decoded child unclassified by
+        // extension. `all_files` must still analyze it as generic data rather
+        // than recording only an empty path entry.
+        let lzma_path = temp_dir.path().join("carrier.lzma");
+        let original_content: Vec<u8> = (0..4096).map(|i| (i % 256) as u8).collect();
 
         let options = xz2::stream::LzmaOptions::new_preset(6).expect("LZMA options");
         let stream = xz2::stream::Stream::new_lzma_encoder(&options).expect("LZMA-alone encoder");
@@ -4358,7 +4361,7 @@ traits:
             File::create(&lzma_path).expect("create .lzma"),
             stream,
         );
-        encoder.write_all(original_content).expect("write LZMA");
+        encoder.write_all(&original_content).expect("write LZMA");
         encoder.finish().expect("finish LZMA");
 
         let config = SampleExtractionConfig::new(extract_dir.path().to_path_buf());
@@ -4369,6 +4372,17 @@ traits:
                 ..crate::AnalysisOptions::default()
             }));
         let report = analyzer.analyze(&lzma_path).expect("analyze .lzma");
+
+        let child = report
+            .files
+            .iter()
+            .find(|file| file.path.ends_with("carrier"))
+            .expect("decoded bare-stem child should be analyzed");
+        assert_eq!(child.file_type, "data");
+        assert!(
+            child.filefacts_metrics.is_some(),
+            "generic data child should retain file facts and metrics"
+        );
 
         let extracted = report
             .files

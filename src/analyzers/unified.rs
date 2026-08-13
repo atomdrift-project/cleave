@@ -500,7 +500,7 @@ impl UnifiedSourceAnalyzer {
                     _ => "",
                 };
 
-                report.strings.push(crate::types::StringInfo {
+                let decoded = crate::types::StringInfo {
                     value: es.value.clone().into(),
                     offset: Some(es.data_offset),
                     string_type,
@@ -512,7 +512,18 @@ impl UnifiedSourceAnalyzer {
                         Vec::new()
                     },
                     fragments: None,
-                });
+                };
+                // Source literals are decoded separately below because stng's
+                // byte scan can see a whole minified line rather than each
+                // quoted value. Avoid double-counting when both paths recover
+                // the same encoded literal at the same source offset.
+                if !report.strings.iter().any(|existing| {
+                    existing.value == decoded.value
+                        && existing.offset == decoded.offset
+                        && existing.encoding_chain == decoded.encoding_chain
+                }) {
+                    report.strings.push(decoded);
+                }
             }
         }
 
@@ -971,15 +982,51 @@ impl UnifiedSourceAnalyzer {
                         // shifting every downstream span one byte left (the span
                         // would cover `"gzi` instead of `gzip`).
                         let lead = s.as_ptr() as u64 - text.as_ptr() as u64;
-                        report.strings.push(StringInfo {
+                        let offset = node.start_byte() as u64 + lead;
+                        let literal = StringInfo {
                             value: s.to_string().into(),
-                            offset: Some(node.start_byte() as u64 + lead),
+                            offset: Some(offset),
                             string_type: None,
                             encoding: "utf-8".to_string(),
                             section: Some("ast".to_string()),
                             encoding_chain: Vec::new(),
                             fragments: None,
-                        });
+                        };
+                        if !report.strings.iter().any(|existing| {
+                            existing.value == literal.value
+                                && existing.offset == literal.offset
+                                && existing.section == literal.section
+                        }) {
+                            report.strings.push(literal);
+                        }
+
+                        // stng intentionally uses a conservative threshold
+                        // when decoding arbitrary byte runs. In minified source,
+                        // however, its raw scan often sees the whole line rather
+                        // than the individual quoted values. Decode compact,
+                        // syntactically confirmed hex string literals here so
+                        // obfuscated API names such as `createDecipher` and
+                        // `_compile` remain available to `type: encoded` rules.
+                        // Requiring six printable decoded bytes rejects hashes,
+                        // keys, color values, and arbitrary binary material.
+                        if let Some(decoded) = decode_printable_hex_literal(s) {
+                            let decoded = StringInfo {
+                                value: decoded.into(),
+                                offset: Some(offset),
+                                string_type: None,
+                                encoding: "utf-8".to_string(),
+                                section: Some("decoded".to_string()),
+                                encoding_chain: vec!["hex".to_string()],
+                                fragments: None,
+                            };
+                            if !report.strings.iter().any(|existing| {
+                                existing.value == decoded.value
+                                    && existing.offset == decoded.offset
+                                    && existing.encoding_chain == decoded.encoding_chain
+                            }) {
+                                report.strings.push(decoded);
+                            }
+                        }
                     }
                 }
             } else if is_numeric_node_kind(kind) {
@@ -1048,6 +1095,33 @@ impl UnifiedSourceAnalyzer {
             }
         }
     }
+}
+
+/// Decode a parser-confirmed hexadecimal string literal when it yields a
+/// meaningful printable ASCII token. This is deliberately narrower than a
+/// generic hex decoder: source literals are already isolated from comments and
+/// surrounding syntax, and six decoded bytes is enough for concealed API names
+/// while excluding short colors and numeric constants.
+fn decode_printable_hex_literal(value: &str) -> Option<String> {
+    const MIN_DECODED_LEN: usize = 6;
+
+    if value.len() < MIN_DECODED_LEN * 2 || !value.len().is_multiple_of(2) {
+        return None;
+    }
+    if !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+
+    let mut decoded = Vec::with_capacity(value.len() / 2);
+    for pair in value.as_bytes().chunks_exact(2) {
+        let pair = std::str::from_utf8(pair).ok()?;
+        decoded.push(u8::from_str_radix(pair, 16).ok()?);
+    }
+    if !decoded.iter().all(|byte| matches!(byte, 0x20..=0x7e)) {
+        return None;
+    }
+
+    String::from_utf8(decoded).ok()
 }
 
 /// Heuristic: tree-sitter node names that correspond to integer
@@ -1122,7 +1196,26 @@ fn parse_numeric_literal(text: &str) -> Option<(i64, u32)> {
 
 #[cfg(test)]
 mod numeric_literal_tests {
-    use super::{is_numeric_node_kind, parse_numeric_literal};
+    use super::{decode_printable_hex_literal, is_numeric_node_kind, parse_numeric_literal};
+
+    #[test]
+    fn decodes_compact_printable_hex_source_literals() {
+        assert_eq!(
+            decode_printable_hex_literal("6372656174654465636970686572").as_deref(),
+            Some("createDecipher")
+        );
+        assert_eq!(
+            decode_printable_hex_literal("5f636f6d70696c65").as_deref(),
+            Some("_compile")
+        );
+    }
+
+    #[test]
+    fn rejects_short_or_binary_hex_source_literals() {
+        assert_eq!(decode_printable_hex_literal("686578"), None);
+        assert_eq!(decode_printable_hex_literal("deadbeefdeadbeef"), None);
+        assert_eq!(decode_printable_hex_literal("not-hexadecimal"), None);
+    }
 
     #[test]
     fn parse_decimal_octal_hex_binary() {

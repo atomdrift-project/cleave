@@ -37,7 +37,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock, Weak};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 /// Maximum number of toplevel report cache entries before eviction triggers.
 const MAX_REPORT_ENTRIES: i64 = 100_000;
@@ -134,6 +134,51 @@ impl ReportFlight {
         if self.owner {
             return None;
         }
+
+        // A follower may be running inside the same Rayon pool as its owner:
+        // diff_paths analyzes both archives concurrently, each archive fans
+        // members out, and each member can launch more Rayon work for traits.
+        // Parking that worker on the Condvar can exhaust the pool while the
+        // owner is waiting for nested jobs that are queued in that same pool.
+        //
+        // Outside Rayon, use the efficient blocking wait. Inside Rayon,
+        // cooperatively execute one pending job at a time. When the pool is
+        // momentarily idle, use a short timed wait to avoid spinning while the
+        // owner is doing non-Rayon work; the timeout guarantees the worker
+        // returns to helping before pool starvation can become permanent.
+        if rayon::current_thread_index().is_some() {
+            loop {
+                {
+                    let result = self
+                        .state
+                        .result
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    if result.done {
+                        return result.report.as_deref().cloned();
+                    }
+                }
+
+                if matches!(rayon::yield_now(), Some(rayon::Yield::Executed)) {
+                    continue;
+                }
+
+                let result = self
+                    .state
+                    .result
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if result.done {
+                    return result.report.as_deref().cloned();
+                }
+                let (_result, _timeout) = self
+                    .state
+                    .wake
+                    .wait_timeout(result, Duration::from_millis(1))
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+            }
+        }
+
         let mut result = self
             .state
             .result
@@ -898,6 +943,56 @@ mod tests {
             owner.complete(Some(&test_report("shared-member-sha")));
             assert_eq!(rx.recv().unwrap().as_deref(), Some("shared-member-sha"));
         });
+    }
+
+    #[test]
+    fn report_flight_wait_keeps_nested_rayon_work_moving() {
+        use std::sync::{Arc, Barrier};
+
+        // Reproduce the diff/archive cycle that hung node-ipc:
+        //
+        // * one pool worker owns analysis of a shared member and enters a
+        //   nested Rayon join;
+        // * the other worker reaches the same SHA and waits as a follower;
+        // * the owner's second nested job cannot run unless the follower
+        //   cooperatively yields to the pool.
+        //
+        // A blocking Condvar wait deadlocks this two-thread pool. The
+        // Rayon-aware wait executes the queued nested job, allowing the owner
+        // to publish its report and both branches to finish.
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(2)
+            .build()
+            .expect("build two-thread regression pool");
+        let ready = Arc::new(Barrier::new(2));
+        let nested = Arc::new(Barrier::new(2));
+        let options = AnalysisOptions::default();
+        let sha = "member-flight-nested-rayon-regression";
+
+        let shared_sha = pool.install(|| {
+            let ((), shared) = rayon::join(
+                || {
+                    let owner = acquire_member_flight(sha, &options);
+                    assert!(owner.is_owner());
+                    ready.wait();
+
+                    let nested_left = Arc::clone(&nested);
+                    let nested_right = Arc::clone(&nested);
+                    rayon::join(|| nested_left.wait(), || nested_right.wait());
+
+                    owner.complete(Some(&test_report(sha)));
+                },
+                || {
+                    ready.wait();
+                    let follower = acquire_member_flight(sha, &options);
+                    assert!(!follower.is_owner());
+                    follower.wait().map(|report| report.target.sha256)
+                },
+            );
+            shared
+        });
+
+        assert_eq!(shared_sha.as_deref(), Some(sha));
     }
 
     #[test]

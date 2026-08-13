@@ -3517,14 +3517,12 @@ mod tests {
     }
 
     #[test]
-    fn focused_two_row_hit_earns_no_third_row() {
-        // A hostile span that already continues onto a second hex row has
+    fn focused_multi_row_hit_earns_no_trailing_row() {
+        // A hostile span that already continues onto multiple hex rows has
         // shown its continuation — no trailing row is added after it. A
-        // one-row hit still keeps its single trail.
-        // 20 matched bytes: two rows at a 16-byte stride (span shows its own
-        // continuation, no trail) or one row + one trail at a wider stride —
-        // exactly two rows either way. Three means a trail was padded onto an
-        // already-multi-row span.
+        // one-row hit still keeps its single trail. The renderer's stride
+        // follows the detected terminal width, so derive the expected number
+        // of match-bearing rows instead of assuming a 16-byte stride.
         let long_hit = finding_with("objectives/spans-two-rows", Criticality::Hostile);
         let mut note = ctx_note("objectives/spans-two-rows", Criticality::Hostile, 0);
         note.len = 20;
@@ -3538,7 +3536,9 @@ mod tests {
         let report = report_with_files(vec![file]);
         let out = format_context(&report, &focused_opts());
         let hex_rows = out.lines().filter(|l| l.contains("42 42 42")).count();
-        assert_eq!(hex_rows, 2, "{out:?}");
+        let loc_width = format!("{:x}", 64).len();
+        let expected_match_rows = 20_usize.div_ceil(hex_stride(terminal_width(), loc_width));
+        assert_eq!(hex_rows, expected_match_rows, "{out:?}");
     }
 
     #[test]

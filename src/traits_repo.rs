@@ -35,9 +35,9 @@ fn traits_dir_override_lock() -> &'static RwLock<Option<PathBuf>> {
 /// against the wrong rules. Invalidation is lazy, so calling this before the
 /// first analysis (the CLI's `--traits-dir`) costs nothing.
 pub fn set_override_dir(dir: Option<PathBuf>) {
-    if let Ok(mut guard) = traits_dir_override_lock().write() {
-        *guard = dir;
-    }
+    *traits_dir_override_lock()
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = dir;
     // Deliberately outside the guard scope: rebuilding a mapper or re-walking
     // the traits tree resolves the traits dir, so holding the override lock
     // across invalidation would invert the lock order against a concurrent build.
@@ -53,8 +53,8 @@ pub fn set_override_dir(dir: Option<PathBuf>) {
 pub fn override_dir() -> Option<PathBuf> {
     traits_dir_override_lock()
         .read()
-        .ok()
-        .and_then(|g| g.clone())
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
 }
 
 /// Returns the explicit traits dir from override-or-env, if either is set.

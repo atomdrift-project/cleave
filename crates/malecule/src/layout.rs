@@ -380,9 +380,9 @@ fn layout_spiral_galaxy(malecule: &mut Malecule) {
         .fold(0.0_f64, f64::max);
 
     if max_dist > 0.0 {
-        let scale = (n as f64).sqrt() * BOND_LENGTH / max_dist;
+        let factor = (n as f64).sqrt() * BOND_LENGTH / max_dist;
         for atom in &mut malecule.atoms {
-            atom.position = scale3(atom.position, scale);
+            atom.position = scale(atom.position, factor);
         }
     }
 }
@@ -398,10 +398,6 @@ fn sub(a: (f64, f64, f64), b: (f64, f64, f64)) -> (f64, f64, f64) {
 }
 
 fn scale(a: (f64, f64, f64), s: f64) -> (f64, f64, f64) {
-    (a.0 * s, a.1 * s, a.2 * s)
-}
-
-fn scale3(a: (f64, f64, f64), s: f64) -> (f64, f64, f64) {
     (a.0 * s, a.1 * s, a.2 * s)
 }
 

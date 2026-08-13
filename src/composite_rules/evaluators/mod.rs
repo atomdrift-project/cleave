@@ -84,10 +84,9 @@ static REGEX_CACHE: OnceLock<
     RwLock<lru::LruCache<(String, bool), Regex, rustc_hash::FxBuildHasher>>,
 > = OnceLock::new();
 
-// SAFETY: REGEX_CACHE_MAX_SIZE is a compile-time constant > 0
-const REGEX_CACHE_SIZE: NonZeroUsize = {
-    #[allow(clippy::expect_used)]
-    NonZeroUsize::new(REGEX_CACHE_MAX_SIZE).expect("REGEX_CACHE_MAX_SIZE is non-zero")
+const REGEX_CACHE_SIZE: NonZeroUsize = match NonZeroUsize::new(REGEX_CACHE_MAX_SIZE) {
+    Some(size) => size,
+    None => NonZeroUsize::MIN,
 };
 
 /// Access the global regex cache, initializing it on first call

@@ -62,13 +62,6 @@ impl GenericAnalyzer {
         }
     }
 
-    /// Report-facing type string. Delegates to the canonical
-    /// [`FileTypeExt::report_file_type`] so there is a single source of truth
-    /// for type stringification (adding a `FileType` only touches that map).
-    fn file_type_str(&self) -> String {
-        crate::analyzers::FileTypeExt::report_file_type(&self.file_type)
-    }
-
     #[allow(dead_code)] // Used by embedded_code_detector
     fn analyze_source(&self, file_path: &Path, content: &str) -> AnalysisReport {
         let ctx =
@@ -108,7 +101,7 @@ impl GenericAnalyzer {
             )
         };
 
-        let file_type = self.file_type_str();
+        let file_type = crate::analyzers::FileTypeExt::report_file_type(&self.file_type);
         let node_types = self.call_node_types();
         let target = TargetInfo {
             path: file_path.display().to_string(),

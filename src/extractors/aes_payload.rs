@@ -16,6 +16,7 @@
 use crate::analyzers::FileType;
 use aho_corasick::AhoCorasick;
 use regex::Regex;
+use std::ops::Deref;
 use std::sync::LazyLock;
 
 /// Represents an extracted AES-encrypted payload
@@ -35,19 +36,38 @@ pub(crate) struct AesExtractedPayload {
     pub algorithm: String,
 }
 
-/// Extracted AES parameters from code
-#[derive(Debug, Clone)]
-struct AesParams {
-    /// Algorithm (e.g., "aes-256-cbc")
-    algorithm: String,
-    /// Raw key bytes
-    key: Vec<u8>,
-    /// Raw IV bytes
-    iv: Vec<u8>,
+#[derive(Debug)]
+struct AesParams<'a> {
+    algorithm: &'a str,
+    key: AesKey<'a>,
+    iv: [u8; 16],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AesKey<'a> {
+    Aes128(&'a [u8; 16]),
+    Aes256(&'a [u8; 32]),
+}
+
+impl Deref for AesKey<'_> {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Aes128(key) => *key,
+            Self::Aes256(key) => *key,
+        }
+    }
+}
+
+impl<const N: usize> PartialEq<[u8; N]> for AesKey<'_> {
+    fn eq(&self, other: &[u8; N]) -> bool {
+        **self == *other
+    }
 }
 
 /// Extracted ciphertext from code
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct CiphertextBlob {
     /// Raw ciphertext bytes (decoded from hex)
     data: Vec<u8>,
@@ -88,17 +108,15 @@ static RE_HEX_STRING: LazyLock<Option<Regex>> = LazyLock::new(|| {
     Regex::new(r#"["']([a-fA-F0-9]{64,})["']"#).ok()
 });
 
-#[allow(clippy::expect_used)]
-static VALID_CODE_INDICATORS: LazyLock<AhoCorasick> = LazyLock::new(|| {
+static VALID_CODE_INDICATORS: LazyLock<Option<AhoCorasick>> = LazyLock::new(|| {
     AhoCorasick::new([
         "function", "const ", "let ", "var ", "import ", "require(", "module.", "exports",
         "class ", "def ", "if ", "for ", "while ",
     ])
-    .expect("valid patterns")
+    .ok()
 });
 
-#[allow(clippy::expect_used)]
-static JS_INDICATORS: LazyLock<AhoCorasick> = LazyLock::new(|| {
+static JS_INDICATORS: LazyLock<Option<AhoCorasick>> = LazyLock::new(|| {
     AhoCorasick::new([
         "function",
         "const ",
@@ -108,15 +126,14 @@ static JS_INDICATORS: LazyLock<AhoCorasick> = LazyLock::new(|| {
         "=>",
         "async ",
     ])
-    .expect("valid patterns")
+    .ok()
 });
 
-#[allow(clippy::expect_used)]
-static PYTHON_INDICATORS: LazyLock<AhoCorasick> =
-    LazyLock::new(|| AhoCorasick::new(["def ", "import ", "class "]).expect("valid patterns"));
+static PYTHON_INDICATORS: LazyLock<Option<AhoCorasick>> =
+    LazyLock::new(|| AhoCorasick::new(["def ", "import ", "class "]).ok());
 
 /// Extract AES parameters from JavaScript/TypeScript content
-fn extract_aes_params(content: &str) -> Vec<AesParams> {
+fn extract_aes_params(content: &str) -> Vec<AesParams<'_>> {
     let mut params = Vec::new();
     let Some(regex) = RE_CREATE_DECIPHERIV.as_ref() else {
         return params;
@@ -128,28 +145,35 @@ fn extract_aes_params(content: &str) -> Vec<AesParams> {
         let key_str = caps.get(2).map(|m| m.as_str()).unwrap_or("");
         let iv_hex = caps.get(3).map(|m| m.as_str()).unwrap_or("");
 
-        // Validate algorithm
-        if !is_supported_algorithm(algorithm) {
+        let Ok(iv) = hex::decode(iv_hex) else {
             continue;
-        }
-
-        // Parse key (plain ASCII for aes-256-cbc, must be 32 bytes)
-        let key = key_str.as_bytes().to_vec();
-        if !is_valid_key_length(algorithm, key.len()) {
+        };
+        let Ok(iv) = <[u8; 16]>::try_from(iv) else {
             continue;
-        }
-
-        // Parse IV (hex encoded, must be 16 bytes for CBC)
-        let iv = match hex::decode(iv_hex) {
-            Ok(iv) if iv.len() == 16 => iv,
-            _ => continue,
         };
 
-        params.push(AesParams {
-            algorithm: algorithm.to_string(),
-            key,
-            iv,
-        });
+        let key = key_str.as_bytes();
+        match algorithm.to_ascii_lowercase().as_str() {
+            "aes-128-cbc" | "aes128" => {
+                if let Ok(key) = <&[u8; 16]>::try_from(key) {
+                    params.push(AesParams {
+                        algorithm,
+                        key: AesKey::Aes128(key),
+                        iv,
+                    });
+                }
+            }
+            "aes-256-cbc" | "aes256" => {
+                if let Ok(key) = <&[u8; 32]>::try_from(key) {
+                    params.push(AesParams {
+                        algorithm,
+                        key: AesKey::Aes256(key),
+                        iv,
+                    });
+                }
+            }
+            _ => {}
+        }
     }
 
     params
@@ -212,23 +236,6 @@ fn extract_ciphertext_blobs(content: &str) -> Vec<CiphertextBlob> {
     blobs
 }
 
-/// Check if algorithm is supported
-fn is_supported_algorithm(algo: &str) -> bool {
-    matches!(
-        algo.to_lowercase().as_str(),
-        "aes-256-cbc" | "aes-128-cbc" | "aes256" | "aes128"
-    )
-}
-
-/// Check if key length is valid for algorithm
-fn is_valid_key_length(algo: &str, len: usize) -> bool {
-    match algo.to_lowercase().as_str() {
-        "aes-256-cbc" | "aes256" => len == 32,
-        "aes-128-cbc" | "aes128" => len == 16,
-        _ => false,
-    }
-}
-
 /// Decrypt AES-256-CBC ciphertext
 pub(crate) fn decrypt_aes_256_cbc(ciphertext: &[u8], key: &[u8], iv: &[u8]) -> Option<Vec<u8>> {
     use aes::cipher::{BlockModeDecrypt, KeyIvInit, block_padding::Pkcs7};
@@ -272,11 +279,10 @@ pub(crate) fn decrypt_aes_128_cbc(ciphertext: &[u8], key: &[u8], iv: &[u8]) -> O
 }
 
 /// Try to decrypt ciphertext with given params
-fn try_decrypt(ciphertext: &[u8], params: &AesParams) -> Option<Vec<u8>> {
-    match params.algorithm.to_lowercase().as_str() {
-        "aes-256-cbc" | "aes256" => decrypt_aes_256_cbc(ciphertext, &params.key, &params.iv),
-        "aes-128-cbc" | "aes128" => decrypt_aes_128_cbc(ciphertext, &params.key, &params.iv),
-        _ => None,
+fn try_decrypt(ciphertext: &[u8], params: &AesParams<'_>) -> Option<Vec<u8>> {
+    match params.key {
+        AesKey::Aes128(key) => decrypt_aes_128_cbc(ciphertext, key, &params.iv),
+        AesKey::Aes256(key) => decrypt_aes_256_cbc(ciphertext, key, &params.iv),
     }
 }
 
@@ -311,7 +317,9 @@ fn validate_decrypted_content(plaintext: &[u8]) -> bool {
     }
 
     // Check for common code patterns
-    VALID_CODE_INDICATORS.is_match(text)
+    VALID_CODE_INDICATORS
+        .as_ref()
+        .is_some_and(|indicators| indicators.is_match(text))
 }
 
 /// Detect the type of decrypted payload
@@ -322,12 +330,18 @@ fn detect_payload_type(data: &[u8]) -> FileType {
     };
 
     // JavaScript indicators
-    if JS_INDICATORS.is_match(text) {
+    if JS_INDICATORS
+        .as_ref()
+        .is_some_and(|indicators| indicators.is_match(text))
+    {
         return FileType::JavaScript;
     }
 
     // Python indicators
-    if PYTHON_INDICATORS.is_match(text) {
+    if PYTHON_INDICATORS
+        .as_ref()
+        .is_some_and(|indicators| indicators.is_match(text))
+    {
         return FileType::Python;
     }
 
@@ -391,16 +405,16 @@ pub(crate) fn extract_aes_payloads(content: &[u8]) -> Vec<AesExtractedPayload> {
 
                 // Try nested decryption (up to MAX_RECURSION_DEPTH)
                 let (final_decrypted, encoding_chain) =
-                    decrypt_nested(&decrypted, vec![params.algorithm.clone()], 1);
+                    decrypt_nested(&decrypted, vec![params.algorithm.to_owned()], 1);
+                let preview = generate_preview(&final_decrypted);
 
-                // Store in memory
                 payloads.push(AesExtractedPayload {
-                    data: final_decrypted.clone(),
+                    data: final_decrypted,
                     encoding_chain,
-                    preview: generate_preview(&final_decrypted),
+                    preview,
                     detected_type,
                     original_offset: blob.offset,
-                    algorithm: params.algorithm.clone(),
+                    algorithm: params.algorithm.to_owned(),
                 });
 
                 // Found a valid decryption, don't try other combinations
@@ -437,8 +451,8 @@ fn decrypt_nested(data: &[u8], chain: Vec<String>, depth: usize) -> (Vec<u8>, Ve
             if let Some(decrypted) = try_decrypt(&blob.data, params)
                 && validate_decrypted_content(&decrypted)
             {
-                let mut new_chain = chain.clone();
-                new_chain.push(params.algorithm.clone());
+                let mut new_chain = chain;
+                new_chain.push(params.algorithm.to_owned());
                 return decrypt_nested(&decrypted, new_chain, depth + 1);
             }
         }

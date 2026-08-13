@@ -42,13 +42,9 @@ pub(crate) fn enhance_yaml_error(error: &Error, file_path: &Path, yaml_content: 
 
 /// Extract line and column numbers from error message
 fn extract_line_column(error_msg: &str) -> (Option<usize>, Option<usize>) {
-    fn line_regex() -> Option<&'static regex::Regex> {
-        static RE: std::sync::OnceLock<Option<regex::Regex>> = std::sync::OnceLock::new();
-        RE.get_or_init(|| regex::Regex::new(r"at line (\d+) column (\d+)").ok())
-            .as_ref()
-    }
-
-    if let Some(caps) = line_regex().and_then(|regex| regex.captures(error_msg)) {
+    static LINE_REGEX: std::sync::OnceLock<Option<regex::Regex>> = std::sync::OnceLock::new();
+    let regex = LINE_REGEX.get_or_init(|| regex::Regex::new(r"at line (\d+) column (\d+)").ok());
+    if let Some(caps) = regex.as_ref().and_then(|regex| regex.captures(error_msg)) {
         let line = caps.get(1).and_then(|m| m.as_str().parse().ok());
         let col = caps.get(2).and_then(|m| m.as_str().parse().ok());
         return (line, col);

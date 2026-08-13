@@ -596,11 +596,6 @@ fn is_elf_metadata_offset(offset: usize, sections: &[types::Section]) -> bool {
     is_elf_metadata_section && section.address == Some(0)
 }
 
-fn parse_evidence_offset(location: &Option<String>) -> Option<usize> {
-    let value = location.as_deref()?.strip_prefix("offset:")?;
-    value.parse::<usize>().ok()
-}
-
 fn should_skip_unknown_url_markup_payload(payload: &types::ExtractedPayload) -> bool {
     if !payload.encoding_chain.iter().any(|e| e == "url")
         || payload.detected_type != FileType::Unknown
@@ -745,8 +740,8 @@ where
         })
         .unwrap_or_default();
 
-    report.yara_matches = matches.clone();
-    for yara_match in &matches {
+    report.yara_matches = matches;
+    for yara_match in &report.yara_matches {
         // Skip YARA findings whose arch_context metadata explicitly excludes
         // the file's architecture.  arch_context takes priority because it is
         // an authoritative signal written by the rule author.  "x86" in
@@ -984,7 +979,10 @@ impl PhaseTracker {
     #[must_use]
     pub fn with_label(label: impl Into<String>) -> Self {
         let this = Self::build(label.into());
-        register_phase(&this.0);
+        if let Ok(mut registry) = PHASE_REGISTRY.lock() {
+            registry.retain(|tracker| tracker.strong_count() > 0);
+            registry.push(Arc::downgrade(&this.0));
+        }
         this
     }
 
@@ -1032,13 +1030,6 @@ type PhaseSnapshot = (String, String, std::time::Duration, std::time::Duration);
 
 static PHASE_REGISTRY: std::sync::LazyLock<std::sync::Mutex<Vec<std::sync::Weak<PhaseInner>>>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(Vec::new()));
-
-fn register_phase(inner: &Arc<PhaseInner>) {
-    if let Ok(mut reg) = PHASE_REGISTRY.lock() {
-        reg.retain(|w| w.strong_count() > 0);
-        reg.push(Arc::downgrade(inner));
-    }
-}
 
 /// Snapshot all currently-live registered phase trackers, sorted oldest-first.
 fn snapshot_active_phases() -> Vec<PhaseSnapshot> {
@@ -2729,8 +2720,12 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             }
 
             !finding.evidence.iter().any(|evidence| {
-                parse_evidence_offset(&evidence.location)
-                    .is_some_and(|offset| is_elf_metadata_offset(offset, &report.sections))
+                let offset = evidence
+                    .location
+                    .as_deref()
+                    .and_then(|location| location.strip_prefix("offset:"))
+                    .and_then(|value| value.parse::<usize>().ok());
+                offset.is_some_and(|offset| is_elf_metadata_offset(offset, &report.sections))
             })
         });
     }

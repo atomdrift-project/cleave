@@ -74,10 +74,6 @@ pub fn set_skip_yara_cache_override(value: Option<bool>) {
     store_override(&SKIP_YARA_CACHE_OVERRIDE, value);
 }
 
-fn skip_yara_cache_override() -> Option<bool> {
-    decode_override(&SKIP_YARA_CACHE_OVERRIDE)
-}
-
 /// Returns `true` if the analysis-result cache should be skipped.
 ///
 /// Resolution order:
@@ -131,7 +127,7 @@ pub fn skip_mapper_cache() -> bool {
 /// - Env vars unset                      → don't skip (even in debug)
 #[must_use]
 pub fn skip_yara_cache() -> bool {
-    if let Some(v) = skip_yara_cache_override() {
+    if let Some(v) = decode_override(&SKIP_YARA_CACHE_OVERRIDE) {
         return v;
     }
     if let Ok(v) = std::env::var("CLEAVE_SKIP_YARA_CACHE") {

@@ -29,16 +29,11 @@ const CHECK_INTERVAL_SECS: u64 = 24 * 60 * 60;
 /// never noticeably delay a command, and an offline host should fail fast.
 const FETCH_TIMEOUT: Duration = Duration::from_secs(3);
 
-/// Resolve the manifest base URL (overridable via `CLEAVE_UPDATE_URL`).
-fn base_url() -> String {
-    std::env::var("CLEAVE_UPDATE_URL").unwrap_or_else(|_| DEFAULT_BASE_URL.to_owned())
-}
-
 /// Build the URL for a named manifest. Apply-time fetches set the `?update=1`
 /// marker — a constant flag (no data embedded) distinguishing a fetch tied to
 /// an `update-rules` action from a passive notice check.
 fn manifest_url(name: &str, marker: bool) -> String {
-    let base = base_url();
+    let base = std::env::var("CLEAVE_UPDATE_URL").unwrap_or_else(|_| DEFAULT_BASE_URL.to_owned());
     let sep = if base.ends_with('/') { "" } else { "/" };
     let query = if marker { "?update=1" } else { "" };
     format!("{base}{sep}{name}{query}")
@@ -94,12 +89,6 @@ fn now_unix() -> u64 {
         .unwrap_or(0)
 }
 
-/// Read the notice cache, returning `None` on any error (treated as "no cache").
-fn read_cache() -> Option<Cache> {
-    let text = std::fs::read_to_string(cache_path()?).ok()?;
-    toml::from_str(&text).ok()
-}
-
 /// Persist the notice cache (best-effort; failures are non-fatal).
 fn write_cache(cache: &Cache) {
     let Some(path) = cache_path() else { return };
@@ -136,7 +125,9 @@ pub fn maybe_notify(disabled_by_flag: bool) {
         return;
     }
     let installed = env!("CARGO_PKG_VERSION");
-    let cached = read_cache();
+    let cached: Option<Cache> = cache_path()
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|text| toml::from_str(&text).ok());
 
     // A fresh stamp (a recent success *or* a recent failed attempt) is used
     // without any network access.

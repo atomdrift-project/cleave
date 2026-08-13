@@ -18,18 +18,6 @@ use anyhow::Result;
 use colored::Colorize;
 use std::collections::{HashMap, HashSet};
 
-/// Extract base trait ID for aggregation (strip ::variant suffix)
-/// e.g., "well-known/malware/trojan/macos-stealer-cpp::variant" -> "well-known/malware/trojan/macos-stealer-cpp"
-/// e.g., "objectives/credential-access/stealer/shell::system-wide" -> "objectives/credential-access/stealer/shell"
-/// Trait IDs without a variant suffix are returned unchanged.
-#[allow(dead_code)] // Used by binary target
-#[must_use]
-fn get_directory_path(id: &str) -> String {
-    // Strip variant suffix (::variant) if present
-    // The base trait ID (without variant) is used as the aggregation key
-    id.split("::").next().unwrap_or(id).to_string()
-}
-
 /// Aggregated finding for a directory path
 #[allow(dead_code)] // Used by binary target
 #[derive(Clone)]
@@ -73,7 +61,13 @@ pub(crate) fn aggregate_findings_by_directory(findings: &[Finding]) -> Vec<Findi
             continue;
         }
 
-        let dir_path = get_directory_path(&finding.id);
+        // Variants aggregate under their base trait ID.
+        let dir_path = finding
+            .id
+            .split("::")
+            .next()
+            .unwrap_or(finding.id.as_str())
+            .to_string();
 
         match aggregated.get_mut(&dir_path) {
             None => {

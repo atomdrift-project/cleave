@@ -152,16 +152,12 @@ func sendRequest(ctx context.Context, client *http.Client, cfg config, p payload
 	r.statusCode = resp.StatusCode
 	r.responseBytes = int64(len(respBody))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 || len(respBody) < 256 {
-		r.responseBody = truncate(string(respBody), 200)
+		r.responseBody = string(respBody)
+		if len(r.responseBody) > 200 {
+			r.responseBody = r.responseBody[:200] + "..."
+		}
 	}
 	r.finishedAt = time.Now()
 	r.latency = r.finishedAt.Sub(start)
 	return r
-}
-
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "..."
 }

@@ -927,7 +927,6 @@ fn resolve_validator_id(id: &str) -> Option<&'static str> {
         .map(|spec| spec.id)
 }
 
-#[allow(clippy::expect_used)]
 pub(crate) fn set_disabled_validators_override(ids: Option<&str>) -> Result<()> {
     let Some(ids) = ids else {
         return Ok(());
@@ -947,7 +946,7 @@ pub(crate) fn set_disabled_validators_override(ids: Option<&str>) -> Result<()> 
 
     *disabled_validator_override()
         .write()
-        .expect("validator override lock poisoned") = Some(disabled);
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(disabled);
     Ok(())
 }
 
@@ -966,11 +965,10 @@ pub(crate) fn disabled_validator_specs() -> Vec<&'static ValidatorSpec> {
 /// [`fatal_severity_threshold`]) — so soft issues are still reported, just not
 /// fatal under `--soft`.
 #[must_use]
-#[allow(clippy::expect_used)]
 pub(crate) fn is_validator_disabled(id: &str) -> bool {
     disabled_validator_override()
         .read()
-        .expect("validator override lock poisoned")
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .as_ref()
         .is_some_and(|disabled| disabled.contains(id))
 }

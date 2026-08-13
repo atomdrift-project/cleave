@@ -230,8 +230,9 @@ impl<'a> ScptParser<'a> {
         // Extract Apple Event codes (0a prefix entries)
         self.extract_apple_events(&mut symbols, &mut seen);
 
-        // Extract string literals
-        self.extract_strings(&mut symbols, &mut seen);
+        // Extract string literals in both encodings used by compiled scripts.
+        self.extract_ascii_strings(&mut symbols, &mut seen);
+        self.extract_utf16_strings(&mut symbols, &mut seen);
 
         // Extract application names from tell blocks
         self.extract_applications(&mut symbols, &mut seen);
@@ -387,13 +388,7 @@ impl<'a> ScptParser<'a> {
         Some((info, 24)) // Standard entry is 24 bytes
     }
 
-    /// Extract string literals (both ASCII and UTF-16LE)
-    fn extract_strings(&self, symbols: &mut Vec<Symbol>, seen: &mut HashSet<(String, SymbolKind)>) {
-        // Look for interesting string patterns
-        self.extract_ascii_strings(symbols, seen);
-        self.extract_utf16_strings(symbols, seen);
-    }
-
+    /// Extract ASCII string literals.
     fn extract_ascii_strings(
         &self,
         symbols: &mut Vec<Symbol>,

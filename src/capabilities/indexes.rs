@@ -46,10 +46,6 @@ fn string_evidence_location(string_info: &StringInfo) -> Option<String> {
     string_info.offset.map(|o| format!("{:#x}", o))
 }
 
-fn binary_family_types(_file_type: &RuleFileType) -> &'static [RuleFileType] {
-    &[]
-}
-
 /// Index of trait indices by file type for fast lookup.
 /// Maps FileType -> Bitset of indices into trait_definitions.
 #[derive(Clone, Default, Debug)]
@@ -123,10 +119,7 @@ impl TraitIndex {
             combined.union(specific);
         }
 
-        for family_type in binary_family_types(file_type)
-            .iter()
-            .chain(archive_family_types(file_type).iter())
-        {
+        for family_type in archive_family_types(file_type) {
             if let Some(family_traits) = self.by_file_type.get(family_type) {
                 combined.union(family_traits);
             }
@@ -263,16 +256,6 @@ impl TraitBitSet {
             })
         })
     }
-}
-
-/// Normalize a symbol for matching without allocating — mirrors the rule normalization
-/// (strip leading `_`, up to 2). Symbols from the report are already normalized at
-/// extraction time, so this is usually a no-op, but we stay safe for edge cases and
-/// for patterns that weren't normalized at rule load time.
-#[inline(always)]
-fn normalize_symbol_ref(s: &str) -> &str {
-    let s = s.strip_prefix('_').unwrap_or(s);
-    s.strip_prefix('_').unwrap_or(s)
 }
 
 /// Index for fast symbol matching.
@@ -526,7 +509,10 @@ impl SymbolMatchIndex {
         let mut seen_candidates: FxHashSet<usize> = FxHashSet::default();
 
         for &symbol in symbols {
-            let normalized = normalize_symbol_ref(symbol);
+            // Rule loading strips up to two leading underscores. Report symbols
+            // are normally pre-normalized, but normalize here for edge cases.
+            let normalized = symbol.strip_prefix('_').unwrap_or(symbol);
+            let normalized = normalized.strip_prefix('_').unwrap_or(normalized);
             if normalized.is_empty() {
                 continue;
             }

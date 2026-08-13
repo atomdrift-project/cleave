@@ -170,6 +170,12 @@ pub struct Args {
     #[arg(long)]
     pub all_files: bool,
 
+    /// Additional passwords to try for encrypted ZIP/7z archives.
+    /// Repeat the option to provide more than one password; built-in common
+    /// sample passwords are always tried as well.
+    #[arg(long = "zip-password", value_name = "PASSWORD", global = true)]
+    pub zip_passwords: Vec<String>,
+
     /// Filter rules by target platform(s) (comma-separated, default: all)
     /// Examples: --platforms linux,macos or --platforms windows
     /// Valid values: all, linux, macos, windows, unix, android, ios, appliance, routeros, fortios, freebsd, openbsd, netbsd, aix, solaris
@@ -267,6 +273,22 @@ impl Args {
     #[must_use]
     pub fn platforms(&self) -> Vec<crate::composite_rules::Platform> {
         parse_platforms(&self.platforms)
+    }
+
+    /// Return the built-in archive passwords followed by unique CLI additions.
+    #[must_use]
+    pub fn archive_passwords(&self) -> Vec<String> {
+        let mut passwords: Vec<String> = DEFAULT_ZIP_PASSWORDS
+            .iter()
+            .copied()
+            .map(str::to_string)
+            .collect();
+        for password in &self.zip_passwords {
+            if !passwords.contains(password) {
+                passwords.push(password.clone());
+            }
+        }
+        passwords
     }
 }
 
@@ -1553,5 +1575,40 @@ mod tests {
         let args = Args::try_parse_from(["cleave", "file.bin"]).unwrap();
         assert!(args.min_crit.is_none());
         assert!(args.max_crit.is_none());
+    }
+
+    #[test]
+    fn test_parse_repeated_zip_passwords() {
+        let args = Args::try_parse_from([
+            "cleave",
+            "--zip-password",
+            "first",
+            "--zip-password",
+            "second",
+            "file.bin",
+        ])
+        .unwrap();
+
+        assert_eq!(args.zip_passwords, ["first", "second"]);
+    }
+
+    #[test]
+    fn extra_zip_passwords_are_appended_without_duplicates() {
+        let args = Args::try_parse_from([
+            "cleave",
+            "--zip-password",
+            "infected",
+            "--zip-password",
+            "sample-key",
+            "--zip-password",
+            "sample-key",
+            "file.bin",
+        ])
+        .unwrap();
+        let passwords = args.archive_passwords();
+
+        assert_eq!(passwords.last().map(String::as_str), Some("sample-key"));
+        assert_eq!(passwords.iter().filter(|p| *p == "sample-key").count(), 1);
+        assert_eq!(passwords.iter().filter(|p| *p == "infected").count(), 1);
     }
 }

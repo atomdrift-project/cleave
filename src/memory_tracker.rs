@@ -25,10 +25,6 @@ pub(crate) fn clear_current_phase() {
     *CURRENT_PHASE.lock() = None;
 }
 
-fn current_phase_snapshot() -> Option<String> {
-    CURRENT_PHASE.lock().clone()
-}
-
 /// Global memory statistics tracker
 #[derive(Debug)]
 pub struct MemoryTracker {
@@ -404,7 +400,7 @@ pub fn start_periodic_logging(interval: Duration, limit: u64) -> MemoryLoggerHan
             // of RSS state so operators always have a recent baseline.
             if last_purge.elapsed() >= purge_interval {
                 last_purge = Instant::now();
-                let phase = current_phase_snapshot();
+                let phase = CURRENT_PHASE.lock().clone();
                 match purge_jemalloc() {
                     Some(stats) => info!(
                         rss_mb = rss_mb,

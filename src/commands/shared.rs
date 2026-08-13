@@ -111,8 +111,8 @@ pub(crate) fn process_yara_result(
     let Some(Ok((matches, inline))) = yara_result else {
         return std::collections::HashMap::new();
     };
-    report.yara_matches = matches.clone();
-    for yara_match in &matches {
+    report.yara_matches = matches;
+    for yara_match in &report.yara_matches {
         // Prefer trait_id for third-party rules (e.g., "third_party/elastic/...")
         // Fall back to namespace conversion for built-in rules
         let cap_id = yara_match
@@ -146,7 +146,12 @@ pub(crate) fn process_yara_result(
             source_file: None,
         });
     }
-    if !report.metadata.tools_used.contains(&"yara-x".to_string()) {
+    if !report
+        .metadata
+        .tools_used
+        .iter()
+        .any(|tool| tool == "yara-x")
+    {
         report.metadata.tools_used.push("yara-x".to_string());
     }
     inline

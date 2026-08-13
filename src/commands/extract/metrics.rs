@@ -31,7 +31,7 @@ fn run_with_layer(target: &str, layer: &str, format: &cli::OutputFormat) -> Resu
     let file_analysis = extract_layer_file_analysis(target, layer)?;
     let file_type = detect_file_type(Path::new(target))?;
 
-    let metrics = file_analysis.filefacts_metrics.clone().ok_or_else(|| {
+    let metrics = file_analysis.filefacts_metrics.ok_or_else(|| {
         anyhow::anyhow!(
             "No metrics available for layer '{}' (layer may not support metrics)",
             layer
@@ -74,11 +74,11 @@ fn run_direct(target: &str, format: &cli::OutputFormat) -> Result<String> {
     // stripped-section inventory) so the metrics command sees the
     // same fields as a full `cleave analyze` run.
     let data = std::fs::read(path)?;
-    let mut full_report = report.clone();
+    let mut full_report = report;
     if matches!(file_type, FileType::Elf | FileType::Pe | FileType::MachO) {
         crate::analyzers::binary_extractors::augment_report(&mut full_report, &data);
     }
-    let metrics = full_report.filefacts_metrics.clone().unwrap_or_default();
+    let metrics = full_report.filefacts_metrics.unwrap_or_default();
 
     format_metrics_output(&metrics, target, &file_type, format)
 }

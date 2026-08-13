@@ -58,15 +58,15 @@ mod jemalloc {
 mod cli_bootstrap;
 mod cli_dispatch;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 use cleave::cli;
 #[cfg(feature = "deadlock-detection")]
 use cli_bootstrap::start_deadlock_detector;
 use cli_bootstrap::{
     apply_runtime_overrides, build_sample_extraction, configure_rayon_thread_pool,
-    default_zip_passwords, determine_default_log_file, init_logging, log_exit_summary, log_startup,
-    print_version_banner, start_memory_logger,
+    determine_default_log_file, init_logging, log_exit_summary, log_startup, print_version_banner,
+    start_memory_logger,
 };
 use cli_dispatch::{build_dispatch_context, dispatch_command, write_output};
 
@@ -101,9 +101,7 @@ fn main() -> Result<()> {
 
     // Dump all thread backtraces on SIGUSR1 (Linux equivalent of BSD SIGINFO / Ctrl-T).
     // Attaches lldb/gdb to ourselves so every thread is reported with symbols.
-    // startup-only: SIGUSR1 backtrace thread failure is unrecoverable
     #[cfg(unix)]
-    #[allow(clippy::expect_used)]
     std::thread::Builder::new()
         .name("sigusr1".into())
         .spawn(|| {
@@ -160,7 +158,7 @@ fn main() -> Result<()> {
                 let _ = writeln!(std::io::stderr(), "--- end backtrace ---\n");
             }
         })
-        .expect("failed to spawn sigusr1 thread");
+        .context("failed to spawn SIGUSR1 thread")?;
 
     let format = args.format();
     // Only create a default log file in server mode — CLI runs at warn level
@@ -218,7 +216,7 @@ fn main() -> Result<()> {
         cleave::update_check::maybe_notify(args.no_update_check);
     }
 
-    let zip_passwords = default_zip_passwords();
+    let zip_passwords = args.archive_passwords();
     let sample_extraction = build_sample_extraction(args.extract_dir.as_deref());
     let platforms = args.platforms();
     let max_memory_file_size = args.max_file_mem * 1024 * 1024;

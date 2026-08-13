@@ -460,7 +460,12 @@ fn find_ole10_native(
 
                     let embedded_filename = if version == 2 && header.len() > 6 {
                         // After version, there are null-terminated strings: label, filename, ...
-                        read_null_terminated(&header[6..])
+                        let bytes = &header[6..];
+                        bytes
+                            .iter()
+                            .position(|&byte| byte == 0)
+                            .filter(|&end| end > 0)
+                            .map(|end| String::from_utf8_lossy(&bytes[..end]).into_owned())
                     } else {
                         None
                     };
@@ -476,16 +481,6 @@ fn find_ole10_native(
     }
 
     found
-}
-
-/// Read a null-terminated ASCII string from bytes.
-fn read_null_terminated(data: &[u8]) -> Option<String> {
-    let end = data.iter().position(|&b| b == 0)?;
-    if end == 0 {
-        return None;
-    }
-    let s = String::from_utf8_lossy(&data[..end]).to_string();
-    if s.is_empty() { None } else { Some(s) }
 }
 
 /// Known dangerous CLSIDs that indicate specific exploit vectors or suspicious objects.

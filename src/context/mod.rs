@@ -43,7 +43,11 @@ pub(crate) fn capture(report: &mut AnalysisReport, data: &[u8], file_type: FileT
     // notable fired, and a trait without captured context would render as
     // nothing there. Baselines were always captured; this aligns components.
     let by_id = index_by_id(&report.findings);
-    let shown: Vec<&Finding> = report.findings.iter().filter(|f| should_show(f)).collect();
+    let shown: Vec<&Finding> = report
+        .findings
+        .iter()
+        .filter(|finding| finding.crit != Criticality::Filtered)
+        .collect();
     if shown.is_empty() {
         return;
     }
@@ -51,14 +55,6 @@ pub(crate) fn capture(report: &mut AnalysisReport, data: &[u8], file_type: FileT
     let textual = file_type.is_source_code() || (!file_type.is_binary() && looks_textual(data));
     let line_index = textual.then(|| LineIndex::new(data));
     report.context = capture_byte_slices(&shown, &by_id, data, line_index.as_ref());
-}
-
-/// Whether a finding contributes context: everything except Filtered noise.
-/// Low-tier traits are captured too — whether the render shows them is the
-/// output layer's call (`select_ids` / `low_tier_fill`), and it can only show
-/// what was captured.
-fn should_show(finding: &Finding) -> bool {
-    finding.crit != Criticality::Filtered
 }
 
 /// One byte-addressed match window before merging.
@@ -499,12 +495,14 @@ fn render_byte_segment(
         }
         None => (None, None),
     };
+    let mut notes: Vec<Note> = seg.notes.iter().map(|(_, note)| note.clone()).collect();
+    dedup_notes(&mut notes);
     vec![ContextLine {
         loc: lo,
         line,
         col,
         data: data[lo as usize..hi as usize].to_vec(),
-        notes: seg.all_notes(),
+        notes,
     }]
 }
 
@@ -518,15 +516,6 @@ struct Segment {
     hi: u64,
     /// `(position, note)` pairs, where position is the line/row the note hits.
     notes: Vec<(u64, Note)>,
-}
-
-impl Segment {
-    /// All notes in the segment, deduped + sorted.
-    fn all_notes(&self) -> Vec<Note> {
-        let mut notes: Vec<Note> = self.notes.iter().map(|(_, n)| n.clone()).collect();
-        dedup_notes(&mut notes);
-        notes
-    }
 }
 
 /// Reduce a chunk's notes to the set worth showing:
@@ -548,9 +537,14 @@ fn dedup_notes(notes: &mut Vec<Note>) {
             .then_with(|| a.id.cmp(&b.id))
     });
     let mut kept: Vec<Note> = Vec::with_capacity(notes.len());
-    for n in notes.drain(..) {
-        if !kept.iter().any(|k| spans_overlap(k, &n)) {
-            kept.push(n);
+    for note in notes.drain(..) {
+        let overlaps = kept.iter().any(|kept| {
+            let kept_end = kept.off + u64::from(kept.len.max(1));
+            let note_end = note.off + u64::from(note.len.max(1));
+            kept.off < note_end && note.off < kept_end
+        });
+        if !overlaps {
+            kept.push(note);
         }
     }
     kept.sort_unstable_by(|a, b| b.crit.cmp(&a.crit).then_with(|| a.id.cmp(&b.id)));
@@ -560,14 +554,6 @@ fn dedup_notes(notes: &mut Vec<Note>) {
 /// Rank for overlap resolution: confidence weighted by criticality level.
 fn note_score(n: &Note) -> f32 {
     n.conf * f32::from(n.crit.rank())
-}
-
-/// Whether two notes' `[off, off+len)` byte spans overlap (a zero-length match
-/// is treated as one byte so two at the same offset still collapse).
-fn spans_overlap(a: &Note, b: &Note) -> bool {
-    let a_end = a.off + u64::from(a.len.max(1));
-    let b_end = b.off + u64::from(b.len.max(1));
-    a.off < b_end && b.off < a_end
 }
 
 /// Sort windows by start, merge overlapping/adjacent ones into [`Segment`]s, and

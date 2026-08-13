@@ -480,16 +480,6 @@ fn enforce_table_bytes(conn: &Connection, table: &str, blob: &str, max_bytes: i6
     }
 }
 
-/// Sample the eviction point 1-in-`EVICTION_CHECK_INTERVAL` stores; when it
-/// fires, evict the report cache on a background thread. The global counter
-/// distributes the sampling across threads without duplication.
-fn maybe_evict_report_cache() {
-    let count = REPORT_STORE_COUNT.fetch_add(1, Ordering::Relaxed);
-    if count.is_multiple_of(EVICTION_CHECK_INTERVAL) {
-        spawn_eviction(&REPORT_EVICTING, evict_report_cache);
-    }
-}
-
 /// Evict oldest entries from the toplevel report cache when over
 /// `MAX_REPORT_ENTRIES`, down to 90% of the cap so the cache doesn't
 /// re-trigger eviction immediately. Runs on a background thread.
@@ -642,7 +632,11 @@ pub(crate) fn report_cache_store(sha256: &str, options: &AnalysisOptions, report
     };
     with_conn(|conn| {
         report_cache_store_conn(conn, sha256, &opts_hash, traits_ts, report);
-        maybe_evict_report_cache();
+        // Sample across all threads and evict in the background.
+        let count = REPORT_STORE_COUNT.fetch_add(1, Ordering::Relaxed);
+        if count.is_multiple_of(EVICTION_CHECK_INTERVAL) {
+            spawn_eviction(&REPORT_EVICTING, evict_report_cache);
+        }
     });
 }
 
@@ -672,7 +666,10 @@ pub(crate) fn file_analysis_cache_store(
     };
     with_conn(|conn| {
         file_analysis_cache_store_conn(conn, sha256, &opts_hash, traits_ts, fa);
-        maybe_evict_file_analysis_cache();
+        let count = FILE_ANALYSIS_STORE_COUNT.fetch_add(1, Ordering::Relaxed);
+        if count.is_multiple_of(EVICTION_CHECK_INTERVAL) {
+            spawn_eviction(&FILE_ANALYSIS_EVICTING, evict_file_analysis_cache);
+        }
     });
 }
 
@@ -726,15 +723,6 @@ fn file_analysis_cache_store_conn(
          VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
         rusqlite::params![sha256, opts_hash, traits_ts, compressed, now],
     );
-}
-
-/// Sample the eviction point 1-in-`EVICTION_CHECK_INTERVAL` stores; when it
-/// fires, evict the file analysis cache on a background thread.
-fn maybe_evict_file_analysis_cache() {
-    let count = FILE_ANALYSIS_STORE_COUNT.fetch_add(1, Ordering::Relaxed);
-    if count.is_multiple_of(EVICTION_CHECK_INTERVAL) {
-        spawn_eviction(&FILE_ANALYSIS_EVICTING, evict_file_analysis_cache);
-    }
 }
 
 /// Evict oldest entries from the file analysis cache when over

@@ -87,7 +87,13 @@ fn print_contributing_findings(file: &FileAnalysis, indent: &str) {
 /// failures), so it is emitted only under `verbose` to keep a passing run to a
 /// single line.
 pub fn run(format: &OutputFormat, exclude: Option<&str>, verbose: bool) -> Result<String> {
-    run_inner(format, exclude, verbose, soft_env_enabled())
+    // Honor the environment toggle for released callers that cannot pass
+    // `--soft`; the explicit API remains [`run_soft`].
+    let soft = matches!(
+        std::env::var("CLEAVE_VALIDATE_SOFT").ok().as_deref(),
+        Some("1" | "true" | "yes" | "on")
+    );
+    run_inner(format, exclude, verbose, soft)
 }
 
 /// Run trait validation in **soft** mode: fail only on `Hard` problems — those
@@ -104,16 +110,6 @@ pub fn run(format: &OutputFormat, exclude: Option<&str>, verbose: bool) -> Resul
 /// defined in one place: `validation_controls::HARD_VALIDATOR_IDS`.
 pub fn run_soft(format: &OutputFormat, exclude: Option<&str>, verbose: bool) -> Result<String> {
     run_inner(format, exclude, verbose, true)
-}
-
-/// Honor the `CLEAVE_VALIDATE_SOFT` env toggle for callers that invoke [`run`]
-/// over a released engine and cannot pass the flag directly. The explicit paths
-/// are `cleave validate --soft` and [`run_soft`].
-fn soft_env_enabled() -> bool {
-    matches!(
-        std::env::var("CLEAVE_VALIDATE_SOFT").ok().as_deref(),
-        Some("1" | "true" | "yes" | "on")
-    )
 }
 
 fn run_inner(
@@ -336,7 +332,15 @@ fn collect_targets() -> Result<(Vec<Target>, Expectations)> {
     let mut targets = Vec::new();
 
     let traits_dir = cleave::traits_repo::try_resolve().map_err(anyhow::Error::msg)?;
-    let exp = load_expectations(&traits_dir)?;
+    let expectations_path = traits_dir.join("testdata").join("expectations.toml");
+    let expectations_text = std::fs::read_to_string(&expectations_path).with_context(|| {
+        format!(
+            "reading validation expectations: {}",
+            expectations_path.display()
+        )
+    })?;
+    let exp: Expectations = toml::from_str(&expectations_text)
+        .with_context(|| format!("parsing {}", expectations_path.display()))?;
 
     collect_hostile_fixtures(
         &traits_dir.join("testdata").join("hostile"),
@@ -368,14 +372,6 @@ fn collect_targets() -> Result<(Vec<Target>, Expectations)> {
     }
 
     Ok((targets, exp))
-}
-
-/// Read fixture expectations from `<traits>/testdata/expectations.toml`.
-fn load_expectations(traits_dir: &Path) -> Result<Expectations> {
-    let path = traits_dir.join("testdata").join("expectations.toml");
-    let text = std::fs::read_to_string(&path)
-        .with_context(|| format!("reading validation expectations: {}", path.display()))?;
-    toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))
 }
 
 /// Every direct file in `testdata/hostile/` must have an expectation entry.

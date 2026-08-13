@@ -248,28 +248,26 @@ fn extend_with_owner_qualified_import(imports: &mut Vec<Import>, import: &Import
     let Some(owner) = import.library.as_deref() else {
         return;
     };
-    if !is_jvm_internal_owner(owner) {
+    if !owner.contains('/') || owner.contains('\\') || owner.contains(' ') {
         return;
     }
     let qualified = format!("{owner}.{}", import.symbol);
-    let mut synthetic = match import.offset.as_deref().and_then(parse_hex_offset) {
+    let offset = import.offset.as_deref().and_then(|value| {
+        if let Some(hex) = value
+            .strip_prefix("0x")
+            .or_else(|| value.strip_prefix("0X"))
+        {
+            u64::from_str_radix(hex, 16).ok()
+        } else {
+            value.parse().ok()
+        }
+    });
+    let mut synthetic = match offset {
         Some(off) => Import::with_offset(qualified, import.library.clone(), off),
         None => Import::new(qualified, import.library.clone()),
     };
     synthetic.alias = import.alias.clone();
     imports.push(synthetic);
-}
-
-fn is_jvm_internal_owner(owner: &str) -> bool {
-    owner.contains('/') && !owner.contains('\\') && !owner.contains(' ')
-}
-
-fn parse_hex_offset(s: &str) -> Option<u64> {
-    if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
-        u64::from_str_radix(hex, 16).ok()
-    } else {
-        s.parse().ok()
-    }
 }
 
 /// Project one filefacts Function symbol into cleave's public function

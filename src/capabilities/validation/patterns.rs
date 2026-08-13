@@ -971,27 +971,25 @@ fn condition_has_position_constraints(condition: &Condition) -> bool {
 
 fn pattern_targets_code_structure(condition: &Condition) -> Option<(&str, &str)> {
     // Regex for function call pattern: identifier (with optional dots/parens) followed by (
-    static FUNC_CALL_RE: OnceLock<regex::Regex> = OnceLock::new();
-    #[allow(clippy::expect_used)]
+    static FUNC_CALL_RE: OnceLock<Option<regex::Regex>> = OnceLock::new();
     let func_call_re = FUNC_CALL_RE
-        .get_or_init(|| regex::Regex::new(r"[a-zA-Z_][a-zA-Z0-9_.]*\(").expect("valid regex"));
+        .get_or_init(|| regex::Regex::new(r"[a-zA-Z_][a-zA-Z0-9_.]*\(").ok())
+        .as_ref()?;
 
     // Import statement pattern: starts with import/from...import
-    static IMPORT_RE: OnceLock<regex::Regex> = OnceLock::new();
-    #[allow(clippy::expect_used)]
-    let import_re = IMPORT_RE.get_or_init(|| {
-        regex::Regex::new(r"^(import\s+\w|from\s+\w+\s+import\b)").expect("valid regex")
-    });
+    static IMPORT_RE: OnceLock<Option<regex::Regex>> = OnceLock::new();
+    let import_re = IMPORT_RE
+        .get_or_init(|| regex::Regex::new(r"^(import\s+\w|from\s+\w+\s+import\b)").ok())
+        .as_ref()?;
 
     // Regex-mode patterns that search for code structure
-    static REGEX_CODE_RE: OnceLock<regex::Regex> = OnceLock::new();
-    #[allow(clippy::expect_used)]
+    static REGEX_CODE_RE: OnceLock<Option<regex::Regex>> = OnceLock::new();
     let regex_code_re = REGEX_CODE_RE.get_or_init(|| {
         regex::Regex::new(
             r"(?:require\b|\\brequire|exec\(|execSync|eval\(|shell_exec\(|child_process\\?\.|from\\s|import\\s|\\bimport\\b)",
         )
-        .expect("valid regex")
-    });
+        .ok()
+    }).as_ref()?;
 
     match condition {
         Condition::Literal(LiteralQuery {

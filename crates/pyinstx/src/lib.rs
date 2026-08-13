@@ -335,7 +335,11 @@ pub fn extract(data: &[u8], out_dir: &Path) -> Result<Stats, Error> {
     let mut writer = Writer::new(out_dir);
     for entry in mem.entries {
         let path = writer.path_for(&entry.name);
-        ensure_parent(&path)?;
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)?;
+            }
+        }
         let mut f = BufWriter::new(File::create(&path)?);
         f.write_all(&entry.data)?;
         f.flush()?;
@@ -633,15 +637,6 @@ fn sanitize_path(name: &str) -> String {
         out.push_str("unnamed");
     }
     out
-}
-
-fn ensure_parent(path: &Path) -> io::Result<()> {
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent)?;
-        }
-    }
-    Ok(())
 }
 
 fn decompress_to_vec(src: &[u8], compressed_flag: u8) -> Result<Vec<u8>, Error> {

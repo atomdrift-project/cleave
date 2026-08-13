@@ -102,22 +102,12 @@ fn decode_hex_string(s: &str) -> Option<Vec<u8>> {
 /// Maximum size for decompressed payloads to prevent decompression bombs
 const MAX_DECOMPRESSED_SIZE: usize = 50 * 1024 * 1024; // 50 MB
 
-/// Check if data is zlib-compressed (magic bytes: 0x78 0x9C/0x01/0xDA)
-fn is_zlib_compressed(data: &[u8]) -> bool {
-    data.len() > 2 && data[0] == 0x78 && (data[1] == 0x9C || data[1] == 0x01 || data[1] == 0xDA)
-}
-
-/// Check if data is gzip-compressed (magic bytes: 0x1F 0x8B)
-fn is_gzip_compressed(data: &[u8]) -> bool {
-    data.len() > 2 && data[0] == 0x1F && data[1] == 0x8B
-}
-
 /// Decompress data if it's compressed, returns (decompressed_bytes, compression_type)
 fn decompress_if_compressed(data: &[u8]) -> Option<(Vec<u8>, String)> {
     use flate2::read::{GzDecoder, ZlibDecoder};
     use std::io::Read;
 
-    if is_zlib_compressed(data) {
+    if matches!(data, [0x78, 0x9c | 0x01 | 0xda, _, ..]) {
         let decoder = ZlibDecoder::new(data);
         let mut decompressed = Vec::with_capacity(data.len() * 4);
 
@@ -130,7 +120,7 @@ fn decompress_if_compressed(data: &[u8]) -> Option<(Vec<u8>, String)> {
             }
             _ => None,
         }
-    } else if is_gzip_compressed(data) {
+    } else if matches!(data, [0x1f, 0x8b, _, ..]) {
         let decoder = GzDecoder::new(data);
         let mut decompressed = Vec::with_capacity(data.len() * 4);
 
@@ -291,12 +281,12 @@ fn process_decoded_string(
 
     // cleave: Check for compression and nested encoding
     let (final_bytes, final_chain) = decompress_and_nest(decoded_bytes, encoding_chain, 0);
+    let preview = generate_preview(&final_bytes);
 
-    // Store decoded content in memory for recursive analysis
     payloads.push(ExtractedPayload {
-        data: final_bytes.clone(),
+        data: final_bytes,
         encoding_chain: final_chain,
-        preview: generate_preview(&final_bytes),
+        preview,
         detected_type: FileType::Unknown, // Will be determined during recursive analysis
         original_offset: decoded_str.data_offset as usize,
     });

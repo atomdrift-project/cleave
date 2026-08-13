@@ -61,7 +61,7 @@ pub(crate) fn extract_version_info(data: &[u8]) -> VersionInfo {
             // `inRT.Runtime.dll`).
             let struct_start = pos.saturating_sub(6);
             let after_key = pos + key_utf16.len();
-            let aligned = struct_start + align_up_4(after_key - struct_start);
+            let aligned = struct_start + ((after_key - struct_start + 3) & !3);
             if aligned + 2 > window.len() {
                 continue;
             }
@@ -117,10 +117,6 @@ fn read_utf16le_string(bytes: &[u8]) -> Option<String> {
         }
     }
     String::from_utf16(&units).ok().filter(|s| !s.is_empty())
-}
-
-fn align_up_4(n: usize) -> usize {
-    (n + 3) & !3
 }
 
 fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {

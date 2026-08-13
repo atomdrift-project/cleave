@@ -104,14 +104,6 @@ pub(crate) fn apply_runtime_overrides(
     }
 }
 
-pub(crate) fn default_zip_passwords() -> Vec<String> {
-    cli::DEFAULT_ZIP_PASSWORDS
-        .iter()
-        .copied()
-        .map(str::to_string)
-        .collect()
-}
-
 pub(crate) fn build_sample_extraction(
     extract_dir: Option<&str>,
 ) -> Option<cleave::SampleExtractionConfig> {

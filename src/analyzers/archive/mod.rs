@@ -289,7 +289,11 @@ fn push_archive_hostile_findings(
                 ));
             }
             HostileArchiveReason::ExcessiveFileCount(count) => {
-                if is_expected_large_package_archive(archive_path) {
+                let path = archive_path.to_string_lossy();
+                if path.contains("/pkg_freebsd/")
+                    && (path.contains("opensearch-dashboards-")
+                        || path.contains("flat-remix-icon-themes-"))
+                {
                     continue;
                 }
                 report.findings.push(archive_finding(
@@ -400,12 +404,6 @@ fn push_archive_hostile_findings(
             match_count,
         ));
     }
-}
-
-fn is_expected_large_package_archive(path: &Path) -> bool {
-    let path = path.to_string_lossy();
-    path.contains("/pkg_freebsd/")
-        && (path.contains("opensearch-dashboards-") || path.contains("flat-remix-icon-themes-"))
 }
 
 fn path_looks_synthetic_edge_case(name: &str) -> bool {

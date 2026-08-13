@@ -39,17 +39,6 @@ pub struct PEAnalyzer {
     cancellation: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
-/// True when the PE has the IMAGE_FILE_DLL characteristic
-/// (`0x2000`) set. Reads from filefacts's `pe.characteristics_raw`
-/// emission, which always carries the raw COFF Characteristics u16.
-fn is_dll_from_ctx(ctx: &Ctx<'_>) -> bool {
-    ctx.parsed
-        .values()
-        .get("pe.characteristics_raw")
-        .and_then(serde_json::Value::as_u64)
-        .is_some_and(|c| c & 0x2000 != 0)
-}
-
 /// The data directory a standard PE section name is *reserved for*. Only
 /// names with a rigid, single-purpose convention are listed: `.text`,
 /// `.rdata` and `.data` are deliberately absent because real toolchains
@@ -338,7 +327,15 @@ impl PEAnalyzer {
             }],
         });
 
-        if is_dll_from_ctx(ctx) {
+        // filefacts always emits the raw COFF Characteristics u16 here;
+        // IMAGE_FILE_DLL is bit 0x2000.
+        let is_dll = ctx
+            .parsed
+            .values()
+            .get("pe.characteristics_raw")
+            .and_then(serde_json::Value::as_u64)
+            .is_some_and(|characteristics| characteristics & 0x2000 != 0);
+        if is_dll {
             features.push(StructuralFeature {
                 id: "pe/dll".to_string(),
                 desc: "Dynamic Link Library (DLL)".to_string(),
@@ -1500,7 +1497,7 @@ impl PEAnalyzer {
         }
 
         // No MZ found - check for BSJB (.NET) signature without valid PE
-        if let Some(bsjb_offset) = self.find_signature(data, b"BSJB") {
+        if let Some(bsjb_offset) = data.windows(4).position(|window| window == b"BSJB") {
             findings.push(Finding {
                 src: None,
                 id: "objectives/anti-analysis/pe-tampering/dotnet-invalid-pe"
@@ -1634,11 +1631,6 @@ impl PEAnalyzer {
             }
         }
         None
-    }
-
-    /// Find a byte signature in data
-    fn find_signature(&self, data: &[u8], needle: &[u8]) -> Option<usize> {
-        data.windows(needle.len()).position(|w| w == needle)
     }
 }
 

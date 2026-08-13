@@ -200,7 +200,13 @@ pub(crate) fn find_build_root(paths: &[String]) -> Option<String> {
 
     // Single-path case — return its parent directory.
     if candidates.len() == 1 {
-        return parent_dir(candidates[0]).map(str::to_string);
+        let path = candidates[0];
+        let separator = if path.contains('\\') { '\\' } else { '/' };
+        let last = path.rfind(separator)?;
+        if last == 0 {
+            return None;
+        }
+        return Some(path[..last].to_string());
     }
 
     // Multi-path: longest common prefix, then trim to last separator.
@@ -211,7 +217,11 @@ pub(crate) fn find_build_root(paths: &[String]) -> Option<String> {
     };
     let mut prefix = candidates[0];
     for c in &candidates[1..] {
-        let common = common_prefix_len(prefix, c);
+        let common = prefix
+            .bytes()
+            .zip(c.bytes())
+            .take_while(|(left, right)| left == right)
+            .count();
         prefix = &prefix[..common];
         if prefix.is_empty() {
             return None;
@@ -223,16 +233,6 @@ pub(crate) fn find_build_root(paths: &[String]) -> Option<String> {
         return None;
     }
     Some(prefix[..last_sep].to_string())
-}
-
-fn parent_dir(p: &str) -> Option<&str> {
-    let separator = if p.contains('\\') { '\\' } else { '/' };
-    let last = p.rfind(separator)?;
-    if last == 0 { None } else { Some(&p[..last]) }
-}
-
-fn common_prefix_len(a: &str, b: &str) -> usize {
-    a.bytes().zip(b.bytes()).take_while(|(x, y)| x == y).count()
 }
 
 /// Best-effort username recovery from a Microsoft PDB path.  Returns

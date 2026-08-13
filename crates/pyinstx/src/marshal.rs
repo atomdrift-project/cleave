@@ -69,10 +69,6 @@ impl<'a> Reader<'a> {
         Ok(u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
     }
 
-    fn i32_le(&mut self) -> Result<i32, MarshalError> {
-        Ok(self.u32_le()? as i32)
-    }
-
     fn read_value(&mut self) -> Result<Value, MarshalError> {
         let code = self.u8()?;
         let has_ref = (code & FLAG_REF) != 0;
@@ -90,7 +86,10 @@ impl<'a> Reader<'a> {
             b'0' | b'N' => Value::None,
             b'T' => Value::Bool(true),
             b'F' => Value::Bool(false),
-            b'i' => Value::Int(self.i32_le()? as i64),
+            b'i' => {
+                let value = self.u32_le()? as i32;
+                Value::Int(i64::from(value))
+            }
             b'I' => {
                 let s = self.take(8)?;
                 let mut arr = [0u8; 8];

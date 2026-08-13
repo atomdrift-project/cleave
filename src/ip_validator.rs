@@ -37,11 +37,15 @@ struct IpCache {
     cache: LruCache<(usize, usize), bool>,
 }
 
+const IP_CACHE_CAPACITY: NonZeroUsize = match NonZeroUsize::new(1024) {
+    Some(capacity) => capacity,
+    None => NonZeroUsize::MIN,
+};
+
 thread_local! {
-    #[allow(clippy::expect_used)]
     static IP_CACHE: std::cell::RefCell<IpCache> = std::cell::RefCell::new(IpCache {
         file_id: 0,
-        cache: LruCache::new(NonZeroUsize::new(1024).expect("valid constant")),
+        cache: LruCache::new(IP_CACHE_CAPACITY),
     });
 }
 
@@ -269,14 +273,6 @@ fn validate_external_ip_string_ctx(ip_str: &str, url_scheme_anchored: bool) -> O
     }
 }
 
-/// True when the bytes immediately before `start` are a `://` URL scheme
-/// separator — i.e. the IPv4 at `start` is the host of a URL such as
-/// `http://45.33.32.156/` or `socks5://2.27.62.51:1080`. A host address is never
-/// a dotted version string, so the version-string heuristics are relaxed for it.
-fn preceded_by_url_scheme(bytes: &[u8], start: usize) -> bool {
-    start >= 3 && &bytes[start - 3..start] == b"://"
-}
-
 /// Validate an IP address string as a structurally valid IPv4 of any range.
 ///
 /// Unlike [`validate_external_ip_string`], this accepts private, loopback,
@@ -412,7 +408,7 @@ pub(crate) fn contains_external_ip(text: &str) -> bool {
         }
         // A `://`-anchored literal is a URL host, not a version string, so the
         // version-string heuristics (low first octet, `.1.1` suffix) are relaxed.
-        let url_anchored = preceded_by_url_scheme(bytes, m.start());
+        let url_anchored = m.start() >= 3 && &bytes[m.start() - 3..m.start()] == b"://";
         if validate_external_ip_string_ctx(m.as_str(), url_anchored).is_some() {
             return true;
         }

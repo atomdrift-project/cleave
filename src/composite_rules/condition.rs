@@ -16,9 +16,9 @@ use std::sync::Arc;
 /// `Regex`) hands out the same warm instance the `&'static` did, without leaking.
 /// Distinct compiled trait regexes kept warm; sized to the regex-using slice of
 /// the corpus (a few thousand), so the working set fits and never thrashes.
-const REGEX_CACHE_CAP: std::num::NonZeroUsize = {
-    #[allow(clippy::expect_used)]
-    std::num::NonZeroUsize::new(16_384).expect("REGEX_CACHE_CAP is non-zero")
+const REGEX_CACHE_CAP: std::num::NonZeroUsize = match std::num::NonZeroUsize::new(16_384) {
+    Some(capacity) => capacity,
+    None => std::num::NonZeroUsize::MIN,
 };
 
 static REGEX_CACHE: std::sync::LazyLock<
@@ -2727,8 +2727,12 @@ impl Condition {
                 }
 
                 // Validate query if present — skip in fast mode (query compiles at eval time)
-                if full && let Some(q) = query {
-                    validate_ast_query(q, language.as_deref())?;
+                if full
+                    && let Some(query) = query
+                    && let Some(language) = language
+                {
+                    filefacts::validate_source_query(language, query)
+                        .map_err(|error| anyhow::anyhow!("{error}"))?;
                 }
 
                 Ok(())
@@ -3436,17 +3440,6 @@ impl Condition {
         // anything, instead of an owned `Finder` per condition (tens of thousands).
         Ok(())
     }
-}
-
-/// Validate a tree-sitter query against the specified language.
-///
-/// Delegates to filefacts so the grammar registry is owned in one place.
-/// When no language is specified, validation is deferred to runtime.
-fn validate_ast_query(query: &str, language: Option<&str>) -> Result<()> {
-    let Some(name) = language else {
-        return Ok(());
-    };
-    filefacts::validate_source_query(name, query).map_err(|e| anyhow::anyhow!("{e}"))
 }
 
 /// Detect regex patterns that cause catastrophic backtracking.

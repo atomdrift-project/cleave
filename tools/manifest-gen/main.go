@@ -229,7 +229,11 @@ func selectPointer(c *config, engine, rel, ch string, cand []commit, cutoff time
 			continue // too fresh to be stable
 		}
 		ok := c.noValidate || validate(c, engine, rel, cm, tarCache, memo)
-		logf("    %s/%s try %s (%s) -> %s", rel, ch, cm.short, cm.date, passWord(ok))
+		result := "fail"
+		if ok {
+			result = "PASS"
+		}
+		logf("    %s/%s try %s (%s) -> %s", rel, ch, cm.short, cm.date, result)
 		if ok {
 			return cm.short
 		}
@@ -745,13 +749,6 @@ func briefErr(out []byte) string {
 		}
 	}
 	return "(no build output)"
-}
-
-func passWord(ok bool) string {
-	if ok {
-		return "PASS"
-	}
-	return "fail"
 }
 
 func logf(format string, a ...any) { fmt.Fprintf(os.Stderr, format+"\n", a...) }

@@ -43,12 +43,15 @@ impl CanonicalTree {
         //
         // The path lengths contains the bit indices or zero if its not present, so find the
         // highest path length to determine how big our tree needs to be.
-        let largest_length =
-            match NonZeroU8::new(*self.path_lengths.iter().max().expect("empty path lengths")) {
-                Some(x) => x,
-                // N.B: If all the path lengths are zero, then the tree is empty (which is allowed).
-                None => return Ok(None),
-            };
+        let Some(&largest_length) = self.path_lengths.iter().max() else {
+            return Ok(None);
+        };
+        let Some(largest_length) = NonZeroU8::new(largest_length) else {
+            return Ok(None);
+        };
+        if largest_length.get() > 16 || self.path_lengths.len() > usize::from(u16::MAX) + 1 {
+            return Err(DecodeFailed::InvalidPathLengths);
+        }
         let mut huffman_tree = vec![0; 1 << largest_length.get()];
 
         // > a zero path length indicates that the element has a zero frequency and is not

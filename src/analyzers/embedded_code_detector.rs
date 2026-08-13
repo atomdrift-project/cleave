@@ -751,16 +751,9 @@ fn lang_name(file_type: &FileType) -> &'static str {
     }
 }
 
-/// Collapse a code snippet to a single trimmed line for use as evidence.
-/// Downstream serialization truncates the value to the evidence cap, so the
-/// snippet stays the actual embedded code rather than a generic description.
-fn code_snippet(value: &str) -> String {
-    value.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
 /// Generate automatic plain embedded-language metadata. The evidence value is
-/// the embedded code itself (collapsed to a single line); the offset lives in
-/// `location`.
+/// the embedded code itself, collapsed to one line and later truncated by the
+/// serializer; the offset lives in `location`.
 fn generate_embedded_language_trait(detected_lang: &FileType, offset: u64, value: &str) -> Finding {
     Finding {
         src: None,
@@ -775,7 +768,7 @@ fn generate_embedded_language_trait(detected_lang: &FileType, offset: u64, value
         evidence: vec![Evidence {
             method: "embedded-code-detection".to_string(),
             source: "string-analysis".to_string(),
-            value: code_snippet(value),
+            value: value.split_whitespace().collect::<Vec<_>>().join(" "),
             location: Some(format!("{:#x}", offset)),
             ..Default::default()
         }],
@@ -994,10 +987,6 @@ pub fn analyze_embedded_string(
 /// Minimum base64 string length to attempt binary decoding.
 const MIN_BASE64_LEN: usize = 100;
 
-fn is_base64_char(c: u8) -> bool {
-    c.is_ascii_alphanumeric() || c == b'+' || c == b'/' || c == b'=' || c == b'-' || c == b'_'
-}
-
 /// Return true if `s` looks like a base64-encoded blob: long enough and nearly all base64 chars.
 fn looks_like_base64(s: &str) -> bool {
     if s.len() < MIN_BASE64_LEN {
@@ -1006,7 +995,10 @@ fn looks_like_base64(s: &str) -> bool {
     let bytes = s.as_bytes();
     let base64_count = bytes
         .iter()
-        .filter(|&&b| is_base64_char(b) || b == b'\n' || b == b'\r')
+        .filter(|&&byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(byte, b'+' | b'/' | b'=' | b'-' | b'_' | b'\n' | b'\r')
+        })
         .count();
     base64_count * 100 / bytes.len() >= 95
 }
@@ -1372,13 +1364,6 @@ pub(crate) fn process_all_strings(
 /// the raw text is still scanned as a plain "mention", but `for:[shell]`/etc.
 /// rules must not fire on documentation. Container/markup types that genuinely
 /// carry executable payloads in malware (HTML, XML, JSON, plists) are NOT listed.
-fn is_document_host_type(file_type: &FileType) -> bool {
-    matches!(
-        file_type,
-        FileType::Markdown | FileType::PkgInfo | FileType::Rtf | FileType::Text
-    )
-}
-
 pub(crate) fn process_all_strings_with_host(
     parent_path: &str,
     strings: &[StringInfo],
@@ -1398,8 +1383,8 @@ pub(crate) fn process_all_strings_with_host(
     // Documentation/prose files embed code blocks as examples, not as executable
     // sublayers. Treat them as plain text mentions: do not create typed embedded
     // sub-analyses (which would let script-targeted rules fire on install docs).
-    if let Some(host) = host_file_type
-        && is_document_host_type(host)
+    if let Some(host @ (FileType::Markdown | FileType::PkgInfo | FileType::Rtf | FileType::Text)) =
+        host_file_type
     {
         tracing::debug!(
             "embedded_code_detector: Skipping embedded sublayers for document type {:?} in {}",

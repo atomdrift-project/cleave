@@ -249,7 +249,8 @@ impl YaraTier {
         }
 
         // Rules that gate on a shebang header are still targeting script files.
-        if has_shebang_magic(&lower) {
+        let condensed: String = lower.chars().filter(|c| !c.is_ascii_whitespace()).collect();
+        if condensed.contains("uint16(0)==0x2123") || condensed.contains("uint16be(0)==0x2321") {
             return Self::Script;
         }
 
@@ -1839,14 +1840,6 @@ fn looks_like_shell_script_text(lower: &str) -> bool {
         || lower.contains("shell-script")
         || lower.contains("bash-script")
         || lower.contains("zsh-script")
-}
-
-fn has_shebang_magic(lower_source: &str) -> bool {
-    let condensed: String = lower_source
-        .chars()
-        .filter(|c| !c.is_ascii_whitespace())
-        .collect();
-    condensed.contains("uint16(0)==0x2123") || condensed.contains("uint16be(0)==0x2321")
 }
 
 /// Infer filetypes from explicit YARA rule header tags.

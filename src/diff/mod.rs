@@ -217,12 +217,27 @@ pub fn diff_paths(
     // Using a canonical root key collapses both sides onto the same logical
     // file. Directories still pair by relative path.
     let canonical_root = old.is_file() && new.is_file();
-    let (old_units, new_units) = rayon::join(
-        || collect_units(old, options, canonical_root),
-        || collect_units(new, options, canonical_root),
-    );
-    let old_units = old_units?;
-    let new_units = new_units?;
+    // Archive diffs are deliberately collected old-first. Their member cache
+    // is keyed by SHA-256, so finishing the baseline populates all unchanged
+    // members before the new archive starts. Besides avoiding duplicate work
+    // for the common "mostly identical package" case, this avoids making
+    // archive-member single-flight followers block the same Rayon pool as the
+    // owner's nested trait work. Non-archive files keep the parallel path.
+    let archive_pair = canonical_root
+        && crate::analyzers::detect_file_type(old).is_ok_and(|kind| kind.is_archive())
+        && crate::analyzers::detect_file_type(new).is_ok_and(|kind| kind.is_archive());
+    let (old_units, new_units) = if archive_pair {
+        (
+            collect_units(old, options, canonical_root)?,
+            collect_units(new, options, canonical_root)?,
+        )
+    } else {
+        let (old_units, new_units) = rayon::join(
+            || collect_units(old, options, canonical_root),
+            || collect_units(new, options, canonical_root),
+        );
+        (old_units?, new_units?)
+    };
 
     let pairs = pair_units(old_units, new_units);
 

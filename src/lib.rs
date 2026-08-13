@@ -2135,7 +2135,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     let flight = loop {
         let flight = analysis_cache::acquire_report_flight(&sha256_hex, options);
         if flight.is_owner() {
-            break flight;
+            break Some(flight);
         }
         if let Some(mut report) = flight.wait() {
             report.target.path = path.display().to_string();
@@ -2149,6 +2149,13 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             );
             return Ok(report);
         }
+        if rayon::current_thread_index().is_some() {
+            tracing::debug!(
+                sha256 = %sha256_hex,
+                "Analysis flight busy on Rayon worker; analyzing independently"
+            );
+            break None;
+        }
         // The owner failed. Its Drop released the slot; retry so this caller
         // can provide the normal error (or successful fallback) itself.
     };
@@ -2159,12 +2166,16 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         cached_report.target.path = path.display().to_string();
         cached_report.analysis_timestamp = Some(chrono::Utc::now());
         restamp_path_derived_values(&mut cached_report, path);
-        flight.complete(None);
+        if let Some(flight) = flight {
+            flight.complete(None);
+        }
         return Ok(cached_report);
     }
     if let Some(fa) = analysis_cache::file_analysis_cache_lookup(&sha256_hex, options) {
         let report = report_from_file_analysis(fa, path.display().to_string());
-        flight.complete(None);
+        if let Some(flight) = flight {
+            flight.complete(None);
+        }
         return Ok(report);
     }
 
@@ -2825,7 +2836,9 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
 
     // Store result in analysis cache for future lookups
     analysis_cache::report_cache_store(&sha256_hex, options, &report);
-    flight.complete(Some(&report));
+    if let Some(flight) = flight {
+        flight.complete(Some(&report));
+    }
 
     Ok(report)
 }

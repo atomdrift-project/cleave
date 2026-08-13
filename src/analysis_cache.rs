@@ -37,7 +37,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock, Weak};
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 
 /// Maximum number of toplevel report cache entries before eviction triggers.
 const MAX_REPORT_ENTRIES: i64 = 100_000;
@@ -128,55 +128,32 @@ impl ReportFlight {
     }
 
     /// Wait for the owner and clone its report. Returns `None` when this
-    /// caller is the owner or when the owner failed, in which case the caller
-    /// should retry acquisition and perform the analysis itself.
+    /// caller is the owner, when the owner failed, or when waiting would block
+    /// a Rayon worker. In the latter case the caller must analyze independently
+    /// so nested work in the same pool can always make progress.
     pub(crate) fn wait(&self) -> Option<AnalysisReport> {
         if self.owner {
             return None;
         }
 
-        // A follower may be running inside the same Rayon pool as its owner:
-        // diff_paths analyzes both archives concurrently, each archive fans
-        // members out, and each member can launch more Rayon work for traits.
-        // Parking that worker on the Condvar can exhaust the pool while the
-        // owner is waiting for nested jobs that are queued in that same pool.
-        //
-        // Outside Rayon, use the efficient blocking wait. Inside Rayon,
-        // cooperatively execute one pending job at a time. When the pool is
-        // momentarily idle, use a short timed wait to avoid spinning while the
-        // owner is doing non-Rayon work; the timeout guarantees the worker
-        // returns to helping before pool starvation can become permanent.
+        // A follower may be running inside the same Rayon pool as its owner,
+        // and archive/member/trait analysis all create nested Rayon work.
+        // Neither parking nor `rayon::yield_now` is safe here: parking can
+        // exhaust the pool, while yielding can recursively execute more
+        // followers of this same flight and never unwind to the owner. Do not
+        // wait on a Rayon worker. Callers fall back to independent analysis;
+        // archive diffs avoid that work in the common case by collecting the
+        // old archive first and serving unchanged new members from SHA cache.
         if rayon::current_thread_index().is_some() {
-            loop {
-                {
-                    let result = self
-                        .state
-                        .result
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner);
-                    if result.done {
-                        return result.report.as_deref().cloned();
-                    }
-                }
-
-                if matches!(rayon::yield_now(), Some(rayon::Yield::Executed)) {
-                    continue;
-                }
-
-                let result = self
-                    .state
-                    .result
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                if result.done {
-                    return result.report.as_deref().cloned();
-                }
-                let (_result, _timeout) = self
-                    .state
-                    .wake
-                    .wait_timeout(result, Duration::from_millis(1))
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-            }
+            let result = self
+                .state
+                .result
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            return result
+                .done
+                .then(|| result.report.as_deref().cloned())
+                .flatten();
         }
 
         let mut result = self
@@ -946,7 +923,7 @@ mod tests {
     }
 
     #[test]
-    fn report_flight_wait_keeps_nested_rayon_work_moving() {
+    fn report_flight_wait_never_blocks_nested_rayon_work() {
         use std::sync::{Arc, Barrier};
 
         // Reproduce the diff/archive cycle that hung node-ipc:
@@ -954,12 +931,11 @@ mod tests {
         // * one pool worker owns analysis of a shared member and enters a
         //   nested Rayon join;
         // * the other worker reaches the same SHA and waits as a follower;
-        // * the owner's second nested job cannot run unless the follower
-        //   cooperatively yields to the pool.
+        // * the owner's second nested job cannot run if the follower parks.
         //
-        // A blocking Condvar wait deadlocks this two-thread pool. The
-        // Rayon-aware wait executes the queued nested job, allowing the owner
-        // to publish its report and both branches to finish.
+        // A blocking Condvar wait deadlocks this two-thread pool. The follower
+        // instead receives None immediately and leaves the worker available,
+        // allowing the owner's nested join to finish.
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(2)
             .build()
@@ -969,8 +945,8 @@ mod tests {
         let options = AnalysisOptions::default();
         let sha = "member-flight-nested-rayon-regression";
 
-        let shared_sha = pool.install(|| {
-            let ((), shared) = rayon::join(
+        let avoided_wait = pool.install(|| {
+            let ((), avoided_wait) = rayon::join(
                 || {
                     let owner = acquire_member_flight(sha, &options);
                     assert!(owner.is_owner());
@@ -989,10 +965,10 @@ mod tests {
                     follower.wait().map(|report| report.target.sha256)
                 },
             );
-            shared
+            avoided_wait
         });
 
-        assert_eq!(shared_sha.as_deref(), Some(sha));
+        assert_eq!(avoided_wait, None);
     }
 
     #[test]

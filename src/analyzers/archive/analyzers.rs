@@ -1060,6 +1060,24 @@ impl ArchiveAnalyzer {
                 tracing::debug!(sha256, relative_path, "Archive member single-flight hit");
                 return Ok(Some(report));
             }
+            if rayon::current_thread_index().is_some() {
+                // Waiting for another member analyzed by this same pool can
+                // starve the owner's nested trait work. Analyze independently
+                // instead; sequential old->new archive diffs normally hit the
+                // SHA cache before reaching this fallback.
+                tracing::debug!(
+                    sha256,
+                    relative_path,
+                    "Archive member flight busy on Rayon worker; analyzing independently"
+                );
+                return self.analyze_extracted_member_uncached(
+                    file_path,
+                    relative_path,
+                    data,
+                    file_type,
+                    sha256,
+                );
+            }
             // The owner failed before publishing a report. Retry once through
             // the normal path so a waiter is not turned into a false success.
             return self.analyze_extracted_member(

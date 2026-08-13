@@ -701,6 +701,15 @@ fn decompress_to_file<R: std::io::Read>(
     )
 }
 
+/// Build a decoder for the legacy LZMA-alone stream format (`.lzma`).
+/// `XzDecoder::new` expects an XZ container; the explicit stream is required
+/// for LZMA-alone files such as the payload carrier used in the xz incident.
+fn lzma_alone_decoder<R: std::io::Read>(reader: R) -> Result<xz2::read::XzDecoder<R>> {
+    let stream = xz2::stream::Stream::new_lzma_decoder(u64::MAX)
+        .context("Failed to create LZMA-alone decoder")?;
+    Ok(xz2::read::XzDecoder::new_stream(reader, stream))
+}
+
 /// Decode `reader` to exhaustion, keeping whatever came out before a truncated
 /// or corrupt stream cut it short.
 ///
@@ -821,7 +830,7 @@ fn extract_decompressed_data_or_write_file(
                 guard,
             )
         }
-        FileType::Gz | FileType::Bz2 | FileType::Xz | FileType::Zst
+        FileType::Gz | FileType::Bz2 | FileType::Xz | FileType::Lzma | FileType::Zst
             if decompression_depth >= MAX_RECURSIVE_DECOMPRESSION_LAYERS =>
         {
             let mut out = File::create(dest_dir.join(stem))?;
@@ -846,6 +855,14 @@ fn extract_decompressed_data_or_write_file(
         ),
         FileType::Xz => decompress_to_file_at_depth(
             xz2::read::XzDecoder::new(Cursor::new(&data)),
+            logical_path,
+            dest_dir,
+            data.len() as u64,
+            guard,
+            decompression_depth + 1,
+        ),
+        FileType::Lzma => decompress_to_file_at_depth(
+            lzma_alone_decoder(Cursor::new(&data))?,
             logical_path,
             dest_dir,
             data.len() as u64,
@@ -1809,6 +1826,13 @@ impl ArchiveAnalyzer {
             ),
             FileType::Xz => decompress_to_file(
                 xz2::read::XzDecoder::new(Cursor::new(data)),
+                archive_path,
+                dest_dir,
+                data.len() as u64,
+                guard,
+            ),
+            FileType::Lzma => decompress_to_file(
+                lzma_alone_decoder(Cursor::new(data))?,
                 archive_path,
                 dest_dir,
                 data.len() as u64,
@@ -4319,6 +4343,43 @@ traits:
                 "decompressed content should match original"
             );
         }
+    }
+
+    #[test]
+    fn test_extract_dir_standalone_lzma() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let extract_dir = tempfile::tempdir().expect("create extract dir");
+        let lzma_path = temp_dir.path().join("payload.sh.lzma");
+        let original_content = b"#!/bin/sh\nprintf '%s\\n' decoded\n";
+
+        let options = xz2::stream::LzmaOptions::new_preset(6).expect("LZMA options");
+        let stream = xz2::stream::Stream::new_lzma_encoder(&options).expect("LZMA-alone encoder");
+        let mut encoder = xz2::write::XzEncoder::new_stream(
+            File::create(&lzma_path).expect("create .lzma"),
+            stream,
+        );
+        encoder.write_all(original_content).expect("write LZMA");
+        encoder.finish().expect("finish LZMA");
+
+        let config = SampleExtractionConfig::new(extract_dir.path().to_path_buf());
+        let analyzer = ArchiveAnalyzer::new()
+            .with_sample_extraction(config)
+            .with_analysis_options(Arc::new(crate::AnalysisOptions {
+                all_files: true,
+                ..crate::AnalysisOptions::default()
+            }));
+        let report = analyzer.analyze(&lzma_path).expect("analyze .lzma");
+
+        let extracted = report
+            .files
+            .iter()
+            .filter_map(|file| file.extracted_path.as_ref())
+            .find(|path| std::path::Path::new(path).is_file())
+            .expect("standalone .lzma should produce an extracted file");
+        assert_eq!(
+            std::fs::read(extracted).expect("read extracted LZMA content"),
+            original_content
+        );
     }
 
     #[test]

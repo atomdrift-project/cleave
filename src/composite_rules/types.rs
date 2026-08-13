@@ -490,6 +490,8 @@ pub(crate) enum FileType {
     Bz2,
     /// XZ-compressed single file (.xz, not a tar)
     Xz,
+    /// LZMA-alone compressed single file (.lzma)
+    Lzma,
     /// npm package (.tgz)
     #[archive]
     Npm,
@@ -678,6 +680,7 @@ impl From<filefacts::FileType> for FileType {
             Ff::Gz => Self::Gz,
             Ff::Bz2 => Self::Bz2,
             Ff::Xz => Self::Xz,
+            Ff::Lzma => Self::Lzma,
             Ff::Zst => Self::Zst,
             Ff::SevenZ | Ff::Rar => Self::Archive,
             Ff::Iso => Self::Iso,

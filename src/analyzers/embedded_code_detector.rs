@@ -1102,12 +1102,12 @@ fn detect_base64_binary(
     if matches!(inner_type, "elf" | "pe") && decoded.len() < MIN_BASE64_EXECUTABLE_SIZE {
         return Vec::new();
     }
-    if matches!(inner_type, "gz" | "zip" | "xz" | "bz2")
+    if matches!(inner_type, "gz" | "zip" | "xz" | "lzma" | "bz2")
         && decoded.len() < MIN_BASE64_COMPRESSED_SIZE
     {
         return Vec::new();
     }
-    if matches!(inner_type, "gz" | "zip" | "xz" | "bz2")
+    if matches!(inner_type, "gz" | "zip" | "xz" | "lzma" | "bz2")
         && parent_path.split(['/', '\\', '!']).any(|component| {
             matches!(component, "testdata" | "fixture" | "fixtures")
                 || component.ends_with("_test.go")
@@ -1209,6 +1209,7 @@ fn inner_type_to_file_type(
         "gz" => Some(crate::analyzers::FileType::Gz),
         "zip" => Some(crate::analyzers::FileType::Zip),
         "xz" => Some(crate::analyzers::FileType::Xz),
+        "lzma" => Some(crate::analyzers::FileType::Lzma),
         "bz2" => Some(crate::analyzers::FileType::Bz2),
         "tar.gz" => Some(crate::analyzers::FileType::TarGz),
         "tar" => Some(crate::analyzers::FileType::Tar),

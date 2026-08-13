@@ -656,6 +656,7 @@ impl FileTypeExt for FileType {
             FileType::Gz
             | FileType::Bz2
             | FileType::Xz
+            | FileType::Lzma
             | FileType::Zst
             | FileType::PkgMacos
             | FileType::Cab => {

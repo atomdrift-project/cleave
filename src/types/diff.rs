@@ -98,8 +98,9 @@ pub struct DiffReportV1 {
     pub summary: DiffSummary,
     /// Program-level rollup of per-scope diffs.
     pub scopes: ScopeDiffs,
-    /// Per-file diffs. Files with `status == Unchanged` are omitted unless
-    /// `include_unchanged` was requested.
+    /// Per-file diffs. Unchanged files are omitted except when both sides
+    /// retain a hostile behavioral formula; those persistent loaders/hooks
+    /// remain visible as differential context.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub files: Vec<FileDiffEntry>,
 }

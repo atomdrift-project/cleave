@@ -249,7 +249,11 @@ pub fn diff_paths(
 
     let visible_files: Vec<FileDiffEntry> = file_diffs
         .into_iter()
-        .filter(|f| f.status != FileStatus::Unchanged)
+        // Normally unchanged files are pure noise. Preserve the narrow case
+        // where both sides carry a hostile behavioral formula: persistent
+        // attack infrastructure is important differential context (for
+        // example, an unchanged loader beside a refreshed payload carrier).
+        .filter(visible_diff_file)
         .collect();
 
     let old_root = old.display().to_string();
@@ -473,14 +477,22 @@ fn diff_pair(pair: UnitPair, mask: ScopeMask, limit: usize) -> FileDiffEntry {
     // same canonical form as the analyze CLI/JSON output (see
     // `output::filter_findings_for_formula`) and the renderer doesn't need
     // access to the raw findings.
+    let unchanged_hostile = matches!(resolved, FileStatus::Unchanged)
+        && old
+            .findings
+            .iter()
+            .chain(&new.findings)
+            .any(|finding| finding.crit == crate::types::Criticality::Hostile);
     let old_formula = side_formula(&old.findings);
     let new_formula = match resolved {
         FileStatus::Added | FileStatus::Changed => side_formula(&new.findings),
-        // Removed/Unchanged carry no "new side" worth showing.
+        FileStatus::Unchanged if unchanged_hostile => side_formula(&new.findings),
+        // Removed and ordinary unchanged files carry no new-side formula.
         _ => None,
     };
     let old_formula = match resolved {
         FileStatus::Removed | FileStatus::Changed => old_formula,
+        FileStatus::Unchanged if unchanged_hostile => old_formula,
         _ => None,
     };
 
@@ -514,6 +526,11 @@ fn side_formula(findings: &[Finding]) -> Option<String> {
     let filtered = crate::output::filter_findings_for_formula(findings);
     let f = crate::malecule_bridge::formula_from_findings(&filtered);
     (!f.is_empty()).then_some(f)
+}
+
+fn visible_diff_file(file: &FileDiffEntry) -> bool {
+    file.status != FileStatus::Unchanged
+        || (file.old_formula.is_some() && file.new_formula.is_some())
 }
 
 fn any_scope_changed(s: &ScopeDiffs) -> bool {
@@ -702,5 +719,50 @@ mod tests {
             pairs.iter().map(|p| p.path.as_str()).collect::<Vec<_>>(),
             vec!["a", "b", "c"]
         );
+    }
+
+    #[test]
+    fn unchanged_hostile_file_retains_formula_and_visibility() {
+        let hostile = Finding {
+            id: "objectives/supply-chain/install-hook/build/autotools::loader".into(),
+            desc: "Persistent hostile loader".into(),
+            conf: 0.99,
+            crit: crate::types::Criticality::Hostile,
+            ..Finding::default()
+        };
+        let mut old = DiffUnit::empty("m4/loader.m4".into());
+        old.findings.push(hostile.clone());
+        let mut new = DiffUnit::empty("m4/loader.m4".into());
+        new.findings.push(hostile);
+
+        let entry = diff_pair(
+            UnitPair {
+                path: "m4/loader.m4".into(),
+                old: Some(old),
+                new: Some(new),
+            },
+            ScopeMask::all(),
+            DEFAULT_LIMIT_CHANGES,
+        );
+
+        assert_eq!(entry.status, FileStatus::Unchanged);
+        assert!(entry.old_formula.is_some());
+        assert_eq!(entry.old_formula, entry.new_formula);
+        assert!(visible_diff_file(&entry));
+    }
+
+    #[test]
+    fn ordinary_unchanged_file_stays_hidden() {
+        let entry = diff_pair(
+            UnitPair {
+                path: "README".into(),
+                old: Some(DiffUnit::empty("README".into())),
+                new: Some(DiffUnit::empty("README".into())),
+            },
+            ScopeMask::all(),
+            DEFAULT_LIMIT_CHANGES,
+        );
+        assert_eq!(entry.status, FileStatus::Unchanged);
+        assert!(!visible_diff_file(&entry));
     }
 }

@@ -247,6 +247,16 @@ pub struct AnalysisReport {
     /// same path map trait authors target.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub values_tree: Option<Box<serde_json::Value>>,
+    /// Already-flattened member kv, carried only across the compact per-member
+    /// cache round-trip. A member cached as a [`FileAnalysis`] keeps its folded
+    /// facts as flat `kv`; the nested `values_tree` was dropped to save space,
+    /// so [`crate::report_from_file_analysis`] stashes the flat map here and
+    /// [`Self::into_file_analysis`] restores it. Without this a cached member
+    /// returns with empty kv and reads as spuriously *changed* against the
+    /// freshly-analyzed side of a diff. Transient: never serialized, and not
+    /// part of any cache key.
+    #[serde(skip)]
+    pub(crate) cached_member_kv: Option<std::collections::BTreeMap<String, serde_json::Value>>,
     /// Filefacts's flat metric map (`{ "lnk.args_max_whitespace_run":
     /// 100.0, "pdf.action_count": 4.0, … }`) attached verbatim so
     /// trait-rule resolution for `type: metrics, field: …` reads
@@ -465,6 +475,7 @@ impl AnalysisReport {
             filefacts: None,
             identity: None,
             values_tree: None,
+            cached_member_kv: None,
             filefacts_metrics: None,
             filefacts_metric_spans: None,
             paths: Vec::new(),
@@ -551,14 +562,25 @@ impl AnalysisReport {
     /// - `archive.security.{setuid_count, setgid_count, sticky_count,
     ///   world_writable_count, symlink_count, external_symlink_count}` —
     ///   permission/symlink shapes that gate supply-chain risk traits.
-    /// - `archive.format.{entry_types, regular_count, directory_count,
-    ///   symlink_count}` — entry-type histogram.
+    /// - `archive.format.{entry_types, regular_count, symlink_count}` —
+    ///   entry-type histogram (directories excluded; see below).
     /// - `archive.builder.{unames, gnames}` — POSIX ownership strings tar
     ///   often leaks (real usernames frequently appear in supply-chain samples).
     ///
+    /// Directory entries are dropped up front. They carry no analyzable content,
+    /// and the archive-analysis paths recorded them inconsistently — the
+    /// in-memory and zip/iso paths already filter them, the tar disk-extraction
+    /// path kept them — so every `archive.*` fact (member_count, members[], the
+    /// security/timing aggregates) silently depended on which path an archive
+    /// took. That made byte-identical archives diff as changed. Excluding
+    /// directories here, once, makes the whole subtree files-only and
+    /// path-independent, matching the dominant in-memory/zip behavior.
+    ///
     /// Idempotent: callers may invoke this multiple times; the last call
-    /// wins. No-op when `archive_contents` is empty.
+    /// wins. No-op when `archive_contents` holds no file members.
     pub(crate) fn seal_archive_metadata_kv(&mut self) {
+        self.archive_contents
+            .retain(|entry| entry.entry_type.as_deref() != Some("directory"));
         if self.archive_contents.is_empty() {
             return;
         }
@@ -1874,10 +1896,17 @@ impl AnalysisReport {
 
         file.populate_file_metrics();
         // `kv` is the single retained representation — see `to_file_analysis`.
+        // A freshly-analyzed report carries the nested `values_tree` and flattens
+        // it here; a member restored from the compact cache has no tree, only its
+        // already-flattened `kv` (stashed on `cached_member_kv`), so use that
+        // directly. Both paths land the same map, so the two sides of a diff
+        // agree on an unchanged member instead of reporting phantom kv deltas.
         if let Some(tree) = self.values_tree.as_deref()
             && retain_folded_kv(&file.path)
         {
             flatten_kv_for_output(tree, &mut file.kv);
+        } else if let Some(kv) = self.cached_member_kv.take() {
+            file.kv = kv;
         }
         drop_unread_folded_fields(&mut file);
         precompact_member_facts(&mut file);

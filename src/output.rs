@@ -4199,6 +4199,7 @@ mod tests {
             filefacts: None,
             identity: None,
             values_tree: None,
+            cached_member_kv: None,
             filefacts_metrics: None,
             filefacts_metric_spans: None,
             paths: vec![],

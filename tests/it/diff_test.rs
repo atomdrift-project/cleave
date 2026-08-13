@@ -9,7 +9,7 @@
 use std::path::Path;
 
 use cleave::AnalysisOptions;
-use cleave::diff::{DEFAULT_LIMIT_CHANGES, ScopeMask, UnchangedMembers, diff_paths};
+use cleave::diff::{DEFAULT_LIMIT_CHANGES, ScopeMask, diff_paths};
 use cleave::types::FileStatus;
 
 const ELF: &str = "tests/fixtures/test.elf";
@@ -37,7 +37,6 @@ fn diff_same_file_has_zero_roc() {
         &options(),
         ScopeMask::all(),
         DEFAULT_LIMIT_CHANGES,
-        UnchangedMembers::Skip,
     )
     .expect("diff should succeed");
 
@@ -69,7 +68,6 @@ fn diff_elf_vs_macho_behavior() {
         &options(),
         ScopeMask::all(),
         DEFAULT_LIMIT_CHANGES,
-        UnchangedMembers::Skip,
     )
     .expect("full-scope diff should succeed");
     let full_diff = full.diff.expect("diff should be present");
@@ -91,7 +89,6 @@ fn diff_elf_vs_macho_behavior() {
         &options(),
         strings_mask,
         DEFAULT_LIMIT_CHANGES,
-        UnchangedMembers::Skip,
     )
     .expect("strings-scope diff should succeed");
     let scoped_diff = scoped.diff.expect("diff should be present");
@@ -131,7 +128,6 @@ fn diff_elf_vs_macho_behavior() {
         &options(),
         ScopeMask::parse("strings").expect("parse"),
         limit,
-        UnchangedMembers::Skip,
     )
     .expect("limited diff should succeed");
     let limited_diff = limited.diff.expect("diff should be present");

@@ -2832,17 +2832,8 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     // replaces raw per-finding evidence; it rides the report into both caches.
     crate::context::capture(&mut report, file_data, file_type);
 
-    // A skip_predicate can prune an archive's members (see `diff_paths`), so its
-    // aggregate report is non-canonical: it is missing members. skip_predicate
-    // is deliberately excluded from the cache key (it is caller policy, not an
-    // input), so persisting a pruned archive report would let a later full
-    // `analyze` of the same sha be served the partial one. Non-archive skipped
-    // files short-circuit far earlier and never reach here; only archives, whose
-    // members each ran the predicate, need this guard.
-    let cacheable = !(options.skip_predicate.is_some() && file_type.is_archive());
-
     // Store result in per-file cache (cross-context: shared with archive member analysis)
-    if cacheable {
+    {
         let mut fa = report.to_file_analysis(0);
         fa.path = String::new();
         fa.id = 0;
@@ -2853,9 +2844,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     }
 
     // Store result in analysis cache for future lookups
-    if cacheable {
-        analysis_cache::report_cache_store(&sha256_hex, options, &report);
-    }
+    analysis_cache::report_cache_store(&sha256_hex, options, &report);
     if let Some(flight) = flight {
         flight.complete(Some(&report));
     }
@@ -3472,7 +3461,6 @@ pub fn diff_files<P: AsRef<Path>>(old: P, new: P) -> Result<AnalysisReport> {
         &AnalysisOptions::default(),
         diff::ScopeMask::all(),
         diff::DEFAULT_LIMIT_CHANGES,
-        diff::UnchangedMembers::Skip,
     )
 }
 

@@ -46,6 +46,7 @@ fn renders_ledger_row_for_added_file() {
         scopes: ScopeDiffs::default(),
         files: vec![FileDiffEntry {
             path: "lib/foo.so".into(),
+            file_type: Some("elf".into()),
             status: FileStatus::Added,
             identity: None,
             scopes: ScopeDiffs {
@@ -103,6 +104,7 @@ fn diff_with_identity(identity: crate::types::IdentityDiff) -> AnalysisReport {
         scopes: ScopeDiffs::default(),
         files: vec![FileDiffEntry {
             path: "bin/tool".into(),
+            file_type: Some("elf".into()),
             status: FileStatus::Changed,
             identity: Some(identity),
             scopes: ScopeDiffs::default(),
@@ -149,6 +151,7 @@ fn unchanged_identity_still_shows_summary_headline() {
         scopes: ScopeDiffs::default(),
         files: vec![FileDiffEntry {
             path: "bin/tool".into(),
+            file_type: Some("elf".into()),
             status: FileStatus::Changed,
             identity: Some(crate::types::IdentityDiff {
                 old: Some(id.clone()),
@@ -213,6 +216,7 @@ fn renders_changed_file_in_ledger_no_zero_filler() {
         scopes: ScopeDiffs::default(),
         files: vec![FileDiffEntry {
             path: "x.py".into(),
+            file_type: Some("python".into()),
             status: FileStatus::Changed,
             identity: None,
             scopes: ScopeDiffs {
@@ -263,6 +267,7 @@ fn header_aligns_formula_arrow_under_label_arrow_single_file() {
         scopes: ScopeDiffs::default(),
         files: vec![FileDiffEntry {
             path: "<root>".into(),
+            file_type: None,
             status: FileStatus::Changed,
             identity: None,
             scopes: ScopeDiffs::default(),
@@ -324,6 +329,7 @@ fn pane_renders_old_and_new_formula_under_path() {
         scopes: ScopeDiffs::default(),
         files: vec![FileDiffEntry {
             path: "lib/foo.so".into(),
+            file_type: Some("elf".into()),
             status: FileStatus::Changed,
             identity: None,
             scopes: ScopeDiffs {
@@ -369,6 +375,7 @@ fn pane_renders_added_file_formula_only() {
         scopes: ScopeDiffs::default(),
         files: vec![FileDiffEntry {
             path: "new_only.py".into(),
+            file_type: Some("python".into()),
             status: FileStatus::Added,
             identity: None,
             scopes: ScopeDiffs {
@@ -420,6 +427,7 @@ fn compact_pair_strips_common_prefix() {
 fn sort_files_by_max_crit_then_roc() {
     let mk = |path: &str, crit: Criticality, roc: f32| FileDiffEntry {
         path: path.into(),
+        file_type: None,
         status: FileStatus::Changed,
         identity: None,
         scopes: ScopeDiffs {

@@ -288,6 +288,11 @@ pub struct IdentityDiff {
 pub struct FileDiffEntry {
     /// Path relative to the input root (or the archive prefix for nested members).
     pub path: String,
+    /// Content-detected file type, preferring the new side and falling back to
+    /// the old side for removals. This is analysis metadata, not an extension
+    /// guess, and gives downstream feature consumers a stable type dimension.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_type: Option<String>,
     /// Whether the file was added, removed, changed, or unchanged.
     pub status: FileStatus,
     /// Identity headline (claimed/verified identity of each side).
@@ -581,6 +586,7 @@ mod tests {
             scopes: ScopeDiffs::default(),
             files: vec![FileDiffEntry {
                 path: "lib/foo.so".to_string(),
+                file_type: Some("elf".to_string()),
                 status: FileStatus::Changed,
                 identity: None,
                 scopes: ScopeDiffs {
@@ -602,6 +608,7 @@ mod tests {
         let back: DiffReportV1 = serde_json::from_str(&s).unwrap();
         assert_eq!(back.files.len(), 1);
         assert_eq!(back.files[0].status, FileStatus::Changed);
+        assert_eq!(back.files[0].file_type.as_deref(), Some("elf"));
         let strings = back.files[0].scopes.strings.as_ref().unwrap();
         assert_eq!(strings.added.len(), 1);
         assert_eq!(strings.added[0].value, "/etc/passwd");

@@ -58,7 +58,13 @@ mod jemalloc {
 mod cli_bootstrap;
 mod cli_dispatch;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
+// Only the `#[cfg(unix)]` SIGUSR1 backtrace thread calls `.context()`, so on
+// Windows this import is unused — and `unused_imports = "deny"` makes that a
+// build failure rather than a warning. That is what kept Windows binaries out
+// of every release through 2.7.1.
+#[cfg(unix)]
+use anyhow::Context;
 use clap::Parser;
 use cleave::cli;
 #[cfg(feature = "deadlock-detection")]

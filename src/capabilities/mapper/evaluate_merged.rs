@@ -233,8 +233,37 @@ impl super::CapabilityMapper {
         }
 
         // Use precomputed regex matches if provided, otherwise compute now
-        let raw_regex_matches = precomputed_raw_regex
+        let mut raw_regex_matches = precomputed_raw_regex
             .unwrap_or_else(|| self.precompute_raw_regex_matches(binary_data, &file_type));
+        // The gate scanned raw bytes, but `type: text` also matches decoded
+        // string layers (base64/xor chains — `eval_text`'s second pass). A
+        // trait whose only match lives inside a decoded layer (English words
+        // in an inline base64 sourcemap) must not be gated out by raw-atom
+        // absence, so candidates from the decoded values are unioned in.
+        // Decoded layers are rare and small, so this pass is ~free — and it
+        // keeps the gate active on such files (bypassing it instead measured
+        // +50% wall on data-URI-dense bundles like browser extensions).
+        if let Some(matches) = raw_regex_matches.as_mut() {
+            let decoded: Vec<&str> = report
+                .strings
+                .iter()
+                .filter(|s| !s.encoding_chain.is_empty())
+                .map(|s| s.value.as_str())
+                .collect();
+            if !decoded.is_empty() {
+                // Newline joins keep word-boundary checks from bridging two
+                // layers; an atom spanning the seam can only over-fire the
+                // gate, never suppress it. Candidate-only sweep: full
+                // verification here measured as a wall regression on
+                // decode-heavy members (browser-extension bundles).
+                let joined = decoded.join("\n");
+                matches.extend(
+                    self.match_indexes()
+                        .raw_content_regex_index
+                        .find_candidates(joined.as_bytes(), &file_type),
+                );
+            }
+        }
         let raw_regex_matches_ref = raw_regex_matches.as_ref();
 
         // Use trait index to only evaluate applicable traits

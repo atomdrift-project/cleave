@@ -710,7 +710,6 @@ fn aggregate_scopes(files: &[FileDiffEntry], mask: ScopeMask, limit: usize) -> S
     fn pool<T: Clone>(
         files: &[FileDiffEntry],
         get: impl Fn(&ScopeDiffs) -> Option<&ScopeDiff<T>>,
-        limit: usize,
     ) -> Option<ScopeDiff<T>> {
         let mut out = ScopeDiff::<T>::default();
         let mut any = false;
@@ -735,36 +734,52 @@ fn aggregate_scopes(files: &[FileDiffEntry], mask: ScopeMask, limit: usize) -> S
             return None;
         }
         out.recompute_roc();
-        scopes::truncate(&mut out, limit);
         Some(out)
     }
 
-    ScopeDiffs {
+    let mut scopes = ScopeDiffs {
         traits: mask
             .traits
-            .then(|| pool(files, |s| s.traits.as_ref(), limit))
+            .then(|| pool(files, |s| s.traits.as_ref()))
             .flatten(),
         metrics: mask
             .metrics
-            .then(|| pool(files, |s| s.metrics.as_ref(), limit))
+            .then(|| pool(files, |s| s.metrics.as_ref()))
             .flatten(),
-        kv: mask
-            .kv
-            .then(|| pool(files, |s| s.kv.as_ref(), limit))
-            .flatten(),
+        kv: mask.kv.then(|| pool(files, |s| s.kv.as_ref())).flatten(),
         symbols: mask
             .symbols
-            .then(|| pool(files, |s| s.symbols.as_ref(), limit))
+            .then(|| pool(files, |s| s.symbols.as_ref()))
             .flatten(),
         strings: mask
             .strings
-            .then(|| pool(files, |s| s.strings.as_ref(), limit))
+            .then(|| pool(files, |s| s.strings.as_ref()))
             .flatten(),
         sections: mask
             .sections
-            .then(|| pool(files, |s| s.sections.as_ref(), limit))
+            .then(|| pool(files, |s| s.sections.as_ref()))
             .flatten(),
+    };
+
+    if let Some(diff) = scopes.traits.as_mut() {
+        scopes::truncate_traits(diff, limit);
     }
+    if let Some(diff) = scopes.metrics.as_mut() {
+        scopes::truncate(diff, limit);
+    }
+    if let Some(diff) = scopes.kv.as_mut() {
+        scopes::truncate(diff, limit);
+    }
+    if let Some(diff) = scopes.symbols.as_mut() {
+        scopes::truncate(diff, limit);
+    }
+    if let Some(diff) = scopes.strings.as_mut() {
+        scopes::truncate(diff, limit);
+    }
+    if let Some(diff) = scopes.sections.as_mut() {
+        scopes::truncate(diff, limit);
+    }
+    scopes
 }
 
 /// Mean of per-scope ROCs over scopes that have data on at least one side.
@@ -966,6 +981,60 @@ mod tests {
         assert!(entry.old_formula.is_some());
         assert_eq!(entry.old_formula, entry.new_formula);
         assert!(visible_diff_file(&entry));
+    }
+
+    #[test]
+    fn aggregate_trait_cap_keeps_high_signal_from_later_files() {
+        let mut noisy = DiffUnit::empty("a-noisy.c".into());
+        noisy.findings = (0..100)
+            .map(|i| Finding {
+                id: format!("metadata/noise/{i:03}").into(),
+                desc: "baseline noise".into(),
+                crit: crate::types::Criticality::Baseline,
+                ..Finding::default()
+            })
+            .collect();
+        let mut hostile = DiffUnit::empty("z-payload.c".into());
+        hostile.findings.push(Finding {
+            id: "objectives/command-and-control/remote-shell".into(),
+            desc: "hostile remote shell".into(),
+            conf: 0.99,
+            crit: crate::types::Criticality::Hostile,
+            ..Finding::default()
+        });
+
+        let entries = vec![
+            diff_pair(
+                UnitPair {
+                    path: noisy.path.clone(),
+                    old: None,
+                    new: Some(noisy),
+                },
+                ScopeMask::all(),
+                DEFAULT_LIMIT_CHANGES,
+            ),
+            diff_pair(
+                UnitPair {
+                    path: hostile.path.clone(),
+                    old: None,
+                    new: Some(hostile),
+                },
+                ScopeMask::all(),
+                DEFAULT_LIMIT_CHANGES,
+            ),
+        ];
+
+        let scopes = aggregate_scopes(&entries, ScopeMask::all(), DEFAULT_LIMIT_CHANGES);
+        let traits = scopes.traits.unwrap();
+        assert_eq!(traits.added.len(), DEFAULT_LIMIT_CHANGES);
+        assert!(traits.truncated);
+        assert_eq!(traits.added[0].crit, crate::types::Criticality::Hostile);
+        assert!(
+            traits
+                .added
+                .iter()
+                .any(|finding| finding.id.ends_with("remote-shell"))
+        );
     }
 
     #[test]

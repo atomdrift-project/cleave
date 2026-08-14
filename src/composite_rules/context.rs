@@ -26,8 +26,14 @@ use crate::hash_str;
 #[derive(Debug, Clone)]
 pub(crate) struct FindingScope<'a> {
     own: &'a [Finding],
+    /// Findings inserted between `own` and `extra` in scope order. Used by the
+    /// container cross-scope reeval, where each member's own findings join a
+    /// scope whose other two halves are shared across all members — carrying
+    /// them as a third borrowed slice replaces a per-member deep clone of the
+    /// container snapshot (Finding + Evidence vectors × member count).
+    mid: &'a [Finding],
     extra: &'a [Finding],
-    /// Hashed ids of both halves, so a lookup for an id nothing produced costs
+    /// Hashed ids of all halves, so a lookup for an id nothing produced costs
     /// one hash instead of a full scan. `None` means always scan.
     id_hashes: Option<Arc<FxHashSet<u64>>>,
 }
@@ -42,6 +48,7 @@ impl<'a> FindingScope<'a> {
         }
         Self {
             own,
+            mid: &[],
             extra,
             id_hashes: Some(Arc::new(id_hashes)),
         }
@@ -56,14 +63,31 @@ impl<'a> FindingScope<'a> {
     ) -> Self {
         Self {
             own,
+            mid: &[],
             extra: extra.unwrap_or(&[]),
             id_hashes,
         }
     }
 
-    /// Every finding in scope, both halves, in report-then-extra order.
+    /// The same scope with `mid` spliced in between `own` and `extra`,
+    /// its ids folded into the index. The id-set clone is a flat `u64` copy —
+    /// the cheap alternative to cloning the findings themselves.
+    pub(crate) fn with_mid_findings(mut self, mid: &'a [Finding]) -> Self {
+        debug_assert!(self.mid.is_empty(), "mid findings already set");
+        self.mid = mid;
+        if let Some(hashes) = self.id_hashes.take() {
+            let mut owned = (*hashes).clone();
+            for finding in mid {
+                owned.insert(hash_str(&finding.id));
+            }
+            self.id_hashes = Some(Arc::new(owned));
+        }
+        self
+    }
+
+    /// Every finding in scope, all halves, in report-then-mid-then-extra order.
     pub(crate) fn iter(&self) -> impl Iterator<Item = &Finding> {
-        self.own.iter().chain(self.extra)
+        self.own.iter().chain(self.mid).chain(self.extra)
     }
 
     /// Whether any finding in scope has exactly this id.
@@ -307,6 +331,14 @@ impl<'a> EvaluationContext<'a> {
     #[cfg(test)]
     pub(crate) fn with_additional_findings(mut self, findings: &'a [Finding]) -> Self {
         self.findings = FindingScope::new(&self.report.findings, Some(findings));
+        self
+    }
+
+    /// Splice `mid` between the report's findings and the additional slice in
+    /// scope order (see [`FindingScope::with_mid_findings`]).
+    #[must_use]
+    pub(crate) fn with_mid_findings(mut self, mid: &'a [Finding]) -> Self {
+        self.findings = self.findings.with_mid_findings(mid);
         self
     }
 

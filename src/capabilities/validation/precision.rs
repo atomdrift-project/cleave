@@ -840,9 +840,6 @@ fn calculate_composite_precision_indexed(
         return precision;
     }
 
-    // Debug output controlled by CLEAVE_DEBUG environment variable
-    let debug = std::env::var("CLEAVE_DEBUG").is_ok();
-
     // Detect cycles
     if !visiting.insert(rule_id.to_string()) {
         return BASE_TRAIT_PRECISION;
@@ -859,50 +856,22 @@ fn calculate_composite_precision_indexed(
 
         let file_type_score = file_type_scope_bonus(&rule.r#for);
         precision += file_type_score;
-        if debug && file_type_score > 0.0 {
-            eprintln!(
-                "  [DEBUG] {} file_type scope bonus: {:.2}",
-                rule_id, file_type_score
-            );
-        }
         precision -= file_type_precision_penalty(&rule.r#for) * COMPOSITE_SCOPE_PENALTY_MULTIPLIER;
-        if debug {
-            eprintln!(
-                "  [DEBUG] {} file_type breadth penalty: -{:.2}",
-                rule_id,
-                file_type_precision_penalty(&rule.r#for) * COMPOSITE_SCOPE_PENALTY_MULTIPLIER
-            );
-        }
 
         // `all` clause: recursively sum all elements
         if let Some(ref conditions) = rule.all {
             let mut all_scores = Vec::new();
             for cond in conditions {
                 let score = match cond {
-                    Condition::Trait { id } => {
-                        let inherited = referenced_precision(
-                            id,
-                            composite_lookup,
-                            trait_lookup,
-                            reference_index,
-                            cache,
-                            visiting,
-                        );
-                        if debug {
-                            eprintln!(
-                                "  [DEBUG] {} all trait '{}' inherited score: {:.2}",
-                                rule_id, id, inherited
-                            );
-                        }
-                        inherited
-                    }
-                    _ => {
-                        let score = score_condition(cond);
-                        if debug {
-                            eprintln!("  [DEBUG] {} all condition score: {:.2}", rule_id, score);
-                        }
-                        score
-                    }
+                    Condition::Trait { id } => referenced_precision(
+                        id,
+                        composite_lookup,
+                        trait_lookup,
+                        reference_index,
+                        cache,
+                        visiting,
+                    ),
+                    _ => score_condition(cond),
                 };
                 all_scores.push(score);
             }
@@ -913,50 +882,22 @@ fn calculate_composite_precision_indexed(
         if let Some(ref conditions) = rule.any {
             let branch_scores: Vec<f32> = conditions
                 .iter()
-                .enumerate()
-                .map(|(i, cond)| match cond {
-                    Condition::Trait { id } => {
-                        let s = referenced_precision(
-                            id,
-                            composite_lookup,
-                            trait_lookup,
-                            reference_index,
-                            cache,
-                            visiting,
-                        );
-                        if debug {
-                            eprintln!(
-                                "  [DEBUG] {} any[{}] trait '{}' inherited score: {:.2}",
-                                rule_id, i, id, s
-                            );
-                        }
-                        s
-                    }
-                    _ => {
-                        let s = score_condition(cond);
-                        if debug {
-                            eprintln!("  [DEBUG] {} any[{}] condition score: {:.2}", rule_id, i, s);
-                        }
-                        s
-                    }
+                .map(|cond| match cond {
+                    Condition::Trait { id } => referenced_precision(
+                        id,
+                        composite_lookup,
+                        trait_lookup,
+                        reference_index,
+                        cache,
+                        visiting,
+                    ),
+                    _ => score_condition(cond),
                 })
                 .collect();
 
             if !branch_scores.is_empty() {
                 let required = rule.needs.unwrap_or(1).max(1);
-                if debug {
-                    eprintln!(
-                        "  [DEBUG] {} any clause: needs={}, scores={:?}",
-                        rule_id, required, branch_scores
-                    );
-                }
                 let weakest_average = average_weakest(branch_scores, required);
-                if debug {
-                    eprintln!(
-                        "  [DEBUG] {} any clause: weakest_average={:.2}",
-                        rule_id, weakest_average
-                    );
-                }
                 precision += weakest_average;
                 precision -= any_breadth_penalty(conditions.len(), required);
             }
@@ -984,44 +925,22 @@ fn calculate_composite_precision_indexed(
         visiting.remove(rule_id);
         let precision = precision.max(BASE_TRAIT_PRECISION);
         cache.insert(rule_id.to_string(), precision);
-        if debug {
-            eprintln!("  [DEBUG] {} TOTAL PRECISION: {:.2}", rule_id, precision);
-        }
         return precision;
     }
 
     // Not a composite - try to find as a trait definition.
-    if debug {
-        eprintln!("  [DEBUG] Looking up trait: '{}'", rule_id);
-    }
     let trait_def = resolve_rule_id(rule_id, trait_lookup);
 
     if let Some(trait_def) = trait_def {
         let precision = trait_def
             .precision
             .unwrap_or_else(|| calculate_trait_precision(trait_def));
-        if debug {
-            eprintln!(
-                "  [DEBUG]   FOUND trait '{}' with stored ID '{}', precision: {:.2}",
-                rule_id, trait_def.id, precision
-            );
-        }
         visiting.remove(rule_id);
         cache.insert(rule_id.to_string(), precision);
         return precision;
     }
 
     // Not found - treat as external/unknown trait
-    if debug {
-        eprintln!(
-            "  [DEBUG]   NOT FOUND - returning BASE_TRAIT_PRECISION: {:.2}",
-            BASE_TRAIT_PRECISION
-        );
-        eprintln!("  [DEBUG]   Available trait IDs (first 20):");
-        for (i, id) in trait_lookup.keys().take(20).enumerate() {
-            eprintln!("  [DEBUG]     [{}] '{}'", i, id);
-        }
-    }
     visiting.remove(rule_id);
     cache.insert(rule_id.to_string(), BASE_TRAIT_PRECISION);
     BASE_TRAIT_PRECISION

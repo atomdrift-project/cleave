@@ -232,6 +232,35 @@ fn system_time_nanos(t: SystemTime) -> Result<u128> {
         .as_nanos())
 }
 
+/// Stable, order-independent fingerprint input for one rule/trait file:
+/// FNV-1a over its traits-relative path components and byte length.
+///
+/// Deliberately NOT `DefaultHasher` (unspecified across Rust releases) and NOT
+/// mtime-based (mtimes don't survive packaging/download): this tag must match
+/// between the machine that ran `yara-precompile` and every machine that loads
+/// the shipped `.yrc`, across OSes and engine builds. Files are folded with
+/// `wrapping_add` so directory-iteration order (which differs by OS) can't
+/// change the result. Path+length misses a same-length content edit; the
+/// mtime-keyed local cache still catches those for local development.
+fn rules_source_tag_for(traits_dir: &Path, path: &Path, metadata: &fs::Metadata) -> u64 {
+    const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+    fn fold(mut h: u64, bytes: &[u8]) -> u64 {
+        for &b in bytes {
+            h ^= u64::from(b);
+            h = h.wrapping_mul(FNV_PRIME);
+        }
+        h
+    }
+    let rel = path.strip_prefix(traits_dir).unwrap_or(path);
+    let mut h = FNV_OFFSET;
+    for comp in rel.components() {
+        h = fold(h, comp.as_os_str().as_encoded_bytes());
+        h = fold(h, b"/");
+    }
+    fold(h, &metadata.len().to_le_bytes())
+}
+
 fn hash_path_metadata(
     hasher: &mut std::collections::hash_map::DefaultHasher,
     traits_dir: &Path,
@@ -286,6 +315,10 @@ struct TraitsScan {
     /// Revision fingerprint over all rule+trait files (`.yar`/`.yara`/`.yaml`/`.yml`,
     /// third-party included), plus the newest mtime across them.
     rule_revision: Option<RuleFilesRevision>,
+    /// Machine-portable tag over the same file set (path + length, no mtimes) —
+    /// see [`rules_source_tag_for`]. Validates shipped pre-compiled YARA rules
+    /// against the rule sources they claim to be built from.
+    source_tag: Option<u64>,
 }
 
 /// Walk the traits directory once, computing every rule/mapper cache input in a
@@ -320,6 +353,7 @@ fn scan_traits_dir(traits_dir: &Path) -> TraitsScan {
     let mut rule_hasher = DefaultHasher::new();
     let mut yaml_count = 0u64;
     let mut rule_count = 0u64;
+    let mut source_tag = 0u64;
 
     // One matching rule/trait file, classified during the (cheap) directory read
     // so the (expensive) stat can be deferred and parallelized below.
@@ -392,6 +426,7 @@ fn scan_traits_dir(traits_dir: &Path) -> TraitsScan {
         // Analysis-cache revision: every rule/trait file, third-party included.
         rule_count += 1;
         hash_path_metadata(&mut rule_hasher, traits_dir, &c.path, metadata);
+        source_tag = source_tag.wrapping_add(rules_source_tag_for(traits_dir, &c.path, metadata));
         if let Some(m) = mtime
             && m > newest_rule
         {
@@ -459,7 +494,16 @@ fn scan_traits_dir(traits_dir: &Path) -> TraitsScan {
             newest_mtime: newest_rule,
             fingerprint: rule_hasher.finish(),
         }),
+        source_tag: (rule_count > 0).then_some(source_tag.wrapping_add(rule_count)),
     }
+}
+
+/// Machine-portable fingerprint of the rule/trait source files (path + length,
+/// no mtimes), or `None` when the traits directory holds none. Matches between
+/// the machine that ran `yara-precompile` and any machine loading the result,
+/// so it validates shipped pre-compiled rules against their claimed sources.
+pub(crate) fn rules_source_tag() -> Option<u64> {
+    traits_scan().source_tag
 }
 
 /// The memoized traits-directory scan, or `None` before the first scan and

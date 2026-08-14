@@ -1296,15 +1296,6 @@ impl PEAnalyzer {
                         ) && overlay_bounds.is_some_and(|(overlay_start, overlay_end)| {
                             binary.offset >= overlay_start && binary.offset < overlay_end
                         });
-                    if std::env::var("DEBUG_CLEAVE_DOTNET").is_ok() {
-                        eprintln!(
-                            "[DEBUG] embedded PE check: in_rsrc={}, is_dotnet={}, in_nsis_overlay={}, data_len={}",
-                            in_rsrc,
-                            is_dotnet,
-                            in_nsis_overlay,
-                            pe_data.len()
-                        );
-                    }
                     // NSIS installers legitimately carry native
                     // plugin DLLs inside the overlay; those child
                     // binaries are still extracted and analyzed, so

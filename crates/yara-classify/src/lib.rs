@@ -1225,8 +1225,36 @@ pub fn canonical_binary_filetype(filetype: &str) -> &str {
         "exe" | "dll" | "win32" | "win64" => "pe",
         "so" | "ko" => "elf",
         "dylib" | "kext" | "mach" => "macho",
-        other => other,
+        other => multiword_binary_filetype(other).unwrap_or(other),
     }
+}
+
+/// Resolve a `filetype` value that names a binary format in more than one word.
+///
+/// Upstream rule packs copy VirusTotal's free-text vocabulary straight into
+/// `filetype = "Win32 EXE"` / `"Mach-O"`. Those never matched the single-token
+/// aliases above, so each became a bucket of its own — and a scan asks for
+/// `pe`, never `win32 exe`, so the rule compiled into a tier nothing ever
+/// selects and silently never ran.
+///
+/// Only unambiguous values resolve: a string whose words point at two different
+/// formats is left alone rather than guessed at.
+fn multiword_binary_filetype(filetype: &str) -> Option<&'static str> {
+    let mut resolved: Option<&'static str> = None;
+    for word in filetype.split(|c: char| !c.is_ascii_alphanumeric()) {
+        let canon = match word {
+            "pe" | "exe" | "dll" | "win32" | "win64" => "pe",
+            "elf" => "elf",
+            "macho" | "mach" | "dylib" | "kext" => "macho",
+            _ => continue,
+        };
+        match resolved {
+            None => resolved = Some(canon),
+            Some(prev) if prev == canon => {}
+            Some(_) => return None,
+        }
+    }
+    resolved
 }
 
 fn push_unique_types(dest: &mut Vec<&'static str>, src: &[&'static str]) {
@@ -2110,17 +2138,22 @@ fn maybe_inject_filetype(body: &str) -> String {
 }
 
 fn find_rule_start(src: &str, from: usize) -> Option<usize> {
+    // Byte-oriented scan: `pos += 1` may land mid-codepoint (rule comments can
+    // carry em-dashes and other multi-byte characters), so slicing `&src[pos..]`
+    // would panic on a non-boundary. Every returned position is the start of an
+    // ASCII `rule ` keyword, hence always a char boundary.
+    let bytes = src.as_bytes();
     let mut pos = from;
-    while pos < src.len() {
-        if src[pos..].starts_with("//") {
-            if let Some(nl) = src[pos..].find('\n') {
+    while pos < bytes.len() {
+        if bytes[pos..].starts_with(b"//") {
+            if let Some(nl) = bytes[pos..].iter().position(|&b| b == b'\n') {
                 pos += nl + 1;
                 continue;
             }
             return None;
         }
-        if src[pos..].starts_with("rule ")
-            && (pos == 0 || matches!(src.as_bytes()[pos - 1], b'\n' | b'\r' | b' ' | b'\t'))
+        if bytes[pos..].starts_with(b"rule ")
+            && (pos == 0 || matches!(bytes[pos - 1], b'\n' | b'\r' | b' ' | b'\t'))
         {
             return Some(pos);
         }
@@ -2416,6 +2449,43 @@ mod tests {
 }"#;
         let output = inject_condition_filetype_hints(source);
         assert!(output.contains("filetype = \"pe\""));
+    }
+
+    #[test]
+    fn test_canonical_binary_filetype() {
+        // Single-token aliases.
+        assert_eq!(canonical_binary_filetype("exe"), "pe");
+        assert_eq!(canonical_binary_filetype("dll"), "pe");
+        assert_eq!(canonical_binary_filetype("so"), "elf");
+        assert_eq!(canonical_binary_filetype("dylib"), "macho");
+
+        // VirusTotal's free-text vocabulary, as copied into upstream rule meta.
+        // Left unresolved these become buckets no scan ever selects.
+        assert_eq!(canonical_binary_filetype("win32 exe"), "pe");
+        assert_eq!(canonical_binary_filetype("win64 dll"), "pe");
+        assert_eq!(canonical_binary_filetype("mach-o"), "macho");
+        assert_eq!(canonical_binary_filetype("elf executable"), "elf");
+
+        // Already canonical, and unrelated types, pass through untouched.
+        assert_eq!(canonical_binary_filetype("pe"), "pe");
+        assert_eq!(canonical_binary_filetype("ps1"), "ps1");
+        assert_eq!(
+            canonical_binary_filetype("ms word document"),
+            "ms word document"
+        );
+
+        // Ambiguous: words naming two different formats are not guessed at.
+        assert_eq!(canonical_binary_filetype("elf and exe"), "elf and exe");
+    }
+
+    #[test]
+    fn test_inject_condition_filetype_hints_multibyte_comment() {
+        // Regression: a multi-byte character (em-dash) before the rule keyword
+        // used to panic find_rule_start's byte-position slicing.
+        let source = "// header — with an em-dash before the rule\nrule Demo {\n    condition:\n        uint16(0) == 0x5A4D\n}";
+        let output = inject_condition_filetype_hints(source);
+        assert!(output.contains("filetype = \"pe\""));
+        assert!(output.contains("— with an em-dash"));
     }
 
     #[test]

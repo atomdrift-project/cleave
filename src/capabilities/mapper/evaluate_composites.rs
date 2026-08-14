@@ -10,7 +10,6 @@ use crate::capabilities::indexes::TraitBitSet;
 use crate::composite_rules::PathQuery;
 use crate::composite_rules::{Arch, EvaluationContext, FileType as RuleFileType, SectionMap};
 use crate::types::{AnalysisReport, Criticality, Evidence, Finding, FindingKind};
-use rustc_hash::FxHashMap;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -44,8 +43,12 @@ impl super::CapabilityMapper {
         // overhead would dominate — which is the regime the old always-serial
         // loop was written for.
         let parallel_rules = report.files.len() >= 32 || report.strings.len() >= 20_000;
+        // Bitset filter first: it excludes most rules on small files with one
+        // dense-index probe, so the string-hash `seen_ids` check only runs for
+        // the survivors. This pair ran per rule per fixed-point pass per file
+        // and the hash probe was a measured leaf on many-member archives.
         let eval_rules = |rules: &[&crate::composite_rules::CompositeTrait],
-                          seen_ids: &std::collections::HashSet<String>,
+                          seen_ids: &rustc_hash::FxHashSet<String>,
                           matched_bits: &TraitBitSet,
                           ctx: &EvaluationContext<'_>|
          -> Vec<Finding> {
@@ -53,16 +56,16 @@ impl super::CapabilityMapper {
             if parallel_rules {
                 rules
                     .par_iter()
-                    .filter(|rule| !seen_ids.contains(rule.id.as_str()))
                     .filter(|rule| matched_bits.contains_all(&rule.required_trait_indices))
+                    .filter(|rule| !seen_ids.contains(rule.id.as_str()))
                     .filter_map(|rule| rule.evaluate(ctx))
                     .filter(|f| !seen_ids.contains(f.id.as_str()))
                     .collect()
             } else {
                 rules
                     .iter()
-                    .filter(|rule| !seen_ids.contains(rule.id.as_str()))
                     .filter(|rule| matched_bits.contains_all(&rule.required_trait_indices))
+                    .filter(|rule| !seen_ids.contains(rule.id.as_str()))
                     .filter_map(|rule| rule.evaluate(ctx))
                     .filter(|f| !seen_ids.contains(f.id.as_str()))
                     .collect()
@@ -71,7 +74,7 @@ impl super::CapabilityMapper {
 
         // Pre-allocate capacity for findings to reduce reallocations
         let mut all_findings: Vec<Finding> = Vec::with_capacity(100);
-        let mut seen_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut seen_ids: rustc_hash::FxHashSet<String> = rustc_hash::FxHashSet::default();
 
         // Track which composite IDs have already matched (including original findings)
         let mut matched_bits = TraitBitSet::with_capacity(self.trait_definitions.len());
@@ -257,12 +260,9 @@ impl super::CapabilityMapper {
         file_type: RuleFileType,
         section_map: &SectionMap,
     ) {
-        // Build a map of rule ID to rule for quick lookup
-        let composite_map: FxHashMap<&str, _> = self
-            .composite_rules
-            .iter()
-            .map(|r| (r.id.as_str(), r))
-            .collect();
+        // Shared lazy rule-ID index: this runs once per analyzed file, so a
+        // per-call map build dominated small-member archive corpora.
+        let composite_map = self.composite_id_index();
 
         // First pass: collect new criticalities (can't mutate while borrowing for context)
         let updates: Vec<(usize, Criticality)> = {
@@ -281,7 +281,9 @@ impl super::CapabilityMapper {
                 .iter()
                 .enumerate()
                 .filter_map(|(i, finding)| {
-                    if let Some(rule) = composite_map.get(finding.id.as_str())
+                    if let Some(rule) = composite_map
+                        .get(finding.id.as_str())
+                        .map(|&i| &self.composite_rules[i])
                         && let Some(downgrade_rules) = &rule.downgrade
                     {
                         let new_crit =
@@ -296,14 +298,7 @@ impl super::CapabilityMapper {
         };
 
         // Second pass: apply updates
-        let debug_downgrade = std::env::var("DEBUG_DOWNGRADE").is_ok();
         for (idx, new_crit) in updates {
-            if debug_downgrade {
-                eprintln!(
-                    "DEBUG: Re-eval downgrade for '{}': {:?} -> {:?}",
-                    findings[idx].id, findings[idx].crit, new_crit
-                );
-            }
             findings[idx].crit = new_crit;
         }
     }
@@ -335,31 +330,29 @@ impl super::CapabilityMapper {
             return;
         }
 
-        // Build a combined slice so the evaluator sees both the target's own
-        // findings (which trait-reference conditions check against) and the
-        // container-level extras.
-        let mut combined: Vec<crate::types::Finding> =
-            Vec::with_capacity(target_findings.len() + extra_findings.len());
-        combined.extend_from_slice(target_findings);
-        combined.extend_from_slice(extra_findings);
-
+        // The evaluator must see both the target's own findings (which
+        // trait-reference conditions check against) and the container-level
+        // extras. Only the target's few findings are cloned (they are mutated
+        // below while the context still needs their pre-pass values); the
+        // extras — invariant across the per-member fan-out — stay borrowed.
+        // Scope order (report, target, extras) matches the old combined-slice
+        // shape exactly.
+        let target_snapshot: Vec<crate::types::Finding> = target_findings.to_vec();
         let ctx = EvaluationContext::new(
             report,
             binary_data,
             file_type,
             &self.platforms,
-            Some(&combined),
+            Some(extra_findings),
             None,
         )
+        .with_mid_findings(&target_snapshot)
         .with_section_map(section_map);
 
-        let composite_by_id: rustc_hash::FxHashMap<&str, &crate::composite_rules::CompositeTrait> =
-            self.composite_rules
-                .iter()
-                .map(|r| (r.id.as_str(), r))
-                .collect();
-
-        let debug_downgrade = std::env::var("DEBUG_DOWNGRADE").is_ok();
+        // Shared lazy rule-ID index: this runs once per archive member in the
+        // container phase, so a per-call map build dominated small-member
+        // corpora.
+        let composite_by_id = self.composite_id_index();
 
         for finding in target_findings.iter_mut() {
             // Atomic traits first: look up the TraitDefinition by id and
@@ -369,12 +362,6 @@ impl super::CapabilityMapper {
                 if let Some(downgrade) = &trait_def.downgrade {
                     let new_crit = trait_def.evaluate_downgrade(downgrade, &trait_def.crit, &ctx);
                     if new_crit != finding.crit {
-                        if debug_downgrade {
-                            eprintln!(
-                                "DEBUG: Cross-scope downgrade for trait '{}': {:?} -> {:?}",
-                                finding.id, finding.crit, new_crit
-                            );
-                        }
                         finding.crit = new_crit;
                     }
                     continue;
@@ -382,17 +369,13 @@ impl super::CapabilityMapper {
             }
 
             // Composite rules: same dance, but against composite_rules.
-            if let Some(rule) = composite_by_id.get(finding.id.as_str())
+            if let Some(rule) = composite_by_id
+                .get(finding.id.as_str())
+                .map(|&i| &self.composite_rules[i])
                 && let Some(downgrade) = &rule.downgrade
             {
                 let new_crit = rule.evaluate_downgrade(downgrade, &rule.crit, &ctx);
                 if new_crit != finding.crit {
-                    if debug_downgrade {
-                        eprintln!(
-                            "DEBUG: Cross-scope downgrade for composite '{}': {:?} -> {:?}",
-                            finding.id, finding.crit, new_crit
-                        );
-                    }
                     finding.crit = new_crit;
                 }
             }

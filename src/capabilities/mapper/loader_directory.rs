@@ -432,7 +432,6 @@ impl super::CapabilityMapper {
         enable_precision_scoring: bool,
     ) -> Result<Self> {
         let _span = tracing::info_span!("load_capabilities").entered();
-        let debug = std::env::var("CLEAVE_DEBUG").is_ok();
         let dir_path = dir_path.as_ref();
         let _t_start = std::time::Instant::now();
 
@@ -448,9 +447,6 @@ impl super::CapabilityMapper {
             tracing::info!("Full validation enabled (this may take 60+ seconds)");
         } else {
             tracing::info!("Fast validation mode (run 'cleave validate' for full validation)");
-        }
-        if debug {
-            eprintln!("🔍 Loading capabilities from: {}", dir_path.display());
         }
 
         // Try to load from cache (skip validation when loading from cache).
@@ -525,6 +521,7 @@ impl super::CapabilityMapper {
                                     unless_index: std::sync::Arc::new(std::sync::OnceLock::new()),
                                     kv_sibling_basenames: std::sync::Arc::default(),
                                     trait_ref_index: std::sync::Arc::default(),
+                                    composite_id_index: std::sync::Arc::default(),
                                     trait_id_map,
                                     platforms: vec![Platform::All],
                                     slow_rule_ms: Self::DEFAULT_SLOW_RULE_MS,
@@ -634,10 +631,6 @@ impl super::CapabilityMapper {
             .par_iter()
             .enumerate()
             .map(|(idx, path)| {
-                if debug {
-                    eprintln!("   📄 Loading: {}", path.display());
-                }
-
                 let bytes = fs::read(path).with_context(|| format!("Failed to read {:?}", path))?;
                 let content = String::from_utf8_lossy(&bytes);
 
@@ -671,7 +664,6 @@ impl super::CapabilityMapper {
         let mut composite_rules_map: HashMap<String, CompositeTrait> = HashMap::new();
         let mut trait_source_files: HashMap<String, String> = HashMap::new(); // trait_id -> file_path
         let mut rule_source_files: HashMap<String, String> = HashMap::new(); // rule_id -> file_path
-        let mut files_processed = 0;
         let mut warnings = crate::validation_controls::ValidationIssues::new();
         let mut parse_errors: Vec<String> = Vec::new();
 
@@ -684,8 +676,6 @@ impl super::CapabilityMapper {
                     continue;
                 }
             };
-            files_processed += 1;
-
             // Collect YAML pattern warnings
             warnings.extend_legacy(yaml_warnings);
 
@@ -697,9 +687,6 @@ impl super::CapabilityMapper {
                 .and_then(|p| p.parent())
                 .map(|p| p.to_string_lossy().replace('\\', "/"))
                 .filter(|s| !s.is_empty());
-
-            let before_traits = trait_definitions_map.len();
-            let before_composites = composite_rules_map.len();
 
             // Per-file: check for values that should use defaults, and values redundant with defaults
             if enable_full_validation
@@ -1072,14 +1059,6 @@ impl super::CapabilityMapper {
             for warning in parsing_warnings {
                 push_parsing_warning(&mut warnings, &path_str, warning);
             }
-
-            if debug {
-                eprintln!(
-                    "      +{} traits, +{} composite rules",
-                    trait_definitions_map.len() - before_traits,
-                    composite_rules_map.len() - before_composites
-                );
-            }
         }
 
         // Check for structurally invalid file types (empty for:) — always fatal.
@@ -1135,10 +1114,6 @@ impl super::CapabilityMapper {
             }
         }
 
-        if debug {
-            eprintln!("   ✅ Processed {} YAML files", files_processed);
-        }
-
         let _t_yara = std::time::Instant::now();
 
         // Convert HashMaps to Vecs now that loading is complete
@@ -1151,11 +1126,6 @@ impl super::CapabilityMapper {
         // condition is `type: yara`.  These rules are compiled into the shared YaraEngine
         // (see `yara_engine::load_inline_trait_rules`), so we only need to record the
         // namespace here — actual compilation and scanning happen in the engine.
-        let yara_count_traits = trait_definitions
-            .iter()
-            .filter(|t| matches!(t.r#if, Condition::Yara { .. }))
-            .count();
-
         trait_definitions.par_iter_mut().for_each(|t| {
             if matches!(t.r#if, Condition::Yara { .. }) {
                 // Set namespace for the combined engine; also compiles any `unless` YARA conditions.
@@ -1165,17 +1135,9 @@ impl super::CapabilityMapper {
 
         // Composite rules still use per-condition compilation (they are rare and have
         // complex condition trees that are not currently in the combined engine).
-        let yara_count_composite = composite_rules.len();
         composite_rules.par_iter_mut().for_each(|r| {
             r.compile_yara();
         });
-
-        if debug && (yara_count_traits > 0 || yara_count_composite > 0) {
-            eprintln!(
-                "   ⚡ Registered {} inline YARA namespaces, compiled {} composite rules",
-                yara_count_traits, yara_count_composite
-            );
-        }
 
         let _t_validate = std::time::Instant::now();
 
@@ -1780,31 +1742,6 @@ impl super::CapabilityMapper {
                     "\n❌ ERROR: {} trait/rule IDs contain invalid characters",
                     invalid_ids.len()
                 );
-                if debug {
-                    eprintln!("   IDs must be a bare local identifier using only [a-zA-Z0-9_-].");
-                    eprintln!("   The taxonomy hierarchy comes from the file's directory on disk,");
-                    eprintln!("   so '/' and ':' are not allowed inside an `id:` declaration.\n");
-                    for (id, invalid_char, source_file) in &invalid_ids {
-                        let line_hint = find_line_number(source_file, id);
-                        if let Some(line) = line_hint {
-                            eprintln!(
-                                "   {}:{}: ID '{}' contains invalid char '{}'",
-                                source_file, line, id, invalid_char
-                            );
-                        } else {
-                            eprintln!(
-                                "   {}: ID '{}' contains invalid char '{}'",
-                                source_file, id, invalid_char
-                            );
-                        }
-                    }
-                    eprintln!("\n   Allowed in id: [a-zA-Z0-9_-] only.");
-                    eprintln!(
-                        "   Reference format (in if/all/any/none): <local_id> or <subdirectory>::<local_id>\n"
-                    );
-                } else {
-                    eprintln!("   Set CLEAVE_DEBUG=1 to see details\n");
-                }
                 warnings.push_id(
                     "invalid-id-chars",
                     format!(
@@ -1945,29 +1882,6 @@ impl super::CapabilityMapper {
                 "\n❌ ERROR: {} invalid trait references found in composite rules",
                 invalid_refs.len()
             );
-            if debug {
-                for (rule_id, ref_id, source_file) in &invalid_refs {
-                    // Try to find line number by searching the file
-                    let line_hint = find_line_number(source_file, ref_id);
-                    if let Some(line) = line_hint {
-                        eprintln!(
-                            "   {}:{}: Rule '{}' references unknown path: '{}'",
-                            source_file, line, rule_id, ref_id
-                        );
-                    } else {
-                        eprintln!(
-                            "   {}: Rule '{}' references unknown path: '{}'",
-                            source_file, rule_id, ref_id
-                        );
-                    }
-                }
-                eprintln!(
-                    "\n   Cross-directory references must use directory paths (e.g., 'discovery/system')"
-                );
-                eprintln!("   that match existing trait directories, not exact trait IDs.\n");
-            } else {
-                eprintln!("   Set CLEAVE_DEBUG=1 to see details\n");
-            }
         }
 
         // Skip regex precompilation - regexes will be compiled on demand during evaluation
@@ -1984,23 +1898,6 @@ impl super::CapabilityMapper {
         }
         let file_stem_hints =
             build_file_stem_reference_hints(dir_path, &trait_definitions, &composite_rules);
-
-        // Debug: Print sample of valid trait IDs
-        if std::env::var("CLEAVE_DEBUG").is_ok() {
-            let mut sample_ids: Vec<_> = valid_trait_ids
-                .iter()
-                .filter(|id| {
-                    id.contains("tiny-elf")
-                        || id.contains("small-elf")
-                        || id.contains("setup-py")
-                        || id.contains("pkginfo")
-                })
-                .collect();
-            sample_ids.sort();
-            for id in sample_ids {
-                eprintln!("[DEBUG] Valid trait ID: {}", id);
-            }
-        }
 
         // Steps 11-15: Additional validation checks (skip when validation disabled)
         if enable_full_validation {
@@ -4221,18 +4118,6 @@ impl super::CapabilityMapper {
                     return None;
                 }
 
-                // Debug: Print broken reference details
-                if std::env::var("CLEAVE_DEBUG").is_ok()
-                    && (ref_id.contains("tiny-elf")
-                        || ref_id.contains("small-elf")
-                        || ref_id.contains("setup-py")
-                        || ref_id.contains("pkginfo"))
-                {
-                    eprintln!(
-                        "[DEBUG] Broken reference: '{}' (from '{}')",
-                        ref_id, owner_id
-                    );
-                }
                 let source_file = rule_source_files
                     .get(owner_id)
                     .map(std::string::String::as_str)
@@ -4742,6 +4627,7 @@ impl super::CapabilityMapper {
             unless_index: std::sync::Arc::new(std::sync::OnceLock::new()),
             kv_sibling_basenames: std::sync::Arc::default(),
             trait_ref_index: std::sync::Arc::default(),
+            composite_id_index: std::sync::Arc::default(),
             trait_id_map,
             platforms: vec![Platform::All],
             slow_rule_ms: Self::DEFAULT_SLOW_RULE_MS,

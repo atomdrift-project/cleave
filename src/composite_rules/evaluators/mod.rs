@@ -65,7 +65,10 @@ const REGEX_CACHE_MAX_SIZE: usize = 16_384;
 /// a ~5 GB peak RSS. The lazy DFA is purely an optimization: when its cache is
 /// too small it evicts states or the meta engine falls back to another
 /// match-equivalent engine, so results are identical by construction — only
-/// speed is at stake. 256 KiB measured wall-neutral on the trait corpus.
+/// speed is at stake. 256 KiB measured wall-neutral on the trait corpus at
+/// the time; on the 2026-08-13 demo.zip corpus (many small text members) it
+/// forced measurable PikeVM fallback, and 1 MiB bought −8.5% total CPU for
+/// +8% RSS. 2 MiB added RSS without further CPU gain.
 /// Override with `CLEAVE_REGEX_DFA_KB` (KiB) for tuning experiments.
 pub(crate) fn regex_dfa_cache_bytes() -> usize {
     static BYTES: OnceLock<usize> = OnceLock::new();
@@ -73,7 +76,7 @@ pub(crate) fn regex_dfa_cache_bytes() -> usize {
         std::env::var("CLEAVE_REGEX_DFA_KB")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
-            .map_or(256 * 1024, |kb| kb * 1024)
+            .map_or(1024 * 1024, |kb| kb * 1024)
     })
 }
 

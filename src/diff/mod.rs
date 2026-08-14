@@ -230,7 +230,7 @@ pub fn diff_paths(
     let archive_pair = canonical_root
         && crate::analyzers::detect_file_type(old).is_ok_and(|kind| kind.is_archive())
         && crate::analyzers::detect_file_type(new).is_ok_and(|kind| kind.is_archive());
-    let (old_units, new_units) = if archive_pair {
+    let (mut old_units, mut new_units) = if archive_pair {
         (
             collect_units(old, options, canonical_root)?,
             collect_units(new, options, canonical_root)?,
@@ -242,6 +242,17 @@ pub fn diff_paths(
         );
         (old_units?, new_units?)
     };
+
+    // Release archives conventionally wrap every member in a versioned root
+    // directory (`openx-2.8.9/…` → `openx-2.8.10/…`). Pair those roots before
+    // computing scopes. Repairing remove/add pairs after the diff is too late:
+    // their scope inventories have already been truncated for presentation,
+    // so the reconstructed comparison depends on which first N symbols happen
+    // to survive. At this point we still have complete units and their hashes,
+    // so byte-identical members take the normal zero-work fast path.
+    if archive_pair {
+        normalize_versioned_archive_roots(&mut old_units, &mut new_units);
+    }
 
     let pairs = pair_units(old_units, new_units);
 
@@ -289,6 +300,125 @@ pub fn diff_paths(
         },
     );
     Ok(report)
+}
+
+/// Normalize one-to-one version-bearing top-level roots shared by two archives.
+///
+/// Only the first component inside the outer archive is considered. A stable
+/// name must occur exactly once on each side, so an archive intentionally
+/// carrying both `sdk-1.0/` and `sdk-2.0/` is never collapsed onto itself.
+fn normalize_versioned_archive_roots(old: &mut [DiffUnit], new: &mut [DiffUnit]) {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    fn archive_roots(units: &[DiffUnit]) -> BTreeSet<String> {
+        units
+            .iter()
+            .filter_map(|unit| archive_member_root(&unit.path).map(str::to_string))
+            .collect()
+    }
+
+    fn roots_by_stable_name(units: &[DiffUnit]) -> BTreeMap<String, BTreeSet<String>> {
+        let mut roots = BTreeMap::<String, BTreeSet<String>>::new();
+        for unit in units {
+            let Some(root) = archive_member_root(&unit.path) else {
+                continue;
+            };
+            if let Some(stable) = stable_versioned_name(root) {
+                roots.entry(stable).or_default().insert(root.to_string());
+            }
+        }
+        roots
+    }
+
+    let old_roots = roots_by_stable_name(old);
+    let new_roots = roots_by_stable_name(new);
+    let old_all = archive_roots(old);
+    let new_all = archive_roots(new);
+    let mut aliases = BTreeMap::<String, String>::new();
+    for (stable, old_names) in old_roots {
+        let Some(new_names) = new_roots.get(&stable) else {
+            continue;
+        };
+        if old_names.len() != 1 || new_names.len() != 1 {
+            continue;
+        }
+        let Some(old_name) = old_names.iter().next() else {
+            continue;
+        };
+        let Some(new_name) = new_names.iter().next() else {
+            continue;
+        };
+        // Do not map onto a literal root already present on either side.
+        // `pkg/` and `pkg-1.0/` can intentionally coexist in one archive.
+        if old_all.contains(&stable) || new_all.contains(&stable) {
+            continue;
+        }
+        if old_name != new_name {
+            aliases.insert(old_name.clone(), stable.clone());
+            aliases.insert(new_name.clone(), stable);
+        }
+    }
+    if aliases.is_empty() {
+        return;
+    }
+
+    for unit in old.iter_mut().chain(new.iter_mut()) {
+        if let Some(normalized) = normalize_archive_member_root(&unit.path, &aliases) {
+            unit.path = normalized;
+        }
+    }
+}
+
+fn archive_member_root(path: &str) -> Option<&str> {
+    let (_, member) = path.split_once("!!")?;
+    member.split_once('/').map(|(root, _)| root)
+}
+
+fn normalize_archive_member_root(
+    path: &str,
+    aliases: &std::collections::BTreeMap<String, String>,
+) -> Option<String> {
+    let (container, member) = path.split_once("!!")?;
+    let (root, suffix) = member.split_once('/')?;
+    let stable = aliases.get(root)?;
+    Some(format!("{container}!!{stable}/{suffix}"))
+}
+
+/// Remove the most complete `major.minor[.patch…]` token from a name.
+/// Mirrors isomer's conservative filename-version detector: maximal runs of
+/// digits and dots are candidates, and at least two numeric components are
+/// required. The remaining non-version text is the package identity.
+fn stable_versioned_name(name: &str) -> Option<String> {
+    let mut best: Option<&str> = None;
+    let mut best_parts = 0usize;
+    for run in name.split(|c: char| !(c.is_ascii_digit() || c == '.')) {
+        let token = run.trim_matches('.');
+        let parts: Vec<&str> = token.split('.').collect();
+        if parts.len() < 2
+            || !parts
+                .iter()
+                .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
+        {
+            continue;
+        }
+        if parts.len() > best_parts {
+            best = Some(token);
+            best_parts = parts.len();
+        }
+    }
+    let token = best?;
+    let start = name.find(token)?;
+    let mut stable = String::with_capacity(name.len().saturating_sub(token.len()));
+    stable.push_str(&name[..start]);
+    stable.push_str(&name[start + token.len()..]);
+    while stable.contains("--") {
+        stable = stable.replace("--", "-");
+    }
+    while stable.contains("..") {
+        stable = stable.replace("..", ".");
+    }
+    let stable = stable.trim_matches(['-', '.', '_', ' ']);
+    (!stable.is_empty()).then(|| stable.to_string())
 }
 
 /// Walk an input path and return one [`DiffUnit`] per analyzable file
@@ -676,6 +806,59 @@ fn build_envelope(old_path: &str, new_path: &str, diff: DiffReportV1) -> Analysi
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn versioned_archive_roots_pair_before_scope_diffing() {
+        let mut old = vec![DiffUnit::empty("<root>!!openx-2.8.9/adg.js".to_string())];
+        let mut new = vec![DiffUnit::empty("<root>!!openx-2.8.10/adg.js".to_string())];
+        old[0].sha = "same-bytes".to_string();
+        new[0].sha = "same-bytes".to_string();
+
+        normalize_versioned_archive_roots(&mut old, &mut new);
+
+        assert_eq!(old[0].path, "<root>!!openx/adg.js");
+        assert_eq!(old[0].path, new[0].path);
+        let pairs = pair_units(old, new);
+        assert_eq!(pairs.len(), 1);
+        let entry = diff_pair(pairs.into_iter().next().unwrap(), ScopeMask::all(), 100);
+        assert_eq!(entry.status, FileStatus::Unchanged);
+    }
+
+    #[test]
+    fn ambiguous_or_literal_archive_roots_are_not_collapsed() {
+        let mut old = vec![
+            DiffUnit::empty("<root>!!sdk-1.0/a.js".to_string()),
+            DiffUnit::empty("<root>!!sdk-2.0/b.js".to_string()),
+        ];
+        let mut new = vec![DiffUnit::empty("<root>!!sdk-3.0/a.js".to_string())];
+        normalize_versioned_archive_roots(&mut old, &mut new);
+        assert_eq!(old[0].path, "<root>!!sdk-1.0/a.js");
+        assert_eq!(new[0].path, "<root>!!sdk-3.0/a.js");
+
+        let mut old = vec![
+            DiffUnit::empty("<root>!!pkg/a.js".to_string()),
+            DiffUnit::empty("<root>!!pkg-1.0/b.js".to_string()),
+        ];
+        let mut new = vec![DiffUnit::empty("<root>!!pkg-1.1/b.js".to_string())];
+        normalize_versioned_archive_roots(&mut old, &mut new);
+        assert_eq!(old[1].path, "<root>!!pkg-1.0/b.js");
+        assert_eq!(new[0].path, "<root>!!pkg-1.1/b.js");
+    }
+
+    #[test]
+    fn stable_versioned_archive_name_matches_isomer_detection() {
+        assert_eq!(
+            stable_versioned_name("openx-2.8.10").as_deref(),
+            Some("openx")
+        );
+        assert_eq!(
+            stable_versioned_name("node-ipc-12.0.1").as_deref(),
+            Some("node-ipc")
+        );
+        assert_eq!(stable_versioned_name("index.js"), None);
+        // A leading pure version has no package identity to pair safely.
+        assert_eq!(stable_versioned_name("1.2.3"), None);
+    }
 
     /// `.git` is skipped because it is thousands of files of object store, not
     /// because it starts with a dot. The distinction is load-bearing: a prefix

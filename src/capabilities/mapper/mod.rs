@@ -133,6 +133,12 @@ pub struct CapabilityMapper {
     /// once on first use. The member-fold early strip keeps any finding this
     /// index can reach.
     pub(super) trait_ref_index: Arc<OnceLock<TraitRefIndex>>,
+    /// Composite-rule id → index into `composite_rules`, built once on first
+    /// downgrade re-evaluation and shared across per-file mapper clones. The
+    /// reeval paths run once per file (and once per archive member in the
+    /// container phase), so rebuilding this map there dominated small-member
+    /// corpora.
+    pub(super) composite_id_index: Arc<OnceLock<rustc_hash::FxHashMap<String, usize>>>,
     /// Maps trait ID -> index in trait_definitions
     #[allow(dead_code)]
     pub(super) trait_id_map: std::collections::HashMap<String, usize>,
@@ -242,6 +248,18 @@ impl CapabilityMapper {
         // The closure only moves an already-built value, so a racing caller
         // blocks for a move rather than for a multi-second parallel build.
         self.indexes.get_or_init(|| built)
+    }
+
+    /// Composite-rule id → index into `composite_rules`, built once on first
+    /// use (see the field doc).
+    pub(super) fn composite_id_index(&self) -> &rustc_hash::FxHashMap<String, usize> {
+        self.composite_id_index.get_or_init(|| {
+            self.composite_rules
+                .iter()
+                .enumerate()
+                .map(|(i, r)| (r.id.clone(), i))
+                .collect()
+        })
     }
 
     /// The lowercased sibling basenames the loaded rule set can read via

@@ -131,6 +131,13 @@ pub(crate) fn eval_ast<'a>(
         let mut match_count = 0;
 
         // Build the matcher once so it's shared between value/alt_value tries.
+        // The regex LRU probe (lock + key alloc + clone) and the pattern
+        // lowercasing are hoisted out of the per-node calls.
+        let compiled = matches!(match_mode, MatchMode::Regex)
+            .then(|| build_regex(pattern, case_insensitive).ok())
+            .flatten();
+        let pattern_lower = (matches!(match_mode, MatchMode::Substr) && case_insensitive)
+            .then(|| pattern.to_lowercase());
         let test_match = |candidate: &str| -> bool {
             match match_mode {
                 MatchMode::Exact => {
@@ -141,16 +148,13 @@ pub(crate) fn eval_ast<'a>(
                     }
                 }
                 MatchMode::Substr => {
-                    if case_insensitive {
-                        candidate.to_lowercase().contains(&pattern.to_lowercase())
+                    if let Some(pl) = &pattern_lower {
+                        candidate.to_lowercase().contains(pl)
                     } else {
                         candidate.contains(pattern)
                     }
                 }
-                MatchMode::Regex => match build_regex(pattern, case_insensitive) {
-                    Ok(re) => re.is_match(candidate),
-                    Err(_) => false,
-                },
+                MatchMode::Regex => compiled.as_ref().is_some_and(|re| re.is_match(candidate)),
             }
         };
         for &nt in &node_types {

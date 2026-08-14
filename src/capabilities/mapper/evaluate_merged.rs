@@ -110,7 +110,8 @@ impl super::CapabilityMapper {
         binary_data: &[u8],
         file_type: &RuleFileType,
     ) -> Option<FxHashSet<usize>> {
-        if std::env::var_os("CLEAVE_DISABLE_RAW_GATE").is_some() {
+        static DISABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if *DISABLED.get_or_init(|| std::env::var_os("CLEAVE_DISABLE_RAW_GATE").is_some()) {
             return None;
         }
         // Gate only content below the measured profitability boundary.
@@ -122,10 +123,13 @@ impl super::CapabilityMapper {
         // flip point — conservative so the gate never trades one machine's
         // wall for the shared box's CPU. Larger content returns None: exact
         // pre-gate behavior. `CLEAVE_RAW_GATE_MAX_KB` overrides.
-        let max_bytes = std::env::var("CLEAVE_RAW_GATE_MAX_KB")
-            .ok()
-            .and_then(|v| v.parse::<usize>().ok())
-            .map_or(3 << 20, |kb| kb << 10);
+        static MAX_BYTES: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+        let max_bytes = *MAX_BYTES.get_or_init(|| {
+            std::env::var("CLEAVE_RAW_GATE_MAX_KB")
+                .ok()
+                .and_then(|v| v.parse::<usize>().ok())
+                .map_or(3 << 20, |kb| kb << 10)
+        });
         if binary_data.len() > max_bytes {
             return None;
         }
@@ -134,14 +138,6 @@ impl super::CapabilityMapper {
             return None;
         }
         let matches = index.find_matches(binary_data, file_type);
-        if std::env::var_os("CLEAVE_GATE_DEBUG").is_some() {
-            eprintln!(
-                "GATE-PRECOMPUTE bytes={} file_type={:?} matches={}",
-                binary_data.len(),
-                file_type,
-                matches.len()
-            );
-        }
         Some(matches)
     }
     /// Evaluate all rules (atomic traits + composite rules) and merge findings into the report.

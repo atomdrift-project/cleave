@@ -34,6 +34,7 @@ impl super::CapabilityMapper {
             composite_rules: Vec::new(),
             indexes: std::sync::Arc::new(std::sync::OnceLock::new()),
             unless_index: std::sync::Arc::new(std::sync::OnceLock::new()),
+            composite_id_index: std::sync::Arc::new(std::sync::OnceLock::new()),
             kv_sibling_basenames: std::sync::Arc::default(),
             trait_ref_index: std::sync::Arc::default(),
             trait_id_map: std::collections::HashMap::new(),

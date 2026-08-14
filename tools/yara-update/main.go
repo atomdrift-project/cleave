@@ -143,7 +143,21 @@ func copyFlat(src, dst string, patterns []string) error {
 
 // copyAll recursively copies src into dst, preserving directory structure,
 // equivalent to: cp -Rp src/* dst/
+//
+// Upstream rule repos sometimes carry two files whose names differ only in
+// case — RussianPanda95 ships both `Zharkbot.yar` and `zharkbot.yar`, byte
+// identical, each defining `rule ZharkBot`. Copied naively those become one
+// file on a case-insensitive filesystem and two on a case-sensitive one, so
+// the same upstream commit yields a different rule set per platform: on Linux
+// the rule loads twice under two namespaces (the namespace embeds the
+// filename, so they don't even collide into a compile error — they just
+// double-report), and the compiled artifacts fingerprint differently than they
+// do on macOS. Collapsing the pair here keeps the checkout identical
+// everywhere, which is what lets the committed precompiles be reproducible.
 func copyAll(src, dst string) error {
+	// Lowercased target path -> the target actually written, so a later file
+	// differing only in case is recognized as the duplicate it is.
+	written := map[string]string{}
 	return filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -162,9 +176,43 @@ func copyAll(src, dst string) error {
 		if d.IsDir() {
 			return os.MkdirAll(target, 0o755)
 		}
+		key := strings.ToLower(target)
+		if kept, dup := written[key]; dup {
+			slog.Warn("skipping case-duplicate rule file",
+				"src", p, "already-copied-as", kept)
+			return nil
+		}
+		// Adopt whatever case the destination already uses, so an existing
+		// (committed) file is never renamed into its own case-variant.
+		target = existingCaseVariant(target)
+		written[key] = target
 		slog.Debug("copying", "src", p, "dst", target)
 		return copyFile(p, target)
 	})
+}
+
+// existingCaseVariant returns the path of a file already present at target's
+// location whose name differs from target only in case, or target unchanged.
+//
+// On a case-insensitive filesystem the exact-name check already succeeds, so
+// this only does work on Linux — precisely where the divergence would
+// otherwise appear.
+func existingCaseVariant(target string) string {
+	if _, err := os.Lstat(target); err == nil {
+		return target
+	}
+	dir, base := filepath.Split(target)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return target
+	}
+	for _, e := range entries {
+		if !strings.EqualFold(e.Name(), base) {
+			continue
+		}
+		return filepath.Join(dir, e.Name())
+	}
+	return target
 }
 
 // downloadYARAForge downloads the full rules zip for a given release and extracts

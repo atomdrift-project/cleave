@@ -18,8 +18,14 @@ impl super::CapabilityMapper {
     #[allow(dead_code)] // Used by library target (lib.rs), not visible to binary crate
     #[must_use]
     pub fn is_low_value_any_rule(&self, finding_id: &str) -> bool {
-        // Find the composite rule with this ID
-        if let Some(rule) = self.composite_rules.iter().find(|r| r.id == finding_id) {
+        // O(1) id lookup: this runs per finding inside the end-of-analysis
+        // retain, and the previous linear scan over every composite rule was
+        // a serial tail on many-finding container reports.
+        if let Some(rule) = self
+            .composite_id_index()
+            .get(finding_id)
+            .map(|&i| &self.composite_rules[i])
+        {
             // A rule is only low-value if it's a simple OR (any: with needs: 1)
             // and has no other positive conditions (all:).
             if rule.all.is_some() {

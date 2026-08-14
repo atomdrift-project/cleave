@@ -508,12 +508,26 @@ pub struct JemallocStats {
 /// Query current jemalloc allocator stats. Returns `None` when jemalloc is not the allocator.
 ///
 /// Advances the jemalloc epoch first so the returned values are fresh.
+///
+/// The target list in every guard below must match the one gating
+/// `tikv-jemalloc-ctl` in Cargo.toml, and the allocator's own in main.rs. Where
+/// they disagree the crate is compiled in on a platform it was never linked
+/// for, and the build dies on `unresolved import tikv_jemalloc_ctl` — which is
+/// what stranded the v2.7.0 release on NetBSD, illumos and Solaris after
+/// jemalloc was dropped for those three.
 #[must_use]
 pub fn jemalloc_stats() -> Option<JemallocStats> {
     #[cfg(all(
         unix,
         feature = "jemalloc",
-        not(any(target_os = "freebsd", target_os = "dragonfly", target_os = "openbsd"))
+        not(any(
+            target_os = "freebsd",
+            target_os = "dragonfly",
+            target_os = "netbsd",
+            target_os = "openbsd",
+            target_os = "illumos",
+            target_os = "solaris",
+        ))
     ))]
     {
         use tikv_jemalloc_ctl::{epoch, stats};
@@ -533,7 +547,14 @@ pub fn jemalloc_stats() -> Option<JemallocStats> {
     #[cfg(not(all(
         unix,
         feature = "jemalloc",
-        not(any(target_os = "freebsd", target_os = "dragonfly", target_os = "openbsd"))
+        not(any(
+            target_os = "freebsd",
+            target_os = "dragonfly",
+            target_os = "netbsd",
+            target_os = "openbsd",
+            target_os = "illumos",
+            target_os = "solaris",
+        ))
     )))]
     None
 }
@@ -565,7 +586,14 @@ pub fn purge_jemalloc() -> Option<JemallocPurgeStats> {
     #[cfg(all(
         unix,
         feature = "jemalloc",
-        not(any(target_os = "freebsd", target_os = "dragonfly", target_os = "openbsd"))
+        not(any(
+            target_os = "freebsd",
+            target_os = "dragonfly",
+            target_os = "netbsd",
+            target_os = "openbsd",
+            target_os = "illumos",
+            target_os = "solaris",
+        ))
     ))]
     {
         // MALLCTL_ARENAS_ALL is jemalloc's sentinel for "all arenas"; stable at
@@ -600,7 +628,14 @@ pub fn purge_jemalloc() -> Option<JemallocPurgeStats> {
     #[cfg(not(all(
         unix,
         feature = "jemalloc",
-        not(any(target_os = "freebsd", target_os = "dragonfly", target_os = "openbsd"))
+        not(any(
+            target_os = "freebsd",
+            target_os = "dragonfly",
+            target_os = "netbsd",
+            target_os = "openbsd",
+            target_os = "illumos",
+            target_os = "solaris",
+        ))
     )))]
     None
 }
@@ -617,7 +652,14 @@ pub fn configure_jemalloc_low_memory() {
     #[cfg(all(
         unix,
         feature = "jemalloc",
-        not(any(target_os = "freebsd", target_os = "dragonfly", target_os = "openbsd"))
+        not(any(
+            target_os = "freebsd",
+            target_os = "dragonfly",
+            target_os = "netbsd",
+            target_os = "openbsd",
+            target_os = "illumos",
+            target_os = "solaris",
+        ))
     ))]
     {
         // tikv-jemalloc-ctl 0.6 doesn't filefacts dirty_decay_ms/muzzy_decay_ms
@@ -657,7 +699,10 @@ pub fn log_startup_diagnostics() {
         not(any(
             target_os = "freebsd",
             target_os = "dragonfly",
-            target_os = "openbsd"
+            target_os = "netbsd",
+            target_os = "openbsd",
+            target_os = "illumos",
+            target_os = "solaris",
         ))
     )) {
         "jemalloc"

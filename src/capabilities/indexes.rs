@@ -30,7 +30,6 @@ fn ac_kind() -> Option<aho_corasick::AhoCorasickKind> {
     })
 }
 use rayon::prelude::*;
-use regex::bytes::{RegexSet, RegexSetBuilder};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::sync::{Arc, OnceLock, RwLock};
 
@@ -287,11 +286,14 @@ pub(crate) struct SymbolMatchIndex {
     /// ~3× faster than a hashmap here because trait_idx is a dense usize range.
     trait_regex: Vec<Option<std::sync::Arc<crate::composite_rules::condition::TraitRegex>>>,
 
-    /// Regex traits with no extractable literal prefix, compiled into a single
-    /// RegexSet (str-based, unlike the bytes-based one used for raw content
-    /// matching elsewhere in this module) for batched matching.
-    /// `regex_fallback_traits[i]` is the trait index for pattern `i`.
-    regex_fallback_set: Option<regex::RegexSet>,
+    /// Regex traits with no extractable literal prefix, compiled individually
+    /// (str-based, unlike the bytes-based raw-content regexes elsewhere in
+    /// this module). A `RegexSet` here ran the PikeVM with every pattern live
+    /// on every symbol; per-pattern `is_match` uses the lazy DFA and, looped
+    /// pattern-major, reuses its cache across the whole symbol list.
+    /// `regex_fallback_traits[i]` is the trait index for pattern `i`; a
+    /// pattern that fails to compile is dropped from both (warned at build).
+    regex_fallback_regexes: Vec<regex::Regex>,
     regex_fallback_traits: Vec<usize>,
 }
 
@@ -426,9 +428,20 @@ impl SymbolMatchIndex {
             })
             .flatten();
 
-        let regex_fallback_set = (!regex_fallback_patterns.is_empty())
-            .then(|| regex::RegexSet::new(&regex_fallback_patterns).ok())
-            .flatten();
+        let mut regex_fallback_regexes: Vec<regex::Regex> = Vec::new();
+        let mut kept_fallback_traits: Vec<usize> = Vec::new();
+        for (pattern, &trait_idx) in regex_fallback_patterns.iter().zip(&regex_fallback_traits) {
+            match regex::Regex::new(pattern) {
+                Ok(re) => {
+                    regex_fallback_regexes.push(re);
+                    kept_fallback_traits.push(trait_idx);
+                }
+                Err(e) => {
+                    tracing::warn!(pattern, error = %e, "symbol fallback pattern failed to compile; skipping");
+                }
+            }
+        }
+        let regex_fallback_traits = kept_fallback_traits;
 
         tracing::debug!(
             "Built SymbolMatchIndex: {} exact, {} substr, {} regex-literal, {} regex-fallback",
@@ -446,7 +459,7 @@ impl SymbolMatchIndex {
             regex_literal_automaton,
             regex_literal_to_traits,
             trait_regex,
-            regex_fallback_set,
+            regex_fallback_regexes,
             regex_fallback_traits,
         }
     }
@@ -492,7 +505,7 @@ impl SymbolMatchIndex {
         if symbols.len() >= PARALLEL_THRESHOLD
             && (self.substr_automaton.is_some()
                 || self.regex_literal_automaton.is_some()
-                || self.regex_fallback_set.is_some())
+                || !self.regex_fallback_regexes.is_empty())
         {
             return self.find_matches_parallel(symbols);
         }
@@ -508,11 +521,16 @@ impl SymbolMatchIndex {
         // Reused across symbols to avoid per-symbol allocation.
         let mut seen_candidates: FxHashSet<usize> = FxHashSet::default();
 
+        // Rule loading strips up to two leading underscores. Report symbols
+        // are normally pre-normalized, but normalize here for edge cases.
+        // A named fn because the fallback pass below iterates pattern-major.
+        fn normalize(symbol: &str) -> &str {
+            let n = symbol.strip_prefix('_').unwrap_or(symbol);
+            n.strip_prefix('_').unwrap_or(n)
+        }
+
         for &symbol in symbols {
-            // Rule loading strips up to two leading underscores. Report symbols
-            // are normally pre-normalized, but normalize here for edge cases.
-            let normalized = symbol.strip_prefix('_').unwrap_or(symbol);
-            let normalized = normalized.strip_prefix('_').unwrap_or(normalized);
+            let normalized = normalize(symbol);
             if normalized.is_empty() {
                 continue;
             }
@@ -555,13 +573,23 @@ impl SymbolMatchIndex {
                     }
                 }
             }
+        }
 
-            // Regex fallback: RegexSet checks all no-literal patterns in one pass.
-            if let Some(ref set) = self.regex_fallback_set {
-                for pattern_idx in set.matches(normalized) {
-                    let trait_idx = self.regex_fallback_traits[pattern_idx];
-                    matched.insert(trait_idx);
-                    Self::push_evidence(&mut evidence, trait_idx, symbol);
+        // Regex fallback (no-literal patterns), pattern-major: each regex's
+        // lazy-DFA cache stays hot across the whole symbol list instead of
+        // being re-entered per symbol.
+        if !self.regex_fallback_regexes.is_empty() {
+            for (re, &trait_idx) in self
+                .regex_fallback_regexes
+                .iter()
+                .zip(&self.regex_fallback_traits)
+            {
+                for &symbol in symbols {
+                    let normalized = normalize(symbol);
+                    if !normalized.is_empty() && re.is_match(normalized) {
+                        matched.insert(trait_idx);
+                        Self::push_evidence(&mut evidence, trait_idx, symbol);
+                    }
                 }
             }
         }
@@ -615,7 +643,7 @@ impl SymbolMatchIndex {
     #[cfg(test)]
     #[allow(dead_code)]
     pub(crate) fn has_fallback(&self) -> bool {
-        self.regex_fallback_set.is_some()
+        !self.regex_fallback_regexes.is_empty()
     }
 }
 
@@ -1298,9 +1326,12 @@ struct FileTypeRegexSet {
     /// once) — strictly better than the old behavior, where one bad pattern
     /// discarded the whole index.
     individual_regexes: Vec<OnceLock<Option<Arc<regex::bytes::Regex>>>>,
-    /// Smaller RegexSet for ONLY patterns without extractable literals
-    no_literal_regex_set: Option<RegexSet>,
-    /// Maps no_literal_regex_set index -> original pattern index
+    /// Individually-compiled regexes for ONLY patterns without extractable
+    /// literals (see `no_literal_pass` for why not one `RegexSet`). Parallel
+    /// to `no_literal_to_original`; patterns that fail to compile are dropped
+    /// from both (warned once at build).
+    no_literal_regexes: Vec<regex::bytes::Regex>,
+    /// Maps no_literal_regexes index -> original pattern index
     no_literal_to_original: Vec<usize>,
     /// Aho-Corasick automaton for CASE-SENSITIVE literal prefix pre-filtering
     cs_literal_prefilter: Option<AhoCorasick>,
@@ -1568,15 +1599,54 @@ impl FileTypeRegexSet {
     /// patterns have been seen. Serves steps 1a/1b (literal → candidate
     /// pattern indices) and 1d (substring atom → trait indices) — both only
     /// care about first occurrence.
+    /// Minimum content size for chunk-parallel AC sweeps. Below this a single
+    /// serial pass wins; above it the slowest pass otherwise runs alone at one
+    /// core for the whole blob (container-scope sweeps over tens of MB were a
+    /// measured 1-core wall window).
+    const AC_CHUNK_BYTES: usize = 8 << 20;
+
+    /// Near-equal chunk ranges over `len` bytes, each extended by `overlap`
+    /// (= longest pattern − 1): any match starting inside a chunk lies fully
+    /// within that chunk's window, so a presence-only union over chunks is
+    /// exact.
+    fn ac_chunk_ranges(len: usize, overlap: usize) -> Vec<(usize, usize)> {
+        let chunks = len.div_ceil(Self::AC_CHUNK_BYTES);
+        let base = len.div_ceil(chunks);
+        (0..chunks)
+            .map(|i| {
+                let lo = i * base;
+                (lo, ((i + 1) * base + overlap).min(len))
+            })
+            .collect()
+    }
+
     fn ac_first_occurrence_pass(
         ac: Option<&AhoCorasick>,
         index_map: &[Vec<usize>],
         content: &[u8],
     ) -> FxHashSet<usize> {
-        let mut out = FxHashSet::default();
         let Some(ac) = ac else {
-            return out;
+            return FxHashSet::default();
         };
+        if content.len() >= 2 * Self::AC_CHUNK_BYTES {
+            use rayon::prelude::*;
+            return Self::ac_chunk_ranges(content.len(), ac.max_pattern_len().saturating_sub(1))
+                .par_iter()
+                .map(|&(lo, hi)| Self::ac_first_occurrence_serial(ac, index_map, &content[lo..hi]))
+                .reduce(FxHashSet::default, |mut a, b| {
+                    a.extend(b);
+                    a
+                });
+        }
+        Self::ac_first_occurrence_serial(ac, index_map, content)
+    }
+
+    fn ac_first_occurrence_serial(
+        ac: &AhoCorasick,
+        index_map: &[Vec<usize>],
+        content: &[u8],
+    ) -> FxHashSet<usize> {
+        let mut out = FxHashSet::default();
         let total = index_map.len();
         let mut seen: FxHashSet<usize> = FxHashSet::default();
         // Overlapping iteration is required for correctness: `find_iter` is
@@ -1607,10 +1677,33 @@ impl FileTypeRegexSet {
         word_to_traits: &[Vec<usize>],
         content: &[u8],
     ) -> FxHashSet<usize> {
-        let mut out = FxHashSet::default();
         let Some(ac) = ac else {
-            return out;
+            return FxHashSet::default();
         };
+        if content.len() >= 2 * Self::AC_CHUNK_BYTES {
+            use rayon::prelude::*;
+            return Self::ac_chunk_ranges(content.len(), ac.max_pattern_len().saturating_sub(1))
+                .par_iter()
+                .map(|&(lo, hi)| Self::ac_word_boundary_serial(ac, word_to_traits, content, lo, hi))
+                .reduce(FxHashSet::default, |mut a, b| {
+                    a.extend(b);
+                    a
+                });
+        }
+        Self::ac_word_boundary_serial(ac, word_to_traits, content, 0, content.len())
+    }
+
+    /// Serial word-boundary sweep over `content[lo..hi]`. Boundary bytes are
+    /// read from the FULL content at the match's global offsets, so chunk
+    /// edges cannot fabricate or lose a boundary.
+    fn ac_word_boundary_serial(
+        ac: &AhoCorasick,
+        word_to_traits: &[Vec<usize>],
+        content: &[u8],
+        lo: usize,
+        hi: usize,
+    ) -> FxHashSet<usize> {
+        let mut out = FxHashSet::default();
         let content_len = content.len();
         let total = word_to_traits.len();
         // Overlapping iteration for the same reason as
@@ -1619,13 +1712,13 @@ impl FileTypeRegexSet {
         // re-checking words that already passed, and exits once every word
         // has.
         let mut satisfied: FxHashSet<usize> = FxHashSet::default();
-        for mat in ac.find_overlapping_iter(content) {
+        for mat in ac.find_overlapping_iter(&content[lo..hi]) {
             let idx = mat.pattern().as_usize();
             if satisfied.contains(&idx) {
                 continue;
             }
-            let start = mat.start();
-            let end = mat.end();
+            let start = lo + mat.start();
+            let end = lo + mat.end();
             let before_ok = start == 0
                 || !content[start - 1].is_ascii_alphanumeric() && content[start - 1] != b'_';
             let after_ok =
@@ -1767,7 +1860,7 @@ impl FileTypeRegexSet {
             let slot = &self.individual_regexes[pattern_idx];
             if slot.get().is_none() {
                 let pattern = &self.patterns[pattern_idx];
-                let compiled = match regex::bytes::Regex::new(pattern) {
+                let compiled = match compile_engine_mirrored(pattern) {
                     Ok(re) => Some(Arc::new(re)),
                     Err(e) => {
                         tracing::warn!(pattern, error = %e, "raw content pattern failed to compile; skipping");
@@ -1792,20 +1885,68 @@ impl FileTypeRegexSet {
         }
     }
 
-    /// Step 3: the smaller RegexSet for patterns without literals (unavoidable).
+    /// Step 3: patterns without extractable literals (unavoidable full scans).
+    ///
+    /// Evaluated per pattern rather than as one multi-pattern `RegexSet`: the
+    /// set's `matches()` runs the PikeVM over every byte with all patterns
+    /// live (no prefilters, no early exit) and was the dominant leaf on
+    /// many-member archives. Individual `Regex::is_match` gives each pattern
+    /// the full meta-engine stack — lazy DFA, regex-automata's own inner
+    /// literal prefilters (more permissive than our atom extractor) — plus
+    /// first-match early exit, and large content fans the patterns across
+    /// the pool. Presence-per-pattern semantics are identical.
     fn no_literal_pass(&self, content: &[u8]) -> FxHashSet<usize> {
+        const PARALLEL_MIN_BYTES: usize = 1 << 20;
         let mut out = FxHashSet::default();
-        if let Some(ref no_lit_set) = self.no_literal_regex_set {
-            for no_lit_idx in no_lit_set.matches(content).iter() {
-                if let Some(&original_idx) = self.no_literal_to_original.get(no_lit_idx)
-                    && let Some(trait_indices) = self.pattern_to_traits.get(original_idx)
-                {
-                    out.extend(trait_indices.iter().copied());
-                }
+        if self.no_literal_regexes.is_empty() {
+            return out;
+        }
+        let matched: Vec<usize> =
+            if content.len() >= PARALLEL_MIN_BYTES && self.no_literal_regexes.len() > 1 {
+                use rayon::prelude::*;
+                self.no_literal_regexes
+                    .par_iter()
+                    .zip(self.no_literal_to_original.par_iter())
+                    .filter_map(|(re, &idx)| re.is_match(content).then_some(idx))
+                    .collect()
+            } else {
+                self.no_literal_regexes
+                    .iter()
+                    .zip(self.no_literal_to_original.iter())
+                    .filter_map(|(re, &idx)| re.is_match(content).then_some(idx))
+                    .collect()
+            };
+        for original_idx in matched {
+            if let Some(trait_indices) = self.pattern_to_traits.get(original_idx) {
+                out.extend(trait_indices.iter().copied());
             }
         }
         out
     }
+}
+
+/// Compile a raw-content pattern with the same parse mode the trait engines
+/// use (`condition.rs::TraitRegex::compile`): byte-mode classes for ASCII
+/// patterns with a codepoint fallback, codepoint mode for non-ASCII patterns
+/// (and under `CLEAVE_REGEX_UNICODE=1`). The gate's verifiers must mirror the
+/// engine's parse mode or the two diverge — Unicode-mode verifiers here were
+/// also the reason gate sweeps ran the PikeVM (Unicode `\b` quits the lazy
+/// DFA on non-ASCII bytes) instead of the DFA the engines use.
+fn compile_engine_mirrored(pattern: &str) -> Result<regex::bytes::Regex, regex::Error> {
+    const SIZE_LIMIT: usize = 100 * 1024 * 1024;
+    if pattern.is_ascii()
+        && !crate::composite_rules::evaluators::regex_unicode_override()
+        && let Ok(re) = regex::bytes::RegexBuilder::new(pattern)
+            .size_limit(SIZE_LIMIT)
+            .unicode(false)
+            .build()
+    {
+        return Ok(re);
+    }
+    // `\p{..}` classes are ASCII source but only parse in codepoint mode.
+    regex::bytes::RegexBuilder::new(pattern)
+        .size_limit(SIZE_LIMIT)
+        .build()
 }
 
 /// A word pattern: the literal word and whether it's case-insensitive
@@ -2167,20 +2308,26 @@ impl RawContentRegexIndex {
         let individual_regexes: Vec<OnceLock<Option<Arc<regex::bytes::Regex>>>> =
             (0..pattern_strs.len()).map(|_| OnceLock::new()).collect();
 
-        // Build smaller RegexSet for ONLY patterns without extractable literals
-        let no_literal_patterns: Vec<&str> = patterns_without_literals
-            .iter()
-            .filter_map(|&idx| pattern_strs.get(idx).map(String::as_str))
-            .collect();
-        let no_literal_to_original: Vec<usize> = patterns_without_literals.clone();
-        let no_literal_regex_set = if !no_literal_patterns.is_empty() {
-            RegexSetBuilder::new(&no_literal_patterns)
-                .size_limit(100 * 1024 * 1024)
-                .build()
-                .ok()
-        } else {
-            None
-        };
+        // Compile the no-extractable-literal patterns individually (see
+        // `no_literal_pass`). A pattern that fails to compile is dropped with
+        // a warning — strictly better than the old single-RegexSet build,
+        // where one bad pattern discarded every no-literal pattern.
+        let mut no_literal_regexes: Vec<regex::bytes::Regex> = Vec::new();
+        let mut no_literal_to_original: Vec<usize> = Vec::new();
+        for &idx in &patterns_without_literals {
+            let Some(pattern) = pattern_strs.get(idx) else {
+                continue;
+            };
+            match compile_engine_mirrored(pattern) {
+                Ok(re) => {
+                    no_literal_regexes.push(re);
+                    no_literal_to_original.push(idx);
+                }
+                Err(e) => {
+                    tracing::warn!(pattern, error = %e, "no-literal pattern failed to compile; skipping");
+                }
+            }
+        }
 
         // Build word boundary Aho-Corasick automatons
         // Separate case-sensitive and case-insensitive words
@@ -2284,7 +2431,7 @@ impl RawContentRegexIndex {
                 pattern_to_traits: Vec::new(),
                 patterns: Vec::new(),
                 individual_regexes: Vec::new(),
-                no_literal_regex_set: None,
+                no_literal_regexes: Vec::new(),
                 no_literal_to_original: Vec::new(),
                 cs_literal_prefilter: None,
                 cs_literal_to_patterns: Vec::new(),
@@ -2317,7 +2464,7 @@ impl RawContentRegexIndex {
             pattern_to_traits,
             patterns: pattern_strs,
             individual_regexes,
-            no_literal_regex_set,
+            no_literal_regexes,
             no_literal_to_original,
             cs_literal_prefilter,
             cs_literal_to_patterns,

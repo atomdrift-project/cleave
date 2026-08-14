@@ -831,19 +831,6 @@ impl super::CapabilityMapper {
                     if gate_stats_enabled() {
                         RAW_GATE_SKIPPED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     }
-                    if let Some(filter) = std::env::var_os("CLEAVE_GATE_DEBUG") {
-                        let filter = filter.to_string_lossy();
-                        if filter == "1" || trait_def.id.contains(filter.as_ref()) {
-                            eprintln!(
-                                "GATE-SKIP {} buckets=[{}] eval_ft={:?}",
-                                trait_def.id,
-                                self.match_indexes()
-                                    .raw_content_regex_index
-                                    .debug_trait_buckets(idx),
-                                file_type
-                            );
-                        }
-                    }
                     return None;
                 }
             }
@@ -871,7 +858,7 @@ impl super::CapabilityMapper {
         };
 
         // Deduplicate findings
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = rustc_hash::FxHashSet::default();
         let mut unique_findings: Vec<Finding> = all_findings
             .into_iter()
             .filter(|f| seen.insert(f.id.clone()))

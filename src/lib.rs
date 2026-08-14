@@ -197,6 +197,18 @@ pub fn precompile_yara(
     yara_engine::YaraEngine::precompile_to(out_dir, enable_third_party)
 }
 
+/// Check that a directory of pre-compiled YARA rules is complete and current
+/// for the rule sources in the active traits directory, without recompiling.
+///
+/// The engine silently ignores compiled rules that don't match their sources
+/// and falls back to compiling in-process, so stale artifacts cost every client
+/// the very work they exist to avoid while producing no visible symptom. This
+/// is the cheap check (one traits walk, no compilation) that makes that state
+/// fail a `validate` run instead.
+pub fn check_precompiled_yara(dir: &std::path::Path) -> anyhow::Result<()> {
+    yara_engine::YaraEngine::check_precompiled(dir)
+}
+
 use rustc_hash::FxHasher;
 use std::hash::{Hash, Hasher};
 

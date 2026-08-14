@@ -148,6 +148,7 @@ impl Default for ScopeMask {
 /// metrics scope.
 pub(crate) struct DiffUnit {
     pub(crate) path: String,
+    pub(crate) file_type: String,
     /// Content hash of this side. Two units with the same non-empty `sha` are
     /// byte-identical, so their scopes cannot differ — [`diff_pair`] uses this
     /// to skip the (dominant) per-member set-diffs for unchanged members.
@@ -174,6 +175,7 @@ impl DiffUnit {
     fn empty(path: String) -> Self {
         Self {
             path,
+            file_type: String::new(),
             sha: String::new(),
             findings: Vec::new(),
             filefacts_metrics: None,
@@ -499,6 +501,7 @@ fn units_from_report(report: &AnalysisReport, root_rel: &str) -> Vec<DiffUnit> {
     let mut out = Vec::with_capacity(1 + report.files.len());
     out.push(DiffUnit {
         path: root_rel.to_string(),
+        file_type: report.target.file_type.clone(),
         sha: report.target.sha256.clone(),
         findings: report.findings.clone(),
         filefacts_metrics: report.filefacts_metrics.clone(),
@@ -531,6 +534,7 @@ fn unit_from_member(fa: &FileAnalysis, root_rel: &str, delim: &str) -> DiffUnit 
     };
     DiffUnit {
         path,
+        file_type: fa.file_type.clone(),
         sha: fa.sha256.clone(),
         findings: fa.findings.clone(),
         filefacts_metrics: fa.filefacts_metrics.clone(),
@@ -586,6 +590,16 @@ fn pair_units(old: Vec<DiffUnit>, new: Vec<DiffUnit>) -> Vec<UnitPair> {
 /// item on the other side becomes an "added" or "removed" entry.
 fn diff_pair(pair: UnitPair, mask: ScopeMask, limit: usize) -> FileDiffEntry {
     let UnitPair { path, old, new } = pair;
+    let file_type = new
+        .as_ref()
+        .map(|unit| unit.file_type.as_str())
+        .filter(|kind| !kind.is_empty())
+        .or_else(|| {
+            old.as_ref()
+                .map(|unit| unit.file_type.as_str())
+                .filter(|kind| !kind.is_empty())
+        })
+        .map(str::to_string);
     // pair_units guarantees at least one side is present.
     let initial_status = match (old.is_some(), new.is_some()) {
         (true, false) => FileStatus::Removed,
@@ -662,6 +676,7 @@ fn diff_pair(pair: UnitPair, mask: ScopeMask, limit: usize) -> FileDiffEntry {
 
     FileDiffEntry {
         path,
+        file_type,
         status: resolved,
         identity,
         scopes,
@@ -1050,5 +1065,28 @@ mod tests {
         );
         assert_eq!(entry.status, FileStatus::Unchanged);
         assert!(!visible_diff_file(&entry));
+    }
+
+    #[test]
+    fn diff_entry_keeps_content_detected_file_type() {
+        let mut new = DiffUnit::empty("payload".into());
+        new.file_type = "elf".into();
+        new.findings.push(Finding {
+            id: "metadata/binary/format::elf".into(),
+            crit: crate::types::Criticality::Notable,
+            ..Finding::default()
+        });
+
+        let entry = diff_pair(
+            UnitPair {
+                path: new.path.clone(),
+                old: None,
+                new: Some(new),
+            },
+            ScopeMask::all(),
+            DEFAULT_LIMIT_CHANGES,
+        );
+
+        assert_eq!(entry.file_type.as_deref(), Some("elf"));
     }
 }

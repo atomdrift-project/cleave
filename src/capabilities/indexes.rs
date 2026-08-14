@@ -1373,6 +1373,53 @@ impl FileTypeRegexSet {
     /// across content chunks, so match semantics cannot change. Small inputs
     /// keep the serial path: archive members already saturate the pool via the
     /// member fan-out, and fork/join overhead would dominate a small scan.
+    /// Candidate-only counterpart of [`Self::find_matches`]: every atom pass
+    /// plus the no-literal RegexSet, but literal-bucket candidates map to
+    /// their traits without the full-content `verify_literal_candidates`
+    /// step. Serves the gate's decoded-layer union, where over-approximation
+    /// is sound and verification cost is not worth paying.
+    fn find_candidates(&self, content: &[u8]) -> FxHashSet<usize> {
+        let mut out: FxHashSet<usize> = FxHashSet::default();
+        let mut literal_candidates: FxHashSet<usize> = FxHashSet::default();
+        literal_candidates.extend(Self::ac_first_occurrence_pass(
+            self.cs_literal_prefilter.as_ref(),
+            &self.cs_literal_to_patterns,
+            content,
+        ));
+        literal_candidates.extend(Self::ac_first_occurrence_pass(
+            self.ci_literal_prefilter.as_ref(),
+            &self.ci_literal_to_patterns,
+            content,
+        ));
+        for pattern_idx in literal_candidates {
+            if let Some(trait_indices) = self.pattern_to_traits.get(pattern_idx) {
+                out.extend(trait_indices.iter().copied());
+            }
+        }
+        out.extend(Self::ac_word_boundary_pass(
+            self.cs_word_automaton.as_ref(),
+            &self.cs_word_to_traits,
+            content,
+        ));
+        out.extend(Self::ac_word_boundary_pass(
+            self.ci_word_automaton.as_ref(),
+            &self.ci_word_to_traits,
+            content,
+        ));
+        out.extend(Self::ac_first_occurrence_pass(
+            self.cs_substr_automaton.as_ref(),
+            &self.cs_substr_to_traits,
+            content,
+        ));
+        out.extend(Self::ac_first_occurrence_pass(
+            self.ci_substr_automaton.as_ref(),
+            &self.ci_substr_to_traits,
+            content,
+        ));
+        out.extend(self.no_literal_pass(content));
+        out
+    }
+
     fn find_matches(&self, content: &[u8]) -> Vec<usize> {
         const PARALLEL_MIN_BYTES: usize = 4 << 20;
         // Below this, per-atom SIMD memmem beats an AC scan and is exact
@@ -1874,28 +1921,29 @@ impl RawContentRegexIndex {
                     case_insensitive,
                     ..
                 }) => {
-                    // Gate on the longest *mandatory* literal anywhere in the
-                    // pattern (the same atom `eval_raw`'s engine windows on), not
-                    // just a prefix — otherwise ~half of `type: text` patterns are
-                    // ungated and re-scan every source file. Skip non-UTF-8 atoms
-                    // (the substring AC is built from `String`s); they stay ungated.
-                    let atom = super::derivation_memo::mandatory_atom_utf8(regex_str);
-                    if let Some(literal) = atom {
-                        let make = || WordPattern {
-                            word: literal.clone(),
-                            case_insensitive: *case_insensitive,
-                            trait_idx,
-                        };
-                        if trait_def.r#for.contains(&RuleFileType::All) {
-                            universal_substr.push(make());
-                        } else {
-                            for ft in &trait_def.r#for {
-                                by_file_type_substr.entry(*ft).or_default().push(make());
+                    // Gate on a mandatory *any-of* atom set (alternation-aware,
+                    // `(?i)`-aware — see `mandatory_atom_set`), not just a
+                    // prefix — otherwise ~half of `type: text` patterns are
+                    // ungated and re-scan every source file. Multiple entries
+                    // sharing a trait_idx give any-of semantics for free: a hit
+                    // on any atom marks the trait a candidate. Non-UTF-8 or
+                    // inextractable sets stay ungated (eval_raw scans directly).
+                    if let Some(atoms) = super::derivation_memo::mandatory_atom_set(regex_str) {
+                        for (literal, atom_ci) in &atoms {
+                            let make = || WordPattern {
+                                word: literal.clone(),
+                                case_insensitive: *case_insensitive || *atom_ci,
+                                trait_idx,
+                            };
+                            if trait_def.r#for.contains(&RuleFileType::All) {
+                                universal_substr.push(make());
+                            } else {
+                                for ft in &trait_def.r#for {
+                                    by_file_type_substr.entry(*ft).or_default().push(make());
+                                }
                             }
                         }
                     }
-                    // A `type: text` regex with no extractable mandatory literal
-                    // stays unindexed (ungated): `eval_raw` scans it directly.
                 }
                 _ => {}
             }
@@ -2386,6 +2434,34 @@ impl RawContentRegexIndex {
             matching_traits.extend(set.find_matches(binary_data));
         }
         matching_traits
+    }
+
+    /// Candidate-only sweep for small secondary haystacks (the decoded string
+    /// layers unioned into the gate). Unlike [`Self::find_matches`], the
+    /// pattern-bucket literal candidates map straight to their traits without
+    /// full-content regex verification — an over-approximation, which is
+    /// exactly what a gate union wants (the trait evaluator verifies for
+    /// real), and it keeps this pass cheap on decode-heavy members where the
+    /// verify step measured as a wall regression.
+    pub(crate) fn find_candidates(
+        &self,
+        content: &[u8],
+        file_type: &RuleFileType,
+    ) -> FxHashSet<usize> {
+        let mut out = FxHashSet::default();
+        for set in self
+            .universal
+            .iter()
+            .chain(self.by_file_type.get(file_type))
+            .chain(
+                archive_family_types(file_type)
+                    .iter()
+                    .filter_map(|ft| self.by_file_type.get(ft)),
+            )
+        {
+            out.extend(set.find_candidates(content));
+        }
+        out
     }
 }
 

@@ -21,7 +21,11 @@ use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 
-const FILE_NAME: &str = "regex-derivations-v1.json";
+// v2: mandatory_atom_set landed (any-of alternation atoms, CI runs,
+// anchored prefix composition, engine-mirrored parse mode). The v1 files
+// on disk hold atom_set entries computed by in-development revisions of
+// that algorithm; abandoning them recomputes everything once (~2.3 s).
+const FILE_NAME: &str = "regex-derivations-v2.json";
 
 #[derive(Default, Serialize, Deserialize)]
 struct MemoData {
@@ -29,6 +33,11 @@ struct MemoData {
     prefix: FxHashMap<String, Option<String>>,
     /// pattern -> longest mandatory UTF-8 literal atom, or None if inextractable.
     atom: FxHashMap<String, Option<String>>,
+    /// pattern -> mandatory any-of atom set (atom, case_insensitive), or None.
+    /// Additive field: files written before it deserialize with an empty map
+    /// and recompute lazily.
+    #[serde(default)]
+    atom_set: FxHashMap<String, Option<Vec<(String, bool)>>>,
 }
 
 struct Memo {
@@ -94,6 +103,21 @@ pub(crate) fn mandatory_atom_utf8(pattern: &str) -> Option<String> {
         .and_then(|b| String::from_utf8(b).ok());
     let mut guard = memo().write();
     guard.data.atom.insert(pattern.to_owned(), computed.clone());
+    guard.dirty = true;
+    computed
+}
+
+/// Memoized [`crate::composite_rules::evaluators::mandatory_atom_set`].
+pub(crate) fn mandatory_atom_set(pattern: &str) -> Option<Vec<(String, bool)>> {
+    if let Some(hit) = memo().read().data.atom_set.get(pattern) {
+        return hit.clone();
+    }
+    let computed = crate::composite_rules::evaluators::mandatory_atom_set(pattern);
+    let mut guard = memo().write();
+    guard
+        .data
+        .atom_set
+        .insert(pattern.to_owned(), computed.clone());
     guard.dirty = true;
     computed
 }

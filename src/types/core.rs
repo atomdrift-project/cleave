@@ -1830,16 +1830,23 @@ impl AnalysisReport {
             .architectures
             .as_ref()
             .and_then(|a| a.first().cloned());
+        file.traits = self.traits.clone();
         file.findings = self.findings.clone();
         file.context = self.context.clone();
         file.filefacts = self.filefacts.clone();
         file.identity = self.identity.clone();
         file.filefacts_metrics = self.filefacts_metrics.clone();
         file.structure = self.structure.clone();
+        file.functions = self.functions.clone();
         file.strings = self.strings.clone();
         file.imports = self.imports.clone();
         file.exports = self.exports.clone();
         file.sections = self.sections.clone();
+        file.yara_matches = self.yara_matches.clone();
+        file.syscalls = self.syscalls.clone();
+        file.paths = self.paths.clone();
+        file.directories = self.directories.clone();
+        file.env_vars = self.env_vars.clone();
 
         file.populate_file_metrics();
         // Flatten the values tree into `kv` (the serialized form). The nested
@@ -1883,16 +1890,23 @@ impl AnalysisReport {
         );
 
         file.arch = arch;
+        file.traits = self.traits;
         file.findings = self.findings;
         file.context = self.context;
         file.filefacts = self.filefacts;
         file.identity = self.identity;
         file.filefacts_metrics = self.filefacts_metrics;
         file.structure = self.structure;
+        file.functions = self.functions;
         file.strings = self.strings;
         file.imports = self.imports;
         file.exports = self.exports;
         file.sections = self.sections;
+        file.yara_matches = self.yara_matches;
+        file.syscalls = self.syscalls;
+        file.paths = self.paths;
+        file.directories = self.directories;
+        file.env_vars = self.env_vars;
 
         file.populate_file_metrics();
         // `kv` is the single retained representation — see `to_file_analysis`.

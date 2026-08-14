@@ -1707,7 +1707,10 @@ pub(crate) fn report_from_file_analysis(
         architectures: fa.arch.as_ref().map(|a| vec![a.clone()]),
     };
     let mut report = types::AnalysisReport::new(target);
+    report.traits = fa.traits;
     report.findings = fa.findings;
+    report.context = fa.context;
+    report.structure = fa.structure;
     report.strings = fa.strings;
     report.imports = fa.imports;
     report.exports = fa.exports;
@@ -1715,6 +1718,7 @@ pub(crate) fn report_from_file_analysis(
     report.sections = fa.sections;
     report.syscalls = fa.syscalls;
     report.yara_matches = fa.yara_matches;
+    report.filefacts = fa.filefacts;
     report.filefacts_metrics = fa.filefacts_metrics;
     report.identity = fa.identity;
     report.paths = fa.paths;
@@ -3620,6 +3624,45 @@ mod tests {
         assert_eq!(kv["file.basename"], "actual.sh");
         assert_eq!(kv["file.stem"], "actual");
         assert_eq!(kv["source.language"], "shell");
+    }
+
+    /// The cross-context cache stores an `AnalysisReport` as `FileAnalysis`
+    /// and reconstructs it on a member cache hit. Source AST symbols live only
+    /// in `filefacts`, so dropping that field makes cached source files appear
+    /// to have far fewer symbols than freshly analyzed identical bytes.
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn file_analysis_cache_round_trip_preserves_source_symbols() {
+        let target = types::TargetInfo {
+            path: "donor.js".to_string(),
+            file_type: "javascript".to_string(),
+            size_bytes: 16,
+            sha256: "abc".to_string(),
+            architectures: None,
+        };
+        let mut report = types::AnalysisReport::new(target);
+        report.filefacts = Some(types::FilefactsView {
+            symbols: vec![filefacts::Symbol::Member {
+                path: "window.localStorage".to_string(),
+                offset: Some(4),
+            }],
+            ..Default::default()
+        });
+
+        let cached = report.to_file_analysis(0);
+        let restored = report_from_file_analysis(cached, "actual.js".to_string());
+
+        assert_eq!(restored.target.path, "actual.js");
+        let symbols = &restored
+            .filefacts
+            .as_ref()
+            .expect("filefacts survives cache round trip")
+            .symbols;
+        assert!(matches!(
+            symbols.as_slice(),
+            [filefacts::Symbol::Member { path, offset: Some(4) }]
+                if path == "window.localStorage"
+        ));
     }
 
     /// `PhaseTracker::new()` must not register (otherwise every default

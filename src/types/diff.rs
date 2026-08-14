@@ -441,12 +441,21 @@ pub struct TraitChange {
     pub trait_section: String,
     /// Criticality at the side this change came from.
     pub crit: Criticality,
+    /// Match confidence at this side. Retained so downstream renderers can
+    /// rank a complete differential by `criticality weight × confidence`
+    /// without imposing an analysis-time row cap.
+    #[serde(default = "default_trait_confidence")]
+    pub conf: f32,
     /// Short human-readable description (for display).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub desc: String,
     /// Match count on this side.
     #[serde(default, skip_serializing_if = "super::is_zero_u32")]
     pub count: u32,
+}
+
+fn default_trait_confidence() -> f32 {
+    1.0
 }
 
 /// A change to a flattened metric path (e.g. `binary.entropy`).
@@ -596,5 +605,17 @@ mod tests {
         let strings = back.files[0].scopes.strings.as_ref().unwrap();
         assert_eq!(strings.added.len(), 1);
         assert_eq!(strings.added[0].value, "/etc/passwd");
+    }
+
+    #[test]
+    fn trait_change_without_confidence_defaults_to_one() {
+        let change: TraitChange = serde_json::from_value(serde_json::json!({
+            "id": "objectives/command-and-control/remote-shell",
+            "trait_section": "objectives",
+            "crit": "hostile"
+        }))
+        .unwrap();
+
+        assert_eq!(change.conf, 1.0);
     }
 }

@@ -122,6 +122,7 @@ fn trait_change(f: &Finding) -> TraitChange {
         id: f.id.clone().to_string(),
         trait_section,
         crit: f.crit,
+        conf: f.conf,
         desc: f.desc.clone().to_string(),
         count: f.match_count as u32,
     }
@@ -1005,6 +1006,7 @@ mod tests {
                     id: format!("metadata/noise/{i:03}"),
                     trait_section: "metadata".to_string(),
                     crit: Criticality::Baseline,
+                    conf: 0.9,
                     desc: "low-signal finding".to_string(),
                     count: 1,
                 })
@@ -1012,6 +1014,7 @@ mod tests {
                     id: "objectives/command-and-control/remote-shell".to_string(),
                     trait_section: "objectives".to_string(),
                     crit: Criticality::Hostile,
+                    conf: 0.99,
                     desc: "hostile composite".to_string(),
                     count: 1,
                 }))

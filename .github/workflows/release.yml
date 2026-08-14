@@ -1,0 +1,525 @@
+# Publish a release. Fires automatically on a `v*` tag:
+#
+#     git tag -s v2.4.0 -m "Cleave 2.4.0"
+#     git push origin v2.4.0
+#
+# It also dry-runs on demand from any ref, which is how you iterate on this
+# pipeline without burning tags:
+#
+#     gh workflow run release.yml --ref my-branch
+#
+# To build and publish an existing tag with the latest workflow definition:
+#
+#     gh workflow run release.yml --ref main -f tag=v2.5.0 -f publish=true
+#
+# To retry one missing target without rebuilding unrelated platforms:
+#
+#     gh workflow run release.yml --ref main -f tag=v2.5.0 -f publish=true \
+#       -f target=x86_64-unknown-openbsd
+#
+# A dry run does everything a real one does — fat-LTO builds, whatever signing
+# the inputs below ask for, packaging, checksums — and stops short of attesting
+# or creating the release, leaving the assembled set as a downloadable artifact.
+# That matters because the release-only surface (the `release-lto` profile, the
+# signing path, this file's packaging steps) is precisely what ci.yml never
+# exercises, so it is where the failures live. `workflow_dispatch` reads the
+# workflow definition from the ref you dispatch. The optional `tag` input lets
+# a repaired definition on main check out and publish an older tagged tree.
+#
+# This workflow is deliberately separate from ci.yml because it is the only one
+# holding dangerous permissions — `contents: write` to publish, `id-token` and
+# `attestations: write` to sign provenance, and the macOS Developer ID secrets.
+# None of that is reachable from a pull_request trigger: tags on this repo can
+# only be pushed by someone who already has write access.
+#
+# To require a human before anything is published, create a `release`
+# environment (Settings -> Environments) with a required reviewer and add
+# `environment: release` to the publish job. The build still runs; only the
+# upload waits.
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: >-
+          Existing v* tag to build. This recovery path lets a repaired workflow
+          on the default branch publish artifacts for a release whose tag
+          already exists.
+        type: string
+        default: ""
+      target:
+        description: >-
+          Rebuild only one missing target. Empty builds the complete release
+          matrix; matrix-backed targets rebuild their matrix group.
+        type: string
+        default: ""
+      publish:
+        description: >-
+          Create or populate the GitHub release. Off (the default) is a dry run.
+          Requires a tag ref or the tag input; a tag push always publishes.
+        type: boolean
+        default: false
+
+permissions: {}
+
+concurrency:
+  # A recovery dispatch comes from main, but it must serialize with any other
+  # run for the requested tag. Different releases can proceed independently.
+  group: release-${{ inputs.tag || github.ref_name }}
+  # Never cancel a half-published release.
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: verify tag
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      publish: ${{ steps.version.outputs.publish }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.tag || github.ref }}
+
+      # A tag can be pushed without ever passing through PR CI, so the release
+      # path repeats the guard rather than trusting that someone ran it.
+      - name: Reject local path overrides
+        run: |
+          if grep -nE '^[[:space:]]*[^#].*path[[:space:]]*=[[:space:]]*"\.\.' Cargo.toml; then
+            echo "::error file=Cargo.toml::local path override committed - refusing to release"
+            exit 1
+          fi
+
+      # A tag push always publishes; a dispatch only does so when asked. On a
+      # tag push the `inputs` context is empty, so the first operand carries it.
+      - name: Resolve version
+        id: version
+        env:
+          PUBLISH: ${{ github.event_name == 'push' || inputs.publish }}
+          REQUESTED_TAG: ${{ inputs.tag || '' }}
+          REQUESTED_TARGET: ${{ inputs.target || '' }}
+        run: |
+          set -eu
+          case "$REQUESTED_TARGET" in
+            ""|x86_64-unknown-linux-gnu|aarch64-unknown-linux-gnu|aarch64-apple-darwin|x86_64-apple-darwin|x86_64-unknown-freebsd|aarch64-unknown-freebsd|x86_64-unknown-openbsd|x86_64-unknown-netbsd|x86_64-pc-solaris|omnios-native|x86_64-pc-windows-msvc|aarch64-pc-windows-msvc|x86_64-unknown-linux-musl|aarch64-unknown-linux-musl|arm-unknown-linux-musleabihf|armv7-unknown-linux-musleabihf|loongarch64-unknown-linux-musl|x86_64-unknown-illumos|s390x-unknown-linux-gnu|riscv64gc-unknown-linux-gnu|powerpc64le-unknown-linux-gnu) ;;
+            *)
+              echo "::error::unknown release target: $REQUESTED_TARGET"
+              exit 1
+              ;;
+          esac
+          CARGO_VERSION="$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
+          case "$GITHUB_REF" in
+            refs/tags/*)
+              TAG="${GITHUB_REF#refs/tags/}"
+              ;;
+            *)
+              TAG="$REQUESTED_TAG"
+              ;;
+          esac
+          if [ -n "$TAG" ]; then
+            case "$TAG" in
+              v*) ;;
+              *)
+                echo "::error::release tag must start with v (got $TAG)"
+                exit 1
+                ;;
+            esac
+            VERSION="${TAG#v}"
+            if [ "$VERSION" != "$CARGO_VERSION" ]; then
+              echo "::error::tag $TAG does not match Cargo.toml version $CARGO_VERSION"
+              exit 1
+            fi
+            if [ "$PUBLISH" = "true" ] && [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && \
+              [ "$GITHUB_REF" != refs/heads/main ]; then
+              echo "::error::release recovery must run from refs/heads/main so its signing identity is predictable"
+              exit 1
+            fi
+          else
+            # Dry runs are the whole point of allowing a branch ref here, but
+            # publishing off one would create a release nobody can reproduce
+            # from a tag.
+            if [ "$PUBLISH" = "true" ]; then
+              echo "::error::publishing requires a tag ref or the tag input (got $GITHUB_REF)"
+              exit 1
+            fi
+            VERSION="$CARGO_VERSION"
+          fi
+          {
+            echo "tag=$TAG"
+            echo "version=$VERSION"
+            echo "publish=$PUBLISH"
+          } >> "$GITHUB_OUTPUT"
+          if [ "$PUBLISH" = "true" ]; then
+            echo "releasing $TAG (version $VERSION)"
+          else
+            echo "dry run at $GITHUB_REF (version $VERSION) - nothing will be published"
+          fi
+
+  # Check both Apple credential sets before starting the expensive release
+  # matrix. This job deliberately checks out no repository code: the signing
+  # key only enters a short-lived keychain used for a tiny probe signature.
+  signing-preflight:
+    name: signing preflight
+    needs: verify
+    runs-on: macos-26
+    timeout-minutes: 10
+    permissions: {}
+    steps:
+      - name: Validate Developer ID and notarization credentials
+        shell: bash
+        env:
+          CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
+          NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          NOTARY_ISSUER: ${{ secrets.MACOS_NOTARY_ISSUER }}
+        run: |
+          set -euo pipefail
+
+          require_secret() {
+            if [ -z "$2" ]; then
+              echo "::error::$1 is not configured"
+              return 1
+            fi
+          }
+          require_secret MACOS_CERT_P12 "$CERT_P12"
+          require_secret MACOS_CERT_PASSWORD "$CERT_PASSWORD"
+          require_secret MACOS_NOTARY_KEY "$NOTARY_KEY"
+          require_secret MACOS_NOTARY_KEY_ID "$NOTARY_KEY_ID"
+          require_secret MACOS_NOTARY_ISSUER "$NOTARY_ISSUER"
+
+          keychain="$RUNNER_TEMP/atomdrift-signing-preflight.keychain-db"
+          cert="$RUNNER_TEMP/atomdrift-signing-preflight.p12"
+          intermediate_g1="$RUNNER_TEMP/DeveloperIDCA-G1.cer"
+          intermediate_g2="$RUNNER_TEMP/DeveloperIDCA-G2.cer"
+          notary_key="$RUNNER_TEMP/atomdrift-notary-preflight.p8"
+          probe="$RUNNER_TEMP/atomdrift-signing-probe"
+          keychain_password="$(openssl rand -base64 24)"
+
+          printf '%s' "$CERT_P12" | base64 --decode > "$cert"
+          printf '%s' "$NOTARY_KEY" | base64 --decode > "$notary_key"
+          chmod 600 "$cert" "$notary_key"
+
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 900 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          original_default_keychain="$(security default-keychain -d user | \
+            sed -e 's/^[[:space:]\"]*//' -e 's/[[:space:]\"]*$//')"
+          echo "PREFLIGHT_DEFAULT_KEYCHAIN=$original_default_keychain" >> "$GITHUB_ENV"
+          security default-keychain -d user -s "$keychain"
+
+          # Import both Apple Developer ID intermediates so certificate
+          # rotation between the legacy G1 and current G2 chains is painless.
+          # Pin the exact DER bytes because these files affect release trust.
+          curl --fail --silent --show-error --location \
+            https://www.apple.com/certificateauthority/DeveloperIDCA.cer \
+            --output "$intermediate_g1"
+          curl --fail --silent --show-error --location \
+            https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer \
+            --output "$intermediate_g2"
+          intermediate_g1_sha="$(shasum -a 256 "$intermediate_g1" | awk '{print $1}')"
+          intermediate_g2_sha="$(shasum -a 256 "$intermediate_g2" | awk '{print $1}')"
+          if [ "$intermediate_g1_sha" != 7afc9d01a62f03a2de9637936d4afe68090d2de18d03f29c88cfb0b1ba63587f ]; then
+            echo "::error::Apple Developer ID G1 intermediate checksum mismatch"
+            exit 1
+          fi
+          if [ "$intermediate_g2_sha" != f16cd3c54c7f83cea4bf1a3e6a0819c8aaa8e4a1528fd144715f350643d2df3a ]; then
+            echo "::error::Apple Developer ID G2 intermediate checksum mismatch"
+            exit 1
+          fi
+          security import "$cert" -k "$keychain" -P "$CERT_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/security
+
+          # Derive the selector before adding the intermediate: the exported
+          # .p12 contains one leaf identity, so its certificate fingerprint is
+          # unambiguous and does not depend on Keychain common-name indexing.
+          sign_identity="$(security find-certificate -a -Z "$keychain" | \
+            awk '/SHA-1 hash:/ { print $3 }')"
+          identity_count="$(printf '%s\n' "$sign_identity" | awk 'NF { count++ } END { print count + 0 }')"
+          if [ "$identity_count" -ne 1 ]; then
+            echo "::error::Expected exactly one certificate in MACOS_CERT_P12; found $identity_count"
+            exit 1
+          fi
+
+          security import "$intermediate_g1" -k "$keychain"
+          security import "$intermediate_g2" -k "$keychain"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$keychain_password" "$keychain" >/dev/null
+
+          # Keep the runner's login keychain in the search list so Security can
+          # complete Apple's certificate chain while taking the leaf identity
+          # and private key from our temporary keychain.
+          # shellcheck disable=SC2046
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          security find-identity -p codesigning "$keychain" || true
+
+          cp /usr/bin/true "$probe"
+          codesign --force --timestamp --options runtime \
+            --sign "$sign_identity" "$probe"
+          codesign --verify --strict --verbose=2 "$probe"
+          codesign --display --verbose=2 "$probe"
+
+          xcrun notarytool history \
+            --key "$notary_key" \
+            --key-id "$NOTARY_KEY_ID" \
+            --issuer "$NOTARY_ISSUER" \
+            --output-format json >/dev/null
+
+      - name: Remove preflight credentials
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          if [ -n "${PREFLIGHT_DEFAULT_KEYCHAIN:-}" ]; then
+            security default-keychain -d user -s "$PREFLIGHT_DEFAULT_KEYCHAIN" >/dev/null 2>&1 || true
+          fi
+          security delete-keychain "$RUNNER_TEMP/atomdrift-signing-preflight.keychain-db" >/dev/null 2>&1 || true
+          rm -f \
+            "$RUNNER_TEMP/atomdrift-signing-preflight.p12" \
+            "$RUNNER_TEMP/DeveloperIDCA-G1.cer" \
+            "$RUNNER_TEMP/DeveloperIDCA-G2.cer" \
+            "$RUNNER_TEMP/atomdrift-notary-preflight.p8" \
+            "$RUNNER_TEMP/atomdrift-signing-probe"
+
+  build:
+    name: build
+    needs: [verify, signing-preflight]
+    uses: ./.github/workflows/build.yml
+    # Ceiling for build.yml's jobs — see the same note in ci.yml. Checkout is
+    # all they need; the release token stays in `publish`.
+    permissions:
+      contents: read
+    with:
+      # Normally empty for a branch dry run. A tag push and the manual recovery
+      # input both make every matrix job build the tagged source, even though
+      # the reusable workflow definition itself may come from a newer commit.
+      ref: ${{ needs.verify.outputs.tag }}
+      target: ${{ inputs.target || '' }}
+      # Fat LTO + one codegen unit. Multi-minute links, and worth it for a
+      # binary people download rather than rebuild.
+      profile: release-lto
+      # Release binaries are Developer ID signed and submitted to Apple's
+      # notary service. The preflight above validates both credential sets
+      # before this expensive matrix starts.
+      sign: true
+      notarize: true
+      require-notarization: ${{ needs.verify.outputs.publish == 'true' }}
+    # Explicit, not `secrets: inherit` — the called workflow gets exactly these
+    # five and nothing else.
+    secrets:
+      MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+      MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+      MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
+      MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+      MACOS_NOTARY_ISSUER: ${{ secrets.MACOS_NOTARY_ISSUER }}
+
+  publish:
+    name: publish
+    needs: [verify, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # Add `environment: release` here to gate the upload on a human approval.
+    permissions:
+      contents: write      # create the release, upload assets
+      id-token: write      # OIDC identity for provenance signing
+      attestations: write  # record the provenance attestation
+    env:
+      VERSION: ${{ needs.verify.outputs.version }}
+      TAG: ${{ needs.verify.outputs.tag }}
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: cleave-*
+          merge-multiple: true
+          path: dist
+
+      # `freebsd` and `cross` are continue-on-error, so a run goes green while
+      # quietly shipping fewer platforms than it should. Deliberately a warning
+      # rather than a failure — a broken experimental target shouldn't block the
+      # ones that built — but the gap gets named instead of being invisible.
+      - name: Inventory targets
+        env:
+          # Keep in sync with build.yml's matrices. Windows x86-64 became a
+          # required release target after its native build and smoke tests first
+          # passed in run 30966163861. Windows ARM64 is native-built and smoked on
+          # GitHub's Windows 11 ARM runner. Solaris is release-bound now that
+          # its native build can complete the fat-LTO link with ZFS-backed swap.
+          EXPECTED: >-
+            x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu
+            aarch64-apple-darwin x86_64-apple-darwin
+            x86_64-unknown-linux-musl aarch64-unknown-linux-musl
+            arm-unknown-linux-musleabihf armv7-unknown-linux-musleabihf
+            loongarch64-unknown-linux-musl
+            s390x-unknown-linux-gnu riscv64gc-unknown-linux-gnu
+            powerpc64le-unknown-linux-gnu
+            x86_64-unknown-freebsd x86_64-unknown-openbsd
+            x86_64-unknown-netbsd
+            x86_64-unknown-illumos x86_64-pc-solaris
+            x86_64-pc-windows-msvc aarch64-pc-windows-msvc
+          REQUESTED_TARGET: ${{ inputs.target || '' }}
+        run: |
+          set -eu
+          missing=""
+          for t in $EXPECTED; do
+            if [ -n "$REQUESTED_TARGET" ] && [ "$t" != "$REQUESTED_TARGET" ]; then
+              continue
+            fi
+            if [ -f "dist/cleave-$t.tar.gz" ]; then
+              echo "  ok      $t"
+            else
+              echo "  MISSING $t"
+              missing="$missing $t"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::warning::release is missing targets:$missing"
+            echo "Missing targets:$missing" >> "$GITHUB_STEP_SUMMARY"
+            # A broad release may publish the platforms that succeeded, but a
+            # targeted retry has one job: produce the requested artifact. Fail
+            # here with that useful diagnosis instead of falling through to an
+            # opaque `cd dist` error when download-artifact found nothing.
+            if [ -n "$REQUESTED_TARGET" ]; then
+              exit 1
+            fi
+          fi
+
+      # Artifacts are named by target; releases are named by version + target.
+      - name: Assemble
+        run: |
+          set -eu
+          cd dist
+          for f in cleave-*.tar.gz; do
+            target="${f#cleave-}"
+            target="${target%.tar.gz}"
+            mv "$f" "cleave-$VERSION-$target.tar.gz"
+          done
+          sha256sum ./*.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+
+      # Signed, verifiable statement that these exact bytes came out of this
+      # workflow at this commit. Consumers check it with:
+      #   gh attestation verify cleave-<version>-<target>.tar.gz \
+      #     --repo atomdrift-project/cleave
+      # A recovery dispatch runs the repaired workflow from main while checking
+      # out the requested tag. In that case github.sha identifies the workflow
+      # commit, not the tagged source, so emitting the automatic attestation
+      # would be misleading. Tag-push releases retain provenance attestation.
+      - name: Attest provenance
+        if: ${{ needs.verify.outputs.publish == 'true' && startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: dist/*.tar.gz
+
+      # GitHub artifact attestations above are already Sigstore-backed, but
+      # consumers need `gh` to retrieve them. A standard bundle beside the
+      # release makes the same trust model usable with standalone `cosign`.
+      - name: Install Cosign
+        if: ${{ needs.verify.outputs.publish == 'true' }}
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      # `gh` ships on the runner, so publishing needs no third-party action in
+      # the one job that holds `contents: write`. Add `--draft` if you'd rather
+      # review before it goes live.
+      - name: Publish release
+        if: ${{ needs.verify.outputs.publish == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "release $TAG already exists; uploading only missing assets"
+            existing_assets="$(
+              gh release view "$TAG" \
+                --repo "$GITHUB_REPOSITORY" \
+                --json assets \
+                --jq '.assets[].name'
+            )"
+            missing_assets=()
+            for asset in dist/*.tar.gz; do
+              name="${asset##*/}"
+              if printf '%s\n' "$existing_assets" | grep -Fqx -- "$name"; then
+                echo "  exists  $name"
+              else
+                echo "  upload  $name"
+                missing_assets+=("$asset")
+              fi
+            done
+            if [ "${#missing_assets[@]}" -gt 0 ]; then
+              gh release upload "$TAG" \
+                --repo "$GITHUB_REPOSITORY" \
+                "${missing_assets[@]}"
+            else
+              echo "all release assets already exist"
+            fi
+
+          else
+            gh release create "$TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "Cleave $VERSION" \
+              --generate-notes \
+              --verify-tag \
+              dist/*.tar.gz
+          fi
+
+          # SHA256SUMS describes the release's actual immutable archives, not
+          # merely the files rebuilt by a recovery run. Derive it from GitHub's
+          # server-side digests after every missing archive has been uploaded.
+          digest_attempt=1
+          while :; do
+            gh release view "$TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --json assets \
+              --jq '.assets[] | select(.name | startswith("cleave-")) | select(.name | endswith(".tar.gz")) | select(.digest != null and .digest != "") | "\(.digest | sub("^sha256:"; ""))  \(.name)"' \
+              | LC_ALL=C sort > dist/SHA256SUMS
+            archive_count="$(gh release view "$TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --json assets \
+              --jq '[.assets[] | select(.name | startswith("cleave-")) | select(.name | endswith(".tar.gz"))] | length')"
+            digest_count="$(awk 'END { print NR + 0 }' dist/SHA256SUMS)"
+            if [ "$archive_count" -gt 0 ] && [ "$digest_count" -eq "$archive_count" ]; then
+              break
+            fi
+            if [ "$digest_attempt" -ge 6 ]; then
+              echo "::error::GitHub did not report SHA-256 digests for every release archive ($digest_count/$archive_count)"
+              exit 1
+            fi
+            echo "waiting for GitHub release digests ($digest_count/$archive_count)"
+            sleep 5
+            digest_attempt=$((digest_attempt + 1))
+          done
+          cat dist/SHA256SUMS
+
+          # Keyless GitHub OIDC identity. The bundle carries the signature,
+          # short-lived certificate, and transparency-log inclusion proof.
+          cosign sign-blob --yes \
+            --bundle dist/SHA256SUMS.sigstore.json \
+            dist/SHA256SUMS
+          cosign verify-blob dist/SHA256SUMS \
+            --bundle dist/SHA256SUMS.sigstore.json \
+            --certificate-identity "https://github.com/$GITHUB_REPOSITORY/.github/workflows/release.yml@$GITHUB_REF" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+          gh release upload "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber \
+            dist/SHA256SUMS \
+            dist/SHA256SUMS.sigstore.json
+
+      # Everything above ran except the two steps that leave a trace. Keep the
+      # assembled set downloadable so a dry run is inspectable, not just green.
+      - name: Upload dry-run artifacts
+        if: ${{ needs.verify.outputs.publish != 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-dry-run
+          path: dist
+          if-no-files-found: error
+          retention-days: 7

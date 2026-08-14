@@ -15,6 +15,7 @@ use crate::composite_rules::context::{ConditionResult, EvaluationContext, String
 use crate::composite_rules::types::Platform;
 use crate::ip_validator::{contains_external_ip_cached, contains_valid_ip};
 use cleave::bitcoin_validator::contains_bitcoin_address;
+use rustc_hash::FxHashSet;
 use std::sync::LazyLock;
 
 /// Resolved once at startup. `std::env::var` calls libc `getenv`, which takes a
@@ -1011,6 +1012,10 @@ pub(crate) fn eval_string_literal<'a, 'b>(
 
     let mut evidence = Vec::new();
     let mut match_count = 0usize;
+    // Tree-sitter grammars can expose both an enclosing string node and a
+    // nested string-content node. Count a source match once by its concrete
+    // byte span, regardless of how many parser projections reported it.
+    let mut seen_match_spans: FxHashSet<(u64, usize)> = FxHashSet::default();
 
     for string_info in &ctx.report.strings {
         if string_info.section.as_deref() != Some("ast") {
@@ -1029,17 +1034,23 @@ pub(crate) fn eval_string_literal<'a, 'b>(
             let excluded_by_is = !validate_match(match_value, params.is_check);
 
             if !excluded_by_not && !excluded_by_is {
+                let within = (match_value.as_ptr() as usize)
+                    .saturating_sub(string_info.value.as_ptr() as usize)
+                    as u64;
+                let match_offset = string_info.offset.map(|o| o.saturating_add(within));
+                if let Some(offset) = match_offset
+                    && !seen_match_spans.insert((offset, match_value.len()))
+                {
+                    continue;
+                }
                 match_count += 1;
                 // Allocate the evidence string only when actually storing it.
                 if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
                     // `match_value` is a subslice for word/regex matches; offset
                     // it within the literal so the location points at the match,
                     // not the enclosing literal's start (mirrors `eval_text`).
-                    let within = (match_value.as_ptr() as usize)
-                        .saturating_sub(string_info.value.as_ptr() as usize)
-                        as u64;
-                    let location = match string_info.offset {
-                        Some(o) => format!("{:#x}", o.saturating_add(within)),
+                    let location = match match_offset {
+                        Some(o) => format!("{:#x}", o),
                         None => string_info_location(ctx.report, string_info),
                     };
                     evidence.push(Evidence {

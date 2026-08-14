@@ -954,6 +954,50 @@ fn test_eval_string_literal_matches_only_ast_strings() {
     assert_eq!(result.evidence[0].source, "ast");
 }
 
+#[test]
+fn test_eval_string_literal_counts_nested_ast_projection_once() {
+    let mut report = create_test_report();
+    for value in [
+        "GET /index HTTP/1.0\\r\\nConnection: close",
+        "GET /index HTTP/1.0",
+    ] {
+        report.strings.push(StringInfo {
+            value: value.to_string().into(),
+            offset: Some(0x200),
+            encoding: "utf8".to_string(),
+            string_type: None,
+            section: Some("ast".to_string()),
+            encoding_chain: Vec::new(),
+            fragments: None,
+        });
+    }
+    let data = vec![];
+    let ctx = EvaluationContext::test_only_new(&report, &data, FileType::C);
+    let pattern = r"(?m)^GET\s+\S+\s+HTTP/\d(\.\d)?".to_string();
+    let params = StringParams {
+        length_min: None,
+        length_max: None,
+        exact: None,
+        substr: None,
+        regex: Some(&pattern),
+        word: None,
+        case_insensitive: false,
+        is_check: None,
+        section: None,
+        offset: None,
+        offset_range: None,
+        section_offset: None,
+        section_offset_range: None,
+        arch_clamp: None,
+    };
+
+    let result = eval_string_literal(&params, None, &ctx);
+
+    assert!(result.matched);
+    assert_eq!(result.match_count, 1);
+    assert_eq!(result.evidence.len(), 1);
+}
+
 // Note: Legacy `eval_string` fused string-extractor lookup with import-symbol
 // matching. `eval_text` only searches extracted strings — import matching now
 // lives in `type: symbol`. The pre-migration test for that behavior was removed.

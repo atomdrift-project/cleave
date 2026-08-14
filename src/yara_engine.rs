@@ -305,10 +305,10 @@ struct YaraManifest {
     rule_contexts: HashMap<String, RuleContext>,
     /// Labels of tiers that carry at least one rule.
     populated_tiers: Vec<String>,
-    /// Machine-portable fingerprint (hex u64) of the rule/trait sources these
-    /// compiled rules were built from — path + length, no mtimes, so it
+    /// Machine-portable fingerprint (hex u64) of the rule sources these
+    /// compiled rules were built from — path + contents, no mtimes, so it
     /// survives packaging and download. Shipped manifests MUST carry it and
-    /// match the loaded traits, else the compiled rules are ignored.
+    /// match the loaded rule sources, else the compiled rules are ignored.
     #[serde(default)]
     source_tag: Option<String>,
 }
@@ -577,7 +577,8 @@ impl YaraEngine {
     /// Mirrors exactly what [`Self::validated_manifest`] accepts at load time,
     /// so a directory that passes here is one the engine will actually use. The
     /// cheap counterpart to a full rebuild-and-compare: it reuses the memoized
-    /// traits walk and reads no rule text.
+    /// traits walk and compiles nothing — it hashes the rule text the walk
+    /// already read, rather than re-parsing and re-compiling it.
     pub(crate) fn check_precompiled(dir: &Path) -> anyhow::Result<()> {
         use anyhow::{Context, bail};
 
@@ -601,7 +602,7 @@ impl YaraEngine {
         };
         let manifest_tag = u64::from_str_radix(tag, 16)
             .with_context(|| format!("unparsable source fingerprint {tag:?}"))?;
-        let current = crate::cache::rules_source_tag()
+        let current = crate::cache::rules_source_tag_uncached()
             .context("no YARA rule sources found under the traits directory")?;
         if manifest_tag != current {
             bail!(
@@ -706,7 +707,7 @@ impl YaraEngine {
         populated_tiers.sort();
 
         let builtin_count = builtin_count + inline_namespaces.len();
-        let source_tag = crate::cache::rules_source_tag().map(|t| format!("{t:016x}"));
+        let source_tag = crate::cache::rules_source_tag_uncached().map(|t| format!("{t:016x}"));
         anyhow::ensure!(
             source_tag.is_some(),
             "no rule sources found under {} — refusing to write an unfingerprinted manifest",

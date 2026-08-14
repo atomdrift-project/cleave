@@ -204,9 +204,9 @@ pub fn third_party_path() -> PathBuf {
 
 /// Returns the most recently modified `.yar`/`.yara` file and its mtime.
 ///
-/// Only pure YARA rule files are considered; trait YAML changes do not invalidate
-/// the YARA compilation cache. Inline `type: yara` conditions embedded in YAML files
-/// require `CLEAVE_SKIP_CACHE=1` to force recompile if they change.
+/// Only pure YARA rule files are considered, and only for display: what
+/// actually invalidates compiled rules is [`rules_source_tag`], which covers
+/// inline `type: yara` conditions embedded in trait YAML as well.
 pub fn most_recent_yar_file() -> Result<(SystemTime, PathBuf)> {
     traits_scan()
         .newest_yar
@@ -232,33 +232,53 @@ fn system_time_nanos(t: SystemTime) -> Result<u128> {
         .as_nanos())
 }
 
-/// Stable, order-independent fingerprint input for one rule/trait file:
-/// FNV-1a over its traits-relative path components and byte length.
+const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+/// Bumped whenever the source-tag definition changes, so tags written by an
+/// older engine can never collide with one this engine computes. A mismatch is
+/// already handled — the compiled rules are ignored and rebuilt — so a bump
+/// costs one recompile, while a silent collision would scan with wrong rules.
+const SOURCE_TAG_VERSION: u64 = 2;
+
+fn fnv_fold(mut h: u64, bytes: &[u8]) -> u64 {
+    for &b in bytes {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(FNV_PRIME);
+    }
+    h
+}
+
+/// Whether a trait YAML can contribute a rule to the YARA compiler.
+///
+/// Only `if: {type: yara, ...}` conditions do, and that comparison is against
+/// the exact lowercase string, so any contributing file necessarily contains
+/// these four bytes — quoted, aliased, or merged in, since YAML resolves all of
+/// those within the one file. A superset of the truth, never a subset: a file
+/// this rejects cannot reach the compiler, which is exactly what the tag needs.
+fn mentions_yara(bytes: &[u8]) -> bool {
+    bytes.windows(4).any(|w| w == b"yara")
+}
+
+/// Fingerprint of one rule source file: FNV-1a over its traits-relative path
+/// components, byte length, and full contents.
 ///
 /// Deliberately NOT `DefaultHasher` (unspecified across Rust releases) and NOT
 /// mtime-based (mtimes don't survive packaging/download): this tag must match
 /// between the machine that ran `yara-precompile` and every machine that loads
-/// the shipped `.yrc`, across OSes and engine builds. Files are folded with
-/// `wrapping_add` so directory-iteration order (which differs by OS) can't
-/// change the result. Path+length misses a same-length content edit; the
-/// mtime-keyed local cache still catches those for local development.
-fn rules_source_tag_for(traits_dir: &Path, path: &Path, metadata: &fs::Metadata) -> u64 {
-    const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-    const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
-    fn fold(mut h: u64, bytes: &[u8]) -> u64 {
-        for &b in bytes {
-            h ^= u64::from(b);
-            h = h.wrapping_mul(FNV_PRIME);
-        }
-        h
-    }
+/// the shipped `.yrc`, across OSes and engine builds. Contents rather than
+/// length alone, because a same-length rule edit — one hex byte, one character
+/// of a string literal — leaves the length fingerprint untouched, and the
+/// engine would then load `.yrc` built from the pre-edit rule and scan with it.
+fn rule_source_digest(traits_dir: &Path, path: &Path, bytes: &[u8]) -> u64 {
     let rel = path.strip_prefix(traits_dir).unwrap_or(path);
     let mut h = FNV_OFFSET;
     for comp in rel.components() {
-        h = fold(h, comp.as_os_str().as_encoded_bytes());
-        h = fold(h, b"/");
+        h = fnv_fold(h, comp.as_os_str().as_encoded_bytes());
+        h = fnv_fold(h, b"/");
     }
-    fold(h, &metadata.len().to_le_bytes())
+    h = fnv_fold(h, &(bytes.len() as u64).to_le_bytes());
+    fnv_fold(h, bytes)
 }
 
 fn hash_path_metadata(
@@ -315,10 +335,6 @@ struct TraitsScan {
     /// Revision fingerprint over all rule+trait files (`.yar`/`.yara`/`.yaml`/`.yml`,
     /// third-party included), plus the newest mtime across them.
     rule_revision: Option<RuleFilesRevision>,
-    /// Machine-portable tag over the same file set (path + length, no mtimes) —
-    /// see [`rules_source_tag_for`]. Validates shipped pre-compiled YARA rules
-    /// against the rule sources they claim to be built from.
-    source_tag: Option<u64>,
 }
 
 /// Walk the traits directory once, computing every rule/mapper cache input in a
@@ -353,7 +369,6 @@ fn scan_traits_dir(traits_dir: &Path) -> TraitsScan {
     let mut rule_hasher = DefaultHasher::new();
     let mut yaml_count = 0u64;
     let mut rule_count = 0u64;
-    let mut source_tag = 0u64;
 
     // One matching rule/trait file, classified during the (cheap) directory read
     // so the (expensive) stat can be deferred and parallelized below.
@@ -407,6 +422,11 @@ fn scan_traits_dir(traits_dir: &Path) -> TraitsScan {
     // folds the hashers deterministically. (Runs inside `traits_scan`'s memoized
     // init, which is only ever triggered from the main thread — see there — so
     // this rayon use cannot re-enter that `OnceLock`.)
+    //
+    // Stat, not read: this walk runs on every scan, and opening all ~15k rule
+    // and trait files costs several times what stat'ing them does. The one
+    // caller that needs the bytes — the YARA source tag — reads them itself,
+    // rarely (see [`rules_source_tag`]).
     let metadatas: Vec<Option<fs::Metadata>> = candidates
         .par_iter()
         .map(|c| fs::metadata(&c.path).ok())
@@ -426,7 +446,6 @@ fn scan_traits_dir(traits_dir: &Path) -> TraitsScan {
         // Analysis-cache revision: every rule/trait file, third-party included.
         rule_count += 1;
         hash_path_metadata(&mut rule_hasher, traits_dir, &c.path, metadata);
-        source_tag = source_tag.wrapping_add(rules_source_tag_for(traits_dir, &c.path, metadata));
         if let Some(m) = mtime
             && m > newest_rule
         {
@@ -494,16 +513,160 @@ fn scan_traits_dir(traits_dir: &Path) -> TraitsScan {
             newest_mtime: newest_rule,
             fingerprint: rule_hasher.finish(),
         }),
-        source_tag: (rule_count > 0).then_some(source_tag.wrapping_add(rule_count)),
     }
 }
 
-/// Machine-portable fingerprint of the rule/trait source files (path + length,
-/// no mtimes), or `None` when the traits directory holds none. Matches between
-/// the machine that ran `yara-precompile` and any machine loading the result,
-/// so it validates shipped pre-compiled rules against their claimed sources.
+/// Machine-portable fingerprint of the YARA rule sources — every `.yar`/`.yara`
+/// plus the trait YAML carrying an inline `type: yara` rule, hashed by
+/// traits-relative path and contents, no mtimes — or `None` when the traits
+/// directory holds none.
+///
+/// Reading every rule source costs several times what the stat-only
+/// [`scan_traits_dir`] walk does, and this runs on every rule load, so the
+/// result is memoized on disk against that walk's stat fingerprint (path, size,
+/// and nanosecond mtime of every rule and trait file). An unchanged tree
+/// therefore reads one short file instead of tens of megabytes; any edit misses
+/// the memo and re-reads.
+///
+/// That memo is for *loading* only. Anything that stamps a tag into an artifact
+/// others will trust — [`rules_source_tag_uncached`] — hashes the bytes every
+/// time, so a shipped fingerprint is never one inherited from mtimes.
 pub(crate) fn rules_source_tag() -> Option<u64> {
-    traits_scan().source_tag
+    let traits_dir = traits_path();
+    if skip_yara_cache() {
+        return compute_rules_source_tag(&traits_dir);
+    }
+    let revision = traits_scan().rule_revision?;
+    if let Some(tag) = memoized_source_tag(&traits_dir, revision) {
+        return Some(tag);
+    }
+    let tag = compute_rules_source_tag(&traits_dir)?;
+    store_source_tag(&traits_dir, revision, tag);
+    Some(tag)
+}
+
+/// [`rules_source_tag`] with the on-disk memo bypassed: always hashes the rule
+/// sources as they stand.
+///
+/// Used where the tag is written into an artifact rather than merely compared
+/// against one — pre-compilation and the staleness check that gates publishing.
+/// Those must not be able to inherit a tag from a memo whose key (size + mtime)
+/// happened to survive an edit.
+pub(crate) fn rules_source_tag_uncached() -> Option<u64> {
+    compute_rules_source_tag(&traits_path())
+}
+
+/// Hash every rule source under `traits_dir` by traits-relative path and
+/// contents.
+///
+/// Walks separately from [`scan_traits_dir`] rather than riding along with it:
+/// that walk feeds every cache key on every scan and must stay stat-only, while
+/// this one reads file bytes and runs only when the memo above misses.
+fn compute_rules_source_tag(traits_dir: &Path) -> Option<u64> {
+    use rayon::prelude::*;
+
+    let started = Instant::now();
+    let mut sources: Vec<(PathBuf, bool)> = Vec::new();
+    if traits_dir.exists() {
+        let walker = WalkDir::new(traits_dir)
+            .follow_links(true)
+            .into_iter()
+            .filter_entry(|entry| {
+                entry.depth() == 0
+                    || !entry.file_type().is_dir()
+                    || entry.file_name().to_str() != Some(".git")
+            });
+        for entry in walker.flatten() {
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let is_yar = match entry.path().extension().and_then(|e| e.to_str()) {
+                Some("yar" | "yara") => true,
+                // Trait YAML is a candidate, but only the few files carrying an
+                // inline rule survive the content test below.
+                Some("yaml" | "yml") => false,
+                _ => continue,
+            };
+            sources.push((entry.path().to_path_buf(), is_yar));
+        }
+    }
+
+    let mut digests: Vec<u64> = sources
+        .par_iter()
+        .filter_map(|(path, is_yar)| {
+            let bytes = fs::read(path).ok()?;
+            (*is_yar || mentions_yara(&bytes)).then(|| rule_source_digest(traits_dir, path, &bytes))
+        })
+        .collect();
+    if digests.is_empty() {
+        return None;
+    }
+
+    // Combine independently of walk order — readdir order differs by filesystem
+    // and OS, and this tag has to match across both — but without the
+    // cancellation a plain sum invites: sorting makes the fold a function of the
+    // digest multiset alone, and the fold itself is order-dependent, so no pair
+    // of files can trade contributions unnoticed.
+    digests.sort_unstable();
+    let mut tag = fnv_fold(FNV_OFFSET, &SOURCE_TAG_VERSION.to_le_bytes());
+    for digest in &digests {
+        tag = fnv_fold(tag, &digest.to_le_bytes());
+    }
+    tracing::debug!(
+        dir = %traits_dir.display(),
+        candidates = sources.len(),
+        rule_sources = digests.len(),
+        elapsed_ms = started.elapsed().as_millis(),
+        tag = %format!("{tag:016x}"),
+        "hashed YARA rule sources"
+    );
+    Some(tag)
+}
+
+/// Single-entry memo pairing a stat fingerprint with the content tag computed
+/// under it. Rewritten in place, so it can neither grow nor go stale.
+fn source_tag_memo_path() -> Option<PathBuf> {
+    Some(cache_dir().ok()?.join("yara-source-tag"))
+}
+
+/// The stored tag, if it was computed for this traits directory at exactly this
+/// stat fingerprint. The directory is part of the key because the tag itself is
+/// path-relative: two checkouts can share a fingerprint without sharing bytes.
+fn memoized_source_tag(traits_dir: &Path, revision: RuleFilesRevision) -> Option<u64> {
+    let text = fs::read_to_string(source_tag_memo_path()?).ok()?;
+    let mut fields = text.split_whitespace();
+    let dir = fields.next()?;
+    let stat = fields.next()?;
+    let tag = fields.next()?;
+    if dir
+        != format!(
+            "{:016x}",
+            fnv_fold(FNV_OFFSET, traits_dir.as_os_str().as_encoded_bytes())
+        )
+        || stat != format!("{:016x}", revision.fingerprint)
+    {
+        return None;
+    }
+    u64::from_str_radix(tag, 16).ok()
+}
+
+/// Record `tag` as the content tag for this traits directory at `revision`.
+/// Best effort: a memo that fails to write only costs the next run a re-hash.
+fn store_source_tag(traits_dir: &Path, revision: RuleFilesRevision, tag: u64) {
+    let Some(path) = source_tag_memo_path() else {
+        return;
+    };
+    let dir = fnv_fold(FNV_OFFSET, traits_dir.as_os_str().as_encoded_bytes());
+    let line = format!("{dir:016x} {:016x} {tag:016x}\n", revision.fingerprint);
+    if let Some(parent) = path.parent()
+        && fs::create_dir_all(parent).is_err()
+    {
+        return;
+    }
+    let tmp = path.with_extension(format!("tmp.{}", std::process::id()));
+    if fs::write(&tmp, line).is_ok() && fs::rename(&tmp, &path).is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
 }
 
 /// The memoized traits-directory scan, or `None` before the first scan and
@@ -892,6 +1055,98 @@ mod tests {
     use super::*;
     use std::io::Write;
     use std::time::Duration;
+
+    /// A traits tree with one YARA rule file and one plain trait file.
+    fn traits_tree(dir: &Path) -> (PathBuf, PathBuf) {
+        let rule = dir.join("third-party/vendor/rules.yar");
+        fs::create_dir_all(rule.parent().unwrap()).unwrap();
+        fs::write(&rule, b"rule a { strings: $s = \"abc\" condition: $s }\n").unwrap();
+        let trait_file = dir.join("micro-behaviors/net/socket.yaml");
+        fs::create_dir_all(trait_file.parent().unwrap()).unwrap();
+        fs::write(
+            &trait_file,
+            b"traits:\n  - id: net/socket\n    if: {type: string, value: connect}\n",
+        )
+        .unwrap();
+        (rule, trait_file)
+    }
+
+    /// The failure this tag exists to catch: a rule edit that leaves the file's
+    /// length untouched, which a path+length fingerprint cannot see.
+    #[test]
+    fn test_source_tag_catches_same_length_rule_edit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (rule, _) = traits_tree(tmp.path());
+        let before = compute_rules_source_tag(tmp.path()).expect("tag");
+
+        fs::write(&rule, b"rule a { strings: $s = \"abd\" condition: $s }\n").unwrap();
+        let after = compute_rules_source_tag(tmp.path()).expect("tag");
+
+        assert_ne!(before, after, "same-length rule edit must change the tag");
+    }
+
+    /// The churn this tag exists to avoid: trait YAML with no inline rule
+    /// cannot change a compiled `.yrc`, so editing it must not condemn one.
+    #[test]
+    fn test_source_tag_ignores_trait_yaml_without_inline_rule() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (_, trait_file) = traits_tree(tmp.path());
+        let before = compute_rules_source_tag(tmp.path()).expect("tag");
+
+        fs::write(
+            &trait_file,
+            b"traits:\n  - id: net/socket\n    if: {type: string, value: connect}\n    description: a much longer file now\n",
+        )
+        .unwrap();
+        fs::create_dir_all(tmp.path().join("well-known")).unwrap();
+        fs::write(tmp.path().join("well-known/added.yaml"), b"traits: []\n").unwrap();
+
+        assert_eq!(
+            before,
+            compute_rules_source_tag(tmp.path()).expect("tag"),
+            "trait YAML with no inline YARA must not move the tag"
+        );
+    }
+
+    /// Inline `type: yara` rules do reach the compiler, so their file is
+    /// fingerprinted by content like any `.yar`.
+    #[test]
+    fn test_source_tag_tracks_inline_yara_yaml() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (_, trait_file) = traits_tree(tmp.path());
+        let inline = tmp.path().join("objectives/impact/wiper.yaml");
+        fs::create_dir_all(inline.parent().unwrap()).unwrap();
+        let rule_of = |marker: &str| {
+            format!(
+                "traits:\n  - id: impact/wiper\n    if:\n      type: yara\n      source: |\n        rule w {{ strings: $s = \"{marker}\" condition: $s }}\n"
+            )
+        };
+        fs::write(&inline, rule_of("wipe")).unwrap();
+        let before = compute_rules_source_tag(tmp.path()).expect("tag");
+
+        fs::write(&inline, rule_of("nuke")).unwrap();
+        let after = compute_rules_source_tag(tmp.path()).expect("tag");
+        assert_ne!(before, after, "inline YARA edit must change the tag");
+
+        // The plain trait file next to it still contributes nothing.
+        fs::write(&trait_file, b"traits: []\n").unwrap();
+        assert_eq!(after, compute_rules_source_tag(tmp.path()).expect("tag"));
+    }
+
+    /// The tag travels with a bundle, so it must depend on the tree's contents
+    /// and layout — never on where that tree happens to sit.
+    #[test]
+    fn test_source_tag_is_independent_of_traits_dir_location() {
+        let one = tempfile::tempdir().unwrap();
+        let two = tempfile::tempdir().unwrap();
+        traits_tree(one.path());
+        traits_tree(two.path());
+
+        assert_eq!(
+            compute_rules_source_tag(one.path()).expect("tag"),
+            compute_rules_source_tag(two.path()).expect("tag"),
+        );
+    }
 
     #[test]
     fn test_yara_cache_key_format() {

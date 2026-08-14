@@ -67,8 +67,44 @@ pub(super) fn diff_traits(old: &DiffUnit, new: &DiffUnit, limit: usize) -> Scope
 
     diff.change_weight = change_weight;
     diff.recompute_roc();
-    truncate(&mut diff, limit);
+    truncate_traits(&mut diff, limit);
     diff
+}
+
+/// Put the highest-signal trait changes first before applying the output cap.
+///
+/// Findings are produced in evaluator/discovery order, which is not a severity
+/// order. Truncating that stream directly can discard a hostile composite that
+/// was evaluated after a large set of baseline atoms. Keep native findings
+/// ahead of third-party rules at equal criticality, matching the terminal
+/// renderer's ordering.
+pub(super) fn truncate_traits(diff: &mut ScopeDiff<TraitChange>, limit: usize) {
+    fn cmp(a: &TraitChange, b: &TraitChange) -> std::cmp::Ordering {
+        b.crit
+            .cmp(&a.crit)
+            .then_with(|| {
+                a.id.starts_with("third_party/")
+                    .cmp(&b.id.starts_with("third_party/"))
+            })
+            .then_with(|| a.id.cmp(&b.id))
+    }
+
+    diff.added.sort_by(cmp);
+    diff.removed.sort_by(cmp);
+    diff.changed.sort_by(|a, b| {
+        let a_crit = a.old.crit.max(a.new.crit);
+        let b_crit = b.old.crit.max(b.new.crit);
+        b_crit
+            .cmp(&a_crit)
+            .then_with(|| {
+                a.new
+                    .id
+                    .starts_with("third_party/")
+                    .cmp(&b.new.id.starts_with("third_party/"))
+            })
+            .then_with(|| a.new.id.cmp(&b.new.id))
+    });
+    truncate(diff, limit);
 }
 
 /// Per-finding score weight, mirroring `Criticality::score_weight()` from
@@ -959,6 +995,41 @@ mod tests {
         truncate(&mut diff, 0);
         assert_eq!(diff.added.len(), 50);
         assert!(!diff.truncated);
+    }
+
+    #[test]
+    fn trait_truncation_keeps_late_hostile_findings() {
+        let mut diff: ScopeDiff<TraitChange> = ScopeDiff {
+            added: (0..100)
+                .map(|i| TraitChange {
+                    id: format!("metadata/noise/{i:03}"),
+                    trait_section: "metadata".to_string(),
+                    crit: Criticality::Baseline,
+                    desc: "low-signal finding".to_string(),
+                    count: 1,
+                })
+                .chain(std::iter::once(TraitChange {
+                    id: "objectives/command-and-control/remote-shell".to_string(),
+                    trait_section: "objectives".to_string(),
+                    crit: Criticality::Hostile,
+                    desc: "hostile composite".to_string(),
+                    count: 1,
+                }))
+                .collect(),
+            new_count: 101,
+            ..Default::default()
+        };
+
+        truncate_traits(&mut diff, 100);
+
+        assert_eq!(diff.added.len(), 100);
+        assert!(diff.truncated);
+        assert_eq!(diff.added[0].crit, Criticality::Hostile);
+        assert!(
+            diff.added
+                .iter()
+                .any(|finding| finding.id.ends_with("remote-shell"))
+        );
     }
 
     #[test]

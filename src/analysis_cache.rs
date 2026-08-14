@@ -226,22 +226,36 @@ fn remove_flight(key: &FlightKey, state: &Arc<FlightState>) {
 }
 
 /// Acquire the in-process single-flight slot for a content hash.
-pub(crate) fn acquire_report_flight(sha256: &str, options: &AnalysisOptions) -> ReportFlight {
-    acquire_flight("report", sha256, options)
+pub(crate) fn acquire_report_flight(
+    sha256: &str,
+    file_type: &str,
+    options: &AnalysisOptions,
+) -> ReportFlight {
+    acquire_flight("report", sha256, file_type, options)
 }
 
-/// Acquire a single-flight slot for an archive member. The key intentionally
-/// follows the persistent file-analysis cache: identical bytes share one
-/// analysis regardless of the member name or detected type.
-pub(crate) fn acquire_member_flight(sha256: &str, options: &AnalysisOptions) -> ReportFlight {
-    acquire_flight("member", sha256, options)
+/// Acquire a single-flight slot for an archive member. Identical bytes share
+/// analysis only when they have the same detected type: a path-derived type is
+/// part of the analyzer input, so sharing across types can change both trait
+/// evaluation and whether an archive member is analyzed at all.
+pub(crate) fn acquire_member_flight(
+    sha256: &str,
+    file_type: &str,
+    options: &AnalysisOptions,
+) -> ReportFlight {
+    acquire_flight("member", sha256, file_type, options)
 }
 
-fn acquire_flight(kind: &str, sha256: &str, options: &AnalysisOptions) -> ReportFlight {
+fn acquire_flight(
+    kind: &str,
+    sha256: &str,
+    file_type: &str,
+    options: &AnalysisOptions,
+) -> ReportFlight {
     let key = FlightKey {
         kind: kind.to_string(),
         sha256: sha256.to_string(),
-        options_hash: options_hash(options),
+        options_hash: typed_options_hash(options, file_type),
         traits_revision: traits_revision_key().unwrap_or_default(),
     };
     let flights = IN_FLIGHT.get_or_init(|| Mutex::new(HashMap::new()));
@@ -584,6 +598,17 @@ fn options_hash(options: &AnalysisOptions) -> String {
     hex::encode(hash)[..16].to_string()
 }
 
+/// Add the detected file type to the analysis key. Detection may depend on a
+/// member's logical path when content is ambiguous, so SHA equality alone does
+/// not guarantee that two paths have the same analysis semantics.
+fn typed_options_hash(options: &AnalysisOptions, file_type: &str) -> String {
+    use sha2::{Digest, Sha256};
+
+    let key = format!("{},type={file_type}", options_hash(options));
+    let hash = Sha256::digest(key.as_bytes());
+    hex::encode(hash)[..16].to_string()
+}
+
 /// Get the active analysis-cache revision fingerprint, or `None` if unavailable.
 ///
 /// Mixes the trait-files fingerprint with the cleave binary's package version
@@ -626,9 +651,10 @@ fn unix_timestamp() -> i64 {
 /// Returns `Some(report)` on cache hit, `None` on miss or if caching is unavailable.
 pub(crate) fn report_cache_lookup(
     sha256: &str,
+    file_type: &str,
     options: &AnalysisOptions,
 ) -> Option<AnalysisReport> {
-    let opts_hash = options_hash(options);
+    let opts_hash = typed_options_hash(options, file_type);
     let traits_ts = traits_revision_key()?;
     with_conn(|conn| report_cache_lookup_conn(conn, sha256, &opts_hash, traits_ts)).flatten()
 }
@@ -647,8 +673,13 @@ pub(crate) fn report_cache_entry_count() -> Option<i64> {
 /// Store a toplevel analysis report in the cache.
 ///
 /// Silently does nothing if caching is unavailable or any error occurs.
-pub(crate) fn report_cache_store(sha256: &str, options: &AnalysisOptions, report: &AnalysisReport) {
-    let opts_hash = options_hash(options);
+pub(crate) fn report_cache_store(
+    sha256: &str,
+    file_type: &str,
+    options: &AnalysisOptions,
+    report: &AnalysisReport,
+) {
+    let opts_hash = typed_options_hash(options, file_type);
     let Some(traits_ts) = traits_revision_key() else {
         return;
     };
@@ -667,9 +698,10 @@ pub(crate) fn report_cache_store(sha256: &str, options: &AnalysisOptions, report
 /// Returns `Some(fa)` on cache hit, `None` on miss or if caching is unavailable.
 pub(crate) fn file_analysis_cache_lookup(
     sha256: &str,
+    file_type: &str,
     options: &AnalysisOptions,
 ) -> Option<FileAnalysis> {
-    let opts_hash = options_hash(options);
+    let opts_hash = typed_options_hash(options, file_type);
     let traits_ts = traits_revision_key()?;
     with_conn(|conn| file_analysis_cache_lookup_conn(conn, sha256, &opts_hash, traits_ts)).flatten()
 }
@@ -679,10 +711,11 @@ pub(crate) fn file_analysis_cache_lookup(
 /// Silently does nothing if caching is unavailable or any error occurs.
 pub(crate) fn file_analysis_cache_store(
     sha256: &str,
+    file_type: &str,
     options: &AnalysisOptions,
     fa: &FileAnalysis,
 ) {
-    let opts_hash = options_hash(options);
+    let opts_hash = typed_options_hash(options, file_type);
     let Some(traits_ts) = traits_revision_key() else {
         return;
     };
@@ -855,10 +888,10 @@ mod tests {
     fn report_flight_shares_one_completed_report() {
         let sha = "single-flight-regression-unique";
         let options = AnalysisOptions::default();
-        let owner = acquire_report_flight(sha, &options);
+        let owner = acquire_report_flight(sha, "python", &options);
         assert!(owner.is_owner());
 
-        let follower = acquire_report_flight(sha, &options);
+        let follower = acquire_report_flight(sha, "python", &options);
         assert!(!follower.is_owner());
 
         let report = test_report(sha);
@@ -872,9 +905,9 @@ mod tests {
     #[test]
     fn report_flights_deduplicate_members_without_merging_hashes() {
         let options = AnalysisOptions::default();
-        let first = acquire_member_flight("member-sha-a", &options);
-        let second = acquire_member_flight("member-sha-b", &options);
-        let archive_peer = acquire_member_flight("member-sha-a", &options);
+        let first = acquire_member_flight("member-sha-a", "python", &options);
+        let second = acquire_member_flight("member-sha-b", "python", &options);
+        let archive_peer = acquire_member_flight("member-sha-a", "python", &options);
 
         assert!(first.is_owner(), "first member hash owns its analysis");
         assert!(
@@ -895,12 +928,25 @@ mod tests {
     }
 
     #[test]
+    fn member_flights_do_not_merge_different_detected_types() {
+        let options = AnalysisOptions::default();
+        let html = acquire_member_flight("same-member-sha", "html", &options);
+        let unknown = acquire_member_flight("same-member-sha", "unknown", &options);
+
+        assert!(html.is_owner());
+        assert!(
+            unknown.is_owner(),
+            "path-dependent file types require independent analysis"
+        );
+    }
+
+    #[test]
     fn report_flight_shares_member_analysis_between_concurrent_archives() {
         use std::sync::{Arc, Barrier, mpsc};
         use std::thread;
 
         let options = AnalysisOptions::default();
-        let owner = acquire_member_flight("shared-member-sha", &options);
+        let owner = acquire_member_flight("shared-member-sha", "python", &options);
         assert!(owner.is_owner());
 
         let barrier = Arc::new(Barrier::new(2));
@@ -909,7 +955,8 @@ mod tests {
             let barrier_for_archive = Arc::clone(&barrier);
             let options_for_archive = options.clone();
             scope.spawn(move || {
-                let archive_peer = acquire_member_flight("shared-member-sha", &options_for_archive);
+                let archive_peer =
+                    acquire_member_flight("shared-member-sha", "python", &options_for_archive);
                 assert!(!archive_peer.is_owner());
                 barrier_for_archive.wait();
                 tx.send(archive_peer.wait().map(|report| report.target.sha256))
@@ -948,7 +995,7 @@ mod tests {
         let avoided_wait = pool.install(|| {
             let ((), avoided_wait) = rayon::join(
                 || {
-                    let owner = acquire_member_flight(sha, &options);
+                    let owner = acquire_member_flight(sha, "python", &options);
                     assert!(owner.is_owner());
                     ready.wait();
 
@@ -960,7 +1007,7 @@ mod tests {
                 },
                 || {
                     ready.wait();
-                    let follower = acquire_member_flight(sha, &options);
+                    let follower = acquire_member_flight(sha, "python", &options);
                     assert!(!follower.is_owner());
                     follower.wait().map(|report| report.target.sha256)
                 },
@@ -1220,6 +1267,19 @@ mod tests {
         let h2 = options_hash(&opts);
         assert_eq!(h1, h2);
         assert_eq!(h1.len(), 16);
+    }
+
+    #[test]
+    fn typed_options_hash_separates_path_dependent_file_types() {
+        let opts = AnalysisOptions::default();
+        assert_ne!(
+            typed_options_hash(&opts, "html"),
+            typed_options_hash(&opts, "unknown")
+        );
+        assert_eq!(
+            typed_options_hash(&opts, "php"),
+            typed_options_hash(&opts, "php")
+        );
     }
 
     #[test]

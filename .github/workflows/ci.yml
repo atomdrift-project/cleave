@@ -1,0 +1,112 @@
+# Lint and test on every push and PR, and build the `cleave` binary for every
+# platform we ship. The build matrix itself lives in build.yml, which release.yml
+# also calls — one definition, so CI and release can't drift apart.
+#
+# Hardening notes — this workflow is itself a supply-chain target:
+#
+#   * Every action is pinned to a full commit SHA. Tags are mutable; a
+#     compromised upstream can move `v4` at any time. .github/dependabot.yml
+#     proposes the bumps so pinning doesn't mean going stale.
+#   * `permissions: {}` at the top level. Each job opts in to exactly what it
+#     needs; nothing here needs more than `contents: read`.
+#   * `persist-credentials: false` on every checkout, so the job token is never
+#     written into .git/config where a build script (we run hundreds) could
+#     read it back out.
+#   * Trigger is `pull_request`, never `pull_request_target`: fork PRs run with
+#     a read-only token and no access to secrets. This workflow passes no
+#     secrets to build.yml at all — CI artifacts get an ad-hoc macOS signature,
+#     and the Developer ID identity is reachable only from release.yml.
+#   * Every cargo invocation is `--locked`. Without it a drifting git dep or a
+#     compromised registry could swap a dependency out from under a release
+#     build, and Cargo.lock is the only thing pinning filefacts/stng/dmgwiz
+#     to reviewed revisions.
+#
+# Smoke tests here are deliberately `--version`/`--help` only: neither compiles
+# the ruleset, so they stay fast and network-free. The per-platform jobs in
+# build.yml scan a real file instead, which exercises the wasmtime/cranelift
+# JIT that a released binary must survive.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
+  CLEAVE_NO_UPDATE_CHECK: "1"
+
+jobs:
+  # Cheapest job, highest value. This repo routinely carries temporary
+  # `[patch]` entries pointing at ../filefacts (or another sibling) while a
+  # cross-repo change is in
+  # flight (see the comment block at the bottom of Cargo.toml). Shipping one
+  # would build a release nobody else can reproduce. Mirrors scripts/pre-commit.
+  guard:
+    name: guard
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Reject local path overrides
+        # Same regex as scripts/pre-commit, including the `[^#]` guard that
+        # keeps commented-out patches (Cargo.toml keeps a running log of them)
+        # from tripping it. Keep the two in sync.
+        run: |
+          if grep -nE '^[[:space:]]*[^#].*path[[:space:]]*=[[:space:]]*"\.\.' Cargo.toml; then
+            echo "::error file=Cargo.toml::local path override committed - push the dep and pin a git rev instead"
+            exit 1
+          fi
+
+      - name: Cache cargo home
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          # Registry + git checkouts only, never target/. The five git deps are
+          # large and re-cloned on every miss; target/ dirs for this graph run
+          # to tens of GB and would blow the 10 GB per-repo cache budget.
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-home-guard-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-home-guard-${{ runner.os }}-
+
+      - run: cargo fmt --all --check
+
+      # Matches `make lint` exactly, so a clean local run means a clean CI run.
+      - run: cargo clippy --locked -- -D warnings
+
+      # A `--locked` build fails outright on a stale lockfile, but this catches
+      # the subtler case of a lockfile that resolves but wasn't committed.
+      - name: Cargo.lock unchanged
+        run: git diff --exit-code Cargo.lock
+
+  # Not gated on `guard`: a cold build is ~25-45 min per target and serializing
+  # them behind clippy would double the wall clock for no safety gain.
+  build:
+    name: build
+    uses: ./.github/workflows/build.yml
+    # A caller job sets the ceiling for the workflow it calls: with
+    # `permissions: {}` up top and nothing declared here, build.yml's jobs are
+    # capped at `contents: none` and the run is rejected before it starts.
+    # Must stay >= the permissions build.yml's own jobs request.
+    permissions:
+      contents: read
+    with:
+      profile: release
+    # No secrets passed. CI never touches the signing identity.

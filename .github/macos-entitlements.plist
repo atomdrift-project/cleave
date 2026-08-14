@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Entitlements for the notarized macOS build.
+
+  Notarization requires the hardened runtime (codesign's "options runtime"
+  flag), and the hardened runtime denies JIT by default. cleave needs JIT:
+  yara-x compiles its rules to WebAssembly and runs them through
+  wasmtime/cranelift, which maps executable pages at load time. Without
+  allow-jit, a hardened-runtime build dies the first time a ruleset loads,
+  i.e. on anything that actually scans.
+
+  allow-jit alone is not enough. A binary signed and notarized with only
+  allow-jit (spctl reports "Notarized Developer ID") runs the version and help
+  flags fine, yet any actual scan is killed in about a second:
+
+      signal:      SIGKILL (Code Signature Invalid)
+      termination: CODESIGNING / Invalid Page
+      frame:       cleave::yara_engine::YaraEngine::scan_bytes_with_inline
+
+  Re-signing the same binary with nothing changed but the entitlements isolates
+  it: allow-jit alone reproduces the SIGKILL, allow-jit plus
+  allow-unsigned-executable-memory scans cleanly. cranelift maps executable
+  pages that MAP_JIT plus pthread_jit_write_protect_np does not cover, and
+  allow-jit cannot authorize them on its own.
+
+  This is also why the smoke test in build.yml runs a real scan: the version
+  and help flags never compile a ruleset, so they never touch the JIT and pass
+  even when signing is broken.
+
+  Keep this comment free of doubled hyphens. They are illegal inside an XML
+  comment, and codesign's AMFI parser rejects the whole file ("Failed to parse
+  entitlements: AMFIUnserializeXML: syntax error") even though plutil accepts it.
+-->
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.cs.allow-jit</key>
+	<true/>
+	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+	<true/>
+</dict>
+</plist>

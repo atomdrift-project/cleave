@@ -1650,6 +1650,27 @@ fn analyze_file_with_resources_and_sha256<P: AsRef<Path>>(
 /// analyzed. Observed symptom: `cleave diff` of two identical files reported a
 /// phantom `file.basename` change against an unrelated donor's name.
 pub(crate) fn restamp_path_derived_values(report: &mut AnalysisReport, path: &Path) {
+    let name = path.file_name().and_then(|n| n.to_str());
+    let stem = path.file_stem().and_then(|s| s.to_str());
+
+    // Reports reconstructed from the cross-context FileAnalysis cache carry
+    // only flattened member kv; their values_tree was intentionally dropped.
+    // Re-stamp that representation too, otherwise identical bytes reused under
+    // another archive path retain the cache donor's name and create a phantom
+    // kv diff.
+    if let Some(kv) = report.cached_member_kv.as_mut() {
+        if let Some(name) = name
+            && let Some(basename) = kv.get_mut("file.basename")
+        {
+            *basename = serde_json::Value::String(name.to_string());
+        }
+        if let Some(stem) = stem
+            && let Some(value) = kv.get_mut("file.stem")
+        {
+            *value = serde_json::Value::String(stem.to_string());
+        }
+    }
+
     let Some(file_values) = report
         .values_tree
         .as_deref_mut()
@@ -1658,14 +1679,14 @@ pub(crate) fn restamp_path_derived_values(report: &mut AnalysisReport, path: &Pa
     else {
         return;
     };
-    if let Some(name) = path.file_name().and_then(|n| n.to_str())
+    if let Some(name) = name
         && let Some(basename) = file_values.get_mut("basename")
     {
         *basename = serde_json::Value::String(name.to_string());
     }
     // `Path::file_stem` matches the extractor's stem convention: leading-dot
     // names keep the dot, and only the last extension is stripped.
-    if let Some(s) = path.file_stem().and_then(|s| s.to_str())
+    if let Some(s) = stem
         && let Some(stem) = file_values.get_mut("stem")
     {
         *stem = serde_json::Value::String(s.to_string());
@@ -1707,6 +1728,8 @@ pub(crate) fn report_from_file_analysis(
     if !fa.kv.is_empty() {
         report.cached_member_kv = Some(fa.kv);
     }
+    let actual_path = report.target.path.clone();
+    restamp_path_derived_values(&mut report, Path::new(&actual_path));
     report
 }
 
@@ -3577,8 +3600,8 @@ mod tests {
         // Unrelated namespaces are untouched.
         assert_eq!(tree["shebang"]["interpreter"], "bash");
 
-        // A report without a values tree (or without the `file` namespace)
-        // passes through unchanged.
+        // A report reconstructed from compact member kv has no values tree,
+        // but its flattened path values still need the same correction.
         let mut bare = types::AnalysisReport::new(types::TargetInfo {
             path: "x".to_string(),
             file_type: "shell".to_string(),
@@ -3586,8 +3609,17 @@ mod tests {
             sha256: "abc".to_string(),
             architectures: None,
         });
+        bare.cached_member_kv = Some(std::collections::BTreeMap::from([
+            ("file.basename".to_string(), serde_json::json!("donor.sh")),
+            ("file.stem".to_string(), serde_json::json!("donor")),
+            ("source.language".to_string(), serde_json::json!("shell")),
+        ]));
         restamp_path_derived_values(&mut bare, Path::new("/tmp/actual.sh"));
         assert!(bare.values_tree.is_none());
+        let kv = bare.cached_member_kv.as_ref().expect("cached kv retained");
+        assert_eq!(kv["file.basename"], "actual.sh");
+        assert_eq!(kv["file.stem"], "actual");
+        assert_eq!(kv["source.language"], "shell");
     }
 
     /// `PhaseTracker::new()` must not register (otherwise every default

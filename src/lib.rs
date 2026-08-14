@@ -1360,7 +1360,10 @@ pub fn analyze_file<P: AsRef<Path>>(path: P, options: &AnalysisOptions) -> Resul
     let (preloaded, precomputed_sha) = if path.is_file() {
         let file_data = file_io::read_file_smart(path)?;
         let sha256 = analyzers::utils::calculate_sha256(file_data.as_slice());
-        if let Some(mut report) = analysis_cache::report_cache_lookup(&sha256, options) {
+        let file_type = analyzers::detect_file_type_from_data(path, file_data.as_slice());
+        if let Some(mut report) =
+            analysis_cache::report_cache_lookup(&sha256, file_type.label(), options)
+        {
             report.target.path = path.display().to_string();
             report.analysis_timestamp = Some(chrono::Utc::now());
             restamp_path_derived_values(&mut report, path);
@@ -1425,7 +1428,10 @@ pub fn analyze_bytes_owned(
     let path = Path::new(filename);
 
     let sha256 = analyzers::utils::calculate_sha256(&data);
-    if let Some(mut report) = analysis_cache::report_cache_lookup(&sha256, options) {
+    let file_type = analyzers::detect_file_type_from_data(path, &data);
+    if let Some(mut report) =
+        analysis_cache::report_cache_lookup(&sha256, file_type.label(), options)
+    {
         report.target.path = filename.to_string();
         report.analysis_timestamp = Some(chrono::Utc::now());
         tracing::info!("Cache hit (fast path)");
@@ -1497,7 +1503,10 @@ pub fn analyze_bytes_shared(
     let path = Path::new(filename);
 
     let sha256 = analyzers::utils::calculate_sha256(&data);
-    if let Some(mut report) = analysis_cache::report_cache_lookup(&sha256, options) {
+    let file_type = analyzers::detect_file_type_from_data(path, &data);
+    if let Some(mut report) =
+        analysis_cache::report_cache_lookup(&sha256, file_type.label(), options)
+    {
         report.target.path = filename.to_string();
         report.analysis_timestamp = Some(chrono::Utc::now());
         tracing::info!("Cache hit (fast path)");
@@ -2090,6 +2099,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     set_phase("cleave:detect");
     tracing::debug!("Detecting file type for: {}", path.display());
     let file_type = analyzers::detect_file_type_from_data(path, file_data);
+    let file_type_key = file_type.label();
     tracing::debug!(
         "Detected file type: {:?} for: {}",
         file_type,
@@ -2140,7 +2150,9 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
 
     // Check analysis cache before running the full pipeline
     set_phase("cleave:cache_lookup");
-    if let Some(mut cached_report) = analysis_cache::report_cache_lookup(&sha256_hex, options) {
+    if let Some(mut cached_report) =
+        analysis_cache::report_cache_lookup(&sha256_hex, file_type_key, options)
+    {
         cached_report.target.path = path.display().to_string();
         cached_report.analysis_timestamp = Some(chrono::Utc::now());
         restamp_path_derived_values(&mut cached_report, path);
@@ -2154,7 +2166,9 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     }
 
     // Secondary check: per-file cache (cross-context, shared with archive members)
-    if let Some(fa) = analysis_cache::file_analysis_cache_lookup(&sha256_hex, options) {
+    if let Some(fa) =
+        analysis_cache::file_analysis_cache_lookup(&sha256_hex, file_type_key, options)
+    {
         tracing::debug!("File cache hit (cross-context)");
         let report = report_from_file_analysis(fa, path.display().to_string());
         memory_tracker::log_after_file_processing(
@@ -2169,7 +2183,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     // the same SHA256 at the same time. The persistent cache cannot prevent
     // that first-wave race, so single-flight identical analyses in-process.
     let flight = loop {
-        let flight = analysis_cache::acquire_report_flight(&sha256_hex, options);
+        let flight = analysis_cache::acquire_report_flight(&sha256_hex, file_type_key, options);
         if flight.is_owner() {
             break Some(flight);
         }
@@ -2198,7 +2212,9 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
 
     // Recheck persistent caches after becoming owner. A non-overlapping
     // caller may have completed between the first lookup and acquisition.
-    if let Some(mut cached_report) = analysis_cache::report_cache_lookup(&sha256_hex, options) {
+    if let Some(mut cached_report) =
+        analysis_cache::report_cache_lookup(&sha256_hex, file_type_key, options)
+    {
         cached_report.target.path = path.display().to_string();
         cached_report.analysis_timestamp = Some(chrono::Utc::now());
         restamp_path_derived_values(&mut cached_report, path);
@@ -2207,7 +2223,9 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         }
         return Ok(cached_report);
     }
-    if let Some(fa) = analysis_cache::file_analysis_cache_lookup(&sha256_hex, options) {
+    if let Some(fa) =
+        analysis_cache::file_analysis_cache_lookup(&sha256_hex, file_type_key, options)
+    {
         let report = report_from_file_analysis(fa, path.display().to_string());
         if let Some(flight) = flight {
             flight.complete(None);
@@ -2867,11 +2885,11 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         fa.parent_id = None;
         fa.depth = 0;
         fa.extracted_path = None;
-        analysis_cache::file_analysis_cache_store(&sha256_hex, options, &fa);
+        analysis_cache::file_analysis_cache_store(&sha256_hex, file_type_key, options, &fa);
     }
 
     // Store result in analysis cache for future lookups
-    analysis_cache::report_cache_store(&sha256_hex, options, &report);
+    analysis_cache::report_cache_store(&sha256_hex, file_type_key, options, &report);
     if let Some(flight) = flight {
         flight.complete(Some(&report));
     }

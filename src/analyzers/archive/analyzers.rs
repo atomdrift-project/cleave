@@ -1042,9 +1042,20 @@ impl ArchiveAnalyzer {
             default_options = crate::AnalysisOptions::default();
             &default_options
         };
+        if let Some(reason) = self.archive_member_analysis_skip_reason(file_type) {
+            tracing::debug!(
+                relative_path,
+                file_type = %file_type.report_file_type(),
+                reason,
+                "Skipping archive member analysis"
+            );
+            return Ok(None);
+        }
         let is_archive = file_type.is_archive();
+        let file_type_key = file_type.label();
         if !is_archive
-            && let Some(fa) = crate::analysis_cache::file_analysis_cache_lookup(sha256, options)
+            && let Some(fa) =
+                crate::analysis_cache::file_analysis_cache_lookup(sha256, file_type_key, options)
         {
             let mut report = crate::report_from_file_analysis(fa, relative_path.to_string());
             crate::restamp_path_derived_values(&mut report, Path::new(relative_path));
@@ -1052,7 +1063,7 @@ impl ArchiveAnalyzer {
             return Ok(Some(report));
         }
 
-        let flight = crate::analysis_cache::acquire_member_flight(sha256, options);
+        let flight = crate::analysis_cache::acquire_member_flight(sha256, file_type_key, options);
         if !flight.is_owner() {
             if let Some(mut report) = flight.wait() {
                 report.target.path = relative_path.to_string();
@@ -1109,7 +1120,12 @@ impl ArchiveAnalyzer {
                     fa.parent_id = None;
                     fa.depth = 0;
                     fa.extracted_path = None;
-                    crate::analysis_cache::file_analysis_cache_store(sha256, options, &fa);
+                    crate::analysis_cache::file_analysis_cache_store(
+                        sha256,
+                        file_type_key,
+                        options,
+                        &fa,
+                    );
                 }
                 flight.complete(Some(report));
             }

@@ -1409,6 +1409,12 @@ impl MachOAnalyzer {
 
     #[allow(clippy::single_range_in_vec_init)] // Intentional: returns single range for thin binaries
     pub(crate) fn all_arch_ranges(&self, data: &[u8]) -> Vec<std::ops::Range<usize>> {
+        // Thin Mach-O is overwhelmingly the common case. Do not reopen
+        // filefacts merely to prove that a fat-slice table is absent: that
+        // duplicate open can include another five-minute Rizin recovery.
+        if !is_fat_macho(data) {
+            return vec![0..data.len()];
+        }
         let Ok(parsed) = filefacts::open(data) else {
             return vec![0..data.len()];
         };
@@ -1551,6 +1557,11 @@ impl MachOAnalyzer {
     /// the fat marker is silently dropped; this is rare enough on
     /// real fat Mach-Os that a finding here would only add noise.
     pub(crate) fn apply_fat_metadata(&self, report: &mut AnalysisReport, data: &[u8]) {
+        // As with the range helpers, avoid a full filefacts reopen for the
+        // ordinary thin case.
+        if !is_fat_macho(data) {
+            return;
+        }
         let arch_names: Vec<String> = filefacts::open_with_path(report.target.path.as_ref(), data)
             .ok()
             .and_then(|parsed| {
@@ -1645,6 +1656,8 @@ impl Analyzer for MachOAnalyzer {
 
         // Use preferred arch for structural analysis (imports, exports, strings, etc.)
         let preferred_range = self.preferred_arch_range(input.data);
+        let preferred_is_full_file =
+            preferred_range.start == 0 && preferred_range.end == input.data.len();
         let preferred_data = &input.data[preferred_range];
         let strings = if input.strings.is_empty() {
             None
@@ -1657,9 +1670,22 @@ impl Analyzer for MachOAnalyzer {
         // signal) is taken by `analyze_structural_with_strings` via
         // `analyze_structural` synthesising a fresh ctx; either way
         // we never re-walk with goblin from here.
-        let preferred_ctx =
-            crate::analysis_context::AnalysisContext::open(input.path, preferred_data).ok();
-        let mut report = if let Some(ctx) = preferred_ctx.as_ref() {
+        // Archive and unified entry points already opened a context over the
+        // full member. A thin Mach-O's preferred slice is that exact member,
+        // so reuse it; reopening used to repeat every filefacts pass,
+        // including Rizin. Fat slices still need their own slice-relative
+        // context so offsets can be rebased correctly below.
+        let opened_preferred_ctx = if preferred_is_full_file && input.parsed_ctx.is_some() {
+            None
+        } else {
+            crate::analysis_context::AnalysisContext::open(input.path, preferred_data).ok()
+        };
+        let preferred_ctx = if preferred_is_full_file {
+            input.parsed_ctx.as_ref().or(opened_preferred_ctx.as_ref())
+        } else {
+            opened_preferred_ctx.as_ref()
+        };
+        let mut report = if let Some(ctx) = preferred_ctx {
             self.analyze_structural_with_strings(
                 input.path,
                 input.backing_path(),
@@ -1707,13 +1733,17 @@ impl Analyzer for MachOAnalyzer {
         if is_fat {
             // Full file evaluation - strings and offsets are file-relative.
             // Use a full-file context so the mapper does not reopen filefacts.
-            let full_ctx =
-                crate::analysis_context::AnalysisContext::open(input.path, input.data).ok();
+            let opened_full_ctx = if input.parsed_ctx.is_some() {
+                None
+            } else {
+                crate::analysis_context::AnalysisContext::open(input.path, input.data).ok()
+            };
+            let full_ctx = input.parsed_ctx.as_ref().or(opened_full_ctx.as_ref());
             self.capability_mapper
                 .evaluate_and_merge_findings_with_precomputed(
                     &mut report,
                     input.data,
-                    crate::capabilities::AnalysisBorrow::with_filefacts(None, full_ctx.as_ref()),
+                    crate::capabilities::AnalysisBorrow::with_filefacts(None, full_ctx),
                     None,
                     None,
                     None,
@@ -1725,10 +1755,7 @@ impl Analyzer for MachOAnalyzer {
                 .evaluate_and_merge_findings_with_precomputed(
                     &mut report,
                     preferred_data,
-                    crate::capabilities::AnalysisBorrow::with_filefacts(
-                        None,
-                        preferred_ctx.as_ref(),
-                    ),
+                    crate::capabilities::AnalysisBorrow::with_filefacts(None, preferred_ctx),
                     None,
                     None,
                     None,
@@ -1742,18 +1769,21 @@ impl Analyzer for MachOAnalyzer {
     fn analyze(&self, file_path: &Path) -> Result<AnalysisReport> {
         let data = fs::read(file_path).context("Failed to read file")?;
         // filefacts is the string-extraction authority. Harvest its full-file
-        // `text()` view; the structural pass opens its own per-arch slice.
-        let strings: std::sync::Arc<[stng::ExtractedString]> =
-            crate::analysis_context::AnalysisContext::open(file_path, &data)
-                .ok()
-                .map(|c| c.text_rows())
-                .unwrap_or_default();
-        let input = AnalysisInput::with_strings(
+        // `text()` view and thread the same context into the structural pass.
+        let parsed_ctx = crate::analysis_context::AnalysisContext::open(file_path, &data).ok();
+        let strings: std::sync::Arc<[stng::ExtractedString]> = parsed_ctx
+            .as_ref()
+            .map(crate::analysis_context::AnalysisContext::text_rows)
+            .unwrap_or_default();
+        let mut input = AnalysisInput::with_strings(
             file_path,
             &data,
             &strings,
             crate::analyzers::FileType::MachO,
         );
+        if let Some(ctx) = parsed_ctx {
+            input = input.with_parsed_ctx(ctx);
+        }
         self.analyze_input(&input)
     }
 

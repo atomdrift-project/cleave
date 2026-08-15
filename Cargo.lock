@@ -1688,7 +1688,7 @@ dependencies = [
 [[package]]
 name = "filefacts"
 version = "1.3.0"
-source = "git+https://github.com/atomdrift-project/filefacts.git#7b467c84ddffbb4a1bd8b2ca8e7b042f05522758"
+source = "git+https://github.com/atomdrift-project/filefacts.git#74d179a236accc1f09076106709f399cf2742186"
 dependencies = [
  "aho-corasick",
  "cfb 0.10.0",
@@ -3475,9 +3475,9 @@ dependencies = [
 
 [[package]]
 name = "psl"
-version = "2.1.223"
+version = "2.1.224"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c0dedad316e05de220cbf3fd8bfb69f3df8755dde2d7d479211827b595168a93"
+checksum = "d6fd4be744906217175e617ecbaff30e1d4574954e5ab2ad6ac0fead0e9abc3a"
 dependencies = [
  "psl-types",
 ]
@@ -5254,7 +5254,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-clojure"
 version = "0.1.0"
-source = "git+https://github.com/atomdrift-project/filefacts.git#7b467c84ddffbb4a1bd8b2ca8e7b042f05522758"
+source = "git+https://github.com/atomdrift-project/filefacts.git#74d179a236accc1f09076106709f399cf2742186"
 dependencies = [
  "cc",
  "tree-sitter",
@@ -5571,9 +5571,9 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 
 [[package]]
 name = "uuid"
-version = "1.24.0"
+version = "1.24.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bf3923a6f5c4c6382e0b653c4117f48d631ea17f38ed86e2a828e6f7412f5239"
+checksum = "2cefc03fd367c0c6d4305de1b312cf00248c4114f4a0418ce6a6af769e3b0bd9"
 dependencies = [
  "js-sys",
  "wasm-bindgen",

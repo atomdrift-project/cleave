@@ -3,6 +3,10 @@
 # Compatible with both GNU make and BSD make
 
 BINARY = cleave
+# Cargo package name, which is not always the binary name (scan's package is
+# `atomdrift-scan` but ships `atomscan`). Read from Cargo.toml so `cut-release`
+# passes the right `-p` without a second place to keep in sync.
+PACKAGE := $(shell awk -F'"' '/^name = /{print $$2; exit}' Cargo.toml)
 OUT_DIR = out
 
 # Honor CARGO_TARGET_DIR if set (cleave-tuna sets it to share the cargo cache
@@ -11,7 +15,7 @@ CARGO_TARGET ?= $(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR),target)
 
 # For sccache, set RUSTC_WRAPPER=sccache in your environment
 
-.PHONY: all build debug release release-lto check-cargo install tarball rollout-bastille test test-fast test-unit lint fix fmt clean coverage ci install-hooks help regenerate-testdata loadtest bench-build benchmark sampled-benchmark validate tuna tuna-once wolfi wolfi-bootstrap wolfi-build wolfi-test wolfi-shell wolfi-clean wolfi-nuke
+.PHONY: all build debug release release-lto check-cargo install tarball rollout-bastille test test-fast test-unit lint fix fmt clean coverage ci install-hooks help regenerate-testdata loadtest bench-build benchmark sampled-benchmark validate tuna tuna-once wolfi wolfi-bootstrap wolfi-build wolfi-test wolfi-shell wolfi-clean wolfi-nuke cut-release
 
 # Default target
 all: build
@@ -432,6 +436,43 @@ update-manifest: release ## Build + validate + render a trait-update manifest (R
 	  --release "$(RELEASE)" --channel "$(CHANNEL)" \
 	  --engine ./$(CARGO_TARGET)/release/$(BINARY) --out "$(DIST)" \
 	  $(if $(SIGN),--sign --identity "$(IDENTITY)",)
+
+# Cut a release: set the version everywhere it is recorded, prove the result
+# builds the way CI will, and commit + tag it as one unit.
+#
+#     make cut-release VERSION=1.2.3
+#
+# The version lives in three places that must agree — Cargo.toml, Cargo.lock,
+# and the tag — and release.yml rejects the build when any pair disagrees.
+# Doing it by hand cost four failed release runs in one day: a tag ahead of
+# Cargo.toml, then Cargo.toml ahead of Cargo.lock, each discovered ~40 minutes
+# into a matrix that `cargo check --locked` disproves in seconds.
+#
+# Pushing stays manual on purpose. That is the step that spends an hour of CI
+# and publishes artifacts people download, so it gets a human; everything this
+# target does is local and revertible with `git reset --hard HEAD~1` plus
+# `git tag -d`.
+cut-release: ## Bump version + lockfile, verify, commit and tag (VERSION=x.y.z)
+	@test -n "$(VERSION)" || { echo "usage: make cut-release VERSION=x.y.z" >&2; exit 1; }
+	@printf '%s\n' "$(VERSION)" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$$' \
+		|| { echo "VERSION must look like 1.2.3 (got '$(VERSION)')" >&2; exit 1; }
+	@test -z "$$(git status --porcelain)" \
+		|| { echo "working tree is dirty — the tag must capture exactly what was tested:" >&2; \
+		     git status --short >&2; exit 1; }
+	@if git rev-parse -q --verify "refs/tags/v$(VERSION)" >/dev/null; then \
+		echo "tag v$(VERSION) already exists" >&2; exit 1; fi
+	@# Rewrite only the first `version =`, which is the one in [package].
+	@awk -v v="$(VERSION)" 'BEGIN{d=0} /^version = "/ && !d {print "version = \"" v "\""; d=1; next} {print}' \
+		Cargo.toml > Cargo.toml.tmp && mv Cargo.toml.tmp Cargo.toml
+	cargo update -p $(PACKAGE) --offline
+	@# The exact gate release.yml applies, minus the hour of linking.
+	cargo check --locked --all-targets
+	git add Cargo.toml Cargo.lock
+	git commit -m "v$(VERSION)"
+	git tag -a "v$(VERSION)" -m "$(BINARY) $(VERSION)"
+	@echo
+	@echo "tagged v$(VERSION). to release:"
+	@echo "    git push origin $$(git rev-parse --abbrev-ref HEAD) && git push origin v$(VERSION)"
 
 clean: ## Clean all build artifacts
 	@echo "Cleaning build artifacts..."

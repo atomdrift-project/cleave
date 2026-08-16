@@ -2349,6 +2349,10 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     "text:objectives/evasion/security-bypass/llm/",
     "text:objectives/impact/crypto-manipulation/keywords/",
     "text:objectives/impact/destroy/keywords/",
+    // Natural-language destructive tasking can be embedded in any source or
+    // script language; objective composites require an unattended agent with
+    // tool-permission bypass before assigning hostile intent.
+    "text:objectives/impact/destroy/agent-directed/",
     "text:objectives/impact/dos/keywords/",
     "text:objectives/impact/ransom/keywords/",
     "text:objectives/privilege-escalation/exploit/keywords/",

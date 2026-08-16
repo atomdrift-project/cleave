@@ -1053,14 +1053,46 @@ impl ArchiveAnalyzer {
         }
         let is_archive = file_type.is_archive();
         let file_type_key = file_type.label();
-        if !is_archive
-            && let Some(fa) =
-                crate::analysis_cache::file_analysis_cache_lookup(sha256, file_type_key, options)
-        {
-            let mut report = crate::report_from_file_analysis(fa, relative_path.to_string());
-            crate::restamp_path_derived_values(&mut report, Path::new(relative_path));
-            tracing::debug!(sha256, relative_path, "Archive member cache hit");
-            return Ok(Some(report));
+        if !is_archive {
+            // A member can emit decoded child files (`##base64`,
+            // `##unicode-escape`, ...). The compact FileAnalysis cache stores
+            // only the parent, so reusing it after one side of a diff was
+            // analyzed fresh made those children appear removed on the cached
+            // side. Preserve the complete report in the report cache and use
+            // it when the logical member path is identical. If the same bytes
+            // occur under another path, child paths and evidence are
+            // path-dependent, so fall through to a fresh analysis rather than
+            // rebasing them incompletely.
+            let mut cached_has_path_dependent_children = false;
+            if let Some(mut report) =
+                crate::analysis_cache::report_cache_lookup(sha256, file_type_key, options)
+            {
+                cached_has_path_dependent_children =
+                    !report.files.is_empty() || !report.archive_contents.is_empty();
+                if report.target.path == relative_path {
+                    report.analysis_timestamp = Some(chrono::Utc::now());
+                    crate::restamp_path_derived_values(&mut report, Path::new(relative_path));
+                    tracing::debug!(
+                        sha256,
+                        relative_path,
+                        "Archive member full-report cache hit"
+                    );
+                    return Ok(Some(report));
+                }
+            }
+
+            if !cached_has_path_dependent_children
+                && let Some(fa) = crate::analysis_cache::file_analysis_cache_lookup(
+                    sha256,
+                    file_type_key,
+                    options,
+                )
+            {
+                let mut report = crate::report_from_file_analysis(fa, relative_path.to_string());
+                crate::restamp_path_derived_values(&mut report, Path::new(relative_path));
+                tracing::debug!(sha256, relative_path, "Archive member cache hit");
+                return Ok(Some(report));
+            }
         }
 
         let flight = crate::analysis_cache::acquire_member_flight(sha256, file_type_key, options);
@@ -1114,6 +1146,14 @@ impl ArchiveAnalyzer {
                 // the persistent cross-context cache. The in-process flight
                 // still shares full archive reports between simultaneous users.
                 if !is_archive {
+                    if !report.files.is_empty() || !report.archive_contents.is_empty() {
+                        crate::analysis_cache::report_cache_store(
+                            sha256,
+                            file_type_key,
+                            options,
+                            report,
+                        );
+                    }
                     let mut fa = report.to_file_analysis(0);
                     fa.path.clear();
                     fa.id = 0;

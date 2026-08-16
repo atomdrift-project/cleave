@@ -85,7 +85,7 @@ impl UPXDecompressor {
         if is_disabled() {
             return false;
         }
-        let Some(upx) = crate::tool_paths::resolve("upx") else {
+        let Some(upx) = filefacts::tools::resolve("upx") else {
             return false;
         };
         Command::new(upx)
@@ -116,7 +116,7 @@ impl UPXDecompressor {
     /// Decompress a UPX-packed file and return the decompressed data.
     /// The input file_path points to the original packed file.
     pub(crate) fn decompress(file_path: &Path) -> Result<Vec<u8>, UPXError> {
-        let Some(upx) = crate::tool_paths::resolve("upx") else {
+        let Some(upx) = filefacts::tools::resolve("upx") else {
             return Err(UPXError::NotInstalled);
         };
         if !Self::is_available() {

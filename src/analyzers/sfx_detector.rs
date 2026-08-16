@@ -395,7 +395,7 @@ fn analyze_pyinstaller_in_memory(
 }
 
 fn tool_available(name: &str) -> bool {
-    let Some(path) = crate::tool_paths::resolve(name) else {
+    let Some(path) = filefacts::tools::resolve(name) else {
         return false;
     };
     std::process::Command::new(path)
@@ -412,7 +412,7 @@ fn sevenzip_cmd() -> Option<std::path::PathBuf> {
     CHOICE
         .get_or_init(|| {
             for name in ["7zz", "7z", "7za", "7zr"] {
-                let Some(path) = crate::tool_paths::resolve(name) else {
+                let Some(path) = filefacts::tools::resolve(name) else {
                     continue;
                 };
                 if std::process::Command::new(&path)
@@ -450,7 +450,7 @@ struct InnoExtractResult {
 }
 
 fn run_innoextract(src: &Path, out: &Path) -> InnoExtractResult {
-    let Some(command) = crate::tool_paths::resolve("innoextract") else {
+    let Some(command) = filefacts::tools::resolve("innoextract") else {
         return InnoExtractResult {
             extracted: false,
             diagnostics: vec![InnoExtractDiagnostic {

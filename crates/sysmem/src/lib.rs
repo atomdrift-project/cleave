@@ -341,9 +341,25 @@ fn cgroup_memory_headroom() -> Option<u64> {
     Some(limit.saturating_sub(current))
 }
 
+/// FreeBSD's VM counters provide a conservative live availability signal.
+/// Free and inactive pages are immediately reclaimable; cache pages are also
+/// reusable. Laundry and wired pages are deliberately excluded so callers
+/// stop admitting work before swap pressure rather than counting memory that
+/// still needs writeback or kernel reclamation.
+#[cfg(target_os = "freebsd")]
+fn available_memory_impl() -> Option<u64> {
+    let page_size = sysctlbyname_int(c"hw.pagesize")? as u64;
+    let free = sysctlbyname_u32(c"vm.stats.vm.v_free_count")? as u64;
+    let inactive = sysctlbyname_u32(c"vm.stats.vm.v_inactive_count")? as u64;
+    let cache = sysctlbyname_u32(c"vm.stats.vm.v_cache_count").unwrap_or(0) as u64;
+    let pages = free.saturating_add(inactive).saturating_add(cache);
+    let available = pages.saturating_mul(page_size);
+    total_memory().map_or(Some(available), |total| Some(available.min(total)))
+}
+
 /// Platforms without a live available-memory source: callers fall back to a
 /// total-memory budget.
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
 fn available_memory_impl() -> Option<u64> {
     None
 }
@@ -755,6 +771,36 @@ fn sysctlbyname_int(name: &core::ffi::CStr) -> Option<usize> {
         )
     };
     (ret == 0 && val > 0).then_some(val as usize)
+}
+
+/// `sysctlbyname` returning an unsigned 32-bit VM counter. Unlike the CPU
+/// helper, zero is valid (notably for `v_cache_count`).
+#[cfg(target_os = "freebsd")]
+fn sysctlbyname_u32(name: &core::ffi::CStr) -> Option<u32> {
+    extern "C" {
+        fn sysctlbyname(
+            name: *const core::ffi::c_char,
+            oldp: *mut std::ffi::c_void,
+            oldlenp: *mut usize,
+            newp: *const std::ffi::c_void,
+            newlen: usize,
+        ) -> i32;
+    }
+
+    let mut val: u32 = 0;
+    let mut len = std::mem::size_of::<u32>();
+    // SAFETY: these named VM counters are uint32_t sysctls; the buffer is
+    // correctly sized and aligned, and the return code and output size gate use.
+    let ret = unsafe {
+        sysctlbyname(
+            name.as_ptr(),
+            (&raw mut val).cast(),
+            &raw mut len,
+            std::ptr::null(),
+            0,
+        )
+    };
+    (ret == 0 && len == std::mem::size_of::<u32>()).then_some(val)
 }
 
 #[cfg(target_os = "macos")]

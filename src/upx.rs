@@ -80,12 +80,15 @@ impl UPXDecompressor {
         false
     }
 
-    /// Check if the upx binary is available in PATH (and not disabled).
+    /// Check if the upx binary is available (and not disabled).
     pub(crate) fn is_available() -> bool {
         if is_disabled() {
             return false;
         }
-        Command::new("upx")
+        let Some(upx) = crate::tool_paths::resolve("upx") else {
+            return false;
+        };
+        Command::new(upx)
             .arg("--version")
             .output()
             .is_ok_and(|output| output.status.success())
@@ -113,6 +116,9 @@ impl UPXDecompressor {
     /// Decompress a UPX-packed file and return the decompressed data.
     /// The input file_path points to the original packed file.
     pub(crate) fn decompress(file_path: &Path) -> Result<Vec<u8>, UPXError> {
+        let Some(upx) = crate::tool_paths::resolve("upx") else {
+            return Err(UPXError::NotInstalled);
+        };
         if !Self::is_available() {
             return Err(UPXError::NotInstalled);
         }
@@ -125,7 +131,7 @@ impl UPXDecompressor {
         // Run upx -d on the temporary copy with a timeout.
         // stdout → null: -q mode produces nothing useful; null avoids a drain thread.
         // stderr → piped: captured for error messages on failure.
-        let mut child = Command::new("upx")
+        let mut child = Command::new(upx)
             .arg("-d")
             .arg("-q") // Quiet mode
             .arg(temp_path)

@@ -17,7 +17,7 @@ use memchr::memmem;
 use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::OnceLock;
 
 /// NSIS installer marker (little-endian 0xDEADBEEF).
 const NSIS_DEADBEEF: &[u8] = &[0xEF, 0xBE, 0xAD, 0xDE];
@@ -395,7 +395,10 @@ fn analyze_pyinstaller_in_memory(
 }
 
 fn tool_available(name: &str) -> bool {
-    std::process::Command::new(name)
+    let Some(path) = crate::tool_paths::resolve(name) else {
+        return false;
+    };
+    std::process::Command::new(path)
         .arg("--version")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -404,32 +407,34 @@ fn tool_available(name: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn sevenzip_cmd() -> &'static str {
-    // 0 = unresolved, 1 = 7zz, 2 = 7z
-    static CHOICE: AtomicU8 = AtomicU8::new(0);
-    match CHOICE.load(Ordering::Relaxed) {
-        1 => "7zz",
-        2 => "7z",
-        _ => {
-            (if std::process::Command::new("7zz")
-                .arg("i")
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-                .is_ok()
-            {
-                CHOICE.store(1, Ordering::Relaxed);
-                "7zz"
-            } else {
-                CHOICE.store(2, Ordering::Relaxed);
-                "7z"
-            }) as _
-        }
-    }
+fn sevenzip_cmd() -> Option<std::path::PathBuf> {
+    static CHOICE: OnceLock<Option<std::path::PathBuf>> = OnceLock::new();
+    CHOICE
+        .get_or_init(|| {
+            for name in ["7zz", "7z", "7za", "7zr"] {
+                let Some(path) = crate::tool_paths::resolve(name) else {
+                    continue;
+                };
+                if std::process::Command::new(&path)
+                    .arg("i")
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status()
+                    .is_ok()
+                {
+                    return Some(path);
+                }
+            }
+            None
+        })
+        .clone()
 }
 
 pub(crate) fn run_7z(src: &Path, out: &Path) -> bool {
-    std::process::Command::new(sevenzip_cmd())
+    let Some(command) = sevenzip_cmd() else {
+        return false;
+    };
+    std::process::Command::new(command)
         .args(["x", "-y", &format!("-o{}", out.display()), "--"])
         .arg(src)
         .stdout(std::process::Stdio::null())
@@ -445,7 +450,16 @@ struct InnoExtractResult {
 }
 
 fn run_innoextract(src: &Path, out: &Path) -> InnoExtractResult {
-    match std::process::Command::new("innoextract")
+    let Some(command) = crate::tool_paths::resolve("innoextract") else {
+        return InnoExtractResult {
+            extracted: false,
+            diagnostics: vec![InnoExtractDiagnostic {
+                kind: InnoExtractDiagnosticKind::GenericFailure,
+                message: "failed to run innoextract: executable not found".to_string(),
+            }],
+        };
+    };
+    match std::process::Command::new(command)
         .args(["--extract", "--output-dir"])
         .arg(out)
         .arg(src)

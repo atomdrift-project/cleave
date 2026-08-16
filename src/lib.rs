@@ -41,6 +41,7 @@ pub mod test_rules;
 #[cfg(test)]
 /// Test module for rule filters.
 pub mod test_rules_filters_test;
+mod tool_paths;
 pub mod traits_repo;
 mod upx;
 pub(crate) mod validation_controls;

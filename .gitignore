@@ -69,6 +69,7 @@ tools/trait-basher/trait-basher-debug
 tools/trait-basher/.gocache/
 tools/yara-update/yara-update
 tools/manifest-gen/manifest-gen
+tools/manifest-gen/__pycache__/
 
 **/dist/
 **/blob/

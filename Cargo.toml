@@ -1,6 +1,6 @@
 [package]
 name = "cleave"
-version = "2.7.2"
+version = "2.8.0-beta.0"
 edition = "2024"
 # support current + two older releases
 rust-version = "1.94"
@@ -367,4 +367,3 @@ wasmtime = { git = "https://github.com/tstromberg/wasmtime.git", branch = "freeb
 # resolution, not just for the fix. Remove once a release carries it.
 tree-sitter = { git = "https://github.com/tree-sitter/tree-sitter", rev = "963b5a5a971021359cf091a63d4f1286bc319643" }
 tree-sitter-language = { git = "https://github.com/tree-sitter/tree-sitter", rev = "963b5a5a971021359cf091a63d4f1286bc319643" }
-

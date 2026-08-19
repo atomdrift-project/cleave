@@ -390,7 +390,7 @@ mod tests {
             good.path().join("good.yaml"),
             r#"
 defaults:
-  for: [all]
+  for: [binaries, scripts, source, manifests, documents, media, data, archives]
 
 traits:
   - id: "test/simple::basic"

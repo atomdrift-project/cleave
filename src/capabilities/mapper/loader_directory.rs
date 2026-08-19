@@ -95,6 +95,8 @@ fn push_parsing_warning(
 ) {
     if warning.starts_with("Unknown file type") {
         warnings.push_id("unknown-file-type", format!("{path_str}: {warning}"));
+    } else if warning.contains("for: [all] is not allowed") {
+        warnings.push_id("for-all", format!("{path_str}: {warning}"));
     } else if warning.starts_with("Invalid file type") {
         warnings.push_id("invalid-file-type", format!("{path_str}: {warning}"));
     } else if warning.contains("regex pattern exceeds") {
@@ -3870,7 +3872,7 @@ impl super::CapabilityMapper {
                     "   Enumerating many types is fragile and hard to maintain — use a named group:"
                 );
                 eprintln!(
-                    "   binaries, scripts, source, manifests, documents, media, data, or all\n"
+                    "   binaries, scripts, source, manifests, documents, media, data, or archives\n"
                 );
                 for (id, count, suggestion, is_composite) in &excessive_for {
                     let source = rule_source_files

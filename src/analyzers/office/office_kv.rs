@@ -56,7 +56,7 @@ use std::path::Path;
 pub(crate) fn extract_office_kv(path: &Path, data: &[u8]) -> Option<Value> {
     let file_type = crate::analyzers::detect_file_type_from_data(path, data);
     match file_type {
-        FileType::OleDoc => {
+        FileType::OleDoc | FileType::Msi => {
             let doc = ole2::parse_ole2(data).ok()?;
             Some(build_ole_kv(&doc))
         }

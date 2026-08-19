@@ -1467,7 +1467,8 @@ pub(crate) fn find_none_only_with_proximity(composite_rules: &[CompositeTrait]) 
 /// no single named group expresses, and forcing a group there over-broadens coverage.
 /// Nine or more almost always maps to an existing group and should use it.
 ///
-/// Traits with `for: [all]` are exempt — they already use the broadest specifier.
+/// Traits that already use the broadest expressible named-group union are exempt —
+/// listing every member type again would only restate the groups.
 ///
 /// Returns: `Vec<(id, count, suggestion, is_composite)>`
 #[must_use]
@@ -1483,7 +1484,10 @@ pub(crate) fn find_excessive_file_types(
         FileType::Pe,
         FileType::Class,
         FileType::Pyc,
+        FileType::Beam,
         FileType::Wasm,
+        FileType::Dex,
+        FileType::StaticLib,
     ];
     let scripts: &[FileType] = &[
         FileType::Shell,
@@ -1593,10 +1597,10 @@ pub(crate) fn find_excessive_file_types(
         true
     };
 
-    // Only called when is_group_expressible returned false, so types contain at least one
-    // member that doesn't belong to any named group — always suggest [all] or named groups.
+    // Only called when is_group_expressible returned false — suggest combining
+    // named groups rather than listing every type (or the rejected `for: [all]`).
     let suggest = |_types: &[FileType]| -> &'static str {
-        "use `for: [all]` or combine named groups (binaries, scripts, source, manifests, documents, media, data, archives)"
+        "combine named groups (binaries, scripts, source, manifests, documents, media, data, archives)"
     };
 
     let mut violations = Vec::new();

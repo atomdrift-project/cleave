@@ -2408,9 +2408,9 @@ impl Condition {
     /// The `query:` string on a live tree-sitter condition, if any.
     pub(crate) fn ast_query_text(&self) -> Option<&str> {
         match self {
-            Self::TreeSitter(TreeSitterQuery {
-                query: Some(q), ..
-            }) if !q.is_empty() => Some(q.as_str()),
+            Self::TreeSitter(TreeSitterQuery { query: Some(q), .. }) if !q.is_empty() => {
+                Some(q.as_str())
+            }
             _ => None,
         }
     }
@@ -2634,12 +2634,10 @@ impl Condition {
         let is_binary = matches!(file_type, FileType::Elf | FileType::Macho | FileType::Pe);
 
         match self {
-            // Section analysis is binary-only
-            Condition::Section(SectionQuery { .. }) => is_binary,
-
-            // Filefacts resolves syscalls from raw `syscall`/`svc` sites on
-            // PE/ELF/Mach-O. Source members never populate `report.syscalls`.
-            Condition::Syscall { .. } => is_binary,
+            // Section analysis and syscalls are binary-only. Filefacts
+            // resolves syscalls from raw `syscall`/`svc` sites on
+            // PE/ELF/Mach-O; source members never populate `report.syscalls`.
+            Condition::Section(SectionQuery { .. }) | Condition::Syscall { .. } => is_binary,
 
             // AST-backed searches require source code support
             Condition::TreeSitter(TreeSitterQuery { .. })

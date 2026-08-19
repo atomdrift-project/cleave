@@ -72,7 +72,9 @@ typedef unsigned char uint8_t;
 #[test]
 fn test_string_condition_matches_c_string_literals() {
     let temp_dir = TempDir::new().unwrap();
-    let c_path = temp_dir.path().join("test.c");
+    // Not `test.c`: that filename fires `c-source-test-file`, and
+    // `http-ip-url-source-literal` unless-excludes the whole testing harness.
+    let c_path = temp_dir.path().join("connect.c");
 
     // C file with IP address in a string literal (should be extracted by AST)
     let c_content = r#"#include <stdio.h>

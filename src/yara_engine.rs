@@ -1231,12 +1231,14 @@ impl YaraEngine {
                 (bucket.clone(), started.elapsed().as_millis() as u64, result)
             })
         };
-        let all_raw: Vec<(String, u64, Result<Vec<RawRule>>)> =
-            if data.len() < tier_parallel_min_bytes() {
-                buckets_to_scan.iter().filter_map(scan_one).collect()
-            } else {
-                buckets_to_scan.par_iter().filter_map(scan_one).collect()
-            };
+        let all_raw: Vec<(String, u64, Result<Vec<RawRule>>)> = if data.len()
+            < tier_parallel_min_bytes()
+            || !crate::rayon_nest::inner_work_parallel()
+        {
+            buckets_to_scan.iter().filter_map(scan_one).collect()
+        } else {
+            buckets_to_scan.par_iter().filter_map(scan_one).collect()
+        };
 
         let mut yara_matches = Vec::new();
         let mut inline_results: HashMap<String, Vec<Evidence>> = HashMap::new();

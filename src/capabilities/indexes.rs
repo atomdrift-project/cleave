@@ -678,6 +678,20 @@ pub(crate) struct StringMatchIndex {
     /// Set of trait indices with exact patterns (for quick lookup)
     exact_trait_indices: FxHashSet<usize>,
 
+    /// Exact needles as a substring automaton. Used only by the source
+    /// raw-haystack prefilter. `eval_raw` `exact:` is per-line equality, so
+    /// "needle appears somewhere" is a conservative skip: a needle absent
+    /// from the file cannot equal a line. The extracted-string path still
+    /// uses `exact_patterns` HashMap lookup — do not feed this AC into that
+    /// path or PE exact traits will false-positive on substrings.
+    exact_automaton: Option<AhoCorasick>,
+    /// AC pattern index → trait indices for `exact_automaton`.
+    exact_ac_to_traits: Vec<Vec<usize>>,
+    /// Case-insensitive exact needles as a substring automaton (same role).
+    ci_exact_automaton: Option<AhoCorasick>,
+    /// AC pattern index → trait indices for `ci_exact_automaton`.
+    ci_exact_ac_to_traits: Vec<Vec<usize>>,
+
     // ===== Kept for regex literal pre-filtering (unchanged) =====
     /// Aho-Corasick automaton for regex literal prefixes (for pre-filtering)
     regex_literal_automaton: Option<AhoCorasick>,
@@ -939,6 +953,10 @@ impl StringMatchIndex {
         };
 
         // Build regex literal automaton for pre-filtering (kept as Aho-Corasick)
+        // Stay case-sensitive. `ascii_case_insensitive(true)` here reproduced
+        // the B1h/B1s Zencoder cascade (lost microsoft-corp-marker / many-imports).
+        // Source `type: text` regex is not skipped by this automaton (exact-only
+        // raw-haystack prefilter); CI source regexes still run through eval_raw.
         let regex_literal_automaton = if !regex_literals.is_empty() {
             AhoCorasick::builder()
                 .kind(ac_kind())
@@ -964,6 +982,51 @@ impl StringMatchIndex {
             .filter(|idx| !traits_with_literal.contains(idx))
             .collect();
 
+        // Source raw-haystack prefilter: exact needles as substring ACs.
+        // HashMap iteration order only has to match `*_ac_to_traits`.
+        let (exact_automaton, exact_ac_to_traits) = {
+            let mut patterns = Vec::with_capacity(exact_patterns.len());
+            let mut to_traits = Vec::with_capacity(exact_patterns.len());
+            for (pat, traits) in &exact_patterns {
+                if pat.is_empty() {
+                    continue;
+                }
+                patterns.push(pat.as_str());
+                to_traits.push(traits.clone());
+            }
+            let automaton = if patterns.is_empty() {
+                None
+            } else {
+                AhoCorasick::builder()
+                    .kind(ac_kind())
+                    .ascii_case_insensitive(false)
+                    .build(&patterns)
+                    .ok()
+            };
+            (automaton, to_traits)
+        };
+        let (ci_exact_automaton, ci_exact_ac_to_traits) = {
+            let mut patterns = Vec::with_capacity(ci_exact_patterns.len());
+            let mut to_traits = Vec::with_capacity(ci_exact_patterns.len());
+            for (lower, (_orig, traits)) in &ci_exact_patterns {
+                if lower.is_empty() {
+                    continue;
+                }
+                patterns.push(lower.as_str());
+                to_traits.push(traits.clone());
+            }
+            let automaton = if patterns.is_empty() {
+                None
+            } else {
+                AhoCorasick::builder()
+                    .kind(ac_kind())
+                    .ascii_case_insensitive(true)
+                    .build(&patterns)
+                    .ok()
+            };
+            (automaton, to_traits)
+        };
+
         let index = Self {
             exact_patterns,
             ci_exact_patterns,
@@ -975,6 +1038,10 @@ impl StringMatchIndex {
             ci_substr_to_traits,
             substr_trait_indices,
             exact_trait_indices,
+            exact_automaton,
+            exact_ac_to_traits,
+            ci_exact_automaton,
+            ci_exact_ac_to_traits,
             regex_literal_automaton,
             regex_literal_to_traits,
             regex_trait_indices,
@@ -1272,6 +1339,64 @@ impl StringMatchIndex {
         candidates
     }
 
+    /// Same floor as source `eval_raw` windowing. Below it, extra AC work
+    /// never pays (S2n: recording offsets on <16 KiB lost wall). Above the
+    /// cap, do not scan 61–480 MiB members (B1k).
+    pub(crate) const MIN_SOURCE_TEXT_PREFILTER_BYTES: usize = 16 * 1024;
+    pub(crate) const MAX_SOURCE_TEXT_PREFILTER_BYTES: usize = 3 << 20;
+
+    /// Presence scan of exact / substr / regex-prefix needles in one UTF-8
+    /// source file. `None` means "do not enable string-index skips" — size
+    /// cap, invalid UTF-8, or a required exact AC failed to build.
+    ///
+    /// Exact needles use the dedicated substring ACs, not `exact_patterns`
+    /// HashMap lookup: the haystack is the whole file. Containment is only
+    /// a skip predicate (`eval_raw` exact is per-line equality).
+    pub(crate) fn find_matches_in_raw_source(
+        &self,
+        binary_data: &[u8],
+    ) -> Option<(FxHashSet<usize>, FxHashSet<usize>)> {
+        if binary_data.len() < Self::MIN_SOURCE_TEXT_PREFILTER_BYTES
+            || binary_data.len() > Self::MAX_SOURCE_TEXT_PREFILTER_BYTES
+        {
+            return None;
+        }
+        let haystack = std::str::from_utf8(binary_data).ok()?;
+        if !self.exact_patterns.is_empty() && self.exact_automaton.is_none() {
+            return None;
+        }
+        if !self.ci_exact_patterns.is_empty() && self.ci_exact_automaton.is_none() {
+            return None;
+        }
+        Some(self.find_matches_in_raw(haystack))
+    }
+
+    fn find_matches_in_raw(&self, haystack: &str) -> (FxHashSet<usize>, FxHashSet<usize>) {
+        let mut matched = FxHashSet::default();
+
+        // Exact-only. Substr/regex `type: text` stay ungated here: regex/word
+        // already have the raw-content atom gate, and extra whole-file AC
+        // scans of those automata were a wash on dscodegpt/S2. Exact
+        // `eval_raw` is a per-line walk; skipping absent PE needles is the
+        // skip this prefilter is for. Second tuple slot is unused (regex
+        // candidates are not produced on this path).
+        if let Some(ref ac) = self.exact_automaton {
+            for mat in ac.find_overlapping_iter(haystack) {
+                if let Some(traits) = self.exact_ac_to_traits.get(mat.pattern().as_usize()) {
+                    matched.extend(traits.iter().copied());
+                }
+            }
+        }
+        if let Some(ref ac) = self.ci_exact_automaton {
+            for mat in ac.find_overlapping_iter(haystack) {
+                if let Some(traits) = self.ci_exact_ac_to_traits.get(mat.pattern().as_usize()) {
+                    matched.extend(traits.iter().copied());
+                }
+            }
+        }
+        (matched, FxHashSet::default())
+    }
+
     /// Check if a trait has a regex string pattern
     pub(crate) fn is_regex_trait(&self, trait_idx: usize) -> bool {
         self.regex_trait_indices.contains(&trait_idx)
@@ -1311,6 +1436,88 @@ pub(crate) struct RawContentRegexIndex {
     indexed_traits: FxHashSet<usize>,
     /// Total number of traits with raw content regex patterns
     pub(crate) total_patterns: usize,
+}
+
+/// Presence set plus reusable atom-hit offsets from one raw-content gate pass.
+///
+/// Offsets are complete for a trait only when that trait is in `atom_offsets`.
+/// Overflowed / no-literal / unrecorded traits are absent — `eval_raw` must
+/// full-scan those. Decoded-layer candidate unions must not write offsets
+/// (those positions are not in the raw file).
+#[derive(Clone, Debug, Default)]
+pub(crate) struct RawGateHits {
+    pub traits: FxHashSet<usize>,
+    pub atom_offsets: FxHashMap<usize, Vec<u32>>,
+}
+
+/// First-N atom starts per trait during a gate scan. Hitting the cap drops
+/// the trait (common atoms are cheaper as one full `eval_raw` than as
+/// hundreds of windows).
+const MAX_ATOM_OFFSETS: usize = 64;
+
+struct OffsetRecorder {
+    map: FxHashMap<usize, Vec<u32>>,
+    overflowed: FxHashSet<usize>,
+}
+
+impl OffsetRecorder {
+    fn new() -> Self {
+        Self {
+            map: FxHashMap::default(),
+            overflowed: FxHashSet::default(),
+        }
+    }
+
+    fn overflowed(&self, trait_idx: usize) -> bool {
+        self.overflowed.contains(&trait_idx)
+    }
+
+    fn hit_traits(&mut self, traits: &[usize], offset: u32) {
+        for &t in traits {
+            self.hit(t, offset);
+        }
+    }
+
+    fn hit(&mut self, trait_idx: usize, offset: u32) {
+        if self.overflowed.contains(&trait_idx) {
+            return;
+        }
+        let entry = self.map.entry(trait_idx).or_default();
+        if entry.last() == Some(&offset) {
+            return;
+        }
+        if entry.len() >= MAX_ATOM_OFFSETS {
+            self.map.remove(&trait_idx);
+            self.overflowed.insert(trait_idx);
+            return;
+        }
+        entry.push(offset);
+    }
+
+    fn finish(mut self) -> FxHashMap<usize, Vec<u32>> {
+        for v in self.map.values_mut() {
+            v.sort_unstable();
+            v.dedup();
+        }
+        self.map
+    }
+}
+
+fn record_mapped(
+    rec: &mut OffsetRecorder,
+    mapped: &[usize],
+    via_patterns: Option<&[Vec<usize>]>,
+    offset: u32,
+) {
+    if let Some(pattern_to_traits) = via_patterns {
+        for &pattern_idx in mapped {
+            if let Some(traits) = pattern_to_traits.get(pattern_idx) {
+                rec.hit_traits(traits, offset);
+            }
+        }
+    } else {
+        rec.hit_traits(mapped, offset);
+    }
 }
 
 /// Regex set for a specific file type
@@ -1451,7 +1658,34 @@ impl FileTypeRegexSet {
         out
     }
 
-    fn find_matches(&self, content: &[u8]) -> Vec<usize> {
+    /// Merge word / substr / type:raw verify / no-literal / type:text verify
+    /// into `(traits, verified)`. Words and type:raw hits are already decided;
+    /// substr atom hits are confirmed or dropped by `verify_text_regex_candidates`.
+    fn assemble_matches(
+        &self,
+        words: FxHashSet<usize>,
+        substr: FxHashSet<usize>,
+        literal_candidates: &FxHashSet<usize>,
+        no_lit: FxHashSet<usize>,
+        content: &[u8],
+    ) -> (FxHashSet<usize>, FxHashSet<usize>) {
+        let verified = words;
+        let mut traits = verified.clone();
+        traits.extend(substr);
+
+        let mut raw_hits = FxHashSet::default();
+        self.verify_literal_candidates(literal_candidates, &mut raw_hits, content);
+        traits.extend(&raw_hits);
+        // type:raw verifiers use `compile_engine_mirrored`, not LeanRegex+(?m).
+        // They stay candidates; marking them verified made `eval_raw` skip a
+        // disagreeing second scan.
+
+        traits.extend(&no_lit);
+
+        (traits, verified)
+    }
+
+    fn find_matches_classified(&self, content: &[u8]) -> (FxHashSet<usize>, FxHashSet<usize>) {
         const PARALLEL_MIN_BYTES: usize = 4 << 20;
         // Below this, per-atom SIMD memmem beats an AC scan and is exact
         // (per-atom search can't shadow overlapping occurrences the way a
@@ -1460,13 +1694,12 @@ impl FileTypeRegexSet {
         const MEMMEM_MAX_BYTES: usize = 256 << 10;
 
         if content.len() <= MEMMEM_MAX_BYTES {
-            return self.find_matches_memmem(content);
+            return self.find_matches_memmem_classified(content);
         }
 
-        let mut matched_traits: FxHashSet<usize> = FxHashSet::default();
         let mut literal_candidates: FxHashSet<usize> = FxHashSet::default();
 
-        if content.len() >= PARALLEL_MIN_BYTES {
+        if content.len() >= PARALLEL_MIN_BYTES && crate::rayon_nest::inner_work_parallel() {
             let (((cand_cs, cand_ci), (word_cs, word_ci)), ((sub_cs, sub_ci), no_lit)) =
                 rayon::join(
                     || {
@@ -1535,12 +1768,11 @@ impl FileTypeRegexSet {
                 );
             literal_candidates.extend(cand_cs);
             literal_candidates.extend(cand_ci);
-            for s in [word_cs, word_ci, sub_cs, sub_ci] {
-                matched_traits.extend(s);
-            }
-            self.verify_literal_candidates(&literal_candidates, &mut matched_traits, content);
-            matched_traits.extend(no_lit);
-            return matched_traits.into_iter().collect();
+            let mut words = word_cs;
+            words.extend(word_ci);
+            let mut substr = sub_cs;
+            substr.extend(sub_ci);
+            return self.assemble_matches(words, substr, &literal_candidates, no_lit, content);
         }
 
         // Step 1a/1b: patterns with matching case-sensitive / case-insensitive
@@ -1558,25 +1790,25 @@ impl FileTypeRegexSet {
         ));
 
         // Step 1c: word boundary patterns via Aho-Corasick + cheap byte checks
-        matched_traits.extend(Self::ac_word_boundary_pass(
+        let mut words = Self::ac_word_boundary_pass(
             self.cs_word_automaton.as_ref(),
             &self.cs_word_to_traits,
             content,
-        ));
-        matched_traits.extend(Self::ac_word_boundary_pass(
+        );
+        words.extend(Self::ac_word_boundary_pass(
             self.ci_word_automaton.as_ref(),
             &self.ci_word_to_traits,
             content,
         ));
 
-        // Step 1d: substring atoms for `type: text` traits — candidate-only, no
-        // boundary check, no in-index regex verify (eval_raw's PikeVM verifies).
-        matched_traits.extend(Self::ac_first_occurrence_pass(
+        // Step 1d: substring atoms for `type: text` traits. Atom hit is
+        // candidate-only until `assemble_matches` verifies the real regex.
+        let mut substr = Self::ac_first_occurrence_pass(
             self.cs_substr_automaton.as_ref(),
             &self.cs_substr_to_traits,
             content,
-        ));
-        matched_traits.extend(Self::ac_first_occurrence_pass(
+        );
+        substr.extend(Self::ac_first_occurrence_pass(
             self.ci_substr_automaton.as_ref(),
             &self.ci_substr_to_traits,
             content,
@@ -1588,10 +1820,277 @@ impl FileTypeRegexSet {
             self.patterns_without_literals.len()
         );
 
-        self.verify_literal_candidates(&literal_candidates, &mut matched_traits, content);
-        matched_traits.extend(self.no_literal_pass(content));
+        self.assemble_matches(
+            words,
+            substr,
+            &literal_candidates,
+            self.no_literal_pass(content),
+            content,
+        )
+    }
 
-        matched_traits.into_iter().collect()
+    /// Same presence semantics as [`Self::find_matches`], but records every
+    /// atom start (up to [`MAX_ATOM_OFFSETS`] per trait) for windowed
+    /// `eval_raw`. Serial only — the gate's 3 MiB cap never hits the 4 MiB
+    /// parallel join, and chunked AC would need offset rebasing.
+    fn find_matches_recording(
+        &self,
+        content: &[u8],
+        rec: &mut OffsetRecorder,
+    ) -> (FxHashSet<usize>, FxHashSet<usize>) {
+        if content.len() <= 256 << 10 {
+            return self.find_matches_memmem_recording(content, rec);
+        }
+
+        let mut words: FxHashSet<usize> = FxHashSet::default();
+        let mut substr: FxHashSet<usize> = FxHashSet::default();
+        let mut literal_candidates: FxHashSet<usize> = FxHashSet::default();
+
+        if let Some(ac) = self.cs_literal_prefilter.as_ref() {
+            literal_candidates.extend(Self::ac_record_offsets(
+                ac,
+                &self.cs_literal_to_patterns,
+                content,
+                rec,
+                Some(&self.pattern_to_traits),
+            ));
+        }
+        if let Some(ac) = self.ci_literal_prefilter.as_ref() {
+            literal_candidates.extend(Self::ac_record_offsets(
+                ac,
+                &self.ci_literal_to_patterns,
+                content,
+                rec,
+                Some(&self.pattern_to_traits),
+            ));
+        }
+        if let Some(ac) = self.cs_word_automaton.as_ref() {
+            words.extend(Self::ac_record_word_offsets(
+                ac,
+                &self.cs_word_to_traits,
+                content,
+                rec,
+            ));
+        }
+        if let Some(ac) = self.ci_word_automaton.as_ref() {
+            words.extend(Self::ac_record_word_offsets(
+                ac,
+                &self.ci_word_to_traits,
+                content,
+                rec,
+            ));
+        }
+        if let Some(ac) = self.cs_substr_automaton.as_ref() {
+            substr.extend(Self::ac_record_offsets(
+                ac,
+                &self.cs_substr_to_traits,
+                content,
+                rec,
+                None,
+            ));
+        }
+        if let Some(ac) = self.ci_substr_automaton.as_ref() {
+            substr.extend(Self::ac_record_offsets(
+                ac,
+                &self.ci_substr_to_traits,
+                content,
+                rec,
+                None,
+            ));
+        }
+
+        self.assemble_matches(
+            words,
+            substr,
+            &literal_candidates,
+            self.no_literal_pass(content),
+            content,
+        )
+    }
+
+    fn ac_record_offsets(
+        ac: &AhoCorasick,
+        index_map: &[Vec<usize>],
+        content: &[u8],
+        rec: &mut OffsetRecorder,
+        via_patterns: Option<&[Vec<usize>]>,
+    ) -> FxHashSet<usize> {
+        let mut out = FxHashSet::default();
+        for mat in ac.find_overlapping_iter(content) {
+            let idx = mat.pattern().as_usize();
+            let Some(mapped) = index_map.get(idx) else {
+                continue;
+            };
+            out.extend(mapped.iter().copied());
+            record_mapped(rec, mapped, via_patterns, mat.start() as u32);
+        }
+        out
+    }
+
+    fn ac_record_word_offsets(
+        ac: &AhoCorasick,
+        word_to_traits: &[Vec<usize>],
+        content: &[u8],
+        rec: &mut OffsetRecorder,
+    ) -> FxHashSet<usize> {
+        let mut out = FxHashSet::default();
+        let content_len = content.len();
+        for mat in ac.find_overlapping_iter(content) {
+            let idx = mat.pattern().as_usize();
+            let start = mat.start();
+            let end = mat.end();
+            let before_ok = start == 0
+                || !content[start - 1].is_ascii_alphanumeric() && content[start - 1] != b'_';
+            let after_ok =
+                end == content_len || !content[end].is_ascii_alphanumeric() && content[end] != b'_';
+            if before_ok
+                && after_ok
+                && let Some(trait_indices) = word_to_traits.get(idx)
+            {
+                out.extend(trait_indices.iter().copied());
+                rec.hit_traits(trait_indices, start as u32);
+            }
+        }
+        out
+    }
+
+    fn find_matches_memmem_recording(
+        &self,
+        content: &[u8],
+        rec: &mut OffsetRecorder,
+    ) -> (FxHashSet<usize>, FxHashSet<usize>) {
+        use crate::composite_rules::condition::cached_finder;
+
+        let mut words: FxHashSet<usize> = FxHashSet::default();
+        let mut substr: FxHashSet<usize> = FxHashSet::default();
+        let mut literal_candidates: FxHashSet<usize> = FxHashSet::default();
+
+        let lowered: Option<Vec<u8>> = (!self.ci_literal_atoms.is_empty()
+            || !self.ci_word_atoms.is_empty()
+            || !self.ci_substr_atoms.is_empty())
+        .then(|| content.to_ascii_lowercase());
+
+        let record_finds = |atoms: &[String],
+                            map: &[Vec<usize>],
+                            haystack: &[u8],
+                            rec: &mut OffsetRecorder,
+                            into: &mut FxHashSet<usize>,
+                            via_patterns: Option<&[Vec<usize>]>| {
+            for (i, atom) in atoms.iter().enumerate() {
+                let Some(mapped) = map.get(i) else {
+                    continue;
+                };
+                let mut any = false;
+                for start in cached_finder(atom).find_iter(haystack) {
+                    record_mapped(rec, mapped, via_patterns, start as u32);
+                    any = true;
+                    let done = if let Some(pt) = via_patterns {
+                        mapped.iter().all(|&p| {
+                            pt.get(p)
+                                .is_none_or(|ts| ts.iter().all(|&t| rec.overflowed(t)))
+                        })
+                    } else {
+                        mapped.iter().all(|&t| rec.overflowed(t))
+                    };
+                    if done {
+                        break;
+                    }
+                }
+                if any {
+                    into.extend(mapped.iter().copied());
+                }
+            }
+        };
+
+        record_finds(
+            &self.cs_literal_atoms,
+            &self.cs_literal_to_patterns,
+            content,
+            rec,
+            &mut literal_candidates,
+            Some(&self.pattern_to_traits),
+        );
+        if let Some(lowered) = lowered.as_deref() {
+            record_finds(
+                &self.ci_literal_atoms,
+                &self.ci_literal_to_patterns,
+                lowered,
+                rec,
+                &mut literal_candidates,
+                Some(&self.pattern_to_traits),
+            );
+        }
+
+        let word_pass = |atoms: &[String],
+                         word_to_traits: &[Vec<usize>],
+                         haystack: &[u8],
+                         rec: &mut OffsetRecorder,
+                         matched: &mut FxHashSet<usize>| {
+            let content_len = haystack.len();
+            for (i, atom) in atoms.iter().enumerate() {
+                let Some(trait_indices) = word_to_traits.get(i) else {
+                    continue;
+                };
+                for start in cached_finder(atom).find_iter(haystack) {
+                    let end = start + atom.len();
+                    let before_ok = start == 0
+                        || !haystack[start - 1].is_ascii_alphanumeric()
+                            && haystack[start - 1] != b'_';
+                    let after_ok = end == content_len
+                        || !haystack[end].is_ascii_alphanumeric() && haystack[end] != b'_';
+                    if before_ok && after_ok {
+                        rec.hit_traits(trait_indices, start as u32);
+                        matched.extend(trait_indices.iter().copied());
+                        if trait_indices.iter().all(|&t| rec.overflowed(t)) {
+                            break;
+                        }
+                    }
+                }
+            }
+        };
+        word_pass(
+            &self.cs_word_atoms,
+            &self.cs_word_to_traits,
+            content,
+            rec,
+            &mut words,
+        );
+        if let Some(lowered) = lowered.as_deref() {
+            word_pass(
+                &self.ci_word_atoms,
+                &self.ci_word_to_traits,
+                lowered,
+                rec,
+                &mut words,
+            );
+        }
+
+        record_finds(
+            &self.cs_substr_atoms,
+            &self.cs_substr_to_traits,
+            content,
+            rec,
+            &mut substr,
+            None,
+        );
+        if let Some(lowered) = lowered.as_deref() {
+            record_finds(
+                &self.ci_substr_atoms,
+                &self.ci_substr_to_traits,
+                lowered,
+                rec,
+                &mut substr,
+                None,
+            );
+        }
+
+        self.assemble_matches(
+            words,
+            substr,
+            &literal_candidates,
+            self.no_literal_pass(content),
+            content,
+        )
     }
 
     /// One Aho-Corasick pass collecting the mapped indices of every distinct
@@ -1628,7 +2127,7 @@ impl FileTypeRegexSet {
         let Some(ac) = ac else {
             return FxHashSet::default();
         };
-        if content.len() >= 2 * Self::AC_CHUNK_BYTES {
+        if content.len() >= 2 * Self::AC_CHUNK_BYTES && crate::rayon_nest::inner_work_parallel() {
             use rayon::prelude::*;
             return Self::ac_chunk_ranges(content.len(), ac.max_pattern_len().saturating_sub(1))
                 .par_iter()
@@ -1680,7 +2179,7 @@ impl FileTypeRegexSet {
         let Some(ac) = ac else {
             return FxHashSet::default();
         };
-        if content.len() >= 2 * Self::AC_CHUNK_BYTES {
+        if content.len() >= 2 * Self::AC_CHUNK_BYTES && crate::rayon_nest::inner_work_parallel() {
             use rayon::prelude::*;
             return Self::ac_chunk_ranges(content.len(), ac.max_pattern_len().saturating_sub(1))
                 .par_iter()
@@ -1742,10 +2241,14 @@ impl FileTypeRegexSet {
     /// exactly (same atom sets, same word-boundary rule, same verify and
     /// no-literal steps), but every atom is searched independently, so one
     /// atom's occurrence can never shadow another's.
-    fn find_matches_memmem(&self, content: &[u8]) -> Vec<usize> {
+    fn find_matches_memmem_classified(
+        &self,
+        content: &[u8],
+    ) -> (FxHashSet<usize>, FxHashSet<usize>) {
         use crate::composite_rules::condition::cached_finder;
 
-        let mut matched_traits: FxHashSet<usize> = FxHashSet::default();
+        let mut words: FxHashSet<usize> = FxHashSet::default();
+        let mut substr: FxHashSet<usize> = FxHashSet::default();
         let mut literal_candidates: FxHashSet<usize> = FxHashSet::default();
 
         // One ASCII-lowercased copy serves every ci atom (offsets preserved).
@@ -1797,14 +2300,14 @@ impl FileTypeRegexSet {
             &self.cs_word_atoms,
             &self.cs_word_to_traits,
             content,
-            &mut matched_traits,
+            &mut words,
         );
         if let Some(lowered) = lowered.as_deref() {
             word_pass(
                 &self.ci_word_atoms,
                 &self.ci_word_to_traits,
                 lowered,
-                &mut matched_traits,
+                &mut words,
             );
         }
 
@@ -1812,7 +2315,7 @@ impl FileTypeRegexSet {
             if cached_finder(atom).find(content).is_some()
                 && let Some(trait_indices) = self.cs_substr_to_traits.get(i)
             {
-                matched_traits.extend(trait_indices.iter().copied());
+                substr.extend(trait_indices.iter().copied());
             }
         }
         if let Some(lowered) = lowered.as_deref() {
@@ -1820,14 +2323,18 @@ impl FileTypeRegexSet {
                 if cached_finder(atom).find(lowered).is_some()
                     && let Some(trait_indices) = self.ci_substr_to_traits.get(i)
                 {
-                    matched_traits.extend(trait_indices.iter().copied());
+                    substr.extend(trait_indices.iter().copied());
                 }
             }
         }
 
-        self.verify_literal_candidates(&literal_candidates, &mut matched_traits, content);
-        matched_traits.extend(self.no_literal_pass(content));
-        matched_traits.into_iter().collect()
+        self.assemble_matches(
+            words,
+            substr,
+            &literal_candidates,
+            self.no_literal_pass(content),
+            content,
+        )
     }
 
     /// Step 2: run individual regexes for candidate patterns, folding their
@@ -1875,7 +2382,10 @@ impl FileTypeRegexSet {
             }
         };
 
-        if content.len() >= PARALLEL_MIN_BYTES && literal_candidates.len() > 1 {
+        if content.len() >= PARALLEL_MIN_BYTES
+            && literal_candidates.len() > 1
+            && crate::rayon_nest::inner_work_parallel()
+        {
             use rayon::prelude::*;
             let hits: Vec<&[usize]> = literal_candidates.par_iter().filter_map(verify).collect();
             matched_traits.extend(hits.into_iter().flatten().copied());
@@ -1901,21 +2411,23 @@ impl FileTypeRegexSet {
         if self.no_literal_regexes.is_empty() {
             return out;
         }
-        let matched: Vec<usize> =
-            if content.len() >= PARALLEL_MIN_BYTES && self.no_literal_regexes.len() > 1 {
-                use rayon::prelude::*;
-                self.no_literal_regexes
-                    .par_iter()
-                    .zip(self.no_literal_to_original.par_iter())
-                    .filter_map(|(re, &idx)| re.is_match(content).then_some(idx))
-                    .collect()
-            } else {
-                self.no_literal_regexes
-                    .iter()
-                    .zip(self.no_literal_to_original.iter())
-                    .filter_map(|(re, &idx)| re.is_match(content).then_some(idx))
-                    .collect()
-            };
+        let matched: Vec<usize> = if content.len() >= PARALLEL_MIN_BYTES
+            && self.no_literal_regexes.len() > 1
+            && crate::rayon_nest::inner_work_parallel()
+        {
+            use rayon::prelude::*;
+            self.no_literal_regexes
+                .par_iter()
+                .zip(self.no_literal_to_original.par_iter())
+                .filter_map(|(re, &idx)| re.is_match(content).then_some(idx))
+                .collect()
+        } else {
+            self.no_literal_regexes
+                .iter()
+                .zip(self.no_literal_to_original.iter())
+                .filter_map(|(re, &idx)| re.is_match(content).then_some(idx))
+                .collect()
+        };
         for original_idx in matched {
             if let Some(trait_indices) = self.pattern_to_traits.get(original_idx) {
                 out.extend(trait_indices.iter().copied());
@@ -2550,6 +3062,14 @@ impl RawContentRegexIndex {
         binary_data: &[u8],
         file_type: &RuleFileType,
     ) -> FxHashSet<usize> {
+        self.find_matches_classified(binary_data, file_type).0
+    }
+
+    fn find_matches_classified(
+        &self,
+        binary_data: &[u8],
+        file_type: &RuleFileType,
+    ) -> (FxHashSet<usize>, FxHashSet<usize>) {
         const PARALLEL_MIN_BYTES: usize = 4 << 20;
 
         let sets: Vec<&FileTypeRegexSet> = self
@@ -2563,24 +3083,69 @@ impl RawContentRegexIndex {
             )
             .collect();
 
-        if binary_data.len() >= PARALLEL_MIN_BYTES && sets.len() > 1 {
+        if binary_data.len() >= PARALLEL_MIN_BYTES
+            && sets.len() > 1
+            && crate::rayon_nest::inner_work_parallel()
+        {
             use rayon::prelude::*;
-            return sets
-                .par_iter()
-                .map(|set| set.find_matches(binary_data))
-                .reduce(Vec::new, |mut a, mut b| {
-                    a.append(&mut b);
+            return sets.par_iter().map(|set| set.find_matches_classified(binary_data)).reduce(
+                || (FxHashSet::default(), FxHashSet::default()),
+                |mut a, b| {
+                    a.0.extend(b.0);
+                    a.1.extend(b.1);
                     a
-                })
-                .into_iter()
-                .collect();
+                },
+            );
         }
 
-        let mut matching_traits = FxHashSet::default();
+        let mut traits = FxHashSet::default();
+        let mut verified = FxHashSet::default();
         for set in sets {
-            matching_traits.extend(set.find_matches(binary_data));
+            let (t, v) = set.find_matches_classified(binary_data);
+            traits.extend(t);
+            verified.extend(v);
         }
-        matching_traits
+        (traits, verified)
+    }
+
+    /// Like [`Self::find_matches`], optionally recording atom-hit offsets for
+    /// source-only windowed `eval_raw`. Presence semantics are identical.
+    pub(crate) fn find_matches_detailed(
+        &self,
+        binary_data: &[u8],
+        file_type: &RuleFileType,
+        record_offsets: bool,
+    ) -> RawGateHits {
+        // Windowing is disabled below 16 KiB (see `MIN_HAYSTACK_TO_WINDOW`).
+        // Recording every atom occurrence on the thousands of tiny `.go` /
+        // `.js` members is extra gate work that `eval_raw` would never use.
+        if !record_offsets || binary_data.len() < 16 * 1024 {
+            let (traits, _) = self.find_matches_classified(binary_data, file_type);
+            return RawGateHits {
+                traits,
+                atom_offsets: FxHashMap::default(),
+            };
+        }
+        let sets: Vec<&FileTypeRegexSet> = self
+            .universal
+            .iter()
+            .chain(self.by_file_type.get(file_type))
+            .chain(
+                archive_family_types(file_type)
+                    .iter()
+                    .filter_map(|ft| self.by_file_type.get(ft)),
+            )
+            .collect();
+        let mut rec = OffsetRecorder::new();
+        let mut traits = FxHashSet::default();
+        for set in sets {
+            let (t, _) = set.find_matches_recording(binary_data, &mut rec);
+            traits.extend(t);
+        }
+        RawGateHits {
+            traits,
+            atom_offsets: rec.finish(),
+        }
     }
 
     /// Candidate-only sweep for small secondary haystacks (the decoded string
@@ -3275,6 +3840,65 @@ mod tests {
             "case-insensitive long pattern should match"
         );
     }
+
+    fn make_exact_trait(id: &str, exact: &str) -> TraitDefinition {
+        let mut t = make_substr_trait(id, "unused");
+        t.r#if = Condition::Text(TextQuery {
+            exact: Some(exact.to_string()),
+            ..Default::default()
+        });
+        t
+    }
+
+    #[test]
+    fn raw_source_prefilter_exact_is_substring_not_whole_file() {
+        let traits = vec![
+            make_exact_trait("has-eval", "eval"),
+            make_exact_trait("pe-api", "VirtualAlloc"),
+        ];
+        let index = StringMatchIndex::build(&traits);
+        let mut src = String::from("const x = 1;\neval('x');\n");
+        while src.len() < StringMatchIndex::MIN_SOURCE_TEXT_PREFILTER_BYTES {
+            src.push_str("// pad\n");
+        }
+        let (matched, _regex) = index
+            .find_matches_in_raw_source(src.as_bytes())
+            .expect("UTF-8 source in the prefilter window");
+        assert!(
+            matched.contains(&0),
+            "exact eval is a substring of the file"
+        );
+        assert!(
+            !matched.contains(&1),
+            "absent PE exact must not be a candidate"
+        );
+    }
+
+    #[test]
+    fn raw_source_prefilter_rejects_tiny_huge_and_non_utf8() {
+        let index = StringMatchIndex::build(&[make_exact_trait("eval", "eval")]);
+        assert!(index.find_matches_in_raw_source(&vec![b'x'; 50]).is_none());
+        assert!(
+            index
+                .find_matches_in_raw_source(&vec![
+                    b'x';
+                    StringMatchIndex::MAX_SOURCE_TEXT_PREFILTER_BYTES
+                        + 1
+                ])
+                .is_none()
+        );
+        let mut bad = vec![b'x'; StringMatchIndex::MIN_SOURCE_TEXT_PREFILTER_BYTES];
+        bad[10] = 0xff;
+        assert!(index.find_matches_in_raw_source(&bad).is_none());
+        assert!(
+            index
+                .find_matches_in_raw_source(&vec![
+                    b'x';
+                    StringMatchIndex::MIN_SOURCE_TEXT_PREFILTER_BYTES
+                ])
+                .is_some()
+        );
+    }
 }
 
 #[cfg(test)]
@@ -3307,5 +3931,75 @@ mod gate_repro_tests {
         );
         let miss = index.find_matches(b"nothing relevant here", &RuleFileType::JavaScript);
         assert!(!miss.contains(&0));
+    }
+
+    /// Source-file CSS gate lives on `RawContentRegexIndex`, not the PE
+    /// extracted-string index (that path caused the Zencoder FN).
+    #[test]
+    fn css_font_family_raw_index_gates() {
+        let trait_def = TraitDefinition {
+            id: "css-font-family".to_string(),
+            desc: "x".to_string(),
+            platforms: vec![Platform::All],
+            arch: vec![Arch::All],
+            r#for: vec![RuleFileType::All],
+            r#if: Condition::Text(TextQuery {
+                regex: Some(r"(?i)(^|})[^@{}]{0,80}\{[^}]{0,160}font-family\s*:".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let index = RawContentRegexIndex::build(&[trait_def]);
+        assert!(index.is_indexed_trait(0));
+        assert!(
+            !index
+                .find_matches(b"no css here", &RuleFileType::JavaScript)
+                .contains(&0)
+        );
+        assert!(
+            index
+                .find_matches(b"h1 { font-family: serif }", &RuleFileType::JavaScript)
+                .contains(&0)
+        );
+        assert!(
+            index
+                .find_matches(b"h1 { FONT-FAMILY: serif }", &RuleFileType::JavaScript)
+                .contains(&0)
+        );
+    }
+
+    #[test]
+    fn css_font_family_records_atom_offset_on_source() {
+        let trait_def = TraitDefinition {
+            id: "css-font-family".to_string(),
+            desc: "x".to_string(),
+            platforms: vec![Platform::All],
+            arch: vec![Arch::All],
+            r#for: vec![RuleFileType::All],
+            r#if: Condition::Text(TextQuery {
+                regex: Some(r"(?i)(^|})[^@{}]{0,80}\{[^}]{0,160}font-family\s*:".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let index = RawContentRegexIndex::build(&[trait_def]);
+        let mut content = vec![b'x'; 16 * 1024];
+        let atom_at = content.len();
+        // `(^|})` cannot see `{` across 16 KiB of padding; a preceding `}`
+        // is a real match, not an atom-only candidate.
+        content.extend_from_slice(b"}h1 { font-family: serif }");
+        let hits = index.find_matches_detailed(&content, &RuleFileType::JavaScript, true);
+        assert!(hits.traits.contains(&0));
+        let offs = hits
+            .atom_offsets
+            .get(&0)
+            .expect("source gate records offset");
+        assert_eq!(offs.len(), 1);
+        let start = offs[0] as usize;
+        assert_eq!(&content[start..start + 11], b"font-family");
+        assert_eq!(start, atom_at + 6);
+        let miss = index.find_matches_detailed(b"no css here", &RuleFileType::JavaScript, true);
+        assert!(!miss.traits.contains(&0));
+        assert!(!miss.atom_offsets.contains_key(&0));
     }
 }

@@ -742,15 +742,32 @@ mod tests {
         // Should be able to get RSS on supported platforms
         let rss = current_rss();
 
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        #[cfg(any(
+            target_os = "linux",
+            target_os = "macos",
+            target_os = "freebsd",
+            target_os = "openbsd",
+            target_os = "netbsd",
+            target_os = "illumos",
+            target_os = "solaris",
+            target_os = "windows",
+        ))]
         {
-            assert!(rss.is_some());
-            let rss_bytes = rss.unwrap();
+            let rss_bytes = rss.expect("RSS should be available on this platform");
             assert!(rss_bytes > 0);
             println!("Current RSS: {} MB", rss_bytes / 1024 / 1024);
         }
 
-        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        #[cfg(not(any(
+            target_os = "linux",
+            target_os = "macos",
+            target_os = "freebsd",
+            target_os = "openbsd",
+            target_os = "netbsd",
+            target_os = "illumos",
+            target_os = "solaris",
+            target_os = "windows",
+        )))]
         {
             assert!(rss.is_none());
         }

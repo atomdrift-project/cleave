@@ -845,7 +845,14 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         category: ValidatorCategory::Quality,
         display_id: "for-invalid",
         description: "Trait uses an invalid file type.",
-        fix: "Use a supported file type or remove the invalid for: value.",
+        fix: "Use a supported file type or named group; for: [none]/[unknown]/[] are not allowed.",
+    },
+    ValidatorSpec {
+        id: "for-all",
+        category: ValidatorCategory::Policy,
+        display_id: "for-all",
+        description: "Trait uses for: [all] instead of concrete types or named groups.",
+        fix: "Name concrete file types or combine groups explicitly (e.g. for: [binaries, scripts]).",
     },
     ValidatorSpec {
         id: "unknown-file-type",
@@ -1184,6 +1191,7 @@ mod tests {
             "precision",
             "wellknown-size-filter",
             "broad-filetype-cap",
+            "for-all",
             "unknown-subdirectory",
             "malware-subcategory",
             "wellknown-composite-only",

@@ -213,6 +213,7 @@ fn extract_source_kv_via_analyzer(path: &Path, content: &[u8]) -> Option<Value> 
             | FileType::Pdf
             | FileType::Rtf
             | FileType::OleDoc
+            | FileType::Msi
             | FileType::Ooxml
     ) {
         return None;

@@ -162,7 +162,7 @@ impl OfficeAnalyzer {
             cross_counts,
             values_tree,
         ) = match file_type {
-            FileType::OleDoc => {
+            FileType::OleDoc | FileType::Msi => {
                 let (t, f, e, om, cc, kv) = self.analyze_ole2(data, &vba_modules);
                 (t, f, e, Some(om), None, None, cc, kv)
             }

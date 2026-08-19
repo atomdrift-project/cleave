@@ -464,9 +464,10 @@ impl UnifiedSourceAnalyzer {
         let tree = source_ast.map(|ast| ast.tree);
 
         if let Some(tree) = tree {
-            let root = tree.root_node();
-            self.extract_functions(&root, content.as_bytes(), &mut report);
-            self.extract_strings(&root, content.as_bytes(), &mut report);
+            // One walk for functions, string/number/comment literals, and
+            // call sites. Three full cursor passes over every JS/Go AST was
+            // pure walk tax — the parse itself is unchanged.
+            self.extract_ast_facts(tree, content, &mut report);
         }
 
         // Use pre-extracted stng strings if available, otherwise use parallel extracted ones
@@ -750,16 +751,8 @@ impl UnifiedSourceAnalyzer {
             }
         }
 
-        if let Some(tree) = tree {
-            // Extract function calls for capability matching (type: symbol conditions)
-            // Reuse the already-parsed tree to avoid redundant tree-sitter parsing
-            symbol_extraction::extract_symbols_from_tree(
-                tree,
-                content,
-                self.config.call_node_types,
-                &mut report,
-            );
-
+        if tree.is_some() {
+            // Call sites were collected in `extract_ast_facts` above.
             // Module imports come from filefacts's per-language queries; cleave
             // only adds Python `__import__` alias resolution on top.
             if let Some(ctx) = source_ctx {
@@ -784,7 +777,9 @@ impl UnifiedSourceAnalyzer {
         // (e.g. decoding a -EncodedCommand payload), skip to avoid infinite loops.
         if !self.skip_embedded_detection {
             // Include the full file content as a synthetic string so that
-            // PS -EncodedCommand arguments (bare, not quoted) are also checked.
+            // PS -EncodedCommand arguments (bare, not quoted) and host
+            // source misclassified as another language (B1r: Python-in-Rust)
+            // are also checked. Do not restrict this to shell-family hosts.
             let content_as_string = crate::types::binary::StringInfo {
                 value: content.to_string().into(),
                 offset: Some(0),
@@ -841,22 +836,25 @@ impl UnifiedSourceAnalyzer {
         report
     }
 
-    fn extract_functions<'a>(
+    fn extract_ast_facts(
         &self,
-        root: &tree_sitter::Node<'a>,
-        source: &[u8],
+        tree: &tree_sitter::Tree,
+        content: &str,
         report: &mut AnalysisReport,
     ) {
-        let mut cursor = root.walk();
-        self.walk_for_functions(&mut cursor, source, report, 0);
+        let source = content.as_bytes();
+        let mut cursor = tree.walk();
+        let mut call_sites: Vec<(String, u64)> = Vec::new();
+        self.walk_ast_facts(&mut cursor, source, report, &mut call_sites);
+        symbol_extraction::push_capped_call_imports(call_sites, report);
     }
 
-    fn walk_for_functions<'a>(
+    fn walk_ast_facts<'a>(
         &self,
         cursor: &mut tree_sitter::TreeCursor<'a>,
         source: &[u8],
         report: &mut AnalysisReport,
-        mut depth: u32,
+        call_sites: &mut Vec<(String, u64)>,
     ) {
         loop {
             let node = cursor.node();
@@ -882,10 +880,53 @@ impl UnifiedSourceAnalyzer {
                 });
             }
 
-            if cursor.goto_first_child() {
-                if self.config.function_node_types.contains(&kind) {
-                    depth += 1;
+            if call_sites.len() < symbol_extraction::MAX_TOTAL_CALL_SITES
+                && self.config.call_node_types.contains(&kind)
+                && let Some(func_name) = symbol_extraction::extract_function_name(&node, source)
+            {
+                let clean_name = func_name
+                    .trim()
+                    .trim_start_matches('_')
+                    .trim_start_matches('$');
+                if !clean_name.is_empty() && clean_name.len() < 100 {
+                    call_sites.push((clean_name.to_string(), node.start_byte() as u64));
                 }
+            }
+
+            if self.config.string_node_types.contains(&kind) || kind.contains("string") {
+                self.collect_string_node(&node, source, report);
+            } else if is_numeric_node_kind(kind) {
+                if let Ok(text) = node.utf8_text(source)
+                    && let Some((value, radix)) = parse_numeric_literal(text)
+                {
+                    report.strings.push(StringInfo {
+                        value: value.to_string().into(),
+                        offset: Some(node.start_byte() as u64),
+                        string_type: None,
+                        encoding: radix.to_string(),
+                        section: Some("ast-number".to_string()),
+                        encoding_chain: Vec::new(),
+                        fragments: None,
+                    });
+                }
+            } else if kind.contains("comment") {
+                if let Ok(text) = node.utf8_text(source) {
+                    let trimmed = text.trim();
+                    if !trimmed.is_empty() && trimmed.len() < 10000 {
+                        report.comments.push(StringInfo {
+                            value: trimmed.to_string().into(),
+                            offset: Some(node.start_byte() as u64),
+                            string_type: None,
+                            encoding: "utf-8".to_string(),
+                            section: Some("comment".to_string()),
+                            encoding_chain: Vec::new(),
+                            fragments: None,
+                        });
+                    }
+                }
+            }
+
+            if cursor.goto_first_child() {
                 continue;
             }
             if cursor.goto_next_sibling() {
@@ -895,13 +936,88 @@ impl UnifiedSourceAnalyzer {
                 if !cursor.goto_parent() {
                     return;
                 }
-                let parent_kind = cursor.node().kind();
-                if self.config.function_node_types.contains(&parent_kind) {
-                    depth = depth.saturating_sub(1);
-                }
                 if cursor.goto_next_sibling() {
                     break;
                 }
+            }
+        }
+    }
+
+    fn collect_string_node(
+        &self,
+        node: &tree_sitter::Node<'_>,
+        source: &[u8],
+        report: &mut AnalysisReport,
+    ) {
+        let Ok(text) = node.utf8_text(source) else {
+            return;
+        };
+        let s = text
+            .trim_start_matches('"')
+            .trim_end_matches('"')
+            .trim_start_matches('\'')
+            .trim_end_matches('\'')
+            .trim_start_matches('`')
+            .trim_end_matches('`')
+            .trim_start_matches("[[")
+            .trim_end_matches("]]")
+            .trim_start_matches("@\"")
+            .trim_end_matches("\"@")
+            .trim_start_matches(':'); // Ruby symbol literals like :alias_method
+
+        if s.is_empty() || s.len() >= 10000 {
+            return;
+        }
+        // `s` is a subslice of `text` after the leading quote/
+        // bracket bytes are trimmed, so the node start must be
+        // advanced by that delta — otherwise the recorded offset
+        // points at the opening quote while `value` excludes it,
+        // shifting every downstream span one byte left (the span
+        // would cover `"gzi` instead of `gzip`).
+        let lead = s.as_ptr() as u64 - text.as_ptr() as u64;
+        let offset = node.start_byte() as u64 + lead;
+        let literal = StringInfo {
+            value: s.to_string().into(),
+            offset: Some(offset),
+            string_type: None,
+            encoding: "utf-8".to_string(),
+            section: Some("ast".to_string()),
+            encoding_chain: Vec::new(),
+            fragments: None,
+        };
+        if !report.strings.iter().any(|existing| {
+            existing.value == literal.value
+                && existing.offset == literal.offset
+                && existing.section == literal.section
+        }) {
+            report.strings.push(literal);
+        }
+
+        // stng intentionally uses a conservative threshold
+        // when decoding arbitrary byte runs. In minified source,
+        // however, its raw scan often sees the whole line rather
+        // than the individual quoted values. Decode compact,
+        // syntactically confirmed hex string literals here so
+        // obfuscated API names such as `createDecipher` and
+        // `_compile` remain available to `type: encoded` rules.
+        // Requiring six printable decoded bytes rejects hashes,
+        // keys, color values, and arbitrary binary material.
+        if let Some(decoded) = decode_printable_hex_literal(s) {
+            let decoded = StringInfo {
+                value: decoded.into(),
+                offset: Some(offset),
+                string_type: None,
+                encoding: "utf-8".to_string(),
+                section: Some("decoded".to_string()),
+                encoding_chain: vec!["hex".to_string()],
+                fragments: None,
+            };
+            if !report.strings.iter().any(|existing| {
+                existing.value == decoded.value
+                    && existing.offset == decoded.offset
+                    && existing.encoding_chain == decoded.encoding_chain
+            }) {
+                report.strings.push(decoded);
             }
         }
     }
@@ -936,164 +1052,6 @@ impl UnifiedSourceAnalyzer {
             }
         }
         None
-    }
-
-    fn extract_strings<'a>(
-        &self,
-        root: &tree_sitter::Node<'a>,
-        source: &[u8],
-        report: &mut AnalysisReport,
-    ) {
-        let mut cursor = root.walk();
-        self.walk_for_strings(&mut cursor, source, report);
-    }
-
-    fn walk_for_strings<'a>(
-        &self,
-        cursor: &mut tree_sitter::TreeCursor<'a>,
-        source: &[u8],
-        report: &mut AnalysisReport,
-    ) {
-        loop {
-            let node = cursor.node();
-            let kind = node.kind();
-
-            if self.config.string_node_types.contains(&kind) || kind.contains("string") {
-                if let Ok(text) = node.utf8_text(source) {
-                    let s = text
-                        .trim_start_matches('"')
-                        .trim_end_matches('"')
-                        .trim_start_matches('\'')
-                        .trim_end_matches('\'')
-                        .trim_start_matches('`')
-                        .trim_end_matches('`')
-                        .trim_start_matches("[[")
-                        .trim_end_matches("]]")
-                        .trim_start_matches("@\"")
-                        .trim_end_matches("\"@")
-                        .trim_start_matches(':') // Ruby symbol literals like :alias_method
-                        ;
-
-                    if !s.is_empty() && s.len() < 10000 {
-                        // `s` is a subslice of `text` after the leading quote/
-                        // bracket bytes are trimmed, so the node start must be
-                        // advanced by that delta — otherwise the recorded offset
-                        // points at the opening quote while `value` excludes it,
-                        // shifting every downstream span one byte left (the span
-                        // would cover `"gzi` instead of `gzip`).
-                        let lead = s.as_ptr() as u64 - text.as_ptr() as u64;
-                        let offset = node.start_byte() as u64 + lead;
-                        let literal = StringInfo {
-                            value: s.to_string().into(),
-                            offset: Some(offset),
-                            string_type: None,
-                            encoding: "utf-8".to_string(),
-                            section: Some("ast".to_string()),
-                            encoding_chain: Vec::new(),
-                            fragments: None,
-                        };
-                        if !report.strings.iter().any(|existing| {
-                            existing.value == literal.value
-                                && existing.offset == literal.offset
-                                && existing.section == literal.section
-                        }) {
-                            report.strings.push(literal);
-                        }
-
-                        // stng intentionally uses a conservative threshold
-                        // when decoding arbitrary byte runs. In minified source,
-                        // however, its raw scan often sees the whole line rather
-                        // than the individual quoted values. Decode compact,
-                        // syntactically confirmed hex string literals here so
-                        // obfuscated API names such as `createDecipher` and
-                        // `_compile` remain available to `type: encoded` rules.
-                        // Requiring six printable decoded bytes rejects hashes,
-                        // keys, color values, and arbitrary binary material.
-                        if let Some(decoded) = decode_printable_hex_literal(s) {
-                            let decoded = StringInfo {
-                                value: decoded.into(),
-                                offset: Some(offset),
-                                string_type: None,
-                                encoding: "utf-8".to_string(),
-                                section: Some("decoded".to_string()),
-                                encoding_chain: vec!["hex".to_string()],
-                                fragments: None,
-                            };
-                            if !report.strings.iter().any(|existing| {
-                                existing.value == decoded.value
-                                    && existing.offset == decoded.offset
-                                    && existing.encoding_chain == decoded.encoding_chain
-                            }) {
-                                report.strings.push(decoded);
-                            }
-                        }
-                    }
-                }
-            } else if is_numeric_node_kind(kind) {
-                // Numeric-literal extraction (rule type: `type: literal,
-                // kind: number`). Heuristic-named node kinds across our
-                // 22 tree-sitter grammars share these stems:
-                //   integer | integer_literal | int_literal | number |
-                //   number_literal | decimal_integer_literal |
-                //   hex_integer_literal | octal_integer_literal |
-                //   binary_integer_literal | imaginary_literal | float_literal
-                //
-                // We piggyback on the existing string `StringInfo` row
-                // shape rather than adding new fields (avoiding 141
-                // cascading test-fix sites):
-                //   value:    decimal-rendered parsed integer ("511")
-                //   encoding: radix as a string ("8" / "10" / "16" / "2")
-                //   section:  "ast-number" sentinel — `eval_literal` filters
-                //             on this to route to numeric matching.
-                if let Ok(text) = node.utf8_text(source)
-                    && let Some((value, radix)) = parse_numeric_literal(text)
-                {
-                    report.strings.push(StringInfo {
-                        value: value.to_string().into(),
-                        offset: Some(node.start_byte() as u64),
-                        string_type: None,
-                        encoding: radix.to_string(),
-                        section: Some("ast-number".to_string()),
-                        encoding_chain: Vec::new(),
-                        fragments: None,
-                    });
-                }
-            } else if kind.contains("comment") {
-                // Comment-body extraction (rule `type: comment`). Tree-sitter
-                // tags comment nodes uniformly across grammars (`comment`,
-                // `line_comment`, `block_comment`, `multiline_comment`). Stored
-                // in the dedicated `report.comments` corpus — NOT `strings` —
-                // so comment text can never bleed into string/byte matchers;
-                // `eval_comment` is the only consumer, giving the
-                // lowest-false-positive home for "keyword in a comment" rules.
-                if let Ok(text) = node.utf8_text(source) {
-                    let trimmed = text.trim();
-                    if !trimmed.is_empty() && trimmed.len() < 10000 {
-                        report.comments.push(StringInfo {
-                            value: trimmed.to_string().into(),
-                            offset: Some(node.start_byte() as u64),
-                            string_type: None,
-                            encoding: "utf-8".to_string(),
-                            section: Some("comment".to_string()),
-                            encoding_chain: Vec::new(),
-                            fragments: None,
-                        });
-                    }
-                }
-            }
-
-            if cursor.goto_first_child() {
-                continue;
-            }
-            loop {
-                if cursor.goto_next_sibling() {
-                    break;
-                }
-                if !cursor.goto_parent() {
-                    return;
-                }
-            }
-        }
     }
 }
 
@@ -1400,6 +1358,33 @@ const handler = async () => {
         let report = analyzer.analyze_source(&path, code);
         assert!(report.structure.iter().any(|s| s.id.contains("javascript")));
         assert!(!report.functions.is_empty());
+    }
+
+    #[test]
+    fn one_walk_collects_functions_strings_and_call_imports() {
+        let analyzer = UnifiedSourceAnalyzer::for_file_type(&FileType::JavaScript).unwrap();
+        let path = PathBuf::from("one-walk.js");
+        let code = r#"
+function fetchData(url) {
+    return eval(url);
+}
+const algorithm = "gzip";
+"#;
+        let report = analyzer.analyze_source(&path, code);
+        assert!(
+            report.functions.iter().any(|f| f.name == "fetchData"),
+            "function walk must still see fetchData: {:?}",
+            report.functions.iter().map(|f| &f.name).collect::<Vec<_>>()
+        );
+        assert!(
+            report.strings.iter().any(|s| &*s.value == "gzip"),
+            "string walk must still see gzip"
+        );
+        assert!(
+            report.imports.iter().any(|i| i.symbol == "eval"),
+            "call walk must still record eval: {:?}",
+            report.imports.iter().map(|i| &i.symbol).collect::<Vec<_>>()
+        );
     }
 
     #[test]

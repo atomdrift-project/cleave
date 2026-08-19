@@ -421,6 +421,17 @@ eval(b);
     }
 
     #[test]
+    fn test_extract_aes_skips_without_createdecipheriv() {
+        let content = r#"
+function fetchData(url) {
+    return require('http').get(url);
+}
+const hex = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+"#;
+        assert!(extract_aes_payloads(content.as_bytes()).is_empty());
+    }
+
+    #[test]
     fn test_binary_garbage_rejection() {
         // If someone passes binary data that happens to have the pattern
         let mut content = Vec::new();

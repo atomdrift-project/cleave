@@ -163,6 +163,11 @@ pub(crate) struct EvaluationContext<'a> {
     pub cached_evidence: Option<&'a FxHashMap<usize, Vec<Evidence>>>,
     /// Current trait index being evaluated
     pub current_trait_idx: Option<usize>,
+    /// Atom-hit offsets from the raw-content gate, keyed by trait index.
+    /// Present only when that gate ran (source members ≤3 MiB). `eval_raw`
+    /// windows bounded regexes around these; it must not memmem the haystack
+    /// again. Missing key → full scan (no-literal / overflow / ungated).
+    pub raw_atom_offsets: Option<&'a rustc_hash::FxHashMap<usize, Vec<u32>>>,
     /// Validated UTF-8 view of `binary_data`, populated once per file for source-code
     /// file types. Lets AST/text evaluators skip the per-rule O(N) `from_utf8` check.
     pub cached_source_utf8: Option<&'a str>,
@@ -245,6 +250,7 @@ impl<'a> EvaluationContext<'a> {
             slow_rule_ms: 4000,
             cached_evidence: None,
             current_trait_idx: None,
+            raw_atom_offsets: None,
             cached_source_utf8,
             parent_is_exception: false,
         }
@@ -492,9 +498,20 @@ impl<'a> EvaluationContext<'a> {
             slow_rule_ms: 4000,
             cached_evidence: None,
             current_trait_idx: None,
+            raw_atom_offsets: None,
             cached_source_utf8: None,
             parent_is_exception: false,
         }
+    }
+
+    /// Attach gate-supplied atom offsets for windowed `eval_raw` on source.
+    #[must_use]
+    pub(crate) fn with_raw_atom_offsets(
+        mut self,
+        offsets: Option<&'a rustc_hash::FxHashMap<usize, Vec<u32>>>,
+    ) -> Self {
+        self.raw_atom_offsets = offsets;
+        self
     }
 }
 

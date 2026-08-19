@@ -36,7 +36,7 @@ pub(crate) fn extract_tar_entries_safe<R: Read>(
 
         let mut entry = entry_result.context("Failed to read tar entry")?;
         let entry_path = entry.path()?;
-        let entry_name = entry_path.to_string_lossy().to_string();
+        let entry_name = entry_path.to_string_lossy().replace('\\', "/");
 
         if entry_name.len() > MAX_PATH_COMPONENT_LEN {
             guard.add_hostile_reason(HostileArchiveReason::ExcessiveEntryName {

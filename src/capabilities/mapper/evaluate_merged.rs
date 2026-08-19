@@ -13,7 +13,7 @@
 
 use crate::composite_rules::{Arch, Condition, FileType as RuleFileType, SectionMap};
 use crate::types::{AnalysisReport, Evidence, Finding};
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashSet;
 use std::collections::HashMap;
 /// Borrowed analysis products shared with the rule engine.
 #[derive(Clone, Copy, Debug, Default)]
@@ -109,7 +109,7 @@ impl super::CapabilityMapper {
         &self,
         binary_data: &[u8],
         file_type: &RuleFileType,
-    ) -> Option<FxHashSet<usize>> {
+    ) -> Option<crate::capabilities::indexes::RawGateHits> {
         static DISABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         if *DISABLED.get_or_init(|| std::env::var_os("CLEAVE_DISABLE_RAW_GATE").is_some()) {
             return None;
@@ -123,6 +123,10 @@ impl super::CapabilityMapper {
         // flip point — conservative so the gate never trades one machine's
         // wall for the shared box's CPU. Larger content returns None: exact
         // pre-gate behavior. `CLEAVE_RAW_GATE_MAX_KB` overrides.
+        //
+        // 2026-08-18: an atom-only candidate sweep above this cap (all types,
+        // then source/text only) lost wall on B1 (415 / 409 s vs B1h 375 s).
+        // Rejected; do not re-land without a new isolate.
         static MAX_BYTES: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
         let max_bytes = *MAX_BYTES.get_or_init(|| {
             std::env::var("CLEAVE_RAW_GATE_MAX_KB")
@@ -137,8 +141,10 @@ impl super::CapabilityMapper {
         if !index.has_patterns() {
             return None;
         }
-        let matches = index.find_matches(binary_data, file_type);
-        Some(matches)
+        // Offsets are only meaningful on source/text: `eval_raw` ignores them
+        // for PE/ELF extracted-string search, and collecting them there would
+        // walk every atom occurrence on binaries the gate still covers (≤3 MiB).
+        Some(index.find_matches_detailed(binary_data, file_type, file_type.uses_raw_text_search()))
     }
     /// Evaluate all rules (atomic traits + composite rules) and merge findings into the report.
     /// This is the correct, foolproof way to evaluate traits that ensures evidence propagates
@@ -191,7 +197,7 @@ impl super::CapabilityMapper {
         binary_data: &[u8],
         analysis: AnalysisBorrow<'_, '_>,
         inline_yara: Option<&HashMap<String, Vec<Evidence>>>,
-        precomputed_raw_regex: Option<Option<FxHashSet<usize>>>,
+        precomputed_raw_regex: Option<Option<crate::capabilities::indexes::RawGateHits>>,
         arch_ranges: Option<&[(Arch, std::ops::Range<usize>)]>,
         cancellation: Option<&std::sync::atomic::AtomicBool>,
     ) {
@@ -229,7 +235,7 @@ impl super::CapabilityMapper {
         }
 
         // Use precomputed regex matches if provided, otherwise compute now
-        let mut raw_regex_matches = precomputed_raw_regex
+        let mut raw_regex_hits = precomputed_raw_regex
             .unwrap_or_else(|| self.precompute_raw_regex_matches(binary_data, &file_type));
         // The gate scanned raw bytes, but `type: text` also matches decoded
         // string layers (base64/xor chains — `eval_text`'s second pass). A
@@ -239,7 +245,10 @@ impl super::CapabilityMapper {
         // Decoded layers are rare and small, so this pass is ~free — and it
         // keeps the gate active on such files (bypassing it instead measured
         // +50% wall on data-URI-dense bundles like browser extensions).
-        if let Some(matches) = raw_regex_matches.as_mut() {
+        //
+        // Do not record decoded-layer offsets: they are not positions in
+        // `binary_data`. Windowing uses only raw-file hits collected above.
+        if let Some(hits) = raw_regex_hits.as_mut() {
             let decoded: Vec<&str> = report
                 .strings
                 .iter()
@@ -253,14 +262,15 @@ impl super::CapabilityMapper {
                 // verification here measured as a wall regression on
                 // decode-heavy members (browser-extension bundles).
                 let joined = decoded.join("\n");
-                matches.extend(
+                hits.traits.extend(
                     self.match_indexes()
                         .raw_content_regex_index
                         .find_candidates(joined.as_bytes(), &file_type),
                 );
             }
         }
-        let raw_regex_matches_ref = raw_regex_matches.as_ref();
+        let raw_regex_matches_ref = raw_regex_hits.as_ref().map(|h| &h.traits);
+        let raw_atom_offsets_ref = raw_regex_hits.as_ref().map(|h| &h.atom_offsets);
 
         // Use trait index to only evaluate applicable traits
         let applicable_indices: Vec<usize> = self
@@ -274,40 +284,20 @@ impl super::CapabilityMapper {
         let ast_kind_cache =
             self.build_ast_kind_cache(cached_ast, binary_data, &applicable_indices, file_type);
 
-        // Build all_strings ONCE — combines report strings, imports, and exports
+        // Build all_strings ONCE — combines report strings, imports, and exports.
+        // Source files use the raw file as the haystack (see `build_string_prefilter`).
         let t_strings = std::time::Instant::now();
 
-        // Only build and match strings if there is something to match against
-        let (string_matched_traits, cached_evidence, regex_candidates) =
-            if !report.strings.is_empty()
-                || !report.imports.is_empty()
-                || !report.exports.is_empty()
-            {
-                let pseudo_strings = super::build_string_pseudo_entries(report);
-                let all_strings: Vec<&crate::types::StringInfo> =
-                    report.strings.iter().chain(pseudo_strings.iter()).collect();
-
-                // Run string matching ONCE
-                let (traits, evidence) = if self.match_indexes().string_match_index.has_patterns() {
-                    self.match_indexes()
-                        .string_match_index
-                        .find_matches_with_evidence(&all_strings)
-                } else {
-                    (FxHashSet::default(), FxHashMap::default())
-                };
-
-                let candidates = self
-                    .match_indexes()
-                    .string_match_index
-                    .find_regex_candidates(&all_strings);
-                (traits, evidence, candidates)
-            } else {
-                (
-                    FxHashSet::default(),
-                    FxHashMap::default(),
-                    FxHashSet::default(),
-                )
-            };
+        let string_prefilter = super::build_string_prefilter(
+            &self.match_indexes().string_match_index,
+            &file_type,
+            binary_data,
+            report,
+        );
+        let string_matched_traits = string_prefilter.matched;
+        let cached_evidence = string_prefilter.evidence;
+        let regex_candidates = string_prefilter.regex_candidates;
+        let source_text_prefiltered = string_prefilter.source_text_prefiltered;
 
         // Run symbol matching ONCE. The haystack spans import/export symbol
         // tables and every source-AST projection (calls, members, binds,
@@ -334,6 +324,7 @@ impl super::CapabilityMapper {
         let t_eval1 = std::time::Instant::now();
         let cache = super::evaluate_traits::TraitEvalCache {
             raw_regex_matches: raw_regex_matches_ref,
+            raw_atom_offsets: raw_atom_offsets_ref,
             section_map: &section_map,
             string_matched_traits: &string_matched_traits,
             symbol_matched_traits: &symbol_matched_traits,
@@ -341,6 +332,7 @@ impl super::CapabilityMapper {
             regex_candidates: &regex_candidates,
             arch_ranges,
             ast_kind_cache,
+            source_text_prefiltered,
         };
 
         if cancellation.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed)) {

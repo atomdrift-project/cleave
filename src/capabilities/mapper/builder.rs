@@ -37,6 +37,7 @@ impl super::CapabilityMapper {
             composite_id_index: std::sync::Arc::new(std::sync::OnceLock::new()),
             kv_sibling_basenames: std::sync::Arc::default(),
             trait_ref_index: std::sync::Arc::default(),
+            doomed_skip: std::sync::Arc::default(),
             trait_id_map: std::collections::HashMap::new(),
             platforms: vec![Platform::All],
             slow_rule_ms: Self::DEFAULT_SLOW_RULE_MS,

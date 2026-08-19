@@ -175,12 +175,21 @@ fn os_thread_id() -> u64 {
         // SAFETY: `_lwp_self` takes no arguments and cannot fail.
         unsafe { _lwp_self() as u64 }
     }
+    #[cfg(target_os = "windows")]
+    {
+        unsafe extern "system" {
+            fn GetCurrentThreadId() -> u32;
+        }
+        // SAFETY: GetCurrentThreadId takes no arguments and cannot fail.
+        unsafe { u64::from(GetCurrentThreadId()) }
+    }
     #[cfg(not(any(
         target_os = "linux",
         target_os = "macos",
         target_os = "freebsd",
         target_os = "illumos",
-        target_os = "solaris"
+        target_os = "solaris",
+        target_os = "windows"
     )))]
     {
         0

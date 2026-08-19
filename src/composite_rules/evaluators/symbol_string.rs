@@ -1428,6 +1428,30 @@ pub(crate) fn eval_numeric_literal<'a>(
     }
 }
 
+/// Windows around gate-supplied atom hits for source `eval_raw`. `None` means
+/// full-scan: PE/extracted-string types, gate did not run, trait has no
+/// recorded offsets, or the pattern is unbounded / `\A`/`\z`.
+fn source_raw_windows(
+    ctx: &EvaluationContext<'_>,
+    pattern: &str,
+    search_start: usize,
+    search_end: usize,
+) -> Option<Vec<(usize, usize)>> {
+    if !ctx.file_type.uses_raw_text_search() {
+        return None;
+    }
+    let idx = ctx.current_trait_idx?;
+    let hits = ctx.raw_atom_offsets?.get(&idx)?;
+    // Offsets were recorded for this trait's *indexed* regex (usually `if:`).
+    // `unless:` / extra `type: text` regexes share `current_trait_idx` but not
+    // those atoms — windowing them around the `if` hits is a false-negative
+    // machine (B1n: extra `loopback-http-url-reference` / `bearer-token`).
+    if !super::hits_are_pattern_atoms(ctx.binary_data, hits, pattern) {
+        return None;
+    }
+    super::windows_from_atom_hits(ctx.binary_data, hits, pattern, search_start, search_end)
+}
+
 /// Used by `type: raw` conditions to search raw file content rather than extracted strings.
 /// Use for cross-boundary patterns or when string extraction is insufficient.
 #[allow(clippy::too_many_arguments)]
@@ -1617,7 +1641,7 @@ pub(crate) fn eval_raw<'a>(
                 let mut first_match = None;
                 let mut first_offset = None;
                 let mut idx = 0usize;
-                lean.for_each_match(search_data, |start, end| {
+                let mut visit = |abs_start: usize, abs_end: usize| -> bool {
                     if idx >= MAX_MATCHES_TO_PROCESS {
                         if let Some(trait_id_val) = trait_id {
                             tracing::info!(
@@ -1636,10 +1660,10 @@ pub(crate) fn eval_raw<'a>(
                         return false;
                     }
                     idx += 1;
-                    if !span_length_ok(end - start, length_bounds) {
+                    if !span_length_ok(abs_end - abs_start, length_bounds) {
                         return true;
                     }
-                    let match_bytes = &search_data[start..end];
+                    let match_bytes = &ctx.binary_data[abs_start..abs_end];
 
                     // For validators or not filters, convert only the match to string
                     if is_check.is_some() || not.is_some() {
@@ -1654,12 +1678,12 @@ pub(crate) fn eval_raw<'a>(
                         }
                         if first_match.is_none() {
                             first_match = Some(match_str.to_string());
-                            first_offset = Some((search_start + start) as u64);
+                            first_offset = Some(abs_start as u64);
                         }
                     } else if first_match.is_none() {
                         // No filters, just count
                         first_match = Some(String::from_utf8_lossy(match_bytes).to_string());
-                        first_offset = Some((search_start + start) as u64);
+                        first_offset = Some(abs_start as u64);
                     }
 
                     match_count += 1;
@@ -1667,7 +1691,17 @@ pub(crate) fn eval_raw<'a>(
                     // stop at the first passing match instead of scanning the
                     // whole file.
                     needs_count
-                });
+                };
+                // Reuse atom offsets the raw-content gate already paid for.
+                // No second memmem. Missing offsets / unbounded / PE → full scan.
+                if let Some(spans) = source_raw_windows(ctx, pattern_str, search_start, search_end)
+                {
+                    lean.for_each_match_spans(ctx.binary_data, &spans, visit);
+                } else {
+                    lean.for_each_match(search_data, |start, end| {
+                        visit(search_start + start, search_start + end)
+                    });
+                }
                 if match_count > 0
                     && evidence.len() < MAX_EVIDENCE_PER_TRAIT
                     && let Some(matched) = first_match

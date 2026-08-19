@@ -2627,9 +2627,41 @@ impl Condition {
             // Section analysis is binary-only
             Condition::Section(SectionQuery { .. }) => is_binary,
 
+            // Filefacts resolves syscalls from raw `syscall`/`svc` sites on
+            // PE/ELF/Mach-O. Source members never populate `report.syscalls`.
+            Condition::Syscall { .. } => is_binary,
+
             // AST-backed searches require source code support
             Condition::TreeSitter(TreeSitterQuery { .. })
             | Condition::Literal(LiteralQuery { .. }) => file_type.supports_ast_queries(),
+
+            // `section:` / `section_offset:` need a PE/ELF/Mach-O section
+            // map. On `uses_raw_text_search` files the map is empty, so
+            // `eval_raw` already returns no_match — drop them before
+            // `eval_trait`. File-absolute `offset:` / `offset_range:` still
+            // apply (they clip `binary_data`).
+            Condition::Text(TextQuery {
+                section,
+                section_offset,
+                section_offset_range,
+                ..
+            })
+            | Condition::Raw(RawQuery {
+                section,
+                section_offset,
+                section_offset_range,
+                ..
+            })
+            | Condition::Hex(HexQuery {
+                section,
+                section_offset,
+                section_offset_range,
+                ..
+            }) => {
+                let needs_sections =
+                    section.is_some() || section_offset.is_some() || section_offset_range.is_some();
+                !needs_sections || !file_type.uses_raw_text_search()
+            }
 
             // All other conditions can potentially match any file type
             _ => true,
@@ -4571,5 +4603,96 @@ exact: curl
         let re = super::TraitRegex::compile(r"abc\w{2}").unwrap();
         assert_eq!(re.min_len, 5);
         assert!(!re.is_match("abcd"));
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod can_match_file_type_tests {
+    use super::*;
+    use crate::composite_rules::FileType;
+
+    #[test]
+    fn syscall_is_binary_only() {
+        let cond = Condition::Syscall {
+            name: Some(vec!["connect".to_string()]),
+            number: None,
+            arch: None,
+            args: Vec::new(),
+        };
+        assert!(cond.can_match_file_type(&FileType::Pe));
+        assert!(cond.can_match_file_type(&FileType::Elf));
+        assert!(cond.can_match_file_type(&FileType::Macho));
+        assert!(!cond.can_match_file_type(&FileType::JavaScript));
+        assert!(!cond.can_match_file_type(&FileType::Go));
+        assert!(!cond.can_match_file_type(&FileType::Python));
+    }
+
+    #[test]
+    fn section_is_binary_only() {
+        let cond = Condition::Section(SectionQuery {
+            exact: Some(".text".to_string()),
+            ..SectionQuery::default()
+        });
+        assert!(cond.can_match_file_type(&FileType::Pe));
+        assert!(!cond.can_match_file_type(&FileType::JavaScript));
+        assert!(!cond.can_match_file_type(&FileType::Go));
+    }
+
+    #[test]
+    fn symbol_and_text_still_apply_to_source() {
+        let symbol = Condition::Symbol(SymbolQuery {
+            exact: Some("eval".to_string()),
+            substr: None,
+            regex: None,
+            platforms: None,
+            is_check: None,
+            kind: None,
+            arg: None,
+            args: None,
+            alias: None,
+            not: None,
+        });
+        let text = Condition::Text(TextQuery {
+            substr: Some("eval".to_string()),
+            ..TextQuery::default()
+        });
+        assert!(symbol.can_match_file_type(&FileType::JavaScript));
+        assert!(symbol.can_match_file_type(&FileType::Go));
+        assert!(text.can_match_file_type(&FileType::JavaScript));
+        assert!(text.can_match_file_type(&FileType::Pe));
+    }
+
+    #[test]
+    fn section_pinned_text_raw_hex_skip_source_but_keep_offset_only() {
+        let text_section = Condition::Text(TextQuery {
+            exact: Some("Microsoft".to_string()),
+            section: Some(".rdata".to_string()),
+            ..TextQuery::default()
+        });
+        let text_offset = Condition::Text(TextQuery {
+            substr: Some("hello".to_string()),
+            offset: Some(0),
+            ..TextQuery::default()
+        });
+        let raw_section = Condition::Raw(RawQuery {
+            substr: Some("MZ".to_string()),
+            section: Some(".text".to_string()),
+            ..RawQuery::default()
+        });
+        let hex_section = Condition::Hex(HexQuery {
+            pattern: "4d5a".to_string(),
+            section: Some(".text".to_string()),
+            ..HexQuery::default()
+        });
+        assert!(!text_section.can_match_file_type(&FileType::JavaScript));
+        assert!(!text_section.can_match_file_type(&FileType::Go));
+        assert!(text_section.can_match_file_type(&FileType::Pe));
+        assert!(text_offset.can_match_file_type(&FileType::JavaScript));
+        assert!(text_offset.can_match_file_type(&FileType::Pe));
+        assert!(!raw_section.can_match_file_type(&FileType::JavaScript));
+        assert!(raw_section.can_match_file_type(&FileType::Pe));
+        assert!(!hex_section.can_match_file_type(&FileType::Python));
+        assert!(hex_section.can_match_file_type(&FileType::Elf));
     }
 }

@@ -49,6 +49,16 @@ use tracing::{debug, trace};
 // since scanners are thread-local and a separate pool doubled the thread count.
 // The global pool's work-stealing scheduler naturally balances archive and non-archive work.
 
+/// Archive member identity is POSIX (`usr/bin/hello`) on every host. Walking
+/// an extracted tree through `Path` would otherwise emit `usr\bin\hello` on
+/// Windows and break path assertions plus any rule that matches on `/`.
+fn posix_relative_path(path: &Path, root: &Path) -> String {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
 /// Read one in-memory archive member into `out`, keeping whatever decoded when
 /// the member's stream fails partway.
 ///
@@ -2909,12 +2919,7 @@ impl ArchiveAnalyzer {
                 if self.is_cancelled() {
                     return None;
                 }
-                let relative_path = entry
-                    .path()
-                    .strip_prefix(temp_dir)
-                    .unwrap_or(entry.path())
-                    .display()
-                    .to_string();
+                let relative_path = posix_relative_path(entry.path(), temp_dir);
                 let entry_path = self.format_entry_path(&relative_path);
                 let archive_location = self.format_evidence_location(&relative_path);
 
@@ -3069,12 +3074,7 @@ impl ArchiveAnalyzer {
                 if self.is_cancelled() {
                     return None;
                 }
-                let relative_path = entry
-                    .path()
-                    .strip_prefix(temp_dir)
-                    .unwrap_or(entry.path())
-                    .display()
-                    .to_string();
+                let relative_path = posix_relative_path(entry.path(), temp_dir);
                 let entry_path = self.format_entry_path(&relative_path);
                 let archive_location = self.format_evidence_location(&relative_path);
 
@@ -3286,12 +3286,7 @@ impl ArchiveAnalyzer {
                     return None;
                 }
 
-                let relative_path = entry
-                    .path()
-                    .strip_prefix(temp_dir)
-                    .unwrap_or(entry.path())
-                    .display()
-                    .to_string();
+                let relative_path = posix_relative_path(entry.path(), temp_dir);
                 let entry_path = self.format_entry_path(&relative_path);
                 let archive_location = self.format_evidence_location(&relative_path);
 

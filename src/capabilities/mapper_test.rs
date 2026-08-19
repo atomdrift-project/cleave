@@ -1,4 +1,4 @@
-//! Test module.
+﻿//! Test module.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -354,7 +354,7 @@ traits:
 
 #[test]
 fn test_symbol_lookup_respects_file_type() {
-    // A `for: [dll]` symbol trait must not fire on an ELF file — file-type
+    // A `for: [dll]` symbol trait must not fire on an ELF file â€” file-type
     // filtering applies to symbol traits like every other kind.
     let yaml = r#"
 defaults:
@@ -400,7 +400,7 @@ fn test_evaluate_composite_rules_empty() {
 #[test]
 fn test_evaluate_and_merge_findings() {
     // A symbol trait (matched against an import) and a text trait both fire
-    // through the single evaluation pass — symbol matching flows through the
+    // through the single evaluation pass â€” symbol matching flows through the
     // trait engine, not a separate lookup path.
     let yaml = r#"
 defaults:
@@ -914,7 +914,7 @@ traits:
       substr: "SIGNAL_B"
 
   # This atomic fires on a common string, but should be SUPPRESSED when the
-  # packer composite fires — i.e., when it's a legitimate packed binary.
+  # packer composite fires â€” i.e., when it's a legitimate packed binary.
   - id: "test/victim::generic-api"
     desc: "Generic API (suppressed when packer detected)"
     crit: suspicious
@@ -1242,7 +1242,7 @@ composite_rules:
 /// `MatchIndexes::build` fans out across the global rayon pool. While the cell
 /// was filled with `get_or_init(|| MatchIndexes::build(..))`, every rayon worker
 /// that reached trait matching parked on the cell waiting for the winner, and the
-/// winner sat waiting for a free worker to finish its parallel build — a cycle
+/// winner sat waiting for a free worker to finish its parallel build â€” a cycle
 /// with no way out. In production a traits reload republished an unwarmed mapper
 /// mid-scan, the first build landed with the pool already saturated, and workers
 /// wedged for days while still heartbeating.
@@ -1259,7 +1259,7 @@ fn match_indexes_survives_saturated_rayon_pool() {
     let spawned = std::sync::Arc::clone(&mapper);
     std::thread::spawn(move || {
         // `scope` blocks this off-pool thread on a rayon latch, so the pool must
-        // make progress for it to return — exactly the production dependency.
+        // make progress for it to return â€” exactly the production dependency.
         rayon::scope(|s| {
             for _ in 0..callers {
                 let m = std::sync::Arc::clone(&spawned);
@@ -1284,3 +1284,652 @@ fn match_indexes_survives_saturated_rayon_pool() {
         "match_indexes must publish a single shared build"
     );
 }
+
+fn pad_source(mut src: String) -> String {
+    while src.len() < 100 {
+        src.push_str("// pad\n");
+    }
+    src
+}
+
+#[test]
+fn source_text_regex_atom_only_does_not_fire() {
+    let yaml = r#"
+defaults:
+  for: [javascript]
+traits:
+  - id: "test/source-text::eval-call"
+    desc: "eval call"
+    crit: notable
+    if:
+      type: text
+      regex: '\beval\s*\('
+"#;
+    let (_dir, path) = create_test_yaml(yaml);
+    let mapper = CapabilityMapper::from_yaml(&path).unwrap();
+    let source = pad_source(String::from("let x = eval; // mention only\n"));
+    let mut report = create_test_source_report("probe.js", "javascript", source.len() as u64);
+    mapper.evaluate_and_merge_findings(&mut report, source.as_bytes(), None, None);
+    assert!(
+        !report
+            .findings
+            .iter()
+            .any(|f| f.id == "test/source-text::eval-call"),
+        "atom-only eval mention must not fire: {:?}",
+        report
+            .findings
+            .iter()
+            .map(|f| f.id.as_str())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn source_text_regex_unless_does_not_reuse_if_verify() {
+    let yaml = r#"
+defaults:
+  for: [javascript]
+traits:
+  - id: "test/source-text::unless-reuse"
+    desc: "if atom must not satisfy unless"
+    crit: notable
+    if:
+      type: text
+      regex: "GATEVERIFY_IF_ATOM_xyz123"
+    unless:
+      - type: text
+        regex: "GATEVERIFY_UNLESS_ATOM_abc456"
+"#;
+    let (_dir, path) = create_test_yaml(yaml);
+    let mapper = CapabilityMapper::from_yaml(&path).unwrap();
+    let source = pad_source(String::from("GATEVERIFY_IF_ATOM_xyz123\n"));
+    let mut report = create_test_source_report("probe.js", "javascript", source.len() as u64);
+    mapper.evaluate_and_merge_findings(&mut report, source.as_bytes(), None, None);
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|f| f.id == "test/source-text::unless-reuse"),
+        "unless pattern is absent; if: must still fire: {:?}",
+        report
+            .findings
+            .iter()
+            .map(|f| f.id.as_str())
+            .collect::<Vec<_>>()
+    );
+
+    let both = pad_source(String::from(
+        "GATEVERIFY_IF_ATOM_xyz123\nGATEVERIFY_UNLESS_ATOM_abc456\n",
+    ));
+    let mut report_both = create_test_source_report("probe.js", "javascript", both.len() as u64);
+    mapper.evaluate_and_merge_findings(&mut report_both, both.as_bytes(), None, None);
+    assert!(
+        !report_both
+            .findings
+            .iter()
+            .any(|f| f.id == "test/source-text::unless-reuse"),
+        "unless pattern present must suppress: {:?}",
+        report_both
+            .findings
+            .iter()
+            .map(|f| f.id.as_str())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn source_text_regex_decoded_only_still_fires() {
+    let yaml = r#"
+defaults:
+  for: [javascript]
+traits:
+  - id: "test/source-text::decoded-regex"
+    desc: "needle only after decode"
+    crit: notable
+    if:
+      type: text
+      regex: "ZXQ_DECODED_REGEX_NEEDLE_9c4a"
+"#;
+    let (_dir, path) = create_test_yaml(yaml);
+    let mapper = CapabilityMapper::from_yaml(&path).unwrap();
+    let source = pad_source(String::from("const x = 1;\n"));
+    assert!(!source.contains("ZXQ_DECODED_REGEX_NEEDLE_9c4a"));
+    let mut report = create_test_source_report("index.js", "javascript", source.len() as u64);
+    report.strings.push(crate::types::StringInfo {
+        value: "ZXQ_DECODED_REGEX_NEEDLE_9c4a".to_string().into(),
+        offset: Some(0),
+        encoding: "utf-8".to_string(),
+        string_type: None,
+        section: None,
+        encoding_chain: vec!["base64".to_string()],
+        fragments: None,
+    });
+    mapper.evaluate_and_merge_findings(&mut report, source.as_bytes(), None, None);
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|f| f.id == "test/source-text::decoded-regex"),
+        "decoded-only regex must survive raw-gate miss"
+    );
+}
+
+#[test]
+fn source_text_regex_length_min_still_filters() {
+    let yaml = r#"
+defaults:
+  for: [javascript]
+traits:
+  - id: "test/source-text::len-min"
+    desc: "span too short"
+    crit: notable
+    if:
+      type: text
+      regex: "GATEVERIFY_LEN_[A-Z]+"
+      length_min: 40
+"#;
+    let (_dir, path) = create_test_yaml(yaml);
+    let mapper = CapabilityMapper::from_yaml(&path).unwrap();
+    let source = pad_source(String::from("GATEVERIFY_LEN_SHORT\n"));
+    let mut report = create_test_source_report("probe.js", "javascript", source.len() as u64);
+    mapper.evaluate_and_merge_findings(&mut report, source.as_bytes(), None, None);
+    assert!(
+        !report
+            .findings
+            .iter()
+            .any(|f| f.id == "test/source-text::len-min"),
+        "gate is_match must not bypass length_min: {:?}",
+        report
+            .findings
+            .iter()
+            .map(|f| f.id.as_str())
+            .collect::<Vec<_>>()
+    );
+
+    let long = pad_source(String::from("GATEVERIFY_LEN_ABCDEFGHIJKLMNOPQRSTUVWXYZ\n"));
+    let mut report_ok = create_test_source_report("probe.js", "javascript", long.len() as u64);
+    mapper.evaluate_and_merge_findings(&mut report_ok, long.as_bytes(), None, None);
+    assert!(
+        report_ok
+            .findings
+            .iter()
+            .any(|f| f.id == "test/source-text::len-min"),
+        "span meeting length_min must fire"
+    );
+}
+
+/// Specimen from dscodegpt `extension/toggle-main.js` (571 B). Official scan
+/// JSON omits `path-join-dirname` / `useragent-variable-branch-call` even
+/// though the bytes match those YAML regexes. This locks whether `evaluate`
+/// itself matches before `strip_unmatched_traits`.
+const TOGGLE_MAIN_JS: &str = r#"#!/usr/bin/env node
+
+const fs = require('fs')
+const path = require('path')
+
+const target = process.argv[2]
+
+if (!target || !['src', 'dist'].includes(target)) {
+  console.error('Usage: node toggle-main.js <src|dist>')
+  process.exit(1)
+}
+
+const packageJsonPath = path.join(__dirname, 'package.json')
+const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8'))
+
+packageJson.main = `./${target}/extension.js`
+
+fs.writeFileSync(packageJsonPath, JSON.stringify(packageJson, null, 2) + '\n')
+
+console.log(`Updated package.json main to: ./${target}/extension.js`)
+"#;
+
+fn finding_ids(report: &AnalysisReport) -> Vec<String> {
+    let mut ids: Vec<String> = report
+        .findings
+        .iter()
+        .map(|f| format!("{}#{}", f.id, f.crit.rank()))
+        .collect();
+    ids.sort();
+    ids
+}
+
+#[test]
+fn toggle_main_isolated_text_regexes_match_bytes() {
+    let yaml = r#"
+defaults:
+  platforms: [windows, unix]
+  for: [javascript, typescript]
+traits:
+  - id: path-join-dirname
+    desc: path.join with __dirname
+    crit: baseline
+    conf: 0.5
+    if:
+      type: text
+      regex: 'path\.join\s*\(\s*__dirname'
+  - id: useragent-variable-branch-call
+    desc: Calls a matcher in a conditional expression
+    crit: component
+    conf: 0.88
+    if:
+      type: text
+      regex: '(?i)\b(if|while)\s*\([^;\r\n]{0,120}\b(test|includes|match|indexOf)\s*\('
+composite_rules:
+  - id: javascript-local-path
+    desc: JavaScript constructs a local script path
+    crit: baseline
+    conf: 0.7
+    any:
+      - id: path-join-dirname
+"#;
+    let (_dir, path) = create_test_yaml(yaml);
+    let mapper = CapabilityMapper::from_yaml(&path).unwrap();
+    let mut report = create_test_source_report(
+        "toggle-main.js",
+        "javascript",
+        TOGGLE_MAIN_JS.len() as u64,
+    );
+    mapper.evaluate_and_merge_findings(&mut report, TOGGLE_MAIN_JS.as_bytes(), None, None);
+    let before = finding_ids(&report);
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|f| f.id.ends_with("path-join-dirname")),
+        "eval must match path.join(__dirname): {before:?}"
+    );
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|f| f.id.ends_with("useragent-variable-branch-call")),
+        "eval must match if (...includes(: {before:?}"
+    );
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|f| f.id.ends_with("javascript-local-path")),
+        "composite any: path-join-dirname must fire: {before:?}"
+    );
+
+    report.strip_unmatched_traits();
+    let after = finding_ids(&report);
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|f| f.id.ends_with("path-join-dirname")),
+        "referenced baseline must survive strip when no notable+ signal: {after:?}"
+    );
+}
+
+#[test]
+#[ignore = "loads the production traits tree; diagnostic for strip vs evaluate"]
+fn toggle_main_production_traits_before_and_after_strip() {
+    let traits_dir = dirs::data_dir()
+        .unwrap()
+        .join("atomdrift")
+        .join("cleave")
+        .join("traits");
+    if !traits_dir.join("micro-behaviors").is_dir() {
+        eprintln!("skip: production traits missing at {}", traits_dir.display());
+        return;
+    }
+    let mapper = CapabilityMapper::from_directory_with_options(
+        &traits_dir,
+        CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION,
+        CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION,
+        false,
+        false,
+    )
+    .expect("load production traits");
+    let mut report = create_test_source_report(
+        "toggle-main.js",
+        "javascript",
+        TOGGLE_MAIN_JS.len() as u64,
+    );
+    mapper.evaluate_and_merge_findings(&mut report, TOGGLE_MAIN_JS.as_bytes(), None, None);
+    let before: Vec<String> = report.findings.iter().map(|f| f.id.to_string()).collect();
+    let had_path = before.iter().any(|id| id.ends_with("path-join-dirname"));
+    let had_ua = before
+        .iter()
+        .any(|id| id.ends_with("useragent-variable-branch-call"));
+    let had_local = before.iter().any(|id| id.ends_with("javascript-local-path"));
+    eprintln!(
+        "toggle-main production before strip ({}): path-join={} ua={} local={}\n{:#?}",
+        before.len(),
+        had_path,
+        had_ua,
+        had_local,
+        before
+    );
+    report.strip_unmatched_traits();
+    let after: Vec<String> = report.findings.iter().map(|f| f.id.to_string()).collect();
+    eprintln!(
+        "toggle-main production after strip ({}): {:#?}",
+        after.len(),
+        after
+    );
+    assert!(
+        had_path,
+        "production evaluate() should match path-join-dirname on these bytes: {before:?}"
+    );
+}
+
+#[test]
+#[ignore = "loads the production traits tree; diagnostic for AST+strip"]
+fn toggle_main_source_analyzer_production_before_strip() {
+    let traits_dir = dirs::data_dir()
+        .unwrap()
+        .join("atomdrift")
+        .join("cleave")
+        .join("traits");
+    if !traits_dir.join("micro-behaviors").is_dir() {
+        eprintln!("skip: production traits missing at {}", traits_dir.display());
+        return;
+    }
+    let mapper = CapabilityMapper::from_directory_with_options(
+        &traits_dir,
+        CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION,
+        CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION,
+        false,
+        false,
+    )
+    .expect("load production traits");
+    let analyzer = crate::analyzers::unified::UnifiedSourceAnalyzer::for_file_type(
+        &crate::analyzers::FileType::JavaScript,
+    )
+    .unwrap()
+    .with_capability_mapper(mapper);
+    let mut report = analyzer.analyze_source(std::path::Path::new("toggle-main.js"), TOGGLE_MAIN_JS);
+    let before: Vec<String> = report.findings.iter().map(|f| f.id.to_string()).collect();
+    eprintln!(
+        "source-analyzer before strip ({}): path-join={} ua={} local={}\n{:#?}",
+        before.len(),
+        before.iter().any(|id| id.ends_with("path-join-dirname")),
+        before
+            .iter()
+            .any(|id| id.ends_with("useragent-variable-branch-call")),
+        before.iter().any(|id| id.ends_with("javascript-local-path")),
+        before
+    );
+    report.strip_unmatched_traits();
+    let after: Vec<String> = report.findings.iter().map(|f| f.id.to_string()).collect();
+    eprintln!("source-analyzer after strip ({}): {:#?}", after.len(), after);
+}
+
+const DOOMED_SKIP_YAML: &str = r#"
+defaults:
+  platforms: [unix, windows]
+  for: [javascript]
+traits:
+  - id: "test/doomed::assigned"
+    desc: assigned partner
+    crit: component
+    if:
+      type: text
+      regex: 'DOOMED_ASSIGNED_ATOM_xyz123'
+  - id: "test/doomed::branch"
+    desc: weak branch
+    crit: component
+    if:
+      type: text
+      regex: '(?i)\b(if|while)\s*\([^;\r\n]{0,120}\b(test|includes|match|indexOf)\s*\('
+  - id: "test/doomed::notable"
+    desc: notable pad
+    crit: notable
+    if:
+      type: text
+      regex: 'DOOMED_NOTABLE_ATOM_abc456'
+composite_rules:
+  - id: "test/doomed::both"
+    desc: requires assigned and branch
+    crit: notable
+    all:
+      - id: "test/doomed::assigned"
+      - id: "test/doomed::branch"
+"#;
+
+fn doomed_ids(report: &AnalysisReport) -> Vec<String> {
+    let mut ids: Vec<String> = report.findings.iter().map(|f| f.id.to_string()).collect();
+    ids.sort();
+    ids
+}
+
+#[test]
+fn doomed_skip_drops_branch_when_partner_atom_misses_and_notable_present() {
+    let (_dir, path) = create_test_yaml(DOOMED_SKIP_YAML);
+    let mapper = CapabilityMapper::from_yaml(&path).unwrap();
+    let source = pad_source(String::from(
+        "if (x.includes(y)) {}\nDOOMED_NOTABLE_ATOM_abc456\n",
+    ));
+    let mut report = create_test_source_report("probe.js", "javascript", source.len() as u64);
+    mapper.evaluate_and_merge_findings(&mut report, source.as_bytes(), None, None);
+    let ids = doomed_ids(&report);
+    assert!(
+        ids.iter().any(|id| id.ends_with("::notable")),
+        "notable must fire: {ids:?}"
+    );
+    assert!(
+        !ids.iter().any(|id| id.ends_with("::branch")),
+        "branch eval_raw must be skipped when assigned atom misses: {ids:?}"
+    );
+    assert!(
+        !ids.iter().any(|id| id.ends_with("::both")),
+        "all: composite cannot fire without assigned: {ids:?}"
+    );
+}
+
+#[test]
+fn doomed_skip_still_evaluates_when_both_partners_hit() {
+    let (_dir, path) = create_test_yaml(DOOMED_SKIP_YAML);
+    let mapper = CapabilityMapper::from_yaml(&path).unwrap();
+    let source = pad_source(String::from(
+        "DOOMED_ASSIGNED_ATOM_xyz123\nif (x.includes(y)) {}\nDOOMED_NOTABLE_ATOM_abc456\n",
+    ));
+    let mut report = create_test_source_report("probe.js", "javascript", source.len() as u64);
+    mapper.evaluate_and_merge_findings(&mut report, source.as_bytes(), None, None);
+    let ids = doomed_ids(&report);
+    assert!(
+        ids.iter().any(|id| id.ends_with("::branch")),
+        "branch must evaluate when assigned can match: {ids:?}"
+    );
+    assert!(
+        ids.iter().any(|id| id.ends_with("::both")),
+        "all: composite must fire: {ids:?}"
+    );
+}
+
+#[test]
+fn doomed_skip_rescues_branch_when_file_has_no_notable() {
+    let (_dir, path) = create_test_yaml(DOOMED_SKIP_YAML);
+    let mapper = CapabilityMapper::from_yaml(&path).unwrap();
+    let source = pad_source(String::from("if (x.includes(y)) {}\n"));
+    let mut report = create_test_source_report("probe.js", "javascript", source.len() as u64);
+    mapper.evaluate_and_merge_findings(&mut report, source.as_bytes(), None, None);
+    let ids = doomed_ids(&report);
+    assert!(
+        ids.iter().any(|id| id.ends_with("::branch")),
+        "rescue path must still evaluate doomed branch: {ids:?}"
+    );
+    let (file, _, _) = report.into_file_analysis(0);
+    let mut wrapped = create_test_source_report("probe.js", "javascript", source.len() as u64);
+    wrapped.files = vec![file];
+    wrapped.strip_unmatched_traits();
+    let after: Vec<String> = wrapped.files[0]
+        .findings
+        .iter()
+        .map(|f| f.id.to_string())
+        .collect();
+    assert!(
+        after.iter().any(|id| id.ends_with("::branch")),
+        "rescued branch must survive strip when no notable+: {after:?}"
+    );
+}
+
+#[test]
+fn doomed_skip_does_not_skip_any_satisfier() {
+    let yaml = r#"
+defaults:
+  platforms: [unix, windows]
+  for: [javascript]
+traits:
+  - id: "test/doomed-any::assigned"
+    desc: assigned partner
+    crit: component
+    if:
+      type: text
+      regex: 'DOOMED_ANY_ASSIGNED_ATOM_xyz123'
+  - id: "test/doomed-any::branch"
+    desc: weak branch
+    crit: component
+    if:
+      type: text
+      regex: '(?i)\b(if|while)\s*\([^;\r\n]{0,120}\b(test|includes|match|indexOf)\s*\('
+  - id: "test/doomed-any::notable"
+    desc: notable pad
+    crit: notable
+    if:
+      type: text
+      regex: 'DOOMED_ANY_NOTABLE_ATOM_abc456'
+composite_rules:
+  - id: "test/doomed-any::either"
+    desc: any of assigned or branch
+    crit: notable
+    any:
+      - id: "test/doomed-any::assigned"
+      - id: "test/doomed-any::branch"
+"#;
+    let (_dir, path) = create_test_yaml(yaml);
+    let mapper = CapabilityMapper::from_yaml(&path).unwrap();
+    let source = pad_source(String::from(
+        "if (x.includes(y)) {}\nDOOMED_ANY_NOTABLE_ATOM_abc456\n",
+    ));
+    let mut report = create_test_source_report("probe.js", "javascript", source.len() as u64);
+    mapper.evaluate_and_merge_findings(&mut report, source.as_bytes(), None, None);
+    let ids = doomed_ids(&report);
+    assert!(
+        ids.iter().any(|id| id.ends_with("::branch")),
+        "any: satisfier must still evaluate when the other leg misses: {ids:?}"
+    );
+    assert!(
+        ids.iter().any(|id| id.ends_with("::either")),
+        "any: composite must fire from branch alone: {ids:?}"
+    );
+}
+
+#[test]
+fn doomed_skip_never_skips_unless_target() {
+    let yaml = r#"
+defaults:
+  platforms: [unix, windows]
+  for: [javascript]
+traits:
+  - id: "test/doomed-unless::partner"
+    desc: partner that will miss
+    crit: component
+    if:
+      type: text
+      regex: 'DOOMED_UNLESS_PARTNER_ATOM_xyz'
+  - id: "test/doomed-unless::target"
+    desc: unless suppressor
+    crit: component
+    if:
+      type: text
+      regex: '(?i)\b(if|while)\s*\([^;\r\n]{0,120}\b(test|includes|match|indexOf)\s*\('
+  - id: "test/doomed-unless::notable"
+    desc: notable gated by unless
+    crit: notable
+    if:
+      type: text
+      regex: 'DOOMED_UNLESS_NOTABLE_ATOM_abc'
+    unless:
+      - id: "test/doomed-unless::target"
+composite_rules:
+  - id: "test/doomed-unless::comp"
+    desc: would doom target if unless did not protect it
+    crit: notable
+    all:
+      - id: "test/doomed-unless::partner"
+      - id: "test/doomed-unless::target"
+"#;
+    let (_dir, path) = create_test_yaml(yaml);
+    let mapper = CapabilityMapper::from_yaml(&path).unwrap();
+    let source = pad_source(String::from(
+        "if (x.includes(y)) {}\nDOOMED_UNLESS_NOTABLE_ATOM_abc\n",
+    ));
+    let mut report = create_test_source_report("probe.js", "javascript", source.len() as u64);
+    mapper.evaluate_and_merge_findings(&mut report, source.as_bytes(), None, None);
+    let ids = doomed_ids(&report);
+    assert!(
+        ids.iter().any(|id| id.ends_with("::target")),
+        "unless target must still evaluate: {ids:?}"
+    );
+    assert!(
+        !ids.iter().any(|id| id.ends_with("::notable")),
+        "skipping the unless target would FP the notable: {ids:?}"
+    );
+}
+
+/// A sibling member firing the composite must not force us to evaluate the
+/// weak leg on a file whose partner atom missed. Official report-wide strip
+/// would have kept that extra copy; the skip treats it as not local evidence.
+#[test]
+fn doomed_skip_does_not_create_sibling_rescued_copy() {
+    let (_dir, path) = create_test_yaml(DOOMED_SKIP_YAML);
+    let mapper = CapabilityMapper::from_yaml(&path).unwrap();
+
+    let both = pad_source(String::from(
+        "DOOMED_ASSIGNED_ATOM_xyz123\nif (x.includes(y)) {}\nDOOMED_NOTABLE_ATOM_abc456\n",
+    ));
+    let mut report_a = create_test_source_report("a.js", "javascript", both.len() as u64);
+    mapper.evaluate_and_merge_findings(&mut report_a, both.as_bytes(), None, None);
+    assert!(
+        doomed_ids(&report_a)
+            .iter()
+            .any(|id| id.ends_with("::both")),
+        "file A must fire the composite: {:?}",
+        doomed_ids(&report_a)
+    );
+
+    let weak = pad_source(String::from(
+        "if (x.includes(y)) {}\nDOOMED_NOTABLE_ATOM_abc456\n",
+    ));
+    let mut report_b = create_test_source_report("b.js", "javascript", weak.len() as u64);
+    mapper.evaluate_and_merge_findings(&mut report_b, weak.as_bytes(), None, None);
+    assert!(
+        !doomed_ids(&report_b)
+            .iter()
+            .any(|id| id.ends_with("::branch")),
+        "file B must not create the doomed branch: {:?}",
+        doomed_ids(&report_b)
+    );
+
+    let (file_a, _, _) = report_a.into_file_analysis(0);
+    let (mut file_b, _, _) = report_b.into_file_analysis(1);
+    file_b.parent_id = Some(0);
+    let mut wrapped = create_test_source_report("bundle.js", "javascript", 0);
+    wrapped.files = vec![file_a, file_b];
+    wrapped.strip_unmatched_traits();
+    let b_ids: Vec<String> = wrapped.files[1]
+        .findings
+        .iter()
+        .map(|f| f.id.to_string())
+        .collect();
+    assert!(
+        !b_ids.iter().any(|id| id.ends_with("::branch")),
+        "sibling composite must not resurrect a skipped branch: {b_ids:?}"
+    );
+    let a_ids: Vec<String> = wrapped.files[0]
+        .findings
+        .iter()
+        .map(|f| f.id.to_string())
+        .collect();
+    assert!(
+        a_ids.iter().any(|id| id.ends_with("::both")),
+        "file A composite must survive: {a_ids:?}"
+    );
+}
+

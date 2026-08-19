@@ -146,6 +146,33 @@ impl LeanRegex {
         });
     }
 
+    /// Search only `spans` (byte ranges in `haystack`). Offsets passed to `f`
+    /// stay haystack-absolute. `Input::span` keeps `\A`/`\b`/`^` relative to
+    /// the full haystack, not the window — no second memmem, no new haystack.
+    pub(crate) fn for_each_match_spans(
+        &self,
+        haystack: &[u8],
+        spans: &[(usize, usize)],
+        mut f: impl FnMut(usize, usize) -> bool,
+    ) {
+        crate::composite_rules::regex_scratch::with_cache(self.id, &self.meta, |cache| {
+            for &(lo, hi) in spans {
+                if lo >= hi || hi > haystack.len() {
+                    continue;
+                }
+                let input = regex_automata::Input::new(haystack).span(lo..hi);
+                let mut it = regex_automata::util::iter::Searcher::new(input);
+                loop {
+                    let m = it.advance(|input| Ok(self.meta.search_with(cache, input)));
+                    let Some(m) = m else { break };
+                    if !f(m.start(), m.end()) {
+                        return;
+                    }
+                }
+            }
+        });
+    }
+
     /// Heap footprint of the compiled engine, for the byte-budgeted store.
     pub(crate) fn heap_bytes(&self) -> usize {
         self.meta.memory_usage() + std::mem::size_of::<Self>()
@@ -154,11 +181,12 @@ impl LeanRegex {
     /// Whether the pattern matches anywhere in `haystack`. Test-only primitive.
     #[cfg(test)]
     pub(crate) fn is_match(&self, haystack: &[u8]) -> bool {
-        crate::composite_rules::regex_scratch::with_cache(self.id, &self.meta, |cache| {
-            self.meta
-                .search_half_with(cache, &regex_automata::Input::new(haystack).earliest(true))
-                .is_some()
-        })
+        let mut hit = false;
+        self.for_each_match(haystack, |_, _| {
+            hit = true;
+            false
+        });
+        hit
     }
 }
 
@@ -517,6 +545,193 @@ pub(crate) fn mandatory_atom_set(pattern: &str) -> Option<Vec<(String, bool)>> {
     set.into_iter()
         .map(|(bytes, ci)| String::from_utf8(bytes).ok().map(|s| (s, ci)))
         .collect()
+}
+
+/// Don't window tiny haystacks: the meta engine's own prefilter is enough.
+const MIN_HAYSTACK_TO_WINDOW: usize = 16 * 1024;
+/// Patterns whose match can exceed this stay full-scan (windowing is pointless).
+const MAX_WINDOW_RADIUS: usize = 8192;
+
+fn parse_hir_like_engine(pattern: &str) -> Option<regex_syntax::hir::Hir> {
+    if pattern.is_ascii() {
+        regex_syntax::ParserBuilder::new()
+            .utf8(false)
+            .unicode(false)
+            .build()
+            .parse(pattern)
+            .ok()
+            .or_else(|| regex_syntax::parse(pattern).ok())
+    } else {
+        regex_syntax::parse(pattern).ok()
+    }
+}
+
+/// Upper bound on bytes a match can consume. `None` if any repetition is
+/// unbounded or the bound exceeds [`MAX_WINDOW_RADIUS`]. ASCII-class
+/// assumption: each `Class` is one byte (the `compile_bytes_regex` path).
+pub(crate) fn bounded_consumed_bytes(pattern: &str) -> Option<usize> {
+    fn walk(hir: &regex_syntax::hir::Hir) -> Option<usize> {
+        use regex_syntax::hir::HirKind;
+        match hir.kind() {
+            HirKind::Empty | HirKind::Look(_) => Some(0),
+            HirKind::Literal(lit) => Some(lit.0.len()),
+            HirKind::Class(_) => Some(1),
+            HirKind::Capture(c) => walk(&c.sub),
+            HirKind::Concat(subs) => {
+                let mut n = 0usize;
+                for s in subs {
+                    n = n.checked_add(walk(s)?)?;
+                    if n > MAX_WINDOW_RADIUS {
+                        return None;
+                    }
+                }
+                Some(n)
+            }
+            HirKind::Alternation(subs) => {
+                let mut m = 0usize;
+                for s in subs {
+                    m = m.max(walk(s)?);
+                }
+                (m <= MAX_WINDOW_RADIUS).then_some(m)
+            }
+            HirKind::Repetition(r) => {
+                let max = r.max?;
+                let sub = walk(&r.sub)?;
+                let n = sub.checked_mul(max as usize)?;
+                (n <= MAX_WINDOW_RADIUS).then_some(n)
+            }
+        }
+    }
+    walk(&parse_hir_like_engine(pattern)?)
+}
+
+fn look_info(hir: &regex_syntax::hir::Hir) -> (bool, bool, bool) {
+    use regex_syntax::hir::{HirKind, Look};
+    match hir.kind() {
+        HirKind::Look(look) => {
+            // `\A` / `\z` only — `EndNoLF` is also used for `$` in some
+            // encodings and must not disable windowing for line-anchored rules.
+            let abs = matches!(look, Look::Start | Look::End);
+            let line = matches!(
+                look,
+                Look::StartLF | Look::EndLF | Look::StartCRLF | Look::EndCRLF
+            );
+            (abs, line, true)
+        }
+        HirKind::Capture(c) => look_info(&c.sub),
+        HirKind::Repetition(r) => look_info(&r.sub),
+        HirKind::Concat(subs) | HirKind::Alternation(subs) => {
+            let mut abs = false;
+            let mut line = false;
+            let mut any = false;
+            for s in subs {
+                let (a, l, y) = look_info(s);
+                abs |= a;
+                line |= l;
+                any |= y;
+            }
+            (abs, line, any)
+        }
+        _ => (false, false, false),
+    }
+}
+
+fn merge_spans(mut spans: Vec<(usize, usize)>) -> Vec<(usize, usize)> {
+    if spans.len() <= 1 {
+        return spans;
+    }
+    spans.sort_unstable_by_key(|s| s.0);
+    let mut out: Vec<(usize, usize)> = Vec::with_capacity(spans.len());
+    for (lo, hi) in spans {
+        match out.last_mut() {
+            Some((_, end)) if lo <= *end => {
+                if hi > *end {
+                    *end = hi;
+                }
+            }
+            _ => out.push((lo, hi)),
+        }
+    }
+    out
+}
+
+/// True when at least one recorded hit is a mandatory atom of `pattern`.
+/// Used to refuse windowing an `unless:` regex around `if:` atom offsets.
+pub(crate) fn hits_are_pattern_atoms(haystack: &[u8], hits: &[u32], pattern: &str) -> bool {
+    let Some(atoms) = mandatory_atom_set(pattern) else {
+        return false;
+    };
+    for &off in hits {
+        let o = off as usize;
+        for (atom, ci) in &atoms {
+            let b = atom.as_bytes();
+            let Some(slice) = haystack.get(o..o + b.len()) else {
+                continue;
+            };
+            let ok = if *ci {
+                slice.eq_ignore_ascii_case(b)
+            } else {
+                slice == b
+            };
+            if ok {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Windows around gate-supplied atom hits for a bounded pattern.
+///
+/// `hits` are absolute starts in `haystack` (the file the gate already
+/// scanned). Returns `None` when windowing is unsound or not profitable —
+/// caller full-scans. Never walks the haystack looking for atoms.
+pub(crate) fn windows_from_atom_hits(
+    haystack: &[u8],
+    hits: &[u32],
+    pattern: &str,
+    search_start: usize,
+    search_end: usize,
+) -> Option<Vec<(usize, usize)>> {
+    let search_len = search_end.saturating_sub(search_start);
+    if search_len < MIN_HAYSTACK_TO_WINDOW || hits.is_empty() {
+        return None;
+    }
+    let hir = parse_hir_like_engine(pattern)?;
+    let (abs, line, any_look) = look_info(&hir);
+    if abs || regex_unicode_override() {
+        return None;
+    }
+    let radius = bounded_consumed_bytes(pattern)?;
+    let pad = usize::from(any_look);
+    let mut spans = Vec::with_capacity(hits.len());
+    let mut covered = 0usize;
+    for &hit in hits {
+        let hit = hit as usize;
+        if hit < search_start || hit >= search_end {
+            continue;
+        }
+        let mut lo = hit
+            .saturating_sub(radius)
+            .saturating_sub(pad)
+            .max(search_start);
+        let mut hi = hit
+            .saturating_add(radius)
+            .saturating_add(pad)
+            .min(search_end);
+        if line {
+            lo = memchr::memrchr(b'\n', &haystack[search_start..lo])
+                .map_or(search_start, |n| search_start + n + 1);
+            hi = memchr::memchr(b'\n', &haystack[hi..search_end])
+                .map_or(search_end, |n| (hi + n + 1).min(search_end));
+        }
+        covered = covered.saturating_add(hi.saturating_sub(lo));
+        spans.push((lo, hi));
+    }
+    if spans.is_empty() || covered > search_len / 2 {
+        return None;
+    }
+    Some(merge_spans(spans))
 }
 
 /// Log compiled-regex store occupancy and churn. `*_evictions` near
@@ -955,7 +1170,7 @@ pub(crate) fn resolve_effective_range_opt<'a>(
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod mandatory_atom_set_tests {
-    use super::{best_mandatory_atom, mandatory_atom_set};
+    use super::{best_mandatory_atom, bounded_consumed_bytes, mandatory_atom_set};
 
     fn set(pattern: &str) -> Option<Vec<(String, bool)>> {
         mandatory_atom_set(pattern).map(|mut s| {
@@ -1030,6 +1245,17 @@ mod mandatory_atom_set_tests {
         assert_eq!(set(r"(?i)\.com\b"), Some(vec![(".com".into(), true)]));
     }
 
+    /// Baseline CSS `font-family` rule: the only long mandatory literal sits
+    /// after `(^|})` and bounded `[^}]` runs, so a prefix extractor leaves it
+    /// ungated. The any-of walk must still recover the CI `font-family` atom.
+    #[test]
+    fn css_font_family_rule_extracts_ci_atom() {
+        assert_eq!(
+            set(r"(?i)(^|})[^@{}]{0,80}\{[^}]{0,160}font-family\s*:"),
+            Some(vec![("font-family".into(), true)])
+        );
+    }
+
     /// Non-ASCII patterns get the unicode engine (E7b), whose case folding
     /// covers non-ASCII letters — so a byte-mode-extracted atom carrying raw
     /// `ç` bytes is NOT mandatory (`Için` matches the engine, misses the
@@ -1099,6 +1325,19 @@ mod mandatory_atom_set_tests {
                 "match {matched:?} contains no atom from {atoms:?}"
             );
         }
+    }
+
+    #[test]
+    fn bounded_consumed_bytes_examples() {
+        assert_eq!(bounded_consumed_bytes(r"PING.{0,120}PONG"), Some(128));
+        assert_eq!(bounded_consumed_bytes(r"foo"), Some(3));
+        assert_eq!(bounded_consumed_bytes(r"foo.*bar"), None);
+        // Trailing `\s*` makes the CSS rule unbounded; atom-skip still applies
+        // via the raw-content gate, not via windowing.
+        assert_eq!(
+            bounded_consumed_bytes(r"(?i)(^|})[^@{}]{0,80}\{[^}]{0,160}font-family\s*:"),
+            None
+        );
     }
 }
 

@@ -53,7 +53,7 @@ impl super::CapabilityMapper {
                           ctx: &EvaluationContext<'_>|
          -> Vec<Finding> {
             use rayon::prelude::*;
-            if parallel_rules {
+            if parallel_rules && crate::rayon_nest::inner_work_parallel() {
                 rules
                     .par_iter()
                     .filter(|rule| matched_bits.contains_all(&rule.required_trait_indices))

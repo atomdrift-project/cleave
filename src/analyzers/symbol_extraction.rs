@@ -7,8 +7,9 @@ use crate::analyzers::FileType;
 use crate::types::{AnalysisReport, Import};
 
 const MAX_DUNDER_IMPORT_ALIASES: usize = 1024;
-const MAX_TOTAL_CALL_SITES: usize = 20_000;
+pub(crate) const MAX_TOTAL_CALL_SITES: usize = 20_000;
 const MAX_IDENTIFIER_DEPTH: usize = 256;
+const MAX_OFFSETS_PER_SYMBOL: usize = 32;
 
 /// Ingest the import list filefacts already produced from its
 /// per-language tree-sitter queries, then run Python `__import__`
@@ -190,11 +191,16 @@ pub(crate) fn extract_symbols_from_tree(
     let mut call_sites: Vec<(String, u64)> = Vec::new();
     let mut cursor = tree.walk();
     extract_calls(&mut cursor, source.as_bytes(), call_types, &mut call_sites);
+    push_capped_call_imports(call_sites, report);
+}
 
-    // Cap per-symbol offsets so minified or deeply repetitive files
-    // don't explode the imports vector. 32 is enough for proximity
-    // (any window that needs more hits than that is pathological).
-    const MAX_OFFSETS_PER_SYMBOL: usize = 32;
+/// Cap per-symbol offsets so minified or deeply repetitive files
+/// don't explode the imports vector. 32 is enough for proximity
+/// (any window that needs more hits than that is pathological).
+pub(crate) fn push_capped_call_imports(
+    call_sites: Vec<(String, u64)>,
+    report: &mut AnalysisReport,
+) {
     let mut per_symbol_count: std::collections::HashMap<String, usize> =
         std::collections::HashMap::new();
 

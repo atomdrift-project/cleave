@@ -69,6 +69,9 @@ pub mod yara_engine;
 // OOM the host. See scan_files / scan_directory.
 mod scan_mem_gate;
 
+// Adaptive nested rayon: serial member-inner joins when 2+ top-level files share the pool.
+mod rayon_nest;
+
 // HTTP API server
 pub mod server;
 
@@ -2992,6 +2995,110 @@ fn sort_largest_first(paths: &mut [std::path::PathBuf]) {
     }
 }
 
+/// Archives at or above this size take a limited concurrency slot so their
+/// member `par_iter` keeps most of the rayon pool. Smaller files run after
+/// the larges drain — attaching them to a live zip was B1d's zip balloon
+/// (solo 66 s → 408 s tail). `CLEAVE_FILE_CONCURRENCY=0` disables the split.
+const LARGE_FILE_SLOT_BYTES: u64 = 50 * 1024 * 1024;
+
+fn file_concurrency_override() -> Option<usize> {
+    static V: std::sync::OnceLock<Option<usize>> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("CLEAVE_FILE_CONCURRENCY")
+            .ok()
+            .and_then(|s| s.parse().ok())
+    })
+}
+
+fn path_len_bytes(path: &Path) -> u64 {
+    std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
+}
+
+/// Dispatch `f` over `paths` without parking rayon workers on a condvar.
+///
+/// If `CLEAVE_FILE_CONCURRENCY=N` is set, files ≥ [`LARGE_FILE_SLOT_BYTES`]
+/// run on a std-thread slot semaphore of N (dispatcher is this thread, so
+/// waits do not park rayon workers). Smaller files then use `into_par_iter`.
+/// Unset or `0` is unlimited rayon (the default; a default of 2 lost on B1f).
+fn for_each_scan_path<F>(paths: Vec<std::path::PathBuf>, f: F)
+where
+    F: Fn(&std::path::PathBuf) + Sync,
+{
+    use rayon::prelude::*;
+
+    // Default is unlimited rayon (B1f's default 2-slot large-file
+    // semaphore was 640 s vs B1b 539 s). Opt in with CLEAVE_FILE_CONCURRENCY.
+    let Some(slots) = file_concurrency_override() else {
+        paths.into_par_iter().for_each(|p| f(&p));
+        return;
+    };
+    if slots == 0 || paths.len() <= 1 {
+        paths.into_par_iter().for_each(|p| f(&p));
+        return;
+    }
+
+    let (larges, smalls): (Vec<_>, Vec<_>) = paths
+        .into_iter()
+        .partition(|p| path_len_bytes(p) >= LARGE_FILE_SLOT_BYTES);
+
+    if larges.len() >= 2 || (larges.len() == 1 && !smalls.is_empty()) {
+        tracing::info!(
+            large_files = larges.len(),
+            small_files = smalls.len(),
+            slots,
+            "scan dispatch: large-file slot semaphore, then unlimited smalls"
+        );
+        for_each_std_limited(&larges, slots, &f);
+        if !smalls.is_empty() {
+            smalls.into_par_iter().for_each(|p| f(&p));
+        }
+    } else {
+        let rest = if larges.is_empty() { smalls } else { larges };
+        rest.into_par_iter().for_each(|p| f(&p));
+    }
+}
+
+fn for_each_std_limited<T, F>(items: &[T], slots: usize, f: &F)
+where
+    T: Sync,
+    F: Fn(&T) + Sync,
+{
+    let n = slots.max(1).min(items.len());
+    if items.is_empty() || n == 0 {
+        return;
+    }
+    if n >= items.len() {
+        std::thread::scope(|scope| {
+            for item in items {
+                scope.spawn(move || f(item));
+            }
+        });
+        return;
+    }
+    let (tx, rx) = std::sync::mpsc::sync_channel::<()>(n);
+    for _ in 0..n {
+        let _ = tx.send(());
+    }
+    std::thread::scope(|scope| {
+        for item in items {
+            if rx.recv().is_err() {
+                break;
+            }
+            let tx = tx.clone();
+            scope.spawn(move || {
+                struct ReturnSlot(std::sync::mpsc::SyncSender<()>);
+                impl Drop for ReturnSlot {
+                    fn drop(&mut self) {
+                        let _ = self.0.send(());
+                    }
+                }
+                let _slot = ReturnSlot(tx);
+                f(item);
+            });
+        }
+    });
+}
+
 /// Analyze a single already-discovered file under the shared scan pipeline:
 /// honor cancellation, gate concurrent memory, apply the size and program-type
 /// filters (unless `all_files`), then analyze and deliver the result through
@@ -3068,6 +3175,7 @@ fn analyze_one_path<F>(
                 skipped.fetch_add(1, Ordering::Relaxed);
                 return;
             }
+            let _in_flight = crate::rayon_nest::enter_toplevel_analysis();
             let result = analyze_file_with_resources(
                 file_path,
                 options,
@@ -3094,6 +3202,7 @@ fn analyze_one_path<F>(
             return;
         }
 
+        let _in_flight = crate::rayon_nest::enter_toplevel_analysis();
         let result = analyze_file_with_resources(file_path, options, mapper, yara_engine, None);
         match &result {
             Ok(_) => {
@@ -3147,7 +3256,6 @@ where
     P: AsRef<Path>,
     F: Fn(ScanEvent) + Sync,
 {
-    use rayon::prelude::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use walkdir::WalkDir;
 
@@ -3234,9 +3342,9 @@ where
         sort_largest_first(&mut paths);
 
         let mem_gate = scan_mem_gate::ScanMemGate::new();
-        paths.into_par_iter().for_each(|file_path| {
+        for_each_scan_path(paths, |file_path| {
             analyze_one_path(
-                &file_path,
+                file_path,
                 options,
                 &mapper,
                 yara_engine.as_ref(),
@@ -3309,7 +3417,6 @@ pub fn scan_paths<F>(
 where
     F: Fn(ScanEvent) + Sync,
 {
-    use rayon::prelude::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     let _disable_guards = AnalysisDisableGuards::from_options(options);
@@ -3336,9 +3443,9 @@ where
 
     crate::mem_profile::start_sampler();
     let mem_gate = scan_mem_gate::ScanMemGate::new();
-    paths.into_par_iter().for_each(|file_path| {
+    for_each_scan_path(paths, |file_path| {
         analyze_one_path(
-            &file_path,
+            file_path,
             options,
             &mapper,
             yara_engine.as_ref(),
@@ -3435,6 +3542,7 @@ where
         // Catch panics so one malformed file can't poison the rayon pool and
         // kill the whole batch.
         let panic_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _in_flight = crate::rayon_nest::enter_toplevel_analysis();
             let result = analyze_file_with_resources(
                 file_path,
                 options,

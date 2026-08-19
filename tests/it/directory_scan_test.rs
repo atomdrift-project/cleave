@@ -269,8 +269,8 @@ fn test_analyze_nonexistent_path() {
 }
 
 /// Test symlink handling
+#[cfg(unix)]
 #[test]
-
 fn test_analyze_symlink_handling() {
     use std::os::unix::fs::symlink;
 

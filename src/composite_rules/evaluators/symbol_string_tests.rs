@@ -2842,3 +2842,157 @@ fn build_regex_dollar_anchors_per_line() {
         "multi-line `$` should match end of every line, got {count} matches"
     );
 }
+
+fn eval_raw_regex_on(
+    pattern: &str,
+    content: &[u8],
+    file_type: FileType,
+    trait_idx: Option<usize>,
+    offsets: Option<&rustc_hash::FxHashMap<usize, Vec<u32>>>,
+) -> ConditionResult {
+    let report = create_test_report();
+    let mut ctx = EvaluationContext::test_only_new(&report, content, file_type);
+    if let Some(idx) = trait_idx {
+        ctx = ctx.with_trait_idx(idx);
+    }
+    ctx = ctx.with_raw_atom_offsets(offsets);
+    let pattern = pattern.to_string();
+    let location = ContentLocationParams::default();
+    eval_raw(
+        None,
+        None,
+        Some(&pattern),
+        None,
+        false,
+        false,
+        None,
+        None,
+        &location,
+        &ctx,
+        None,
+    )
+}
+
+/// Bounded `A.{0,N}B` must find the match when the gate hands over the atom
+/// offset — no second memmem inside `eval_raw`.
+#[test]
+fn test_eval_raw_window_finds_bounded_match() {
+    let mut content = vec![b'x'; 20_000];
+    let hit = content.len() as u32;
+    content.extend_from_slice(b"PING----PONG");
+    content.extend_from_slice(&[b'y'; 1000]);
+    let mut offsets = rustc_hash::FxHashMap::default();
+    offsets.insert(0, vec![hit]);
+    let result = eval_raw_regex_on(
+        r"PING.{0,120}PONG",
+        &content,
+        FileType::JavaScript,
+        Some(0),
+        Some(&offsets),
+    );
+    assert!(result.matched);
+}
+
+/// Line-anchored `^` after 20 KiB of filler: windowing must snap to the line.
+#[test]
+fn test_eval_raw_window_caret_on_later_line() {
+    let mut content = vec![b'x'; 20_000];
+    content.extend_from_slice(b"\nnamespace Foo;\n");
+    let hit = memchr::memmem::find(&content, b"namespace").expect("atom") as u32;
+    let mut offsets = rustc_hash::FxHashMap::default();
+    offsets.insert(0, vec![hit]);
+    let result = eval_raw_regex_on(
+        r"^namespace ",
+        &content,
+        FileType::JavaScript,
+        Some(0),
+        Some(&offsets),
+    );
+    assert!(
+        result.matched,
+        "^namespace must match at a later line under windowed search"
+    );
+}
+
+/// `\A` is file-absolute. A mid-file atom must not produce a match just
+/// because a window starts at the atom — we full-scan (no window) and still
+/// must not match.
+#[test]
+fn test_eval_raw_absolute_anchor_mid_file_does_not_match() {
+    let mut content = vec![b'x'; 20_000];
+    content.extend_from_slice(b"foo");
+    let hit = 20_000u32;
+    let mut offsets = rustc_hash::FxHashMap::default();
+    offsets.insert(0, vec![hit]);
+    let result = eval_raw_regex_on(
+        r"\Afoo",
+        &content,
+        FileType::JavaScript,
+        Some(0),
+        Some(&offsets),
+    );
+    assert!(!result.matched);
+}
+
+/// PE / extracted-string types ignore gate offsets and full-scan. Wrong
+/// offsets must not hide a real match.
+#[test]
+fn test_eval_raw_pe_ignores_atom_offsets() {
+    let mut content = vec![b'x'; 20_000];
+    content.extend_from_slice(b"PING----PONG");
+    let mut offsets = rustc_hash::FxHashMap::default();
+    offsets.insert(0, vec![0]); // would miss if windowed
+    let result = eval_raw_regex_on(
+        r"PING.{0,120}PONG",
+        &content,
+        FileType::Pe,
+        Some(0),
+        Some(&offsets),
+    );
+    assert!(result.matched, "PE path must full-scan, not window");
+}
+
+/// Two atom hits: first is a false candidate, second is the match. Complete
+/// offset lists from the gate must still find the later match.
+#[test]
+fn test_eval_raw_window_later_hit_after_false_candidate() {
+    let mut content = vec![b'x'; 20_000];
+    let first = content.len() as u32;
+    content.extend_from_slice(b"PING----xxxx");
+    content.extend_from_slice(&[b'y'; 200]);
+    let second = content.len() as u32;
+    content.extend_from_slice(b"PING----PONG");
+    let mut offsets = rustc_hash::FxHashMap::default();
+    offsets.insert(0, vec![first, second]);
+    let result = eval_raw_regex_on(
+        r"PING.{0,120}PONG",
+        &content,
+        FileType::JavaScript,
+        Some(0),
+        Some(&offsets),
+    );
+    assert!(result.matched);
+}
+
+/// Offsets from a different regex on the same trait (the `if:` atom) must not
+/// window an `unless:` regex — that was B1n's extra loopback/bearer hits.
+#[test]
+fn test_eval_raw_foreign_offsets_do_not_window() {
+    let mut content = b"window.location.origin\n".to_vec();
+    content.extend_from_slice(&vec![b'x'; 20_000]);
+    let localhost_at = content.len() as u32;
+    content.extend_from_slice(b"http://localhost/api");
+    let mut offsets = rustc_hash::FxHashMap::default();
+    offsets.insert(0, vec![localhost_at + 7]); // start of "localhost"
+    let result = eval_raw_regex_on(
+        r"window\.location\.(origin|href)",
+        &content,
+        FileType::JavaScript,
+        Some(0),
+        Some(&offsets),
+    );
+    assert!(
+        result.matched,
+        "unless regex must full-scan when offsets belong to the if atom"
+    );
+}

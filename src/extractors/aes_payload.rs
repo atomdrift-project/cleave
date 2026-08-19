@@ -378,6 +378,12 @@ fn generate_preview(data: &[u8]) -> String {
 pub(crate) fn extract_aes_payloads(content: &[u8]) -> Vec<AesExtractedPayload> {
     let mut payloads = Vec::new();
 
+    // The extractor only matches `createDecipheriv(...)`. Skip the
+    // hex-blob regexes on the >99% of JS members that have no AES.
+    if memchr::memmem::find(content, b"createDecipheriv").is_none() {
+        return payloads;
+    }
+
     // Convert to string (AES patterns are in text)
     let Ok(content_str) = std::str::from_utf8(content) else {
         return payloads;

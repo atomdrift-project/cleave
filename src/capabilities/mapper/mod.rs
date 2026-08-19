@@ -27,7 +27,7 @@ use std::sync::{Arc, OnceLock};
 use crate::capabilities::indexes::{
     RawContentRegexIndex, StringMatchIndex, SymbolMatchIndex, TraitIndex,
 };
-use crate::composite_rules::{CompositeTrait, Platform, TraitDefinition};
+use crate::composite_rules::{CompositeTrait, FileType as RuleFileType, Platform, TraitDefinition};
 
 /// The four match indexes, built together as a pure function of the mapper's
 /// `trait_definitions` and `platforms`. Held behind a [`OnceLock`] so they are
@@ -133,6 +133,9 @@ pub struct CapabilityMapper {
     /// once on first use. The member-fold early strip keeps any finding this
     /// index can reach.
     pub(super) trait_ref_index: Arc<OnceLock<TraitRefIndex>>,
+    /// Skip `eval_raw` for a component/baseline whose every file-scope
+    /// consumer composite is already unsatisfiable on this file.
+    pub(super) doomed_skip: Arc<OnceLock<doomed_skip::DoomedSkipIndex>>,
     /// Composite-rule id → index into `composite_rules`, built once on first
     /// downgrade re-evaluation and shared across per-file mapper clones. The
     /// reeval paths run once per file (and once per archive member in the
@@ -248,6 +251,16 @@ impl CapabilityMapper {
         // The closure only moves an already-built value, so a racing caller
         // blocks for a move rather than for a multi-second parallel build.
         self.indexes.get_or_init(|| built)
+    }
+
+    pub(super) fn doomed_skip_index(&self) -> &doomed_skip::DoomedSkipIndex {
+        self.doomed_skip.get_or_init(|| {
+            doomed_skip::DoomedSkipIndex::build(
+                &self.trait_definitions,
+                &self.composite_rules,
+                &self.trait_id_map,
+            )
+        })
     }
 
     /// Composite-rule id → index into `composite_rules`, built once on first
@@ -405,6 +418,82 @@ pub(super) fn build_string_pseudo_entries(
     all_strings
 }
 
+/// String-index skip sets for one file.
+///
+/// On source (`uses_raw_text_search`), `source_text_prefiltered` is set only
+/// when the raw file was scanned as one haystack. Exact/substr/regex-prefix
+/// skips are then sound because `eval_text` searches those same bytes.
+/// Cached evidence stays empty on that path — do not take the PE fast path
+/// that would emit extracted-string evidence in place of `eval_raw`.
+pub(super) struct StringPrefilter {
+    pub matched: rustc_hash::FxHashSet<usize>,
+    pub evidence: rustc_hash::FxHashMap<usize, Vec<crate::types::Evidence>>,
+    pub regex_candidates: rustc_hash::FxHashSet<usize>,
+    pub source_text_prefiltered: bool,
+}
+
+pub(super) fn build_string_prefilter(
+    index: &StringMatchIndex,
+    file_type: &RuleFileType,
+    binary_data: &[u8],
+    report: &crate::types::AnalysisReport,
+) -> StringPrefilter {
+    if file_type.uses_raw_text_search() {
+        if let Some((mut matched, regex_candidates)) = index.find_matches_in_raw_source(binary_data)
+        {
+            let decoded: Vec<&crate::types::StringInfo> = report
+                .strings
+                .iter()
+                .filter(|s| !s.encoding_chain.is_empty())
+                .collect();
+            if !decoded.is_empty() {
+                let (decoded_matched, _) = index.find_matches_with_evidence(&decoded);
+                matched.extend(decoded_matched);
+            }
+            return StringPrefilter {
+                matched,
+                evidence: rustc_hash::FxHashMap::default(),
+                regex_candidates,
+                source_text_prefiltered: true,
+            };
+        }
+        return StringPrefilter {
+            matched: rustc_hash::FxHashSet::default(),
+            evidence: rustc_hash::FxHashMap::default(),
+            regex_candidates: rustc_hash::FxHashSet::default(),
+            source_text_prefiltered: false,
+        };
+    }
+
+    if report.strings.is_empty() && report.imports.is_empty() && report.exports.is_empty() {
+        return StringPrefilter {
+            matched: rustc_hash::FxHashSet::default(),
+            evidence: rustc_hash::FxHashMap::default(),
+            regex_candidates: rustc_hash::FxHashSet::default(),
+            source_text_prefiltered: false,
+        };
+    }
+
+    let pseudo_strings = build_string_pseudo_entries(report);
+    let all_strings: Vec<&crate::types::StringInfo> =
+        report.strings.iter().chain(pseudo_strings.iter()).collect();
+    let (matched, evidence) = if index.has_patterns() {
+        index.find_matches_with_evidence(&all_strings)
+    } else {
+        (
+            rustc_hash::FxHashSet::default(),
+            rustc_hash::FxHashMap::default(),
+        )
+    };
+    let regex_candidates = index.find_regex_candidates(&all_strings);
+    StringPrefilter {
+        matched,
+        evidence,
+        regex_candidates,
+        source_text_prefiltered: false,
+    }
+}
+
 /// Build the symbol-prefilter haystack the `SymbolMatchIndex` runs over to
 /// decide which `type: symbol` traits are candidates for evaluation.
 ///
@@ -500,6 +589,7 @@ pub(super) fn fill_symbol_evidence_locations(
 pub(crate) mod builder;
 pub(crate) mod evaluate_composites;
 pub(crate) mod evaluate_merged;
+pub(crate) mod doomed_skip;
 pub(crate) mod evaluate_traits;
 pub(crate) use evaluate_merged::AnalysisBorrow;
 pub(crate) mod filters;

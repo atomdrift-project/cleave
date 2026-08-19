@@ -5,9 +5,7 @@
 //! - `StringMatchIndex`: Batched string matching using Aho-Corasick automaton
 //! - `RawContentRegexIndex`: Batched regex matching for binary content
 
-use crate::composite_rules::evaluators::{
-    MIN_HAYSTACK_TO_WINDOW, match_window, truncate_evidence,
-};
+use crate::composite_rules::evaluators::{MIN_HAYSTACK_TO_WINDOW, match_window, truncate_evidence};
 use crate::composite_rules::{
     Condition, FileType as RuleFileType, Platform, TraitDefinition, platforms_intersect,
 };
@@ -1668,7 +1666,7 @@ impl FileTypeRegexSet {
         words: FxHashSet<usize>,
         substr: FxHashSet<usize>,
         literal_candidates: &FxHashSet<usize>,
-        no_lit: FxHashSet<usize>,
+        no_lit: &FxHashSet<usize>,
         content: &[u8],
     ) -> (FxHashSet<usize>, FxHashSet<usize>) {
         let verified = words;
@@ -1682,7 +1680,7 @@ impl FileTypeRegexSet {
         // They stay candidates; marking them verified made `eval_raw` skip a
         // disagreeing second scan.
 
-        traits.extend(&no_lit);
+        traits.extend(no_lit);
 
         (traits, verified)
     }
@@ -1774,7 +1772,7 @@ impl FileTypeRegexSet {
             words.extend(word_ci);
             let mut substr = sub_cs;
             substr.extend(sub_ci);
-            return self.assemble_matches(words, substr, &literal_candidates, no_lit, content);
+            return self.assemble_matches(words, substr, &literal_candidates, &no_lit, content);
         }
 
         // Step 1a/1b: patterns with matching case-sensitive / case-insensitive
@@ -1826,7 +1824,7 @@ impl FileTypeRegexSet {
             words,
             substr,
             &literal_candidates,
-            self.no_literal_pass(content),
+            &self.no_literal_pass(content),
             content,
         )
     }
@@ -1905,7 +1903,7 @@ impl FileTypeRegexSet {
             words,
             substr,
             &literal_candidates,
-            self.no_literal_pass(content),
+            &self.no_literal_pass(content),
             content,
         )
     }
@@ -2090,7 +2088,7 @@ impl FileTypeRegexSet {
             words,
             substr,
             &literal_candidates,
-            self.no_literal_pass(content),
+            &self.no_literal_pass(content),
             content,
         )
     }
@@ -2334,7 +2332,7 @@ impl FileTypeRegexSet {
             words,
             substr,
             &literal_candidates,
-            self.no_literal_pass(content),
+            &self.no_literal_pass(content),
             content,
         )
     }
@@ -3059,6 +3057,7 @@ impl RawContentRegexIndex {
     /// sub-passes out (see [`FileTypeRegexSet::find_matches`]), but those
     /// fan-outs were serialized behind one another: a container's raw bytes
     /// (hundreds of MB) paid every set's slowest pass end to end.
+    #[cfg(test)]
     pub(crate) fn find_matches(
         &self,
         binary_data: &[u8],
@@ -3883,7 +3882,7 @@ mod tests {
     #[test]
     fn raw_source_prefilter_rejects_tiny_huge_and_non_utf8() {
         let index = StringMatchIndex::build(&[make_exact_trait("eval", "eval")]);
-        assert!(index.find_matches_in_raw_source(&vec![b'x'; 50]).is_none());
+        assert!(index.find_matches_in_raw_source(&[b'x'; 50]).is_none());
         assert!(
             index
                 .find_matches_in_raw_source(&vec![
@@ -3996,6 +3995,7 @@ mod gate_repro_tests {
         content.extend_from_slice(b"}h1 { font-family: serif }");
         let hits = index.find_matches_detailed(&content, &RuleFileType::JavaScript, true);
         assert!(hits.traits.contains(&0));
+        #[allow(clippy::expect_used)]
         let offs = hits
             .atom_offsets
             .get(&0)
@@ -4034,6 +4034,7 @@ mod gate_repro_tests {
         content.extend_from_slice(b"}h1 { font-family: serif }");
         let hits = index.find_matches_detailed(&content, &RuleFileType::JavaScript, true);
         assert!(hits.traits.contains(&0));
+        #[allow(clippy::expect_used)]
         let offs = hits
             .atom_offsets
             .get(&0)

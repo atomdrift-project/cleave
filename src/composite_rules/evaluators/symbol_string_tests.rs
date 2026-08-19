@@ -2933,7 +2933,7 @@ fn test_eval_raw_windows_small_js_haystack() {
 #[test]
 fn test_eval_raw_tiny_haystack_still_full_scans() {
     let mut content = b"PING".to_vec();
-    content.extend_from_slice(&vec![b'x'; 200]);
+    content.extend_from_slice(&[b'x'; 200]);
     content.extend_from_slice(b"PING----PONG");
     let mut decoy = rustc_hash::FxHashMap::default();
     decoy.insert(0, vec![0]);
@@ -3036,7 +3036,10 @@ fn test_eval_raw_windows_line_local_dot_star() {
         Some(0),
         Some(&offsets),
     );
-    assert!(hit_result.matched, "atom on the foo...bar line must window-hit");
+    assert!(
+        hit_result.matched,
+        "atom on the foo...bar line must window-hit"
+    );
 
     let mut decoy = rustc_hash::FxHashMap::default();
     decoy.insert(0, vec![0]);
@@ -3069,7 +3072,10 @@ fn test_eval_raw_windows_line_local_not_newline() {
         Some(0),
         Some(&offsets),
     );
-    assert!(hit_result.matched, "atom on the foo[^\\n]*bar line must window-hit");
+    assert!(
+        hit_result.matched,
+        "atom on the foo[^\\n]*bar line must window-hit"
+    );
 
     let mut decoy = rustc_hash::FxHashMap::default();
     decoy.insert(0, vec![0]);

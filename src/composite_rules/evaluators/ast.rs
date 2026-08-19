@@ -14,6 +14,7 @@ use crate::types::{Evidence, MAX_EVIDENCE_PER_TRAIT};
 use parking_lot::RwLock;
 use rustc_hash::FxHashMap;
 use std::ops::ControlFlow;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, LazyLock};
 use std::time::Instant;
 use streaming_iterator::StreamingIterator;
@@ -48,6 +49,16 @@ use streaming_iterator::StreamingIterator;
 static QUERY_CACHE: LazyLock<RwLock<FxHashMap<(String, String), Arc<tree_sitter::Query>>>> =
     LazyLock::new(|| RwLock::new(FxHashMap::default()));
 
+/// Combined `query:` set for one (language, sorted query list). `pattern_to_query[i]`
+/// is the index into that list for combined-query pattern `i`.
+struct CombinedAstQuery {
+    query: Arc<tree_sitter::Query>,
+    pattern_to_query: Vec<usize>,
+}
+
+static COMBINED_QUERY_CACHE: LazyLock<RwLock<FxHashMap<(String, String), Arc<CombinedAstQuery>>>> =
+    LazyLock::new(|| RwLock::new(FxHashMap::default()));
+
 /// Must stay within tree-sitter's accepted `set_match_limit` range
 /// (`1..=65_536`). Keep the cap below the binding maximum so pathological
 /// queries truncate predictably instead of relying on binding/runtime behavior.
@@ -59,6 +70,7 @@ pub(crate) const AST_QUERY_CAPTURE_LIMIT: usize = 100_000;
 #[allow(dead_code)] // Called via clear_thread_local_caches
 pub(crate) fn clear_ast_query_cache() {
     QUERY_CACHE.write().clear();
+    COMBINED_QUERY_CACHE.write().clear();
 }
 
 /// Match mode for AST pattern matching
@@ -352,6 +364,12 @@ fn walk_ast_for_pattern_multi<'a>(
 /// Evaluate full tree-sitter query condition
 #[must_use]
 pub(crate) fn eval_ast_query<'a>(query_str: &str, ctx: &EvaluationContext<'a>) -> ConditionResult {
+    if let Some(cache) = ctx.ast_query_cache
+        && let Some(cached) = cache.get(query_str)
+    {
+        return cached.clone();
+    }
+
     // Only works for source code files — prefer the cached UTF-8 view when available.
     let source = match ctx.cached_source_utf8 {
         Some(s) => s,
@@ -373,36 +391,8 @@ pub(crate) fn eval_ast_query<'a>(query_str: &str, ctx: &EvaluationContext<'a>) -
     // Track parse errors but continue — tree-sitter recovers from minor errors
     let has_parse_errors = tree.root_node().has_error();
 
-    // Compile the query, cached process-wide to avoid recompilation across files
-    // and threads. The frequent case is a hit on the read-lock fast path. On a
-    // miss we take the write lock and compile *while holding it*, double-checking
-    // first: each (language, query) compiles exactly once with no overlapping
-    // `Query::new`. CORRECTNESS-CRITICAL (see the QUERY_CACHE doc): compiling
-    // outside the lock reintroduces finding drift; do not "optimize" it away.
-    // (Verified 2026-05-31: per-key `OnceLock` concurrent compilation dropped a
-    // trait 1/10 under contention — the separate pre-existing archive race must
-    // be fixed before any compile-parallelization can be validated.)
-    let key = (
-        ast_query_language_key(lang, ctx.file_type),
-        query_str.to_string(),
-    );
-    let cached = QUERY_CACHE.read().get(&key).map(Arc::clone);
-    let query = if let Some(q) = cached {
-        q
-    } else {
-        let mut cache = QUERY_CACHE.write();
-        if let Some(q) = cache.get(&key).map(Arc::clone) {
-            q
-        } else {
-            match tree_sitter::Query::new(lang, query_str) {
-                Ok(q) => {
-                    let arc = Arc::new(q);
-                    cache.insert(key, Arc::clone(&arc));
-                    arc
-                }
-                Err(_) => return ConditionResult::no_match(),
-            }
-        }
+    let Some(query) = cached_ast_query(lang, ctx.file_type, query_str) else {
+        return ConditionResult::no_match();
     };
 
     // Execute the query with safety limits
@@ -529,6 +519,262 @@ pub(crate) fn eval_ast_query<'a>(query_str: &str, ctx: &EvaluationContext<'a>) -
         precision: 2.0, // Tree-sitter queries are complex and specific
         matched_trait_ids: Vec::new(),
     }
+}
+
+fn cached_ast_query(
+    lang: &tree_sitter::Language,
+    file_type: FileType,
+    query_str: &str,
+) -> Option<Arc<tree_sitter::Query>> {
+    // Compile the query, cached process-wide to avoid recompilation across files
+    // and threads. The frequent case is a hit on the read-lock fast path. On a
+    // miss we take the write lock and compile *while holding it*, double-checking
+    // first: each (language, query) compiles exactly once with no overlapping
+    // `Query::new`. CORRECTNESS-CRITICAL (see the QUERY_CACHE doc): compiling
+    // outside the lock reintroduces finding drift; do not "optimize" it away.
+    let key = (
+        ast_query_language_key(lang, file_type),
+        query_str.to_string(),
+    );
+    let cached = QUERY_CACHE.read().get(&key).map(Arc::clone);
+    if let Some(q) = cached {
+        return Some(q);
+    }
+    let mut cache = QUERY_CACHE.write();
+    if let Some(q) = cache.get(&key).map(Arc::clone) {
+        return Some(q);
+    }
+    match tree_sitter::Query::new(lang, query_str) {
+        Ok(q) => {
+            let arc = Arc::new(q);
+            cache.insert(key, Arc::clone(&arc));
+            Some(arc)
+        }
+        Err(_) => None,
+    }
+}
+
+/// Tree-sitter's `set_match_limit` accepts at most this many matches per cursor.
+/// Combined `query:` batches share one cursor, so a bomb can starve later
+/// patterns — on exceed we drop the batch and fall back to per-query eval.
+const COMBINED_AST_QUERY_MATCH_LIMIT: u32 = 65_536;
+
+/// Run every applicable `query:` in one `QueryCursor` walk. `None` means
+/// "do not use a batch" — caller keeps the per-trait `eval_ast_query` path
+/// (fewer than two compiling queries, combined compile failed, match-limit
+/// overflow, timeout, or cancel). Results are keyed by the original query
+/// string so `unless:` / duplicate `if:` share one bucket.
+pub(crate) fn batch_ast_queries(
+    tree: &tree_sitter::Tree,
+    source: &str,
+    file_type: FileType,
+    query_strs: &[&str],
+    deadline: Option<Instant>,
+    cancellation: Option<&AtomicBool>,
+) -> Option<FxHashMap<String, ConditionResult>> {
+    if query_strs.len() < 2 || source.len() > AST_QUERY_BYTE_LIMIT {
+        return None;
+    }
+    let lang = &*tree.language();
+    let mut compiling: Vec<(&str, Arc<tree_sitter::Query>)> = Vec::new();
+    for &q in query_strs {
+        if let Some(compiled) = cached_ast_query(lang, file_type, q) {
+            compiling.push((q, compiled));
+        }
+    }
+    if compiling.len() < 2 {
+        return None;
+    }
+
+    let combined_source: String = compiling
+        .iter()
+        .map(|(q, _)| *q)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let lang_key = ast_query_language_key(lang, file_type);
+    let cache_key = (lang_key, combined_source.clone());
+    let cached = COMBINED_QUERY_CACHE.read().get(&cache_key).map(Arc::clone);
+    let combined = if let Some(c) = cached {
+        c
+    } else {
+        let mut cache = COMBINED_QUERY_CACHE.write();
+        if let Some(c) = cache.get(&cache_key).map(Arc::clone) {
+            c
+        } else {
+            let Ok(query) = tree_sitter::Query::new(lang, &combined_source) else {
+                return None;
+            };
+            let mut pattern_to_query = Vec::new();
+            let mut expected = 0usize;
+            for (i, (_, q)) in compiling.iter().enumerate() {
+                let n = q.pattern_count();
+                expected = expected.saturating_add(n);
+                pattern_to_query.extend(std::iter::repeat_n(i, n));
+            }
+            if query.pattern_count() != expected {
+                return None;
+            }
+            let arc = Arc::new(CombinedAstQuery {
+                query: Arc::new(query),
+                pattern_to_query,
+            });
+            cache.insert(cache_key, Arc::clone(&arc));
+            arc
+        }
+    };
+
+    struct SourceTextProvider<'a>(&'a [u8]);
+    impl<'a> tree_sitter::TextProvider<&'a [u8]> for SourceTextProvider<'a> {
+        type I = std::iter::Once<&'a [u8]>;
+        fn text<'b>(&mut self, node: tree_sitter::Node<'b>) -> Self::I {
+            let start = node.byte_range().start;
+            let end = node.byte_range().end.min(self.0.len());
+            std::iter::once(&self.0[start..end])
+        }
+    }
+
+    struct Bucket {
+        evidence: Vec<Evidence>,
+        match_count: usize,
+        query_matches: usize,
+        capture_limited: bool,
+        match_limited: bool,
+    }
+    let n = compiling.len();
+    let mut buckets: Vec<Bucket> = (0..n)
+        .map(|_| Bucket {
+            evidence: Vec::new(),
+            match_count: 0,
+            query_matches: 0,
+            capture_limited: false,
+            match_limited: false,
+        })
+        .collect();
+
+    let mut query_cursor = tree_sitter::QueryCursor::new();
+    query_cursor.set_match_limit(COMBINED_AST_QUERY_MATCH_LIMIT);
+    query_cursor.set_byte_range(0..source.len().min(AST_QUERY_BYTE_LIMIT));
+
+    let cancelled = || {
+        cancellation.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
+    };
+    let cpu_budget = deadline.map(|_| AST_QUERY_CPU_BUDGET);
+    let cpu_start = thread_cpu_time();
+    let mut timed_out = false;
+    let mut progress_cb = |_state: &tree_sitter::QueryCursorState| -> ControlFlow<()> {
+        if cancelled() {
+            return ControlFlow::Break(());
+        }
+        if let Some(dl) = deadline
+            && Instant::now() > dl
+        {
+            return ControlFlow::Break(());
+        }
+        if let Some(budget) = cpu_budget
+            && thread_cpu_time().saturating_sub(cpu_start) > budget
+        {
+            return ControlFlow::Break(());
+        }
+        ControlFlow::Continue(())
+    };
+    let options = tree_sitter::QueryCursorOptions::default().progress_callback(&mut progress_cb);
+    let mut matches = query_cursor.matches_with_options(
+        &combined.query,
+        tree.root_node(),
+        source.as_bytes(),
+        options,
+    );
+    let mut buffer1: Vec<u8> = Vec::new();
+    let mut buffer2: Vec<u8> = Vec::new();
+    while let Some(m) = matches.next() {
+        if cancelled() || deadline.is_some_and(|dl| Instant::now() > dl) {
+            return None;
+        }
+        if let Some(budget) = cpu_budget
+            && thread_cpu_time().saturating_sub(cpu_start) > budget
+        {
+            timed_out = true;
+            break;
+        }
+        let Some(&qi) = combined.pattern_to_query.get(m.pattern_index) else {
+            continue;
+        };
+        let bucket = &mut buckets[qi];
+        if bucket.capture_limited || bucket.match_limited {
+            continue;
+        }
+        if bucket.query_matches >= AST_QUERY_MATCH_LIMIT as usize {
+            bucket.match_limited = true;
+            continue;
+        }
+        let mut text_provider = SourceTextProvider(source.as_bytes());
+        if !m.satisfies_text_predicates(
+            &combined.query,
+            &mut buffer1,
+            &mut buffer2,
+            &mut text_provider,
+        ) {
+            continue;
+        }
+        bucket.query_matches += 1;
+        for capture in m.captures {
+            if bucket.match_count >= AST_QUERY_CAPTURE_LIMIT {
+                bucket.capture_limited = true;
+                break;
+            }
+            if let Ok(text) = capture.node.utf8_text(source.as_bytes()) {
+                bucket.match_count += 1;
+                if bucket.evidence.len() < MAX_EVIDENCE_PER_TRAIT {
+                    bucket.evidence.push(Evidence {
+                        method: "ast_query".to_string(),
+                        source: "tree-sitter".to_string(),
+                        value: truncate_evidence(text, 100),
+                        location: Some(format!(
+                            "{}:{}",
+                            capture.node.start_position().row + 1,
+                            capture.node.start_position().column + 1
+                        )),
+                        offsets: vec![capture.node.start_byte() as u64],
+                        ..Default::default()
+                    });
+                }
+            }
+        }
+    }
+    if timed_out || cancelled() || query_cursor.did_exceed_match_limit() {
+        return None;
+    }
+
+    let has_parse_errors = tree.root_node().has_error();
+    let mut out = FxHashMap::default();
+    for (i, (qstr, _)) in compiling.iter().enumerate() {
+        let bucket = &mut buckets[i];
+        let mut warnings = Vec::new();
+        if has_parse_errors {
+            warnings.push(AnalysisWarning::AstParseError);
+        }
+        if bucket.capture_limited || bucket.match_limited {
+            warnings.push(AnalysisWarning::AstQueryLimited {
+                limit: if bucket.capture_limited {
+                    AST_QUERY_CAPTURE_LIMIT
+                } else {
+                    AST_QUERY_MATCH_LIMIT as usize
+                },
+            });
+        }
+        out.insert(
+            (*qstr).to_string(),
+            ConditionResult {
+                matched: bucket.match_count > 0,
+                evidence: std::mem::take(&mut bucket.evidence),
+                match_count: bucket.match_count,
+                warnings,
+                precision: 2.0,
+                matched_trait_ids: Vec::new(),
+            },
+        );
+    }
+    Some(out)
 }
 
 fn ast_query_language_key(lang: &tree_sitter::Language, file_type: FileType) -> String {

@@ -136,6 +136,10 @@ pub(crate) struct EvaluationContext<'a> {
     pub cached_kv_offsets: Arc<OnceLock<FxHashMap<String, u64>>>,
     /// Cached AST nodes by kind (for batch evaluation)
     pub ast_kind_cache: Option<&'a FxHashMap<String, Vec<Evidence>>>,
+    /// Precomputed `query:` results for this file (one combined QueryCursor).
+    /// Keyed by the original query string. Missing key → `eval_ast_query`
+    /// runs that pattern itself (compile fail, or the batch was declined).
+    pub ast_query_cache: Option<&'a FxHashMap<String, ConditionResult>>,
     /// Index for O(1) exact string lookups. Values are indices into
     /// `report.strings` (not cloned strings) — the source is always
     /// `string_extractor` and the value/offset are looked up from the entry, so
@@ -241,6 +245,7 @@ impl<'a> EvaluationContext<'a> {
             cached_lower_binary: Arc::new(OnceLock::new()),
             cached_lossy_utf8: Arc::new(OnceLock::new()),
             ast_kind_cache: None,
+            ast_query_cache: None,
             string_exact_index: Arc::new(OnceLock::new()),
             string_exact_index_ci: Arc::new(OnceLock::new()),
             encoded_string_indices: Arc::new(OnceLock::new()),
@@ -275,6 +280,15 @@ impl<'a> EvaluationContext<'a> {
         cache: &'a FxHashMap<String, Vec<Evidence>>,
     ) -> Self {
         self.ast_kind_cache = Some(cache);
+        self
+    }
+
+    /// Set the batched `query:` result cache
+    pub(crate) fn with_ast_query_cache(
+        mut self,
+        cache: &'a FxHashMap<String, ConditionResult>,
+    ) -> Self {
+        self.ast_query_cache = Some(cache);
         self
     }
 
@@ -489,6 +503,7 @@ impl<'a> EvaluationContext<'a> {
             cached_lower_binary: Arc::new(OnceLock::new()),
             cached_lossy_utf8: Arc::new(OnceLock::new()),
             ast_kind_cache: None,
+            ast_query_cache: None,
             string_exact_index: Arc::new(OnceLock::new()),
             string_exact_index_ci: Arc::new(OnceLock::new()),
             encoded_string_indices: Arc::new(OnceLock::new()),

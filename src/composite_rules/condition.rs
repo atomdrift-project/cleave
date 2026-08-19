@@ -2405,6 +2405,16 @@ impl Condition {
         }
     }
 
+    /// The `query:` string on a live tree-sitter condition, if any.
+    pub(crate) fn ast_query_text(&self) -> Option<&str> {
+        match self {
+            Self::TreeSitter(TreeSitterQuery {
+                query: Some(q), ..
+            }) if !q.is_empty() => Some(q.as_str()),
+            _ => None,
+        }
+    }
+
     pub(crate) fn collect_kv_sibling_basenames(
         &self,
         out: &mut std::collections::BTreeSet<String>,

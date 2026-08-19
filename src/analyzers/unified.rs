@@ -14,10 +14,49 @@
 use crate::analyzers::symbol_extraction;
 use crate::analyzers::{AnalysisInput, Analyzer, FileType, FileTypeExt};
 use crate::capabilities::CapabilityMapper;
-use crate::types::{AnalysisReport, Function, StringInfo, TargetInfo};
+use crate::capabilities::record_ast_kind_node;
+use crate::types::{AnalysisReport, Evidence, Function, StringInfo, TargetInfo};
 use anyhow::Result;
+use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
+use std::hash::Hasher;
 use std::path::Path;
 use std::sync::Arc;
+
+/// Identity for `report.strings` dedup. JS `string` + `string_fragment` land
+/// at the same trimmed offset; a linear `iter().any` on every push was
+/// O(n²) memcmp on minified members (the CRT memcpy/memcmp bucket).
+type SeenStringKey = (u64, u8, u64, u64);
+
+fn seen_string_key(info: &StringInfo) -> SeenStringKey {
+    let mut value_hash = FxHasher::default();
+    value_hash.write(info.value.as_bytes());
+    let mut chain_hash = FxHasher::default();
+    for step in &info.encoding_chain {
+        chain_hash.write(step.as_bytes());
+        chain_hash.write_u8(0xff);
+    }
+    (
+        info.offset.unwrap_or(u64::MAX),
+        match info.section.as_deref() {
+            Some("ast") => 1,
+            Some("decoded") => 2,
+            Some("ast-number") => 3,
+            _ => 0,
+        },
+        chain_hash.finish(),
+        value_hash.finish(),
+    )
+}
+
+fn push_unique_string(
+    report: &mut AnalysisReport,
+    seen: &mut FxHashSet<SeenStringKey>,
+    info: StringInfo,
+) {
+    if seen.insert(seen_string_key(&info)) {
+        report.strings.push(info);
+    }
+}
 
 /// Configuration for a language analyzer.
 #[derive(Clone, Debug)]
@@ -463,11 +502,29 @@ impl UnifiedSourceAnalyzer {
         let source_ast = source_ctx.and_then(crate::analysis_context::AnalysisContext::source_ast);
         let tree = source_ast.map(|ast| ast.tree);
 
+        let mut ast_kind_cache = None;
+        let mut seen_strings = FxHashSet::default();
         if let Some(tree) = tree {
-            // One walk for functions, string/number/comment literals, and
-            // call sites. Three full cursor passes over every JS/Go AST was
-            // pure walk tax — the parse itself is unchanged.
-            self.extract_ast_facts(tree, content, &mut report);
+            // One walk for functions, string/number/comment literals, call
+            // sites, and the trait kind-cache. A second cursor pass in
+            // evaluate_and_merge was pure walk tax — keep extract_function_name
+            // chained names (B1g: do not ingest filefacts Call.target).
+            let mapper = Arc::clone(&self.capability_mapper);
+            let rule_ft = mapper.detect_file_type(self.config.file_type);
+            let (required, call_types) = mapper.ast_kind_cache_plan(rule_ft);
+            let mut cache = FxHashMap::default();
+            self.extract_ast_facts(
+                tree,
+                content,
+                &mut report,
+                &required,
+                &call_types,
+                &mut cache,
+                &mut seen_strings,
+            );
+            if !required.is_empty() {
+                ast_kind_cache = Some(cache);
+            }
         }
 
         // Use pre-extracted stng strings if available, otherwise use parallel extracted ones
@@ -488,6 +545,7 @@ impl UnifiedSourceAnalyzer {
                     | stng::StringMethod::HexDecode
                     | stng::StringMethod::UrlDecode
                     | stng::StringMethod::UnicodeEscapeDecode
+                    | stng::StringMethod::ScriptDecode
             ) {
                 let string_type = es.kind;
 
@@ -498,6 +556,7 @@ impl UnifiedSourceAnalyzer {
                     stng::StringMethod::HexDecode => "hex",
                     stng::StringMethod::UrlDecode => "url",
                     stng::StringMethod::UnicodeEscapeDecode => "unicode-escape",
+                    stng::StringMethod::ScriptDecode => "script",
                     _ => "",
                 };
 
@@ -518,13 +577,7 @@ impl UnifiedSourceAnalyzer {
                 // byte scan can see a whole minified line rather than each
                 // quoted value. Avoid double-counting when both paths recover
                 // the same encoded literal at the same source offset.
-                if !report.strings.iter().any(|existing| {
-                    existing.value == decoded.value
-                        && existing.offset == decoded.offset
-                        && existing.encoding_chain == decoded.encoding_chain
-                }) {
-                    report.strings.push(decoded);
-                }
+                push_unique_string(&mut report, &mut seen_strings, decoded);
             }
         }
 
@@ -772,33 +825,36 @@ impl UnifiedSourceAnalyzer {
             // filefacts's source extractor now and get merged into
             // `report.filefacts_metrics` inside the capability mapper.
         }
-        // Detect base64 binary payloads and PowerShell -EncodedCommand blobs.
+        // Detect base64 binary payloads and plain embedded code.
         // Guard against recursion: when this analyzer was created for inner analysis
         // (e.g. decoding a -EncodedCommand payload), skip to avoid infinite loops.
         if !self.skip_embedded_detection {
-            // Include the full file content as a synthetic string so that
-            // PS -EncodedCommand arguments (bare, not quoted) and host
-            // source misclassified as another language (B1r: Python-in-Rust)
-            // are also checked. Do not restrict this to shell-family hosts.
-            let content_as_string = crate::types::binary::StringInfo {
-                value: content.to_string().into(),
-                offset: Some(0),
-                string_type: None,
-                encoding: "utf-8".to_string(),
-                section: None,
-                encoding_chain: Vec::new(),
-                fragments: None,
-            };
-            let mut all_strings = report.strings.clone();
-            all_strings.push(content_as_string);
+            let parent = file_path.display().to_string();
+            // stng already found/decoded obfuscated script blobs during string
+            // extract, but it shreds `DeobfuscationResult.decoded` into
+            // `ScriptDecode` fragments. Keep the full payload as a typed
+            // source layer here and skip the home-grown EncodedCommand scan.
+            report.files.extend(
+                crate::analyzers::embedded_code_detector::analyze_script_deobfuscation_layers(
+                    &parent,
+                    content,
+                    &self.capability_mapper,
+                    0,
+                    self.cancellation.as_deref(),
+                ),
+            );
+            // Borrow the host haystack (B1r: Python-in-Rust) instead of
+            // `content.to_string()` + `report.strings.clone()` per member.
             let (encoded_layers, plain_findings) =
-                crate::analyzers::embedded_code_detector::process_all_strings(
-                    &file_path.display().to_string(),
-                    &all_strings,
+                crate::analyzers::embedded_code_detector::process_all_strings_with_host(
+                    &parent,
+                    &report.strings,
                     &self.capability_mapper,
                     0,
                     Some(&self.file_type),
                     self.cancellation.as_deref(),
+                    true,
+                    Some(content),
                 );
             report.files.extend(encoded_layers);
             report.findings.extend(plain_findings);
@@ -823,7 +879,8 @@ impl UnifiedSourceAnalyzer {
             .evaluate_and_merge_findings_with_precomputed(
                 &mut report,
                 content.as_bytes(),
-                crate::capabilities::AnalysisBorrow::with_filefacts(tree, source_ctx),
+                crate::capabilities::AnalysisBorrow::with_filefacts(tree, source_ctx)
+                    .with_ast_kind_cache(ast_kind_cache.as_ref()),
                 None,
                 None,
                 None,
@@ -836,29 +893,56 @@ impl UnifiedSourceAnalyzer {
         report
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn extract_ast_facts(
         &self,
         tree: &tree_sitter::Tree,
         content: &str,
         report: &mut AnalysisReport,
+        required_node_types: &FxHashSet<&str>,
+        call_node_types: &FxHashSet<&'static str>,
+        kind_cache: &mut FxHashMap<String, Vec<Evidence>>,
+        seen_strings: &mut FxHashSet<SeenStringKey>,
     ) {
         let source = content.as_bytes();
         let mut cursor = tree.walk();
         let mut call_sites: Vec<(String, u64)> = Vec::new();
-        self.walk_ast_facts(&mut cursor, source, report, &mut call_sites);
+        self.walk_ast_facts(
+            &mut cursor,
+            source,
+            report,
+            &mut call_sites,
+            required_node_types,
+            call_node_types,
+            kind_cache,
+            seen_strings,
+        );
         symbol_extraction::push_capped_call_imports(call_sites, report);
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn walk_ast_facts<'a>(
         &self,
         cursor: &mut tree_sitter::TreeCursor<'a>,
         source: &[u8],
         report: &mut AnalysisReport,
         call_sites: &mut Vec<(String, u64)>,
+        required_node_types: &FxHashSet<&str>,
+        call_node_types: &FxHashSet<&'static str>,
+        kind_cache: &mut FxHashMap<String, Vec<Evidence>>,
+        seen_strings: &mut FxHashSet<SeenStringKey>,
     ) {
         loop {
             let node = cursor.node();
             let kind = node.kind();
+            record_ast_kind_node(
+                kind,
+                &node,
+                source,
+                required_node_types,
+                call_node_types,
+                kind_cache,
+            );
 
             if self.config.function_node_types.contains(&kind) {
                 let name = self
@@ -894,7 +978,7 @@ impl UnifiedSourceAnalyzer {
             }
 
             if self.config.string_node_types.contains(&kind) || kind.contains("string") {
-                self.collect_string_node(&node, source, report);
+                self.collect_string_node(&node, source, report, seen_strings);
             } else if is_numeric_node_kind(kind) {
                 if let Ok(text) = node.utf8_text(source)
                     && let Some((value, radix)) = parse_numeric_literal(text)
@@ -948,6 +1032,7 @@ impl UnifiedSourceAnalyzer {
         node: &tree_sitter::Node<'_>,
         source: &[u8],
         report: &mut AnalysisReport,
+        seen_strings: &mut FxHashSet<SeenStringKey>,
     ) {
         let Ok(text) = node.utf8_text(source) else {
             return;
@@ -985,13 +1070,7 @@ impl UnifiedSourceAnalyzer {
             encoding_chain: Vec::new(),
             fragments: None,
         };
-        if !report.strings.iter().any(|existing| {
-            existing.value == literal.value
-                && existing.offset == literal.offset
-                && existing.section == literal.section
-        }) {
-            report.strings.push(literal);
-        }
+        push_unique_string(report, seen_strings, literal);
 
         // stng intentionally uses a conservative threshold
         // when decoding arbitrary byte runs. In minified source,
@@ -1012,13 +1091,7 @@ impl UnifiedSourceAnalyzer {
                 encoding_chain: vec!["hex".to_string()],
                 fragments: None,
             };
-            if !report.strings.iter().any(|existing| {
-                existing.value == decoded.value
-                    && existing.offset == decoded.offset
-                    && existing.encoding_chain == decoded.encoding_chain
-            }) {
-                report.strings.push(decoded);
-            }
+            push_unique_string(report, seen_strings, decoded);
         }
     }
 
@@ -1385,6 +1458,40 @@ const algorithm = "gzip";
             "call walk must still record eval: {:?}",
             report.imports.iter().map(|i| &i.symbol).collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn ast_string_literals_dedup_string_and_fragment() {
+        let analyzer = UnifiedSourceAnalyzer::for_file_type(&FileType::JavaScript).unwrap();
+        let path = PathBuf::from("dedup.js");
+        let report = analyzer.analyze_source(&path, r#"const algorithm = "gzip";"#);
+        let gzip = report
+            .strings
+            .iter()
+            .filter(|s| &*s.value == "gzip" && s.section.as_deref() == Some("ast"))
+            .count();
+        assert_eq!(
+            gzip, 1,
+            "string + string_fragment must not double-count gzip"
+        );
+    }
+
+    #[test]
+    fn ast_string_literals_keep_distinct_offsets() {
+        let analyzer = UnifiedSourceAnalyzer::for_file_type(&FileType::JavaScript).unwrap();
+        let path = PathBuf::from("many-strings.js");
+        let mut code = String::from("const o = {\n");
+        for i in 0..500 {
+            code.push_str(&format!("  k{i}: \"v{i}\",\n"));
+        }
+        code.push_str("};\n");
+        let report = analyzer.analyze_source(&path, &code);
+        let ast = report
+            .strings
+            .iter()
+            .filter(|s| s.section.as_deref() == Some("ast"))
+            .count();
+        assert_eq!(ast, 500, "each quoted literal stays unique: {ast}");
     }
 
     #[test]

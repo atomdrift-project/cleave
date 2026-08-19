@@ -1430,7 +1430,9 @@ pub(crate) fn eval_numeric_literal<'a>(
 
 /// Windows around gate-supplied atom hits for source `eval_raw`. `None` means
 /// full-scan: PE/extracted-string types, gate did not run, trait has no
-/// recorded offsets, or the pattern is unbounded / `\A`/`\z`.
+/// recorded offsets, the pattern is cross-line unbounded (`(?s).*` /
+/// `[\s\S]*`), or `\A`/`\z`. Line-local `.*` / `[^\n]*` and whitespace `\s*`
+/// (capped at `UNBOUNDED_WS_CAP`) window.
 fn source_raw_windows(
     ctx: &EvaluationContext<'_>,
     pattern: &str,

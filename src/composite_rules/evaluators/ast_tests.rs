@@ -940,3 +940,103 @@ fn test_eval_ast_query_predicates_positive_match() {
         "should match .replace(/:/g,\"-\") — regex has colon and replacement is dash"
     );
 }
+
+#[test]
+fn batch_ast_queries_matches_sequential_eval() {
+    let report = create_test_report("/test/script.js");
+    let source = r#"
+eval("x");
+document.write("y");
+"#;
+    let parsed = parsed_for_test("script.js", source.as_bytes());
+    let tree = parsed.source_ast().expect("ast").tree;
+    let q_eval = r#"(call_expression
+        function: (identifier) @fn
+        (#eq? @fn "eval")) @call"#;
+    let q_write = r#"(call_expression
+        function: (member_expression
+            object: (identifier) @obj
+            property: (property_identifier) @method)
+        (#eq? @obj "document")
+        (#eq? @method "write")) @call"#;
+
+    let mut ctx =
+        create_test_context_with_ast(&report, &parsed, source.as_bytes(), FileType::JavaScript);
+    let sequential_eval = eval_ast(None, None, None, None, None, Some(q_eval), false, &ctx);
+    let sequential_write = eval_ast(None, None, None, None, None, Some(q_write), false, &ctx);
+    assert!(sequential_eval.matched);
+    assert!(sequential_write.matched);
+
+    let batch = batch_ast_queries(
+        tree,
+        source,
+        FileType::JavaScript,
+        &[q_eval, q_write],
+        None,
+        None,
+    )
+    .expect("two compiling queries should batch");
+    assert_eq!(
+        batch.get(q_eval).map(|r| (r.matched, r.match_count)),
+        Some((sequential_eval.matched, sequential_eval.match_count))
+    );
+    assert_eq!(
+        batch.get(q_write).map(|r| (r.matched, r.match_count)),
+        Some((sequential_write.matched, sequential_write.match_count))
+    );
+
+    ctx.ast_query_cache = Some(&batch);
+    let cached = eval_ast(None, None, None, None, None, Some(q_eval), false, &ctx);
+    assert_eq!(cached.match_count, sequential_eval.match_count);
+    assert_eq!(cached.matched, sequential_eval.matched);
+}
+
+#[test]
+fn batch_ast_queries_keeps_text_predicates() {
+    let source = r#"addr.replace(/:/g,"-"); eval("z");"#;
+    let parsed = parsed_for_test("ip.js", source.as_bytes());
+    let tree = parsed.source_ast().expect("ast").tree;
+    let q_replace = r#"(call_expression
+  function: (member_expression
+    property: (property_identifier) @prop
+  )
+  arguments: (arguments
+    (regex (regex_pattern) @pat)
+    (string (string_fragment) @repl)
+  )
+  (#eq? @prop "replace")
+  (#match? @pat ":")
+  (#eq? @repl "-")
+)"#;
+    let q_eval = r#"(call_expression
+        function: (identifier) @fn
+        (#eq? @fn "eval")) @call"#;
+    let miss_replace = r#"(call_expression
+  function: (member_expression
+    property: (property_identifier) @prop
+  )
+  arguments: (arguments
+    (regex (regex_pattern) @pat)
+    (string (string_fragment) @repl)
+  )
+  (#eq? @prop "replace")
+  (#match? @pat ":")
+  (#eq? @repl "nope")
+)"#;
+
+    let batch = batch_ast_queries(
+        tree,
+        source,
+        FileType::JavaScript,
+        &[q_replace, q_eval, miss_replace],
+        None,
+        None,
+    )
+    .expect("three compiling queries should batch");
+    assert!(batch.get(q_replace).is_some_and(|r| r.matched));
+    assert!(batch.get(q_eval).is_some_and(|r| r.matched));
+    assert!(
+        batch.get(miss_replace).is_some_and(|r| !r.matched),
+        "combined query must still apply per-pattern #eq?"
+    );
+}

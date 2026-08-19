@@ -271,7 +271,9 @@ fn resolve_all(
             .iter()
             .enumerate()
             .filter(|(_, def)| {
-                def.id == id || def.id.starts_with(&prefix_new) || def.id.starts_with(&prefix_legacy)
+                def.id == id
+                    || def.id.starts_with(&prefix_new)
+                    || def.id.starts_with(&prefix_legacy)
             })
             .map(|(idx, _)| idx)
             .collect();

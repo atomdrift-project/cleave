@@ -547,10 +547,20 @@ pub(crate) fn mandatory_atom_set(pattern: &str) -> Option<Vec<(String, bool)>> {
         .collect()
 }
 
-/// Don't window tiny haystacks: the meta engine's own prefilter is enough.
-const MIN_HAYSTACK_TO_WINDOW: usize = 16 * 1024;
+/// Don't window haystacks this small: offset recording plus tiny windows
+/// is a net tax (S2n recorded offsets below 16 KiB *without* windowing and
+/// lost wall). 256 B is large enough for bounded-pattern windows to beat a
+/// full `eval_raw` scan on 256 B–1 KiB JS stubs, and small enough that
+/// 100-byte files still full-scan. Pair with `find_matches_detailed`: do
+/// not record offsets below this floor.
+pub(crate) const MIN_HAYSTACK_TO_WINDOW: usize = 256;
 /// Patterns whose match can exceed this stay full-scan (windowing is pointless).
 const MAX_WINDOW_RADIUS: usize = 8192;
+/// Upper bound used only for window radius when a repetition is `\s*` / `[ \t]*`
+/// with no explicit max. Real matches with more than this many whitespace bytes
+/// between tokens would FN; trait authors write `\s*` for formatting, not 256
+/// spaces. `.*` / `[^\n]*` stay unbounded (full-scan).
+const UNBOUNDED_WS_CAP: usize = 256;
 
 fn parse_hir_like_engine(pattern: &str) -> Option<regex_syntax::hir::Hir> {
     if pattern.is_ascii() {
@@ -566,9 +576,85 @@ fn parse_hir_like_engine(pattern: &str) -> Option<regex_syntax::hir::Hir> {
     }
 }
 
+/// Perl/`regex` ASCII `\s` bytes (`[ \t\n\r\x0B\x0C]`). Used to decide whether
+/// an unbounded repetition can be capped for windowing.
+fn is_ascii_ws_byte(b: u8) -> bool {
+    matches!(b, b'\t' | b'\n' | 0x0B | 0x0C | b'\r' | b' ')
+}
+
+fn class_contains_byte(class: &regex_syntax::hir::Class, b: u8) -> bool {
+    use regex_syntax::hir::Class;
+    match class {
+        Class::Bytes(c) => c.ranges().iter().any(|r| r.start() <= b && b <= r.end()),
+        Class::Unicode(c) => {
+            let ch = char::from(b);
+            c.ranges().iter().any(|r| r.start() <= ch && ch <= r.end())
+        }
+    }
+}
+
+/// Whether this HIR can consume a newline. `.` without `(?s)` cannot; `[\s\S]`
+/// and `\s` can.
+fn hir_can_match_newline(hir: &regex_syntax::hir::Hir) -> bool {
+    use regex_syntax::hir::HirKind;
+    match hir.kind() {
+        HirKind::Empty | HirKind::Look(_) => false,
+        HirKind::Literal(lit) => lit.0.contains(&b'\n'),
+        HirKind::Class(c) => class_contains_byte(c, b'\n'),
+        HirKind::Capture(c) => hir_can_match_newline(&c.sub),
+        HirKind::Repetition(r) => hir_can_match_newline(&r.sub),
+        HirKind::Concat(subs) | HirKind::Alternation(subs) => {
+            subs.iter().any(hir_can_match_newline)
+        }
+    }
+}
+
+/// `foo.*bar` / `foo[^\n]*bar` without `(?s)` cannot leave the atom's line.
+/// Windowing that line is sound and is **not** an 8 KiB match-length cap.
+/// Any pattern that can consume a newline (`[\s\S]`, `(?s).*`, `\s`) stays
+/// full-scan — even when some *other* unbounded rep (`\w+`) is line-local.
+/// Specimen: `readdirSync[\s\S]{0,300}\w+\.push` (node-recursive-file-walk).
+fn unbounded_reps_are_line_local(hir: &regex_syntax::hir::Hir) -> bool {
+    has_unbounded_rep(hir) && !hir_can_match_newline(hir)
+}
+
+fn has_unbounded_rep(hir: &regex_syntax::hir::Hir) -> bool {
+    use regex_syntax::hir::HirKind;
+    match hir.kind() {
+        HirKind::Capture(c) => has_unbounded_rep(&c.sub),
+        HirKind::Repetition(r) => r.max.is_none() || has_unbounded_rep(&r.sub),
+        HirKind::Concat(subs) | HirKind::Alternation(subs) => {
+            subs.iter().any(has_unbounded_rep)
+        }
+        _ => false,
+    }
+}
+
+/// True when `hir` can only match ASCII whitespace (literals, `\s`, `[ \t]`).
+/// `.*` / `[^\n]` / mixed classes stay false so those patterns keep full-scan.
+fn hir_is_whitespace_atom(hir: &regex_syntax::hir::Hir) -> bool {
+    use regex_syntax::hir::{Class, HirKind};
+    match hir.kind() {
+        HirKind::Literal(lit) => lit.0.iter().copied().all(is_ascii_ws_byte),
+        HirKind::Class(Class::Bytes(cls)) => cls
+            .ranges()
+            .iter()
+            .all(|r| (r.start()..=r.end()).all(is_ascii_ws_byte)),
+        HirKind::Class(Class::Unicode(cls)) => cls.ranges().iter().all(|r| {
+            let (s, e) = (r.start(), r.end());
+            let span = (e as u32).saturating_sub(s as u32);
+            span <= 32 && (s..=e).all(|c| c.is_ascii() && is_ascii_ws_byte(c as u8))
+        }),
+        HirKind::Capture(c) => hir_is_whitespace_atom(&c.sub),
+        _ => false,
+    }
+}
+
 /// Upper bound on bytes a match can consume. `None` if any repetition is
-/// unbounded or the bound exceeds [`MAX_WINDOW_RADIUS`]. ASCII-class
-/// assumption: each `Class` is one byte (the `compile_bytes_regex` path).
+/// unbounded (except whitespace `\s*` / `[ \t]*`, capped at
+/// [`UNBOUNDED_WS_CAP`]) or the bound exceeds [`MAX_WINDOW_RADIUS`].
+/// ASCII-class assumption: each `Class` is one byte (the `compile_bytes_regex`
+/// path).
 pub(crate) fn bounded_consumed_bytes(pattern: &str) -> Option<usize> {
     fn walk(hir: &regex_syntax::hir::Hir) -> Option<usize> {
         use regex_syntax::hir::HirKind;
@@ -595,7 +681,15 @@ pub(crate) fn bounded_consumed_bytes(pattern: &str) -> Option<usize> {
                 (m <= MAX_WINDOW_RADIUS).then_some(m)
             }
             HirKind::Repetition(r) => {
-                let max = r.max?;
+                let max = match r.max {
+                    Some(m) => m,
+                    None => {
+                        if !hir_is_whitespace_atom(&r.sub) {
+                            return None;
+                        }
+                        UNBOUNDED_WS_CAP as u32
+                    }
+                };
                 let sub = walk(&r.sub)?;
                 let n = sub.checked_mul(max as usize)?;
                 (n <= MAX_WINDOW_RADIUS).then_some(n)
@@ -620,13 +714,31 @@ fn look_info(hir: &regex_syntax::hir::Hir) -> (bool, bool, bool) {
         }
         HirKind::Capture(c) => look_info(&c.sub),
         HirKind::Repetition(r) => look_info(&r.sub),
-        HirKind::Concat(subs) | HirKind::Alternation(subs) => {
+        HirKind::Concat(subs) => {
             let mut abs = false;
             let mut line = false;
             let mut any = false;
             for s in subs {
                 let (a, l, y) = look_info(s);
                 abs |= a;
+                line |= l;
+                any |= y;
+            }
+            (abs, line, any)
+        }
+        HirKind::Alternation(subs) => {
+            // `(^|})...atom` is not file-anchored: only one branch is `\A`.
+            // ORing abs here used to disable windowing for the CSS font-family
+            // rule. Require every branch to be absolute before refusing.
+            if subs.is_empty() {
+                return (false, false, false);
+            }
+            let mut abs = true;
+            let mut line = false;
+            let mut any = false;
+            for s in subs {
+                let (a, l, y) = look_info(s);
+                abs &= a;
                 line |= l;
                 any |= y;
             }
@@ -681,7 +793,8 @@ pub(crate) fn hits_are_pattern_atoms(haystack: &[u8], hits: &[u32], pattern: &st
     false
 }
 
-/// Windows around gate-supplied atom hits for a bounded pattern.
+/// Windows around gate-supplied atom hits for a bounded pattern, or for
+/// line-local unbounded `.*` / `[^\n]*` (snap to the atom's line; no byte cap).
 ///
 /// `hits` are absolute starts in `haystack` (the file the gate already
 /// scanned). Returns `None` when windowing is unsound or not profitable —
@@ -698,11 +811,18 @@ pub(crate) fn windows_from_atom_hits(
         return None;
     }
     let hir = parse_hir_like_engine(pattern)?;
-    let (abs, line, any_look) = look_info(&hir);
+    let (abs, mut line, any_look) = look_info(&hir);
     if abs || regex_unicode_override() {
         return None;
     }
-    let radius = bounded_consumed_bytes(pattern)?;
+    let radius = match bounded_consumed_bytes(pattern) {
+        Some(r) => r,
+        None if unbounded_reps_are_line_local(&hir) => {
+            line = true;
+            0
+        }
+        None => return None,
+    };
     let pad = usize::from(any_look);
     let mut spans = Vec::with_capacity(hits.len());
     let mut covered = 0usize;
@@ -1332,12 +1452,12 @@ mod mandatory_atom_set_tests {
         assert_eq!(bounded_consumed_bytes(r"PING.{0,120}PONG"), Some(128));
         assert_eq!(bounded_consumed_bytes(r"foo"), Some(3));
         assert_eq!(bounded_consumed_bytes(r"foo.*bar"), None);
-        // Trailing `\s*` makes the CSS rule unbounded; atom-skip still applies
-        // via the raw-content gate, not via windowing.
-        assert_eq!(
-            bounded_consumed_bytes(r"(?i)(^|})[^@{}]{0,80}\{[^}]{0,160}font-family\s*:"),
-            None
-        );
+        assert_eq!(bounded_consumed_bytes(r"[^\n]*foo"), None);
+        assert_eq!(bounded_consumed_bytes(r"(?s)foo.*bar"), None);
+        // Trailing `\s*` is capped so CSS can window; `.*` stays unbounded.
+        assert_eq!(bounded_consumed_bytes(r"foo\s*bar"), Some(3 + 256 + 3));
+        let css = bounded_consumed_bytes(r"(?i)(^|})[^@{}]{0,80}\{[^}]{0,160}font-family\s*:");
+        assert!(css.is_some() && css.unwrap() <= 8192);
     }
 }
 

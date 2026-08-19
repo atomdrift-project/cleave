@@ -26,11 +26,13 @@ pub(crate) struct TraitEvalCache<'a> {
     pub cached_evidence: &'a FxHashMap<usize, Vec<Evidence>>,
     pub regex_candidates: &'a FxHashSet<usize>,
     pub arch_ranges: Option<&'a [(Arch, std::ops::Range<usize>)]>,
-    pub ast_kind_cache: Option<FxHashMap<String, Vec<Evidence>>>,
+    pub ast_kind_cache: Option<&'a FxHashMap<String, Vec<Evidence>>>,
     /// Raw-file string-index scan ran for this source member. Enables
     /// skip-if-absent for exact/substr/regex-prefix `type: text` without
     /// taking the extracted-string evidence fast path.
     pub source_text_prefiltered: bool,
+    /// Batched `query:` results for this file. Missing → per-trait QueryCursor.
+    pub ast_query_cache: Option<&'a FxHashMap<String, crate::composite_rules::context::ConditionResult>>,
 }
 
 /// Which half of the trait set one filtered pass evaluates, plus any findings
@@ -156,7 +158,85 @@ fn finding_could_affect_ref(r: &str, f: &str) -> bool {
 
 use super::get_relative_source_file;
 
+/// Record one AST node into the kind cache if a `kind:`/`node:` trait needs it.
+/// Shared by the source-analyzer fact walk and `build_ast_kind_cache` so a
+/// second cursor pass is not required for bag-identical `kind: call` matches.
+pub(crate) fn record_ast_kind_node(
+    kind: &str,
+    node: &tree_sitter::Node<'_>,
+    source: &[u8],
+    required_node_types: &FxHashSet<&str>,
+    call_node_types: &FxHashSet<&'static str>,
+    cache: &mut FxHashMap<String, Vec<Evidence>>,
+) {
+    if !required_node_types.contains(kind) {
+        return;
+    }
+    let Ok(text) = node.utf8_text(source) else {
+        return;
+    };
+    let alt_value = if call_node_types.contains(kind) {
+        crate::analyzers::symbol_extraction::extract_function_name(node, source)
+    } else {
+        None
+    };
+    cache.entry(kind.to_string()).or_default().push(Evidence {
+        method: "ast".to_string(),
+        source: "tree-sitter".to_string(),
+        value: crate::composite_rules::evaluators::truncate_evidence(text, 100),
+        location: Some(format!(
+            "{}:{}",
+            node.start_position().row + 1,
+            node.start_position().column + 1
+        )),
+        offsets: vec![node.start_byte() as u64],
+        alt_value,
+        ..Default::default()
+    });
+}
+
 impl super::CapabilityMapper {
+    /// Node kinds `kind:`/`node:` traits need for this file type, plus the
+    /// call-expression kinds whose function name goes in `Evidence.alt_value`.
+    /// Empty `required` means the kind-cache walk can be skipped.
+    pub(crate) fn ast_kind_cache_plan(
+        &self,
+        file_type: crate::composite_rules::FileType,
+    ) -> (FxHashSet<&str>, FxHashSet<&'static str>) {
+        let applicable_indices: Vec<usize> = self
+            .match_indexes()
+            .trait_index
+            .get_applicable(&file_type)
+            .into_indices_static()
+            .collect();
+        self.ast_kind_cache_plan_for(&applicable_indices, file_type)
+    }
+
+    fn ast_kind_cache_plan_for<'a>(
+        &'a self,
+        applicable_indices: &[usize],
+        file_type: crate::composite_rules::FileType,
+    ) -> (FxHashSet<&'a str>, FxHashSet<&'static str>) {
+        let mut required_node_types = FxHashSet::default();
+        for &idx in applicable_indices {
+            if let Condition::TreeSitter(TreeSitterQuery { kind, node, .. }) =
+                &self.trait_definitions[idx].r#if
+            {
+                if let Some(k) = kind {
+                    for nt in map_kind_to_node_types(k, file_type) {
+                        required_node_types.insert(nt);
+                    }
+                } else if let Some(n) = node {
+                    required_node_types.insert(n.as_str());
+                }
+            }
+        }
+        let call_node_types = map_kind_to_node_types("call", file_type)
+            .into_iter()
+            .collect();
+        (required_node_types, call_node_types)
+    }
+
     /// Pre-walk the cached AST once, collecting every node whose kind some
     /// applicable `kind:`/`node:` trait needs into a `kind → evidence` map (Idea
     /// 9). Call-expression nodes also carry the extracted function name in
@@ -176,62 +256,86 @@ impl super::CapabilityMapper {
     ) -> Option<FxHashMap<String, Vec<Evidence>>> {
         let tree = cached_ast?;
         let source = std::str::from_utf8(binary_data).ok()?;
-
-        let mut required_node_types = FxHashSet::default();
-        for &idx in applicable_indices {
-            if let Condition::TreeSitter(TreeSitterQuery { kind, node, .. }) =
-                &self.trait_definitions[idx].r#if
-            {
-                if let Some(k) = kind {
-                    for nt in map_kind_to_node_types(k, file_type) {
-                        required_node_types.insert(nt);
-                    }
-                } else if let Some(n) = node {
-                    required_node_types.insert(n.as_str());
-                }
-            }
-        }
+        let (required_node_types, call_node_types) =
+            self.ast_kind_cache_plan_for(applicable_indices, file_type);
         if required_node_types.is_empty() {
             return None;
         }
 
-        // Call-node kinds for this file type get their function name lifted into
-        // `alt_value` so natural `exact: foo` patterns match `foo(args)`.
-        let call_node_types: FxHashSet<&'static str> = map_kind_to_node_types("call", file_type)
-            .into_iter()
-            .collect();
         let mut cache: FxHashMap<String, Vec<Evidence>> = FxHashMap::default();
         let mut cursor = tree.walk();
         crate::analyzers::ast_walker::walk_tree_with_stats(&mut cursor, None, |node, _| {
-            let kind = node.kind();
-            if required_node_types.contains(kind)
-                && let Ok(text) = node.utf8_text(source.as_bytes())
-            {
-                let alt_value = if call_node_types.contains(kind) {
-                    crate::analyzers::symbol_extraction::extract_function_name(
-                        &node,
-                        source.as_bytes(),
-                    )
-                } else {
-                    None
-                };
-                cache.entry(kind.to_string()).or_default().push(Evidence {
-                    method: "ast".to_string(),
-                    source: "tree-sitter".to_string(),
-                    value: crate::composite_rules::evaluators::truncate_evidence(text, 100),
-                    location: Some(format!(
-                        "{}:{}",
-                        node.start_position().row + 1,
-                        node.start_position().column + 1
-                    )),
-                    offsets: vec![node.start_byte() as u64],
-                    alt_value,
-                    ..Default::default()
-                });
-            }
+            record_ast_kind_node(
+                node.kind(),
+                &node,
+                source.as_bytes(),
+                &required_node_types,
+                &call_node_types,
+                &mut cache,
+            );
             true
         });
         Some(cache)
+    }
+
+    fn collect_ast_query_strings<'a>(&'a self, indices: &[usize]) -> Vec<&'a str> {
+        let mut seen = FxHashSet::default();
+        let mut out = Vec::new();
+        let mut push = |c: &'a Condition| {
+            if let Some(q) = c.ast_query_text()
+                && seen.insert(q)
+            {
+                out.push(q);
+            }
+        };
+        for &idx in indices {
+            let t = &self.trait_definitions[idx];
+            push(&t.r#if);
+            if let Some(unless) = &t.unless {
+                for c in unless {
+                    push(c);
+                }
+            }
+            if let Some(d) = &t.downgrade {
+                for c in d
+                    .any
+                    .iter()
+                    .flatten()
+                    .chain(d.all.iter().flatten())
+                    .chain(d.none.iter().flatten())
+                {
+                    push(c);
+                }
+            }
+        }
+        out.sort_unstable();
+        out
+    }
+
+    /// One QueryCursor walk for every applicable `query:` on this file.
+    /// `None` leaves `eval_ast_query` on the per-trait path.
+    pub(crate) fn build_ast_query_batch(
+        &self,
+        cached_ast: Option<&tree_sitter::Tree>,
+        binary_data: &[u8],
+        file_type: crate::composite_rules::FileType,
+        indices: &[usize],
+        cancellation: Option<&std::sync::atomic::AtomicBool>,
+    ) -> Option<FxHashMap<String, crate::composite_rules::context::ConditionResult>> {
+        let tree = cached_ast?;
+        if !file_type.supports_ast_queries() {
+            return None;
+        }
+        let source = std::str::from_utf8(binary_data).ok()?;
+        let queries = self.collect_ast_query_strings(indices);
+        crate::composite_rules::evaluators::batch_ast_queries(
+            tree,
+            source,
+            file_type,
+            &queries,
+            Some(std::time::Instant::now() + std::time::Duration::from_secs(180)),
+            cancellation,
+        )
     }
 
     /// Evaluate trait definitions against an analysis report with optional cached AST.
@@ -270,6 +374,8 @@ impl super::CapabilityMapper {
         // Idea 9: Batch AST node collection
         let ast_kind_cache =
             self.build_ast_kind_cache(cached_ast, binary_data, &applicable_indices, file_type);
+        let ast_query_cache =
+            self.build_ast_query_batch(cached_ast, binary_data, file_type, &applicable_indices, None);
 
         // Pre-filter using batched Aho-Corasick string matching WITH evidence
         // caching. Source files scan the raw bytes; PE still uses extracted
@@ -322,8 +428,9 @@ impl super::CapabilityMapper {
             cached_evidence: &cached_evidence,
             regex_candidates: &regex_candidates,
             arch_ranges: None,
-            ast_kind_cache,
+            ast_kind_cache: ast_kind_cache.as_ref(),
             source_text_prefiltered,
+            ast_query_cache: ast_query_cache.as_ref(),
         };
 
         // Pass 1: Evaluate independent traits
@@ -491,6 +598,7 @@ impl super::CapabilityMapper {
                 arch_ranges: None,
                 ast_kind_cache: None,
                 source_text_prefiltered,
+                ast_query_cache: None,
             },
             None,
         )
@@ -537,8 +645,11 @@ impl super::CapabilityMapper {
             ctx = ctx.with_cancellation(flag);
         }
 
-        if let Some(ref ast_cache) = cache.ast_kind_cache {
+        if let Some(ast_cache) = cache.ast_kind_cache {
             ctx = ctx.with_ast_kind_cache(ast_cache);
+        }
+        if let Some(qcache) = cache.ast_query_cache {
+            ctx = ctx.with_ast_query_cache(qcache);
         }
 
         if let Some(results) = inline_yara {

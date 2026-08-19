@@ -2893,6 +2893,269 @@ fn test_eval_raw_window_finds_bounded_match() {
     assert!(result.matched);
 }
 
+/// 4 KiB is below the old 16 KiB window floor. Bounded patterns must still
+/// window around the gate atom. A decoy `PING` far from `PONG` is a real
+/// pattern atom (so windowing is allowed) but must not full-scan.
+#[test]
+fn test_eval_raw_windows_small_js_haystack() {
+    let mut content = b"PING".to_vec();
+    content.extend_from_slice(&vec![b'x'; 4000]);
+    let hit = content.len() as u32;
+    content.extend_from_slice(b"PING----PONG");
+    let mut offsets = rustc_hash::FxHashMap::default();
+    offsets.insert(0, vec![hit]);
+    let hit_result = eval_raw_regex_on(
+        r"PING.{0,120}PONG",
+        &content,
+        FileType::JavaScript,
+        Some(0),
+        Some(&offsets),
+    );
+    assert!(hit_result.matched, "atom at the match must window-hit");
+
+    let mut decoy = rustc_hash::FxHashMap::default();
+    decoy.insert(0, vec![0]);
+    let miss = eval_raw_regex_on(
+        r"PING.{0,120}PONG",
+        &content,
+        FileType::JavaScript,
+        Some(0),
+        Some(&decoy),
+    );
+    assert!(
+        !miss.matched,
+        "decoy PING ~4 KiB from PONG must not full-scan"
+    );
+}
+
+/// Below `MIN_HAYSTACK_TO_WINDOW`, eval_raw still full-scans. A decoy `PING`
+/// at byte 0 would miss if windowed (radius ~128, match at ~200).
+#[test]
+fn test_eval_raw_tiny_haystack_still_full_scans() {
+    let mut content = b"PING".to_vec();
+    content.extend_from_slice(&vec![b'x'; 200]);
+    content.extend_from_slice(b"PING----PONG");
+    let mut decoy = rustc_hash::FxHashMap::default();
+    decoy.insert(0, vec![0]);
+    let result = eval_raw_regex_on(
+        r"PING.{0,120}PONG",
+        &content,
+        FileType::JavaScript,
+        Some(0),
+        Some(&decoy),
+    );
+    assert!(
+        result.matched,
+        "sub-256 B source must full-scan past a decoy atom"
+    );
+}
+
+/// 400 B is below the old 1 KiB floor and above 256 B. Bounded patterns
+/// must window. A decoy `PING` far from `PONG` must not full-scan.
+#[test]
+fn test_eval_raw_windows_sub_1kib_haystack() {
+    let mut content = b"PING".to_vec();
+    content.extend_from_slice(&vec![b'x'; 300]);
+    let hit = content.len() as u32;
+    content.extend_from_slice(b"PING----PONG");
+    assert!(content.len() > 256 && content.len() < 1024);
+    let mut offsets = rustc_hash::FxHashMap::default();
+    offsets.insert(0, vec![hit]);
+    let hit_result = eval_raw_regex_on(
+        r"PING.{0,120}PONG",
+        &content,
+        FileType::JavaScript,
+        Some(0),
+        Some(&offsets),
+    );
+    assert!(hit_result.matched, "atom at the match must window-hit");
+
+    let mut decoy = rustc_hash::FxHashMap::default();
+    decoy.insert(0, vec![0]);
+    let miss = eval_raw_regex_on(
+        r"PING.{0,120}PONG",
+        &content,
+        FileType::JavaScript,
+        Some(0),
+        Some(&decoy),
+    );
+    assert!(
+        !miss.matched,
+        "decoy PING ~300 B from PONG must not full-scan"
+    );
+}
+
+/// Unbounded `\s*` (token spacing) used to force a full eval_raw scan.
+/// A decoy `foo` far from `bar` must not full-scan.
+#[test]
+fn test_eval_raw_windows_unbounded_whitespace() {
+    let mut content = b"foo".to_vec();
+    content.extend_from_slice(&vec![b'x'; 20_000]);
+    let hit = content.len() as u32;
+    content.extend_from_slice(b"foo   bar");
+    let mut offsets = rustc_hash::FxHashMap::default();
+    offsets.insert(0, vec![hit]);
+    let hit_result = eval_raw_regex_on(
+        r"foo\s*bar",
+        &content,
+        FileType::JavaScript,
+        Some(0),
+        Some(&offsets),
+    );
+    assert!(hit_result.matched, "atom at foo...bar must window-hit");
+
+    let mut decoy = rustc_hash::FxHashMap::default();
+    decoy.insert(0, vec![0]);
+    let miss = eval_raw_regex_on(
+        r"foo\s*bar",
+        &content,
+        FileType::JavaScript,
+        Some(0),
+        Some(&decoy),
+    );
+    assert!(
+        !miss.matched,
+        "decoy foo 20 KiB from bar must not full-scan"
+    );
+}
+
+/// `foo.*bar` cannot cross newlines (eval_raw does not set `(?s)`). Window the
+/// atom's line. A decoy `foo` on its own line must not full-scan to `bar`.
+#[test]
+fn test_eval_raw_windows_line_local_dot_star() {
+    let mut content = b"foo\n".to_vec();
+    content.extend_from_slice(&vec![b'x'; 20_000]);
+    content.extend_from_slice(b"\nfoo----bar");
+    let hit = memchr::memmem::rfind(&content, b"foo").expect("rule atom") as u32;
+    let mut offsets = rustc_hash::FxHashMap::default();
+    offsets.insert(0, vec![hit]);
+    let hit_result = eval_raw_regex_on(
+        r"foo.*bar",
+        &content,
+        FileType::JavaScript,
+        Some(0),
+        Some(&offsets),
+    );
+    assert!(hit_result.matched, "atom on the foo...bar line must window-hit");
+
+    let mut decoy = rustc_hash::FxHashMap::default();
+    decoy.insert(0, vec![0]);
+    let miss = eval_raw_regex_on(
+        r"foo.*bar",
+        &content,
+        FileType::JavaScript,
+        Some(0),
+        Some(&decoy),
+    );
+    assert!(
+        !miss.matched,
+        "decoy foo on its own line must not full-scan"
+    );
+}
+
+/// `[^\n]*` is the same line-local case as `.` without `(?s)`.
+#[test]
+fn test_eval_raw_windows_line_local_not_newline() {
+    let mut content = b"foo\n".to_vec();
+    content.extend_from_slice(&vec![b'x'; 20_000]);
+    content.extend_from_slice(b"\nfoo----bar");
+    let hit = memchr::memmem::rfind(&content, b"foo").expect("rule atom") as u32;
+    let mut offsets = rustc_hash::FxHashMap::default();
+    offsets.insert(0, vec![hit]);
+    let hit_result = eval_raw_regex_on(
+        r"foo[^\n]*bar",
+        &content,
+        FileType::JavaScript,
+        Some(0),
+        Some(&offsets),
+    );
+    assert!(hit_result.matched, "atom on the foo[^\\n]*bar line must window-hit");
+
+    let mut decoy = rustc_hash::FxHashMap::default();
+    decoy.insert(0, vec![0]);
+    let miss = eval_raw_regex_on(
+        r"foo[^\n]*bar",
+        &content,
+        FileType::JavaScript,
+        Some(0),
+        Some(&decoy),
+    );
+    assert!(
+        !miss.matched,
+        "decoy foo on its own line must not full-scan"
+    );
+}
+
+/// `(?s)foo.*bar` *can* cross newlines. Windowing the decoy line would FN;
+/// eval_raw must still full-scan.
+#[test]
+fn test_eval_raw_dotall_star_still_full_scans() {
+    let mut content = b"foo\n".to_vec();
+    content.extend_from_slice(&vec![b'x'; 20_000]);
+    content.extend_from_slice(b"\nbar");
+    let mut decoy = rustc_hash::FxHashMap::default();
+    decoy.insert(0, vec![0]);
+    let result = eval_raw_regex_on(
+        r"(?s)foo.*bar",
+        &content,
+        FileType::JavaScript,
+        Some(0),
+        Some(&decoy),
+    );
+    assert!(
+        result.matched,
+        "(?s).* must full-scan from a decoy foo to a later-line bar"
+    );
+}
+
+/// `[\s\S]{0,n}` can span lines. An unbounded `\w+` in the same pattern must
+/// not flip us into line-windowing (node-recursive-file-walk FN).
+#[test]
+fn test_eval_raw_mixed_s_class_not_line_windowed() {
+    const PAT: &str = r"\bfs[\w$]{0,3}\.readdirSync[\s\S]{0,300}\.statSync[\s\S]{0,300}\w+\.push";
+    let mut content = b"fs.readdirSync(dir)\n".to_vec();
+    content.extend_from_slice(b"  x.statSync(p)\n");
+    content.extend_from_slice(b"  files.push(p)\n");
+    content.extend_from_slice(&vec![b'x'; 2000]);
+    let hit = memchr::memmem::find(&content, b"readdirSync").expect("atom") as u32;
+    let mut offsets = rustc_hash::FxHashMap::default();
+    offsets.insert(0, vec![hit]);
+    let result = eval_raw_regex_on(PAT, &content, FileType::JavaScript, Some(0), Some(&offsets));
+    assert!(
+        result.matched,
+        "readdirSync / statSync / push on adjacent lines must still match"
+    );
+}
+
+/// CSS `font-family\s*:` used to skip windowing (`\s*` unbounded, `(^|})`
+/// treated as `\A`). eval_raw prefixes `(?m)`, so `^` line-snaps.
+#[test]
+fn test_eval_raw_windows_css_unbounded_whitespace() {
+    const CSS: &str = r"(?i)(^|})[^@{}]{0,80}\{[^}]{0,160}font-family\s*:";
+    // eval_raw prefixes `(?m)`, so `^` line-snaps to the next newline after
+    // the radius. A newline just past the ~510-byte window keeps the decoy
+    // from swallowing the real rule 20 KiB later.
+    let mut content = b"font-family\n".to_vec();
+    content.extend_from_slice(&vec![b'x'; 600]);
+    content.push(b'\n');
+    content.extend_from_slice(&vec![b'x'; 20_000]);
+    content.extend_from_slice(b"\n}{font-family:");
+    let hit = memchr::memmem::rfind(&content, b"font-family").expect("rule atom") as u32;
+    let mut offsets = rustc_hash::FxHashMap::default();
+    offsets.insert(0, vec![hit]);
+    let hit_result =
+        eval_raw_regex_on(CSS, &content, FileType::JavaScript, Some(0), Some(&offsets));
+    assert!(hit_result.matched, "atom at the CSS rule must window-hit");
+
+    let mut decoy = rustc_hash::FxHashMap::default();
+    decoy.insert(0, vec![0]);
+    let miss = eval_raw_regex_on(CSS, &content, FileType::JavaScript, Some(0), Some(&decoy));
+    assert!(
+        !miss.matched,
+        "decoy font-family 20 KiB from the rule must not full-scan"
+    );
+}
+
 /// Line-anchored `^` after 20 KiB of filler: windowing must snap to the line.
 #[test]
 fn test_eval_raw_window_caret_on_later_line() {

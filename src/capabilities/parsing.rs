@@ -16,6 +16,31 @@ use std::collections::HashSet;
 
 use super::models::{RawCompositeRule, RawTraitDefinition, TraitDefaults};
 
+/// True if a `for:` entry includes the forbidden `all` / `*` aggregator (as an
+/// inclusion, not an exclusion). Comma-separated entries are split.
+fn for_entry_contains_all(entry: &str) -> bool {
+    entry.split(',').any(|part| {
+        let part = part.trim();
+        if part.is_empty() || part.starts_with('!') || part.starts_with('-') {
+            return false;
+        }
+        part.eq_ignore_ascii_case("all") || part == "*"
+    })
+}
+
+fn for_list_contains_all(types: &[String]) -> bool {
+    types.iter().any(|s| for_entry_contains_all(s))
+}
+
+const FOR_ALL_REJECTED: &str = "for: [all] is not allowed — use concrete types \
+     (elf, python, ...) or named groups (binaries, scripts, source, manifests, \
+     documents, media, data, archives). Combine groups explicitly \
+     (e.g. for: [binaries, scripts]) instead of for: [all].";
+
+const FOR_ALL_REJECTED_DEFAULTS: &str = "for: [all] is not allowed in file default \
+     'for:' — use concrete types or named groups (binaries, scripts, source, manifests, \
+     documents, media, data, archives). Combine groups explicitly instead of for: [all].";
+
 /// Apply default for Option<String> fields, supporting "none" to unset
 /// - If raw is Some("none"), return None (explicit unset)
 /// - If raw is Some(value), return Some(value)
@@ -98,6 +123,8 @@ pub(crate) fn apply_trait_defaults(
                  media, data)."
                     .to_string(),
             );
+        } else if for_list_contains_all(types) {
+            warnings.push(FOR_ALL_REJECTED.to_string());
         }
     } else if defaults.r#for.as_deref().is_some_and(<[String]>::is_empty) {
         warnings.push(
@@ -125,6 +152,8 @@ pub(crate) fn apply_trait_defaults(
              named groups."
                 .to_string(),
         );
+    } else if defaults.r#for.as_deref().is_some_and(for_list_contains_all) {
+        warnings.push(FOR_ALL_REJECTED_DEFAULTS.to_string());
     }
     let parsed_ft = apply_vec_default(raw.file_types, &defaults.r#for)
         .map(|types| parse_file_types(&types, warnings))
@@ -406,6 +435,7 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                     RuleFileType::Pyc,
                     RuleFileType::Beam,
                     RuleFileType::Wasm,
+                    RuleFileType::Dex,
                     RuleFileType::StaticLib,
                 ],
                 "scripts" => vec![
@@ -518,6 +548,7 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 "class" | "java_class" | "javaclass" => vec![RuleFileType::Class],
                 "pyc" | "python-bytecode" | "pythonbytecode" => vec![RuleFileType::Pyc],
                 "wasm" | "webassembly" => vec![RuleFileType::Wasm],
+                "dex" | "dalvik" => vec![RuleFileType::Dex],
                 "c" | "cpp" | "c++" | "cc" | "cxx" => vec![RuleFileType::C],
                 "rust" => vec![RuleFileType::Rust],
                 "go" => vec![RuleFileType::Go],
@@ -564,6 +595,7 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 "oledoc" | "ole" | "doc" | "xls" | "ppt" | "msg" => {
                     vec![RuleFileType::OleDoc]
                 }
+                "msi" | "msp" | "mst" | "msm" => vec![RuleFileType::Msi],
                 "ooxml" | "docx" | "xlsx" | "pptx" | "docm" | "xlsm" | "pptm" => {
                     vec![RuleFileType::Ooxml]
                 }
@@ -736,9 +768,11 @@ pub(crate) fn resolve_platform_filetype_conflicts(
                 | RuleFileType::Vbs
                 | RuleFileType::PowerShell
                 | RuleFileType::Lnk
+                | RuleFileType::Msi
                 | RuleFileType::Nupkg => has_windows,
                 // ELF and APK both run on Linux/Android
                 RuleFileType::Elf | RuleFileType::Apk => has_unix || has_android,
+                RuleFileType::Dex => has_android,
                 RuleFileType::Jcl => has_zos,
                 // Mach-O/Plist/Ipa and AppleScript/Swift/ObjC are macOS/iOS-native;
                 // Shell runs on all unix-like systems. macOS is a Unix, so the
@@ -778,11 +812,13 @@ pub(crate) fn resolve_platform_filetype_conflicts(
                 | RuleFileType::Vbs
                 | RuleFileType::PowerShell
                 | RuleFileType::Lnk
+                | RuleFileType::Msi
                 | RuleFileType::Nupkg => (has_windows, "windows"),
                 // ELF and APK both run on Linux/Android
                 RuleFileType::Elf | RuleFileType::Apk => {
                     (has_unix || has_android, "linux, unix, or android")
                 }
+                RuleFileType::Dex => (has_android, "android"),
                 RuleFileType::Jcl => (has_zos, "zos"),
                 RuleFileType::Shell => (has_darwin, "linux, unix, macos, or ios"),
                 // macOS/iOS-native languages and formats — the `unix` umbrella
@@ -917,6 +953,8 @@ pub(crate) fn apply_composite_defaults(
                  groups."
                     .to_string(),
             );
+        } else if for_list_contains_all(types) {
+            warnings.push(FOR_ALL_REJECTED.to_string());
         }
     } else if defaults.r#for.as_deref().is_some_and(<[String]>::is_empty) {
         warnings.push(
@@ -944,6 +982,8 @@ pub(crate) fn apply_composite_defaults(
              groups."
                 .to_string(),
         );
+    } else if defaults.r#for.as_deref().is_some_and(for_list_contains_all) {
+        warnings.push(FOR_ALL_REJECTED_DEFAULTS.to_string());
     }
     let parsed_ft = apply_vec_default(raw.file_types, &defaults.r#for)
         .map(|types| parse_file_types(&types, warnings))
@@ -2025,6 +2065,25 @@ mod tests {
         assert!(result.types.contains(&RuleFileType::Elf));
         assert!(result.types.contains(&RuleFileType::Macho));
         assert!(result.types.contains(&RuleFileType::Pe));
+        assert!(result.types.contains(&RuleFileType::Dex));
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn test_parse_file_types_dex_and_msi() {
+        let mut warnings = Vec::new();
+        let dex = parse_file_types(&["dex".to_string()], &mut warnings);
+        assert_eq!(dex.types, vec![RuleFileType::Dex]);
+        let dalvik = parse_file_types(&["dalvik".to_string()], &mut warnings);
+        assert_eq!(dalvik.types, vec![RuleFileType::Dex]);
+        let msi = parse_file_types(&["msi".to_string()], &mut warnings);
+        assert_eq!(msi.types, vec![RuleFileType::Msi]);
+        let msp = parse_file_types(&["msp".to_string()], &mut warnings);
+        assert_eq!(msp.types, vec![RuleFileType::Msi]);
+        let mst = parse_file_types(&["mst".to_string()], &mut warnings);
+        assert_eq!(mst.types, vec![RuleFileType::Msi]);
+        let msm = parse_file_types(&["msm".to_string()], &mut warnings);
+        assert_eq!(msm.types, vec![RuleFileType::Msi]);
         assert!(warnings.is_empty());
     }
 
@@ -2225,7 +2284,7 @@ mod tests {
     #[test]
     fn test_for_in_defaults_suppresses_warning() {
         let defaults = super::super::models::TraitDefaults {
-            r#for: Some(vec!["all".to_string()]),
+            r#for: Some(vec!["binaries".to_string()]),
             ..Default::default()
         };
         let raw = make_raw_trait("test-trait", None);
@@ -2242,6 +2301,90 @@ mod tests {
                 .iter()
                 .any(|w| w.contains("missing 'for:' declaration")),
             "unexpected for: warning"
+        );
+    }
+
+    #[test]
+    fn test_for_all_is_rejected_with_clear_warning() {
+        // RULES.md: `for: [all]` is no longer valid — authors must name concrete
+        // types or groups. Runtime still materialises FileType::All so existing
+        // traits keep matching until they are rewritten. This is a Soft
+        // authoring issue (`for-all`), not a load-breaking invalid file type.
+        let defaults = super::super::models::TraitDefaults {
+            platforms: Some(vec!["linux".to_string()]),
+            ..super::super::models::TraitDefaults::default()
+        };
+        let raw = make_raw_trait("test-trait", Some(vec!["all".to_string()]));
+        let mut warnings = Vec::new();
+        let result = super::apply_trait_defaults(
+            raw,
+            &defaults,
+            &mut warnings,
+            std::path::Path::new("test.yaml"),
+            true,
+        );
+        assert!(
+            result
+                .r#for
+                .contains(&crate::composite_rules::FileType::All),
+            "for: [all] should still parse as All for downstream safety, got: {:?}",
+            result.r#for
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|w| { w.contains("for: [all] is not allowed") && w.contains("named groups") }),
+            "expected for: [all] soft warning, got: {:?}",
+            warnings
+        );
+    }
+
+    #[test]
+    fn test_for_star_is_rejected_like_all() {
+        let defaults = super::super::models::TraitDefaults {
+            platforms: Some(vec!["linux".to_string()]),
+            ..super::super::models::TraitDefaults::default()
+        };
+        let raw = make_raw_trait("test-trait", Some(vec!["*".to_string()]));
+        let mut warnings = Vec::new();
+        super::apply_trait_defaults(
+            raw,
+            &defaults,
+            &mut warnings,
+            std::path::Path::new("test.yaml"),
+            true,
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("for: [all] is not allowed")),
+            "expected for: [*] soft warning, got: {:?}",
+            warnings
+        );
+    }
+
+    #[test]
+    fn test_for_all_in_defaults_is_rejected() {
+        let defaults = super::super::models::TraitDefaults {
+            platforms: Some(vec!["linux".to_string()]),
+            r#for: Some(vec!["all".to_string()]),
+            ..super::super::models::TraitDefaults::default()
+        };
+        let raw = make_raw_trait("test-trait", None);
+        let mut warnings = Vec::new();
+        super::apply_trait_defaults(
+            raw,
+            &defaults,
+            &mut warnings,
+            std::path::Path::new("test.yaml"),
+            true,
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|w| { w.contains("for: [all] is not allowed") && w.contains("file default") }),
+            "expected defaults for: [all] soft warning, got: {:?}",
+            warnings
         );
     }
 

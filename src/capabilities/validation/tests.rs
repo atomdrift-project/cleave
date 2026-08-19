@@ -5602,6 +5602,10 @@ mod excessive_file_types_tests {
                 FileType::Pe,
                 FileType::Class,
                 FileType::Pyc,
+                FileType::Beam,
+                FileType::Wasm,
+                FileType::Dex,
+                FileType::StaticLib,
             ],
         )];
         let result = find_excessive_file_types(&traits, &[]);
@@ -5689,8 +5693,8 @@ mod excessive_file_types_tests {
     }
 
     #[test]
-    fn test_mixed_types_suggest_all() {
-        // Mix spanning multiple groups → suggest `all`
+    fn test_mixed_types_suggest_named_groups() {
+        // Mix spanning multiple groups → suggest combining named groups, not `all`
         let traits = vec![trait_with_for(
             "test::mixed",
             vec![
@@ -5707,13 +5711,15 @@ mod excessive_file_types_tests {
         )];
         let result = find_excessive_file_types(&traits, &[]);
         assert_eq!(result.len(), 1);
-        assert!(result[0].2.contains("all"));
+        assert!(result[0].2.contains("named groups"));
+        assert!(!result[0].2.contains("[all]"));
     }
 
     #[test]
     fn test_multi_group_union_exempt() {
-        // `for: [scripts, binaries, source]` in YAML expands to 33 concrete types.
-        // The validator must not re-warn the author to use groups they already used.
+        // `for: [scripts, binaries, source]` in YAML expands to the concrete
+        // union of those named groups. The validator must not re-warn the
+        // author to use groups they already used.
         let scripts = vec![
             FileType::Shell,
             FileType::Batch,
@@ -5734,7 +5740,10 @@ mod excessive_file_types_tests {
             FileType::Pe,
             FileType::Class,
             FileType::Pyc,
+            FileType::Beam,
             FileType::Wasm,
+            FileType::Dex,
+            FileType::StaticLib,
         ];
         let source = vec![
             FileType::TypeScript,
@@ -5753,7 +5762,7 @@ mod excessive_file_types_tests {
             FileType::Elixir,
         ];
         let combined: Vec<FileType> = scripts.into_iter().chain(binaries).chain(source).collect();
-        assert_eq!(combined.len(), 32);
+        assert_eq!(combined.len(), 35);
         let traits = vec![trait_with_for("test::multi-group", combined)];
         let result = find_excessive_file_types(&traits, &[]);
         assert!(

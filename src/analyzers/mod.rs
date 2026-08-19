@@ -133,7 +133,7 @@ pub fn analyzer_for_file_type(
         )),
 
         // Microsoft Office documents (OLE2 and OOXML)
-        FileType::OleDoc | FileType::Ooxml => Some(Box::new(
+        FileType::OleDoc | FileType::Msi | FileType::Ooxml => Some(Box::new(
             office::OfficeAnalyzer::new().with_capability_mapper(mapper_or_empty),
         )),
 
@@ -184,6 +184,7 @@ pub fn analyzer_for_file_type(
         | FileType::Text
         | FileType::Dockerfile
         | FileType::Wasm
+        | FileType::Dex
         | FileType::Data => Some(Box::new(
             generic::GenericAnalyzer::new(*file_type).with_capability_mapper(mapper_or_empty),
         )),
@@ -250,7 +251,7 @@ pub(crate) fn analyzer_for_file_type_arc(
         )),
 
         // Microsoft Office documents (OLE2 and OOXML)
-        FileType::OleDoc | FileType::Ooxml => Some(Box::new(
+        FileType::OleDoc | FileType::Msi | FileType::Ooxml => Some(Box::new(
             office::OfficeAnalyzer::new().with_capability_mapper_arc(mapper_or_empty),
         )),
 
@@ -301,6 +302,7 @@ pub(crate) fn analyzer_for_file_type_arc(
         | FileType::Text
         | FileType::Dockerfile
         | FileType::Wasm
+        | FileType::Dex
         | FileType::Data => Some(Box::new(
             generic::GenericAnalyzer::new(*file_type).with_capability_mapper_arc(mapper_or_empty),
         )),
@@ -665,6 +667,7 @@ impl FileTypeExt for FileType {
             FileType::Gem => vec!["gem", "archive"],
             FileType::ApkAndroid => vec!["apk", "android", "archive"],
             FileType::ApkAlpine => vec!["apk", "alpine", "archive"],
+            FileType::Dex => vec!["dex"],
             FileType::Npm => vec!["npm", "tgz", "archive"],
             FileType::Crate => vec!["crate", "rust", "archive"],
             FileType::Conda => vec!["conda", "archive"],
@@ -693,6 +696,7 @@ impl FileTypeExt for FileType {
             FileType::Plist => vec!["plist", "xml", "apple"],
             FileType::Rtf => vec!["rtf", "doc"],
             FileType::OleDoc => vec!["doc", "xls", "ppt", "ole", "msg"],
+            FileType::Msi => vec!["msi", "msp", "mst", "msm", "ole"],
             FileType::Ooxml => vec!["docx", "xlsx", "pptx", "doc", "xls", "ole"],
             FileType::Lnk => vec!["lnk", "shortcut"],
             FileType::Jpeg => vec!["jpeg", "jpg"],

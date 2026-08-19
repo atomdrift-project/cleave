@@ -2310,7 +2310,10 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     // (jpeg/png) qualify; binaries take the dedicated arms above, and types
     // with their own parsers (office/java_class) are intentionally excluded.
     let threads_ctx = file_type.is_source_code()
-        || matches!(file_type, FileType::Jpeg | FileType::Png | FileType::Wasm);
+        || matches!(
+            file_type,
+            FileType::Jpeg | FileType::Png | FileType::Wasm | FileType::Dex
+        );
     let yara_prefetch = |ftypes: &[&str]| {
         if cancel_for_yara
             .as_ref()
@@ -2629,10 +2632,12 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         FileType::JavaClass => analyzers::java_class::JavaClassAnalyzer::new()
             .with_capability_mapper_arc(mapper_arc.clone())
             .analyze_input(&input),
-        FileType::OleDoc | FileType::Ooxml => analyzers::office::OfficeAnalyzer::new()
-            .with_capability_mapper_arc(mapper_arc.clone())
-            .with_cancellation(options.cancellation.clone())
-            .analyze_input(&input),
+        FileType::OleDoc | FileType::Msi | FileType::Ooxml => {
+            analyzers::office::OfficeAnalyzer::new()
+                .with_capability_mapper_arc(mapper_arc.clone())
+                .with_cancellation(options.cancellation.clone())
+                .analyze_input(&input)
+        }
         ref ft if ft.is_archive() => {
             set_phase(&format!("archive:{}", ft.report_file_type()));
             let mut analyzer = analyzers::archive::ArchiveAnalyzer::new()

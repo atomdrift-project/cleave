@@ -763,9 +763,6 @@ mod tests {
     #[allow(clippy::expect_used)]
     fn make_basename_mapper() -> super::super::CapabilityMapper {
         let yaml = r#"
-defaults:
-  for: [all]
-
 traits:
   - id: "test/archive::package-json-basename"
     desc: "package.json basename"
@@ -924,9 +921,6 @@ traits:
         // test does not depend on the installed trait set (which lives in
         // a separate repo that can drift or carry parse errors).
         let yaml = r#"
-defaults:
-  for: [all]
-
 traits:
   - id: "test/archive::macos-temp-staging-path"
     desc: "Archive preserves macOS temp staging path"
@@ -971,9 +965,6 @@ traits:
     #[allow(clippy::expect_used)]
     fn make_cross_scope_mapper() -> super::super::CapabilityMapper {
         let yaml = r#"
-defaults:
-  for: [all]
-
 traits:
   - id: "test/target::target-trait"
     desc: "target trait that should downgrade in presence of gate"
@@ -1242,8 +1233,7 @@ composite_rules:
     fn package_scope_mapper() -> super::super::CapabilityMapper {
         let yaml = r#"
 defaults:
-  for: [all]
-  platforms: [all]
+  platforms: [unix, windows, macos]
 
 traits:
   - id: "test/pkg::deprecated"
@@ -1342,9 +1332,6 @@ composite_rules:
     #[allow(clippy::expect_used)]
     fn kv_sibling_basenames_collects_referenced_files_only() {
         let yaml = r#"
-defaults:
-  for: [all]
-
 traits:
   - id: "test/kv::plain-value"
     desc: "no sibling reference"

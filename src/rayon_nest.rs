@@ -52,7 +52,9 @@ mod tests {
 
     #[test]
     fn inner_parallel_with_zero_or_one_toplevel() {
-        let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _lock = TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         assert!(inner_work_parallel());
         let one = enter_toplevel_analysis();
         assert!(inner_work_parallel());
@@ -62,7 +64,9 @@ mod tests {
 
     #[test]
     fn inner_serial_when_two_toplevel() {
-        let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _lock = TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let a = enter_toplevel_analysis();
         let b = enter_toplevel_analysis();
         assert!(!inner_work_parallel());

@@ -9,12 +9,12 @@ cleave identifies files by magic bytes, extension, filename, and content heurist
 | Mach-O | (none), `.dylib`, `.bundle` | macOS/iOS executable, library, or fat universal binary |
 | ELF | (none), `.so`, `.o` | Unix/Linux executable or shared library |
 | PE | `.exe`, `.dll`, `.sys`, `.scr` | Windows executable, DLL, or driver |
-| MSI | `.msi`, `.msp` | Windows Installer (with embedded PE extraction) |
+| MSI | `.msi`, `.msp`, `.mst`, `.msm` | Windows Installer (with embedded PE extraction) |
 | Java class | `.class` | Compiled Java bytecode |
 | Python bytecode | `.pyc` | CPython compiled bytecode |
 | Python pickle | `.pkl`, `.pickle`, `.joblib`, `.pt`, `.pth` | Serialized Python object |
 | WebAssembly | `.wasm` | WebAssembly binary module (Go/TinyGo/Rust/Emscripten target) |
-| Android DEX | `.dex` | Dalvik executable bytecode |
+| DEX | `.dex` | Dalvik/ART executable bytecode |
 | Erlang/Elixir BEAM | `.beam` | Compiled BEAM VM bytecode |
 | AppleScript (compiled) | `.scpt`, `.applescript` | Compiled AppleScript binary |
 

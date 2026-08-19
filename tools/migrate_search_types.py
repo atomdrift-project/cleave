@@ -23,6 +23,7 @@ ALL_FILE_TYPES = {
     "dll",
     "class",
     "pyc",
+    "dex",
     "shell",
     "batch",
     "python",
@@ -64,6 +65,7 @@ ALL_FILE_TYPES = {
     "rtf",
     "pdf",
     "oledoc",
+    "msi",
     "ooxml",
     "archive",
     "zip",
@@ -91,6 +93,7 @@ BINARY_GROUP = {
     "dll",
     "class",
     "pyc",
+    "dex",
 }
 
 SCRIPT_GROUP = {
@@ -261,6 +264,12 @@ FILE_TYPE_ALIASES = {
     "xls": {"oledoc"},
     "ppt": {"oledoc"},
     "msg": {"oledoc"},
+    "msi": {"msi"},
+    "msp": {"msi"},
+    "mst": {"msi"},
+    "msm": {"msi"},
+    "dex": {"dex"},
+    "dalvik": {"dex"},
     "ooxml": {"ooxml"},
     "docx": {"ooxml"},
     "xlsx": {"ooxml"},

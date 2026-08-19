@@ -2433,7 +2433,7 @@ mod tests {
     fn create_debug_test_mapper() -> CapabilityMapper {
         let yaml = r#"
 defaults:
-  for: [all]
+  for: [binaries, scripts, source, manifests, documents, media, data, archives]
 
 traits:
   - id: "micro-behaviors/data/embedded/zstd-magic"

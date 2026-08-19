@@ -328,6 +328,8 @@ pub(crate) enum FileType {
     /// WebAssembly binary module (.wasm) — portable bytecode payload,
     /// string-extracted (Go/TinyGo/Rust/Emscripten compile target).
     Wasm,
+    /// Dalvik/ART executable bytecode (.dex). A standalone program, not an APK.
+    Dex,
     /// Unix shell script (bash, sh, zsh, etc.)
     Shell,
     /// Windows batch script (.bat, .cmd)
@@ -453,6 +455,9 @@ pub(crate) enum FileType {
     Rtf,
     /// Legacy Microsoft Office document (OLE2/CFBF: .doc, .xls, .ppt, .msg)
     OleDoc,
+    /// Windows Installer package / patch (OLE2/CFBF: .msi, .msp). Same compound
+    /// container as [`OleDoc`], but a distinct installer surface — not a document.
+    Msi,
     /// Modern Microsoft Office document (OOXML: .docx, .xlsx, .pptx)
     Ooxml,
     /// OpenDocument Format document (.odt, .ods, .odp, .odg)
@@ -601,6 +606,7 @@ impl From<filefacts::FileType> for FileType {
             Ff::PythonBytecode => Self::Pyc,
             Ff::Beam => Self::Beam,
             Ff::Wasm => Self::Wasm,
+            Ff::Dex => Self::Dex,
             // Scripts / source
             Ff::Shell => Self::Shell,
             Ff::Batch => Self::Batch,
@@ -663,6 +669,7 @@ impl From<filefacts::FileType> for FileType {
             Ff::Plist => Self::Plist,
             Ff::Rtf => Self::Rtf,
             Ff::OleDoc => Self::OleDoc,
+            Ff::Msi => Self::Msi,
             Ff::Ooxml => Self::Ooxml,
             Ff::Odf => Self::Odf,
             Ff::Lnk => Self::Lnk,
@@ -700,7 +707,7 @@ impl From<filefacts::FileType> for FileType {
             Ff::Whl => Self::Whl,
             Ff::PythonSdist => Self::PythonSdist,
             Ff::Gem => Self::Gem,
-            Ff::ApkAndroid | Ff::ApkAlpine | Ff::AndroidDex => Self::Apk,
+            Ff::ApkAndroid | Ff::ApkAlpine => Self::Apk,
             Ff::Npm => Self::Npm,
             Ff::Crate => Self::Crate,
             Ff::Conda => Self::Conda,
@@ -871,6 +878,7 @@ impl FileType {
             "class" | "java_class" | "javaclass" => FileType::Class,
             "pyc" | "python-bytecode" | "pythonbytecode" => FileType::Pyc,
             "wasm" | "webassembly" => FileType::Wasm,
+            "dex" | "dalvik" => FileType::Dex,
             "ruby" | "rb" => FileType::Ruby,
             "php" => FileType::Php,
             "csharp" | "cs" => FileType::CSharp,
@@ -920,6 +928,7 @@ impl FileType {
             "pkginfo" | "pkg-info" | "pkg_info" => FileType::PkgInfo,
             "rtf" => FileType::Rtf,
             "ole" | "doc" | "xls" | "ppt" | "msg" | "oledoc" => FileType::OleDoc,
+            "msi" | "msp" | "mst" | "msm" => FileType::Msi,
             "ooxml" | "docx" | "xlsx" | "pptx" | "docm" | "xlsm" | "pptm" => FileType::Ooxml,
             "lnk" => FileType::Lnk,
             "ipa" => FileType::Ipa,
@@ -1184,6 +1193,13 @@ mod tests {
             FileType::ChromeManifest
         );
         assert_eq!(FileType::from_str(Ff::OleDoc.label()), FileType::OleDoc);
+        // MSI is its own routing bucket: the office analyzer reports subtype
+        // "msi", and filefacts labels .msi/.msp as `msi` (not ole_doc).
+        assert_eq!(FileType::from_str("msi"), FileType::Msi);
+        assert_eq!(FileType::from_str("msp"), FileType::Msi);
+        assert_eq!(FileType::from_str("mst"), FileType::Msi);
+        assert_eq!(FileType::from_str("msm"), FileType::Msi);
+        assert_eq!(FileType::from_str(Ff::Msi.label()), FileType::Msi);
         // Deliberate foldings: the report keeps the precise label, routing uses
         // the coarse bucket.
         assert_eq!(
@@ -1192,7 +1208,8 @@ mod tests {
         );
         assert_eq!(FileType::from_str(Ff::Svg.label()), FileType::Xml);
         assert_eq!(FileType::from_str(Ff::ApkAndroid.label()), FileType::Apk);
-        assert_eq!(FileType::from_str(Ff::AndroidDex.label()), FileType::Apk);
+        assert_eq!(FileType::from_str(Ff::Dex.label()), FileType::Dex);
+        assert_eq!(FileType::from_str("dex"), FileType::Dex);
         assert_eq!(FileType::from_str(Ff::Cab.label()), FileType::Cab);
         assert_eq!(FileType::from_str(Ff::PkgArch.label()), FileType::Pkg);
         assert_eq!(FileType::from_str(Ff::TarZst.label()), FileType::Tar);

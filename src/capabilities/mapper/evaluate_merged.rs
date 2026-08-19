@@ -13,7 +13,7 @@
 
 use crate::composite_rules::{Arch, Condition, FileType as RuleFileType, SectionMap};
 use crate::types::{AnalysisReport, Evidence, Finding};
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::HashMap;
 /// Borrowed analysis products shared with the rule engine.
 #[derive(Clone, Copy, Debug, Default)]
@@ -25,6 +25,9 @@ use std::collections::HashMap;
 pub(crate) struct AnalysisBorrow<'a, 'b> {
     pub(crate) cached_ast: Option<&'a tree_sitter::Tree>,
     pub(crate) filefacts: Option<&'a crate::analysis_context::AnalysisContext<'b>>,
+    /// Kind-cache filled during the source analyzer's AST fact walk so
+    /// evaluation does not walk the same tree again.
+    pub(crate) ast_kind_cache: Option<&'a FxHashMap<String, Vec<Evidence>>>,
 }
 
 impl<'a, 'b> AnalysisBorrow<'a, 'b> {
@@ -32,6 +35,7 @@ impl<'a, 'b> AnalysisBorrow<'a, 'b> {
         Self {
             cached_ast,
             filefacts: None,
+            ast_kind_cache: None,
         }
     }
 
@@ -42,7 +46,16 @@ impl<'a, 'b> AnalysisBorrow<'a, 'b> {
         Self {
             cached_ast,
             filefacts,
+            ast_kind_cache: None,
         }
+    }
+
+    pub(crate) fn with_ast_kind_cache(
+        mut self,
+        ast_kind_cache: Option<&'a FxHashMap<String, Vec<Evidence>>>,
+    ) -> Self {
+        self.ast_kind_cache = ast_kind_cache;
+        self
     }
 }
 
@@ -80,6 +93,46 @@ pub(crate) fn merge_filefacts_context(
     }
 }
 
+/// Full raw-content gate with source offset recording (windowed `eval_raw`).
+pub(crate) const RAW_GATE_MAX_BYTES: usize = 3 << 20;
+/// Presence-only source sweep above [`RAW_GATE_MAX_BYTES`]. Not B1l: no
+/// offsets, no windowing. PE/ELF never use this band.
+pub(crate) const RAW_GATE_THIN_SOURCE_MAX_BYTES: usize = 80 << 20;
+
+fn raw_gate_caps() -> (usize, usize) {
+    static CAPS: std::sync::OnceLock<(usize, usize)> = std::sync::OnceLock::new();
+    *CAPS.get_or_init(|| {
+        let full = std::env::var("CLEAVE_RAW_GATE_MAX_KB")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .map_or(RAW_GATE_MAX_BYTES, |kb| kb << 10);
+        let thin = std::env::var("CLEAVE_RAW_GATE_THIN_SOURCE_MAX_KB")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .map_or(RAW_GATE_THIN_SOURCE_MAX_BYTES, |kb| kb << 10);
+        (full, thin.max(full))
+    })
+}
+
+/// `None` = do not run the raw-content gate. `Some(record_offsets)` runs it.
+pub(crate) fn raw_gate_plan(file_len: usize, is_source: bool) -> Option<bool> {
+    let (full, thin) = raw_gate_caps();
+    raw_gate_plan_with_caps(file_len, is_source, full, thin)
+}
+
+pub(crate) fn raw_gate_plan_with_caps(
+    file_len: usize,
+    is_source: bool,
+    full: usize,
+    thin: usize,
+) -> Option<bool> {
+    let cap = if is_source { thin.max(full) } else { full };
+    if file_len > cap {
+        return None;
+    }
+    Some(is_source && file_len <= full)
+}
+
 impl super::CapabilityMapper {
     /// Pre-compute raw content regex matches once for the binary.
     /// This is expensive (converts entire binary to string and runs regex set)
@@ -114,37 +167,23 @@ impl super::CapabilityMapper {
         if *DISABLED.get_or_init(|| std::env::var_os("CLEAVE_DISABLE_RAW_GATE").is_some()) {
             return None;
         }
-        // Gate only content below the measured profitability boundary.
-        // A 16-sample sweep across the 1-16 MB band (2026-08-04, scripts /
-        // Mach-O / PE / archives / ISO) showed raw-text content winning up to
-        // ~3 MB (a 2.2 MB .py: -25% wall AND -25% CPU) and flipping to a
-        // small loss at 4.5 MB; binary/compressed content is neutral-to-loss
-        // above ~4 MB (a 7.9 MB PE: +11% wall). 3 MiB is ~66% of the 4.5 MB
-        // flip point — conservative so the gate never trades one machine's
-        // wall for the shared box's CPU. Larger content returns None: exact
-        // pre-gate behavior. `CLEAVE_RAW_GATE_MAX_KB` overrides.
-        //
-        // 2026-08-18: an atom-only candidate sweep above this cap (all types,
-        // then source/text only) lost wall on B1 (415 / 409 s vs B1h 375 s).
-        // Rejected; do not re-land without a new isolate.
-        static MAX_BYTES: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-        let max_bytes = *MAX_BYTES.get_or_init(|| {
-            std::env::var("CLEAVE_RAW_GATE_MAX_KB")
-                .ok()
-                .and_then(|v| v.parse::<usize>().ok())
-                .map_or(3 << 20, |kb| kb << 10)
-        });
-        if binary_data.len() > max_bytes {
+        // Full gate (source offset recording / windowed `eval_raw`) is
+        // profitable up to ~3 MiB. PE/ELF stay ungated above that (B1k:
+        // AC + window on 200–480 MiB installers). Source 3–80 MiB gets a
+        // *presence-only* sweep: skip `eval_raw` when the mandatory atom is
+        // absent, but do **not** record offsets or window (B1l did, +42 s).
+        // Specimen: 61 MiB `re2-exhaustive.txt` has no `font-family` and
+        // still paid 7.3 s for that regex (S4 / S2p).
+        let Some(record_offsets) =
+            raw_gate_plan(binary_data.len(), file_type.uses_raw_text_search())
+        else {
             return None;
-        }
+        };
         let index = &self.match_indexes().raw_content_regex_index;
         if !index.has_patterns() {
             return None;
         }
-        // Offsets are only meaningful on source/text: `eval_raw` ignores them
-        // for PE/ELF extracted-string search, and collecting them there would
-        // walk every atom occurrence on binaries the gate still covers (≤3 MiB).
-        Some(index.find_matches_detailed(binary_data, file_type, file_type.uses_raw_text_search()))
+        Some(index.find_matches_detailed(binary_data, file_type, record_offsets))
     }
     /// Evaluate all rules (atomic traits + composite rules) and merge findings into the report.
     /// This is the correct, foolproof way to evaluate traits that ensures evidence propagates
@@ -280,9 +319,21 @@ impl super::CapabilityMapper {
             .into_indices_static()
             .collect();
 
-        // Idea 9: Batch AST node collection
-        let ast_kind_cache =
-            self.build_ast_kind_cache(cached_ast, binary_data, &applicable_indices, file_type);
+        // Idea 9: Batch AST node collection. Unified source already filled
+        // this during `extract_ast_facts`; do not walk the tree a second time.
+        let owned_kind_cache = if analysis.ast_kind_cache.is_some() {
+            None
+        } else {
+            self.build_ast_kind_cache(cached_ast, binary_data, &applicable_indices, file_type)
+        };
+        let ast_kind_cache = analysis.ast_kind_cache.or(owned_kind_cache.as_ref());
+        let ast_query_cache = self.build_ast_query_batch(
+            cached_ast,
+            binary_data,
+            file_type,
+            &applicable_indices,
+            cancellation,
+        );
 
         // Build all_strings ONCE — combines report strings, imports, and exports.
         // Source files use the raw file as the haystack (see `build_string_prefilter`).
@@ -333,6 +384,7 @@ impl super::CapabilityMapper {
             arch_ranges,
             ast_kind_cache,
             source_text_prefiltered,
+            ast_query_cache: ast_query_cache.as_ref(),
         };
 
         if cancellation.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed)) {
@@ -609,5 +661,50 @@ impl super::CapabilityMapper {
         all_ids.iter().any(|fid| {
             *fid == id || fid.starts_with(&prefix_new) || fid.starts_with(&prefix_legacy)
         })
+    }
+}
+
+#[cfg(test)]
+mod raw_gate_plan_tests {
+    use super::{
+        RAW_GATE_MAX_BYTES, RAW_GATE_THIN_SOURCE_MAX_BYTES, raw_gate_plan_with_caps,
+    };
+
+    const FULL: usize = RAW_GATE_MAX_BYTES;
+    const THIN: usize = RAW_GATE_THIN_SOURCE_MAX_BYTES;
+
+    #[test]
+    fn source_below_full_records_offsets() {
+        assert_eq!(raw_gate_plan_with_caps(2 << 20, true, FULL, THIN), Some(true));
+    }
+
+    #[test]
+    fn source_thin_band_presence_only() {
+        assert_eq!(
+            raw_gate_plan_with_caps(FULL + 1, true, FULL, THIN),
+            Some(false)
+        );
+        assert_eq!(raw_gate_plan_with_caps(THIN, true, FULL, THIN), Some(false));
+    }
+
+    #[test]
+    fn source_above_thin_skips_gate() {
+        assert_eq!(
+            raw_gate_plan_with_caps(THIN + 1, true, FULL, THIN),
+            None
+        );
+    }
+
+    #[test]
+    fn pe_above_full_skips_gate() {
+        assert_eq!(raw_gate_plan_with_caps(FULL + 1, false, FULL, THIN), None);
+    }
+
+    #[test]
+    fn pe_below_full_gates_without_offsets() {
+        assert_eq!(
+            raw_gate_plan_with_caps(2 << 20, false, FULL, THIN),
+            Some(false)
+        );
     }
 }

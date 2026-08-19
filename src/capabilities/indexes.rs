@@ -5,7 +5,9 @@
 //! - `StringMatchIndex`: Batched string matching using Aho-Corasick automaton
 //! - `RawContentRegexIndex`: Batched regex matching for binary content
 
-use crate::composite_rules::evaluators::{match_window, truncate_evidence};
+use crate::composite_rules::evaluators::{
+    MIN_HAYSTACK_TO_WINDOW, match_window, truncate_evidence,
+};
 use crate::composite_rules::{
     Condition, FileType as RuleFileType, Platform, TraitDefinition, platforms_intersect,
 };
@@ -1339,9 +1341,9 @@ impl StringMatchIndex {
         candidates
     }
 
-    /// Same floor as source `eval_raw` windowing. Below it, extra AC work
-    /// never pays (S2n: recording offsets on <16 KiB lost wall). Above the
-    /// cap, do not scan 61–480 MiB members (B1k).
+    /// Floor for the source exact-as-substr skip. Independent of the 256 B
+    /// `eval_raw` window floor: extra exact ACs on sub-16 KiB members were a
+    /// tax (S2n / five-AC trial). Windowing uses `MIN_HAYSTACK_TO_WINDOW`.
     pub(crate) const MIN_SOURCE_TEXT_PREFILTER_BYTES: usize = 16 * 1024;
     pub(crate) const MAX_SOURCE_TEXT_PREFILTER_BYTES: usize = 3 << 20;
 
@@ -3088,14 +3090,17 @@ impl RawContentRegexIndex {
             && crate::rayon_nest::inner_work_parallel()
         {
             use rayon::prelude::*;
-            return sets.par_iter().map(|set| set.find_matches_classified(binary_data)).reduce(
-                || (FxHashSet::default(), FxHashSet::default()),
-                |mut a, b| {
-                    a.0.extend(b.0);
-                    a.1.extend(b.1);
-                    a
-                },
-            );
+            return sets
+                .par_iter()
+                .map(|set| set.find_matches_classified(binary_data))
+                .reduce(
+                    || (FxHashSet::default(), FxHashSet::default()),
+                    |mut a, b| {
+                        a.0.extend(b.0);
+                        a.1.extend(b.1);
+                        a
+                    },
+                );
         }
 
         let mut traits = FxHashSet::default();
@@ -3116,10 +3121,11 @@ impl RawContentRegexIndex {
         file_type: &RuleFileType,
         record_offsets: bool,
     ) -> RawGateHits {
-        // Windowing is disabled below 16 KiB (see `MIN_HAYSTACK_TO_WINDOW`).
-        // Recording every atom occurrence on the thousands of tiny `.go` /
-        // `.js` members is extra gate work that `eval_raw` would never use.
-        if !record_offsets || binary_data.len() < 16 * 1024 {
+        // Windowing is disabled below [`MIN_HAYSTACK_TO_WINDOW`]. Recording
+        // every atom occurrence on sub-floor stubs is extra gate work that
+        // `eval_raw` would never use (S2n). The floor is 256 B so 256 B–1 KiB
+        // source members can window bounded regexes.
+        if !record_offsets || binary_data.len() < MIN_HAYSTACK_TO_WINDOW {
             let (traits, _) = self.find_matches_classified(binary_data, file_type);
             return RawGateHits {
                 traits,
@@ -4001,5 +4007,55 @@ mod gate_repro_tests {
         let miss = index.find_matches_detailed(b"no css here", &RuleFileType::JavaScript, true);
         assert!(!miss.traits.contains(&0));
         assert!(!miss.atom_offsets.contains_key(&0));
+    }
+
+    fn css_font_family_index() -> RawContentRegexIndex {
+        RawContentRegexIndex::build(&[TraitDefinition {
+            id: "css-font-family".to_string(),
+            desc: "x".to_string(),
+            platforms: vec![Platform::All],
+            arch: vec![Arch::All],
+            r#for: vec![RuleFileType::All],
+            r#if: Condition::Text(TextQuery {
+                regex: Some(r"(?i)(^|})[^@{}]{0,80}\{[^}]{0,160}font-family\s*:".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }])
+    }
+
+    /// 400 B sits above the 256 B window floor: offsets must be recorded
+    /// so `eval_raw` can window.
+    #[test]
+    fn records_atom_offsets_above_window_floor() {
+        let index = css_font_family_index();
+        let mut content = vec![b'x'; 2 * 1024];
+        let atom_at = content.len();
+        content.extend_from_slice(b"}h1 { font-family: serif }");
+        let hits = index.find_matches_detailed(&content, &RuleFileType::JavaScript, true);
+        assert!(hits.traits.contains(&0));
+        let offs = hits
+            .atom_offsets
+            .get(&0)
+            .expect("400 B+ source must record offsets");
+        let start = offs[0] as usize;
+        assert_eq!(&content[start..start + 11], b"font-family");
+        assert_eq!(start, atom_at + 6);
+    }
+
+    /// Sub-floor stubs still gate on presence, but skip offset recording
+    /// (S2n: offsets without windowing were a tax).
+    #[test]
+    fn does_not_record_atom_offsets_below_window_floor() {
+        let index = css_font_family_index();
+        let mut content = vec![b'x'; 200];
+        content.extend_from_slice(b"}h1 { font-family: serif }");
+        assert!(content.len() < super::MIN_HAYSTACK_TO_WINDOW);
+        let hits = index.find_matches_detailed(&content, &RuleFileType::JavaScript, true);
+        assert!(hits.traits.contains(&0), "presence still gates");
+        assert!(
+            hits.atom_offsets.is_empty(),
+            "sub-floor stubs must not record offsets"
+        );
     }
 }

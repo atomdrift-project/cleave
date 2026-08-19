@@ -718,4 +718,34 @@ func main() {
         assert_eq!(call.kind(), "call_expression");
         assert!(extract_function_name(&call, code.as_bytes()).is_none());
     }
+
+    #[test]
+    fn chained_replace_calls_keep_synthetic_dot_names() {
+        // B1g: filefacts Call.target is None / `replace().replace` for a method
+        // on a call result. Symbol traits (`regex: \.replace\.replace`) need
+        // the synthetic `replace.replace` name from extract_function_name.
+        let code = "s.replace(/a/g, 'b').replace(/c/g, 'd');\n";
+        let parsed = parse_for_test(code, &FileType::JavaScript);
+        let tree = parsed.source_ast().expect("source_ast").tree;
+        let mut report = AnalysisReport::new(TargetInfo {
+            path: "/test/file.js".to_string(),
+            file_type: "javascript".to_string(),
+            size_bytes: code.len() as u64,
+            sha256: "test".to_string(),
+            architectures: None,
+        });
+        extract_symbols_from_tree(tree, code, &["call_expression"], &mut report);
+        assert!(
+            report
+                .imports
+                .iter()
+                .any(|imp| imp.symbol.contains("replace.replace")),
+            "chained replace must stay a dotted name, got {:?}",
+            report
+                .imports
+                .iter()
+                .map(|imp| imp.symbol.as_str())
+                .collect::<Vec<_>>(),
+        );
+    }
 }

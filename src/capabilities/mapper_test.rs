@@ -1,4 +1,4 @@
-﻿//! Test module.
+//! Test module.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -1525,11 +1525,8 @@ composite_rules:
 "#;
     let (_dir, path) = create_test_yaml(yaml);
     let mapper = CapabilityMapper::from_yaml(&path).unwrap();
-    let mut report = create_test_source_report(
-        "toggle-main.js",
-        "javascript",
-        TOGGLE_MAIN_JS.len() as u64,
-    );
+    let mut report =
+        create_test_source_report("toggle-main.js", "javascript", TOGGLE_MAIN_JS.len() as u64);
     mapper.evaluate_and_merge_findings(&mut report, TOGGLE_MAIN_JS.as_bytes(), None, None);
     let before = finding_ids(&report);
     assert!(
@@ -1574,7 +1571,10 @@ fn toggle_main_production_traits_before_and_after_strip() {
         .join("cleave")
         .join("traits");
     if !traits_dir.join("micro-behaviors").is_dir() {
-        eprintln!("skip: production traits missing at {}", traits_dir.display());
+        eprintln!(
+            "skip: production traits missing at {}",
+            traits_dir.display()
+        );
         return;
     }
     let mapper = CapabilityMapper::from_directory_with_options(
@@ -1585,18 +1585,17 @@ fn toggle_main_production_traits_before_and_after_strip() {
         false,
     )
     .expect("load production traits");
-    let mut report = create_test_source_report(
-        "toggle-main.js",
-        "javascript",
-        TOGGLE_MAIN_JS.len() as u64,
-    );
+    let mut report =
+        create_test_source_report("toggle-main.js", "javascript", TOGGLE_MAIN_JS.len() as u64);
     mapper.evaluate_and_merge_findings(&mut report, TOGGLE_MAIN_JS.as_bytes(), None, None);
     let before: Vec<String> = report.findings.iter().map(|f| f.id.to_string()).collect();
     let had_path = before.iter().any(|id| id.ends_with("path-join-dirname"));
     let had_ua = before
         .iter()
         .any(|id| id.ends_with("useragent-variable-branch-call"));
-    let had_local = before.iter().any(|id| id.ends_with("javascript-local-path"));
+    let had_local = before
+        .iter()
+        .any(|id| id.ends_with("javascript-local-path"));
     eprintln!(
         "toggle-main production before strip ({}): path-join={} ua={} local={}\n{:#?}",
         before.len(),
@@ -1627,7 +1626,10 @@ fn toggle_main_source_analyzer_production_before_strip() {
         .join("cleave")
         .join("traits");
     if !traits_dir.join("micro-behaviors").is_dir() {
-        eprintln!("skip: production traits missing at {}", traits_dir.display());
+        eprintln!(
+            "skip: production traits missing at {}",
+            traits_dir.display()
+        );
         return;
     }
     let mapper = CapabilityMapper::from_directory_with_options(
@@ -1643,7 +1645,8 @@ fn toggle_main_source_analyzer_production_before_strip() {
     )
     .unwrap()
     .with_capability_mapper(mapper);
-    let mut report = analyzer.analyze_source(std::path::Path::new("toggle-main.js"), TOGGLE_MAIN_JS);
+    let mut report =
+        analyzer.analyze_source(std::path::Path::new("toggle-main.js"), TOGGLE_MAIN_JS);
     let before: Vec<String> = report.findings.iter().map(|f| f.id.to_string()).collect();
     eprintln!(
         "source-analyzer before strip ({}): path-join={} ua={} local={}\n{:#?}",
@@ -1652,12 +1655,18 @@ fn toggle_main_source_analyzer_production_before_strip() {
         before
             .iter()
             .any(|id| id.ends_with("useragent-variable-branch-call")),
-        before.iter().any(|id| id.ends_with("javascript-local-path")),
+        before
+            .iter()
+            .any(|id| id.ends_with("javascript-local-path")),
         before
     );
     report.strip_unmatched_traits();
     let after: Vec<String> = report.findings.iter().map(|f| f.id.to_string()).collect();
-    eprintln!("source-analyzer after strip ({}): {:#?}", after.len(), after);
+    eprintln!(
+        "source-analyzer after strip ({}): {:#?}",
+        after.len(),
+        after
+    );
 }
 
 const DOOMED_SKIP_YAML: &str = r#"
@@ -1932,4 +1941,3 @@ fn doomed_skip_does_not_create_sibling_rescued_copy() {
         "file A composite must survive: {a_ids:?}"
     );
 }
-

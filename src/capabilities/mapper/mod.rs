@@ -587,9 +587,9 @@ pub(super) fn fill_symbol_evidence_locations(
 
 // Extracted modules
 pub(crate) mod builder;
+pub(crate) mod doomed_skip;
 pub(crate) mod evaluate_composites;
 pub(crate) mod evaluate_merged;
-pub(crate) mod doomed_skip;
 pub(crate) mod evaluate_traits;
 pub(crate) use evaluate_merged::AnalysisBorrow;
 pub(crate) mod filters;

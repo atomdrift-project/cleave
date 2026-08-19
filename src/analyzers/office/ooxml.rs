@@ -486,7 +486,7 @@ fn find_embedded_executables<R: OoxmlEntryReader>(
                     found.push(entry_path.clone());
                     continue;
                 }
-                filefacts::FileType::OleDoc => {
+                filefacts::FileType::OleDoc | filefacts::FileType::Msi => {
                     // OLE2 container — scan for embedded PE
                     let scan_len = data.len().min(64 * 1024);
                     if memchr::memmem::find(&data[..scan_len], b"MZ").is_some() {

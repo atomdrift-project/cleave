@@ -124,13 +124,14 @@ fn test_parse_file_types_binary_alias() {
     let mut warnings = Vec::new();
     let result = parsing::parse_file_types(&types, &mut warnings);
     assert!(result.from_groups);
-    assert_eq!(result.types.len(), 8);
+    assert_eq!(result.types.len(), 9);
     assert!(result.types.contains(&RuleFileType::Elf));
     assert!(result.types.contains(&RuleFileType::Macho));
     assert!(result.types.contains(&RuleFileType::Pe));
     assert!(result.types.contains(&RuleFileType::Class));
     assert!(result.types.contains(&RuleFileType::Pyc));
     assert!(result.types.contains(&RuleFileType::Wasm));
+    assert!(result.types.contains(&RuleFileType::Dex));
     assert!(result.types.contains(&RuleFileType::StaticLib));
 }
 
@@ -2527,9 +2528,10 @@ fn test_parse_file_types_groups_and_exclusions() {
     // Test groups
     let binaries = parsing::parse_file_types(&["binaries".to_string()], &mut warnings);
     assert!(binaries.from_groups);
-    assert_eq!(binaries.types.len(), 8);
+    assert_eq!(binaries.types.len(), 9);
     assert!(binaries.types.contains(&RuleFileType::Elf));
     assert!(binaries.types.contains(&RuleFileType::Wasm));
+    assert!(binaries.types.contains(&RuleFileType::Dex));
     assert!(binaries.types.contains(&RuleFileType::StaticLib));
     assert!(!binaries.types.contains(&RuleFileType::Python));
 
@@ -2698,6 +2700,67 @@ fn test_meta_internal_paths_forbidden_in_composite_rules() {
     // - metadata/import/{lang}::{module} : OK (dynamically generated, allowed in composites)
     // - metadata/dylib/{library}        : OK (dynamically generated, allowed in composites)
     // - metadata/internal/{anything}    : FORBIDDEN (ML-only, not for composite rules)
+}
+
+#[test]
+fn test_for_all_is_soft_and_does_not_fail_load() {
+    use std::fs;
+    use tempfile::TempDir;
+
+    let temp_dir = TempDir::new().unwrap();
+    let traits_dir = temp_dir.path().join("traits");
+    fs::create_dir(&traits_dir).unwrap();
+    fs::write(
+        traits_dir.join("test.yaml"),
+        r#"
+defaults:
+  crit: notable
+  conf: 0.8
+  platforms: [linux]
+
+traits:
+  - id: test_for_all
+    desc: Broad for all still loads
+    for: [all]
+    if:
+      type: text
+      exact: test
+"#,
+    )
+    .unwrap();
+
+    // Analysis load uses the mapper cache, which is a process-wide file of
+    // whatever traits were compiled last — not this temp directory.
+    let prev = std::env::var("CLEAVE_SKIP_MAPPER_CACHE").ok();
+    // SAFETY: this test is the only writer of this env var for its duration.
+    unsafe {
+        std::env::set_var("CLEAVE_SKIP_MAPPER_CACHE", "1");
+    }
+
+    let result = CapabilityMapper::from_directory_with_options(
+        temp_dir.path(),
+        CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION,
+        CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION,
+        false,
+        false,
+    );
+
+    match prev {
+        Some(v) => unsafe { std::env::set_var("CLEAVE_SKIP_MAPPER_CACHE", v) },
+        None => unsafe { std::env::remove_var("CLEAVE_SKIP_MAPPER_CACHE") },
+    }
+
+    let mapper =
+        result.expect("for: [all] is a Soft authoring issue and must not fail analysis load");
+    let ids: Vec<_> = mapper
+        .trait_definitions()
+        .iter()
+        .map(|t| t.id.as_str())
+        .collect();
+    assert!(
+        ids.iter().any(|id| id.ends_with("test_for_all")),
+        "trait using for: [all] should still be loaded, got {ids:?}"
+    );
 }
 
 #[test]

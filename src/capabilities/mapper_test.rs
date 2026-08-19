@@ -34,7 +34,7 @@ fn create_test_report_with_size(size: u64) -> AnalysisReport {
 
     AnalysisReport::new(TargetInfo {
         path: "test.bin".to_string(),
-        file_type: "executable".to_string(),
+        file_type: "elf".to_string(),
         size_bytes: size,
         sha256: "abc123".to_string(),
         architectures: None,
@@ -89,7 +89,7 @@ fn test_with_platforms_filters_index_but_keeps_definitions() {
     // raw substring pattern.
     let yaml = r#"
 defaults:
-  for: [all]
+  for: [binaries, scripts, source, manifests, documents, media, data, archives]
 
 traits:
   - id: "test/linux::marker"
@@ -135,7 +135,7 @@ traits:
 fn test_from_yaml_with_trait() {
     let yaml = r#"
 defaults:
-  for: [all]
+  for: [binaries, scripts, source, manifests, documents, media, data, archives]
 
 traits:
   - id: "test/simple::basic"
@@ -194,7 +194,7 @@ fn test_from_yaml_empty_file() {
 fn test_evaluate_traits_empty_report() {
     let yaml = r#"
 defaults:
-  for: [all]
+  for: [binaries, scripts, source, manifests, documents, media, data, archives]
 
 traits:
   - id: "test/simple::basic"
@@ -217,7 +217,7 @@ traits:
 fn test_evaluate_traits_string_match() {
     let yaml = r#"
 defaults:
-  for: [all]
+  for: [binaries, scripts, source, manifests, documents, media, data, archives]
 
 traits:
   - id: "test/simple::string_check"
@@ -259,7 +259,7 @@ traits:
 fn test_evaluate_traits_regex_match() {
     let yaml = r#"
 defaults:
-  for: [all]
+  for: [binaries, scripts, source, manifests, documents, media, data, archives]
 
 traits:
   - id: "test/regex::pattern"
@@ -404,7 +404,7 @@ fn test_evaluate_and_merge_findings() {
     // trait engine, not a separate lookup path.
     let yaml = r#"
 defaults:
-  for: [all]
+  for: [binaries, scripts, source, manifests, documents, media, data, archives]
 
 traits:
   - id: "test/mem::malloc"
@@ -456,7 +456,7 @@ traits:
 fn test_find_trait() {
     let yaml = r#"
 defaults:
-  for: [all]
+  for: [binaries, scripts, source, manifests, documents, media, data, archives]
 
 traits:
   - id: "test/finder::target"
@@ -481,7 +481,7 @@ traits:
 fn test_trait_definitions() {
     let yaml = r#"
 defaults:
-  for: [all]
+  for: [binaries, scripts, source, manifests, documents, media, data, archives]
 
 traits:
   - id: "test/one::first"
@@ -542,7 +542,7 @@ composite_rules:
 fn test_evaluate_traits_with_count_constraint() {
     let yaml = r#"
 defaults:
-  for: [all]
+  for: [binaries, scripts, source, manifests, documents, media, data, archives]
 
 traits:
   - id: "test/count::multiple"
@@ -618,7 +618,7 @@ traits:
 fn test_evaluate_traits_case_insensitive() {
     let yaml = r#"
 defaults:
-  for: [all]
+  for: [binaries, scripts, source, manifests, documents, media, data, archives]
 
 traits:
   - id: "test/case::insensitive"
@@ -653,7 +653,7 @@ traits:
 fn test_precision_thresholds() {
     let yaml = r#"
 defaults:
-  for: [all]
+  for: [binaries, scripts, source, manifests, documents, media, data, archives]
 
 traits:
   - id: "test/mem::malloc"
@@ -674,7 +674,7 @@ traits:
 fn test_from_yaml_with_defaults() {
     let yaml = r#"
 defaults:
-  for: [all]
+  for: [binaries, scripts, source, manifests, documents, media, data, archives]
   crit: suspicious
   attack: "T1059.001"
 
@@ -697,7 +697,7 @@ traits:
 fn test_evaluate_traits_with_section_filter() {
     let yaml = r#"
 defaults:
-  for: [all]
+  for: [binaries, scripts, source, manifests, documents, media, data, archives]
 
 traits:
   - id: "test/section::text"
@@ -750,7 +750,7 @@ fn test_evaluate_traits_with_trait_dependency() {
     // Both are atomic traits that should be evaluated together
     let yaml = r#"
 defaults:
-  for: [all]
+  for: [binaries, scripts, source, manifests, documents, media, data, archives]
 
 traits:
   # Base trait - detects a string pattern
@@ -821,7 +821,7 @@ traits:
 fn test_evaluate_traits_with_chained_dependency() {
     let yaml = r#"
 defaults:
-  for: [all]
+  for: [binaries, scripts, source, manifests, documents, media, data, archives]
 
 traits:
   # Level 1: Base trait
@@ -894,7 +894,7 @@ traits:
 fn test_retroactive_unless_suppression_atomic_with_composite_ref() {
     let yaml = r#"
 defaults:
-  for: [all]
+  for: [binaries, scripts, source, manifests, documents, media, data, archives]
 
 traits:
   - id: "test/packer::signal-a"
@@ -990,7 +990,7 @@ composite_rules:
 fn test_retroactive_unless_suppression_fires_when_suppressor_absent() {
     let yaml = r#"
 defaults:
-  for: [all]
+  for: [binaries, scripts, source, manifests, documents, media, data, archives]
 
 traits:
   - id: "test/packer::signal-a"
@@ -1072,7 +1072,7 @@ composite_rules:
 fn test_retroactive_unless_suppression_composite_with_composite_ref() {
     let yaml = r#"
 defaults:
-  for: [all]
+  for: [binaries, scripts, source, manifests, documents, media, data, archives]
 
 traits:
   - id: "test/base::signal-a"

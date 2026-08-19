@@ -2097,7 +2097,7 @@ mod tests {
     fn make_archive_test_mapper() -> crate::capabilities::CapabilityMapper {
         let yaml = r#"
 defaults:
-  for: [all]
+  for: [binaries, scripts, source, manifests, documents, media, data, archives]
   platforms: [unix, windows, macos]
 
 traits:

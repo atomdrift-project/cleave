@@ -108,6 +108,7 @@ pub fn detect_language(string_info: &StringInfo, is_encoded: bool) -> Option<Fil
 /// Detect the language of embedded code, optionally filtering against the host file type.
 /// When the host is known, detections that match syntactically similar languages are
 /// suppressed to avoid false positives (e.g., Ruby files misdetected as Python).
+#[must_use]
 pub fn detect_language_with_host(
     string_info: &StringInfo,
     is_encoded: bool,
@@ -835,7 +836,7 @@ pub enum EmbeddedAnalysisResult {
 pub fn analyze_embedded_string(
     parent_path: &str,
     string_info: &StringInfo,
-    string_index: usize,
+    _string_index: usize,
     capability_mapper: &Arc<CapabilityMapper>,
     current_depth: usize,
     host_file_type: Option<&FileType>,
@@ -846,7 +847,6 @@ pub fn analyze_embedded_string(
         string_info.offset.unwrap_or(0),
         &string_info.encoding_chain,
         string_info.string_type,
-        string_index,
         capability_mapper,
         current_depth,
         host_file_type,
@@ -859,7 +859,6 @@ fn analyze_embedded_haystack(
     offset: u64,
     encoding_chain: &[String],
     string_type: Option<crate::types::binary::StringType>,
-    _string_index: usize,
     capability_mapper: &Arc<CapabilityMapper>,
     current_depth: usize,
     host_file_type: Option<&FileType>,
@@ -975,21 +974,16 @@ fn analyze_embedded_haystack(
         // one per step in the encoding chain — so trait authors can
         // target "anything reached via hex" / "anything reached via
         // base64+gzip" without re-walking `encoding_chain` inline.
-        file_entry.findings.extend(generate_encoded_layer_traits(
-            encoding_chain,
-            offset,
-        ));
+        file_entry
+            .findings
+            .extend(generate_encoded_layer_traits(encoding_chain, offset));
 
         file_entry.compute_summary();
         Ok(EmbeddedAnalysisResult::EncodedLayer(Box::new(file_entry)))
     } else {
         // Plain embedded code - return findings for parent
         let mut findings = report.findings;
-        findings.push(generate_embedded_language_trait(
-            &file_type,
-            offset,
-            value,
-        ));
+        findings.push(generate_embedded_language_trait(&file_type, offset, value));
 
         // Rewrite evidence to be parent-relative so the parent's
         // proximity checks (`near_bytes`/`near_lines`) measure real
@@ -1609,13 +1603,6 @@ impl<'a> EmbedCand<'a> {
         }
     }
 
-    fn index(&self) -> usize {
-        match *self {
-            Self::Extracted(idx, _) => idx,
-            Self::HostPlain(_) => 0,
-        }
-    }
-
     fn score(&self) -> usize {
         let is_code = |kind: Option<crate::types::binary::StringType>| -> bool {
             matches!(
@@ -1786,20 +1773,20 @@ pub(crate) fn process_all_strings_with_host(
         detection_attempts += 1;
 
         // Check for PowerShell -EncodedCommand blobs first
-        if !skip_powershell_encoded_command {
-            if let Some(ps_layer) = detect_powershell_encoded_command(
+        if !skip_powershell_encoded_command
+            && let Some(ps_layer) = detect_powershell_encoded_command(
                 parent_path,
                 value,
                 offset,
                 capability_mapper,
                 current_depth,
-            ) {
-                detected_count += 1;
-                total_bytes += value.len();
-                total_analyzed += 1;
-                encoded_layers.push(ps_layer);
-                continue;
-            }
+            )
+        {
+            detected_count += 1;
+            total_bytes += value.len();
+            total_analyzed += 1;
+            encoded_layers.push(ps_layer);
+            continue;
         }
 
         // Check for base64-encoded binary payloads (PE, ELF, archives).
@@ -1809,12 +1796,9 @@ pub(crate) fn process_all_strings_with_host(
         // archive contents, sub-sub-files). All entries already
         // carry their final depth.
         let bin_entries = match cand.extracted() {
-            Some((_, info)) => detect_base64_binary(
-                parent_path,
-                info,
-                current_depth as u32,
-                capability_mapper,
-            ),
+            Some((_, info)) => {
+                detect_base64_binary(parent_path, info, current_depth as u32, capability_mapper)
+            }
             None => {
                 // Host haystack: only copy into a StringInfo if it actually
                 // looks like packed base64. Source files almost never do.
@@ -1828,12 +1812,7 @@ pub(crate) fn process_all_strings_with_host(
                         encoding_chain: Vec::new(),
                         fragments: None,
                     };
-                    detect_base64_binary(
-                        parent_path,
-                        &tmp,
-                        current_depth as u32,
-                        capability_mapper,
-                    )
+                    detect_base64_binary(parent_path, &tmp, current_depth as u32, capability_mapper)
                 } else {
                     Vec::new()
                 }
@@ -1865,7 +1844,6 @@ pub(crate) fn process_all_strings_with_host(
             offset,
             cand.encoding_chain(),
             cand.string_type(),
-            cand.index(),
             capability_mapper,
             current_depth,
             host_file_type,
@@ -2474,8 +2452,16 @@ IAAAAAAAsDyZDwU=";
             None,
             None,
         );
-        let (skipped, _) =
-            process_all_strings_with_host("stager.ps1", &[info], &mapper, 0, None, None, true, None);
+        let (skipped, _) = process_all_strings_with_host(
+            "stager.ps1",
+            &[info],
+            &mapper,
+            0,
+            None,
+            None,
+            true,
+            None,
+        );
         assert!(
             with_scan.iter().any(|file| {
                 file.findings
@@ -2495,8 +2481,10 @@ IAAAAAAAsDyZDwU=";
     }
 
     #[test]
+    #[allow(clippy::expect_used)]
     fn test_extract_inline_interpreter_code_python3() {
-        let host = "#!/bin/sh\npython3 -c \"import os, sys; os.system('id'); print(sys.version)\"\n";
+        let host =
+            "#!/bin/sh\npython3 -c \"import os, sys; os.system('id'); print(sys.version)\"\n";
         let (lang, code) =
             extract_inline_interpreter_code(host).expect("python3 -c body should unwrap");
         assert_eq!(lang, FileType::Python);

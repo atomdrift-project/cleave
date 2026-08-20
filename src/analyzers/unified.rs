@@ -993,20 +993,20 @@ impl UnifiedSourceAnalyzer {
                         fragments: None,
                     });
                 }
-            } else if kind.contains("comment") {
-                if let Ok(text) = node.utf8_text(source) {
-                    let trimmed = text.trim();
-                    if !trimmed.is_empty() && trimmed.len() < 10000 {
-                        report.comments.push(StringInfo {
-                            value: trimmed.to_string().into(),
-                            offset: Some(node.start_byte() as u64),
-                            string_type: None,
-                            encoding: "utf-8".to_string(),
-                            section: Some("comment".to_string()),
-                            encoding_chain: Vec::new(),
-                            fragments: None,
-                        });
-                    }
+            } else if kind.contains("comment")
+                && let Ok(text) = node.utf8_text(source)
+            {
+                let trimmed = text.trim();
+                if !trimmed.is_empty() && trimmed.len() < 10000 {
+                    report.comments.push(StringInfo {
+                        value: trimmed.to_string().into(),
+                        offset: Some(node.start_byte() as u64),
+                        string_type: None,
+                        encoding: "utf-8".to_string(),
+                        section: Some("comment".to_string()),
+                        encoding_chain: Vec::new(),
+                        fragments: None,
+                    });
                 }
             }
 

@@ -126,10 +126,10 @@ impl DoomedSkipIndex {
             let mut required: Vec<usize> = Vec::new();
             if let Some(conds) = &rule.all {
                 for cond in conds {
-                    if let Condition::Trait { id } = cond {
-                        if let Some(idx) = resolve_unique(id, trait_id_map, &short_unique) {
-                            required.push(idx);
-                        }
+                    if let Condition::Trait { id } = cond
+                        && let Some(idx) = resolve_unique(id, trait_id_map, &short_unique)
+                    {
+                        required.push(idx);
                     }
                 }
             }
@@ -137,10 +137,10 @@ impl DoomedSkipIndex {
                 let required_from_any = rule.needs.unwrap_or(1);
                 if required_from_any >= conds.len() {
                     for cond in conds {
-                        if let Condition::Trait { id } = cond {
-                            if let Some(idx) = resolve_unique(id, trait_id_map, &short_unique) {
-                                required.push(idx);
-                            }
+                        if let Condition::Trait { id } = cond
+                            && let Some(idx) = resolve_unique(id, trait_id_map, &short_unique)
+                        {
+                            required.push(idx);
                         }
                     }
                 }

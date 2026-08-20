@@ -436,6 +436,12 @@ impl YaraEngine {
         }
         let rules = compiler.build();
 
+        // A bucket can have source entries that compile successfully without
+        // defining any rules. Keep that empty result uncached: there is no
+        // useful scanner to restore, and an empty cache file only adds work
+        // and noise to every later lookup.
+        rules.iter().next()?;
+
         // 3. Write the compiled bucket to the LOCAL cache (best effort, atomic)
         //    so later scans and processes skip the compile. Never writes into
         //    the shipped directory — that is package content, not a cache.
@@ -656,7 +662,7 @@ impl YaraEngine {
         // fails to compile — or any bucket that fails to serialize — fails the
         // whole run with every offender named, rather than silently shipping a
         // bundle with holes.
-        let results: Vec<(String, Result<Vec<u8>, String>)> = tier_sources
+        let results: Vec<(String, Result<Option<Vec<u8>>, String>)> = tier_sources
             .par_iter()
             .filter(|(_, s)| !s.is_empty())
             .map(|(bucket, sources)| {
@@ -671,8 +677,12 @@ impl YaraEngine {
                 if !errors.is_empty() {
                     return (bucket.clone(), Err(errors.join("\n")));
                 }
-                match compiler.build().serialize() {
-                    Ok(bytes) => (bucket.clone(), Ok(bytes)),
+                let rules = compiler.build();
+                if rules.iter().next().is_none() {
+                    return (bucket.clone(), Ok(None));
+                }
+                match rules.serialize() {
+                    Ok(bytes) => (bucket.clone(), Ok(Some(bytes))),
                     Err(e) => (
                         bucket.clone(),
                         Err(format!("bucket {bucket}: serialize failed: {e}")),
@@ -686,7 +696,8 @@ impl YaraEngine {
         let mut failures = Vec::new();
         for (bucket, result) in results {
             match result {
-                Ok(bytes) => compiled.push((bucket, bytes)),
+                Ok(Some(bytes)) => compiled.push((bucket, bytes)),
+                Ok(None) => {}
                 Err(report) => failures.push(report),
             }
         }
@@ -3824,6 +3835,37 @@ rule ELASTIC_Windows_Generic_Threat : FILE
         assert!(
             warm.tier_rules(bucket).is_some(),
             "warm engine must load the bucket from its per-bucket cache without sources"
+        );
+    }
+
+    #[test]
+    fn test_lazy_tier_does_not_cache_empty_rules() {
+        let dir = tempfile::tempdir().unwrap();
+        let bucket = "empty";
+        let mut sources = HashMap::new();
+        sources.insert(
+            bucket.to_string(),
+            vec![("empty_ns".to_string(), "// no rules".to_string())],
+        );
+        let cell = OnceLock::new();
+        let _ = cell.set(sources);
+
+        let mut engine = YaraEngine::new_for_test();
+        engine.populated_tiers.insert(bucket.to_string());
+        engine.tiers = YaraEngine::tier_cells([bucket]);
+        engine.source = TierSource::Lazy {
+            shipped_dir: None,
+            cache_dir: Some(dir.path().to_path_buf()),
+            traits_dir: dir.path().to_path_buf(),
+            third_party_dir: dir.path().to_path_buf(),
+            enable_third_party: false,
+            sources: cell,
+        };
+
+        assert!(engine.tier_rules(bucket).is_none());
+        assert!(
+            !dir.path().join(format!("{bucket}.yrc")).exists(),
+            "empty buckets must not create cache files"
         );
     }
 

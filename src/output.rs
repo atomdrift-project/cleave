@@ -4198,6 +4198,7 @@ mod tests {
             syscalls: vec![],
             filefacts: None,
             identity: None,
+            cache_hit: false,
             values_tree: None,
             cached_member_kv: None,
             filefacts_metrics: None,

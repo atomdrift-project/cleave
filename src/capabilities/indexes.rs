@@ -4054,6 +4054,7 @@ mod gate_repro_tests {
         content.extend_from_slice(b"}h1 { FONT-FAMILY: serif }");
         let hits = index.find_matches_detailed(&content, &RuleFileType::JavaScript, true);
         assert!(hits.traits.contains(&0), "CI atom must match FONT-FAMILY");
+        #[allow(clippy::expect_used)]
         let offs = hits
             .atom_offsets
             .get(&0)

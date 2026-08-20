@@ -1381,8 +1381,9 @@ pub fn analyze_file<P: AsRef<Path>>(path: P, options: &AnalysisOptions) -> Resul
         {
             report.target.path = path.display().to_string();
             report.analysis_timestamp = Some(chrono::Utc::now());
+            report.cache_hit = true;
             restamp_path_derived_values(&mut report, path);
-            tracing::info!("Cache hit (fast path)");
+            tracing::debug!(%sha256, "analysis cache hit (fast path)");
             return Ok(report);
         }
         (Some(file_data), Some(sha256))
@@ -1449,7 +1450,8 @@ pub fn analyze_bytes_owned(
     {
         report.target.path = filename.to_string();
         report.analysis_timestamp = Some(chrono::Utc::now());
-        tracing::info!("Cache hit (fast path)");
+        report.cache_hit = true;
+        tracing::debug!(%sha256, "analysis cache hit (bytes fast path)");
         return Ok(report);
     }
 
@@ -1524,7 +1526,8 @@ pub fn analyze_bytes_shared(
     {
         report.target.path = filename.to_string();
         report.analysis_timestamp = Some(chrono::Utc::now());
-        tracing::info!("Cache hit (fast path)");
+        report.cache_hit = true;
+        tracing::debug!(%sha256, "analysis cache hit (bytes fast path)");
         return Ok(report);
     }
 
@@ -1731,6 +1734,9 @@ pub(crate) fn report_from_file_analysis(
         architectures: fa.arch.as_ref().map(|a| vec![a.clone()]),
     };
     let mut report = types::AnalysisReport::new(target);
+    // Every caller synthesizes from a file-analysis cache entry, so the report
+    // is a replay rather than a fresh pass.
+    report.cache_hit = true;
     report.traits = fa.traits;
     report.findings = fa.findings;
     report.context = fa.context;
@@ -2170,8 +2176,9 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     {
         cached_report.target.path = path.display().to_string();
         cached_report.analysis_timestamp = Some(chrono::Utc::now());
+        cached_report.cache_hit = true;
         restamp_path_derived_values(&mut cached_report, path);
-        tracing::debug!("Cache hit");
+        tracing::debug!(sha256 = %sha256_hex, "analysis cache hit (report)");
         memory_tracker::log_after_file_processing(
             path.to_str().unwrap_or("unknown"),
             file_size,
@@ -2232,6 +2239,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     {
         cached_report.target.path = path.display().to_string();
         cached_report.analysis_timestamp = Some(chrono::Utc::now());
+        cached_report.cache_hit = true;
         restamp_path_derived_values(&mut cached_report, path);
         if let Some(flight) = flight {
             flight.complete(None);

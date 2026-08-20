@@ -247,6 +247,16 @@ pub struct AnalysisReport {
     /// same path map trait authors target.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub values_tree: Option<Box<serde_json::Value>>,
+    /// Whether this report was replayed from the analysis cache instead of
+    /// produced by a fresh pass.
+    ///
+    /// Transient: never serialized, so a report stored in the cache and read
+    /// back deserializes with this `false` and the lookup that returned it sets
+    /// it. Callers use it to report where an answer came from — a cache hit and
+    /// a fresh analysis are otherwise distinguishable only by how long they
+    /// took, which is exactly the thing an operator is trying to explain.
+    #[serde(skip)]
+    pub cache_hit: bool,
     /// Already-flattened member kv, carried only across the compact per-member
     /// cache round-trip. A member cached as a [`FileAnalysis`] keeps its folded
     /// facts as flat `kv`; the nested `values_tree` was dropped to save space,
@@ -475,6 +485,7 @@ impl AnalysisReport {
             filefacts: None,
             identity: None,
             values_tree: None,
+            cache_hit: false,
             cached_member_kv: None,
             filefacts_metrics: None,
             filefacts_metric_spans: None,

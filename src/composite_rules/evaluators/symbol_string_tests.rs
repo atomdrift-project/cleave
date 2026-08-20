@@ -546,6 +546,50 @@ fn test_eval_string_exact_match() {
     assert_eq!(result.evidence[0].value, "/bin/sh");
 }
 
+/// Duplicate exact values at distinct offsets both stay in the index.
+#[test]
+fn test_eval_string_exact_duplicate_offsets() {
+    let mut report = create_test_report();
+    for off in [0x1000_u64, 0x2000] {
+        report.strings.push(StringInfo {
+            value: ("/bin/sh".to_string()).into(),
+            offset: Some(off),
+            encoding: "utf8".to_string(),
+            string_type: Some(StringType::Path),
+            section: None,
+            encoding_chain: Vec::new(),
+            fragments: None,
+        });
+    }
+    let data = vec![];
+    let ctx = create_test_context(&report, &data);
+    let needle = "/bin/sh".to_string();
+    let params = StringParams {
+        length_min: None,
+        length_max: None,
+        exact: Some(&needle),
+        substr: None,
+        regex: None,
+        word: None,
+        case_insensitive: false,
+        is_check: None,
+        section: None,
+        offset: None,
+        offset_range: None,
+        section_offset: None,
+        section_offset_range: None,
+        arch_clamp: None,
+    };
+    let result = eval_text(&params, None, &ctx, None);
+    assert!(result.matched);
+    assert_eq!(result.match_count, 2);
+    let idx = ctx
+        .get_string_exact_index()
+        .get("/bin/sh")
+        .expect("duplicate values share one exact-index key");
+    assert_eq!(idx.as_slice(), &[0, 1]);
+}
+
 #[test]
 fn test_eval_text_regex_length_bounds() {
     let mut report = create_test_report();
@@ -1055,6 +1099,47 @@ fn test_eval_raw_substr_count() {
     assert!(result.matched);
     // Evidence value contains the matched pattern
     assert!(result.evidence[0].value.contains("token"));
+}
+
+/// CI ASCII substr must hit mixed-case haystacks without lowercasing the
+/// whole file (the old `lower_binary` copy).
+#[test]
+fn test_eval_raw_ci_substr_mixed_case_haystack() {
+    let report = create_test_report();
+    let content = "Hello TOKEN world";
+    let ctx = create_test_context(&report, content.as_bytes());
+    let location = ContentLocationParams::default();
+    let needle = "token".to_string();
+
+    let ci = eval_raw(
+        None,
+        Some(&needle),
+        None,
+        None,
+        true,
+        false,
+        None,
+        None,
+        &location,
+        &ctx,
+        None,
+    );
+    assert!(ci.matched, "ASCII-CI substr must see TOKEN as token");
+
+    let cs = eval_raw(
+        None,
+        Some(&needle),
+        None,
+        None,
+        false,
+        false,
+        None,
+        None,
+        &location,
+        &ctx,
+        None,
+    );
+    assert!(!cs.matched, "case-sensitive substr must miss TOKEN");
 }
 
 #[test]
@@ -3036,7 +3121,10 @@ fn test_eval_raw_windows_line_local_dot_star() {
         Some(0),
         Some(&offsets),
     );
-    assert!(hit_result.matched, "atom on the foo...bar line must window-hit");
+    assert!(
+        hit_result.matched,
+        "atom on the foo...bar line must window-hit"
+    );
 
     let mut decoy = rustc_hash::FxHashMap::default();
     decoy.insert(0, vec![0]);
@@ -3069,7 +3157,10 @@ fn test_eval_raw_windows_line_local_not_newline() {
         Some(0),
         Some(&offsets),
     );
-    assert!(hit_result.matched, "atom on the foo[^\\n]*bar line must window-hit");
+    assert!(
+        hit_result.matched,
+        "atom on the foo[^\\n]*bar line must window-hit"
+    );
 
     let mut decoy = rustc_hash::FxHashMap::default();
     decoy.insert(0, vec![0]);

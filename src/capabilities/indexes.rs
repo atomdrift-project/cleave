@@ -4043,6 +4043,25 @@ mod gate_repro_tests {
         assert_eq!(start, atom_at + 6);
     }
 
+    /// `(?i)font-family` must still see mixed-case `FONT-FAMILY` on a small
+    /// source member (CI gate, whether via lowercase-memmem or CI AC).
+    #[test]
+    fn small_file_ci_literal_gate_finds_mixed_case() {
+        let index = css_font_family_index();
+        let mut content = vec![b'x'; 2 * 1024];
+        let atom_at = content.len();
+        content.extend_from_slice(b"}h1 { FONT-FAMILY: serif }");
+        let hits = index.find_matches_detailed(&content, &RuleFileType::JavaScript, true);
+        assert!(hits.traits.contains(&0), "CI atom must match FONT-FAMILY");
+        let offs = hits
+            .atom_offsets
+            .get(&0)
+            .expect("2 KiB source must record offsets");
+        let start = offs[0] as usize;
+        assert_eq!(&content[start..start + 11], b"FONT-FAMILY");
+        assert_eq!(start, atom_at + 6);
+    }
+
     /// Sub-floor stubs still gate on presence, but skip offset recording
     /// (S2n: offsets without windowing were a tax).
     #[test]

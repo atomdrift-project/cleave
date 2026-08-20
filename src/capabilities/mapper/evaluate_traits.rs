@@ -32,7 +32,8 @@ pub(crate) struct TraitEvalCache<'a> {
     /// taking the extracted-string evidence fast path.
     pub source_text_prefiltered: bool,
     /// Batched `query:` results for this file. Missing → per-trait QueryCursor.
-    pub ast_query_cache: Option<&'a FxHashMap<String, crate::composite_rules::context::ConditionResult>>,
+    pub ast_query_cache:
+        Option<&'a FxHashMap<String, crate::composite_rules::context::ConditionResult>>,
 }
 
 /// Which half of the trait set one filtered pass evaluates, plus any findings
@@ -374,8 +375,13 @@ impl super::CapabilityMapper {
         // Idea 9: Batch AST node collection
         let ast_kind_cache =
             self.build_ast_kind_cache(cached_ast, binary_data, &applicable_indices, file_type);
-        let ast_query_cache =
-            self.build_ast_query_batch(cached_ast, binary_data, file_type, &applicable_indices, None);
+        let ast_query_cache = self.build_ast_query_batch(
+            cached_ast,
+            binary_data,
+            file_type,
+            &applicable_indices,
+            None,
+        );
 
         // Pre-filter using batched Aho-Corasick string matching WITH evidence
         // caching. Source files scan the raw bytes; PE still uses extracted

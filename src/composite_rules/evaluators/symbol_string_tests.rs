@@ -3018,7 +3018,7 @@ fn test_eval_raw_windows_small_js_haystack() {
 #[test]
 fn test_eval_raw_tiny_haystack_still_full_scans() {
     let mut content = b"PING".to_vec();
-    content.extend_from_slice(&vec![b'x'; 200]);
+    content.extend_from_slice(&[b'x'; 200]);
     content.extend_from_slice(b"PING----PONG");
     let mut decoy = rustc_hash::FxHashMap::default();
     decoy.insert(0, vec![0]);

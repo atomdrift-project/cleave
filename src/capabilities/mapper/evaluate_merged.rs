@@ -174,11 +174,7 @@ impl super::CapabilityMapper {
         // absent, but do **not** record offsets or window (B1l did, +42 s).
         // Specimen: 61 MiB `re2-exhaustive.txt` has no `font-family` and
         // still paid 7.3 s for that regex (S4 / S2p).
-        let Some(record_offsets) =
-            raw_gate_plan(binary_data.len(), file_type.uses_raw_text_search())
-        else {
-            return None;
-        };
+        let record_offsets = raw_gate_plan(binary_data.len(), file_type.uses_raw_text_search())?;
         let index = &self.match_indexes().raw_content_regex_index;
         if !index.has_patterns() {
             return None;
@@ -666,16 +662,17 @@ impl super::CapabilityMapper {
 
 #[cfg(test)]
 mod raw_gate_plan_tests {
-    use super::{
-        RAW_GATE_MAX_BYTES, RAW_GATE_THIN_SOURCE_MAX_BYTES, raw_gate_plan_with_caps,
-    };
+    use super::{RAW_GATE_MAX_BYTES, RAW_GATE_THIN_SOURCE_MAX_BYTES, raw_gate_plan_with_caps};
 
     const FULL: usize = RAW_GATE_MAX_BYTES;
     const THIN: usize = RAW_GATE_THIN_SOURCE_MAX_BYTES;
 
     #[test]
     fn source_below_full_records_offsets() {
-        assert_eq!(raw_gate_plan_with_caps(2 << 20, true, FULL, THIN), Some(true));
+        assert_eq!(
+            raw_gate_plan_with_caps(2 << 20, true, FULL, THIN),
+            Some(true)
+        );
     }
 
     #[test]
@@ -689,10 +686,7 @@ mod raw_gate_plan_tests {
 
     #[test]
     fn source_above_thin_skips_gate() {
-        assert_eq!(
-            raw_gate_plan_with_caps(THIN + 1, true, FULL, THIN),
-            None
-        );
+        assert_eq!(raw_gate_plan_with_caps(THIN + 1, true, FULL, THIN), None);
     }
 
     #[test]

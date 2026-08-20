@@ -623,9 +623,7 @@ fn has_unbounded_rep(hir: &regex_syntax::hir::Hir) -> bool {
     match hir.kind() {
         HirKind::Capture(c) => has_unbounded_rep(&c.sub),
         HirKind::Repetition(r) => r.max.is_none() || has_unbounded_rep(&r.sub),
-        HirKind::Concat(subs) | HirKind::Alternation(subs) => {
-            subs.iter().any(has_unbounded_rep)
-        }
+        HirKind::Concat(subs) | HirKind::Alternation(subs) => subs.iter().any(has_unbounded_rep),
         _ => false,
     }
 }

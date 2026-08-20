@@ -542,16 +542,19 @@ fn cached_ast_query(
     }
     let mut cache = QUERY_CACHE.write();
     if let Some(q) = cache.get(&key).map(Arc::clone) {
+        drop(cache);
         return Some(q);
     }
-    match tree_sitter::Query::new(lang, query_str) {
+    let compiled = match tree_sitter::Query::new(lang, query_str) {
         Ok(q) => {
             let arc = Arc::new(q);
             cache.insert(key, Arc::clone(&arc));
             Some(arc)
         }
         Err(_) => None,
-    }
+    };
+    drop(cache);
+    compiled
 }
 
 /// Tree-sitter's `set_match_limit` accepts at most this many matches per cursor.
@@ -655,9 +658,7 @@ pub(crate) fn batch_ast_queries(
     query_cursor.set_match_limit(COMBINED_AST_QUERY_MATCH_LIMIT);
     query_cursor.set_byte_range(0..source.len().min(AST_QUERY_BYTE_LIMIT));
 
-    let cancelled = || {
-        cancellation.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
-    };
+    let cancelled = || cancellation.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed));
     let cpu_budget = deadline.map(|_| AST_QUERY_CPU_BUDGET);
     let cpu_start = thread_cpu_time();
     let mut timed_out = false;

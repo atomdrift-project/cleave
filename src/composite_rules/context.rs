@@ -175,10 +175,10 @@ pub(crate) struct EvaluationContext<'a> {
     /// Validated UTF-8 view of `binary_data`, populated once per file for source-code
     /// file types. Lets AST/text evaluators skip the per-rule O(N) `from_utf8` check.
     pub cached_source_utf8: Option<&'a str>,
-    /// Whole-`binary_data` ASCII-lowercased once and shared (via the `Arc`)
-    /// across every case-insensitive raw/text condition on this file. ASCII
-    /// lowercasing is byte-position-preserving, so any search sub-range maps to
-    /// the same range of this buffer (see [`Self::lower_binary`]).
+    /// Whole-`binary_data` ASCII-lowercased once. Production CI search now
+    /// uses `cached_ci_searcher` on the original bytes; this slot remains so
+    /// existing `EvaluationContext` constructors stay source-compatible.
+    #[allow(dead_code)]
     pub cached_lower_binary: Arc<OnceLock<Vec<u8>>>,
     /// Lossy UTF-8 view of the *whole* `binary_data`, built at most once per
     /// file and shared across every full-range Unicode condition. Only used
@@ -384,13 +384,9 @@ impl<'a> EvaluationContext<'a> {
         }
     }
 
-    /// Get or build the exact string index for O(1) lookups. Only `report.strings`
-    /// is indexed (the only consumer, `eval_text` exact, ignores import/export
-    /// entries); values are `report.strings` indices, not cloned strings.
-    /// The whole `binary_data` ASCII-lowercased, built once and shared across
-    /// every case-insensitive raw/text condition. Because ASCII lowercasing
-    /// preserves byte positions, callers slice this by the same `[start..end]`
-    /// they would have applied to `binary_data`.
+    /// Unused production helper: ASCII-lowercase the whole haystack.
+    /// eval_raw CI now searches original bytes via `cached_ci_searcher`.
+    #[allow(dead_code)]
     pub(crate) fn lower_binary(&self) -> &[u8] {
         self.cached_lower_binary
             .get_or_init(|| self.binary_data.to_ascii_lowercase())

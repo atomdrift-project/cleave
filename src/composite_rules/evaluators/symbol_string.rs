@@ -10,7 +10,9 @@ use super::{
     ContentLocationParams, build_regex, match_window, resolve_effective_range,
     resolve_effective_range_opt, symbol_matches, truncate_evidence,
 };
-use crate::composite_rules::condition::{NotException, StringValidator, SymbolKind};
+use crate::composite_rules::condition::{
+    NotException, StringValidator, SymbolKind, cached_ci_searcher,
+};
 use crate::composite_rules::context::{ConditionResult, EvaluationContext, StringParams};
 use crate::composite_rules::types::Platform;
 use crate::ip_validator::{contains_external_ip_cached, contains_valid_ip};
@@ -49,6 +51,34 @@ fn string_info_location(
         section_start_location(report, string_info.section.as_deref())
             .unwrap_or_else(|| "0x0".to_string())
     })
+}
+
+/// ASCII-CI substring hits in `haystack` without allocating a lowercased copy.
+/// `overlapping` matches the old `pos + 1` memmem walk used when a validator
+/// or `not:` needs every start; otherwise this is non-overlapping like
+/// `memchr::memmem::find_iter`.
+fn for_each_ascii_ci_substr(
+    haystack: &[u8],
+    needle: &str,
+    overlapping: bool,
+    mut visit: impl FnMut(usize, usize) -> bool,
+) {
+    let Some(ac) = cached_ci_searcher(needle) else {
+        return;
+    };
+    if overlapping {
+        for m in ac.find_overlapping_iter(haystack) {
+            if !visit(m.start(), m.end() - m.start()) {
+                break;
+            }
+        }
+    } else {
+        for m in ac.find_iter(haystack) {
+            if !visit(m.start(), m.end() - m.start()) {
+                break;
+            }
+        }
+    }
 }
 
 /// Helper to apply high-fidelity validation checks to a string match.
@@ -1887,33 +1917,29 @@ pub(crate) fn eval_raw<'a>(
                 // Need to check each match context for validator
                 let mut first_match_offset = None;
                 if case_insensitive {
-                    let pattern_lower = substr_str.to_ascii_lowercase();
-                    let needle = pattern_lower.as_bytes();
-                    let finder = memchr::memmem::Finder::new(needle);
+                    for_each_ascii_ci_substr(
+                        search_data,
+                        substr_str,
+                        true,
+                        |abs_pos, needle_len| {
+                            let ctx_start = abs_pos.saturating_sub(50);
+                            let ctx_end = (abs_pos + needle_len + 50).min(search_data.len());
+                            let context = String::from_utf8_lossy(&search_data[ctx_start..ctx_end]);
 
-                    // Pre-lowercase entire search data ONCE (not per-iteration!)
-                    let search_lower = &ctx.lower_binary()[search_start..search_end];
-                    let mut pos = 0;
-                    while let Some(offset) = finder.find(&search_lower[pos..]) {
-                        let abs_pos = pos + offset;
-                        // Convert only context window for validation check (not entire file!)
-                        let ctx_start = abs_pos.saturating_sub(50);
-                        let ctx_end = (abs_pos + needle.len() + 50).min(search_data.len());
-                        let context = String::from_utf8_lossy(&search_data[ctx_start..ctx_end]);
-
-                        if validate_match(&context, is_check) {
-                            let excluded = not
-                                .map(|excs| excs.iter().any(|e| e.matches(&context)))
-                                .unwrap_or(false);
-                            if !excluded {
-                                if first_match_offset.is_none() {
-                                    first_match_offset = Some((search_start + abs_pos) as u64);
+                            if validate_match(&context, is_check) {
+                                let excluded = not
+                                    .map(|excs| excs.iter().any(|e| e.matches(&context)))
+                                    .unwrap_or(false);
+                                if !excluded {
+                                    if first_match_offset.is_none() {
+                                        first_match_offset = Some((search_start + abs_pos) as u64);
+                                    }
+                                    match_count += 1;
                                 }
-                                match_count += 1;
                             }
-                        }
-                        pos = abs_pos + 1;
-                    }
+                            true
+                        },
+                    );
                 } else {
                     let needle = substr_str.as_bytes();
                     let finder = memchr::memmem::Finder::new(needle);
@@ -1954,27 +1980,26 @@ pub(crate) fn eval_raw<'a>(
                 // Per-match not: filtering — extract context per match
                 let mut first_match_offset = None;
                 if case_insensitive {
-                    let pattern_lower = substr_str.to_ascii_lowercase();
-                    let needle = pattern_lower.as_bytes();
-                    let search_lower = &ctx.lower_binary()[search_start..search_end];
-                    let finder = memchr::memmem::Finder::new(needle);
-                    let mut pos = 0;
-                    while let Some(offset) = finder.find(&search_lower[pos..]) {
-                        let abs_pos = pos + offset;
-                        let ctx_start = abs_pos.saturating_sub(50);
-                        let ctx_end = (abs_pos + needle.len() + 50).min(search_data.len());
-                        let context = String::from_utf8_lossy(&search_data[ctx_start..ctx_end]);
-                        let excluded = not
-                            .map(|excs| excs.iter().any(|e| e.matches(&context)))
-                            .unwrap_or(false);
-                        if !excluded {
-                            if first_match_offset.is_none() {
-                                first_match_offset = Some((search_start + abs_pos) as u64);
+                    for_each_ascii_ci_substr(
+                        search_data,
+                        substr_str,
+                        true,
+                        |abs_pos, needle_len| {
+                            let ctx_start = abs_pos.saturating_sub(50);
+                            let ctx_end = (abs_pos + needle_len + 50).min(search_data.len());
+                            let context = String::from_utf8_lossy(&search_data[ctx_start..ctx_end]);
+                            let excluded = not
+                                .map(|excs| excs.iter().any(|e| e.matches(&context)))
+                                .unwrap_or(false);
+                            if !excluded {
+                                if first_match_offset.is_none() {
+                                    first_match_offset = Some((search_start + abs_pos) as u64);
+                                }
+                                match_count += 1;
                             }
-                            match_count += 1;
-                        }
-                        pos = abs_pos + 1;
-                    }
+                            true
+                        },
+                    );
                 } else {
                     let needle = substr_str.as_bytes();
                     let finder = memchr::memmem::Finder::new(needle);
@@ -2008,14 +2033,16 @@ pub(crate) fn eval_raw<'a>(
                 }
             } else {
                 // Simple count - just count byte occurrences (fastest path, no not: filter)
-                let first_offset;
+                let mut first_offset = None;
                 if case_insensitive {
-                    let pattern_lower = substr_str.to_ascii_lowercase();
-                    let needle = pattern_lower.as_bytes();
-                    let search_lower = &ctx.lower_binary()[search_start..search_end];
-                    let iter = memchr::memmem::find_iter(search_lower, needle);
-                    first_offset = iter.clone().next().map(|o| (search_start + o) as u64);
-                    match_count = iter.count();
+                    match_count = 0;
+                    for_each_ascii_ci_substr(search_data, substr_str, false, |abs_pos, _len| {
+                        if first_offset.is_none() {
+                            first_offset = Some((search_start + abs_pos) as u64);
+                        }
+                        match_count += 1;
+                        true
+                    });
                 } else {
                     let needle = substr_str.as_bytes();
                     let iter = memchr::memmem::find_iter(search_data, needle);

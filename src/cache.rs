@@ -205,7 +205,7 @@ pub fn third_party_path() -> PathBuf {
 /// Returns the most recently modified `.yar`/`.yara` file and its mtime.
 ///
 /// Only pure YARA rule files are considered, and only for display: what
-/// actually invalidates compiled rules is [`rules_source_tag`], which covers
+/// actually invalidates compiled rules is `rules_source_tag`, which covers
 /// inline `type: yara` conditions embedded in trait YAML as well.
 pub fn most_recent_yar_file() -> Result<(SystemTime, PathBuf)> {
     traits_scan()

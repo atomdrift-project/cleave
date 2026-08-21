@@ -43,12 +43,12 @@ use crate::capabilities::validation::{
     find_string_content_collisions, find_string_literal_should_use_text,
     find_string_pattern_duplicates, find_structural_regex_duplicates,
     find_suppression_only_building_blocks, find_too_short_patterns,
-    find_unanchored_wellknown_composites, find_unreferenced_exceptions,
-    find_wellknown_category_violations, find_wellknown_missing_section_filter,
-    find_wellknown_missing_size_filter, find_wide_trait_directories,
-    precalculate_all_composite_precisions, validate_composite_trait_only,
-    validate_directory_structure, validate_hostile_composite_precision,
-    validate_hostile_trait_precision,
+    find_unanchored_wellknown_composites, find_uncompilable_ast_queries,
+    find_unreferenced_exceptions, find_wellknown_category_violations,
+    find_wellknown_missing_section_filter, find_wellknown_missing_size_filter,
+    find_wide_trait_directories, precalculate_all_composite_precisions,
+    validate_composite_trait_only, validate_directory_structure,
+    validate_hostile_composite_precision, validate_hostile_trait_precision,
 };
 use crate::composite_rules::MetricsQuery;
 use crate::composite_rules::{
@@ -524,10 +524,10 @@ impl super::CapabilityMapper {
                                     kv_sibling_basenames: std::sync::Arc::default(),
                                     trait_ref_index: std::sync::Arc::default(),
                                     doomed_skip: std::sync::Arc::default(),
-            composite_worklists: std::sync::Arc::default(),
-            trait_worklists: std::sync::Arc::default(),
-            trait_eval_flags: std::sync::Arc::default(),
-            trait_ref_ids_memo: std::sync::Arc::default(),
+                                    composite_worklists: std::sync::Arc::default(),
+                                    trait_worklists: std::sync::Arc::default(),
+                                    trait_eval_flags: std::sync::Arc::default(),
+                                    trait_ref_ids_memo: std::sync::Arc::default(),
                                     composite_id_index: std::sync::Arc::default(),
                                     trait_id_map,
                                     platforms: vec![Platform::All],
@@ -745,7 +745,7 @@ impl super::CapabilityMapper {
                 // Validate YARA/AST conditions at load time
                 trait_def
                     .r#if
-                    .validate(enable_full_validation)
+                    .validate()
                     .map_err(|e| anyhow::anyhow!("{}", e))
                     .with_context(|| {
                         format!(
@@ -1292,6 +1292,17 @@ impl super::CapabilityMapper {
                 });
             }
             tracing::trace!("Step 1h1 completed in {:?}", step_start.elapsed());
+
+            // Compile every tree-sitter `query:`. Evaluation swallows a compile
+            // failure and caches it, so a broken query is a silently dead rule.
+            let step_start = std::time::Instant::now();
+            tracing::trace!("Step 1h1a/15: Compiling tree-sitter AST queries");
+            if !crate::validation_controls::is_validator_disabled("ast-query-compile") {
+                warnings.collect_as("ast-query-compile", |warnings| {
+                    find_uncompilable_ast_queries(&trait_definitions, &composite_rules, warnings);
+                });
+            }
+            tracing::trace!("Step 1h1a completed in {:?}", step_start.elapsed());
 
             // Detect unnecessary non-capturing groups in regex patterns
             let step_start = std::time::Instant::now();

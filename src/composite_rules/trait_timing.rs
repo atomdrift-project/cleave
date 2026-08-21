@@ -56,3 +56,114 @@ pub(crate) fn report(n: usize) {
         );
     }
 }
+
+/// Cheap per-evaluation timer for the slow-rule / hard-timeout checks.
+///
+/// Every trait and composite evaluation brackets itself with a timer; with
+/// hundreds of evaluations per member and tens of thousands of members,
+/// `Instant::now`'s `QueryPerformanceCounter` pair was ~2% of total scan CPU.
+/// On x86_64 this reads the invariant TSC instead (a few ns) and converts
+/// ticks to wall time with a rate calibrated once against `Instant` after the
+/// first ~50 ms of process lifetime; until calibration settles — and on other
+/// architectures — it simply uses `Instant`. The consumers compare against
+/// thresholds of seconds, so calibration error at the percent level is
+/// irrelevant; correctness of the comparisons is preserved either way.
+#[cfg(target_arch = "x86_64")]
+mod eval_clock {
+    use std::sync::OnceLock;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{Duration, Instant};
+
+    fn tsc() -> u64 {
+        // SAFETY: RDTSC is unprivileged and always available on x86_64.
+        unsafe { core::arch::x86_64::_rdtsc() }
+    }
+
+    struct Base {
+        tsc0: u64,
+        instant0: Instant,
+    }
+
+    fn base() -> &'static Base {
+        static BASE: OnceLock<Base> = OnceLock::new();
+        BASE.get_or_init(|| Base {
+            tsc0: tsc(),
+            instant0: Instant::now(),
+        })
+    }
+
+    /// Picoseconds per tick, 0 while uncalibrated.
+    static PS_PER_TICK: AtomicU64 = AtomicU64::new(0);
+
+    fn ps_per_tick() -> u64 {
+        let cached = PS_PER_TICK.load(Ordering::Relaxed);
+        if cached != 0 {
+            return cached;
+        }
+        let base = base();
+        let dt_ticks = tsc().saturating_sub(base.tsc0);
+        let dt_wall = base.instant0.elapsed();
+        // Wait for a long-enough baseline that scheduling noise is <1%.
+        if dt_wall < Duration::from_millis(50) || dt_ticks == 0 {
+            return 0;
+        }
+        #[allow(clippy::cast_possible_truncation)]
+        let ps = ((dt_wall.as_nanos() as u128 * 1000) / u128::from(dt_ticks)) as u64;
+        let ps = ps.max(1);
+        PS_PER_TICK.store(ps, Ordering::Relaxed);
+        ps
+    }
+
+    pub(crate) enum EvalTimer {
+        Tsc(u64),
+        Precise(Instant),
+    }
+
+    impl EvalTimer {
+        #[inline]
+        pub(crate) fn start() -> Self {
+            if PS_PER_TICK.load(Ordering::Relaxed) != 0 || ps_per_tick() != 0 {
+                EvalTimer::Tsc(tsc())
+            } else {
+                EvalTimer::Precise(Instant::now())
+            }
+        }
+
+        #[inline]
+        pub(crate) fn elapsed(&self) -> Duration {
+            match self {
+                EvalTimer::Tsc(t0) => {
+                    let dt = tsc().saturating_sub(*t0);
+                    let ps = PS_PER_TICK.load(Ordering::Relaxed).max(1);
+                    Duration::from_nanos((u128::from(dt) * u128::from(ps) / 1000) as u64)
+                }
+                EvalTimer::Precise(i0) => i0.elapsed(),
+            }
+        }
+    }
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+mod eval_clock {
+    use std::time::{Duration, Instant};
+
+    pub(crate) enum EvalTimer {
+        Precise(Instant),
+    }
+
+    impl EvalTimer {
+        #[inline]
+        pub(crate) fn start() -> Self {
+            EvalTimer::Precise(Instant::now())
+        }
+
+        #[inline]
+        pub(crate) fn elapsed(&self) -> Duration {
+            match self {
+                EvalTimer::Precise(i0) => i0.elapsed(),
+            }
+        }
+    }
+}
+
+pub(crate) use eval_clock::EvalTimer;

@@ -150,6 +150,24 @@ pub struct CapabilityMapper {
     /// container phase), so rebuilding this map there dominated small-member
     /// corpora.
     pub(super) composite_id_index: Arc<OnceLock<rustc_hash::FxHashMap<String, usize>>>,
+    /// Per-trait static evaluation flags (index-aligned bitmask; see
+    /// `trait_eval_flags`): the per-(trait x member) closure previously
+    /// re-derived these with deep `matches!` walks and five hash-set probes
+    /// per trait per member.
+    pub(super) trait_eval_flags: Arc<OnceLock<Vec<u16>>>,
+    /// Atomic-trait work lists per (file type, dependent) pass: applicable
+    /// indices additionally filtered by `Condition::can_match_file_type` and
+    /// `has_trait_dependency` — all static per (mapper, file type), but
+    /// previously recomputed per member per pass, with `has_trait_dependency`
+    /// walking each trait's unless/downgrade lists every time.
+    pub(super) trait_worklists: Arc<
+        parking_lot::RwLock<
+            rustc_hash::FxHashMap<(RuleFileType, bool), Arc<Vec<usize>>>,
+        >,
+    >,
+    /// `trait_ref_ids()` per trait definition (index-aligned), computed once:
+    /// the per-call version allocates a Vec per (trait x member x rescan).
+    pub(super) trait_ref_ids_memo: Arc<OnceLock<Vec<Vec<String>>>>,
     /// Composite-rule work lists per file type: indices of rules whose
     /// platform and file-type gates can pass, split positive/negative
     /// (`has_negative_conditions`). Those three gates are static per
@@ -276,6 +294,136 @@ impl CapabilityMapper {
     /// evaluation only walks rules that can actually apply. Arch and size
     /// gates stay dynamic in `CompositeTrait::evaluate`. Must mirror the
     /// gates at the top of `CompositeTrait::evaluate` exactly.
+    /// Index-aligned static per-trait evaluation flags. Bits mirror the
+    /// predicates in `evaluate_traits_filtered_with_cache`'s per-trait
+    /// closure exactly — keep the two in lockstep.
+    pub(super) fn trait_eval_flags(&self) -> &[u16] {
+        self.trait_eval_flags.get_or_init(|| {
+            use crate::composite_rules::{Condition, RawQuery, TextQuery};
+            let indexes = self.match_indexes();
+            self.trait_definitions
+                .iter()
+                .enumerate()
+                .map(|(idx, t)| {
+                    let mut bits: u16 = 0;
+                    let counts_plain = t.count_min.unwrap_or(1) == 1
+                        && t.count_max.is_none()
+                        && t.per_kb_min.is_none()
+                        && t.per_kb_max.is_none();
+                    let no_location = |q: &TextQuery| {
+                        q.section.is_none()
+                            && q.offset.is_none()
+                            && q.offset_range.is_none()
+                            && q.section_offset.is_none()
+                            && q.section_offset_range.is_none()
+                    };
+                    if t.downgrade.is_none()
+                        && counts_plain
+                        && matches!(&t.r#if, Condition::Text(q) if q.exact.is_some() && no_location(q))
+                    {
+                        bits |= flags::SIMPLE_EXACT;
+                    }
+                    if t.downgrade.is_none()
+                        && counts_plain
+                        && matches!(&t.r#if, Condition::Text(q) if q.substr.is_some() && no_location(q))
+                    {
+                        bits |= flags::SIMPLE_SUBSTR;
+                    }
+                    if indexes.string_match_index.is_exact_trait(idx) {
+                        bits |= flags::IDX_EXACT;
+                    }
+                    if indexes.string_match_index.is_substr_trait(idx) {
+                        bits |= flags::IDX_SUBSTR;
+                    }
+                    if indexes.string_match_index.is_regex_trait(idx) {
+                        bits |= flags::IDX_REGEX;
+                    }
+                    if indexes.symbol_match_index.is_symbol_trait(idx) {
+                        bits |= flags::IDX_SYMBOL;
+                    }
+                    match &t.r#if {
+                        Condition::Raw(RawQuery { regex: Some(_), .. })
+                        | Condition::Raw(RawQuery { word: Some(_), .. }) => {
+                            bits |= flags::CONTENT_RAW;
+                        }
+                        Condition::Text(TextQuery { regex: Some(_), .. })
+                        | Condition::Text(TextQuery { word: Some(_), .. }) => {
+                            bits |= flags::CONTENT_TEXT;
+                        }
+                        _ => {}
+                    }
+                    if indexes.raw_content_regex_index.is_indexed_trait(idx) {
+                        bits |= flags::RAW_INDEXED;
+                    }
+                    if t.count_min.is_some()
+                        || t.count_max.is_some()
+                        || t.per_kb_min.is_some()
+                        || t.per_kb_max.is_some()
+                    {
+                        bits |= flags::NEEDS_COUNT;
+                    }
+                    bits
+                })
+                .collect()
+        })
+    }
+
+    /// Atomic-trait work list for `(file_type, dependent_only)`: applicable
+    /// indices whose `if:` can match the file type and whose dependency class
+    /// matches the pass. Mirrors the filter at the top of
+    /// `evaluate_traits_filtered_with_cache`, which must stay in lockstep.
+    pub(super) fn trait_worklist(
+        &self,
+        file_type: RuleFileType,
+        dependent_only: bool,
+    ) -> Arc<Vec<usize>> {
+        let key = (file_type, dependent_only);
+        if let Some(hit) = self.trait_worklists.read().get(&key) {
+            return Arc::clone(hit);
+        }
+        let applicable: Vec<usize> = self
+            .match_indexes()
+            .trait_index
+            .get_applicable(&file_type)
+            .into_indices_static()
+            .collect();
+        let list: Vec<usize> = applicable
+            .into_iter()
+            .filter(|&idx| {
+                let t = &self.trait_definitions[idx];
+                t.r#if.can_match_file_type(&file_type)
+                    && t.has_trait_dependency() == dependent_only
+                    // Platform gate folded here too: the evaluation context's
+                    // platforms are always this mapper's `self.platforms`, so
+                    // the per-evaluation `platforms_intersect` check in
+                    // `TraitDefinition::evaluate` is static per trait.
+                    && crate::composite_rules::platforms_intersect(
+                        &t.platforms,
+                        &self.platforms,
+                    )
+            })
+            .collect();
+        let arc = Arc::new(list);
+        self.trait_worklists.write().insert(key, Arc::clone(&arc));
+        arc
+    }
+
+    /// Index-aligned `trait_ref_ids()` for every trait definition, built once.
+    pub(super) fn trait_ref_ids_for(&self, idx: usize) -> &[String] {
+        let memo = self.trait_ref_ids_memo.get_or_init(|| {
+            self.trait_definitions
+                .iter()
+                .map(|t| {
+                    t.trait_ref_ids()
+                        .into_iter()
+                        .map(str::to_string)
+                        .collect()
+                })
+                .collect()
+        });
+        memo.get(idx).map_or(&[], Vec::as_slice)
+    }
+
     pub(super) fn composite_worklists(
         &self,
         file_type: RuleFileType,
@@ -660,3 +808,17 @@ pub(crate) mod helpers;
 pub(crate) mod loader_directory;
 pub(crate) mod loader_yaml;
 pub(crate) mod lookup;
+
+/// Bit names for [`CapabilityMapper::trait_eval_flags`].
+pub(super) mod flags {
+    pub(super) const SIMPLE_EXACT: u16 = 1 << 0;
+    pub(super) const SIMPLE_SUBSTR: u16 = 1 << 1;
+    pub(super) const IDX_EXACT: u16 = 1 << 2;
+    pub(super) const IDX_SUBSTR: u16 = 1 << 3;
+    pub(super) const IDX_REGEX: u16 = 1 << 4;
+    pub(super) const IDX_SYMBOL: u16 = 1 << 5;
+    pub(super) const CONTENT_RAW: u16 = 1 << 6;
+    pub(super) const CONTENT_TEXT: u16 = 1 << 7;
+    pub(super) const RAW_INDEXED: u16 = 1 << 8;
+    pub(super) const NEEDS_COUNT: u16 = 1 << 9;
+}

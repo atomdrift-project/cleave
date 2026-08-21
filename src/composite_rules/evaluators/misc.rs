@@ -58,12 +58,20 @@ pub(crate) fn eval_trait<'a>(id: &str, ctx: &EvaluationContext<'a>) -> Condition
     if slash_count == 0 {
         // Short name: suffix match for same-directory relative reference
         // e.g., "terminate" matches "execution/process::terminate" or legacy "execution/process/terminate"
-        let suffix_new = format!("::{}", id);
-        let suffix_legacy = format!("/{}", id);
+        // Alloc-free suffix test: `f.id` ends with `id` preceded by `::` or
+        // `/`. This runs per (rule x member) and usually misses; the old
+        // `format!` pair allocated two Strings per call.
+        let ends_with_ref = |fid: &str| -> bool {
+            if fid.len() <= id.len() || !fid.ends_with(id) {
+                return false;
+            }
+            let head = &fid[..fid.len() - id.len()];
+            head.ends_with("::") || head.ends_with('/')
+        };
         let matching: Vec<_> = ctx
             .findings
             .iter()
-            .filter(|f| f.id.ends_with(&suffix_new) || f.id.ends_with(&suffix_legacy))
+            .filter(|f| ends_with_ref(&f.id))
             .collect();
 
         if !matching.is_empty() {
@@ -100,12 +108,17 @@ pub(crate) fn eval_trait<'a>(id: &str, ctx: &EvaluationContext<'a>) -> Condition
         // an `objectives/` directory into an `all:`/`any:` clause. An exception
         // composite, however, may assemble a directory of exceptions, so it
         // re-includes them (`parent_is_exception`).
-        let prefix_new = format!("{}::", id);
-        let prefix_legacy = format!("{}/", id);
+        // Alloc-free prefix test: `f.id` starts with `id` followed by `::`
+        // or `/` (same semantics as the old formatted prefixes).
+        let starts_with_ref = |fid: &str| -> bool {
+            fid.len() > id.len()
+                && fid.starts_with(id)
+                && (fid[id.len()..].starts_with("::") || fid[id.len()..].starts_with('/'))
+        };
         let matching: Vec<_> = ctx
             .findings
             .iter()
-            .filter(|f| f.id.starts_with(&prefix_new) || f.id.starts_with(&prefix_legacy))
+            .filter(|f| starts_with_ref(&f.id))
             .filter(|f| ctx.parent_is_exception || f.crit != Criticality::Exception)
             .collect();
 

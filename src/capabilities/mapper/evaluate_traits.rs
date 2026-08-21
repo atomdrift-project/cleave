@@ -7,9 +7,9 @@
 //! - Parallel evaluation of applicable traits
 //! - Early termination for empty files
 
+use crate::composite_rules::TreeSitterQuery;
 use crate::composite_rules::ast_kinds::map_kind_to_node_types;
 use crate::composite_rules::{Arch, Condition, EvaluationContext, SectionMap};
-use crate::composite_rules::TreeSitterQuery;
 use crate::types::{AnalysisReport, Criticality, Evidence, Finding, FindingKind};
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -313,7 +313,6 @@ impl super::CapabilityMapper {
         out
     }
 
-
     /// One trait evaluation step for `evaluate_traits_filtered_with_cache`'s
     /// loop: static-flag gates, then the actual `TraitDefinition::evaluate`.
     /// Split out so the loop can reuse one mutable context per worker (the
@@ -331,118 +330,113 @@ impl super::CapabilityMapper {
         raw_regex_prefilter_enabled: bool,
         base_cached_evidence: Option<&'a rustc_hash::FxHashMap<usize, Vec<Evidence>>>,
     ) -> Option<Finding> {
-            // Check cancellation before each trait — this is the innermost
-            // loop that processes ~9000 traits per file, and is the main reason
-            // analysis can't be interrupted once it enters trait evaluation.
-            if trait_ctx.is_cancelled() {
+        // Check cancellation before each trait — this is the innermost
+        // loop that processes ~9000 traits per file, and is the main reason
+        // analysis can't be interrupted once it enters trait evaluation.
+        if trait_ctx.is_cancelled() {
+            return None;
+        }
+
+        let trait_def = &self.trait_definitions[idx];
+        let tf = eval_flags[idx];
+        // For dependent traits, skip string-based optimizations since
+        // we're matching on trait: conditions, not strings.
+        //
+        // Extracted-string skips stay off for raw-text source unless
+        // `source_text_prefiltered`: `type: text` searches the file bytes,
+        // and extracted literals miss span-syntax (`require('./prebuilt/…')`).
+        // When the raw file was scanned as one haystack, skip-if-absent is
+        // sound. The evidence fast path below is PE-only — it would replace
+        // `eval_raw` evidence with extracted-string hits.
+        if !dependent_only && use_string_prefilters {
+            if !is_raw_text
+                && (tf & (super::flags::SIMPLE_EXACT | super::flags::SIMPLE_SUBSTR)) != 0
+            {
+                // Simple exact/substr string trait: cached evidence is the
+                // whole answer (hit -> synthesized finding, miss -> None).
+                if let Some(evidence) = cache.cached_evidence.get(&idx)
+                    && !evidence.is_empty()
+                {
+                    return Some(Finding {
+                        src: None,
+                        id: trait_def.shared_id(),
+                        desc: trait_def.shared_desc(),
+                        conf: trait_def.conf,
+                        crit: trait_def.crit,
+                        mbc: trait_def.mbc.as_deref().map(Into::into),
+                        attack: trait_def.attack.as_deref().map(Into::into),
+                        evidence: evidence.clone(),
+                        match_count: 0,
+                        kind: FindingKind::Capability,
+                        trait_refs: vec![],
+                        source_file: get_relative_source_file(&trait_def.defined_in),
+                    });
+                }
                 return None;
             }
 
-            let trait_def = &self.trait_definitions[idx];
-            let tf = eval_flags[idx];
-            // For dependent traits, skip string-based optimizations since
-            // we're matching on trait: conditions, not strings.
-            //
-            // Extracted-string skips stay off for raw-text source unless
-            // `source_text_prefiltered`: `type: text` searches the file bytes,
-            // and extracted literals miss span-syntax (`require('./prebuilt/…')`).
-            // When the raw file was scanned as one haystack, skip-if-absent is
-            // sound. The evidence fast path below is PE-only — it would replace
-            // `eval_raw` evidence with extracted-string hits.
-            if !dependent_only && use_string_prefilters {
-                if !is_raw_text
-                    && (tf & (super::flags::SIMPLE_EXACT | super::flags::SIMPLE_SUBSTR)) != 0
+            // Skip indexed exact traits that weren't matched
+            if tf & super::flags::IDX_EXACT != 0 && !cache.string_matched_traits.contains(&idx) {
+                return None;
+            }
+
+            // Source raw-haystack prefilter is exact-only. Substr/regex
+            // skips stay PE-only (extracted-string haystack).
+            if !is_raw_text {
+                if tf & super::flags::IDX_SUBSTR != 0 && !cache.string_matched_traits.contains(&idx)
                 {
-                    // Simple exact/substr string trait: cached evidence is the
-                    // whole answer (hit -> synthesized finding, miss -> None).
-                    if let Some(evidence) = cache.cached_evidence.get(&idx)
-                        && !evidence.is_empty()
-                    {
-                        return Some(Finding {
-                            src: None,
-                            id: trait_def.shared_id(),
-                            desc: trait_def.shared_desc(),
-                            conf: trait_def.conf,
-                            crit: trait_def.crit,
-                            mbc: trait_def.mbc.as_deref().map(Into::into),
-                            attack: trait_def.attack.as_deref().map(Into::into),
-                            evidence: evidence.clone(),
-                            match_count: 0,
-                            kind: FindingKind::Capability,
-                            trait_refs: vec![],
-                            source_file: get_relative_source_file(&trait_def.defined_in),
-                        });
-                    }
                     return None;
                 }
 
-                // Skip indexed exact traits that weren't matched
-                if tf & super::flags::IDX_EXACT != 0
-                    && !cache.string_matched_traits.contains(&idx)
-                {
+                if tf & super::flags::IDX_REGEX != 0 && !cache.regex_candidates.contains(&idx) {
                     return None;
                 }
-
-                // Source raw-haystack prefilter is exact-only. Substr/regex
-                // skips stay PE-only (extracted-string haystack).
-                if !is_raw_text {
-                    if tf & super::flags::IDX_SUBSTR != 0
-                        && !cache.string_matched_traits.contains(&idx)
-                    {
-                        return None;
-                    }
-
-                    if tf & super::flags::IDX_REGEX != 0
-                        && !cache.regex_candidates.contains(&idx)
-                    {
-                        return None;
-                    }
-                }
             }
+        }
 
-            // `type: symbol` searches imports/exports/functions plus the
-            // filefacts names `build_all_symbols` already fed the index (see
-            // the flag builder for why this skip is sound on all file types).
-            if !dependent_only
-                && tf & super::flags::IDX_SYMBOL != 0
-                && !cache.symbol_matched_traits.contains(&idx)
-            {
-                return None;
+        // `type: symbol` searches imports/exports/functions plus the
+        // filefacts names `build_all_symbols` already fed the index (see
+        // the flag builder for why this skip is sound on all file types).
+        if !dependent_only
+            && tf & super::flags::IDX_SYMBOL != 0
+            && !cache.symbol_matched_traits.contains(&idx)
+        {
+            return None;
+        }
+
+        // Raw-content atom gate: `type: raw` always; `type: text` only on
+        // raw-text files. Sound on every file type and in the dependent
+        // pass (an absent mandatory atom can't match regardless of other
+        // findings).
+        let has_content_regex = tf & super::flags::CONTENT_RAW != 0
+            || (tf & super::flags::CONTENT_TEXT != 0 && is_raw_text);
+        if has_content_regex && gate_stats_enabled() {
+            RAW_GATE_ELIGIBLE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if tf & super::flags::RAW_INDEXED != 0 {
+                RAW_GATE_INDEXED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
-
-            // Raw-content atom gate: `type: raw` always; `type: text` only on
-            // raw-text files. Sound on every file type and in the dependent
-            // pass (an absent mandatory atom can't match regardless of other
-            // findings).
-            let has_content_regex = tf & super::flags::CONTENT_RAW != 0
-                || (tf & super::flags::CONTENT_TEXT != 0 && is_raw_text);
-            if has_content_regex && gate_stats_enabled() {
-                RAW_GATE_ELIGIBLE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                if tf & super::flags::RAW_INDEXED != 0 {
-                    RAW_GATE_INDEXED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                }
+        }
+        if has_content_regex
+            && raw_regex_prefilter_enabled
+            && tf & super::flags::RAW_INDEXED != 0
+            && cache.raw_regex_matches.is_some_and(|s| !s.contains(&idx))
+        {
+            if gate_stats_enabled() {
+                RAW_GATE_SKIPPED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
-            if has_content_regex
-                && raw_regex_prefilter_enabled
-                && tf & super::flags::RAW_INDEXED != 0
-                && cache.raw_regex_matches.is_some_and(|s| !s.contains(&idx))
-            {
-                if gate_stats_enabled() {
-                    RAW_GATE_SKIPPED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                }
-                return None;
-            }
+            return None;
+        }
 
-            trait_ctx.current_trait_idx = Some(idx);
-            trait_ctx.cached_evidence = if tf & super::flags::NEEDS_COUNT != 0 {
-                None
-            } else {
-                base_cached_evidence
-            };
+        trait_ctx.current_trait_idx = Some(idx);
+        trait_ctx.cached_evidence = if tf & super::flags::NEEDS_COUNT != 0 {
+            None
+        } else {
+            base_cached_evidence
+        };
 
-            // Both index sources (the work list, and the tiny-DOS bypass
-            // above) apply the platform gate before an index reaches here.
-            trait_def.evaluate_pregated(trait_ctx)
+        // Both index sources (the work list, and the tiny-DOS bypass
+        // above) apply the platform gate before an index reaches here.
+        trait_def.evaluate_pregated(trait_ctx)
     }
 
     /// One QueryCursor walk for every applicable `query:` on this file.

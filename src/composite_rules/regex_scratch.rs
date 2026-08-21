@@ -79,6 +79,11 @@ pub(crate) fn next_regex_id() -> u64 {
 /// re-measured only every [`REMEASURE_EVERY`] parks (a cache's usage only
 /// moves when the lazy DFA learns new transitions, which tapers off fast on
 /// a warm cache), so the common park is a hash probe with no traversal.
+/// Always handled as `Box<Entry>`: `meta::Cache` is a large inline struct,
+/// and the hot-slot/pool choreography moves an entry several times per
+/// checkout — by-value moves measured as the process's hottest memmove
+/// (~8% of total CPU on the 34-archive mix). Boxing makes every move
+/// pointer-sized.
 struct Entry {
     cache: meta::Cache,
     size: usize,
@@ -94,14 +99,16 @@ const GLOBAL_SHARDS: usize = 64;
 
 /// Parked caches one regex may hold. Live cache count per regex tracks its
 /// peak concurrent use; beyond this cap a returning cache is dropped rather
-/// than parked (creation covers the rare wider burst).
+/// than parked (creation covers the rare wider burst). 16 was tried on the
+/// C:\data\sample mix (suspecting parked-cache misses drove lazy-DFA
+/// relearn) and measured wall-neutral with a slight go-solo cost; 8 stays.
 const PER_REGEX_CAP: usize = 8;
 
 /// Bytes currently parked across all shards. Checked-out caches are
 /// unaccounted, exactly as the previous design's hot slot was.
 static GLOBAL_BYTES: AtomicUsize = AtomicUsize::new(0);
 
-type Shard = Mutex<FxHashMap<u64, Vec<Entry>>>;
+type Shard = Mutex<FxHashMap<u64, Vec<Box<Entry>>>>;
 
 fn shards() -> &'static [Shard; GLOBAL_SHARDS] {
     static SHARDS: OnceLock<[Shard; GLOBAL_SHARDS]> = OnceLock::new();
@@ -114,7 +121,7 @@ fn shard_for(id: u64) -> &'static Shard {
 }
 
 /// Steal a parked cache for `id`, if any thread left one.
-fn global_take(id: u64) -> Option<Entry> {
+fn global_take(id: u64) -> Option<Box<Entry>> {
     // The shard lock covers the stacks only; the byte counter is a separate
     // atomic, so it is updated after the guard drops to keep the critical
     // section a bare probe + pop.
@@ -128,7 +135,7 @@ fn global_take(id: u64) -> Option<Entry> {
 
 /// Park a finished cache for other threads, subject to the global byte budget
 /// and the per-regex cap; over either limit the cache is simply dropped.
-fn global_park(id: u64, mut entry: Entry) {
+fn global_park(id: u64, mut entry: Box<Entry>) {
     entry.parks = entry.parks.wrapping_add(1);
     if entry.parks.is_multiple_of(REMEASURE_EVERY) || entry.size == 0 {
         entry.size = entry.cache.memory_usage();
@@ -160,7 +167,7 @@ fn global_park(id: u64, mut entry: Entry) {
 /// touch a lock.
 struct HotSlot {
     id: u64,
-    entry: Option<Entry>,
+    entry: Option<Box<Entry>>,
 }
 
 thread_local! {
@@ -197,10 +204,12 @@ pub(crate) fn with_cache<R>(id: u64, re: &meta::Regex, f: impl FnOnce(&mut meta:
         h.id = id;
         global_take(id)
     });
-    let mut entry = stolen.unwrap_or_else(|| Entry {
-        cache: re.create_cache(),
-        size: 0,
-        parks: 0,
+    let mut entry = stolen.unwrap_or_else(|| {
+        Box::new(Entry {
+            cache: re.create_cache(),
+            size: 0,
+            parks: 0,
+        })
     });
     let result = f(&mut entry.cache);
     finish(id, entry);
@@ -211,7 +220,7 @@ pub(crate) fn with_cache<R>(id: u64, re: &meta::Regex, f: impl FnOnce(&mut meta:
 /// free, otherwise into the global pool (nested/interleaved use of the same
 /// regex on one thread built a transient second cache; the newer one wins
 /// the slot).
-fn finish(id: u64, entry: Entry) {
+fn finish(id: u64, entry: Box<Entry>) {
     let parked = HOT.with(|h| {
         let mut h = h.borrow_mut();
         if h.id == id && h.entry.is_none() {

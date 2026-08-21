@@ -23,7 +23,7 @@ use crate::types::{
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// Hard deadline for a single rule evaluation (90 seconds).
 /// When exceeded, evaluation is interrupted and a timeout finding is emitted.
@@ -944,6 +944,21 @@ impl TraitDefinition {
 
     /// Evaluate this trait definition against the analysis context
     pub(crate) fn evaluate<'a>(&self, ctx: &EvaluationContext<'a>) -> Option<Finding> {
+        self.evaluate_with_gates(ctx, false)
+    }
+
+    /// [`Self::evaluate`] for callers whose work list already applied the
+    /// static platform gate (`CapabilityMapper::trait_worklist`); the other
+    /// gates (arch, file type, size, entropy) still run.
+    pub(crate) fn evaluate_pregated<'a>(&self, ctx: &EvaluationContext<'a>) -> Option<Finding> {
+        self.evaluate_with_gates(ctx, true)
+    }
+
+    fn evaluate_with_gates<'a>(
+        &self,
+        ctx: &EvaluationContext<'a>,
+        platform_prechecked: bool,
+    ) -> Option<Finding> {
         use super::debug::{ConditionDebug, DowngradeDebug, SkipReason};
 
         // Let raw/text matching stop at the first match unless this trait needs
@@ -951,10 +966,10 @@ impl TraitDefinition {
         // nested `Condition::Trait` evaluations don't clobber it.
         let _mcg = MatchCountGuard::set(self.needs_match_count());
 
-        // Check platform match
-        let platform_match = super::types::platforms_intersect(&self.platforms, ctx.platforms);
-
-        if !platform_match {
+        // Check platform match (skipped when the caller's work list proved it)
+        if !platform_prechecked
+            && !super::types::platforms_intersect(&self.platforms, ctx.platforms)
+        {
             ctx.record_skip(|| SkipReason::PlatformMismatch {
                 rule: self.platforms.clone(),
                 context: ctx.platforms.to_vec(),
@@ -1052,7 +1067,7 @@ impl TraitDefinition {
         }
 
         // Start timing for timeout detection (covers all evaluation phases)
-        let start = Instant::now();
+        let start = crate::composite_rules::trait_timing::EvalTimer::start();
 
         // Check unless conditions (file-level skip)
         if let Some(unless_conds) = &self.unless {
@@ -2427,7 +2442,7 @@ impl CompositeTrait {
         }
 
         // Start timing for timeout detection (covers all evaluation phases)
-        let start = Instant::now();
+        let start = crate::composite_rules::trait_timing::EvalTimer::start();
 
         // Check unless conditions (file-level skip)
         if let Some(unless_conds) = &self.unless {

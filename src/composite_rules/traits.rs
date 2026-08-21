@@ -217,6 +217,15 @@ pub(crate) struct TraitDefinition {
     pub id: String,
     /// Human-readable description of what this trait detects
     pub desc: String,
+    /// Shared `Istr` of `id`/`desc`, built lazily: every finding this
+    /// definition produces clones the `Arc` instead of allocating a fresh
+    /// copy — per-finding id/desc allocations were the largest retained
+    /// memory class on member-heavy archives (2M findings held through a
+    /// 54k-member archive's fold). `serde(skip)`: derived state only.
+    #[serde(skip)]
+    pub(crate) id_shared: std::sync::OnceLock<crate::types::Istr>,
+    #[serde(skip)]
+    pub(crate) desc_shared: std::sync::OnceLock<crate::types::Istr>,
     /// Confidence score (0.5 = heuristic, 1.0 = definitive)
     #[serde(default = "default_confidence")]
     pub conf: f32,
@@ -317,6 +326,8 @@ impl Default for TraitDefinition {
     /// empty id (matches nothing); real constructions always override it.
     fn default() -> Self {
         Self {
+            id_shared: std::sync::OnceLock::new(),
+            desc_shared: std::sync::OnceLock::new(),
             id: String::new(),
             desc: String::new(),
             conf: default_confidence(),
@@ -851,6 +862,20 @@ impl TraitDefinition {
         None
     }
 
+    /// The shared `Istr` for this definition's id (see `id_shared`).
+    pub(crate) fn shared_id(&self) -> crate::types::Istr {
+        self.id_shared
+            .get_or_init(|| self.id.as_str().into())
+            .clone()
+    }
+
+    /// The shared `Istr` for this definition's description.
+    pub(crate) fn shared_desc(&self) -> crate::types::Istr {
+        self.desc_shared
+            .get_or_init(|| self.desc.as_str().into())
+            .clone()
+    }
+
     /// Check if this trait has any dependencies on other traits via `trait:` conditions.
     /// Used to determine evaluation order - traits with dependencies must be evaluated
     /// after their dependencies have been resolved.
@@ -1279,9 +1304,9 @@ impl TraitDefinition {
 
             Some(Finding {
                 src: None,
-                id: self.id.clone().into(),
+                id: self.shared_id(),
                 kind: FindingKind::Capability,
-                desc: self.desc.clone().into(),
+                desc: self.shared_desc(),
                 conf: self.conf,
                 crit: final_crit,
                 mbc: self.mbc.as_deref().map(Into::into),
@@ -2023,6 +2048,15 @@ pub(crate) struct CompositeTrait {
     pub id: String,
     /// Human-readable description of what this rule detects
     pub desc: String,
+    /// Shared `Istr` of `id`/`desc`, built lazily: every finding this
+    /// definition produces clones the `Arc` instead of allocating a fresh
+    /// copy — per-finding id/desc allocations were the largest retained
+    /// memory class on member-heavy archives (2M findings held through a
+    /// 54k-member archive's fold). `serde(skip)`: derived state only.
+    #[serde(skip)]
+    pub(crate) id_shared: std::sync::OnceLock<crate::types::Istr>,
+    #[serde(skip)]
+    pub(crate) desc_shared: std::sync::OnceLock<crate::types::Istr>,
     /// Confidence score for the generated finding
     pub conf: f32,
 
@@ -2125,6 +2159,8 @@ impl Default for CompositeTrait {
         Self {
             id: String::new(),
             desc: String::new(),
+            id_shared: std::sync::OnceLock::new(),
+            desc_shared: std::sync::OnceLock::new(),
             conf: default_confidence(),
             crit: Criticality::default(),
             mbc: None,
@@ -2653,9 +2689,9 @@ impl CompositeTrait {
 
             Some(Finding {
                 src: None,
-                id: self.id.clone().into(),
+                id: self.shared_id(),
                 kind: FindingKind::Capability,
-                desc: self.desc.clone().into(),
+                desc: self.shared_desc(),
                 conf: self.conf,
                 crit: final_crit,
                 mbc: self.mbc.as_deref().map(Into::into),
@@ -3587,6 +3623,20 @@ impl CompositeTrait {
 
     /// Returns true if this rule has unless (skip) conditions
     #[must_use]
+    /// The shared `Istr` for this definition's id (see `id_shared`).
+    pub(crate) fn shared_id(&self) -> crate::types::Istr {
+        self.id_shared
+            .get_or_init(|| self.id.as_str().into())
+            .clone()
+    }
+
+    /// The shared `Istr` for this definition's description.
+    pub(crate) fn shared_desc(&self) -> crate::types::Istr {
+        self.desc_shared
+            .get_or_init(|| self.desc.as_str().into())
+            .clone()
+    }
+
     pub(crate) fn has_negative_conditions(&self) -> bool {
         self.unless.as_ref().map(|n| !n.is_empty()).unwrap_or(false)
     }

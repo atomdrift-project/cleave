@@ -2938,7 +2938,7 @@ fn eval_raw_regex_on(
     let report = create_test_report();
     let mut ctx = EvaluationContext::test_only_new(&report, content, file_type);
     if let Some(idx) = trait_idx {
-        ctx = ctx.with_trait_idx(idx);
+        ctx.current_trait_idx = Some(idx);
     }
     ctx = ctx.with_raw_atom_offsets(offsets);
     let pattern = pattern.to_string();

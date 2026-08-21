@@ -1062,10 +1062,8 @@ pub fn compact_from_files(files: &[super::file_analysis::FileAnalysis]) -> Compa
 pub fn compact_from_files_consuming(
     files: Vec<super::file_analysis::FileAnalysis>,
 ) -> CompactReport {
-    let compact_files: Vec<CompactFile> = files
-        .into_iter()
-        .map(|f| convert_file(&f, f.id))
-        .collect();
+    let compact_files: Vec<CompactFile> =
+        files.into_iter().map(|f| convert_file(&f, f.id)).collect();
     assemble_report(compact_files)
 }
 

@@ -160,11 +160,8 @@ pub struct CapabilityMapper {
     /// `has_trait_dependency` — all static per (mapper, file type), but
     /// previously recomputed per member per pass, with `has_trait_dependency`
     /// walking each trait's unless/downgrade lists every time.
-    pub(super) trait_worklists: Arc<
-        parking_lot::RwLock<
-            rustc_hash::FxHashMap<(RuleFileType, bool), Arc<Vec<usize>>>,
-        >,
-    >,
+    pub(super) trait_worklists:
+        Arc<parking_lot::RwLock<rustc_hash::FxHashMap<(RuleFileType, bool), Arc<Vec<usize>>>>>,
     /// `trait_ref_ids()` per trait definition (index-aligned), computed once:
     /// the per-call version allocates a Vec per (trait x member x rescan).
     pub(super) trait_ref_ids_memo: Arc<OnceLock<Vec<Vec<String>>>>,
@@ -406,12 +403,7 @@ impl CapabilityMapper {
         let memo = self.trait_ref_ids_memo.get_or_init(|| {
             self.trait_definitions
                 .iter()
-                .map(|t| {
-                    t.trait_ref_ids()
-                        .into_iter()
-                        .map(str::to_string)
-                        .collect()
-                })
+                .map(|t| t.trait_ref_ids().into_iter().map(str::to_string).collect())
                 .collect()
         });
         memo.get(idx).map_or(&[], Vec::as_slice)

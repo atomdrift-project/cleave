@@ -1277,7 +1277,7 @@ pub fn log_scan_stats() {
 /// is not a supported archive, or the member lives inside a *nested* archive
 /// (a `!` in `member`), which would need recursive extraction; the caller then
 /// falls back to whatever evidence it already has. A single member is capped at
-/// [`MAX_EXTRACTED_MEMBER`] bytes so a crafted archive cannot exhaust memory.
+/// `MAX_EXTRACTED_MEMBER` bytes so a crafted archive cannot exhaust memory.
 pub fn extract_member(archive: &Path, member: &str) -> Result<Option<Vec<u8>>> {
     use anyhow::Context as _;
     // Nested members carry an inner-archive separator; one level of extraction

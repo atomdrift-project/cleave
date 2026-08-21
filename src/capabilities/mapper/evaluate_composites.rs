@@ -223,7 +223,7 @@ impl super::CapabilityMapper {
                     cached_ast,
                 )
                 .with_section_map(section_map)
-            .with_file_caches(&file_caches);
+                .with_file_caches(&file_caches);
                 if let Some(results) = inline_yara {
                     ctx = ctx.with_inline_yara(results);
                 }

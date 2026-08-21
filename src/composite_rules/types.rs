@@ -765,33 +765,46 @@ impl FileType {
         )
     }
 
+    /// Grammar name for this file type, as [`filefacts::validate_source_query`]
+    /// spells it. `None` means no tree-sitter grammar is wired up, so `type:
+    /// tree-sitter` conditions can never match this type.
+    ///
+    /// This is the single source of truth for AST support: it names the
+    /// grammar a `query:` is compiled against during `cleave validate`, and
+    /// [`Self::supports_ast_queries`] is derived from it, so the validation
+    /// gate and the evaluation gate can never drift apart.
+    #[must_use]
+    pub(crate) fn tree_sitter_language_name(&self) -> Option<&'static str> {
+        Some(match self {
+            FileType::C => "c",
+            FileType::Python => "python",
+            FileType::JavaScript => "javascript",
+            FileType::TypeScript => "typescript",
+            FileType::Rust => "rust",
+            FileType::Go => "go",
+            FileType::Java => "java",
+            FileType::Ruby => "ruby",
+            FileType::Shell => "shell",
+            FileType::Php => "php",
+            FileType::CSharp => "csharp",
+            FileType::Lua => "lua",
+            FileType::Perl => "perl",
+            FileType::PowerShell => "powershell",
+            FileType::Swift => "swift",
+            FileType::ObjectiveC => "objc",
+            FileType::Groovy => "groovy",
+            FileType::Scala => "scala",
+            FileType::Zig => "zig",
+            FileType::Elixir => "elixir",
+            FileType::Makefile => "makefile",
+            _ => return None,
+        })
+    }
+
     /// Returns true if this file type supports tree-sitter-backed AST queries.
     #[must_use]
     pub(crate) fn supports_ast_queries(&self) -> bool {
-        matches!(
-            self,
-            FileType::C
-                | FileType::Python
-                | FileType::JavaScript
-                | FileType::TypeScript
-                | FileType::Rust
-                | FileType::Go
-                | FileType::Java
-                | FileType::Ruby
-                | FileType::Shell
-                | FileType::Php
-                | FileType::CSharp
-                | FileType::Lua
-                | FileType::Perl
-                | FileType::PowerShell
-                | FileType::Swift
-                | FileType::ObjectiveC
-                | FileType::Groovy
-                | FileType::Scala
-                | FileType::Zig
-                | FileType::Elixir
-                | FileType::Makefile
-        )
+        self.tree_sitter_language_name().is_some()
     }
 
     /// Returns true when `type: text` should search raw file content for this file type.

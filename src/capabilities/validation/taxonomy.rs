@@ -2184,7 +2184,7 @@ const BROAD_PLATFORM_THRESHOLD: usize = 4;
 /// byte scans target progressively narrower sets; `section` is binary-bound;
 /// `symbol`/`syscall` and `hex`/`yara` are language/binary-bound; structural
 /// `value` paths are format-bound; and an AST (`tree-sitter`) query is written
-/// for exactly one grammar. A type-qualified allowlist entry
+/// for one grammar, or for a pair that shares a grammar shape. A type-qualified allowlist entry
 /// (`"text:<dir-prefix>"`) only lifts the cap for that one matcher type.
 const BROAD_FILETYPE_THRESHOLD_PATH: usize = 4; // full-path matchers — start tight; whitelist/narrow case-by-case
 // Content-scan caps (text/metrics/encoded) include the macOS-native types
@@ -2207,7 +2207,11 @@ const BROAD_FILETYPE_THRESHOLD_SYMBOL: usize = 7; // symbol / syscall tables
 const BROAD_FILETYPE_THRESHOLD_VALUE: usize = 6; // structural value paths
 const BROAD_FILETYPE_THRESHOLD_RAW: usize = 3; // raw byte scan — native binary family (elf/macho/pe)
 const BROAD_FILETYPE_THRESHOLD_HEX: usize = 3; // hex byte pattern — native binary family (elf/macho/pe)
-const BROAD_FILETYPE_THRESHOLD_AST: usize = 1; // tree-sitter (single grammar)
+// Tree-sitter node types are grammar-specific, so a query is written against a
+// specific grammar. Two is the width of the one pairing that genuinely shares a
+// grammar shape (javascript/typescript); past that the query cannot compile for
+// every type it claims (see the `ast-query-compile` validator).
+const BROAD_FILETYPE_THRESHOLD_AST: usize = 2; // tree-sitter (one grammar, or a js/ts pair)
 
 /// Per-matcher-type file-type cap. See [`BROAD_FILETYPE_THRESHOLD_TEXT`].
 fn filetype_cap_for_condition(cond: &Condition) -> usize {

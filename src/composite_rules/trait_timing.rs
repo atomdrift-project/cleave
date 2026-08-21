@@ -108,7 +108,7 @@ mod eval_clock {
             return 0;
         }
         #[allow(clippy::cast_possible_truncation)]
-        let ps = ((dt_wall.as_nanos() as u128 * 1000) / u128::from(dt_ticks)) as u64;
+        let ps = ((dt_wall.as_nanos() * 1000) / u128::from(dt_ticks)) as u64;
         let ps = ps.max(1);
         PS_PER_TICK.store(ps, Ordering::Relaxed);
         ps

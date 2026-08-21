@@ -360,8 +360,8 @@ impl super::CapabilityMapper {
                     {
                         return Some(Finding {
                             src: None,
-                            id: trait_def.id.clone().into(),
-                            desc: trait_def.desc.clone().into(),
+                            id: trait_def.shared_id(),
+                            desc: trait_def.shared_desc(),
                             conf: trait_def.conf,
                             crit: trait_def.crit,
                             mbc: trait_def.mbc.as_deref().map(Into::into),

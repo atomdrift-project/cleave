@@ -1052,6 +1052,23 @@ pub fn compact_from_files(files: &[super::file_analysis::FileAnalysis]) -> Compa
     assemble_report(compact_files)
 }
 
+/// [`compact_from_files`], but consuming: each `FileAnalysis` is dropped as
+/// soon as its compact projection exists, so a member-heavy report and its
+/// compact copy never fully co-reside. Output-identical to the borrowing
+/// version — `convert_file` is pure. Use from callers that are done with the
+/// typed files (the JSON emission path); callers that still render the typed
+/// report keep the borrowing version.
+#[must_use]
+pub fn compact_from_files_consuming(
+    files: Vec<super::file_analysis::FileAnalysis>,
+) -> CompactReport {
+    let compact_files: Vec<CompactFile> = files
+        .into_iter()
+        .map(|f| convert_file(&f, f.id))
+        .collect();
+    assemble_report(compact_files)
+}
+
 /// Strip every cross-file reference that does not resolve to an emitted file id.
 /// An inherited finding's `src` and a composite's `srcs[].f` both index into
 /// `files[]`; if a caller filtered or renumbered `files[]` without remapping

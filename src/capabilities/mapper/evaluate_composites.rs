@@ -58,7 +58,7 @@ impl super::CapabilityMapper {
                     .par_iter()
                     .filter(|rule| matched_bits.contains_all(&rule.required_trait_indices))
                     .filter(|rule| !seen_ids.contains(rule.id.as_str()))
-                    .filter_map(|rule| rule.evaluate(ctx))
+                    .filter_map(|rule| rule.evaluate_pregated(ctx))
                     .filter(|f| !seen_ids.contains(f.id.as_str()))
                     .collect()
             } else {
@@ -66,7 +66,7 @@ impl super::CapabilityMapper {
                     .iter()
                     .filter(|rule| matched_bits.contains_all(&rule.required_trait_indices))
                     .filter(|rule| !seen_ids.contains(rule.id.as_str()))
-                    .filter_map(|rule| rule.evaluate(ctx))
+                    .filter_map(|rule| rule.evaluate_pregated(ctx))
                     .filter(|f| !seen_ids.contains(f.id.as_str()))
                     .collect()
             }
@@ -85,11 +85,27 @@ impl super::CapabilityMapper {
             }
         }
 
-        // Split rules into two groups: those with negative conditions and those without
-        let (mut negative_rules, mut positive_rules): (Vec<_>, Vec<_>) = self
-            .composite_rules
+        // One set of per-file lazy caches for every context this call builds
+        // (fixed-point iterations re-create the context to refresh the finding
+        // scope, but the file's bytes and strings never change).
+        let file_caches = crate::composite_rules::context::FileEvalCaches::default();
+        // Work lists prefiltered by the static gates (platform, file type,
+        // positive/negative split) — memoized per file type on the mapper.
+        // `CompositeTrait::evaluate` still runs its own gates for the dynamic
+        // ones (arch, size); the static ones it re-checks are already known
+        // to pass. Skip-reason debug info is unaffected: contexts built here
+        // never carry a debug collector.
+        let worklists = self.composite_worklists(file_type);
+        let mut positive_rules: Vec<&crate::composite_rules::CompositeTrait> = worklists
+            .positive
             .iter()
-            .partition(|r| r.has_negative_conditions());
+            .map(|&i| &self.composite_rules[i as usize])
+            .collect();
+        let mut negative_rules: Vec<&crate::composite_rules::CompositeTrait> = worklists
+            .negative
+            .iter()
+            .map(|&i| &self.composite_rules[i as usize])
+            .collect();
 
         let is_tiny_dos_com_candidate = file_type == RuleFileType::Unknown
             && binary_data.len() <= 4096
@@ -126,7 +142,8 @@ impl super::CapabilityMapper {
                 },
                 cached_ast,
             )
-            .with_section_map(section_map);
+            .with_section_map(section_map)
+            .with_file_caches(&file_caches);
             if let Some(results) = inline_yara {
                 ctx = ctx.with_inline_yara(results);
             }
@@ -171,7 +188,8 @@ impl super::CapabilityMapper {
                 },
                 cached_ast,
             )
-            .with_section_map(section_map);
+            .with_section_map(section_map)
+            .with_file_caches(&file_caches);
             if let Some(results) = inline_yara {
                 ctx = ctx.with_inline_yara(results);
             }
@@ -204,7 +222,8 @@ impl super::CapabilityMapper {
                     Some(&all_findings),
                     cached_ast,
                 )
-                .with_section_map(section_map);
+                .with_section_map(section_map)
+            .with_file_caches(&file_caches);
                 if let Some(results) = inline_yara {
                     ctx = ctx.with_inline_yara(results);
                 }
@@ -263,6 +282,7 @@ impl super::CapabilityMapper {
         // Shared lazy rule-ID index: this runs once per analyzed file, so a
         // per-call map build dominated small-member archive corpora.
         let composite_map = self.composite_id_index();
+        let file_caches = crate::composite_rules::context::FileEvalCaches::default();
 
         // First pass: collect new criticalities (can't mutate while borrowing for context)
         let updates: Vec<(usize, Criticality)> = {
@@ -275,7 +295,8 @@ impl super::CapabilityMapper {
                 Some(findings),
                 cached_ast,
             )
-            .with_section_map(section_map);
+            .with_section_map(section_map)
+            .with_file_caches(&file_caches);
 
             findings
                 .iter()
@@ -338,6 +359,7 @@ impl super::CapabilityMapper {
         // Scope order (report, target, extras) matches the old combined-slice
         // shape exactly.
         let target_snapshot: Vec<crate::types::Finding> = target_findings.to_vec();
+        let file_caches = crate::composite_rules::context::FileEvalCaches::default();
         let ctx = EvaluationContext::new(
             report,
             binary_data,
@@ -347,7 +369,8 @@ impl super::CapabilityMapper {
             None,
         )
         .with_mid_findings(&target_snapshot)
-        .with_section_map(section_map);
+        .with_section_map(section_map)
+        .with_file_caches(&file_caches);
 
         // Shared lazy rule-ID index: this runs once per archive member in the
         // container phase, so a per-call map build dominated small-member

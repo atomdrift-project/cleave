@@ -110,6 +110,14 @@ impl UnlessIndex {
     }
 }
 
+/// Composite-rule indices that pass the static (platform, file-type) gates
+/// for one file type, split by `has_negative_conditions`.
+#[derive(Debug, Default)]
+pub(super) struct CompositeTypeLists {
+    pub(super) positive: Vec<u32>,
+    pub(super) negative: Vec<u32>,
+}
+
 /// Maps symbols (function names, library calls) to capability IDs
 /// Also supports trait definitions and composite rules that combine traits
 #[derive(Clone, Debug)]
@@ -142,6 +150,14 @@ pub struct CapabilityMapper {
     /// container phase), so rebuilding this map there dominated small-member
     /// corpora.
     pub(super) composite_id_index: Arc<OnceLock<rustc_hash::FxHashMap<String, usize>>>,
+    /// Composite-rule work lists per file type: indices of rules whose
+    /// platform and file-type gates can pass, split positive/negative
+    /// (`has_negative_conditions`). Those three gates are static per
+    /// (mapper, file type); testing them per (rule x member) was a measured
+    /// leaf on many-member archives. Memoized here and shared across the
+    /// per-file mapper clones, like the other lazy indexes.
+    pub(super) composite_worklists:
+        Arc<parking_lot::RwLock<rustc_hash::FxHashMap<RuleFileType, Arc<CompositeTypeLists>>>>,
     /// Maps trait ID -> index in trait_definitions
     #[allow(dead_code)]
     pub(super) trait_id_map: std::collections::HashMap<String, usize>,
@@ -251,6 +267,53 @@ impl CapabilityMapper {
         // The closure only moves an already-built value, so a racing caller
         // blocks for a move rather than for a multi-second parallel build.
         self.indexes.get_or_init(|| built)
+    }
+
+    /// Composite-rule work lists for `file_type`. Folds the gates that are
+    /// static per (mapper, file type) — platform intersection, the `for:`
+    /// file-type check (including the archive-family / cross-archive-scope
+    /// carve-outs), and the positive/negative partition — so per-member
+    /// evaluation only walks rules that can actually apply. Arch and size
+    /// gates stay dynamic in `CompositeTrait::evaluate`. Must mirror the
+    /// gates at the top of `CompositeTrait::evaluate` exactly.
+    pub(super) fn composite_worklists(
+        &self,
+        file_type: RuleFileType,
+    ) -> Arc<CompositeTypeLists> {
+        use crate::composite_rules::Scope;
+        if let Some(hit) = self.composite_worklists.read().get(&file_type) {
+            return Arc::clone(hit);
+        }
+        let mut lists = CompositeTypeLists::default();
+        for (i, rule) in self.composite_rules.iter().enumerate() {
+            if !crate::composite_rules::platforms_intersect(&rule.platforms, &self.platforms) {
+                continue;
+            }
+            let wants_archive_family = rule.r#for.iter().any(RuleFileType::is_archive);
+            let pools_across_archive = matches!(
+                rule.scope,
+                Some(Scope::Outer | Scope::Archive | Scope::Package)
+            );
+            let file_type_match = rule.r#for.contains(&RuleFileType::All)
+                || rule.r#for.contains(&file_type)
+                || ((file_type == RuleFileType::All || file_type.is_archive())
+                    && (wants_archive_family || pools_across_archive));
+            if !file_type_match {
+                continue;
+            }
+            #[allow(clippy::cast_possible_truncation)]
+            let idx = i as u32;
+            if rule.has_negative_conditions() {
+                lists.negative.push(idx);
+            } else {
+                lists.positive.push(idx);
+            }
+        }
+        let arc = Arc::new(lists);
+        self.composite_worklists
+            .write()
+            .insert(file_type, Arc::clone(&arc));
+        arc
     }
 
     pub(super) fn doomed_skip_index(&self) -> &doomed_skip::DoomedSkipIndex {

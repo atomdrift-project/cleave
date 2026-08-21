@@ -1936,6 +1936,7 @@ impl AnalysisReport {
         drop_unread_folded_fields(&mut file);
         precompact_member_facts(&mut file);
         early_strip_member_findings(&mut file);
+        shrink_member_capacity(&mut file);
         (file, nested_files, archive_contents)
     }
 }
@@ -2007,6 +2008,31 @@ fn early_strip_impl(file: &mut FileAnalysis, possibly_referenced: impl Fn(&str) 
         idx += 1;
         !strippable(f) || keep.contains(&i) || possibly_referenced(&f.id)
     });
+}
+
+
+/// In compact-member mode, release the Vec slack a folded member still
+/// carries. The strip above `retain`s findings in place — capacity stays at
+/// the pre-strip count — and the eval-time Vecs grew by doubling; measured on
+/// a 54k-member archive the findings/evidence arrays held ~30% dead capacity
+/// (~0.3 GB) through the whole archive ramp. Shrinking reallocates into
+/// right-sized blocks, so the abandoned pages become purgeable instead of
+/// pinned by live tails.
+fn shrink_member_capacity(file: &mut FileAnalysis) {
+    if !crate::shared_resources::compact_member_retention() {
+        return;
+    }
+    file.findings.shrink_to_fit();
+    for finding in &mut file.findings {
+        finding.evidence.shrink_to_fit();
+        finding.trait_refs.shrink_to_fit();
+        for ev in &mut finding.evidence {
+            ev.offsets.shrink_to_fit();
+        }
+    }
+    file.context.shrink_to_fit();
+    file.strings.shrink_to_fit();
+    file.structure.shrink_to_fit();
 }
 
 /// In compact-member mode, project a folded member's fact vectors into their

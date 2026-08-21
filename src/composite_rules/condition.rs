@@ -348,6 +348,25 @@ pub(crate) fn raw_regex_pattern(
 /// a single needle; caching it means we build the searcher once and reuse it
 /// across evals instead of rebuilding per call, with no per-condition storage.
 pub(crate) fn cached_finder(needle: &str) -> &'static memchr::memmem::Finder<'static> {
+    // Thread-local front cache of the leaked `'static` refs. The global map
+    // below is one RwLock cache line shared by every worker, probed once per
+    // (condition x member) — measured as a hot leaf on member-heavy archives
+    // purely from cross-core contention. Needles are a bounded set (the trait
+    // corpus), so each thread converges to an uncontended local hit.
+    thread_local! {
+        static TLS_FINDERS: std::cell::RefCell<
+            rustc_hash::FxHashMap<Box<str>, &'static memchr::memmem::Finder<'static>>,
+        > = std::cell::RefCell::new(rustc_hash::FxHashMap::default());
+    }
+    if let Some(f) = TLS_FINDERS.with(|m| m.borrow().get(needle).copied()) {
+        return f;
+    }
+    let resolved = cached_finder_shared(needle);
+    TLS_FINDERS.with(|m| m.borrow_mut().insert(Box::from(needle), resolved));
+    resolved
+}
+
+fn cached_finder_shared(needle: &str) -> &'static memchr::memmem::Finder<'static> {
     use std::sync::{LazyLock, RwLock};
     // FxHashMap: keyed by the needle string and hit on every eval; SipHash on
     // string keys showed up as a hot frame, FxHash is far cheaper.
@@ -371,6 +390,22 @@ pub(crate) fn cached_finder(needle: &str) -> &'static memchr::memmem::Finder<'st
 /// searcher per unique needle. For CI single-needle matching, AC's built-in
 /// case folding beats lowercasing the haystack on every eval.
 pub(crate) fn cached_ci_searcher(needle: &str) -> Option<&'static aho_corasick::AhoCorasick> {
+    // Same thread-local front as `cached_finder` — see the rationale there.
+    // Build failures (`None`) are cached too so a bad needle doesn't retry.
+    thread_local! {
+        static TLS_CI: std::cell::RefCell<
+            rustc_hash::FxHashMap<Box<str>, Option<&'static aho_corasick::AhoCorasick>>,
+        > = std::cell::RefCell::new(rustc_hash::FxHashMap::default());
+    }
+    if let Some(hit) = TLS_CI.with(|m| m.borrow().get(needle).copied()) {
+        return hit;
+    }
+    let resolved = cached_ci_searcher_shared(needle);
+    TLS_CI.with(|m| m.borrow_mut().insert(Box::from(needle), resolved));
+    resolved
+}
+
+fn cached_ci_searcher_shared(needle: &str) -> Option<&'static aho_corasick::AhoCorasick> {
     use std::sync::{LazyLock, RwLock};
     static CACHE: LazyLock<
         RwLock<rustc_hash::FxHashMap<String, &'static aho_corasick::AhoCorasick>>,

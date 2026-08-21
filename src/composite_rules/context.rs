@@ -101,6 +101,26 @@ impl<'a> FindingScope<'a> {
     }
 }
 
+/// Per-file lazy caches shared by every [`EvaluationContext`] built for one
+/// member. A member's evaluation constructs several contexts (the trait pass,
+/// then each composite fixed-point iteration, then downgrade re-evaluation);
+/// each used to start with fresh `OnceLock`s, so the string exact indexes, KV
+/// parse, lowercased binary, and lossy-UTF-8 projections were rebuilt per
+/// context even though the underlying bytes and `report.strings` are fixed
+/// for the member's lifetime. One `FileEvalCaches` per member makes every
+/// later context a cache hit.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct FileEvalCaches {
+    kv_format: Arc<OnceLock<StructuredFormat>>,
+    kv_parsed: Arc<OnceLock<Box<Value>>>,
+    kv_offsets: Arc<OnceLock<FxHashMap<String, u64>>>,
+    lower_binary: Arc<OnceLock<Vec<u8>>>,
+    lossy_utf8: Arc<OnceLock<String>>,
+    string_exact_index: Arc<OnceLock<FxHashMap<String, Vec<u32>>>>,
+    string_exact_index_ci: Arc<OnceLock<FxHashMap<String, Vec<u32>>>>,
+    encoded_string_indices: Arc<OnceLock<Vec<u32>>>,
+}
+
 /// Context for evaluating composite rules
 #[derive(Debug, Clone)]
 pub(crate) struct EvaluationContext<'a> {
@@ -259,6 +279,21 @@ impl<'a> EvaluationContext<'a> {
             cached_source_utf8,
             parent_is_exception: false,
         }
+    }
+
+    /// Share one member's lazy per-file caches across every context built
+    /// for it (see [`FileEvalCaches`]). Must only be used for contexts over
+    /// the same `binary_data` / `report.strings`.
+    pub(crate) fn with_file_caches(mut self, caches: &FileEvalCaches) -> Self {
+        self.cached_kv_format = Arc::clone(&caches.kv_format);
+        self.cached_kv_parsed = Arc::clone(&caches.kv_parsed);
+        self.cached_kv_offsets = Arc::clone(&caches.kv_offsets);
+        self.cached_lower_binary = Arc::clone(&caches.lower_binary);
+        self.cached_lossy_utf8 = Arc::clone(&caches.lossy_utf8);
+        self.string_exact_index = Arc::clone(&caches.string_exact_index);
+        self.string_exact_index_ci = Arc::clone(&caches.string_exact_index_ci);
+        self.encoded_string_indices = Arc::clone(&caches.encoded_string_indices);
+        self
     }
 
     /// Set the slow rule threshold
@@ -464,8 +499,13 @@ impl<'a> EvaluationContext<'a> {
     }
 
     /// Record a skip reason to the debug collector if one is present.
-    pub(crate) fn record_skip(&self, reason: SkipReason) {
-        self.with_debug(|debug| debug.record_skip(reason));
+    ///
+    /// Takes a closure so the reason — which typically clones platform/type
+    /// vectors — is only built when a debug collector is attached. These fire
+    /// for most (rule x member) pairs on big archives; eager construction was
+    /// a measurable allocation tax on scans that never collect debug info.
+    pub(crate) fn record_skip(&self, reason: impl FnOnce() -> SkipReason) {
+        self.with_debug(|debug| debug.record_skip(reason()));
     }
 
     /// Check if a finding ID exists (exact match only)

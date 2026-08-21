@@ -139,7 +139,7 @@ impl Criticality {
     }
 
     /// Bytes of context `(before, after)` a binary/hex match reserves and renders
-    /// around itself. The binary analogue of [`context_radius`], but asymmetric:
+    /// around itself. The binary analogue of [`Self::context_radius`], but asymmetric:
     /// far more trailing than leading context, since a payload (shellcode, an
     /// unpacked stub, a config blob) runs *forward* from the match. As with the
     /// source path the strongest findings earn the widest window; the single

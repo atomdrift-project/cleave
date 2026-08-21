@@ -337,6 +337,8 @@ pub(crate) fn apply_trait_defaults(
     }
 
     let mut trait_def = TraitDefinition {
+        id_shared: std::sync::OnceLock::new(),
+        desc_shared: std::sync::OnceLock::new(),
         id: raw.id,
         desc: raw.desc,
         conf: raw.conf.or(defaults.conf).unwrap_or(1.0),
@@ -1102,6 +1104,8 @@ pub(crate) fn apply_composite_defaults(
     CompositeTrait {
         id: raw.id,
         desc: raw.desc,
+        id_shared: std::sync::OnceLock::new(),
+        desc_shared: std::sync::OnceLock::new(),
         conf: raw.conf.or(defaults.conf).unwrap_or(1.0),
         crit: criticality,
         mbc: apply_string_default(raw.mbc, &defaults.mbc),

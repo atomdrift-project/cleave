@@ -544,9 +544,9 @@ impl super::CapabilityMapper {
                 let trait_def = pt.trait_def;
                 Some(Finding {
                     src: None,
-                    id: trait_def.id.clone().into(),
+                    id: trait_def.shared_id(),
                     kind: FindingKind::Indicator,
-                    desc: trait_def.desc.clone().into(),
+                    desc: trait_def.shared_desc(),
                     conf: trait_def.conf,
                     crit: trait_def.crit,
                     mbc: trait_def.mbc.as_deref().map(Into::into),

@@ -22,7 +22,31 @@ use std::time::{Duration, Instant};
 /// available memory can't be read (the only-thing-to-go-by fallback).
 const BUDGET_FRACTION: f64 = 0.75;
 /// On-disk size multiplier estimating an archive's peak resident footprint.
-const EXPANSION: u64 = 8;
+/// Overridable via `CLEAVE_MEMGATE_EXPANSION`.
+///
+/// The old 8 modeled decompression of the bytes themselves, and never bit:
+/// member-heavy archives measured 18-82x compressed size end-to-end
+/// (decompressed members + retained findings + analysis transients), so a
+/// 34-archive mix ran every whale concurrently and peaked at 15 GB on a
+/// 31 GB box. 48 sits in that measured band; with it the same mix peaked at
+/// 11.6 GB with wall unchanged (the scan is CPU-bound, so admitting fewer
+/// whales at once reorders work without starving the pool — 96 cost +8%
+/// wall, 128 starved it). Deliberately static: the gate's live
+/// available-memory floor and RAM-fraction budget already adapt to the box,
+/// and no per-archive estimator can be accurate before the archive is
+/// opened — overestimating merely serializes whales (mild, bounded by the
+/// force-admit escape), while underestimating is the OOM this gate exists
+/// to prevent.
+fn expansion() -> u64 {
+    static V: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("CLEAVE_MEMGATE_EXPANSION")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .filter(|&n| n > 0)
+            .unwrap_or(48)
+    })
+}
 /// Floor so thousands of tiny files still register aggregate pressure.
 const MIN_ESTIMATE_BYTES: usize = 8 * 1024 * 1024;
 /// Headroom kept free when admitting a lone file against live available memory.
@@ -74,7 +98,7 @@ impl ScanMemGate {
 
     #[allow(clippy::cast_possible_truncation)]
     fn estimate(&self, size: u64) -> usize {
-        let raw = usize::try_from(size.saturating_mul(EXPANSION)).unwrap_or(usize::MAX);
+        let raw = usize::try_from(size.saturating_mul(expansion())).unwrap_or(usize::MAX);
         raw.max(MIN_ESTIMATE_BYTES).min(self.budget_bytes)
     }
 

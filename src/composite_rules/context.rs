@@ -374,13 +374,6 @@ impl<'a> EvaluationContext<'a> {
         self
     }
 
-    /// Set the current trait index being evaluated
-    #[must_use]
-    pub(crate) fn with_trait_idx(mut self, idx: usize) -> Self {
-        self.current_trait_idx = Some(idx);
-        self
-    }
-
     /// Set additional findings and rebuild index
     #[must_use]
     #[cfg(test)]

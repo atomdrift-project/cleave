@@ -83,6 +83,9 @@ const HARD_VALIDATOR_IDS: &[&str] = &[
     // The pattern uses lookaround/backreferences the linear-time engine can't
     // compile, so the condition silently never matches — the rule is dead.
     "incompatible-regex",
+    // A `type: tree-sitter` `query:` that compiles against no grammar it can
+    // run on. Evaluation caches the compile failure and the rule never fires.
+    "ast-query-compile",
 ];
 
 /// The severity of a validator, looked up by id. Unknown/legacy ids default to
@@ -804,6 +807,17 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         display_id: "re-mem",
         description: "Regex compiles to an oversized engine that wastes memory and CPU.",
         fix: "Replace counted runs (`X{4000,}`) with a loop plus length_min (`X+` + `length_min: 4000`); split wide `X{0,N}` gaps into atomic traits joined by a near_lines:/near_bytes: composite.",
+    },
+    ValidatorSpec {
+        id: "ast-query-compile",
+        category: ValidatorCategory::Quality,
+        display_id: "ast-compile",
+        description: "Tree-sitter `query:` does not compile against any grammar the rule runs \
+                      on, so evaluation caches the failure and the rule silently never fires.",
+        fix: "Fix the S-expression (balanced parens, node types that exist in the target \
+              grammar, predicates spelled `#eq?`/`#match?`), or narrow `for:` to the types the \
+              query actually parses. A `type: tree-sitter` rule targets at most two file types \
+              (see policy/ft-cap), so every one of them must compile.",
     },
     ValidatorSpec {
         id: "ast-text-call-performance",

@@ -545,7 +545,11 @@ fn cached_ast_query(
         ast_query_language_key(lang, file_type),
         query_str.to_string(),
     );
-    if let Some(entry) = QUERY_CACHE.read().get(&key).cloned() {
+    // Bind the lookup before the `if let` so the read guard is released here
+    // rather than at the end of the `if let` — the write lock below is taken on
+    // exactly the path that falls through it.
+    let hit = QUERY_CACHE.read().get(&key).cloned();
+    if let Some(entry) = hit {
         return entry;
     }
     let mut cache = QUERY_CACHE.write();

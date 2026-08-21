@@ -292,13 +292,13 @@ pub struct CompactRef {
 pub struct CompactFacts {
     /// Metrics (nested structure, floats rounded to 2dp).
     pub metrics: Option<RoundedMetrics>,
-    /// Imports as tuples: [library, name] or [library, name, ordinal].
+    /// Imports as tuples: `[library, name]` or `[library, name, ordinal]`.
     pub imports: Vec<CompactImport>,
-    /// Exports as tuples: [name] or [name, forward_to].
+    /// Exports as tuples: `[name]` or `[name, forward_to]`.
     pub exports: Vec<CompactExport>,
-    /// Functions as tuples: [name], [name, offset], or [name, offset, kind].
+    /// Functions as tuples: `[name]`, `[name, offset]`, or `[name, offset, kind]`.
     pub functions: Vec<CompactFunction>,
-    /// Sections as tuples: [name, file_offset, file_size, entropy, flags].
+    /// Sections as tuples: `[name, file_offset, file_size, entropy, flags]`.
     pub sections: Vec<CompactSection>,
     /// AST targets.
     pub targets: Vec<String>,

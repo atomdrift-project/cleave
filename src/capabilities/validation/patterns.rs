@@ -1459,14 +1459,292 @@ pub(crate) fn find_brittle_path_patterns(traits: &[TraitDefinition], warnings: &
     }
 }
 
+/// Invoke `f` with every `type: tree-sitter` `query:` a rule carries, paired
+/// with its explicit `language:` when the author pinned one.
+fn for_each_ast_query<'a>(condition: &'a Condition, f: &mut impl FnMut(&'a str, Option<&'a str>)) {
+    if let Condition::TreeSitter(TreeSitterQuery {
+        query: Some(query),
+        language,
+        ..
+    }) = condition
+    {
+        f(query, language.as_deref());
+    }
+}
+
+/// Compile every `type: tree-sitter` `query:` against the grammars it claims to
+/// run on, and report the ones that don't compile.
+///
+/// Evaluation compiles queries lazily and caches the failure
+/// (`composite_rules::evaluators::ast`): a query with a typo'd node type or an
+/// unbalanced S-expression does not error, it simply never matches. That is
+/// indistinguishable from "the behavior isn't present", so a broken query is a
+/// silently dead rule — the reason this is a Hard validator.
+///
+/// The grammar set is, in order of preference: the condition's explicit
+/// `language:`; otherwise the AST-capable entries of the rule's `for:` list.
+/// Every one of them must compile: node types are grammar-specific, so a
+/// JavaScript query listed under `for: [javascript, python]` is dead on every
+/// Python file it claims to cover. The `broad-file-type` cap keeps that list to
+/// at most two types, which is what makes the all-must-compile bar reachable.
+///
+/// When `for:` names no AST-capable type at all (`for: [all]`, or a
+/// binary-only list) there is no grammar to hold the query to, so the check
+/// falls back to "compiles against at least one grammar" — enough to catch a
+/// malformed S-expression, and `broad-filetype-cap` owns the mis-scoping.
+pub(crate) fn find_uncompilable_ast_queries(
+    traits: &[TraitDefinition],
+    composites: &[CompositeTrait],
+    warnings: &mut Vec<String>,
+) {
+    let mut check = |kind: &str,
+                     id: &str,
+                     defined_in: &std::path::Path,
+                     for_types: &[FileType],
+                     query: &str,
+                     language: Option<&str>| {
+        let declared: Vec<&str> = match language {
+            Some(explicit) => vec![explicit],
+            None => for_types
+                .iter()
+                .filter_map(FileType::tree_sitter_language_name)
+                .collect(),
+        };
+        // With no declared grammar, any grammar compiling is enough; with one
+        // or more, all of them must.
+        let all_required = !declared.is_empty();
+        let languages: Vec<&str> = if all_required {
+            declared
+        } else {
+            FileType::all_variants()
+                .iter()
+                .filter_map(FileType::tree_sitter_language_name)
+                .collect()
+        };
+
+        let mut failures = Vec::new();
+        for lang in &languages {
+            match filefacts::validate_source_query(lang, query) {
+                Ok(()) if !all_required => return,
+                Ok(()) => {}
+                Err(error) => failures.push(format!("{lang}: {error}")),
+            }
+        }
+        if failures.is_empty() {
+            return;
+        }
+
+        let source_file = defined_in.to_str().unwrap_or("unknown");
+        let location = match find_line_number(source_file, id) {
+            Some(line) => format!("{source_file}:{line}"),
+            None => source_file.to_string(),
+        };
+        let scope = if all_required {
+            "does not compile against every grammar it targets"
+        } else {
+            "compiles against no grammar at all"
+        };
+        warnings.push(format!(
+            "AST query: {kind} '{id}' in {location} has a `query:` that {scope} — evaluation \
+             caches the compile failure and the rule silently never matches on those types. \
+             Errors: {}",
+            failures.join("; ")
+        ));
+    };
+
+    for trait_def in traits {
+        let mut report = |query: &str, language: Option<&str>| {
+            check(
+                "trait",
+                &trait_def.id,
+                &trait_def.defined_in,
+                &trait_def.r#for,
+                query,
+                language,
+            );
+        };
+        for_each_ast_query(&trait_def.r#if, &mut report);
+        for condition in trait_def.unless.as_deref().unwrap_or_default() {
+            for_each_ast_query(condition, &mut report);
+        }
+        if let Some(downgrade) = &trait_def.downgrade {
+            for_each_downgrade_ast_query(downgrade, &mut report);
+        }
+    }
+    for rule in composites {
+        let mut report = |query: &str, language: Option<&str>| {
+            check(
+                "composite",
+                &rule.id,
+                &rule.defined_in,
+                &rule.r#for,
+                query,
+                language,
+            );
+        };
+        for condition in [&rule.all, &rule.any, &rule.unless]
+            .into_iter()
+            .flat_map(|legs| legs.as_deref().unwrap_or_default())
+        {
+            for_each_ast_query(condition, &mut report);
+        }
+        if let Some(downgrade) = &rule.downgrade {
+            for_each_downgrade_ast_query(downgrade, &mut report);
+        }
+    }
+}
+
+/// Invoke `f` with every AST query in a downgrade block's `any:`/`all:`/`none:` legs.
+fn for_each_downgrade_ast_query<'a>(
+    downgrade: &'a DowngradeConditions,
+    f: &mut impl FnMut(&'a str, Option<&'a str>),
+) {
+    for condition in [&downgrade.any, &downgrade.all, &downgrade.none]
+        .into_iter()
+        .flat_map(|legs| legs.as_deref().unwrap_or_default())
+    {
+        for_each_ast_query(condition, f);
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::find_uncompilable_ast_queries;
     use super::{
         REGEX_NFA_BUDGET_BYTES, RegexFacts, RegexMemoryIssue, find_memory_hungry_regex_patterns,
         regex_memory_issue, regex_performance_issues,
     };
     use crate::composite_rules::condition::{NotException, NotExceptionStructured};
-    use crate::composite_rules::{CompositeTrait, Condition, RawQuery, TextQuery, TraitDefinition};
+    use crate::composite_rules::{
+        CompositeTrait, Condition, FileType, RawQuery, TextQuery, TraitDefinition, TreeSitterQuery,
+    };
+
+    fn ast_query(query: &str, language: Option<&str>) -> Condition {
+        Condition::TreeSitter(TreeSitterQuery {
+            query: Some(query.to_string()),
+            language: language.map(str::to_string),
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    fn ast_query_compile_accepts_a_query_valid_for_every_for_type() {
+        // The one pairing the ≤2 cap exists for: `call_expression` is a node in
+        // both the JavaScript and TypeScript grammars.
+        let trait_def = TraitDefinition {
+            id: "t".to_string(),
+            r#for: vec![FileType::JavaScript, FileType::TypeScript],
+            r#if: ast_query("(call_expression) @c", None),
+            ..Default::default()
+        };
+        let mut warnings = Vec::new();
+        find_uncompilable_ast_queries(&[trait_def], &[], &mut warnings);
+        assert!(warnings.is_empty(), "{warnings:?}");
+    }
+
+    #[test]
+    fn ast_query_compile_flags_query_dead_on_one_of_its_for_types() {
+        // Compiling for JavaScript is not enough: the trait claims Python too,
+        // and every Python file it covers silently never matches.
+        let trait_def = TraitDefinition {
+            id: "t".to_string(),
+            r#for: vec![FileType::JavaScript, FileType::Python],
+            r#if: ast_query("(call_expression) @c", None),
+            ..Default::default()
+        };
+        let mut warnings = Vec::new();
+        find_uncompilable_ast_queries(&[trait_def], &[], &mut warnings);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("every grammar it targets"));
+        assert!(warnings[0].contains("python:"));
+    }
+
+    #[test]
+    fn ast_query_compile_flags_query_valid_for_no_for_type() {
+        // `call_expression` exists in no grammar this trait can run on, so the
+        // query compiles nowhere and the rule is dead.
+        let trait_def = TraitDefinition {
+            id: "t".to_string(),
+            r#for: vec![FileType::Python],
+            r#if: ast_query("(call_expression) @c", None),
+            ..Default::default()
+        };
+        let mut warnings = Vec::new();
+        find_uncompilable_ast_queries(&[trait_def], &[], &mut warnings);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("trait 't'"));
+        assert!(warnings[0].contains("python:"));
+    }
+
+    #[test]
+    fn ast_query_compile_flags_malformed_s_expression_without_for_types() {
+        // No AST-capable `for:` type — fall back to every grammar. An
+        // unbalanced S-expression compiles against none of them.
+        let trait_def = TraitDefinition {
+            id: "t".to_string(),
+            r#for: vec![FileType::All],
+            r#if: ast_query("(call_expression", None),
+            ..Default::default()
+        };
+        let mut warnings = Vec::new();
+        find_uncompilable_ast_queries(&[trait_def], &[], &mut warnings);
+        assert_eq!(warnings.len(), 1);
+    }
+
+    #[test]
+    fn ast_query_compile_honors_explicit_language_over_for_types() {
+        // `language:` pins the grammar even when `for:` is wider, so a query
+        // that only compiles elsewhere is still reported.
+        let trait_def = TraitDefinition {
+            id: "t".to_string(),
+            r#for: vec![FileType::JavaScript, FileType::Python],
+            r#if: ast_query("(call_expression) @c", Some("python")),
+            ..Default::default()
+        };
+        let mut warnings = Vec::new();
+        find_uncompilable_ast_queries(&[trait_def], &[], &mut warnings);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("python:"));
+    }
+
+    #[test]
+    fn ast_query_compile_reaches_unless_and_composite_legs() {
+        // A broken query hidden in a suppression leg silently stops suppressing,
+        // which is a false positive — the walker must reach every query.
+        let trait_def = TraitDefinition {
+            id: "t".to_string(),
+            r#for: vec![FileType::Python],
+            r#if: ast_query("(call) @c", None),
+            unless: Some(vec![ast_query("(bogus_node) @c", None)]),
+            ..Default::default()
+        };
+        let composite = CompositeTrait {
+            id: "c".to_string(),
+            r#for: vec![FileType::Python],
+            all: Some(vec![ast_query("(also_bogus) @c", None)]),
+            ..Default::default()
+        };
+        let mut warnings = Vec::new();
+        find_uncompilable_ast_queries(&[trait_def], &[composite], &mut warnings);
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        assert!(warnings[0].contains("trait 't'"));
+        assert!(warnings[1].contains("composite 'c'"));
+    }
+
+    #[test]
+    fn tree_sitter_language_names_are_all_known_to_filefacts() {
+        // The name map is the bridge to filefacts' grammar registry; a typo
+        // here would silently turn the validator into a no-op for that type.
+        for file_type in FileType::all_variants() {
+            let Some(name) = file_type.tree_sitter_language_name() else {
+                continue;
+            };
+            assert!(
+                filefacts::validate_source_query(name, "(ERROR) @e").is_ok(),
+                "{file_type:?} maps to unknown grammar name {name:?}"
+            );
+        }
+    }
 
     #[test]
     fn regex_memory_skips_cheap_and_unparseable_patterns() {

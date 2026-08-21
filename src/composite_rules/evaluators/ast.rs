@@ -46,7 +46,13 @@ use streaming_iterator::StreamingIterator;
 /// compilation was tried and measured *wall-neutral* (the one-time compile
 /// warmup is small and amortized), so it's not worth the extra concurrency on
 /// this correctness-sensitive path.
-static QUERY_CACHE: LazyLock<RwLock<FxHashMap<(String, String), Arc<tree_sitter::Query>>>> =
+/// `None` records a query that failed to compile for this language: traits are
+/// written against several grammars, so a JS file sees a handful of foreign
+/// `query:` strings whose compile always errors. Without the negative entry
+/// those recompiled (serially, under the write lock) on every archive member —
+/// ~150 s CPU and a lock convoy on a 54k-member zip. Compilation is
+/// deterministic, so a cached failure is exactly as correct as retrying it.
+static QUERY_CACHE: LazyLock<RwLock<FxHashMap<(String, String), Option<Arc<tree_sitter::Query>>>>> =
     LazyLock::new(|| RwLock::new(FxHashMap::default()));
 
 /// Combined `query:` set for one (language, sorted query list). `pattern_to_query[i]`
@@ -56,8 +62,11 @@ struct CombinedAstQuery {
     pattern_to_query: Vec<usize>,
 }
 
-static COMBINED_QUERY_CACHE: LazyLock<RwLock<FxHashMap<(String, String), Arc<CombinedAstQuery>>>> =
-    LazyLock::new(|| RwLock::new(FxHashMap::default()));
+/// `None` records a combined source that failed to compile (or whose pattern
+/// count didn't line up): same negative-caching rationale as [`QUERY_CACHE`].
+static COMBINED_QUERY_CACHE: LazyLock<
+    RwLock<FxHashMap<(String, String), Option<Arc<CombinedAstQuery>>>>,
+> = LazyLock::new(|| RwLock::new(FxHashMap::default()));
 
 /// Must stay within tree-sitter's accepted `set_match_limit` range
 /// (`1..=65_536`). Keep the cap below the binding maximum so pathological
@@ -536,23 +545,16 @@ fn cached_ast_query(
         ast_query_language_key(lang, file_type),
         query_str.to_string(),
     );
-    let cached = QUERY_CACHE.read().get(&key).map(Arc::clone);
-    if let Some(q) = cached {
-        return Some(q);
+    if let Some(entry) = QUERY_CACHE.read().get(&key).cloned() {
+        return entry;
     }
     let mut cache = QUERY_CACHE.write();
-    if let Some(q) = cache.get(&key).map(Arc::clone) {
+    if let Some(entry) = cache.get(&key).cloned() {
         drop(cache);
-        return Some(q);
+        return entry;
     }
-    let compiled = match tree_sitter::Query::new(lang, query_str) {
-        Ok(q) => {
-            let arc = Arc::new(q);
-            cache.insert(key, Arc::clone(&arc));
-            Some(arc)
-        }
-        Err(_) => None,
-    };
+    let compiled = tree_sitter::Query::new(lang, query_str).ok().map(Arc::new);
+    cache.insert(key, compiled.clone());
     drop(cache);
     compiled
 }
@@ -596,33 +598,38 @@ pub(crate) fn batch_ast_queries(
         .join("\n");
     let lang_key = ast_query_language_key(lang, file_type);
     let cache_key = (lang_key, combined_source.clone());
-    let cached = COMBINED_QUERY_CACHE.read().get(&cache_key).map(Arc::clone);
-    let combined = if let Some(c) = cached {
-        c
+    let cached = COMBINED_QUERY_CACHE.read().get(&cache_key).cloned();
+    let combined = if let Some(entry) = cached {
+        entry?
     } else {
         let mut cache = COMBINED_QUERY_CACHE.write();
-        if let Some(c) = cache.get(&cache_key).map(Arc::clone) {
-            c
+        if let Some(entry) = cache.get(&cache_key).cloned() {
+            drop(cache);
+            entry?
         } else {
-            let Ok(query) = tree_sitter::Query::new(lang, &combined_source) else {
-                return None;
-            };
-            let mut pattern_to_query = Vec::new();
-            let mut expected = 0usize;
-            for (i, (_, q)) in compiling.iter().enumerate() {
-                let n = q.pattern_count();
-                expected = expected.saturating_add(n);
-                pattern_to_query.extend(std::iter::repeat_n(i, n));
-            }
-            if query.pattern_count() != expected {
-                return None;
-            }
-            let arc = Arc::new(CombinedAstQuery {
-                query: Arc::new(query),
-                pattern_to_query,
-            });
-            cache.insert(cache_key, Arc::clone(&arc));
-            arc
+            // Compile (or fail) once and record the outcome either way; a
+            // failure or pattern-count mismatch is deterministic for this
+            // combined source, so retrying it per member only burns CPU.
+            let entry = (|| {
+                let query = tree_sitter::Query::new(lang, &combined_source).ok()?;
+                let mut pattern_to_query = Vec::new();
+                let mut expected = 0usize;
+                for (i, (_, q)) in compiling.iter().enumerate() {
+                    let n = q.pattern_count();
+                    expected = expected.saturating_add(n);
+                    pattern_to_query.extend(std::iter::repeat_n(i, n));
+                }
+                if query.pattern_count() != expected {
+                    return None;
+                }
+                Some(Arc::new(CombinedAstQuery {
+                    query: Arc::new(query),
+                    pattern_to_query,
+                }))
+            })();
+            cache.insert(cache_key, entry.clone());
+            drop(cache);
+            entry?
         }
     };
 

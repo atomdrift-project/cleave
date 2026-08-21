@@ -955,7 +955,7 @@ impl TraitDefinition {
         let platform_match = super::types::platforms_intersect(&self.platforms, ctx.platforms);
 
         if !platform_match {
-            ctx.record_skip(SkipReason::PlatformMismatch {
+            ctx.record_skip(|| SkipReason::PlatformMismatch {
                 rule: self.platforms.clone(),
                 context: ctx.platforms.to_vec(),
             });
@@ -968,7 +968,7 @@ impl TraitDefinition {
             || self.arch.iter().any(|a| ctx.arch.contains(a));
 
         if !arch_match {
-            ctx.record_skip(SkipReason::ArchMismatch {
+            ctx.record_skip(|| SkipReason::ArchMismatch {
                 rule: self.arch.clone(),
                 context: ctx.arch.to_vec(),
             });
@@ -986,7 +986,7 @@ impl TraitDefinition {
                 && wants_archive_family);
 
         if !file_type_match {
-            ctx.record_skip(SkipReason::FileTypeMismatch {
+            ctx.record_skip(|| SkipReason::FileTypeMismatch {
                 rule: self.r#for.clone(),
                 context: ctx.file_type,
             });
@@ -998,7 +998,7 @@ impl TraitDefinition {
         if let Some(min) = self.size_min
             && file_size < min
         {
-            ctx.record_skip(SkipReason::SizeTooSmall {
+            ctx.record_skip(|| SkipReason::SizeTooSmall {
                 actual: file_size,
                 min,
             });
@@ -1007,7 +1007,7 @@ impl TraitDefinition {
         if let Some(max) = self.size_max
             && file_size > max
         {
-            ctx.record_skip(SkipReason::SizeTooLarge {
+            ctx.record_skip(|| SkipReason::SizeTooLarge {
                 actual: file_size,
                 max,
             });
@@ -1034,7 +1034,7 @@ impl TraitDefinition {
             if let Some(min) = self.entropy_min
                 && file_entropy < min
             {
-                ctx.record_skip(SkipReason::EntropyTooLow {
+                ctx.record_skip(|| SkipReason::EntropyTooLow {
                     actual: file_entropy,
                     min,
                 });
@@ -1043,7 +1043,7 @@ impl TraitDefinition {
             if let Some(max) = self.entropy_max
                 && file_entropy > max
             {
-                ctx.record_skip(SkipReason::EntropyTooHigh {
+                ctx.record_skip(|| SkipReason::EntropyTooHigh {
                     actual: file_entropy,
                     max,
                 });
@@ -1069,7 +1069,7 @@ impl TraitDefinition {
                     } else {
                         format!(" [matched: {}]", result.matched_trait_ids.join(", "))
                     };
-                    ctx.record_skip(SkipReason::UnlessConditionMatched {
+                    ctx.record_skip(|| SkipReason::UnlessConditionMatched {
                         condition_desc: format!("{:?}{}", condition, concrete),
                     });
                     return None;
@@ -1169,7 +1169,7 @@ impl TraitDefinition {
             if let Some(min) = self.count_min
                 && match_count < min
             {
-                ctx.record_skip(SkipReason::CountBelowMinimum {
+                ctx.record_skip(|| SkipReason::CountBelowMinimum {
                     actual: match_count,
                     min,
                 });
@@ -1180,7 +1180,7 @@ impl TraitDefinition {
             if let Some(max) = self.count_max
                 && match_count > max
             {
-                ctx.record_skip(SkipReason::CountAboveMaximum {
+                ctx.record_skip(|| SkipReason::CountAboveMaximum {
                     actual: match_count,
                     max,
                 });
@@ -1194,7 +1194,7 @@ impl TraitDefinition {
             {
                 let actual_density = (match_count as f64) / file_kb;
                 if actual_density < min_density {
-                    ctx.record_skip(SkipReason::DensityBelowMinimum {
+                    ctx.record_skip(|| SkipReason::DensityBelowMinimum {
                         actual: actual_density,
                         min: min_density,
                     });
@@ -1211,7 +1211,7 @@ impl TraitDefinition {
                     f64::INFINITY
                 };
                 if actual_density > max_density {
-                    ctx.record_skip(SkipReason::DensityAboveMaximum {
+                    ctx.record_skip(|| SkipReason::DensityAboveMaximum {
                         actual: actual_density,
                         max: max_density,
                     });
@@ -2314,6 +2314,23 @@ impl CompositeTrait {
     /// Evaluate this rule against the analysis context
     #[must_use]
     pub(crate) fn evaluate<'a>(&self, ctx: &EvaluationContext<'a>) -> Option<Finding> {
+        self.evaluate_with_gates(ctx, false)
+    }
+
+    /// [`Self::evaluate`] for callers that already applied the static
+    /// platform / file-type gates via `CapabilityMapper::composite_worklists`
+    /// — those two checks are skipped; the dynamic gates (arch, size,
+    /// conditions) still run. Must only be called with rules drawn from the
+    /// matching work list, or platform/file-type filtering is silently lost.
+    pub(crate) fn evaluate_pregated<'a>(&self, ctx: &EvaluationContext<'a>) -> Option<Finding> {
+        self.evaluate_with_gates(ctx, true)
+    }
+
+    fn evaluate_with_gates<'a>(
+        &self,
+        ctx: &EvaluationContext<'a>,
+        static_gates_prechecked: bool,
+    ) -> Option<Finding> {
         use super::debug::{DowngradeDebug, ProximityDebug, SkipReason};
 
         // A `crit: exception` composite may assemble a directory of exceptions, so
@@ -2332,10 +2349,10 @@ impl CompositeTrait {
         let _mcg = MatchCountGuard::set(self.needs_match_count());
 
         // Check platform match
-        let platform_match = super::types::platforms_intersect(&self.platforms, ctx.platforms);
-
-        if !platform_match {
-            ctx.record_skip(SkipReason::PlatformMismatch {
+        if !static_gates_prechecked
+            && !super::types::platforms_intersect(&self.platforms, ctx.platforms)
+        {
+            ctx.record_skip(|| SkipReason::PlatformMismatch {
                 rule: self.platforms.clone(),
                 context: ctx.platforms.to_vec(),
             });
@@ -2348,7 +2365,7 @@ impl CompositeTrait {
             || self.arch.iter().any(|a| ctx.arch.contains(a));
 
         if !arch_match {
-            ctx.record_skip(SkipReason::ArchMismatch {
+            ctx.record_skip(|| SkipReason::ArchMismatch {
                 rule: self.arch.clone(),
                 context: ctx.arch.to_vec(),
             });
@@ -2359,30 +2376,33 @@ impl CompositeTrait {
         // Container-level evaluation may collapse archive parents to FileType::All.
         // In that case, allow only archive-family rules to match rather than treating
         // All as a universal wildcard for every script/source/binary rule.
-        let wants_archive_family = self.r#for.iter().any(super::types::FileType::is_archive);
-        // A composite scoped to the whole input (`outer`) or to the enclosing
-        // archive (`archive`) explicitly intends to pool evidence across archive
-        // entries, so it must be allowed to run at the container/archive level
-        // even when its `for:` lists only leaf types (e.g. a browser-extension
-        // rule `for: [javascript]` whose evidence is split across the CRX's
-        // content script and its manifest/rules JSON). Without this, such a rule
-        // would only ever evaluate on a single leaf and never see the pooled
-        // cross-entry findings it was written for.
-        let pools_across_archive = matches!(
-            self.scope,
-            Some(Scope::Outer | Scope::Archive | Scope::Package)
-        );
-        let file_type_match = self.r#for.contains(&FileType::All)
-            || self.r#for.contains(&ctx.file_type)
-            || ((ctx.file_type == FileType::All || ctx.file_type.is_archive())
-                && (wants_archive_family || pools_across_archive));
+        // Skipped when the caller's work list already proved it for this type.
+        if !static_gates_prechecked {
+            let wants_archive_family = self.r#for.iter().any(super::types::FileType::is_archive);
+            // A composite scoped to the whole input (`outer`) or to the enclosing
+            // archive (`archive`) explicitly intends to pool evidence across archive
+            // entries, so it must be allowed to run at the container/archive level
+            // even when its `for:` lists only leaf types (e.g. a browser-extension
+            // rule `for: [javascript]` whose evidence is split across the CRX's
+            // content script and its manifest/rules JSON). Without this, such a rule
+            // would only ever evaluate on a single leaf and never see the pooled
+            // cross-entry findings it was written for.
+            let pools_across_archive = matches!(
+                self.scope,
+                Some(Scope::Outer | Scope::Archive | Scope::Package)
+            );
+            let file_type_match = self.r#for.contains(&FileType::All)
+                || self.r#for.contains(&ctx.file_type)
+                || ((ctx.file_type == FileType::All || ctx.file_type.is_archive())
+                    && (wants_archive_family || pools_across_archive));
 
-        if !file_type_match {
-            ctx.record_skip(SkipReason::FileTypeMismatch {
-                rule: self.r#for.clone(),
-                context: ctx.file_type,
-            });
-            return None;
+            if !file_type_match {
+                ctx.record_skip(|| SkipReason::FileTypeMismatch {
+                    rule: self.r#for.clone(),
+                    context: ctx.file_type,
+                });
+                return None;
+            }
         }
 
         // Check size constraints
@@ -2390,7 +2410,7 @@ impl CompositeTrait {
         if let Some(min) = self.size_min
             && file_size < min
         {
-            ctx.record_skip(SkipReason::SizeTooSmall {
+            ctx.record_skip(|| SkipReason::SizeTooSmall {
                 actual: file_size,
                 min,
             });
@@ -2399,7 +2419,7 @@ impl CompositeTrait {
         if let Some(max) = self.size_max
             && file_size > max
         {
-            ctx.record_skip(SkipReason::SizeTooLarge {
+            ctx.record_skip(|| SkipReason::SizeTooLarge {
                 actual: file_size,
                 max,
             });
@@ -2424,7 +2444,7 @@ impl CompositeTrait {
                     } else {
                         format!(" [matched: {}]", result.matched_trait_ids.join(", "))
                     };
-                    ctx.record_skip(SkipReason::UnlessConditionMatched {
+                    ctx.record_skip(|| SkipReason::UnlessConditionMatched {
                         condition_desc: format!("{:?}{}", condition, concrete),
                     });
                     return None;

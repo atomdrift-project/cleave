@@ -276,10 +276,7 @@ impl CapabilityMapper {
     /// evaluation only walks rules that can actually apply. Arch and size
     /// gates stay dynamic in `CompositeTrait::evaluate`. Must mirror the
     /// gates at the top of `CompositeTrait::evaluate` exactly.
-    pub(super) fn composite_worklists(
-        &self,
-        file_type: RuleFileType,
-    ) -> Arc<CompositeTypeLists> {
+    pub(super) fn composite_worklists(&self, file_type: RuleFileType) -> Arc<CompositeTypeLists> {
         use crate::composite_rules::Scope;
         if let Some(hit) = self.composite_worklists.read().get(&file_type) {
             return Arc::clone(hit);
@@ -410,7 +407,7 @@ impl CapabilityMapper {
     ///
     /// Callers about to fan a scan out across the rayon pool warm them here so the
     /// pool does not perform redundant concurrent builds. Correctness no longer
-    /// depends on this — see [`Self::match_indexes`]. Idempotent and cheap once built.
+    /// depends on this — see `Self::match_indexes`. Idempotent and cheap once built.
     pub fn warm_indexes(&self) {
         let _ = self.match_indexes();
     }

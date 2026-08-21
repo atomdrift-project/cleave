@@ -2743,9 +2743,14 @@ impl Condition {
         }
     }
 
-    /// Validate that condition can be compiled (for YARA/AST rules)
-    /// Call this at load time to catch syntax errors early
-    pub(crate) fn validate(&self, full: bool) -> Result<()> {
+    /// Validate that a condition is structurally well-formed and that its
+    /// inline YARA source compiles. Called at load time to catch authoring
+    /// errors early.
+    ///
+    /// Tree-sitter `query:` compilation is *not* checked here — that needs the
+    /// owning rule's `for:` list to know which grammars apply, so it lives in
+    /// the `ast-query-compile` validator.
+    pub(crate) fn validate(&self) -> Result<()> {
         match self {
             Condition::Yara { source, .. } => {
                 // Only validate syntax - add_source catches parse errors
@@ -2763,7 +2768,6 @@ impl Condition {
                 substr,
                 regex,
                 query,
-                language,
                 ..
             }) => {
                 // Validate mode: either (kind/node + exact/substr/regex) or query, not both
@@ -2801,15 +2805,10 @@ impl Condition {
                     ));
                 }
 
-                // Validate query if present — skip in fast mode (query compiles at eval time)
-                if full
-                    && let Some(query) = query
-                    && let Some(language) = language
-                {
-                    filefacts::validate_source_query(language, query)
-                        .map_err(|error| anyhow::anyhow!("{error}"))?;
-                }
-
+                // Query compilation is checked by the `ast-query-compile`
+                // validator, which knows the rule's `for:` list and so can pick
+                // the grammars to compile against even when `language:` is
+                // absent. Doing it here too would double-report.
                 Ok(())
             }
             Condition::Kv(KvQuery {
@@ -3856,7 +3855,7 @@ mod location_constraint_tests {
             section_offset_range: None,
             platforms: None,
         });
-        assert!(condition.validate(true).is_err());
+        assert!(condition.validate().is_err());
     }
 
     #[test]
@@ -3878,7 +3877,7 @@ mod location_constraint_tests {
             section_offset: None,
             section_offset_range: None,
         });
-        assert!(condition.validate(true).is_ok());
+        assert!(condition.validate().is_ok());
     }
 
     #[test]

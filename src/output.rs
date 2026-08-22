@@ -3310,6 +3310,7 @@ mod tests {
 
     fn finding_with(id: &str, crit: Criticality) -> Finding {
         Finding {
+            precomputed_spans: None,
             src: None,
             kind: FindingKind::Capability,
             trait_refs: vec![],
@@ -4234,6 +4235,7 @@ mod tests {
     fn test_aggregate_findings_different_directories() {
         let findings = vec![
             Finding {
+                precomputed_spans: None,
                 src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![],
@@ -4248,6 +4250,7 @@ mod tests {
                 source_file: None,
             },
             Finding {
+                precomputed_spans: None,
                 src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![],
@@ -4274,6 +4277,7 @@ mod tests {
     fn test_aggregate_findings_same_directory_keeps_highest_criticality() {
         let findings = vec![
             Finding {
+                precomputed_spans: None,
                 src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![],
@@ -4288,6 +4292,7 @@ mod tests {
                 source_file: None,
             },
             Finding {
+                precomputed_spans: None,
                 src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![],
@@ -4314,6 +4319,7 @@ mod tests {
     fn test_aggregate_findings_same_directory_keeps_highest_confidence() {
         let findings = vec![
             Finding {
+                precomputed_spans: None,
                 src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![],
@@ -4328,6 +4334,7 @@ mod tests {
                 source_file: None,
             },
             Finding {
+                precomputed_spans: None,
                 src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![],
@@ -4391,6 +4398,7 @@ mod tests {
     #[test]
     fn test_format_evidence_empty() {
         let trait_item = Finding {
+            precomputed_spans: None,
             src: None,
             kind: FindingKind::Capability,
             trait_refs: vec![],
@@ -4410,6 +4418,7 @@ mod tests {
     #[test]
     fn test_format_evidence_with_values() {
         let trait_item = Finding {
+            precomputed_spans: None,
             src: None,
             kind: FindingKind::Capability,
             trait_refs: vec![],
@@ -4453,6 +4462,7 @@ mod tests {
     #[test]
     fn test_format_terminal_with_capabilities() {
         let capabilities = vec![Finding {
+            precomputed_spans: None,
             src: None,
             kind: FindingKind::Capability,
             trait_refs: vec![],
@@ -4474,6 +4484,7 @@ mod tests {
     #[test]
     fn test_format_terminal_includes_third_party() {
         let findings = vec![Finding {
+            precomputed_spans: None,
             src: None,
             kind: FindingKind::Indicator,
             trait_refs: vec![],
@@ -4505,6 +4516,7 @@ mod tests {
     #[test]
     fn test_format_tiny_renders_location_less_finding_as_annotation() {
         let findings = vec![Finding {
+            precomputed_spans: None,
             src: None,
             kind: FindingKind::Capability,
             trait_refs: vec![],
@@ -4573,6 +4585,7 @@ mod tests {
     fn test_format_tiny_includes_baseline_and_composite_findings() {
         let findings = vec![
             Finding {
+                precomputed_spans: None,
                 src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![],
@@ -4587,6 +4600,7 @@ mod tests {
                 source_file: None,
             },
             Finding {
+                precomputed_spans: None,
                 src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![],
@@ -4607,6 +4621,7 @@ mod tests {
                 source_file: None,
             },
             Finding {
+                precomputed_spans: None,
                 src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![],
@@ -4621,6 +4636,7 @@ mod tests {
                 source_file: None,
             },
             Finding {
+                precomputed_spans: None,
                 src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![],
@@ -4637,6 +4653,7 @@ mod tests {
                 source_file: None,
             },
             Finding {
+                precomputed_spans: None,
                 src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![
@@ -4677,6 +4694,7 @@ mod tests {
         use crate::types::{ContextLine, Note};
         let report = create_test_report(
             vec![Finding {
+                precomputed_spans: None,
                 src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![],
@@ -4732,6 +4750,7 @@ mod tests {
         let report = create_test_report(
             vec![
                 Finding {
+                    precomputed_spans: None,
                     src: None,
                     kind: FindingKind::Capability,
                     trait_refs: vec![],
@@ -4746,6 +4765,7 @@ mod tests {
                     source_file: None,
                 },
                 Finding {
+                    precomputed_spans: None,
                     src: None,
                     kind: FindingKind::Capability,
                     trait_refs: vec![],
@@ -4810,6 +4830,7 @@ mod tests {
             conf: 0.9,
         };
         let finding = |id: &str| Finding {
+            precomputed_spans: None,
             src: None,
             kind: FindingKind::Capability,
             trait_refs: vec![],
@@ -4858,6 +4879,7 @@ mod tests {
         // shows at the offset).
         use crate::types::{ContextLine, Evidence, Note};
         let finding = |id: &str, crit: Criticality| Finding {
+            precomputed_spans: None,
             src: None,
             kind: FindingKind::Capability,
             trait_refs: vec![],
@@ -4915,6 +4937,7 @@ mod tests {
         use crate::types::{ContextLine, Note};
         let report = create_test_report(
             vec![Finding {
+                precomputed_spans: None,
                 src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![],

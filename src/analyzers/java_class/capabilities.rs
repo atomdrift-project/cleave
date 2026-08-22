@@ -353,6 +353,7 @@ impl super::JavaClassAnalyzer {
     ) {
         if !report.findings.iter().any(|c| c.id == id) {
             report.findings.push(Finding {
+                precomputed_spans: None,
                 src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![],

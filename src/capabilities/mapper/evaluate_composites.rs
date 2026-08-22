@@ -543,6 +543,7 @@ impl super::CapabilityMapper {
                 })?;
                 let trait_def = pt.trait_def;
                 Some(Finding {
+                    precomputed_spans: None,
                     src: None,
                     id: trait_def.shared_id(),
                     kind: FindingKind::Indicator,

@@ -214,6 +214,7 @@ pub(crate) fn finding_for(binary: &EmbeddedBinary, parent_path: &str) -> Finding
             | EmbeddedKind::Elf64Be
     ) && parent_path.ends_with(".ko");
     Finding {
+        precomputed_spans: None,
         src: None,
         kind: FindingKind::Capability,
         id: format!("binary/embedded/{}", binary.kind.as_str()).into(),

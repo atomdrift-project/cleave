@@ -189,6 +189,7 @@ impl super::CapabilityMapper {
             composite_id_index: std::sync::Arc::new(std::sync::OnceLock::new()),
             kv_sibling_basenames: std::sync::Arc::default(),
             trait_ref_index: std::sync::Arc::default(),
+            container_ref_index: std::sync::Arc::default(),
             doomed_skip: std::sync::Arc::default(),
             composite_worklists: std::sync::Arc::default(),
             trait_worklists: std::sync::Arc::default(),

@@ -811,6 +811,7 @@ where
             _ => types::Criticality::Baseline,
         };
         report.findings.push(types::Finding {
+            precomputed_spans: None,
             src: None,
             kind: types::FindingKind::Capability,
             trait_refs: vec![],
@@ -1951,6 +1952,7 @@ pub(crate) fn process_encoded_payloads(
         };
 
         report.findings.push(types::Finding {
+            precomputed_spans: None,
             src: None,
             id: format!(
                 "metadata/encoded-payload/{}",
@@ -1995,6 +1997,7 @@ pub(crate) fn process_encoded_payloads(
                 "Encoded payload analysis depth limit reached ({MAX_ANALYSIS_DEPTH}), skipping deeper analysis"
             );
             report.findings.push(types::Finding {
+                precomputed_spans: None,
                 src: None,
                 id: "objectives/anti-static/obfuscation/multi-layer/deep-nesting"
                     .to_string()

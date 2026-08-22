@@ -44,6 +44,7 @@ fn create_test_context<'a>(
 
 fn create_test_finding(id: &str) -> Finding {
     Finding {
+        precomputed_spans: None,
         src: None,
         id: id.to_string().into(),
         kind: FindingKind::Capability,

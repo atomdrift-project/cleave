@@ -55,6 +55,12 @@ mod jemalloc {
     static _rjem_malloc_conf: SyncPtr = SyncPtr(cleave::JEMALLOC_CONF.as_ptr());
 }
 
+#[cfg(feature = "memprofile-win")]
+mod memprofile_win_alloc {
+    #[global_allocator]
+    static GLOBAL: cleave::mem_profile::CountingAlloc = cleave::mem_profile::CountingAlloc;
+}
+
 mod cli_bootstrap;
 mod cli_dispatch;
 

@@ -255,6 +255,12 @@ jemalloc-prof = ["jemalloc", "tikv-jemallocator/profiling"]
 # attribute live-heap growth without symbol-based profiling. Diagnostic only.
 # Build with: cargo build --release --features memprofile
 memprofile = ["jemalloc"]
+# Windows-capable variant of `memprofile`: same phase-tagged accounting, but
+# the per-thread allocated/deallocated counters come from a counting
+# GlobalAlloc wrapper (see src/mem_profile.rs `win_imp`) instead of jemalloc.
+# The binary must install `cleave::mem_profile::CountingAlloc` as its global
+# allocator (cleave's main.rs does under this feature). Measurement-only.
+memprofile-win = []
 
 # jemalloc for unix-like systems (Linux, macOS).
 # Excluded on FreeBSD/DragonFlyBSD/NetBSD where jemalloc is already the system

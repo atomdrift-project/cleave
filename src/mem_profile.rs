@@ -141,10 +141,10 @@ pub fn report_scan_stats() {
     report();
 }
 
-#[cfg(feature = "memprofile")]
+#[cfg(all(feature = "memprofile", not(feature = "memprofile-win")))]
 pub use imp::{PhaseGuard, phase, report, start_sampler};
 
-#[cfg(feature = "memprofile")]
+#[cfg(all(feature = "memprofile", not(feature = "memprofile-win")))]
 mod imp {
     use super::Phase;
     use std::cell::RefCell;
@@ -300,10 +300,172 @@ mod imp {
     }
 }
 
-#[cfg(not(feature = "memprofile"))]
+#[cfg(feature = "memprofile-win")]
+pub use win_imp::{CountingAlloc, PhaseGuard, phase, report, start_sampler};
+
+/// Windows-capable backend: identical phase accounting to `imp`, with the
+/// per-thread byte counters maintained by [`win_imp::CountingAlloc`] — a
+/// forwarding `GlobalAlloc` the binary installs under `memprofile-win`.
+/// Peak resident comes from `memory_tracker::current_rss` on the sampler.
+#[cfg(feature = "memprofile-win")]
+mod win_imp {
+    use super::Phase;
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::cell::{Cell, RefCell};
+    use std::sync::atomic::{AtomicI64, Ordering};
+
+    thread_local! {
+        static TL_ALLOC: Cell<u64> = const { Cell::new(0) };
+        static TL_DEALLOC: Cell<u64> = const { Cell::new(0) };
+    }
+
+    /// Forwarding allocator that tallies per-thread allocated/deallocated
+    /// bytes. Forwards to the System allocator; the tally, not the allocator
+    /// brand, is what the measurement needs.
+    #[derive(Debug)]
+    pub struct CountingAlloc;
+
+    // SAFETY: pure forwarding to System plus thread-local counter bumps;
+    // a recursive first-touch during TLS init falls back to the untallied
+    // path via try_with.
+    unsafe impl GlobalAlloc for CountingAlloc {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            let _ = TL_ALLOC.try_with(|c| c.set(c.get() + layout.size() as u64));
+            unsafe { System.alloc(layout) }
+        }
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            let _ = TL_DEALLOC.try_with(|c| c.set(c.get() + layout.size() as u64));
+            unsafe { System.dealloc(ptr, layout) }
+        }
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+            let _ = TL_ALLOC.try_with(|c| c.set(c.get() + new_size as u64));
+            let _ = TL_DEALLOC.try_with(|c| c.set(c.get() + layout.size() as u64));
+            unsafe { System.realloc(ptr, layout, new_size) }
+        }
+        unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+            let _ = TL_ALLOC.try_with(|c| c.set(c.get() + layout.size() as u64));
+            unsafe { System.alloc_zeroed(layout) }
+        }
+    }
+
+    static NET_LIVE: [AtomicI64; Phase::COUNT] = [const { AtomicI64::new(0) }; Phase::COUNT];
+    static GROSS_ALLOC: [AtomicI64; Phase::COUNT] = [const { AtomicI64::new(0) }; Phase::COUNT];
+    static CURRENT_NET: AtomicI64 = AtomicI64::new(0);
+    static PEAK_NET: AtomicI64 = AtomicI64::new(0);
+    static PEAK_RESIDENT: AtomicI64 = AtomicI64::new(0);
+
+    struct Ctx {
+        phase: Phase,
+        last_alloc: u64,
+        last_dealloc: u64,
+    }
+
+    thread_local! {
+        static CTX: RefCell<Option<Ctx>> = const { RefCell::new(None) };
+    }
+
+    fn checkpoint(ctx: &mut Ctx) {
+        let a = TL_ALLOC.with(Cell::get);
+        let d = TL_DEALLOC.with(Cell::get);
+        let da = a.wrapping_sub(ctx.last_alloc) as i64;
+        let dd = d.wrapping_sub(ctx.last_dealloc) as i64;
+        let idx = ctx.phase as usize;
+        let delta = da - dd;
+        NET_LIVE[idx].fetch_add(delta, Ordering::Relaxed);
+        GROSS_ALLOC[idx].fetch_add(da, Ordering::Relaxed);
+        let cur = CURRENT_NET.fetch_add(delta, Ordering::Relaxed) + delta;
+        PEAK_NET.fetch_max(cur, Ordering::Relaxed);
+        ctx.last_alloc = a;
+        ctx.last_dealloc = d;
+    }
+
+    fn with_ctx<R>(f: impl FnOnce(&mut Ctx) -> R) -> Option<R> {
+        CTX.with(|cell| {
+            let mut slot = cell.borrow_mut();
+            if slot.is_none() {
+                *slot = Some(Ctx {
+                    phase: Phase::Other,
+                    last_alloc: TL_ALLOC.with(Cell::get),
+                    last_dealloc: TL_DEALLOC.with(Cell::get),
+                });
+            }
+            slot.as_mut().map(f)
+        })
+    }
+
+    /// Restores the previous phase when dropped.
+    #[derive(Debug)]
+    pub struct PhaseGuard {
+        prev: Phase,
+    }
+
+    /// Enter `p` for the lifetime of the returned guard; heap growth in the
+    /// window is charged to `p`.
+    #[must_use]
+    pub fn phase(p: Phase) -> PhaseGuard {
+        super::time_imp::enter(p);
+        let prev = with_ctx(|ctx| {
+            checkpoint(ctx);
+            let prev = ctx.phase;
+            ctx.phase = p;
+            prev
+        })
+        .unwrap_or(Phase::Other);
+        PhaseGuard { prev }
+    }
+
+    impl Drop for PhaseGuard {
+        fn drop(&mut self) {
+            super::time_imp::enter(self.prev);
+            with_ctx(|ctx| {
+                checkpoint(ctx);
+                ctx.phase = self.prev;
+            });
+        }
+    }
+
+    /// Spawn a wall-clock sampler recording peak process RSS.
+    pub fn start_sampler() {
+        let _ = std::thread::Builder::new()
+            .name("memprofile-sampler".into())
+            .spawn(|| {
+                loop {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                    if let Some(rss) = crate::memory_tracker::current_rss() {
+                        PEAK_RESIDENT.fetch_max(rss as i64, Ordering::Relaxed);
+                    }
+                }
+            });
+    }
+
+    /// Log the per-phase net-live and gross-allocation totals. Call once at
+    /// the end of a scan.
+    pub fn report() {
+        let mut total_net = 0_i64;
+        for i in 0..Phase::COUNT {
+            let net = NET_LIVE[i].load(Ordering::Relaxed);
+            let gross = GROSS_ALLOC[i].load(Ordering::Relaxed);
+            total_net += net;
+            tracing::info!(
+                phase = Phase::NAMES[i],
+                net_live_mb = net / (1024 * 1024),
+                gross_alloc_mb = gross / (1024 * 1024),
+                "memprofile phase totals"
+            );
+        }
+        tracing::info!(
+            total_net_live_mb = total_net / (1024 * 1024),
+            peak_net_live_mb = PEAK_NET.load(Ordering::Relaxed) / (1024 * 1024),
+            peak_resident_mb = PEAK_RESIDENT.load(Ordering::Relaxed) / (1024 * 1024),
+            "memprofile totals (net excludes startup rule engine)"
+        );
+    }
+}
+
+#[cfg(not(any(feature = "memprofile", feature = "memprofile-win")))]
 pub use noop::{PhaseGuard, phase, report, start_sampler};
 
-#[cfg(not(feature = "memprofile"))]
+#[cfg(not(any(feature = "memprofile", feature = "memprofile-win")))]
 mod noop {
     use super::Phase;
 

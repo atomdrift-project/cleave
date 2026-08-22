@@ -137,6 +137,79 @@ where
     }
 }
 
+/// Streaming sibling of [`par_filter_map_members`]: fold each produced value
+/// into the accumulator the moment its producer finishes, instead of
+/// collecting the whole batch first. On member-heavy windows the collect held
+/// every member's full pre-fold report co-resident until the serial fold loop
+/// drained it — several hundred MB to ~1 GB of pure peak on a big window
+/// (memprofile: 1.9 GB net-live in the analyze phase). With streaming, at
+/// most #threads reports are in flight. The fold is orders of magnitude
+/// cheaper than the analysis that feeds it, so lock contention is noise.
+fn par_filter_fold_members<T, U, F>(
+    items: &[T],
+    parallel: bool,
+    f: F,
+    mut fold: impl FnMut(U) + Send,
+) where
+    T: Sync,
+    U: Send,
+    F: Fn(&T) -> Option<U> + Sync + Send,
+{
+    const MEMBER_RED_ZONE: usize = 64 * 1024 * 1024;
+    const MEMBER_GROWN_STACK: usize = 128 * 1024 * 1024;
+    let f = |item: &T| stacker::maybe_grow(MEMBER_RED_ZONE, MEMBER_GROWN_STACK, || f(item));
+    if !parallel {
+        for u in items.iter().filter_map(f) {
+            fold(u);
+        }
+        return;
+    }
+    // Ordered streaming fold: results are folded in ITEM order (identical to
+    // the old collect-then-fold — member record order, rollup tie-breaks and
+    // YARA dedup order are all arrival-order-sensitive), but each result is
+    // folded as soon as the order allows instead of after the whole batch.
+    // Out-of-order completions buffer until their predecessors fold, so the
+    // co-resident set is bounded by completion skew (typically ~#threads)
+    // rather than the window size.
+    struct Ordered<U> {
+        next: usize,
+        pending: std::collections::BTreeMap<usize, Option<U>>,
+    }
+    let state = std::sync::Mutex::new(Ordered {
+        next: 0,
+        pending: std::collections::BTreeMap::new(),
+    });
+    let fold = std::sync::Mutex::new(fold);
+    items
+        .par_iter()
+        .enumerate()
+        .map(|(i, item)| (i, f(item)))
+        .for_each(|(i, u)| {
+            let mut st = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            st.pending.insert(i, u);
+            // Drain the contiguous prefix. Holding `state` while folding keeps
+            // drains single-threaded; producers only block here when they have
+            // nothing left to analyze anyway.
+            loop {
+                let next = st.next;
+                match st.pending.first_entry() {
+                    Some(entry) if *entry.key() == next => {
+                        let (_, u) = entry.remove_entry();
+                        st.next += 1;
+                        if let Some(u) = u {
+                            let mut g =
+                                fold.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                            g(u);
+                        }
+                    }
+                    _ => break,
+                }
+            }
+        });
+    // Filtered items (f returned None) still advance `next` via the None
+    // entries above, so every Some folds exactly once, in order.
+}
+
 /// Result of analyzing a single archive member, collected lock-free during par_iter
 /// and aggregated single-threaded afterwards.
 struct MemberAnalysisResult {
@@ -345,6 +418,7 @@ impl MemberAccumulator {
     /// Member order is preserved because callers fold windows sequentially and
     /// each window's `par_iter` collect is index-ordered.
     fn fold(&mut self, result: MemberAnalysisResult) {
+        let _aggregate = crate::mem_profile::phase(crate::mem_profile::Phase::Aggregate);
         self.collected_archive_entries.push(result.entry_metadata);
         let Some(file_report) = result.report else {
             return;
@@ -786,12 +860,12 @@ impl<'a: 'scope, 'scope> MemberWindow<'a, 'scope> {
             let mut acc = MemberAccumulator::default();
             while let Ok(batch) = rx.recv() {
                 let parallel = analyzer.members_run_parallel(batch.len());
-                let results = par_filter_map_members(&batch, parallel, |member| {
-                    analyzer.analyze_one_member(member, slow_log_label)
-                });
-                for result in results {
-                    acc.fold(result);
-                }
+                par_filter_fold_members(
+                    &batch,
+                    parallel,
+                    |member| analyzer.analyze_one_member(member, slow_log_label),
+                    |result| acc.fold(result),
+                );
             }
             acc
         });
@@ -833,12 +907,13 @@ impl<'a: 'scope, 'scope> MemberWindow<'a, 'scope> {
         let analyzer = self.analyzer;
         let label = self.slow_log_label;
         let parallel = analyzer.members_run_parallel(self.window.len());
-        let results = par_filter_map_members(&self.window, parallel, |member| {
-            analyzer.analyze_one_member(member, label)
-        });
-        for result in results {
-            self.acc.fold(result);
-        }
+        let acc = &mut self.acc;
+        par_filter_fold_members(
+            &self.window,
+            parallel,
+            |member| analyzer.analyze_one_member(member, label),
+            |result| acc.fold(result),
+        );
         self.window.clear();
         self.window_bytes = 0;
     }
@@ -2584,6 +2659,7 @@ impl ArchiveAnalyzer {
             member.container_kind.clone(),
         );
 
+        let _analyze = crate::mem_profile::phase(crate::mem_profile::Phase::Analyze);
         let member_report = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.analyze_extracted_member(
                 logical_path,

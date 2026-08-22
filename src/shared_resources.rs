@@ -81,6 +81,7 @@ pub(crate) fn trait_referenced_at_container_scope(id: &str) -> bool {
         .is_some_and(|m| m.container_ref_index().possibly_referenced(id))
 }
 
+
 /// Whether any loaded rule reads `<basename>::…` from a sibling file's
 /// flattened `kv`. False when no mapper is loaded: no rules, no readers.
 pub(crate) fn kv_sibling_basename_referenced(basename: &str) -> bool {

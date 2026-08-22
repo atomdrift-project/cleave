@@ -68,6 +68,19 @@ pub(crate) fn trait_possibly_referenced(id: &str) -> bool {
         .is_some_and(|m| m.trait_ref_index().possibly_referenced(id))
 }
 
+/// Whether a container-scope-capable rule (one whose `for:` includes `all`
+/// or an archive-family type) could reference finding id `id`. Container
+/// composite evaluation is the only rule pass that runs after the member
+/// fold, so this — not the full index above — is the evidence-retention
+/// oracle for fold-time member slimming. Conservative superset, same match
+/// modes as `eval_trait`.
+pub(crate) fn trait_referenced_at_container_scope(id: &str) -> bool {
+    let guard = CAPABILITY_MAPPER.read();
+    guard
+        .as_ref()
+        .is_some_and(|m| m.container_ref_index().possibly_referenced(id))
+}
+
 /// Whether any loaded rule reads `<basename>::…` from a sibling file's
 /// flattened `kv`. False when no mapper is loaded: no rules, no readers.
 pub(crate) fn kv_sibling_basename_referenced(basename: &str) -> bool {

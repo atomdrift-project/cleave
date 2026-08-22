@@ -455,6 +455,7 @@ mod tests {
 
     fn make_finding(id: &str, crit: Criticality) -> Finding {
         Finding {
+            precomputed_spans: None,
             src: None,
             id: id.to_string().into(),
             kind: FindingKind::Capability,

@@ -322,6 +322,7 @@ impl MachOAnalyzer {
             .load(std::sync::atomic::Ordering::SeqCst)
         {
             report.findings.push(Finding {
+                precomputed_spans: None,
                 src: None,
                 id: "metadata/strings-truncated".to_string().into(),
                 kind: FindingKind::Structural,
@@ -1020,6 +1021,7 @@ fn signature_finding(
     location: &str,
 ) -> Finding {
     Finding {
+        precomputed_spans: None,
         src: None,
         kind: FindingKind::Capability,
         trait_refs: vec![],
@@ -1622,6 +1624,7 @@ impl MachOAnalyzer {
         if plausible_macho_size && let Some(msg) = parse_failure {
             report.metadata.errors.push(msg.clone());
             report.findings.push(Finding {
+                precomputed_spans: None,
                 src: None,
                 kind: FindingKind::Structural,
                 id: "anti-analysis/malformed/macho-header".to_string().into(),

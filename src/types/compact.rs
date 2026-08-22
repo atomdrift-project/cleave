@@ -779,30 +779,9 @@ fn convert_file(file: &super::file_analysis::FileAnalysis, id: u32) -> CompactFi
     let mut trait_order: Vec<&str> = Vec::new();
 
     for finding in &file.findings {
-        // Collect local evidence spans: (offset, len) for evidence whose offset
-        // lives in this file's byte space (skip archive: member offsets).
-        let mut ev_spans: Vec<[u64; 2]> = finding
-            .evidence
-            .iter()
-            .filter(|e| {
-                !e.location
-                    .as_deref()
-                    .is_some_and(|l| l.starts_with("archive:"))
-            })
-            .filter_map(|e| {
-                e.byte_offset().map(|off| {
-                    // A decoded-layer match sets `match_len` to its encoded
-                    // source size; otherwise the span is the value's own length.
-                    let len = e.match_len.unwrap_or_else(|| {
-                        u64::from(u32::try_from(e.value.len()).unwrap_or(u32::MAX))
-                    });
-                    [off, len]
-                })
-            })
-            .collect();
-        ev_spans.sort_unstable_by_key(|s| s[0]);
-        ev_spans.dedup_by_key(|s| s[0]);
-        ev_spans.truncate(crate::types::traits_findings::MAX_EV_LOCS);
+        // Local evidence spans — precomputed at fold for compact-retained
+        // members, else derived here; one shared definition either way.
+        let ev_spans: Vec<[u64; 2]> = crate::types::traits_findings::finding_spans(finding);
 
         if let Some(existing) = trait_map.get_mut(finding.id.as_str()) {
             let new_crit = crit_to_int(finding.crit);
@@ -1419,6 +1398,7 @@ mod formula_tests {
 
     fn finding(id: &str, crit: Criticality, conf: f32) -> Finding {
         Finding {
+            precomputed_spans: None,
             src: None,
             id: id.to_string().into(),
             kind: FindingKind::Capability,

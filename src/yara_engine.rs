@@ -2662,6 +2662,7 @@ impl YaraEngine {
                 };
 
                 findings.push(Finding {
+                    precomputed_spans: None,
                     src: None,
                     kind: FindingKind::Capability,
                     trait_refs: vec![],

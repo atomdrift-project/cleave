@@ -1287,6 +1287,27 @@ impl AnalysisReport {
                 pending.entry(parent_idx).or_default().extend(
                     self.files[child_idx].findings.iter().cloned().map(|mut f| {
                         f.src.get_or_insert(child_id);
+                        // Precomputed emission spans are member-local byte
+                        // offsets; on the wrapper they are as meaningless as
+                        // `archive:`-located evidence (which the span
+                        // derivation filters out). Carrying them up unioned
+                        // child offsets into the wrapper's spans and evicted
+                        // its own under the span cap.
+                        f.precomputed_spans = None;
+                        // Same reasoning for raw evidence: stamp inherited
+                        // locations `archive:`-prefixed (as the fold rollup
+                        // does), so the wrapper's span derivation skips them
+                        // instead of emitting child byte offsets as wrapper
+                        // spans.
+                        for ev in &mut f.evidence {
+                            match &ev.location {
+                                None => ev.location = Some("archive:member".to_string()),
+                                Some(loc) if !loc.starts_with("archive:") => {
+                                    ev.location = Some(format!("archive:member:{loc}"));
+                                }
+                                _ => {}
+                            }
+                        }
                         f
                     }),
                 );
@@ -1665,6 +1686,7 @@ impl AnalysisReport {
             return; // already linked (e.g. a re-finalize)
         }
         file.findings.push(Finding {
+            precomputed_spans: None,
             id: id.to_string().into(),
             kind,
             desc: desc.into(),
@@ -2219,6 +2241,19 @@ fn merge_finding(existing: &mut Finding, new: Finding) {
         existing.conf = new.conf;
     }
     existing.match_count = existing.match_count.saturating_add(new.match_count);
+    // If either side carries precomputed emission spans (compact-retained
+    // member whose evidence strings were released at fold), the merged
+    // finding's spans are the union under the same offset-dedup rules the
+    // convert-time derivation applies — otherwise merged evidence would be
+    // silently dropped from the emitted spans.
+    if existing.precomputed_spans.is_some() || new.precomputed_spans.is_some() {
+        let mut spans = crate::types::traits_findings::finding_spans(existing);
+        spans.extend(crate::types::traits_findings::finding_spans(&new));
+        spans.sort_unstable_by_key(|s| s[0]);
+        spans.dedup_by_key(|s| s[0]);
+        spans.truncate(crate::types::traits_findings::MAX_EV_LOCS);
+        existing.precomputed_spans = Some(spans);
+    }
     existing.evidence.extend(new.evidence);
     for r in new.trait_refs {
         if !existing.trait_refs.contains(&r) {
@@ -2435,6 +2470,7 @@ mod tests {
 
     fn test_finding(id: &str, crit: Criticality) -> Finding {
         Finding {
+            precomputed_spans: None,
             src: None,
             id: id.to_string().into(),
             kind: FindingKind::Capability,

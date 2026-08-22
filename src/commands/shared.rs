@@ -132,6 +132,7 @@ pub(crate) fn process_yara_result(
             _ => types::Criticality::Baseline,
         };
         report.findings.push(types::Finding {
+            precomputed_spans: None,
             src: None,
             kind: types::FindingKind::Capability,
             trait_refs: vec![],

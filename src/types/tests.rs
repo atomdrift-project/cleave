@@ -208,6 +208,7 @@ fn test_finding_constructor() {
     }];
 
     let finding = Finding {
+        precomputed_spans: None,
         src: None,
         id: "net/socket".to_string().into(),
         kind: FindingKind::Capability,

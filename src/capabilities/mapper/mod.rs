@@ -141,6 +141,14 @@ pub struct CapabilityMapper {
     /// once on first use. The member-fold early strip keeps any finding this
     /// index can reach.
     pub(super) trait_ref_index: Arc<OnceLock<TraitRefIndex>>,
+    /// Like `trait_ref_index`, but restricted to rules that can evaluate at
+    /// container (archive) scope — `for:` containing `all` or any
+    /// archive-family type. Container-scope evaluation is the only rule pass
+    /// that runs AFTER the member fold, over the folded member findings; a
+    /// folded member finding this index can reach must keep its evidence
+    /// (offsets feed `near_bytes`, values/counts feed conditions). Everything
+    /// else is safe to slim at fold.
+    pub(super) container_ref_index: Arc<OnceLock<TraitRefIndex>>,
     /// Skip `eval_raw` for a component/baseline whose every file-scope
     /// consumer composite is already unsatisfiable on this file.
     pub(super) doomed_skip: Arc<OnceLock<doomed_skip::DoomedSkipIndex>>,
@@ -526,6 +534,48 @@ impl CapabilityMapper {
                 }
             }
             for r in &self.composite_rules {
+                for c in r
+                    .all
+                    .iter()
+                    .flatten()
+                    .chain(r.any.iter().flatten())
+                    .chain(r.unless.iter().flatten())
+                {
+                    c.collect_trait_refs(&mut raw);
+                }
+                if let Some(d) = &r.downgrade {
+                    d.collect_trait_refs(&mut raw);
+                }
+            }
+            TraitRefIndex::build(raw)
+        })
+    }
+
+    /// The referenced-trait index restricted to container-scope-capable rules.
+    /// See the `container_ref_index` field doc.
+    pub(crate) fn container_ref_index(&self) -> &TraitRefIndex {
+        self.container_ref_index.get_or_init(|| {
+            use crate::composite_rules::FileType;
+            let container_capable = |r#for: &[FileType]| {
+                r#for.contains(&FileType::All) || r#for.iter().any(FileType::is_archive)
+            };
+            let mut raw = std::collections::BTreeSet::new();
+            for t in &self.trait_definitions {
+                if !container_capable(&t.r#for) {
+                    continue;
+                }
+                t.r#if.collect_trait_refs(&mut raw);
+                for c in t.unless.iter().flatten() {
+                    c.collect_trait_refs(&mut raw);
+                }
+                if let Some(d) = &t.downgrade {
+                    d.collect_trait_refs(&mut raw);
+                }
+            }
+            for r in &self.composite_rules {
+                if !container_capable(&r.r#for) {
+                    continue;
+                }
                 for c in r
                     .all
                     .iter()

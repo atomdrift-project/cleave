@@ -272,6 +272,56 @@ fn archive_entry_json(entry: &ArchiveEntry) -> serde_json::Value {
 
 /// Streaming accumulator for per-member analysis results.
 ///
+/// Rebuild a folded member's retained record into fresh allocations, dropping
+/// the analysis-time graph whole (see the fold-site comment for why in-place
+/// field releases do not reduce peak RSS). The retained slice is everything
+/// the finalize passes and compact emission still read:
+/// - findings: slim clones — id/desc/mbc/attack are shared `Istr`s (refcount
+///   clones), `trait_refs` kept (end-strip referenced union + per-file
+///   summary scoring), evidence replaced by precomputed emission spans
+///   (derived through the same dedup pipeline finalize would apply);
+///   evidence appended later (inheritance, aggregate attribution) unions in
+///   via `finding_spans`.
+/// - context lines (note_location + emission), precompacted facts, folded kv,
+///   filefacts references (link_flagged_references), identity/scalars.
+fn rebuild_slim_member(mut file: FileAnalysis) -> FileAnalysis {
+    for finding in &mut file.findings {
+        // A finding some loaded rule references stays full: container-scope
+        // composite evaluation runs AFTER the fold over the folded member
+        // findings, and offset conditions (`near_bytes`) and value conditions
+        // read this evidence. Slimming one was measured to silently kill a
+        // container proximity composite (gist-api deaddrop on a tar.gz),
+        // whose death then cascaded through the end-strip's `referenced` set
+        // and deleted the component findings from every member. The oracle is
+        // the TraitRefIndex restricted to container-scope-capable rules — the
+        // full index exempted most member findings and gave back the entire
+        // memory win (member components exist largely to feed composites).
+        if crate::shared_resources::trait_referenced_at_container_scope(&finding.id) {
+            continue;
+        }
+        if finding.precomputed_spans.is_none() {
+            // Materialize emission spans through the finalize-time evidence
+            // pipeline (tuple-dedup + cap) before dropping the evidence.
+            if finding.evidence.len() > 1 {
+                let ev = std::mem::take(&mut finding.evidence);
+                finding.evidence = crate::types::traits_findings::deduplicate_evidence(ev);
+                finding
+                    .evidence
+                    .truncate(crate::types::traits_findings::MAX_EVIDENCE_PER_TRAIT);
+            }
+            finding.precomputed_spans =
+                Some(crate::types::traits_findings::finding_spans(finding));
+        }
+        finding.evidence = Vec::new();
+    }
+    // One deep clone of the now-slim graph into fresh allocations, then drop
+    // the original: its pages — shared with the analysis-time evidence and
+    // strings freed above — empty out and purge.
+    let slim = file.clone();
+    drop(file);
+    slim
+}
+
 /// Folds each member's result into deduplicated aggregate state and drops the
 /// (large) member `AnalysisReport` immediately. This lets an archive's members
 /// be analyzed in bounded byte-windows without ever holding every member's
@@ -356,17 +406,67 @@ impl MemberAccumulator {
         // `jsonkeeper.com` URL decoded from a member) with member-relative
         // offsets meaningless in the archive's byte space. Only traits roll up
         // to the parent — carrying their member `from`.
+        // Compact-retained members are REBUILT into fresh allocations
+        // (`rebuild_slim_member`) and the original analysis graph dropped
+        // whole — in-place field releases were measured a no-op for peak RSS
+        // because a member's eval-time allocations interleave on shared
+        // allocator pages. Runs AFTER the rollup loop above (the rollup
+        // representatives clone member evidence and keep the full form).
+        // Wrapper nodes — members that contain the nested files below — stay
+        // full: finalize's aggregate attribution rewrites `archive:`-located
+        // evidence on wrappers after the fold, and slimming them froze
+        // pre-rewrite spans (measured: 223 findings lost spans on the
+        // 54k-member manifest). Wrappers are rare, so keeping them costs
+        // little.
+        if crate::shared_resources::compact_member_retention() && nested_files.is_empty() {
+            file_entry = rebuild_slim_member(file_entry);
+        }
         self.collected_files.push(file_entry);
         self.collected_archive_entries
             .extend(archive_contents.into_iter().map(|mut entry| {
                 entry.path = rebase_nested_archive_entry_path(&result.entry_path, &entry.path);
                 entry
             }));
+        let mut nested: Vec<FileAnalysis> = Vec::with_capacity(nested_files.len());
         for mut nested_file in nested_files {
             nested_file.path = rebase_nested_file_path(&result.entry_path, &nested_file.path);
             nested_file.depth += 1;
-            self.collected_files.push(nested_file);
+            nested.push(nested_file);
         }
+        if crate::shared_resources::compact_member_retention() {
+            // A record stays full when finalize still re-reads its evidence:
+            // - wrappers (another path extends this one at a `!` or `##`
+            //   boundary): aggregate attribution rewrites their evidence, and
+            //   `merge_encoding_layers` merges layer findings into the parent
+            //   and RE-EVALUATES composites over the merged findings — `near`
+            //   offsets and `unless:` suppressions both read evidence there
+            //   (measured on a vsix: slimming the layer parent flipped crit-3
+            //   composites in both directions).
+            // - decoded-layer records themselves (`##` in the path): their
+            //   findings are what that merge copies into the parent.
+            let exempt: Vec<bool> = (0..nested.len())
+                .map(|i| {
+                    let path = &nested[i].path;
+                    if path.contains(crate::types::file_analysis::ENCODING_DELIMITER)
+                    {
+                        return true;
+                    }
+                    nested.iter().any(|f| {
+                        f.path.len() > path.len()
+                            && f.path.starts_with(path.as_str())
+                            && (f.path.as_bytes().get(path.len()) == Some(&b'!')
+                                || f.path.as_bytes()[path.len()..].starts_with(b"##"))
+                    })
+                })
+                .collect();
+            for (i, is_exempt) in exempt.into_iter().enumerate() {
+                if !is_exempt {
+                    let f = std::mem::take(&mut nested[i]);
+                    nested[i] = rebuild_slim_member(f);
+                }
+            }
+        }
+        self.collected_files.extend(nested);
     }
 
     /// Merge another accumulator's state after this one's — the pipelined

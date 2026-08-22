@@ -768,6 +768,7 @@ impl OfficeAnalyzer {
             let module_names: Vec<&str> = vba_modules.iter().map(|m| m.name.as_str()).collect();
 
             findings.push(Finding {
+                precomputed_spans: None,
                 src: None,
                 id: "metadata/format/macro::ole2-has-vba".to_string().into(),
                 kind: FindingKind::Structural,
@@ -808,6 +809,7 @@ impl OfficeAnalyzer {
                 continue;
             }
             findings.push(Finding {
+                precomputed_spans: None,
                 src: None,
                 id: "objectives/command-and-control/dropper/payload::embedded-executable"
                     .to_string()
@@ -845,6 +847,7 @@ impl OfficeAnalyzer {
                 )
             };
             findings.push(Finding {
+                precomputed_spans: None,
                 src: None,
                 id: "metadata/format/embedded::ole10-native-object"
                     .to_string()
@@ -865,6 +868,7 @@ impl OfficeAnalyzer {
         // Dangerous CLSIDs — suspicious structural indicator (known exploit vectors)
         for clsid_match in &doc.dangerous_clsids {
             findings.push(Finding {
+                precomputed_spans: None,
                 src: None,
                 id: "metadata/format/clsid::dangerous-clsid".to_string().into(),
                 kind: FindingKind::Structural,
@@ -1007,6 +1011,7 @@ impl OfficeAnalyzer {
             let module_names: Vec<&str> = vba_modules.iter().map(|m| m.name.as_str()).collect();
 
             findings.push(Finding {
+                precomputed_spans: None,
                 src: None,
                 id: "metadata/format/macro::ooxml-has-vba".to_string().into(),
                 kind: FindingKind::Structural,
@@ -1032,6 +1037,7 @@ impl OfficeAnalyzer {
             if doc.doc_subtype == ooxml::OoxmlSubtype::Word {
                 has_word_vba_doc = true;
                 findings.push(Finding {
+                    precomputed_spans: None,
                     src: None,
                     id: "metadata/document/office/markup::ooxml-word-vba-document"
                         .to_string()
@@ -1181,6 +1187,7 @@ impl OfficeAnalyzer {
             if vba_surface.contains("AcceptConflictAndAdvance") {
                 has_accept_conflict = true;
                 findings.push(Finding {
+                    precomputed_spans: None,
                     src: None,
                     id: "well-known/malware/trojan/trickbot::accept-conflict-and-advance-marker"
                         .to_string()
@@ -1218,6 +1225,7 @@ impl OfficeAnalyzer {
         let has_ip_list = endpoints.len() >= 3;
         if endpoints.len() >= 3 {
             findings.push(Finding {
+                precomputed_spans: None,
                 src: None,
                 id:
                     "objectives/command-and-control/infrastructure/ip::hardcoded-ipv4-port-list-any"
@@ -1256,6 +1264,7 @@ impl OfficeAnalyzer {
             && behavior_count >= 2
         {
             findings.push(Finding {
+                precomputed_spans: None,
                 src: None,
                 id: "well-known/malware/trojan/trickbot::concealed-word-vba-loader"
                     .to_string()
@@ -1296,6 +1305,7 @@ impl OfficeAnalyzer {
             };
 
             findings.push(Finding {
+                precomputed_spans: None,
                 src: None,
                 id: "objectives/execution/interpreter::template-injection"
                     .to_string()
@@ -1326,6 +1336,7 @@ impl OfficeAnalyzer {
         // DDE links — objective (execution via DDE)
         for dde in &doc.dde_links {
             findings.push(Finding {
+                precomputed_spans: None,
                 src: None,
                 id: "objectives/execution/interpreter::dde-execution"
                     .to_string()
@@ -1347,6 +1358,7 @@ impl OfficeAnalyzer {
         // needs loader or execution behavior from companion traits.
         for entry in &doc.embedded_executables {
             findings.push(Finding {
+                precomputed_spans: None,
                 src: None,
                 id: "objectives/command-and-control/dropper/payload::embedded-executable"
                     .to_string()
@@ -1565,6 +1577,7 @@ fn add_metadata_findings(meta: &ole2::DocumentMetadata, findings: &mut Vec<Findi
 
     if !meta_parts.is_empty() {
         findings.push(Finding {
+            precomputed_spans: None,
             src: None,
             id: "metadata/format/properties::doc-properties"
                 .to_string()

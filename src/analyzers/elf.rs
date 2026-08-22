@@ -290,6 +290,7 @@ impl ElfAnalyzer {
                 const SQUASHFS_BE: &[u8] = &[0x68, 0x73, 0x71, 0x73];
                 if overlay.starts_with(SQUASHFS_LE) || overlay.starts_with(SQUASHFS_BE) {
                     report.findings.push(crate::types::Finding {
+                        precomputed_spans: None,
                         src: None,
                         id: "file/sfx/appimage".to_string().into(),
                         kind: crate::types::FindingKind::Structural,
@@ -404,6 +405,7 @@ impl ElfAnalyzer {
                 }
             }
             report.findings.push(Finding {
+                precomputed_spans: None,
                 src: None,
                 kind: FindingKind::Structural,
                 id: "anti-analysis/malformed/elf-header".to_string().into(),
@@ -555,6 +557,7 @@ impl ElfAnalyzer {
             .load(std::sync::atomic::Ordering::SeqCst)
         {
             report.findings.push(Finding {
+                precomputed_spans: None,
                 src: None,
                 id: "metadata/strings-truncated".to_string().into(),
                 kind: FindingKind::Structural,
@@ -595,6 +598,7 @@ impl ElfAnalyzer {
         // than a notable deviation (unlike PE / Mach-O where signing is expected).
         if !is_core_dump {
             report.findings.push(Finding {
+                precomputed_spans: None,
                 src: None,
                 id: "metadata/unsigned".to_string().into(),
                 kind: FindingKind::Capability,

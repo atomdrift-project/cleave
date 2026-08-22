@@ -28,10 +28,13 @@ const BUDGET_FRACTION: f64 = 0.75;
 /// member-heavy archives measured 18-82x compressed size end-to-end
 /// (decompressed members + retained findings + analysis transients), so a
 /// 34-archive mix ran every whale concurrently and peaked at 15 GB on a
-/// 31 GB box. 48 sits in that measured band; with it the same mix peaked at
-/// 11.6 GB with wall unchanged (the scan is CPU-bound, so admitting fewer
-/// whales at once reorders work without starving the pool — 96 cost +8%
-/// wall, 128 starved it). Deliberately static: the gate's live
+/// 31 GB box. 64 sits in that measured band; with it the same mix peaked at
+/// 10.5-11.0 GB with wall unchanged-to-better (the scan is CPU-bound, so
+/// admitting fewer whales at once reorders work without starving the pool).
+/// Measured frontier after compact member retention slimmed the whales:
+/// 48 = 12.5-13.8 GB, 64 = 10.5-11.0 GB wall-neutral, 80 and 96 are worse on
+/// BOTH axes (over-serialization pushes whales into worse overlap late in
+/// the run). Deliberately static: the gate's live
 /// available-memory floor and RAM-fraction budget already adapt to the box,
 /// and no per-archive estimator can be accurate before the archive is
 /// opened — overestimating merely serializes whales (mild, bounded by the
@@ -44,7 +47,7 @@ fn expansion() -> u64 {
             .ok()
             .and_then(|s| s.parse().ok())
             .filter(|&n| n > 0)
-            .unwrap_or(48)
+            .unwrap_or(64)
     })
 }
 /// Floor so thousands of tiny files still register aggregate pressure.

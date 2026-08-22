@@ -771,6 +771,7 @@ fn lang_name(file_type: &FileType) -> &'static str {
 /// serializer; the offset lives in `location`.
 fn generate_embedded_language_trait(detected_lang: &FileType, offset: u64, value: &str) -> Finding {
     Finding {
+        precomputed_spans: None,
         src: None,
         id: format!("metadata/lang/embedded::{}", lang_name(detected_lang)).into(),
         kind: crate::types::FindingKind::Capability,
@@ -801,6 +802,7 @@ fn generate_encoded_layer_traits(encoding_chain: &[String], offset: u64) -> Vec<
     encoding_chain
         .iter()
         .map(|encoding| Finding {
+            precomputed_spans: None,
             src: None,
             id: format!("metadata/lang/encoded/{encoding}").into(),
             kind: crate::types::FindingKind::Capability,
@@ -1152,6 +1154,7 @@ fn detect_base64_binary(
     let sha256 = crate::analyzers::utils::calculate_sha256(&decoded);
 
     let finding = Finding {
+        precomputed_spans: None,
         src: None,
         kind: FindingKind::Capability,
         id: format!("binary/embedded/base64-{}", inner_type).into(),
@@ -1361,6 +1364,7 @@ fn host_may_contain_script_obfuscation(content: &str) -> bool {
 
 fn encoded_powershell_finding(parent_path: &str, decoded_len: usize, offset: u64) -> Finding {
     Finding {
+        precomputed_spans: None,
         src: None,
         kind: FindingKind::Capability,
         id: "binary/embedded/base64-powershell".to_string().into(),

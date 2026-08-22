@@ -358,6 +358,7 @@ impl super::CapabilityMapper {
                     && !evidence.is_empty()
                 {
                     return Some(Finding {
+                        precomputed_spans: None,
                         src: None,
                         id: trait_def.shared_id(),
                         desc: trait_def.shared_desc(),

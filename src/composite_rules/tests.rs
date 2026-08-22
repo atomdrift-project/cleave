@@ -359,6 +359,7 @@ fn suspicious_composite_directory_ref_drops_exception_keeps_notable() {
     };
     let mut report = AnalysisReport::new(target);
     let mk = |id: &str, crit: Criticality| Finding {
+        precomputed_spans: None,
         src: None,
         id: id.to_string().into(),
         kind: FindingKind::Capability,
@@ -673,6 +674,7 @@ fn test_unless_directive_skips_trait() {
 
     // Add a finding that would trigger unless condition
     let findings = vec![Finding {
+        precomputed_spans: None,
         src: None,
         id: "file/signed/apple".to_string().into(),
         kind: FindingKind::Capability,
@@ -794,6 +796,7 @@ fn test_downgrade_to_notable() {
 
     // Add finding for downgrade condition
     let findings = vec![Finding {
+        precomputed_spans: None,
         src: None,
         id: "file/type/shell-script".to_string().into(),
         kind: FindingKind::Capability,
@@ -875,6 +878,7 @@ fn test_downgrade_one_level() {
     let (report, data) = create_test_context();
 
     let findings = vec![Finding {
+        precomputed_spans: None,
         src: None,
         id: "file/path/test-fixtures".to_string().into(),
         kind: FindingKind::Capability,
@@ -1012,6 +1016,7 @@ fn test_downgrade_from_hostile() {
 
     // Add finding that will trigger downgrade
     let findings = vec![Finding {
+        precomputed_spans: None,
         src: None,
         id: "file/type/shell-script".to_string().into(),
         kind: FindingKind::Capability,
@@ -1109,6 +1114,7 @@ fn test_all_three_directives_combined() {
 
     // Add finding for downgrade
     let findings = vec![Finding {
+        precomputed_spans: None,
         src: None,
         id: "file/type/test".to_string().into(),
         kind: FindingKind::Capability,
@@ -1986,6 +1992,7 @@ fn test_composite_unless_skips_rule() {
 
     // Add a finding that would trigger the unless condition
     let findings = vec![Finding {
+        precomputed_spans: None,
         src: None,
         id: "file/signed/apple".to_string().into(),
         kind: FindingKind::Capability,
@@ -3018,6 +3025,7 @@ fn test_all_and_any_without_needs_requires_one_any() {
 /// Each finding gets a unique value (the id) to prevent deduplication during evidence merging.
 fn finding_at_line(id: &str, line: usize, col: usize) -> Finding {
     Finding {
+        precomputed_spans: None,
         src: None,
         id: id.to_string().into(),
         kind: FindingKind::Capability,
@@ -3043,6 +3051,7 @@ fn finding_at_line(id: &str, line: usize, col: usize) -> Finding {
 /// Each finding gets a unique value (the id) to prevent deduplication during evidence merging.
 fn finding_at_offset(id: &str, offset: u64) -> Finding {
     Finding {
+        precomputed_spans: None,
         src: None,
         id: id.to_string().into(),
         kind: FindingKind::Capability,
@@ -3544,6 +3553,7 @@ fn test_near_lines_no_location_evidence_fails() {
     let data = b"some content\n";
     let findings = vec![
         Finding {
+            precomputed_spans: None,
             src: None,
             id: "trait-a".to_string().into(),
             kind: FindingKind::Capability,
@@ -3564,6 +3574,7 @@ fn test_near_lines_no_location_evidence_fails() {
             source_file: None,
         },
         Finding {
+            precomputed_spans: None,
             src: None,
             id: "trait-b".to_string().into(),
             kind: FindingKind::Capability,
@@ -3602,6 +3613,7 @@ fn test_near_lines_hex_offset_location() {
     let findings = vec![
         // Hex offset 0x05 = byte 5 = start of line 2
         Finding {
+            precomputed_spans: None,
             src: None,
             id: "trait-a".to_string().into(),
             kind: FindingKind::Capability,
@@ -3623,6 +3635,7 @@ fn test_near_lines_hex_offset_location() {
         },
         // Hex offset 0x0f = byte 15 = start of line 4
         Finding {
+            precomputed_spans: None,
             src: None,
             id: "trait-b".to_string().into(),
             kind: FindingKind::Capability,
@@ -3807,6 +3820,7 @@ fn test_downgrade_combined_all_and_none_blocked_by_none() {
 
     // Add finding for none: condition — this should BLOCK the downgrade
     let findings = vec![Finding {
+        precomputed_spans: None,
         src: None,
         id: "file/type/binary".to_string().into(),
         kind: FindingKind::Capability,
@@ -4001,6 +4015,7 @@ fn test_downgrade_needs_threshold_not_met() {
 
     // Only one finding present (socket)
     let findings = vec![Finding {
+        precomputed_spans: None,
         src: None,
         id: "test/socket".to_string().into(),
         kind: FindingKind::Capability,
@@ -4091,6 +4106,7 @@ fn test_downgrade_needs_threshold_met() {
     // Two findings present
     let findings = vec![
         Finding {
+            precomputed_spans: None,
             src: None,
             id: "test/socket".to_string().into(),
             kind: FindingKind::Capability,
@@ -4105,6 +4121,7 @@ fn test_downgrade_needs_threshold_met() {
             source_file: None,
         },
         Finding {
+            precomputed_spans: None,
             src: None,
             id: "test/connect".to_string().into(),
             kind: FindingKind::Capability,
@@ -4206,6 +4223,7 @@ fn test_composite_downgrade_all_match() {
     // Provide findings that satisfy both the rule's `all` and the downgrade's `all`
     let findings = vec![
         Finding {
+            precomputed_spans: None,
             src: None,
             id: "file/type/shell-script".to_string().into(),
             kind: FindingKind::Capability,
@@ -4220,6 +4238,7 @@ fn test_composite_downgrade_all_match() {
             source_file: None,
         },
         Finding {
+            precomputed_spans: None,
             src: None,
             id: "file/path/test-fixtures".to_string().into(),
             kind: FindingKind::Capability,
@@ -4308,6 +4327,7 @@ fn test_composite_downgrade_none_blocks() {
 
     // Provide a finding that matches the downgrade.none condition — should block downgrade
     let findings = vec![Finding {
+        precomputed_spans: None,
         src: None,
         id: "file/signed/apple".to_string().into(),
         kind: FindingKind::Capability,
@@ -4391,6 +4411,7 @@ fn test_composite_downgrade_none_blocks() {
 /// Helper: build a Finding with multiple evidence items at different line locations.
 fn finding_at_lines(id: &str, lines: &[(usize, usize)]) -> Finding {
     Finding {
+        precomputed_spans: None,
         src: None,
         id: id.to_string().into(),
         kind: FindingKind::Capability,
@@ -4699,6 +4720,7 @@ fn test_proximity_filters_evidence_to_window() {
 #[cfg(test)]
 fn member_finding(id: &str) -> Finding {
     Finding {
+        precomputed_spans: None,
         src: None,
         id: id.to_string().into(),
         kind: FindingKind::Capability,

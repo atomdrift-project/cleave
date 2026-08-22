@@ -203,6 +203,41 @@ pub struct Note {
     pub conf: f32,
 }
 
+/// The emission spans for `finding`: the union of the fold-time precompute
+/// (if any) and whatever the live `evidence` derives — evidence appended
+/// after the fold (inheritance, aggregate attribution) contributes spans on
+/// top of the snapshot instead of being lost. Derivation matches compact
+/// conversion's historical rules: skip `archive:`-located evidence, take
+/// `[byte_offset, match_len-or-value-len]`, sort by offset, dedup by offset,
+/// cap at [`MAX_EV_LOCS`]. One definition so fold and convert never drift.
+#[must_use]
+pub(crate) fn finding_spans(finding: &Finding) -> Vec<[u64; 2]> {
+    let mut ev_spans: Vec<[u64; 2]> = finding
+        .evidence
+        .iter()
+        .filter(|e| {
+            !e.location
+                .as_deref()
+                .is_some_and(|l| l.starts_with("archive:"))
+        })
+        .filter_map(|e| {
+            e.byte_offset().map(|off| {
+                let len = e.match_len.unwrap_or_else(|| {
+                    u64::from(u32::try_from(e.value.len()).unwrap_or(u32::MAX))
+                });
+                [off, len]
+            })
+        })
+        .collect();
+    if let Some(pre) = &finding.precomputed_spans {
+        ev_spans.extend(pre.iter().copied());
+    }
+    ev_spans.sort_unstable_by_key(|s| s[0]);
+    ev_spans.dedup_by_key(|s| s[0]);
+    ev_spans.truncate(MAX_EV_LOCS);
+    ev_spans
+}
+
 /// A finding - an interpretive conclusion based on traits
 /// Findings represent what we CONCLUDE from traits (capabilities, threats, behaviors)
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -241,6 +276,15 @@ pub struct Finding {
     /// helpers stay skipped — they're consumed during matching, which has run.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub evidence: Vec<Evidence>,
+    /// Emission spans (`[offset, len]`, offset-sorted, offset-deduped, capped
+    /// at [`MAX_EV_LOCS`]) precomputed from `evidence` — set when a folded
+    /// archive member's evidence strings are released early (compact member
+    /// retention). `None` means "compute from `evidence` at convert time",
+    /// the historical path; roots and grafted findings stay on it. Never
+    /// serialized: this is the retained-memory form of what compact
+    /// conversion would derive.
+    #[serde(skip)]
+    pub precomputed_spans: Option<Vec<[u64; 2]>>,
     /// Total match count for density/frequency analysis (may exceed evidence.len())
     #[serde(skip_serializing_if = "is_zero_usize", default)]
     pub match_count: usize,
@@ -275,6 +319,7 @@ impl Finding {
         conf: f32,
     ) -> Self {
         Self {
+            precomputed_spans: None,
             id: id.into(),
             kind,
             desc: desc.into(),

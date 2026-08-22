@@ -156,6 +156,7 @@ fn archive_finding(
     };
 
     Finding {
+        precomputed_spans: None,
         src: None,
         kind: FindingKind::Capability,
         trait_refs: vec![],
@@ -213,6 +214,7 @@ fn drain_extraction_notes(report: &mut AnalysisReport, guard: &ExtractionGuard) 
         .collect();
 
     report.findings.push(Finding {
+        precomputed_spans: None,
         src: None,
         kind: FindingKind::Structural,
         trait_refs: vec![],
@@ -327,6 +329,7 @@ fn push_archive_hostile_findings(
             }
             HostileArchiveReason::ExcessiveFileSize { file, size } => {
                 report.findings.push(Finding {
+                    precomputed_spans: None,
                     src: None,
                     kind: FindingKind::Capability,
                     trait_refs: vec![],

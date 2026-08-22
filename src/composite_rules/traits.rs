@@ -1131,6 +1131,7 @@ impl TraitDefinition {
             );
 
             let timeout_warning = Finding {
+                precomputed_spans: None,
                 src: None,
                 id: "objectives/anti-analysis/analysis-bomb/rule-timeout"
                     .to_string()
@@ -1303,6 +1304,7 @@ impl TraitDefinition {
             report_locationless_evidence(&self.id, &result.evidence);
 
             Some(Finding {
+                precomputed_spans: None,
                 src: None,
                 id: self.shared_id(),
                 kind: FindingKind::Capability,
@@ -2653,6 +2655,7 @@ impl CompositeTrait {
                 );
 
                 return Some(Finding {
+                    precomputed_spans: None,
                     src: None,
                     id: "objectives/anti-analysis/analysis-bomb/rule-timeout"
                         .to_string()
@@ -2688,6 +2691,7 @@ impl CompositeTrait {
             }
 
             Some(Finding {
+                precomputed_spans: None,
                 src: None,
                 id: self.shared_id(),
                 kind: FindingKind::Capability,

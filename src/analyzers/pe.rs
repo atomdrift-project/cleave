@@ -912,6 +912,7 @@ impl PEAnalyzer {
                 "PE parsed with header-only fallback (downstream walker failed)"
             };
             report.findings.push(Finding {
+                precomputed_spans: None,
                 src: None,
                 id: "objectives/anti-analysis/pe-tampering/corrupted-header"
                     .to_string()
@@ -977,6 +978,7 @@ impl PEAnalyzer {
             .load(std::sync::atomic::Ordering::SeqCst)
         {
             report.findings.push(Finding {
+                precomputed_spans: None,
                 src: None,
                 id: "metadata/strings-truncated".to_string().into(),
                 kind: FindingKind::Structural,
@@ -1045,6 +1047,7 @@ impl PEAnalyzer {
                     .replace("(", "")
                     .replace(")", "");
                 report.findings.push(Finding {
+                    precomputed_spans: None,
                     src: None,
                     id: format!("metadata/signed/unknown::{}", normalized).into(),
                     kind: FindingKind::Capability,
@@ -1074,6 +1077,7 @@ impl PEAnalyzer {
                         .replace("(", "")
                         .replace(")", "");
                     report.findings.push(Finding {
+                        precomputed_spans: None,
                         src: None,
                         id: format!("metadata/signed/leaf::{}", primary_norm).into(),
                         kind: FindingKind::Capability,
@@ -1454,6 +1458,7 @@ impl PEAnalyzer {
             };
 
             findings.push(Finding {
+                precomputed_spans: None,
                 src: None,
                 id: "objectives/anti-analysis/pe-tampering/junk-prefix"
                     .to_string()
@@ -1490,6 +1495,7 @@ impl PEAnalyzer {
         // No MZ found - check for BSJB (.NET) signature without valid PE
         if let Some(bsjb_offset) = data.windows(4).position(|window| window == b"BSJB") {
             findings.push(Finding {
+                precomputed_spans: None,
                 src: None,
                 id: "objectives/anti-analysis/pe-tampering/dotnet-invalid-pe"
                     .to_string()
@@ -1544,6 +1550,7 @@ impl PEAnalyzer {
             // Skip 0x00 (common in headers) and check if any byte is >40% of header
             if byte_val != 0 && count > header_len * 2 / 5 {
                 findings.push(Finding {
+                    precomputed_spans: None,
                     src: None,
                     id: "objectives/anti-analysis/pe-tampering/byte-injection"
                         .to_string()
@@ -1584,6 +1591,7 @@ impl PEAnalyzer {
             let sig = &data[pe_sig_offset..pe_sig_offset + 4];
             if sig != b"PE\x00\x00" && !looks_like_dos_executable(data) {
                 findings.push(Finding { src: None,
+                    precomputed_spans: None,
                     id: "objectives/anti-analysis/pe-tampering/pe-signature-corrupted".to_string().into(),
                     kind: FindingKind::Structural,
                     desc: format!(

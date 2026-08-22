@@ -1804,6 +1804,44 @@ impl AnalysisReport {
         // before the score is recomputed so a referrer's verdict reflects it.
         Self::link_flagged_references(&mut self.files);
 
+        // Context windows on sub-notable, un-cited members serve no reader:
+        // collimator never reads `ctx`, and prism renders member context only
+        // for records with signal — a notable+ finding, or membership in a
+        // fired composite's `from` legs (`composite_sources`, resolved just
+        // above). On a member-heavy archive those windows were the largest
+        // single JSON term (dt: 71 MB of 227 MB under `--show all`) read by
+        // nothing. Sweep them here — AFTER attach/link so the cited set is
+        // the exact fired-leg set, not a static reachability approximation
+        // (measured: rule-reference reachability kept 43k of 54k members'
+        // ctx; the fired set is ~16k). `CLEAVE_MEMBER_CTX=all` retains all.
+        {
+            static ALL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+            let keep_all = *ALL.get_or_init(|| {
+                std::env::var("CLEAVE_MEMBER_CTX").is_ok_and(|v| v.eq_ignore_ascii_case("all"))
+            });
+            if !keep_all {
+                use rustc_hash::FxHashSet;
+                let cited: FxHashSet<u32> = self
+                    .files
+                    .iter()
+                    .flat_map(|f| f.composite_sources.values().flatten().map(|s| s.file))
+                    .collect();
+                for file in &mut self.files {
+                    if file.depth == 0
+                        || file.context.is_empty()
+                        || cited.contains(&file.id)
+                        || file
+                            .findings
+                            .iter()
+                            .any(|f| f.crit >= Criticality::Notable)
+                    {
+                        continue;
+                    }
+                    file.context = Vec::new();
+                }
+            }
+        }
+
         for file in &mut self.files {
             file.strip_source_fields();
             Self::refresh_formula(file);

@@ -222,9 +222,9 @@ pub(crate) fn finding_spans(finding: &Finding) -> Vec<[u64; 2]> {
         })
         .filter_map(|e| {
             e.byte_offset().map(|off| {
-                let len = e.match_len.unwrap_or_else(|| {
-                    u64::from(u32::try_from(e.value.len()).unwrap_or(u32::MAX))
-                });
+                let len = e
+                    .match_len
+                    .unwrap_or_else(|| u64::from(u32::try_from(e.value.len()).unwrap_or(u32::MAX)));
                 [off, len]
             })
         })

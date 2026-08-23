@@ -1830,10 +1830,7 @@ impl AnalysisReport {
                     if file.depth == 0
                         || file.context.is_empty()
                         || cited.contains(&file.id)
-                        || file
-                            .findings
-                            .iter()
-                            .any(|f| f.crit >= Criticality::Notable)
+                        || file.findings.iter().any(|f| f.crit >= Criticality::Notable)
                     {
                         continue;
                     }
@@ -2069,7 +2066,6 @@ fn early_strip_impl(file: &mut FileAnalysis, possibly_referenced: impl Fn(&str) 
         !strippable(f) || keep.contains(&i) || possibly_referenced(&f.id)
     });
 }
-
 
 /// In compact-member mode, release the Vec slack a folded member still
 /// carries. The strip above `retain`s findings in place — capacity stays at

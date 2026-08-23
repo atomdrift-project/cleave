@@ -1,6 +1,6 @@
 [package]
 name = "cleave"
-version = "2.8.0-beta.2"
+version = "2.8.0"
 edition = "2024"
 # support current + two older releases
 rust-version = "1.94"

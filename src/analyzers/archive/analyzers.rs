@@ -145,6 +145,10 @@ where
 /// (memprofile: 1.9 GB net-live in the analyze phase). With streaming, at
 /// most #threads reports are in flight. The fold is orders of magnitude
 /// cheaper than the analysis that feeds it, so lock contention is noise.
+// The state lock intentionally remains held while folding the contiguous
+// prefix: releasing it would let another producer advance and fold a later
+// item concurrently, breaking the input-order guarantee.
+#[allow(clippy::significant_drop_tightening)]
 fn par_filter_fold_members<T, U, F>(
     items: &[T],
     parallel: bool,
@@ -185,7 +189,9 @@ fn par_filter_fold_members<T, U, F>(
         .enumerate()
         .map(|(i, item)| (i, f(item)))
         .for_each(|(i, u)| {
-            let mut st = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut st = state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             st.pending.insert(i, u);
             // Drain the contiguous prefix. Holding `state` while folding keeps
             // drains single-threaded; producers only block here when they have
@@ -197,8 +203,9 @@ fn par_filter_fold_members<T, U, F>(
                         let (_, u) = entry.remove_entry();
                         st.next += 1;
                         if let Some(u) = u {
-                            let mut g =
-                                fold.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                            let mut g = fold
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
                             g(u);
                         }
                     }
@@ -382,8 +389,7 @@ fn rebuild_slim_member(mut file: FileAnalysis) -> FileAnalysis {
                     .evidence
                     .truncate(crate::types::traits_findings::MAX_EVIDENCE_PER_TRAIT);
             }
-            finding.precomputed_spans =
-                Some(crate::types::traits_findings::finding_spans(finding));
+            finding.precomputed_spans = Some(crate::types::traits_findings::finding_spans(finding));
         }
         finding.evidence = Vec::new();
     }
@@ -521,8 +527,7 @@ impl MemberAccumulator {
             let exempt: Vec<bool> = (0..nested.len())
                 .map(|i| {
                     let path = &nested[i].path;
-                    if path.contains(crate::types::file_analysis::ENCODING_DELIMITER)
-                    {
+                    if path.contains(crate::types::file_analysis::ENCODING_DELIMITER) {
                         return true;
                     }
                     nested.iter().any(|f| {

@@ -2068,7 +2068,7 @@ pub fn run(
                 if !flat_keys.is_empty() {
                     output.push_str("\n  Available metric fields:\n");
                     if has_prefix("binary.") {
-                        output.push_str("    binary.overall_entropy, binary.avg_complexity, binary.import_count, ...\n");
+                        output.push_str("    file.entropy, binary.avg_complexity, binary.import_count, ...\n");
                     }
                     if has_prefix("text.") {
                         output.push_str("    text.char_entropy, text.avg_line_length, ...\n");

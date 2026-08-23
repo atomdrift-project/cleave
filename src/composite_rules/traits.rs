@@ -1055,15 +1055,15 @@ impl TraitDefinition {
         }
 
         // Check entropy constraints (from if: block)
-        // Uses binary.overall_entropy for binaries, text.char_entropy for scripts
+        // Uses file.entropy for binaries, text.char_entropy for scripts
         if self.entropy_min.is_some() || self.entropy_max.is_some() {
-            // Both `binary.overall_entropy` and `text.char_entropy`
+            // Both `file.entropy` and `text.char_entropy`
             // flow through the flat `filefacts_metrics` map now.
             let binary_entropy = ctx
                 .report
                 .filefacts_metrics
                 .as_ref()
-                .and_then(|m| m.get("binary.overall_entropy").copied());
+                .and_then(|m| m.get("file.entropy").copied());
             let text_entropy = ctx
                 .report
                 .filefacts_metrics

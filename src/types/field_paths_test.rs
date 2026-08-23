@@ -11,7 +11,7 @@ mod tests {
         // `text.*` keys are still claimed.
         let paths = super::super::field_paths::all_valid_metric_paths();
         assert!(paths.contains("text.char_entropy"));
-        assert!(paths.contains("text.total_lines"));
+        assert!(paths.contains("text.lines"));
         assert!(paths.contains("text.avg_line_length"));
         assert!(paths.contains("text.whitespace_ratio"));
     }
@@ -22,7 +22,7 @@ mod tests {
 
         // Text-side paths still come from the typed manifest.
         assert!(paths.contains("text.char_entropy"));
-        assert!(paths.contains("text.total_lines"));
+        assert!(paths.contains("text.lines"));
 
         // Should have many paths (text + container + language + score
         // manifests still contribute even after the binary-format

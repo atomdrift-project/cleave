@@ -411,7 +411,7 @@ impl GenericAnalyzer {
         ctx: Option<&crate::analysis_context::AnalysisContext<'_>>,
         report: &mut AnalysisReport,
     ) {
-        // Pull `text.*` (+ `binary.overall_entropy`) directly from filefacts.
+        // Pull `text.*` (+ `file.entropy`) directly from filefacts.
         // Reuse the already-open parse when the analyze pipeline supplies one;
         // only the context-less re-entry paths (tests, embedded-code) re-parse.
         match ctx {
@@ -431,7 +431,7 @@ impl GenericAnalyzer {
             .filefacts_metrics
             .get_or_insert_with(Default::default);
         for (k, v) in parsed.metrics().iter() {
-            if k.starts_with("text.") || k == "binary.overall_entropy" {
+            if k.starts_with("text.") || k == "file.entropy" {
                 flat.set_f(k.to_string(), v);
             }
         }

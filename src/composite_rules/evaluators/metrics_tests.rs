@@ -112,8 +112,8 @@ fn test_eval_metrics_identifiers_single_char_ratio() {
 fn test_eval_metrics_identifiers_reuse_ratio() {
     let mut report = create_test_report();
     set_metric(&mut report, "identifiers.reuse_ratio", 0.25);
-    set_metric(&mut report, "identifiers.total", 100.0);
-    set_metric(&mut report, "identifiers.unique_count", 25.0);
+    set_metric(&mut report, "identifiers.count", 100.0);
+    set_metric(&mut report, "identifiers.unique", 25.0);
     let data = vec![];
     let ctx = create_test_context(&report, &data);
 
@@ -174,12 +174,12 @@ fn test_eval_metrics_functions_over_100_lines() {
 #[test]
 fn test_eval_metrics_functions_density() {
     let mut report = create_test_report();
-    set_metric(&mut report, "functions.density_per_100_lines", 15.0);
+    set_metric(&mut report, "functions.density", 15.0);
     let data = vec![];
     let ctx = create_test_context(&report, &data);
 
     let result = eval_metrics(
-        "functions.density_per_100_lines",
+        "functions.density",
         Some(10.0),
         Some(20.0),
         None,

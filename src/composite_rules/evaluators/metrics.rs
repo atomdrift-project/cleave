@@ -14,7 +14,7 @@ use crate::types::Evidence;
 use crate::types::scores::get_metric_value;
 
 /// Evaluate metrics condition - check computed metrics against thresholds
-/// Field path examples: "identifiers.avg_entropy", "functions.density_per_100_lines"
+/// Field path examples: "identifiers.avg_entropy", "functions.density"
 #[must_use]
 pub(crate) fn eval_metrics<'a>(
     field: &str,

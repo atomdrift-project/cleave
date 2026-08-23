@@ -5,7 +5,7 @@
 //! now a thin shell that runs the trait engine — filefacts's
 //! dual-emission step in `evaluate_and_merge_findings` populates
 //! `report.filefacts_metrics` with every `png.*` / `image.*` /
-//! `binary.overall_entropy` field that the trait rules consume.
+//! `file.entropy` field that the trait rules consume.
 
 use super::{AnalysisInput, Analyzer};
 use crate::capabilities::CapabilityMapper;
@@ -72,7 +72,7 @@ impl PngAnalyzer {
         }
 
         // Filefacts's dual-emission inside `evaluate_and_merge_findings`
-        // populates every `png.*` / `image.*` / `binary.overall_entropy`
+        // populates every `png.*` / `image.*` / `file.entropy`
         // metric onto `report.filefacts_metrics` for the trait engine.
         // `source_ctx` is resolved by the caller (threaded or freshly opened).
         self.capability_mapper

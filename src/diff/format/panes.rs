@@ -513,7 +513,7 @@ fn is_byte_metric(path: &str) -> bool {
             | "binary.avg_func_size"
             | "binary.avg_function_size"
             | "binary.max_string_length"
-            | "strings.total_bytes"
+            | "strings.bytes"
             | "elf.load_segment_max_p_filesz"
             | "elf.load_segment_max_p_memsz"
     )

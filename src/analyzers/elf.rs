@@ -626,17 +626,17 @@ impl ElfAnalyzer {
                 .get_or_insert_with(Default::default);
             if embedded_binary_count > 0 {
                 flat.set_f(
-                    "binary.embedded_binary_count",
+                    "binary.embedded_binaries",
                     f64::from(embedded_binary_count),
                 );
                 flat.set_f(
-                    "binary.embedded_file_count",
+                    "binary.embedded_files",
                     f64::from(embedded_binary_count + embedded_archive_count),
                 );
             }
             if embedded_archive_count > 0 {
                 flat.set_f(
-                    "binary.embedded_archive_count",
+                    "binary.embedded_archives",
                     f64::from(embedded_archive_count),
                 );
             }

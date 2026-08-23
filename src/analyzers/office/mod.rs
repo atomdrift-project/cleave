@@ -257,7 +257,7 @@ impl OfficeAnalyzer {
             let flat = report
                 .filefacts_metrics
                 .get_or_insert_with(Default::default);
-            flat.set_u("binary.embedded_binary_count", u64::from(embedded_count));
+            flat.set_u("binary.embedded_binaries", u64::from(embedded_count));
         }
 
         // Delegate pattern detection to capability mapper (YAML traits + YARA),

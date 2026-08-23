@@ -161,7 +161,7 @@ pub(crate) struct SupplyChainScore {
 // METRIC VALUE ACCESSOR
 // =============================================================================
 
-/// Get a metric value by field path (e.g., "binary.string_count", "text.total_lines").
+/// Get a metric value by field path (e.g., "binary.string_count", "text.lines").
 /// Returns `None` if the metric doesn't exist. Reads exclusively from filefacts's
 /// flat metric map; cleave-side typed metric projections have been retired.
 #[must_use]

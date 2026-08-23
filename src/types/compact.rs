@@ -685,10 +685,18 @@ fn round_json_floats(value: serde_json::Value) -> serde_json::Value {
         serde_json::Value::Number(n) => {
             if let Some(f) = n.as_f64() {
                 let rounded = (f * 100.0).round() / 100.0;
-                serde_json::Value::Number(
-                    serde_json::Number::from_f64(rounded)
-                        .unwrap_or_else(|| serde_json::Number::from(0)),
-                )
+                // Integer-valued metrics serialize as integers ("4" not
+                // "4.0") — numerically identical JSON, two bytes less per
+                // value, and most metric values are counts.
+                #[allow(clippy::cast_possible_truncation)]
+                if rounded.fract() == 0.0 && rounded.abs() < 9_007_199_254_740_992.0 {
+                    serde_json::Value::Number(serde_json::Number::from(rounded as i64))
+                } else {
+                    serde_json::Value::Number(
+                        serde_json::Number::from_f64(rounded)
+                            .unwrap_or_else(|| serde_json::Number::from(0)),
+                    )
+                }
             } else {
                 serde_json::Value::Number(n)
             }
@@ -910,7 +918,22 @@ fn convert_file(file: &super::file_analysis::FileAnalysis, id: u32) -> CompactFi
         identity: file.identity.clone(),
         findings: traits,
         refs,
-        context: file.context.clone(),
+        // Context windows without their per-line notes: the note payloads
+        // duplicate the sibling `traits` entries (id/desc/conf/crit) per
+        // annotated line, and no JSON consumer reads them — collimator never
+        // reads `ctx`, and prism's deserializer takes only line/col/t/b/ln,
+        // deriving annotations by intersecting trait spans with windows.
+        // (Measured: 16.8 MB of an 87.8 MB default report.) The raw in-memory
+        // report keeps notes — the terminal renderer and `note_location`
+        // read them there.
+        context: file
+            .context
+            .iter()
+            .map(|l| crate::types::ContextLine {
+                notes: Vec::new(),
+                ..l.clone()
+            })
+            .collect(),
         facts,
     }
 }
@@ -1162,7 +1185,7 @@ mod wire_roundtrip_tests {
             ..Default::default()
         }];
         fa.filefacts_metrics = Some(std::collections::BTreeMap::from([(
-            "binary.overall_entropy".to_string(),
+            "file.entropy".to_string(),
             7.123_456,
         )]));
 
@@ -1584,7 +1607,7 @@ mod formula_tests {
             flags: Vec::new(),
         });
         fa.filefacts_metrics = Some(
-            [("binary.overall_entropy".to_string(), 7.125)]
+            [("file.entropy".to_string(), 7.125)]
                 .into_iter()
                 .collect(),
         );
@@ -1615,7 +1638,7 @@ mod formula_tests {
             Some("8")
         );
         let ff = &value["files"][0]["facts"];
-        assert_eq!(ff["metrics"]["binary"]["overall_entropy"], 7.13);
+        assert_eq!(ff["metrics"]["file"]["entropy"], 7.13);
         assert_eq!(ff["imp"][0], json!(["kernel32.dll", "CreateFileW"]));
         assert_eq!(ff["sec"][0], json!([".text", 1024, 4096, 6.42, "r-x"]));
         assert_eq!(ff["tgt"], json!(["fetch"]));

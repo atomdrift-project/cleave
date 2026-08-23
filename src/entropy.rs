@@ -2,7 +2,7 @@
 //!
 //! High entropy sections often indicate encryption, compression, or packing.
 //! The Shannon entropy value itself is computed by filefacts and surfaced as
-//! `binary.overall_entropy` / `file.entropy` / per-section metrics; this module
+//! `file.entropy` / `file.entropy` / per-section metrics; this module
 //! only classifies a precomputed value into coarse bands.
 
 /// Classify entropy level

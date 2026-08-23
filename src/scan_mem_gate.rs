@@ -59,6 +59,8 @@ const POLL_INTERVAL: Duration = Duration::from_millis(250);
 /// A lone file that never fits live memory is force-admitted after this long,
 /// so the scan can't wedge forever on one oversized file.
 const FORCE_ADMIT_AFTER: Duration = Duration::from_secs(300);
+/// Log a one-shot admission-stall warning after this long parked.
+const STALL_REPORT_AFTER: Duration = Duration::from_secs(120);
 
 /// Aggregate byte-budget admission gate over concurrently-analysed files.
 pub(crate) struct ScanMemGate {
@@ -114,10 +116,26 @@ impl ScanMemGate {
             .reserved
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut stall_logged = false;
         loop {
             if self.fits(*reserved, est, started.elapsed() >= FORCE_ADMIT_AFTER) {
                 *reserved += est;
                 return ScanMemPermit { gate: self, est };
+            }
+            // Leave evidence: one warning per waiter after two minutes parked,
+            // with the numbers needed to diagnose a wedged holder from logs
+            // alone (a rare whole-scan stall was observed 2026-08-22 with all
+            // workers parked here and could not be reproduced under harness).
+            if !stall_logged && started.elapsed() >= STALL_REPORT_AFTER {
+                stall_logged = true;
+                tracing::warn!(
+                    est_mb = est / (1024 * 1024),
+                    reserved_mb = *reserved / (1024 * 1024),
+                    budget_mb = self.budget_bytes / (1024 * 1024),
+                    available_mb = (self.available_fn)().map(|a| a / (1024 * 1024)),
+                    waited_s = started.elapsed().as_secs(),
+                    "mem-gate admission stalled; will force-admit against live                      memory after the timeout"
+                );
             }
             let (guard, _) = self
                 .released
@@ -129,7 +147,7 @@ impl ScanMemGate {
 
     /// Whether reserving `est` on top of `reserved` is allowed right now.
     #[allow(clippy::cast_possible_truncation)]
-    fn fits(&self, reserved: usize, est: usize, force_lone: bool) -> bool {
+    fn fits(&self, reserved: usize, est: usize, force: bool) -> bool {
         let available = (self.available_fn)();
         // Lone file: admit if it fits live memory with headroom, so a single
         // large archive makes progress. Unknown memory or a long wait admits
@@ -139,17 +157,27 @@ impl ScanMemGate {
                 Some(avail) => (est as u64).saturating_add(LONE_HEADROOM_BYTES) <= avail,
                 None => true,
             };
-            return fits || force_lone;
-        }
-        // Aggregate ceiling caps commitments before their allocations land.
-        if reserved.saturating_add(est) > self.budget_bytes {
-            return false;
+            return fits || force;
         }
         // Cross-process live gate: leave free_floor available after admitting.
-        match available {
+        let live_ok = match available {
             Some(avail) => (est as u64).saturating_add(self.free_floor_bytes) <= avail,
             None => true,
+        };
+        // Aggregate ceiling caps commitments before their allocations land.
+        // Timed escape (2026-08-22): a waiter parked past FORCE_ADMIT_AFTER
+        // whose LIVE memory check passes is admitted despite the ceiling.
+        // Reservation accounting is an estimate of the future; when it and
+        // reality disagree for five minutes straight — a wedged permit
+        // holder, or estimates far above real usage — reality wins. The
+        // free_floor still vetoes under genuine pressure, so this cannot
+        // admit into an actual OOM. Observed motivation: a whole-mix stall
+        // with every whale parked in the aggregate branch (which previously
+        // had NO escape) while the process sat at 3 GB RSS of a 31 GB box.
+        if reserved.saturating_add(est) > self.budget_bytes {
+            return force && live_ok;
         }
+        live_ok
     }
 
     fn release(&self, est: usize) {

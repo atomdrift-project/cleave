@@ -1230,12 +1230,12 @@ impl<'a> RuleDebugger<'a> {
                 .push(format!("Metric '{}' not found in report", field));
             if let Some(flat) = &self.report.filefacts_metrics {
                 for key in [
-                    "text.total_lines",
+                    "text.lines",
                     "functions.total",
                     "identifiers.single_char_ratio",
                     "identifiers.avg_length",
-                    "identifiers.total",
-                    "identifiers.unique_count",
+                    "identifiers.count",
+                    "identifiers.unique",
                 ] {
                     if let Some(v) = flat.get(key) {
                         result.details.push(format!("  {key}: {v}"));

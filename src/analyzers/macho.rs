@@ -1564,6 +1564,14 @@ impl MachOAnalyzer {
         if !is_fat_macho(data) {
             return;
         }
+        // The structural pass ran on the preferred slice and stamped the
+        // slice length as the target size. The target is the FILE: `size`
+        // in the output (and the `file.size` metric derived from it) must
+        // be the on-disk byte count (measured: a 712,624-byte universal
+        // binary emitted size=352,176 — its x86-64 slice). Both the
+        // single-file and archive-member paths come through here with the
+        // full-file bytes.
+        report.target.size_bytes = data.len() as u64;
         let arch_names: Vec<String> = filefacts::open_with_path(report.target.path.as_ref(), data)
             .ok()
             .and_then(|parsed| {

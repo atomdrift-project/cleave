@@ -846,13 +846,13 @@ mod tests {
 
         let mut old = unit();
         let mut new = unit();
-        old.filefacts_metrics = Some(BTreeMap::from([("text.total_lines".to_string(), 100.0)]));
-        new.filefacts_metrics = Some(BTreeMap::from([("text.total_lines".to_string(), 150.0)]));
+        old.filefacts_metrics = Some(BTreeMap::from([("text.lines".to_string(), 100.0)]));
+        new.filefacts_metrics = Some(BTreeMap::from([("text.lines".to_string(), 150.0)]));
 
         let d = diff_metrics(&old, &new, 0);
         assert!(d.old_count > 0);
         assert!(d.new_count > 0);
-        assert!(d.changed.iter().any(|c| c.new.path == "text.total_lines"));
+        assert!(d.changed.iter().any(|c| c.new.path == "text.lines"));
     }
 
     /// Contract: the metrics scope carries digits only — counters,

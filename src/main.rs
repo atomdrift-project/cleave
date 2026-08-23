@@ -29,6 +29,7 @@
 #[cfg(all(
     unix,
     feature = "jemalloc",
+    not(feature = "memprofile-win"),
     not(any(
         target_os = "freebsd",
         target_os = "dragonfly",

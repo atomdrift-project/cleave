@@ -263,8 +263,8 @@ pub(crate) fn all_valid_metric_paths() -> HashSet<String> {
         "member_count",
         "file_count",
         "directory_count",
-        "total_uncompressed",
-        "total_compressed",
+        "uncompressed_size",
+        "compressed_size",
         "compression_ratio",
         "compression.ratio",
         // Compression breakdowns (the actual concrete keys are

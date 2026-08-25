@@ -54,7 +54,13 @@ pub(crate) fn capture(report: &mut AnalysisReport, data: &[u8], file_type: FileT
 
     let textual = file_type.is_source_code() || (!file_type.is_binary() && looks_textual(data));
     let line_index = textual.then(|| LineIndex::new(data));
-    report.context = capture_byte_slices(&shown, &by_id, data, line_index.as_ref());
+    report.context = capture_byte_slices(
+        &shown,
+        &by_id,
+        data,
+        line_index.as_ref(),
+        &report.target.path,
+    );
 }
 
 /// One byte-addressed match window before merging.
@@ -74,9 +80,13 @@ struct Window {
 /// offsets the merged composite evidence lost to truncation). Deduped by offset,
 /// file-ordered. A composite shows only its first location; an atomic trait
 /// shows up to its first three.
-fn finding_anchors(finding: &Finding, by_id: &FxHashMap<&str, &Finding>) -> Vec<(u64, u32)> {
+fn finding_anchors(
+    finding: &Finding,
+    by_id: &FxHashMap<&str, &Finding>,
+    file_path: &str,
+) -> Vec<(u64, u32)> {
     let composite = !finding.trait_refs.is_empty();
-    let mut anchors = local_anchors(finding, by_id);
+    let mut anchors = local_anchors(finding, by_id, file_path);
     anchors.truncate(if composite { 1 } else { ATOMIC_MAX_MATCHES });
     anchors
 }
@@ -114,11 +124,15 @@ fn collect_leg_anchors(
 /// "legs"), resolved transitively. Falls back to [`fallback_anchor`] when none
 /// are local. Unlike [`finding_anchors`] this keeps every leg, so a composite can
 /// be placed at the first one not already taken by a stronger match.
-fn local_anchors(finding: &Finding, by_id: &FxHashMap<&str, &Finding>) -> Vec<(u64, u32)> {
+fn local_anchors(
+    finding: &Finding,
+    by_id: &FxHashMap<&str, &Finding>,
+    file_path: &str,
+) -> Vec<(u64, u32)> {
     let mut legs = Vec::new();
     collect_leg_anchors(finding, by_id, &mut FxHashSet::default(), &mut legs);
     if legs.is_empty() {
-        return fallback_anchor(finding, by_id);
+        return fallback_anchor(finding, by_id, file_path);
     }
     let mut anchors: Vec<(u64, u32)> = legs.into_iter().map(|(off, len, _)| (off, len)).collect();
     anchors.sort_unstable_by_key(|(off, _)| *off);
@@ -134,7 +148,11 @@ fn local_anchors(finding: &Finding, by_id: &FxHashMap<&str, &Finding>) -> Vec<(u
 /// composite's own confidence) when no leg is local — e.g. a cross-file composite
 /// whose components live in other files, which then has no leg and is omitted
 /// from the byte view (it renders as a located-elsewhere note instead).
-fn composite_legs(finding: &Finding, by_id: &FxHashMap<&str, &Finding>) -> Vec<(u64, u32, f32)> {
+fn composite_legs(
+    finding: &Finding,
+    by_id: &FxHashMap<&str, &Finding>,
+    file_path: &str,
+) -> Vec<(u64, u32, f32)> {
     /// Bound on legs considered — composites reference at most a handful of
     /// distinguishing components; a few extra metric legs add nothing.
     const MAX_LEGS: usize = 8;
@@ -142,7 +160,7 @@ fn composite_legs(finding: &Finding, by_id: &FxHashMap<&str, &Finding>) -> Vec<(
     let mut legs = Vec::new();
     collect_leg_anchors(finding, by_id, &mut FxHashSet::default(), &mut legs);
     if legs.is_empty() {
-        return fallback_anchor(finding, by_id)
+        return fallback_anchor(finding, by_id, file_path)
             .into_iter()
             .map(|(o, l)| (o, l, finding.conf))
             .collect();
@@ -217,7 +235,11 @@ fn locate_nul_terminated(data: &[u8], value: &str) -> Option<u64> {
 ///   absence) which belongs in the file-level annotation surface. Classify by
 ///   evidence method and log accordingly; neither case fabricates byte-zero
 ///   context.
-fn fallback_anchor(finding: &Finding, by_id: &FxHashMap<&str, &Finding>) -> Vec<(u64, u32)> {
+fn fallback_anchor(
+    finding: &Finding,
+    by_id: &FxHashMap<&str, &Finding>,
+    file_path: &str,
+) -> Vec<(u64, u32)> {
     // An `archive:` location carries a real offset in an embedded member's byte
     // space — `local_anchor` skips it (it doesn't index *this* file's bytes), and
     // the member renders it in its own context. `byte_offset()` can't parse that
@@ -260,7 +282,7 @@ fn fallback_anchor(finding: &Finding, by_id: &FxHashMap<&str, &Finding>) -> Vec<
         tracing::error!(
             finding_id = %finding.id,
             kind = ?finding.kind,
-            "content match has no file offset — the matcher should record where it matched"
+            "{file_path}: content match has no file offset — the matcher should record where it matched"
         );
     } else {
         tracing::debug!(
@@ -388,6 +410,7 @@ fn capture_byte_slices(
     by_id: &FxHashMap<&str, &Finding>,
     data: &[u8],
     line_index: Option<&LineIndex>,
+    file_path: &str,
 ) -> Vec<ContextLine> {
     let total = data.len() as u64;
 
@@ -420,7 +443,7 @@ fn capture_byte_slices(
         let crit = leg_crit
             .get(finding.id.as_str())
             .map_or(finding.crit, |&c| c.max(finding.crit));
-        for (off, len) in finding_anchors(finding, by_id) {
+        for (off, len) in finding_anchors(finding, by_id, file_path) {
             let (lo, hi, at) = bounds(crit, off, len);
             windows.push(Window {
                 lo,
@@ -449,7 +472,7 @@ fn capture_byte_slices(
     });
     for finding in composites {
         let score = finding_score(finding);
-        let leg = composite_legs(finding, by_id)
+        let leg = composite_legs(finding, by_id, file_path)
             .into_iter()
             .find(|&(off, len, _)| {
                 let (s, e) = span(off, len);

@@ -1606,11 +1606,7 @@ mod formula_tests {
             permissions: Some("r-x".into()),
             flags: Vec::new(),
         });
-        fa.filefacts_metrics = Some(
-            [("file.entropy".to_string(), 7.125)]
-                .into_iter()
-                .collect(),
-        );
+        fa.filefacts_metrics = Some([("file.entropy".to_string(), 7.125)].into_iter().collect());
         fa.filefacts = Some(FilefactsView {
             symbols: vec![
                 filefacts::Symbol::Call {

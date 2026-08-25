@@ -42,6 +42,26 @@ fn test_version_command() {
         .stdout(predicate::str::contains("cleave"));
 }
 
+/// An ordinary self-analysis should be silent on stderr. `RUST_LOG=error`
+/// suppresses only the intentional debug-build startup notice; operational
+/// errors still reach stderr and fail this assertion.
+#[test]
+fn test_self_analysis_is_silent() {
+    let cleave = env!("CARGO_BIN_EXE_cleave");
+    let output = assert_cmd::cargo_bin_cmd!("cleave")
+        .env("RUST_LOG", "error")
+        .args(["--json", "analyze", cleave])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "cleave exited with failure");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "",
+        "self-analysis wrote to stderr"
+    );
+}
+
 /// Test analyze command with nonexistent file
 #[test]
 
@@ -557,15 +577,10 @@ fn test_system_binary_false_positive_sanity() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     // Filter out environmental/diagnostic warnings that don't reflect detection
-    // output: the debug-build notice, lazy YARA init, and the cold-cache
-    // traits-walk timing warning (fires under parallel-suite I/O contention).
+    // output: the debug-build notice and lazy YARA init.
     let unexpected_stderr: String = stderr
         .lines()
-        .filter(|l| {
-            !l.contains("DEBUG binary")
-                && !l.contains("YARA engine not yet initialized")
-                && !l.contains("slow traits-directory walk")
-        })
+        .filter(|l| !l.contains("DEBUG binary") && !l.contains("YARA engine not yet initialized"))
         .collect::<Vec<_>>()
         .join("\n");
     assert!(

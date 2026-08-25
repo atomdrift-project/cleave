@@ -384,7 +384,7 @@ impl super::CapabilityMapper {
         };
 
         if cancellation.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed)) {
-            tracing::warn!(
+            tracing::debug!(
                 path = %report.target.path,
                 "skipping trait evaluation: analysis cancelled"
             );

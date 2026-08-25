@@ -409,7 +409,7 @@ impl YaraEngine {
                 match yara_x::Rules::deserialize(&bytes) {
                     Ok(rules) => return Some(rules),
                     Err(e) => {
-                        tracing::error!(bucket = %bucket, path = %path.display(), error = ?e, "compiled YARA bucket failed to deserialize (engine/yara-x version skew or corrupt file); recompiling from source");
+                        tracing::debug!(bucket = %bucket, path = %path.display(), error = ?e, "compiled YARA bucket failed to deserialize (engine/yara-x version skew or corrupt file); recompiling from source");
                     }
                 }
             }

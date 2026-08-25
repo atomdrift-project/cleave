@@ -297,14 +297,6 @@ fn hash_path_metadata(
     }
 }
 
-/// A walk of the traits tree slow enough to be worth a warning: on a warm local
-/// filesystem the single pass is tens of milliseconds, so anything past this is
-/// a cold cache, a slow/networked filesystem, or a machine under I/O load — the
-/// exact conditions that turn a "should be instant" scan into a multi-second (or
-/// multi-minute) stall. Logging it at `warn` makes that cause visible without
-/// `--verbose`.
-const SLOW_TRAITS_WALK: std::time::Duration = std::time::Duration::from_millis(400);
-
 /// Count of full traits-directory walks this process has performed.
 ///
 /// A warm scan should walk the traits tree exactly once — every cache key reads
@@ -479,27 +471,16 @@ fn scan_traits_dir(traits_dir: &Path) -> TraitsScan {
     rule_count.hash(&mut rule_hasher);
 
     let elapsed = started.elapsed();
-    if elapsed >= SLOW_TRAITS_WALK {
-        tracing::warn!(
-            walk = ordinal,
-            dir = %traits_dir.display(),
-            entries = entries_visited,
-            stats = files_statted,
-            elapsed_ms = elapsed.as_millis(),
-            "slow traits-directory walk — cold cache, a slow/networked filesystem, or I/O contention"
-        );
-    } else {
-        tracing::debug!(
-            walk = ordinal,
-            dir = %traits_dir.display(),
-            entries = entries_visited,
-            stats = files_statted,
-            yaml_files = yaml_count,
-            rule_files = rule_count,
-            elapsed_ms = elapsed.as_millis(),
-            "walked traits directory"
-        );
-    }
+    tracing::debug!(
+        walk = ordinal,
+        dir = %traits_dir.display(),
+        entries = entries_visited,
+        stats = files_statted,
+        yaml_files = yaml_count,
+        rule_files = rule_count,
+        elapsed_ms = elapsed.as_millis(),
+        "walked traits directory"
+    );
 
     TraitsScan {
         newest_yaml: (newest_yaml != SystemTime::UNIX_EPOCH)

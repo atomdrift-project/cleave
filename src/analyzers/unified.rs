@@ -1144,7 +1144,7 @@ fn decode_printable_hex_literal(value: &str) -> Option<String> {
     }
 
     let mut decoded = Vec::with_capacity(value.len() / 2);
-    for pair in value.as_bytes().chunks_exact(2) {
+    for pair in value.as_bytes().as_chunks::<2>().0 {
         let pair = std::str::from_utf8(pair).ok()?;
         decoded.push(u8::from_str_radix(pair, 16).ok()?);
     }

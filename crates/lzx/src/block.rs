@@ -181,18 +181,16 @@ fn decode_element(
             let offset_bits = FOOTER_BITS[position_slot as usize];
 
             let formatted_offset = if let Some(aligned_offset_tree) = aligned_offset_tree.as_ref() {
-                let verbatim_bits;
-                let aligned_bits;
-
                 // This means there are some aligned bits.
-                if offset_bits >= 3 {
-                    verbatim_bits = bitstream.read_bits(offset_bits - 3)? << 3;
-                    aligned_bits = aligned_offset_tree.decode_element(bitstream)?;
+                let (verbatim_bits, aligned_bits) = if offset_bits >= 3 {
+                    (
+                        bitstream.read_bits(offset_bits - 3)? << 3,
+                        aligned_offset_tree.decode_element(bitstream)?,
+                    )
                 } else {
                     // 0, 1, or 2 verbatim bits
-                    verbatim_bits = bitstream.read_bits(offset_bits)?;
-                    aligned_bits = 0;
-                }
+                    (bitstream.read_bits(offset_bits)?, 0)
+                };
 
                 BASE_POSITION[position_slot as usize] + verbatim_bits + aligned_bits as u32
             } else {

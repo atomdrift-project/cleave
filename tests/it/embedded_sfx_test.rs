@@ -181,13 +181,10 @@ fn embedded_binary_scanning() {
         .and_then(|files| files.first())
         .expect("host PE should be present in compact report");
     assert_eq!(
-        compact_metric(pe_host, "binary.embedded_binary_count"),
+        compact_metric(pe_host, "binary.embedded_binaries"),
         Some(1.0)
     );
-    assert_eq!(
-        compact_metric(pe_host, "binary.embedded_file_count"),
-        Some(1.0)
-    );
+    assert_eq!(compact_metric(pe_host, "binary.embedded_files"), Some(1.0));
 
     // 2. Embedded PE in NSIS overlay should downgrade to notable (level 3).
     let mut nsis = minimal_pe_stub();
@@ -236,13 +233,10 @@ fn embedded_binary_scanning() {
         .and_then(|files| files.first())
         .expect("host ELF should be present in compact report");
     assert_eq!(
-        compact_metric(elf_host, "binary.embedded_binary_count"),
+        compact_metric(elf_host, "binary.embedded_binaries"),
         Some(1.0)
     );
-    assert_eq!(
-        compact_metric(elf_host, "binary.embedded_file_count"),
-        Some(1.0)
-    );
+    assert_eq!(compact_metric(elf_host, "binary.embedded_files"), Some(1.0));
     assert_eq!(
         compact_metric(elf_host, "binary.embedded_archive_count"),
         None

@@ -1395,10 +1395,7 @@ impl PEAnalyzer {
                 .filefacts_metrics
                 .get_or_insert_with(Default::default);
             if embedded_binary_count > 0 {
-                flat.set_f(
-                    "binary.embedded_binaries",
-                    f64::from(embedded_binary_count),
-                );
+                flat.set_f("binary.embedded_binaries", f64::from(embedded_binary_count));
                 flat.set_f(
                     "binary.embedded_files",
                     f64::from(embedded_binary_count + embedded_archive_count),

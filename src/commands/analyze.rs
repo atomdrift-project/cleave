@@ -193,7 +193,12 @@ pub fn run(config: &AnalyzeConfig<'_>) -> Result<String> {
                         res
                     }
                     Err(e) => {
-                        tracing::error!(path = %file_path_str, error = %e, "Analysis failed");
+                        // Cancellation is expected while draining after Ctrl-C. The
+                        // signal handler already gives the user one concise status
+                        // line; don't turn every in-flight file into an error.
+                        if !cleave::cancellation::is_cancelled() {
+                            tracing::error!(path = %file_path_str, error = %e, "Analysis failed");
+                        }
                         String::new()
                     }
                 };

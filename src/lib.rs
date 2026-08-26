@@ -1946,7 +1946,7 @@ pub(crate) fn process_encoded_payloads(
             "Percent-encoded content decoded".to_string()
         } else {
             format!(
-                "Encoded payload detected: {}",
+                "Encoded content decoded: {}",
                 payload.encoding_chain.join(" → ")
             )
         };

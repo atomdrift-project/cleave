@@ -539,6 +539,7 @@ impl YaraEngine {
         dir: &Path,
         current_tag: Option<u64>,
         strict: bool,
+        report_invalid: bool,
     ) -> Option<YaraManifest> {
         let manifest = Self::read_manifest(dir)?;
         let manifest_tag = manifest
@@ -549,17 +550,31 @@ impl YaraEngine {
             (Some(m), Some(c)) if m == c => Some(manifest),
             (None, _) if !strict => Some(manifest),
             (None, _) => {
-                tracing::error!(
-                    dir = %dir.display(),
-                    "shipped pre-compiled YARA rules carry no source fingerprint; ignoring them (regenerate with yara-precompile)"
-                );
+                if report_invalid {
+                    tracing::error!(
+                        dir = %dir.display(),
+                        "shipped pre-compiled YARA rules carry no source fingerprint; ignoring them (regenerate with yara-precompile)"
+                    );
+                } else {
+                    tracing::debug!(
+                        dir = %dir.display(),
+                        "shipped pre-compiled YARA rules carry no source fingerprint; using recovered local cache"
+                    );
+                }
                 None
             }
             (Some(_), _) => {
-                tracing::error!(
-                    dir = %dir.display(),
-                    "compiled YARA rules do not match the rule sources on disk; ignoring them and recompiling"
-                );
+                if report_invalid {
+                    tracing::error!(
+                        dir = %dir.display(),
+                        "compiled YARA rules do not match the rule sources on disk; ignoring them and recompiling"
+                    );
+                } else {
+                    tracing::debug!(
+                        dir = %dir.display(),
+                        "shipped pre-compiled YARA rules do not match the sources; using recovered local cache"
+                    );
+                }
                 None
             }
         }
@@ -918,14 +933,19 @@ impl YaraEngine {
             // from different sources must not survive here either.
             let local_manifest = cache_dir
                 .as_ref()
-                .and_then(|dir| Self::validated_manifest(dir, current_tag, false));
+                .and_then(|dir| Self::validated_manifest(dir, current_tag, false, false));
             if local_manifest.is_none()
                 && let Some(dir) = &cache_dir
                 && dir.exists()
             {
                 let _ = std::fs::remove_dir_all(dir);
             }
-            match Self::validated_manifest(&shipped, current_tag, true) {
+            // A valid local manifest proves a prior process already recovered
+            // from stale package content. Keep checking shipped artifacts so a
+            // valid complete bundle retains precedence, but do not report the
+            // same recoverable packaging error on every process invocation.
+            let report_shipped_invalid = local_manifest.is_none();
+            match Self::validated_manifest(&shipped, current_tag, true, report_shipped_invalid) {
                 Some(manifest) => {
                     tracing::info!(
                         "Using shipped pre-compiled YARA rules at {}",
@@ -3929,17 +3949,17 @@ rule ELASTIC_Windows_Generic_Threat : FILE
         YaraEngine::write_manifest(dir.path(), &manifest);
 
         // Matching tag: accepted in both modes.
-        assert!(YaraEngine::validated_manifest(dir.path(), Some(0xabcd), true).is_some());
-        assert!(YaraEngine::validated_manifest(dir.path(), Some(0xabcd), false).is_some());
+        assert!(YaraEngine::validated_manifest(dir.path(), Some(0xabcd), true, true).is_some());
+        assert!(YaraEngine::validated_manifest(dir.path(), Some(0xabcd), false, true).is_some());
         // Mismatching tag: rejected in both modes.
-        assert!(YaraEngine::validated_manifest(dir.path(), Some(0x1234), true).is_none());
-        assert!(YaraEngine::validated_manifest(dir.path(), Some(0x1234), false).is_none());
+        assert!(YaraEngine::validated_manifest(dir.path(), Some(0x1234), true, true).is_none());
+        assert!(YaraEngine::validated_manifest(dir.path(), Some(0x1234), false, true).is_none());
 
         // Missing tag: rejected for shipped dirs, tolerated for legacy local caches.
         manifest.source_tag = None;
         YaraEngine::write_manifest(dir.path(), &manifest);
-        assert!(YaraEngine::validated_manifest(dir.path(), Some(0xabcd), true).is_none());
-        assert!(YaraEngine::validated_manifest(dir.path(), Some(0xabcd), false).is_some());
+        assert!(YaraEngine::validated_manifest(dir.path(), Some(0xabcd), true, true).is_none());
+        assert!(YaraEngine::validated_manifest(dir.path(), Some(0xabcd), false, true).is_some());
     }
 
     #[test]

@@ -1267,6 +1267,14 @@ pub fn log_scan_stats() {
     crate::composite_rules::trait_timing::report(40);
 }
 
+/// Return `(retained_bytes, budget_bytes)` for the process-wide regex scratch
+/// pool. Cheap enough for a periodic worker heartbeat and useful for
+/// separating bounded regex retention from the rest of process RSS.
+#[must_use]
+pub fn regex_scratch_usage() -> (usize, usize) {
+    crate::composite_rules::regex_scratch::usage()
+}
+
 /// Read one archive member's raw bytes by its in-archive path.
 ///
 /// A differential consumer (e.g. isomer) needs the *old* text of a changed
@@ -1632,6 +1640,14 @@ fn analyze_file_with_resources_and_sha256<P: AsRef<Path>>(
     precomputed_sha256: Option<String>,
 ) -> Result<AnalysisReport> {
     let path = path.as_ref();
+    // Every public single-file entry point converges here, including workers
+    // that call `analyze_file` concurrently from independent blocking tasks.
+    // Keeping the top-level counter only in directory-scan wrappers missed
+    // exactly that worker case: the counter stayed at zero, so all 24 analyses
+    // independently enabled nested trait/YARA/AC `par_iter`s over the same
+    // global Rayon pool. Besides severe head-of-line starvation, each Rayon
+    // thread then retained regex scratch from many unrelated analyses.
+    let _in_flight = crate::rayon_nest::enter_toplevel_analysis();
     let _disable_guards = AnalysisDisableGuards::from_options(options);
 
     // Catch panics from any analyzer so a single malformed or adversarial file
@@ -2358,10 +2374,21 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         let empty: std::sync::Arc<[stng::ExtractedString]> = Vec::new().into();
         (None, empty, 0u64, None)
     } else if let Some(ftypes) = binary_yara_ftypes {
-        // Binaries (PE/ELF/Mach-O): overlap the filefacts open + string
-        // harvest with the YARA prefetch (both need only the file bytes).
-        let ((ctx, strings, ms), yara) = rayon::join(open_ctx_strings, || yara_prefetch(ftypes));
-        (ctx, strings, ms, yara)
+        // A lone binary benefits from overlapping filefacts with YARA. In a
+        // worker, however, every top-level analysis already runs on its own
+        // blocking thread. Letting all of them enter `rayon::join` adds two
+        // runnable trees per file on top of those coordinators (48 analyses on
+        // uruk-hai drove 111/128 cores while completing fewer files than 24).
+        // Keep the overlap only on the single-analysis fast path.
+        if crate::rayon_nest::inner_work_parallel() {
+            let ((ctx, strings, ms), yara) =
+                rayon::join(open_ctx_strings, || yara_prefetch(ftypes));
+            (ctx, strings, ms, yara)
+        } else {
+            let (ctx, strings, ms) = open_ctx_strings();
+            let yara = yara_prefetch(ftypes);
+            (ctx, strings, ms, yara)
+        }
     } else {
         // Every other type sources strings from the same filefacts view.
         // Source + image types additionally thread the context into their
@@ -3191,7 +3218,6 @@ fn analyze_one_path<F>(
                 skipped.fetch_add(1, Ordering::Relaxed);
                 return;
             }
-            let _in_flight = crate::rayon_nest::enter_toplevel_analysis();
             let result = analyze_file_with_resources(
                 file_path,
                 options,
@@ -3218,7 +3244,6 @@ fn analyze_one_path<F>(
             return;
         }
 
-        let _in_flight = crate::rayon_nest::enter_toplevel_analysis();
         let result = analyze_file_with_resources(file_path, options, mapper, yara_engine, None);
         match &result {
             Ok(_) => {
@@ -3558,7 +3583,6 @@ where
         // Catch panics so one malformed file can't poison the rayon pool and
         // kill the whole batch.
         let panic_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _in_flight = crate::rayon_nest::enter_toplevel_analysis();
             let result = analyze_file_with_resources(
                 file_path,
                 options,

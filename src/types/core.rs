@@ -964,7 +964,7 @@ impl AnalysisReport {
         // sampling, 3 of 6 in-tail samples across this retain and the
         // `filter_findings_for_formula` call inside `refresh_formula`). Below
         // that size the fan-out costs more than the walk.
-        let parallel = self.files.len() >= 32;
+        let parallel = self.files.len() >= 32 && crate::rayon_nest::inner_work_parallel();
         if parallel {
             self.files
                 .par_iter_mut()
@@ -1089,7 +1089,7 @@ impl AnalysisReport {
             });
             (c, b)
         };
-        let parallel = self.files.len() >= 32;
+        let parallel = self.files.len() >= 32 && crate::rayon_nest::inner_work_parallel();
         let (file_components, file_baselines) = if parallel {
             self.files
                 .par_iter_mut()

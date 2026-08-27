@@ -143,8 +143,9 @@ where
 /// every member's full pre-fold report co-resident until the serial fold loop
 /// drained it — several hundred MB to ~1 GB of pure peak on a big window
 /// (memprofile: 1.9 GB net-live in the analyze phase). With streaming, at
-/// most #threads reports are in flight. The fold is orders of magnitude
-/// cheaper than the analysis that feeds it, so lock contention is noise.
+/// at most one bounded scheduling window of reports in flight. The fold is
+/// orders of magnitude cheaper than the analysis that feeds it, so lock
+/// contention is noise.
 // The state lock intentionally remains held while folding the contiguous
 // prefix: releasing it would let another producer advance and fold a later
 // item concurrently, breaking the input-order guarantee.
@@ -179,40 +180,47 @@ fn par_filter_fold_members<T, U, F>(
         next: usize,
         pending: std::collections::BTreeMap<usize, Option<U>>,
     }
-    let state = std::sync::Mutex::new(Ordered {
-        next: 0,
-        pending: std::collections::BTreeMap::new(),
-    });
     let fold = std::sync::Mutex::new(fold);
-    items
-        .par_iter()
-        .enumerate()
-        .map(|(i, item)| (i, f(item)))
-        .for_each(|(i, u)| {
-            let mut st = state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            st.pending.insert(i, u);
-            // Drain the contiguous prefix. Holding `state` while folding keeps
-            // drains single-threaded; producers only block here when they have
-            // nothing left to analyze anyway.
-            loop {
-                let next = st.next;
-                match st.pending.first_entry() {
-                    Some(entry) if *entry.key() == next => {
-                        let (_, u) = entry.remove_entry();
-                        st.next += 1;
-                        if let Some(u) = u {
-                            let mut g = fold
-                                .lock()
-                                .unwrap_or_else(std::sync::PoisonError::into_inner);
-                            g(u);
-                        }
-                    }
-                    _ => break,
-                }
-            }
+    // A single early straggler can otherwise let every later completion pile
+    // into `pending`; on the generic disk-walk path that means up to 100,000
+    // full member reports despite the function being described as streaming.
+    // Sequential bounded chunks preserve exact item order while retaining the
+    // measured 2,048-member scheduling window.
+    for chunk in items.chunks(member_window_count()) {
+        let state = std::sync::Mutex::new(Ordered {
+            next: 0,
+            pending: std::collections::BTreeMap::new(),
         });
+        chunk
+            .par_iter()
+            .enumerate()
+            .map(|(i, item)| (i, f(item)))
+            .for_each(|(i, u)| {
+                let mut st = state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                st.pending.insert(i, u);
+                // Drain the contiguous prefix. Holding `state` while folding
+                // keeps drains single-threaded; producers only block here when
+                // they have nothing left to analyze anyway.
+                loop {
+                    let next = st.next;
+                    match st.pending.first_entry() {
+                        Some(entry) if *entry.key() == next => {
+                            let (_, u) = entry.remove_entry();
+                            st.next += 1;
+                            if let Some(u) = u {
+                                let mut g = fold
+                                    .lock()
+                                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                                g(u);
+                            }
+                        }
+                        _ => break,
+                    }
+                }
+            });
+    }
     // Filtered items (f returned None) still advance `next` via the None
     // entries above, so every Some folds exactly once, in order.
 }
@@ -1200,6 +1208,17 @@ impl ArchiveAnalyzer {
     /// crossover; `CLEAVE_SERIAL_NESTED_MEMBERS=1` forces the old always-serial
     /// behavior for A/B runs.
     fn members_run_parallel(&self, member_count: usize) -> bool {
+        // When sibling top-level files are already occupying independent
+        // blocking workers, keep each archive's member walk on that worker.
+        // Letting every one of 24 top-level archives enqueue an ordered member
+        // fan-out into the same Rayon pool recreates the same head-of-line
+        // starvation that the trait/AC/YARA guard prevents: producers from
+        // later archives occupy the pool while each archive waits for an early
+        // member before it can drain. A single top-level analysis still gets
+        // the full pool, including its large nested containers.
+        if !crate::rayon_nest::inner_work_parallel() {
+            return false;
+        }
         if self.current_depth == 0 {
             return true;
         }
@@ -1598,6 +1617,15 @@ impl ArchiveAnalyzer {
                 "Analyzing archive member via unified AnalysisInput path"
             );
 
+            // A top-level archive fans members onto Rayon, but binary members
+            // can each spend many minutes in serial trait evaluation after
+            // that fan-out. On uruk-hai a 4.53 MiB Go ELF member took 996,725
+            // ms while 110/128 Rayon workers were idle. Admit only a bounded
+            // number of members to one additional parallel level; the guard
+            // is thread-local, so their Rayon children cannot recursively fan
+            // out again.
+            let _nested_parallel =
+                crate::rayon_nest::try_enter_nested_member_parallelism(data.len());
             let mut report = analyzer.analyze_input(&input)?;
 
             // Attach the filefacts view for any member analyzer that didn't,
@@ -2588,20 +2616,14 @@ impl ArchiveAnalyzer {
             "Starting in-memory archive member analysis"
         );
 
-        let results: Vec<MemberAnalysisResult> = par_filter_map_members(
+        let mut acc = MemberAccumulator::default();
+        par_filter_fold_members(
             members,
             self.members_run_parallel(members.len()),
             |member| self.analyze_one_member(member, slow_log_label),
+            |result| acc.fold(result),
         );
-
-        self.aggregate_member_results(
-            results,
-            report,
-            start,
-            archive_label,
-            tools_used,
-            total_files,
-        );
+        acc.finalize(report, start, archive_label, tools_used, total_files);
     }
 
     fn analyze_in_memory_member_refs(
@@ -2622,20 +2644,14 @@ impl ArchiveAnalyzer {
             "Starting borrowed in-memory archive member analysis"
         );
 
-        let results: Vec<MemberAnalysisResult> = par_filter_map_members(
+        let mut acc = MemberAccumulator::default();
+        par_filter_fold_members(
             members,
             self.members_run_parallel(members.len()),
             |member| self.analyze_one_member(member, slow_log_label),
+            |result| acc.fold(result),
         );
-
-        self.aggregate_member_results(
-            results,
-            report,
-            start,
-            archive_label,
-            tools_used,
-            total_files,
-        );
+        acc.finalize(report, start, archive_label, tools_used, total_files);
     }
 
     /// Analyze a single decompressed archive member. Pure per-member work —
@@ -2722,30 +2738,6 @@ impl ArchiveAnalyzer {
             extracted_path,
             report: member_report,
         })
-    }
-
-    /// Aggregate per-member analysis results into the parent archive report.
-    /// Splits findings, yara matches, strings, and nested archive entries
-    /// across the appropriate top-level fields.
-    ///
-    /// Thin wrapper over [`MemberAccumulator`] for callers that already hold
-    /// the full `results` vector. The byte-windowed ZIP path folds directly
-    /// into a [`MemberAccumulator`] instead, so it never materializes every
-    /// member's report at once.
-    fn aggregate_member_results(
-        &self,
-        results: Vec<MemberAnalysisResult>,
-        report: &mut AnalysisReport,
-        start: std::time::Instant,
-        archive_label: &'static str,
-        tools_used: Vec<String>,
-        total_files: usize,
-    ) {
-        let mut acc = MemberAccumulator::default();
-        for result in results {
-            acc.fold(result);
-        }
-        acc.finalize(report, start, archive_label, tools_used, total_files);
     }
 
     /// Analyze a PyInstaller-bundled executable entirely in memory. Decodes
@@ -3078,10 +3070,10 @@ impl ArchiveAnalyzer {
 
         debug!("Full analysis on {} classes", classes_to_analyze.len());
 
-        // Run full analysis on selected classes — collect results lock-free,
-        // then fold single-threaded to avoid Mutex contention deadlocks. Both
-        // the class phase and the non-class phase below fold into one
-        // accumulator so the JAR's tallies span every analyzed member.
+        // Run full analysis on selected classes and stream completed results
+        // into one accumulator. The class and non-class phases share it so the
+        // JAR's tallies span every analyzed member without retaining both full
+        // result vectors until the end.
         let expected_count = classes_to_analyze.len();
         let mut acc = MemberAccumulator::default();
 
@@ -3092,7 +3084,7 @@ impl ArchiveAnalyzer {
             .as_deref()
             .unwrap_or(report.target.path.as_str());
 
-        let member_results: Vec<MemberAnalysisResult> = par_filter_map_members(
+        par_filter_fold_members(
             &classes_to_analyze,
             self.members_run_parallel(classes_to_analyze.len()),
             |entry| {
@@ -3209,12 +3201,8 @@ impl ArchiveAnalyzer {
                     report,
                 })
             },
+            |result| acc.fold(result),
         );
-
-        // Single-threaded fold — no lock contention
-        for result in member_results {
-            acc.fold(result);
-        }
 
         // Phase 3: Analyze non-class files (scripts, configs, etc.)
         let non_class_files: Vec<_> = other_files
@@ -3247,7 +3235,7 @@ impl ArchiveAnalyzer {
             "starting parallel archive member analysis",
         );
 
-        let non_class_results: Vec<MemberAnalysisResult> = par_filter_map_members(
+        par_filter_fold_members(
             &non_class_files,
             self.members_run_parallel(non_class_files.len()),
             |entry| {
@@ -3366,12 +3354,8 @@ impl ArchiveAnalyzer {
                     report,
                 })
             },
+            |result| acc.fold(result),
         );
-
-        // Fold non-class results into the same accumulator
-        for result in non_class_results {
-            acc.fold(result);
-        }
 
         // Merge JAR collected results into the report
         let MemberCounts {
@@ -3449,7 +3433,7 @@ impl ArchiveAnalyzer {
         let total_files = files.len();
         debug!("Found {} files to analyze", total_files);
 
-        // Collect results lock-free, fold single-threaded afterwards
+        // Stream results into the accumulator in bounded, ordered windows.
         let mut acc = MemberAccumulator::default();
 
         // Analyze files in parallel — no shared Mutexes. Nested rayon calls
@@ -3460,8 +3444,10 @@ impl ArchiveAnalyzer {
             on_rayon_thread = rayon::current_thread_index().is_some(),
             "Starting parallel archive member analysis"
         );
-        let generic_results: Vec<MemberAnalysisResult> =
-            par_filter_map_members(&files, self.members_run_parallel(files.len()), |entry| {
+        par_filter_fold_members(
+            &files,
+            self.members_run_parallel(files.len()),
+            |entry| {
                 let _thread_local_cache_clear_guard = ThreadLocalCacheClearGuard;
                 if self.is_cancelled() {
                     return None;
@@ -3576,13 +3562,12 @@ impl ArchiveAnalyzer {
                     extracted_path,
                     report,
                 })
-            });
-
-        // Single-threaded fold
-        let _aggregate = crate::mem_profile::phase(crate::mem_profile::Phase::Aggregate);
-        for result in generic_results {
-            acc.fold(result);
-        }
+            },
+            |result| {
+                let _aggregate = crate::mem_profile::phase(crate::mem_profile::Phase::Aggregate);
+                acc.fold(result);
+            },
+        );
 
         // Surface the most severe members first under a hard ceiling, then drain
         // the aggregate into the report.

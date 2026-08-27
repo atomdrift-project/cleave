@@ -1705,25 +1705,28 @@ impl ArchiveAnalyzer {
         // immutable container snapshot, so this parallelizes cleanly — on a
         // 13k-member archive the serial loop was a single-threaded tail that
         // ran after all member analysis had finished.
-        {
-            use rayon::prelude::*;
-            files.par_iter_mut().for_each(|file| {
-                mapper.reeval_downgrades_cross_scope(
-                    &mut file.findings,
-                    &container_snapshot,
-                    report,
-                    &[],
-                    container_file_type,
-                    &empty_section_map,
-                );
-                if has_builtin_anti_analysis_finding(&file.findings) {
-                    mapper.apply_retroactive_unless_suppression_to_findings(&mut file.findings);
-                    if path_is_fixture_context(&file.path) {
-                        file.findings
-                            .retain(|finding| finding.id != "anti-analysis/archive/symlink-escape");
-                    }
+        let reeval_file = |file: &mut crate::types::FileAnalysis| {
+            mapper.reeval_downgrades_cross_scope(
+                &mut file.findings,
+                &container_snapshot,
+                report,
+                &[],
+                container_file_type,
+                &empty_section_map,
+            );
+            if has_builtin_anti_analysis_finding(&file.findings) {
+                mapper.apply_retroactive_unless_suppression_to_findings(&mut file.findings);
+                if path_is_fixture_context(&file.path) {
+                    file.findings
+                        .retain(|finding| finding.id != "anti-analysis/archive/symlink-escape");
                 }
-            });
+            }
+        };
+        if crate::rayon_nest::inner_work_parallel() {
+            use rayon::prelude::*;
+            files.par_iter_mut().for_each(reeval_file);
+        } else {
+            files.iter_mut().for_each(reeval_file);
         }
         report.files = files;
         if has_builtin_anti_analysis_finding(&report.findings) {

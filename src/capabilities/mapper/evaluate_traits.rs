@@ -15,6 +15,7 @@ use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::OnceLock;
 
 /// Pre-computed caches passed to trait evaluation to avoid redundant work.
 pub(crate) struct TraitEvalCache<'a> {
@@ -119,6 +120,20 @@ pub(crate) static RAW_GATE_SKIPPED: std::sync::atomic::AtomicUsize =
 fn gate_stats_enabled() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var("CLEAVE_PHASE_STATS").is_ok_and(|v| v == "1"))
+}
+
+/// Traits evaluated serially per Rayon job before that job's mutable context
+/// is dropped. The override exists for reproducible scheduler tuning on large
+/// workers; zero and invalid values retain the measured default.
+fn parallel_trait_chunk() -> usize {
+    static CHUNK: OnceLock<usize> = OnceLock::new();
+    *CHUNK.get_or_init(|| {
+        std::env::var("CLEAVE_PAR_TRAIT_CHUNK")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|&value| value > 0)
+            .unwrap_or(64)
+    })
 }
 
 /// Log the raw-content gate counters at `info`.
@@ -933,35 +948,43 @@ impl super::CapabilityMapper {
         // Static per-trait classification comes from the precomputed flag
         // vector (`trait_eval_flags`) — one indexed load replaces the deep
         // `matches!` walks and five hash-set probes this closure used to run
-        // per (trait x member). The evaluation context is reused across the
-        // whole trait loop (per worker under rayon) instead of cloned per
-        // trait: only `current_trait_idx` / `cached_evidence` vary per trait,
-        // and the shared lazy caches are meant to be shared.
+        // per (trait x member). Only `current_trait_idx` / `cached_evidence`
+        // vary per trait, so one mutable context serves a bounded trait chunk.
+        //
+        // Do not use `par_iter().map_init(|| ctx.clone(), ...)` here. Rayon
+        // initializes that state per split job, not once per durable worker;
+        // member-heavy archives consequently spent most of their CPU cloning
+        // and dropping the context's Arc-backed lazy caches. Explicit chunks
+        // bound clones to ceil(traits / chunk) while preserving fine-grained
+        // load balancing. `CLEAVE_PAR_TRAIT_CHUNK` is the benchmark override.
         let eval_flags = self.trait_eval_flags();
         let base_cached_evidence = ctx.cached_evidence;
         let is_raw_text = file_type.uses_raw_text_search();
+        let trait_chunk = parallel_trait_chunk();
 
         let eval_indices = |indices: &[usize]| -> Vec<Finding> {
             if crate::rayon_nest::inner_work_parallel() {
                 indices
-                    .par_iter()
-                    .map_init(
-                        || ctx.clone(),
-                        |trait_ctx, &idx| {
-                            self.eval_one_trait(
-                                trait_ctx,
-                                idx,
-                                cache,
-                                eval_flags,
-                                dependent_only,
-                                use_string_prefilters,
-                                is_raw_text,
-                                raw_regex_prefilter_enabled,
-                                base_cached_evidence,
-                            )
-                        },
-                    )
-                    .filter_map(|f| f)
+                    .par_chunks(trait_chunk)
+                    .flat_map_iter(|chunk| {
+                        let mut trait_ctx = ctx.clone();
+                        chunk
+                            .iter()
+                            .filter_map(|&idx| {
+                                self.eval_one_trait(
+                                    &mut trait_ctx,
+                                    idx,
+                                    cache,
+                                    eval_flags,
+                                    dependent_only,
+                                    use_string_prefilters,
+                                    is_raw_text,
+                                    raw_regex_prefilter_enabled,
+                                    base_cached_evidence,
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                    })
                     .collect()
             } else {
                 let mut trait_ctx = ctx.clone();

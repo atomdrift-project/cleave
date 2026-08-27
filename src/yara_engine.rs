@@ -148,6 +148,15 @@ static YARA_SCANS_DISABLED_AFTER_PANIC: AtomicBool = AtomicBool::new(false);
 // than letting verdicts silently weaken. See [`yara_degradation`].
 static YARA_RUNTIME_COMPILE_ERRORS: AtomicU64 = AtomicU64::new(0);
 
+// Count of shipped/cached `.yrc` this process declined to load and recompiled
+// from source instead. NOT a correctness degradation — the rules end up
+// identical, they just cost a compile this package existed to avoid — so it
+// stays out of [`yara_degradation`] and is reported on its own. Left invisible
+// (it was a `debug!` and nothing else) this is exactly the silent state the
+// publish-side precompile gate exists to prevent, with no way to tell from the
+// outside that every client is paying for it. See [`yara_precompiled_misses`].
+static YARA_PRECOMPILED_REJECTED: AtomicU64 = AtomicU64::new(0);
+
 /// Describes how YARA scanning degraded in this process, if it did.
 ///
 /// `Some` when a YARA panic tripped the scan breaker or any rule failed to
@@ -167,6 +176,19 @@ pub fn yara_degradation() -> Option<String> {
         ));
     }
     (!parts.is_empty()).then(|| parts.join("; "))
+}
+
+/// How many times this process declined a pre-compiled `.yrc` and compiled that
+/// tier from source instead.
+///
+/// Deliberately NOT part of [`yara_degradation`]: the resulting rules are
+/// correct and complete, so this must not fail a scan. It is a *cost* signal —
+/// nonzero means the shipped precompiles are not loadable here and every
+/// process is paying the compile the package exists to avoid. Surface it where
+/// fleet-wide costs are watched, not where correctness is.
+#[must_use]
+pub fn yara_precompiled_misses() -> u64 {
+    YARA_PRECOMPILED_REJECTED.load(Ordering::Relaxed)
 }
 
 // Thread-local LRU cache for YARA scanners keyed by `Rules` pointer address.
@@ -293,6 +315,54 @@ enum TierSource {
     },
 }
 
+/// Fingerprint of the compiled-rule *producer*: this build's `yara_x`, the
+/// features it was built with, and anything else that changes serialized
+/// output.
+///
+/// A `.yrc` is only loadable by an engine whose serializer agrees with the one
+/// that wrote it, and nothing in the file records who that was — the same
+/// sources compiled by two different cleave builds yield different bytes under
+/// an identical `source_tag`, which reads downstream as "stale rules" when
+/// nothing is stale. Naming a version would miss the rest: feature flags change
+/// the format too (`native-code-serialization` alone roughly doubles the
+/// output, and makes it architecture-specific). So probe it instead — compile
+/// one fixed rule and hash what this build serializes. Two engines agree on
+/// this tag exactly when they agree on the format.
+///
+/// Deliberately over-strict: a tag that changes when the format did not costs
+/// one recompile from source, while a tag that stays put across a real format
+/// change means loading rules the engine will misread.
+fn engine_tag() -> u64 {
+    static TAG: OnceLock<u64> = OnceLock::new();
+    *TAG.get_or_init(|| {
+        // Exercise several constructs, not just a literal: the more of the
+        // compiler the probe touches, the less room for two builds to agree
+        // here and diverge on a real rule set.
+        const CANARY: &str = r#"
+import "math"
+rule cleave_engine_probe {
+  strings:
+    $text = "cleave-engine-probe" nocase
+    $hex  = { 6A 40 68 00 30 00 00 6A 14 8D 91 }
+    $re   = /pro(be|of)[0-9a-f]{2,8}/i
+  condition:
+    filesize > 0 and math.entropy(0, filesize) >= 0.0
+      and ($text or $hex or #re > 1)
+}"#;
+        let mut compiler = yara_x::Compiler::new();
+        // A probe that cannot compile or serialize means this build cannot
+        // produce loadable rules at all. Return a tag no real one can equal, so
+        // every shipped set is rejected and recompiled rather than trusted.
+        if compiler.add_source(CANARY.as_bytes()).is_err() {
+            return u64::MAX;
+        }
+        match compiler.build().serialize() {
+            Ok(bytes) => crate::cache::digest_bytes(&bytes),
+            Err(_) => u64::MAX,
+        }
+    })
+}
+
 /// Metadata persisted alongside the per-tier compiled rule files. Lets a warm
 /// start restore counts/contexts/namespaces without reading or classifying any
 /// rule text — the tiers themselves load lazily from their `.yrc` files.
@@ -311,6 +381,12 @@ struct YaraManifest {
     /// match the loaded rule sources, else the compiled rules are ignored.
     #[serde(default)]
     source_tag: Option<String>,
+    /// Fingerprint (hex u64) of the engine that compiled these `.yrc`, from
+    /// [`engine_tag`]. Absent in manifests written before this field existed.
+    /// Shipped manifests whose tag differs from this engine's are ignored: the
+    /// bytes are for a different serializer, whatever the sources say.
+    #[serde(default)]
+    engine_tag: Option<String>,
 }
 
 /// Serialize the rule-context map with its keys in sorted order.
@@ -409,7 +485,12 @@ impl YaraEngine {
                 match yara_x::Rules::deserialize(&bytes) {
                     Ok(rules) => return Some(rules),
                     Err(e) => {
-                        tracing::debug!(bucket = %bucket, path = %path.display(), error = ?e, "compiled YARA bucket failed to deserialize (engine/yara-x version skew or corrupt file); recompiling from source");
+                        // `warn`, not `debug`: this is the silent degradation the
+                        // publish-side precompile gate exists to prevent, and at
+                        // `debug` a fleet can pay a full compile per tier per
+                        // process indefinitely with nothing to show for it.
+                        YARA_PRECOMPILED_REJECTED.fetch_add(1, Ordering::Relaxed);
+                        tracing::warn!(bucket = %bucket, path = %path.display(), error = ?e, "compiled YARA bucket failed to deserialize (engine/yara-x version skew or corrupt file); recompiling from source");
                     }
                 }
             }
@@ -525,8 +606,9 @@ impl YaraEngine {
         serde_json::from_slice(&bytes).ok()
     }
 
-    /// Read `dir`'s manifest and accept it only if its source fingerprint
-    /// matches the rule sources currently loaded.
+    /// Read `dir`'s manifest and accept it only if it was built from the rule
+    /// sources currently loaded *and* by an engine that serializes the way this
+    /// one does.
     ///
     /// Shipped manifests (package content, `strict`) must carry a matching tag
     /// — one that is absent, unparsable, or different means the `.yrc` were
@@ -535,6 +617,12 @@ impl YaraEngine {
     /// compatibility (their directory key already binds them to the newest
     /// `.yar` mtime); a *mismatching* tag still rejects them, which is what
     /// finally invalidates the cache on inline-YAML rule edits.
+    ///
+    /// The engine tag is checked separately and for both kinds, because it is
+    /// orthogonal to the sources: a shipped set can be built from exactly these
+    /// rules and still be unreadable here if a different cleave compiled it.
+    /// Those two failures are indistinguishable without this — which is how a
+    /// producer/engine skew comes to report itself as "stale rules".
     fn validated_manifest(
         dir: &Path,
         current_tag: Option<u64>,
@@ -542,6 +630,33 @@ impl YaraEngine {
         report_invalid: bool,
     ) -> Option<YaraManifest> {
         let manifest = Self::read_manifest(dir)?;
+        let manifest_engine = manifest
+            .engine_tag
+            .as_deref()
+            .and_then(|s| u64::from_str_radix(s, 16).ok());
+        // An absent engine tag predates the field: fall through to the source
+        // check and let the per-bucket deserialize decide, exactly as before.
+        if let Some(engine) = manifest_engine
+            && engine != engine_tag()
+        {
+            if report_invalid {
+                tracing::warn!(
+                    dir = %dir.display(),
+                    manifest_engine = %format!("{engine:016x}"),
+                    this_engine = %format!("{:016x}", engine_tag()),
+                    "pre-compiled YARA rules were built by a different engine; \
+                     recompiling from source (rules are not stale — this build \
+                     serializes differently than the one that wrote them)"
+                );
+            } else {
+                tracing::debug!(
+                    dir = %dir.display(),
+                    "compiled YARA cache was written by a different engine; recompiling"
+                );
+            }
+            YARA_PRECOMPILED_REJECTED.fetch_add(1, Ordering::Relaxed);
+            return None;
+        }
         let manifest_tag = manifest
             .source_tag
             .as_deref()
@@ -630,6 +745,33 @@ impl YaraEngine {
                 "compiled YARA rules are stale: built from sources fingerprinted \
                  {manifest_tag:016x}, but the rules on disk fingerprint {current:016x}"
             );
+        }
+
+        // Separate axis, separate message. Sources can be perfectly in sync
+        // while the bytes are still unreadable here, and calling that "stale"
+        // sends whoever reads it to re-run a compile that changes nothing.
+        match manifest.engine_tag.as_deref() {
+            None => bail!(
+                "{} carries no engine fingerprint — regenerate it with this \
+                 build's yara-precompile so the engine that reads these rules \
+                 can tell whether it wrote them",
+                manifest_path.display()
+            ),
+            Some(tag) => {
+                let manifest_engine = u64::from_str_radix(tag, 16)
+                    .with_context(|| format!("unparsable engine fingerprint {tag:?}"))?;
+                let current_engine = engine_tag();
+                if manifest_engine != current_engine {
+                    bail!(
+                        "compiled YARA rules are not stale, but this engine cannot \
+                         read them: they were compiled by engine {manifest_engine:016x} \
+                         and this build is {current_engine:016x}. Recompile them with \
+                         the same build that will load them — a different yara-x \
+                         version or feature set serializes different bytes from \
+                         identical sources."
+                    );
+                }
+            }
         }
 
         let mut problems = Vec::new();
@@ -739,6 +881,12 @@ impl YaraEngine {
             "no rule sources found under {} — refusing to write an unfingerprinted manifest",
             traits_dir.display()
         );
+        let engine = engine_tag();
+        anyhow::ensure!(
+            engine != u64::MAX,
+            "this build cannot serialize a probe rule set, so the .yrc it just wrote \
+             are not known to be loadable — refusing to stamp them as valid"
+        );
         Self::write_manifest(
             out_dir,
             &YaraManifest {
@@ -748,6 +896,7 @@ impl YaraEngine {
                 rule_contexts,
                 populated_tiers,
                 source_tag,
+                engine_tag: Some(format!("{engine:016x}")),
             },
         );
         anyhow::ensure!(
@@ -1016,6 +1165,7 @@ impl YaraEngine {
                     rule_contexts: self.rule_contexts.clone(),
                     populated_tiers: self.populated_tiers.iter().cloned().collect(),
                     source_tag: current_tag.map(|t| format!("{t:016x}")),
+                    engine_tag: Some(format!("{:016x}", engine_tag())),
                 },
             );
             let _ = crate::cache::cleanup_old_caches(dir);
@@ -3780,6 +3930,7 @@ rule ELASTIC_Windows_Generic_Threat : FILE
             rule_contexts,
             populated_tiers: vec!["pe".to_string(), FALLBACK_BUCKET.to_string()],
             source_tag: Some(format!("{:016x}", 0xdead_beef_u64)),
+            engine_tag: Some(format!("{:016x}", engine_tag())),
         };
         YaraEngine::write_manifest(dir.path(), &manifest);
 
@@ -3945,6 +4096,7 @@ rule ELASTIC_Windows_Generic_Threat : FILE
             rule_contexts: HashMap::new(),
             populated_tiers: vec!["pe".to_string()],
             source_tag: Some(format!("{:016x}", 0xabcd_u64)),
+            engine_tag: Some(format!("{:016x}", engine_tag())),
         };
         YaraEngine::write_manifest(dir.path(), &manifest);
 
@@ -3960,6 +4112,51 @@ rule ELASTIC_Windows_Generic_Threat : FILE
         YaraEngine::write_manifest(dir.path(), &manifest);
         assert!(YaraEngine::validated_manifest(dir.path(), Some(0xabcd), true, true).is_none());
         assert!(YaraEngine::validated_manifest(dir.path(), Some(0xabcd), false, true).is_some());
+    }
+
+    /// The engine tag rejects on its own axis: rules built from exactly the
+    /// right sources are still refused when another build compiled them, and
+    /// the refusal does not depend on `strict` — a cache written by a different
+    /// local build is as unreadable as a shipped one.
+    #[test]
+    fn test_validated_manifest_engine_tag() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut manifest = YaraManifest {
+            builtin_count: 1,
+            third_party_count: 0,
+            inline_namespaces: Vec::new(),
+            rule_contexts: HashMap::new(),
+            populated_tiers: vec!["pe".to_string()],
+            source_tag: Some(format!("{:016x}", 0xabcd_u64)),
+            engine_tag: Some(format!("{:016x}", engine_tag())),
+        };
+        YaraEngine::write_manifest(dir.path(), &manifest);
+        assert!(YaraEngine::validated_manifest(dir.path(), Some(0xabcd), true, true).is_some());
+
+        // Sources still match; a different producer wrote the bytes.
+        let before = yara_precompiled_misses();
+        manifest.engine_tag = Some(format!("{:016x}", engine_tag() ^ 0xffff_ffff_u64));
+        YaraEngine::write_manifest(dir.path(), &manifest);
+        assert!(YaraEngine::validated_manifest(dir.path(), Some(0xabcd), true, true).is_none());
+        assert!(YaraEngine::validated_manifest(dir.path(), Some(0xabcd), false, true).is_none());
+        assert!(
+            yara_precompiled_misses() > before,
+            "an engine-tag rejection must be counted, not silent"
+        );
+
+        // Absent tag predates the field: fall through to the source check.
+        manifest.engine_tag = None;
+        YaraEngine::write_manifest(dir.path(), &manifest);
+        assert!(YaraEngine::validated_manifest(dir.path(), Some(0xabcd), true, true).is_some());
+    }
+
+    /// The probe must actually produce a usable fingerprint; `u64::MAX` is the
+    /// sentinel for "this build cannot serialize at all", which would silently
+    /// turn every load into a from-source compile.
+    #[test]
+    fn test_engine_tag_is_usable_and_stable() {
+        assert_ne!(engine_tag(), u64::MAX, "probe rule failed to compile here");
+        assert_eq!(engine_tag(), engine_tag(), "engine tag must be stable");
     }
 
     #[test]

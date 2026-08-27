@@ -489,7 +489,7 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
 
       - name: Build in FreeBSD VM
-        uses: vmactions/freebsd-vm@83b151f58c6047089f4c80eb5ba2039d158ce093 # v1.5.3
+        uses: vmactions/freebsd-vm@d0518f912576ae759075aa00fb9fe27037940271 # v1.5.4
         with:
           usesh: true
           # Newest stable image the builder publishes, pinned explicitly rather than
@@ -581,7 +581,7 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
 
       - name: Build in FreeBSD aarch64 VM
-        uses: vmactions/freebsd-vm@83b151f58c6047089f4c80eb5ba2039d158ce093 # v1.5.3
+        uses: vmactions/freebsd-vm@d0518f912576ae759075aa00fb9fe27037940271 # v1.5.4
         with:
           usesh: true
           # Same pin and the same 15.x-only reach tradeoff as the x86_64 job.
@@ -771,7 +771,7 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
 
       - name: Build in DragonFlyBSD VM
-        uses: vmactions/dragonflybsd-vm@bc8ccbaa091ce3624c93f2dc328ae48129b07580 # v1.3.1
+        uses: vmactions/dragonflybsd-vm@a7ede19f8f21f25f1abfc728aca9a02af5aa7f6a # v1.3.2
         with:
           usesh: true
           # This is the newest image vmactions publishes. DragonFly's official
@@ -1023,7 +1023,7 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
 
       - name: Build in OmniOS VM
-        uses: vmactions/omnios-vm@027e3ec08fed6fb740ab5f300c2605f9de02997a # v1.3.4
+        uses: vmactions/omnios-vm@f777b9ef6bf644b6c9a33e018bd158b5b1982f06 # v1.3.5
         with:
           usesh: true
           # Newest image the builder publishes. Unlike the FreeBSD pin, newer

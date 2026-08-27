@@ -2335,19 +2335,24 @@ composite_rules:
 
     #[test]
     fn test_encrypted_zip_with_wrong_password() {
-        use zip::unstable::write::FileOptionsExt;
         use zip::write::SimpleFileOptions;
 
         let temp_dir = tempfile::tempdir().unwrap();
         let zip_path = temp_dir.path().join("encrypted.zip");
 
-        // Create encrypted zip with password "secret"
+        // Create an AES-encrypted zip with password "secret". Unlike the
+        // legacy ZipCrypto scheme (`with_deprecated_encryption`), whose
+        // wrong-password rejection is only a probabilistic 1-byte check —
+        // see the `zip` crate's own doc comment on `by_index_decrypt`, "This
+        // function sometimes accepts wrong password... 1/256 chance" — AES
+        // decryption is verified against an HMAC-SHA1 authentication code
+        // covering the whole ciphertext, so a wrong password deterministically
+        // fails instead of flaking.
         let file = File::create(&zip_path).unwrap();
         let mut zip = zip::ZipWriter::new(file);
         let options = SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Stored)
-            .with_deprecated_encryption(b"secret")
-            .unwrap();
+            .with_aes_encryption(zip::AesMode::Aes256, "secret");
         zip.start_file("test.txt", options).unwrap();
         zip.write_all(b"hello world").unwrap();
         zip.finish().unwrap();

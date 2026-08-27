@@ -194,6 +194,7 @@ pub(crate) fn inner_work_parallel() -> bool {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use std::sync::Mutex;

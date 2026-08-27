@@ -236,8 +236,71 @@ fn compile_codepoint(pattern: &str) -> Option<regex_automata::meta::Regex> {
         .ok()
 }
 
+/// Per-thread memo in front of [`REGEX_CACHE`].
+///
+/// [`cached_regex`] runs once per regex condition per evaluation, and the store
+/// behind it is a single `RwLock`. Even the read path is a shared atomic RMW on
+/// one cache line, so on a 128-core host the uncontended CAS keeps losing and
+/// readers fall through to the futex path. Measured on uruk-hai analyzing one
+/// 112 MB PE with a flat profile: 664k of ~1.15M samples in
+/// `RwLock::read_contended` and another 337k inside this function, against
+/// 7.2k in the actual substring searcher — the pool spent roughly 87% of its
+/// cycles arbitrating access to a cache instead of matching bytes.
+///
+/// A thread re-evaluates the same rule set against member after member, so a
+/// small per-thread memo answers nearly every call without touching the global
+/// lock. Direct-mapped rather than an LRU: one probe, no recency bookkeeping
+/// (the global store already learned that recency updates dominate under
+/// contention), and a colliding pattern just replaces the slot. The stored
+/// pattern is compared on hit, so a hash collision cannot return the wrong
+/// regex — only cost a miss.
+///
+/// Entries hold an `Arc` clone, so a pattern evicted from the global store
+/// stays alive while some thread's slot still references it. That is bounded by
+/// `LOCAL_REGEX_SLOTS` per thread and is the deliberate trade for dropping the
+/// lock traffic.
+const LOCAL_REGEX_SLOTS: usize = 512;
+
+thread_local! {
+    static LOCAL_REGEX: std::cell::RefCell<Vec<Option<(Box<str>, Arc<TraitRegex>)>>> =
+        std::cell::RefCell::new(vec![None; LOCAL_REGEX_SLOTS]);
+}
+
+/// Direct-mapped slot for `pattern`.
+fn local_regex_slot(pattern: &str) -> usize {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = rustc_hash::FxHasher::default();
+    pattern.hash(&mut hasher);
+    (hasher.finish() as usize) % LOCAL_REGEX_SLOTS
+}
+
+/// Look up `pattern` in this thread's memo, verifying the stored key.
+fn local_regex_get(slot: usize, pattern: &str) -> Option<Arc<TraitRegex>> {
+    LOCAL_REGEX.with(|cache| {
+        let cache = cache.borrow();
+        match cache.get(slot) {
+            Some(Some((key, regex))) if &**key == pattern => Some(Arc::clone(regex)),
+            _ => None,
+        }
+    })
+}
+
+/// Publish `regex` into this thread's memo, replacing any colliding entry.
+fn local_regex_put(slot: usize, pattern: &str, regex: &Arc<TraitRegex>) {
+    LOCAL_REGEX.with(|cache| {
+        if let Some(entry) = cache.borrow_mut().get_mut(slot) {
+            *entry = Some((Box::from(pattern), Arc::clone(regex)));
+        }
+    });
+}
+
 pub(crate) fn cached_regex(pattern: &str) -> Option<Arc<TraitRegex>> {
-    // Hot path: `peek` under a read lock — it doesn't bump LRU recency, so warm
+    // Hottest path: this thread's own memo, no shared state touched at all.
+    let slot = local_regex_slot(pattern);
+    if let Some(arc) = local_regex_get(slot, pattern) {
+        return Some(arc);
+    }
+    // Warm path: `peek` under a read lock — it doesn't bump LRU recency, so warm
     // evals never serialize on the write lock (the bytes cache learned this the
     // hard way: `get`'s &mut recency update cost ~25% CPU in lock wait).
     if let Some(arc) = REGEX_CACHE
@@ -245,6 +308,7 @@ pub(crate) fn cached_regex(pattern: &str) -> Option<Arc<TraitRegex>> {
         .ok()
         .and_then(|c| c.peek(pattern).cloned())
     {
+        local_regex_put(slot, pattern, &arc);
         return Some(arc);
     }
     // Miss: claim the key so racing workers pick up one compile instead of
@@ -260,7 +324,7 @@ pub(crate) fn cached_regex(pattern: &str) -> Option<Arc<TraitRegex>> {
         Some(arc)
     };
     let kh = super::compile_claim::ClaimSet::hash_key(&pattern);
-    if let Some(_guard) = CLAIMS.try_claim(kh) {
+    let compiled = if let Some(_guard) = CLAIMS.try_claim(kh) {
         compile_and_put()
     } else if let Some(hit) = CLAIMS.wait_for(|| {
         REGEX_CACHE
@@ -271,7 +335,11 @@ pub(crate) fn cached_regex(pattern: &str) -> Option<Arc<TraitRegex>> {
         Some(hit)
     } else {
         compile_and_put()
+    };
+    if let Some(arc) = compiled.as_ref() {
+        local_regex_put(slot, pattern, arc);
     }
+    compiled
 }
 
 /// Occupancy and churn stats for the condition-level `TraitRegex` store, for

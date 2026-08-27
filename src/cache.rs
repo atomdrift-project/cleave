@@ -249,6 +249,12 @@ fn fnv_fold(mut h: u64, bytes: &[u8]) -> u64 {
     h
 }
 
+/// Fingerprint an opaque byte string with the same fold the source tag uses, so
+/// every tag this crate mints reads the same way in logs and manifests.
+pub(crate) fn digest_bytes(bytes: &[u8]) -> u64 {
+    fnv_fold(FNV_OFFSET, bytes)
+}
+
 /// Whether a trait YAML can contribute a rule to the YARA compiler.
 ///
 /// Only `if: {type: yara, ...}` conditions do, and that comparison is against

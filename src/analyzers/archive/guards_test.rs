@@ -678,3 +678,320 @@ fn test_excessive_entry_name_hostile_reason() {
         HostileArchiveReason::ExcessiveEntryName { len: 1_048_563, .. }
     ));
 }
+
+// =============================================================================
+// Windows Filename Representability (unix archive -> Windows extraction)
+// =============================================================================
+//
+// Every case below was measured on Windows 11 26200 before the escaping existed:
+// the member either vanished (device name, alternate data stream), was silently
+// renamed into a collision (trailing dot or space), or failed to create at all
+// (forbidden character). All three end the same way — bytes that no rule ever
+// sees — which is why these are escaped rather than skipped.
+
+/// The leaf name `sanitize_entry_path` produces, for terse assertions.
+fn leaf(entry_name: &str, dest: &std::path::Path) -> String {
+    sanitize_entry_path(entry_name, dest)
+        .unwrap_or_else(|| panic!("{entry_name:?} should sanitize, not be rejected"))
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned()
+}
+
+#[test]
+fn sanitize_escapes_colons_so_a_member_cannot_become_an_alternate_data_stream() {
+    let temp_dir = TempDir::new().unwrap();
+    let dest = temp_dir.path();
+
+    // `DateTime:Locale.gz` on NTFS writes into the `:Locale.gz` stream of a
+    // zero-byte file called `DateTime`, which a directory walk never reports —
+    // the payload is extracted and then invisible to the analyzer.
+    assert_eq!(leaf("DateTime:Locale.gz", dest), "DateTime%3ALocale.gz");
+    assert_eq!(leaf("a:b", dest), "a%3Ab");
+    // Drive-*relative* (`C:rel`, and any single-letter name with a colon) is
+    // escaped rather than rejected: skipping it would be the evasion. Only a
+    // drive followed by a separator is genuinely anchored.
+    assert_eq!(leaf("C:rel", dest), "C%3Arel");
+    assert!(sanitize_entry_path("C:/Windows", dest).is_none());
+}
+
+#[test]
+fn sanitize_escapes_reserved_device_names() {
+    let temp_dir = TempDir::new().unwrap();
+    let dest = temp_dir.path();
+
+    // Bare, cased, with an extension, and with a multi-part extension: Windows
+    // matches the device on the stem, so all four resolve to the device and
+    // silently swallow the member's bytes.
+    for name in ["nul", "NUL", "nul.exe", "con", "CON.txt", "com1.tar.gz", "lpt9", "conin$"] {
+        let got = leaf(name, dest);
+        assert_ne!(got, name, "{name:?} must not survive unescaped");
+        let stem = got.split('.').next().unwrap().to_ascii_lowercase();
+        assert!(
+            !["nul", "con", "com1", "lpt9", "conin$"].contains(&stem.as_str()),
+            "{name:?} escaped to {got:?}, whose stem is still a device name",
+        );
+    }
+
+    // The extension is preserved, so file-type detection still works on it.
+    assert!(leaf("nul.exe", dest).ends_with(".exe"));
+    assert!(leaf("com1.tar.gz", dest).ends_with(".tar.gz"));
+
+    // A name that merely starts with a device name is not one.
+    assert_eq!(leaf("nullable.txt", dest), "nullable.txt");
+    assert_eq!(leaf("console.log", dest), "console.log");
+}
+
+#[test]
+fn sanitize_escapes_characters_windows_cannot_put_in_a_filename() {
+    let temp_dir = TempDir::new().unwrap();
+    let dest = temp_dir.path();
+
+    assert_eq!(leaf("a<b", dest), "a%3Cb");
+    assert_eq!(leaf("a>b", dest), "a%3Eb");
+    assert_eq!(leaf("a\"b", dest), "a%22b");
+    assert_eq!(leaf("a|b", dest), "a%7Cb");
+    assert_eq!(leaf("a?b", dest), "a%3Fb");
+    assert_eq!(leaf("a*b", dest), "a%2Ab");
+    // Control characters, including an embedded NUL, which would otherwise make
+    // the create call fail outright on every platform.
+    assert_eq!(leaf("a\u{0}b", dest), "a%00b");
+    assert_eq!(leaf("a\u{1}b", dest), "a%01b");
+    assert_eq!(leaf("a\u{7f}b", dest), "a%7Fb");
+}
+
+#[test]
+fn sanitize_escapes_trailing_dots_and_spaces_windows_would_strip() {
+    let temp_dir = TempDir::new().unwrap();
+    let dest = temp_dir.path();
+
+    // Windows drops these silently, so `report.` and `report` become one file
+    // and the second member overwrites the first.
+    assert_eq!(leaf("report.", dest), "report%2E");
+    assert_eq!(leaf("report ", dest), "report%20");
+    assert_eq!(leaf("report...", dest), "report%2E%2E%2E");
+    assert_eq!(leaf("report . ", dest), "report%20%2E%20");
+    // Interior and leading dots and spaces are ordinary.
+    assert_eq!(leaf("re port.txt", dest), "re port.txt");
+    assert_eq!(leaf(".hidden", dest), ".hidden");
+}
+
+#[test]
+fn sanitize_is_injective_so_one_member_cannot_mask_another() {
+    let temp_dir = TempDir::new().unwrap();
+    let dest = temp_dir.path();
+
+    // The whole point of escaping `%` too: without it, an archive could ship
+    // `a%3Ab` alongside `a:b` and have the second overwrite the first.
+    let names = [
+        "a:b", "a%3Ab", "a%253Ab", "report.", "report", "report%2E", "nul", "%6Eul", "nul.exe",
+        "a<b", "a%3Cb", "a b", "a%20b",
+    ];
+    let mut seen: std::collections::HashMap<String, &str> = std::collections::HashMap::new();
+    for name in names {
+        let got = leaf(name, dest);
+        if let Some(previous) = seen.insert(got.clone(), name) {
+            panic!("{name:?} and {previous:?} both sanitize to {got:?}");
+        }
+    }
+}
+
+#[test]
+fn sanitize_rejects_entries_that_name_the_extraction_root_itself() {
+    let temp_dir = TempDir::new().unwrap();
+    let dest = temp_dir.path();
+
+    // These used to return `dest_dir`, handing the caller the extraction root to
+    // create as a *file*. Affects every platform, not just Windows.
+    for name in [".", "", "./", "./.", "/", "././."] {
+        assert!(
+            sanitize_entry_path(name, dest).is_none(),
+            "{name:?} must be rejected, not resolve to the extraction root",
+        );
+    }
+}
+
+#[test]
+fn sanitize_splits_both_separators_on_every_platform() {
+    let temp_dir = TempDir::new().unwrap();
+    let dest = temp_dir.path();
+
+    // A member name containing a backslash is one component on unix and two on
+    // Windows. Treating both as separators everywhere keeps member names — and
+    // so the corpus keys built from them — identical across a mixed fleet.
+    let backslash = 0x5C_u8 as char;
+    let nested = format!("a{backslash}b.txt");
+    assert_eq!(escaped_relative_path(&nested).unwrap(), "a/b.txt");
+    assert_eq!(leaf(&nested, dest), "b.txt");
+
+    // Traversal spelled with backslashes is rejected the same way as with
+    // forward slashes.
+    let traversal = format!("..{backslash}..{backslash}evil");
+    assert!(sanitize_entry_path(&traversal, dest).is_none());
+    // ...as is a UNC root.
+    let unc = format!("{backslash}{backslash}server{backslash}share{backslash}x");
+    assert!(sanitize_entry_path(&unc, dest).is_none());
+}
+
+#[test]
+fn sanitize_still_rejects_every_traversal_shape() {
+    let temp_dir = TempDir::new().unwrap();
+    let dest = temp_dir.path();
+
+    for name in ["../etc/passwd", "foo/../../etc/passwd", "..", "/etc/passwd", "C:/Windows"] {
+        assert!(sanitize_entry_path(name, dest).is_none(), "{name:?} must be rejected");
+    }
+    // A `..` buried mid-path is still a reject, and escaping must not launder it.
+    assert!(sanitize_entry_path("ok/../../out", dest).is_none());
+    // But a name that merely starts with dots is a legitimate file.
+    assert_eq!(leaf("..hidden", dest), "..hidden");
+    assert_eq!(leaf("...", dest), "%2E%2E%2E");
+}
+
+#[test]
+fn truncation_never_leaves_a_half_written_escape() {
+    let temp_dir = TempDir::new().unwrap();
+    let dest = temp_dir.path();
+
+    // Build a name whose escaped form lands a `%XX` exactly across the 255-byte
+    // boundary, in each of the three possible alignments.
+    for pad in 252..256 {
+        let name = format!("{}:tail", "a".repeat(pad));
+        let got = leaf(&name, dest);
+        assert!(got.len() <= MAX_PATH_COMPONENT_LEN, "{} bytes", got.len());
+        // No trailing `%` or `%X`: the result must stay decodable.
+        assert!(!got.ends_with('%'), "dangling escape in {got:?}");
+        let tail: String = got.chars().rev().take(2).collect();
+        assert!(!tail.ends_with('%'), "half-written escape in {got:?}");
+    }
+}
+
+#[test]
+fn escaped_relative_path_agrees_with_sanitize_entry_path() {
+    let temp_dir = TempDir::new().unwrap();
+    let dest = temp_dir.path();
+
+    // The metadata merge relies on these two agreeing: it looks up the walked
+    // name using the escaped form of the name recorded inside the archive.
+    for name in ["a:b/c.txt", "nul.exe", "plain/nested/file.bin", "trailing./x"] {
+        let relative = escaped_relative_path(name).unwrap();
+        let full = sanitize_entry_path(name, dest).unwrap();
+        let stripped = full.strip_prefix(dest).unwrap().to_string_lossy().into_owned();
+        let backslash = 0x5C_u8 as char;
+        assert_eq!(stripped.replace(backslash, "/"), relative, "for {name:?}");
+    }
+    // Rejections agree too.
+    for name in ["..", "/abs", ".", ""] {
+        assert!(escaped_relative_path(name).is_none(), "for {name:?}");
+    }
+}
+
+/// The end-to-end proof: sanitized names are all creatable, all distinct, and
+/// all visible to the directory walk that feeds the analyzer.
+#[test]
+fn every_sanitized_name_lands_as_a_file_the_walk_can_see() {
+    let temp_dir = TempDir::new().unwrap();
+    let dest = temp_dir.path();
+
+    let hostile = [
+        "DateTime:Locale.gz",
+        "nul",
+        "nul.exe",
+        "con",
+        "com1",
+        "prn.dll",
+        "aux.txt",
+        "trailing.",
+        "trailing ",
+        "a<b",
+        "a|b",
+        "a*b",
+        "ordinary.exe",
+    ];
+
+    for name in hostile {
+        let path = sanitize_entry_path(name, dest).unwrap();
+        std::fs::write(&path, b"MZ-payload").unwrap();
+    }
+
+    let found: Vec<String> = std::fs::read_dir(dest)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+
+    // Nothing was swallowed by a device, diverted into a data stream, or merged
+    // with another member by a silent rename.
+    assert_eq!(
+        found.len(),
+        hostile.len(),
+        "expected every member on disk, got {found:?}",
+    );
+    for entry in &found {
+        let bytes = std::fs::read(dest.join(entry)).unwrap();
+        assert_eq!(bytes, b"MZ-payload", "{entry:?} did not keep its bytes");
+    }
+}
+
+// =============================================================================
+// Case-Insensitive Collisions
+// =============================================================================
+
+#[test]
+fn claim_output_path_disambiguates_case_only_collisions() {
+    let temp_dir = TempDir::new().unwrap();
+    let dest = temp_dir.path();
+    let guard = ExtractionGuard::new();
+
+    // Distinct members on unix; one file on NTFS, where the second silently
+    // overwrites the first and the first is never analyzed.
+    let first = guard.claim_output_path(dest.join("evil.exe"));
+    let second = guard.claim_output_path(dest.join("EVIL.exe"));
+    let third = guard.claim_output_path(dest.join("Evil.Exe"));
+
+    assert_eq!(first.file_name().unwrap(), "evil.exe");
+    assert_eq!(second.file_name().unwrap(), "EVIL~2.exe");
+    assert_eq!(third.file_name().unwrap(), "Evil~3.Exe");
+
+    // All three can coexist on a case-insensitive filesystem.
+    for path in [&first, &second, &third] {
+        std::fs::write(path, b"payload").unwrap();
+    }
+    assert_eq!(std::fs::read_dir(dest).unwrap().count(), 3);
+}
+
+#[test]
+fn claim_output_path_keeps_multi_part_extensions_intact() {
+    let temp_dir = TempDir::new().unwrap();
+    let dest = temp_dir.path();
+    let guard = ExtractionGuard::new();
+
+    // The suffix goes before the extension so file-type detection, which reads
+    // the extension, is unaffected by disambiguation.
+    guard.claim_output_path(dest.join("archive.tar.gz"));
+    let second = guard.claim_output_path(dest.join("ARCHIVE.TAR.GZ"));
+    assert_eq!(second.file_name().unwrap(), "ARCHIVE~2.TAR.GZ");
+
+    // A name with no extension still disambiguates.
+    guard.claim_output_path(dest.join("README"));
+    let second = guard.claim_output_path(dest.join("readme"));
+    assert_eq!(second.file_name().unwrap(), "readme~2");
+}
+
+#[test]
+fn claim_output_path_leaves_distinct_names_alone() {
+    let temp_dir = TempDir::new().unwrap();
+    let dest = temp_dir.path();
+    let guard = ExtractionGuard::new();
+
+    // The common case must be untouched: no suffix, no allocation churn.
+    for name in ["a.txt", "b.txt", "nested/c.txt"] {
+        let path = dest.join(name);
+        assert_eq!(guard.claim_output_path(path.clone()), path);
+    }
+    // Same leaf in different directories is not a collision.
+    let one = guard.claim_output_path(dest.join("x").join("dup.txt"));
+    let two = guard.claim_output_path(dest.join("y").join("dup.txt"));
+    assert_eq!(one.file_name().unwrap(), "dup.txt");
+    assert_eq!(two.file_name().unwrap(), "dup.txt");
+}

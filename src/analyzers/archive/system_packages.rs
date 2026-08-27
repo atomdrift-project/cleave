@@ -57,6 +57,10 @@ fn extract_7z_entry_safe<R: Read + ?Sized>(
         return Ok(true);
     }
 
+    // Past the directory case above, so this is a file: rename it if a previous
+    // member already claimed the name case-insensitively.
+    let outpath = guard.claim_output_path(outpath);
+
     // Check size limits
     let uncompressed = entry.size();
     if uncompressed > MAX_FILE_SIZE {
@@ -449,6 +453,8 @@ pub(crate) fn extract_pkg_from_reader<R: Read + Seek + std::fmt::Debug>(
             guard.add_hostile_reason(HostileArchiveReason::PathTraversal(path.clone()));
             continue;
         };
+        // XAR extraction only ever creates files.
+        let out_path = guard.claim_output_path(out_path);
 
         // Check file size
         if let Some(size) = file_entry.size
@@ -778,6 +784,12 @@ fn extract_cpio<R: Read>(mut reader: R, dest_dir: &Path, guard: &ExtractionGuard
 
         let mode = entry.mode();
         let file_size = entry.file_size() as u64;
+        // Directories (S_IFDIR) keep their name; files are disambiguated.
+        let out_path = if mode & 0o170000 == 0o040000 {
+            out_path
+        } else {
+            guard.claim_output_path(out_path)
+        };
 
         // Check file size limit
         if file_size > MAX_FILE_SIZE {
@@ -902,6 +914,10 @@ pub(crate) fn extract_rar(
                         continue;
                     };
 
+                    // This is the non-directory branch, so disambiguate a
+                    // case-insensitive collision with an earlier member.
+                    let out_path = guard.claim_output_path(out_path);
+
                     // Create parent directories
                     if let Some(parent) = out_path.parent() {
                         fs::create_dir_all(parent)?;
@@ -965,6 +981,8 @@ pub(crate) fn extract_cab_from_reader<R: Read + Seek>(
             guard.add_hostile_reason(HostileArchiveReason::PathTraversal(name.clone()));
             continue;
         };
+        // CAB entries are always files.
+        let out_path = guard.claim_output_path(out_path);
 
         let mut reader = cabinet
             .read_file(name)

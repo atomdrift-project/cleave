@@ -31,7 +31,7 @@ use crate::composite_rules::SectionMap;
 use ::zip::ZipArchive;
 use guards::{
     ExtractedMemberMetadata, ExtractionGuard, MAX_FILE_COUNT, MAX_FILE_SIZE, MAX_TOTAL_SIZE,
-    sanitize_entry_path,
+    escaped_relative_path, sanitize_entry_path,
 };
 use utils::calculate_sha256;
 
@@ -1943,10 +1943,20 @@ fn merge_archive_member_metadata(
 ) {
     use std::collections::HashMap;
 
-    let mut by_path: HashMap<String, ExtractedMemberMetadata> = metadata
-        .into_iter()
-        .map(|m| (m.archive_path.clone(), m))
-        .collect();
+    // `archive_path` is the name recorded inside the archive; `entry.path`
+    // below comes from walking the extracted tree, so the two differ whenever
+    // the name had to be escaped to be representable on disk. Index both forms
+    // so an escaped member still finds its own tar/ZIP header metadata instead
+    // of silently losing it.
+    let mut by_path: HashMap<String, ExtractedMemberMetadata> = HashMap::new();
+    for meta in metadata {
+        if let Some(escaped) = escaped_relative_path(&meta.archive_path)
+            && escaped != meta.archive_path
+        {
+            by_path.insert(escaped, meta.clone());
+        }
+        by_path.insert(meta.archive_path.clone(), meta);
+    }
 
     for entry in &mut report.archive_contents {
         let key = if by_path.contains_key(&entry.path) {

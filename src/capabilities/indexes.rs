@@ -503,6 +503,7 @@ impl SymbolMatchIndex {
         // Parallel path threshold matches StringMatchIndex.
         const PARALLEL_THRESHOLD: usize = 4096;
         if symbols.len() >= PARALLEL_THRESHOLD
+            && crate::rayon_nest::inner_work_parallel()
             && (self.substr_automaton.is_some()
                 || self.regex_literal_automaton.is_some()
                 || !self.regex_fallback_regexes.is_empty())
@@ -1084,7 +1085,7 @@ impl StringMatchIndex {
         // Experiment 2: Use parallel processing for large string sets (>1000 strings)
         const PARALLEL_THRESHOLD: usize = 1000;
 
-        if strings.len() >= PARALLEL_THRESHOLD {
+        if strings.len() >= PARALLEL_THRESHOLD && crate::rayon_nest::inner_work_parallel() {
             self.find_matches_parallel(strings)
         } else {
             self.find_matches_sequential(strings)

@@ -962,6 +962,7 @@ pub fn clear_regex_caches() {
         cache.write().clear();
     }
     crate::composite_rules::condition::clear_cached_regex();
+    crate::composite_rules::regex_scratch::clear_parked();
 }
 
 /// Check if a symbol matches a pattern (supports exact match or regex).

@@ -507,65 +507,67 @@ impl super::CapabilityMapper {
         // Each trait yields at most one finding (first matching entry), so the
         // collected order — and therefore the output — stays trait-definition
         // order exactly as the serial loop produced it.
-        path_traits
-            .par_iter()
-            .filter_map(|pt| {
-                let matched_entry = entry_names.iter().find(|entry_name| {
-                    let target: &str = match pt.scope {
-                        Scope::Base => {
-                            crate::composite_rules::evaluators::misc::path_basename(entry_name)
-                        }
-                        Scope::Dir => {
-                            crate::composite_rules::evaluators::misc::path_dirname(entry_name)
-                        }
-                        Scope::Full => entry_name.as_str(),
-                    };
-                    if target.is_empty() {
-                        return false;
+        let evaluate = |pt: &PathTrait<'_>| {
+            let matched_entry = entry_names.iter().find(|entry_name| {
+                let target: &str = match pt.scope {
+                    Scope::Base => {
+                        crate::composite_rules::evaluators::misc::path_basename(entry_name)
                     }
-                    if pt.exact.is_some() || pt.substr.is_some() {
-                        let cmp_target = if pt.case_insensitive {
-                            std::borrow::Cow::Owned(target.to_lowercase())
-                        } else {
-                            std::borrow::Cow::Borrowed(target)
-                        };
-                        if let Some(e) = &pt.exact {
-                            cmp_target.as_ref() == e
-                        } else {
-                            // substr is Some by the branch condition above.
-                            pt.substr.as_deref().is_some_and(|s| cmp_target.contains(s))
-                        }
-                    } else if let Some(re) = &pt.regex {
-                        re.is_match(target)
+                    Scope::Dir => {
+                        crate::composite_rules::evaluators::misc::path_dirname(entry_name)
+                    }
+                    Scope::Full => entry_name.as_str(),
+                };
+                if target.is_empty() {
+                    return false;
+                }
+                if pt.exact.is_some() || pt.substr.is_some() {
+                    let cmp_target = if pt.case_insensitive {
+                        std::borrow::Cow::Owned(target.to_lowercase())
                     } else {
-                        false
+                        std::borrow::Cow::Borrowed(target)
+                    };
+                    if let Some(e) = &pt.exact {
+                        cmp_target.as_ref() == e
+                    } else {
+                        // substr is Some by the branch condition above.
+                        pt.substr.as_deref().is_some_and(|s| cmp_target.contains(s))
                     }
-                })?;
-                let trait_def = pt.trait_def;
-                Some(Finding {
-                    precomputed_spans: None,
-                    src: None,
-                    id: trait_def.shared_id(),
-                    kind: FindingKind::Indicator,
-                    desc: trait_def.shared_desc(),
-                    conf: trait_def.conf,
-                    crit: trait_def.crit,
-                    mbc: trait_def.mbc.as_deref().map(Into::into),
-                    attack: trait_def.attack.as_deref().map(Into::into),
-                    trait_refs: vec![],
-                    evidence: vec![Evidence {
-                        method: "basename".to_string(),
-                        source: "archive-entry".to_string(),
-                        value: matched_entry.clone(),
-                        // Archive-entry name match describes the whole entry.
-                        location: Some("0x0".to_string()),
-                        ..Default::default()
-                    }],
-                    match_count: 0,
-                    source_file: None,
-                })
+                } else if let Some(re) = &pt.regex {
+                    re.is_match(target)
+                } else {
+                    false
+                }
+            })?;
+            let trait_def = pt.trait_def;
+            Some(Finding {
+                precomputed_spans: None,
+                src: None,
+                id: trait_def.shared_id(),
+                kind: FindingKind::Indicator,
+                desc: trait_def.shared_desc(),
+                conf: trait_def.conf,
+                crit: trait_def.crit,
+                mbc: trait_def.mbc.as_deref().map(Into::into),
+                attack: trait_def.attack.as_deref().map(Into::into),
+                trait_refs: vec![],
+                evidence: vec![Evidence {
+                    method: "basename".to_string(),
+                    source: "archive-entry".to_string(),
+                    value: matched_entry.clone(),
+                    // Archive-entry name match describes the whole entry.
+                    location: Some("0x0".to_string()),
+                    ..Default::default()
+                }],
+                match_count: 0,
+                source_file: None,
             })
-            .collect()
+        };
+        if crate::rayon_nest::inner_work_parallel() {
+            path_traits.par_iter().filter_map(evaluate).collect()
+        } else {
+            path_traits.iter().filter_map(evaluate).collect()
+        }
     }
 
     pub(crate) fn evaluate_container_composites(

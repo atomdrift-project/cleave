@@ -1,5 +1,5 @@
 //! Byte-budgeted regex scratch caches: a lock-free per-thread hot slot over a
-//! global, sharded parking pool.
+//! global, sharded parking pool. Both tiers share one process-wide byte budget.
 //!
 //! The `regex` crate keeps one lazily-created `Cache` per regex *per thread
 //! that ever searched with it*, inside a pool owned by the `Regex` — so a
@@ -34,36 +34,38 @@ use parking_lot::Mutex;
 use regex_automata::meta;
 use rustc_hash::FxHashMap;
 
-/// Global pool budget in bytes: a flat 512 MiB on 64-bit hosts (64 MiB on a
-/// 32-bit address space, where scratch must not crowd the scanner's working
-/// set). An explicit `CLEAVE_REGEX_SCRATCH_MB` (per-thread MiB, times
-/// available parallelism) is honored literally.
+/// Global pool budget in bytes: 32 MiB per hardware thread, clamped to
+/// 512 MiB..=4 GiB on 64-bit hosts (64 MiB on a 32-bit address space, where
+/// scratch must not crowd the scanner's working set). An explicit
+/// `CLEAVE_REGEX_SCRATCH_MB` (per-thread MiB, times available parallelism) is
+/// honored literally.
 ///
-/// This replaced a machine-scaled default (1/32 of physical RAM clamped to
-/// [512 MiB, 4 GiB]) after measurement showed the pool should be sized by
-/// the *workload*, not the host: on a 64 GB box the old default held 2 GiB
-/// of scratch, and on the 57k-member MiniMax archive the sweep read
-/// 2 GiB → 12,817 MiB peak / 505.9 s; 512 MiB → 11,575 / 468.0 (wall
-/// *faster* — smaller pool, better locality); 128 MiB → 10,850 / 579.2
-/// (+14% wall, the create_cache churn the pool exists to avoid). 512 MiB is
-/// the knee, and it matches the earlier finding that 512 MiB recovers about
-/// two-thirds of a JS-heavy scan's `create_cache` CPU — the remaining third
-/// was not worth 1.2 GB of RSS on any measured sample.
+/// The budget follows parallel demand rather than physical RAM. On the
+/// 128-core FreeBSD gauntlet hard-tail fixture, 16 nested owners with a 4 GiB
+/// ceiling completed in 294.09 s at 16,400,232 KiB max RSS. A 2 GiB ceiling
+/// took 326.32 s (+11.0%) and *increased* max RSS to 17,257,512 KiB as cache
+/// eviction/relearning inflated the rest of the heap. Retained scratch peaked
+/// at 1,862 MiB with the 4 GiB ceiling and 1,937 MiB with the 2 GiB ceiling;
+/// concurrent checkout growth needs the headroom even though the settled
+/// retained total stays below 2 GiB. The 4 GiB clamp prevents wider hosts from
+/// turning that throughput allowance into unbounded retention.
 fn global_budget_bytes() -> usize {
     static BYTES: OnceLock<usize> = OnceLock::new();
     *BYTES.get_or_init(|| {
-        const DEFAULT: usize = if usize::BITS >= 64 {
-            512 * 1024 * 1024
-        } else {
-            64 * 1024 * 1024
-        };
+        const MIB: usize = 1024 * 1024;
+        const FOUR_GIB: usize = 4usize.saturating_mul(1024 * MIB);
         let threads = std::thread::available_parallelism().map_or(8, std::num::NonZero::get);
+        let default = if usize::BITS >= 64 {
+            threads.saturating_mul(32 * MIB).clamp(512 * MIB, FOUR_GIB)
+        } else {
+            64 * MIB
+        };
         match std::env::var("CLEAVE_REGEX_SCRATCH_MB")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
         {
-            Some(mb) => mb.saturating_mul(1024 * 1024).saturating_mul(threads),
-            None => DEFAULT,
+            Some(mb) => mb.saturating_mul(MIB).saturating_mul(threads),
+            None => default,
         }
     })
 }
@@ -75,10 +77,11 @@ pub(crate) fn next_regex_id() -> u64 {
     NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
-/// A parked cache with staleness-tolerant size accounting: `size` is
-/// re-measured only every [`REMEASURE_EVERY`] parks (a cache's usage only
-/// moves when the lazy DFA learns new transitions, which tapers off fast on
-/// a warm cache), so the common park is a hash probe with no traversal.
+/// A cached regex scratch allocation. `size` is refreshed whenever the cache
+/// returns from a search, before either the hot slot or global pool retains it.
+/// This is deliberately exact: lazy DFAs can grow substantially while staying
+/// on one thread, which made the old unmeasured hot tier an unbounded
+/// `rayon_threads × cache_size` retention path.
 /// Always handled as `Box<Entry>`: `meta::Cache` is a large inline struct,
 /// and the hot-slot/pool choreography moves an entry several times per
 /// checkout — by-value moves measured as the process's hottest memmove
@@ -87,11 +90,28 @@ pub(crate) fn next_regex_id() -> u64 {
 struct Entry {
     cache: meta::Cache,
     size: usize,
-    parks: u32,
 }
 
-/// How many parks between `memory_usage()` re-measurements.
-const REMEASURE_EVERY: u32 = 32;
+/// Releases a checked-out entry's retained-byte reservation if its search
+/// unwinds. Archive member analysis catches panics at its boundary, so without
+/// this guard one bad evaluator could leave a phantom reservation behind for
+/// the lifetime of the worker.
+struct CheckoutReservation<'a> {
+    bytes: usize,
+    counter: &'a AtomicUsize,
+}
+
+impl CheckoutReservation<'_> {
+    fn disarm(&mut self) {
+        self.bytes = 0;
+    }
+}
+
+impl Drop for CheckoutReservation<'_> {
+    fn drop(&mut self) {
+        release_counter(self.counter, self.bytes);
+    }
+}
 
 /// Shard count for the global pool: enough that a wide rayon pool rarely
 /// collides on one lock.
@@ -104,9 +124,41 @@ const GLOBAL_SHARDS: usize = 64;
 /// relearn) and measured wall-neutral with a slight go-solo cost; 8 stays.
 const PER_REGEX_CAP: usize = 8;
 
-/// Bytes currently parked across all shards. Checked-out caches are
-/// unaccounted, exactly as the previous design's hot slot was.
-static GLOBAL_BYTES: AtomicUsize = AtomicUsize::new(0);
+/// Bytes retained in both cache tiers, including caches temporarily checked
+/// out for a search. A checked-out cache keeps its existing reservation; on
+/// return only growth or shrinkage adjusts this counter. This avoids two
+/// globally-contended atomic updates on every hot-cache search while keeping
+/// the retained-memory bound exact after each search.
+static CACHED_BYTES: AtomicUsize = AtomicUsize::new(0);
+
+fn reserve_cached(bytes: usize) -> bool {
+    let budget = global_budget_bytes();
+    let mut used = CACHED_BYTES.load(Ordering::Acquire);
+    loop {
+        let Some(next) = used.checked_add(bytes) else {
+            return false;
+        };
+        if next > budget {
+            return false;
+        }
+        match CACHED_BYTES.compare_exchange_weak(used, next, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => return true,
+            Err(actual) => used = actual,
+        }
+    }
+}
+
+fn release_cached(bytes: usize) {
+    release_counter(&CACHED_BYTES, bytes);
+}
+
+fn release_counter(counter: &AtomicUsize, bytes: usize) {
+    if bytes == 0 {
+        return;
+    }
+    let previous = counter.fetch_sub(bytes, Ordering::AcqRel);
+    debug_assert!(previous >= bytes, "regex scratch byte accounting underflow");
+}
 
 type Shard = Mutex<FxHashMap<u64, Vec<Box<Entry>>>>;
 
@@ -122,31 +174,19 @@ fn shard_for(id: u64) -> &'static Shard {
 
 /// Steal a parked cache for `id`, if any thread left one.
 fn global_take(id: u64) -> Option<Box<Entry>> {
-    // The shard lock covers the stacks only; the byte counter is a separate
-    // atomic, so it is updated after the guard drops to keep the critical
-    // section a bare probe + pop.
-    let entry = {
+    // A checked-out entry keeps its byte reservation, so the common
+    // take/search/return path does not bounce the process-wide counter's cache
+    // line between every Rayon worker.
+    {
         let mut shard = shard_for(id).lock();
-        shard.get_mut(&id)?.pop()?
-    };
-    GLOBAL_BYTES.fetch_sub(entry.size, Ordering::Relaxed);
-    Some(entry)
+        shard.get_mut(&id)?.pop()
+    }
 }
 
-/// Park a finished cache for other threads, subject to the global byte budget
-/// and the per-regex cap; over either limit the cache is simply dropped.
-fn global_park(id: u64, mut entry: Box<Entry>) {
-    entry.parks = entry.parks.wrapping_add(1);
-    if entry.parks.is_multiple_of(REMEASURE_EVERY) || entry.size == 0 {
-        entry.size = entry.cache.memory_usage();
-    }
-    if GLOBAL_BYTES
-        .load(Ordering::Relaxed)
-        .saturating_add(entry.size)
-        > global_budget_bytes()
-    {
-        return;
-    }
+/// Park an already-reserved cache for other threads. The byte budget was
+/// settled by [`finish`] (or retained across checkout); only the per-regex cap
+/// can reject it here.
+fn global_park(id: u64, entry: Box<Entry>) {
     let size = entry.size;
     let mut shard = shard_for(id).lock();
     let stack = shard.entry(id).or_default();
@@ -154,12 +194,31 @@ fn global_park(id: u64, mut entry: Box<Entry>) {
     if parked {
         stack.push(entry);
     }
-    // Release before touching the global counter: the shard guard protects the
-    // stacks, and the counter is a separate atomic.
     drop(shard);
-    if parked {
-        GLOBAL_BYTES.fetch_add(size, Ordering::Relaxed);
+    if !parked {
+        release_cached(size);
     }
+}
+
+/// Drop the globally parked tier. Thread-local hot slots cannot be reached
+/// from an arbitrary pressure-monitor thread, but they are included in the
+/// shared budget and are evicted naturally on their next regex switch.
+pub(crate) fn clear_parked() {
+    let mut freed = 0usize;
+    for shard in shards() {
+        let mut shard = shard.lock();
+        for entries in shard.values() {
+            freed = freed.saturating_add(entries.iter().map(|entry| entry.size).sum::<usize>());
+        }
+        shard.clear();
+    }
+    release_cached(freed);
+}
+
+/// Live retained scratch bytes and the configured process-wide budget.
+/// Reading this is one atomic load and is intended for worker heartbeats.
+pub(crate) fn usage() -> (usize, usize) {
+    (CACHED_BYTES.load(Ordering::Acquire), global_budget_bytes())
 }
 
 /// This thread's most recent (regex id, cache): repeat searches with one
@@ -189,8 +248,13 @@ pub(crate) fn with_cache<R>(id: u64, re: &meta::Regex, f: impl FnOnce(&mut meta:
         if h.id == id { h.entry.take() } else { None }
     });
     if let Some(mut entry) = hot {
+        let mut reservation = CheckoutReservation {
+            bytes: entry.size,
+            counter: &CACHED_BYTES,
+        };
         let result = f(&mut entry.cache);
-        finish(id, entry);
+        reservation.disarm();
+        finish(id, entry, true);
         return result;
     }
     // Slow path: demote the current hot cache to the global pool, then steal
@@ -204,15 +268,20 @@ pub(crate) fn with_cache<R>(id: u64, re: &meta::Regex, f: impl FnOnce(&mut meta:
         h.id = id;
         global_take(id)
     });
+    let was_reserved = stolen.is_some();
     let mut entry = stolen.unwrap_or_else(|| {
         Box::new(Entry {
             cache: re.create_cache(),
             size: 0,
-            parks: 0,
         })
     });
+    let mut reservation = CheckoutReservation {
+        bytes: if was_reserved { entry.size } else { 0 },
+        counter: &CACHED_BYTES,
+    };
     let result = f(&mut entry.cache);
-    finish(id, entry);
+    reservation.disarm();
+    finish(id, entry, was_reserved);
     result
 }
 
@@ -220,7 +289,28 @@ pub(crate) fn with_cache<R>(id: u64, re: &meta::Regex, f: impl FnOnce(&mut meta:
 /// free, otherwise into the global pool (nested/interleaved use of the same
 /// regex on one thread built a transient second cache; the newer one wins
 /// the slot).
-fn finish(id: u64, entry: Box<Entry>) {
+fn finish(id: u64, mut entry: Box<Entry>, was_reserved: bool) {
+    let old_size = entry.size;
+    let new_size = entry.cache.memory_usage();
+    let retained = if was_reserved && new_size > old_size {
+        reserve_cached(new_size - old_size)
+    } else if was_reserved {
+        if new_size < old_size {
+            release_cached(old_size - new_size);
+        }
+        true
+    } else {
+        reserve_cached(new_size)
+    };
+    if !retained {
+        // A previously-reserved cache still owns its old-size reservation when
+        // charging growth fails. Release that reservation before dropping it.
+        if was_reserved {
+            release_cached(old_size);
+        }
+        return;
+    }
+    entry.size = new_size;
     let parked = HOT.with(|h| {
         let mut h = h.borrow_mut();
         if h.id == id && h.entry.is_none() {
@@ -240,12 +330,19 @@ fn finish(id: u64, entry: Box<Entry>) {
 mod tests {
     use super::*;
 
+    fn test_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     fn engine(pattern: &str) -> meta::Regex {
         meta::Regex::new(pattern).unwrap()
     }
 
     #[test]
     fn hot_slot_reuses_and_switch_parks_globally() {
+        let _lock = test_lock();
         let a = engine("foo[a-z]+");
         let b = engine("bar[0-9]+");
         let (ida, idb) = (next_regex_id(), next_regex_id());
@@ -270,6 +367,7 @@ mod tests {
 
     #[test]
     fn nested_same_regex_use_builds_a_transient_cache() {
+        let _lock = test_lock();
         let a = engine("qu+x");
         let id = next_regex_id();
         let hit = with_cache(id, &a, |outer| {
@@ -284,5 +382,85 @@ mod tests {
             outer_hit && inner_hit
         });
         assert!(hit);
+    }
+
+    #[test]
+    fn panicking_hot_search_drops_the_checkout_and_its_reservation() {
+        let _lock = test_lock();
+        clear_parked();
+        HOT.with(|h| {
+            if let Some(entry) = h.borrow_mut().entry.take() {
+                release_cached(entry.size);
+            }
+        });
+        let re = engine("panic-[a-z]{8,64}");
+        let id = next_regex_id();
+        let _ = with_cache(id, &re, |cache| {
+            re.search_half_with(cache, &regex_automata::Input::new("panic-abcdefgh"))
+        });
+        let reserved = HOT.with(|h| h.borrow().entry.as_ref().unwrap().size);
+        assert!(reserved > 0);
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            with_cache(id, &re, |_cache| panic!("synthetic evaluator panic"));
+        }));
+        assert!(panic.is_err());
+        assert!(HOT.with(|h| h.borrow().entry.is_none()));
+
+        // Verify the reservation guard's accounting against a private counter,
+        // not the process-global total that unrelated regex tests legitimately
+        // mutate in parallel.
+        let counter = AtomicUsize::new(reserved);
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _reservation = CheckoutReservation {
+                bytes: reserved,
+                counter: &counter,
+            };
+            panic!("synthetic checkout panic");
+        }));
+        assert!(panic.is_err());
+        assert_eq!(counter.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn parked_cache_preserves_the_hot_cache_reservation() {
+        let _lock = test_lock();
+        clear_parked();
+        HOT.with(|h| {
+            if let Some(entry) = h.borrow_mut().entry.take() {
+                release_cached(entry.size);
+            }
+        });
+        // Force the lazy hybrid DFA path; simple literal-heavy patterns can
+        // complete through a zero-heap strategy and legitimately report a
+        // zero-byte cache, which would make this accounting test vacuous.
+        let re = meta::Regex::builder()
+            .configure(
+                meta::Config::new()
+                    .dfa(false)
+                    .onepass(false)
+                    .backtrack(false),
+            )
+            .build(r"(?:[A-Za-z0-9_]{1,32}[./:-]){4,16}(?:powershell|cmd|https?)")
+            .unwrap();
+        let id = next_regex_id();
+        assert!(with_cache(id, &re, |cache| re
+            .search_half_with(
+                cache,
+                &regex_automata::Input::new("abc/def/ghi/jkl/powershell"),
+            )
+            .is_some()));
+        let hot_bytes = HOT.with(|h| h.borrow().entry.as_ref().unwrap().size);
+        assert!(hot_bytes > 0);
+        HOT.with(|h| {
+            let mut h = h.borrow_mut();
+            let entry = h.entry.take().unwrap();
+            global_park(h.id, entry);
+        });
+        let parked = global_take(id).expect("demoted hot cache should be parked");
+        assert_eq!(parked.size, hot_bytes);
+        // Return the still-reserved entry before clearing it so this test leaves
+        // the global accounting balanced.
+        global_park(id, parked);
+        clear_parked();
     }
 }

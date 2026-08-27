@@ -68,6 +68,16 @@ pub(crate) fn extract_tar_entries_safe<R: Read>(
             .flatten()
             .filter(|s| !s.is_empty())
             .map(ToString::to_string);
+        // A file whose name a previous member already claimed
+        // (case-insensitively) is renamed rather than left to overwrite it.
+        // Directories keep their sanitized name so members extracted beneath
+        // them still resolve.
+        let outpath = if entry_type.is_file() {
+            guard.claim_output_path(outpath)
+        } else {
+            outpath
+        };
+
         let entry_type_str = tar_entry_type_label(entry_type);
         let rel_path = outpath
             .strip_prefix(dest_dir)

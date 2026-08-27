@@ -287,6 +287,16 @@ pub(crate) fn extract_zip_entries_safe<R: Read + Seek>(
             continue; // Skip this file but continue extraction
         };
 
+        // A file whose name a previous member already claimed
+        // (case-insensitively) is renamed rather than left to overwrite it.
+        // Directories keep their sanitized name so members extracted beneath
+        // them still resolve.
+        let outpath = if entry.is_dir() {
+            outpath
+        } else {
+            guard.claim_output_path(outpath)
+        };
+
         let rel_path = outpath
             .strip_prefix(dest_dir)
             .map(|p| p.to_string_lossy().to_string())

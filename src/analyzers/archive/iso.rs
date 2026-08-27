@@ -69,6 +69,16 @@ pub(crate) fn extract_iso_from_data(
             guard.add_hostile_reason(HostileArchiveReason::PathTraversal(name.to_string()));
             continue;
         };
+        // A file whose name a previous member already claimed
+        // (case-insensitively) is renamed rather than left to overwrite it.
+        // Directories keep their sanitized name so members extracted beneath
+        // them still resolve.
+        let outpath = if member.entry_type.as_deref() == Some("directory") {
+            outpath
+        } else {
+            guard.claim_output_path(outpath)
+        };
+
         let rel_path = outpath
             .strip_prefix(dest_dir)
             .map(|p| p.to_string_lossy().to_string())

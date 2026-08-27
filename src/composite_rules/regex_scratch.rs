@@ -326,7 +326,7 @@ fn finish(id: u64, mut entry: Box<Entry>, was_reserved: bool) {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 

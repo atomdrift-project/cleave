@@ -55,6 +55,15 @@ impl Engine {
     }
 }
 
+impl Drop for Engine {
+    fn drop(&mut self) {
+        // The scratch pool keys parked caches by this id; once the engine is
+        // gone nothing can take them again, so return their bytes now rather
+        // than at the next pressure-driven `clear_parked`.
+        super::regex_scratch::forget(self.id);
+    }
+}
+
 /// A compiled trait regex, held as a **single byte-searching engine**.
 ///
 /// `regex_automata` always searches bytes; `unicode` is a parse-time flag, not

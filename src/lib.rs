@@ -65,6 +65,9 @@ pub mod update_check;
 pub mod update_manifest;
 pub mod yara_engine;
 
+// Live host-memory pressure gate for the archive member walk, which no
+// top-level admission gate covers. See par_filter_fold_members.
+mod mem_pressure;
 // Memory-aware admission so parallel scans don't co-resident large archives and
 // OOM the host. See scan_files / scan_directory.
 mod scan_mem_gate;

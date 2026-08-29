@@ -34,6 +34,57 @@ fn directory_ref_includes_rule(ref_id: &str, rule_id: &str) -> bool {
         .is_some_and(|rest| rest.starts_with("::") || rest.starts_with('/'))
 }
 
+/// Find atomic traits that suppress or downgrade themselves.
+///
+/// An atomic trait whose `unless:` names its own id — or a directory that
+/// expands to include it — can never surface: its own match satisfies its own
+/// suppression clause. The same shape in `downgrade:` silently pins the trait
+/// one level below its declared criticality, forever.
+///
+/// This is the atomic counterpart of [`find_self_referencing_composites`], and
+/// it is easy to introduce the same way: collapsing a same-directory
+/// `unless:` list into a bare directory reference. It is also near-invisible,
+/// because `test-rules` evaluates a rule in isolation and happily reports
+/// MATCHED — only a full scan, where the trait's own finding is in the table,
+/// shows it being skipped.
+///
+/// Returns `(trait, offending_ref_id, clause_name)` per violation.
+#[must_use]
+pub(crate) fn find_self_suppressing_traits(
+    traits: &[TraitDefinition],
+) -> Vec<(&TraitDefinition, String, &'static str)> {
+    fn ref_includes_rule(ref_id: &str, rule_id: &str) -> bool {
+        ref_id == rule_id || directory_ref_includes_rule(ref_id, rule_id)
+    }
+
+    fn scan(trait_def: &TraitDefinition, conditions: Option<&[Condition]>) -> Option<String> {
+        conditions?.iter().find_map(|cond| {
+            let Condition::Trait { id } = cond else {
+                return None;
+            };
+            ref_includes_rule(id, &trait_def.id).then(|| id.clone())
+        })
+    }
+
+    let mut violations = Vec::new();
+    for trait_def in traits {
+        if let Some(ref_id) = scan(trait_def, trait_def.unless.as_deref()) {
+            violations.push((trait_def, ref_id, "unless"));
+            continue;
+        }
+        if let Some(downgrade) = trait_def.downgrade.as_ref() {
+            let hit = scan(trait_def, downgrade.all.as_deref())
+                .or_else(|| scan(trait_def, downgrade.any.as_deref()))
+                .or_else(|| scan(trait_def, downgrade.none.as_deref()));
+            if let Some(ref_id) = hit {
+                violations.push((trait_def, ref_id, "downgrade"));
+            }
+        }
+    }
+
+    violations
+}
+
 /// Find composite rules whose conditions reference the composite itself.
 ///
 /// This catches both direct references (`id: <rule-id>`) and directory

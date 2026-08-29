@@ -163,12 +163,29 @@ pub(crate) fn prepare_test_analysis(
         std::borrow::Cow::Borrowed(_) => raw_data,
     };
     let prepared_target = prepare_test_target(&file_type, &full_data);
-    let mut report = create_analysis_report(
-        path,
-        &file_type,
-        &prepared_target.preferred_binary_data,
-        capability_mapper,
-    )?;
+    // An archive is analyzed through the archive pipeline, exactly as
+    // `lib.rs::analyze_file_with_resources_at_depth` does for a production scan.
+    //
+    // Building a single-file report for a container instead reports NOT MATCHED
+    // for every archive-scope rule that fires in a real `cleave analyze`: members
+    // are never extracted, so no member trait exists to compose, and
+    // `evaluate_container_findings` never runs, so container metrics
+    // (`consistency.*`) are absent and read back as "metric not found in report".
+    // The same divergence class the UTF-16 note below describes — a debugger that
+    // disagrees with the scanner sends rule authors after the wrong cause.
+    let mut report = if file_type.is_archive() {
+        use crate::analyzers::Analyzer as _;
+        crate::analyzers::archive::ArchiveAnalyzer::new()
+            .with_capability_mapper(capability_mapper.clone())
+            .analyze(path)?
+    } else {
+        create_analysis_report(
+            path,
+            &file_type,
+            &prepared_target.preferred_binary_data,
+            capability_mapper,
+        )?
+    };
 
     // For FAT binaries, source full-file strings from filefacts (the
     // string-extraction authority) so offsets are file-relative.

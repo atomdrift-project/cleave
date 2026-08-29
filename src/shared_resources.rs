@@ -27,7 +27,25 @@ pub fn set_skip_traits_override(value: Option<bool>) {
         Some(true) => 1,
         Some(false) => -1,
     };
-    SKIP_TRAITS_OVERRIDE.store(encoded, Ordering::Relaxed);
+    if SKIP_TRAITS_OVERRIDE.swap(encoded, Ordering::Relaxed) == encoded {
+        return;
+    }
+
+    // The flag decides whether the mapper loads rules or is built empty, so a
+    // mapper built under the old value must not outlive this call. Without the
+    // invalidation the override is silently one-way: the first caller to skip
+    // traits memoizes an empty mapper, and every later `Some(false)` / `None`
+    // stores a flag nothing re-reads — the analysis still runs, against no rules
+    // at all. This is the same singleton-keyed-on-nothing hazard that
+    // `set_override_dir` already invalidates for the traits *directory*; the
+    // skip flag is the other input to the same decision and gets the same
+    // treatment.
+    //
+    // The traits fingerprint goes too, for the reason `reload_capability_mapper`
+    // documents: cache keys carry it, so results computed under the old flag
+    // would otherwise be served to callers running under the new one.
+    crate::cache::invalidate_traits_scan();
+    invalidate_capability_mapper();
 }
 
 pub(crate) fn skip_traits_requested() -> bool {

@@ -53,6 +53,7 @@ impl DoomedSkipIndex {
         for (idx, def) in traits.iter().enumerate() {
             leaf_hits.entry(trait_leaf(&def.id)).or_default().push(idx);
         }
+        let ids = IdIndex::new(traits, &leaf_hits);
         let short_unique: FxHashMap<&str, usize> = leaf_hits
             .iter()
             .filter_map(|(leaf, idxs)| {
@@ -65,7 +66,7 @@ impl DoomedSkipIndex {
             .collect();
 
         let mut mark_never = |raw: &str| {
-            for idx in resolve_all(raw, trait_id_map, traits) {
+            for idx in ids.resolve_all(raw, trait_id_map) {
                 if idx < n {
                     never_skip[idx] = true;
                 }
@@ -255,39 +256,63 @@ fn resolve_unique(
     short_unique.get(id).copied()
 }
 
-fn resolve_all(
-    id: &str,
-    exact: &std::collections::HashMap<String, usize>,
-    traits: &[TraitDefinition],
-) -> Vec<usize> {
-    let id = id.trim_end_matches('/');
-    if id.contains("::") {
-        return exact.get(id).copied().into_iter().collect();
-    }
-    if id.contains('/') {
-        let prefix_new = format!("{id}::");
-        let prefix_legacy = format!("{id}/");
-        return traits
+/// Sorted trait ids for directory-prefix lookups, plus the leaf map for bare
+/// short refs. `unless:`/`downgrade:` refs are resolved for every trait and
+/// composite at build time; the previous resolver walked all ~71k trait ids
+/// with `starts_with`/`ends_with` per ref, which made this index cost ~5 s of
+/// one thread on the first analysis of every process (memcmp-bound). Two
+/// binary searches per prefix and one hash probe per leaf make the build a
+/// few milliseconds.
+struct IdIndex<'a> {
+    /// `(id, index into traits)`, sorted by id.
+    sorted: Vec<(&'a str, usize)>,
+    leaf_hits: &'a FxHashMap<&'a str, Vec<usize>>,
+}
+
+impl<'a> IdIndex<'a> {
+    fn new(traits: &'a [TraitDefinition], leaf_hits: &'a FxHashMap<&'a str, Vec<usize>>) -> Self {
+        let mut sorted: Vec<(&str, usize)> = traits
             .iter()
             .enumerate()
-            .filter(|(_, def)| {
-                def.id == id
-                    || def.id.starts_with(&prefix_new)
-                    || def.id.starts_with(&prefix_legacy)
-            })
-            .map(|(idx, _)| idx)
+            .map(|(idx, def)| (def.id.as_str(), idx))
             .collect();
+        sorted.sort_unstable();
+        Self { sorted, leaf_hits }
     }
-    let suffix_new = format!("::{id}");
-    let suffix_legacy = format!("/{id}");
-    traits
-        .iter()
-        .enumerate()
-        .filter(|(_, def)| {
-            def.id == id || def.id.ends_with(&suffix_new) || def.id.ends_with(&suffix_legacy)
-        })
-        .map(|(idx, _)| idx)
-        .collect()
+
+    /// Indices of every id that starts with `prefix`, in id order.
+    fn with_prefix<'p>(&'p self, prefix: &'p str) -> impl Iterator<Item = usize> + 'p {
+        let start = self.sorted.partition_point(|(id, _)| *id < prefix);
+        self.sorted[start..]
+            .iter()
+            .take_while(move |(id, _)| id.starts_with(prefix))
+            .map(|(_, idx)| *idx)
+    }
+
+    /// Same contract as the old `resolve_all`: an exact `ns::leaf` id, a
+    /// directory prefix (`ns/` — itself, `ns/…` legacy ids and `ns::…`), or a
+    /// bare short name matching by leaf.
+    fn resolve_all(
+        &self,
+        id: &str,
+        exact: &std::collections::HashMap<String, usize>,
+    ) -> Vec<usize> {
+        let id = id.trim_end_matches('/');
+        if id.contains("::") {
+            return exact.get(id).copied().into_iter().collect();
+        }
+        if id.contains('/') {
+            let mut out: Vec<usize> = exact.get(id).copied().into_iter().collect();
+            out.extend(self.with_prefix(&format!("{id}::")));
+            out.extend(self.with_prefix(&format!("{id}/")));
+            out.sort_unstable();
+            out.dedup();
+            return out;
+        }
+        // A bare name matches every trait whose leaf is that name, which is
+        // exactly the `::name` / `/name` suffix test the linear scan did.
+        self.leaf_hits.get(id).cloned().unwrap_or_default()
+    }
 }
 
 fn composite_applies(

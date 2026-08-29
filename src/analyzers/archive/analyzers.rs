@@ -186,7 +186,34 @@ fn par_filter_fold_members<T, U, F>(
     // full member reports despite the function being described as streaming.
     // Sequential bounded chunks preserve exact item order while retaining the
     // measured 2,048-member scheduling window.
-    for chunk in items.chunks(member_window_count()) {
+    // Under live host-memory pressure (see `mem_pressure`) a chunk runs
+    // serially on this thread instead of fanning out — no new member working
+    // set stacks onto a host with no room for it — and the walk resumes
+    // parallel on the next chunk once memory frees. Pressured chunks are
+    // short so that re-check comes quickly. Deliberately not a lock: a member
+    // that is itself an archive waits on its own nested walk, and a
+    // process-wide mutex held across that wait would deadlock the pool.
+    const PRESSURED_CHUNK: usize = 16;
+    let mut start = 0;
+    while start < items.len() {
+        let pressured = crate::mem_pressure::under_pressure();
+        let len = if pressured {
+            PRESSURED_CHUNK
+        } else {
+            member_window_count().max(1)
+        };
+        let end = start.saturating_add(len).min(items.len());
+        let chunk = &items[start..end];
+        start = end;
+        if pressured {
+            for u in chunk.iter().filter_map(f) {
+                let mut g = fold
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                g(u);
+            }
+            continue;
+        }
         let state = std::sync::Mutex::new(Ordered {
             next: 0,
             pending: std::collections::BTreeMap::new(),

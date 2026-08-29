@@ -359,7 +359,7 @@ fn available_memory_impl() -> Option<u64> {
 
 /// Platforms without a live available-memory source: callers fall back to a
 /// total-memory budget.
-#[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+#[cfg(not(any(target_os = "linux", target_os = "freebsd", target_os = "windows")))]
 fn available_memory_impl() -> Option<u64> {
     None
 }
@@ -643,20 +643,23 @@ fn current_rss_impl() -> Option<u64> {
 // ── Windows ─────────────────────────────────────────────────────────────
 
 #[cfg(target_os = "windows")]
-fn total_memory_impl() -> Option<u64> {
-    #[repr(C)]
-    struct MemoryStatusEx {
-        dw_length: u32,
-        dw_memory_load: u32,
-        ull_total_phys: u64,
-        ull_avail_phys: u64,
-        ull_total_page_file: u64,
-        ull_avail_page_file: u64,
-        ull_total_virtual: u64,
-        ull_avail_virtual: u64,
-        ull_avail_extended_virtual: u64,
-    }
+#[repr(C)]
+struct MemoryStatusEx {
+    dw_length: u32,
+    dw_memory_load: u32,
+    ull_total_phys: u64,
+    ull_avail_phys: u64,
+    ull_total_page_file: u64,
+    ull_avail_page_file: u64,
+    ull_total_virtual: u64,
+    ull_avail_virtual: u64,
+    ull_avail_extended_virtual: u64,
+}
 
+/// One `GlobalMemoryStatusEx` call, shared by the total and available
+/// readers so both see the same snapshot semantics.
+#[cfg(target_os = "windows")]
+fn global_memory_status() -> Option<MemoryStatusEx> {
     extern "system" {
         fn GlobalMemoryStatusEx(buffer: *mut MemoryStatusEx) -> i32;
     }
@@ -666,11 +669,21 @@ fn total_memory_impl() -> Option<u64> {
     let mut status: MemoryStatusEx = unsafe { std::mem::zeroed() };
     status.dw_length = std::mem::size_of::<MemoryStatusEx>() as u32;
     let ret = unsafe { GlobalMemoryStatusEx(&raw mut status) };
-    if ret != 0 && status.ull_total_phys > 0 {
-        Some(status.ull_total_phys)
-    } else {
-        None
-    }
+    (ret != 0 && status.ull_total_phys > 0).then_some(status)
+}
+
+#[cfg(target_os = "windows")]
+fn total_memory_impl() -> Option<u64> {
+    global_memory_status().map(|s| s.ull_total_phys)
+}
+
+/// `ullAvailPhys`: physical memory the kernel can hand out without paging,
+/// which is what an admission gate needs to know before it fans out more
+/// work. Before this, Windows returned `None` here and every caller that
+/// throttles on live host memory silently degraded to "no live signal".
+#[cfg(target_os = "windows")]
+fn available_memory_impl() -> Option<u64> {
+    global_memory_status().map(|s| s.ull_avail_phys.min(s.ull_total_phys))
 }
 
 #[cfg(target_os = "windows")]

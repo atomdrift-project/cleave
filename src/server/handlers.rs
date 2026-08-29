@@ -17,6 +17,43 @@ use tracing::{Instrument, Span, error, info, info_span, warn};
 
 use super::AppState;
 
+/// Registers one analysis in `active_tasks` / `in_flight` and unregisters it
+/// on drop. The handlers `await` a blocking task between the two, and axum
+/// drops the handler future when the client disconnects — so plain inline
+/// cleanup after the `.await` was skipped on every aborted request, leaking
+/// an `in_flight` entry each time and ratcheting `active_tasks` up until the
+/// overload check refused every request for good.
+struct InFlightGuard {
+    state: Arc<super::AppState>,
+    request_id: u64,
+}
+
+impl InFlightGuard {
+    fn register(
+        state: &Arc<super::AppState>,
+        request_id: u64,
+        req: super::InFlightRequest,
+    ) -> Self {
+        state
+            .active_tasks
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        state.in_flight.insert(request_id, req);
+        Self {
+            state: Arc::clone(state),
+            request_id,
+        }
+    }
+}
+
+impl Drop for InFlightGuard {
+    fn drop(&mut self) {
+        self.state
+            .active_tasks
+            .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+        self.state.in_flight.remove(&self.request_id);
+    }
+}
+
 fn analysis_error_response(error: &anyhow::Error) -> Response {
     let (status, message) = classify_analysis_error(error.root_cause().to_string().as_str());
     let detail = format!("{error:#}");
@@ -359,10 +396,8 @@ async fn analyze_inner(
             .into_response();
     }
 
-    state
-        .active_tasks
-        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    state.in_flight.insert(
+    let _in_flight = InFlightGuard::register(
+        &state,
         request_id,
         super::InFlightRequest {
             name: filename.clone(),
@@ -399,10 +434,6 @@ async fn analyze_inner(
     });
 
     let result = handle.await;
-    state
-        .active_tasks
-        .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-    state.in_flight.remove(&request_id);
     drop(temp_dir);
     let elapsed_ms = request_start.elapsed().as_millis();
 
@@ -673,10 +704,8 @@ async fn analyze_path_inner(
         .load(std::sync::atomic::Ordering::Relaxed)
         .is_multiple_of(50);
     let size_bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-    state
-        .active_tasks
-        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    state.in_flight.insert(
+    let _in_flight = InFlightGuard::register(
+        &state,
         request_id,
         super::InFlightRequest {
             name: path_str.clone(),
@@ -711,10 +740,6 @@ async fn analyze_path_inner(
     });
 
     let result = handle.await;
-    state
-        .active_tasks
-        .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-    state.in_flight.remove(&request_id);
 
     let elapsed_ms = request_start.elapsed().as_millis();
 

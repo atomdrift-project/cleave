@@ -177,10 +177,32 @@ fn global_take(id: u64) -> Option<Box<Entry>> {
     // A checked-out entry keeps its byte reservation, so the common
     // take/search/return path does not bounce the process-wide counter's cache
     // line between every Rayon worker.
-    {
-        let mut shard = shard_for(id).lock();
-        shard.get_mut(&id)?.pop()
+    let mut shard = shard_for(id).lock();
+    let stack = shard.get_mut(&id)?;
+    let entry = stack.pop();
+    if stack.is_empty() {
+        // Do not leave an empty stack behind: ids are minted per compiled
+        // engine, so over a long run the key set only ever grows.
+        shard.remove(&id);
     }
+    entry
+}
+
+/// Drop every cache parked under `id` and release its bytes. Called when the
+/// engine that owns `id` is dropped: without this, a regex evicted from its
+/// budgeted store and later recompiled (under a fresh id) leaves its old parked
+/// caches unreachable — nobody holds the dead id — yet still counted against
+/// the budget. Over a long run those orphans fill the pool, live regexes then
+/// fail `reserve_cached` and churn on cache creation while retained bytes sit
+/// pinned at the ceiling.
+pub(crate) fn forget(id: u64) {
+    let freed = {
+        let mut shard = shard_for(id).lock();
+        shard
+            .remove(&id)
+            .map_or(0, |stack| stack.iter().map(|e| e.size).sum::<usize>())
+    };
+    release_cached(freed);
 }
 
 /// Park an already-reserved cache for other threads. The byte budget was

@@ -555,6 +555,105 @@ pub(crate) fn find_redundant_needs_one(composite_rules: &[CompositeTrait]) -> Ve
     violations
 }
 
+/// A `downgrade:` entry that `unless:` already suppresses, so it can never fire.
+pub(crate) struct DeadDowngrade {
+    /// The offending rule's ID.
+    pub id: String,
+    /// True for a composite rule, false for an atomic trait.
+    pub is_composite: bool,
+    /// Which `downgrade:` clause the dead references sit in (`any`/`all`).
+    pub clause: &'static str,
+    /// The references present in both `unless:` and `downgrade:`.
+    pub refs: Vec<String>,
+    /// True when the whole clause is dead, not just some of its entries.
+    pub whole_clause: bool,
+}
+
+/// Reference id of a condition, if it is a plain trait reference.
+fn trait_ref(cond: &Condition) -> Option<&str> {
+    match cond {
+        Condition::Trait { id } => Some(id.as_str()),
+        _ => None,
+    }
+}
+
+/// Find `downgrade:` conditions that can never lower a rule's criticality because
+/// `unless:` on the same rule already skips the match outright.
+///
+/// `unless:` wins: if the same reference appears in both, whenever it matches the rule
+/// is suppressed entirely and the downgrade is unreachable. Two shapes are dead:
+///
+/// - a `downgrade.any` entry that is also in `unless:` (that leg is dead; if every leg
+///   is, the whole clause is)
+/// - any `downgrade.all` entry that is also in `unless:` (the clause needs all of them,
+///   so one suppressed leg kills it)
+///
+/// `downgrade.none` is inverted — an entry there is not dead — and is skipped.
+///
+/// Returns one entry per dead clause.
+#[must_use]
+pub(crate) fn find_dead_downgrades(
+    trait_definitions: &[TraitDefinition],
+    composite_rules: &[CompositeTrait],
+) -> Vec<DeadDowngrade> {
+    let mut violations = Vec::new();
+
+    let mut check = |id: &str,
+                     unless: Option<&Vec<Condition>>,
+                     downgrade: Option<&DowngradeConditions>,
+                     is_composite: bool| {
+        let (Some(unless), Some(downgrade)) = (unless, downgrade) else {
+            return;
+        };
+        let suppressed: HashSet<&str> = unless.iter().filter_map(trait_ref).collect();
+        if suppressed.is_empty() {
+            return;
+        }
+
+        for (clause, list) in [
+            ("any", downgrade.any.as_ref()),
+            ("all", downgrade.all.as_ref()),
+        ] {
+            let Some(list) = list else { continue };
+            if list.is_empty() {
+                continue;
+            }
+            let dead: Vec<String> = list
+                .iter()
+                .filter_map(trait_ref)
+                .filter(|r| suppressed.contains(r))
+                .map(String::from)
+                .collect();
+            if dead.is_empty() {
+                continue;
+            }
+            // `all:` needs every leg, so a single suppressed leg kills the clause.
+            let whole_clause = clause == "all" || dead.len() == list.len();
+            violations.push(DeadDowngrade {
+                id: id.to_string(),
+                is_composite,
+                clause,
+                refs: dead,
+                whole_clause,
+            });
+        }
+    };
+
+    for t in trait_definitions {
+        check(
+            t.id.as_str(),
+            t.unless.as_ref(),
+            t.downgrade.as_ref(),
+            false,
+        );
+    }
+    for r in composite_rules {
+        check(r.id.as_str(), r.unless.as_ref(), r.downgrade.as_ref(), true);
+    }
+
+    violations
+}
+
 /// Count the `unless:` and `downgrade:` conditions declared directly on a single rule.
 ///
 /// Returns `(unless_count, downgrade_count)`.

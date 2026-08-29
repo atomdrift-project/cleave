@@ -1859,12 +1859,36 @@ fn resolve_all_values(qualified_path: &str, ctx: &EvaluationContext<'_>) -> Vec<
             // Sibling archive entry: first `report.files[]` whose basename
             // matches (case-insensitive). Reads the already-flattened `file.kv`,
             // which is always present even when members fold into the container.
-            for file in &ctx.report.files {
-                if sibling_path_matches(&file.path, name)
-                    && let Some(v) = file.kv.get(path)
-                {
+            //
+            // A member's kv has been through `flatten_kv_for_output`, so it is
+            // a different representation from the `values_tree` the same-file
+            // branch navigates above — one that spells an array as indexed keys
+            // and cannot store it whole. Read it through the accessor that sits
+            // beside the flattening rather than open-coding a `get` here: an
+            // exact lookup resolves scalars and silently misses every array,
+            // which is why `README.md::markdown.first_heading` worked while
+            // `README.md::markdown.npm_packages` never matched anything.
+            // Shallowest match wins, not first-in-file-order. An archive that
+            // vendors its dependencies holds several `README.md` and
+            // `package.json` entries, and file order is an artifact of how the
+            // container was written — so first-match let the two halves of a
+            // cross-file comparison come from *different* packages
+            // (`node_modules/debug/README.md` answering for the root manifest).
+            // The entry that speaks for the archive is the one nearest its root.
+            if let Some(file) = ctx
+                .report
+                .files
+                .iter()
+                .filter(|f| sibling_path_matches(&f.path, name))
+                .min_by_key(|f| {
+                    f.path
+                        .bytes()
+                        .filter(|b| matches!(b, b'/' | b'\\' | b'!'))
+                        .count()
+                })
+            {
+                for v in crate::types::core::kv_lookup_flattened(&file.kv, path) {
                     push_flat(&mut out, v);
-                    break;
                 }
             }
         }
@@ -4548,6 +4572,73 @@ Author-Email: test@example.com
     // ============================================================
     // Cross-fact eq/ne tests
     // ============================================================
+
+    #[test]
+    fn sibling_lookup_prefers_the_shallowest_match() {
+        // A package that vendors its dependencies holds several README.md; the
+        // one that speaks for the archive is the one nearest the root.
+        let mk = |path: &str, heading: &str| {
+            let mut f = FileAnalysis::new(0, path.into(), "markdown".into(), String::new(), 0);
+            crate::types::core::flatten_kv_for_output(
+                &json!({"markdown": {"first_heading": heading}}),
+                &mut f.kv,
+            );
+            f
+        };
+        let mut report = AnalysisReport::new(TargetInfo::default());
+        // Nested entry deliberately first, as tar order often puts it.
+        report.files = vec![
+            mk("package/node_modules/debug/README.md", "debug"),
+            mk("package/README.md", "finalhandler"),
+        ];
+        let report: &'static AnalysisReport = Box::leak(Box::new(report));
+        let ctx = EvaluationContext::test_only_new(report, &[], FileType::All);
+        let got = resolve_all_values("README.md::markdown.first_heading", &ctx);
+        assert_eq!(got, vec![serde_json::json!("finalhandler")]);
+    }
+
+    #[test]
+    fn sibling_array_fact_resolves_every_element() {
+        // `flatten_kv_for_output` writes an array as indexed keys, so the
+        // sibling lookup must return the elements rather than nothing.
+        let mut kv = std::collections::BTreeMap::new();
+        kv.insert(
+            "markdown.npm_packages[0]".to_string(),
+            serde_json::json!("chain-registry"),
+        );
+        kv.insert(
+            "markdown.npm_packages[1]".to_string(),
+            serde_json::json!("@chain-registry/utils"),
+        );
+        kv.insert(
+            "markdown.first_heading".to_string(),
+            serde_json::json!("theta-registry"),
+        );
+        let got = crate::types::core::kv_lookup_flattened(&kv, "markdown.npm_packages");
+        assert_eq!(
+            got,
+            vec![
+                &serde_json::json!("chain-registry"),
+                &serde_json::json!("@chain-registry/utils")
+            ]
+        );
+        // Scalars still resolve through the same accessor.
+        assert_eq!(
+            crate::types::core::kv_lookup_flattened(&kv, "markdown.first_heading"),
+            vec![&serde_json::json!("theta-registry")]
+        );
+        // An absent path yields nothing.
+        assert!(crate::types::core::kv_lookup_flattened(&kv, "markdown.absent").is_empty());
+    }
+
+    #[test]
+    fn sibling_array_lookup_excludes_nested_element_leaves() {
+        // `a.b[0].c` is a leaf inside an element, not an element of `a.b`.
+        let mut kv = std::collections::BTreeMap::new();
+        kv.insert("a.b[0].c".to_string(), serde_json::json!("nested"));
+        kv.insert("a.bx".to_string(), serde_json::json!("adjacent-prefix"));
+        assert!(crate::types::core::kv_lookup_flattened(&kv, "a.b").is_empty());
+    }
 
     #[test]
     fn split_qualified_path_no_prefix() {

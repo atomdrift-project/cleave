@@ -18,8 +18,8 @@ use crate::capabilities::validation::{
     find_banned_directory_segments, find_benign_misplaced, find_brittle_path_patterns,
     find_broad_filetype_traits, find_broad_platform_traits, find_cap_obj_violations,
     find_cap_wellknown_violations, find_case_insensitive_overlap_issues,
-    find_composite_only_wellknown_files, find_depth_violations, find_duplicate_atomic_traits,
-    find_duplicate_composite_rules, find_duplicate_inline_exclusions,
+    find_composite_only_wellknown_files, find_dead_downgrades, find_depth_violations,
+    find_duplicate_atomic_traits, find_duplicate_composite_rules, find_duplicate_inline_exclusions,
     find_duplicate_second_level_directories, find_empty_condition_clauses,
     find_exception_atomic_traits, find_exception_inline_conditions,
     find_exception_non_notable_members, find_exception_positive_refs, find_excessive_file_types,
@@ -38,9 +38,9 @@ use crate::capabilities::validation::{
     find_platform_named_directories, find_pure_alias_traits, find_pure_directory_alias_composites,
     find_raw_should_use_text, find_redundant_any_refs, find_redundant_explicit_defaults,
     find_redundant_needs_one, find_redundant_unix_platforms, find_regex_literal_overlap_issues,
-    find_self_referencing_composites, find_self_referencing_traits, find_short_pattern_warnings,
-    find_should_use_defaults, find_single_item_clauses, find_slow_regex_patterns,
-    find_string_content_collisions, find_string_literal_should_use_text,
+    find_self_referencing_composites, find_self_referencing_traits, find_self_suppressing_traits,
+    find_short_pattern_warnings, find_should_use_defaults, find_single_item_clauses,
+    find_slow_regex_patterns, find_string_content_collisions, find_string_literal_should_use_text,
     find_string_pattern_duplicates, find_structural_regex_duplicates,
     find_suppression_only_building_blocks, find_too_short_patterns,
     find_unanchored_wellknown_composites, find_uncompilable_ast_queries,
@@ -1811,6 +1811,88 @@ impl super::CapabilityMapper {
                     format!(
                         "{} self-referencing traits (will never fire)",
                         self_refs.len()
+                    ),
+                );
+            }
+
+            // Dead `downgrade:` clauses -- a reference that also sits in
+            // `unless:`. Suppression wins, so the rule never survives long
+            // enough for the downgrade to apply and the clause is unreachable.
+            // Sibling of the self-suppression check below: both are cases where
+            // a rule's own guards quietly cancel part of it out, and neither is
+            // visible from reading the rule top to bottom.
+            let disable_dead_downgrade =
+                crate::validation_controls::is_validator_disabled("dead-downgrade");
+            let dead_downgrades = find_dead_downgrades(&trait_definitions, &composite_rules);
+            if !disable_dead_downgrade && !dead_downgrades.is_empty() {
+                eprintln!(
+                    "\n❌ ERROR: {} rules have a dead downgrade clause",
+                    dead_downgrades.len()
+                );
+                eprintln!(
+                    "   `unless:` wins over `downgrade:`. A reference in both means the rule is\n   \
+                     suppressed whenever it matches, so the downgrade is unreachable.\n"
+                );
+                for d in &dead_downgrades {
+                    let kind = if d.is_composite { "Rule" } else { "Trait" };
+                    let scope = if d.whole_clause { "clause" } else { "entries" };
+                    eprintln!(
+                        "   {} '{}': dead downgrade.{} {} ({})",
+                        kind,
+                        d.id,
+                        d.clause,
+                        scope,
+                        d.refs.join(", ")
+                    );
+                }
+                eprintln!();
+                warnings.push_id(
+                    "dead-downgrade",
+                    format!(
+                        "{} rules have a dead downgrade clause",
+                        dead_downgrades.len()
+                    ),
+                );
+            }
+
+            // Self-suppressing / self-downgrading atomic traits. Same class of
+            // bug as the composite check below, but on `unless:`/`downgrade:`
+            // instead of `all:`/`any:` — and quieter, because the trait matches
+            // fine in isolation and only dies during a real scan.
+            tracing::trace!("Step 7b2/15: Checking for self-suppressing traits");
+            let self_suppress = find_self_suppressing_traits(&trait_definitions);
+            if !self_suppress.is_empty() {
+                eprintln!(
+                    "\n❌ ERROR: {} traits suppress or downgrade themselves",
+                    self_suppress.len()
+                );
+                eprintln!(
+                    "   A trait listed in its own `unless:` — directly, or through a\n   \
+                     directory reference that expands to include it — is satisfied by its\n   \
+                     own match, so it can never surface. In `downgrade:` the same shape\n   \
+                     pins it one criticality level below what it declares. Reference the\n   \
+                     specific sibling traits it should defer to instead of the directory.\n"
+                );
+                for (trait_def, ref_id, clause) in &self_suppress {
+                    let source_file = rule_source_files
+                        .get(&trait_def.id)
+                        .map(std::string::String::as_str)
+                        .unwrap_or("unknown");
+                    let line_hint = find_line_number(source_file, &trait_def.id);
+                    let location = line_hint
+                        .map(|line| format!("{source_file}:{line}"))
+                        .unwrap_or_else(|| source_file.to_string());
+                    eprintln!(
+                        "   {}: Trait '{}' names itself in `{}:` through '{}'",
+                        location, trait_def.id, clause, ref_id
+                    );
+                }
+                eprintln!();
+                warnings.push_id(
+                    "self-suppression",
+                    format!(
+                        "{} traits suppress or downgrade themselves",
+                        self_suppress.len()
                     ),
                 );
             }

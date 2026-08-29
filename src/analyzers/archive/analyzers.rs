@@ -1080,7 +1080,24 @@ impl ArchiveAnalyzer {
         // technically `!is_program()` but the cross-file value
         // matchers depend on their values being reachable from
         // archive-scope evaluation.
-        if matches!(file_type, FileType::Markdown | FileType::PkgInfo) {
+        //
+        // HTML is here for a stronger reason: `is_program()` excludes only
+        // `Unknown | Html | Markdown | Odf`, and HTML is the one of those that
+        // carries executable code. A `<script>` block is a JavaScript program
+        // whether it arrives as `payload.js` or inlined in `index.html`, and
+        // cleave ships a full HTML analyzer plus the `documents` trait group to
+        // read it. Skipping HTML members meant an archive whose ENTIRE payload
+        // is a web page analyzed as though it were empty: the npm-as-free-CDN
+        // campaigns publish a package whose only file is `index.html` — a fake
+        // Cloudflare "Just a moment" Turnstile page with an obfuscated
+        // completion handler — and cleave reported only the `package.json`,
+        // reaching none of the phishing traits that fire when the same file is
+        // scanned directly. The same blind spot covers browser-extension
+        // popups, `.crx`/`.xpi` UI pages, and HTML droppers stapled into a zip.
+        if matches!(
+            file_type,
+            FileType::Markdown | FileType::PkgInfo | FileType::Html
+        ) {
             return None;
         }
 
@@ -3720,9 +3737,11 @@ mod tests {
             default_analyzer.archive_member_analysis_skip_reason(&FileType::Unknown),
             Some("non-program archive member and all_files is false")
         );
+        // HTML members are analyzed by default: they carry inline <script> and
+        // are the whole payload of the npm-as-CDN phishing packages.
         assert_eq!(
             default_analyzer.archive_member_analysis_skip_reason(&FileType::Html),
-            Some("non-program archive member and all_files is false")
+            None
         );
         assert_eq!(
             default_analyzer.archive_member_analysis_skip_reason(&FileType::Pe),

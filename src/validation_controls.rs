@@ -883,6 +883,13 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         fix: "Tighten the matcher, split by technique, lower criticality, or delete low-signal catch-alls.",
     },
     ValidatorSpec {
+        id: "dead-downgrade",
+        category: ValidatorCategory::Quality,
+        display_id: "dead-downgrade",
+        description: "downgrade: condition is already in unless:, so it can never lower the criticality.",
+        fix: "Drop the dead downgrade entry, or remove it from unless: if the intent was to soften rather than suppress.",
+    },
+    ValidatorSpec {
         id: "score-caps",
         category: ValidatorCategory::Regression,
         display_id: "score-caps",

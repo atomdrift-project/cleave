@@ -1097,18 +1097,49 @@ fn select_ids<'a>(file: &'a FileAnalysis, opts: &TinyOpts, low_tier_fill: usize)
         )
     });
 
+    // The LLM/tiny view shows evidence, not conclusions. A composite *is*
+    // cleave's own verdict, and putting it in front of the grader invites the
+    // model to agree with it instead of reasoning from what was observed; the
+    // legs carry the same information without the conclusion attached. So the
+    // tiny view drops composites and guarantees their legs in their place.
+    //
+    // Consumers must therefore read severity from the structured report, never
+    // by scanning this render for `H`/`S` letters — most elevated findings are
+    // composites and no longer appear here at all.
+    let minimal = matches!(opts.header, HeaderStyle::Minimal);
+    let composite_legs: HashSet<&str> = if minimal {
+        file.findings
+            .iter()
+            .filter(|f| !f.trait_refs.is_empty())
+            .flat_map(|f| f.trait_refs.iter().map(crate::types::Istr::as_str))
+            .collect()
+    } else {
+        HashSet::new()
+    };
+
     // Per id, keep the best score and the highest criticality seen — the
     // latter decides whether the id bypasses the cap.
     let mut scored: HashMap<&str, (f32, Criticality)> = HashMap::new();
     for f in &file.findings {
-        // Show each finding only under the file it was located in: an inherited
-        // copy (`src` set) is rendered by its origin member, not here.
+        // An inherited copy (`src` set, native to a member below) is rendered by
+        // its origin member, not here. A *cross-file composite* also carries
+        // source provenance — `composite_sources` records the members it drew
+        // from — but is native to no member at all: it exists only on this
+        // container. Treating it as an inherited copy dropped it from every
+        // rendered view while leaving it in the JSON, so a container-scope
+        // finding was invisible in `cleave analyze` and in the LLM render alike
+        // (measured on localstack-core's `aws-instance-launch-with-user-data`).
+        // `compact.rs` draws the same distinction for the JSON path.
+        let inherited_copy = f.src.is_some() && !file.composite_sources.contains_key(f.id.as_str());
         // Baseline (universal low-signal noise) is dropped from the primary
         // selection: it crowds the record list without helping the reader reach
         // a verdict. Referenced component traits stay — they're the
         // source-context counterweight. (Both tiers re-enter below as
         // `low_tier_fill` candidates.)
-        if f.src.is_some() || !tiny_should_show(f, file) {
+        if inherited_copy || !tiny_should_show(f, file) {
+            continue;
+        }
+        if minimal && !f.trait_refs.is_empty() {
             continue;
         }
         if let (Some(legs), Some(fc)) = (&focus_legs, opts.focus_crit) {
@@ -1145,6 +1176,20 @@ fn select_ids<'a>(file: &'a FileAnalysis, opts: &TinyOpts, low_tier_fill: usize)
     }
     let remaining = opts.top_n.saturating_sub(out.len());
     out.extend(filler.into_iter().take(remaining));
+
+    // Guarantee the legs of every omitted composite. They are usually
+    // `component`, so the cap or the ranking could otherwise drop the only
+    // evidence left for a finding whose conclusion was just withheld. Additive
+    // and native-only: a leg carried by another member is rendered there.
+    if minimal && !composite_legs.is_empty() {
+        let mut have: HashSet<&str> = out.iter().copied().collect();
+        for f in &file.findings {
+            let id = f.id.as_str();
+            if f.src.is_none() && composite_legs.contains(id) && have.insert(id) {
+                out.push(id);
+            }
+        }
+    }
 
     // Top up to `low_tier_fill` with the best low-tier traits the primary pass
     // excluded (unreferenced components, baselines) — additive only: it never
@@ -4582,109 +4627,66 @@ mod tests {
     }
 
     #[test]
-    fn test_format_tiny_includes_baseline_and_composite_findings() {
-        let findings = vec![
-            Finding {
-                precomputed_spans: None,
-                src: None,
-                kind: FindingKind::Capability,
-                trait_refs: vec![],
-                id: "micro-behaviors/fs/read::open".to_string().into(),
-                desc: "Open file for reading".to_string().into(),
-                conf: 0.8,
-                crit: Criticality::Baseline,
-                mbc: None,
-                attack: None,
-                evidence: vec![],
-                match_count: 0,
-                source_file: None,
-            },
-            Finding {
-                precomputed_spans: None,
-                src: None,
-                kind: FindingKind::Capability,
-                trait_refs: vec![],
-                id: "micro-behaviors/fs/read::open".to_string().into(),
-                desc: "Open file for reading".to_string().into(),
-                conf: 0.8,
-                crit: Criticality::Baseline,
-                mbc: None,
-                attack: None,
-                evidence: vec![Evidence {
-                    method: "symbol".to_string(),
-                    source: "test".to_string(),
-                    value: "fopen".to_string(),
-                    location: None,
-                    ..Default::default()
-                }],
-                match_count: 0,
-                source_file: None,
-            },
-            Finding {
-                precomputed_spans: None,
-                src: None,
-                kind: FindingKind::Capability,
-                trait_refs: vec![],
-                id: "objectives/execution/loader::fragment".to_string().into(),
-                desc: "Loader fragment".to_string().into(),
-                conf: 0.7,
-                crit: Criticality::Component,
-                mbc: None,
-                attack: None,
-                evidence: vec![],
-                match_count: 0,
-                source_file: None,
-            },
-            Finding {
-                precomputed_spans: None,
-                src: None,
-                kind: FindingKind::Capability,
-                trait_refs: vec![],
-                id: "objectives/execution/loader::unused-fragment"
-                    .to_string()
-                    .into(),
-                desc: "Unused loader fragment".to_string().into(),
-                conf: 0.7,
-                crit: Criticality::Component,
-                mbc: None,
-                attack: None,
-                evidence: vec![],
-                match_count: 0,
-                source_file: None,
-            },
-            Finding {
-                precomputed_spans: None,
-                src: None,
-                kind: FindingKind::Capability,
-                trait_refs: vec![
-                    "micro-behaviors/fs/read::open".to_string().into(),
-                    "objectives/execution/loader::fragment".to_string().into(),
-                ],
-                id: "objectives/execution/loader::matched-composite"
-                    .to_string()
-                    .into(),
-                desc: "Matched composite loader".to_string().into(),
-                conf: 0.95,
-                crit: Criticality::Suspicious,
-                mbc: None,
-                attack: None,
-                evidence: vec![],
-                match_count: 0,
-                source_file: None,
-            },
+    fn select_ids_tiny_omits_composites_and_promotes_their_legs() {
+        // The LLM view shows evidence, not conclusions. A composite is cleave's
+        // own verdict: withheld, with the legs it was built from promoted in its
+        // place — even though those legs sit at Baseline/Component, tiers this
+        // view would otherwise drop. A component the composite does not
+        // reference stays dropped: promotion is for legs, not every fragment.
+        let mut composite = finding_with("objectives/loader::matched", Criticality::Suspicious);
+        composite.trait_refs = vec![
+            "micro-behaviors/fs/read::open".to_string().into(),
+            "objectives/loader::fragment".to_string().into(),
         ];
-        let report = create_test_report(findings, vec![]);
+        let file = file_with_findings(vec![
+            finding_with("micro-behaviors/fs/read::open", Criticality::Baseline),
+            finding_with("objectives/loader::fragment", Criticality::Component),
+            finding_with("objectives/loader::unused", Criticality::Component),
+            composite,
+        ]);
 
-        let output = format_tiny(&report);
+        let tiny = select_ids(&file, &TinyOpts::tiny(), 0);
+        assert!(
+            !tiny.contains(&"objectives/loader::matched"),
+            "the composite's conclusion must not reach the grader: {tiny:?}"
+        );
+        assert!(tiny.contains(&"micro-behaviors/fs/read::open"), "{tiny:?}");
+        assert!(tiny.contains(&"objectives/loader::fragment"), "{tiny:?}");
+        assert!(!tiny.contains(&"objectives/loader::unused"), "{tiny:?}");
 
-        // No capture pass, so findings render as location-less records — but only
-        // Suspicious+ ones. The Baseline read and both Components are filtered
-        // out; only the matched composite (Suspicious) survives.
-        assert!(!output.contains("micro-behaviors/fs/read::open"));
-        assert!(!output.contains("objectives/execution/loader::fragment"));
-        assert!(!output.contains("objectives/execution/loader::unused-fragment"));
-        // No-anchor finding: a bare annotation line — marker, severity, desc.
-        assert!(output.contains("// S Matched composite loader"));
+        // The terminal view is unchanged: a human wants the conclusion.
+        let term = select_ids(&file, &TinyOpts::terminal(), 0);
+        assert!(term.contains(&"objectives/loader::matched"), "{term:?}");
+    }
+
+    #[test]
+    fn select_ids_keeps_cross_file_composites_on_a_container() {
+        // A cross-file composite carries source provenance (`composite_sources`)
+        // but is native to no member — it exists only on the container. Treating
+        // it as an inherited copy dropped it from every rendered view while it
+        // stayed in the JSON.
+        let mut composite = finding_with("objectives/impact::launch", Criticality::Suspicious);
+        composite.src = Some(7);
+        let mut file = file_with_findings(vec![composite]);
+        file.composite_sources.insert(
+            "objectives/impact::launch".to_string(),
+            vec![crate::types::file_analysis::CompositeSource {
+                file: 7,
+                line: None,
+                offset: None,
+            }],
+        );
+
+        let term = select_ids(&file, &TinyOpts::terminal(), 0);
+        assert!(term.contains(&"objectives/impact::launch"), "{term:?}");
+
+        // An ordinary inherited copy — `src` set, no composite provenance — is
+        // still rendered by its origin member, not here.
+        let mut inherited = finding_with("objectives/impact::other", Criticality::Suspicious);
+        inherited.src = Some(7);
+        let plain = file_with_findings(vec![inherited]);
+        let term = select_ids(&plain, &TinyOpts::terminal(), 0);
+        assert!(!term.contains(&"objectives/impact::other"), "{term:?}");
     }
 
     #[test]

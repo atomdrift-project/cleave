@@ -600,6 +600,10 @@ impl CapabilityMapper {
     /// depends on this — see `Self::match_indexes`. Idempotent and cheap once built.
     pub fn warm_indexes(&self) {
         let _ = self.match_indexes();
+        // The doomed-skip index is also lazily built on the first analysis;
+        // left out of the warm-up it lands inside the first job while that
+        // job holds the worker's cleave gate and everything else queues.
+        let _ = self.doomed_skip_index();
     }
 }
 

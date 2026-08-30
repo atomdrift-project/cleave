@@ -160,8 +160,12 @@ pub(crate) fn str_budget_bytes() -> usize {
 }
 
 /// Budget for the raw-content (`LeanRegex` byte engine) store.
-/// `CLEAVE_REGEX_RAW_MB` overrides.
+/// `CLEAVE_REGEX_RAW_MB` overrides. 512 MiB, up from 256: the poppy worker
+/// corpus needs ~275 MiB of compiled raw engines, and at 256 the store evicted
+/// ~5,000 times per quarter-benchmark run — pure recompile churn (−3% wall
+/// when lifted, 2026-08-30). The str store scales with RAM; this one is flat
+/// because its working set tracks the rule corpus, not the host.
 pub(crate) fn raw_budget_bytes() -> usize {
     static BYTES: OnceLock<usize> = OnceLock::new();
-    *BYTES.get_or_init(|| env_mb("CLEAVE_REGEX_RAW_MB", 256))
+    *BYTES.get_or_init(|| env_mb("CLEAVE_REGEX_RAW_MB", 512))
 }

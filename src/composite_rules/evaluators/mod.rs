@@ -208,6 +208,22 @@ pub(crate) fn bytes_regex_cache() -> &'static RwLock<BytesRegexCache> {
     })
 }
 
+/// Populate the raw-bytes store with `(pattern, case_insensitive)` if it is
+/// not already there. Used by the startup regex warm; a later lookup at the
+/// eval site then hits `peek` instead of compiling on the pool.
+pub(crate) fn warm_bytes_regex(pattern: &str, case_insensitive: bool) {
+    let key = (pattern.to_string(), case_insensitive);
+    let cache = bytes_regex_cache();
+    if cache.read().peek(&key).is_some() {
+        return;
+    }
+    if let Some(re) = compile_bytes_regex(pattern, case_insensitive) {
+        let arc = std::sync::Arc::new(re);
+        let size = arc.heap_bytes();
+        cache.write().put(key, arc, size);
+    }
+}
+
 /// Compile an ASCII-only pattern into a lean [`LeanRegex`] for
 /// zero-UTF-8-validation matching against raw file bytes. Returns `None` if the
 /// pattern uses features both engines reject (e.g. backreferences) — callers must
@@ -697,6 +713,42 @@ pub(crate) fn bounded_consumed_bytes(pattern: &str) -> Option<usize> {
     walk(&parse_hir_like_engine(pattern)?)
 }
 
+/// Pattern-only part of [`windows_from_atom_hits`]: `(line_local, any_look,
+/// radius)`, or `None` when the pattern must not be windowed. Memoized by
+/// pattern — the derivation parses the regex to HIR, and it used to run on
+/// every evaluation of every windowable rule (0.8 s of pool time on one
+/// 37 MB archive). Patterns are rule-derived, so the map is bounded by the
+/// rule set.
+fn window_shape(pattern: &str) -> Option<(bool, bool, usize)> {
+    use std::sync::RwLock;
+    static MEMO: std::sync::LazyLock<
+        RwLock<rustc_hash::FxHashMap<Box<str>, Option<(bool, bool, usize)>>>,
+    > = std::sync::LazyLock::new(|| RwLock::new(rustc_hash::FxHashMap::default()));
+    if let Some(hit) = MEMO.read().ok().and_then(|m| m.get(pattern).copied()) {
+        return hit;
+    }
+    let computed = (|| {
+        let hir = parse_hir_like_engine(pattern)?;
+        let (abs, mut line, any_look) = look_info(&hir);
+        if abs {
+            return None;
+        }
+        let radius = match bounded_consumed_bytes(pattern) {
+            Some(r) => r,
+            None if unbounded_reps_are_line_local(&hir) => {
+                line = true;
+                0
+            }
+            None => return None,
+        };
+        Some((line, any_look, radius))
+    })();
+    if let Ok(mut m) = MEMO.write() {
+        m.insert(Box::from(pattern), computed);
+    }
+    computed
+}
+
 fn look_info(hir: &regex_syntax::hir::Hir) -> (bool, bool, bool) {
     use regex_syntax::hir::{HirKind, Look};
     match hir.kind() {
@@ -768,7 +820,9 @@ fn merge_spans(mut spans: Vec<(usize, usize)>) -> Vec<(usize, usize)> {
 /// True when at least one recorded hit is a mandatory atom of `pattern`.
 /// Used to refuse windowing an `unless:` regex around `if:` atom offsets.
 pub(crate) fn hits_are_pattern_atoms(haystack: &[u8], hits: &[u32], pattern: &str) -> bool {
-    let Some(atoms) = mandatory_atom_set(pattern) else {
+    // Memoized: this runs per evaluation, and the unmemoized derivation parses
+    // the pattern to HIR every call (0.5 s of pool time on one 37 MB archive).
+    let Some(atoms) = crate::capabilities::derivation_memo::mandatory_atom_set(pattern) else {
         return false;
     };
     for &off in hits {
@@ -808,19 +862,10 @@ pub(crate) fn windows_from_atom_hits(
     if search_len < MIN_HAYSTACK_TO_WINDOW || hits.is_empty() {
         return None;
     }
-    let hir = parse_hir_like_engine(pattern)?;
-    let (abs, mut line, any_look) = look_info(&hir);
-    if abs || regex_unicode_override() {
+    if regex_unicode_override() {
         return None;
     }
-    let radius = match bounded_consumed_bytes(pattern) {
-        Some(r) => r,
-        None if unbounded_reps_are_line_local(&hir) => {
-            line = true;
-            0
-        }
-        None => return None,
-    };
+    let (line, any_look, radius) = window_shape(pattern)?;
     let pad = usize::from(any_look);
     let mut spans = Vec::with_capacity(hits.len());
     let mut covered = 0usize;
@@ -1010,6 +1055,7 @@ pub(crate) fn build_regex(pattern: &str, case_insensitive: bool) -> anyhow::Resu
         builder.dfa_size_limit(regex_dfa_cache_bytes());
         builder.build()?
     };
+    crate::composite_rules::regex_warm::record_facade(pattern, case_insensitive);
 
     // Insert with write lock (LRU will evict oldest if at capacity)
     {

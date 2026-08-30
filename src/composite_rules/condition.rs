@@ -14,9 +14,13 @@ use std::sync::Arc;
 /// engine (~95 KB apiece, ~19k of them on member-heavy archives) — an immortal
 /// leak that was the dominant steady-state RSS. Cloning the `Arc` (never the
 /// `Regex`) hands out the same warm instance the `&'static` did, without leaking.
-/// Distinct compiled trait regexes kept warm; sized to the regex-using slice of
-/// the corpus (a few thousand), so the working set fits and never thrashes.
-const REGEX_CACHE_CAP: std::num::NonZeroUsize = match std::num::NonZeroUsize::new(16_384) {
+/// Distinct compiled trait regexes kept warm. The byte budget
+/// (`str_budget_bytes`) is the real bound; this count cap only guards the
+/// LRU's bookkeeping. It must exceed the rule set's regex count: at 16,384
+/// the startup warm (17.5k patterns from the memo, ~244 MB) evicted its own
+/// earliest entries, and those were exactly the container `type: path`
+/// rules the first job recompiled.
+const REGEX_CACHE_CAP: std::num::NonZeroUsize = match std::num::NonZeroUsize::new(65_536) {
     Some(capacity) => capacity,
     None => std::num::NonZeroUsize::MIN,
 };
@@ -326,6 +330,7 @@ pub(crate) fn cached_regex(pattern: &str) -> Option<Arc<TraitRegex>> {
     static CLAIMS: super::compile_claim::ClaimSet = super::compile_claim::ClaimSet::new();
     let compile_and_put = || {
         let arc = Arc::new(TraitRegex::compile(pattern)?);
+        super::regex_warm::record_str(pattern);
         let size = arc.heap_bytes();
         if let Ok(mut cache) = REGEX_CACHE.write() {
             cache.put(pattern.to_string(), Arc::clone(&arc), size);
@@ -2511,6 +2516,22 @@ impl Condition {
     /// early-strip keep-set. Mirrors `eval_trait`'s matching exactly: an id
     /// is stored raw (trailing `/` trimmed); classification into
     /// exact / short-suffix / directory-prefix happens at index build.
+    /// Whether evaluating this condition reads the file's own path: `type:
+    /// path` (full path, `basename`, `dirname`) and `type: value` queries over
+    /// the synthetic `file.*` keys (`file.basename`, `file.path`, …). A finding
+    /// produced through such a condition is only valid for the path it was
+    /// evaluated under — the content-keyed caches must not serve it elsewhere.
+    pub(crate) fn depends_on_path(&self) -> bool {
+        match self {
+            Self::Path(_) => true,
+            Self::Kv(q) => [Some(q.path.as_str()), q.eq.as_deref(), q.ne.as_deref()]
+                .into_iter()
+                .flatten()
+                .any(|p| p.starts_with("file.")),
+            _ => false,
+        }
+    }
+
     pub(crate) fn collect_trait_refs(&self, out: &mut std::collections::BTreeSet<String>) {
         if let Self::Trait { id } = self {
             out.insert(id.trim_end_matches('/').to_string());

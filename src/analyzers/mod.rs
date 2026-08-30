@@ -405,6 +405,23 @@ pub(crate) fn detect_file_type_from_path(file_path: &Path) -> FileType {
 /// Detect file type from already-loaded data (content first, extension fallback).
 #[inline]
 pub(crate) fn detect_file_type_from_data(file_path: &Path, file_data: &[u8]) -> FileType {
+    detect_file_type_from_detected(
+        file_path,
+        file_data,
+        filefacts::fileid::detect(file_path, file_data).map(|d| d.file_type),
+    )
+}
+
+/// [`detect_file_type_from_data`] with the filefacts detection already done
+/// (`detected` is `filefacts::fileid::detect(..).map(|d| d.file_type)`).
+/// Lets a caller that also needs the full [`filefacts::FileId`] run the
+/// detection pipeline once — on a compressed tar it inflates up to 64 MiB
+/// to decide npm/sdist.
+pub(crate) fn detect_file_type_from_detected(
+    file_path: &Path,
+    file_data: &[u8],
+    detected: Option<FileType>,
+) -> FileType {
     if is_dotenv_name(file_path) {
         return FileType::Text;
     }
@@ -415,8 +432,7 @@ pub(crate) fn detect_file_type_from_data(file_path: &Path, file_data: &[u8]) -> 
         return FileType::Text;
     }
 
-    filefacts::fileid::detect(file_path, file_data)
-        .map(|d| d.file_type)
+    detected
         .filter(|ft| *ft != FileType::Pe || looks_like_pe_image(file_data))
         .filter(|ft| *ft != FileType::Unknown)
         .or_else(|| sniff_script_type_from_content(file_data))

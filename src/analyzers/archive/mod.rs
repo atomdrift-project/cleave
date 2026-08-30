@@ -1273,7 +1273,15 @@ impl ArchiveAnalyzer {
         }
 
         let guard = ExtractionGuard::with_cancellation(self.cancelled.clone());
-        let file_type = crate::analyzers::detect_file_type_from_data(archive_path, data);
+        // One detection pass for both cleave's type and the filefacts context
+        // below: `from_path_and_bytes` is `detect` plus the extension-mismatch
+        // carve-outs, and `detect` on a gzip tar inflates up to 64 MiB of it.
+        let fileid = filefacts::FileId::from_path_and_bytes(archive_path, data);
+        let file_type = crate::analyzers::detect_file_type_from_detected(
+            archive_path,
+            data,
+            Some(fileid.file_type()).filter(|ft| *ft != FileType::Unknown),
+        );
         let archive_type_str = file_type.report_file_type();
 
         let target = TargetInfo {
@@ -1296,7 +1304,9 @@ impl ArchiveAnalyzer {
         // makes `chm.itsf.*` / `rpm.*` / `crx.*` etc. reachable via
         // both `report.values_tree` (host-level kv) and
         // `report.filefacts_metrics` (host-level metrics).
-        if let Ok(ctx) = crate::analysis_context::AnalysisContext::open(archive_path, data) {
+        if let Ok(ctx) =
+            crate::analysis_context::AnalysisContext::open_with_fileid(archive_path, data, fileid)
+        {
             report.filefacts = Some(crate::types::FilefactsView::from_ctx(&ctx));
             report.identity = ctx.identity();
             filefacts_archive_entries = ctx.archive_entries();
@@ -1393,8 +1403,66 @@ impl ArchiveAnalyzer {
             && !filefacts_archive_entries
                 .iter()
                 .any(|entry| entry.encrypted);
-        if zip_family_in_memory {
-            if matches!(file_type, FileType::Crx) {
+        // Tar family (plain and gzip/bzip2/xz/zstd compressed, and the
+        // packages built on them) streams through the same in-memory member
+        // window as zips when the archive fits in memory. `CLEAVE_TAR_IN_MEMORY=0`
+        // restores the temp-tree extraction.
+        let tar_family_in_memory = archive_fits_memory
+            && tar_in_memory_enabled()
+            && matches!(
+                file_type,
+                FileType::Tar
+                    | FileType::TarGz
+                    | FileType::Npm
+                    | FileType::Crate
+                    | FileType::PythonSdist
+                    | FileType::TarBz2
+                    | FileType::TarXz
+                    | FileType::TarZst
+            );
+        if zip_family_in_memory || tar_family_in_memory {
+            if tar_family_in_memory {
+                use std::io::Cursor;
+                let label = "tar archive";
+                match file_type {
+                    FileType::Tar => self.analyze_tar_archive_in_memory(
+                        Cursor::new(data),
+                        &mut report,
+                        start,
+                        &guard,
+                        label,
+                    )?,
+                    FileType::TarBz2 => self.analyze_tar_archive_in_memory(
+                        bzip2::read::BzDecoder::new(Cursor::new(data)),
+                        &mut report,
+                        start,
+                        &guard,
+                        label,
+                    )?,
+                    FileType::TarXz => self.analyze_tar_archive_in_memory(
+                        xz2::read::XzDecoder::new(Cursor::new(data)),
+                        &mut report,
+                        start,
+                        &guard,
+                        label,
+                    )?,
+                    FileType::TarZst => self.analyze_tar_archive_in_memory(
+                        zstd::stream::read::Decoder::new(Cursor::new(data))
+                            .context("Failed to create zstd decoder")?,
+                        &mut report,
+                        start,
+                        &guard,
+                        label,
+                    )?,
+                    _ => self.analyze_tar_archive_in_memory(
+                        flate2::read::GzDecoder::new(Cursor::new(data)),
+                        &mut report,
+                        start,
+                        &guard,
+                        label,
+                    )?,
+                }
+            } else if matches!(file_type, FileType::Crx) {
                 let zip_offset = zip::crx_zip_offset(data)?;
                 self.analyze_zip_archive_in_memory(
                     &data[zip_offset..],
@@ -1904,6 +1972,13 @@ impl Default for ArchiveAnalyzer {
         Self::new()
     }
 }
+/// `CLEAVE_TAR_IN_MEMORY=0` disables the in-memory tar path (temp-tree
+/// extraction instead), for A/B and as a kill switch.
+fn tar_in_memory_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| !std::env::var("CLEAVE_TAR_IN_MEMORY").is_ok_and(|v| v == "0"))
+}
+
 impl Analyzer for ArchiveAnalyzer {
     fn analyze_input(&self, input: &AnalysisInput<'_>) -> Result<AnalysisReport> {
         if input.path.exists() {

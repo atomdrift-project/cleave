@@ -523,6 +523,7 @@ impl super::CapabilityMapper {
                                     unless_index: std::sync::Arc::new(std::sync::OnceLock::new()),
                                     kv_sibling_basenames: std::sync::Arc::default(),
                                     trait_ref_index: std::sync::Arc::default(),
+                                    path_dependent_ids: std::sync::Arc::default(),
                                     container_ref_index: std::sync::Arc::default(),
                                     doomed_skip: std::sync::Arc::default(),
                                     composite_worklists: std::sync::Arc::default(),
@@ -1129,6 +1130,16 @@ impl super::CapabilityMapper {
         let mut trait_definitions: Vec<TraitDefinition> =
             trait_definitions_map.into_values().collect();
         let mut composite_rules: Vec<CompositeTrait> = composite_rules_map.into_values().collect();
+        // Canonical order. `HashMap` iteration is seeded per process, so without
+        // this every mapper build handed out a different trait/composite order,
+        // the on-disk mapper cache then froze that order, and evaluation on
+        // large members is order-sensitive (composite crediting / `unless`
+        // interplay): the same archive produced different findings after a
+        // cache rebuild, and two identical copies of one rule bundle
+        // disagreed. Sorting by id makes the order a pure function of the
+        // rule set — reproducible across rebuilds, machines and bundle copies.
+        trait_definitions.sort_unstable_by(|a, b| a.id.cmp(&b.id));
+        composite_rules.sort_unstable_by(|a, b| a.id.cmp(&b.id));
 
         // Register the combined-engine namespace for atomic traits whose top-level `if`
         // condition is `type: yara`.  These rules are compiled into the shared YaraEngine
@@ -4646,6 +4657,7 @@ impl super::CapabilityMapper {
             unless_index: std::sync::Arc::new(std::sync::OnceLock::new()),
             kv_sibling_basenames: std::sync::Arc::default(),
             trait_ref_index: std::sync::Arc::default(),
+            path_dependent_ids: std::sync::Arc::default(),
             container_ref_index: std::sync::Arc::default(),
             doomed_skip: std::sync::Arc::default(),
             composite_worklists: std::sync::Arc::default(),

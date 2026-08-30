@@ -1247,6 +1247,32 @@ pub fn prefetch_capability_mapper() {
     }
 }
 
+/// Build every YARA bucket in the background, on a few plain threads, so a
+/// long-lived worker's first archive does not pay the lazy per-bucket
+/// deserialize + wasmtime JIT (the `pe` bucket alone is ~3 s on one thread)
+/// inside its analysis. Returns immediately; the engine must already be
+/// initialized (call after [`prefetch_yara_engine`]). Steady-state memory is
+/// unchanged — the buckets are built on first use anyway and never dropped.
+/// `CLEAVE_YARA_PREWARM_THREADS` sets the thread count (0 disables).
+pub fn prewarm_yara_buckets_background(enable_third_party: bool) {
+    let threads = std::env::var("CLEAVE_YARA_PREWARM_THREADS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or_else(|| {
+            std::thread::available_parallelism().map_or(2, |n| (n.get() / 4).clamp(2, 4))
+        });
+    if threads == 0 {
+        return;
+    }
+    let engine = shared_resources::yara_engine(enable_third_party);
+    if let Err(e) = std::thread::Builder::new()
+        .name("yara-prewarm".into())
+        .spawn(move || engine.prewarm_all_cold_buckets(threads))
+    {
+        tracing::warn!(error = %e, "could not spawn YARA prewarm thread");
+    }
+}
+
 /// Pre-warm both YARA and the capability mapper.
 ///
 /// Call this once at process startup (e.g. at the top of a worker or server
@@ -1255,8 +1281,34 @@ pub fn prefetch_capability_mapper() {
 /// subsequent rayon scan cannot win the first-init race and rebuild them. Safe
 /// to call multiple times; subsequent calls are cheap.
 pub fn prefetch_shared_resources(enable_third_party: bool) {
+    // First: compile the trait regexes this deployment needed last time on a
+    // few plain background threads (see `regex_warm`); they overlap the two
+    // blocking prefetches below and the embedder's own model load. Without
+    // this the first small file on a fresh process spends ~85 % of its
+    // analysis in first-use regex compiles (an 8.5 KB wheel: ~640 ms cold
+    // vs ~100 ms warm).
+    prewarm_regexes_background();
     prefetch_yara_engine(enable_third_party);
     prefetch_capability_mapper();
+}
+
+/// Compile the regexes recorded in the warm memo on background threads
+/// (`CLEAVE_REGEX_PREWARM_THREADS`, 0 disables). Returns immediately.
+pub fn prewarm_regexes_background() {
+    let threads = std::env::var("CLEAVE_REGEX_PREWARM_THREADS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or_else(|| {
+            std::thread::available_parallelism().map_or(2, |n| (n.get() / 4).clamp(2, 8))
+        });
+    composite_rules::regex_warm::warm_background(threads);
+}
+
+/// Flush the regex warm memo if new patterns compiled since the last flush.
+/// Cheap when nothing changed; a long-lived worker calls this from its
+/// periodic summary tick so the next startup can warm what this run learned.
+pub fn persist_regex_warm_memo() {
+    composite_rules::regex_warm::persist();
 }
 
 /// Log end-of-scan engine statistics at `info`: per-phase thread-time (and
@@ -1267,7 +1319,12 @@ pub fn log_scan_stats() {
     crate::mem_profile::report_scan_stats();
     crate::composite_rules::evaluators::log_regex_cache_stats();
     crate::capabilities::log_raw_gate_stats();
-    crate::composite_rules::trait_timing::report(40);
+    let top = std::env::var("CLEAVE_TRAIT_TIMING_TOP")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(40);
+    crate::composite_rules::trait_timing::report(top);
+    composite_rules::regex_warm::persist();
 }
 
 /// Return `(retained_bytes, budget_bytes)` for the process-wide regex scratch
@@ -2212,6 +2269,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     // Secondary check: per-file cache (cross-context, shared with archive members)
     if let Some(fa) =
         analysis_cache::file_analysis_cache_lookup(&sha256_hex, file_type_key, options)
+        && (fa.path.is_empty() || fa.path == path.display().to_string())
     {
         tracing::debug!("File cache hit (cross-context)");
         let report = report_from_file_analysis(fa, path.display().to_string());
@@ -2270,6 +2328,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     }
     if let Some(fa) =
         analysis_cache::file_analysis_cache_lookup(&sha256_hex, file_type_key, options)
+        && (fa.path.is_empty() || fa.path == path.display().to_string())
     {
         let report = report_from_file_analysis(fa, path.display().to_string());
         if let Some(flight) = flight {
@@ -2941,7 +3000,12 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     // Store result in per-file cache (cross-context: shared with archive member analysis)
     {
         let mut fa = report.to_file_analysis(0);
-        fa.path = String::new();
+        // Content-keyed: pin the path when the findings depend on it.
+        fa.path = if shared_resources::report_has_path_dependent_findings(&report) {
+            path.display().to_string()
+        } else {
+            String::new()
+        };
         fa.id = 0;
         fa.parent_id = None;
         fa.depth = 0;

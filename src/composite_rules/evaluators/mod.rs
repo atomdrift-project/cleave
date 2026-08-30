@@ -254,6 +254,7 @@ pub(crate) fn compile_bytes_regex(pattern: &str, case_insensitive: bool) -> Opti
                 regex_automata::meta::Regex::config()
                     .utf8_empty(false)
                     .onepass(false)
+                    .dfa(regex_full_dfa())
                     .which_captures(regex_automata::nfa::thompson::WhichCaptures::Implicit)
                     .nfa_size_limit(Some(10 * (1 << 20)))
                     .hybrid_cache_capacity(regex_dfa_cache_bytes()),
@@ -280,6 +281,16 @@ pub(crate) fn compile_bytes_regex(pattern: &str, case_insensitive: bool) -> Opti
 /// the string path's ASCII class demotion (see `compile_bytes_regex` and
 /// `condition::demote_perl_classes_to_ascii`). `CLEAVE_REGEX_UNICODE=1`
 /// restores the old Unicode behavior for A/B benchmarking.
+/// Whether `regex_automata::meta` may build its eager full DFAs (default). They
+/// only apply to small NFAs but cost up to `dfa_size_limit` twice per engine;
+/// over the poppy worker's 44k-pattern warm set they were ~13% of compiled
+/// engine bytes (705 → 610 MiB). `CLEAVE_REGEX_NO_FULL_DFA=1` leaves matching
+/// to the lazy DFA, which the scratch pool already serves.
+pub(crate) fn regex_full_dfa() -> bool {
+    static FULL: OnceLock<bool> = OnceLock::new();
+    *FULL.get_or_init(|| !std::env::var("CLEAVE_REGEX_NO_FULL_DFA").is_ok_and(|v| v == "1"))
+}
+
 pub(crate) fn regex_unicode_override() -> bool {
     static UNICODE: OnceLock<bool> = OnceLock::new();
     *UNICODE.get_or_init(|| std::env::var("CLEAVE_REGEX_UNICODE").is_ok_and(|v| v == "1"))
@@ -901,6 +912,14 @@ pub(crate) fn windows_from_atom_hits(
 /// `*_inserts` means the working set exceeds that store's byte budget and
 /// engines recompile per use instead of being reused — the signature of
 /// budget thrash on archive scans.
+/// `(entries, bytes, evictions, budget_bytes)` of the raw-bytes regex store.
+pub(crate) fn bytes_regex_store_stats() -> (usize, usize, u64, usize) {
+    BYTES_REGEX_CACHE.get().map_or((0, 0, 0, 0), |c| {
+        let c = c.read();
+        (c.len(), c.bytes(), c.evictions(), c.budget())
+    })
+}
+
 #[allow(dead_code)] // called from lib.rs end-of-scan path
 pub(crate) fn log_regex_cache_stats() {
     let uni = REGEX_CACHE.get().map_or(0, |c| c.read().len());

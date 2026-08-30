@@ -89,6 +89,10 @@ pub(crate) struct KvMatcher {
     pub length_min: Option<usize>,
     /// Maximum collection size (array elements or object keys)
     pub length_max: Option<usize>,
+    /// Optional high-fidelity validation check applied to the resolved value.
+    /// Set after construction so the existing `new()` signature is untouched.
+    pub is_check: Option<crate::composite_rules::condition::StringValidator>,
+    pub not: Vec<crate::composite_rules::condition::NotException>,
 }
 
 impl KvMatcher {
@@ -118,6 +122,8 @@ impl KvMatcher {
             exists,
             length_min,
             length_max,
+            is_check: None,
+            not: Vec::new(),
         }
     }
 
@@ -149,8 +155,14 @@ impl KvMatcher {
             }
         }
 
-        // If no string matcher specified, just check existence (path resolved)
-        if self.exact.is_none() && self.substr.is_none() && self.regex.is_none() {
+        // If no string matcher specified, just check existence (path resolved).
+        // `is:` counts as a matcher: `path: office.creator, is: random_like`
+        // has no exact/substr/regex and still has to inspect the value.
+        if self.exact.is_none()
+            && self.substr.is_none()
+            && self.regex.is_none()
+            && self.is_check.is_none()
+        {
             return true;
         }
 
@@ -166,6 +178,19 @@ impl KvMatcher {
     /// Check if a scalar value matches the matcher.
     fn scalar_matches(&self, value: &Value) -> bool {
         let s = value_to_string(value);
+
+        // The validator gates every other matcher, exactly as it does for the
+        // text conditions: a value must satisfy `is:` before anything else is
+        // consulted. With no other matcher set, passing it is the whole test.
+        if !crate::composite_rules::evaluators::symbol_string::validate_match(&s, self.is_check) {
+            return false;
+        }
+        if self.not.iter().any(|exc| exc.matches(&s)) {
+            return false;
+        }
+        if self.exact.is_none() && self.substr.is_none() && self.regex.is_none() {
+            return true;
+        }
 
         if let Some(ref exact_val) = self.exact {
             return if self.case_insensitive {
@@ -1527,6 +1552,8 @@ pub(crate) fn evaluate_kv(condition: &Condition, ctx: &EvaluationContext<'_>) ->
         exists,
         length_min,
         length_max,
+        is_check,
+        not,
     }) = condition
     else {
         return None;
@@ -1638,7 +1665,7 @@ pub(crate) fn evaluate_kv(condition: &Condition, ctx: &EvaluationContext<'_>) ->
     let resolved_regex = resolved_regex_owned.as_ref();
 
     // Build matcher
-    let matcher = KvMatcher::new(
+    let mut matcher = KvMatcher::new(
         exact.as_ref(),
         substr.as_ref(),
         resolved_regex,
@@ -1647,6 +1674,8 @@ pub(crate) fn evaluate_kv(condition: &Condition, ctx: &EvaluationContext<'_>) ->
         *length_min,
         *length_max,
     );
+    matcher.is_check = *is_check;
+    matcher.not = not.clone().unwrap_or_default();
 
     // Check if any value matches
     for value in &values {
@@ -2048,6 +2077,8 @@ mod tests {
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
         assert!(evaluate_kv(&cond, &ctx).is_some());
 
@@ -2064,6 +2095,8 @@ mod tests {
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
         assert!(evaluate_kv(&cond, &ctx).is_some());
 
@@ -2080,6 +2113,8 @@ mod tests {
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
         assert!(evaluate_kv(&cond, &ctx).is_none());
     }
@@ -2110,6 +2145,8 @@ Author-email: security-research@example.com
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
         assert!(evaluate_kv(&cond, &ctx).is_some());
     }
@@ -2701,6 +2738,8 @@ Author-email: security-research@example.com
             exists: Some(false),
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
 
         // "description" doesn't exist, so exists: false should match
@@ -2725,6 +2764,8 @@ Author-email: security-research@example.com
             exists: Some(false),
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
 
         // "description" exists, so exists: false should NOT match
@@ -2749,6 +2790,8 @@ Author-email: security-research@example.com
             exists: Some(true),
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
 
         // "description" exists, so exists: true should match
@@ -2773,6 +2816,8 @@ Author-email: security-research@example.com
             exists: Some(true),
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
 
         // "description" doesn't exist, so exists: true should NOT match
@@ -2804,6 +2849,8 @@ Author-email: security-research@example.com
             exists: None,
             length_min: Some(1),
             length_max: Some(1),
+            is_check: None,
+            not: None,
         });
 
         assert!(evaluate_kv_test(&cond, package_json, path).is_some());
@@ -2830,6 +2877,8 @@ Author-email: security-research@example.com
             exists: None,
             length_min: None,
             length_max: Some(0),
+            is_check: None,
+            not: None,
         });
 
         assert!(evaluate_kv_test(&cond, package_json, path).is_some());
@@ -2860,6 +2909,8 @@ Author-email: security-research@example.com
             exists: None,
             length_min: Some(30),
             length_max: None,
+            is_check: None,
+            not: None,
         });
 
         assert!(evaluate_kv_test(&cond, package_json.as_bytes(), path).is_some());
@@ -3009,10 +3060,104 @@ Author-email: security-research@example.com
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
 
         assert!(evaluate_kv_test(&cond, json_content, Path::new("random.json")).is_none());
         assert!(evaluate_kv_test(&cond, json_content, Path::new("config.json")).is_none());
+    }
+
+    #[test]
+    fn is_validator_gates_a_value_condition() {
+        // `is: random_like` on a value path is how document metadata is
+        // judged -- a creator field holding a generated token rather than a
+        // name. The validator has to run against the resolved value, not
+        // just parse: with the gate unwired every value would pass.
+        use crate::composite_rules::condition::StringValidator;
+        // `Administrator` comes first on purpose: with the gate unwired the
+        // condition matches on whatever it reaches first, so a test that put
+        // the generated token first would pass either way.
+        let json = br#"{"name":"p","authors":["Administrator","kwTfNTTv"]}"#;
+        let build = |v: Option<StringValidator>| {
+            Condition::Kv(KvQuery {
+                match_mode: Default::default(),
+                path: "authors[*]".to_string(),
+                exact: None,
+                substr: None,
+                regex: None,
+                eq: None,
+                ne: None,
+                case_insensitive: false,
+                exists: None,
+                length_min: None,
+                length_max: None,
+                is_check: v,
+                not: None,
+            })
+        };
+        let path = Path::new("package.json");
+
+        // Without the validator the first value carries the match.
+        let plain = evaluate_kv_test(&build(None), json, path).unwrap();
+        assert!(plain.value.contains("Administrator"), "{}", plain.value);
+
+        // With it, the name is skipped and only the generated token matches.
+        let gated = evaluate_kv_test(&build(Some(StringValidator::RandomLike)), json, path)
+            .expect("the generated token should still match");
+        assert!(gated.value.contains("kwTfNTTv"), "{}", gated.value);
+        assert!(!gated.value.contains("Administrator"), "{}", gated.value);
+
+        // And where nothing is generated-looking, the condition must not
+        // match at all rather than fall through to the first value.
+        let names = br#"{"name":"p","authors":["Administrator","Kostenkontrolle"]}"#;
+        assert!(
+            evaluate_kv_test(&build(Some(StringValidator::RandomLike)), names, path).is_none(),
+            "validator let an ordinary name through"
+        );
+    }
+
+    #[test]
+    fn not_exclusion_filters_a_matched_value() {
+        // A `not:` on a value condition used to parse cleanly and then be
+        // dropped, so the exception silently did nothing.
+        let json_content = br#"{"name":"p","files": ["report.accreport.html", "index.html"]}"#;
+        let build = |not: Option<Vec<crate::composite_rules::condition::NotException>>| {
+            Condition::Kv(KvQuery {
+                match_mode: Default::default(),
+                path: "files[*]".to_string(),
+                exact: None,
+                substr: None,
+                regex: Some(r"(?i)\.html?$".to_string()),
+                eq: None,
+                ne: None,
+                case_insensitive: false,
+                exists: None,
+                length_min: None,
+                length_max: None,
+                is_check: None,
+                not,
+            })
+        };
+        let path = Path::new("package.json");
+        let excluded = vec![crate::composite_rules::condition::NotException::Structured(
+            crate::composite_rules::condition::NotExceptionStructured {
+                exact: None,
+                substr: None,
+                regex: Some(r"(?i)accreport\.html?$".to_string()),
+                lowered_substr: None,
+            },
+        )];
+
+        assert!(evaluate_kv_test(&build(None), json_content, path).is_some());
+        // `index.html` still matches, so the condition holds -- but the
+        // excluded name must not be what carries it.
+        let ev = evaluate_kv_test(&build(Some(excluded)), json_content, path).unwrap();
+        assert!(
+            !ev.value.contains("accreport"),
+            "excluded value: {}",
+            ev.value
+        );
     }
 
     #[test]
@@ -3047,6 +3192,8 @@ Author-email: security-research@example.com
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
 
         assert!(evaluate_kv_test(&cond, yaml_content, Path::new("config.yaml")).is_none());
@@ -3084,6 +3231,8 @@ Author-email: security-research@example.com
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
 
         assert!(evaluate_kv_test(&cond, toml_content, Path::new("config.toml")).is_none());
@@ -3123,6 +3272,8 @@ Author-email: security-research@example.com
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
 
         assert!(evaluate_kv_test(&cond, package_json, Path::new("package.json")).is_some());
@@ -3157,6 +3308,8 @@ Author-email: security-research@example.com
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
 
         assert!(evaluate_kv_test(&cond, cargo_toml, Path::new("Cargo.toml")).is_some());
@@ -3200,6 +3353,8 @@ Author-email: security-research@example.com
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
 
         assert!(evaluate_kv_test(&cond, workflow, Path::new(".github/workflows/ci.yml")).is_some());
@@ -3233,6 +3388,8 @@ Author-email: security-research@example.com
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
 
         assert!(evaluate_kv_test(&cond, valid_json, Path::new("database.json")).is_none());
@@ -3500,6 +3657,8 @@ WantedBy=multi-user.target graphical.target
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
         assert!(evaluate_kv_test(&exec_start, service, path).is_some());
 
@@ -3515,6 +3674,8 @@ WantedBy=multi-user.target graphical.target
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
         assert!(evaluate_kv_test(&ld_preload, service, path).is_some());
 
@@ -3530,6 +3691,8 @@ WantedBy=multi-user.target graphical.target
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
         assert!(evaluate_kv_test(&wanted_by_member, service, path).is_some());
 
@@ -3545,6 +3708,8 @@ WantedBy=multi-user.target graphical.target
             exists: Some(true),
             length_min: Some(2),
             length_max: None,
+            is_check: None,
+            not: None,
         });
         assert!(evaluate_kv_test(&wanted_by_size, service, path).is_some());
 
@@ -3560,6 +3725,8 @@ WantedBy=multi-user.target graphical.target
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
         assert!(evaluate_kv_test(&old_exec_start, service, path).is_none());
     }
@@ -3580,6 +3747,8 @@ WantedBy=multi-user.target graphical.target
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
         assert!(evaluate_kv_test(&cond, service, path).is_some());
     }
@@ -3600,6 +3769,8 @@ WantedBy=multi-user.target graphical.target
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
         assert!(
             evaluate_kv_test_with_file_type(&cond, service, path, FileType::SystemdService)
@@ -3711,6 +3882,8 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
         assert!(evaluate_kv_test(&env_list_item, service, path).is_some());
 
@@ -3726,6 +3899,8 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
         assert!(evaluate_kv_test(&env_var, service, path).is_some());
 
@@ -3741,6 +3916,8 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
         assert!(evaluate_kv_test(&raw_env, service, path).is_some());
     }
@@ -3773,6 +3950,8 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
         assert!(evaluate_kv_test(&cond, manifest, path).is_some());
 
@@ -3789,6 +3968,8 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
         assert!(evaluate_kv_test(&cond, manifest, path).is_none());
 
@@ -3805,6 +3986,8 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
         assert!(evaluate_kv_test(&cond, manifest, path).is_some());
     }
@@ -3840,6 +4023,8 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
         assert!(evaluate_kv_test(&cond, manifest, path).is_some());
 
@@ -3856,6 +4041,8 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
         assert!(evaluate_kv_test(&cond, manifest, path).is_some());
 
@@ -3872,6 +4059,8 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
         assert!(evaluate_kv_test(&cond, manifest, path).is_some());
     }
@@ -3905,6 +4094,8 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
         assert!(evaluate_kv_test(&cond, package, path).is_some());
 
@@ -3921,6 +4112,8 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
         assert!(evaluate_kv_test(&cond, package, path).is_some());
 
@@ -3937,6 +4130,8 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
         assert!(evaluate_kv_test(&cond, package, path).is_some());
 
@@ -3953,6 +4148,8 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
         assert!(evaluate_kv_test(&cond, package, path).is_none());
     }
@@ -3980,6 +4177,8 @@ name: test
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
         assert!(evaluate_kv_test(&cond, yaml, path).is_some());
     }
@@ -4011,6 +4210,8 @@ openssl = "0.10"
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
         assert!(evaluate_kv_test(&cond, toml, path).is_some());
 
@@ -4027,6 +4228,8 @@ openssl = "0.10"
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
         assert!(evaluate_kv_test(&cond, toml, path).is_none());
 
@@ -4043,6 +4246,8 @@ openssl = "0.10"
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
         assert!(evaluate_kv_test(&cond, toml, path).is_some());
     }
@@ -4069,6 +4274,8 @@ openssl = "0.10"
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
         assert!(evaluate_kv_test(&cond, json, path).is_some());
 
@@ -4085,6 +4292,8 @@ openssl = "0.10"
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
         assert!(evaluate_kv_test(&cond, json, path).is_none());
     }
@@ -4107,6 +4316,8 @@ openssl = "0.10"
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
         assert!(evaluate_kv_test(&cond, json, path).is_some());
 
@@ -4123,6 +4334,8 @@ openssl = "0.10"
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
         assert!(evaluate_kv_test(&cond, json, path).is_some());
     }
@@ -4144,6 +4357,8 @@ openssl = "0.10"
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
         assert!(evaluate_kv_test(&cond, json, path).is_some());
     }
@@ -4165,6 +4380,8 @@ openssl = "0.10"
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
         assert!(evaluate_kv_test(&cond, json, path).is_some());
     }
@@ -4186,6 +4403,8 @@ openssl = "0.10"
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
         // Should not panic, just return no match
         assert!(evaluate_kv_test(&cond, bad, path).is_none());
@@ -4240,6 +4459,8 @@ Author: attacker@evil.com
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
         assert!(evaluate_kv_test(&cond, pkginfo, path).is_some());
 
@@ -4256,6 +4477,8 @@ Author: attacker@evil.com
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
         assert!(evaluate_kv_test(&cond, pkginfo, path).is_some());
 
@@ -4272,6 +4495,8 @@ Author: attacker@evil.com
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
         assert!(evaluate_kv_test(&cond, pkginfo, path).is_some());
 
@@ -4288,6 +4513,8 @@ Author: attacker@evil.com
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
         assert!(evaluate_kv_test(&cond, pkginfo, path).is_some());
 
@@ -4304,6 +4531,8 @@ Author: attacker@evil.com
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
         assert!(evaluate_kv_test(&cond, pkginfo, path).is_none());
     }
@@ -4332,6 +4561,8 @@ Classifier: Programming Language :: Python :: 3
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
         assert!(evaluate_kv_test(&cond, pkginfo, path).is_some());
 
@@ -4348,6 +4579,8 @@ Classifier: Programming Language :: Python :: 3
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
         assert!(evaluate_kv_test(&cond, pkginfo, path).is_some());
     }
@@ -4376,6 +4609,8 @@ Version: 1.0.0
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
         assert!(evaluate_kv_test(&cond, pkginfo, path).is_some());
     }
@@ -4402,6 +4637,8 @@ Author-Email: test@example.com
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
         assert!(evaluate_kv_test(&cond, pkginfo, path).is_some());
     }
@@ -4468,6 +4705,8 @@ Author-Email: test@example.com
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
         assert!(evaluate_kv_test(&cond, plist, path).is_some());
 
@@ -4484,6 +4723,8 @@ Author-Email: test@example.com
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
         assert!(evaluate_kv_test(&cond, plist, path).is_some());
 
@@ -4500,6 +4741,8 @@ Author-Email: test@example.com
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
         assert!(evaluate_kv_test(&cond, plist, path).is_none());
     }
@@ -4533,6 +4776,8 @@ Author-Email: test@example.com
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
         assert!(evaluate_kv_test(&cond_label, plist, path).is_some());
 
@@ -4549,6 +4794,8 @@ Author-Email: test@example.com
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
         assert!(evaluate_kv_test(&cond_program, plist, path).is_some());
     }
@@ -4722,6 +4969,8 @@ Author-Email: test@example.com
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         })
     }
 
@@ -4738,6 +4987,8 @@ Author-Email: test@example.com
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         })
     }
 

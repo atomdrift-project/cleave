@@ -17,6 +17,7 @@ use crate::composite_rules::context::{ConditionResult, EvaluationContext, String
 use crate::composite_rules::types::Platform;
 use crate::ip_validator::{contains_external_ip_cached, contains_valid_ip};
 use cleave::bitcoin_validator::contains_bitcoin_address;
+use cleave::random_validator::is_random_like;
 use rustc_hash::FxHashSet;
 use std::sync::LazyLock;
 
@@ -88,6 +89,7 @@ pub(crate) fn validate_match(s: &str, validator: Option<StringValidator>) -> boo
         Some(StringValidator::ExternalIp) => contains_external_ip_cached(s),
         Some(StringValidator::ValidIp) => contains_valid_ip(s),
         Some(StringValidator::BitcoinAddr) => contains_bitcoin_address(s),
+        Some(StringValidator::RandomLike) => is_random_like(s),
     }
 }
 use crate::types::binary::normalize_symbol;
@@ -2487,5 +2489,36 @@ mod multi_arg_tests {
             &[s("a.exe"), s("b.exe")],
             &[rx(r"\.exe$"), rx(r"\.exe$")]
         ));
+    }
+}
+
+#[cfg(test)]
+mod validator_wiring_tests {
+    use super::validate_match;
+    use crate::composite_rules::condition::StringValidator;
+
+    #[test]
+    fn random_like_reaches_the_validator() {
+        // The arm that connects `is: random_like` to the model. Without it
+        // the validator silently accepts everything, and every trait built
+        // on it matches every value.
+        assert!(validate_match(
+            "kwTfNTTv",
+            Some(StringValidator::RandomLike)
+        ));
+        assert!(validate_match(
+            "QDnqfZpMxb",
+            Some(StringValidator::RandomLike)
+        ));
+        assert!(!validate_match(
+            "Administrator",
+            Some(StringValidator::RandomLike)
+        ));
+        assert!(!validate_match(
+            "Kostenkontrolle",
+            Some(StringValidator::RandomLike)
+        ));
+        // No validator declared means no opinion.
+        assert!(validate_match("anything at all", None));
     }
 }

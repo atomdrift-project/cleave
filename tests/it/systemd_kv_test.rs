@@ -87,14 +87,14 @@ traits:
     if:
       type: value
       path: "service.restart"
-      is: "always"
+      exact: "always"
 
   - id: systemd-kv/wanted-by-default
     desc: Default target install
     if:
       type: value
       path: "install.wanted_by"
-      is: "default.target"
+      exact: "default.target"
 
   - id: systemd-kv/exec-start-shell
     desc: ExecStart launches shell downloader

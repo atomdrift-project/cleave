@@ -1336,6 +1336,23 @@ pub fn regex_scratch_usage() -> (usize, usize) {
     crate::composite_rules::regex_scratch::usage()
 }
 
+/// Live occupancy of the two compiled-trait-regex stores, for a long-lived
+/// process's periodic summary: `(entries, bytes, budget_bytes, evictions)` for
+/// the `str` store and then the raw-bytes store. Evictions climbing between
+/// summaries means the working set exceeds the budget and engines are being
+/// recompiled (`CLEAVE_REGEX_STR_MB` / `CLEAVE_REGEX_RAW_MB`).
+#[must_use]
+pub fn regex_store_usage() -> [(usize, usize, usize, u64); 2] {
+    let (str_len, str_bytes, _inserts, str_evictions, _repl, str_budget) =
+        crate::composite_rules::condition::regex_store_stats();
+    let (raw_len, raw_bytes, raw_evictions, raw_budget) =
+        crate::composite_rules::evaluators::bytes_regex_store_stats();
+    [
+        (str_len, str_bytes, str_budget, str_evictions),
+        (raw_len, raw_bytes, raw_budget, raw_evictions),
+    ]
+}
+
 /// Read one archive member's raw bytes by its in-archive path.
 ///
 /// A differential consumer (e.g. isomer) needs the *old* text of a changed

@@ -736,6 +736,8 @@ impl<'a> RuleDebugger<'a> {
                 exists,
                 length_min,
                 length_max,
+                is_check,
+                not,
                 ..
             }) => self.debug_kv_condition(
                 path,
@@ -746,6 +748,8 @@ impl<'a> RuleDebugger<'a> {
                 *exists,
                 *length_min,
                 *length_max,
+                *is_check,
+                not,
             ),
             Condition::Hex(HexQuery {
                 pattern,
@@ -1514,6 +1518,8 @@ impl<'a> RuleDebugger<'a> {
         exists: Option<bool>,
         length_min: Option<usize>,
         length_max: Option<usize>,
+        is_check: Option<crate::composite_rules::condition::StringValidator>,
+        not: &Option<Vec<crate::composite_rules::condition::NotException>>,
     ) -> ConditionDebugResult {
         let pattern_desc = if let Some(e) = exact {
             format!("exact: \"{}\"", truncate_string(e, 40))
@@ -1552,6 +1558,8 @@ impl<'a> RuleDebugger<'a> {
             exists,
             length_min,
             length_max,
+            is_check,
+            not: not.clone(),
         });
 
         // Create evaluation context
@@ -2714,6 +2722,55 @@ composite_rules:
                 }
             }
         }
+    }
+
+    /// The debugger must apply the same exclusions production does.
+    ///
+    /// `test-rules` builds its own condition and calls the real evaluator. A
+    /// field it forgets to carry across makes it report a match the scan does
+    /// not produce -- and the operator trusts the debugger precisely when the
+    /// two disagree, so the divergence is worse than either behaviour alone.
+    #[test]
+    fn debug_value_condition_honours_not_exclusions() {
+        let target = TargetInfo {
+            path: "/test/package.json".to_string(),
+            file_type: "packagejson".to_string(),
+            size_bytes: 64,
+            sha256: "test".to_string(),
+            architectures: None,
+        };
+        let report = AnalysisReport::new(target);
+        let json = br#"{"name":"p","files":["report.accreport.html"]}"#;
+        let mapper = CapabilityMapper::empty();
+        let debugger = RuleDebugger::new(&mapper, &report, json, vec![Platform::All], None);
+
+        let with_not: Condition = serde_yaml::from_str(
+            r#"
+type: value
+path: files[*]
+regex: '(?i)\.html?$'
+not:
+  - regex: 'accreport\.html?$'
+"#,
+        )
+        .unwrap();
+        let without_not: Condition = serde_yaml::from_str(
+            r#"
+type: value
+path: files[*]
+regex: '(?i)\.html?$'
+"#,
+        )
+        .unwrap();
+
+        assert!(
+            debugger.debug_condition(&without_not).matched,
+            "the condition should match without the exclusion"
+        );
+        assert!(
+            !debugger.debug_condition(&with_not).matched,
+            "the debugger ignored a not: the evaluator applies"
+        );
     }
 
     /// Test that exact trait ID match in findings is detected

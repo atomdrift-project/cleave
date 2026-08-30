@@ -1012,6 +1012,10 @@ pub fn run(
                 exists: kv_exists,
                 length_min: kv_size_min,
                 length_max: kv_size_max,
+                is_check,
+                // `test-match` builds the condition from CLI flags, which
+                // carry no exclusions.
+                not: None,
             });
 
             // Create minimal context for kv evaluation

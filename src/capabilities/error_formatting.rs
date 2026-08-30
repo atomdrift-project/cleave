@@ -2,6 +2,7 @@
 //!
 //! Provides user-friendly error messages with context, suggestions, and clear guidance.
 
+use crate::composite_rules::condition::StringValidator;
 use anyhow::Error;
 use std::path::Path;
 
@@ -226,8 +227,28 @@ fn detect_invalid_field_in_context(context: &str) -> Option<String> {
             "language",
             "case_insensitive",
         ],
+        // Mirrors `KvQuery`, including the YAML spellings that differ from the
+        // field names: `is` for the validator, `match` for the array
+        // quantifier, `size_min`/`size_max` aliasing `length_min`/`length_max`.
+        // `not`, `eq`/`ne`, `match` and the length keys were absent, so rules
+        // legitimately using them were reported as unknown fields.
         "value" => &[
-            "type", "path", "is", "exact", "substr", "regex", "exists", "size_min", "size_max",
+            "type",
+            "path",
+            "is",
+            "exact",
+            "substr",
+            "regex",
+            "eq",
+            "ne",
+            "match",
+            "case_insensitive",
+            "exists",
+            "not",
+            "length_min",
+            "length_max",
+            "size_min",
+            "size_max",
         ],
         _ => return None,
     };
@@ -369,6 +390,41 @@ fn clean_error_message(error_msg: &str) -> String {
     msg
 }
 
+/// Recover a targeted diagnostic for `is:` carrying a literal where a
+/// validator name belongs.
+///
+/// `is:` names a high-fidelity check applied to the matched value. On value
+/// conditions it used to be an alias for `exact:`, so a rule written against
+/// the old spelling now fails as an unknown enum variant -- and because it
+/// fails inside an untagged enum, the raw error names neither the key nor the
+/// line it sits on. Ask serde which variants it accepts rather than restating
+/// them here, so this can never drift from `StringValidator`.
+fn invalid_is_validator(context: &str) -> Option<(String, String)> {
+    for line in context.lines() {
+        let Some(rest) = line.trim_start().strip_prefix("is:") else {
+            continue;
+        };
+        let value = rest
+            .split_once('#')
+            .map_or(rest, |(before, _)| before)
+            .trim()
+            .trim_matches(['"', '\''])
+            .trim();
+        if value.is_empty() {
+            continue;
+        }
+        if let Err(err) = serde_yaml::from_str::<StringValidator>(value) {
+            let detail = err.to_string();
+            let detail = detail
+                .split_once(" at line")
+                .map_or(detail.as_str(), |(head, _)| head)
+                .to_string();
+            return Some((value.to_string(), detail));
+        }
+    }
+    None
+}
+
 /// Provide intelligent guidance based on the error type and context
 fn provide_error_guidance(
     error_msg: &str,
@@ -414,8 +470,21 @@ fn provide_error_guidance(
     ];
 
     let mut found_hallucination = false;
+
+    // A literal where a validator belongs is specific enough to name outright,
+    // so it answers the error before the generic field checks guess at it.
+    if let Some((value, detail)) = invalid_is_validator(&context) {
+        guidance.push_str(&format!("\n   'is: {}' is not a validator.\n", value));
+        guidance.push_str(&format!("   💡 {}\n", detail));
+        guidance.push_str(&format!(
+            "   💡 'is:' applies a high-fidelity check to the matched value. For a literal match, use 'exact: {}'.\n",
+            value
+        ));
+        found_hallucination = true;
+    }
+
     for (hallucinated, suggestion) in &hallucinated_fields {
-        if context.contains(hallucinated) {
+        if !found_hallucination && context.contains(hallucinated) {
             guidance.push_str(&format!(
                 "\n   Unknown field '{}' in condition.\n",
                 hallucinated.trim_end_matches(':')
@@ -606,6 +675,47 @@ mod tests {
         let (line, col) = extract_line_column(error);
         assert_eq!(line, Some(149));
         assert_eq!(col, Some(5));
+    }
+
+    /// `is:` on a value condition used to be an alias for `exact:`. A rule
+    /// written against the old spelling fails deep inside an untagged enum,
+    /// where the raw error names neither the key nor its line -- so the
+    /// guidance has to name both the offending value and the fix.
+    #[test]
+    fn stale_is_literal_is_named_in_the_guidance() {
+        let yaml = "traits:\n  - id: t/restart-always\n    if:\n      type: value\n      path: \"service.restart\"\n      is: \"always\"\n";
+        let guidance = provide_error_guidance(
+            "data did not match any variant of untagged enum ConditionDeser at line 2 column 5",
+            yaml,
+            2,
+        )
+        .expect("a stale `is:` literal should produce guidance");
+
+        assert!(
+            guidance.contains("'is: always' is not a validator"),
+            "{guidance}"
+        );
+        // The accepted set comes from serde, so it stays correct as validators
+        // are added; assert on one rather than pinning the whole list.
+        assert!(guidance.contains("random_like"), "{guidance}");
+        assert!(guidance.contains("exact: always"), "{guidance}");
+        // The generic fallback must not also fire and bury the real answer.
+        assert!(!guidance.contains("Valid condition types"), "{guidance}");
+    }
+
+    #[test]
+    fn a_real_validator_produces_no_is_guidance() {
+        assert!(invalid_is_validator("      is: random_like\n").is_none());
+        assert!(invalid_is_validator("      is: \"external_ip\"\n").is_none());
+        // A key merely ending in `is` is not the validator key.
+        assert!(invalid_is_validator("      axis: always\n").is_none());
+    }
+
+    #[test]
+    fn is_guidance_survives_quotes_and_trailing_comments() {
+        let (value, _) = invalid_is_validator("      is: 'always'  # legacy spelling\n")
+            .expect("quoted literal with a comment should still be caught");
+        assert_eq!(value, "always");
     }
 
     #[test]

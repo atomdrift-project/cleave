@@ -57,6 +57,7 @@ pub mod env_mapper;
 pub mod malecule_bridge;
 pub mod output;
 pub mod path_mapper;
+pub mod random_validator;
 pub mod theme;
 pub mod third_party_config;
 pub mod third_party_yara;

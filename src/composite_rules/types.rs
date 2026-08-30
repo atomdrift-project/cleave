@@ -940,9 +940,19 @@ impl FileType {
             "plist" => FileType::Plist,
             "pkginfo" | "pkg-info" | "pkg_info" => FileType::PkgInfo,
             "rtf" => FileType::Rtf,
-            "ole" | "doc" | "xls" | "ppt" | "msg" | "oledoc" => FileType::OleDoc,
+            // Every legacy Office extension filefacts recognises. The
+            // template and add-in variants were missing, so a `.xla` or a
+            // `.dot` fell through to Unknown and no OleDoc rule reached it.
+            "ole" | "doc" | "xls" | "ppt" | "msg" | "oledoc" | "dot" | "pps" | "pot" | "ppa"
+            | "xlt" | "xla" => FileType::OleDoc,
             "msi" | "msp" | "mst" | "msm" => FileType::Msi,
-            "ooxml" | "docx" | "xlsx" | "pptx" | "docm" | "xlsm" | "pptm" => FileType::Ooxml,
+            // Likewise for OOXML. `.ppam` and `.xlam` are add-ins and
+            // `.dotm` / `.potm` / `.ppsm` macro-enabled templates -- the
+            // formats macro delivery reaches for precisely because they get
+            // looked at less, and until now they got no rules at all.
+            "ooxml" | "docx" | "xlsx" | "pptx" | "docm" | "xlsm" | "pptm" | "dotx" | "dotm"
+            | "xltx" | "xltm" | "xlam" | "ppam" | "potx" | "potm" | "ppsx" | "ppsm" | "sldx"
+            | "sldm" => FileType::Ooxml,
             "lnk" => FileType::Lnk,
             "ipa" => FileType::Ipa,
             "pdf" => FileType::Pdf,
@@ -1001,6 +1011,35 @@ pub(crate) fn default_file_types() -> Vec<FileType> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every Office extension filefacts recognises has to route to a rule
+    /// file type, or the rules written for that format never reach the file.
+    ///
+    /// The macro-enabled add-in and template variants were the ones missing,
+    /// which is the wrong half to lose: `.ppam` and `.xlam` are what macro
+    /// delivery uses to get looked at less.
+    #[test]
+    fn office_variants_route_to_their_document_type() {
+        for ext in [
+            "docx", "xlsx", "pptx", "docm", "xlsm", "pptm", "dotx", "dotm", "xltx", "xltm", "xlam",
+            "ppam", "potx", "potm", "ppsx", "ppsm", "sldx", "sldm", "ooxml",
+        ] {
+            assert_eq!(
+                FileType::from_str(ext),
+                FileType::Ooxml,
+                "{ext} did not route to Ooxml"
+            );
+        }
+        for ext in [
+            "doc", "xls", "ppt", "msg", "dot", "pps", "pot", "ppa", "xlt", "xla", "oledoc",
+        ] {
+            assert_eq!(
+                FileType::from_str(ext),
+                FileType::OleDoc,
+                "{ext} did not route to OleDoc"
+            );
+        }
+    }
 
     // ==================== FileType::is_source_code Tests ====================
 

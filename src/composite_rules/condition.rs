@@ -860,6 +860,13 @@ pub enum StringValidator {
     /// Require match to contain a valid Bitcoin address (with checksum)
     #[serde(rename = "bitcoin_addr")]
     BitcoinAddr,
+    /// Require the match to read as a generated identifier rather than a
+    /// chosen one -- a DGA domain label, a maldoc builder's `Author` field, a
+    /// generated mutex or bundle name. Scored against an English bigram
+    /// model; see `crate::random_validator`. Strings under six letters are
+    /// never called random, so this never fires on `Dell` or `admin`.
+    #[serde(rename = "random_like")]
+    RandomLike,
 }
 
 /// Quantifier for cross-fact `eq`/`ne` when a path resolves to multiple values
@@ -1551,12 +1558,14 @@ enum ConditionTagged {
     Kv {
         /// Path to navigate using dot notation, [n] for indices, [*] for wildcards
         path: String,
-        /// Value/element equals exactly
-        #[serde(
-            rename = "is",
-            alias = "exact",
-            skip_serializing_if = "Option::is_none"
-        )]
+        /// Value/element equals exactly.
+        ///
+        /// `is` used to be an alias for this. It now carries the validator,
+        /// matching every other condition type -- no rule in the corpus used
+        /// the alias, and a stale `is: <literal>` fails to parse as a
+        /// `StringValidator`, so the change surfaces as a load error rather
+        /// than as a silently different match.
+        #[serde(skip_serializing_if = "Option::is_none")]
         exact: Option<String>,
         /// Value/element contains substring
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -1590,6 +1599,12 @@ enum ConditionTagged {
         /// Explicit existence check (true = must exist, false = must not exist)
         #[serde(skip_serializing_if = "Option::is_none")]
         exists: Option<bool>,
+        /// Values to exclude after a match, exactly as for the text
+        /// conditions. Without this a `not:` on a value matcher parsed
+        /// cleanly and was then dropped, so the exception silently did
+        /// nothing.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        not: Option<Vec<NotException>>,
         /// Minimum len() of the value: string bytes, array elements, or
         /// object keys. `size_min` is the deprecated spelling.
         #[serde(alias = "size_min", skip_serializing_if = "Option::is_none")]
@@ -1598,6 +1613,11 @@ enum ConditionTagged {
         /// deprecated spelling.
         #[serde(alias = "size_max", skip_serializing_if = "Option::is_none")]
         length_max: Option<usize>,
+        /// Optional high-fidelity validation check applied to the resolved
+        /// value. Same `is:` spelling and same validators as the text
+        /// conditions.
+        #[serde(rename = "is", default)]
+        is_check: Option<StringValidator>,
     },
 }
 
@@ -1979,8 +1999,10 @@ impl From<ConditionDeser> for Condition {
                     match_mode,
                     case_insensitive,
                     exists,
+                    not,
                     length_min,
                     length_max,
+                    is_check,
                 } => Condition::Kv(KvQuery {
                     path,
                     exact,
@@ -1991,8 +2013,10 @@ impl From<ConditionDeser> for Condition {
                     match_mode,
                     case_insensitive,
                     exists,
+                    not,
                     length_min,
                     length_max,
+                    is_check,
                 }),
             },
         }
@@ -2302,8 +2326,10 @@ impl From<Condition> for ConditionTagged {
                 match_mode,
                 case_insensitive,
                 exists,
+                not,
                 length_min,
                 length_max,
+                is_check,
             }) => ConditionTagged::Kv {
                 path,
                 exact,
@@ -2314,8 +2340,10 @@ impl From<Condition> for ConditionTagged {
                 match_mode,
                 case_insensitive,
                 exists,
+                not,
                 length_min,
                 length_max,
+                is_check,
             },
         }
     }
@@ -2499,10 +2527,14 @@ pub(crate) struct KvQuery {
     pub case_insensitive: bool,
     /// Explicit existence check (true = must exist, false = must not exist).
     pub exists: Option<bool>,
+    /// Values to exclude after a match, as for the text conditions.
+    pub not: Option<Vec<NotException>>,
     /// Minimum len() of the value: string bytes, array elements, or object keys.
     pub length_min: Option<usize>,
     /// Maximum len() of the value (see `length_min`).
     pub length_max: Option<usize>,
+    /// Optional high-fidelity validation check applied to the resolved value.
+    pub is_check: Option<StringValidator>,
 }
 
 impl Condition {
@@ -4140,7 +4172,7 @@ mod location_constraint_tests {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod backtrack_tests {
     use super::find_backtrack_issue;
     use crate::composite_rules::condition::SymbolKind;
@@ -4240,6 +4272,8 @@ mod backtrack_tests {
             exists: None,
             length_min: None,
             length_max: None,
+            is_check: None,
+            not: None,
         });
         assert!(cond.check_greedy_patterns().is_none());
     }
@@ -4295,15 +4329,79 @@ exact: main
     }
 
     #[test]
-    fn value_condition_accepts_is() {
-        let current: Condition = serde_yaml::from_str(
+    fn value_condition_carries_not_exceptions() {
+        // A `not:` on a value condition parsed cleanly and was then dropped:
+        // `Kv` had no such field, and nothing rejects an unknown key. The
+        // exception silently did nothing, which is the worst way for a
+        // suppression to fail. Parse it here so the field cannot go missing
+        // again without a test noticing.
+        let cond: Condition = serde_yaml::from_str(
             r#"
 type: value
-path: scripts.postinstall
-is: curl
+path: pdf.embedded_files[*].filename
+regex: '(?i)\.html?$'
+not:
+  - regex: 'accreport\.html?$'
 "#,
         )
         .unwrap();
+        let Condition::Kv(KvQuery { not, .. }) = cond else {
+            panic!("expected a value condition");
+        };
+        let not = not.expect("not: was dropped during deserialization");
+        assert_eq!(not.len(), 1);
+        assert!(not[0].matches("report.accreport.html"));
+        assert!(!not[0].matches("index.html"));
+    }
+
+    #[test]
+    fn value_condition_accepts_the_shorthand_not_form() {
+        // A bare string is the substring shorthand every other condition
+        // type accepts; the value matcher has to read it the same way.
+        let cond: Condition = serde_yaml::from_str(
+            r#"
+type: value
+path: files[*]
+regex: '\.html$'
+not:
+  - accreport
+"#,
+        )
+        .unwrap();
+        let Condition::Kv(KvQuery { not, .. }) = cond else {
+            panic!("expected a value condition");
+        };
+        let not = not.expect("not: was dropped");
+        assert!(not[0].matches("x.accreport.html"));
+        assert!(!not[0].matches("x.html"));
+    }
+
+    #[test]
+    fn value_condition_is_now_the_validator_not_exact() {
+        // `is` used to be an alias for `exact` on value conditions. It now
+        // carries the validator, matching every other condition type. No rule
+        // in the corpus used the alias, and the migration is safe because a
+        // stale literal cannot masquerade as a validator -- see the sibling
+        // test below.
+        let cond: Condition = serde_yaml::from_str(
+            r#"
+type: value
+path: office.creator
+is: random_like
+"#,
+        )
+        .unwrap();
+        assert_eq!(cond.type_name(), "value");
+        assert!(matches!(
+            cond,
+            Condition::Kv(KvQuery {
+                exact: None,
+                is_check: Some(super::StringValidator::RandomLike),
+                ..
+            })
+        ));
+
+        // `exact` is untouched and remains the spelling every rule uses.
         let legacy: Condition = serde_yaml::from_str(
             r#"
 type: value
@@ -4312,23 +4410,25 @@ exact: curl
 "#,
         )
         .unwrap();
-
-        assert_eq!(current.type_name(), "value");
-        assert_eq!(legacy.type_name(), "value");
-        assert!(matches!(
-            current,
-            Condition::Kv(KvQuery {
-                exact: Some(ref s),
-                ..
-            }) if s == "curl"
-        ));
         assert!(matches!(
             legacy,
-            Condition::Kv(KvQuery {
-                exact: Some(ref s),
-                ..
-            }) if s == "curl"
+            Condition::Kv(KvQuery { exact: Some(ref s), is_check: None, .. }) if s == "curl"
         ));
+    }
+
+    #[test]
+    fn value_condition_rejects_a_literal_where_a_validator_belongs() {
+        // The safety property behind reusing the key: an old-style
+        // `is: <literal>` fails to parse rather than silently changing from
+        // an exact match into a validator that is not there.
+        let err = serde_yaml::from_str::<Condition>(
+            r#"
+type: value
+path: scripts.postinstall
+is: curl
+"#,
+        );
+        assert!(err.is_err(), "a bare literal must not parse as a validator");
     }
 
     #[test]

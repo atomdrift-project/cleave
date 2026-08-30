@@ -120,7 +120,7 @@ pub(crate) use composite::{
     autoprefix_trait_refs, collect_trait_refs_from_rule, collect_trait_refs_from_trait_def,
     find_many_directory_refs, find_overlapping_conditions, find_pure_directory_alias_composites,
     find_redundant_any_refs, find_self_referencing_composites, find_self_referencing_traits,
-    find_single_item_clauses, validate_composite_trait_only,
+    find_self_suppressing_traits, find_single_item_clauses, validate_composite_trait_only,
 };
 
 // Pattern quality checks
@@ -154,14 +154,15 @@ pub(crate) use taxonomy::{
 // Logic constraint validation
 #[allow(unused_imports)] // find_needs_zero used by binary target
 pub(crate) use constraints::{
-    find_empty_condition_clauses, find_excessive_file_types, find_excessive_skip_conditions,
-    find_hex_binary_missing_section, find_hostile_composites_without_notable_leg,
-    find_impossible_count_constraints, find_impossible_length_bounds, find_impossible_needs,
-    find_impossible_size_constraints, find_invalid_not_usage, find_kv_exists_with_matcher,
-    find_length_bounds_without_regex, find_missing_search_patterns, find_needs_without_any,
-    find_needs_zero, find_none_only_with_proximity, find_orphaned_components,
-    find_pure_alias_traits, find_redundant_explicit_defaults, find_redundant_needs_one,
-    find_should_use_defaults, find_too_short_patterns,
+    find_dead_downgrades, find_empty_condition_clauses, find_excessive_file_types,
+    find_excessive_skip_conditions, find_hex_binary_missing_section,
+    find_hostile_composites_without_notable_leg, find_impossible_count_constraints,
+    find_impossible_length_bounds, find_impossible_needs, find_impossible_size_constraints,
+    find_invalid_not_usage, find_kv_exists_with_matcher, find_length_bounds_without_regex,
+    find_missing_search_patterns, find_needs_without_any, find_needs_zero,
+    find_none_only_with_proximity, find_orphaned_components, find_pure_alias_traits,
+    find_redundant_explicit_defaults, find_redundant_needs_one, find_should_use_defaults,
+    find_too_short_patterns,
 };
 
 // Utility functions

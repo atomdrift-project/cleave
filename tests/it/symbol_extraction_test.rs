@@ -34,6 +34,12 @@ fn analyze_file_for_traits(file_path: &str) -> serde_json::Value {
     report.shrink_to_fit();
     report.finalize();
     let compact = cleave::types::compact_from_files(&report.files);
+    // Clear the process-wide flag: it outlives this helper otherwise, and any
+    // test that later triggers the first mapper build in this process would get
+    // an empty mapper and see zero findings. `xor_source_fixtures_still_detect`
+    // failed exactly that way -- passing when run alone, failing beside anything
+    // in this file.
+    cleave::set_skip_traits_override(None);
     serde_json::to_value(&compact).expect("serialize compact report")
 }
 

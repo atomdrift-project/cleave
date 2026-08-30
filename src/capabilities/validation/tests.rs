@@ -4604,6 +4604,154 @@ mod constraint_tests {
     }
 
     #[test]
+    fn test_dead_downgrade_detected() {
+        use crate::capabilities::validation::constraints::find_dead_downgrades;
+        use crate::composite_rules::traits::DowngradeConditions;
+
+        fn dg(
+            any: Option<&[&str]>,
+            all: Option<&[&str]>,
+            none: Option<&[&str]>,
+        ) -> DowngradeConditions {
+            let conv = |v: &[&str]| {
+                v.iter()
+                    .map(|r| Condition::Trait {
+                        id: (*r).to_string(),
+                    })
+                    .collect::<Vec<_>>()
+            };
+            DowngradeConditions {
+                any: any.map(conv),
+                all: all.map(conv),
+                none: none.map(conv),
+                needs: None,
+            }
+        }
+        fn unless(v: &[&str]) -> Vec<Condition> {
+            v.iter()
+                .map(|r| Condition::Trait {
+                    id: (*r).to_string(),
+                })
+                .collect()
+        }
+
+        // Whole `any:` clause dead — every leg is also suppressed.
+        let mut whole = create_trait_ref("d::whole", "x::x", Criticality::Suspicious, None, false);
+        whole.unless = Some(unless(&["g::a"]));
+        whole.downgrade = Some(dg(Some(&["g::a"]), None, None));
+
+        // Partially dead `any:` — one leg survives, so the clause still works.
+        let mut partial =
+            create_trait_ref("d::partial", "x::x", Criticality::Suspicious, None, false);
+        partial.unless = Some(unless(&["g::a"]));
+        partial.downgrade = Some(dg(Some(&["g::a", "g::b"]), None, None));
+
+        // `all:` needs every leg, so one suppressed leg kills the whole clause.
+        let mut all_dead = create_trait_ref("d::all", "x::x", Criticality::Suspicious, None, false);
+        all_dead.unless = Some(unless(&["g::a"]));
+        all_dead.downgrade = Some(dg(None, Some(&["g::a", "g::b"]), None));
+
+        // `none:` is inverted — an entry there is not dead.
+        let mut inverted =
+            create_trait_ref("d::none", "x::x", Criticality::Suspicious, None, false);
+        inverted.unless = Some(unless(&["g::a"]));
+        inverted.downgrade = Some(dg(None, None, Some(&["g::a"])));
+
+        // Disjoint unless/downgrade — the ordinary, healthy shape.
+        let mut clean = create_trait_ref("d::clean", "x::x", Criticality::Suspicious, None, false);
+        clean.unless = Some(unless(&["g::a"]));
+        clean.downgrade = Some(dg(Some(&["g::b"]), None, None));
+
+        let traits = [whole, partial, all_dead, inverted, clean];
+        let found = find_dead_downgrades(&traits, &[]);
+
+        let ids: Vec<&str> = found.iter().map(|d| d.id.as_str()).collect();
+        assert_eq!(ids, ["d::whole", "d::partial", "d::all"]);
+        assert!(
+            found[0].whole_clause,
+            "single dead any: leg is the whole clause"
+        );
+        assert!(
+            !found[1].whole_clause,
+            "a surviving any: leg keeps the clause alive"
+        );
+        assert!(found[2].whole_clause, "all: dies on one suppressed leg");
+        assert_eq!(found[2].clause, "all");
+        assert!(found.iter().all(|d| !d.is_composite));
+    }
+
+    #[test]
+    fn test_trait_self_suppression_detected() {
+        use crate::capabilities::validation::composite::find_self_suppressing_traits;
+
+        // Direct self-reference in `unless:`.
+        let mut direct = create_trait_ref(
+            "foo/bar::alias",
+            "unrelated/dir::x",
+            Criticality::Notable,
+            None,
+            false,
+        );
+        direct.unless = Some(vec![Condition::Trait {
+            id: "foo/bar::alias".to_string(),
+        }]);
+
+        // Own-directory reference in `unless:` — the shape that killed
+        // objectives/lateral-movement/ssh/backdoor-deploy::ssh-permit-root.
+        let mut via_dir = create_trait_ref(
+            "foo/bar::other",
+            "unrelated/dir::x",
+            Criticality::Notable,
+            None,
+            false,
+        );
+        via_dir.unless = Some(vec![Condition::Trait {
+            id: "foo/bar".to_string(),
+        }]);
+
+        // Self-reference in `downgrade:` — pins the trait a level below its
+        // declared criticality forever.
+        let mut downgraded = create_trait_ref(
+            "foo/bar::pinned",
+            "unrelated/dir::x",
+            Criticality::Notable,
+            None,
+            false,
+        );
+        downgraded.downgrade = Some(crate::composite_rules::traits::DowngradeConditions {
+            any: Some(vec![Condition::Trait {
+                id: "foo/bar::pinned".to_string(),
+            }]),
+            all: None,
+            none: None,
+            needs: None,
+        });
+
+        // A reference to a different directory is legitimate.
+        let mut clean = create_trait_ref(
+            "foo/bar::fine",
+            "unrelated/dir::x",
+            Criticality::Notable,
+            None,
+            false,
+        );
+        clean.unless = Some(vec![Condition::Trait {
+            id: "other/dir".to_string(),
+        }]);
+
+        let traits = [direct, via_dir, downgraded, clean];
+        let violations = find_self_suppressing_traits(&traits);
+
+        assert_eq!(violations.len(), 3, "{violations:?}");
+        assert_eq!(violations[0].0.id, "foo/bar::alias");
+        assert_eq!(violations[0].2, "unless");
+        assert_eq!(violations[1].0.id, "foo/bar::other");
+        assert_eq!(violations[1].1, "foo/bar");
+        assert_eq!(violations[2].0.id, "foo/bar::pinned");
+        assert_eq!(violations[2].2, "downgrade");
+    }
+
+    #[test]
     fn test_composite_directory_self_reference_detected() {
         let rule = create_composite_any("foo/bar::alias", &["foo/bar"]);
         let rules = [rule];

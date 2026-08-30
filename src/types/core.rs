@@ -2209,6 +2209,38 @@ pub(crate) fn flatten_kv_for_output(
     walk(value, "", out);
 }
 
+/// Read a path out of a map produced by [`flatten_kv_for_output`], returning
+/// every value it denotes.
+///
+/// The inverse of the flattening above, and deliberately its neighbour: the
+/// encoding is not self-describing, so any reader has to know that an array at
+/// `a.b` was written as `a.b[0]`, `a.b[1]`, … Keeping the writer and the reader
+/// in one place is the only thing that stops the two drifting — the sibling-kv
+/// evaluator previously open-coded an exact `get`, which silently resolved
+/// scalar facts and missed every array one.
+///
+/// Returns the single value for a scalar leaf, or the elements in index order
+/// for an array. Nested leaves below an element (`a.b[0].c`) belong to that
+/// element, not to `a.b`, and are not returned.
+pub(crate) fn kv_lookup_flattened<'a>(
+    map: &'a std::collections::BTreeMap<String, serde_json::Value>,
+    path: &str,
+) -> Vec<&'a serde_json::Value> {
+    if let Some(v) = map.get(path) {
+        return vec![v];
+    }
+    let prefix = format!("{path}[");
+    map.range(prefix.clone()..)
+        .take_while(|(k, _)| k.starts_with(&prefix))
+        .filter(|(k, _)| {
+            k[prefix.len()..]
+                .strip_suffix(']')
+                .is_some_and(|i| !i.is_empty() && i.bytes().all(|b| b.is_ascii_digit()))
+        })
+        .map(|(_, v)| v)
+        .collect()
+}
+
 /// Recursively merge two JSON objects. Object children are unioned
 /// (with the right-hand-side winning on leaf collisions); non-object
 /// leaves are replaced by the right-hand value. Used by

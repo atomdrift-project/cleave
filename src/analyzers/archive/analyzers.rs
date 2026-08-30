@@ -36,7 +36,7 @@ use crate::types::{
     ARCHIVE_DELIMITER, AnalysisReport, ArchiveEntry, FileAnalysis, Finding, TargetInfo, YaraMatch,
     encode_archive_path,
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
@@ -1323,6 +1323,12 @@ impl ArchiveAnalyzer {
                     file_type_key,
                     options,
                 )
+                // A cached analysis that carries path-derived findings
+                // (`type: path`, `file.basename` values) is only valid under
+                // the path it was evaluated for: the same bytes under another
+                // path would otherwise inherit, e.g., a `<lib>/core-path`
+                // finding they never matched.
+                && (fa.path.is_empty() || fa.path == relative_path)
             {
                 let mut report = crate::report_from_file_analysis(fa, relative_path.to_string());
                 crate::restamp_path_derived_values(&mut report, Path::new(relative_path));
@@ -1391,7 +1397,14 @@ impl ArchiveAnalyzer {
                         );
                     }
                     let mut fa = report.to_file_analysis(0);
-                    fa.path.clear();
+                    // Content-keyed, so path-derived findings must pin the
+                    // path they were evaluated under (see the lookup below).
+                    fa.path = if crate::shared_resources::report_has_path_dependent_findings(report)
+                    {
+                        relative_path.to_string()
+                    } else {
+                        String::new()
+                    };
                     fa.id = 0;
                     fa.parent_id = None;
                     fa.depth = 0;
@@ -2291,6 +2304,239 @@ impl ArchiveAnalyzer {
                     vec!["archive_analyzer".to_string(), "in_memory_zip".to_string()],
                 );
             }
+            Ok(())
+        })
+    }
+
+    /// Tar-family twin of [`Self::analyze_zip_archive_in_memory`]: stream the
+    /// entries straight from the (decompressing) reader into the member
+    /// window instead of extracting to a temp tree and walking it back.
+    ///
+    /// The temp tree was the archive's serial critical path: on a 9,090-member
+    /// npm tarball ~3 s to create the files and ~0.7 s to delete them, three
+    /// quarters of it kernel time in NTFS and the filter-driver stack
+    /// (Defender scans every file it creates), while 15 pool threads idled.
+    /// Guards, hostile-archive reasons and per-member metadata mirror
+    /// `tar::extract_tar_entries_safe` one for one, including the disk walk's
+    /// depth cap, so the member set and its order are the walk's.
+    pub(super) fn analyze_tar_archive_in_memory<R: Read>(
+        &self,
+        reader: R,
+        report: &mut AnalysisReport,
+        start: std::time::Instant,
+        guard: &ExtractionGuard,
+        label: &'static str,
+    ) -> Result<()> {
+        use super::guards::ExtractedMemberMetadata;
+        use super::tar::tar_entry_type_label;
+
+        // The disk walk is `WalkDir::new(temp).min_depth(1).max_depth(10)`:
+        // a member more than ten components deep is never analyzed there.
+        const MAX_WALK_DEPTH: usize = 10;
+        let fake_root = Path::new("/__cleave_archive__");
+        let mut archive = ::tar::Archive::new(reader);
+
+        // Mirrors the temp-tree path's partial-extraction contract: a
+        // truncated or hostile stream stops the walk, and the members read
+        // before the cut are still analyzed (with an extraction note) as long
+        // as there is at least one; with none, the error surfaces.
+        std::thread::scope(|scope| -> Result<()> {
+            let mut window = MemberWindow::new_in(scope, self, "memory TAR");
+            let mut pushed = 0usize;
+            let mut stop_reason: Option<anyhow::Error> = None;
+            let mut entries = archive.entries()?;
+            loop {
+                if self.is_cancelled() {
+                    anyhow::bail!("Analysis cancelled during tar member read");
+                }
+                if !guard.check_file_count() {
+                    stop_reason = Some(anyhow::anyhow!("Exceeded maximum file count"));
+                    break;
+                }
+                let Some(entry_result) = entries.next() else {
+                    break;
+                };
+                let mut entry = match entry_result.context("Failed to read tar entry") {
+                    Ok(entry) => entry,
+                    Err(e) => {
+                        stop_reason = Some(e);
+                        break;
+                    }
+                };
+                let entry_path = match entry.path() {
+                    Ok(p) => p,
+                    Err(e) => {
+                        stop_reason = Some(e.into());
+                        break;
+                    }
+                };
+                let entry_name = entry_path.to_string_lossy().replace('\\', "/");
+
+                if entry_name.len() > MAX_PATH_COMPONENT_LEN {
+                    guard.add_hostile_reason(HostileArchiveReason::ExcessiveEntryName {
+                        len: entry_name.len(),
+                        preview: entry_name.chars().take(80).collect(),
+                    });
+                }
+                let Some(outpath) = sanitize_entry_path(&entry_name, fake_root) else {
+                    guard.add_hostile_reason(HostileArchiveReason::PathTraversal(entry_name));
+                    continue;
+                };
+
+                let entry_type = entry.header().entry_type();
+                let header = entry.header();
+                let mode_octal = header.mode().ok();
+                let uid = header.uid().ok();
+                let gid = header.gid().ok();
+                let mtime_unix = header.mtime().ok().map(|m| m as i64);
+                let uname = header
+                    .username()
+                    .ok()
+                    .flatten()
+                    .filter(|s| !s.is_empty())
+                    .map(ToString::to_string);
+                let gname = header
+                    .groupname()
+                    .ok()
+                    .flatten()
+                    .filter(|s| !s.is_empty())
+                    .map(ToString::to_string);
+                let outpath = if entry_type.is_file() {
+                    guard.claim_output_path(outpath)
+                } else {
+                    outpath
+                };
+                let rel_path = outpath
+                    .strip_prefix(fake_root)
+                    .map(|p| p.to_string_lossy().replace('\\', "/"))
+                    .unwrap_or_else(|_| entry_name.clone());
+                let linkname_opt = if entry_type.is_symlink() || entry_type.is_hard_link() {
+                    entry
+                        .link_name()
+                        .ok()
+                        .flatten()
+                        .map(|p| p.to_string_lossy().to_string())
+                } else {
+                    None
+                };
+
+                guard.record_member_metadata(ExtractedMemberMetadata {
+                    archive_path: rel_path.clone(),
+                    compressed_size: None,
+                    compression_method: None,
+                    mtime_unix,
+                    mode_octal,
+                    uid,
+                    gid,
+                    uname,
+                    gname,
+                    entry_type: Some(tar_entry_type_label(entry_type).to_string()),
+                    linkname: linkname_opt.clone(),
+                    host_os: None,
+                });
+
+                if entry_type.is_symlink() || entry_type.is_hard_link() {
+                    if let Some(target_str) = linkname_opt.as_deref()
+                        && symlink_escapes(&outpath, target_str, fake_root)
+                    {
+                        guard.add_hostile_reason(HostileArchiveReason::SymlinkEscape(format!(
+                            "{} -> {}",
+                            entry_name, target_str
+                        )));
+                    }
+                    continue;
+                }
+                if !entry_type.is_file() {
+                    continue;
+                }
+
+                let size = match entry.header().size() {
+                    Ok(s) => s,
+                    Err(e) => {
+                        stop_reason = Some(e.into());
+                        break;
+                    }
+                };
+                if size > MAX_FILE_SIZE {
+                    guard.add_hostile_reason(HostileArchiveReason::ExcessiveFileSize {
+                        file: entry_name.clone(),
+                        size,
+                    });
+                    continue;
+                }
+
+                let mut file_data = Vec::with_capacity(size.min(16 * 1024 * 1024) as usize);
+                let mut limited = LimitedReader::new(&mut entry, MAX_FILE_SIZE);
+                let mut buf = [0u8; 65536];
+                let mut written = 0u64;
+                let mut read_err = None;
+                loop {
+                    if guard.is_cancelled() {
+                        anyhow::bail!("cancelled");
+                    }
+                    let n = match limited.read(&mut buf) {
+                        Ok(n) => n,
+                        Err(e) => {
+                            read_err = Some(
+                                anyhow::Error::from(e)
+                                    .context(format!("Failed to extract: {}", entry_name)),
+                            );
+                            break;
+                        }
+                    };
+                    if n == 0 {
+                        break;
+                    }
+                    file_data.extend_from_slice(&buf[..n]);
+                    written += n as u64;
+                }
+                if let Some(e) = read_err {
+                    stop_reason = Some(e);
+                    break;
+                }
+                if limited.is_limited() {
+                    guard.add_hostile_reason(HostileArchiveReason::ExcessiveFileSize {
+                        file: entry_name.clone(),
+                        size: MAX_FILE_SIZE,
+                    });
+                    continue;
+                }
+                if !guard.check_bytes(written, &entry_name) {
+                    stop_reason = Some(anyhow::anyhow!("Exceeded maximum total extraction size"));
+                    break;
+                }
+
+                if rel_path.split('/').count() > MAX_WALK_DEPTH {
+                    continue;
+                }
+
+                let logical_path = Path::new(&rel_path);
+                let file_type =
+                    crate::analyzers::detect_file_type_from_data(logical_path, &file_data);
+                let sha256 = calculate_sha256(&file_data);
+                window.push(MemoryArchiveMember {
+                    relative_path: rel_path,
+                    data: file_data,
+                    file_type,
+                    sha256,
+                    container_kind: None,
+                });
+                pushed += 1;
+            }
+            if let Some(e) = stop_reason {
+                if pushed == 0 {
+                    return Err(e);
+                }
+                guard.add_extraction_note(format!(
+                    "archive extraction stopped after {pushed} entries: {e}"
+                ));
+            }
+            window.finalize(
+                report,
+                start,
+                label,
+                vec!["archive_analyzer".to_string(), "in_memory_tar".to_string()],
+            );
             Ok(())
         })
     }

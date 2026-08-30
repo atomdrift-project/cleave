@@ -180,7 +180,7 @@ pub(crate) fn extract_tar_entries_safe<R: Read>(
 }
 
 /// Map a tar EntryType to a short forensic label.
-fn tar_entry_type_label(t: tar::EntryType) -> &'static str {
+pub(super) fn tar_entry_type_label(t: tar::EntryType) -> &'static str {
     use tar::EntryType;
     match t {
         EntryType::Regular => "regular",

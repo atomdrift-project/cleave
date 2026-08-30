@@ -74,6 +74,19 @@ pub(crate) fn trait_possibly_referenced(id: &str) -> bool {
 /// fold, so this — not the full index above — is the evidence-retention
 /// oracle for fold-time member slimming. Conservative superset, same match
 /// modes as `eval_trait`.
+/// Whether `report` carries a finding from a path-dependent rule (see
+/// `CapabilityMapper::path_dependent_ids`). With no mapper loaded the answer
+/// is conservative (`true`): the cache then keeps the path and refuses
+/// cross-path hits rather than risk serving a path finding elsewhere.
+pub(crate) fn report_has_path_dependent_findings(
+    report: &crate::types::core::AnalysisReport,
+) -> bool {
+    let guard = CAPABILITY_MAPPER.read();
+    guard
+        .as_ref()
+        .is_none_or(|m| m.report_has_path_dependent_findings(report))
+}
+
 pub(crate) fn trait_referenced_at_container_scope(id: &str) -> bool {
     let guard = CAPABILITY_MAPPER.read();
     guard

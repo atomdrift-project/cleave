@@ -91,7 +91,7 @@ jobs:
             --dir compat
 
       - name: Smoke test on Tribblix
-        uses: vmactions/tribblix-vm@4a486df18403c7ceeeab5fcb82fa47ff2116d35a # v1.0.3
+        uses: vmactions/tribblix-vm@0e661d78e9c57de32d06538807d2e49b8bd5058e # v1.0.4
         with:
           release: "0m40"
           usesh: true

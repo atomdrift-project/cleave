@@ -724,7 +724,16 @@ fn sanitize_escapes_reserved_device_names() {
     // Bare, cased, with an extension, and with a multi-part extension: Windows
     // matches the device on the stem, so all four resolve to the device and
     // silently swallow the member's bytes.
-    for name in ["nul", "NUL", "nul.exe", "con", "CON.txt", "com1.tar.gz", "lpt9", "conin$"] {
+    for name in [
+        "nul",
+        "NUL",
+        "nul.exe",
+        "con",
+        "CON.txt",
+        "com1.tar.gz",
+        "lpt9",
+        "conin$",
+    ] {
         let got = leaf(name, dest);
         assert_ne!(got, name, "{name:?} must not survive unescaped");
         let stem = got.split('.').next().unwrap().to_ascii_lowercase();
@@ -785,8 +794,19 @@ fn sanitize_is_injective_so_one_member_cannot_mask_another() {
     // The whole point of escaping `%` too: without it, an archive could ship
     // `a%3Ab` alongside `a:b` and have the second overwrite the first.
     let names = [
-        "a:b", "a%3Ab", "a%253Ab", "report.", "report", "report%2E", "nul", "%6Eul", "nul.exe",
-        "a<b", "a%3Cb", "a b", "a%20b",
+        "a:b",
+        "a%3Ab",
+        "a%253Ab",
+        "report.",
+        "report",
+        "report%2E",
+        "nul",
+        "%6Eul",
+        "nul.exe",
+        "a<b",
+        "a%3Cb",
+        "a b",
+        "a%20b",
     ];
     let mut seen: std::collections::HashMap<String, &str> = std::collections::HashMap::new();
     for name in names {
@@ -839,8 +859,17 @@ fn sanitize_still_rejects_every_traversal_shape() {
     let temp_dir = TempDir::new().unwrap();
     let dest = temp_dir.path();
 
-    for name in ["../etc/passwd", "foo/../../etc/passwd", "..", "/etc/passwd", "C:/Windows"] {
-        assert!(sanitize_entry_path(name, dest).is_none(), "{name:?} must be rejected");
+    for name in [
+        "../etc/passwd",
+        "foo/../../etc/passwd",
+        "..",
+        "/etc/passwd",
+        "C:/Windows",
+    ] {
+        assert!(
+            sanitize_entry_path(name, dest).is_none(),
+            "{name:?} must be rejected"
+        );
     }
     // A `..` buried mid-path is still a reject, and escaping must not launder it.
     assert!(sanitize_entry_path("ok/../../out", dest).is_none());
@@ -874,10 +903,19 @@ fn escaped_relative_path_agrees_with_sanitize_entry_path() {
 
     // The metadata merge relies on these two agreeing: it looks up the walked
     // name using the escaped form of the name recorded inside the archive.
-    for name in ["a:b/c.txt", "nul.exe", "plain/nested/file.bin", "trailing./x"] {
+    for name in [
+        "a:b/c.txt",
+        "nul.exe",
+        "plain/nested/file.bin",
+        "trailing./x",
+    ] {
         let relative = escaped_relative_path(name).unwrap();
         let full = sanitize_entry_path(name, dest).unwrap();
-        let stripped = full.strip_prefix(dest).unwrap().to_string_lossy().into_owned();
+        let stripped = full
+            .strip_prefix(dest)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
         let backslash = 0x5C_u8 as char;
         assert_eq!(stripped.replace(backslash, "/"), relative, "for {name:?}");
     }

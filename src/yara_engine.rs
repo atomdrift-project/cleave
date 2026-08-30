@@ -434,6 +434,58 @@ pub(crate) struct YaraEngine {
     compiled_inline_namespaces: Vec<String>,
 }
 
+/// Fan `f` out over `items` WITHOUT touching the shared rayon pool: on a
+/// rayon worker it runs inline; elsewhere it uses a few scoped plain threads.
+///
+/// Bucket source collection runs inside `build_tier`, i.e. while other
+/// threads may be parked on that bucket's `OnceLock`. Using the global pool
+/// from a non-worker caller (a startup prewarm thread, or a library caller)
+/// then deadlocks: the caller waits for the pool to run its jobs while every
+/// pool thread waits for the caller to finish the bucket (observed as a
+/// 30-minute STARVED stall on a fresh traits dir, where buckets compile from
+/// source). Plain threads cannot be blocked by the pool.
+fn off_pool_flat_map<T, R, I>(items: &[T], f: impl Fn(&T) -> I + Sync) -> Vec<R>
+where
+    T: Sync,
+    R: Send,
+    I: IntoIterator<Item = R>,
+{
+    if rayon::current_thread_index().is_some() || items.len() < 2 {
+        return items.iter().flat_map(&f).collect();
+    }
+    let threads = std::thread::available_parallelism()
+        .map_or(4, std::num::NonZeroUsize::get)
+        .clamp(2, 8)
+        .min(items.len());
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let mut per_thread: Vec<Vec<(usize, Vec<R>)>> = Vec::new();
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..threads)
+            .map(|_| {
+                scope.spawn(|| {
+                    let mut out = Vec::new();
+                    loop {
+                        let i = next.fetch_add(1, Ordering::Relaxed);
+                        let Some(item) = items.get(i) else { break };
+                        out.push((i, f(item).into_iter().collect::<Vec<R>>()));
+                    }
+                    out
+                })
+            })
+            .collect();
+        for h in handles {
+            if let Ok(v) = h.join() {
+                per_thread.push(v);
+            }
+        }
+    });
+    // Restore item order so callers see the same sequence as the old
+    // `iter().flat_map()` path.
+    let mut all: Vec<(usize, Vec<R>)> = per_thread.into_iter().flatten().collect();
+    all.sort_by_key(|(i, _)| *i);
+    all.into_iter().flat_map(|(_, v)| v).collect()
+}
+
 impl YaraEngine {
     /// An empty tier map pre-keyed with one `OnceLock` per bucket key.
     /// Keys are filetype strings (or [`FALLBACK_BUCKET`]) that actually carry
@@ -943,6 +995,82 @@ impl YaraEngine {
     /// This only fills cold `OnceLock`s; already-materialized buckets return
     /// immediately. Callers use this to overlap cache deserialization with other
     /// structural analysis before the actual YARA scan reaches the same buckets.
+    /// Build every populated bucket that is still cold, on `threads` plain
+    /// (non-rayon) threads, biggest buckets first. For a long-lived worker
+    /// this is the startup counterpart of lazy bucket loading: the buckets
+    /// get built either way, but here it happens on otherwise idle cores
+    /// while the first jobs are still being fetched, instead of inside the
+    /// first archive that needs them — where the `pe` bucket alone
+    /// (deserialize + wasmtime JIT, ~3 s) held one pool thread and every
+    /// member queued behind it.
+    ///
+    /// Plain threads, not the rayon pool: the pool is the analysis engine's
+    /// and a 77-job fan-out there would sit in front of the first jobs. A
+    /// member that needs a bucket mid-build parks on its `OnceLock` until the
+    /// builder thread finishes — bounded, and the same wait it would have had
+    /// behind a sibling member building it.
+    pub(crate) fn prewarm_all_cold_buckets(&self, threads: usize) {
+        let mut cold: Vec<&str> = self
+            .populated_tiers
+            .iter()
+            .map(String::as_str)
+            .filter(|bucket| {
+                self.tiers
+                    .get(*bucket)
+                    .is_some_and(|cell| cell.get().is_none())
+            })
+            .collect();
+        if cold.is_empty() {
+            return;
+        }
+        // The two giant buckets (`pe` ~21 MB, `elf` ~1.5 MB compiled) go on
+        // one dedicated thread; every other bucket is small (~30 ms) and the
+        // remaining threads sweep them alphabetically, so the buckets a
+        // typical first job needs (`py`, `js`, `json`, `txt`, ...) are ready
+        // within a few hundred ms instead of queueing behind `pe`.
+        const HEAVY: [&str; 2] = ["pe", "elf"];
+        cold.sort_unstable();
+        let (heavy, light): (Vec<&str>, Vec<&str>) = cold.iter().partition(|b| HEAVY.contains(b));
+        let started = std::time::Instant::now();
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        let threads = threads.clamp(1, cold.len());
+        std::thread::scope(|scope| {
+            // First the process-global scanner one-time init: `yara_x`'s
+            // first `Scanner` calibrates a `quanta` clock (~200 ms of
+            // spinning) — pay it here on the smallest bucket, before the
+            // heavy builds, instead of inside the first member that scans.
+            if let Some(first) = light.first().copied().or_else(|| heavy.first().copied()) {
+                let _ = self.tier_rules(first);
+                let _ = self.scan_bytes_filtered(b"prewarm", Some(&[first]));
+            }
+            if !heavy.is_empty() {
+                scope.spawn(|| {
+                    for bucket in &heavy {
+                        let _ = self.tier_rules(bucket);
+                    }
+                });
+            }
+            let light_threads = threads
+                .saturating_sub(usize::from(!heavy.is_empty()))
+                .max(1);
+            for _ in 0..light_threads {
+                scope.spawn(|| {
+                    loop {
+                        let i = next.fetch_add(1, Ordering::Relaxed);
+                        let Some(bucket) = light.get(i) else { break };
+                        let _ = self.tier_rules(bucket);
+                    }
+                });
+            }
+        });
+        tracing::info!(
+            buckets = cold.len(),
+            threads,
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "prewarmed all YARA buckets in the background"
+        );
+    }
+
     pub(crate) fn prewarm_filetypes(&self, file_type_filter: Option<&[&str]>) {
         let buckets_to_warm: Vec<String> = self
             .buckets_to_scan(file_type_filter)
@@ -1325,11 +1453,7 @@ impl YaraEngine {
         // worker. Cold YARA init may happen from a library caller inside rayon;
         // starting another rayon pass there can starve the pool while peers wait
         // on the global YARA singleton.
-        let collected: Vec<(String, String, String)> = if rayon::current_thread_index().is_some() {
-            yaml_files.iter().flat_map(collect_one).collect()
-        } else {
-            yaml_files.par_iter().flat_map(collect_one).collect()
-        };
+        let collected: Vec<(String, String, String)> = off_pool_flat_map(&yaml_files, collect_one);
 
         let mut tier_sources: HashMap<String, Vec<(String, String)>> = HashMap::new();
         let mut namespaces = Vec::with_capacity(collected.len());
@@ -1755,11 +1879,9 @@ impl YaraEngine {
             Some(split)
         };
 
-        let processed: Vec<SplitSource> = if rayon::current_thread_index().is_some() {
-            rule_files.iter().filter_map(process_one).collect()
-        } else {
-            rule_files.par_iter().filter_map(process_one).collect()
-        };
+        let processed: Vec<SplitSource> = off_pool_flat_map(&rule_files, |f| {
+            process_one(f).into_iter().collect::<Vec<_>>()
+        });
 
         let mut tier_sources: HashMap<String, Vec<(String, String)>> = HashMap::new();
         let mut rule_contexts: HashMap<String, RuleContext> = HashMap::new();
@@ -1893,11 +2015,9 @@ impl YaraEngine {
         // Read and preprocess in parallel unless already on a rayon worker.
         // The transform is pure, but nested rayon here can deadlock cold YARA
         // initialization when other workers are waiting on the singleton.
-        let processed: Vec<Processed> = if rayon::current_thread_index().is_some() {
-            rule_files.iter().filter_map(process_one).collect()
-        } else {
-            rule_files.par_iter().filter_map(process_one).collect()
-        };
+        let processed: Vec<Processed> = off_pool_flat_map(&rule_files, |f| {
+            process_one(f).into_iter().collect::<Vec<_>>()
+        });
 
         let mut tier_sources: HashMap<String, Vec<(String, String)>> = HashMap::new();
         let mut rule_contexts: HashMap<String, RuleContext> = HashMap::new();

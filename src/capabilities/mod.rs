@@ -24,7 +24,7 @@
 //! - `mapper.evaluate_traits()` - Evaluate atomic traits against a report
 //! - `mapper.evaluate_composite_rules()` - Evaluate composite rules
 
-mod derivation_memo;
+pub(crate) mod derivation_memo;
 mod error_formatting;
 pub(crate) mod indexes;
 mod mapper;

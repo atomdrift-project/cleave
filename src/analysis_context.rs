@@ -51,6 +51,21 @@ impl<'a> AnalysisContext<'a> {
         self
     }
 
+    /// Open with a [`filefacts::FileId`] the caller already computed, so the
+    /// (potentially expensive) detection pass runs once per file.
+    pub fn open_with_fileid(
+        path: &'a Path,
+        content: &'a [u8],
+        fileid: filefacts::FileId,
+    ) -> Result<Self, filefacts::Error> {
+        let parsed = filefacts::open_with_fileid(path, content, fileid)?;
+        Ok(Self {
+            path,
+            content,
+            parsed,
+        })
+    }
+
     /// Open `content` forcing a caller-known `file_type`, bypassing
     /// detection. For embedded code whose language is already known but
     /// whose virtual path / extracted body carries no detectable shebang,

@@ -1647,6 +1647,7 @@ pub(crate) fn eval_raw<'a>(
                 crate::composite_rules::compile_claim::ClaimSet::new();
             let compile_and_put = |key: (String, bool)| {
                 super::compile_bytes_regex(pattern_str, case_insensitive).map(|re| {
+                    crate::composite_rules::regex_warm::record_bytes(pattern_str, case_insensitive);
                     let arc = std::sync::Arc::new(re);
                     let size = arc.heap_bytes();
                     cache.write().put(key, std::sync::Arc::clone(&arc), size);

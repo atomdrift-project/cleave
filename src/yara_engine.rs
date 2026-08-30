@@ -109,6 +109,23 @@ const MAX_PATTERN_MATCHES: usize = 8;
 /// scan recreated scanners ~31,000 times — each a wasmtime store + linker
 /// instantiation that dominated the fetch-phase tail. 64 covers every tier a
 /// thread realistically touches; tune via `CLEAVE_YARA_SCANNER_CACHE`.
+/// Inputs at or above this size evict their scanner from the per-thread cache
+/// after the scan (see the eviction site in `run_scanner`). `CLEAVE_YARA_EVICT_ABOVE_MB`
+/// overrides. Default 1 MiB: on the poppy worker benchmark this returned
+/// ~460 MB of idle module-struct state (peak 4572 → 4112 MiB) with wall
+/// unchanged and identical outputs; evicting on every input (=0) saved no
+/// more memory and cost a little wall re-instantiating scanners for small
+/// files (2026-08-30).
+fn yara_evict_above_bytes() -> usize {
+    static BYTES: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *BYTES.get_or_init(|| {
+        std::env::var("CLEAVE_YARA_EVICT_ABOVE_MB")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .map_or(1024 * 1024, |mb| mb.saturating_mul(1024 * 1024))
+    })
+}
+
 fn engine_scanner_cache_size() -> usize {
     const DEFAULT: usize = 64;
     static SIZE: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
@@ -1771,6 +1788,17 @@ impl YaraEngine {
             // Scanner/ScanResults borrow is now released. Evict the cached
             // scanner if the scan failed or took unreasonably long — yara-x may
             // not cleanly reset internal state after a timeout.
+            // A cached scanner keeps the module structs (`pe`, `elf`, `dotnet`, …)
+            // parsed from its *last* input until its next scan replaces them —
+            // yara-x resets the context at scan start, never at scan end. With
+            // 64 scanners per thread over 8 threads that idle state measured
+            // ~380–440 MB of a 4.2 GB worker heap. Above this input size the
+            // scanner is dropped after use; re-instantiating one is cheap
+            // next to a scan of that size.
+            let evict_for_size = data.len() >= yara_evict_above_bytes();
+            if evict_for_size {
+                cache.pop(&key);
+            }
             if raw_rules_result.is_err() || scan_elapsed > Self::YARA_WALL_CLOCK_LIMIT {
                 if scan_elapsed > Self::YARA_WALL_CLOCK_LIMIT {
                     tracing::error!(

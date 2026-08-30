@@ -101,6 +101,7 @@ pub(crate) struct TraitRegex {
 fn engine_config() -> regex_automata::meta::Config {
     regex_automata::meta::Regex::config()
         .onepass(false)
+        .dfa(super::evaluators::regex_full_dfa())
         .which_captures(regex_automata::nfa::thompson::WhichCaptures::Implicit)
         .nfa_size_limit(Some(10 * (1 << 20)))
         .hybrid_cache_capacity(super::evaluators::regex_dfa_cache_bytes())

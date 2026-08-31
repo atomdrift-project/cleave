@@ -2665,6 +2665,10 @@ impl YaraEngine {
         let mut os_meta: Option<String> = None;
         let mut arch_context_meta: Option<String> = None;
         let mut metadata_hint_text = String::new();
+        // Kept for the description fallback below: whole rule sets carry a
+        // family label but no `description` meta.
+        let mut threat_name_meta: Option<String> = None;
+        let mut family_meta: Option<String> = None;
 
         for tag_name in tags {
             if matches!(
@@ -2709,10 +2713,16 @@ impl YaraEngine {
                 "arch_context" => arch_context_meta = Some(value_str.to_lowercase()),
                 "source_url" | "reference" | "category" | "classification" | "threat_name"
                 | "scan_context" | "tags" => {
+                    if key == "threat_name" {
+                        threat_name_meta = Some(value_str.clone());
+                    }
                     if !metadata_hint_text.is_empty() {
                         metadata_hint_text.push(' ');
                     }
                     metadata_hint_text.push_str(&value_str);
+                }
+                "malware_family" | "family" => {
+                    family_meta = Some(value_str);
                 }
                 _ => {}
             }
@@ -2858,6 +2868,21 @@ impl YaraEngine {
                 &namespace,
                 trait_id.as_deref(),
             )?;
+        }
+
+        // Not every rule set writes a `description`. Elastic's, for one, labels
+        // 3084 rules with `threat_name` and gives fewer than half of them a
+        // description — and third-party rules are graded hostile by default, so
+        // the rest surfaced as a red verdict above a blank line, which is the
+        // least useful thing a triage tool can print. Fall back through the
+        // labels a rule set does carry, and last of all name the rule itself:
+        // any of these tells the reader more than nothing.
+        if description.trim().is_empty() {
+            description = match (&threat_name_meta, &family_meta) {
+                (Some(t), _) if !t.trim().is_empty() => format!("Detects {t}"),
+                (_, Some(f)) if !f.trim().is_empty() => format!("Detects {f}"),
+                _ => format!("YARA rule {rule_name}"),
+            };
         }
 
         Some(YaraMatch {
@@ -3057,6 +3082,69 @@ rule test_rule {
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].rule, "test_rule");
         assert!(!matches[0].matched_strings.is_empty());
+    }
+
+    /// Whole vendor rule sets label their rules with `threat_name` and no
+    /// `description` — Elastic's ships 3084 of the former and fewer than half
+    /// as many of the latter. Third-party rules are graded hostile by default,
+    /// so those findings reached the analyst as a red verdict over a blank
+    /// line. Fall back to whatever label the rule does carry.
+    #[test]
+    fn test_description_falls_back_to_threat_name() {
+        let rule = r#"
+rule threat_named_rule {
+    meta:
+        threat_name = "Windows.Generic.Threat"
+    strings:
+        $test = "TESTPATTERN"
+    condition:
+        $test
+}
+"#;
+        let mut engine = YaraEngine::new_for_test();
+        engine.load_rule_source(rule).unwrap();
+        let matches = engine.scan_bytes(b"This contains TESTPATTERN").unwrap();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].desc, "Detects Windows.Generic.Threat");
+    }
+
+    /// With no label at all, name the rule: still more than an empty string.
+    #[test]
+    fn test_description_falls_back_to_rule_name() {
+        let rule = r#"
+rule unlabelled_rule {
+    strings:
+        $test = "TESTPATTERN"
+    condition:
+        $test
+}
+"#;
+        let mut engine = YaraEngine::new_for_test();
+        engine.load_rule_source(rule).unwrap();
+        let matches = engine.scan_bytes(b"This contains TESTPATTERN").unwrap();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].desc, "YARA rule unlabelled_rule");
+    }
+
+    /// An explicit description always wins over the fallbacks.
+    #[test]
+    fn test_explicit_description_wins_over_threat_name() {
+        let rule = r#"
+rule described_rule {
+    meta:
+        description = "Detects a specific loader stage"
+        threat_name = "Windows.Generic.Threat"
+    strings:
+        $test = "TESTPATTERN"
+    condition:
+        $test
+}
+"#;
+        let mut engine = YaraEngine::new_for_test();
+        engine.load_rule_source(rule).unwrap();
+        let matches = engine.scan_bytes(b"This contains TESTPATTERN").unwrap();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].desc, "Detects a specific loader stage");
     }
 
     #[test]

@@ -1710,7 +1710,7 @@ dependencies = [
 [[package]]
 name = "filefacts"
 version = "1.3.0"
-source = "git+https://github.com/atomdrift-project/filefacts.git#e6d1e8b6d04e7a711215d322de0a837464dc9960"
+source = "git+https://github.com/atomdrift-project/filefacts.git#34e26d4a57c464c9803e7943e341a97bb08ea528"
 dependencies = [
  "aho-corasick",
  "cfb 0.10.0",
@@ -4238,7 +4238,7 @@ version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c1257cd4248b4132760d6524d6dda4e053bc648c9070b960929bf50cfb1e7add"
 dependencies = [
- "scroll_derive 0.13.1",
+ "scroll_derive 0.13.2",
 ]
 
 [[package]]
@@ -4254,13 +4254,13 @@ dependencies = [
 
 [[package]]
 name = "scroll_derive"
-version = "0.13.1"
+version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ed76efe62313ab6610570951494bdaa81568026e0318eaa55f167de70eeea67d"
+checksum = "e1a36a382ed65dbcc0ab47fd5e9a94112417ccd34560a392ef3b7b0f0ec39148"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.119",
+ "syn 3.0.4",
 ]
 
 [[package]]
@@ -4632,7 +4632,7 @@ dependencies = [
 [[package]]
 name = "stng"
 version = "1.9.0"
-source = "git+https://github.com/atomdrift-project/stng.git#17ff72deb5ff61afcf8dbdcdd227a8a4b43fce52"
+source = "git+https://github.com/atomdrift-project/stng.git#603c3d1e2787be5edd568f39fde22cb61b195897"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -5298,7 +5298,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-clojure"
 version = "0.1.0"
-source = "git+https://github.com/atomdrift-project/filefacts.git#e6d1e8b6d04e7a711215d322de0a837464dc9960"
+source = "git+https://github.com/atomdrift-project/filefacts.git#34e26d4a57c464c9803e7943e341a97bb08ea528"
 dependencies = [
  "cc",
  "tree-sitter",

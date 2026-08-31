@@ -533,7 +533,7 @@ impl PEAnalyzer {
         ctx: &Ctx<'a>,
     ) -> AnalysisReport {
         use crate::types::file_analysis::encode_upx_path;
-        use crate::upx::{UPXDecompressor, UPXError};
+        use crate::upx::UPXDecompressor;
 
         if !UPXDecompressor::is_upx_packed(data) {
             return self.analyze_structural_with_strings(
@@ -676,19 +676,25 @@ impl PEAnalyzer {
                 }
             }
             Err(e) => {
-                let description = match e {
-                    UPXError::DecompressionFailed(msg) => {
-                        format!("UPX decompression failed (possibly tampered): {}", msg)
-                    }
-                    _ => format!("UPX decompression failed: {}", e),
-                };
+                // The raw `upx` stderr names the temp file we handed it, so it
+                // is not reproducible run to run; keep it in the log and put a
+                // fixed reason in the finding. See `upx::classify_failure`.
+                tracing::debug!("UPX decompression failed: {}", e);
+                let failure = crate::upx::classify_failure(&e);
                 report.findings.push(
                     Finding::structural(
                         "anti-static/packer/upx/decompression-failed".to_string(),
-                        description,
+                        failure.description.to_string(),
                         1.0,
                     )
-                    .with_criticality(Criticality::Hostile),
+                    .with_criticality(if failure.indicts_image {
+                        Criticality::Hostile
+                    } else {
+                        // A timeout, our own size cap or a missing `upx` says
+                        // nothing about the sample — reporting those as hostile
+                        // graded our environment instead of the file.
+                        Criticality::Notable
+                    }),
                 );
             }
         }

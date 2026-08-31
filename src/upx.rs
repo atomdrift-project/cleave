@@ -53,6 +53,66 @@ pub(crate) enum UPXError {
     IoError(#[from] std::io::Error),
 }
 
+/// A stable description of why UPX decompression failed.
+///
+/// `upx` reports errors against the temporary file it was handed, so its stderr
+/// carries a path that is different on every run:
+///
+/// ```text
+/// upx: /tmp/.tmpJYEaZH: Exception: checksum error
+/// ```
+///
+/// That string used to be interpolated straight into the
+/// `anti-static/packer/upx/decompression-failed` finding, which meant the same
+/// sample produced a different description on each scan — two reports of one
+/// file could not be diffed, and the triage line carried a path that means
+/// nothing to the reader. Classify the failure into a fixed vocabulary instead
+/// and keep the raw stderr in the debug log.
+pub(crate) struct UpxFailure {
+    /// Fixed text, safe to compare across runs and machines.
+    pub description: &'static str,
+    /// Whether the failure is evidence about the *image* — a UPX header that
+    /// does not match its payload, or one `upx` refuses to unpack — as opposed
+    /// to a fact about this run (a timeout, our own size cap, a missing tool).
+    /// Only the former is a reason to grade the sample.
+    pub indicts_image: bool,
+}
+
+/// Map a decompression error onto one of a fixed set of reasons.
+///
+/// Matching is done on substrings of `upx`'s own exception names, which are
+/// stable across releases (`ChecksumException`, `CantUnpackException`,
+/// `NotPackedException`, `IOException`). An unrecognised stderr still indicts
+/// the image: the file carried UPX markers and `upx` refused it.
+pub(crate) fn classify_failure(err: &UPXError) -> UpxFailure {
+    let (description, indicts_image) = match err {
+        UPXError::NotInstalled => ("UPX tool not available to unpack", false),
+        UPXError::IoError(_) => ("UPX decompression I/O error", false),
+        UPXError::DecompressionFailed(msg) => {
+            let m = msg.to_ascii_lowercase();
+            if m.contains("timed out") {
+                ("UPX decompression timed out", false)
+            } else if m.contains("exceeds limit") {
+                ("UPX payload exceeds decompression size limit", false)
+            } else if m.contains("checksum") {
+                ("UPX header checksum does not match payload", true)
+            } else if m.contains("notpacked") || m.contains("not packed") {
+                ("UPX markers present but image is not packed", true)
+            } else if m.contains("cantunpack") || m.contains("cantpack") {
+                ("UPX image refuses to unpack", true)
+            } else if m.contains("ioexception") {
+                ("UPX could not read the image", false)
+            } else {
+                ("UPX decompression failed", true)
+            }
+        }
+    };
+    UpxFailure {
+        description,
+        indicts_image,
+    }
+}
+
 pub(crate) struct UPXDecompressor;
 
 impl UPXDecompressor {
@@ -352,6 +412,54 @@ mod tests {
     fn test_upx_error_decompression_failed_display() {
         let err = UPXError::DecompressionFailed("corrupt file".to_string());
         assert_eq!(err.to_string(), "UPX decompression failed: corrupt file");
+    }
+
+    // =========================================================================
+    // Failure classification
+    // =========================================================================
+
+    /// The reason a finding exists must not depend on which temp file `upx`
+    /// happened to be handed: two scans of one sample have to produce the same
+    /// description, or the reports cannot be diffed.
+    #[test]
+    fn test_classify_failure_is_stable_across_temp_paths() {
+        let a = classify_failure(&UPXError::DecompressionFailed(
+            "upx: /tmp/.tmpJYEaZH: Exception: checksum error\n".to_string(),
+        ));
+        let b = classify_failure(&UPXError::DecompressionFailed(
+            "upx: /tmp/.tmpQYT9GU: Exception: checksum error\n".to_string(),
+        ));
+        assert_eq!(a.description, b.description);
+        assert!(!a.description.contains("/tmp"));
+        assert!(a.indicts_image);
+    }
+
+    /// A timeout, our own size ceiling, or a missing `upx` are facts about the
+    /// run. Grading those as evidence against the sample reported our own
+    /// environment as hostile.
+    #[test]
+    fn test_classify_failure_environmental_reasons_do_not_indict() {
+        for err in [
+            UPXError::DecompressionFailed("UPX decompression timed out".to_string()),
+            UPXError::DecompressionFailed(
+                "Decompressed UPX size exceeds limit (200 > 100)".to_string(),
+            ),
+            UPXError::NotInstalled,
+        ] {
+            let f = classify_failure(&err);
+            assert!(!f.indicts_image, "{} should not indict", f.description);
+        }
+    }
+
+    /// An unrecognised refusal still counts: the image carried UPX markers and
+    /// `upx` would not unpack it.
+    #[test]
+    fn test_classify_failure_unknown_stderr_indicts_image() {
+        let f = classify_failure(&UPXError::DecompressionFailed(
+            "upx: something new went wrong".to_string(),
+        ));
+        assert!(f.indicts_image);
+        assert_eq!(f.description, "UPX decompression failed");
     }
 
     #[test]

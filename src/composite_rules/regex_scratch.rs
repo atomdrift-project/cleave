@@ -90,6 +90,8 @@ pub(crate) fn next_regex_id() -> u64 {
 struct Entry {
     cache: meta::Cache,
     size: usize,
+    /// Returns since checkout-creation; schedules size remeasurement.
+    uses: u32,
 }
 
 /// Releases a checked-out entry's retained-byte reservation if its search
@@ -295,6 +297,7 @@ pub(crate) fn with_cache<R>(id: u64, re: &meta::Regex, f: impl FnOnce(&mut meta:
         Box::new(Entry {
             cache: re.create_cache(),
             size: 0,
+            uses: 0,
         })
     });
     let mut reservation = CheckoutReservation {
@@ -313,7 +316,17 @@ pub(crate) fn with_cache<R>(id: u64, re: &meta::Regex, f: impl FnOnce(&mut meta:
 /// the slot).
 fn finish(id: u64, mut entry: Box<Entry>, was_reserved: bool) {
     let old_size = entry.size;
-    let new_size = entry.cache.memory_usage();
+    // `meta::Cache::memory_usage` walks the cache's internal structures and
+    // measured 0.7% of whole-run CPU when taken on every return. A cache only
+    // grows meaningfully while the lazy DFA is learning new states, so remeasure
+    // on a coarse schedule: every 16th return (plus the first, when `size` is
+    // still the insert-time estimate).
+    entry.uses = entry.uses.wrapping_add(1);
+    let new_size = if entry.uses % 16 == 1 {
+        entry.cache.memory_usage()
+    } else {
+        old_size
+    };
     let retained = if was_reserved && new_size > old_size {
         reserve_cached(new_size - old_size)
     } else if was_reserved {

@@ -501,6 +501,10 @@ impl super::CapabilityMapper {
                                     cache_data.composite_rules.len(),
                                 );
 
+                                super::drop_unreferenced_support_rules(
+                                    &mut cache_data.trait_definitions,
+                                    &cache_data.composite_rules,
+                                );
                                 // Populate trait_id_map from cached data
                                 let mut trait_id_map = std::collections::HashMap::with_capacity(
                                     cache_data.trait_definitions.len(),
@@ -4720,6 +4724,8 @@ impl super::CapabilityMapper {
                 }
             }
         }
+
+        super::drop_unreferenced_support_rules(&mut trait_definitions, &composite_rules);
 
         // Populate trait_id_map
         let mut trait_id_map = std::collections::HashMap::with_capacity(trait_definitions.len());

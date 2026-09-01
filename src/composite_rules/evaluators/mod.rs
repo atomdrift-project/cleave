@@ -912,6 +912,67 @@ pub(crate) fn windows_from_atom_hits(
 /// `*_inserts` means the working set exceeds that store's byte budget and
 /// engines recompile per use instead of being reused — the signature of
 /// budget thrash on archive scans.
+/// Coverage counters for `eval_raw`'s hit-window confirmation: how many
+/// evaluations searched only gate-atom windows vs. the whole member, how many
+/// bytes each mode walked, and why each full scan fell back. Logged from
+/// `log_scan_stats` so a worker run ends with the aggregate; the counts are
+/// what says whether widening the windowing (more offsets, more file types,
+/// str-engine coverage) is worth the risk.
+pub(crate) mod raw_window_stats {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    pub(crate) static WINDOWED: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static WINDOWED_BYTES: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static FULL: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static FULL_BYTES: AtomicU64 = AtomicU64::new(0);
+    // fallback reasons for FULL
+    pub(crate) static NOT_SOURCE_TYPE: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static NO_TRAIT_IDX: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static NO_ATOMS: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static ATOM_MISMATCH: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static UNBOUNDED: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static STR_ENGINE: AtomicU64 = AtomicU64::new(0);
+    // full-scan bytes attributed to the fallback reason recorded for the eval
+    pub(crate) static NO_ATOMS_BYTES: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static UNBOUNDED_BYTES: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static OTHER_FULL_BYTES: AtomicU64 = AtomicU64::new(0);
+    use std::cell::Cell;
+    thread_local! {
+        /// Reason recorded by the most recent `source_raw_windows` fallback on
+        /// this thread, consumed by the byte accounting at the scan site.
+        pub(crate) static LAST_REASON: Cell<u8> = const { Cell::new(0) };
+    }
+
+    pub(crate) fn bump(counter: &AtomicU64) {
+        counter.fetch_add(1, Ordering::Relaxed);
+    }
+    pub(crate) fn add_bytes(counter: &AtomicU64, n: usize) {
+        counter.fetch_add(n as u64, Ordering::Relaxed);
+    }
+    pub(crate) fn log() {
+        let w = WINDOWED.load(Ordering::Relaxed);
+        let f = FULL.load(Ordering::Relaxed);
+        if w + f == 0 {
+            return;
+        }
+        tracing::info!(
+            windowed = w,
+            windowed_mb = WINDOWED_BYTES.load(Ordering::Relaxed) / (1 << 20),
+            full = f,
+            full_mb = FULL_BYTES.load(Ordering::Relaxed) / (1 << 20),
+            no_atoms_mb = NO_ATOMS_BYTES.load(Ordering::Relaxed) / (1 << 20),
+            unbounded_mb = UNBOUNDED_BYTES.load(Ordering::Relaxed) / (1 << 20),
+            other_full_mb = OTHER_FULL_BYTES.load(Ordering::Relaxed) / (1 << 20),
+            not_source_type = NOT_SOURCE_TYPE.load(Ordering::Relaxed),
+            no_trait_idx = NO_TRAIT_IDX.load(Ordering::Relaxed),
+            no_atoms = NO_ATOMS.load(Ordering::Relaxed),
+            atom_mismatch = ATOM_MISMATCH.load(Ordering::Relaxed),
+            unbounded = UNBOUNDED.load(Ordering::Relaxed),
+            str_engine = STR_ENGINE.load(Ordering::Relaxed),
+            "eval_raw window coverage"
+        );
+    }
+}
+
 /// `(entries, bytes, evictions, budget_bytes)` of the raw-bytes regex store.
 pub(crate) fn bytes_regex_store_stats() -> (usize, usize, u64, usize) {
     BYTES_REGEX_CACHE.get().map_or((0, 0, 0, 0), |c| {

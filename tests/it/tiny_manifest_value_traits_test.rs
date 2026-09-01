@@ -35,7 +35,6 @@ traits:
   # pass runs on a sub-100-byte manifest.
   - id: fx-license-isc
     desc: Manifest declares the npm-init default ISC license
-    crit: baseline
     conf: 0.95
     for: [package.json]
     if:

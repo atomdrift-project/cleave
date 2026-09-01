@@ -208,7 +208,7 @@ reqwest = { version = "0.13", features = ["blocking", "rustls", "webpki-roots"],
 parking_lot = "0.12"  # Efficient mutexes/RwLocks. NOTE: `deadlock_detection` is opt-in (see the `deadlock-detection` feature) — it adds per-lock global-registry bookkeeping that has no place in release builds.
 libc = "0.2"          # For FreeBSD sysctl thread info and other OS APIs
 memmap2 = "0.9"  # Memory-mapped file I/O for large files
-smallvec = "1.15"  # Stack-allocated vectors for small collections
+smallvec = "1.16"  # Stack-allocated vectors for small collections
 encoding_rs = "0.8"  # Character encoding detection and conversion
 stng = { git = "https://github.com/atomdrift-project/stng.git" }  # String extraction
 

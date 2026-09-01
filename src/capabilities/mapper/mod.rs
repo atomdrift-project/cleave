@@ -213,22 +213,30 @@ pub(crate) struct TraitRefIndex {
     dirs: rustc_hash::FxHashSet<String>,
 }
 
-/// Drop support rules no other rule can reach: `Component` traits are only
-/// ever shown when a matched composite references them, `Exception` traits
-/// exist purely to be consumed from `unless:`/`downgrade:` clauses, and
-/// unreferenced `Baseline` traits carry no analytical signal on their own
-/// (dropping those does remove their findings from member output). Every
-/// retained rule is one fewer pattern evaluated against every member of every
-/// archive, so this pays for itself on the first file scanned. Runs to a
-/// fixpoint: dropping a Component also drops the references *it* made, which
-/// can strand further support rules.
+/// Drop `Exception` traits no other rule can reach. An exception exists purely
+/// to be consumed from an `unless:`/`downgrade:` clause and is, per TAXONOMY,
+/// "never emitted to JSON, the CLI, the web UI, or differential analysis" — so
+/// one that nothing references can never affect output, and evaluating it
+/// against every member of every archive is pure waste.
+///
+/// `Component` and `Baseline` are deliberately *not* droppable, though they
+/// look like the bigger prize. TAXONOMY specifies both as user-visible —
+/// baseline is "always present in JSON, the web UI, and differential
+/// analysis", and the visibility caveat says the same of component — and they
+/// do reach `report.findings`, which is the JSON/API surface; only terminal
+/// rendering de-emphasizes them. Dropping them also makes a mis-tiered trait
+/// silently undetectable, and tiers are not reliable enough to bet detection
+/// on: sampling the traits this once removed turned up privilege operations
+/// (`cap-set-proc`), code-signing chains, and PE hardening flags labeled
+/// baseline, all of which TAXONOMY's `notable` row names explicitly.
+///
+/// Runs to a fixpoint: dropping an exception also drops the references *it*
+/// made, which can strand further exceptions.
 pub(crate) fn drop_unreferenced_support_rules(
     trait_definitions: &mut Vec<crate::composite_rules::TraitDefinition>,
     composite_rules: &[crate::composite_rules::CompositeTrait],
 ) {
     use crate::types::core::Criticality;
-    let mut dropped_baseline = 0usize;
-    let mut dropped_component = 0usize;
     let mut dropped_exception = 0usize;
     loop {
         let mut raw = std::collections::BTreeSet::new();
@@ -258,28 +266,20 @@ pub(crate) fn drop_unreferenced_support_rules(
         let idx = TraitRefIndex::build(raw);
         let before = trait_definitions.len();
         trait_definitions.retain(|t| {
-            let droppable = matches!(
-                t.crit,
-                Criticality::Exception | Criticality::Component | Criticality::Baseline
-            );
-            if !droppable || idx.possibly_referenced(&t.id) {
+            if t.crit != Criticality::Exception || idx.possibly_referenced(&t.id) {
                 return true;
             }
-            match t.crit {
-                Criticality::Exception => dropped_exception += 1,
-                Criticality::Component => dropped_component += 1,
-                _ => dropped_baseline += 1,
-            }
+            dropped_exception += 1;
             false
         });
         if trait_definitions.len() == before {
             break;
         }
     }
-    if dropped_baseline + dropped_component + dropped_exception > 0 {
+    if dropped_exception > 0 {
         tracing::info!(
             remaining = trait_definitions.len(),
-            "dropped {dropped_baseline} unreferenced baseline, {dropped_component}              component, and {dropped_exception} exception rules",
+            "dropped {dropped_exception} unreferenced exception rules",
         );
     }
 }

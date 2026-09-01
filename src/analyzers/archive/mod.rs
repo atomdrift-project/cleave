@@ -214,6 +214,68 @@ fn name_repo_mismatch(report: &AnalysisReport) -> Option<bool> {
     Some(name != repo)
 }
 
+/// How a VS Code extension pack is composed: `(total entries, entries the
+/// publisher owns)`.
+///
+/// An extension pack contributes no code of its own — `extensionPack` is a list
+/// of marketplace ids the editor installs alongside it, each written
+/// `publisher.name`. A vendor's pack is mostly the vendor's own extensions, and
+/// a community "awesome tools" pack is entirely other people's. The laundering
+/// shape sits between: forty genuinely popular third-party extensions as
+/// ballast around one or two entries from the publisher, so the listing reads
+/// as a curated toolkit while the entry that matters is installed with it. The
+/// pack itself never looks hostile, because it is only a list.
+///
+/// Two neutral counts rather than a verdict — where the line falls between
+/// curation and laundering is a trait's policy, not this function's.
+///
+/// `None` when the manifest declares no pack, or declares no publisher to
+/// compare entries against.
+fn extension_pack_counts(report: &AnalysisReport) -> Option<(u64, u64)> {
+    let manifest = report.files.iter().find(|f| {
+        Path::new(&f.path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.eq_ignore_ascii_case("package.json"))
+    })?;
+
+    // A member's kv is flattened, so the array arrives as `extensionPack[0]`,
+    // `extensionPack[1]`, ... rather than as one JSON array.
+    let entries: Vec<&str> = manifest
+        .kv
+        .iter()
+        .filter(|(k, _)| {
+            k.strip_prefix("extensionPack[")
+                .is_some_and(|rest| rest.ends_with(']'))
+        })
+        .filter_map(|(_, v)| v.as_str())
+        .collect();
+    if entries.is_empty() {
+        return None;
+    }
+
+    let publisher = manifest
+        .kv
+        .get("publisher")
+        .and_then(serde_json::Value::as_str)?;
+    if publisher.is_empty() {
+        return None;
+    }
+
+    // `publisher.name`: the publisher is everything before the first dot, since
+    // neither half of a marketplace id may itself contain one.
+    let own = entries
+        .iter()
+        .filter(|entry| {
+            entry
+                .split_once('.')
+                .is_some_and(|(owner, _)| owner.eq_ignore_ascii_case(publisher))
+        })
+        .count();
+
+    Some((entries.len() as u64, own as u64))
+}
+
 fn archive_finding(
     id: &str,
     desc: String,
@@ -1783,6 +1845,18 @@ impl ArchiveAnalyzer {
                 );
         }
 
+        // How a VS Code extension pack is composed. Only a list of marketplace
+        // ids, so nothing here is a behavior — but the ratio of borrowed
+        // reputation to the publisher's own entries is what separates a curated
+        // bundle from one assembled to carry something in.
+        if let Some((size, own)) = extension_pack_counts(report) {
+            let metrics = report
+                .filefacts_metrics
+                .get_or_insert_with(Default::default);
+            metrics.insert("vsix.extension_pack_size".to_string(), size as f64);
+            metrics.insert("vsix.extension_pack_self_entries".to_string(), own as f64);
+        }
+
         let Some(mapper) = &self.capability_mapper else {
             return;
         };
@@ -2195,6 +2269,57 @@ mod tests {
         f.kv.insert("name".into(), serde_json::json!(name));
         f.kv.insert(repo_key.into(), serde_json::json!(repo));
         report_with(vec![f])
+    }
+
+    fn pack_manifest(publisher: &str, entries: &[&str]) -> AnalysisReport {
+        let mut f = FileAnalysis::new(
+            0,
+            "extension/package.json".into(),
+            "package.json".into(),
+            String::new(),
+            0,
+        );
+        f.kv.insert("publisher".into(), serde_json::json!(publisher));
+        for (i, e) in entries.iter().enumerate() {
+            f.kv.insert(format!("extensionPack[{i}]"), serde_json::json!(e));
+        }
+        report_with(vec![f])
+    }
+
+    #[test]
+    fn extension_pack_counts_separates_borrowed_from_own() {
+        // The laundering shape: one of the publisher's own extensions carried
+        // in by three well-known third-party ones.
+        assert_eq!(
+            extension_pack_counts(&pack_manifest(
+                "krabt",
+                &[
+                    "krabt.krabt-proto",
+                    "eamodio.gitlens",
+                    "golang.go",
+                    "ms-python.python",
+                ],
+            )),
+            Some((4, 1)),
+        );
+        // A vendor pack of its own extensions.
+        assert_eq!(
+            extension_pack_counts(&pack_manifest(
+                "ms-python",
+                &["ms-python.python", "ms-python.debugpy"],
+            )),
+            Some((2, 2)),
+        );
+    }
+
+    #[test]
+    fn extension_pack_counts_abstains_without_a_pack_or_publisher() {
+        assert_eq!(extension_pack_counts(&pack_manifest("krabt", &[])), None);
+        // Entries but no publisher: nothing to compare ownership against.
+        assert_eq!(
+            extension_pack_counts(&pack_manifest("", &["eamodio.gitlens"])),
+            None,
+        );
     }
 
     #[test]

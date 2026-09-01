@@ -1454,7 +1454,15 @@ pub(crate) struct RawGateHits {
 /// First-N atom starts per trait during a gate scan. Hitting the cap drops
 /// the trait (common atoms are cheaper as one full `eval_raw` than as
 /// hundreds of windows).
-const MAX_ATOM_OFFSETS: usize = 64;
+/// 512, up from 64: on overflow the recorder DROPS the trait's offsets, which
+/// forces `eval_raw` back to a full-content scan — and a common atom ("curl",
+/// "http") overflows precisely in the large members where the full scan is
+/// most expensive. Measured on the poppy-q worker benchmark (2026-08-31),
+/// full scans walked 117 GB per run vs 3.5 GB windowed, with `no_atoms`
+/// (this overflow among its causes) the top fallback at 3.3M evaluations.
+/// Windows are merged after sorting, so a dense atom degrades toward one big
+/// window — i.e. toward today's full scan — never past it.
+const MAX_ATOM_OFFSETS: usize = 512;
 
 struct OffsetRecorder {
     map: FxHashMap<usize, Vec<u32>>,

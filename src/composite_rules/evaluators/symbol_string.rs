@@ -1471,19 +1471,38 @@ fn source_raw_windows(
     search_start: usize,
     search_end: usize,
 ) -> Option<Vec<(usize, usize)>> {
+    use super::raw_window_stats as ws;
     if !ctx.file_type.uses_raw_text_search() {
+        ws::bump(&ws::NOT_SOURCE_TYPE);
+        ws::LAST_REASON.with(|r| r.set(3));
         return None;
     }
-    let idx = ctx.current_trait_idx?;
-    let hits = ctx.raw_atom_offsets?.get(&idx)?;
+    let Some(idx) = ctx.current_trait_idx else {
+        ws::bump(&ws::NO_TRAIT_IDX);
+        ws::LAST_REASON.with(|r| r.set(3));
+        return None;
+    };
+    let Some(hits) = ctx.raw_atom_offsets.and_then(|m| m.get(&idx)) else {
+        ws::bump(&ws::NO_ATOMS);
+        ws::LAST_REASON.with(|r| r.set(1));
+        return None;
+    };
     // Offsets were recorded for this trait's *indexed* regex (usually `if:`).
     // `unless:` / extra `type: text` regexes share `current_trait_idx` but not
     // those atoms — windowing them around the `if` hits is a false-negative
     // machine (B1n: extra `loopback-http-url-reference` / `bearer-token`).
     if !super::hits_are_pattern_atoms(ctx.binary_data, hits, pattern) {
+        ws::bump(&ws::ATOM_MISMATCH);
+        ws::LAST_REASON.with(|r| r.set(3));
         return None;
     }
-    super::windows_from_atom_hits(ctx.binary_data, hits, pattern, search_start, search_end)
+    let windows =
+        super::windows_from_atom_hits(ctx.binary_data, hits, pattern, search_start, search_end);
+    if windows.is_none() {
+        ws::bump(&ws::UNBOUNDED);
+        ws::LAST_REASON.with(|r| r.set(2));
+    }
+    windows
 }
 
 /// Used by `type: raw` conditions to search raw file content rather than extracted strings.
@@ -1731,8 +1750,22 @@ pub(crate) fn eval_raw<'a>(
                 // No second memmem. Missing offsets / unbounded / PE → full scan.
                 if let Some(spans) = source_raw_windows(ctx, pattern_str, search_start, search_end)
                 {
+                    use super::raw_window_stats as ws;
+                    ws::bump(&ws::WINDOWED);
+                    ws::add_bytes(
+                        &ws::WINDOWED_BYTES,
+                        spans.iter().map(|(a, b)| b - a).sum::<usize>(),
+                    );
                     lean.for_each_match_spans(ctx.binary_data, &spans, visit);
                 } else {
+                    use super::raw_window_stats as ws;
+                    ws::bump(&ws::FULL);
+                    ws::add_bytes(&ws::FULL_BYTES, search_data.len());
+                    match ws::LAST_REASON.with(std::cell::Cell::get) {
+                        1 => ws::add_bytes(&ws::NO_ATOMS_BYTES, search_data.len()),
+                        2 => ws::add_bytes(&ws::UNBOUNDED_BYTES, search_data.len()),
+                        _ => ws::add_bytes(&ws::OTHER_FULL_BYTES, search_data.len()),
+                    }
                     lean.for_each_match(search_data, |start, end| {
                         visit(search_start + start, search_start + end)
                     });
@@ -1755,6 +1788,12 @@ pub(crate) fn eval_raw<'a>(
             // UNICODE PATH: compile the unicode engine now — only non-ASCII
             // patterns reach here. A compile failure (unreachable for corpus
             // patterns, which compiled before) simply yields no matches.
+            {
+                use super::raw_window_stats as ws;
+                ws::bump(&ws::STR_ENGINE);
+                ws::bump(&ws::FULL);
+                ws::add_bytes(&ws::FULL_BYTES, search_end - search_start);
+            }
             if let Some(re) = crate::composite_rules::condition::cached_regex(pattern_str) {
                 // Reuse the whole-file UTF-8 view built once at ctx construction
                 // (source types) or on first use (everything else); only

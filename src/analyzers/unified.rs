@@ -1072,6 +1072,40 @@ impl UnifiedSourceAnalyzer {
         };
         push_unique_string(report, seen_strings, literal);
 
+        // The literal as the program will actually use it, when the source
+        // spelled it with escapes. Pushed *in addition to* the raw form, and
+        // into the same `ast` section, so that `type: literal` sees both: rules
+        // that deliberately match escaped spellings (obfuscation detectors
+        // keying on `\x` runs) keep working, while rules written against the
+        // plain text start working.
+        //
+        // Without this, an obfuscator's string table defeats the literal
+        // matcher outright — `js-obfuscator` escapes every space, so a shipped
+        // `powershell\x20-Command\x20\x22irm\x20…\x20|\x20iex\x22` is
+        // invisible to a rule looking for `powershell -Command`. It also made
+        // `cleave facts literals`, which reports the decoded value, disagree
+        // with what rules could match — so an author following the rule guide
+        // would write a matcher against a string that could never fire.
+        let decoded_escapes = filefacts::decode_source_escapes(s);
+        if decoded_escapes != s {
+            let unescaped = StringInfo {
+                value: decoded_escapes.into(),
+                offset: Some(offset),
+                string_type: None,
+                encoding: "utf-8".to_string(),
+                section: Some("ast".to_string()),
+                // Deliberately no encoding chain. This is the same datum as the
+                // source literal, normalised — not a concealment layer wrapped
+                // around it. Recording it as encoded would make every ordinary
+                // string that merely contains a `\n` look deliberately hidden,
+                // and `type: encoded` rules exist precisely to find the strings
+                // someone took the trouble to hide.
+                encoding_chain: Vec::new(),
+                fragments: None,
+            };
+            push_unique_string(report, seen_strings, unescaped);
+        }
+
         // stng intentionally uses a conservative threshold
         // when decoding arbitrary byte runs. In minified source,
         // however, its raw scan often sees the whole line rather

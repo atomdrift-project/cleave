@@ -1571,6 +1571,107 @@ pub fn analyze_bytes_owned(
 ///
 /// # Errors
 /// Returns an error if the capability mapper cannot be initialized.
+/// Evaluate traits against a file's post-fetch `references.*` facts and graft
+/// what fires onto that file.
+///
+/// The follow phase runs *after* trait evaluation — it needs the references
+/// the analysis found — so anything it learns arrives too late for the pass
+/// that would have used it. For a reference that resolved this does not matter:
+/// the payload is grafted into the tree as a child of the file that declared
+/// it, and its own findings come with it. For one that did **not** resolve there
+/// is no payload and no node, so the outcome existed only in the fetch log,
+/// where no rule could reach it.
+///
+/// That outcome is worth a rule. A manifest naming a dependency the registry no
+/// longer serves is pointing at something withdrawn, and packages are withdrawn
+/// for reasons — the VS Code marketplace pulls extensions for malware, npm
+/// unpublishes for the same. The declaring package usually remains installed and
+/// still pointing at it.
+///
+/// Deliberately *not* a new composite scope. The facts land on the file that
+/// made the claim (attributed by the fetch edge's declaring endpoint), so an
+/// ordinary file-scoped trait reads them with the matchers that already exist;
+/// only the timing needed fixing, not the scoping model. This re-runs atomic
+/// evaluation for the one file whose facts changed, which is why it takes a sha
+/// rather than walking the report.
+pub fn graft_reference_outcome_traits(
+    report: &mut AnalysisReport,
+    file_sha: &str,
+    options: &AnalysisOptions,
+) -> Result<usize> {
+    let Some(file) = report.files.iter().find(|f| f.sha256 == file_sha) else {
+        return Ok(0);
+    };
+    // Nothing was attributed to this file, so nothing new can fire.
+    if !file
+        .filefacts_metrics
+        .as_ref()
+        .is_some_and(|m| m.contains_key("references.declared_count"))
+    {
+        return Ok(0);
+    }
+    let mapper = shared_resources::capability_mapper_with_options(options)?;
+
+    // A synthetic one-file report carrying just this file's facts. The bytes are
+    // long gone by the follow phase, and the `references.*` traits are metric and
+    // value matchers that never wanted them.
+    let mut scratch = AnalysisReport::new(crate::types::TargetInfo {
+        path: file.path.clone(),
+        file_type: file.file_type.clone(),
+        size_bytes: file.size,
+        sha256: file.sha256.clone(),
+        architectures: None,
+    });
+    scratch.filefacts_metrics = file.filefacts_metrics.clone();
+    scratch.files.push(file.clone());
+    let no_bytes: &[u8] = &[];
+    let found = mapper.evaluate_traits_with_ast(&scratch, no_bytes, None, None);
+    if found.is_empty() {
+        return Ok(0);
+    }
+    let mut grafted = report.graft_findings(file_sha, found);
+
+    // The atomic facts landed on one member, but a rule that convicts on them
+    // pairs them with facts from elsewhere in the artifact — the manifest that
+    // declared the reference sits beside the archive root that carries the
+    // package-shape metrics. Those composites were evaluated in the main pass,
+    // before the follow existed, so re-run the pooling scopes over everything
+    // the report now holds and graft what newly fires onto the root.
+    // Archive-level atomic findings live on the report itself, not on any one
+    // member, so pooling only the per-file lists misses exactly the facts an
+    // archive-wide rule pairs the member's with.
+    let pooled: Vec<Finding> = report
+        .findings
+        .iter()
+        .cloned()
+        .chain(report.files.iter().flat_map(|f| f.findings.iter().cloned()))
+        .collect();
+    if !pooled.is_empty() {
+        // Graft onto the outermost file node, not `target.sha256`: a merged
+        // report assembled by a caller (scan's fetch phase grafts payload
+        // subtrees into it) does not necessarily carry a target digest, and
+        // grafting to an empty sha silently matches no file and drops the
+        // finding. The shallowest node is the artifact the pooled rule is a
+        // statement about; the declaring file is the fallback.
+        let root_sha = report
+            .files
+            .iter()
+            .min_by_key(|f| f.depth)
+            .map_or_else(|| file_sha.to_string(), |f| f.sha256.clone());
+        let fresh = mapper.evaluate_package_composites(&pooled);
+        if !fresh.is_empty() {
+            grafted += report.graft_findings(&root_sha, fresh);
+        }
+    }
+    Ok(grafted)
+}
+
+/// Graft package-level composite findings onto a report by correlating an
+/// artifact's findings with those of its registry metadata.
+///
+/// Composites that span both sides can only fire once the two sets are pooled,
+/// so this evaluates them together and attaches anything new to `artifact_sha`.
+/// Returns the number of findings grafted.
 pub fn graft_package_composites(
     report: &mut AnalysisReport,
     artifact_sha: &str,

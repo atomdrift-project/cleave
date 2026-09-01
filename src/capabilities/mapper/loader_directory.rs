@@ -205,63 +205,61 @@ fn is_dynamic_metadata_ref(ref_id: &str) -> bool {
         .any(|prefix| ref_id.starts_with(prefix))
 }
 
-/// Metric paths emitted by filefacts live in cleave's flat
-/// `filefacts_metrics` map (`BTreeMap<String, f64>`). The set of valid keys
-/// inside those namespaces is open: filefacts adds new ones as extractors grow.
-/// The strict known-field check is only for cleave-owned typed metrics and the
-/// explicit language/encoding manifest.
+/// Whether a metric path is one of filefacts' *templated* keys — the few
+/// whose trailing segment is data read out of the file rather than a fixed
+/// name, such as `ast.op.<operator>` or `archive.format.<entry_type>_count`.
+///
+/// Every other key is checked by exact name against the catalog. This used to
+/// wave through 44 whole namespaces, on the grounds that filefacts' key set
+/// was open-ended and grew with its extractors. It no longer is: filefacts
+/// fails its own build on an undeclared key and enumerates the result. The
+/// blanket exemption is exactly what let a batch of renamed metrics keep
+/// validating while matching nothing.
 fn is_open_filefacts_metric_path(field: &str) -> bool {
-    const FILEFACTS_PREFIXES: &[&str] = &[
-        "archive.",
-        "ast.",
-        "binary.",
-        "binds.",
-        "calls.",
-        "chm.",
-        "class.",
-        "comments.",
-        "consistency.",
-        "deb.",
-        "dependencies.",
-        "dmg.",
-        "elf.",
-        "exports.",
-        "file.",
-        "functions.",
-        "gem.",
-        "identifiers.",
-        "image.",
-        "imports.",
-        "iso.",
-        "jar.",
-        "java_class.",
-        "jpeg.",
-        "json.",
-        "lnk.",
-        "macho.",
-        "members.",
-        "oci.",
-        "office.",
-        "parse.",
-        "pdf.",
-        "pe.",
-        "pickle.",
-        "png.",
-        "pyc.",
-        "registry.",
-        "rtf.",
-        "sections.",
-        "source.",
-        "strings.",
-        "text.",
-        "vsix.",
-        "wasm.",
-        "whl.",
-    ];
-
-    FILEFACTS_PREFIXES
+    let (_, families) = filefacts::known_metrics();
+    families
         .iter()
-        .any(|prefix| field.starts_with(prefix))
+        .any(|template| matches_metric_family(field, template))
+}
+
+/// Match a concrete metric path against a family template.
+///
+/// A template alternates literal text with a `<placeholder>`. A placeholder
+/// stands for one path segment and never spans a `.`, which is what stops
+/// `source.query_limited.<query>` from swallowing
+/// `source.query_limited.identifiers.match_limit` — that one has its own
+/// template, and matching it here would hide a typo in the suffix.
+fn matches_metric_family(field: &str, template: &str) -> bool {
+    let mut rest = field;
+    let mut tmpl = template;
+    loop {
+        let Some(open) = tmpl.find('<') else {
+            return rest == tmpl;
+        };
+        let Some(r) = rest.strip_prefix(&tmpl[..open]) else {
+            return false;
+        };
+        rest = r;
+        let Some(close) = tmpl[open..].find('>') else {
+            return false;
+        };
+        tmpl = &tmpl[open + close + 1..];
+
+        // The placeholder runs up to whatever literal follows it.
+        let next_literal = &tmpl[..tmpl.find('<').unwrap_or(tmpl.len())];
+        let width = if next_literal.is_empty() {
+            rest.len()
+        } else {
+            match rest.find(next_literal) {
+                Some(at) => at,
+                None => return false,
+            }
+        };
+        if width == 0 || rest[..width].contains('.') {
+            return false;
+        }
+        rest = &rest[width..];
+    }
 }
 
 fn format_reference_choices(ids: &[String]) -> String {
@@ -4762,33 +4760,68 @@ impl super::CapabilityMapper {
 
 #[cfg(test)]
 mod tests {
-    use super::is_open_filefacts_metric_path;
+    use super::{is_open_filefacts_metric_path, matches_metric_family};
 
+    /// Fixed keys are accepted by exact name, not because their namespace is
+    /// waved through. The second list is the point of the change: these are
+    /// real metric names from before the cleave→filefacts migration, and
+    /// under the old namespace exemption every one of them validated while
+    /// matching nothing.
     #[test]
-    fn filefacts_metric_namespaces_are_open() {
+    fn fixed_metric_keys_are_checked_by_name() {
+        let valid = crate::types::field_paths::all_valid_metric_paths();
         for field in [
             "chm.user_entry_count",
-            "chm.infotype_count",
             "archive.member_count",
             "image.width",
             "wasm.import_count",
             "registry.downloads_recent",
+            "file.entropy",
         ] {
-            assert!(
-                is_open_filefacts_metric_path(field),
-                "{field} should be accepted as a filefacts metric path"
-            );
+            assert!(valid.contains(field), "{field} should be a known metric");
         }
 
         for field in [
+            "binary.overall_entropy",
+            "text.total_lines",
+            "strings.total",
+            "pe.has_rich_header",
             "chmx.user_entry_count",
-            "chm_user_entry_count",
-            "xchm.user_entry_count",
         ] {
             assert!(
-                !is_open_filefacts_metric_path(field),
-                "{field} should not be accepted as a filefacts metric path"
+                !valid.contains(field) && !is_open_filefacts_metric_path(field),
+                "{field} is not emitted and must not validate"
             );
         }
+    }
+
+    /// Templated keys are matched by shape, one path segment per placeholder.
+    #[test]
+    fn templated_metric_keys_match_by_shape() {
+        for field in [
+            "ast.op.xor",
+            "archive.compression.method_counts.deflate",
+            "archive.format.regular_count",
+            "consistency.extension_content_mismatch.binary_as_text",
+            "source.query_limited.identifiers",
+            "source.query_limited.identifiers.output_limit",
+        ] {
+            assert!(
+                is_open_filefacts_metric_path(field),
+                "{field} should match a family"
+            );
+        }
+
+        // A placeholder covers one segment, so a template must not swallow a
+        // longer path that has a template of its own — otherwise a typo in
+        // the suffix would validate against the shorter form.
+        assert!(!matches_metric_family(
+            "source.query_limited.identifiers.output_limit",
+            "source.query_limited.<query>"
+        ));
+        // An empty placeholder is not a value.
+        assert!(!matches_metric_family("ast.op.", "ast.op.<operator>"));
+        // Literal text around the placeholder still has to line up.
+        assert!(!matches_metric_family("ast.ops.xor", "ast.op.<operator>"));
     }
 }

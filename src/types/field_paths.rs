@@ -21,182 +21,11 @@ pub trait ValidFieldPaths {
     }
 }
 
-// Canonical source-text metric field lists. Kept in sync with the
-// dotted keys filefacts's source extractors emit
-// (`filefacts/src/formats/source/{text,identifier,string,comment,function,import}_metrics.rs`).
-// New emitter additions in filefacts must show up here too — the trait
-// engine rejects unknown field paths.
-
-const TEXT_METRIC_FIELDS: &[&str] = &[
-    "char_entropy",
-    "unique_chars",
-    "top_char",
-    "top_char_null",
-    "top_char_ratio",
-    "non_ascii_ratio",
-    "non_printable_ratio",
-    "null_byte_count",
-    "lines",
-    "avg_line_length",
-    "max_line_length",
-    "line_length_stddev",
-    "lines_over_200",
-    "lines_over_500",
-    "lines_over_1000",
-    "last_line_length",
-    "ast_parse_errors",
-    "ast_max_depth",
-    "empty_line_ratio",
-    "whitespace_ratio",
-    "tab_count",
-    "space_count",
-    "mixed_indent",
-    "trailing_whitespace_lines",
-    "unusual_whitespace",
-    "max_ws_run",
-    "hex_escape_count",
-    "unicode_escape_count",
-    "octal_escape_count",
-    "escape_density",
-    "invisible_chars",
-    "long_token_count",
-    "repeated_char_sequences",
-    "digit_ratio",
-    "ascii_art_lines",
-    "strings_to_functions_ratio",
-    "identifiers_to_functions_ratio",
-    "imports_to_functions_ratio",
-    "identifier_density",
-    "string_density",
-    "import_density",
-    "suspicious_identifier_ratio",
-    "encoded_string_ratio",
-    "suspicious_string_ratio",
-    "suspicious_comment_ratio",
-    "normalized_function_count",
-    "normalized_import_count",
-    "normalized_string_count",
-    "normalized_unique_identifiers",
-    "dynamic_string_ratio",
-    "dynamic_import_ratio",
-    "anonymous_function_ratio",
-];
-
-const IDENTIFIER_METRIC_FIELDS: &[&str] = &[
-    "count",
-    "unique",
-    "reuse_ratio",
-    "avg_length",
-    "min_length",
-    "max_length",
-    "length_stddev",
-    "single_char_count",
-    "single_char_ratio",
-    "avg_entropy",
-    "high_entropy_count",
-    "high_entropy_ratio",
-    "all_lowercase_ratio",
-    "all_uppercase_ratio",
-    "has_digit_ratio",
-    "underscore_prefix_count",
-    "double_underscore_count",
-    "numeric_suffix_count",
-    "hex_like_names",
-    "base64_like_names",
-    "sequential_names",
-    "keyboard_pattern_names",
-    "repeated_char_names",
-];
-
-const STRING_METRIC_FIELDS: &[&str] = &[
-    "count",
-    "bytes",
-    "avg_length",
-    "max_length",
-    "empty_count",
-    "avg_entropy",
-    "entropy_stddev",
-    "high_entropy_count",
-    "very_high_entropy_count",
-    "base64_candidates",
-    "hex",
-    "url_encoded",
-    "unicode_heavy",
-    "url_count",
-    "path_count",
-    "ip_count",
-    "email_count",
-    "domain_count",
-    "concat_operations",
-    "format_strings",
-    "char_construction",
-    "array_join_construction",
-    "very_long",
-    "embedded_code_candidates",
-    "shell",
-    "sql",
-];
-
-const COMMENT_METRIC_FIELDS: &[&str] = &[
-    "count",
-    "lines",
-    "chars",
-    "to_code_ratio",
-    "todo_count",
-    "fixme_count",
-    "hack_count",
-    "xxx_count",
-    "empty",
-    "high_entropy",
-    "code",
-    "url_in_comments",
-    "base64",
-];
-
-const FUNCTION_METRIC_FIELDS: &[&str] = &[
-    "total",
-    "anonymous",
-    "async_count",
-    "generator_count",
-    "avg_length_lines",
-    "max_length_lines",
-    "min_length_lines",
-    "length_stddev",
-    "over_100_lines",
-    "over_500_lines",
-    "one_liners",
-    "avg_params",
-    "max_params",
-    "no_params_count",
-    "many_params_count",
-    "avg_param_name_length",
-    "single_char_params",
-    "avg_name_length",
-    "single_char_names",
-    "high_entropy_names",
-    "numeric_suffix_names",
-    "max_nesting_depth",
-    "avg_nesting_depth",
-    "nested",
-    "recursive_count",
-    "density",
-    "code_ratio",
-];
-
-const IMPORT_METRIC_FIELDS: &[&str] = &[
-    "total",
-    "count",
-    "stdlib_count",
-    "third_party_count",
-    "relative",
-    "wildcard",
-    "dynamic",
-    "aliased",
-    "conditional_imports",
-    "stdlib_ratio",
-    "third_party_ratio",
-    "relative_ratio",
-];
+// The metric surface is no longer described here. filefacts declares every
+// key it emits at the emission site and enumerates them through
+// `known_metrics()`; cleave declares only the metrics its own analyzers
+// compute. The lists that used to live here were a hand-maintained copy of
+// filefacts' emitters, and a copy is exactly what drifts.
 
 /// Returns all valid metric field paths for use in YAML rules
 /// Returns paths like "binary.code_to_data_ratio", "text.line_count", etc.
@@ -211,28 +40,16 @@ pub(crate) fn all_valid_metric_paths() -> HashSet<String> {
         EncodedLanguageMetrics, EncodedMetrics, ObfuscationScore, PackingScore, SupplyChainScore,
     };
 
-    // Source-text metrics live in filefacts
-    // (`filefacts/src/formats/source/`). The canonical key list is
-    // hardcoded below — kept in sync with the dotted keys those
-    // emitters write to. New emitters must be reflected here so
-    // trait field validation accepts their paths.
-    for field in TEXT_METRIC_FIELDS {
-        paths.insert(format!("text.{}", field));
-    }
-    for field in IDENTIFIER_METRIC_FIELDS {
-        paths.insert(format!("identifiers.{}", field));
-    }
-    for field in STRING_METRIC_FIELDS {
-        paths.insert(format!("strings.{}", field));
-    }
-    for field in COMMENT_METRIC_FIELDS {
-        paths.insert(format!("comments.{}", field));
-    }
-    for field in FUNCTION_METRIC_FIELDS {
-        paths.insert(format!("functions.{}", field));
-    }
-    for field in IMPORT_METRIC_FIELDS {
-        paths.insert(format!("imports.{}", field));
+    // Everything filefacts can emit, declared at its emission sites and
+    // enumerated through `known_metrics()`. This used to be a hand-copied
+    // manifest here, which drifted the moment filefacts renamed a key: the
+    // rule still validated and simply stopped matching. filefacts now fails
+    // its own build on an undeclared key, so this list is derived, not
+    // maintained. Templated keys (`ast.op.<operator>`) are matched
+    // separately, by shape.
+    let (catalog, _families) = filefacts::known_metrics();
+    for field in catalog {
+        paths.insert((*field).to_string());
     }
     for field in EncodedMetrics::valid_field_paths() {
         if !matches!(field, "python" | "javascript" | "php" | "shell") {
@@ -249,157 +66,11 @@ pub(crate) fn all_valid_metric_paths() -> HashSet<String> {
     // …) retired with the cleave→filefacts migration. No production code
     // ever emitted them — the surface is gone.
 
-    // Binary-format metrics (`binary.*`, `pe.*`, `elf.*`, `macho.*`,
-    // `java_class.*`) live exclusively in filefacts's flat metric map —
-    // trait validation accepts any path under those namespaces.
-
-    // Container/Archive metrics. `archive.*` paths are emitted by
-    // filefacts's zip/tar extractors directly into `report.filefacts_metrics`.
-    // The list below is the canonical manifest the trait engine accepts;
-    // it mirrors the keys filefacts's `formats::zip` and `formats::tar`
-    // write. Keep in sync when filefacts adds a new `archive.*` metric.
-    for field in [
-        // Index/size aggregates.
-        "member_count",
-        "file_count",
-        "directory_count",
-        "uncompressed_size",
-        "compressed_size",
-        "compression_ratio",
-        "compression.ratio",
-        // Compression breakdowns (the actual concrete keys are
-        // `archive.compression.method_counts.<method>` and
-        // `archive.format.<entry-type>_count`; those go through the
-        // unrestricted-prefix path below).
-        // Security / forensic counts (legacy flat names).
-        "symlink_count",
-        "encrypted_count",
-        "max_filename_length",
-        "hidden_file_count",
-        "path_traversal_count",
-        "symlink_escape_count",
-        "executable_count",
-        "script_count",
-        "unicode_filename_count",
-        "homoglyph_filename_count",
-        "double_extension_count",
-        "rtlo_filename_count",
-        "nested_archive_count",
-        "misplaced_executable_count",
-        "zip_bomb_ratio",
-        "extra_field_size",
-        "uses_zip64",
-        "has_comment",
-        // Security sub-namespace filefacts emits alongside the flat names.
-        "security.setuid_count",
-        "security.setgid_count",
-        "security.sticky_count",
-        "security.world_writable_count",
-        "security.symlink_count",
-        "security.encrypted_count",
-        "security.external_symlink_count",
-        // Timing spread metrics computed from member mtimes.
-        "timing.mtime_spread_seconds",
-        "timing.mtime_unique_count",
-    ] {
-        paths.insert(format!("archive.{}", field));
-    }
-    // `chm.*` and `package_json.*` paths come from filefacts's
-    // emission (no typed marker struct cleave-side).
-    for field in [
-        "chm.default_topic_missing",
-        "chm.html_entry_count",
-        "chm.max_user_entry_size",
-        "chm.no_compiler_version",
-        "chm.title_topic_mismatch",
-        "chm.user_byte_ratio",
-    ] {
-        paths.insert(field.to_string());
-    }
-
-    // Image metrics (image.*, jpeg.*, png.*) flow through
-    // `filefacts_metrics` rather than typed marker structs; field
-    // validation accepts any of those paths.
-    for field in [
-        "image.width",
-        "image.height",
-        "image.channels",
-        "image.pixel_entropy",
-        "image.histogram_flatness",
-        "image.edge_density",
-        "image.r_entropy",
-        "image.g_entropy",
-        "image.b_entropy",
-        "jpeg.appended_bytes",
-        "jpeg.comment_bytes",
-        "jpeg.exif_size",
-        "png.bit_depth",
-        "png.compression_ratio",
-        "png.a_entropy",
-        "png.chunk_count",
-        "png.idat_chunk_count",
-        "png.unknown_chunk_count",
-        "png.text_chunk_bytes",
-        "png.trailing_bytes",
-        "png.chunks_after_iend",
-    ] {
-        paths.insert(field.to_string());
-    }
-
-    // Document/shortcut metrics
-    // LNK whitespace/presence metrics live in filefacts's flat metric
-    // map (`lnk.*` keys); no typed marker struct here.
-    // PDF metrics similarly live in cleave's flat metric map under
-    // `pdf.*` keys, populated by filefacts's `formats::pdf` extractor
-    // and surfaced via `report.filefacts_metrics`.
-    for field in [
-        "lnk.args_leading_spaces",
-        "lnk.args_leading_tabs",
-        "lnk.args_max_whitespace_run",
-        "lnk.args_whitespace_total",
-        "pdf.action_count",
-        "pdf.annotation_count",
-        "pdf.annotations_per_page",
-        "pdf.byte_range_count",
-        "pdf.decoded_form_value_max_len",
-        "pdf.duplicate_form_name_count",
-        "pdf.duplicate_form_name_rect_count",
-        "pdf.duplicate_form_rect_count",
-        "pdf.embedded_file_count",
-        "pdf.font_count",
-        "pdf.form_field_count",
-        "pdf.hidden_zero_rect_field_count",
-        "pdf.jbig2_filter_count",
-        "pdf.javascript_action_count",
-        "pdf.leading_bytes_before_header",
-        "pdf.object_count",
-        "pdf.object_stream_inner_object_count",
-        "pdf.objstm_count",
-        "pdf.overlapping_form_field_pair_count",
-        "pdf.page_count",
-        "pdf.risky_feature_score",
-        "pdf.signature_object_count",
-        "pdf.signed_incremental_update_count",
-        "pdf.startxref_count",
-        "pdf.stream_bad_delimiter_count",
-        "pdf.stream_count",
-        "pdf.stream_invalid_length_count",
-        "pdf.stream_length_mismatch_count",
-        "pdf.stream_missing_endstream_count",
-        "pdf.stream_missing_length_count",
-        "pdf.streams_with_unusual_filter_count",
-        "pdf.three_d_object_count",
-        "pdf.trailer_count",
-        "pdf.trailing_bytes_after_eof",
-        "pdf.unreferenced_object_count",
-        "pdf.uri_action_count",
-        "pdf.uri_actions_per_page",
-        "pdf.visible_object_count",
-        "pdf.xobject_count",
-        "pdf.xref_stream_count",
-    ] {
-        paths.insert(field.to_string());
-    }
+    // Format-specific metrics — `archive.*`, `binary.*`, `pe.*`, `elf.*`,
+    // `macho.*`, `chm.*`, `image.*`, `pdf.*`, `lnk.*`, the cross-format
+    // `office.*` fields — all come from the filefacts catalog above. They
+    // were once re-listed here by hand, or waved through by namespace, which
+    // is how a batch of renamed keys stayed "valid" while matching nothing.
 
     // Office metrics: cross-format fields plus per-container sub-structs.
     // Cross-format `office.*` fields flow through `filefacts_metrics`
@@ -408,9 +79,9 @@ pub(crate) fn all_valid_metric_paths() -> HashSet<String> {
     // carriers populated by analyzer parsers, then flattened into
     // `office.<sub>.<field>` via `flatten_into_metrics`.
     use super::office_metrics::{OleMetrics, OoxmlMetrics, VbaMetrics, XlmMetrics};
-    // Cross-format `office.*` fields don't have a typed struct anymore;
-    // trait validation accepts any `office.X` path that the analyzer
-    // writes to `filefacts_metrics`.
+    // Cross-format `office.*` fields have no typed struct: cleave's office
+    // analyzer writes them straight into `filefacts_metrics`, so this is
+    // their declaration.
     for field in [
         "office.dde_link_count",
         "office.embedded_executable_count",
@@ -451,8 +122,45 @@ pub(crate) fn all_valid_metric_paths() -> HashSet<String> {
         paths.insert(format!("supply_chain.{}", field));
     }
 
+    // Cross-field metrics cleave computes itself, after filefacts has run,
+    // and writes into `filefacts_metrics` by name. filefacts cannot declare
+    // these because it never sees them; declaring them here is what keeps
+    // them inside the same check as everything else.
+    for field in CLEAVE_OWNED_METRIC_FIELDS {
+        paths.insert((*field).to_string());
+    }
+
     paths
 }
+
+/// Metrics cleave's own analyzers still write into the flat map.
+///
+/// This list is a migration backlog, not a home. Measurement belongs in
+/// filefacts, where a key is declared at its emission site and the build
+/// fails if it is not; a metric computed here is outside that guarantee and
+/// can be renamed or dropped without anything noticing. Every entry should
+/// either move to a filefacts extractor or justify why cleave is the only
+/// place it can be computed.
+///
+/// `consistency.*` and `vsix.*` have the strongest claim to staying: they
+/// are cross-field judgements over an already-assembled report (does the
+/// manifest name match the repository, how much of an extension pack is the
+/// publisher's own), which is a different job from extracting facts out of
+/// one file's bytes. The `binary.*` / `pe.*` entries have no such excuse —
+/// they are per-file measurements sitting on the wrong side of the boundary.
+pub(crate) const CLEAVE_OWNED_METRIC_FIELDS: &[&str] = &[
+    // Cross-field judgements over an assembled report.
+    "consistency.name_repo_mismatch",
+    "consistency.unused_runtime_deps",
+    "vsix.extension_pack_self_entries",
+    "vsix.extension_pack_size",
+    // Per-file measurements that should move into filefacts.
+    "binary.embedded_binaries",
+    "pe.directory_section_mismatch_count",
+    "pe.executable_prose_section_count",
+    "pe.headers_size",
+    "pe.prose_section_count",
+];
 
 /// Returns a map of `"prefix.field"` → doc-comment description for every
 /// known metric field.  Only fields with a non-empty doc comment are included.

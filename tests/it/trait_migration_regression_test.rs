@@ -56,7 +56,6 @@ traits:
   # false positive a bare `(aliased_import)` migration caused.
   - id: fx-alias-subprocess
     desc: subprocess imported under an alias
-    crit: component
     conf: 0.6
     for: [python]
     if:
@@ -82,7 +81,6 @@ traits:
   # exposes the count, so this pins that the counter and threshold agree.
   - id: fx-identity-function-proxy
     desc: Contains several identity wrapper functions
-    crit: baseline
     conf: 0.8
     for: [javascript, typescript]
     size_max: 500000

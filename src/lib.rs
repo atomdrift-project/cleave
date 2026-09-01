@@ -1319,6 +1319,7 @@ pub fn persist_regex_warm_memo() {
 pub fn log_scan_stats() {
     crate::mem_profile::report_scan_stats();
     crate::composite_rules::evaluators::log_regex_cache_stats();
+    crate::composite_rules::evaluators::raw_window_stats::log();
     crate::capabilities::log_raw_gate_stats();
     let top = std::env::var("CLEAVE_TRAIT_TIMING_TOP")
         .ok()

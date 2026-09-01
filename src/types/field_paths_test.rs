@@ -20,14 +20,24 @@ mod tests {
     fn test_all_valid_metric_paths() {
         let paths = super::super::field_paths::all_valid_metric_paths();
 
-        // Text-side paths still come from the typed manifest.
+        // Source-text paths come from filefacts' catalog, not from a manifest
+        // maintained here.
         assert!(paths.contains("text.char_entropy"));
         assert!(paths.contains("text.lines"));
 
-        // Should have many paths (text + container + language + score
-        // manifests still contribute even after the binary-format
-        // projections retired).
-        assert!(paths.len() > 50, "Expected 50+ paths, got {}", paths.len());
+        // Binary-format paths are in the same set now. They used to be
+        // exempted by namespace, which is how a renamed key kept validating.
+        assert!(paths.contains("file.entropy"));
+        assert!(paths.contains("pe.checksum"));
+
+        // A floor well under the real count (filefacts alone declares 600+),
+        // there to catch the catalog failing to load rather than to pin a
+        // number that grows with every extractor.
+        assert!(
+            paths.len() > 500,
+            "Expected 500+ paths, got {}",
+            paths.len()
+        );
     }
 
     #[test]

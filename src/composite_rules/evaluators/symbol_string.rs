@@ -775,6 +775,23 @@ pub(crate) fn eval_text<'a, 'b>(
         if ctx.encoded_strings().is_empty() {
             return raw;
         }
+        // The raw-content gate swept the decoded values for atoms: when this
+        // very `if:` pattern's atoms are absent there, the per-string pass
+        // cannot match and is skipped (`decoded_skip` is keyed on the pattern
+        // text so an `unless:` sharing the trait index still runs).
+        if let Some(idx) = ctx.current_trait_idx
+            && let Some(skip) = ctx.decoded_skip
+            && let Some(&indexed) = skip.get(&idx)
+            && params
+                .regex
+                .map(String::as_str)
+                .or(params.word.map(String::as_str))
+                == Some(indexed)
+        {
+            super::raw_window_stats::bump(&super::raw_window_stats::DECODED_SKIPPED);
+            return raw;
+        }
+        super::raw_window_stats::bump(&super::raw_window_stats::DECODED_SWEPT);
         return merge_text_passes(raw, eval_text_encoded(params, trait_not, ctx));
     }
 

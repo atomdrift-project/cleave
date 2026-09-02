@@ -21,6 +21,9 @@ use std::sync::OnceLock;
 pub(crate) struct TraitEvalCache<'a> {
     pub raw_regex_matches: Option<&'a FxHashSet<usize>>,
     pub raw_atom_offsets: Option<&'a FxHashMap<usize, Vec<u32>>>,
+    /// Indexed traits whose atoms occur in the member's decoded string
+    /// layers; see `RawGateHits::decoded_candidates`.
+    pub decoded_candidates: Option<&'a FxHashSet<usize>>,
     pub section_map: &'a SectionMap,
     pub string_matched_traits: &'a FxHashSet<usize>,
     pub symbol_matched_traits: &'a FxHashSet<usize>,
@@ -570,6 +573,7 @@ impl super::CapabilityMapper {
         let cache = TraitEvalCache {
             raw_regex_matches: Some(&raw_regex_hits.traits),
             raw_atom_offsets: Some(&raw_regex_hits.atom_offsets),
+            decoded_candidates: None,
             section_map: &section_map,
             string_matched_traits: &string_matched_traits,
             symbol_matched_traits: &symbol_matched_traits,
@@ -738,6 +742,7 @@ impl super::CapabilityMapper {
             &TraitEvalCache {
                 raw_regex_matches: Some(&raw_regex_hits.traits),
                 raw_atom_offsets: Some(&raw_regex_hits.atom_offsets),
+                decoded_candidates: None,
                 section_map: &section_map,
                 string_matched_traits: &string_matched_traits,
                 symbol_matched_traits: &symbol_matched_traits,
@@ -961,6 +966,41 @@ impl super::CapabilityMapper {
         let base_cached_evidence = ctx.cached_evidence;
         let is_raw_text = file_type.uses_raw_text_search();
         let trait_chunk = parallel_trait_chunk();
+
+        // Decoded-layer skip map for `eval_text`: indexed `type: text` traits
+        // (regex/word `if:`) whose atoms are absent from every decoded
+        // string value. Keyed by trait index and carrying the `if:` pattern
+        // text, so only that pattern's evaluation skips — an `unless:` or
+        // extra regex sharing the trait index still sweeps the layers.
+        let decoded_skip: Option<FxHashMap<usize, &str>> = match cache.decoded_candidates {
+            Some(cands)
+                if is_raw_text && report.strings.iter().any(|s| !s.encoding_chain.is_empty()) =>
+            {
+                use crate::composite_rules::{Condition, TextQuery};
+                let map: FxHashMap<usize, &str> = rest_indices
+                    .iter()
+                    .copied()
+                    .filter(|&idx| {
+                        let tf = eval_flags[idx];
+                        tf & super::flags::RAW_INDEXED != 0
+                            && tf & super::flags::CONTENT_TEXT != 0
+                            && !cands.contains(&idx)
+                    })
+                    .filter_map(|idx| match &self.trait_definitions[idx].r#if {
+                        Condition::Text(TextQuery { regex: Some(r), .. }) => {
+                            Some((idx, r.as_str()))
+                        }
+                        Condition::Text(TextQuery { word: Some(w), .. }) => Some((idx, w.as_str())),
+                        _ => None,
+                    })
+                    .collect();
+                Some(map)
+            }
+            _ => None,
+        };
+        if let Some(map) = decoded_skip.as_ref() {
+            ctx = ctx.with_decoded_skip(Some(map));
+        }
 
         let eval_indices = |indices: &[usize]| -> Vec<Finding> {
             if crate::rayon_nest::inner_work_parallel() {

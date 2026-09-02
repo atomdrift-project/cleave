@@ -105,6 +105,63 @@ pub(crate) fn report_has_path_dependent_findings(
         .is_none_or(|m| m.report_has_path_dependent_findings(report))
 }
 
+/// Diagnostics for a refused share: which rule path inputs differ.
+pub(crate) fn paths_inequivalent_inputs(a: &str, b: &str) -> Vec<String> {
+    let guard = CAPABILITY_MAPPER.read();
+    guard
+        .as_ref()
+        .map_or_else(Vec::new, |m| m.paths_inequivalent_inputs(a, b))
+}
+
+/// Adopt a report evaluated under `owner_path` for `new_path`, or refuse.
+///
+/// Same path: nothing to do. Otherwise every rule's direct path inputs must
+/// read the same value under both paths (`CapabilityMapper::paths_equivalent`)
+/// — then identical bytes yield identical findings — and the same must hold
+/// for every decoded child file (`<path>##base64`, …) whose path hangs off
+/// the member path; those child paths are then rebased onto `new_path`.
+pub(crate) fn adopt_report_under(
+    report: &mut crate::types::core::AnalysisReport,
+    owner_path: &str,
+    new_path: &str,
+) -> bool {
+    if owner_path == new_path {
+        return true;
+    }
+    let rebase = |p: &str| -> Option<String> {
+        p.strip_prefix(owner_path)
+            .map(|rest| format!("{new_path}{rest}"))
+    };
+    let equivalent =
+        {
+            let guard = CAPABILITY_MAPPER.read();
+            let Some(mapper) = guard.as_ref() else {
+                return false;
+            };
+            mapper.paths_equivalent(owner_path, new_path)
+                && report.files.iter().all(|f| {
+                    rebase(&f.path).is_some_and(|np| mapper.paths_equivalent(&f.path, &np))
+                })
+                && report.archive_contents.iter().all(|e| {
+                    rebase(&e.path).is_some_and(|np| mapper.paths_equivalent(&e.path, &np))
+                })
+        };
+    if !equivalent {
+        return false;
+    }
+    for f in &mut report.files {
+        if let Some(np) = rebase(&f.path) {
+            f.path = np;
+        }
+    }
+    for e in &mut report.archive_contents {
+        if let Some(np) = rebase(&e.path) {
+            e.path = np;
+        }
+    }
+    true
+}
+
 pub(crate) fn trait_referenced_at_container_scope(id: &str) -> bool {
     let guard = CAPABILITY_MAPPER.read();
     guard

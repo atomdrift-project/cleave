@@ -3328,16 +3328,49 @@ where
         return;
     }
     let next = AtomicUsize::new(0);
-    let lanes = rayon::current_num_threads().max(1).min(items.len());
+    // `CLEAVE_SCAN_LANES=N` (experiment): admit paths on N lanes and leave
+    // the other pool threads free to steal inner work (whale member and
+    // trait chunks) for the whole scan.
+    let lanes = std::env::var("CLEAVE_SCAN_LANES")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or_else(rayon::current_num_threads)
+        .max(1)
+        .min(items.len());
     crate::rayon_nest::set_toplevel_pending(items.len());
+    let pull = || -> bool {
+        let i = next.fetch_add(1, Ordering::Relaxed);
+        let Some(item) = items.get(i) else {
+            return false;
+        };
+        crate::rayon_nest::set_toplevel_pending(items.len().saturating_sub(i + 1));
+        f(item);
+        true
+    };
+    // A lane that finds a member's analysis already in flight on another
+    // thread (seven archives carrying one 10 MB bundle start in the same
+    // wave) pulls the next path from this queue instead of idling until the
+    // owner finishes — see `ReportFlight::wait_yielding`.
+    let wait_work = crate::rayon_nest::install_wait_work(&pull);
+    let started = AtomicUsize::new(0);
     (0..lanes).into_par_iter().for_each(|_| {
+        started.fetch_add(1, Ordering::AcqRel);
         loop {
-            let i = next.fetch_add(1, Ordering::Relaxed);
-            let Some(item) = items.get(i) else { break };
-            crate::rayon_nest::set_toplevel_pending(items.len().saturating_sub(i + 1));
-            f(item);
+            // Once every lane runs (no lane job is left in any queue to be
+            // stolen and nested), finish inner work already in flight — a
+            // whale's member and trait chunks — before admitting another
+            // path. A 45 CPU-second bundle otherwise runs on its lane alone
+            // while sixteen lanes stay busy with paths that could wait.
+            if started.load(Ordering::Acquire) >= lanes {
+                while rayon::yield_now() == Some(rayon::Yield::Executed) {}
+            }
+            if !pull() {
+                break;
+            }
         }
     });
+    drop(wait_work);
     crate::rayon_nest::set_toplevel_pending(usize::MAX);
 }
 

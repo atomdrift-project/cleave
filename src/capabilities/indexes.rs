@@ -1469,6 +1469,20 @@ pub(crate) struct RawGateHits {
 /// window — i.e. toward today's full scan — never past it.
 const MAX_ATOM_OFFSETS: usize = 512;
 
+/// Per-trait atom-offset cap: `CLEAVE_ATOM_OFFSET_CAP` overrides
+/// [`MAX_ATOM_OFFSETS`] (experiment knob; see `windows_from_atom_hits` for
+/// the coverage rule that bounds the cost of a dense atom).
+fn atom_offset_cap() -> usize {
+    static CAP: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *CAP.get_or_init(|| {
+        std::env::var("CLEAVE_ATOM_OFFSET_CAP")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .filter(|&n| n > 0)
+            .unwrap_or(MAX_ATOM_OFFSETS)
+    })
+}
+
 struct OffsetRecorder {
     map: FxHashMap<usize, Vec<u32>>,
     overflowed: FxHashSet<usize>,
@@ -1500,7 +1514,7 @@ impl OffsetRecorder {
         if entry.last() == Some(&offset) {
             return;
         }
-        if entry.len() >= MAX_ATOM_OFFSETS {
+        if entry.len() >= atom_offset_cap() {
             self.map.remove(&trait_idx);
             self.overflowed.insert(trait_idx);
             return;

@@ -4,7 +4,10 @@
 //! that composite rules only contain trait references (not inline primitives),
 //! auto-prefixing trait references, and detecting redundant patterns.
 
-use crate::composite_rules::{CompositeTrait, Condition, TraitDefinition};
+use crate::capabilities::mapper::doomed_skip::{composite_applies, trait_applies_to_file};
+use crate::composite_rules::{
+    CompositeTrait, Condition, FileType, Platform, Scope, TraitDefinition,
+};
 use std::collections::{HashMap, HashSet};
 
 /// Find atomic traits whose `if:` clause references themselves
@@ -619,5 +622,116 @@ pub(crate) fn find_overlapping_conditions(
         }
     }
 
+    violations
+}
+
+/// Find composites that can never match, because no file type exists that the
+/// rule and every trait it requires all apply to.
+///
+/// At `scope: file` one file has to satisfy every leg of an `all:`, so the rule
+/// is only reachable if some file type passes the engine's own applicability
+/// test for the composite *and* for each of its legs. Asking the engine rather
+/// than re-deriving the answer keeps this honest: `for:` is not a plain set
+/// test — a rule naming an archive type also reaches container nodes, and a
+/// trait's `if:` can rule out types its `for:` admits.
+///
+/// This is easy to get wrong by accident, because `for:` is usually inherited.
+/// A file whose `defaults:` say `for: [package.json]` hands that to every rule
+/// in it, including composites assembled entirely out of JavaScript traits —
+/// the rule then reads perfectly and matches nothing.
+///
+/// Reported as a warning rather than an error: a leg backed by `type: encoded`
+/// can match inside a decoded layer whose type differs from the file that
+/// carried it, so an empty result is strong evidence of a dead rule rather
+/// than proof of one.
+///
+/// Returns `(rule_id, rule_for, legs, types_the_legs_share)`.
+#[must_use]
+pub(crate) fn find_unsatisfiable_file_types<'a>(
+    rules: &'a [CompositeTrait],
+    traits_by_id: &HashMap<String, &TraitDefinition>,
+    composites_by_id: &HashMap<String, &CompositeTrait>,
+) -> Vec<(&'a str, Vec<FileType>, Vec<String>, Vec<FileType>)> {
+    let platforms = [Platform::All];
+    let types = FileType::all_variants();
+    let mut violations = Vec::new();
+
+    for rule in rules {
+        // Only `scope: file` forces one file to satisfy every leg. Wider scopes
+        // pool evidence across members, where differing types are the normal
+        // case rather than a contradiction.
+        if !matches!(rule.scope, None | Some(Scope::File)) {
+            continue;
+        }
+        // A rule naming an archive type is evaluated on the container node,
+        // which carries the findings of the members folded into it. Its legs
+        // matched real files of their own types, so the intersection this
+        // check looks for is not the question being asked.
+        if rule
+            .r#for
+            .iter()
+            .any(|t| t.is_archive() || *t == FileType::All)
+        {
+            continue;
+        }
+        let Some(conditions) = rule.all.as_deref() else {
+            continue;
+        };
+        let legs: Vec<&String> = conditions
+            .iter()
+            .filter_map(|c| match c {
+                Condition::Trait { id } => Some(id),
+                _ => None,
+            })
+            // A directory reference stands for a set of traits, any one of
+            // which may satisfy the leg; there is no single rule to ask.
+            .filter(|id| !id.ends_with('/'))
+            .collect();
+        if legs.len() < 2 {
+            continue;
+        }
+        // Every leg has to be resolvable; an unknown reference could be
+        // satisfiable by a type this check would otherwise rule out.
+        if legs.iter().any(|id| {
+            !traits_by_id.contains_key(id.as_str()) && !composites_by_id.contains_key(id.as_str())
+        }) {
+            continue;
+        }
+
+        let reachable = types.iter().any(|&ft| {
+            composite_applies(rule, &platforms, ft)
+                && legs.iter().all(|id| {
+                    traits_by_id
+                        .get(id.as_str())
+                        .is_some_and(|t| trait_applies_to_file(t, &platforms, ft))
+                        || composites_by_id
+                            .get(id.as_str())
+                            .is_some_and(|c| composite_applies(c, &platforms, ft))
+                })
+        });
+        if !reachable {
+            // What the rule should say instead: the types on which every leg
+            // does apply. Empty means the legs disagree with each other, and
+            // no `for:` can rescue the rule.
+            let suggested: Vec<FileType> = types
+                .iter()
+                .copied()
+                .filter(|&ft| {
+                    ft != FileType::All
+                        && legs.iter().all(|id| {
+                            traits_by_id
+                                .get(id.as_str())
+                                .is_some_and(|t| trait_applies_to_file(t, &platforms, ft))
+                                || composites_by_id
+                                    .get(id.as_str())
+                                    .is_some_and(|c| composite_applies(c, &platforms, ft))
+                        })
+                })
+                .collect();
+            let mut ids: Vec<String> = legs.iter().map(|id| (*id).clone()).collect();
+            ids.sort();
+            violations.push((rule.id.as_str(), rule.r#for.clone(), ids, suggested));
+        }
+    }
     violations
 }

@@ -315,7 +315,7 @@ impl<'a> IdIndex<'a> {
     }
 }
 
-fn composite_applies(
+pub(crate) fn composite_applies(
     rule: &CompositeTrait,
     mapper_platforms: &[Platform],
     file_type: FileType,
@@ -334,7 +334,7 @@ fn composite_applies(
             && (wants_archive_family || pools_across_archive))
 }
 
-fn trait_applies_to_file(
+pub(crate) fn trait_applies_to_file(
     def: &TraitDefinition,
     mapper_platforms: &[Platform],
     file_type: FileType,

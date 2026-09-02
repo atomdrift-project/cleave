@@ -44,11 +44,12 @@ use crate::capabilities::validation::{
     find_string_pattern_duplicates, find_structural_regex_duplicates,
     find_suppression_only_building_blocks, find_too_short_patterns,
     find_unanchored_wellknown_composites, find_uncompilable_ast_queries,
-    find_unreferenced_exceptions, find_wellknown_category_violations,
-    find_wellknown_missing_section_filter, find_wellknown_missing_size_filter,
-    find_wide_trait_directories, precalculate_all_composite_precisions,
-    validate_composite_trait_only, validate_directory_structure,
-    validate_hostile_composite_precision, validate_hostile_trait_precision,
+    find_unreferenced_exceptions, find_unsatisfiable_file_types,
+    find_wellknown_category_violations, find_wellknown_missing_section_filter,
+    find_wellknown_missing_size_filter, find_wide_trait_directories,
+    precalculate_all_composite_precisions, validate_composite_trait_only,
+    validate_directory_structure, validate_hostile_composite_precision,
+    validate_hostile_trait_precision,
 };
 use crate::composite_rules::MetricsQuery;
 use crate::composite_rules::{
@@ -3212,6 +3213,70 @@ impl super::CapabilityMapper {
                         dir_alias_composites.len()
                     ),
                 );
+            }
+
+            // Composites whose `for:` cannot overlap their legs' `for:`. At
+            // `scope: file` one file has to satisfy every leg, so a disjoint
+            // set is a rule that matches nothing on any input — usually a
+            // `for:` inherited from the file's `defaults:` that does not suit
+            // the traits the rule was assembled from.
+            if !crate::validation_controls::is_validator_disabled("unsatisfiable-file-type") {
+                let traits_by_id: HashMap<String, &TraitDefinition> = trait_definitions
+                    .iter()
+                    .map(|t| (t.id.clone(), t))
+                    .collect();
+                let composites_by_id: HashMap<String, &CompositeTrait> =
+                    composite_rules.iter().map(|r| (r.id.clone(), r)).collect();
+                let unsatisfiable = find_unsatisfiable_file_types(
+                    &composite_rules,
+                    &traits_by_id,
+                    &composites_by_id,
+                );
+                if !unsatisfiable.is_empty() {
+                    eprintln!(
+                        "\n⚠️  WARNING: {} composites can never match (file types do not intersect)",
+                        unsatisfiable.len()
+                    );
+                    eprintln!(
+                        "   At scope: file every leg must match the same file, so the rule's"
+                    );
+                    eprintln!("   for: and its legs' for: have to share a file type.\n");
+                    for (rule_id, rule_for, legs, suggested) in &unsatisfiable {
+                        let source_file = rule_source_files
+                            .get(*rule_id)
+                            .map(std::string::String::as_str)
+                            .unwrap_or("unknown");
+                        match find_line_number(source_file, rule_id) {
+                            Some(line) => eprintln!(
+                                "   {}:{}: Rule '{}' has for: {:?}",
+                                source_file, line, rule_id, rule_for
+                            ),
+                            None => eprintln!(
+                                "   {}: Rule '{}' has for: {:?}",
+                                source_file, rule_id, rule_for
+                            ),
+                        }
+                        eprintln!("      Legs: {}", legs.join(", "));
+                        if suggested.is_empty() {
+                            eprintln!(
+                                "      Legs share no file type with each other; the rule needs different legs."
+                            );
+                        } else {
+                            eprintln!("      Suggested for: {:?}", suggested);
+                        }
+                        eprintln!(
+                            "      Recommendation: set for: on the rule to the type its legs match.\n"
+                        );
+                    }
+                    warnings.push_count(
+                        "unsatisfiable-file-type",
+                        unsatisfiable.len(),
+                        format!(
+                            "{} composites can never match (file types do not intersect)",
+                            unsatisfiable.len()
+                        ),
+                    );
+                }
             }
 
             // Validate that `any:` and `all:` clauses don't have exactly 1 item

@@ -305,6 +305,18 @@ pub enum Command {
         targets: Vec<String>,
     },
 
+    /// Probe regex patterns for lazy-DFA explosion (reads stdin, one per line).
+    ///
+    /// Prints `ok` or `explode:<reason>` per line, using the same haystack and
+    /// give-up thresholds as the `regex-explosion` validator. Exists so a
+    /// pattern can be checked without a full `validate` run over the tree.
+    #[command(name = "regex-cost")]
+    RegexCost {
+        /// Treat patterns as case-insensitive (as `type: text` with (?i) does).
+        #[arg(long)]
+        case_insensitive: bool,
+    },
+
     /// Enumerate recognized files as JSONL (for ingest pipelines).
     ///
     /// Walks the given targets and emits one JSON line per recognized file:

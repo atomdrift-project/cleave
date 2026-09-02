@@ -4015,6 +4015,16 @@ pub fn version_info() -> VersionInfo {
     }
 }
 
+/// Report whether `pattern` makes the lazy DFA explode on bundle-shaped text.
+///
+/// Same haystack and give-up thresholds as the `regex-explosion` validator, so
+/// a pattern can be checked one at a time instead of by re-validating the tree.
+#[must_use]
+pub fn regex_explodes(pattern: &str, case_insensitive: bool) -> bool {
+    crate::capabilities::validation::regex_cost::explosion(pattern, case_insensitive)
+        .is_some_and(capabilities::validation::regex_cost::Explosion::is_pathological)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

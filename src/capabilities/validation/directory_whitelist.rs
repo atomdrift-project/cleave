@@ -839,13 +839,13 @@ const ALLOWED_METADATA_FILE: &[&str] = &[
 
 /// Allowed subdirectories in metadata/image/
 ///
-/// Image-specific neutral measurements, plus the creation provenance an image
-/// carries about itself. File identity (PNG/JPEG magic, extension) belongs in
-/// metadata/file/. Document container image references belong in
-/// metadata/document/.
+/// Image-specific neutral measurements. File identity (PNG/JPEG magic,
+/// extension) belongs in metadata/file/. Document container image references
+/// belong in metadata/document/. Embedded creation provenance (C2PA content
+/// credentials) needs the container parsed, so it lives under
+/// metadata/binary/provenance/ with the other structure-derived facts.
 const ALLOWED_METADATA_IMAGE: &[&str] = &[
-    "metrics",    // Pixel/channel/statistical image measurements
-    "provenance", // Embedded creation provenance (C2PA credentials, generator tags)
+    "metrics", // Pixel/channel/statistical image measurements
 ];
 
 /// Allowed subdirectories in metadata/lang/

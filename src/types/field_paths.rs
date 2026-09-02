@@ -142,23 +142,38 @@ pub(crate) fn all_valid_metric_paths() -> HashSet<String> {
 /// either move to a filefacts extractor or justify why cleave is the only
 /// place it can be computed.
 ///
-/// `consistency.*` and `vsix.*` have the strongest claim to staying: they
-/// are cross-field judgements over an already-assembled report (does the
-/// manifest name match the repository, how much of an extension pack is the
-/// publisher's own), which is a different job from extracting facts out of
-/// one file's bytes. The `binary.*` / `pe.*` entries have no such excuse —
-/// they are per-file measurements sitting on the wrong side of the boundary.
+/// What is left has to justify itself against one test: could filefacts
+/// compute it from a single file's bytes? `consistency.name_repo_mismatch`
+/// and `consistency.publisher_repo_owner_mismatch` could — both only compare
+/// two claims the same `package.json` makes — so they moved to
+/// `filefacts::formats::npm`, which is where that manifest is parsed. The
+/// remaining entries genuinely cannot: `unused_runtime_deps` needs every
+/// shipped module's imports beside the manifest, `vsix.*` needs the manifest
+/// as a member of a container filefacts does not crack, and `references.*` is
+/// the outcome of a network fetch. The `binary.*` / `pe.*` entries have no
+/// such excuse — they are per-file measurements sitting on the wrong side of
+/// the boundary.
 pub(crate) const CLEAVE_OWNED_METRIC_FIELDS: &[&str] = &[
-    // Cross-field judgements over an assembled report.
-    "consistency.name_repo_mismatch",
+    // Needs every shipped module's imports beside the manifest, so no
+    // single-file parse can reach it.
     "consistency.unused_runtime_deps",
     "vsix.extension_pack_self_entries",
     "vsix.extension_pack_size",
+    // Written by scan's follow phase (`attribute_reference_outcomes`), which
+    // attributes each fetch outcome back to the file that declared it. Neither
+    // filefacts nor cleave can compute these — only a run that actually
+    // followed the references knows how they resolved — but they land in the
+    // same `filefacts_metrics` map, so this is where they have to be declared
+    // to stay inside the check. Absent entirely on an offline scan.
+    "references.declared_count",
+    "references.unresolved_count",
+    "references.unresolved_extension_count",
     // Per-file measurements that should move into filefacts.
     "binary.embedded_binaries",
     "pe.directory_section_mismatch_count",
     "pe.executable_prose_section_count",
     "pe.headers_size",
+    "pe.headers_size_ratio",
     "pe.prose_section_count",
 ];
 

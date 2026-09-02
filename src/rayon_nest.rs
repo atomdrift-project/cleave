@@ -38,6 +38,105 @@ pub(crate) fn toplevel_draining() -> bool {
     TOPLEVEL_PENDING.load(Ordering::Acquire) < rayon::current_num_threads()
 }
 static NEXT_TOPLEVEL_ID: AtomicU64 = AtomicU64::new(1);
+
+/// Work a lane can do instead of idling in a single-flight wait: the next
+/// top-level path of the ordered scan queue. Installed by `for_each_ordered`
+/// for the duration of the scan (`None` outside it). Callers take the lock,
+/// copy the hook and bump `WAIT_WORK_ACTIVE` *before* unlocking; the
+/// uninstaller clears the slot under the lock and then waits for
+/// `WAIT_WORK_ACTIVE` to drain, so the borrowed closure never outlives its
+/// scope.
+static WAIT_WORK: std::sync::Mutex<Option<&'static (dyn Fn() -> bool + Sync)>> =
+    std::sync::Mutex::new(None);
+static WAIT_WORK_ACTIVE: AtomicUsize = AtomicUsize::new(0);
+static WAIT_WORK_RUNS: AtomicUsize = AtomicUsize::new(0);
+
+thread_local! {
+    /// Depth of scan paths this thread is analyzing *inside* a single-flight
+    /// wait. A nested path never pulls further work (bounded stack, no wait
+    /// chains through this thread).
+    static WAIT_WORK_DEPTH: Cell<usize> = const { Cell::new(0) };
+}
+
+pub(crate) struct WaitWorkGuard(());
+
+impl Drop for WaitWorkGuard {
+    fn drop(&mut self) {
+        *WAIT_WORK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        while WAIT_WORK_ACTIVE.load(Ordering::Acquire) != 0 {
+            std::thread::yield_now();
+        }
+    }
+}
+
+/// Install `hook` as the wait-time work source until the guard drops.
+///
+/// `hook` returns `true` when it ran a job (the caller re-checks its wait
+/// condition) and `false` when the queue is exhausted.
+pub(crate) fn install_wait_work(hook: &(dyn Fn() -> bool + Sync)) -> WaitWorkGuard {
+    // SAFETY: the guard clears the slot and drains every in-progress call
+    // before it drops, and the caller keeps `hook` alive until then.
+    let hook: &'static (dyn Fn() -> bool + Sync) = unsafe { std::mem::transmute(hook) };
+    *WAIT_WORK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(hook);
+    WaitWorkGuard(())
+}
+
+/// Run one queued scan path on this thread, if any is installed and this
+/// thread is not already inside such a job. Returns whether a job ran.
+pub(crate) fn run_wait_work() -> bool {
+    if WAIT_WORK_DEPTH.with(Cell::get) > 0 {
+        return false;
+    }
+    let slot = WAIT_WORK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some(hook) = *slot else { return false };
+    // Bump under the lock so the uninstaller's drain sees this call.
+    WAIT_WORK_ACTIVE.fetch_add(1, Ordering::AcqRel);
+    drop(slot);
+    struct Active;
+    impl Drop for Active {
+        fn drop(&mut self) {
+            WAIT_WORK_DEPTH.with(|d| d.set(d.get() - 1));
+            WAIT_WORK_ACTIVE.fetch_sub(1, Ordering::AcqRel);
+        }
+    }
+    WAIT_WORK_DEPTH.with(|d| d.set(d.get() + 1));
+    let _active = Active;
+    let ran = hook();
+    if ran {
+        WAIT_WORK_RUNS.fetch_add(1, Ordering::Relaxed);
+    }
+    ran
+}
+
+/// Whether this thread is analyzing a scan path pulled during a
+/// single-flight wait.
+pub(crate) fn in_wait_work() -> bool {
+    WAIT_WORK_DEPTH.with(Cell::get) > 0
+}
+
+/// Archive members analyzed independently because their single-flight was
+/// busy and this thread could not wait (scan statistics).
+static INDEPENDENT_MEMBER_ANALYSES: AtomicUsize = AtomicUsize::new(0);
+
+pub(crate) fn note_independent_member_analysis() {
+    INDEPENDENT_MEMBER_ANALYSES.fetch_add(1, Ordering::Relaxed);
+}
+
+pub(crate) fn independent_member_analyses() -> usize {
+    INDEPENDENT_MEMBER_ANALYSES.load(Ordering::Relaxed)
+}
+
+/// Scan paths analyzed by lanes that would otherwise have idled in a
+/// single-flight wait (scan statistics).
+pub(crate) fn wait_work_runs() -> usize {
+    WAIT_WORK_RUNS.load(Ordering::Relaxed)
+}
 static INNER_PARALLEL_OWNERS: AtomicUsize = AtomicUsize::new(0);
 static NESTED_MEMBER_OWNERS: AtomicUsize = AtomicUsize::new(0);
 
@@ -245,5 +344,35 @@ mod tests {
         assert!(inner_work_parallel());
         drop(a);
         assert!(inner_work_parallel());
+    }
+
+    #[test]
+    fn wait_work_runs_queued_jobs_once_each_and_never_nests() {
+        let _lock = TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert!(!run_wait_work(), "nothing installed");
+        let queue = AtomicUsize::new(0);
+        let nested_ran = AtomicUsize::new(0);
+        let hook = || -> bool {
+            if queue.fetch_add(1, Ordering::Relaxed) >= 3 {
+                return false;
+            }
+            // A job that itself waits must not pull another job.
+            if run_wait_work() {
+                nested_ran.fetch_add(1, Ordering::Relaxed);
+            }
+            true
+        };
+        let guard = install_wait_work(&hook);
+        let before = wait_work_runs();
+        assert!(run_wait_work());
+        assert!(run_wait_work());
+        assert!(run_wait_work());
+        assert!(!run_wait_work(), "queue exhausted");
+        assert_eq!(wait_work_runs() - before, 3);
+        assert_eq!(nested_ran.load(Ordering::Relaxed), 0);
+        drop(guard);
+        assert!(!run_wait_work(), "uninstalled");
     }
 }

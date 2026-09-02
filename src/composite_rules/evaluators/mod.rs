@@ -199,11 +199,27 @@ type BytesRegexCache =
     crate::composite_rules::regex_store::BudgetedStore<(String, bool), LeanRegex>;
 static BYTES_REGEX_CACHE: OnceLock<RwLock<BytesRegexCache>> = OnceLock::new();
 
+/// Entry cap of the raw-bytes store. The byte budget is the real bound;
+/// the count cap is a backstop — but at [`REGEX_CACHE_MAX_SIZE`] it sat
+/// *below* the ~17,000 byte-mode trait patterns, so a 10 MB bundle evicted
+/// and recompiled ~3,100 engines per member (regex compilation showed in
+/// the profile). `CLEAVE_REGEX_CACHE_ENTRIES` overrides.
+fn bytes_regex_cache_entries() -> NonZeroUsize {
+    static N: OnceLock<NonZeroUsize> = OnceLock::new();
+    *N.get_or_init(|| {
+        std::env::var("CLEAVE_REGEX_CACHE_ENTRIES")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .and_then(NonZeroUsize::new)
+            .unwrap_or(REGEX_CACHE_SIZE)
+    })
+}
+
 /// Access the bytes regex cache.
 pub(crate) fn bytes_regex_cache() -> &'static RwLock<BytesRegexCache> {
     BYTES_REGEX_CACHE.get_or_init(|| {
         RwLock::new(crate::composite_rules::regex_store::BudgetedStore::new(
-            REGEX_CACHE_SIZE,
+            bytes_regex_cache_entries(),
             crate::composite_rules::regex_store::raw_budget_bytes(),
         ))
     })

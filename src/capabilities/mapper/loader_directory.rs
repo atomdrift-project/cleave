@@ -1308,6 +1308,20 @@ impl super::CapabilityMapper {
             }
             tracing::trace!("Step 1h1 completed in {:?}", step_start.elapsed());
 
+            // Probe each text/raw regex's lazy DFA on its own alphabet: a
+            // pattern that explodes there explodes on real bundles (soft).
+            let step_start = std::time::Instant::now();
+            tracing::trace!("Step 1h2/15: Probing regexes for lazy-DFA explosion");
+            if !crate::validation_controls::is_validator_disabled("regex-explosion") {
+                warnings.collect_as("regex-explosion", |warnings| {
+                    crate::capabilities::validation::find_pathological_regex_patterns(
+                        &trait_definitions,
+                        warnings,
+                    );
+                });
+            }
+            tracing::trace!("Step 1h2 completed in {:?}", step_start.elapsed());
+
             // Compile every tree-sitter `query:`. Evaluation swallows a compile
             // failure and caches it, so a broken query is a silently dead rule.
             let step_start = std::time::Instant::now();

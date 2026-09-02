@@ -132,20 +132,22 @@ pub(crate) fn adopt_report_under(
         p.strip_prefix(owner_path)
             .map(|rest| format!("{new_path}{rest}"))
     };
-    let equivalent =
-        {
-            let guard = CAPABILITY_MAPPER.read();
-            let Some(mapper) = guard.as_ref() else {
-                return false;
-            };
-            mapper.paths_equivalent(owner_path, new_path)
-                && report.files.iter().all(|f| {
-                    rebase(&f.path).is_some_and(|np| mapper.paths_equivalent(&f.path, &np))
-                })
-                && report.archive_contents.iter().all(|e| {
-                    rebase(&e.path).is_some_and(|np| mapper.paths_equivalent(&e.path, &np))
-                })
-        };
+    // Clone the Arc out and release the read lock before walking the report:
+    // the equivalence check is O(files + archive entries), and holding the
+    // mapper lock across it would block a concurrent trait reload for the
+    // whole walk.
+    let Some(mapper) = CAPABILITY_MAPPER.read().as_ref().cloned() else {
+        return false;
+    };
+    let equivalent = mapper.paths_equivalent(owner_path, new_path)
+        && report
+            .files
+            .iter()
+            .all(|f| rebase(&f.path).is_some_and(|np| mapper.paths_equivalent(&f.path, &np)))
+        && report
+            .archive_contents
+            .iter()
+            .all(|e| rebase(&e.path).is_some_and(|np| mapper.paths_equivalent(&e.path, &np)));
     if !equivalent {
         return false;
     }

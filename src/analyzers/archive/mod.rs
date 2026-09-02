@@ -140,80 +140,6 @@ fn compute_unused_runtime_deps(report: &AnalysisReport) -> Option<u64> {
     Some(declared.iter().filter(|dep| !used(dep)).count() as u64)
 }
 
-/// Whether a package's name disagrees with the repository it claims.
-///
-/// A clone-and-rename package keeps the original project's `repository` URL and
-/// republishes under a new name: `tailwindcss-form-styles` shipping
-/// `github.com/tailwindlabs/tailwindcss-forms` is the whole tell, and it takes no
-/// publisher list to spot. There is nothing hostile in the code — the payload, if
-/// it ever comes, is a later version — so the only signal is the manifest
-/// contradicting itself.
-///
-/// Compared on a folded slug, because the noise is predictable: a `@scope/`
-/// prefix, a `.git` suffix, and `-`/`_`/case spelling all differ without
-/// disagreeing, so `@tailwindcss/forms` and `tailwindcss-forms` agree.
-///
-/// Deliberately literal beyond that. A package legitimately named `foo` in a
-/// repo called `foo-js`, or one package of a monorepo, will read as a mismatch —
-/// which is why this is one weak signal and never a verdict on its own.
-///
-/// `None` when either field is missing: a package that claims no repository has
-/// made no claim to contradict.
-fn name_repo_mismatch(report: &AnalysisReport) -> Option<bool> {
-    // Fold to the comparable core: last path segment for a URL, no scope marker,
-    // no separators, no case.
-    fn slug(s: &str) -> String {
-        s.trim_end_matches('/')
-            .rsplit('/')
-            .next()
-            .unwrap_or(s)
-            .trim_end_matches(".git")
-            .chars()
-            .filter(char::is_ascii_alphanumeric)
-            .flat_map(char::to_lowercase)
-            .collect()
-    }
-
-    let manifest = report.files.iter().find(|f| {
-        Path::new(&f.path)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .is_some_and(|n| n.eq_ignore_ascii_case("package.json"))
-    })?;
-    // Members carry a flattened kv whose keys are namespaced (`file.basename`,
-    // `dependencies.<name>`); a manifest surfaces both the raw JSON fields and
-    // cleave's normalized `npm.*` view, and which one is present depends on how
-    // the member was reached. Take the first that answers.
-    let first = |keys: &[&str]| {
-        keys.iter()
-            .find_map(|k| manifest.kv.get(*k).and_then(serde_json::Value::as_str))
-    };
-
-    // A monorepo package declares which subdirectory it lives in, and makes no
-    // claim that the repository shares its name: `@react-pdf/png-js` ships from
-    // `diegomura/react-pdf` with `directory: packages/png-js`, and is not a clone
-    // of anything. Abstain rather than guess.
-    if first(&["repository.directory", "npm.repository.directory"]).is_some() {
-        return None;
-    }
-
-    // A scoped name is `@scope/pkg`, whose slug is the two joined — the scope is
-    // part of the identity, not a path.
-    let name = first(&["name", "npm.name"])?.replace(['@', '/'], "");
-    let name = slug(&name);
-    // `repository` is either the URL itself or an object carrying one.
-    let repo = slug(first(&[
-        "repository.url",
-        "repository",
-        "npm.repository.url",
-        "npm.repository",
-    ])?);
-    if name.is_empty() || repo.is_empty() {
-        return None;
-    }
-    Some(name != repo)
-}
-
 /// How a VS Code extension pack is composed: `(total entries, entries the
 /// publisher owns)`.
 ///
@@ -1832,18 +1758,12 @@ impl ArchiveAnalyzer {
                 .insert("consistency.unused_runtime_deps".to_string(), count as f64);
         }
 
-        // Cross-field npm consistency: the manifest names one package and claims
-        // another project's repository — the clone-and-rename shape, where there
-        // is no hostile code to find because the payload is a later version.
-        if let Some(mismatch) = name_repo_mismatch(report) {
-            report
-                .filefacts_metrics
-                .get_or_insert_with(Default::default)
-                .insert(
-                    "consistency.name_repo_mismatch".to_string(),
-                    f64::from(u8::from(mismatch)),
-                );
-        }
+        // `consistency.name_repo_mismatch` and
+        // `consistency.publisher_repo_owner_mismatch` used to be recomputed
+        // here from the manifest member's kv. Both are cross-field judgements
+        // over one file's bytes, so filefacts emits them from its own
+        // `package.json` parse (`formats::npm::emit`) — on the npm tarball
+        // itself, and on a bare or in-archive manifest member.
 
         // How a VS Code extension pack is composed. Only a list of marketplace
         // ids, so nothing here is a behavior — but the ratio of borrowed
@@ -2258,19 +2178,6 @@ mod tests {
     use ::tar;
     use ::zip;
 
-    fn manifest_with(name: &str, repo_key: &str, repo: &str) -> AnalysisReport {
-        let mut f = FileAnalysis::new(
-            0,
-            "package/package.json".into(),
-            "package.json".into(),
-            String::new(),
-            0,
-        );
-        f.kv.insert("name".into(), serde_json::json!(name));
-        f.kv.insert(repo_key.into(), serde_json::json!(repo));
-        report_with(vec![f])
-    }
-
     fn pack_manifest(publisher: &str, entries: &[&str]) -> AnalysisReport {
         let mut f = FileAnalysis::new(
             0,
@@ -2320,88 +2227,6 @@ mod tests {
             extension_pack_counts(&pack_manifest("", &["eamodio.gitlens"])),
             None,
         );
-    }
-
-    #[test]
-    fn name_repo_mismatch_spots_a_clone_and_rename() {
-        // Both gauntlet samples: the manifest names one package and claims
-        // another project's repository.
-        assert_eq!(
-            name_repo_mismatch(&manifest_with(
-                "tailwindcss-form-styles",
-                "repository",
-                "https://github.com/tailwindlabs/tailwindcss-forms",
-            )),
-            Some(true),
-        );
-        assert_eq!(
-            name_repo_mismatch(&manifest_with(
-                "tailwindcss-3d-animate",
-                "repository.url",
-                "git://github.com/sambauers/tailwindcss-3d.git",
-            )),
-            Some(true),
-        );
-    }
-
-    #[test]
-    fn name_repo_mismatch_folds_the_noise() {
-        // A scope, a `.git` suffix and `-`/case spelling differ without
-        // disagreeing.
-        for (name, repo) in [
-            (
-                "@tailwindcss/forms",
-                "https://github.com/tailwindlabs/tailwindcss-forms",
-            ),
-            ("Lodash", "https://github.com/lodash/lodash.git"),
-            (
-                "mini_svg_data_uri",
-                "https://github.com/tigt/mini-svg-data-uri/",
-            ),
-        ] {
-            assert_eq!(
-                name_repo_mismatch(&manifest_with(name, "repository", repo)),
-                Some(false),
-                "{name} vs {repo}",
-            );
-        }
-    }
-
-    #[test]
-    fn name_repo_mismatch_abstains_for_a_monorepo() {
-        // `@react-pdf/png-js` ships from `diegomura/react-pdf` and says so.
-        let mut f = FileAnalysis::new(
-            0,
-            "package/package.json".into(),
-            "package.json".into(),
-            String::new(),
-            0,
-        );
-        f.kv.insert("name".into(), serde_json::json!("@react-pdf/png-js"));
-        f.kv.insert(
-            "repository.url".into(),
-            serde_json::json!("https://github.com/diegomura/react-pdf.git"),
-        );
-        f.kv.insert(
-            "repository.directory".into(),
-            serde_json::json!("packages/png-js"),
-        );
-        assert_eq!(name_repo_mismatch(&report_with(vec![f])), None);
-    }
-
-    #[test]
-    fn name_repo_mismatch_abstains_without_a_claim() {
-        // No repository is no claim to contradict, and neither is no manifest.
-        let mut f = FileAnalysis::new(
-            0,
-            "package/package.json".into(),
-            "package.json".into(),
-            String::new(),
-            0,
-        );
-        f.kv.insert("name".into(), serde_json::json!("solo"));
-        assert_eq!(name_repo_mismatch(&report_with(vec![f])), None);
-        assert_eq!(name_repo_mismatch(&report_with(vec![])), None);
     }
 
     fn pkg_json_member(deps: &[&str]) -> FileAnalysis {

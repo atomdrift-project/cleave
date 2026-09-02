@@ -820,6 +820,28 @@ mod memo {
         misses: u64,
     }
 
+    impl Memo {
+        /// Insert `value`, then evict least-recently-used entries until the
+        /// byte budget holds. Values over a quarter of the budget are skipped
+        /// so one giant report cannot flush the whole cache.
+        fn insert(&mut self, kind: Kind, key: String, value: Vec<u8>) {
+            let len = value.len();
+            if len > self.budget / 4 {
+                return;
+            }
+            if let Some(old) = self.entries.push((kind, key), Arc::from(value)) {
+                self.bytes = self.bytes.saturating_sub(old.1.len());
+            }
+            self.bytes += len;
+            while self.bytes > self.budget {
+                let Some((_, evicted)) = self.entries.pop_lru() else {
+                    break;
+                };
+                self.bytes = self.bytes.saturating_sub(evicted.len());
+            }
+        }
+    }
+
     static MEMO: OnceLock<Option<Mutex<Memo>>> = OnceLock::new();
 
     fn memo() -> Option<&'static Mutex<Memo>> {
@@ -860,21 +882,9 @@ mod memo {
     #[allow(clippy::significant_drop_tightening)]
     pub(super) fn put(kind: Kind, key: String, value: Vec<u8>) {
         let Some(m) = memo() else { return };
-        let len = value.len();
-        let mut m = m.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if len > m.budget / 4 {
-            return;
-        }
-        if let Some(old) = m.entries.push((kind, key), Arc::from(value)) {
-            m.bytes = m.bytes.saturating_sub(old.1.len());
-        }
-        m.bytes += len;
-        while m.bytes > m.budget {
-            let Some((_, evicted)) = m.entries.pop_lru() else {
-                break;
-            };
-            m.bytes = m.bytes.saturating_sub(evicted.len());
-        }
+        m.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(kind, key, value);
     }
 
     /// `(entries, bytes, hits, misses)` for end-of-scan logging.

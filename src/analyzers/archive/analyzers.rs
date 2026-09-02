@@ -95,6 +95,25 @@ fn read_member_tolerant<R: Read>(
 
 // Member analyses currently on this thread's stack (see
 // `ArchiveAnalyzer::member_may_wait`).
+
+/// Members at or above the single-flight wait floor stay on their lane
+/// thread in a parallel member window (see `par_filter_fold_members`).
+fn member_is_heavy(bytes: usize) -> bool {
+    bytes >= flight_wait_min_bytes()
+}
+
+/// Smallest member a busy single-flight is worth waiting for
+/// (`CLEAVE_FLIGHT_WAIT_MIN_KB`, default 256 KiB); smaller duplicates are
+/// analyzed independently.
+fn flight_wait_min_bytes() -> usize {
+    static MIN: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *MIN.get_or_init(|| {
+        std::env::var("CLEAVE_FLIGHT_WAIT_MIN_KB")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .map_or(256 << 10, |kb| kb << 10)
+    })
+}
 thread_local! {
     static MEMBER_ANALYSIS_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
@@ -156,9 +175,18 @@ where
 // prefix: releasing it would let another producer advance and fold a later
 // item concurrently, breaking the input-order guarantee.
 #[allow(clippy::significant_drop_tightening)]
+///
+/// `heavy` marks members that must run on the calling (lane) thread even in
+/// a parallel window. A heavy member as a stealable job is a trap for every
+/// other whale: a thread blocked in one of its own `join`s steals whatever
+/// is pending, and a 9 MB bundle stolen that way extends the thief's own
+/// path — and any single-flight it owns — by the bundle's whole analysis
+/// (postman 32 → 52 s, 2026-09-02). Light members and trait chunks are the
+/// only work left to steal, so a diversion is bounded to well under a second.
 fn par_filter_fold_members<T, U, F>(
     items: &[T],
     parallel: bool,
+    heavy: impl Fn(&T) -> bool + Sync,
     f: F,
     mut fold: impl FnMut(U) + Send,
 ) where
@@ -239,35 +267,47 @@ fn par_filter_fold_members<T, U, F>(
             next: 0,
             pending: std::collections::BTreeMap::new(),
         });
-        chunk
-            .par_iter()
-            .enumerate()
-            .map(|(i, item)| (i, f(item)))
-            .for_each(|(i, u)| {
-                let mut st = state
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                st.pending.insert(i, u);
-                // Drain the contiguous prefix. Holding `state` while folding
-                // keeps drains single-threaded; producers only block here when
-                // they have nothing left to analyze anyway.
-                loop {
-                    let next = st.next;
-                    match st.pending.first_entry() {
-                        Some(entry) if *entry.key() == next => {
-                            let (_, u) = entry.remove_entry();
-                            st.next += 1;
-                            if let Some(u) = u {
-                                let mut g = fold
-                                    .lock()
-                                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                                g(u);
-                            }
+        let deliver = |i: usize, u: Option<U>| {
+            let mut st = state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            st.pending.insert(i, u);
+            // Drain the contiguous prefix. Holding `state` while folding
+            // keeps drains single-threaded; producers only block here when
+            // they have nothing left to analyze anyway.
+            loop {
+                let next = st.next;
+                match st.pending.first_entry() {
+                    Some(entry) if *entry.key() == next => {
+                        let (_, u) = entry.remove_entry();
+                        st.next += 1;
+                        if let Some(u) = u {
+                            let mut g = fold
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                            g(u);
                         }
-                        _ => break,
                     }
+                    _ => break,
                 }
-            });
+            }
+        };
+        let (heavy_items, light_items): (Vec<usize>, Vec<usize>) =
+            (0..chunk.len()).partition(|&i| heavy(&chunk[i]));
+        // `join`'s left side runs here; the right side is the only stealable
+        // job. Heavy members never enter a queue.
+        rayon::join(
+            || {
+                for i in heavy_items {
+                    deliver(i, f(&chunk[i]));
+                }
+            },
+            || {
+                light_items
+                    .par_iter()
+                    .for_each(|&i| deliver(i, f(&chunk[i])));
+            },
+        );
     }
     // Filtered items (f returned None) still advance `next` via the None
     // entries above, so every Some folds exactly once, in order.
@@ -988,6 +1028,7 @@ impl<'a: 'scope, 'scope> MemberWindow<'a, 'scope> {
                 par_filter_fold_members(
                     &batch,
                     parallel,
+                    |member| member_is_heavy(member.data.len()),
                     |member| analyzer.analyze_one_member(member, slow_log_label),
                     |result| acc.fold(result),
                 );
@@ -1036,6 +1077,7 @@ impl<'a: 'scope, 'scope> MemberWindow<'a, 'scope> {
         par_filter_fold_members(
             &self.window,
             parallel,
+            |member| member_is_heavy(member.data.len()),
             |member| analyzer.analyze_one_member(member, label),
             |result| acc.fold(result),
         );
@@ -1472,6 +1514,29 @@ impl ArchiveAnalyzer {
                     relative_path,
                     "Archive member flight busy while owning another; analyzing independently"
                 );
+                crate::rayon_nest::note_independent_member_analysis();
+                return self.analyze_extracted_member_uncached(
+                    file_path,
+                    relative_path,
+                    data,
+                    file_type,
+                    sha256,
+                );
+            }
+            // Only a member worth deduplicating is worth waiting for. The
+            // owner of a small member's flight can be diverted for tens of
+            // seconds — a rayon `join` inside its analysis steals whatever
+            // is pending, a 30 s bundle included — and seven lanes then sat
+            // 180 s on a README.md flight (2026-09-02). Below the floor the
+            // duplicate is cheaper than any wait.
+            if on_pool && data.len() < flight_wait_min_bytes() {
+                tracing::debug!(
+                    sha256,
+                    relative_path,
+                    bytes = data.len(),
+                    "Archive member flight busy; member below the wait floor, analyzing independently"
+                );
+                crate::rayon_nest::note_independent_member_analysis();
                 return self.analyze_extracted_member_uncached(
                     file_path,
                     relative_path,
@@ -1489,15 +1554,22 @@ impl ArchiveAnalyzer {
             let waited = if on_pool {
                 // Half the pool, and never the last two workers: an owner's
                 // spawned nested job needs a free worker to run on.
+                // A path pulled during another wait (`rayon_nest::run_wait_work`)
+                // is exempt: its lane already holds a waiter slot, it cannot
+                // pull further work, and its wait resolves through an owner
+                // that never waits — so it is counted with its lane, not as
+                // a second idle worker.
                 let threads = rayon::current_num_threads();
                 let cap = (threads / 2).min(threads.saturating_sub(2));
-                if WAITERS.fetch_add(1, std::sync::atomic::Ordering::AcqRel) >= cap {
+                let counted = !crate::rayon_nest::in_wait_work();
+                if counted && WAITERS.fetch_add(1, std::sync::atomic::Ordering::AcqRel) >= cap {
                     WAITERS.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
                     tracing::debug!(
                         sha256,
                         relative_path,
                         "Archive member flight busy; waiter cap reached, analyzing independently"
                     );
+                    crate::rayon_nest::note_independent_member_analysis();
                     return self.analyze_extracted_member_uncached(
                         file_path,
                         relative_path,
@@ -1507,10 +1579,13 @@ impl ArchiveAnalyzer {
                     );
                 }
                 let w = flight.wait_yielding(std::time::Duration::from_secs(180));
-                WAITERS.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+                if counted {
+                    WAITERS.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+                }
                 match w {
                     Some(w) => w,
                     None => {
+                        crate::rayon_nest::note_independent_member_analysis();
                         return self.analyze_extracted_member_uncached(
                             file_path,
                             relative_path,
@@ -3098,6 +3173,7 @@ impl ArchiveAnalyzer {
         par_filter_fold_members(
             members,
             self.members_run_parallel(members.len()),
+            |member| member_is_heavy(member.data.len()),
             |member| self.analyze_one_member(member, slow_log_label),
             |result| acc.fold(result),
         );
@@ -3126,6 +3202,7 @@ impl ArchiveAnalyzer {
         par_filter_fold_members(
             members,
             self.members_run_parallel(members.len()),
+            |member| member_is_heavy(member.data.len()),
             |member| self.analyze_one_member(member, slow_log_label),
             |result| acc.fold(result),
         );
@@ -3565,6 +3642,7 @@ impl ArchiveAnalyzer {
         par_filter_fold_members(
             &classes_to_analyze,
             self.members_run_parallel(classes_to_analyze.len()),
+            |_| false,
             |entry| {
                 let _thread_local_cache_clear_guard = ThreadLocalCacheClearGuard;
                 if self.is_cancelled() {
@@ -3732,6 +3810,7 @@ impl ArchiveAnalyzer {
         par_filter_fold_members(
             &non_class_files,
             self.members_run_parallel(non_class_files.len()),
+            |_| false,
             |entry| {
                 let _thread_local_cache_clear_guard = ThreadLocalCacheClearGuard;
                 if self.is_cancelled() {
@@ -3941,6 +4020,7 @@ impl ArchiveAnalyzer {
         par_filter_fold_members(
             &files,
             self.members_run_parallel(files.len()),
+            |_| false,
             |entry| {
                 let _thread_local_cache_clear_guard = ThreadLocalCacheClearGuard;
                 if self.is_cancelled() {

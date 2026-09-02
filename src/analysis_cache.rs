@@ -199,8 +199,14 @@ impl ReportFlight {
         if self.owner {
             return Some(self.wait());
         }
-        let started = std::time::Instant::now();
+        // `waited` excludes time spent on queued scan paths pulled through
+        // `rayon_nest::run_wait_work`: that is useful work, not a wait, and
+        // must not trip the deadline.
+        let mut waited = std::time::Duration::ZERO;
+        let mut mark = std::time::Instant::now();
         loop {
+            waited += mark.elapsed();
+            mark = std::time::Instant::now();
             {
                 let result = self
                     .state
@@ -211,9 +217,9 @@ impl ReportFlight {
                     return Some(result.report.as_deref().cloned());
                 }
             }
-            if started.elapsed() > deadline {
+            if waited > deadline {
                 tracing::warn!(
-                    waited_s = started.elapsed().as_secs(),
+                    waited_s = waited.as_secs(),
                     sha256 = %self.key.sha256,
                     owner_thread = ?self.state.owner_thread,
                     owner = %self.owner_label(),
@@ -221,9 +227,9 @@ impl ReportFlight {
                 );
                 return None;
             }
-            if started.elapsed().as_secs() >= 30 && started.elapsed().as_millis() % 30_000 < 3 {
+            if waited.as_secs() >= 30 && waited.as_millis() % 30_000 < 3 {
                 tracing::info!(
-                    waited_s = started.elapsed().as_secs(),
+                    waited_s = waited.as_secs(),
                     sha256 = %self.key.sha256,
                     owner_thread = ?self.state.owner_thread,
                     owner = %self.owner_label(),
@@ -233,6 +239,10 @@ impl ReportFlight {
             match rayon::yield_local() {
                 Some(rayon::Yield::Executed) => {}
                 _ => {
+                    if crate::rayon_nest::run_wait_work() {
+                        mark = std::time::Instant::now();
+                        continue;
+                    }
                     let result = self
                         .state
                         .result
@@ -878,6 +888,11 @@ mod memo {
 
 /// Log the in-process analysis memo's occupancy and hit rate at `info`.
 pub(crate) fn log_analysis_memo_stats() {
+    tracing::info!(
+        paths = crate::rayon_nest::wait_work_runs(),
+        independent_members = crate::rayon_nest::independent_member_analyses(),
+        "scan paths analyzed by lanes during single-flight waits"
+    );
     let (entries, bytes, hits, misses) = memo::stats();
     if hits + misses == 0 {
         return;

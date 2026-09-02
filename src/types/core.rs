@@ -2157,6 +2157,20 @@ fn retain_folded_kv(path: &str) -> bool {
     }
     // Mirror `sibling_path_matches`: the final `/`, `\`, or `!` component.
     let basename = path.rsplit(['/', '\\', '!']).next().unwrap_or(path);
+    // Rules are not the only consumer. `compute_unused_runtime_deps` reads a
+    // package.json member's flattened kv at *container* scope, after the member
+    // has folded, to list declared runtime dependencies — and it is the only
+    // reader that does so, which is why no `package.json::` sibling reference
+    // exists to keep this alive. Dropping the kv left `declared` empty, so the
+    // metric silently returned `None` and never emitted
+    // `consistency.unused_runtime_deps`. The phantom-dependency trait that
+    // reads it then could not fire in compact mode, taking the hostile
+    // `npm-readme-clone-with-phantom-dependencies` composite down with it:
+    // present under `cleave`, absent under any caller that enables compact
+    // retention.
+    if basename.eq_ignore_ascii_case("package.json") {
+        return true;
+    }
     crate::shared_resources::kv_sibling_basename_referenced(basename)
 }
 

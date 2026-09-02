@@ -151,12 +151,26 @@ fn compute_unused_runtime_deps(report: &AnalysisReport) -> Option<u64> {
                     || n.eq_ignore_ascii_case("npm-shrinkwrap.json")
             })
     };
+    // `imports` is cleared on every member under compact retention
+    // (`precompact_member_facts`), whose comment assumed nothing between the
+    // fold and compact conversion reads it — this function does, at container
+    // scope, and so saw zero imports and bailed out through the
+    // "no imports observed" guard below. The names survive in the precompacted
+    // facts, so read those when the live vector is gone: no member holds its
+    // symbol table any longer, and the metric works on both paths again.
     let imported: Vec<&str> = report
         .files
         .iter()
         .filter(|f| !is_manifest_like(&f.path))
-        .flat_map(|f| f.imports.iter())
-        .map(|imp| imp.symbol.as_str())
+        .flat_map(|f| {
+            let live = f.imports.iter().map(|imp| imp.symbol.as_str());
+            let compacted = f
+                .precompact_facts
+                .as_ref()
+                .into_iter()
+                .flat_map(|facts| facts.imports.iter().map(|imp| imp.name.as_str()));
+            live.chain(compacted)
+        })
         .collect();
     if imported.is_empty() {
         return None;
@@ -2318,6 +2332,27 @@ mod tests {
             pkg_json_member(&["@turbopuffer/turbopuffer", "easy-day-js"]),
             code_member(&["@turbopuffer/turbopuffer/resources/custom", "node:crypto"]),
         ]);
+        assert_eq!(compute_unused_runtime_deps(&report), Some(1));
+    }
+
+    /// The compact-retention path clears `FileAnalysis::imports` on every
+    /// member and keeps only the precompacted names, so a member reaching this
+    /// function that way carries no live imports at all. That is what every
+    /// `atomscan` caller does, and it silently zeroed this metric: with no
+    /// imports observed the "cannot distinguish unused from unparsed" guard
+    /// returned `None`, and the phantom-dependency trait — and the hostile
+    /// composite built on it — could never fire outside plain `cleave`.
+    #[test]
+    fn phantom_dep_reads_precompacted_imports() {
+        let mut code = code_member(&["dayjs/plugin/utc"]);
+        // Mirror `precompact_member_facts`: names survive, the vector does not.
+        code.precompact_facts = Some(crate::types::compact::compact_facts_from_parts(
+            &code, false,
+        ));
+        code.imports = Vec::new();
+
+        let report = report_with(vec![pkg_json_member(&["dayjs", "easy-day-js"]), code]);
+        // `dayjs` is imported via a subpath, `easy-day-js` never → one phantom.
         assert_eq!(compute_unused_runtime_deps(&report), Some(1));
     }
 

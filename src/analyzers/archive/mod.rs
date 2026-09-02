@@ -64,6 +64,36 @@ fn is_zip_container(file_type: FileType) -> bool {
     )
 }
 
+/// Whether an extracted zip actually carries Java bytecode.
+///
+/// `is_zip_container` is true of every zip-shaped format — wheels, VSIXes,
+/// nupkgs, npm tarballs repacked as zips, plain zips — but `analyze_jar_archive`
+/// exists to separate `.class` members from the resources sitting around them.
+/// Handing it a package with no bytecode makes the entire payload "resources"
+/// and subjects it to a sampling cap meant for icons and properties files, so
+/// an npm package large enough to exceed the cap can lose its `package.json`
+/// and, with it, every install-hook and dependency trait it should have had.
+///
+/// Deciding on content rather than extension cuts both ways on purpose: a Java
+/// application shipped as a plain `.zip` still reaches the JAR analyzer, and a
+/// `.jar` that turns out to hold no bytecode does not.
+fn contains_java_members(temp_dir: &Path) -> bool {
+    walkdir::WalkDir::new(temp_dir)
+        .min_depth(1)
+        .max_depth(10)
+        .into_iter()
+        .filter_map(std::result::Result::ok)
+        .filter(|e| e.file_type().is_file())
+        .any(|e| {
+            let path = e.path();
+            path.extension().is_some_and(|ext| {
+                ext.eq_ignore_ascii_case("class") || ext.eq_ignore_ascii_case("dex")
+            }) || path
+                .file_name()
+                .is_some_and(|n| n.eq_ignore_ascii_case("MANIFEST.MF"))
+        })
+}
+
 /// Count `package.json` runtime `dependencies` that no shipped module imports.
 ///
 /// A phantom runtime dependency — declared but never `import`ed/`require`d
@@ -1706,7 +1736,7 @@ impl ArchiveAnalyzer {
             anyhow::bail!("Analysis cancelled after archive extraction");
         }
 
-        if is_zip_container(file_type) {
+        if is_zip_container(file_type) && contains_java_members(temp_dir.path()) {
             self.analyze_jar_archive(temp_dir.path(), &mut report, start);
         } else {
             self.analyze_generic_archive(temp_dir.path(), &mut report, start);

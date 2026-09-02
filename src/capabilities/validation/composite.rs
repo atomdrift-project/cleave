@@ -29,8 +29,15 @@ fn directory_ref_includes_rule(ref_id: &str, rule_id: &str) -> bool {
     if ref_id.contains("::") {
         return false;
     }
+    // Directory references are conventionally written with a trailing slash
+    // (`objectives/exfiltration/messaging/webhook/`), while a rule id joins its
+    // directory to its name with `::`. Comparing the two without trimming that
+    // slash silently matched only rules in *sub*directories -- the one case the
+    // check least needed -- and never a rule in the directory named. That let
+    // self-suppressing traits through: the shape this function exists to catch.
+    let dir = ref_id.strip_suffix('/').unwrap_or(ref_id);
     rule_id
-        .strip_prefix(ref_id)
+        .strip_prefix(dir)
         .is_some_and(|rest| rest.starts_with("::") || rest.starts_with('/'))
 }
 

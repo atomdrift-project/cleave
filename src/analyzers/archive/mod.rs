@@ -2529,6 +2529,67 @@ composite_rules:
         );
     }
 
+    /// A zip with no bytecode must not be treated as a Java archive.
+    ///
+    /// `analyze_jar_archive` samples "non-class files" as if they were a JAR's
+    /// incidental resources. For a package with no bytecode that set is the
+    /// whole payload, and the sample used to truncate it in walkdir order --
+    /// so a members list longer than the cap silently lost whatever sorted
+    /// last. Here that is `zz-late/package.json`, the file a package verdict
+    /// leans on hardest.
+    #[test]
+    fn non_java_zip_keeps_late_sorting_manifest() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let zip_path = temp_dir.path().join("pkg.zip");
+
+        let file = File::create(&zip_path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let options = zip::write::FileOptions::<()>::default()
+            .compression_method(zip::CompressionMethod::Stored);
+
+        // Comfortably more members than the old cap, none of them Java.
+        for i in 0..150 {
+            zip.start_file(format!("aa-bulk/mod{i}.js"), options)
+                .unwrap();
+            zip.write_all(b"export const x = 1;\n").unwrap();
+        }
+        // Sorts after every bulk member under any ordering the walk produces.
+        zip.start_file("zz-late/package.json", options).unwrap();
+        zip.write_all(br#"{"name":"late","version":"1.0.0"}"#)
+            .unwrap();
+        zip.finish().unwrap();
+
+        let analyzer = ArchiveAnalyzer::new();
+        let report = analyzer.analyze(&zip_path).expect("analysis succeeds");
+
+        assert!(
+            report
+                .files
+                .iter()
+                .any(|f| f.path.ends_with("zz-late/package.json")),
+            "manifest was dropped from a {}-member non-Java zip; files: {}",
+            151,
+            report.files.len()
+        );
+    }
+
+    /// The routing predicate keys on bytecode, not on the archive extension.
+    #[test]
+    fn java_members_detected_by_content() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("index.js"), b"1").unwrap();
+        assert!(!contains_java_members(dir.path()));
+
+        std::fs::write(dir.path().join("Main.class"), b"\xca\xfe\xba\xbe").unwrap();
+        assert!(contains_java_members(dir.path()));
+
+        let manifest_dir = tempfile::tempdir().unwrap();
+        let meta = manifest_dir.path().join("META-INF");
+        std::fs::create_dir_all(&meta).unwrap();
+        std::fs::write(meta.join("MANIFEST.MF"), b"Manifest-Version: 1.0\n").unwrap();
+        assert!(contains_java_members(manifest_dir.path()));
+    }
+
     #[test]
     fn test_max_depth_exceeded() {
         let analyzer = ArchiveAnalyzer::new().with_depth(3);

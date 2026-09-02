@@ -834,6 +834,51 @@ fn nested_parallel_min_members() -> usize {
     })
 }
 
+/// Non-class members sampled from a Java archive, where the remainder are
+/// incidental resources. Raised from 100 once it was measured truncating real
+/// archives: a hundred is fewer entries than an ordinary JAR's resource tree,
+/// so the sample was cutting into content rather than trimming a long tail.
+const JAR_RESOURCE_SAMPLE: usize = 1_000;
+
+/// Rank a member by how much its absence would change a verdict, lowest first.
+/// Used to order members before a cap truncates them, so the files a verdict
+/// actually rests on survive a sample taken for size reasons.
+fn member_signal_rank(path: &std::path::Path) -> u8 {
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    // Package manifests: they carry install hooks, dependencies and entrypoint
+    // declarations, and every ecosystem keeps exactly one at a known name.
+    const MANIFESTS: [&str; 12] = [
+        "package.json",
+        "manifest.mf",
+        "androidmanifest.xml",
+        "setup.py",
+        "pyproject.toml",
+        "cargo.toml",
+        "composer.json",
+        "build.gradle",
+        "pom.xml",
+        "bower.json",
+        "gemspec",
+        "extension.vsixmanifest",
+    ];
+    if MANIFESTS.contains(&name.as_str()) {
+        return 0;
+    }
+    // Conventional entrypoints -- the file a manifest's `main` or install hook
+    // most often names, and so the usual home of an install-time payload.
+    if matches!(
+        name.as_str(),
+        "index.js" | "main.js" | "install.js" | "setup.js" | "preinstall.js" | "postinstall.js"
+    ) {
+        return 1;
+    }
+    2
+}
+
 /// Maximum members held in one window. Caps the per-window report transient
 /// (each window's `par_iter` collects this many full reports before folding)
 /// independent of member size; tunable via `CLEAVE_MEMBER_WINDOW_COUNT`.
@@ -3638,7 +3683,19 @@ impl ArchiveAnalyzer {
         );
 
         // Phase 3: Analyze non-class files (scripts, configs, etc.)
-        let non_class_files: Vec<_> = other_files
+        //
+        // The cap here samples a Java archive's incidental resources --
+        // images, properties, XML -- and only archives that actually carry
+        // bytecode now reach this function; `contains_java_members` sends the
+        // rest to the generic path. Before that split every zip-shaped format
+        // landed here, which made an npm package's *entire* payload
+        // "non-class files" and truncated it in walkdir order -- dropping
+        // whatever sorted late, manifests included.
+        //
+        // Ordering by signal before the cap is the second half: a sample taken
+        // for size should never be what decides a verdict, so the members a
+        // verdict rests on sort to the front and survive it.
+        let mut non_class_files: Vec<_> = other_files
             .into_iter()
             .filter(|e| !is_benign_java_path(e.path()))
             .filter(|e| {
@@ -3648,8 +3705,12 @@ impl ArchiveAnalyzer {
                     || path_str.ends_with("manifest.mf")
                     || path_str.ends_with(".xml")
             })
-            .take(100)
             .collect();
+        // Path breaks rank ties so the selection is reproducible; walkdir
+        // order is filesystem order, which is not.
+        non_class_files
+            .sort_by_cached_key(|e| (member_signal_rank(e.path()), e.path().to_path_buf()));
+        non_class_files.truncate(JAR_RESOURCE_SAMPLE);
 
         let member_count = non_class_files.len();
         let members_done = std::sync::atomic::AtomicUsize::new(0);

@@ -18,6 +18,25 @@ use std::cell::Cell;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 static TOPLEVEL_IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
+/// Top-level paths a directory scan has not yet admitted (`usize::MAX` when
+/// no ordered scan is running). Once fewer remain than there are pool
+/// threads the lanes are about to idle, and the bounded-owner rule that
+/// keeps sibling archives serial no longer buys anything: every in-flight
+/// analysis may fan out. Without this the scan's tail is one whale walking
+/// its members one by one on one thread while fifteen workers sleep —
+/// overdrive-db's two ELF libraries (24 s + 9 s of rizin) back to back were
+/// a 49 s critical path in a 51 s scan.
+static TOPLEVEL_PENDING: AtomicUsize = AtomicUsize::new(usize::MAX);
+
+pub(crate) fn set_toplevel_pending(n: usize) {
+    TOPLEVEL_PENDING.store(n, Ordering::Release);
+}
+
+/// The directory scan is draining: too few top-level paths remain to keep
+/// every pool thread busy at the top level.
+pub(crate) fn toplevel_draining() -> bool {
+    TOPLEVEL_PENDING.load(Ordering::Acquire) < rayon::current_num_threads()
+}
 static NEXT_TOPLEVEL_ID: AtomicU64 = AtomicU64::new(1);
 static INNER_PARALLEL_OWNERS: AtomicUsize = AtomicUsize::new(0);
 static NESTED_MEMBER_OWNERS: AtomicUsize = AtomicUsize::new(0);
@@ -161,7 +180,7 @@ pub(crate) fn inner_work_parallel() -> bool {
     if serial_traits_forced() {
         return false;
     }
-    if TOPLEVEL_IN_FLIGHT.load(Ordering::Acquire) <= 1 {
+    if TOPLEVEL_IN_FLIGHT.load(Ordering::Acquire) <= 1 || toplevel_draining() {
         return true;
     }
     if NESTED_MEMBER_PARALLELISM.with(Cell::get) {

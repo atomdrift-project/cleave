@@ -31,7 +31,7 @@ pub mod types;
 pub use condition::StringValidator;
 pub(crate) use condition::{
     CommentQuery, Condition, EncodedQuery, HexQuery, KvQuery, LiteralQuery, MetricsQuery,
-    PathQuery, RawQuery, SectionQuery, SymbolQuery, TextQuery, TreeSitterQuery,
+    PathInput, PathQuery, RawQuery, SectionQuery, SymbolQuery, TextQuery, TreeSitterQuery,
 };
 pub(crate) use context::{EvaluationContext, FindingScope};
 pub(crate) use section_map::SectionMap;

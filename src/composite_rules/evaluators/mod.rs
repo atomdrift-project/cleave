@@ -24,6 +24,7 @@ pub(crate) mod binary;
 pub(crate) mod kv;
 pub(crate) mod metrics;
 pub(crate) mod misc;
+pub(crate) use misc::{path_basename, path_dirname};
 pub(crate) mod symbol_string;
 pub(crate) mod yara;
 
@@ -931,6 +932,9 @@ pub(crate) mod raw_window_stats {
     pub(crate) static ATOM_MISMATCH: AtomicU64 = AtomicU64::new(0);
     pub(crate) static UNBOUNDED: AtomicU64 = AtomicU64::new(0);
     pub(crate) static STR_ENGINE: AtomicU64 = AtomicU64::new(0);
+    // decoded-layer pass of `eval_text`: swept vs. skipped by the atom gate
+    pub(crate) static DECODED_SWEPT: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static DECODED_SKIPPED: AtomicU64 = AtomicU64::new(0);
     // full-scan bytes attributed to the fallback reason recorded for the eval
     pub(crate) static NO_ATOMS_BYTES: AtomicU64 = AtomicU64::new(0);
     pub(crate) static UNBOUNDED_BYTES: AtomicU64 = AtomicU64::new(0);
@@ -968,6 +972,8 @@ pub(crate) mod raw_window_stats {
             atom_mismatch = ATOM_MISMATCH.load(Ordering::Relaxed),
             unbounded = UNBOUNDED.load(Ordering::Relaxed),
             str_engine = STR_ENGINE.load(Ordering::Relaxed),
+            decoded_swept = DECODED_SWEPT.load(Ordering::Relaxed),
+            decoded_skipped = DECODED_SKIPPED.load(Ordering::Relaxed),
             "eval_raw window coverage"
         );
     }

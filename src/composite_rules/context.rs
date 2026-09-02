@@ -192,6 +192,10 @@ pub(crate) struct EvaluationContext<'a> {
     /// windows bounded regexes around these; it must not memmem the haystack
     /// again. Missing key → full scan (no-literal / overflow / ungated).
     pub raw_atom_offsets: Option<&'a rustc_hash::FxHashMap<usize, Vec<u32>>>,
+    /// Indexed `type: text` traits (by index, with their `if:` pattern text)
+    /// whose atoms are absent from every decoded string layer of this member.
+    /// `eval_text` skips its decoded-layer pass for exactly that pattern.
+    pub decoded_skip: Option<&'a rustc_hash::FxHashMap<usize, &'a str>>,
     /// Validated UTF-8 view of `binary_data`, populated once per file for source-code
     /// file types. Lets AST/text evaluators skip the per-rule O(N) `from_utf8` check.
     pub cached_source_utf8: Option<&'a str>,
@@ -276,6 +280,7 @@ impl<'a> EvaluationContext<'a> {
             cached_evidence: None,
             current_trait_idx: None,
             raw_atom_offsets: None,
+            decoded_skip: None,
             cached_source_utf8,
             parent_is_exception: false,
         }
@@ -543,9 +548,20 @@ impl<'a> EvaluationContext<'a> {
             cached_evidence: None,
             current_trait_idx: None,
             raw_atom_offsets: None,
+            decoded_skip: None,
             cached_source_utf8: None,
             parent_is_exception: false,
         }
+    }
+
+    /// Attach the decoded-layer skip map (see `decoded_skip`).
+    #[must_use]
+    pub(crate) fn with_decoded_skip(
+        mut self,
+        skip: Option<&'a rustc_hash::FxHashMap<usize, &'a str>>,
+    ) -> Self {
+        self.decoded_skip = skip;
+        self
     }
 
     /// Attach gate-supplied atom offsets for windowed `eval_raw` on source.

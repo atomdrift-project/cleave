@@ -755,6 +755,11 @@ fn should_suppress_path_traversal_findings(
 pub(crate) struct ArchiveAnalyzer {
     max_depth: usize,
     current_depth: usize,
+    /// Rayon thread that began this (top-level) archive's analysis — its
+    /// lane. A member job running elsewhere was stolen; see
+    /// `analyze_extracted_member` for why only lane-executed members may
+    /// wait on a busy single-flight.
+    lane_thread: std::sync::atomic::AtomicUsize,
     /// Path prefix for nested archives (e.g., "inner.tar.gz" becomes "outer.zip!inner.tar.gz")
     archive_path_prefix: Option<String>,
     capability_mapper: Option<Arc<CapabilityMapper>>,
@@ -1069,6 +1074,7 @@ impl ArchiveAnalyzer {
         Self {
             max_depth: 3,
             current_depth: 0,
+            lane_thread: std::sync::atomic::AtomicUsize::new(usize::MAX),
             archive_path_prefix: None,
             capability_mapper: None,
             yara_engine: None,
@@ -1220,6 +1226,7 @@ impl ArchiveAnalyzer {
         Self {
             max_depth: self.max_depth,
             current_depth: self.current_depth,
+            lane_thread: std::sync::atomic::AtomicUsize::new(usize::MAX),
             archive_path_prefix: self.archive_path_prefix.clone(),
             capability_mapper: self.capability_mapper.clone(),
             yara_engine: self.yara_engine.clone(),
@@ -1398,6 +1405,12 @@ impl ArchiveAnalyzer {
         data: &[u8],
         archive_path: &Path,
     ) -> Result<AnalysisReport> {
+        if self.current_depth == 0 {
+            self.lane_thread.store(
+                rayon::current_thread_index().unwrap_or(usize::MAX),
+                std::sync::atomic::Ordering::Relaxed,
+            );
+        }
         let start = std::time::Instant::now();
 
         if self.current_depth >= self.max_depth {

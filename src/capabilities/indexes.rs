@@ -1449,6 +1449,11 @@ pub(crate) struct RawContentRegexIndex {
 pub(crate) struct RawGateHits {
     pub traits: FxHashSet<usize>,
     pub atom_offsets: FxHashMap<usize, Vec<u32>>,
+    /// Indexed traits whose atoms occur in the member's decoded string
+    /// layers (base64/xor/… values). `Some` once the decoded sweep ran, even
+    /// when nothing decoded; `eval_text` skips its decoded-layer pass for an
+    /// indexed trait absent from this set.
+    pub decoded_candidates: Option<FxHashSet<usize>>,
 }
 
 /// First-N atom starts per trait during a gate scan. Hitting the cap drops
@@ -2500,6 +2505,12 @@ impl RawContentRegexIndex {
             FxHashMap::default();
         let mut universal_substr: Vec<WordPattern> = Vec::new();
 
+        // Diagnostic: `CLEAVE_DUMP_TEXT_GATES=<file>` writes one line per
+        // `type: text` regex trait — whether the raw-content atom gate covers
+        // it (`gated`/`ungated`), its id, its `for:` set and the pattern.
+        let mut ungated_dump = std::env::var_os("CLEAVE_DUMP_TEXT_GATES")
+            .and_then(|p| std::fs::File::create(p).ok())
+            .map(std::io::BufWriter::new);
         for (trait_idx, trait_def) in traits.iter().enumerate() {
             if !platforms_intersect(&trait_def.platforms, platforms) {
                 continue;
@@ -2590,7 +2601,24 @@ impl RawContentRegexIndex {
                     // sharing a trait_idx give any-of semantics for free: a hit
                     // on any atom marks the trait a candidate. Non-UTF-8 or
                     // inextractable sets stay ungated (eval_raw scans directly).
-                    if let Some(atoms) = super::derivation_memo::mandatory_atom_set(regex_str) {
+                    let atoms = super::derivation_memo::mandatory_atom_set(regex_str);
+                    if let Some(dump) = ungated_dump.as_mut() {
+                        use std::io::Write as _;
+                        let kind = if atoms.is_some() { "gated" } else { "ungated" };
+                        let _ = writeln!(
+                            dump,
+                            "{kind}	{}	{}	{}",
+                            trait_def.id,
+                            trait_def
+                                .r#for
+                                .iter()
+                                .map(|f| format!("{f:?}"))
+                                .collect::<Vec<_>>()
+                                .join(","),
+                            regex_str.replace('\t', "\\t").replace('\n', "\\n")
+                        );
+                    }
+                    if let Some(atoms) = atoms {
                         for (literal, atom_ci) in &atoms {
                             let make = || WordPattern {
                                 word: literal.clone(),
@@ -3138,6 +3166,7 @@ impl RawContentRegexIndex {
             return RawGateHits {
                 traits,
                 atom_offsets: FxHashMap::default(),
+                decoded_candidates: None,
             };
         }
         let sets: Vec<&FileTypeRegexSet> = self
@@ -3159,6 +3188,7 @@ impl RawContentRegexIndex {
         RawGateHits {
             traits,
             atom_offsets: rec.finish(),
+            decoded_candidates: None,
         }
     }
 

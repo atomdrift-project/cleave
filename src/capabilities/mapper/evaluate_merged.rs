@@ -290,6 +290,7 @@ impl super::CapabilityMapper {
                 .filter(|s| !s.encoding_chain.is_empty())
                 .map(|s| s.value.as_str())
                 .collect();
+            let mut decoded_candidates = FxHashSet::default();
             if !decoded.is_empty() {
                 // Newline joins keep word-boundary checks from bridging two
                 // layers; an atom spanning the seam can only over-fire the
@@ -297,12 +298,18 @@ impl super::CapabilityMapper {
                 // verification here measured as a wall regression on
                 // decode-heavy members (browser-extension bundles).
                 let joined = decoded.join("\n");
-                hits.traits.extend(
-                    self.match_indexes()
-                        .raw_content_regex_index
-                        .find_candidates(joined.as_bytes(), &file_type),
-                );
+                decoded_candidates = self
+                    .match_indexes()
+                    .raw_content_regex_index
+                    .find_candidates(joined.as_bytes(), &file_type);
+                hits.traits.extend(decoded_candidates.iter().copied());
             }
+            // Kept for `eval_text`'s decoded-layer pass: an indexed trait
+            // whose atoms are absent from every decoded value cannot match
+            // there, so that per-string sweep is skipped for it. On a
+            // 10 MB minified bundle with thousands of decoded literals the
+            // sweep was a third of the member's trait time.
+            hits.decoded_candidates = Some(decoded_candidates);
         }
         let raw_regex_matches_ref = raw_regex_hits.as_ref().map(|h| &h.traits);
         let raw_atom_offsets_ref = raw_regex_hits.as_ref().map(|h| &h.atom_offsets);
@@ -372,6 +379,9 @@ impl super::CapabilityMapper {
         let cache = super::evaluate_traits::TraitEvalCache {
             raw_regex_matches: raw_regex_matches_ref,
             raw_atom_offsets: raw_atom_offsets_ref,
+            decoded_candidates: raw_regex_hits
+                .as_ref()
+                .and_then(|h| h.decoded_candidates.as_ref()),
             section_map: &section_map,
             string_matched_traits: &string_matched_traits,
             symbol_matched_traits: &symbol_matched_traits,

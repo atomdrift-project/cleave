@@ -110,6 +110,9 @@ struct FlightResult {
 struct FlightState {
     result: Mutex<FlightResult>,
     wake: Condvar,
+    /// Diagnostics for a wait that overruns: who owns this flight.
+    owner_thread: Option<usize>,
+    owner_label: Mutex<String>,
 }
 
 static IN_FLIGHT: OnceLock<Mutex<HashMap<FlightKey, Weak<FlightState>>>> = OnceLock::new();
@@ -171,6 +174,100 @@ impl ReportFlight {
         result.report.as_deref().cloned()
     }
 
+    /// [`Self::wait`] for a rayon worker: while the owner works, run this
+    /// worker's *own* pending jobs (its archive's other members) instead of
+    /// parking or re-analyzing.
+    ///
+    /// A worker that re-analyzes the bytes itself (the previous behaviour)
+    /// doubles the work — measured on an npm corpus where seven archives
+    /// carrying one identical 10 MB bundle all began in the same scheduling
+    /// wave and each paid the full ~33 CPU-seconds. Only the local deque is
+    /// drained (`rayon::yield_local`), never stolen work: a waiter that
+    /// steals a foreign job can nest into another wait, or hold a half of
+    /// the very join the owner is blocked in — both observed as multi-minute
+    /// stalls. Owners themselves never wait (see `owns_any_flight`), and a
+    /// waiter holds nothing another thread's join depends on, so the owner
+    /// always makes progress and the wait resolves.
+    ///
+    /// Returns `None` when `deadline` passes first: the caller then analyzes
+    /// on its own, so any wait cycle this design has not foreseen degrades
+    /// into duplicated work rather than a wedged scan.
+    pub(crate) fn wait_yielding(
+        &self,
+        deadline: std::time::Duration,
+    ) -> Option<Option<AnalysisReport>> {
+        if self.owner {
+            return Some(self.wait());
+        }
+        let started = std::time::Instant::now();
+        loop {
+            {
+                let result = self
+                    .state
+                    .result
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if result.done {
+                    return Some(result.report.as_deref().cloned());
+                }
+            }
+            if started.elapsed() > deadline {
+                tracing::warn!(
+                    waited_s = started.elapsed().as_secs(),
+                    sha256 = %self.key.sha256,
+                    owner_thread = ?self.state.owner_thread,
+                    owner = %self.owner_label(),
+                    "single-flight wait exceeded its deadline; analyzing independently"
+                );
+                return None;
+            }
+            if started.elapsed().as_secs() >= 30 && started.elapsed().as_millis() % 30_000 < 3 {
+                tracing::info!(
+                    waited_s = started.elapsed().as_secs(),
+                    sha256 = %self.key.sha256,
+                    owner_thread = ?self.state.owner_thread,
+                    owner = %self.owner_label(),
+                    "single-flight wait still pending"
+                );
+            }
+            match rayon::yield_local() {
+                Some(rayon::Yield::Executed) => {}
+                _ => {
+                    let result = self
+                        .state
+                        .result
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    if !result.done {
+                        let _ = self
+                            .state
+                            .wake
+                            .wait_timeout(result, std::time::Duration::from_millis(2))
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Name the analysis this flight stands for (the owner's member path),
+    /// for wait diagnostics.
+    pub(crate) fn set_label(&self, label: &str) {
+        if self.owner
+            && let Ok(mut l) = self.state.owner_label.lock()
+        {
+            *l = label.to_string();
+        }
+    }
+
+    fn owner_label(&self) -> String {
+        self.state
+            .owner_label
+            .lock()
+            .map(|l| l.clone())
+            .unwrap_or_default()
+    }
+
     /// Publish the completed report to waiters and release the flight. The
     /// report is copied once into an Arc; waiters then clone the cheap Arc
     /// payload into their path-restamped result.
@@ -191,6 +288,13 @@ impl ReportFlight {
         }
         remove_flight(&self.key, &self.state);
         self.completed = true;
+        release_owned(&self.key);
+    }
+}
+
+fn release_owned(key: &FlightKey) {
+    if key.kind == "member" {
+        OWNED_FLIGHTS.with(|c| c.set(c.get().saturating_sub(1)));
     }
 }
 
@@ -208,6 +312,7 @@ impl Drop for ReportFlight {
         self.state.wake.notify_all();
         drop(result);
         remove_flight(&self.key, &self.state);
+        release_owned(&self.key);
     }
 }
 
@@ -246,6 +351,24 @@ pub(crate) fn acquire_member_flight(
     acquire_flight("member", sha256, file_type, options)
 }
 
+thread_local! {
+    /// Flights this thread currently owns (nested: an archive member whose
+    /// analysis is in progress on this stack). See [`ReportFlight::owns_any`].
+    static OWNED_FLIGHTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Whether the calling thread is inside an analysis it owns a flight for.
+///
+/// Such a thread must never block on another flight: rayon lets an owner
+/// stuck in a `join` steal arbitrary pending jobs, including a duplicate
+/// of the very member it owns, and a wait there — or a longer cycle through
+/// two owners each stealing the other's duplicate — can never complete
+/// because completion needs the owner's stack to unwind. Threads that own
+/// nothing may wait: the owner they wait on never blocks, so it finishes.
+pub(crate) fn owns_any_flight() -> bool {
+    OWNED_FLIGHTS.with(|c| c.get() > 0)
+}
+
 fn acquire_flight(
     kind: &str,
     sha256: &str,
@@ -276,9 +399,17 @@ fn acquire_flight(
             report: None,
         }),
         wake: Condvar::new(),
+        owner_thread: rayon::current_thread_index(),
+        owner_label: Mutex::new(String::new()),
     });
     flights.insert(key.clone(), Arc::downgrade(&state));
     drop(flights);
+    // Only member flights count: every top-level path owns its report
+    // flight for the whole analysis, which would otherwise mark all of its
+    // member waits as "owning" and disable waiting entirely.
+    if key.kind == "member" {
+        OWNED_FLIGHTS.with(|c| c.set(c.get() + 1));
+    }
     ReportFlight {
         key,
         state,
@@ -646,6 +777,122 @@ fn unix_timestamp() -> i64 {
         .unwrap_or(0)
 }
 
+/// In-process memo in front of the SQLite caches.
+///
+/// Identical bytes recur constantly within one run — a corpus of npm packages
+/// carrying the same worm payload, a vsix shipping per-language copies of every
+/// DLL — and each copy re-ran the full analysis whenever the persistent cache
+/// was disabled (`CLEAVE_SKIP_CACHE=1`, every benchmark and the worker) or
+/// simply not yet written by a concurrent sibling on another thread. Measured
+/// on a 510-package npm corpus: seven byte-identical 10 MB `bun_environment.js`
+/// members cost ~33 CPU-seconds each, a quarter of the whole scan.
+///
+/// The memo mirrors the persistent cache exactly — same keys (sha256, typed
+/// options hash, traits revision), same serialized `FileAnalysis`/report
+/// values, same path guards applied by the callers — so a memo hit is
+/// indistinguishable from a warm-cache hit. It lives and dies with the process,
+/// so it never reuses a previous run's results. Byte-budgeted LRU
+/// (`CLEAVE_ANALYSIS_MEMO_MB`, default 256; `0` disables).
+mod memo {
+    use std::sync::{Arc, Mutex, OnceLock};
+
+    #[derive(Clone, Copy, PartialEq, Eq, Hash)]
+    pub(super) enum Kind {
+        Report,
+        FileAnalysis,
+    }
+
+    struct Memo {
+        entries: lru::LruCache<(Kind, String), Arc<[u8]>>,
+        bytes: usize,
+        budget: usize,
+        hits: u64,
+        misses: u64,
+    }
+
+    static MEMO: OnceLock<Option<Mutex<Memo>>> = OnceLock::new();
+
+    fn memo() -> Option<&'static Mutex<Memo>> {
+        MEMO.get_or_init(|| {
+            let mb = std::env::var("CLEAVE_ANALYSIS_MEMO_MB")
+                .ok()
+                .and_then(|v| v.parse::<usize>().ok())
+                .unwrap_or(256);
+            (mb > 0).then(|| {
+                Mutex::new(Memo {
+                    entries: lru::LruCache::unbounded(),
+                    bytes: 0,
+                    budget: mb * 1024 * 1024,
+                    hits: 0,
+                    misses: 0,
+                })
+            })
+        })
+        .as_ref()
+    }
+
+    pub(super) fn get(kind: Kind, key: &str) -> Option<Arc<[u8]>> {
+        let m = memo()?;
+        let mut m = m.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let hit = m.entries.get(&(kind, key.to_string())).cloned();
+        if hit.is_some() {
+            m.hits += 1;
+        } else {
+            m.misses += 1;
+        }
+        hit
+    }
+
+    pub(super) fn put(kind: Kind, key: String, value: Vec<u8>) {
+        let Some(m) = memo() else { return };
+        let len = value.len();
+        let mut m = m.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if len > m.budget / 4 {
+            return;
+        }
+        if let Some(old) = m.entries.push((kind, key), Arc::from(value)) {
+            m.bytes = m.bytes.saturating_sub(old.1.len());
+        }
+        m.bytes += len;
+        while m.bytes > m.budget {
+            let Some((_, evicted)) = m.entries.pop_lru() else {
+                break;
+            };
+            m.bytes = m.bytes.saturating_sub(evicted.len());
+        }
+    }
+
+    /// `(entries, bytes, hits, misses)` for end-of-scan logging.
+    pub(crate) fn stats() -> (usize, usize, u64, u64) {
+        memo().map_or((0, 0, 0, 0), |m| {
+            let m = m.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            (m.entries.len(), m.bytes, m.hits, m.misses)
+        })
+    }
+}
+
+/// Log the in-process analysis memo's occupancy and hit rate at `info`.
+pub(crate) fn log_analysis_memo_stats() {
+    let (entries, bytes, hits, misses) = memo::stats();
+    if hits + misses == 0 {
+        return;
+    }
+    tracing::info!(
+        entries,
+        mb = bytes / (1024 * 1024),
+        hits,
+        misses,
+        "analysis memo stats"
+    );
+}
+
+fn memo_key(sha256: &str, opts_hash: &str) -> String {
+    format!(
+        "{sha256}:{opts_hash}:{}",
+        traits_revision_key().unwrap_or_default()
+    )
+}
+
 /// Look up a cached toplevel analysis report for the given file hash and options.
 ///
 /// Returns `Some(report)` on cache hit, `None` on miss or if caching is unavailable.
@@ -655,8 +902,21 @@ pub(crate) fn report_cache_lookup(
     options: &AnalysisOptions,
 ) -> Option<AnalysisReport> {
     let opts_hash = typed_options_hash(options, file_type);
+    let key = memo_key(sha256, &opts_hash);
+    if let Some(bytes) = memo::get(memo::Kind::Report, &key)
+        && let Ok(report) = serde_json::from_slice::<AnalysisReport>(&bytes)
+    {
+        return Some(report);
+    }
     let traits_ts = traits_revision_key()?;
-    with_conn(|conn| report_cache_lookup_conn(conn, sha256, &opts_hash, traits_ts)).flatten()
+    let hit =
+        with_conn(|conn| report_cache_lookup_conn(conn, sha256, &opts_hash, traits_ts)).flatten();
+    if let Some(report) = &hit
+        && let Ok(bytes) = serde_json::to_vec(report)
+    {
+        memo::put(memo::Kind::Report, key, bytes);
+    }
+    hit
 }
 
 /// Count entries currently in the toplevel report cache. Returns `None` if unavailable.
@@ -680,6 +940,9 @@ pub(crate) fn report_cache_store(
     report: &AnalysisReport,
 ) {
     let opts_hash = typed_options_hash(options, file_type);
+    if let Ok(bytes) = serde_json::to_vec(report) {
+        memo::put(memo::Kind::Report, memo_key(sha256, &opts_hash), bytes);
+    }
     let Some(traits_ts) = traits_revision_key() else {
         return;
     };
@@ -702,8 +965,22 @@ pub(crate) fn file_analysis_cache_lookup(
     options: &AnalysisOptions,
 ) -> Option<FileAnalysis> {
     let opts_hash = typed_options_hash(options, file_type);
+    let key = memo_key(sha256, &opts_hash);
+    if let Some(bytes) = memo::get(memo::Kind::FileAnalysis, &key)
+        && let Ok(fa) = serde_json::from_slice::<FileAnalysis>(&bytes)
+    {
+        return Some(fa);
+    }
     let traits_ts = traits_revision_key()?;
-    with_conn(|conn| file_analysis_cache_lookup_conn(conn, sha256, &opts_hash, traits_ts)).flatten()
+    let hit =
+        with_conn(|conn| file_analysis_cache_lookup_conn(conn, sha256, &opts_hash, traits_ts))
+            .flatten();
+    if let Some(fa) = &hit
+        && let Ok(bytes) = serde_json::to_vec(fa)
+    {
+        memo::put(memo::Kind::FileAnalysis, key, bytes);
+    }
+    hit
 }
 
 /// Store a `FileAnalysis` in the file analysis cache.
@@ -716,6 +993,13 @@ pub(crate) fn file_analysis_cache_store(
     fa: &FileAnalysis,
 ) {
     let opts_hash = typed_options_hash(options, file_type);
+    if let Ok(bytes) = serde_json::to_vec(fa) {
+        memo::put(
+            memo::Kind::FileAnalysis,
+            memo_key(sha256, &opts_hash),
+            bytes,
+        );
+    }
     let Some(traits_ts) = traits_revision_key() else {
         return;
     };

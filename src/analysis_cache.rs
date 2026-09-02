@@ -843,6 +843,11 @@ mod memo {
         hit
     }
 
+    // The whole body is one read-modify-evict sequence against the memo: the
+    // budget check, the insert and the LRU drain have to see the same state,
+    // so the guard is held to the end by design. Clippy's suggestion here is
+    // to drop it inside the eviction loop, which would not compile.
+    #[allow(clippy::significant_drop_tightening)]
     pub(super) fn put(kind: Kind, key: String, value: Vec<u8>) {
         let Some(m) = memo() else { return };
         let len = value.len();

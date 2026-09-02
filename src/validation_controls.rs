@@ -809,6 +809,15 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         fix: "Replace counted runs (`X{4000,}`) with a loop plus length_min (`X+` + `length_min: 4000`); split wide `X{0,N}` gaps into atomic traits joined by a near_lines:/near_bytes: composite.",
     },
     ValidatorSpec {
+        id: "regex-explosion",
+        category: ValidatorCategory::Policy,
+        display_id: "re-explode",
+        description: "Regex's lazy DFA explodes on its own alphabet (overlapping counted repetitions); it falls back to the PikeVM on real files.",
+        fix: r"Exclude the start byte from the counted class or anchor the run to the last delimiter before the literal (`[\/][^
+]{1,120}` -> `[\/][^
+\/]{0,120}`), keeping a `^` case as its own branch.",
+    },
+    ValidatorSpec {
         id: "ast-query-compile",
         category: ValidatorCategory::Quality,
         display_id: "ast-compile",

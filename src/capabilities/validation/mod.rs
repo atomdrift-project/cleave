@@ -36,6 +36,7 @@ mod duplicates;
 mod helpers;
 mod patterns;
 mod precision;
+mod regex_cost;
 mod taxonomy;
 
 // Shared types used across validation modules
@@ -130,6 +131,7 @@ pub(crate) use patterns::{
     find_raw_should_use_text, find_short_pattern_warnings, find_slow_regex_patterns,
     find_string_literal_should_use_text, find_uncompilable_ast_queries,
 };
+pub(crate) use regex_cost::find_pathological_regex_patterns;
 
 // Taxonomy validation
 pub(crate) use directory_whitelist::validate_directory_structure;

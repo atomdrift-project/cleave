@@ -277,7 +277,7 @@ pub struct Finding {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub evidence: Vec<Evidence>,
     /// Emission spans (`[offset, len]`, offset-sorted, offset-deduped, capped
-    /// at [`MAX_EV_LOCS`]) precomputed from `evidence` — set when a folded
+    /// at `MAX_EV_LOCS`) precomputed from `evidence` — set when a folded
     /// archive member's evidence strings are released early (compact member
     /// retention). `None` means "compute from `evidence` at convert time",
     /// the historical path; roots and grafted findings stay on it. Never

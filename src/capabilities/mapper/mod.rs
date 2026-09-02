@@ -149,6 +149,7 @@ pub struct CapabilityMapper {
     /// keeps the evaluation path on a report that carries any of these, and
     /// only serves it back under that same path.
     pub(super) path_dependent_ids: Arc<OnceLock<rustc_hash::FxHashSet<String>>>,
+    pub(super) path_inputs: Arc<OnceLock<Vec<crate::composite_rules::PathInput>>>,
     /// Like `trait_ref_index`, but restricted to rules that can evaluate at
     /// container (archive) scope — `for:` containing `all` or any
     /// archive-family type. Container-scope evaluation is the only rule pass
@@ -634,10 +635,21 @@ impl CapabilityMapper {
     /// See the `container_ref_index` field doc.
     /// See the `path_dependent_ids` field.
     pub(crate) fn path_dependent_ids(&self) -> &rustc_hash::FxHashSet<String> {
-        self.path_dependent_ids.get_or_init(|| {
-            fn conds_depend_on_path<'a>(conds: impl Iterator<Item = &'a Condition>) -> bool {
+        self.path_dependent_ids
+            .get_or_init(|| self.path_ids_closed_over_refs(Condition::depends_on_path))
+    }
+
+    fn path_ids_closed_over_refs(
+        &self,
+        pred: fn(&Condition) -> bool,
+    ) -> rustc_hash::FxHashSet<String> {
+        {
+            fn conds_depend_on_path<'a>(
+                pred: fn(&Condition) -> bool,
+                conds: impl Iterator<Item = &'a Condition>,
+            ) -> bool {
                 let mut conds = conds;
-                conds.any(Condition::depends_on_path)
+                conds.any(pred)
             }
             fn downgrade_conds(
                 d: &crate::composite_rules::DowngradeConditions,
@@ -650,17 +662,18 @@ impl CapabilityMapper {
             }
             let mut index = PathRefIndex::default();
             for t in &self.trait_definitions {
-                let direct = t.r#if.depends_on_path()
-                    || conds_depend_on_path(t.unless.iter().flatten())
+                let direct = pred(&t.r#if)
+                    || conds_depend_on_path(pred, t.unless.iter().flatten())
                     || t.downgrade
                         .as_ref()
-                        .is_some_and(|d| conds_depend_on_path(downgrade_conds(d)));
+                        .is_some_and(|d| conds_depend_on_path(pred, downgrade_conds(d)));
                 if direct {
                     index.insert(t.id.as_str());
                 }
             }
             for r in &self.composite_rules {
-                if conds_depend_on_path(r.all.iter().flatten().chain(r.any.iter().flatten())) {
+                if conds_depend_on_path(pred, r.all.iter().flatten().chain(r.any.iter().flatten()))
+                {
                     index.insert(r.id.as_str());
                 }
             }
@@ -703,7 +716,7 @@ impl CapabilityMapper {
                 }
             }
             index.ids
-        })
+        }
     }
 
     /// Whether any finding on `report` comes from a path-dependent rule.
@@ -713,6 +726,58 @@ impl CapabilityMapper {
     ) -> bool {
         let ids = self.path_dependent_ids();
         !ids.is_empty() && report.findings.iter().any(|f| ids.contains(f.id.as_str()))
+    }
+
+    /// Every direct path input of the rule set (top-level `if:`/`unless:`/
+    /// `downgrade:` conditions and composite `all:`/`any:` lists — the same
+    /// scope `path_dependent_ids` considers).
+    fn path_inputs(&self) -> &[crate::composite_rules::PathInput] {
+        self.path_inputs.get_or_init(|| {
+            let mut out = Vec::new();
+            for t in &self.trait_definitions {
+                t.r#if.collect_path_inputs(&mut out);
+                for c in t.unless.iter().flatten() {
+                    c.collect_path_inputs(&mut out);
+                }
+                if let Some(d) = &t.downgrade {
+                    for c in d
+                        .any
+                        .iter()
+                        .flatten()
+                        .chain(d.all.iter().flatten())
+                        .chain(d.none.iter().flatten())
+                    {
+                        c.collect_path_inputs(&mut out);
+                    }
+                }
+            }
+            for r in &self.composite_rules {
+                for c in r.all.iter().flatten().chain(r.any.iter().flatten()) {
+                    c.collect_path_inputs(&mut out);
+                }
+            }
+            out
+        })
+    }
+
+    /// Whether an analysis evaluated under path `a` is valid under path `b`:
+    /// every direct path input of every rule reads the same value under
+    /// both, so identical bytes yield identical findings. Lets byte-identical
+    /// archive members share one analysis across archives whose only path
+    /// difference is an unpacking prefix the rules never look at.
+    pub(crate) fn paths_equivalent(&self, a: &str, b: &str) -> bool {
+        a == b || self.path_inputs().iter().all(|i| i.same_under(a, b))
+    }
+
+    /// Diagnostics: the first path inputs that read differently under `a`
+    /// and `b` (empty when the paths are equivalent).
+    pub(crate) fn paths_inequivalent_inputs(&self, a: &str, b: &str) -> Vec<String> {
+        self.path_inputs()
+            .iter()
+            .filter(|i| !i.same_under(a, b))
+            .take(5)
+            .map(|i| format!("{i:?}"))
+            .collect()
     }
 
     pub(crate) fn container_ref_index(&self) -> &TraitRefIndex {

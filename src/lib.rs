@@ -1319,6 +1319,7 @@ pub fn persist_regex_warm_memo() {
 pub fn log_scan_stats() {
     crate::mem_profile::report_scan_stats();
     crate::composite_rules::evaluators::log_regex_cache_stats();
+    crate::analysis_cache::log_analysis_memo_stats();
     crate::composite_rules::evaluators::raw_window_stats::log();
     crate::capabilities::log_raw_gate_stats();
     let top = std::env::var("CLEAVE_TRAIT_TIMING_TOP")
@@ -2410,7 +2411,19 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             break Some(flight);
         }
         if let Some(mut report) = flight.wait() {
-            report.target.path = path.display().to_string();
+            // A report with path-derived findings or decoded children is
+            // bound to the path it was evaluated under (same guard as the
+            // archive-member flight); fall through to a fresh analysis.
+            let path_string = path.display().to_string();
+            let owner_path = report.target.path.clone();
+            if !shared_resources::adopt_report_under(&mut report, &owner_path, &path_string) {
+                tracing::debug!(
+                    sha256 = %sha256_hex,
+                    "Analysis single-flight hit is path-bound; analyzing independently"
+                );
+                break None;
+            }
+            report.target.path = path_string;
             report.analysis_timestamp = Some(chrono::Utc::now());
             restamp_path_derived_values(&mut report, path);
             tracing::debug!(sha256 = %sha256_hex, "Analysis single-flight hit");
@@ -3259,11 +3272,11 @@ where
     // Default is unlimited rayon (B1f's default 2-slot large-file
     // semaphore was 640 s vs B1b 539 s). Opt in with CLEAVE_FILE_CONCURRENCY.
     let Some(slots) = file_concurrency_override() else {
-        paths.into_par_iter().for_each(|p| f(&p));
+        for_each_ordered(&paths, &f);
         return;
     };
     if slots == 0 || paths.len() <= 1 {
-        paths.into_par_iter().for_each(|p| f(&p));
+        for_each_ordered(&paths, &f);
         return;
     }
 
@@ -3286,6 +3299,46 @@ where
         let rest = if larges.is_empty() { smalls } else { larges };
         rest.into_par_iter().for_each(|p| f(&p));
     }
+}
+
+/// Run `f` over `paths` on the rayon pool, admitting them strictly in
+/// order: one worker per pool thread pulls the next index from a shared
+/// counter.
+///
+/// `paths.into_par_iter().for_each` looks like the same thing but is not:
+/// rayon splits the vector in halves as work is stolen, so the sixteen
+/// jobs that start first are indices 0, 256, 128, 384, … and index 2 — the
+/// third-largest archive after `sort_largest_first` — waits behind a
+/// sequential run of its first-half chunk. Measured on a 510-archive npm
+/// corpus: an 11 MB installer that costs 40 CPU-seconds began at t=42 s of
+/// a 55 s scan and was the last file to finish. Nested member parallelism
+/// is unaffected: it is stolen by whichever pull-loop thread is idle
+/// exactly as before.
+fn for_each_ordered<T, F>(items: &[T], f: &F)
+where
+    T: Sync,
+    F: Fn(&T) + Sync,
+{
+    use rayon::prelude::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    if items.len() <= 1 {
+        for item in items {
+            f(item);
+        }
+        return;
+    }
+    let next = AtomicUsize::new(0);
+    let lanes = rayon::current_num_threads().max(1).min(items.len());
+    crate::rayon_nest::set_toplevel_pending(items.len());
+    (0..lanes).into_par_iter().for_each(|_| {
+        loop {
+            let i = next.fetch_add(1, Ordering::Relaxed);
+            let Some(item) = items.get(i) else { break };
+            crate::rayon_nest::set_toplevel_pending(items.len().saturating_sub(i + 1));
+            f(item);
+        }
+    });
+    crate::rayon_nest::set_toplevel_pending(usize::MAX);
 }
 
 fn for_each_std_limited<T, F>(items: &[T], slots: usize, f: &F)
@@ -3371,7 +3424,11 @@ fn analyze_one_path<F>(
 
     // Bound concurrent memory: a burst of large archives serialises instead of
     // co-residing and OOM-killing the host. Held until this file is done.
-    let _mem_permit = mem_gate.acquire(std::fs::metadata(file_path).map(|m| m.len()).unwrap_or(0));
+    let file_len = std::fs::metadata(file_path).map(|m| m.len()).unwrap_or(0);
+    let gate_wait = std::time::Instant::now();
+    let _mem_permit = mem_gate.acquire(file_len);
+    let gate_wait_ms = gate_wait.elapsed().as_millis() as u64;
+    let started = std::time::Instant::now();
 
     // Catch panics from any analyzer so one malformed file doesn't poison the
     // rayon thread pool and kill the entire scan.
@@ -3446,6 +3503,19 @@ fn analyze_one_path<F>(
         });
         composite_rules::evaluators::clear_thread_local_caches();
     }));
+    // One line per top-level path: where a directory scan's wall clock went
+    // (`RUST_LOG=cleave=info`). `gate_wait_ms` is time spent queued on the
+    // memory gate before analysis began.
+    static SCAN_EPOCH: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    let epoch = *SCAN_EPOCH.get_or_init(|| started);
+    tracing::info!(
+        path = %file_path.display(),
+        size = file_len,
+        gate_wait_ms,
+        start_ms = started.duration_since(epoch).as_millis() as u64,
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "path analyzed"
+    );
     if panic_result.is_err() {
         tracing::error!(path = %file_path.display(), "panic during file analysis (caught)");
         errors.fetch_add(1, Ordering::Relaxed);
@@ -3592,6 +3662,7 @@ where
 
     crate::mem_profile::report_scan_stats();
     crate::composite_rules::evaluators::log_regex_cache_stats();
+    crate::analysis_cache::log_analysis_memo_stats();
 
     let total = walked.load(Ordering::Relaxed);
     let final_analyzed = analyzed.load(Ordering::Relaxed);
@@ -3688,6 +3759,7 @@ where
     });
     crate::mem_profile::report_scan_stats();
     crate::composite_rules::evaluators::log_regex_cache_stats();
+    crate::analysis_cache::log_analysis_memo_stats();
 
     let final_analyzed = analyzed.load(Ordering::Relaxed);
     let final_skipped = skipped.load(Ordering::Relaxed);

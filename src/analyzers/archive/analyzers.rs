@@ -93,6 +93,12 @@ fn read_member_tolerant<R: Read>(
     }
 }
 
+// Member analyses currently on this thread's stack (see
+// `ArchiveAnalyzer::member_may_wait`).
+thread_local! {
+    static MEMBER_ANALYSIS_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Filter-map `items` in parallel for the top archive, sequentially for nested
 /// archives.
 ///
@@ -163,11 +169,26 @@ fn par_filter_fold_members<T, U, F>(
     const MEMBER_RED_ZONE: usize = 64 * 1024 * 1024;
     const MEMBER_GROWN_STACK: usize = 128 * 1024 * 1024;
     let f = |item: &T| stacker::maybe_grow(MEMBER_RED_ZONE, MEMBER_GROWN_STACK, || f(item));
+    let mut items = items;
     if !parallel {
-        for u in items.iter().filter_map(f) {
-            fold(u);
+        // Serial walk, re-checked per member: the scan may enter its drain
+        // phase (see `rayon_nest::toplevel_draining`) while a whale is
+        // still walking, at which point the remaining members fan out
+        // instead of finishing one by one on an otherwise idle pool.
+        let mut upgraded = false;
+        for (i, item) in items.iter().enumerate() {
+            if i > 0 && items.len() - i > 1 && crate::rayon_nest::inner_work_parallel() {
+                items = &items[i..];
+                upgraded = true;
+                break;
+            }
+            if let Some(u) = f(item) {
+                fold(u);
+            }
         }
-        return;
+        if !upgraded {
+            return;
+        }
     }
     // Ordered streaming fold: results are folded in ITEM order (identical to
     // the old collect-then-fold — member record order, rollup tie-breaks and
@@ -768,13 +789,32 @@ struct MemberCounts {
 /// those members ≈ 31 MB); the byte budget only doubles so worker fleets with
 /// dozens of concurrent archive scans don't gain 8x transients.
 fn member_window_bytes() -> usize {
-    const DEFAULT_MB: usize = 64;
-    std::env::var("CLEAVE_MEMBER_WINDOW_MB")
-        .ok()
-        .and_then(|s| s.parse::<usize>().ok())
-        .filter(|mb| *mb > 0)
-        .unwrap_or(DEFAULT_MB)
-        .saturating_mul(1024 * 1024)
+    static BYTES: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *BYTES.get_or_init(|| {
+        if let Some(mb) = std::env::var("CLEAVE_MEMBER_WINDOW_MB")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .filter(|mb| *mb > 0)
+        {
+            return mb.saturating_mul(1024 * 1024);
+        }
+        // Scale with the host: the window is the decompressed member bytes
+        // co-resident during one parallel batch, and a fixed 64 MB serialises
+        // an archive's whales. A 95 MB ELF fills a window alone and the
+        // 10 MB bundle beside it waits for the next one — measured as the
+        // 52 s critical path of a 55 s corpus scan on a 31 GB host, where
+        // both could have run side by side. 1/64 of RAM, clamped to the old
+        // floor and a 512 MB ceiling, keeps small hosts exactly where they
+        // were.
+        const FLOOR_MB: usize = 64;
+        const CEIL_MB: usize = 512;
+        let from_ram = crate::memory_tracker::total_memory()
+            .map(|total| (total / 64) as usize / (1024 * 1024))
+            .unwrap_or(FLOOR_MB);
+        from_ram
+            .clamp(FLOOR_MB, CEIL_MB)
+            .saturating_mul(1024 * 1024)
+    })
 }
 
 /// Minimum batch size at which a *nested* archive's members fan out across the
@@ -1275,6 +1315,23 @@ impl ArchiveAnalyzer {
         member_count >= nested_parallel_min_members()
     }
 
+    /// Whether a member whose single-flight is busy may wait for the owner.
+    ///
+    /// Only when this thread holds nothing another thread's rayon join is
+    /// waiting for: the member must be a top-level one executed directly by
+    /// the archive's own lane thread, with no member analysis already on
+    /// this thread's stack. A job that was stolen — a member, or a trait
+    /// chunk that led here through a nested payload — sits on top of some
+    /// owner's join; parking there while that owner waits for it is the
+    /// wait cycle a process dump showed as a multi-minute stall (owners
+    /// asleep in `wait_until_cold`, their halves under a waiting frame).
+    fn member_may_wait(&self) -> bool {
+        self.current_depth == 0
+            && MEMBER_ANALYSIS_DEPTH.with(std::cell::Cell::get) == 0
+            && rayon::current_thread_index()
+                .is_some_and(|t| t == self.lane_thread.load(std::sync::atomic::Ordering::Relaxed))
+    }
+
     fn analyze_extracted_member(
         &self,
         file_path: &Path,
@@ -1355,22 +1412,20 @@ impl ArchiveAnalyzer {
         }
 
         let flight = crate::analysis_cache::acquire_member_flight(sha256, file_type_key, options);
+        flight.set_label(relative_path);
         if !flight.is_owner() {
-            if let Some(mut report) = flight.wait() {
-                report.target.path = relative_path.to_string();
-                crate::restamp_path_derived_values(&mut report, Path::new(relative_path));
-                tracing::debug!(sha256, relative_path, "Archive member single-flight hit");
-                return Ok(Some(report));
-            }
-            if rayon::current_thread_index().is_some() {
-                // Waiting for another member analyzed by this same pool can
-                // starve the owner's nested trait work. Analyze independently
-                // instead; sequential old->new archive diffs normally hit the
-                // SHA cache before reaching this fallback.
+            let on_pool = rayon::current_thread_index().is_some();
+            if on_pool && (crate::analysis_cache::owns_any_flight() || !self.member_may_wait()) {
+                // This thread is inside an analysis it owns (a nested
+                // archive, or a job stolen while its own `join` waited).
+                // Blocking here can deadlock — the flight it waits on may
+                // need this very stack to unwind — so it analyzes
+                // independently, as every pool waiter did before
+                // `wait_yielding` existed.
                 tracing::debug!(
                     sha256,
                     relative_path,
-                    "Archive member flight busy on Rayon worker; analyzing independently"
+                    "Archive member flight busy while owning another; analyzing independently"
                 );
                 return self.analyze_extracted_member_uncached(
                     file_path,
@@ -1379,6 +1434,84 @@ impl ArchiveAnalyzer {
                     file_type,
                     sha256,
                 );
+            }
+            // On a pool worker, wait by running this lane's own pending jobs
+            // rather than parking (or, as before, re-analyzing the same
+            // bytes) — see `ReportFlight::wait_yielding`. Waiters are capped
+            // at half the pool so the owner's nested parallelism always has
+            // free workers; past the cap a duplicate is analyzed on its own.
+            static WAITERS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            let waited = if on_pool {
+                // Half the pool, and never the last two workers: an owner's
+                // spawned nested job needs a free worker to run on.
+                let threads = rayon::current_num_threads();
+                let cap = (threads / 2).min(threads.saturating_sub(2));
+                if WAITERS.fetch_add(1, std::sync::atomic::Ordering::AcqRel) >= cap {
+                    WAITERS.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+                    tracing::debug!(
+                        sha256,
+                        relative_path,
+                        "Archive member flight busy; waiter cap reached, analyzing independently"
+                    );
+                    return self.analyze_extracted_member_uncached(
+                        file_path,
+                        relative_path,
+                        data,
+                        file_type,
+                        sha256,
+                    );
+                }
+                let w = flight.wait_yielding(std::time::Duration::from_secs(180));
+                WAITERS.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+                match w {
+                    Some(w) => w,
+                    None => {
+                        return self.analyze_extracted_member_uncached(
+                            file_path,
+                            relative_path,
+                            data,
+                            file_type,
+                            sha256,
+                        );
+                    }
+                }
+            } else {
+                flight.wait()
+            };
+            if let Some(mut report) = waited {
+                // Same guard as the persistent caches above: a report
+                // carrying path-derived findings (or decoded children whose
+                // paths hang off the member path) is only valid under the
+                // path it was evaluated for. Sharing it across paths let
+                // `testing/harness` basename findings from one archive
+                // surface on another's container record.
+                let owner_path = report.target.path.clone();
+                let path_bound = !crate::shared_resources::adopt_report_under(
+                    &mut report,
+                    &owner_path,
+                    relative_path,
+                );
+                if path_bound {
+                    tracing::debug!(
+                        sha256,
+                        relative_path,
+                        owner_path = %owner_path,
+                        children = report.files.len() + report.archive_contents.len(),
+                        differing = ?crate::shared_resources::paths_inequivalent_inputs(&owner_path, relative_path),
+                        "Archive member single-flight hit is path-bound; analyzing independently"
+                    );
+                    return self.analyze_extracted_member_uncached(
+                        file_path,
+                        relative_path,
+                        data,
+                        file_type,
+                        sha256,
+                    );
+                }
+                report.target.path = relative_path.to_string();
+                crate::restamp_path_derived_values(&mut report, Path::new(relative_path));
+                tracing::debug!(sha256, relative_path, "Archive member single-flight hit");
+                return Ok(Some(report));
             }
             // The owner failed before publishing a report. Retry once through
             // the normal path so a waiter is not turned into a false success.
@@ -1451,6 +1584,16 @@ impl ArchiveAnalyzer {
         if self.is_cancelled() {
             anyhow::bail!("Analysis cancelled");
         }
+        // Depth of member analyses on this thread's stack (see
+        // `member_may_wait`). Restored on every exit path.
+        struct DepthGuard;
+        impl Drop for DepthGuard {
+            fn drop(&mut self) {
+                MEMBER_ANALYSIS_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+            }
+        }
+        MEMBER_ANALYSIS_DEPTH.with(|d| d.set(d.get() + 1));
+        let _depth_guard = DepthGuard;
 
         // Breadcrumb so a wedge dump can name which member this pool thread is
         // analyzing. This is the universal per-member chokepoint (every archive

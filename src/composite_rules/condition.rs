@@ -2565,6 +2565,26 @@ impl Condition {
         }
     }
 
+    /// The direct path inputs of this condition, for
+    /// `CapabilityMapper::paths_equivalent`: a `type: path` query, or the
+    /// `file.*` value keys a `kv` condition reads.
+    pub(crate) fn collect_path_inputs(&self, out: &mut Vec<PathInput>) {
+        match self {
+            Self::Path(q) => out.push(PathInput::Query(q.clone())),
+            Self::Kv(q) => {
+                for p in [Some(q.path.as_str()), q.eq.as_deref(), q.ne.as_deref()]
+                    .into_iter()
+                    .flatten()
+                {
+                    if p.starts_with("file.") {
+                        out.push(PathInput::FileValue(p.to_string()));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
     pub(crate) fn collect_trait_refs(&self, out: &mut std::collections::BTreeSet<String>) {
         if let Self::Trait { id } = self {
             out.insert(id.trim_end_matches('/').to_string());
@@ -2770,6 +2790,84 @@ pub(crate) struct PathQuery {
     pub is_check: Option<StringValidator>,
     pub basename: bool,
     pub dirname: bool,
+}
+
+/// One direct path input of a rule (see `Condition::collect_path_inputs`).
+#[derive(Debug, Clone)]
+pub(crate) enum PathInput {
+    Query(PathQuery),
+    FileValue(String),
+}
+
+impl PathInput {
+    /// Whether this input reads the same value under `a` and `b`. Conservative:
+    /// an input that cannot be settled cheaply reports `false`.
+    pub(crate) fn same_under(&self, a: &str, b: &str) -> bool {
+        use crate::composite_rules::evaluators::{path_basename, path_dirname};
+        match self {
+            Self::FileValue(key) => match key.as_str() {
+                // Derived from the basename alone (`restamp_path_derived_values`
+                // rewrites them); equal basenames make them equal.
+                "file.basename" | "file.stem" | "file.extension" => {
+                    path_basename(a) == path_basename(b)
+                }
+                // Derived from the bytes, not the path: identical content
+                // reads the same value anywhere.
+                "file.size" | "file.size_bytes" | "file.entropy" => true,
+                _ => a == b,
+            },
+            Self::Query(q) => {
+                let scope = |p: &str| -> String {
+                    if q.basename {
+                        path_basename(p).to_string()
+                    } else if q.dirname {
+                        path_dirname(p).to_string()
+                    } else {
+                        p.to_string()
+                    }
+                };
+                let (ta, tb) = (scope(a), scope(b));
+                if ta == tb {
+                    return true;
+                }
+                // A validator inspects the matched text; only equal targets
+                // are known to agree.
+                if q.is_check.is_some() {
+                    return false;
+                }
+                // Mirror `eval_path` exactly.
+                let matched = |target: &str| -> bool {
+                    let cmp_target = if q.case_insensitive {
+                        target.to_lowercase()
+                    } else {
+                        target.to_string()
+                    };
+                    if let Some(e) = &q.exact {
+                        let e = if q.case_insensitive {
+                            e.to_lowercase()
+                        } else {
+                            e.clone()
+                        };
+                        cmp_target == e
+                    } else if let Some(sub) = &q.substr {
+                        let sub = if q.case_insensitive {
+                            sub.to_lowercase()
+                        } else {
+                            sub.clone()
+                        };
+                        cmp_target.contains(sub.as_str())
+                    } else if let Some(r) = &q.regex {
+                        lazy_regex(Some(r.as_str()), q.case_insensitive)
+                            .map(|re| re.is_match(target))
+                            .unwrap_or(false)
+                    } else {
+                        false
+                    }
+                };
+                matched(&ta) == matched(&tb)
+            }
+        }
+    }
 }
 
 /// Payload for `type: metrics` — computed metric threshold check.

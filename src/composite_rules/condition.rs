@@ -276,42 +276,51 @@ fn compile_codepoint(pattern: &str) -> Option<regex_automata::meta::Regex> {
 const LOCAL_REGEX_SLOTS: usize = 512;
 
 thread_local! {
-    static LOCAL_REGEX: std::cell::RefCell<Vec<Option<(Box<str>, Arc<TraitRegex>)>>> =
+    static LOCAL_REGEX: std::cell::RefCell<Vec<Option<(Box<str>, bool, Arc<TraitRegex>)>>> =
         std::cell::RefCell::new(vec![None; LOCAL_REGEX_SLOTS]);
 }
 
-/// Direct-mapped slot for `pattern`.
-fn local_regex_slot(pattern: &str) -> usize {
+/// Direct-mapped slot for `pattern` under `case_insensitive`. The flag is
+/// part of the key so [`lazy_regex`] can answer from the memo without first
+/// building the `(?i)`-prefixed pattern string.
+fn local_regex_slot(pattern: &str, case_insensitive: bool) -> usize {
     use std::hash::{Hash, Hasher};
     let mut hasher = rustc_hash::FxHasher::default();
     pattern.hash(&mut hasher);
+    case_insensitive.hash(&mut hasher);
     (hasher.finish() as usize) % LOCAL_REGEX_SLOTS
 }
 
 /// Look up `pattern` in this thread's memo, verifying the stored key.
-fn local_regex_get(slot: usize, pattern: &str) -> Option<Arc<TraitRegex>> {
+fn local_regex_get(
+    slot: usize,
+    pattern: &str,
+    case_insensitive: bool,
+) -> Option<Arc<TraitRegex>> {
     LOCAL_REGEX.with(|cache| {
         let cache = cache.borrow();
         match cache.get(slot) {
-            Some(Some((key, regex))) if &**key == pattern => Some(Arc::clone(regex)),
+            Some(Some((key, ci, regex))) if *ci == case_insensitive && &**key == pattern => {
+                Some(Arc::clone(regex))
+            }
             _ => None,
         }
     })
 }
 
 /// Publish `regex` into this thread's memo, replacing any colliding entry.
-fn local_regex_put(slot: usize, pattern: &str, regex: &Arc<TraitRegex>) {
+fn local_regex_put(slot: usize, pattern: &str, case_insensitive: bool, regex: &Arc<TraitRegex>) {
     LOCAL_REGEX.with(|cache| {
         if let Some(entry) = cache.borrow_mut().get_mut(slot) {
-            *entry = Some((Box::from(pattern), Arc::clone(regex)));
+            *entry = Some((Box::from(pattern), case_insensitive, Arc::clone(regex)));
         }
     });
 }
 
 pub(crate) fn cached_regex(pattern: &str) -> Option<Arc<TraitRegex>> {
     // Hottest path: this thread's own memo, no shared state touched at all.
-    let slot = local_regex_slot(pattern);
-    if let Some(arc) = local_regex_get(slot, pattern) {
+    let slot = local_regex_slot(pattern, false);
+    if let Some(arc) = local_regex_get(slot, pattern, false) {
         return Some(arc);
     }
     // Warm path: `peek` under a read lock — it doesn't bump LRU recency, so warm
@@ -322,7 +331,7 @@ pub(crate) fn cached_regex(pattern: &str) -> Option<Arc<TraitRegex>> {
         .ok()
         .and_then(|c| c.peek(pattern).cloned())
     {
-        local_regex_put(slot, pattern, &arc);
+        local_regex_put(slot, pattern, false, &arc);
         return Some(arc);
     }
     // Miss: claim the key so racing workers pick up one compile instead of
@@ -352,7 +361,7 @@ pub(crate) fn cached_regex(pattern: &str) -> Option<Arc<TraitRegex>> {
         compile_and_put()
     };
     if let Some(arc) = compiled.as_ref() {
-        local_regex_put(slot, pattern, arc);
+        local_regex_put(slot, pattern, false, arc);
     }
     compiled
 }
@@ -390,11 +399,21 @@ pub(crate) fn clear_cached_regex() {
 /// matches (see [`word_match_start`]) and never touch the regex engine.
 pub(crate) fn lazy_regex(regex: Option<&str>, case_insensitive: bool) -> Option<Arc<TraitRegex>> {
     let raw = regex?;
-    if case_insensitive {
-        cached_regex(&format!("(?i){raw}"))
-    } else {
-        cached_regex(raw)
+    if !case_insensitive {
+        return cached_regex(raw);
     }
+    // Memo on the *raw* pattern plus the flag, so a warm case-insensitive
+    // condition never rebuilds its `(?i)`-prefixed key: that `format!` ran
+    // once per evaluation of every CI regex condition.
+    let slot = local_regex_slot(raw, true);
+    if let Some(arc) = local_regex_get(slot, raw, true) {
+        return Some(arc);
+    }
+    let compiled = cached_regex(&format!("(?i){raw}"));
+    if let Some(ref arc) = compiled {
+        local_regex_put(slot, raw, true, arc);
+    }
+    compiled
 }
 
 /// Raw-content matcher's regex pattern source. Serves `word:` by building

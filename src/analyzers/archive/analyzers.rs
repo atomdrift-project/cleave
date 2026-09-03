@@ -2026,8 +2026,15 @@ impl ArchiveAnalyzer {
                     );
                     crate::memory_tracker::set_current_phase(format!("yara on {relative_path}"));
                     let yara_start = std::time::Instant::now();
-                    match yara_engine.scan_bytes_filtered(data, yara_filter) {
-                        Ok(matches) => {
+                    // `scan_bytes_to_findings`, not `scan_bytes_filtered`: a
+                    // member's rule hits must become findings, exactly as the
+                    // standalone path does (lib.rs, "Run YARA for file types
+                    // that didn't handle it internally"). Collecting only
+                    // `yara_matches` left every third-party rule that fired on
+                    // an archive member invisible in the report — a LNK inside
+                    // a zip lost the LNK_Ruleset hits it gets on its own.
+                    match yara_engine.scan_bytes_to_findings(data, yara_filter) {
+                        Ok((matches, findings)) => {
                             let elapsed_ms = yara_start.elapsed().as_millis();
                             crate::memory_tracker::clear_current_phase();
                             if elapsed_ms > SLOW_ARCHIVE_MEMBER_YARA_MS {
@@ -2047,6 +2054,16 @@ impl ArchiveAnalyzer {
                                 );
                             }
                             report.yara_matches = matches;
+                            let existing: HashSet<crate::types::Istr> =
+                                report.findings.iter().map(|f| f.id.clone()).collect();
+                            report.findings.extend(
+                                findings
+                                    .into_iter()
+                                    .filter(|f| !existing.contains(f.id.as_str())),
+                            );
+                            if !report.metadata.tools_used.iter().any(|t| t == "yara-x") {
+                                report.metadata.tools_used.push("yara-x".to_string());
+                            }
                         }
                         Err(e) => {
                             crate::memory_tracker::clear_current_phase();

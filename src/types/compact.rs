@@ -220,6 +220,31 @@ pub struct CompactTrait {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     #[serde(default)]
     pub ev: Vec<[u64; 2]>,
+    /// For a composite: indices into this file's own `traits[]` of the
+    /// component traits it fired on — the composite→atomic edges of the trait
+    /// graph, which a visualization otherwise has no way to reconstruct (the
+    /// trait ids alone don't say which composite consumed which atom).
+    ///
+    /// Indices, not ids, because the ids are already in the array and repeating
+    /// them costs far more than a small integer. They address `traits[]` of the
+    /// **same** file, are ascending, and never dangle.
+    ///
+    /// A container resolves its own edges: archive and encoding-layer
+    /// inheritance copies a composite *and* the components it fired on into the
+    /// parent's findings, so a member's composite re-emitted on the zip indexes
+    /// the zip's own `traits[]` while [`Self::from`] names the member it came
+    /// from. The two are complementary — `uses` is the shape of the detection,
+    /// `from` is where it happened.
+    ///
+    /// A ref that resolves to nothing is dropped, not emitted as a dangling
+    /// index. That is rare (~0.6% of edges on the traits-dev corpus) and means
+    /// the component is not in the report: an `unless:`-suppressed leg the
+    /// composite still recorded, or a leg that stayed behind in a member.
+    /// Empty for atomic traits.
+    #[serde(rename = "uses")]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
+    pub uses: Vec<u32>,
     /// Machine-readable identity of a dependency this finding is about, set by a
     /// consumer that resolved the reference and graded what it fetched. `desc`
     /// carries the same facts as prose for a human or an LLM; this is the copy a
@@ -785,8 +810,20 @@ fn convert_file(file: &super::file_analysis::FileAnalysis, id: u32) -> CompactFi
     // Dedup findings by ID within this file, merge evidence
     let mut trait_map: HashMap<&str, CompactTrait> = HashMap::new();
     let mut trait_order: Vec<&str> = Vec::new();
+    // Component ids per trait id, unioned across the duplicate findings the
+    // loop below folds together. Resolved to `traits[]` indices once the array
+    // is final — the ids alone are meaningless to a consumer drawing the graph.
+    let mut refs_by_id: HashMap<&str, Vec<&str>> = HashMap::new();
 
     for finding in &file.findings {
+        if !finding.trait_refs.is_empty() {
+            let refs = refs_by_id.entry(&finding.id).or_default();
+            for trait_ref in &finding.trait_refs {
+                if !refs.contains(&trait_ref.as_str()) {
+                    refs.push(trait_ref);
+                }
+            }
+        }
         // Local evidence spans — precomputed at fold for compact-retained
         // members, else derived here; one shared definition either way.
         let ev_spans: Vec<[u64; 2]> = crate::types::traits_findings::finding_spans(finding);
@@ -842,16 +879,55 @@ fn convert_file(file: &super::file_analysis::FileAnalysis, id: u32) -> CompactFi
                     attack: finding.attack.as_deref().map(str::to_owned),
                     from,
                     ev: ev_spans,
+                    uses: Vec::new(),
                     dep: None,
                 },
             );
         }
     }
 
-    let traits: Vec<CompactTrait> = trait_order
+    let mut traits: Vec<CompactTrait> = trait_order
         .into_iter()
         .filter_map(|id| trait_map.remove(id))
         .collect();
+
+    // Resolve each composite's component ids to positions in `traits`. Done in
+    // a second pass because a composite is folded before some of the components
+    // it references, so no index is knowable until the array is complete.
+    if !refs_by_id.is_empty() {
+        let position: HashMap<&str, u32> = traits
+            .iter()
+            .enumerate()
+            .map(|(i, t)| (t.id.as_str(), i as u32))
+            .collect();
+        let mut unresolved = 0usize;
+        let uses: Vec<Vec<u32>> = traits
+            .iter()
+            .map(|t| {
+                let refs = refs_by_id.get(t.id.as_str()).map_or(&[][..], Vec::as_slice);
+                let mut idx: Vec<u32> = refs
+                    .iter()
+                    // A ref the report doesn't carry is dropped rather than
+                    // left dangling; see `CompactTrait::uses`.
+                    .filter_map(|id| position.get(id).copied())
+                    .collect();
+                idx.sort_unstable();
+                idx.dedup();
+                unresolved += refs.len() - idx.len();
+                idx
+            })
+            .collect();
+        if unresolved > 0 {
+            tracing::debug!(
+                file = %file.path,
+                unresolved,
+                "composite components absent from this file's traits",
+            );
+        }
+        for (t, idx) in traits.iter_mut().zip(uses) {
+            t.uses = idx;
+        }
+    }
 
     let mut facts = file
         .precompact_facts
@@ -1326,6 +1402,76 @@ mod wire_roundtrip_tests {
         assert_eq!(decoded.files[0].risk, -1);
         let re = serde_json::to_value(&decoded).expect("re-encode");
         assert_eq!(re["files"][0]["risk"], serde_json::json!(-1));
+    }
+
+    #[test]
+    fn composite_uses_indexes_its_components_in_this_file() {
+        use super::super::file_analysis::FileAnalysis;
+        use super::super::traits_findings::Finding;
+        use super::super::{Criticality, FindingKind};
+
+        fn trait_finding(id: &str, crit: Criticality, refs: &[&str]) -> Finding {
+            let mut f = Finding::new(id, FindingKind::Capability, id, 0.9);
+            f.crit = crit;
+            f.trait_refs = refs.iter().map(|r| (*r).into()).collect();
+            f
+        }
+
+        let mut fa = FileAnalysis::new(
+            0,
+            "shortcut.lnk".to_string(),
+            "lnk".to_string(),
+            "a".repeat(64),
+            2048,
+        );
+        // Emission order deliberately puts a composite before one of its own
+        // components, and chains a composite onto another composite: both are
+        // shapes the single-pass fold cannot resolve on its own.
+        fa.findings = vec![
+            trait_finding("t/atomic::target", Criticality::Component, &[]),
+            trait_finding(
+                "t/comp::target-with-args",
+                Criticality::Notable,
+                &["t/atomic::target", "t/atomic::args"],
+            ),
+            trait_finding("t/atomic::args", Criticality::Component, &[]),
+            trait_finding(
+                "t/comp::chained",
+                Criticality::Suspicious,
+                &["t/comp::target-with-args", "t/elsewhere::member-leg"],
+            ),
+        ];
+
+        let report = compact_from_files(&[fa]);
+        let traits = &report.files[0].findings;
+
+        assert!(traits[0].uses.is_empty(), "an atomic trait uses nothing");
+        assert_eq!(
+            traits[1].uses,
+            vec![0, 2],
+            "a composite must index both components, including one folded after it",
+        );
+        assert!(traits[2].uses.is_empty());
+        assert_eq!(
+            traits[3].uses,
+            vec![1],
+            "a composite leg that is itself a composite must resolve; a leg \
+             living in another file must be dropped, not left dangling",
+        );
+        for t in traits {
+            assert!(
+                t.uses.iter().all(|i| (*i as usize) < traits.len()),
+                "every index must address this file's traits[]",
+            );
+        }
+
+        let encoded = serde_json::to_string(&report).expect("encode");
+        let decoded: CompactReport = serde_json::from_str(&encoded).expect("decode");
+        assert_eq!(
+            encoded,
+            serde_json::to_string(&decoded).expect("re-encode"),
+            "`uses` did not survive the wire round trip",
+        );
     }
 
     #[test]

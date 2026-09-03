@@ -2168,7 +2168,14 @@ fn retain_folded_kv(path: &str) -> bool {
     // `npm-readme-clone-with-phantom-dependencies` composite down with it:
     // present under `cleave`, absent under any caller that enables compact
     // retention.
-    if basename.eq_ignore_ascii_case("package.json") {
+    //
+    // `compute_self_dependency` reads the same way, and additionally needs the
+    // Python distribution metadata member (`Name:` + `Requires-Dist:`), which
+    // has no sibling reference keeping it alive either.
+    if basename.eq_ignore_ascii_case("package.json")
+        || basename.eq_ignore_ascii_case("PKG-INFO")
+        || basename.eq_ignore_ascii_case("METADATA")
+    {
         return true;
     }
     crate::shared_resources::kv_sibling_basename_referenced(basename)

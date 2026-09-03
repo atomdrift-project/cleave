@@ -157,6 +157,7 @@ pub(crate) const CLEAVE_OWNED_METRIC_FIELDS: &[&str] = &[
     // Needs every shipped module's imports beside the manifest, so no
     // single-file parse can reach it.
     "consistency.unused_runtime_deps",
+    "consistency.self_dependency",
     "vsix.extension_pack_self_entries",
     "vsix.extension_pack_size",
     // Written by scan's follow phase (`attribute_reference_outcomes`), which

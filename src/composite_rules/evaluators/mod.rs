@@ -199,11 +199,21 @@ type BytesRegexCache =
     crate::composite_rules::regex_store::BudgetedStore<(String, bool), LeanRegex>;
 static BYTES_REGEX_CACHE: OnceLock<RwLock<BytesRegexCache>> = OnceLock::new();
 
-/// Entry cap of the raw-bytes store. The byte budget is the real bound;
-/// the count cap is a backstop — but at [`REGEX_CACHE_MAX_SIZE`] it sat
-/// *below* the ~17,000 byte-mode trait patterns, so a 10 MB bundle evicted
-/// and recompiled ~3,100 engines per member (regex compilation showed in
-/// the profile). `CLEAVE_REGEX_CACHE_ENTRIES` overrides.
+/// Default entry cap of the raw-bytes store: comfortably above the ~17,000
+/// byte-mode trait patterns. The byte budget
+/// ([`crate::composite_rules::regex_store::raw_budget_bytes`])
+/// is the real bound; this count is a backstop, and it only has to sit above
+/// the pattern set to stop being one. At [`REGEX_CACHE_MAX_SIZE`] it sat
+/// *below* that set, so a 10 MB bundle evicted and recompiled ~3,100 engines
+/// per member and the 510-archive npm corpus 7,344 per run. Raising it costs
+/// ~17 MB and removes all of them.
+const BYTES_REGEX_CACHE_ENTRIES: NonZeroUsize = match NonZeroUsize::new(32_768) {
+    Some(size) => size,
+    None => NonZeroUsize::MIN,
+};
+
+/// Entry cap of the raw-bytes store: [`BYTES_REGEX_CACHE_ENTRIES`] unless
+/// `CLEAVE_REGEX_CACHE_ENTRIES` overrides it.
 fn bytes_regex_cache_entries() -> NonZeroUsize {
     static N: OnceLock<NonZeroUsize> = OnceLock::new();
     *N.get_or_init(|| {
@@ -211,7 +221,7 @@ fn bytes_regex_cache_entries() -> NonZeroUsize {
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
             .and_then(NonZeroUsize::new)
-            .unwrap_or(REGEX_CACHE_SIZE)
+            .unwrap_or(BYTES_REGEX_CACHE_ENTRIES)
     })
 }
 
@@ -1113,7 +1123,8 @@ pub fn clear_thread_local_caches() {
 /// Clear the process-global regex caches.
 ///
 /// These caches are shared across all threads and can grow up to
-/// `REGEX_CACHE_MAX_SIZE` entries each (compiled `Regex` / `regex::bytes::Regex`
+/// `REGEX_CACHE_MAX_SIZE` entries (string mode) and 32,768 (raw-bytes mode;
+/// see `BYTES_REGEX_CACHE_ENTRIES`) (compiled `Regex` / `regex::bytes::Regex`
 /// values can run several MB apiece for complex patterns, putting the cap in the
 /// tens of GB range). Once populated by a diverse pattern set they stay at the
 /// cap indefinitely, which is the dominant steady-state leak for long-running

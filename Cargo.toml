@@ -355,3 +355,4 @@ opt-level = 3
 [patch.crates-io]
 tree-sitter = { git = "https://github.com/tstromberg/tree-sitter", branch = "master" }
 tree-sitter-language = { git = "https://github.com/tstromberg/tree-sitter", branch = "master" }
+

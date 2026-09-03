@@ -158,6 +158,9 @@ pub(crate) const CLEAVE_OWNED_METRIC_FIELDS: &[&str] = &[
     // single-file parse can reach it.
     "consistency.unused_runtime_deps",
     "consistency.self_dependency",
+    "consistency.metadata_identity_mismatch",
+    "consistency.name_typosquat",
+    "consistency.cloned_summary",
     "vsix.extension_pack_self_entries",
     "vsix.extension_pack_size",
     // Written by scan's follow phase (`attribute_reference_outcomes`), which

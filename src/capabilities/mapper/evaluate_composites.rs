@@ -27,6 +27,7 @@ impl super::CapabilityMapper {
         inline_yara: Option<&HashMap<String, Vec<Evidence>>>,
         section_map: &SectionMap,
         arch_ranges: Option<&[(Arch, std::ops::Range<usize>)]>,
+        suppressions: Option<&crate::types::SuppressionSink>,
     ) -> Vec<Finding> {
         // Determine file type from report (platform comes from self.platform)
         let file_type = self.detect_file_type(&report.target.file_type);
@@ -142,6 +143,7 @@ impl super::CapabilityMapper {
                 },
                 cached_ast,
             )
+            .with_suppressions(suppressions)
             .with_section_map(section_map)
             .with_file_caches(&file_caches);
             if let Some(results) = inline_yara {
@@ -188,6 +190,7 @@ impl super::CapabilityMapper {
                 },
                 cached_ast,
             )
+            .with_suppressions(suppressions)
             .with_section_map(section_map)
             .with_file_caches(&file_caches);
             if let Some(results) = inline_yara {
@@ -222,6 +225,7 @@ impl super::CapabilityMapper {
                     Some(&all_findings),
                     cached_ast,
                 )
+                .with_suppressions(suppressions)
                 .with_section_map(section_map)
                 .with_file_caches(&file_caches);
                 if let Some(results) = inline_yara {
@@ -258,6 +262,7 @@ impl super::CapabilityMapper {
             cached_ast,
             file_type,
             section_map,
+            suppressions,
         );
         // Excessive-line-length detection (>1MB single line) is emitted by YAML
         // traits, not here: the only input is the `text.max_line_length` metric.
@@ -278,6 +283,7 @@ impl super::CapabilityMapper {
         cached_ast: Option<&tree_sitter::Tree>,
         file_type: RuleFileType,
         section_map: &SectionMap,
+        suppressions: Option<&crate::types::SuppressionSink>,
     ) {
         // Shared lazy rule-ID index: this runs once per analyzed file, so a
         // per-call map build dominated small-member archive corpora.
@@ -295,6 +301,7 @@ impl super::CapabilityMapper {
                 Some(findings),
                 cached_ast,
             )
+            .with_suppressions(suppressions)
             .with_section_map(section_map)
             .with_file_caches(&file_caches);
 

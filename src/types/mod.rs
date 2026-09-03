@@ -79,10 +79,12 @@ pub use file_analysis::{FileAnalysis, Rel, Role};
 
 #[allow(unused_imports)]
 pub use traits_findings::{
-    ContextLine, Evidence, Finding, FindingKind, Note, StructuralFeature, Trait, TraitKind,
+    ContextLine, Evidence, Finding, FindingKind, Note, StructuralFeature, Suppression,
+    SuppressionKind, SuppressionLeg, Trait, TraitKind,
 };
 pub(crate) use traits_findings::{
-    MAX_EVIDENCE_PER_TRAIT, deduplicate_evidence, truncate_evidence_value,
+    MAX_EVIDENCE_PER_TRAIT, MIN_RECORDED_SUPPRESSION, SuppressionSink, deduplicate_evidence,
+    truncate_evidence_value,
 };
 
 #[allow(unused_imports)]

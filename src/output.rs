@@ -789,7 +789,10 @@ pub fn format_context_badged(
             let flagged = file
                 .findings
                 .iter()
-                .any(|f| f.crit >= fc && sel.contains(f.id.as_str()));
+                .any(|f| f.crit >= fc && sel.contains(f.id.as_str()))
+                // A withheld detection at focus criticality is exactly the
+                // evidence the focused view exists to surface, not hide.
+                || file.suppressions.iter().any(|s| s.crit >= fc);
             if !flagged {
                 continue;
             }
@@ -805,8 +808,9 @@ pub fn format_context_badged(
             selected.retain(|&id| seen.insert(id));
         }
 
-        // Cheap pre-filter: nothing selected and no identity → nothing to show.
-        if selected.is_empty() && file.identity.is_none() {
+        // Cheap pre-filter: nothing selected, no identity and nothing withheld →
+        // nothing to show.
+        if selected.is_empty() && file.identity.is_none() && !has_shown_suppressions(file, opts) {
             continue;
         }
 
@@ -874,6 +878,7 @@ pub fn format_context_badged(
             eff_width,
             colorize,
         );
+        render_suppressions(&mut body, file, opts, colorize);
 
         // Skip a file whose body came out empty: a lone header advertising
         // counts with nothing beneath it is noise. A container is kept even when
@@ -1052,6 +1057,12 @@ fn indent_block(out: &mut String, block: &str, depth: u32) {
 
 /// Whether a file contributes anything to the context view.
 fn file_has_output(file: &FileAnalysis, opts: &TinyOpts) -> bool {
+    // A file whose only output is what the analysis withheld still has
+    // something to say — arguably the most important thing, since a reader
+    // that never sees it reads the silence as a clean file.
+    if has_shown_suppressions(file, opts) {
+        return true;
+    }
     // With a low-tier fill in play, any non-filtered trait can end up shown, so
     // a file carrying only unreferenced components must survive this gate for
     // the fill to reach it.
@@ -1062,6 +1073,14 @@ fn file_has_output(file: &FileAnalysis, opts: &TinyOpts) -> bool {
             .any(|f| f.crit != Criticality::Filtered);
     }
     file.findings.iter().any(|f| tiny_should_show(f, file))
+}
+
+/// Whether this file has suppressions [`render_suppressions`] would draw.
+///
+/// The single gate every skip path consults, so a file can never be dropped
+/// from the view for having nothing but withheld traits to report.
+fn has_shown_suppressions(file: &FileAnalysis, opts: &TinyOpts) -> bool {
+    file.suppressions.iter().any(|s| s.crit >= opts.min_crit)
 }
 
 /// The top-`n` finding ids to show, ranked by `crit × conf` (highest first) and
@@ -1501,22 +1520,30 @@ fn render_context(
     }
 }
 
-/// Render binary context for the machine/LLM view: each match window as
+/// Render binary context for the machine/LLM view: each run of matched bytes as
 /// ASCII-forward rows — printable bytes verbatim, non-printables as C-string
-/// escapes — preceded by a `{marker} SEV desc` annotation line per finding it
-/// carries, so the detections describe the bytes that follow and the window
-/// itself renders unannotated. Every row opens with an xxd-style gutter (the
-/// absolute byte offset of its first byte in unpadded hex, then a colon), so
-/// any byte is addressable without the terminal view's hex column, and a
-/// clipped window needs no `…` marker — the gutter says where the bytes sit.
+/// escapes — preceded by one `{marker} SEV OFFSET desc` line per detection in
+/// that run, so the detections describe the bytes that follow. Every row opens
+/// with an xxd-style gutter (the absolute byte offset of its first byte in
+/// unpadded hex), `:` when a detection matched inside the row and `-` when it is
+/// surrounding context, so any byte is addressable without the terminal view's
+/// hex column and a clipped run needs no `…` marker.
+///
+/// A captured window is split into one block per contiguous run its own
+/// annotations cover. Capture merges overlapping windows, and low-tier traits
+/// this view does not list bridge them: on `/bin/ls` sixteen listed detections
+/// arrived as a single 1.5 KB window, so the block stopped describing the bytes
+/// it held. Splitting on the gaps restores the property that makes the view
+/// readable — every block is contiguous data that its own annotations account
+/// for.
 fn render_ascii_context(out: &mut String, file: &FileAnalysis, selected: &[&str]) {
     use std::fmt::Write;
     let sel: HashSet<&str> = selected.iter().copied().collect();
     let marker = comment_marker(&file.file_type);
     let mut emitted = false;
     for line in &file.context {
-        // Distinct selected findings on this window, strongest first. (Capture
-        // already capped locations per trait; merging can pool several here.)
+        // Distinct selected findings on this window. (Capture already capped
+        // locations per trait; merging can pool several here.)
         let mut seen = HashSet::new();
         let mut notes: Vec<&Note> = line
             .notes
@@ -1526,47 +1553,71 @@ fn render_ascii_context(out: &mut String, file: &FileAnalysis, selected: &[&str]
         if notes.is_empty() {
             continue;
         }
-        // A blank line sets each window apart — from the file-level annotations
-        // above the first one, and from the preceding window after that.
-        if emitted || (!out.is_empty() && !out.ends_with("\n\n")) {
-            out.push('\n');
-        }
-        emitted = true;
-        notes.sort_by(|a, b| b.crit.cmp(&a.crit).then_with(|| a.off.cmp(&b.off)));
-        // Clip the window to the match span ± a criticality-sized margin, so a
-        // large merged window doesn't dump the whole region at the model; `…` marks
-        // a trim. The block is sized by its strongest detection (`notes` is
-        // strongest-first), asymmetric — more trailing than leading, since a
-        // payload runs forward from the match. Capture reserved this many bytes.
-        let (before, after) = notes[0].crit.hex_context();
+
+        // Each note claims its match span widened by a criticality-sized margin,
+        // asymmetric — more trailing than leading, since a payload runs forward
+        // from the match. Notes whose claims touch share a block; a gap between
+        // them ends one and starts the next.
         let len = line.data.len();
         let within = |off: u64| (off.saturating_sub(line.loc) as usize).min(len);
-        let lo = notes.iter().map(|n| within(n.off)).min().unwrap_or(0);
-        let hi = notes
-            .iter()
-            .map(|n| within(n.off + u64::from(n.len.max(1))))
-            .max()
-            .unwrap_or(len);
-        let start = lo.saturating_sub(before as usize);
-        let end = (hi + after as usize).min(len);
-        for n in &notes {
-            let _ = writeln!(
-                out,
-                "{marker} {} {}",
-                n.crit.letter(),
-                annotate_desc(&terse_description(&n.desc), &n.id)
-            );
+        notes.sort_by_key(|n| n.off);
+        let mut blocks: Vec<(usize, usize, Vec<&Note>)> = Vec::new();
+        for note in notes {
+            let (before, after) = note.crit.hex_context();
+            let lo = within(note.off).saturating_sub(before as usize);
+            let hi = (within(note.off + u64::from(note.len.max(1))) + after as usize).min(len);
+            match blocks.last_mut() {
+                Some((_, block_end, block_notes)) if lo <= *block_end => {
+                    *block_end = (*block_end).max(hi);
+                    block_notes.push(note);
+                }
+                _ => blocks.push((lo, hi, vec![note])),
+            }
         }
-        let mut row = start;
-        while row < end {
-            let row_end = (row + ASCII_ROW).min(end);
-            let _ = writeln!(
-                out,
-                "{:x}: {}",
-                line.loc + row as u64,
-                ascii_forward(&line.data[row..row_end])
-            );
-            row = row_end;
+
+        for (start, end, mut block_notes) in blocks {
+            // A blank line sets each block apart — from the file-level
+            // annotations above the first one, and from the preceding block.
+            if emitted || (!out.is_empty() && !out.ends_with("\n\n")) {
+                out.push('\n');
+            }
+            emitted = true;
+
+            // Strongest first: the block leads with the worst thing in it.
+            block_notes.sort_by(|a, b| b.crit.cmp(&a.crit).then_with(|| a.off.cmp(&b.off)));
+            // Each annotation carries the hex offset of the bytes it fired on,
+            // in the same base and form as the row gutter below, so a detection
+            // can be pointed at its bytes even when a block holds several. The
+            // text view has always shown `LINE:COL` here.
+            for note in &block_notes {
+                let _ = writeln!(
+                    out,
+                    "{marker} {} {:x} {}",
+                    note.crit.letter(),
+                    note.off,
+                    annotate_desc(&terse_description(&note.desc), &note.id)
+                );
+            }
+
+            let mut row = start;
+            while row < end {
+                let row_end = (row + ASCII_ROW).min(end);
+                let row_lo = line.loc + row as u64;
+                let row_hi = line.loc + row_end as u64;
+                // `:` marks a row a detection actually matched in, `-` a row of
+                // surrounding context — the same distinction the terminal
+                // view's gutter draws.
+                let hit = block_notes
+                    .iter()
+                    .any(|n| n.off < row_hi && n.off + u64::from(n.len.max(1)) > row_lo);
+                let _ = writeln!(
+                    out,
+                    "{row_lo:x}{} {}",
+                    if hit { ':' } else { '-' },
+                    ascii_forward(&line.data[row..row_end])
+                );
+                row = row_end;
+            }
         }
     }
 }
@@ -1772,6 +1823,17 @@ fn render_text_chunks(
         // its continuation already). Every other note-less row is dropped;
         // near-empty rows — a lone `}`, a blank — don't satisfy the trail.
         let mut hit_rows = 0usize;
+        // Index of the last row actually rendered, so a jump over dropped rows
+        // can be marked. A chunk is one contiguous byte range, but the loop
+        // below renders only rows that carry a match or real surrounding code —
+        // so consecutive output lines are routinely not consecutive source
+        // lines. Run together they read as one block of code that never existed.
+        let mut last_rendered: Option<usize> = None;
+        // Rows accumulate here so a finished block can be trimmed before it is
+        // appended — a block's first or last line carrying nothing visible is
+        // padding, and against a blank separator it reads as a gap twice as big
+        // as the one that is really there.
+        let mut block = String::new();
         for (idx, row) in rows.iter().enumerate() {
             let bytes = &chunk.data[row.start..row.end];
             // Notes whose match starts within this row's byte span.
@@ -1803,12 +1865,21 @@ fn render_text_chunks(
             } else {
                 hit_rows = 0;
             }
+            // A blank line where rows were dropped: each run of consecutive
+            // source lines becomes its own block. The card layout prints a line
+            // number on every row, so its jumps are already legible and it stays
+            // one compact unit.
+            if !opts.card && last_rendered.is_some_and(|prev| prev + 1 != idx) {
+                push_source_block(out, &mut block);
+            }
+            last_rendered = Some(idx);
+
             let comment = notes
                 .iter()
                 .copied()
                 .max_by_key(|n| (n.crit, std::cmp::Reverse(n.off)));
             render_source_line(
-                out,
+                &mut block,
                 bytes,
                 row.off,
                 row.line,
@@ -1824,7 +1895,38 @@ fn render_text_chunks(
                 opts.card,
             );
         }
+        push_source_block(out, &mut block);
     }
+}
+
+/// Append one block of rendered source rows, set off by a blank line, with any
+/// leading or trailing rows that carry no visible text dropped.
+///
+/// A match can land on an empty source line, and a block that opens or closes on
+/// one reads — next to the blank line separating blocks — as a gap twice the
+/// size of the real one. Trimming is by rendered text, so a terminal row that is
+/// blank apart from its line-number gutter is content and stays. A block that is
+/// nothing but blank rows appends nothing, so it can never leave a stray
+/// separator behind.
+fn push_source_block(out: &mut String, block: &mut String) {
+    let mut lines: Vec<&str> = block.lines().collect();
+    while lines.first().is_some_and(|l| l.trim().is_empty()) {
+        lines.remove(0);
+    }
+    while lines.last().is_some_and(|l| l.trim().is_empty()) {
+        lines.pop();
+    }
+    if !lines.is_empty() {
+        if !out.is_empty() && !out.ends_with("\n\n") {
+            if !out.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push('\n');
+        }
+        out.push_str(&lines.join("\n"));
+        out.push('\n');
+    }
+    block.clear();
 }
 
 /// Render binary context: each shown window is a raw-byte unit, wrapped into
@@ -2543,6 +2645,121 @@ fn render_no_anchor(
                 out.push_str(&format!("  {trail}\n"));
             }
         }
+    }
+}
+
+/// Render the traits this file matched but withheld or demoted, with the legs
+/// that did it and the bytes those legs fired on.
+///
+/// The point is an independent second opinion: a reader that only sees what the
+/// engine chose to report cannot tell a clean file from a suppressed one, and
+/// the suppressor is the interesting half — `netrc` withheld because the file
+/// looks like a test fixture is a judgement worth checking, not a fact.
+///
+/// Legs carry byte spans rather than rendered bytes. Where the leg is itself a
+/// reported finding its window is already drawn above; where it is a
+/// `crit: exception` composite (the common benign-context suppressor, stripped
+/// before output) the span is the only handle there is, and it is enough to
+/// pull the bytes from the file.
+///
+/// Trait ids stand alone, without the descriptions reported findings carry: a
+/// taxonomy path already says what the trait is
+/// (`…/http/url/domain::js-remote-host-url`), and the reader these lines exist
+/// for can take it from there. Prose would only crowd out the legs, which are
+/// the part nothing else in the report states.
+fn render_suppressions(out: &mut String, file: &FileAnalysis, opts: &TinyOpts, colorize: bool) {
+    /// Suppressions shown per file. Enough to see a pattern, few enough that a
+    /// heavily-suppressed file does not crowd out its actual findings.
+    const MAX_SHOWN: usize = 8;
+    /// Legs shown per suppression.
+    const MAX_LEGS: usize = 3;
+
+    let shown: Vec<&crate::types::Suppression> = file
+        .suppressions
+        .iter()
+        .filter(|s| s.crit >= opts.min_crit)
+        .take(MAX_SHOWN)
+        .collect();
+    if shown.is_empty() {
+        return;
+    }
+
+    let rich = matches!(opts.header, HeaderStyle::Rich);
+    // Offsets in the same base the file's own rows carry, so a leg's bytes are
+    // looked up the same way as a finding's. (A text file's windows are labelled
+    // `LINE:COL`; a leg is a raw byte offset into the file either way, since the
+    // trait it fired on drew no window to sit beside.)
+    let hex = is_binary_file_type(&file.file_type);
+    for suppression in shown {
+        let verb = match suppression.kind {
+            crate::types::SuppressionKind::Unless => "withheld",
+            crate::types::SuppressionKind::Downgrade => "downgraded",
+        };
+        let legs: Vec<String> = suppression
+            .by
+            .iter()
+            .take(MAX_LEGS)
+            .map(|leg| {
+                if leg.spans.is_empty() {
+                    leg.id.to_string()
+                } else {
+                    let spans: Vec<String> = leg
+                        .spans
+                        .iter()
+                        .map(|[off, _]| {
+                            if hex {
+                                format!("{off:x}")
+                            } else {
+                                off.to_string()
+                            }
+                        })
+                        .collect();
+                    format!("{} @{}", leg.id, spans.join(","))
+                }
+            })
+            .collect();
+        let more = suppression.by.len().saturating_sub(MAX_LEGS);
+        let by = match (legs.is_empty(), more) {
+            (true, _) => String::new(),
+            (false, 0) => format!(" by {}", legs.join("; ")),
+            (false, n) => format!(" by {}, +{n} more", legs.join("; ")),
+        };
+
+        if rich {
+            let line = format!(
+                "⊘ {verb} {} {}{by}",
+                suppression.crit.letter(),
+                suppression.id
+            );
+            if colorize {
+                out.push_str(&format!("{}\n", line.bright_black()));
+            } else {
+                out.push_str(&format!("{line}\n"));
+            }
+        } else {
+            // Machine/LLM view: same comment-marker form the located findings
+            // use, with the verb standing where a location would.
+            let marker = comment_marker(&file.file_type);
+            out.push_str(&format!(
+                "{marker} {} {verb} {}{by}\n",
+                suppression.crit.letter(),
+                suppression.id,
+            ));
+        }
+    }
+    let hidden = file
+        .suppressions
+        .iter()
+        .filter(|s| s.crit >= opts.min_crit)
+        .count()
+        .saturating_sub(MAX_SHOWN);
+    if hidden > 0 {
+        let marker = if rich {
+            "⊘"
+        } else {
+            comment_marker(&file.file_type)
+        };
+        out.push_str(&format!("{marker} +{hidden} more suppressed\n"));
     }
 }
 
@@ -4080,8 +4297,11 @@ mod tests {
     fn tiny_binary_lists_all_descriptions_ahead_of_merged_block() {
         // The binary (ASCII-forward) interpret view's model: a single merged byte
         // window carrying multiple traits lists *all* their descriptions ahead of
-        // the block ("here's what we detected in these bytes"), strongest-first,
-        // then the unannotated byte rows.
+        // the block ("here's what we detected in these bytes"), then the byte
+        // rows.
+        //
+        // Within a block they lead with the worst thing in it, and each line
+        // carries the hex offset that locates it in the rows below.
         let data: Vec<u8> = (0u8..80).collect(); // bytes 0x41.. render as ABC… in-block
         let file = bin_file(
             0,
@@ -4111,6 +4331,146 @@ mod tests {
         assert!(
             n_desc < block,
             "every description precedes the block's bytes:\n{output}"
+        );
+        // Each carries the hex offset of its match — 20 and 40 decimal.
+        assert!(
+            output.contains("14 net/connect desc") && output.contains("28 exec/shell desc"),
+            "each description carries its hex match offset:\n{output}"
+        );
+    }
+
+    /// One captured window splits into a block per contiguous run its own
+    /// annotations cover.
+    ///
+    /// Capture merges overlapping windows, and low-tier traits this view does
+    /// not list bridge them: on `/bin/ls` sixteen listed detections arrived as
+    /// one 1.5 KB window, so the block held hundreds of bytes no annotation
+    /// accounted for and the reader had nothing tying either lump to the other.
+    /// A gap between detections must end the block.
+    #[test]
+    fn tiny_binary_splits_a_merged_window_into_contiguous_blocks() {
+        // 1 KB window with detections at each end and nothing between: the
+        // notable margin is ±64/128 bytes, far short of the 700-byte gap.
+        let mut data = vec![b'.'; 1024];
+        data[100..108].copy_from_slice(b"NEAR_LOW");
+        data[900..909].copy_from_slice(b"NEAR_HIGH");
+        let file = bin_file(
+            0,
+            2048,
+            vec![
+                finding_with("low/hit", Criticality::Notable),
+                finding_with("high/hit", Criticality::Notable),
+            ],
+            vec![byte_unit(
+                0,
+                &data,
+                vec![
+                    ctx_note("low/hit", Criticality::Notable, 100),
+                    ctx_note("high/hit", Criticality::Notable, 900),
+                ],
+            )],
+        );
+        let out = format_tiny(&report_with_files(vec![file]));
+
+        // Two blocks, each carrying only its own annotation.
+        let low_desc = out.find("low/hit desc").expect("low annotation");
+        let low_bytes = out.find("NEAR_LOW").expect("low bytes");
+        let high_desc = out.find("high/hit desc").expect("high annotation");
+        let high_bytes = out.find("NEAR_HIGH").expect("high bytes");
+        assert!(
+            low_desc < low_bytes && low_bytes < high_desc && high_desc < high_bytes,
+            "each block must follow its own annotations:\n{out}",
+        );
+
+        // The dead span between them is not rendered: every row belongs to one
+        // of the two blocks.
+        let rows: Vec<u64> = out
+            .lines()
+            .filter_map(|l| {
+                let (gutter, rest) = l.split_once(['-', ':'])?;
+                rest.starts_with(' ')
+                    .then(|| u64::from_str_radix(gutter, 16).ok())
+                    .flatten()
+            })
+            .collect();
+        assert!(!rows.is_empty(), "no rows rendered:\n{out}");
+        assert!(
+            rows.iter().all(|off| *off < 300 || *off > 700),
+            "the unannotated span between blocks must not be rendered: {rows:?}\n{out}",
+        );
+    }
+
+    /// A source chunk renders as blocks of *consecutive* lines, separated by a
+    /// blank line and with no blank line of their own at either edge.
+    ///
+    /// The renderer drops rows carrying no match and no real code, so the lines
+    /// it emits from one chunk are routinely not consecutive in the file. Run
+    /// together they read as one block of code that never existed; padded with
+    /// the source's own blank lines they read as a bigger jump than there is.
+    #[test]
+    fn tiny_source_blocks_are_separated_and_edge_trimmed() {
+        use crate::types::{ContextLine, Note};
+
+        // Matches on the first and last statements, blank source lines flanking
+        // the second, and filler between that carries neither a match nor real
+        // code.
+        let src = "const alpha = requireSomething();\n}\n}\n}\n\nconst beta = exfiltrateSomething();\n\n}\n";
+        let note = |id: &str, off: u64| Note {
+            crit: Criticality::Notable,
+            id: id.to_string().into(),
+            desc: format!("{id} desc").into(),
+            off,
+            len: 5,
+            conf: 0.9,
+        };
+        let beta_off = src.find("const beta").unwrap_or(0) as u64;
+        let file = src_file(
+            0,
+            "/t/sample.js",
+            90,
+            vec![
+                finding_with("a/first", Criticality::Notable),
+                finding_with("b/second", Criticality::Notable),
+            ],
+            vec![ContextLine {
+                loc: 0,
+                line: Some(1),
+                col: Some(1),
+                data: src.as_bytes().to_vec(),
+                notes: vec![note("a/first", 0), note("b/second", beta_off)],
+            }],
+        );
+        let out = format_tiny(&report_with_files(vec![file]));
+
+        // Skip the header line; the rest is the rendered body, less the
+        // document's own trailing newline.
+        let mut body: Vec<&str> = out.lines().skip(1).collect();
+        while body.last().is_some_and(|l| l.is_empty()) {
+            body.pop();
+        }
+        assert!(
+            body.iter().any(|l| l.contains("const alpha"))
+                && body.iter().any(|l| l.contains("const beta")),
+            "both matched lines render: {out:?}",
+        );
+        assert!(
+            !body.iter().any(|l| l.trim().is_empty() && !l.is_empty()),
+            "a whitespace-only row is padding, not content: {out:?}",
+        );
+        let blanks: Vec<usize> = body
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| l.is_empty())
+            .map(|(i, _)| i)
+            .collect();
+        assert!(
+            blanks.windows(2).all(|w| w[1] != w[0] + 1),
+            "blocks are separated by exactly one blank line: {out:?}",
+        );
+        assert!(
+            body.first().is_some_and(|l| !l.is_empty())
+                && body.last().is_some_and(|l| !l.is_empty()),
+            "the body must not open or close on a blank line: {out:?}",
         );
     }
 
@@ -4232,6 +4592,7 @@ mod tests {
                 architectures: Some(vec!["x86_64".to_string()]),
             },
             findings,
+            suppressions: vec![],
             context: vec![],
             traits: vec![],
             structure: vec![],
@@ -4928,6 +5289,96 @@ mod tests {
         // everywhere, never resurrected as a location-less gutter note.
         let term = format_context(&report, &TinyOpts::terminal());
         assert!(!term.contains("dominated desc"), "{term:?}");
+    }
+
+    /// A binary window's annotations must be locatable in the bytes below them.
+    ///
+    /// Overlapping windows merge, so one block can carry a dozen detections. The
+    /// annotations used to be a positionless lump above a positionless lump of
+    /// bytes — on `/bin/ls`, sixteen `// N …` lines followed by 1.5 KB of the
+    /// symbol table, with nothing saying which line described which bytes. Each
+    /// annotation now carries its match offset in the same hex the row gutter
+    /// uses, and a row a detection matched in is marked `:` rather than `-`.
+    #[test]
+    fn binary_annotations_carry_offsets_that_locate_them_in_the_rows() {
+        use crate::types::{ContextLine, Note};
+
+        let note = |id: &str, off: u64| Note {
+            crit: Criticality::Notable,
+            id: id.to_string().into(),
+            desc: format!("{id} desc").into(),
+            off,
+            len: 4,
+            conf: 0.9,
+        };
+        let finding = |id: &str| Finding {
+            precomputed_spans: None,
+            src: None,
+            kind: FindingKind::Capability,
+            trait_refs: vec![],
+            id: id.to_string().into(),
+            desc: format!("{id} desc").into(),
+            conf: 0.9,
+            crit: Criticality::Notable,
+            mbc: None,
+            attack: None,
+            evidence: vec![],
+            match_count: 0,
+            source_file: None,
+        };
+
+        // One window at 0x1000, two matches in it — the second in a later row.
+        // Emission order must follow the bytes, not the (equal) criticalities.
+        let mut report = create_test_report(vec![finding("t/late"), finding("t/early")], vec![]);
+        // The ASCII-forward view is chosen by file type; the canonical labels
+        // are lowercase (`macho`, `elf`), which is what a real report carries.
+        report.files[0].file_type = "elf".to_string();
+        report.files[0].context = vec![ContextLine {
+            loc: 0x1000,
+            line: None,
+            col: None,
+            data: vec![b'A'; 192],
+            notes: vec![note("t/late", 0x1050), note("t/early", 0x1005)],
+        }];
+
+        let out = format_tiny(&report);
+        let annotations: Vec<&str> = out.lines().filter(|l| l.starts_with("// ")).collect();
+        assert_eq!(
+            annotations,
+            vec![
+                "// N 1005 t/early desc (t/early)",
+                "// N 1050 t/late desc (t/late)",
+            ],
+            "annotations must carry their hex offset, in byte order: {out}",
+        );
+
+        // Every match offset must land in a row the gutter marks as a hit.
+        let rows: Vec<(u64, char)> = out
+            .lines()
+            .filter_map(|l| {
+                let (gutter, rest) = l.split_once(['-', ':'])?;
+                let marker = l.as_bytes()[gutter.len()] as char;
+                rest.starts_with(' ')
+                    .then(|| u64::from_str_radix(gutter, 16).ok())
+                    .flatten()
+                    .map(|off| (off, marker))
+            })
+            .collect();
+        assert!(!rows.is_empty(), "no byte rows rendered: {out}");
+        for off in [0x1005u64, 0x1050] {
+            let covering = rows.iter().rfind(|(row, _)| *row <= off).copied();
+            assert!(covering.is_some(), "no row covers {off:x}: {out}");
+            if let Some((gutter, marker)) = covering {
+                assert_eq!(
+                    marker, ':',
+                    "row {gutter:x} holds the match at {off:x} but is not marked as a hit: {out}",
+                );
+            }
+        }
+        assert!(
+            rows.iter().any(|(_, marker)| *marker == '-'),
+            "a row with no match must be marked as context: {out}",
+        );
     }
 
     #[test]

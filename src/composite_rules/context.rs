@@ -141,6 +141,10 @@ pub(crate) struct EvaluationContext<'a> {
     pub cached_ast: Option<&'a tree_sitter::Tree>,
     /// Optional debug collector - None for hot path, Some during test-rules
     pub debug_collector: Option<&'a DebugCollector>,
+    /// Where `unless:`/`downgrade:` suppressions of notable-or-above traits are
+    /// recorded, so the report can say what it decided not to report. `None`
+    /// for callers that don't collect them.
+    pub suppressions: Option<&'a crate::types::SuppressionSink>,
     /// Section map for location-constrained matching (lazy-initialized)
     pub section_map: Option<&'a SectionMap>,
     /// Pre-scanned inline YARA results from the combined engine
@@ -261,6 +265,7 @@ impl<'a> EvaluationContext<'a> {
             findings: FindingScope::new(&report.findings, additional_findings),
             cached_ast,
             debug_collector: None,
+            suppressions: None,
             section_map: None,
             inline_yara_results: None,
             cached_kv_format: Arc::new(OnceLock::new()),
@@ -496,6 +501,16 @@ impl<'a> EvaluationContext<'a> {
         }
     }
 
+    /// Attach the sink that collects `unless:`/`downgrade:` suppressions.
+    #[must_use]
+    pub(crate) fn with_suppressions(
+        mut self,
+        sink: Option<&'a crate::types::SuppressionSink>,
+    ) -> Self {
+        self.suppressions = sink;
+        self
+    }
+
     /// Record a skip reason to the debug collector if one is present.
     ///
     /// Takes a closure so the reason — which typically clones platform/type
@@ -504,6 +519,21 @@ impl<'a> EvaluationContext<'a> {
     /// a measurable allocation tax on scans that never collect debug info.
     pub(crate) fn record_skip(&self, reason: impl FnOnce() -> SkipReason) {
         self.with_debug(|debug| debug.record_skip(reason()));
+    }
+
+    /// Record that `unless:`/`downgrade:` legs withheld or demoted a trait.
+    ///
+    /// Takes a closure so the record — which clones ids and copies spans — is
+    /// built only when a sink is attached. Suppressions below
+    /// [`crate::types::MIN_RECORDED_SUPPRESSION`] are the engine's constant
+    /// background noise and are the caller's job to filter.
+    pub(crate) fn record_suppression(
+        &self,
+        suppression: impl FnOnce() -> crate::types::Suppression,
+    ) {
+        if let Some(sink) = self.suppressions {
+            sink.push(suppression());
+        }
     }
 
     /// Check if a finding ID exists (exact match only)
@@ -529,6 +559,7 @@ impl<'a> EvaluationContext<'a> {
             findings: FindingScope::with_index(&report.findings, None, None),
             cached_ast: None,
             debug_collector: None,
+            suppressions: None,
             section_map: None,
             inline_yara_results: None,
             cached_kv_format: Arc::new(OnceLock::new()),

@@ -10,7 +10,7 @@ use super::file_analysis::{FileAnalysis, ReportSummary};
 use super::filefacts_view::FilefactsView;
 use super::is_false;
 use super::paths_env::{DirectoryAccess, EnvVarInfo, PathInfo};
-use super::traits_findings::{ContextLine, Finding, StructuralFeature, Trait};
+use super::traits_findings::{ContextLine, Finding, StructuralFeature, Suppression, Trait};
 use crate::analyzers::FileType;
 use crate::malecule_bridge;
 
@@ -186,6 +186,12 @@ pub struct AnalysisReport {
     /// Findings - interpretive conclusions based on traits (capabilities, threats, etc.)
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub findings: Vec<Finding>,
+    /// Notable-or-above traits that matched but were withheld or demoted by
+    /// their own `unless:`/`downgrade:` legs, with the bytes those legs fired
+    /// on. What the engine decided *not* to report — so a reader can weigh that
+    /// call instead of reading silence as absence.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub suppressions: Vec<Suppression>,
     /// Merged, render-ready context: matched content shown once, in file order,
     /// annotated with the findings that touch it. The output surface that
     /// replaces raw per-finding evidence. Populated by the context-capture pass.
@@ -472,6 +478,7 @@ impl AnalysisReport {
             target,
             traits: Vec::new(),
             findings: Vec::new(),
+            suppressions: Vec::new(),
             context: Vec::new(),
             structure: Vec::new(),
             functions: Vec::new(),
@@ -1856,6 +1863,7 @@ impl AnalysisReport {
         // Existing skip_serializing_if = "Vec::is_empty" prevents these from appearing in output
         let _ = std::mem::take(&mut self.traits);
         let _ = std::mem::take(&mut self.findings);
+        let _ = std::mem::take(&mut self.suppressions);
         let _ = std::mem::take(&mut self.structure);
         let _ = std::mem::take(&mut self.functions);
         let _ = std::mem::take(&mut self.strings);
@@ -1900,6 +1908,7 @@ impl AnalysisReport {
             .and_then(|a| a.first().cloned());
         file.traits = self.traits.clone();
         file.findings = self.findings.clone();
+        file.suppressions = self.suppressions.clone();
         file.context = self.context.clone();
         file.filefacts = self.filefacts.clone();
         file.identity = self.identity.clone();

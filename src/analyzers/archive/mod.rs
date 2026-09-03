@@ -94,6 +94,162 @@ fn contains_java_members(temp_dir: &Path) -> bool {
         })
 }
 
+/// Count declared dependencies that name the package itself.
+///
+/// A manifest that lists its own name among its dependencies describes a
+/// package that cannot resolve: the installer is told to fetch, as a
+/// prerequisite for this release, the very release it is installing. No
+/// working build produces it, which is why it shows up in name reservations
+/// and dependency-confusion placeholders — the manifest is assembled to hold a
+/// name rather than to install anything, and the dependency list is filled in
+/// from the package's own identity.
+///
+/// The tree already carried this as two family-specific traits
+/// (`base58-core-self-dependency`, and the pucuk5000 note); the shape recurs
+/// across ecosystems, so it belongs here as one fact rather than one trait per
+/// campaign.
+///
+/// Decided only where both halves are structured data: an npm `package.json`
+/// (`name` + `dependencies.*`) and Python distribution metadata (`Name:` +
+/// `Requires-Dist:` in `PKG-INFO`/`METADATA`, or the `requires.txt` setuptools
+/// writes beside it in `*.egg-info/`). A `setup.py` declares `install_requires`
+/// in code, and cleave surfaces its strings without the field they belong to,
+/// so that spelling alone is not decidable -- but an sdist built from one
+/// carries the same list in `requires.txt`, which is.
+///
+/// Returns `None` when no manifest carries both a name and a dependency list,
+/// so the metric is absent rather than zero on packages it cannot judge.
+fn compute_self_dependency(report: &AnalysisReport) -> Option<u64> {
+    // PEP 503 normalisation, and npm's case rules, both reduce to this.
+    fn norm(s: &str) -> String {
+        s.trim()
+            .trim_matches('"')
+            .to_ascii_lowercase()
+            .replace(['_', '.'], "-")
+    }
+    // `Requires-Dist: foo[extra] >=1.0 ; python_version < "3.9"` -> `foo`.
+    fn dep_name(spec: &str) -> &str {
+        spec.split(|c: char| c == '[' || c == ';' || c == '(' || c.is_whitespace())
+            .next()
+            .unwrap_or("")
+            .trim_end_matches(|c: char| "<>=!~,".contains(c))
+    }
+
+    let mut judged = false;
+    let mut self_deps = 0u64;
+    for f in &report.files {
+        let base = Path::new(&f.path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("");
+        if base.eq_ignore_ascii_case("package.json") {
+            let Some(name) = f.kv.get("name").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let name = norm(name);
+            if name.is_empty() {
+                continue;
+            }
+            let mut saw_dep = false;
+            for dep in f.kv.keys().filter_map(|k| k.strip_prefix("dependencies.")) {
+                saw_dep = true;
+                if norm(dep) == name {
+                    self_deps += 1;
+                }
+            }
+            if saw_dep {
+                judged = true;
+            }
+        } else if base.eq_ignore_ascii_case("PKG-INFO") || base.eq_ignore_ascii_case("METADATA") {
+            let Some(name) = f.kv.get("name").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let name = norm(name);
+            if name.is_empty() {
+                continue;
+            }
+            // Repeated `Requires-Dist:` headers flatten to one key; every
+            // spelling of the value is checked so a single or multi-valued
+            // entry behaves the same.
+            let mut saw_dep = false;
+            for (k, v) in &f.kv {
+                // Flattening turns repeated headers into `requires-dist[0]`,
+                // `requires-dist[1]`, ...; an unflattened single value keeps
+                // the bare key. Accept both.
+                let key_matches = k.eq_ignore_ascii_case("requires-dist")
+                    || k.get(..14)
+                        .is_some_and(|p| p.eq_ignore_ascii_case("requires-dist["));
+                if !key_matches {
+                    continue;
+                }
+                saw_dep = true;
+                // Repeated headers arrive as an array; a single one as a
+                // scalar. Both spellings are the same list.
+                let specs: Vec<&str> = match v {
+                    serde_json::Value::Array(items) => {
+                        items.iter().filter_map(|i| i.as_str()).collect()
+                    }
+                    serde_json::Value::String(one) => vec![one.as_str()],
+                    _ => continue,
+                };
+                for spec in specs.iter().flat_map(|s| s.split([',', '\n'])) {
+                    if norm(dep_name(spec)) == name {
+                        self_deps += 1;
+                    }
+                }
+            }
+            if saw_dep {
+                judged = true;
+            }
+        }
+    }
+
+    // `*.egg-info/requires.txt`: setuptools' rendering of `install_requires`,
+    // one requirement per line, with `[extra]` section headers for the
+    // optional groups. Only the leading section applies to a plain install,
+    // and the distribution name comes from the metadata member handled above.
+    let dist_names: Vec<String> = report
+        .files
+        .iter()
+        .filter(|f| {
+            let base = Path::new(&f.path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("");
+            base.eq_ignore_ascii_case("PKG-INFO") || base.eq_ignore_ascii_case("METADATA")
+        })
+        .filter_map(|f| f.kv.get("name").and_then(|v| v.as_str()))
+        .map(norm)
+        .filter(|n| !n.is_empty())
+        .collect();
+    if !dist_names.is_empty() {
+        for f in &report.files {
+            let base = Path::new(&f.path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("");
+            if !base.eq_ignore_ascii_case("requires.txt") {
+                continue;
+            }
+            judged = true;
+            for s in &f.strings {
+                for line in s.value.as_ref().lines() {
+                    let line = line.trim();
+                    if line.is_empty() || line.starts_with('[') || line.starts_with('#') {
+                        continue;
+                    }
+                    let dep = norm(dep_name(line));
+                    if !dep.is_empty() && dist_names.contains(&dep) {
+                        self_deps += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    judged.then_some(self_deps)
+}
+
 /// Count `package.json` runtime `dependencies` that no shipped module imports.
 ///
 /// A phantom runtime dependency — declared but never `import`ed/`require`d
@@ -1813,6 +1969,16 @@ impl ArchiveAnalyzer {
                 .filefacts_metrics
                 .get_or_insert_with(Default::default)
                 .insert("consistency.unused_runtime_deps".to_string(), count as f64);
+        }
+
+        // A manifest that lists its own name as a dependency. Same placement
+        // and the same reason: a cross-member judgement that no single file's
+        // matcher can make.
+        if let Some(count) = compute_self_dependency(report) {
+            report
+                .filefacts_metrics
+                .get_or_insert_with(Default::default)
+                .insert("consistency.self_dependency".to_string(), count as f64);
         }
 
         // `consistency.name_repo_mismatch` and

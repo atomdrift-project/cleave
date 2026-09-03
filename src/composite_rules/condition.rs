@@ -292,11 +292,7 @@ fn local_regex_slot(pattern: &str, case_insensitive: bool) -> usize {
 }
 
 /// Look up `pattern` in this thread's memo, verifying the stored key.
-fn local_regex_get(
-    slot: usize,
-    pattern: &str,
-    case_insensitive: bool,
-) -> Option<Arc<TraitRegex>> {
+fn local_regex_get(slot: usize, pattern: &str, case_insensitive: bool) -> Option<Arc<TraitRegex>> {
     LOCAL_REGEX.with(|cache| {
         let cache = cache.borrow();
         match cache.get(slot) {

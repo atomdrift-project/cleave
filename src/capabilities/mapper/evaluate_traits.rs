@@ -68,6 +68,11 @@ pub(crate) struct TraitPass<'a> {
     /// re-evaluating them is pure waste, because the fixed-point loops dedup
     /// by id and would discard whatever they return.
     pub settled_ids: Option<&'a rustc_hash::FxHashSet<crate::types::Istr>>,
+    /// Where this pass records the `unless:`/`downgrade:` legs that withheld or
+    /// demoted a notable-or-above trait. Threaded on the pass rather than as a
+    /// parameter so every constructor below carries it to the one context the
+    /// pass builds.
+    pub suppressions: Option<&'a crate::types::SuppressionSink>,
 }
 
 impl<'a> TraitPass<'a> {
@@ -78,6 +83,7 @@ impl<'a> TraitPass<'a> {
             extra_findings: None,
             changed_ids: None,
             settled_ids: None,
+            suppressions: None,
         }
     }
 
@@ -88,6 +94,7 @@ impl<'a> TraitPass<'a> {
             extra_findings: extra,
             changed_ids: None,
             settled_ids: None,
+            suppressions: None,
         }
     }
 
@@ -103,7 +110,15 @@ impl<'a> TraitPass<'a> {
             extra_findings: extra,
             changed_ids: Some(changed),
             settled_ids: Some(settled),
+            suppressions: None,
         }
+    }
+
+    /// Record this pass's suppressions into `sink`.
+    #[must_use]
+    pub(crate) fn recording(mut self, sink: Option<&'a crate::types::SuppressionSink>) -> Self {
+        self.suppressions = sink;
+        self
     }
 }
 
@@ -738,6 +753,7 @@ impl super::CapabilityMapper {
                 extra_findings: None,
                 changed_ids: None,
                 settled_ids: None,
+                suppressions: None,
             },
             &TraitEvalCache {
                 raw_regex_matches: Some(&raw_regex_hits.traits),
@@ -775,6 +791,7 @@ impl super::CapabilityMapper {
             extra_findings,
             changed_ids,
             settled_ids,
+            suppressions,
         } = pass;
         // Determine file type from report
         let file_type = self.detect_file_type(&report.target.file_type);
@@ -789,6 +806,7 @@ impl super::CapabilityMapper {
             extra_findings,
             cached_ast,
         )
+        .with_suppressions(suppressions)
         .with_section_map(cache.section_map)
         .with_cached_evidence(Some(cache.cached_evidence))
         .with_deadline(std::time::Instant::now() + std::time::Duration::from_secs(180))

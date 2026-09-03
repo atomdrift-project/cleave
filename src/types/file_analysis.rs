@@ -148,6 +148,11 @@ pub struct FileAnalysis {
     /// Findings for this file
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub findings: Vec<Finding>,
+    /// Notable-or-above traits that matched this file but were withheld or
+    /// demoted by their own `unless:`/`downgrade:` legs. See
+    /// [`crate::types::Suppression`].
+    #[serde(rename = "supp", skip_serializing_if = "Vec::is_empty", default)]
+    pub suppressions: Vec<crate::types::Suppression>,
 
     /// Merged, render-ready context: matched content shown once, in file
     /// order, annotated with the findings that touch it. Replaces raw
@@ -288,6 +293,7 @@ impl FileAnalysis {
             counts: None,
             encoding: None,
             findings: Vec::new(),
+            suppressions: Vec::new(),
             context: Vec::new(),
             traits: Vec::new(),
             structure: Vec::new(),

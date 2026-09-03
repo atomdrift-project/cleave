@@ -144,6 +144,13 @@ pub struct CompactFile {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     #[serde(default)]
     pub findings: Vec<CompactTrait>,
+    /// Notable-or-above traits this file matched that were withheld or demoted
+    /// by their own `unless:`/`downgrade:` legs — what the analysis decided not
+    /// to report, with the legs and byte spans behind that call.
+    #[serde(rename = "supp")]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
+    pub suppressions: Vec<crate::types::Suppression>,
     /// External references this file declares (deps, URLs, repository), each
     /// with its byte offset — the file→dependency edges of the galaxy view.
     #[serde(rename = "refs")]
@@ -993,6 +1000,7 @@ fn convert_file(file: &super::file_analysis::FileAnalysis, id: u32) -> CompactFi
         formula,
         identity: file.identity.clone(),
         findings: traits,
+        suppressions: file.suppressions.clone(),
         refs,
         // Context windows without their per-line notes: the note payloads
         // duplicate the sibling `traits` entries (id/desc/conf/crit) per
@@ -1498,6 +1506,18 @@ mod wire_roundtrip_tests {
         fa.depth = 1;
         fa.parent_id = Some(0);
 
+        // A suppression rides the same round trip: it is the only record of
+        // what the analysis withheld, so a lossy encode would silently erase it.
+        fa.suppressions.push(crate::types::Suppression {
+            id: "objectives/execution/shell".into(),
+            crit: Criticality::Suspicious,
+            kind: crate::types::SuppressionKind::Unless,
+            by: vec![crate::types::SuppressionLeg {
+                id: "metadata/package/testing/harness/runtime::is-test".into(),
+                spans: vec![[0, 57]],
+            }],
+        });
+
         let report = compact_from_files(&[fa]);
         let encoded = serde_json::to_string(&report).expect("encode");
         let decoded: CompactReport = serde_json::from_str(&encoded).expect("decode");
@@ -1508,6 +1528,10 @@ mod wire_roundtrip_tests {
         );
         assert_eq!(decoded.files.len(), 1);
         assert_eq!(decoded.files[0].findings.len(), 1);
+        assert_eq!(
+            decoded.files[0].suppressions, report.files[0].suppressions,
+            "suppressions did not survive the wire round trip"
+        );
         assert_eq!(decoded.version, SCHEMA_VERSION);
     }
 

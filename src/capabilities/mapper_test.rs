@@ -392,8 +392,15 @@ fn test_evaluate_composite_rules_empty() {
     let mapper = CapabilityMapper::empty();
     let report = create_test_report();
 
-    let findings =
-        mapper.evaluate_composite_rules(&report, &[], None, None, &SectionMap::default(), None);
+    let findings = mapper.evaluate_composite_rules(
+        &report,
+        &[],
+        None,
+        None,
+        &SectionMap::default(),
+        None,
+        None,
+    );
     assert_eq!(findings.len(), 0);
 }
 
@@ -982,6 +989,401 @@ composite_rules:
             .iter()
             .any(|f| f.id == "test/victim::generic-api"),
         "generic-api should be retroactively suppressed by unless: test/packer::combined"
+    );
+}
+
+/// A composite that fired on a trait the retroactive pass then suppressed must
+/// not survive on it.
+///
+/// Ordering makes this reachable: an atomic whose `unless:` names a composite
+/// cannot be checked until composites have run, so a composite evaluated in
+/// between consumes the atomic and records it in `trait_refs`. Step 6 then
+/// removes the atomic. Before the cascade, the consumer stayed — a finding
+/// whose only stated evidence was no longer in the report, citing a trait no
+/// consumer could resolve. The cascade must reach transitively: a composite
+/// built on the orphaned composite goes too.
+#[test]
+fn test_retroactive_unless_suppression_cascades_to_composites_that_used_the_trait() {
+    let yaml = r#"
+defaults:
+  for: [binaries, scripts, source, manifests, documents, media, data, archives]
+
+traits:
+  - id: "test/packer::signal-a"
+    desc: "Packer signal A"
+    crit: baseline
+    conf: 0.9
+    if:
+      type: text
+      substr: "SIGNAL_A"
+
+  - id: "test/packer::signal-b"
+    desc: "Packer signal B"
+    crit: baseline
+    conf: 0.9
+    if:
+      type: text
+      substr: "SIGNAL_B"
+
+  # Retroactively suppressed once the packer composite fires — but the
+  # consumer composite below has already fired on it by then.
+  - id: "test/victim::generic-api"
+    desc: "Generic API (suppressed when packer detected)"
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      substr: "GENERIC_API"
+    unless:
+      - id: test/packer::combined
+
+composite_rules:
+  - id: "test/packer::combined"
+    desc: "Both packer signals present"
+    crit: notable
+    conf: 0.9
+    all:
+      - id: test/packer::signal-a
+      - id: test/packer::signal-b
+
+  - id: "test/consumer::uses-victim"
+    desc: "Fires only on the victim trait"
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: test/victim::generic-api
+
+  - id: "test/consumer::uses-consumer"
+    desc: "Fires only on the consumer composite"
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: test/consumer::uses-victim
+"#;
+    let (_dir, path) = create_test_yaml(yaml);
+    let mapper = CapabilityMapper::from_yaml(&path).unwrap();
+
+    let binary_data = b"SIGNAL_A SIGNAL_B GENERIC_API";
+    let mut report = create_test_report_with_size(binary_data.len() as u64);
+    for s in ["SIGNAL_A", "SIGNAL_B", "GENERIC_API"] {
+        report.strings.push(crate::types::StringInfo {
+            value: (s.to_string()).into(),
+            offset: Some(0),
+            encoding: "ascii".to_string(),
+            string_type: None,
+            section: None,
+            encoding_chain: Vec::new(),
+            fragments: None,
+        });
+    }
+
+    mapper.evaluate_and_merge_findings(&mut report, binary_data, None, None);
+
+    let fired = |id: &str| report.findings.iter().any(|f| f.id == id);
+    assert!(fired("test/packer::combined"), "the suppressor must fire");
+    assert!(
+        !fired("test/victim::generic-api"),
+        "the victim must be retroactively suppressed",
+    );
+    assert!(
+        !fired("test/consumer::uses-victim"),
+        "a composite whose only cited evidence was suppressed must go with it",
+    );
+    assert!(
+        !fired("test/consumer::uses-consumer"),
+        "the cascade must reach transitively",
+    );
+
+    // Nothing may cite a trait that is not in the report.
+    let present: std::collections::HashSet<&str> =
+        report.findings.iter().map(|f| f.id.as_str()).collect();
+    for finding in &report.findings {
+        for r in &finding.trait_refs {
+            assert!(
+                present.contains(r.as_str()),
+                "{} cites {r}, which is not in the report",
+                finding.id,
+            );
+        }
+    }
+}
+
+/// A composite that keeps some of its cited evidence survives the cascade — the
+/// suppression removes the dead reference, not the finding.
+#[test]
+fn test_retroactive_unless_suppression_keeps_composites_with_surviving_legs() {
+    let yaml = r#"
+defaults:
+  for: [binaries, scripts, source, manifests, documents, media, data, archives]
+
+traits:
+  - id: "test/packer::signal-a"
+    desc: "Packer signal A"
+    crit: baseline
+    conf: 0.9
+    if:
+      type: text
+      substr: "SIGNAL_A"
+
+  - id: "test/packer::signal-b"
+    desc: "Packer signal B"
+    crit: baseline
+    conf: 0.9
+    if:
+      type: text
+      substr: "SIGNAL_B"
+
+  - id: "test/victim::generic-api"
+    desc: "Generic API (suppressed when packer detected)"
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      substr: "GENERIC_API"
+    unless:
+      - id: test/packer::combined
+
+  - id: "test/other::survivor"
+    desc: "Unsuppressed sibling signal"
+    crit: component
+    conf: 0.9
+    if:
+      type: text
+      substr: "SURVIVOR"
+
+composite_rules:
+  - id: "test/packer::combined"
+    desc: "Both packer signals present"
+    crit: notable
+    conf: 0.9
+    all:
+      - id: test/packer::signal-a
+      - id: test/packer::signal-b
+
+  - id: "test/consumer::any-of-two"
+    desc: "Fires on either signal"
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: test/victim::generic-api
+      - id: test/other::survivor
+"#;
+    let (_dir, path) = create_test_yaml(yaml);
+    let mapper = CapabilityMapper::from_yaml(&path).unwrap();
+
+    let binary_data = b"SIGNAL_A SIGNAL_B GENERIC_API SURVIVOR";
+    let mut report = create_test_report_with_size(binary_data.len() as u64);
+    for s in ["SIGNAL_A", "SIGNAL_B", "GENERIC_API", "SURVIVOR"] {
+        report.strings.push(crate::types::StringInfo {
+            value: (s.to_string()).into(),
+            offset: Some(0),
+            encoding: "ascii".to_string(),
+            string_type: None,
+            section: None,
+            encoding_chain: Vec::new(),
+            fragments: None,
+        });
+    }
+
+    mapper.evaluate_and_merge_findings(&mut report, binary_data, None, None);
+
+    let consumer = report
+        .findings
+        .iter()
+        .find(|f| f.id == "test/consumer::any-of-two")
+        .expect("a composite with a surviving leg must be kept");
+    assert_eq!(
+        consumer
+            .trait_refs
+            .iter()
+            .map(crate::types::Istr::as_str)
+            .collect::<Vec<_>>(),
+        vec!["test/other::survivor"],
+        "the suppressed leg must be struck from trait_refs, the surviving one kept",
+    );
+}
+
+/// A suppression is recorded only for a trait that would otherwise have fired.
+///
+/// `unless:` is checked before the positive condition, so most `unless:` hits
+/// land on rules whose positive side never comes close — on one 275-byte script
+/// that was 221 rules, every one of them a hostile detection that was never in
+/// prospect. Reporting those as "withheld" would be false. The engine defers the
+/// early-out when it is recording, so only a real withholding is reported.
+#[test]
+fn test_suppression_record_only_covers_traits_that_would_have_fired() {
+    let yaml = r#"
+defaults:
+  for: [binaries, scripts, source, manifests, documents, media, data, archives]
+
+traits:
+  - id: "test/context::benign-marker"
+    desc: "Benign context marker"
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      substr: "BENIGN_CONTEXT"
+
+  # Matches the file AND is suppressed — a real withholding.
+  - id: "test/victim::withheld"
+    desc: "Withheld detection"
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: text
+      substr: "REAL_SIGNAL"
+    unless:
+      - id: test/context::benign-marker
+
+  # Suppressed, but its positive side does not match the file — it was never
+  # going to fire, so it must NOT be reported as withheld.
+  - id: "test/victim::never-would-have-fired"
+    desc: "Absent detection"
+    crit: hostile
+    conf: 0.9
+    if:
+      type: text
+      substr: "SIGNAL_THAT_IS_NOT_PRESENT"
+    unless:
+      - id: test/context::benign-marker
+
+  # Below the recording floor: withheld, but not worth reporting.
+  - id: "test/victim::low-tier"
+    desc: "Low-tier detection"
+    crit: baseline
+    conf: 0.9
+    if:
+      type: text
+      substr: "REAL_SIGNAL"
+    unless:
+      - id: test/context::benign-marker
+"#;
+    let (_dir, path) = create_test_yaml(yaml);
+    let mapper = CapabilityMapper::from_yaml(&path).unwrap();
+
+    let binary_data = b"BENIGN_CONTEXT REAL_SIGNAL";
+    let mut report = create_test_report_with_size(binary_data.len() as u64);
+    for s in ["BENIGN_CONTEXT", "REAL_SIGNAL"] {
+        report.strings.push(crate::types::StringInfo {
+            value: (s.to_string()).into(),
+            offset: Some(0),
+            encoding: "ascii".to_string(),
+            string_type: None,
+            section: None,
+            encoding_chain: Vec::new(),
+            fragments: None,
+        });
+    }
+
+    mapper.evaluate_and_merge_findings(&mut report, binary_data, None, None);
+
+    assert!(
+        !report
+            .findings
+            .iter()
+            .any(|f| f.id == "test/victim::withheld"),
+        "the suppressed trait must still produce no finding",
+    );
+
+    let recorded: Vec<&str> = report.suppressions.iter().map(|s| s.id.as_str()).collect();
+    assert_eq!(
+        recorded,
+        vec!["test/victim::withheld"],
+        "only a trait that would otherwise have fired, at notable or above, is recorded",
+    );
+
+    let suppression = &report.suppressions[0];
+    assert_eq!(suppression.kind, crate::types::SuppressionKind::Unless);
+    assert_eq!(suppression.crit, Criticality::Suspicious);
+    assert_eq!(
+        suppression
+            .by
+            .iter()
+            .map(|l| l.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["test/context::benign-marker"],
+        "the record must name the leg that did the withholding",
+    );
+    assert!(
+        !suppression.by[0].spans.is_empty(),
+        "a leg must carry the bytes it fired on: {:?}",
+        suppression.by[0],
+    );
+}
+
+/// A `downgrade:` is recorded too — the trait survives, demoted, and the reason
+/// is exactly as reviewable as an outright withholding.
+#[test]
+fn test_downgrade_is_recorded_with_the_leg_that_demoted_it() {
+    let yaml = r#"
+defaults:
+  for: [binaries, scripts, source, manifests, documents, media, data, archives]
+
+traits:
+  - id: "test/context::test-harness"
+    desc: "Test harness marker"
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      substr: "IS_TEST_FIXTURE"
+
+  - id: "test/victim::demoted"
+    desc: "Demoted detection"
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: text
+      substr: "REAL_SIGNAL"
+    downgrade:
+      any:
+        - id: test/context::test-harness
+"#;
+    let (_dir, path) = create_test_yaml(yaml);
+    let mapper = CapabilityMapper::from_yaml(&path).unwrap();
+
+    let binary_data = b"IS_TEST_FIXTURE REAL_SIGNAL";
+    let mut report = create_test_report_with_size(binary_data.len() as u64);
+    for s in ["IS_TEST_FIXTURE", "REAL_SIGNAL"] {
+        report.strings.push(crate::types::StringInfo {
+            value: (s.to_string()).into(),
+            offset: Some(0),
+            encoding: "ascii".to_string(),
+            string_type: None,
+            section: None,
+            encoding_chain: Vec::new(),
+            fragments: None,
+        });
+    }
+
+    mapper.evaluate_and_merge_findings(&mut report, binary_data, None, None);
+
+    let demoted = report
+        .findings
+        .iter()
+        .find(|f| f.id == "test/victim::demoted")
+        .expect("a downgraded trait still fires");
+    assert!(
+        demoted.crit < Criticality::Suspicious,
+        "it must actually be demoted, got {:?}",
+        demoted.crit,
+    );
+
+    let record = report
+        .suppressions
+        .iter()
+        .find(|s| s.id == "test/victim::demoted")
+        .expect("the downgrade must be recorded");
+    assert_eq!(record.kind, crate::types::SuppressionKind::Downgrade);
+    assert_eq!(
+        record.crit,
+        Criticality::Suspicious,
+        "the record states the criticality the trait would have carried",
+    );
+    assert_eq!(
+        record.by.iter().map(|l| l.id.as_str()).collect::<Vec<_>>(),
+        vec!["test/context::test-harness"],
     );
 }
 

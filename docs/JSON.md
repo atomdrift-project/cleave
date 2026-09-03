@@ -47,6 +47,7 @@ hex strings; that representation is unchanged.)
 | `mol` | string | Molecular formula. Omitted if absent. |
 | `ident` | `Identity` | Normalised identity claims: name, version, signer, trust tier (from filefacts). Omitted if absent. |
 | `traits` | array | Findings, as compact traits (below). Omitted if empty. |
+| `supp` | array | Suppressions: notable-or-above traits that matched but were withheld or demoted (below). Omitted if empty. |
 | `refs` | array | Declared references (deps, URLs, repository) — the file→dependency edges. Omitted if empty. |
 | `ctx` | array | Merged context windows: raw match-highlight bytes in file order. Omitted if empty. |
 | `facts` | object | Dense filefacts-derived facts (below). Omitted if empty. |
@@ -81,6 +82,37 @@ composite still recorded, or a leg that stayed behind in a member).
 
 `from[].line` carries the 1-based source line of a component match when known —
 so a composite that fires across members cites each leg down to the line.
+
+### Suppression (`supp[]`)
+
+What the analysis decided *not* to report: a trait that matched the file but was
+withheld by an `unless:` leg or demoted by a `downgrade:` leg. Recorded so a
+reader can weigh that call on the same evidence instead of taking silence for
+absence — a credential path withheld because the file "looks like a test
+fixture" is a judgement worth checking, not a fact.
+
+| JSON | Type | Meaning |
+| ---- | ---- | ------- |
+| `id` | string | The trait that matched. No description is carried — the taxonomy path says what the trait is, and a copy of the prose here would be a second place for it to go stale. |
+| `crit` | string | The criticality it would have carried. |
+| `kind` | string | `unless` (withheld outright) or `downgrade` (demoted one level). |
+| `by` | array | The legs that fired: `{id, spans?}`, where `spans` are `[[offset, length], …]` byte spans. Omitted if empty. |
+
+Only notable-or-above suppressions are recorded: below that the engine withholds
+constantly and none of it changes an assessment. A trait is recorded only when
+its positive condition *also* matched — `unless:` is evaluated first as a cheap
+early-out, so most `unless:` hits land on rules that were never going to fire,
+and reporting those would be false. Legs carry spans rather than rendered bytes
+because the most common suppressors are `crit: exception` composites, stripped
+from the report before anything could resolve them; the span is enough to pull
+the bytes from the file.
+
+`cleave --format tiny` (the payload `scan --format interpret` prints verbatim)
+renders each as a `withheld`/`downgraded` line naming the trait, the legs, and
+their spans. A file is never skipped from that output for having nothing but
+withheld traits to report, and a per-file cap on how many are listed still ends
+with a `+N more suppressed` count — an assessment built on what the analysis
+reported is only as good as its account of what it withheld.
 
 ### Compact reference (`refs[]`)
 

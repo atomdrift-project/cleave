@@ -212,8 +212,22 @@ pub struct Note {
 /// cap at [`MAX_EV_LOCS`]. One definition so fold and convert never drift.
 #[must_use]
 pub(crate) fn finding_spans(finding: &Finding) -> Vec<[u64; 2]> {
-    let mut ev_spans: Vec<[u64; 2]> = finding
-        .evidence
+    let mut ev_spans = evidence_spans(&finding.evidence);
+    if let Some(pre) = &finding.precomputed_spans {
+        ev_spans.extend(pre.iter().copied());
+    }
+    ev_spans.sort_unstable_by_key(|s| s[0]);
+    ev_spans.dedup_by_key(|s| s[0]);
+    ev_spans.truncate(MAX_EV_LOCS);
+    ev_spans
+}
+
+/// The byte spans a slice of evidence points at, unsorted and uncapped —
+/// `finding_spans`'s first half, shared with suppression-leg capture so both
+/// derive spans from evidence the same way. Archive-scoped locations are
+/// dropped: they address a member, not this file's bytes.
+pub(crate) fn evidence_spans(evidence: &[Evidence]) -> Vec<[u64; 2]> {
+    evidence
         .iter()
         .filter(|e| {
             !e.location
@@ -228,14 +242,7 @@ pub(crate) fn finding_spans(finding: &Finding) -> Vec<[u64; 2]> {
                 [off, len]
             })
         })
-        .collect();
-    if let Some(pre) = &finding.precomputed_spans {
-        ev_spans.extend(pre.iter().copied());
-    }
-    ev_spans.sort_unstable_by_key(|s| s[0]);
-    ev_spans.dedup_by_key(|s| s[0]);
-    ev_spans.truncate(MAX_EV_LOCS);
-    ev_spans
+        .collect()
 }
 
 /// A finding - an interpretive conclusion based on traits
@@ -1048,5 +1055,104 @@ mod tests {
 
         assert_eq!(sf.id, "binary/format/pe");
         assert_eq!(sf.evidence.len(), 1);
+    }
+}
+
+/// Why a matched trait was withheld from the report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SuppressionKind {
+    /// An `unless:` leg fired: the trait matched but produced no finding.
+    Unless,
+    /// A `downgrade:` leg fired: the trait was demoted, not withheld.
+    Downgrade,
+}
+
+impl SuppressionKind {
+    /// Lowercase label, for rendering.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Unless => "unless",
+            Self::Downgrade => "downgrade",
+        }
+    }
+}
+
+/// One leg of a suppression: the trait that fired to withhold or demote
+/// another, and the bytes it fired on.
+///
+/// The spans are captured at suppression time rather than looked up later
+/// because the most common suppressors are `crit: exception` composites, which
+/// are stripped from the report before anything could resolve them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SuppressionLeg {
+    /// The trait or composite that fired.
+    pub id: super::Istr,
+    /// Byte spans (`[offset, len]`) it fired on. May be empty when the leg is
+    /// not byte-addressable (a metric or file-property condition).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spans: Vec<[u64; 2]>,
+}
+
+/// A trait that matched the file but was withheld or demoted by its own
+/// `unless:`/`downgrade:` legs.
+///
+/// Recorded so a downstream reader — an LLM grading the file, a human reviewing
+/// a verdict — can see what the engine decided *not* to say and judge that call
+/// on the evidence, instead of taking silence for absence. Only notable-or-above
+/// suppressions are recorded: below that the engine withholds constantly and
+/// none of it changes an assessment.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Suppression {
+    /// The trait that matched.
+    ///
+    /// Carried alone, without a description: the taxonomy path already says
+    /// what the trait is, and a copy of the prose here would only be a second
+    /// place for it to go stale when the trait definition changes.
+    pub id: super::Istr,
+    /// The criticality it would have carried.
+    pub crit: Criticality,
+    /// Whether it was withheld outright or demoted.
+    pub kind: SuppressionKind,
+    /// The legs that fired, with the bytes behind them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub by: Vec<SuppressionLeg>,
+}
+
+/// Suppressions worth recording start here: below notable the engine withholds
+/// constantly (baseline noise, component building blocks) and reporting it
+/// would bury the cases that change an assessment.
+pub(crate) const MIN_RECORDED_SUPPRESSION: Criticality = Criticality::Notable;
+
+/// Collects [`Suppression`]s during evaluation.
+///
+/// Shared behind `&` by every rule worker, so it is a lock — but one taken only
+/// when a notable-or-above trait is actually suppressed, which is rare next to
+/// the ~9k rule evaluations a file runs. Absent (`None` on the context) for
+/// callers that don't want the record, which costs one `Option` check per
+/// suppression.
+#[derive(Debug, Default)]
+pub(crate) struct SuppressionSink(std::sync::Mutex<Vec<Suppression>>);
+
+impl SuppressionSink {
+    /// Record one suppression. A poisoned lock drops the record rather than
+    /// panicking — this is diagnostic output, never worth failing an analysis.
+    pub(crate) fn push(&self, suppression: Suppression) {
+        if let Ok(mut out) = self.0.lock() {
+            out.push(suppression);
+        }
+    }
+
+    /// Take everything recorded, deduplicated by trait id (a trait evaluated
+    /// per member or across dependent-trait rounds records the same suppression
+    /// more than once) and ordered strongest-first.
+    pub(crate) fn drain(self) -> Vec<Suppression> {
+        let Ok(mut out) = self.0.into_inner() else {
+            return Vec::new();
+        };
+        out.sort_unstable_by(|a, b| b.crit.cmp(&a.crit).then_with(|| a.id.cmp(&b.id)));
+        out.dedup_by(|a, b| a.id == b.id && a.kind == b.kind);
+        out
     }
 }

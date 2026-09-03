@@ -2087,7 +2087,10 @@ impl ArchiveAnalyzer {
                 &empty_section_map,
             );
             if has_builtin_anti_analysis_finding(&file.findings) {
-                mapper.apply_retroactive_unless_suppression_to_findings(&mut file.findings);
+                // No sink: this pass runs at archive assembly over an aggregated
+                // finding pool. Each member recorded its own suppressions when
+                // it was analyzed.
+                mapper.apply_retroactive_unless_suppression_to_findings(&mut file.findings, None);
                 if path_is_fixture_context(&file.path) {
                     file.findings
                         .retain(|finding| finding.id != "anti-analysis/archive/symlink-escape");
@@ -2102,7 +2105,7 @@ impl ArchiveAnalyzer {
         }
         report.files = files;
         if has_builtin_anti_analysis_finding(&report.findings) {
-            mapper.apply_retroactive_unless_suppression_to_findings(&mut report.findings);
+            mapper.apply_retroactive_unless_suppression_to_findings(&mut report.findings, None);
             let fixture_file_ids: Vec<u32> = report
                 .files
                 .iter()

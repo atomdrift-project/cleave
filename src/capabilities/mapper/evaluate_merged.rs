@@ -93,44 +93,82 @@ pub(crate) fn merge_filefacts_context(
     }
 }
 
-/// Full raw-content gate with source offset recording (windowed `eval_raw`).
+/// Full raw-content gate with offset recording (windowed `eval_raw`) for
+/// binaries. PE/ELF stay here: B1k measured AC + windows on 200–480 MiB
+/// installers as a loss.
 pub(crate) const RAW_GATE_MAX_BYTES: usize = 3 << 20;
+/// Full gate for source/text (`CLEAVE_RAW_GATE_SOURCE_MAX_KB` overrides).
+/// Same as the binary band for now. Above it a 5–15 MB JavaScript bundle
+/// gets the presence-only sweep, so every text trait whose atom occurs
+/// anywhere full-scans it (85 GB of haystack per analysis of one 8.9 MB
+/// bundle). Solo, 16 MiB cut CPU on every bundle in the npm corpus
+/// (edgeone 54.7 → 48.4 s, tcsp 34.2 → 32.3, utils-mf 20.1 → 18.2, 0
+/// diffs), but the whole-corpus scan measured neutral to +3% CPU over six
+/// runs (2026-09-03) even after the line-window fix, so the default stays
+/// put until that is understood. The 512 atom offset cap stays too:
+/// raising it makes dense atoms cost more in window-building than the
+/// scan they replace (tcsp +26% at 4,096, +55% at 32,768).
+pub(crate) const RAW_GATE_SOURCE_MAX_BYTES: usize = RAW_GATE_MAX_BYTES;
 /// Presence-only source sweep above [`RAW_GATE_MAX_BYTES`]. Not B1l: no
 /// offsets, no windowing. PE/ELF never use this band.
 pub(crate) const RAW_GATE_THIN_SOURCE_MAX_BYTES: usize = 80 << 20;
 
-fn raw_gate_caps() -> (usize, usize) {
-    static CAPS: std::sync::OnceLock<(usize, usize)> = std::sync::OnceLock::new();
+fn raw_gate_caps() -> (usize, usize, usize) {
+    static CAPS: std::sync::OnceLock<(usize, usize, usize)> = std::sync::OnceLock::new();
     *CAPS.get_or_init(|| {
         let full = std::env::var("CLEAVE_RAW_GATE_MAX_KB")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
             .map_or(RAW_GATE_MAX_BYTES, |kb| kb << 10);
+        let source_full = std::env::var("CLEAVE_RAW_GATE_SOURCE_MAX_KB")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .map_or(RAW_GATE_SOURCE_MAX_BYTES.max(full), |kb| kb << 10);
         let thin = std::env::var("CLEAVE_RAW_GATE_THIN_SOURCE_MAX_KB")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
             .map_or(RAW_GATE_THIN_SOURCE_MAX_BYTES, |kb| kb << 10);
-        (full, thin.max(full))
+        (full, source_full, thin.max(source_full))
     })
 }
 
 /// `None` = do not run the raw-content gate. `Some(record_offsets)` runs it.
 pub(crate) fn raw_gate_plan(file_len: usize, is_source: bool) -> Option<bool> {
-    let (full, thin) = raw_gate_caps();
-    raw_gate_plan_with_caps(file_len, is_source, full, thin)
+    let (full, source_full, thin) = raw_gate_caps();
+    raw_gate_plan_with_source_cap(file_len, is_source, full, source_full, thin)
 }
 
+#[cfg(test)]
 pub(crate) fn raw_gate_plan_with_caps(
     file_len: usize,
     is_source: bool,
     full: usize,
     thin: usize,
 ) -> Option<bool> {
-    let cap = if is_source { thin.max(full) } else { full };
-    if file_len > cap {
-        return None;
+    raw_gate_plan_with_source_cap(file_len, is_source, full, full, thin)
+}
+
+/// `full` bounds offset recording for binaries, `source_full` for
+/// source/text, `thin` the presence-only sweep for source above that.
+pub(crate) fn raw_gate_plan_with_source_cap(
+    file_len: usize,
+    is_source: bool,
+    full: usize,
+    source_full: usize,
+    thin: usize,
+) -> Option<bool> {
+    if is_source {
+        let source_full = source_full.max(full);
+        if file_len > thin.max(source_full) {
+            return None;
+        }
+        Some(file_len <= source_full)
+    } else {
+        if file_len > full {
+            return None;
+        }
+        Some(false)
     }
-    Some(is_source && file_len <= full)
 }
 
 impl super::CapabilityMapper {
@@ -672,7 +710,28 @@ impl super::CapabilityMapper {
 
 #[cfg(test)]
 mod raw_gate_plan_tests {
-    use super::{RAW_GATE_MAX_BYTES, RAW_GATE_THIN_SOURCE_MAX_BYTES, raw_gate_plan_with_caps};
+    use super::{
+        RAW_GATE_MAX_BYTES, RAW_GATE_THIN_SOURCE_MAX_BYTES, raw_gate_plan_with_caps,
+        raw_gate_plan_with_source_cap,
+    };
+
+    #[test]
+    fn source_records_offsets_up_to_its_own_band_binaries_keep_the_small_one() {
+        const FULL: usize = RAW_GATE_MAX_BYTES;
+        const SRC: usize = 16 << 20;
+        const THIN: usize = RAW_GATE_THIN_SOURCE_MAX_BYTES;
+        let plan = |len, src| raw_gate_plan_with_source_cap(len, src, FULL, SRC, THIN);
+        assert_eq!(plan(9 << 20, true), Some(true), "9 MB bundle: windowed");
+        assert_eq!(plan(SRC, true), Some(true));
+        assert_eq!(
+            plan(SRC + 1, true),
+            Some(false),
+            "above the band: presence only"
+        );
+        assert_eq!(plan(THIN + 1, true), None);
+        assert_eq!(plan(9 << 20, false), None, "9 MB binary: no gate");
+        assert_eq!(plan(2 << 20, false), Some(false), "binaries never record");
+    }
 
     const FULL: usize = RAW_GATE_MAX_BYTES;
     const THIN: usize = RAW_GATE_THIN_SOURCE_MAX_BYTES;

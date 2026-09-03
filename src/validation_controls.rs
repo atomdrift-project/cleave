@@ -529,13 +529,6 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         fix: "Use directory syntax for any: clauses; for all: clauses, split only when there are clear sub-techniques.",
     },
     ValidatorSpec {
-        id: "unsatisfiable-file-type",
-        category: ValidatorCategory::Quality,
-        display_id: "unsat-filetype",
-        description: "Composite and its legs share no file type, so it can never match.",
-        fix: "Set for: on the rule to the file type its legs match.",
-    },
-    ValidatorSpec {
         id: "directory-alias-composite",
         category: ValidatorCategory::Reuse,
         display_id: "dir-alias",

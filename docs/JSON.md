@@ -58,11 +58,26 @@ hex strings; that representation is unchanged.)
 | `id` | string | Trait id, e.g. `objectives/execution/shell/bash`. |
 | `crit` | u8 | Criticality ordinal 0–5 (see below). |
 | `desc` | string | Description. Omitted if empty. |
-| `conf` | f32 | Confidence. Omitted when `0.5`. |
+| `conf` | f32 | Confidence. Always emitted; a missing `conf` (only from builds that omitted it) decodes to `0.0`. |
 | `mbc` | string | MBC id. Omitted if unset. |
 | `atk` | string | ATT&CK technique. Omitted if unset. |
 | `from` | array | Cross-file composite provenance: `{file, line?, off?}` per contributing member. Omitted when the finding is native to this file. |
 | `spans` | array | Evidence byte spans `[[offset, length], …]`, capped at 8. Locate matches in `ctx` by range intersection. Omitted if empty. |
+| `uses` | array | For a composite: ascending indices into this file's own `traits[]` of the components it fired on — the composite→component edges of the trait graph. Omitted for atomic traits and when empty. |
+
+`uses` is index-based rather than id-based because the ids are already in the
+array: repeating them would cost far more than a small integer, and on a
+30k-trait corpus the edges add under 1% to the report. Composites chain — a
+`uses` entry may itself be a composite with its own `uses`.
+
+Containers resolve their own edges. Archive and encoding-layer inheritance
+copies a composite *and* the components it fired on into the parent, so a
+member's composite re-emitted on the enclosing zip indexes the zip's own
+`traits[]`, while `from` names the member it came from: `uses` is the shape of
+the detection, `from` is where it happened, and a cross-file composite carries
+both. Indices never dangle — a ref the report does not carry is dropped, which
+happens for roughly 0.6% of edges (an `unless:`-suppressed component the
+composite still recorded, or a leg that stayed behind in a member).
 
 `from[].line` carries the 1-based source line of a component match when known —
 so a composite that fires across members cites each leg down to the line.

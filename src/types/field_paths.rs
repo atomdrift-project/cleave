@@ -168,6 +168,12 @@ pub(crate) const CLEAVE_OWNED_METRIC_FIELDS: &[&str] = &[
     "references.declared_count",
     "references.unresolved_count",
     "references.unresolved_extension_count",
+    // How many of a file's declared dependencies resolved to a registry
+    // security hold — the provider's statement that it removed the package.
+    // Counted from the registry documents a follow materializes, which is a
+    // different path from the fetch records the two counts above come from: a
+    // dependency can resolve without a live download and still have a record.
+    "references.security_hold_count",
     // Per-file measurements that should move into filefacts.
     "binary.embedded_binaries",
     "pe.directory_section_mismatch_count",

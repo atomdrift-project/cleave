@@ -337,6 +337,22 @@ pub(crate) fn dispatch_command(
             run_version();
             return Ok(None);
         }
+        Some(cli::Command::RegexCost { case_insensitive }) => {
+            use std::io::BufRead;
+            let stdin = std::io::stdin();
+            for line in stdin.lock().lines() {
+                let pat = line?;
+                if pat.is_empty() {
+                    continue;
+                }
+                if cleave::regex_explodes(&pat, case_insensitive) {
+                    println!("explode");
+                } else {
+                    println!("ok");
+                }
+            }
+            return Ok(None);
+        }
         Some(cli::Command::Validate { exclude, soft }) => {
             if soft {
                 cleave::commands::validate::run_soft(ctx.format, exclude.as_deref(), args.verbose)?

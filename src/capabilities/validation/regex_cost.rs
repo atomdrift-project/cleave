@@ -666,7 +666,6 @@ pub(crate) fn probe(pattern: &str, case_insensitive: bool, hay: &[u8]) -> Option
 }
 
 /// Probe a pattern on the standard haystack.
-#[cfg(test)]
 pub(crate) fn explosion(pattern: &str, case_insensitive: bool) -> Option<Explosion> {
     probe(pattern, case_insensitive, haystack())
 }

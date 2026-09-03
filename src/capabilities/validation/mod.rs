@@ -36,7 +36,7 @@ mod duplicates;
 mod helpers;
 mod patterns;
 mod precision;
-mod regex_cost;
+pub(crate) mod regex_cost;
 mod taxonomy;
 
 // Shared types used across validation modules

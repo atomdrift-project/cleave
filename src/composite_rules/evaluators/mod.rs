@@ -897,6 +897,12 @@ pub(crate) fn windows_from_atom_hits(
     let pad = usize::from(any_look);
     let mut spans = Vec::with_capacity(hits.len());
     let mut covered = 0usize;
+    // Line-local windows: hits arrive sorted, so a hit inside the previous
+    // window's line reuses it, and the search for the line start is bounded
+    // by the previous line's end instead of running back to the file start
+    // — on a minified bundle (lines of 5–100 KB, hundreds of hits per line)
+    // the unbounded `memrchr` per hit was quadratic (+9 s on one corpus).
+    let mut last_line: Option<(usize, usize)> = None;
     for &hit in hits {
         let hit = hit as usize;
         if hit < search_start || hit >= search_end {
@@ -911,10 +917,25 @@ pub(crate) fn windows_from_atom_hits(
             .saturating_add(pad)
             .min(search_end);
         if line {
-            lo = memchr::memrchr(b'\n', &haystack[search_start..lo])
-                .map_or(search_start, |n| search_start + n + 1);
-            hi = memchr::memchr(b'\n', &haystack[hi..search_end])
-                .map_or(search_end, |n| (hi + n + 1).min(search_end));
+            match last_line {
+                Some((l, h)) if hit >= l && hit < h => {
+                    // Same line as the previous hit: the span is already
+                    // counted, and counting it again per hit made every
+                    // hit-dense line look like more than half the file
+                    // and forced the full scan this window exists to avoid.
+                    spans.push((l, h));
+                    continue;
+                }
+                _ => {
+                    let floor = last_line.map_or(search_start, |(_, h)| h.max(search_start));
+                    let from = lo.max(floor);
+                    lo = memchr::memrchr(b'\n', &haystack[floor..from])
+                        .map_or(floor, |n| floor + n + 1);
+                    hi = memchr::memchr(b'\n', &haystack[hi..search_end])
+                        .map_or(search_end, |n| (hi + n + 1).min(search_end));
+                    last_line = Some((lo, hi));
+                }
+            }
         }
         covered = covered.saturating_add(hi.saturating_sub(lo));
         spans.push((lo, hi));
@@ -1704,5 +1725,59 @@ mod mandatory_atom_set_probe {
             violations
         );
         assert_eq!(violations, 0, "gate would cause false negatives");
+    }
+}
+
+#[cfg(test)]
+mod window_tests {
+    #![allow(clippy::expect_used)]
+    use super::*;
+
+    /// Reference: line bounds found by scanning from the haystack ends, the
+    /// way the builder worked before the incremental walk.
+    fn naive_line_windows(hay: &[u8], hits: &[u32]) -> Vec<(usize, usize)> {
+        let mut spans = Vec::new();
+        for &hit in hits {
+            let hit = hit as usize;
+            let lo = memchr::memrchr(b'\n', &hay[..hit]).map_or(0, |n| n + 1);
+            let hi = memchr::memchr(b'\n', &hay[hit..]).map_or(hay.len(), |n| hit + n + 1);
+            spans.push((lo, hi));
+        }
+        merge_spans(spans)
+    }
+
+    #[test]
+    fn line_local_windows_match_the_naive_scan_on_long_lines() {
+        // Three long minified-style lines with many atom hits each, plus a
+        // short one: every shape the incremental walk has to get right.
+        let mut hay = Vec::new();
+        let mut hits = Vec::new();
+        for (line_no, reps) in [(0usize, 40usize), (1, 1), (2, 25), (3, 3)] {
+            for i in 0..reps {
+                if line_no == 1 {
+                    hay.extend_from_slice(b"short foo(x) bar;");
+                } else {
+                    hay.extend_from_slice(b"var a=b.c(d);if(e){f=g}");
+                    if i % 2 == 0 {
+                        hits.push(hay.len() as u32);
+                        hay.extend_from_slice(b"foo(");
+                    }
+                    hay.extend_from_slice(b"h.i(j,k);");
+                }
+            }
+            hay.push(b'\n');
+        }
+        // Windowing is only chosen when the windows cover under half of the
+        // haystack: pad with a long hit-free line.
+        hay.extend(std::iter::repeat_n(b'x', 8 * hay.len()));
+        hay.push(b'\n');
+        assert!(hay.len() > MIN_HAYSTACK_TO_WINDOW);
+        let pattern = r"foo\([^\n]*bar";
+        assert!(
+            matches!(window_shape(pattern), Some((true, _, 0))),
+            "test pattern must be line-local"
+        );
+        let got = windows_from_atom_hits(&hay, &hits, pattern, 0, hay.len()).expect("windowable");
+        assert_eq!(got, naive_line_windows(&hay, &hits));
     }
 }

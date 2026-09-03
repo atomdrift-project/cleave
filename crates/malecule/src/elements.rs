@@ -11,14 +11,16 @@
 //!   Co(llection) Dy(discoverY) Er(vasion) Eu(xfiltration) I(mpact) La(teral)
 //!   P(ersistence) Pr(ivilege) S(upply-chain) Xe(xecution)
 //!
-//! Micro-behaviors: Cm(comms) Cr(ypto) Db(data) Ds(dylib/shared) F(ilesystem)
-//!   Hf(hardware) Mg(memory) Os(operating-system) Po(process) Ti(me) U(I)
+//! Micro-behaviors: Br(owser-extension) Cm(comms) Cr(ypto) Db(data) Ds(dylib/shared)
+//!   F(ilesystem) Hf(hardware) Mg(memory) Os(operating-system) Po(process) Ti(me) U(I)
 //!
 //! Metadata: Ar(ch) Bi(nary) Bk(build) Cf(config) He(hardening) In(import)
-//!   Li(brary) Pa(ckage) Pd(ocument) Pt(lang) Rh(ights/entitlements) Si(gned)
+//!   Ir(image) Li(brary) Pa(ckage) Pd(ocument) Pm(ermission) Pt(lang)
+//!   Re(gistry) Rh(ights/entitlements) Si(gned) V(endor)
 //!   + deeper: Ag(format) Au(quality) B(undle) Ce(compiler) Ne(archive)
 //!
-//! Well-known: Am(pp) Ga(me) Li(b — shared with metadata/library) Mc(malware-code) Te(ool)
+//! Well-known: Am(pp) Ga(me) Li(b — shared with metadata/library) Lu(duaL-Use)
+//!   Mc(malware-code) Nd(uNwanteD) Te(ool)
 
 use rustc_hash::FxHashMap;
 
@@ -89,6 +91,8 @@ pub const XENON: Element = Element::new(54, "Xe", "Xenon");
 
 // ── Micro-behavior subcategories ────────────────────────────────────────────
 
+/// Br for BRowser-extension.
+pub const BROMINE: Element = Element::new(35, "Br", "Bromine");
 /// Cm for CoMms/communications.
 pub const CURIUM: Element = Element::new(96, "Cm", "Curium");
 /// Cr for CRypto.
@@ -130,14 +134,22 @@ pub const RHODIUM: Element = Element::new(45, "Rh", "Rhodium");
 pub const HELIUM: Element = Element::new(2, "He", "Helium");
 /// In for Import.
 pub const INDIUM: Element = Element::new(49, "In", "Indium");
+/// Ir for Image.
+pub const IRIDIUM: Element = Element::new(77, "Ir", "Iridium");
 /// Pt for lang (precious metal, like Au/Ag).
 pub const PLATINUM: Element = Element::new(78, "Pt", "Platinum");
 /// Li for LIbrary.
 pub const LITHIUM: Element = Element::new(3, "Li", "Lithium");
 /// Pa for PAckage.
 pub const PROTACTINIUM: Element = Element::new(91, "Pa", "Protactinium");
+/// Pm for PerMission.
+pub const PROMETHIUM: Element = Element::new(61, "Pm", "Promethium");
+/// Re for REgistry.
+pub const RHENIUM: Element = Element::new(75, "Re", "Rhenium");
 /// Si for SIgned.
 pub const SILICON: Element = Element::new(14, "Si", "Silicon");
+/// V for Vendor.
+pub const VANADIUM: Element = Element::new(23, "V", "Vanadium");
 
 // Deeper-segment metadata matches (3rd+ level, not in formulas but used by
 // finding_to_element for atom labeling):
@@ -159,9 +171,13 @@ pub const NEON: Element = Element::new(10, "Ne", "Neon");
 pub const AMERICIUM: Element = Element::new(95, "Am", "Americium");
 /// Ga for GAme.
 pub const GALLIUM: Element = Element::new(31, "Ga", "Gallium");
+/// Lu for duaL-Use.
+pub const LUTETIUM: Element = Element::new(71, "Lu", "Lutetium");
 /// Mc for Malicious-Code → malware (synthetic transuranic, fits the
 /// engineered-toxin theme).
 pub const MOSCOVIUM: Element = Element::new(115, "Mc", "Moscovium");
+/// Nd for uNwanteD.
+pub const NEODYMIUM: Element = Element::new(60, "Nd", "Neodymium");
 /// Te for Tool (Tellurium retained from the prior `tools` mapping).
 pub const TELLURIUM: Element = Element::new(52, "Te", "Tellurium");
 // Note: well-known/lib reuses LITHIUM (Li) — same concept as metadata/library,
@@ -205,6 +221,7 @@ pub fn category_to_element(category: &str) -> Option<Element> {
         m.insert("supply-chain", SULFUR);
 
         // Micro-behavior subcategories
+        m.insert("browser-extension", BROMINE);
         m.insert("communications", CURIUM);
         m.insert("crypto", CHROMIUM);
         m.insert("data", DUBNIUM);
@@ -225,11 +242,15 @@ pub fn category_to_element(category: &str) -> Option<Element> {
         // NOTE: "file" deliberately omitted — collides with micro-behaviors/fs/file.
         // metadata/file findings fall through to parent Md (Mendelevium).
         m.insert("hardening", HELIUM);
+        m.insert("image", IRIDIUM);
         m.insert("import", INDIUM);
         m.insert("lang", PLATINUM);
         m.insert("library", LITHIUM);
         m.insert("package", PROTACTINIUM);
+        m.insert("permission", PROMETHIUM);
+        m.insert("registry", RHENIUM);
         m.insert("signed", SILICON);
+        m.insert("vendor", VANADIUM);
 
         // Metadata deeper-segment matches (3rd+ level, for finding_to_element)
         m.insert("archive", NEON);
@@ -243,9 +264,11 @@ pub fn category_to_element(category: &str) -> Option<Element> {
         // Well-known subcategories
         m.insert("malware", MOSCOVIUM);
         m.insert("app", AMERICIUM);
+        m.insert("dual-use", LUTETIUM);
         m.insert("game", GALLIUM);
         m.insert("lib", LITHIUM);
         m.insert("tool", TELLURIUM);
+        m.insert("unwanted", NEODYMIUM);
 
         m
     });
@@ -274,18 +297,18 @@ pub fn parent_element(category: &str) -> Option<Element> {
         | "supply-chain" => Some(OXYGEN),
 
         // Micro-behavior subcategories -> H
-        "communications" | "crypto" | "data" | "dylib" | "fs" | "hardware" | "mem"
-        | "os" | "process" | "time" | "ui" => Some(HYDROGEN_MICRO),
+        "browser-extension" | "communications" | "crypto" | "data" | "dylib" | "fs"
+        | "hardware" | "mem" | "os" | "process" | "time" | "ui" => Some(HYDROGEN_MICRO),
 
         // Metadata subcategories -> Md
-        "arch" | "binary" | "build" | "document" | "file" | "hardening" | "import" | "lang"
-        | "library" | "package" | "signed"
+        "arch" | "binary" | "build" | "document" | "file" | "hardening" | "image" | "import"
+        | "lang" | "library" | "package" | "permission" | "registry" | "signed" | "vendor"
         // deeper metadata segments
         | "archive" | "bundle" | "compiler" | "config" | "entitlements" | "format"
         | "quality" => Some(MENDELEVIUM),
 
         // Well-known
-        "malware" | "app" | "game" | "lib" | "tool" => Some(POTASSIUM),
+        "malware" | "app" | "dual-use" | "game" | "lib" | "tool" | "unwanted" => Some(POTASSIUM),
 
         _ => None,
     }
@@ -337,7 +360,30 @@ mod tests {
         // reference these paths anymore.
         assert_eq!(category_to_element("host"), None);
         assert_eq!(category_to_element("network"), None);
-        assert_eq!(category_to_element("vendor"), None);
+        // NOTE: metadata/vendor was believed removed during the 2026-05
+        // resync but is present again in traits-dev — see
+        // test_2026_09_resync_mappings.
+    }
+
+    #[test]
+    fn test_2026_09_resync_mappings() {
+        // Directories added to traits-dev since the last malecule sync
+        // (audited against ../traits-dev/TAXONOMY.md on 2026-09-03).
+        assert_eq!(category_to_element("browser-extension"), Some(BROMINE));
+        assert_eq!(category_to_element("dual-use"), Some(LUTETIUM));
+        assert_eq!(category_to_element("unwanted"), Some(NEODYMIUM));
+        assert_eq!(category_to_element("image"), Some(IRIDIUM));
+        assert_eq!(category_to_element("permission"), Some(PROMETHIUM));
+        assert_eq!(category_to_element("registry"), Some(RHENIUM));
+        assert_eq!(category_to_element("vendor"), Some(VANADIUM));
+
+        assert_eq!(parent_element("browser-extension"), Some(HYDROGEN_MICRO));
+        assert_eq!(parent_element("dual-use"), Some(POTASSIUM));
+        assert_eq!(parent_element("unwanted"), Some(POTASSIUM));
+        assert_eq!(parent_element("image"), Some(MENDELEVIUM));
+        assert_eq!(parent_element("permission"), Some(MENDELEVIUM));
+        assert_eq!(parent_element("registry"), Some(MENDELEVIUM));
+        assert_eq!(parent_element("vendor"), Some(MENDELEVIUM));
     }
 
     #[test]
@@ -353,6 +399,5 @@ mod tests {
         // Removed categories must no longer claim a parent.
         assert_eq!(parent_element("host"), None);
         assert_eq!(parent_element("network"), None);
-        assert_eq!(parent_element("vendor"), None);
     }
 }

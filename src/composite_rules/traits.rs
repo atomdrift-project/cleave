@@ -1094,7 +1094,16 @@ impl TraitDefinition {
         // Start timing for timeout detection (covers all evaluation phases)
         let start = crate::composite_rules::trait_timing::EvalTimer::start();
 
-        // Check unless conditions (file-level skip)
+        // Check unless conditions (file-level skip).
+        //
+        // Normally a cheap early-out: a matched `unless:` ends the evaluation
+        // before the positive condition ever runs. With a suppression sink
+        // attached and the trait worth reporting, the early-out is deferred —
+        // "withheld" is only true of a trait that would otherwise have matched,
+        // and the overwhelming majority of `unless:` hits are on rules whose
+        // positive side never comes close. Recording those would fill the report
+        // with detections that were never in prospect.
+        let mut withheld_by: Option<(&Condition, ConditionResult)> = None;
         if let Some(unless_conds) = &self.unless {
             // Default 'any' semantics: skip if ANY condition matches
             for condition in unless_conds {
@@ -1112,6 +1121,12 @@ impl TraitDefinition {
                     ctx.record_skip(|| SkipReason::UnlessConditionMatched {
                         condition_desc: format!("{:?}{}", condition, concrete),
                     });
+                    if ctx.suppressions.is_some()
+                        && self.crit >= crate::types::MIN_RECORDED_SUPPRESSION
+                    {
+                        withheld_by = Some((condition, result));
+                        break;
+                    }
                     return None;
                 }
             }
@@ -1200,6 +1215,21 @@ impl TraitDefinition {
             debug.add_condition(cond_debug);
         });
 
+        // A deferred `unless:` hit: the positive side has now run, so the
+        // suppression is recorded only when there was really something to
+        // suppress. Either way the trait produces no finding.
+        if let Some((condition, unless_result)) = withheld_by {
+            if result.matched {
+                ctx.record_suppression(|| crate::types::Suppression {
+                    id: self.shared_id(),
+                    crit: self.crit,
+                    kind: crate::types::SuppressionKind::Unless,
+                    by: suppression_legs(condition, &unless_result),
+                });
+            }
+            return None;
+        }
+
         if result.matched {
             // Apply count and density filters (centralized for all condition types)
             // Use match_count which may exceed evidence.len() for high-frequency patterns
@@ -1274,6 +1304,16 @@ impl TraitDefinition {
                             self.crit,
                             final_crit
                         );
+                        if self.crit >= crate::types::MIN_RECORDED_SUPPRESSION {
+                            ctx.record_suppression(|| crate::types::Suppression {
+                                id: self.shared_id(),
+                                crit: self.crit,
+                                kind: crate::types::SuppressionKind::Downgrade,
+                                by: downgrade_legs(downgrade_conds, |c| {
+                                    self.eval_condition(c, ctx)
+                                }),
+                            });
+                        }
                     }
                 }
 
@@ -1341,6 +1381,14 @@ impl TraitDefinition {
         ctx: &EvaluationContext<'a>,
     ) -> Criticality {
         if self.eval_downgrade_conditions(conditions, ctx) {
+            if *base_crit >= crate::types::MIN_RECORDED_SUPPRESSION {
+                ctx.record_suppression(|| crate::types::Suppression {
+                    id: self.shared_id(),
+                    crit: *base_crit,
+                    kind: crate::types::SuppressionKind::Downgrade,
+                    by: downgrade_legs(conditions, |c| self.eval_condition(c, ctx)),
+                });
+            }
             downgrade_crit(*base_crit)
         } else {
             *base_crit
@@ -2482,7 +2530,9 @@ impl CompositeTrait {
         // Start timing for timeout detection (covers all evaluation phases)
         let start = crate::composite_rules::trait_timing::EvalTimer::start();
 
-        // Check unless conditions (file-level skip)
+        // Check unless conditions (file-level skip). Deferred when recording —
+        // see the identical note on `TraitDefinition::evaluate_with_gates`.
+        let mut withheld_by: Option<(&Condition, ConditionResult)> = None;
         if let Some(unless_conds) = &self.unless {
             // Default 'any' semantics: skip if ANY condition matches
             for condition in unless_conds {
@@ -2500,12 +2550,20 @@ impl CompositeTrait {
                     ctx.record_skip(|| SkipReason::UnlessConditionMatched {
                         condition_desc: format!("{:?}{}", condition, concrete),
                     });
+                    if ctx.suppressions.is_some()
+                        && self.crit >= crate::types::MIN_RECORDED_SUPPRESSION
+                    {
+                        withheld_by = Some((condition, result));
+                        break;
+                    }
                     return None;
                 }
             }
         }
 
-        // Evaluate positive conditions based on the boolean operator(s)
+        // Evaluate positive conditions based on the boolean operator(s).
+        // The `return None`s below are all "the positive side did not match",
+        // so a deferred `unless:` hit needs no record on any of those paths.
         let (positive_result, proximity_tags) = match (&self.all, &self.any) {
             (Some(all), Some(any)) => {
                 // Both all AND any: all must match AND any must match (respecting `needs`)
@@ -2567,6 +2625,18 @@ impl CompositeTrait {
             return None;
         }
 
+        // The positive side held, so a deferred `unless:` hit really did
+        // withhold a composite that would otherwise have fired.
+        if let Some((condition, unless_result)) = withheld_by {
+            ctx.record_suppression(|| crate::types::Suppression {
+                id: self.shared_id(),
+                crit: self.crit,
+                kind: crate::types::SuppressionKind::Unless,
+                by: suppression_legs(condition, &unless_result),
+            });
+            return None;
+        }
+
         let mut result = positive_result;
 
         // Apply scope filter (e.g. `scope: leaf` for archive-FP suppression).
@@ -2625,6 +2695,16 @@ impl CompositeTrait {
                 let triggered = self.eval_downgrade_conditions(downgrade_conds, ctx);
                 if triggered {
                     final_crit = downgrade_crit(self.crit);
+                    if final_crit != self.crit
+                        && self.crit >= crate::types::MIN_RECORDED_SUPPRESSION
+                    {
+                        ctx.record_suppression(|| crate::types::Suppression {
+                            id: self.shared_id(),
+                            crit: self.crit,
+                            kind: crate::types::SuppressionKind::Downgrade,
+                            by: downgrade_legs(downgrade_conds, |c| self.eval_condition(c, ctx)),
+                        });
+                    }
                 }
 
                 // Record downgrade debug
@@ -2721,6 +2801,14 @@ impl CompositeTrait {
         ctx: &EvaluationContext<'a>,
     ) -> Criticality {
         if self.eval_downgrade_conditions(conditions, ctx) {
+            if *base_crit >= crate::types::MIN_RECORDED_SUPPRESSION {
+                ctx.record_suppression(|| crate::types::Suppression {
+                    id: self.shared_id(),
+                    crit: *base_crit,
+                    kind: crate::types::SuppressionKind::Downgrade,
+                    by: downgrade_legs(conditions, |c| self.eval_condition(c, ctx)),
+                });
+            }
             return downgrade_crit(*base_crit);
         }
         *base_crit
@@ -4002,6 +4090,70 @@ fn evidence_within_byte_range_grouped(
     }
 
     None
+}
+
+/// The legs behind one fired `unless:`/`downgrade:` condition, with the bytes
+/// they matched.
+///
+/// A `Condition::Trait` (the overwhelmingly common suppressor) names the
+/// concrete traits it resolved to, so a directory-prefix leg like
+/// `metadata/package/testing/harness/runtime/` reports the trait that actually
+/// fired rather than echoing the prefix. Any other condition kind has no trait
+/// identity, so it reports its own shape.
+fn suppression_legs(
+    condition: &Condition,
+    result: &crate::composite_rules::context::ConditionResult,
+) -> Vec<crate::types::SuppressionLeg> {
+    let spans = || {
+        let mut s = crate::types::traits_findings::evidence_spans(&result.evidence);
+        s.sort_unstable_by_key(|w| w[0]);
+        s.dedup_by_key(|w| w[0]);
+        s.truncate(crate::types::traits_findings::MAX_EV_LOCS);
+        s
+    };
+    if result.matched_trait_ids.is_empty() {
+        return vec![crate::types::SuppressionLeg {
+            id: condition.type_name().into(),
+            spans: spans(),
+        }];
+    }
+    // One shared span set: the evidence a `Trait` condition returns is the
+    // union across the traits it resolved to, not attributable per id.
+    let spans = spans();
+    result
+        .matched_trait_ids
+        .iter()
+        .map(|id| crate::types::SuppressionLeg {
+            id: id.clone(),
+            spans: spans.clone(),
+        })
+        .collect()
+}
+
+/// The legs that fired a `downgrade:`.
+///
+/// Re-evaluates the positive blocks, which is why it is reached only through
+/// [`EvaluationContext::record_suppression`]'s closure: the hot path asks
+/// `eval_downgrade_conditions` a yes/no question and must not pay to remember
+/// which legs answered it. `none:` is skipped — a fired downgrade means nothing
+/// in it matched.
+fn downgrade_legs(
+    conditions: &DowngradeConditions,
+    mut eval: impl FnMut(&Condition) -> crate::composite_rules::context::ConditionResult,
+) -> Vec<crate::types::SuppressionLeg> {
+    let mut legs = Vec::new();
+    for cond in conditions
+        .all
+        .iter()
+        .flatten()
+        .chain(conditions.any.iter().flatten())
+    {
+        let result = eval(cond);
+        if result.matched {
+            legs.extend(suppression_legs(cond, &result));
+        }
+    }
+    legs
 }
 
 #[cfg(test)]

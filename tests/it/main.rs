@@ -40,6 +40,7 @@ mod office_corpus_test;
 mod php_ast_call_kind_regression;
 mod string_vs_content_test;
 mod subfile_pipeline_test;
+mod suppression_visibility_test;
 mod symbol_extraction_test;
 mod systemd_kv_test;
 mod test_match_location_test;

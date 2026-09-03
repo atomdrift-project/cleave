@@ -411,6 +411,12 @@ impl super::CapabilityMapper {
         let mut seen: FxHashSet<crate::types::Istr> =
             report.findings.iter().map(|f| f.id.clone()).collect();
 
+        // Collects the `unless:`/`downgrade:` legs that withhold or demote a
+        // notable-or-above trait during every phase below, so the finished
+        // report can say what it decided not to report and a reader can judge
+        // that call on the same evidence.
+        let sink = crate::types::SuppressionSink::default();
+
         // Step 1: Evaluate independent atomic traits (no trait: dependencies)
         // These can be evaluated in parallel without worrying about order
         let t_eval1 = std::time::Instant::now();
@@ -444,7 +450,8 @@ impl super::CapabilityMapper {
             binary_data,
             cached_ast,
             inline_yara,
-            crate::capabilities::mapper::evaluate_traits::TraitPass::independent(),
+            crate::capabilities::mapper::evaluate_traits::TraitPass::independent()
+                .recording(Some(&sink)),
             &cache,
             cancellation,
         );
@@ -472,6 +479,7 @@ impl super::CapabilityMapper {
                 // The merged path pushes each pass's findings straight into
                 // `report`, so the report itself is already the full scope.
                 crate::capabilities::mapper::evaluate_traits::TraitPass::dependent(None)
+                    .recording(Some(&sink))
             } else {
                 // Re-iterations only re-run traits the previous round's new
                 // findings could affect (`seen` is the settled set: a settled
@@ -479,6 +487,7 @@ impl super::CapabilityMapper {
                 crate::capabilities::mapper::evaluate_traits::TraitPass::dependent_rescan(
                     None, &changed, &seen,
                 )
+                .recording(Some(&sink))
             };
             let dependent_findings = self.evaluate_traits_filtered_with_cache(
                 report,
@@ -520,6 +529,7 @@ impl super::CapabilityMapper {
             inline_yara,
             &section_map,
             arch_ranges,
+            Some(&sink),
         );
 
         // Merge composite findings into report
@@ -542,7 +552,13 @@ impl super::CapabilityMapper {
         // After all findings are merged, re-check `unless:` Condition::Trait references
         // for every atomic finding and remove any that are now satisfied. The loop runs
         // until no further suppressions occur (handles chained unless: dependencies).
-        self.apply_retroactive_unless_suppression(report);
+        self.apply_retroactive_unless_suppression(report, &sink);
+
+        // The suppressions this file's evaluation withheld, so the report can
+        // state what it decided not to say. Ordered strongest-first and
+        // deduplicated by trait id — a trait re-evaluated across dependent
+        // rounds records the same suppression each time.
+        report.suppressions = sink.drain();
     }
 
     /// Re-evaluate `unless:` Trait conditions for all findings after the full evaluation
@@ -562,13 +578,18 @@ impl super::CapabilityMapper {
     /// finding's `unless:` Trait conditions against the complete finding set and removes
     /// any that should have been suppressed. It loops to a fixed point so cascading
     /// suppressions (A suppresses B which suppresses C) are fully resolved.
-    fn apply_retroactive_unless_suppression(&self, report: &mut AnalysisReport) {
-        self.apply_retroactive_unless_suppression_to_findings(&mut report.findings);
+    fn apply_retroactive_unless_suppression(
+        &self,
+        report: &mut AnalysisReport,
+        sink: &crate::types::SuppressionSink,
+    ) {
+        self.apply_retroactive_unless_suppression_to_findings(&mut report.findings, Some(sink));
     }
 
     pub(crate) fn apply_retroactive_unless_suppression_to_findings(
         &self,
         findings: &mut Vec<Finding>,
+        sink: Option<&crate::types::SuppressionSink>,
     ) {
         let index = self.unless_index();
         if index.is_empty() {
@@ -608,7 +629,108 @@ impl super::CapabilityMapper {
                 suppressed.len()
             );
 
-            findings.retain(|f| !suppressed.contains(f.id.as_str()));
+            // Record before removing: this is a suppression like any other,
+            // and the only one an eval-time reader never sees — the trait fired
+            // and lived in the report until the suppressor composite existed.
+            if let Some(sink) = sink {
+                for finding in findings
+                    .iter()
+                    .filter(|f| suppressed.contains(f.id.as_str()))
+                    .filter(|f| f.crit >= crate::types::MIN_RECORDED_SUPPRESSION)
+                {
+                    sink.push(crate::types::Suppression {
+                        id: finding.id.clone(),
+                        crit: finding.crit,
+                        kind: crate::types::SuppressionKind::Unless,
+                        by: self.retroactive_suppressor_legs(finding, findings),
+                    });
+                }
+            }
+
+            Self::remove_findings_and_orphaned_dependents(findings, suppressed);
+        }
+    }
+
+    /// The findings whose ids satisfy `finding`'s `unless:` legs, with the bytes
+    /// they matched — the retroactive equivalent of `suppression_legs`, resolved
+    /// against the surviving set rather than a live `ConditionResult`.
+    fn retroactive_suppressor_legs(
+        &self,
+        finding: &Finding,
+        findings: &[Finding],
+    ) -> Vec<crate::types::SuppressionLeg> {
+        let index = self.unless_index();
+        let Some(source) = (!index.by_hook_leaf.is_empty())
+            .then(|| Self::builtin_finding_hook_slug(&finding.id))
+            .and_then(|slug| index.by_hook_leaf.get(&slug))
+            .or_else(|| index.by_id.get(finding.id.as_str()))
+        else {
+            return Vec::new();
+        };
+        let mut legs = Vec::new();
+        for cond in self.unless_conditions(*source) {
+            let Condition::Trait { id } = cond else {
+                continue;
+            };
+            // A leg may name a directory prefix; report the concrete surviving
+            // findings it resolves to rather than echoing the pattern.
+            for suppressor in findings.iter().filter(|f| {
+                let one: FxHashSet<&str> = std::iter::once(f.id.as_str()).collect();
+                self.unless_trait_id_matches(id, &one)
+            }) {
+                legs.push(crate::types::SuppressionLeg {
+                    id: suppressor.id.clone(),
+                    spans: crate::types::traits_findings::finding_spans(suppressor),
+                });
+            }
+        }
+        legs.truncate(crate::types::MAX_EVIDENCE_PER_TRAIT);
+        legs
+    }
+
+    /// Remove `removed`, then cascade: a composite that fired on a removed
+    /// trait cited it in `trait_refs`, and that citation is now evidence the
+    /// engine has decided does not hold. Strike the dead reference; a composite
+    /// left with none of the trait evidence it fired on goes with it, which in
+    /// turn can orphan a composite built on *that* one — so the cascade runs to
+    /// a fixed point.
+    ///
+    /// Without this a retroactive suppression removed the trait but left every
+    /// composite standing on it: the composite survived as a finding whose
+    /// stated evidence was no longer in the report, and `trait_refs` named a
+    /// trait no consumer could resolve.
+    ///
+    /// A composite keeping *some* of its cited legs is kept. That is exact for
+    /// `any:`, and conservative for `all:` — a multi-leg `all:` that loses one
+    /// leg is no longer satisfied, but re-deciding that needs the leg semantics
+    /// the definition holds, not the flat `trait_refs` list. Keeping it errs
+    /// toward reporting, which is the right way to err for a detector.
+    fn remove_findings_and_orphaned_dependents(
+        findings: &mut Vec<Finding>,
+        removed: FxHashSet<crate::types::Istr>,
+    ) {
+        let mut removed = removed;
+        while !removed.is_empty() {
+            findings.retain(|f| !removed.contains(f.id.as_str()));
+
+            let mut orphaned: FxHashSet<crate::types::Istr> = FxHashSet::default();
+            for finding in findings.iter_mut() {
+                if finding.trait_refs.is_empty() {
+                    continue;
+                }
+                let before = finding.trait_refs.len();
+                finding.trait_refs.retain(|r| !removed.contains(r.as_str()));
+                if finding.trait_refs.is_empty() && before > 0 {
+                    orphaned.insert(finding.id.clone());
+                }
+            }
+            if !orphaned.is_empty() {
+                tracing::debug!(
+                    "Retroactive unless-suppression: removing {} composites left with no cited evidence",
+                    orphaned.len()
+                );
+            }
+            removed = orphaned;
         }
     }
 

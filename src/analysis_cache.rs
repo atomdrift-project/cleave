@@ -802,7 +802,12 @@ fn unix_timestamp() -> i64 {
 /// values, same path guards applied by the callers — so a memo hit is
 /// indistinguishable from a warm-cache hit. It lives and dies with the process,
 /// so it never reuses a previous run's results. Byte-budgeted LRU
-/// (`CLEAVE_ANALYSIS_MEMO_MB`, default 256; `0` disables).
+/// (`CLEAVE_ANALYSIS_MEMO_MB`, default 64; `0` disables).
+///
+/// 64, not 256: on the npm corpus the memo held 254 MB to serve 1,447 hits
+/// against 17,844 misses, and at 64 MB it holds 63 MB and still serves 1,472 —
+/// the duplicates that matter are the seven 10 MB `bun_environment.js` copies,
+/// so the rest was retention with no hit behind it.
 mod memo {
     use std::sync::{Arc, Mutex, OnceLock};
 
@@ -849,7 +854,7 @@ mod memo {
             let mb = std::env::var("CLEAVE_ANALYSIS_MEMO_MB")
                 .ok()
                 .and_then(|v| v.parse::<usize>().ok())
-                .unwrap_or(256);
+                .unwrap_or(64);
             (mb > 0).then(|| {
                 Mutex::new(Memo {
                     entries: lru::LruCache::unbounded(),

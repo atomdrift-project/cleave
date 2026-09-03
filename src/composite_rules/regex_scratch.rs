@@ -36,7 +36,14 @@ use rustc_hash::FxHashMap;
 
 /// Global pool budget in bytes: 32 MiB per hardware thread, clamped to
 /// 512 MiB..=4 GiB on 64-bit hosts (64 MiB on a 32-bit address space, where
-/// scratch must not crowd the scanner's working set). An explicit
+/// scratch must not crowd the scanner's working set).
+///
+/// Measured 2026-09-03 and deliberately left here: 16 MiB/thread cuts the
+/// 510-archive npm corpus from 6.0 GB to 4.8 GB peak at no wall cost, but on
+/// a 1.1 GB corpus of large archives it costs ~3.5% wall and ~6% CPU (same
+/// engine, 407 s -> 421 s), because the per-(regex, thread) caches it drops
+/// are rebuilt on big files. Operators who want the memory back set
+/// `CLEAVE_REGEX_SCRATCH_MB=16`. An explicit
 /// `CLEAVE_REGEX_SCRATCH_MB` (per-thread MiB, times available parallelism) is
 /// honored literally.
 ///

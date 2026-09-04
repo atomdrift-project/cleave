@@ -1392,6 +1392,96 @@ fn encoded_powershell_finding(parent_path: &str, decoded_len: usize, offset: u64
     }
 }
 
+/// Decode a Unicode variation-selector steganography payload.
+///
+/// Variation selectors render as nothing, so a run of them carries bytes
+/// invisibly inside what looks like an ordinary string literal. Every
+/// published implementation uses the same mapping, and so does the malware:
+/// `U+FE00..=U+FE0F` gives 0..=15 and `U+E0100..=U+E01EF` gives 16..=255.
+///
+/// Both spellings have to be handled. A minified bundle usually stores the
+/// payload as literal `\u{E0148}` escape text -- the compromised
+/// watercrawl-mcp and miso-client releases are pure ASCII on disk for exactly
+/// that reason -- while a hand-written file may carry the real codepoints.
+/// Scanning only for the characters misses the form that actually ships.
+///
+/// Returns the longest decoded run and its byte offset, or `None` when no run
+/// is long enough to be a payload rather than a stray selector after an emoji.
+fn decode_variation_selector_payload(content: &str) -> Option<(String, usize)> {
+    /// Short runs are legitimate: one selector follows an emoji or a CJK
+    /// glyph to pick a presentation form. A payload is hundreds of bytes.
+    const MIN_PAYLOAD_BYTES: usize = 64;
+
+    fn byte_for(cp: u32) -> Option<u8> {
+        if (0xFE00..=0xFE0F).contains(&cp) {
+            u8::try_from(cp - 0xFE00).ok()
+        } else if (0xE0100..=0xE01EF).contains(&cp) {
+            u8::try_from(cp - 0xE0100 + 16).ok()
+        } else {
+            None
+        }
+    }
+
+    // Read a literal `\u{HEX}` escape at `idx`, returning the codepoint and
+    // the length of the escape text consumed.
+    fn escape_at(bytes: &[u8], idx: usize) -> Option<(u32, usize)> {
+        if bytes.get(idx) != Some(&b'\\') || bytes.get(idx + 1) != Some(&b'u') {
+            return None;
+        }
+        if bytes.get(idx + 2) != Some(&b'{') {
+            return None;
+        }
+        let close = bytes[idx + 3..].iter().position(|b| *b == b'}')? + idx + 3;
+        let hex = std::str::from_utf8(&bytes[idx + 3..close]).ok()?;
+        if hex.is_empty() || hex.len() > 6 {
+            return None;
+        }
+        let cp = u32::from_str_radix(hex, 16).ok()?;
+        Some((cp, close + 1 - idx))
+    }
+
+    let bytes = content.as_bytes();
+    let mut best: Option<(usize, Vec<u8>)> = None;
+    let mut run: Vec<u8> = Vec::new();
+    let mut run_start = 0usize;
+    let mut idx = 0usize;
+
+    let flush = |run: &mut Vec<u8>, start: usize, best: &mut Option<(usize, Vec<u8>)>| {
+        if run.len() >= MIN_PAYLOAD_BYTES
+            && best.as_ref().is_none_or(|(_, prev)| run.len() > prev.len())
+        {
+            *best = Some((start, std::mem::take(run)));
+        } else {
+            run.clear();
+        }
+    };
+
+    while idx < bytes.len() {
+        let (cp, width) = match escape_at(bytes, idx) {
+            Some(hit) => hit,
+            None => match content[idx..].chars().next() {
+                Some(ch) => (ch as u32, ch.len_utf8()),
+                None => break,
+            },
+        };
+        match byte_for(cp) {
+            Some(b) => {
+                if run.is_empty() {
+                    run_start = idx;
+                }
+                run.push(b);
+            }
+            None => flush(&mut run, run_start, &mut best),
+        }
+        idx += width;
+    }
+    flush(&mut run, run_start, &mut best);
+
+    let (offset, payload) = best?;
+    let text = String::from_utf8(payload).ok()?;
+    Some((text, offset))
+}
+
 /// Analyze a stng-decoded script payload as its own source layer.
 fn analyze_decoded_script_layer(
     parent_path: &str,
@@ -1484,6 +1574,27 @@ pub(crate) fn analyze_script_deobfuscation_layers(
             layers.push(layer);
         }
     }
+
+    // Variation-selector steganography is not something stng deobfuscates, and
+    // the trait engine cannot reach a payload it never sees decoded: the
+    // watercrawl-mcp and miso-client compromises hid an AES-encrypted Solana
+    // command-and-control stage this way, and the shipped bundle exposed only
+    // the decoder and an eval.
+    if let Some((decoded, offset)) = decode_variation_selector_payload(content)
+        && let Some(layer) = analyze_decoded_script_layer(
+            parent_path,
+            &decoded,
+            offset as u64,
+            FileType::JavaScript,
+            vec!["unicode-variation-selector".to_string()],
+            capability_mapper,
+            current_depth,
+            false,
+        )
+    {
+        layers.push(layer);
+    }
+
     layers
 }
 
@@ -2523,5 +2634,31 @@ IAAAAAAAsDyZDwU=";
             "HostPlain shell must still unwrap python3 -c; got {:?}",
             findings.iter().map(|f| &f.id).collect::<Vec<_>>(),
         );
+    }
+}
+
+#[cfg(test)]
+mod variation_selector_tests {
+    use super::decode_variation_selector_payload;
+
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn decodes_escaped_variation_selector_run() {
+        // "console.log(1)" repeated to clear the minimum-length bar, written
+        // the way a bundler emits it: literal \u{...} escape text.
+        let payload = "console.log(1);".repeat(8);
+        let escaped: String = payload
+            .bytes()
+            .map(|b| {
+                if b < 16 {
+                    format!("\\u{{{:X}}}", 0xFE00 + u32::from(b))
+                } else {
+                    format!("\\u{{{:X}}}", 0xE0100 + u32::from(b) - 16)
+                }
+            })
+            .collect();
+        let host = format!("const s=`{escaped}`; eval(s);");
+        let (decoded, _) = decode_variation_selector_payload(&host).expect("run decodes");
+        assert_eq!(decoded, payload);
     }
 }

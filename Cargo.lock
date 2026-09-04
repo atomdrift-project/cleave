@@ -1710,7 +1710,7 @@ dependencies = [
 [[package]]
 name = "filefacts"
 version = "1.3.0"
-source = "git+https://github.com/atomdrift-project/filefacts.git#c464b0e9ef559fd2d944ec5fb46e675fa17cf1f7"
+source = "git+https://github.com/atomdrift-project/filefacts.git#35095dd133709844f826438ae8b187ece54de711"
 dependencies = [
  "aho-corasick",
  "cfb 0.10.0",
@@ -4632,7 +4632,7 @@ dependencies = [
 [[package]]
 name = "stng"
 version = "1.9.0"
-source = "git+https://github.com/atomdrift-project/stng.git#ddd89de94ac0a64a7cee4b0301fb5b19f146b4b5"
+source = "git+https://github.com/atomdrift-project/stng.git#216af13ff2e9f68d737f74fb5088ce4be338719d"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -4935,9 +4935,9 @@ dependencies = [
 
 [[package]]
 name = "tinyvec"
-version = "1.12.0"
+version = "1.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bb4ebadaa0af04fab11ae01eb5f9fdb5f9c5b875506e210e71c07873528baa7f"
+checksum = "0ba2077be5cd93c7408c849e45a4ab261b59f923f4bcdee2a724b8ed5a175a77"
 dependencies = [
  "tinyvec_macros",
 ]
@@ -5298,7 +5298,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-clojure"
 version = "0.1.0"
-source = "git+https://github.com/atomdrift-project/filefacts.git#c464b0e9ef559fd2d944ec5fb46e675fa17cf1f7"
+source = "git+https://github.com/atomdrift-project/filefacts.git#35095dd133709844f826438ae8b187ece54de711"
 dependencies = [
  "cc",
  "tree-sitter",

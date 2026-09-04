@@ -1073,6 +1073,23 @@ fn snapshot_active_phases() -> Vec<PhaseSnapshot> {
     out
 }
 
+/// Whether the shared Rayon pool has headroom for a caller's own fan-out of
+/// cleave analyses.
+///
+/// Cleave bounds how many analyses fan out at once, on the assumption that the
+/// throttled ones make serial progress on independent blocking threads. A
+/// caller that dispatches `analyze_*` from Rayon workers instead (a `par_iter`
+/// over payloads, say) breaks that assumption: the throttled analysis occupies
+/// a pool worker rather than freeing one, and its dispatcher sits blocked and
+/// stealing, so the pool's stacks weave into one dependency chain. Gate such a
+/// fan-out on this and run the analyses inline when it is false; the headroom
+/// cases (a lone analysis, or a scan draining its queue) — the ones where
+/// fanning out is what keeps the pool busy — still get it.
+#[must_use]
+pub fn pool_has_headroom() -> bool {
+    rayon_nest::pool_has_headroom()
+}
+
 /// Spawns a background thread that logs rayon pool diagnostics every 5 minutes.
 /// Call once at startup. The thread exits when the process exits.
 pub fn start_rayon_diagnostics() {

@@ -268,6 +268,22 @@ pub(crate) fn try_enter_nested_member_parallelism(
     None
 }
 
+/// Whether the pool has room for a caller's *own* fan-out of top-level
+/// analyses.
+///
+/// This is the same headroom test `inner_work_parallel` opens with, exposed
+/// for callers outside this crate that dispatch cleave analyses themselves.
+/// The bounded-owner rule below assumes non-owner analyses make serial
+/// progress **on their own blocking threads** — a caller that instead fans
+/// them across the Rayon pool defeats it, because a throttled analysis then
+/// occupies a pool worker rather than freeing one, and the `par_iter` that
+/// dispatched it leaves its caller blocked-and-stealing. Such a caller should
+/// fan out only while this returns true, and run its analyses inline
+/// otherwise.
+pub(crate) fn pool_has_headroom() -> bool {
+    TOPLEVEL_IN_FLIGHT.load(Ordering::Acquire) <= 1 || toplevel_draining()
+}
+
 /// Whether this top-level analysis owns one of the bounded inner-parallel slots.
 ///
 /// With sibling files in flight, the first analysis to reach parallel work

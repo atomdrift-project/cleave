@@ -214,7 +214,14 @@ stng = { git = "https://github.com/atomdrift-project/stng.git" }  # String extra
 
 # Logging (tracing is the modern standard, more powerful than log+env_logger)
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+# `default-features = false` drops the `tracing-log` bridge. With it on,
+# `SubscriberInitExt::init()` installs a global `log` facade that funnels every
+# upstream `log!()` through the tracing dispatcher and env-filter; goblin's
+# permissive PE import walker warns per malformed lookup-table entry, and a
+# forged import directory turns that into a CPU livelock. scan already asks for
+# this, but Cargo unifies features across the graph, so a default-features
+# dependency here re-arms the bridge for the whole binary.
+tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt", "ansi", "smallvec", "std"] }
 
 # HTTP server (for `cleave server` subcommand)
 axum = { version = "0.8", features = ["multipart"] }

@@ -1,15 +1,15 @@
 //! Regression tests for archive analysis temp-file behavior.
 
+use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
+use std::path::PathBuf;
 
 #[test]
 fn zip_analysis_does_not_extract_to_tmpdir_by_default() -> anyhow::Result<()> {
     let _guard = crate::support::global_lock();
 
     let work = tempfile::tempdir()?;
-    let tmp = work.path().join("tmp");
-    fs::create_dir(&tmp)?;
     let zip_path = work.path().join("sample.zip");
 
     {
@@ -28,12 +28,12 @@ fn zip_analysis_does_not_extract_to_tmpdir_by_default() -> anyhow::Result<()> {
         zip.finish()?;
     }
 
-    let old_tmp = std::env::var_os("TMPDIR");
-    // SAFETY: TMPDIR is a system env var that std/libc reads; the test
-    // serializes via the surrounding `env_lock` so no other thread mutates it.
-    unsafe {
-        std::env::set_var("TMPDIR", &tmp);
-    }
+    // Scan the process's real temp dir rather than pointing TMPDIR at a
+    // scratch directory: TMPDIR is process-global, and mutating it here raced
+    // with every other test in this binary creating its own temp files.
+    let tmp = std::env::temp_dir();
+    let before = extraction_leftovers(&tmp)?;
+
     cleave::set_skip_traits_override(Some(true));
     let result = cleave::analyze_file(
         &zip_path,
@@ -43,23 +43,26 @@ fn zip_analysis_does_not_extract_to_tmpdir_by_default() -> anyhow::Result<()> {
             ..Default::default()
         },
     );
-    // SAFETY: see above.
-    unsafe {
-        match old_tmp {
-            Some(value) => std::env::set_var("TMPDIR", value),
-            None => std::env::remove_var("TMPDIR"),
-        }
-    }
     cleave::set_skip_traits_override(None);
     result?;
 
-    // TMPDIR is process-global; other tests running in parallel may legitimately
-    // leave their own tempdirs under it. We only fail on entries whose name
-    // looks like a zip extraction — i.e., names containing one of the archive
-    // members above, or starting with cleave's archive-extraction prefix.
-    let leftovers: Vec<_> = fs::read_dir(&tmp)?
-        .collect::<Result<Vec<_>, _>>()?
+    let leftovers: Vec<_> = extraction_leftovers(&tmp)?
         .into_iter()
+        .filter(|path| !before.contains(path))
+        .collect();
+    assert!(
+        leftovers.is_empty(),
+        "archive analysis left zip-extraction temp entries under TMPDIR: {leftovers:?}"
+    );
+
+    Ok(())
+}
+
+/// Entries under `dir` whose names look like they came from extracting the
+/// zip built above, or from cleave's archive-extraction scratch space.
+fn extraction_leftovers(dir: &std::path::Path) -> anyhow::Result<HashSet<PathBuf>> {
+    Ok(fs::read_dir(dir)?
+        .filter_map(Result::ok)
         .filter(|entry| {
             let name = entry.file_name();
             let name = name.to_string_lossy();
@@ -68,15 +71,6 @@ fn zip_analysis_does_not_extract_to_tmpdir_by_default() -> anyhow::Result<()> {
                 || name.contains("package.json")
                 || name.starts_with("cleave-archive")
         })
-        .collect();
-    assert!(
-        leftovers.is_empty(),
-        "archive analysis left zip-extraction temp entries under TMPDIR: {:?}",
-        leftovers
-            .iter()
-            .map(std::fs::DirEntry::path)
-            .collect::<Vec<_>>()
-    );
-
-    Ok(())
+        .map(|entry| entry.path())
+        .collect())
 }

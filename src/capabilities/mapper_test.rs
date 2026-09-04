@@ -63,9 +63,16 @@ fn test_empty_mapper() {
 
 #[test]
 fn test_new_mapper() {
+    // The test constructor is hermetic unless something opts into real traits;
+    // mirror that condition rather than asserting an empty mapper outright, so
+    // the test still holds under CLEAVE_TRAITS_DIR.
+    let hermetic = crate::traits_repo::override_dir().is_none()
+        && std::env::var_os("CLEAVE_TRAITS_DIR").is_none()
+        && !crate::shared_resources::skip_traits_requested();
     let mapper = CapabilityMapper::new_without_validation();
-    // Test constructor should be hermetic unless a test opts into a traits directory.
-    assert_eq!(mapper.trait_definitions_count(), 0);
+    if hermetic {
+        assert_eq!(mapper.trait_definitions_count(), 0);
+    }
 }
 
 #[test]

@@ -10,8 +10,10 @@ pub(crate) mod ooxml;
 pub(crate) mod vba;
 pub(crate) mod vba_symbols;
 
+use super::subfile::attach_member;
 use super::{AnalysisInput, Analyzer, FileType, analyzer_for_file_type_arc};
 use crate::capabilities::CapabilityMapper;
+use crate::types::file_analysis::ARCHIVE_DELIMITER;
 use crate::types::office_metrics::{OleMetrics, OoxmlMetrics, XlmMetrics};
 use crate::types::{AnalysisReport, ArchiveEntry, Criticality, Finding, FindingKind, TargetInfo};
 
@@ -35,7 +37,7 @@ struct OfficeCrossCounts {
 use anyhow::Result;
 use regex::Regex;
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -518,7 +520,8 @@ impl OfficeAnalyzer {
             }
 
             let vba_bytes = module.source_code.as_bytes();
-            let virtual_path_str = format!("{doc_name}!!vba/{}.vbs", module.name);
+            let member_path = format!("vba/{}.vbs", module.name);
+            let virtual_path_str = format!("{doc_name}{ARCHIVE_DELIMITER}{member_path}");
             let virtual_path = Path::new(&virtual_path_str);
 
             // filefacts is the string-extraction authority and source parser:
@@ -537,59 +540,14 @@ impl OfficeAnalyzer {
             input.cancellation = cancellation.cloned();
 
             match analyzer.analyze_input(&input) {
-                Ok(mut sub_report) => {
-                    // Take findings before consuming the report
-                    let sub_findings = std::mem::take(&mut sub_report.findings);
-
-                    // Merge findings upward, tagging with source location.
-                    // Build a map of existing findings for O(1) dedup with best-wins semantics.
-                    let mut by_id: HashMap<crate::types::Istr, usize> = report
-                        .findings
-                        .iter()
-                        .enumerate()
-                        .map(|(i, f)| (f.id.clone(), i))
-                        .collect();
-
-                    for mut finding in sub_findings {
-                        for evidence in &mut finding.evidence {
-                            if let Some(ref loc) = evidence.location {
-                                evidence.location = Some(format!("vba:{}/{}", module.name, loc));
-                            } else {
-                                evidence.location = Some(format!("vba:{}", module.name));
-                            }
-                        }
-                        match by_id.get(finding.id.as_str()) {
-                            Some(&idx) => {
-                                let existing = &report.findings[idx];
-                                if (finding.crit, finding.conf.total_cmp(&existing.conf))
-                                    > (existing.crit, std::cmp::Ordering::Equal)
-                                {
-                                    report.findings[idx] = finding;
-                                }
-                            }
-                            None => {
-                                by_id.insert(
-                                    finding.id.clone().to_string().into(),
-                                    report.findings.len(),
-                                );
-                                report.findings.push(finding);
-                            }
-                        }
-                    }
-
-                    // Convert to FileAnalysis and add as nested file
-                    let (mut file_entry, nested_files, _archive_contents) =
-                        sub_report.into_file_analysis(0);
-                    file_entry.path = virtual_path_str.clone();
-                    file_entry.depth = 1;
-                    file_entry.compute_summary();
-                    report.files.push(file_entry);
-
-                    for mut nested in nested_files {
-                        nested.depth += 1;
-                        report.files.push(nested);
-                    }
-                }
+                Ok(sub_report) => attach_member(
+                    report,
+                    sub_report,
+                    vba_bytes,
+                    FileType::Vbs,
+                    &member_path,
+                    &virtual_path_str,
+                ),
                 Err(e) => {
                     tracing::warn!(
                         module = %module.name,
@@ -634,7 +592,8 @@ impl OfficeAnalyzer {
             // Sanitize the OLE stream path (which has leading "/" and may
             // contain reserved characters) into a stable virtual filename.
             let stream_label = exec.stream_path.trim_start_matches('/').replace('/', "_");
-            let virtual_path_str = format!("{doc_name}!!ole/{stream_label}");
+            let member_path = format!("ole/{stream_label}");
+            let virtual_path_str = format!("{doc_name}{ARCHIVE_DELIMITER}{member_path}");
             let virtual_path = Path::new(&virtual_path_str);
 
             // filefacts is the string-extraction authority: open the embedded
@@ -654,55 +613,14 @@ impl OfficeAnalyzer {
             input.depth = 1;
 
             match analyzer.analyze_input(&input) {
-                Ok(mut sub_report) => {
-                    let sub_findings = std::mem::take(&mut sub_report.findings);
-
-                    let mut by_id: HashMap<crate::types::Istr, usize> = report
-                        .findings
-                        .iter()
-                        .enumerate()
-                        .map(|(i, f)| (f.id.clone(), i))
-                        .collect();
-
-                    for mut finding in sub_findings {
-                        for evidence in &mut finding.evidence {
-                            if let Some(ref loc) = evidence.location {
-                                evidence.location = Some(format!("ole:{}/{}", stream_label, loc));
-                            } else {
-                                evidence.location = Some(format!("ole:{stream_label}"));
-                            }
-                        }
-                        match by_id.get(finding.id.as_str()) {
-                            Some(&idx) => {
-                                let existing = &report.findings[idx];
-                                if (finding.crit, finding.conf.total_cmp(&existing.conf))
-                                    > (existing.crit, std::cmp::Ordering::Equal)
-                                {
-                                    report.findings[idx] = finding;
-                                }
-                            }
-                            None => {
-                                by_id.insert(
-                                    finding.id.clone().to_string().into(),
-                                    report.findings.len(),
-                                );
-                                report.findings.push(finding);
-                            }
-                        }
-                    }
-
-                    let (mut file_entry, nested_files, _archive_contents) =
-                        sub_report.into_file_analysis(0);
-                    file_entry.path = virtual_path_str.clone();
-                    file_entry.depth = 1;
-                    file_entry.compute_summary();
-                    report.files.push(file_entry);
-
-                    for mut nested in nested_files {
-                        nested.depth += 1;
-                        report.files.push(nested);
-                    }
-                }
+                Ok(sub_report) => attach_member(
+                    report,
+                    sub_report,
+                    &exec.data,
+                    file_type,
+                    &member_path,
+                    &virtual_path_str,
+                ),
                 Err(e) => {
                     tracing::warn!(
                         stream = %exec.stream_path,

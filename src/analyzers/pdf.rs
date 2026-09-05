@@ -22,7 +22,6 @@ use crate::capabilities::CapabilityMapper;
 use crate::types::{AnalysisReport, TargetInfo};
 use anyhow::Result;
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -150,7 +149,8 @@ impl PdfAnalyzer {
             let object_label = payload
                 .source_object_id
                 .map_or_else(|| "anon".to_string(), |id| format!("object{id}"));
-            let virtual_path_str = format!("{doc_name}!!pdf/{object_label}.js");
+            let member_path = format!("pdf/{object_label}.js");
+            let virtual_path_str = format!("{doc_name}!!{member_path}");
             let virtual_path = Path::new(&virtual_path_str);
 
             // filefacts is the string-extraction authority and the source
@@ -169,52 +169,14 @@ impl PdfAnalyzer {
             }
 
             match analyzer.analyze_input(&input) {
-                Ok(mut sub_report) => {
-                    let sub_findings = std::mem::take(&mut sub_report.findings);
-                    let mut by_id: HashMap<crate::types::Istr, usize> = report
-                        .findings
-                        .iter()
-                        .enumerate()
-                        .map(|(i, f)| (f.id.clone(), i))
-                        .collect();
-                    let location_prefix = format!("pdf-js:{object_label}");
-                    for mut finding in sub_findings {
-                        for evidence in &mut finding.evidence {
-                            evidence.location = Some(match evidence.location.as_deref() {
-                                Some(loc) => format!("{location_prefix}/{loc}"),
-                                None => location_prefix.clone(),
-                            });
-                        }
-                        match by_id.get(finding.id.as_str()) {
-                            Some(&idx) => {
-                                let existing = &report.findings[idx];
-                                if (finding.crit, finding.conf.total_cmp(&existing.conf))
-                                    > (existing.crit, std::cmp::Ordering::Equal)
-                                {
-                                    report.findings[idx] = finding;
-                                }
-                            }
-                            None => {
-                                by_id.insert(
-                                    finding.id.clone().to_string().into(),
-                                    report.findings.len(),
-                                );
-                                report.findings.push(finding);
-                            }
-                        }
-                    }
-
-                    let (mut file_entry, nested_files, _archive_contents) =
-                        sub_report.into_file_analysis(0);
-                    file_entry.path = virtual_path_str.clone();
-                    file_entry.depth = 1;
-                    file_entry.compute_summary();
-                    report.files.push(file_entry);
-                    for mut nested in nested_files {
-                        nested.depth += 1;
-                        report.files.push(nested);
-                    }
-                }
+                Ok(sub_report) => super::subfile::attach_member(
+                    report,
+                    sub_report,
+                    js_bytes,
+                    FileType::JavaScript,
+                    &member_path,
+                    &virtual_path_str,
+                ),
                 Err(e) => {
                     tracing::warn!(
                         object = %object_label,

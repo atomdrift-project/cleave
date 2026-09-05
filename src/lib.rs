@@ -3214,26 +3214,19 @@ fn load_scan_resources(
     options: &AnalysisOptions,
 ) -> Result<(Arc<CapabilityMapper>, Option<Arc<yara_engine::YaraEngine>>)> {
     // Surface this pre-pipeline step in the phase tracker. It runs before
-    // `analyze_file_with_resources_at_depth` reaches its first `set_phase`, and
-    // its `rayon::join` blocks on the shared pool — so a pool-starvation wedge
-    // here would otherwise be reported under the caller's `cleave:init` label
-    // with no hint that it is stuck acquiring shared resources.
+    // `analyze_file_with_resources_at_depth` reaches its first `set_phase`.
     if let Some(ref tracker) = options.phase {
         tracker.set("cleave:resources");
     }
-    let (mapper_result, yara_engine) = rayon::join(
-        || shared_resources::capability_mapper_with_options(options),
-        || {
-            if options.disable_yara {
-                None
-            } else {
-                Some(shared_resources::yara_engine(
-                    options.enable_third_party_yara,
-                ))
-            }
-        },
-    );
-    Ok((mapper_result?, yara_engine))
+    // Both are process-wide caches after the first load: a warm call is a
+    // lock read. This used to hand the two lookups to `rayon::join`, which
+    // put the start of every analysis behind whatever the pool was busy with
+    // — thirty-minute `cleave:resources` phases while one jar held every
+    // worker. A cold load runs here, on the caller's own thread.
+    let mapper = shared_resources::capability_mapper_with_options(options)?;
+    let yara_engine = (!options.disable_yara)
+        .then(|| shared_resources::yara_engine(options.enable_third_party_yara));
+    Ok((mapper, yara_engine))
 }
 
 /// Above this file count the work-list is left in directory order and the

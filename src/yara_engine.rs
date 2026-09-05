@@ -11,7 +11,7 @@ use crate::capabilities::CapabilityMapper;
 use crate::types::{
     Evidence, MAX_EVIDENCE_PER_TRAIT, MatchedString, YaraMatch, deduplicate_evidence,
 };
-use anyhow::{Context, Result};
+use anyhow::Result;
 use rayon::prelude::*;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -2613,20 +2613,11 @@ impl YaraEngine {
         false
     }
 
-    /// Scan a file with loaded YARA rules
-    pub(crate) fn scan_file(&self, file_path: &Path) -> Result<Vec<YaraMatch>> {
-        if self.populated_tiers.is_empty() {
-            anyhow::bail!("No YARA rules loaded");
-        }
-
-        let data =
-            fs::read(file_path).context(format!("Failed to read file: {}", file_path.display()))?;
-
-        self.scan_bytes(&data)
-    }
-
-    /// Scan byte data with loaded YARA rules
-    /// Optionally filter results by file type
+    /// Scan against every bucket. Production callers name the buckets a file
+    /// type can match (`scan_bytes_filtered`); the unfiltered spelling is a
+    /// test convenience, kept out of reach so no per-member path can pick it
+    /// up again.
+    #[cfg(test)]
     pub(crate) fn scan_bytes(&self, data: &[u8]) -> Result<Vec<YaraMatch>> {
         self.scan_bytes_filtered(data, None)
     }

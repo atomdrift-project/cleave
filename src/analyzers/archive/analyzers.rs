@@ -155,11 +155,19 @@ where
     const MEMBER_RED_ZONE: usize = 64 * 1024 * 1024;
     const MEMBER_GROWN_STACK: usize = 128 * 1024 * 1024;
     let f = |item: &T| stacker::maybe_grow(MEMBER_RED_ZONE, MEMBER_GROWN_STACK, || f(item));
-    if parallel {
-        items.par_iter().filter_map(f).collect()
-    } else {
-        items.iter().filter_map(f).collect()
+    if !parallel {
+        return items.iter().filter_map(f).collect();
     }
+    // One window at a time. A rayon worker drains its own deque before it
+    // looks at the shared injector, so one unbounded `par_iter` over tens of
+    // thousands of members keeps every worker until it finishes, and every
+    // other analysis's join waits behind it — h2o.jar's 70k classes held the
+    // whole pool for 34 minutes. Windows the size the fold path already uses
+    // bound that wait to one window.
+    items
+        .chunks(member_window_count().max(1))
+        .flat_map(|window| window.par_iter().filter_map(&f).collect::<Vec<_>>())
+        .collect()
 }
 
 /// Streaming sibling of [`par_filter_map_members`]: fold each produced value
@@ -2838,6 +2846,46 @@ impl ArchiveAnalyzer {
         })
     }
 
+    /// Phase 1 of jar triage: YARA over every class, restricted to the class
+    /// buckets, answering the index of each flagged class with its matches.
+    ///
+    /// Shared by the in-memory and extracted paths so they cannot drift. They
+    /// once did: the extracted path called the unfiltered `scan_file`, which
+    /// after rule tiering meant every bucket for every class — 77 buckets ×
+    /// 70k classes for h2o.jar, an analysis that never finished and held the
+    /// whole rayon pool while it tried.
+    fn yara_triage_classes<T: Sync>(
+        &self,
+        yara_engine: &crate::yara_engine::YaraEngine,
+        classes: &[T],
+        bytes: impl for<'a> Fn(&'a T) -> Option<std::borrow::Cow<'a, [u8]>> + Sync,
+    ) -> Vec<(usize, Vec<YaraMatch>)> {
+        let filetypes = FileType::JavaClass.yara_filetypes();
+        let filter = (!filetypes.is_empty()).then_some(filetypes.as_slice());
+        let indexes: Vec<usize> = (0..classes.len()).collect();
+        par_filter_map_members(&indexes, self.members_run_parallel(classes.len()), |&i| {
+            if self.is_cancelled() {
+                return None;
+            }
+            let data = bytes(&classes[i])?;
+            let scanned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                yara_engine.scan_bytes_filtered(&data, filter)
+            }));
+            match scanned {
+                Ok(Ok(matches)) if !matches.is_empty() => Some((i, matches)),
+                Ok(Ok(_)) => None,
+                Ok(Err(e)) => {
+                    debug!("YARA scan failed for class {i}: {e}");
+                    None
+                }
+                Err(_panic) => {
+                    tracing::error!(class = i, "panic during YARA scan (caught)");
+                    None
+                }
+            }
+        })
+    }
+
     fn analyze_jar_members_in_memory(
         &self,
         members: &[MemoryArchiveMember],
@@ -2859,33 +2907,11 @@ impl ArchiveAnalyzer {
         let mut flagged_classes = HashSet::<String>::new();
         let mut collected_yara = Vec::<YaraMatch>::with_capacity(50);
         if let Some(ref yara_engine) = self.yara_engine {
-            let yara_filetypes = FileType::JavaClass.yara_filetypes();
-            let yara_filter = if yara_filetypes.is_empty() {
-                None
-            } else {
-                Some(yara_filetypes.as_slice())
-            };
-            let yara_results = par_filter_map_members(
-                &class_members,
-                self.members_run_parallel(class_members.len()),
-                |member| {
-                    if self.is_cancelled() {
-                        return None;
-                    }
-                    match yara_engine.scan_bytes_filtered(&member.data, yara_filter) {
-                        Ok(matches) if !matches.is_empty() => {
-                            Some((member.relative_path.clone(), matches))
-                        }
-                        Ok(_) => None,
-                        Err(e) => {
-                            debug!("YARA scan failed for {}: {}", member.relative_path, e);
-                            None
-                        }
-                    }
-                },
-            );
-            for (path, matches) in yara_results {
-                flagged_classes.insert(path);
+            let yara_results = self.yara_triage_classes(yara_engine, &class_members, |m| {
+                Some(std::borrow::Cow::Borrowed(m.data.as_slice()))
+            });
+            for (i, matches) in yara_results {
+                flagged_classes.insert(class_members[i].relative_path.clone());
                 for ym in matches {
                     if !collected_yara.iter().any(|m: &YaraMatch| m.rule == ym.rule) {
                         collected_yara.push(ym);
@@ -3530,51 +3556,29 @@ impl ArchiveAnalyzer {
         let total_class_files = class_files.len();
         debug!("Found {} .class files", total_class_files);
 
-        // Phase 1: Run YARA on ALL class files in parallel (fast, lock-free)
+        // Phase 1: YARA over every class, class buckets only.
         let (flagged_classes, collected_yara_matches) = if let Some(ref yara_engine) =
             self.yara_engine
         {
             let yara_start = std::time::Instant::now();
-            // Serialize when already inside a rayon context so nested-depth
-            // stays ≤ 1 (outer archive-member walk is already at depth 1).
-            // Running a second `par_iter` here when nested commits sibling
-            // slot-pool workers to JAR YARA scans and can starve the outer
-            // reaper on small pools.
-            let yara_results = par_filter_map_members(
-                &class_files,
-                self.members_run_parallel(class_files.len()),
-                |entry| {
-                    if self.is_cancelled() {
-                        return None;
+            let yara_results = self.yara_triage_classes(yara_engine, &class_files, |entry| {
+                match std::fs::read(entry.path()) {
+                    Ok(data) => Some(std::borrow::Cow::Owned(data)),
+                    Err(e) => {
+                        debug!("Failed to read {}: {}", entry.path().display(), e);
+                        None
                     }
-                    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        yara_engine.scan_file(entry.path())
-                    })) {
-                        Ok(Ok(matches)) if !matches.is_empty() => {
-                            Some((entry.path().to_path_buf(), matches))
-                        }
-                        Ok(Err(e)) => {
-                            debug!("YARA scan failed for {}: {}", entry.path().display(), e);
-                            None
-                        }
-                        Err(_panic) => {
-                            tracing::error!(path = %entry.path().display(), "panic during YARA scan (caught)");
-                            None
-                        }
-                        _ => None,
-                    }
-                },
-            );
+                }
+            });
             debug!(
                 "YARA scan completed in {:.2}s",
                 yara_start.elapsed().as_secs_f64()
             );
 
-            // Single-threaded aggregation
             let mut flagged = HashSet::new();
             let mut matches = Vec::with_capacity(50);
-            for (path, file_matches) in yara_results {
-                flagged.insert(path);
+            for (i, file_matches) in yara_results {
+                flagged.insert(class_files[i].path().to_path_buf());
                 for ym in file_matches {
                     if !matches.iter().any(|m: &YaraMatch| m.rule == ym.rule) {
                         matches.push(ym);

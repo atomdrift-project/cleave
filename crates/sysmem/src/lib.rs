@@ -1,8 +1,9 @@
-//! Lightweight system memory queries with zero dependencies.
+//! Lightweight system memory and CPU queries with zero dependencies.
 //!
 //! Provides [`total_memory`] (effective available memory) and [`current_rss`]
 //! (resident set size) on macOS, Linux, FreeBSD, OpenBSD, NetBSD, illumos,
-//! Solaris, and Windows. Returns `None` on unsupported platforms.
+//! Solaris, and Windows, plus [`physical_cpu_count`] and the machine-wide
+//! [`cpu_time`] counters. Returns `None` on unsupported platforms.
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 
@@ -755,6 +756,110 @@ fn current_rss_impl() -> Option<u64> {
 // `None` rather than guessing when its source is unavailable, so the caller
 // can warn and apply its own heuristic.
 
+/// Cumulative CPU time across every CPU since boot, in the kernel's own ticks.
+///
+/// Deliberately unit-free. The tick differs between kernels — `USER_HZ` on
+/// Linux, `stathz` on FreeBSD — so a caller never reads one of these alone. It
+/// reads two, a poll apart, and takes `Δbusy / (Δbusy + Δidle)`: the fraction
+/// of all CPU time the machine spent busy over the interval, and times the
+/// logical CPU count, the number of cores busy. That is the same question on
+/// every platform, which the load average is not: Linux counts threads waiting
+/// on disk in its load average and FreeBSD counts only runnable ones, so a box
+/// mid-download reads busier on one than the other for identical CPU work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CpuTime {
+    /// Ticks spent running anything: user, nice, system, interrupt, steal.
+    pub busy: u64,
+    /// Ticks spent idle, including Linux's `iowait`, which is idle with a disk
+    /// request outstanding — no core was busy for it.
+    pub idle: u64,
+}
+
+/// Machine-wide CPU time since boot, or `None` where the platform exposes no
+/// source. Linux reads the aggregate `cpu` line of `/proc/stat`; FreeBSD reads
+/// `kern.cp_time`. Other platforms return `None` rather than a guess, and a
+/// caller falls back to whatever weaker signal it has (a load average).
+#[must_use]
+pub fn cpu_time() -> Option<CpuTime> {
+    cpu_time_impl()
+}
+
+#[cfg(target_os = "linux")]
+fn cpu_time_impl() -> Option<CpuTime> {
+    let stat = std::fs::read_to_string("/proc/stat").ok()?;
+    parse_proc_stat_cpu(&stat)
+}
+
+/// The aggregate `cpu` line of `/proc/stat`: `cpu user nice system idle iowait
+/// irq softirq steal [guest guest_nice]`. `guest` and `guest_nice` are already
+/// counted inside `user` and `nice` and are not added again. Pure, so the
+/// tests run it on every platform.
+#[cfg(any(target_os = "linux", test))]
+fn parse_proc_stat_cpu(stat: &str) -> Option<CpuTime> {
+    let line = stat.lines().find(|l| l.starts_with("cpu "))?;
+    let mut fields = line.split_whitespace().skip(1).map(str::parse::<u64>);
+    let mut next = || fields.next()?.ok();
+    let user = next()?;
+    let nice = next()?;
+    let system = next()?;
+    let idle = next()?;
+    // Fields after `idle` arrived over kernel versions; a missing one is zero.
+    let iowait = next().unwrap_or(0);
+    let irq = next().unwrap_or(0);
+    let softirq = next().unwrap_or(0);
+    let steal = next().unwrap_or(0);
+    Some(CpuTime {
+        busy: user + nice + system + irq + softirq + steal,
+        idle: idle + iowait,
+    })
+}
+
+#[cfg(target_os = "freebsd")]
+fn cpu_time_impl() -> Option<CpuTime> {
+    // <sys/resource.h>: CP_USER, CP_NICE, CP_SYS, CP_INTR, CP_IDLE; CPUSTATES=5.
+    let cp: [i64; 5] = sysctlbyname_longs(c"kern.cp_time")?;
+    let ticks = |v: i64| u64::try_from(v).ok();
+    Some(CpuTime {
+        busy: ticks(cp[0])? + ticks(cp[1])? + ticks(cp[2])? + ticks(cp[3])?,
+        idle: ticks(cp[4])?,
+    })
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+fn cpu_time_impl() -> Option<CpuTime> {
+    None
+}
+
+/// `sysctlbyname` returning an array of N C `long`s, for `kern.cp_time`.
+#[cfg(target_os = "freebsd")]
+fn sysctlbyname_longs<const N: usize>(name: &core::ffi::CStr) -> Option<[i64; N]> {
+    extern "C" {
+        fn sysctlbyname(
+            name: *const core::ffi::c_char,
+            oldp: *mut std::ffi::c_void,
+            oldlenp: *mut usize,
+            newp: *const std::ffi::c_void,
+            newlen: usize,
+        ) -> i32;
+    }
+
+    let mut val: [core::ffi::c_long; N] = [0; N];
+    let mut len = std::mem::size_of::<[core::ffi::c_long; N]>();
+    // SAFETY: kern.cp_time writes CPUSTATES C longs; the buffer is exactly
+    // that size and alignment, and the length the kernel reports back is
+    // checked against it so a shorter or longer answer is refused.
+    let ret = unsafe {
+        sysctlbyname(
+            name.as_ptr(),
+            (&raw mut val).cast(),
+            &raw mut len,
+            std::ptr::null(),
+            0,
+        )
+    };
+    (ret == 0 && len == std::mem::size_of::<[core::ffi::c_long; N]>()).then(|| val.map(i64::from))
+}
+
 /// `sysctlbyname` returning a single C `int` as `usize`. Shared by the two
 /// platforms whose physical-core sysctls return an `int`: macOS and FreeBSD.
 #[cfg(any(target_os = "macos", target_os = "freebsd"))]
@@ -993,6 +1098,39 @@ fn physical_cpu_count_impl() -> Option<usize> {
 mod tests {
     #![allow(clippy::expect_used)]
     use super::*;
+
+    /// The Linux aggregate line, with the post-2.6.11 fields present. iowait
+    /// is idle time: a core waiting on a disk is not a busy core.
+    #[test]
+    fn parse_proc_stat_cpu_splits_busy_from_idle() {
+        let stat = "cpu  100 20 300 4000 50 6 7 8 90 10\ncpu0 1 2 3 4 5 6 7 8 9 10\n";
+        let t = parse_proc_stat_cpu(stat).expect("cpu line");
+        assert_eq!(t.busy, 100 + 20 + 300 + 6 + 7 + 8);
+        assert_eq!(t.idle, 4000 + 50);
+    }
+
+    /// An old kernel with only the four original fields still parses.
+    #[test]
+    fn parse_proc_stat_cpu_tolerates_short_lines() {
+        let t = parse_proc_stat_cpu("cpu 1 2 3 4\n").expect("cpu line");
+        assert_eq!(t, CpuTime { busy: 6, idle: 4 });
+        assert!(
+            parse_proc_stat_cpu("cpu0 1 2 3 4\n").is_none(),
+            "no aggregate line"
+        );
+        assert!(
+            parse_proc_stat_cpu("cpu 1 2 x 4\n").is_none(),
+            "garbage refused"
+        );
+    }
+
+    /// Where the platform supports it, two reads a moment apart are monotonic.
+    #[test]
+    fn cpu_time_is_monotonic_where_supported() {
+        if let (Some(a), Some(b)) = (cpu_time(), cpu_time()) {
+            assert!(b.busy >= a.busy && b.idle >= a.idle, "{a:?} then {b:?}");
+        }
+    }
 
     #[test]
     fn total_memory_returns_value() {

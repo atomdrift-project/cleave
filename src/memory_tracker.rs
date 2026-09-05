@@ -203,6 +203,17 @@ pub fn physical_cpu_count() -> Option<usize> {
     sysmem::physical_cpu_count()
 }
 
+pub use sysmem::CpuTime;
+
+/// Machine-wide cumulative CPU time, busy and idle, in kernel ticks; `None`
+/// where the platform exposes no source. Two reads a poll apart give the
+/// share of the machine that was busy between them — the platform-neutral
+/// pressure signal a load average is not. See [`sysmem::cpu_time`].
+#[must_use]
+pub fn cpu_time() -> Option<CpuTime> {
+    sysmem::cpu_time()
+}
+
 /// Memory limit: `min(50% RAM, 32 GiB)`.
 ///
 /// Use this as the default `limit` argument to [`start_periodic_logging`] and

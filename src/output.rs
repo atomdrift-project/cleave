@@ -1298,6 +1298,69 @@ fn minimal_header(out: &mut String, file: &FileAnalysis, basename_root: bool) {
 /// which often leaks the dev account — plus contact emails and stable
 /// unique ids (cdhash, extension id, MAC). Emitted only when present, so
 /// most files render nothing here.
+/// The identity claims the headline consumed, by value.
+///
+/// Mirrors [`identity_headline`]'s selection exactly so [`render_identity`]
+/// can show everything it *didn't* pick without repeating what it did. Kept
+/// beside the headline rather than derived from its rendered string: the
+/// headline truncates and joins, and matching on that text would silently
+/// start duplicating the moment either changes.
+fn headline_claims(id: &filefacts::Identity) -> Vec<String> {
+    use filefacts::Trust;
+    let mut used = Vec::new();
+    // what — the subject, in the same order the headline tries them.
+    if let Some(c) = &id.identifier {
+        used.push(c.value.clone());
+    } else if let Some(c) = &id.title {
+        used.push(c.value.clone());
+    } else if let Some(c) = &id.name {
+        used.push(c.value.clone());
+        // The version is folded into the subject only when the name is used.
+        if let Some(v) = &id.version {
+            used.push(v.value.clone());
+        }
+    }
+    // who — the responsible party, most authoritative first.
+    if let Some(s) = id
+        .signer
+        .as_ref()
+        .and_then(|s| s.organization.clone().or_else(|| s.common_name.clone()))
+    {
+        used.push(s);
+    } else if let Some(a) = id
+        .authors
+        .first()
+        .and_then(|a| a.name.clone().or_else(|| a.email.clone()))
+    {
+        used.push(a);
+    } else if let Some(c) = &id.organization {
+        used.push(c.value.clone());
+    } else if let Some(c) = &id.team_id {
+        used.push(c.value.clone());
+    }
+    // provenance — the producing tool stands in only when nothing signed it.
+    if matches!(id.trust, Trust::Unsigned | Trust::AdHoc)
+        && let Some(c) = &id.producer
+    {
+        used.push(c.value.clone());
+    }
+    used
+}
+
+/// Supplementary identity lines: every claim the artifact makes about itself
+/// that the headline had no room for, plus the forensic fields that never
+/// belonged in a headline (the build path — which often leaks the dev
+/// account — contact emails, stable unique ids).
+///
+/// These are rendered as labelled pairs rather than folded into prose because
+/// the *disagreements* are the point. A PE whose version resource names one
+/// company while its Authenticode chain names another, a document whose
+/// author is not the account that produced it, a Mach-O whose bundle id does
+/// not match its team — each is a supply-chain signal that only exists when
+/// both halves are on the page. The headline shows one of each pair by
+/// design; this shows the rest, and lets the reader notice.
+///
+/// Emitted only when present, so most files render nothing here.
 fn render_identity(out: &mut String, id: &filefacts::Identity, colorize: bool) {
     let label = |s: &str| {
         if colorize {
@@ -1306,6 +1369,86 @@ fn render_identity(out: &mut String, id: &filefacts::Identity, colorize: bool) {
             s.to_string()
         }
     };
+    let used = headline_claims(id);
+    let fresh = |v: &str| !v.is_empty() && !used.iter().any(|u| u == v);
+
+    // What it claims to be, beyond the one the headline picked.
+    let mut claims: Vec<String> = Vec::new();
+    let mut push_claim = |key: &str, claim: &Option<filefacts::Claim>, max: usize| {
+        if let Some(c) = claim
+            && fresh(&c.value)
+        {
+            claims.push(format!("{key}=\"{}\"", truncate_end(&c.value, max)));
+        }
+    };
+    push_claim("product", &id.project, 48);
+    push_claim("company", &id.organization, 48);
+    push_claim("file", &id.name, 48);
+    push_claim("title", &id.title, 48);
+    push_claim("id", &id.identifier, 64);
+    push_claim("version", &id.version, 24);
+    push_claim("team", &id.team_id, 32);
+    push_claim("producer", &id.producer, 32);
+    if !claims.is_empty() {
+        out.push_str(&format!("  {}  {}\n", label("claims"), claims.join(" ")));
+    }
+
+    // Who signed it, in the signature's own words. The headline reduces a
+    // signer to one name; a chain that a reader can compare against the
+    // claims above needs the issuer and the subject too.
+    if let Some(signer) = &id.signer {
+        let mut parts: Vec<String> = Vec::new();
+        for (key, value) in [
+            ("CN", &signer.common_name),
+            ("O", &signer.organization),
+            ("subject", &signer.subject),
+            ("issuer", &signer.issuer),
+            ("at", &signer.signed_at),
+        ] {
+            if let Some(v) = value
+                && fresh(v)
+            {
+                parts.push(format!("{key}=\"{}\"", truncate_end(v, 64)));
+            }
+        }
+        if !parts.is_empty() {
+            out.push_str(&format!("  {}  {}\n", label("signer"), parts.join(" ")));
+        }
+    }
+
+    // Every named party, not just the one the headline chose.
+    let authors: Vec<String> = id
+        .authors
+        .iter()
+        .filter_map(|a| {
+            let name = a.name.as_deref().or(a.email.as_deref())?;
+            if !fresh(name) {
+                return None;
+            }
+            let mut text = truncate_end(name, 48);
+            if let Some(email) = a.email.as_deref().filter(|e| Some(*e) != a.name.as_deref()) {
+                text.push_str(&format!(" <{}>", truncate_end(email, 48)));
+            }
+            if !a.role.is_empty() {
+                text.push_str(&format!(" ({})", a.role));
+            }
+            Some(text)
+        })
+        .collect();
+    if !authors.is_empty() {
+        out.push_str(&format!("  {}  {}\n", label("authors"), authors.join(", ")));
+    }
+
+    // Where it says it lives. A repository or homepage that disagrees with the
+    // package name is the classic clone-and-rename tell.
+    let urls: Vec<String> = id
+        .urls
+        .iter()
+        .map(|u| format!("{:?}={}", u.kind, truncate_end(&u.url, 72)).to_lowercase())
+        .collect();
+    if !urls.is_empty() {
+        out.push_str(&format!("  {}  {}\n", label("links"), urls.join(" ")));
+    }
 
     if let Some(bp) = &id.build_path {
         out.push_str(&format!(
@@ -3474,6 +3617,175 @@ mod tests {
     use super::*;
     use crate::types::{AnalysisReport, Evidence, FindingKind, TargetInfo, YaraMatch};
     use chrono::Utc;
+
+    /// Identity fixture from JSON, so a test reads as the claims a file makes
+    /// rather than as struct assembly.
+    fn identity(json: serde_json::Value) -> filefacts::Identity {
+        serde_json::from_value(json).expect("identity fixture")
+    }
+
+    fn identity_lines(id: &filefacts::Identity) -> String {
+        let mut out = String::new();
+        render_identity(&mut out, id, false);
+        out
+    }
+
+    /// A signed PE that claims one company in its version resource and carries
+    /// another on its Authenticode chain. The headline can only name one of
+    /// them; the disagreement is the signal, so both must reach the reader.
+    #[test]
+    fn pe_identity_shows_the_version_resource_beside_the_signature() {
+        let id = identity(serde_json::json!({
+            "name": {"value": "setup.exe", "source": "pe.version.original_filename"},
+            "project": {"value": "Contoso Updater", "source": "pe.version.product_name"},
+            "version": {"value": "3.5.1", "source": "pe.version.file_version"},
+            "organization": {"value": "Contoso Ltd", "source": "pe.version.company_name"},
+            "signer": {
+                "common_name": "Vanguard Tech Limited",
+                "organization": "Vanguard Tech Limited",
+                "issuer": "DigiCert Trusted G4 Code Signing RSA4096",
+                "signed_at": "2024-01-05T00:00:00Z",
+                "source": "pe.signatures[0]",
+            },
+            "trust": "ca_signed",
+            "build_path": {"value": "C:\\Users\\dev\\proj\\src\\main.rs", "source": "strings"},
+        }));
+        let headline = identity_headline(&id, false).expect("headline");
+        let lines = identity_lines(&id);
+
+        // The headline names the signer; the claims line names what the binary
+        // says about itself, and the two disagree in plain sight.
+        assert!(headline.contains("Vanguard Tech Limited"), "{headline}");
+        assert!(lines.contains(r#"product="Contoso Updater""#), "{lines}");
+        assert!(lines.contains(r#"company="Contoso Ltd""#), "{lines}");
+        // The signer's own words, so the chain can be judged rather than trusted.
+        assert!(lines.contains("issuer=\"DigiCert"), "{lines}");
+        assert!(lines.contains("at=\"2024-01-05"), "{lines}");
+        // The build path still reaches the reader.
+        assert!(lines.contains(r"C:\Users\dev"), "{lines}");
+        // Nothing the headline already showed is repeated.
+        assert!(
+            !lines.contains("O=\"Vanguard"),
+            "signer org duplicated: {lines}"
+        );
+        assert!(
+            !lines.contains("CN=\"Vanguard"),
+            "signer name duplicated: {lines}"
+        );
+        assert!(
+            !lines.contains(r#"file="setup.exe""#),
+            "subject duplicated: {lines}"
+        );
+        assert!(
+            !lines.contains(r#"version="3.5.1""#),
+            "folded version duplicated: {lines}"
+        );
+    }
+
+    /// A Mach-O keeps its team id and bundle version beside the signing
+    /// identity: a Developer ID whose team does not match the bundle it ships
+    /// is the same class of tell as the PE above.
+    #[test]
+    fn macho_identity_keeps_team_and_bundle_version() {
+        let id = identity(serde_json::json!({
+            "identifier": {"value": "com.contoso.helper", "source": "macho.bundle_identifier"},
+            "version": {"value": "1.4.0", "source": "macho.bundle_version"},
+            "team_id": {"value": "AB12CD34EF", "source": "macho.code_signature"},
+            "signer": {
+                "common_name": "Developer ID Application: Contoso Ltd (AB12CD34EF)",
+                "organization": "Contoso Ltd",
+                "source": "macho.code_signature",
+            },
+            "trust": "developer_id",
+        }));
+        let headline = identity_headline(&id, false).expect("headline");
+        let lines = identity_lines(&id);
+        assert!(headline.contains("com.contoso.helper"), "{headline}");
+        assert!(headline.contains("developer-id"), "{headline}");
+        // The identifier is the subject, so the version is *not* folded in and
+        // must be carried here instead.
+        assert!(lines.contains(r#"version="1.4.0""#), "{lines}");
+        assert!(lines.contains(r#"team="AB12CD34EF""#), "{lines}");
+        assert!(lines.contains("CN=\"Developer ID Application"), "{lines}");
+    }
+
+    /// An Office document names an author, a company and the application that
+    /// produced it. The headline shows two of the three; all three matter when
+    /// a document arrives from outside the company it claims.
+    #[test]
+    fn docx_identity_keeps_company_beside_author_and_producer() {
+        let id = identity(serde_json::json!({
+            "title": {"value": "Q3 Vendor Invoice", "source": "docprops.core.title"},
+            "authors": [
+                {"name": "Aleksandr Petrov", "email": "a.petrov@example.invalid",
+                 "role": "creator", "source": "docprops.core.creator"},
+                {"name": "Finance Bot", "role": "last_modified_by",
+                 "source": "docprops.core.lastModifiedBy"},
+            ],
+            "organization": {"value": "Contoso Ltd", "source": "docprops.app.company"},
+            "producer": {"value": "Microsoft Office Word", "source": "docprops.app.application"},
+            "trust": "unsigned",
+        }));
+        let headline = identity_headline(&id, false).expect("headline");
+        let lines = identity_lines(&id);
+        assert!(headline.contains("Q3 Vendor Invoice"), "{headline}");
+        assert!(headline.contains("Aleksandr Petrov"), "{headline}");
+        // The company the document claims — dropped from the headline because
+        // an author outranked it — and the second party that touched it.
+        assert!(lines.contains(r#"company="Contoso Ltd""#), "{lines}");
+        assert!(lines.contains("Finance Bot"), "{lines}");
+        assert!(lines.contains("(last_modified_by)"), "{lines}");
+        // The author the headline already named is not repeated, but their
+        // address — which the headline has no room for — is not lost either.
+        assert!(!lines.contains("authors  Aleksandr Petrov,"), "{lines}");
+        // Unsigned, so the producer is the headline's third slot: not repeated.
+        assert!(!lines.contains(r#"producer="Microsoft"#), "{lines}");
+    }
+
+    /// A signed artifact shows its producing tool too: the headline spends its
+    /// third slot on the trust tier, so the tool would otherwise vanish.
+    #[test]
+    fn a_signed_artifact_still_names_its_producing_tool() {
+        let id = identity(serde_json::json!({
+            "title": {"value": "Quarterly Report", "source": "docprops.core.title"},
+            "producer": {"value": "LibreOffice 7.6", "source": "docprops.app.application"},
+            "signer": {"common_name": "Contoso Ltd", "source": "ooxml.signature"},
+            "trust": "ca_signed",
+        }));
+        let headline = identity_headline(&id, false).expect("headline");
+        assert!(headline.contains("ca-signed"), "{headline}");
+        assert!(!headline.contains("LibreOffice"), "{headline}");
+        assert!(
+            identity_lines(&id).contains(r#"producer="LibreOffice 7.6""#),
+            "{}",
+            identity_lines(&id)
+        );
+    }
+
+    /// The whole point is that this reaches the LLM view, which has no rich
+    /// header — only the minimal header plus these lines.
+    #[test]
+    fn tiny_view_carries_the_full_identity_block() {
+        let mut file = src_file(
+            0,
+            "setup.exe",
+            5,
+            vec![finding_with("t/one", Criticality::Notable)],
+            vec![],
+        );
+        file.file_type = "pe".to_string();
+        file.identity = Some(identity(serde_json::json!({
+            "name": {"value": "setup.exe", "source": "pe.version.original_filename"},
+            "project": {"value": "Contoso Updater", "source": "pe.version.product_name"},
+            "organization": {"value": "Contoso Ltd", "source": "pe.version.company_name"},
+            "signer": {"organization": "Vanguard Tech Limited", "source": "pe.signatures[0]"},
+            "trust": "ca_signed",
+        })));
+        let tiny = format_context(&report_with_files(vec![file]), &TinyOpts::tiny());
+        assert!(tiny.contains("Vanguard Tech Limited"), "{tiny}");
+        assert!(tiny.contains(r#"product="Contoso Updater""#), "{tiny}");
+        assert!(tiny.contains(r#"company="Contoso Ltd""#), "{tiny}");
+    }
 
     #[test]
     fn embedded_label_formats_kind_offset_and_size() {

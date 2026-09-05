@@ -30,7 +30,8 @@
 use crate::analyzers::archive::ArchiveAnalyzer;
 use crate::analyzers::{AnalysisInput, FileType, analyzer_for_file_type_arc};
 use crate::capabilities::CapabilityMapper;
-use crate::types::FileAnalysis;
+use crate::types::{AnalysisReport, FileAnalysis, Finding};
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -57,10 +58,9 @@ pub const MAX_SUBFILE_DEPTH: u32 = 6;
 /// `location_prefix` is prepended to every sub-finding's
 /// `evidence.location`, with the original location appended after
 /// a `:`. Conventions:
-/// - `pdf-js:object<id>` — PDF `/JS` action
-/// - `vba:<module-name>` — Office VBA module
 /// - `embedded@<offset>` — base64-decoded payload at byte offset
-/// - `archive:<member-path>` — archive member
+/// - `archive:<member-path>` — archive member, and every
+///   format-embedded payload attached via `attach_member`
 ///
 /// Returns an empty vec on any failure (analyzer unavailable,
 /// depth exceeded, parse error). Sub-file analysis is best-effort
@@ -104,6 +104,82 @@ pub fn analyze_subfile_bytes(
     };
 
     flatten_subreport(report, virtual_path, location_prefix, child_depth)
+}
+
+/// Attach an analyzed format-embedded payload (an Office VBA module, an OLE2
+/// executable stream, a PDF `/JS` action) to its container `parent` the way
+/// the archive analyzer attaches a member.
+///
+/// The member is first finished on its *own* bytes — findings deduped and
+/// render context captured — because the per-analyzer path never runs
+/// capture (the lib/archive orchestration normally does). Its findings are
+/// then lifted into the parent's stream, best-wins per id (higher
+/// criticality, then confidence), with evidence relabeled
+/// `archive:<member_path>[:<loc>]`. That scheme, not a private one, is what
+/// every byte-position consumer keys off — context capture, span derivation,
+/// member attribution all skip `archive:`-scoped evidence on the container
+/// and let the member render it itself. A private prefix (`ole:`, `vba:`,
+/// `pdf-js:`) hid the evidence from that logic, so the container reported
+/// every member content match as an offset-less matcher bug and the member,
+/// stripped of its findings, rendered nothing. Evidence already
+/// `archive:`-scoped (an overlay nested inside the member) keeps its label.
+///
+/// `member_path` is the member's path relative to the container
+/// (`ole/Binary.x`, `vba/Module1.vbs`); `virtual_path` is the full nested
+/// path recorded on the attached [`FileAnalysis`].
+pub(crate) fn attach_member(
+    parent: &mut AnalysisReport,
+    mut member: AnalysisReport,
+    bytes: &[u8],
+    file_type: FileType,
+    member_path: &str,
+    virtual_path: &str,
+) {
+    member.dedupe_findings();
+    crate::context::capture(&mut member, bytes, file_type);
+
+    let mut by_id: HashMap<crate::types::Istr, usize> = parent
+        .findings
+        .iter()
+        .enumerate()
+        .map(|(i, f)| (f.id.clone(), i))
+        .collect();
+    for finding in &member.findings {
+        let mut lifted: Finding = finding.clone();
+        for evidence in &mut lifted.evidence {
+            match &evidence.location {
+                None => evidence.location = Some(format!("archive:{member_path}")),
+                Some(loc) if !loc.starts_with("archive:") => {
+                    evidence.location = Some(format!("archive:{member_path}:{loc}"));
+                }
+                _ => {}
+            }
+        }
+        match by_id.get(lifted.id.as_str()) {
+            Some(&idx) => {
+                let existing = &parent.findings[idx];
+                if (lifted.crit, lifted.conf.total_cmp(&existing.conf))
+                    > (existing.crit, std::cmp::Ordering::Equal)
+                {
+                    parent.findings[idx] = lifted;
+                }
+            }
+            None => {
+                by_id.insert(lifted.id.clone(), parent.findings.len());
+                parent.findings.push(lifted);
+            }
+        }
+    }
+
+    let (mut file_entry, nested_files, _archive_contents) = member.into_file_analysis(0);
+    file_entry.path = virtual_path.to_string();
+    file_entry.depth = 1;
+    file_entry.compute_summary();
+    parent.files.push(file_entry);
+    for mut nested in nested_files {
+        nested.depth += 1;
+        parent.files.push(nested);
+    }
 }
 
 /// Pick the right analyzer for a [`FileType`]. Archives go through

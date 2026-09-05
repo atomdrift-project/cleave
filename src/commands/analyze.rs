@@ -130,6 +130,7 @@ pub fn run(config: &AnalyzeConfig<'_>) -> Result<String> {
         // this is still a no-op for server-invoked analyses.
         cancellation: Some(cleave::cancellation::global_flag()),
         phase: None,
+        dedicated_pool: false,
         skip_predicate: None,
     };
 

@@ -3,7 +3,9 @@
 //! Traits (detection rules) are distributed as signed `.tar.zst` bundles from
 //! the update bucket — see [`crate::rule_update`], which `cleave update-rules`
 //! drives. This module only handles *resolution* (where traits live) and the
-//! first-run bootstrap install. No git.
+//! first-run bootstrap install. It performs no git *operations* — but it does
+//! read `.git/HEAD` to report a version for a git-managed traits checkout,
+//! which carries no bundle sidecar. See [`version`].
 //!
 //! Resolution order:
 //! 1. `--traits-dir` CLI flag / `CLEAVE_TRAITS_DIR` env var / API override
@@ -167,12 +169,89 @@ fn has_traits(path: &Path) -> bool {
             || path.join("metadata").is_dir())
 }
 
-/// Get the installed traits commit (short), from the bundle's sidecar.
+/// Get the traits commit (short) currently in use.
+///
+/// Prefers the bundle's sidecar; falls back to the checked-out commit when the
+/// traits directory is a git checkout, which has no sidecar because
+/// [`crate::rule_update::update`] deliberately refuses to touch a git-managed
+/// tree.
+///
+/// The fallback is not cosmetic. This value becomes `CompactReport::traits_version`,
+/// serialized as `rev` and omitted entirely when `None`. Downstream, hopper's
+/// `/api/known` reports a stored verdict "current" only when its recorded traits
+/// version matches the producer's, and scan skips re-posting exactly those — so a
+/// producer that reports no version has that negotiation silently disabled and
+/// re-posts every verdict, forever. Returning `None` here is therefore expensive
+/// and invisible, which is the worst combination; prefer any true answer.
 #[must_use]
 #[allow(dead_code)] // Used by binary target
 pub fn version() -> Option<String> {
     let traits_dir = resolve_current_traits_dir();
-    crate::rule_update::installed(&traits_dir).map(|i| i.commit.chars().take(9).collect())
+    crate::rule_update::installed(&traits_dir)
+        .map(|i| short_commit_prefix(&i.commit))
+        .or_else(|| git_head_commit(&traits_dir))
+}
+
+/// First 9 chars of a commit hash — the sidecar's own convention, kept for the
+/// git fallback so both sources are indistinguishable downstream.
+fn short_commit_prefix(commit: &str) -> String {
+    commit.chars().take(9).collect()
+}
+
+/// Validate and shorten a candidate commit hash read from git's on-disk refs.
+fn checked_commit(hash: &str) -> Option<String> {
+    let hash = hash.trim();
+    (hash.len() >= 9 && hash.chars().all(|c| c.is_ascii_hexdigit()))
+        .then(|| short_commit_prefix(hash))
+}
+
+/// Read the checked-out commit straight from git's on-disk refs.
+///
+/// Parsed rather than shelled out to `git`: this runs on the report-emit path,
+/// cleave takes no git dependency, and a subprocess per report would be absurd.
+/// Handles the three shapes that actually occur — a detached HEAD holding a raw
+/// hash, a symbolic ref resolved through a loose ref file, and one resolved
+/// through `packed-refs` (which is the common case in a freshly cloned tree).
+fn git_head_commit(dir: &Path) -> Option<String> {
+    let git = dir.join(".git");
+    // A worktree or submodule stores `gitdir: <path>` in a .git FILE, not a dir.
+    let git_dir = if git.is_file() {
+        let text = std::fs::read_to_string(&git).ok()?;
+        let target = PathBuf::from(text.trim().strip_prefix("gitdir:")?.trim());
+        if target.is_absolute() {
+            target
+        } else {
+            dir.join(target)
+        }
+    } else {
+        git
+    };
+
+    let head = std::fs::read_to_string(git_dir.join("HEAD")).ok()?;
+    let head = head.trim();
+    let Some(reference) = head.strip_prefix("ref:") else {
+        return checked_commit(head); // detached HEAD
+    };
+    let reference = reference.trim();
+
+    // A loose ref file wins; git only packs refs it has not since moved.
+    if let Ok(text) = std::fs::read_to_string(git_dir.join(reference)) {
+        return checked_commit(&text);
+    }
+
+    let packed = std::fs::read_to_string(git_dir.join("packed-refs")).ok()?;
+    packed.lines().find_map(|line| {
+        let line = line.trim();
+        // '#' is the header; '^' lines are peeled tag targets, never the ref.
+        if line.starts_with('#') || line.starts_with('^') {
+            return None;
+        }
+        let (hash, name) = line.split_once(' ')?;
+        if name.trim() != reference {
+            return None;
+        }
+        checked_commit(hash)
+    })
 }
 
 /// Resolve the traits directory that is currently in use (without bootstrapping).
@@ -196,6 +275,79 @@ mod tests {
     fn test_default_traits_dir_is_under_cleave() {
         let dir = default_traits_dir();
         assert!(dir.ends_with("cleave/traits"));
+    }
+
+    /// A git-managed traits checkout must still report a version. It carries no
+    /// bundle sidecar (`update` refuses to touch a git tree), and a `None` here
+    /// omits `rev` from every emitted report, which silently disables hopper's
+    /// `/api/known` currency negotiation and makes producers re-post verdicts
+    /// forever. Covers the three on-disk shapes that actually occur.
+    #[test]
+    fn test_git_head_commit_resolves_every_ref_shape() {
+        let hash = "4c8739fad0123456789abcdef0123456789abcde";
+        let cases: Vec<(&str, Box<dyn Fn(&Path)>)> = vec![
+            (
+                "detached HEAD holds the hash directly",
+                Box::new(move |git: &Path| {
+                    std::fs::write(git.join("HEAD"), format!("{hash}\n")).unwrap();
+                }),
+            ),
+            (
+                "symbolic ref via a loose ref file",
+                Box::new(move |git: &Path| {
+                    std::fs::write(git.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+                    std::fs::create_dir_all(git.join("refs/heads")).unwrap();
+                    std::fs::write(git.join("refs/heads/main"), format!("{hash}\n")).unwrap();
+                }),
+            ),
+            (
+                "symbolic ref via packed-refs",
+                Box::new(move |git: &Path| {
+                    std::fs::write(git.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+                    std::fs::write(
+                        git.join("packed-refs"),
+                        format!("# pack-refs with: peeled fully-peeled sorted \n{hash} refs/heads/main\n^{hash}\n"),
+                    )
+                    .unwrap();
+                }),
+            ),
+        ];
+
+        for (name, setup) in cases {
+            let tmp = std::env::temp_dir().join(format!("cleave-traits-{}", std::process::id()));
+            let git = tmp.join(".git");
+            let _ = std::fs::remove_dir_all(&tmp);
+            std::fs::create_dir_all(&git).unwrap();
+            setup(&git);
+            assert_eq!(
+                git_head_commit(&tmp).as_deref(),
+                Some("4c8739fad"),
+                "{name}"
+            );
+            std::fs::remove_dir_all(&tmp).unwrap();
+        }
+    }
+
+    #[test]
+    fn test_git_head_commit_rejects_non_git_and_garbage() {
+        let tmp = std::env::temp_dir().join(format!("cleave-nogit-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        assert_eq!(git_head_commit(&tmp), None, "no .git at all");
+
+        let git = tmp.join(".git");
+        std::fs::create_dir_all(&git).unwrap();
+        std::fs::write(git.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        assert_eq!(git_head_commit(&tmp), None, "ref resolves to nothing");
+
+        // A short or non-hex value must be rejected rather than reported as a
+        // version: a bogus `rev` is worse than none, because it would make
+        // hopper call an unrelated verdict current.
+        std::fs::write(git.join("HEAD"), "not-a-hash\n").unwrap();
+        assert_eq!(git_head_commit(&tmp), None, "garbage HEAD");
+        std::fs::write(git.join("HEAD"), "abc123\n").unwrap();
+        assert_eq!(git_head_commit(&tmp), None, "too short to be a commit");
+        std::fs::remove_dir_all(&tmp).unwrap();
     }
 
     #[test]

@@ -144,11 +144,17 @@ thread_local! {
     static TOPLEVEL_ID: Cell<u64> = const { Cell::new(0) };
     static OWNS_INNER_PARALLELISM: Cell<bool> = const { Cell::new(false) };
     static NESTED_MEMBER_PARALLELISM: Cell<bool> = const { Cell::new(false) };
+    /// The top-level analysis on this thread runs on a pool of its own
+    /// (`AnalysisOptions::dedicated_pool`): exempt from the shared-pool
+    /// bounded-owner rule, and invisible to it.
+    static DEDICATED_POOL: Cell<bool> = const { Cell::new(false) };
 }
 
 pub(crate) struct ToplevelInFlightGuard {
     previous_id: u64,
     previous_owned: bool,
+    previous_dedicated: bool,
+    dedicated: bool,
 }
 
 impl Drop for ToplevelInFlightGuard {
@@ -158,18 +164,35 @@ impl Drop for ToplevelInFlightGuard {
             INNER_PARALLEL_OWNERS.fetch_sub(1, Ordering::Release);
         }
         TOPLEVEL_ID.with(|value| value.set(self.previous_id));
-        TOPLEVEL_IN_FLIGHT.fetch_sub(1, Ordering::Release);
+        DEDICATED_POOL.with(|value| value.set(self.previous_dedicated));
+        if !self.dedicated {
+            TOPLEVEL_IN_FLIGHT.fetch_sub(1, Ordering::Release);
+        }
     }
 }
 
-pub(crate) fn enter_toplevel_analysis() -> ToplevelInFlightGuard {
+/// Register a top-level analysis. `dedicated_pool` says the caller runs it on
+/// a rayon pool of its own: it then always gets inner parallelism (its pool
+/// has nobody else to starve) and is not counted among the shared pool's
+/// in-flight analyses, so a long whale on a private pool neither takes one of
+/// the bounded owner slots nor makes the shared pool's small analyses go
+/// serial for its duration. Measured 2026-09-05 on a 128-thread scan server:
+/// four 36–254 MB wheels on private pools held all four owner slots for
+/// 30 s each, and every 1–5 MB package that arrived meanwhile analyzed its
+/// members serially, 2.5× slower than alone.
+pub(crate) fn enter_toplevel_analysis_on(dedicated_pool: bool) -> ToplevelInFlightGuard {
     let id = NEXT_TOPLEVEL_ID.fetch_add(1, Ordering::Relaxed);
     let previous_id = TOPLEVEL_ID.with(|value| value.replace(id));
     let previous_owned = OWNS_INNER_PARALLELISM.with(|value| value.replace(false));
-    TOPLEVEL_IN_FLIGHT.fetch_add(1, Ordering::AcqRel);
+    let previous_dedicated = DEDICATED_POOL.with(|value| value.replace(dedicated_pool));
+    if !dedicated_pool {
+        TOPLEVEL_IN_FLIGHT.fetch_add(1, Ordering::AcqRel);
+    }
     ToplevelInFlightGuard {
         previous_id,
         previous_owned,
+        previous_dedicated,
+        dedicated: dedicated_pool,
     }
 }
 
@@ -295,6 +318,9 @@ pub(crate) fn inner_work_parallel() -> bool {
     if serial_traits_forced() {
         return false;
     }
+    if DEDICATED_POOL.with(Cell::get) {
+        return true;
+    }
     if TOPLEVEL_IN_FLIGHT.load(Ordering::Acquire) <= 1 || toplevel_draining() {
         return true;
     }
@@ -333,6 +359,36 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
 
+    /// A dedicated-pool analysis is parallel regardless of the owner cap and
+    /// does not count as in flight for the shared pool.
+    #[test]
+    fn dedicated_pool_analysis_is_exempt_and_invisible() {
+        let _lock = TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = TOPLEVEL_IN_FLIGHT.load(Ordering::Acquire);
+        let _shared_a = enter_toplevel_analysis_on(false);
+        let shared_b = std::thread::spawn(|| {
+            let _g = enter_toplevel_analysis_on(false);
+            std::thread::sleep(std::time::Duration::from_millis(30));
+        });
+        let dedicated = std::thread::spawn(|| {
+            let _g = enter_toplevel_analysis_on(true);
+            assert!(inner_work_parallel(), "dedicated pool always parallel");
+            TOPLEVEL_IN_FLIGHT.load(Ordering::Acquire)
+        })
+        .join()
+        .unwrap();
+        assert!(
+            dedicated <= before + 2,
+            "dedicated analysis must not count as in flight"
+        );
+        shared_b.join().unwrap();
+        drop(_shared_a);
+        assert_eq!(TOPLEVEL_IN_FLIGHT.load(Ordering::Acquire), before);
+        assert!(!DEDICATED_POOL.with(Cell::get));
+    }
+
     static TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
@@ -341,7 +397,7 @@ mod tests {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         assert!(inner_work_parallel());
-        let one = enter_toplevel_analysis();
+        let one = enter_toplevel_analysis_on(false);
         assert!(inner_work_parallel());
         drop(one);
         assert!(inner_work_parallel());
@@ -352,8 +408,8 @@ mod tests {
         let _lock = TEST_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let a = enter_toplevel_analysis();
-        let b = enter_toplevel_analysis();
+        let a = enter_toplevel_analysis_on(false);
+        let b = enter_toplevel_analysis_on(false);
         assert!(inner_work_parallel());
         assert!(!std::thread::spawn(inner_work_parallel).join().unwrap());
         drop(b);

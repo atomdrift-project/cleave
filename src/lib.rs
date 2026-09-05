@@ -926,6 +926,13 @@ pub struct AnalysisOptions {
     /// string at key analysis stages so callers (e.g. litmus `/_/requests`) can
     /// report what a stuck request is actually doing.
     pub phase: Option<PhaseTracker>,
+    /// This analysis runs on a rayon pool of its own (the caller `install`ed
+    /// it there), so it neither competes with sibling analyses for the shared
+    /// pool nor should it be throttled like one: it always gets its inner
+    /// parallelism, and it does not count as an in-flight top-level analysis
+    /// for the bounded-owner rule the shared pool applies (`rayon_nest`).
+    /// Leave false for anything on the global pool.
+    pub dedicated_pool: bool,
     /// Optional caller-supplied predicate, consulted with a file's sha256 hex
     /// and path after it is hashed but before any analysis. Returning `true`
     /// skips the expensive pipeline and yields a minimal report (target only).
@@ -1197,6 +1204,7 @@ impl Default for AnalysisOptions {
             max_scan_file_size: 600 * 1024 * 1024, // 600 MB default
             cancellation: None,
             phase: None,
+            dedicated_pool: false,
             skip_predicate: None,
         }
     }
@@ -1845,7 +1853,7 @@ fn analyze_file_with_resources_and_sha256<P: AsRef<Path>>(
     // independently enabled nested trait/YARA/AC `par_iter`s over the same
     // global Rayon pool. Besides severe head-of-line starvation, each Rayon
     // thread then retained regex scratch from many unrelated analyses.
-    let _in_flight = crate::rayon_nest::enter_toplevel_analysis();
+    let _in_flight = crate::rayon_nest::enter_toplevel_analysis_on(options.dedicated_pool);
     let _disable_guards = AnalysisDisableGuards::from_options(options);
 
     // Catch panics from any analyzer so a single malformed or adversarial file

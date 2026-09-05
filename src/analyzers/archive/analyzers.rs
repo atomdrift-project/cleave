@@ -1559,6 +1559,10 @@ impl ArchiveAnalyzer {
             // at half the pool so the owner's nested parallelism always has
             // free workers; past the cap a duplicate is analyzed on its own.
             static WAITERS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            /// Members below this many bytes wait at most [`SMALL_MEMBER_WAIT`]
+            /// for a single-flight owner before analyzing independently.
+            const SMALL_MEMBER_WAIT_BYTES: usize = 256 * 1024;
+            const SMALL_MEMBER_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
             let waited = if on_pool {
                 // Half the pool, and never the last two workers: an owner's
                 // spawned nested job needs a free worker to run on.
@@ -1586,7 +1590,25 @@ impl ArchiveAnalyzer {
                         sha256,
                     );
                 }
-                let w = flight.wait_yielding(std::time::Duration::from_secs(180));
+                // How long a wait is worth depends on what duplicating the
+                // work would cost. For a big member (the 10 MB bundle case
+                // above) that is CPU-seconds, so wait up to the analysis wall
+                // deadline. For a small one it is milliseconds, and the wait
+                // can be far longer than that: the owner may be a worker in
+                // another pool (a whale on its private pool, whose members
+                // share a LICENSE or vendored file with everyone) that is
+                // saturated with its own heavy members. Measured 2026-09-05
+                // on a scan server at concurrency 8: three unrelated small
+                // packages each stalled 15 s in this wait on a member the
+                // whale in flight owned, then finished within 0.4 s of each
+                // other. A second's patience is plenty for a member whose
+                // analysis takes less than that.
+                let deadline = if data.len() < SMALL_MEMBER_WAIT_BYTES {
+                    SMALL_MEMBER_WAIT
+                } else {
+                    std::time::Duration::from_secs(180)
+                };
+                let w = flight.wait_yielding(deadline);
                 if counted {
                     WAITERS.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
                 }

@@ -339,7 +339,37 @@ fn cgroup_memory_headroom() -> Option<u64> {
     let path = cgroup_v2_path()?;
     let limit = parse_cgroup_memory_value(&read_trimmed(path.join("memory.max"))?)?;
     let current: u64 = read_trimmed(path.join("memory.current"))?.parse().ok()?;
-    Some(limit.saturating_sub(current))
+    // `memory.current` counts reclaimable page cache; `MemAvailable` — the host
+    // figure this is reconciled against in `available_memory_impl` — does not.
+    // Subtracting it raw reports a process that has merely *read* a lot of files
+    // as nearly out of memory, and since the two are combined with `min`, that
+    // wrong number always wins inside a cgroup. Observed 2026-09-05: 48.4 GiB
+    // "used" of a 64 GiB limit, of which 3.1 GiB was anon and 39.3 GiB was cold
+    // page cache — 15.6 GiB reported against ~55 GiB actually available.
+    let reclaimable = read_trimmed(path.join("memory.stat"))
+        .map_or(0, |stat| parse_cgroup_reclaimable(&stat));
+    Some(
+        limit
+            .saturating_sub(current)
+            .saturating_add(reclaimable)
+            .min(limit),
+    )
+}
+
+/// Cold page cache from a cgroup v2 `memory.stat`.
+///
+/// `inactive_file` only: it is the cache the kernel evicts first, so this
+/// under-reports reclaimable memory rather than over-reporting it. Active cache
+/// and reclaimable slab are deliberately excluded, mirroring the FreeBSD arm
+/// below.
+#[cfg(target_os = "linux")]
+fn parse_cgroup_reclaimable(stat: &str) -> u64 {
+    for line in stat.lines() {
+        if let Some(rest) = line.strip_prefix("inactive_file ") {
+            return rest.trim().parse().unwrap_or(0);
+        }
+    }
+    0
 }
 
 /// FreeBSD's VM counters provide a conservative live availability signal.
@@ -1293,5 +1323,19 @@ cpu_info:5:cpu_info5:state\ton-line
         );
         assert_eq!(parse_cgroup_memory_value("max"), None);
         assert_eq!(parse_cgroup_memory_value("not-a-number"), None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn parse_cgroup_reclaimable_reads_cold_page_cache() {
+        // Shape of a real memory.stat: the wedged service on 2026-09-05.
+        let stat = "anon 3364188160\nfile 46862876672\nkernel_stack 851968\n\
+                    inactive_file 42156023808\nactive_file 515813376\nslab 1752777984\n";
+        assert_eq!(parse_cgroup_reclaimable(stat), 42_156_023_808);
+        // Neither a suffix match nor a prefix match may stand in for it.
+        assert_eq!(parse_cgroup_reclaimable("active_file 123\n"), 0);
+        assert_eq!(parse_cgroup_reclaimable("total_inactive_file 123\n"), 0);
+        assert_eq!(parse_cgroup_reclaimable("inactive_file bogus\n"), 0);
+        assert_eq!(parse_cgroup_reclaimable(""), 0);
     }
 }

@@ -137,8 +137,25 @@ pub(crate) fn independent_member_analyses() -> usize {
 pub(crate) fn wait_work_runs() -> usize {
     WAIT_WORK_RUNS.load(Ordering::Relaxed)
 }
+// Owner slots come in two classes, foreground and background, with a counter
+// and a cap each. A thread marked background — a host's idle pull worker, see
+// [`mark_thread_background`] — claims from the background pair only, so pull
+// work can never hold the slots an interactive analysis needs. Before this
+// split there was one pair for the whole process, and on a 16-thread server
+// the inner-parallel cap is one: the idle worker held it, and the server's
+// own archive analyses ran serial behind it (measured 2026-09-05: 173s waits
+// on the gate; a 341s interactive analysis of a repository that took 30s on
+// an idle host).
 static INNER_PARALLEL_OWNERS: AtomicUsize = AtomicUsize::new(0);
 static NESTED_MEMBER_OWNERS: AtomicUsize = AtomicUsize::new(0);
+static BACKGROUND_INNER_PARALLEL_OWNERS: AtomicUsize = AtomicUsize::new(0);
+static BACKGROUND_NESTED_MEMBER_OWNERS: AtomicUsize = AtomicUsize::new(0);
+/// Explicit caps, set by [`set_parallel_owner_caps`]; zero means "not set",
+/// and the lazy defaults below apply.
+static FOREGROUND_INNER_CAP: AtomicUsize = AtomicUsize::new(0);
+static FOREGROUND_NESTED_CAP: AtomicUsize = AtomicUsize::new(0);
+static BACKGROUND_INNER_CAP: AtomicUsize = AtomicUsize::new(0);
+static BACKGROUND_NESTED_CAP: AtomicUsize = AtomicUsize::new(0);
 
 thread_local! {
     static TOPLEVEL_ID: Cell<u64> = const { Cell::new(0) };
@@ -148,6 +165,69 @@ thread_local! {
     /// (`AnalysisOptions::dedicated_pool`): exempt from the shared-pool
     /// bounded-owner rule, and invisible to it.
     static DEDICATED_POOL: Cell<bool> = const { Cell::new(false) };
+    static BACKGROUND_THREAD: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Mark the calling thread as background work: every owner slot it claims from
+/// here on comes from the background class. Meant for a rayon pool's start
+/// handler, so a host's pull-queue analyses fan out on their own pool and
+/// draw on their own slots, leaving the foreground caps whole for the
+/// analyses a caller is waiting on. Rayon children do not inherit the mark
+/// and do not need to: a pool's workers are all marked at start.
+pub fn mark_thread_background() {
+    BACKGROUND_THREAD.with(|value| value.set(true));
+}
+
+/// Size the owner caps for each class from the thread count of the pool it
+/// runs on: the same formulas the lazy defaults use (`threads / 32` inner
+/// owners, `threads / 8` nested-member owners, each clamped to 1..=16), but
+/// per pool rather than from whichever pool happened to call first. A host
+/// with two pools must call this, or the foreground cap may be derived from
+/// the background pool's size. The `CLEAVE_*_OWNERS` environment overrides
+/// still win for the foreground class.
+pub fn set_parallel_owner_caps(foreground_threads: usize, background_threads: usize) {
+    FOREGROUND_INNER_CAP.store(inner_cap_for(foreground_threads), Ordering::Release);
+    FOREGROUND_NESTED_CAP.store(nested_cap_for(foreground_threads), Ordering::Release);
+    BACKGROUND_INNER_CAP.store(inner_cap_for(background_threads), Ordering::Release);
+    BACKGROUND_NESTED_CAP.store(nested_cap_for(background_threads), Ordering::Release);
+}
+
+fn inner_cap_for(threads: usize) -> usize {
+    (threads / 32).clamp(1, 16)
+}
+
+fn nested_cap_for(threads: usize) -> usize {
+    (threads / 8).clamp(1, 16)
+}
+
+fn background_thread() -> bool {
+    BACKGROUND_THREAD.with(Cell::get)
+}
+
+/// The inner-parallel owner counter and cap for the calling thread's class.
+fn inner_owner_slots() -> (&'static AtomicUsize, usize) {
+    if background_thread() {
+        let cap = match BACKGROUND_INNER_CAP.load(Ordering::Acquire) {
+            0 => 1,
+            cap => cap,
+        };
+        (&BACKGROUND_INNER_PARALLEL_OWNERS, cap)
+    } else {
+        (&INNER_PARALLEL_OWNERS, max_inner_parallel_owners())
+    }
+}
+
+/// The nested-member owner counter and cap for the calling thread's class.
+fn nested_owner_slots() -> (&'static AtomicUsize, usize) {
+    if background_thread() {
+        let cap = match BACKGROUND_NESTED_CAP.load(Ordering::Acquire) {
+            0 => 1,
+            cap => cap,
+        };
+        (&BACKGROUND_NESTED_MEMBER_OWNERS, cap)
+    } else {
+        (&NESTED_MEMBER_OWNERS, max_nested_member_owners())
+    }
 }
 
 pub(crate) struct ToplevelInFlightGuard {
@@ -155,13 +235,21 @@ pub(crate) struct ToplevelInFlightGuard {
     previous_owned: bool,
     previous_dedicated: bool,
     dedicated: bool,
+    /// Which class's counter an owned slot came from. Recorded at entry so the
+    /// release matches the claim even if the mark were to change underneath.
+    background: bool,
 }
 
 impl Drop for ToplevelInFlightGuard {
     fn drop(&mut self) {
         let owned = OWNS_INNER_PARALLELISM.with(|value| value.replace(self.previous_owned));
         if owned {
-            INNER_PARALLEL_OWNERS.fetch_sub(1, Ordering::Release);
+            let owners = if self.background {
+                &BACKGROUND_INNER_PARALLEL_OWNERS
+            } else {
+                &INNER_PARALLEL_OWNERS
+            };
+            owners.fetch_sub(1, Ordering::Release);
         }
         TOPLEVEL_ID.with(|value| value.set(self.previous_id));
         DEDICATED_POOL.with(|value| value.set(self.previous_dedicated));
@@ -193,6 +281,7 @@ pub(crate) fn enter_toplevel_analysis_on(dedicated_pool: bool) -> ToplevelInFlig
         previous_owned,
         previous_dedicated,
         dedicated: dedicated_pool,
+        background: background_thread(),
     }
 }
 
@@ -207,7 +296,10 @@ fn max_inner_parallel_owners() -> usize {
         std::env::var("CLEAVE_INNER_PARALLEL_OWNERS")
             .ok()
             .and_then(|value| value.parse().ok())
-            .unwrap_or_else(|| (rayon::current_num_threads() / 32).clamp(1, 16))
+            .unwrap_or_else(|| match FOREGROUND_INNER_CAP.load(Ordering::Acquire) {
+                0 => inner_cap_for(rayon::current_num_threads()),
+                cap => cap,
+            })
     })
 }
 
@@ -217,7 +309,10 @@ fn max_nested_member_owners() -> usize {
         std::env::var("CLEAVE_NESTED_MEMBER_PARALLEL_OWNERS")
             .ok()
             .and_then(|value| value.parse().ok())
-            .unwrap_or_else(|| (rayon::current_num_threads() / 8).clamp(1, 16))
+            .unwrap_or_else(|| match FOREGROUND_NESTED_CAP.load(Ordering::Acquire) {
+                0 => nested_cap_for(rayon::current_num_threads()),
+                cap => cap,
+            })
     })
 }
 
@@ -233,13 +328,19 @@ fn nested_member_parallel_min_bytes() -> usize {
 
 pub(crate) struct NestedMemberParallelGuard {
     previous: bool,
+    background: bool,
 }
 
 impl Drop for NestedMemberParallelGuard {
     fn drop(&mut self) {
         let owned = NESTED_MEMBER_PARALLELISM.with(|value| value.replace(self.previous));
         if owned && !self.previous {
-            NESTED_MEMBER_OWNERS.fetch_sub(1, Ordering::Release);
+            let owners = if self.background {
+                &BACKGROUND_NESTED_MEMBER_OWNERS
+            } else {
+                &NESTED_MEMBER_OWNERS
+            };
+            owners.fetch_sub(1, Ordering::Release);
         }
     }
 }
@@ -248,10 +349,10 @@ fn try_claim_nested_member_owner() -> bool {
     if NESTED_MEMBER_PARALLELISM.with(Cell::get) {
         return true;
     }
-    let limit = max_nested_member_owners();
-    let mut current = NESTED_MEMBER_OWNERS.load(Ordering::Acquire);
+    let (owners, limit) = nested_owner_slots();
+    let mut current = owners.load(Ordering::Acquire);
     while current < limit {
-        match NESTED_MEMBER_OWNERS.compare_exchange_weak(
+        match owners.compare_exchange_weak(
             current,
             current + 1,
             Ordering::AcqRel,
@@ -282,11 +383,18 @@ pub(crate) fn try_enter_nested_member_parallelism(
         return None;
     }
     let previous = NESTED_MEMBER_PARALLELISM.with(Cell::get);
+    let background = background_thread();
     if previous {
-        return Some(NestedMemberParallelGuard { previous });
+        return Some(NestedMemberParallelGuard {
+            previous,
+            background,
+        });
     }
     if try_claim_nested_member_owner() {
-        return Some(NestedMemberParallelGuard { previous });
+        return Some(NestedMemberParallelGuard {
+            previous,
+            background,
+        });
     }
     None
 }
@@ -334,10 +442,10 @@ pub(crate) fn inner_work_parallel() -> bool {
         return true;
     }
 
-    let limit = max_inner_parallel_owners();
-    let mut current = INNER_PARALLEL_OWNERS.load(Ordering::Acquire);
+    let (owners, limit) = inner_owner_slots();
+    let mut current = owners.load(Ordering::Acquire);
     while current < limit {
-        match INNER_PARALLEL_OWNERS.compare_exchange_weak(
+        match owners.compare_exchange_weak(
             current,
             current + 1,
             Ordering::AcqRel,
@@ -416,6 +524,45 @@ mod tests {
         assert!(inner_work_parallel());
         drop(a);
         assert!(inner_work_parallel());
+    }
+
+    /// A background thread's owner slot is not the foreground's. With one
+    /// foreground slot and a background analysis holding a background one,
+    /// a foreground analysis beside another still gets its own.
+    #[test]
+    fn background_owners_never_take_foreground_slots() {
+        let _lock = TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        set_parallel_owner_caps(16, 8);
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+        let background = std::thread::spawn(move || {
+            mark_thread_background();
+            let _a = enter_toplevel_analysis_on(false);
+            let _b = enter_toplevel_analysis_on(false);
+            assert!(inner_work_parallel(), "background claims its own slot");
+            assert_eq!(BACKGROUND_INNER_PARALLEL_OWNERS.load(Ordering::Acquire), 1);
+            ready_tx.send(()).unwrap();
+            done_rx.recv().unwrap();
+        });
+        ready_rx.recv().unwrap();
+        // Two foreground top-levels beside the two background ones: the
+        // foreground slot is untouched, so the first foreground claim wins.
+        let a = enter_toplevel_analysis_on(false);
+        let b = enter_toplevel_analysis_on(false);
+        assert_eq!(INNER_PARALLEL_OWNERS.load(Ordering::Acquire), 0);
+        assert!(
+            inner_work_parallel(),
+            "foreground slot was not consumed by background work"
+        );
+        assert_eq!(INNER_PARALLEL_OWNERS.load(Ordering::Acquire), 1);
+        drop(b);
+        drop(a);
+        done_tx.send(()).unwrap();
+        background.join().unwrap();
+        assert_eq!(BACKGROUND_INNER_PARALLEL_OWNERS.load(Ordering::Acquire), 0);
+        assert_eq!(INNER_PARALLEL_OWNERS.load(Ordering::Acquire), 0);
     }
 
     #[test]

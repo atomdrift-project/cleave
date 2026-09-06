@@ -346,8 +346,8 @@ fn cgroup_memory_headroom() -> Option<u64> {
     // wrong number always wins inside a cgroup. Observed 2026-09-05: 48.4 GiB
     // "used" of a 64 GiB limit, of which 3.1 GiB was anon and 39.3 GiB was cold
     // page cache — 15.6 GiB reported against ~55 GiB actually available.
-    let reclaimable = read_trimmed(path.join("memory.stat"))
-        .map_or(0, |stat| parse_cgroup_reclaimable(&stat));
+    let reclaimable =
+        read_trimmed(path.join("memory.stat")).map_or(0, |stat| parse_cgroup_reclaimable(&stat));
     Some(
         limit
             .saturating_sub(current)

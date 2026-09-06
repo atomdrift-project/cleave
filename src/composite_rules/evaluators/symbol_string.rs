@@ -1502,7 +1502,6 @@ fn source_raw_windows(
     let Some(hits) = ctx.raw_atom_offsets.and_then(|m| m.get(&idx)) else {
         ws::bump(&ws::NO_ATOMS);
         ws::LAST_REASON.with(|r| r.set(1));
-        tracing::debug!(target: "cleave::rawwin", pattern, bytes = search_end - search_start, "TEMPNOATOM");
         return None;
     };
     // Offsets were recorded for this trait's *indexed* regex (usually `if:`).

@@ -174,6 +174,45 @@ impl ReportFlight {
         result.report.as_deref().cloned()
     }
 
+    /// [`Self::wait`] with a deadline, for a caller off the rayon pool that
+    /// would rather duplicate the work than wait indefinitely: `None` when
+    /// `deadline` passes first, otherwise what [`Self::wait`] returns. The
+    /// owner may be a worker in another pool that is saturated with its own
+    /// heavy members (a whale on its private pool), and then a small member
+    /// it shares with everyone can take it tens of seconds to reach; a
+    /// serial analysis parked on it for that long is a stall, not a saving.
+    pub(crate) fn wait_bounded(
+        &self,
+        deadline: std::time::Duration,
+    ) -> Option<Option<AnalysisReport>> {
+        if self.owner || rayon::current_thread_index().is_some() {
+            return Some(self.wait());
+        }
+        let started = std::time::Instant::now();
+        let mut result = self
+            .state
+            .result
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        while !result.done {
+            let Some(remaining) = deadline.checked_sub(started.elapsed()) else {
+                tracing::debug!(
+                    sha256 = %self.key.sha256,
+                    owner = %self.owner_label(),
+                    "single-flight wait exceeded its deadline off-pool; analyzing independently"
+                );
+                return None;
+            };
+            result = self
+                .state
+                .wake
+                .wait_timeout(result, remaining)
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .0;
+        }
+        Some(result.report.as_deref().cloned())
+    }
+
     /// [`Self::wait`] for a rayon worker: while the owner works, run this
     /// worker's *own* pending jobs (its archive's other members) instead of
     /// parking or re-analyzing.

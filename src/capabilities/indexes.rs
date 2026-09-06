@@ -257,6 +257,40 @@ impl TraitBitSet {
     }
 }
 
+/// A `regex::Regex`-equivalent engine whose search scratch comes from
+/// cleave's per-thread pool ([`crate::composite_rules::regex_scratch`])
+/// instead of the regex crate's own per-regex pool. Same meta engine, same
+/// default configuration as `regex::Regex::new`, so matches are identical;
+/// only where the scratch lives differs. That matters here because the
+/// no-literal symbol fallbacks run pattern-major over every symbol of every
+/// member on every worker at once, and the crate's pool has one owner
+/// thread — every other worker takes its mutex on each `is_match`. Measured
+/// 2026-09-06 on a scan server: 3% of all CPU in that pool's `get`, 87% of
+/// it from this loop.
+#[derive(Clone, Debug)]
+pub(crate) struct ScratchRegex {
+    meta: regex_automata::meta::Regex,
+    id: u64,
+}
+
+impl ScratchRegex {
+    fn new(pattern: &str) -> Result<Self, Box<regex_automata::meta::BuildError>> {
+        Ok(Self {
+            meta: regex_automata::meta::Regex::new(pattern).map_err(Box::new)?,
+            id: crate::composite_rules::regex_scratch::next_regex_id(),
+        })
+    }
+
+    /// `regex::Regex::is_match`: an earliest-match search on the same engine.
+    pub(crate) fn is_match(&self, haystack: &str) -> bool {
+        crate::composite_rules::regex_scratch::with_cache(self.id, &self.meta, |cache| {
+            self.meta
+                .search_half_with(cache, &regex_automata::Input::new(haystack).earliest(true))
+                .is_some()
+        })
+    }
+}
+
 /// Index for fast symbol matching.
 ///
 /// Batches three pattern kinds across traits in a single pass per symbol:
@@ -265,6 +299,7 @@ impl TraitBitSet {
 /// - `regex`: literal-prefix Aho-Corasick prefilter + full-regex verification on candidates.
 ///   Regexes with no extractable literal are batched into a single `RegexSet` so the
 ///   fallback path is O(symbol_len × set_cost) instead of O(symbols × patterns).
+
 #[derive(Clone, Default, Debug)]
 pub(crate) struct SymbolMatchIndex {
     /// Case-sensitive exact symbol -> trait indices
@@ -293,7 +328,7 @@ pub(crate) struct SymbolMatchIndex {
     /// pattern-major, reuses its cache across the whole symbol list.
     /// `regex_fallback_traits[i]` is the trait index for pattern `i`; a
     /// pattern that fails to compile is dropped from both (warned at build).
-    regex_fallback_regexes: Vec<regex::Regex>,
+    regex_fallback_regexes: Vec<ScratchRegex>,
     regex_fallback_traits: Vec<usize>,
 }
 
@@ -428,10 +463,10 @@ impl SymbolMatchIndex {
             })
             .flatten();
 
-        let mut regex_fallback_regexes: Vec<regex::Regex> = Vec::new();
+        let mut regex_fallback_regexes: Vec<ScratchRegex> = Vec::new();
         let mut kept_fallback_traits: Vec<usize> = Vec::new();
         for (pattern, &trait_idx) in regex_fallback_patterns.iter().zip(&regex_fallback_traits) {
-            match regex::Regex::new(pattern) {
+            match ScratchRegex::new(pattern) {
                 Ok(re) => {
                     regex_fallback_regexes.push(re);
                     kept_fallback_traits.push(trait_idx);

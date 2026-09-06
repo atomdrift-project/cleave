@@ -171,6 +171,7 @@ use analyzers::FileTypeExt;
 pub use analyzers::{AnalysisInput, Analyzer, FileType, detect_file_type};
 pub use capabilities::CapabilityMapper;
 pub use composite_rules::Platform;
+pub use rayon_nest::{mark_thread_background, set_parallel_owner_caps};
 pub use types::binary::StringInfo;
 pub use types::code_structure::{BinaryProperties, SourceCodeMetrics};
 pub use types::core::{AnalysisReport, Criticality, TargetInfo};

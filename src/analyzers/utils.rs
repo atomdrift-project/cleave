@@ -61,7 +61,7 @@ pub(crate) fn analyze_embedded_as_child(
 
     let mut report = if file_type == crate::analyzers::FileType::Pe {
         let mut analyzer = PEAnalyzer::new()
-            .with_capability_mapper_arc(capability_mapper)
+            .with_capability_mapper_arc(capability_mapper.clone())
             .without_embedded_scan();
         if let Some(yara) = yara_engine.clone() {
             analyzer = analyzer.with_yara_arc(yara);
@@ -69,7 +69,7 @@ pub(crate) fn analyze_embedded_as_child(
         analyzer.analyze_input(&input).ok()?
     } else {
         let mut analyzer = ElfAnalyzer::new()
-            .with_capability_mapper_arc(capability_mapper)
+            .with_capability_mapper_arc(capability_mapper.clone())
             .without_embedded_scan();
         if let Some(ref yara) = yara_engine {
             analyzer = analyzer.with_yara_arc(yara);
@@ -99,7 +99,10 @@ pub(crate) fn analyze_embedded_as_child(
     // evidence offsets index these carved bytes. Rides up into `files[].context`
     // via `into_file_analysis`, exactly as archive members do.
     report.dedupe_findings();
-    crate::context::capture(&mut report, bytes, file_type);
+    // As in the archive-member path: the low-value filter runs at the end of the
+    // parent's analysis, after this capture, so exclude what it will delete.
+    let doomed = capability_mapper.doomed_low_value_ids(&report.findings);
+    crate::context::capture(&mut report, bytes, file_type, &doomed);
 
     let temp_path = temp.path().display().to_string();
     let (mut fa, nested, _) = report.into_file_analysis(0);

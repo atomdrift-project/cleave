@@ -136,7 +136,10 @@ pub(crate) fn attach_member(
     virtual_path: &str,
 ) {
     member.dedupe_findings();
-    crate::context::capture(&mut member, bytes, file_type);
+    let doomed = crate::shared_resources::loaded_capability_mapper()
+        .map(|m| m.doomed_low_value_ids(&member.findings))
+        .unwrap_or_default();
+    crate::context::capture(&mut member, bytes, file_type, &doomed);
 
     let mut by_id: HashMap<crate::types::Istr, usize> = parent
         .findings

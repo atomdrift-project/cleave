@@ -4387,8 +4387,13 @@ mod constraint_tests {
     }
 
     #[test]
-    fn test_criticality_change_not_flagged() {
-        // Trait A references Trait B but changes criticality - this adds value
+    fn test_criticality_change_is_still_a_pure_alias() {
+        // A different `crit:` used to exempt an alias on the theory that it
+        // "adds value". It does not: the alias matches exactly what the base
+        // matches, so the file gets the same evidence twice under two names at
+        // two severities, and a reader has to work out which id to believe.
+        // Promoting is the worse direction — it relabels one matcher's hit as a
+        // stronger verdict with no new evidence behind it.
         let base = create_base_trait("micro-behaviors/test::base", Criticality::Baseline);
         let alias = create_trait_ref(
             "objectives/test::upgraded",
@@ -4401,7 +4406,30 @@ mod constraint_tests {
         let traits = vec![base, alias];
         let violations = find_pure_alias_traits(&traits);
 
-        assert!(violations.is_empty(), "Should not flag criticality changes");
+        assert_eq!(violations.len(), 1, "a retiered rename is still a rename");
+        assert_eq!(violations[0].0, "objectives/test::upgraded");
+    }
+
+    #[test]
+    fn test_directory_reference_is_not_a_pure_alias() {
+        // `if: id: <dir>/` is an OR across every trait beneath the directory —
+        // real logic, not a rename of one trait — so it must stay exempt. The
+        // old code skipped it only as a side effect of failing the criticality
+        // lookup; with that gone the guard has to be explicit.
+        let base = create_base_trait("micro-behaviors/test::base", Criticality::Notable);
+        let alias = create_trait_ref(
+            "objectives/test::fans-out",
+            "micro-behaviors/test/", // directory, not a single trait
+            Criticality::Notable,
+            None,
+            false,
+        );
+
+        let traits = vec![base, alias];
+        assert!(
+            find_pure_alias_traits(&traits).is_empty(),
+            "a directory reference matches many traits, so it is not an alias"
+        );
     }
 
     #[test]
@@ -7639,5 +7667,219 @@ mod wide_directory_tests {
             order,
             ["well-known/app", "well-known/game", "well-known/lib"]
         );
+    }
+}
+
+/// Tests for [`find_bare_or_crit_escalations`]: a bare `any:` composite that
+/// adds no filtering must agree with its legs about how serious a match is.
+mod bare_or_crit_escalation_tests {
+    use crate::capabilities::validation::find_bare_or_crit_escalations;
+    use crate::composite_rules::traits::DowngradeConditions;
+    use crate::composite_rules::{CompositeTrait, Condition, FileType, Platform, TraitDefinition};
+    use crate::types::Criticality;
+
+    /// A leaf trait at `crit`, scoped to `for_types` (empty = every type).
+    fn leg(id: &str, crit: Criticality, for_types: Vec<FileType>) -> TraitDefinition {
+        TraitDefinition {
+            id: id.to_string(),
+            desc: "leg".to_string(),
+            crit,
+            r#for: for_types,
+            platforms: vec![Platform::All],
+            ..Default::default()
+        }
+    }
+
+    /// A composite whose whole logic is `any:` over `legs`.
+    fn bare_or(id: &str, crit: Criticality, legs: &[&str]) -> CompositeTrait {
+        CompositeTrait {
+            id: id.to_string(),
+            desc: "or".to_string(),
+            crit,
+            r#for: vec![],
+            platforms: vec![Platform::All],
+            any: Some(
+                legs.iter()
+                    .map(|l| Condition::Trait {
+                        id: (*l).to_string(),
+                    })
+                    .collect(),
+            ),
+            ..Default::default()
+        }
+    }
+
+    fn flagged_legs(
+        traits: &[TraitDefinition],
+        rules: &[CompositeTrait],
+    ) -> Vec<(String, Criticality)> {
+        let violations = find_bare_or_crit_escalations(traits, rules);
+        assert!(violations.len() <= 1, "one rule under test: {violations:?}");
+        violations
+            .into_iter()
+            .next()
+            .map(|(_, _, l)| l)
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn under_ranked_legs_of_a_pure_relabelling_or_are_reported() {
+        // The `offensive-tool-pdb` shape: one leg already carries the tier, the
+        // other is promoted to it purely by being listed.
+        let traits = vec![
+            leg("d::metasploit", Criticality::Suspicious, vec![]),
+            leg("d::cobalt", Criticality::Notable, vec![]),
+        ];
+        let rules = vec![bare_or(
+            "d::offensive-pdb",
+            Criticality::Suspicious,
+            &["d::metasploit", "d::cobalt"],
+        )];
+        assert_eq!(
+            flagged_legs(&traits, &rules),
+            vec![("d::cobalt".to_string(), Criticality::Notable)],
+            "only the leg below the composite is reported"
+        );
+    }
+
+    #[test]
+    fn legs_that_agree_with_the_composite_are_clean() {
+        let traits = vec![
+            leg("d::a", Criticality::Suspicious, vec![]),
+            leg("d::b", Criticality::Suspicious, vec![]),
+        ];
+        let rules = vec![bare_or("d::or", Criticality::Suspicious, &["d::a", "d::b"])];
+        assert!(flagged_legs(&traits, &rules).is_empty());
+    }
+
+    #[test]
+    fn a_leg_above_the_composite_is_not_an_escalation() {
+        // Demotion is a deliberate, separate choice; this validator is only
+        // about a wrapper claiming more than its legs.
+        let traits = vec![leg("d::a", Criticality::Hostile, vec![])];
+        let rules = vec![bare_or("d::or", Criticality::Notable, &["d::a"])];
+        assert!(flagged_legs(&traits, &rules).is_empty());
+    }
+
+    #[test]
+    fn filtering_clauses_exempt_the_composite() {
+        // `unless:`, `all:`, `needs:`, size and scope bounds all mean the
+        // composite decides something its legs do not.
+        let traits = vec![
+            leg("d::a", Criticality::Component, vec![]),
+            leg("d::b", Criticality::Component, vec![]),
+        ];
+        let base = bare_or("d::or", Criticality::Suspicious, &["d::a", "d::b"]);
+        assert!(
+            !flagged_legs(&traits, std::slice::from_ref(&base)).is_empty(),
+            "the unfiltered form must flag, or the exemptions below prove nothing"
+        );
+
+        let with_unless = CompositeTrait {
+            unless: Some(vec![Condition::Trait {
+                id: "d::benign".to_string(),
+            }]),
+            ..base.clone()
+        };
+        assert!(
+            flagged_legs(&traits, &[with_unless]).is_empty(),
+            "unless: exempts"
+        );
+
+        let with_needs = CompositeTrait {
+            needs: Some(2),
+            ..base.clone()
+        };
+        assert!(
+            flagged_legs(&traits, &[with_needs]).is_empty(),
+            "needs: exempts"
+        );
+
+        let with_size = CompositeTrait {
+            size_max: Some(4096),
+            ..base.clone()
+        };
+        assert!(
+            flagged_legs(&traits, &[with_size]).is_empty(),
+            "size_max: exempts"
+        );
+
+        let with_downgrade = CompositeTrait {
+            downgrade: Some(DowngradeConditions {
+                any: Some(vec![Condition::Trait {
+                    id: "d::benign".to_string(),
+                }]),
+                all: None,
+                none: None,
+                needs: None,
+            }),
+            ..base.clone()
+        };
+        assert!(
+            flagged_legs(&traits, &[with_downgrade]).is_empty(),
+            "downgrade: exempts"
+        );
+
+        let with_all = CompositeTrait {
+            all: Some(vec![Condition::Trait {
+                id: "d::a".to_string(),
+            }]),
+            ..base
+        };
+        assert!(
+            flagged_legs(&traits, &[with_all]).is_empty(),
+            "all: exempts"
+        );
+    }
+
+    #[test]
+    fn a_different_for_scope_exempts_the_composite() {
+        // Deciding *where* a leg counts is real work, and can earn a tier the
+        // leg does not have everywhere. Exact agreement is required, so a
+        // composite scoped differently from its leg — wider or narrower — is
+        // left alone.
+        let traits = vec![leg("d::a", Criticality::Notable, vec![])];
+        let narrowed = CompositeTrait {
+            r#for: vec![FileType::Elf],
+            ..bare_or("d::or", Criticality::Suspicious, &["d::a"])
+        };
+        assert!(flagged_legs(&traits, &[narrowed]).is_empty());
+    }
+
+    #[test]
+    fn a_rules_own_regex_split_legs_are_judged_like_any_other() {
+        // Splitting an alternation into `--rx-N` legs is meant to give each
+        // alternative a meaning of its own. A leg matching therefore says what
+        // the reassembled composite says, so demoting the fragments below it is
+        // the same laundering, arrived at mechanically.
+        let traits = vec![
+            leg("d::term--rx-1", Criticality::Component, vec![]),
+            leg("d::term--rx-2", Criticality::Component, vec![]),
+        ];
+        let rules = vec![bare_or(
+            "d::term",
+            Criticality::Notable,
+            &["d::term--rx-1", "d::term--rx-2"],
+        )];
+        assert_eq!(
+            flagged_legs(&traits, &rules),
+            vec![
+                ("d::term--rx-1".to_string(), Criticality::Component),
+                ("d::term--rx-2".to_string(), Criticality::Component),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_directory_leg_skips_the_whole_rule() {
+        // "Raise every trait under this directory" is not a fix worth
+        // prescribing, so the rule is not judged at all.
+        let traits = vec![leg("d::a", Criticality::Component, vec![])];
+        let rules = vec![bare_or(
+            "d::or",
+            Criticality::Suspicious,
+            &["d::a", "d/sub"],
+        )];
+        assert!(flagged_legs(&traits, &rules).is_empty());
     }
 }

@@ -106,6 +106,133 @@ mod tests {
         Condition::Trait { id: id.to_string() }
     }
 
+    /// A finding at `crit` that fired on `legs`.
+    fn fired(id: &str, crit: Criticality, legs: &[&str]) -> Finding {
+        let mut f = create_finding(id);
+        f.crit = crit;
+        f.trait_refs = legs.iter().map(|l| (*l).to_string().into()).collect();
+        f
+    }
+
+    /// The mapper used by the escalation tests: one bare-OR wrapper over two legs.
+    fn wrapper_mapper() -> CapabilityMapper {
+        create_test_mapper_with_rules(vec![create_any_rule(
+            "wrapper",
+            vec![trait_ref("leg-a"), trait_ref("leg-b")],
+            None,
+        )])
+    }
+
+    #[test]
+    fn escalating_bare_or_is_kept() {
+        // The `direct-http-c2` shape: a suspicious wrapper whose only matched
+        // leg is a component. Dropping it does not demote the file, it deletes
+        // the detection — the component leg is stripped as low-tier noise right
+        // after, so nothing survives to report the endpoint.
+        let mapper = wrapper_mapper();
+        let finding = fired("wrapper", Criticality::Suspicious, &["leg-a"]);
+        assert!(
+            !mapper.drops_as_low_value(
+                &finding,
+                |id| (id == "leg-a").then_some(Criticality::Component),
+                |_| false,
+            ),
+            "a wrapper that outranks its matched leg is the verdict, not a restatement"
+        );
+    }
+
+    #[test]
+    fn pass_through_bare_or_is_dropped() {
+        // Same criticality as the leg: the leg already says everything the
+        // wrapper does, which is exactly what this filter exists to remove.
+        let mapper = wrapper_mapper();
+        let finding = fired("wrapper", Criticality::Suspicious, &["leg-a"]);
+        assert!(
+            mapper.drops_as_low_value(
+                &finding,
+                |id| (id == "leg-a").then_some(Criticality::Suspicious),
+                |_| false,
+            ),
+            "a wrapper level with its leg adds nothing"
+        );
+    }
+
+    #[test]
+    fn bare_or_is_dropped_when_any_matched_leg_already_carries_the_tier() {
+        // Legs disagree: one component, one suspicious. The suspicious leg
+        // reports on its own, so the wrapper escalates nothing.
+        let mapper = wrapper_mapper();
+        let finding = fired("wrapper", Criticality::Suspicious, &["leg-a", "leg-b"]);
+        assert!(
+            mapper.drops_as_low_value(
+                &finding,
+                |id| Some(match id {
+                    "leg-a" => Criticality::Component,
+                    _ => Criticality::Suspicious,
+                }),
+                |_| false,
+            ),
+            "only the strongest matched leg decides whether the wrapper escalates"
+        );
+    }
+
+    #[test]
+    fn bare_or_with_an_unresolved_leg_is_kept() {
+        // Nothing proves it is a pass-through, and keeping a finding is the
+        // safe way to be wrong.
+        let mapper = wrapper_mapper();
+        let finding = fired("wrapper", Criticality::Suspicious, &["leg-a"]);
+        assert!(
+            !mapper.drops_as_low_value(&finding, |_| None, |_| false),
+            "an unresolvable leg must not be read as a pass-through"
+        );
+    }
+
+    #[test]
+    fn cited_bare_or_is_kept() {
+        // Pre-existing rule: a composite standing on this one needs it for
+        // provenance, regardless of tiers.
+        let mapper = wrapper_mapper();
+        let finding = fired("wrapper", Criticality::Suspicious, &["leg-a"]);
+        assert!(
+            !mapper.drops_as_low_value(
+                &finding,
+                |_| Some(Criticality::Suspicious),
+                |id| id == "wrapper",
+            ),
+            "a cited finding is never low value"
+        );
+    }
+
+    #[test]
+    fn doomed_low_value_ids_names_only_the_pass_throughs() {
+        // End-to-end over one finding pool: the escalator stays, the
+        // pass-through is named. This is the set context capture must skip.
+        let mapper = create_test_mapper_with_rules(vec![
+            create_any_rule("escalator", vec![trait_ref("leg-a")], None),
+            create_any_rule("passthrough", vec![trait_ref("leg-b")], None),
+        ]);
+        let findings = vec![
+            fired("escalator", Criticality::Suspicious, &["leg-a"]),
+            fired("passthrough", Criticality::Suspicious, &["leg-b"]),
+            fired("leg-a", Criticality::Component, &[]),
+            fired("leg-b", Criticality::Suspicious, &[]),
+        ];
+        let doomed = mapper.doomed_low_value_ids(&findings);
+        assert!(
+            !doomed.iter().any(|id| id.as_str() == "escalator"),
+            "escalator must survive: {doomed:?}"
+        );
+        assert!(
+            doomed.iter().any(|id| id.as_str() == "passthrough"),
+            "pass-through must be named: {doomed:?}"
+        );
+        assert!(
+            !doomed.iter().any(|id| id.as_str().starts_with("leg-")),
+            "plain traits are never low-value rules: {doomed:?}"
+        );
+    }
+
     #[test]
     fn test_is_low_value_any_rule_with_single_condition() {
         // Rule with only 1 condition in `any` should be filtered (low-value)

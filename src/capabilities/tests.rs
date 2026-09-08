@@ -693,6 +693,87 @@ fn test_apply_composite_defaults_applies_all_defaults() {
     assert_eq!(result.size_max, Some(5_242_880));
 }
 
+/// A composite that fires on any single leg performs no intent inference, so it
+/// is held to the same `suspicious` ceiling as an atomic trait. Hostile has to
+/// be earned by combining distinct signals.
+mod bare_or_hostile_ceiling {
+    use super::*;
+
+    fn rule(any_legs: usize, all_legs: usize, needs: Option<usize>) -> models::RawCompositeRule {
+        let legs = |n: usize| {
+            (n > 0).then(|| {
+                (0..n)
+                    .map(|i| Condition::Trait {
+                        id: format!("d::leg{i}"),
+                    })
+                    .collect::<Vec<_>>()
+            })
+        };
+        models::RawCompositeRule {
+            id: "objectives/c2::rule".to_string(),
+            desc: "A composite with a long enough description".to_string(),
+            crit: Some("hostile".to_string()),
+            any: legs(any_legs),
+            all: legs(all_legs),
+            needs,
+            ..Default::default()
+        }
+    }
+
+    fn build(raw: models::RawCompositeRule) -> (Criticality, usize) {
+        let mut warnings = Vec::new();
+        let out = parsing::apply_composite_defaults(
+            raw,
+            &models::TraitDefaults::default(),
+            &mut warnings,
+            std::path::Path::new("test.yaml"),
+        );
+        let flagged = warnings
+            .iter()
+            .filter(|w| w.contains("bare `any:` rule marked 'crit: hostile'"))
+            .count();
+        (out.crit, flagged)
+    }
+
+    #[test]
+    fn bare_any_is_capped_at_suspicious_and_warns() {
+        let (crit, warned) = build(rule(3, 0, None));
+        assert_eq!(crit, Criticality::Suspicious);
+        assert_eq!(warned, 1, "the author must be told the tier was lowered");
+    }
+
+    #[test]
+    fn explicit_needs_one_is_still_a_bare_or() {
+        let (crit, warned) = build(rule(3, 0, Some(1)));
+        assert_eq!(crit, Criticality::Suspicious);
+        assert_eq!(warned, 1);
+    }
+
+    #[test]
+    fn an_all_clause_earns_hostile() {
+        let (crit, warned) = build(rule(0, 2, None));
+        assert_eq!(crit, Criticality::Hostile);
+        assert_eq!(warned, 0);
+    }
+
+    #[test]
+    fn needs_two_across_the_any_earns_hostile() {
+        // Two distinct legs must agree, which is the inference the ceiling asks for.
+        let (crit, warned) = build(rule(3, 0, Some(2)));
+        assert_eq!(crit, Criticality::Hostile);
+        assert_eq!(warned, 0);
+    }
+
+    #[test]
+    fn a_bare_or_below_hostile_is_untouched() {
+        let mut raw = rule(3, 0, None);
+        raw.crit = Some("suspicious".to_string());
+        let (crit, warned) = build(raw);
+        assert_eq!(crit, Criticality::Suspicious);
+        assert_eq!(warned, 0, "only a hostile claim is capped");
+    }
+}
+
 #[test]
 fn test_apply_composite_defaults_unset_with_none() {
     let defaults = models::TraitDefaults {

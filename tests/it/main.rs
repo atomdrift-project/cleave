@@ -24,6 +24,7 @@ mod cli_integration_test;
 mod cli_kv_office_test;
 mod cli_kv_source_test;
 mod compact_trait_graph_test;
+mod context_note_orphan_test;
 mod diff_test;
 mod directory_scan_test;
 mod embedded_code_detection_test;

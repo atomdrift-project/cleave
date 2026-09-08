@@ -1076,6 +1076,29 @@ pub(crate) fn apply_composite_defaults(
     // Handle single condition by converting to requires_all
     let requires_all = raw.all.or_else(|| raw.condition.map(|c| vec![c]));
 
+    // Hostile requires intent inference, and a bare OR infers nothing: it fires
+    // on whichever single leg matched, which is exactly what an atomic trait
+    // does. Atomic traits are held to `suspicious` for this reason (see the
+    // clamp in `apply_trait_defaults`); a composite that combines nothing is
+    // held to the same ceiling rather than laundering one leg's match into a
+    // hostile verdict. Earning hostile means combining distinct signals: an
+    // `all:` clause, or `needs: 2`+ across the `any:`.
+    let combines_signals = requires_all.as_ref().is_some_and(|all| !all.is_empty())
+        || raw.needs.is_some_and(|n| n > 1);
+    let criticality = if criticality == Criticality::Hostile && !combines_signals {
+        warnings.push(format!(
+            "Composite '{}' in {}: bare `any:` rule marked 'crit: hostile'. A rule that fires on \
+             any single leg performs no intent inference, so it is capped at 'suspicious' like an \
+             atomic trait. Add an `all:` leg or raise `needs:` to combine distinct signals, or \
+             lower the composite to 'suspicious'.",
+            raw.id,
+            path.display()
+        ));
+        Criticality::Suspicious
+    } else {
+        criticality
+    };
+
     // Check regex patterns in all condition lists
     let warn_start = warnings.len();
     let mut check_conditions = |conditions: &Option<Vec<crate::composite_rules::Condition>>,

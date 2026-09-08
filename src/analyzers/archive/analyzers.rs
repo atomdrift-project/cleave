@@ -2120,7 +2120,14 @@ impl ArchiveAnalyzer {
             // byte/line context. Rides up into `files[].context` via
             // `into_file_analysis`.
             report.dedupe_findings();
-            crate::context::capture(&mut report, data, *file_type);
+            // The container's end-of-analysis low-value filter has not run yet,
+            // so resolve what it will delete and keep those out of the windows.
+            let doomed = self
+                .capability_mapper
+                .as_ref()
+                .map(|m| m.doomed_low_value_ids(&report.findings))
+                .unwrap_or_default();
+            crate::context::capture(&mut report, data, *file_type, &doomed);
             Ok(Some(report))
         } else if self
             .analysis_options
@@ -2170,7 +2177,12 @@ impl ArchiveAnalyzer {
                 );
             }
             report.dedupe_findings();
-            crate::context::capture(&mut report, data, effective_type);
+            let doomed = self
+                .capability_mapper
+                .as_ref()
+                .map(|m| m.doomed_low_value_ids(&report.findings))
+                .unwrap_or_default();
+            crate::context::capture(&mut report, data, effective_type, &doomed);
             Ok(Some(report))
         } else {
             Err(anyhow::anyhow!("Unsupported file type: {:?}", file_type))

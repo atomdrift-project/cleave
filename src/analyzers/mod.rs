@@ -178,6 +178,8 @@ pub fn analyzer_for_file_type(
         | FileType::SystemdService
         | FileType::DesktopEntry
         | FileType::Xml
+        | FileType::Yaml
+        | FileType::PgpSignature
         | FileType::Svg
         | FileType::Html
         | FileType::Markdown
@@ -185,6 +187,13 @@ pub fn analyzer_for_file_type(
         | FileType::Dockerfile
         | FileType::Wasm
         | FileType::Dex
+        // Compressed package images we identify but do not yet unpack. The
+        // generic analyzer still runs strings, entropy and encoded-payload
+        // detection over the container; before they had a type they were
+        // `Unknown` and skipped outright.
+        | FileType::Snap
+        | FileType::Flatpak
+        | FileType::SquashFs
         | FileType::Data => Some(Box::new(
             generic::GenericAnalyzer::new(*file_type).with_capability_mapper(mapper_or_empty),
         )),
@@ -661,6 +670,9 @@ impl FileTypeExt for FileType {
             FileType::PyProjectToml => vec!["toml", "pyproject.toml", "python"],
             FileType::ComposerJson => vec!["json", "composer.json", "php"],
             FileType::GithubActions => vec!["yaml", "yml", "github-actions"],
+            // Generic YAML shares the workflow keys, so a rule written `for:
+            // [yaml]` reaches an ordinary config as well as an Actions file.
+            FileType::Yaml => vec!["yaml", "yml"],
             FileType::SystemdService => vec!["service", "systemd", "unit"],
             FileType::DesktopEntry => vec!["desktop", "desktop-entry", "freedesktop", "xdg"],
             FileType::Xml => vec!["xml", "csproj", "xaml", "svg", "msbuild"],
@@ -708,6 +720,12 @@ impl FileTypeExt for FileType {
             FileType::Xbps => vec!["xbps", "archive"],
             FileType::GentooBinpkg => vec!["gentoo_binpkg", "archive"],
             FileType::Asar => vec!["asar", "archive"],
+            // Compressed images we identify but do not unpack. They take the
+            // archive tier like the other opaque containers (iso, dmg): their
+            // members are out of reach, but the container itself is scanned.
+            FileType::Snap => vec!["snap", "squashfs", "archive"],
+            FileType::SquashFs => vec!["squashfs", "archive"],
+            FileType::Flatpak => vec!["flatpak", "archive"],
             FileType::AppleScript => vec!["scpt", "applescript"],
             FileType::Plist => vec!["plist", "xml", "apple"],
             FileType::Rtf => vec!["rtf", "doc"],
@@ -723,6 +741,7 @@ impl FileTypeExt for FileType {
             FileType::Markdown => vec!["md", "markdown"],
             FileType::Makefile => vec!["makefile", "make", "mk"],
             FileType::Dockerfile => vec!["dockerfile", "docker", "containerfile"],
+            FileType::PgpSignature => vec!["sig", "asc", "pgp"],
             FileType::Text => vec!["txt", "text"],
             FileType::Data => vec!["dat", "bin", "payload", "raw"],
             _ => vec![],
@@ -869,10 +888,21 @@ mod tests {
     }
 
     #[test]
-    fn bridge_yaml_skip() {
+    fn bridge_yaml() {
+        // YAML used to bridge to Unknown because filefacts had no type for it,
+        // which meant cleave skipped every config it could not otherwise
+        // identify. It now carries a type of its own.
         assert_eq!(
             detect_file_type_from_data(Path::new("c.yaml"), b"name: test\n"),
-            FileType::Unknown
+            FileType::Yaml
+        );
+        // A workflow still refines past generic YAML.
+        assert_eq!(
+            detect_file_type_from_data(
+                Path::new("ci.yml"),
+                b"name: CI\non: [push]\njobs:\n  b:\n    runs-on: ubuntu-latest\n"
+            ),
+            FileType::GithubActions
         );
     }
 

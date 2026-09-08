@@ -1722,7 +1722,7 @@ dependencies = [
 [[package]]
 name = "filefacts"
 version = "1.5.0"
-source = "git+https://github.com/atomdrift-project/filefacts.git#cabb159d05af766c06300c608a6889ec11d88342"
+source = "git+https://github.com/atomdrift-project/filefacts.git#caf0415c8c9bdd1af4475da3fe0eda21f4905101"
 dependencies = [
  "aho-corasick",
  "cfb 0.10.0",
@@ -4672,7 +4672,7 @@ dependencies = [
 [[package]]
 name = "stng"
 version = "1.10.0"
-source = "git+https://github.com/atomdrift-project/stng.git#5d4408a98ee7a0f18eb2c496bd82c16960f490f5"
+source = "git+https://github.com/atomdrift-project/stng.git#8fd3549563108c0be6e324edaa79f9040b30c163"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -5344,7 +5344,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-clojure"
 version = "0.1.0"
-source = "git+https://github.com/atomdrift-project/filefacts.git#cabb159d05af766c06300c608a6889ec11d88342"
+source = "git+https://github.com/atomdrift-project/filefacts.git#caf0415c8c9bdd1af4475da3fe0eda21f4905101"
 dependencies = [
  "cc",
  "tree-sitter",
@@ -5732,9 +5732,9 @@ dependencies = [
 
 [[package]]
 name = "walrus"
-version = "0.26.5"
+version = "0.26.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "25b63a2bc6e4acb4cf69080068a531bad4530791098230e972ffcb64fd1dc266"
+checksum = "56f869278647ac781bbd9ad108cadbd9779ac7ed833811edc0b6dfbcb9184496"
 dependencies = [
  "anyhow",
  "gimli 0.32.3",

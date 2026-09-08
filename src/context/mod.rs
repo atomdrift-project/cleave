@@ -12,6 +12,13 @@
 //! Rendering those bytes as numbered text lines or a hex dump is solely an
 //! output concern.
 //!
+//! Because the weaker of two overlapping notes is dropped rather than queued
+//! behind the winner, capture must see the *final* finding set: a note that
+//! disappears afterwards takes the annotations it outranked with it and leaves
+//! the location bare. The standalone path filters before it captures; the
+//! archive-member and embedded-payload paths capture first, so they name what
+//! the filter will delete in `doomed`.
+//!
 //! [`Evidence`]: crate::types::Evidence
 
 use filefacts::FileType;
@@ -26,7 +33,18 @@ const ATOMIC_MAX_MATCHES: usize = MAX_EV_LOCS;
 
 /// Populate `report.context` from `report.findings`, slicing windows out of
 /// `data`. Every file type uses the same byte-addressed window model.
-pub(crate) fn capture(report: &mut AnalysisReport, data: &[u8], file_type: FileType) {
+///
+/// `doomed` names findings that are still in `report` but that the
+/// end-of-analysis low-value filter will delete
+/// (`CapabilityMapper::doomed_low_value_ids`). They are skipped so one cannot
+/// win a byte span and then vanish, silently taking the surviving annotations
+/// it outranked with it. Pass an empty set when the findings are already final.
+pub(crate) fn capture(
+    report: &mut AnalysisReport,
+    data: &[u8],
+    file_type: FileType,
+    doomed: &FxHashSet<crate::types::Istr>,
+) {
     if report.findings.is_empty() || data.is_empty() {
         return;
     }
@@ -36,8 +54,9 @@ pub(crate) fn capture(report: &mut AnalysisReport, data: &[u8], file_type: FileT
     // references it pick up the recovered position.
     anchor_orphan_symbol_matches(&mut report.findings, data);
 
-    // Capture context for every finding that can render: only Filtered noise is
-    // skipped. Components are captured whether or not a composite references
+    // Capture context for every finding that can render: Filtered noise and
+    // `doomed` (deleted right after this by the low-value filter) are the only
+    // ones skipped. Components are captured whether or not a composite references
     // them — the LLM/tiny view's low-tier fill (`TinyOpts::low_tier_fill`) shows
     // a top-scored file's best component/baseline traits even when nothing
     // notable fired, and a trait without captured context would render as
@@ -46,7 +65,7 @@ pub(crate) fn capture(report: &mut AnalysisReport, data: &[u8], file_type: FileT
     let shown: Vec<&Finding> = report
         .findings
         .iter()
-        .filter(|finding| finding.crit != Criticality::Filtered)
+        .filter(|finding| finding.crit != Criticality::Filtered && !doomed.contains(&finding.id))
         .collect();
     if shown.is_empty() {
         return;
@@ -675,6 +694,56 @@ mod tests {
     }
 
     #[test]
+    fn doomed_finding_does_not_evict_the_note_it_outranks() {
+        // Regression: the low-value filter deletes findings *after* capture on
+        // the archive-member path. A doomed finding used to win its byte span,
+        // `dedup_notes` dropped every weaker note overlapping it, and the
+        // renderer then filtered the winner out by id — so the location
+        // rendered with no annotation at all. Measured on an npm dropper whose
+        // raw-IP URL literal lost its line to a composite that was then
+        // deleted (`platform-bootstrap.mjs:16`).
+        let data = b"const BASE = \"https://203.0.113.9:4443/x\"\n";
+        let doomed_id = "objectives/c2::wrapper";
+        let survivor_id = "micro/ip::literal";
+        let mut r = report(vec![
+            // Same span; the doomed one outranks the survivor.
+            finding(doomed_id, Criticality::Suspicious, &[13]),
+            finding(survivor_id, Criticality::Notable, &[13]),
+        ]);
+        let doomed: FxHashSet<crate::types::Istr> =
+            std::iter::once(crate::types::Istr::from(doomed_id)).collect();
+        capture(&mut r, data, FileType::JavaScript, &doomed);
+
+        assert!(
+            block_for(&r.context, doomed_id).is_none(),
+            "a doomed finding must not be annotated at all: {:?}",
+            r.context
+        );
+        assert!(
+            block_for(&r.context, survivor_id).is_some(),
+            "the surviving trait must keep the span the doomed one used to take: {:?}",
+            r.context
+        );
+    }
+
+    #[test]
+    fn doomed_finding_alone_on_a_span_leaves_no_stray_window() {
+        // Nothing else covers the span, so there is nothing to rescue — but the
+        // doomed finding must not carve a context window of its own either.
+        let data = b"const BASE = \"https://203.0.113.9:4443/x\"\n";
+        let doomed_id = "objectives/c2::wrapper";
+        let mut r = report(vec![finding(doomed_id, Criticality::Suspicious, &[13])]);
+        let doomed: FxHashSet<crate::types::Istr> =
+            std::iter::once(crate::types::Istr::from(doomed_id)).collect();
+        capture(&mut r, data, FileType::JavaScript, &doomed);
+        assert!(
+            r.context.is_empty(),
+            "no surviving finding, so no context: {:?}",
+            r.context
+        );
+    }
+
+    #[test]
     fn textual_matches_share_the_same_byte_window() {
         let data = b"import os\nx = 1\ndata = decode(p)\nexec(data)\nend\n";
         let mut r = report(vec![
@@ -682,7 +751,7 @@ mod tests {
             finding("b/fs", Criticality::Suspicious, &[23]),
             finding("c/exec", Criticality::Notable, &[33]),
         ]);
-        capture(&mut r, data, FileType::Python);
+        capture(&mut r, data, FileType::Python, &FxHashSet::default());
 
         // The hostile window (±128/256) spans the whole 47-byte file, so all three
         // matches merge into one chunk anchored at byte 0 (line 1, column 1), with
@@ -705,7 +774,7 @@ mod tests {
             finding("text/first", Criticality::Notable, &[100]),
             finding("text/second", Criticality::Suspicious, &[9_000]),
         ]);
-        capture(&mut r, &data, FileType::JavaScript);
+        capture(&mut r, &data, FileType::JavaScript, &FxHashSet::default());
 
         let first = block_for(&r.context, "text/first").expect("first chunk");
         let second = block_for(&r.context, "text/second").expect("second chunk");
@@ -727,7 +796,7 @@ mod tests {
         data[199] = b'\n';
         data[500] = b'M';
         let mut r = report(vec![finding("text/hit", Criticality::Notable, &[500])]);
-        capture(&mut r, &data, FileType::JavaScript);
+        capture(&mut r, &data, FileType::JavaScript, &FxHashSet::default());
 
         // Window starts at byte 436, which is on line 3 (after the newlines at 99
         // and 199), at column 436 − 200 + 1 = 237.
@@ -742,7 +811,7 @@ mod tests {
     fn locationless_finding_has_no_fabricated_context() {
         let data = b"import os\nx = 1\n";
         let mut r = report(vec![finding("struct/entropy", Criticality::Notable, &[])]);
-        capture(&mut r, data, FileType::Python);
+        capture(&mut r, data, FileType::Python, &FxHashSet::default());
         assert!(r.context.is_empty());
     }
 
@@ -759,7 +828,7 @@ mod tests {
                 .with_location("archive:member.bin"),
         ];
         let mut r = report(vec![f]);
-        capture(&mut r, data, FileType::Python);
+        capture(&mut r, data, FileType::Python, &FxHashSet::default());
         assert!(
             r.context
                 .iter()
@@ -782,7 +851,7 @@ mod tests {
                 .with_location("archive:package/src/hooks/deps:0x3fa97"),
         ];
         let mut r = report(vec![f]);
-        capture(&mut r, data, FileType::Python);
+        capture(&mut r, data, FileType::Python, &FxHashSet::default());
         assert!(
             r.context
                 .iter()
@@ -807,7 +876,7 @@ mod tests {
         composite.trait_refs = vec!["comp/a".to_string().into(), "comp/b".to_string().into()];
 
         let mut r = report(vec![strong, comp_a, comp_b, composite]);
-        capture(&mut r, &data, FileType::Elf);
+        capture(&mut r, &data, FileType::Elf, &FxHashSet::default());
 
         let note_at = |off: u64| {
             r.context
@@ -839,7 +908,7 @@ mod tests {
         composite.trait_refs = vec!["comp/only".to_string().into()];
 
         let mut r = report(vec![strong, comp, composite]);
-        capture(&mut r, &data, FileType::Elf);
+        capture(&mut r, &data, FileType::Elf, &FxHashSet::default());
 
         assert!(
             r.context
@@ -859,7 +928,7 @@ mod tests {
         let mut composite = finding("obj/loader", Criticality::Suspicious, &[]);
         composite.trait_refs = vec!["comp/open".to_string().into()];
         let mut r = report(vec![comp, composite]);
-        capture(&mut r, data, FileType::Python);
+        capture(&mut r, data, FileType::Python, &FxHashSet::default());
 
         // The composite (no evidence of its own) anchors at its component's offset.
         // Both share that span, so overlap dedup keeps the stronger composite and
@@ -882,7 +951,7 @@ mod tests {
         composite.trait_refs = vec!["cap/near".to_string().into(), "cap/far".to_string().into()];
 
         let mut r = report(vec![near, far, composite]);
-        capture(&mut r, &data, FileType::Python);
+        capture(&mut r, &data, FileType::Python, &FxHashSet::default());
 
         // The near leg inherits the hostile 128-byte lead-in (not notable's 64), so
         // its window starts at 800 − 128; the composite anchored far away at 100.
@@ -900,7 +969,7 @@ mod tests {
         let mut lo = finding("b/weak", Criticality::Notable, &[0]);
         lo.conf = 0.9;
         let mut r = report(vec![hi, lo]);
-        capture(&mut r, data, FileType::Python);
+        capture(&mut r, data, FileType::Python, &FxHashSet::default());
         let ids: Vec<&str> = r
             .context
             .iter()
@@ -943,7 +1012,7 @@ mod tests {
             ..Default::default()
         }];
         let mut r = report(vec![f]);
-        capture(&mut r, data, FileType::Elf);
+        capture(&mut r, data, FileType::Elf, &FxHashSet::default());
         assert_eq!(r.findings[0].evidence[0].byte_offset(), Some(5));
         assert!(
             r.context
@@ -958,7 +1027,7 @@ mod tests {
     fn binary_emits_raw_byte_window() {
         let data: Vec<u8> = (0u8..64).collect();
         let mut r = report(vec![finding("bin/x", Criticality::Notable, &[16])]);
-        capture(&mut r, &data, FileType::Elf);
+        capture(&mut r, &data, FileType::Elf, &FxHashSet::default());
         // Byte-offset mode: one window of raw bytes spanning the match, carrying no
         // line/col labels (the renderer wraps it into hex rows at display time).
         let hit = r.context.iter().find(|c| !c.notes.is_empty());
@@ -976,7 +1045,7 @@ mod tests {
         let hostile = finding("mal/exec", Criticality::Hostile, &[500]);
         let component = finding("cap/str", Criticality::Component, &[100]);
         let mut r = report(vec![hostile, component]);
-        capture(&mut r, &data, FileType::Elf);
+        capture(&mut r, &data, FileType::Elf, &FxHashSet::default());
 
         let block = |id: &str| {
             r.context
@@ -1006,7 +1075,7 @@ mod tests {
         let strong = finding("mal/exec", Criticality::Hostile, &[100]);
         let weak = finding("cap/str", Criticality::Notable, &[100]);
         let mut r = report(vec![strong, weak]);
-        capture(&mut r, &data, FileType::Elf);
+        capture(&mut r, &data, FileType::Elf, &FxHashSet::default());
 
         let ids: Vec<&str> = r
             .context
@@ -1036,7 +1105,7 @@ mod tests {
         let mut composite = finding("obj/implant", Criticality::Hostile, &[]);
         composite.trait_refs = vec!["cap/near".to_string().into(), "cap/far".to_string().into()];
         let mut r = report(vec![near, far, composite]);
-        capture(&mut r, &data, FileType::Elf);
+        capture(&mut r, &data, FileType::Elf, &FxHashSet::default());
 
         let near_block = r
             .context

@@ -4,7 +4,10 @@
 //! that composite rules only contain trait references (not inline primitives),
 //! auto-prefixing trait references, and detecting redundant patterns.
 
-use crate::composite_rules::{CompositeTrait, Condition, TraitDefinition};
+use crate::composite_rules::{
+    CompositeTrait, Condition, FileType as RuleFileType, Platform, TraitDefinition,
+};
+use crate::types::Criticality;
 use std::collections::{HashMap, HashSet};
 
 /// Find atomic traits whose `if:` clause references themselves
@@ -520,6 +523,158 @@ pub(crate) fn find_pure_directory_alias_composites(
         violations.push((rule.id.clone(), dir, trait_ids.len(), trait_ids));
     }
 
+    violations
+}
+
+/// The scope a rule matches in, for deciding whether a composite narrows its leg.
+struct RuleScope<'a> {
+    crit: Criticality,
+    for_types: &'a [RuleFileType],
+    platforms: &'a [Platform],
+}
+
+/// Whether two `for:`/`platforms:` lists select the same set. Order and repeats
+/// carry no meaning there, and an empty list ("everything") is a different set
+/// from any restriction, so `[]` and `[Elf]` are correctly unequal.
+fn same_set<T: PartialEq>(a: &[T], b: &[T]) -> bool {
+    a.iter().all(|x| b.contains(x)) && b.iter().all(|x| a.contains(x))
+}
+
+/// Whether `rule` and `leg` match in exactly the same places.
+///
+/// Any difference — narrower or wider, file type or platform — means the
+/// composite decides *where* the leg counts, which is real work and can earn a
+/// tier the leg does not have on its own.
+fn same_scope(rule: &RuleScope<'_>, leg: &RuleScope<'_>) -> bool {
+    same_set(rule.for_types, leg.for_types) && same_set(rule.platforms, leg.platforms)
+}
+
+/// A composite whose whole logic is "any one of these legs matched": no second
+/// positive clause, no suppression, no size/scope/proximity bound, no `needs`
+/// above 1. Its `for:`/`platforms` may still narrow, which is judged per leg.
+fn is_bare_or(rule: &CompositeTrait) -> bool {
+    rule.any.as_ref().is_some_and(|v| !v.is_empty())
+        && rule.all.as_ref().is_none_or(std::vec::Vec::is_empty)
+        && rule.unless.as_ref().is_none_or(std::vec::Vec::is_empty)
+        && rule.not.as_ref().is_none_or(std::vec::Vec::is_empty)
+        && rule.downgrade.is_none()
+        && rule.near_lines.is_none()
+        && rule.near_bytes.is_none()
+        && rule.size_min.is_none()
+        && rule.size_max.is_none()
+        && rule.scope.is_none()
+        && rule.needs.is_none_or(|n| n <= 1)
+}
+
+/// Find bare `any:` composites that report a higher criticality than their own
+/// legs while adding no filtering of any kind.
+///
+/// Only composites whose entire logic is the `any:` list qualify: no `all:`,
+/// `unless:`, `not:`, `downgrade:`, `needs:`, size, scope or proximity bound,
+/// and a `for:`/`platforms:` identical to every leg's. Such a composite fires
+/// exactly where its legs do, on whichever one matched — so it is not
+/// classifying anything, it is relabelling one leg's match as a stronger
+/// verdict, and the tier a file receives depends on which leg matched:
+///
+/// ```yaml
+/// - id: offensive-tool-pdb      # suspicious
+///   any:
+///     - id: pdb-metasploit-indicator   # suspicious
+///     - id: pdb-cobalt-indicator       # notable    <- flagged
+/// ```
+///
+/// A Cobalt Strike PDB path is either suspicious on its own or it is not; it
+/// should not become suspicious merely by being listed here.
+///
+/// The fix is to raise the under-ranked legs to the composite's `crit:` — they
+/// are, by the composite's own claim, that serious on their own. (Or to add
+/// the `all:`/`needs:`/`unless:`/`for:` that makes the wrapper more than a
+/// relabelling.) It matters beyond tidiness: a `component` leg is stripped as
+/// low-tier noise, so if the wrapper is ever dropped as a redundant OR the
+/// detection disappears rather than being demoted — the failure mode seen on
+/// `@onescience/onecode`, where `direct-http-c2` was the only thing reporting
+/// a raw-IP C2 endpoint over `component` legs.
+///
+/// Legs that are bare directory references are not resolved: "raise every
+/// trait under this directory" is not a fix worth prescribing, so such a rule
+/// is skipped entirely.
+///
+/// A rule's own `--rx-N`/`--alt-N` decomposition legs are judged like any
+/// other. Splitting an alternation into named legs is meant to give each
+/// alternative a meaning of its own, so a leg matching says exactly what the
+/// reassembled composite says — and demoting the fragments below it is the
+/// same laundering in mechanical form.
+///
+/// Returns `(rule_id, rule_crit, under_ranked_legs)`.
+#[must_use]
+pub(crate) fn find_bare_or_crit_escalations(
+    trait_definitions: &[TraitDefinition],
+    composite_rules: &[CompositeTrait],
+) -> Vec<(String, Criticality, Vec<(String, Criticality)>)> {
+    let scopes: HashMap<&str, RuleScope<'_>> = trait_definitions
+        .iter()
+        .map(|t| {
+            (
+                t.id.as_str(),
+                RuleScope {
+                    crit: t.crit,
+                    for_types: &t.r#for,
+                    platforms: &t.platforms,
+                },
+            )
+        })
+        .chain(composite_rules.iter().map(|r| {
+            (
+                r.id.as_str(),
+                RuleScope {
+                    crit: r.crit,
+                    for_types: &r.r#for,
+                    platforms: &r.platforms,
+                },
+            )
+        }))
+        .collect();
+
+    let mut violations = Vec::new();
+    for rule in composite_rules.iter().filter(|r| is_bare_or(r)) {
+        let Some(any) = rule.any.as_ref() else {
+            continue;
+        };
+        let rule_scope = RuleScope {
+            crit: rule.crit,
+            for_types: &rule.r#for,
+            platforms: &rule.platforms,
+        };
+
+        let mut under_ranked = Vec::new();
+        let mut relabels_only = true;
+        for cond in any {
+            // A directory reference has no `::` and so never resolves here.
+            let Condition::Trait { id } = cond else {
+                relabels_only = false;
+                break;
+            };
+            let Some(leg) = scopes.get(id.as_str()) else {
+                relabels_only = false;
+                break;
+            };
+            if !same_scope(&rule_scope, leg) {
+                relabels_only = false;
+                break;
+            }
+            if leg.crit < rule.crit {
+                under_ranked.push((id.clone(), leg.crit));
+            }
+        }
+        if !relabels_only || under_ranked.is_empty() {
+            continue;
+        }
+        under_ranked.sort();
+        under_ranked.dedup();
+        violations.push((rule.id.clone(), rule.crit, under_ranked));
+    }
+
+    violations.sort();
     violations
 }
 

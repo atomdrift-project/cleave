@@ -550,6 +550,13 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         fix: "Move or reference traits according to TAXONOMY.md tiers.",
     },
     ValidatorSpec {
+        id: "bare-or-crit-escalation",
+        category: ValidatorCategory::Policy,
+        display_id: "or-escalation",
+        description: "A bare `any:` composite outranks legs it does not narrow, so the tier a file gets depends on which leg matched.",
+        fix: "Raise those legs to the composite's crit:, or add the all:/needs:/unless:/for: that earns the higher tier.",
+    },
+    ValidatorSpec {
         id: "suppression-only-building-block",
         category: ValidatorCategory::Policy,
         display_id: "supp-only",

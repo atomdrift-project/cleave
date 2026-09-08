@@ -15,9 +15,9 @@ use crate::capabilities::validation::{
     check_same_string_different_types, collect_trait_refs_from_rule,
     collect_trait_refs_from_trait_def, find_alternation_merge_candidates,
     find_ast_function_call_should_use_symbol, find_atomic_logic_duplicates,
-    find_banned_directory_segments, find_benign_misplaced, find_brittle_path_patterns,
-    find_broad_filetype_traits, find_broad_platform_traits, find_cap_obj_violations,
-    find_cap_wellknown_violations, find_case_insensitive_overlap_issues,
+    find_banned_directory_segments, find_bare_or_crit_escalations, find_benign_misplaced,
+    find_brittle_path_patterns, find_broad_filetype_traits, find_broad_platform_traits,
+    find_cap_obj_violations, find_cap_wellknown_violations, find_case_insensitive_overlap_issues,
     find_composite_only_wellknown_files, find_dead_downgrades, find_depth_violations,
     find_duplicate_atomic_traits, find_duplicate_composite_rules, find_duplicate_inline_exclusions,
     find_duplicate_second_level_directories, find_empty_condition_clauses,
@@ -3908,6 +3908,57 @@ impl super::CapabilityMapper {
                 ));
             }
 
+            // Validate: a bare `any:` composite must agree with its legs about
+            // how serious a match is. Without that agreement the tier a file
+            // gets depends on which leg happened to match.
+            let disable_or_escalation =
+                crate::validation_controls::is_validator_disabled("bare-or-crit-escalation");
+            let or_escalations =
+                find_bare_or_crit_escalations(&trait_definitions, &composite_rules);
+            if !disable_or_escalation && !or_escalations.is_empty() {
+                let legs: usize = or_escalations.iter().map(|(_, _, l)| l.len()).sum();
+                eprintln!(
+                    "\n❌ ERROR: {} bare `any:` composites outrank {legs} leg(s) while adding no filtering",
+                    or_escalations.len()
+                );
+                eprintln!(
+                    "   These composites are nothing but their `any:` list — no all:/unless:/not:/"
+                );
+                eprintln!(
+                    "   downgrade:/needs:/size/scope, and a for:/platforms: identical to every leg."
+                );
+                eprintln!(
+                    "   They fire exactly where their legs do, on whichever one matched, so a leg"
+                );
+                eprintln!(
+                    "   below the composite makes the reported tier depend on which leg it was."
+                );
+                eprintln!(
+                    "   Raise these legs to the composite's crit:, or add the filtering that earns it:\n"
+                );
+                for (rule_id, crit, under_ranked) in &or_escalations {
+                    let source = rule_source_files
+                        .get(rule_id)
+                        .map(std::string::String::as_str)
+                        .unwrap_or("unknown");
+                    match find_line_number(source, rule_id) {
+                        Some(line) => eprintln!("   {source}:{line}: '{rule_id}' ({crit:?})"),
+                        None => eprintln!("   {source}: '{rule_id}' ({crit:?})"),
+                    }
+                    for (leg_id, leg_crit) in under_ranked {
+                        eprintln!("      leg {leg_id} is {leg_crit:?}");
+                    }
+                }
+                eprintln!();
+                warnings.push_id(
+                    "bare-or-crit-escalation",
+                    format!(
+                        "{} bare `any:` composites outrank {legs} leg(s) while adding no filtering",
+                        or_escalations.len()
+                    ),
+                );
+            }
+
             let disable_excessive_suppression_validation =
                 crate::validation_controls::is_validator_disabled("excessive-suppression");
 
@@ -4039,8 +4090,13 @@ impl super::CapabilityMapper {
                     "   These traits reference another trait via `if: id:` but add no constraints:"
                 );
                 eprintln!("   - No filtering (count_min, count_max, section, etc.)");
-                eprintln!("   - Same criticality as referenced trait");
                 eprintln!("   - No unless/not/downgrade modifiers");
+                eprintln!(
+                    "   A different `crit:` does not count: the alias matches exactly what its"
+                );
+                eprintln!(
+                    "   target matches, so it reports the same evidence twice under two names."
+                );
                 eprintln!(
                     "   Either add constraints/modifiers or reference the original trait directly:\n"
                 );

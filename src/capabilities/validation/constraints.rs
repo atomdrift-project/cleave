@@ -457,8 +457,18 @@ pub(crate) fn find_missing_search_patterns(trait_definitions: &[TraitDefinition]
 ///
 /// A pure alias trait references another trait but adds no constraints:
 /// - No filtering (count_min, count_max, section, offset, per_kb_*, size_*)
-/// - No criticality change (same crit as referenced trait)
 /// - No unless/not/downgrade modifiers
+///
+/// A different `crit:` does not rescue it. The alias matches exactly what its
+/// target matches, so a tier change reports the same evidence a second time
+/// under a second name, and a reader has to work out which id to believe. If
+/// the tier is wrong, fix it on the trait that owns the matcher; if two
+/// contexts genuinely need different severities, that belongs in the composites
+/// that consume the trait, not in a renamed copy of it.
+///
+/// A reference that does not resolve to a single trait is left alone: a
+/// directory prefix (`micro-behaviors/fs/file/rename/`) is an OR across
+/// everything beneath it, which is real logic rather than a rename.
 ///
 /// These should either add constraints or be removed in favor of direct references.
 ///
@@ -467,11 +477,9 @@ pub(crate) fn find_missing_search_patterns(trait_definitions: &[TraitDefinition]
 pub(crate) fn find_pure_alias_traits(
     trait_definitions: &[TraitDefinition],
 ) -> Vec<(String, String)> {
-    // Build a map of trait ID -> criticality for lookup
-    let crit_map: HashMap<&str, &crate::types::Criticality> = trait_definitions
-        .iter()
-        .map(|t| (t.id.as_str(), &t.crit))
-        .collect();
+    // Every defined trait id, to tell a rename of one trait from a directory
+    // reference that fans out across many.
+    let known_ids: HashSet<&str> = trait_definitions.iter().map(|t| t.id.as_str()).collect();
 
     let mut violations = Vec::new();
 
@@ -512,14 +520,10 @@ pub(crate) fn find_pure_alias_traits(
             continue;
         }
 
-        // Check if criticality differs from referenced trait
-        // If referenced trait isn't found, assume it differs (don't flag)
-        if let Some(ref_crit) = crit_map.get(ref_id.as_str()) {
-            if &t.crit != *ref_crit {
-                continue; // Criticality change adds value
-            }
-        } else {
-            continue; // Referenced trait not found locally, can't compare
+        // Only a reference naming one trait is a rename of it; a directory
+        // prefix fans out across every trait beneath it and is real logic.
+        if !known_ids.contains(ref_id.as_str()) {
+            continue;
         }
 
         violations.push((t.id.clone(), ref_id.clone()));

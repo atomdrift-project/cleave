@@ -164,6 +164,15 @@ pub(crate) fn adopt_report_under(
     true
 }
 
+/// The global CapabilityMapper if one is already loaded, else `None`.
+///
+/// Never initializes: callers on the analysis path (embedded-payload capture)
+/// only want the mapper if the run already built one, and paying a full trait
+/// load here would be a surprise.
+pub(crate) fn loaded_capability_mapper() -> Option<Arc<CapabilityMapper>> {
+    CAPABILITY_MAPPER.read().clone()
+}
+
 pub(crate) fn trait_referenced_at_container_scope(id: &str) -> bool {
     let guard = CAPABILITY_MAPPER.read();
     guard

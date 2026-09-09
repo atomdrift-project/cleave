@@ -2330,6 +2330,12 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     // drops whole ecosystems rather than trimming a matcher — the file type is
     // not a property of the technique.
     "encoded:micro-behaviors/communications/http/download/encoded/",
+    // Stacked-encoding rules match on the recovered *chain* (`base64+base64`),
+    // which is a property of the wrapping and not of the file that carries it.
+    // The same doubly-wrapped payload turns up in a git hook, a Makefile recipe
+    // and an Xcode build setting, so a narrow `for:` here would scope a rule by
+    // the one thing the technique is indifferent to.
+    "encoded:micro-behaviors/data/decode/multiple-encoding/",
     // Hardcoded C2 URL string literals (IP-pinned URLs, .php panel endpoints)
     // appear in any source language — same rationale as communications/url/.
     // The directory's -encoded and -binary legs are already narrowly scoped.

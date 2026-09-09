@@ -2361,19 +2361,36 @@ pub(crate) fn eval_encoded<'a>(
     };
 
     // Determine encoding filter function
+    //
+    // A spec containing `+` names a *chain* rather than one encoding:
+    // `base64+base64` is the doubly-wrapped payload, `xor+base64` the XOR over
+    // base64 form. It is matched as a contiguous run of links so it says
+    // "these encodings, in this order", which is the property worth writing a
+    // rule against — nothing legitimate wraps a payload twice. The spelling
+    // matches how a chain is already rendered in evidence
+    // (`encoding_chain:xor+base64`), so a rule reads the way the finding does.
+    let chain_matches = |spec: &str, enc_chain: &[String]| -> bool {
+        if !spec.contains('+') {
+            return enc_chain.iter().any(|link| link == spec);
+        }
+        let want: Vec<&str> = spec.split('+').filter(|s| !s.is_empty()).collect();
+        if want.is_empty() || want.len() > enc_chain.len() {
+            return false;
+        }
+        enc_chain
+            .windows(want.len())
+            .any(|run| run.iter().zip(&want).all(|(link, w)| link == w))
+    };
     let matches_encoding = |enc_chain: &[String]| -> bool {
         match encoding {
             None => {
                 // No filter: match ANY encoded string (non-empty encoding_chain)
                 !enc_chain.is_empty()
             }
-            Some(EncodingSpec::Single(enc)) => {
-                // Single encoding: must be in the chain
-                enc_chain.contains(enc)
-            }
+            Some(EncodingSpec::Single(enc)) => chain_matches(enc, enc_chain),
             Some(EncodingSpec::Multiple(encodings)) => {
-                // Multiple encodings: match if ANY encoding is in the chain (OR logic)
-                encodings.iter().any(|enc| enc_chain.contains(enc))
+                // Multiple encodings: match if ANY entry matches (OR logic)
+                encodings.iter().any(|enc| chain_matches(enc, enc_chain))
             }
         }
     };

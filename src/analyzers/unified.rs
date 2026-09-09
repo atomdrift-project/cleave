@@ -560,17 +560,25 @@ impl UnifiedSourceAnalyzer {
                     _ => "",
                 };
 
+                let chain = if encoding_method.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![encoding_method.to_string()]
+                };
+                // A decoder's output can itself be encoded. Peel the rest so
+                // the string is the innermost content and the chain records how
+                // it was reached (`base64+base64`) — see the same call in the
+                // generic analyzer.
+                let (value, encoding_chain) =
+                    super::generic::peel_nested_encoding(&es.value, chain);
+
                 let decoded = crate::types::StringInfo {
-                    value: es.value.clone().into(),
+                    value: value.into(),
                     offset: Some(es.data_offset),
                     string_type,
                     encoding: "utf-8".to_string(),
                     section: Some("decoded".to_string()),
-                    encoding_chain: if !encoding_method.is_empty() {
-                        vec![encoding_method.to_string()]
-                    } else {
-                        Vec::new()
-                    },
+                    encoding_chain,
                     fragments: None,
                 };
                 // Source literals are decoded separately below because stng's

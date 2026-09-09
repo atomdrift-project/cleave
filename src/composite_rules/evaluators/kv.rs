@@ -1514,7 +1514,14 @@ pub(crate) fn structured_format_from_file_type(
         crate::composite_rules::FileType::CargoToml
         | crate::composite_rules::FileType::PyProjectToml => StructuredFormat::Toml,
         crate::composite_rules::FileType::GithubActions => StructuredFormat::Yaml,
-        crate::composite_rules::FileType::Plist => StructuredFormat::Plist,
+        // An Xcode project is an OpenStep property list, which the plist
+        // parser reads alongside the XML and binary dialects. Without this arm
+        // a `project.pbxproj` reaching the evaluator by file type rather than
+        // by filename falls through to Unknown and no `type: value` path
+        // resolves against it.
+        crate::composite_rules::FileType::Plist | crate::composite_rules::FileType::Pbxproj => {
+            StructuredFormat::Plist
+        }
         crate::composite_rules::FileType::PkgInfo => StructuredFormat::PkgInfo,
         crate::composite_rules::FileType::SystemdService => StructuredFormat::SystemdService,
         crate::composite_rules::FileType::DesktopEntry => StructuredFormat::DesktopEntry,

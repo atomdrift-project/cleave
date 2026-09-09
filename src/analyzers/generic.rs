@@ -479,8 +479,19 @@ fn push_stng_string(report: &mut AnalysisReport, es: &stng::ExtractedString) {
         _ => Vec::new(),
     };
 
+    // stng reports the decoder that ran, which is one link. When its output is
+    // *itself* encoded -- `base64 --decode | base64 --decode`, hex over base64,
+    // the nested-wrapper family -- peel the rest here so the string carries the
+    // innermost content and the chain that produced it (`base64+base64`).
+    //
+    // Done on the existing string rather than by emitting one per layer: the
+    // payload extractor already represents a stacked payload as a single
+    // artifact with a multi-link chain, and splitting layers into separate
+    // entries would contradict that. Reuses its peeler so both agree.
+    let (value, encoding_chain) = peel_nested_encoding(&es.value, encoding_chain);
+
     report.strings.push(crate::types::binary::StringInfo {
-        value: es.value.clone().into(),
+        value: value.into(),
         offset: Some(es.data_offset),
         string_type: es.kind,
         encoding: "utf-8".to_string(),
@@ -488,6 +499,29 @@ fn push_stng_string(report: &mut AnalysisReport, es: &stng::ExtractedString) {
         encoding_chain,
         fragments,
     });
+}
+
+/// Peel any further encodings wrapping an already-decoded string.
+///
+/// Returns the innermost text and the full chain that reached it. A value that
+/// is not further encoded comes back untouched with its one-link chain, so this
+/// is a no-op for the overwhelming majority of decoded strings; only a stacked
+/// payload grows a link. Non-UTF-8 output (a decompressed binary stage) keeps
+/// the original text -- the chain still records what was found, but the string
+/// corpus stays text.
+pub(crate) fn peel_nested_encoding(value: &str, chain: Vec<String>) -> (String, Vec<String>) {
+    if chain.is_empty() {
+        return (value.to_string(), chain);
+    }
+    let depth_before = chain.len();
+    let (bytes, chain) =
+        crate::extractors::encoded_payload::decompress_and_nest(value.as_bytes(), chain, 0);
+    if chain.len() > depth_before
+        && let Ok(inner) = String::from_utf8(bytes)
+    {
+        return (inner, chain);
+    }
+    (value.to_string(), chain)
 }
 
 impl Analyzer for GenericAnalyzer {

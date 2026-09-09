@@ -1302,12 +1302,24 @@ fn file_has_output(file: &FileAnalysis, opts: &TinyOpts) -> bool {
     file.findings.iter().any(|f| tiny_should_show(f, file))
 }
 
+/// cleave's own terminal view: the rich header, without litmus's card layout.
+/// The one view whose height is spent on a human reading a verdict at a
+/// terminal, so the one that trims hardest.
+fn is_terminal_view(opts: &TinyOpts) -> bool {
+    matches!(opts.header, HeaderStyle::Rich) && !opts.card
+}
+
 /// Whether this file has suppressions [`render_suppressions`] would draw.
 ///
 /// The single gate every skip path consults, so a file can never be dropped
 /// from the view for having nothing but withheld traits to report.
+///
+/// cleave's terminal view draws none: a human reading a verdict wants the
+/// evidence, not the engine's internal second-guessing, and the trailing block
+/// routinely ran longer than the findings above it. Every other view keeps
+/// them — there the withheld half is signal a grader can weigh.
 fn has_shown_suppressions(file: &FileAnalysis, opts: &TinyOpts) -> bool {
-    file.suppressions.iter().any(|s| s.crit >= opts.min_crit)
+    !is_terminal_view(opts) && file.suppressions.iter().any(|s| s.crit >= opts.min_crit)
 }
 
 /// The top-`n` finding ids to show, ranked by `crit × conf` (highest first) and
@@ -2449,6 +2461,13 @@ fn comment_marker(file_type: &str) -> &'static str {
 /// Comment text reserved at the end of a hex row when sizing the row width, so a
 /// meaningful `// desc` trailer fits before any truncation kicks in.
 const HEX_COMMENT_BUDGET: usize = 44;
+/// Hex rows drawn either side of a match in the full-context views. One row of
+/// neighbouring bytes is what places a match in its surroundings; beyond that
+/// the block stops being evidence and starts being a hex editor.
+const HEX_MARGIN_ROWS: usize = 1;
+/// As [`HEX_MARGIN_ROWS`], for a hostile match — the one case where what runs
+/// alongside the bytes carries the verdict.
+const HEX_MARGIN_HOSTILE: usize = 2;
 /// Comment width reserved on source lines — enough that typical descriptions
 /// land in full; the code column takes the rest.
 const SRC_COMMENT_BUDGET: usize = 56;
@@ -2721,13 +2740,19 @@ fn render_hex_unit(
     colorize: bool,
 ) {
     let full_context = opts.full_context;
-    // Focused mode narrows this renderer's world to the selected notes: they
-    // drive the byte highlights, the row filter, and the gutter comments. A
-    // merged capture window then no longer annotates unselected neighbors.
+    // Row trimming and the selected-notes filter below are cleave's terminal
+    // view alone; every other consumer of this renderer keeps the window and
+    // the annotations it asked for.
+    let trim = is_terminal_view(opts);
+    // Focused mode — and the terminal view — narrow this renderer's world to
+    // the selected notes: they drive the byte highlights, the row filter, and
+    // the gutter comments. A merged capture window then no longer annotates
+    // unselected neighbors, whose rows (a language token, a file extension)
+    // came with a margin each and buried the finding the window was drawn for.
     let notes: Vec<&Note> = line
         .notes
         .iter()
-        .filter(|n| opts.focus_crit.is_none() || sel.contains(n.id.as_str()))
+        .filter(|n| (opts.focus_crit.is_none() && !trim) || sel.contains(n.id.as_str()))
         .collect();
     let spans: Vec<(u64, u64, Criticality)> = notes
         .iter()
@@ -2745,24 +2770,59 @@ fn render_hex_unit(
     let comment_col = prefix + cells_w + 2 + marker.len() + 1;
     let desc_budget = term_width.saturating_sub(comment_col + 2).max(8);
 
+    // Matches intersecting each row, strongest first — drives the gutter.
+    let row_notes_by_row: Vec<Vec<&Note>> = (0..line.data.len())
+        .step_by(stride)
+        .map(|chunk_start| {
+            let row_base = line.loc + chunk_start as u64;
+            let row_end = row_base + (stride.min(line.data.len() - chunk_start)) as u64;
+            let mut row_notes: Vec<&Note> = notes
+                .iter()
+                .copied()
+                .filter(|n| n.off < row_end && row_base < n.off + u64::from(n.len.max(1)))
+                .collect();
+            row_notes.sort_by(|a, b| b.crit.cmp(&a.crit).then_with(|| a.off.cmp(&b.off)));
+            row_notes
+        })
+        .collect();
+    // Rows a match earned: the hit row itself plus a margin either side. One
+    // row of neighbouring bytes is what places a match in its surroundings; a
+    // hostile hit earns two, since its verdict most depends on what runs
+    // alongside it. Capture reserves a criticality-sized byte window (up to
+    // 128/256 bytes), which drawn whole turned a single hit into a twenty-row
+    // block — the annotations scrolled away from the bytes they described.
+    let mut margin_keep = vec![false; row_notes_by_row.len()];
+    if trim {
+        for (i, ns) in row_notes_by_row.iter().enumerate() {
+            let Some(top) = ns.iter().map(|n| n.crit).max() else {
+                continue;
+            };
+            let margin = if top >= Criticality::Hostile {
+                HEX_MARGIN_HOSTILE
+            } else {
+                HEX_MARGIN_ROWS
+            };
+            let lo = i.saturating_sub(margin);
+            let hi = (i + margin + 1).min(margin_keep.len());
+            margin_keep[lo..hi].fill(true);
+        }
+    }
+
     // In focused mode a hit at or above `focus_crit` keeps one row of trailing
     // context — but only when the hit itself fit on a single row. A match span
     // that already continues onto a second row has shown its continuation;
     // adding a third row past it is padding. `hit_rows` counts the consecutive
     // rendered rows of the current hit; a trail fires only from exactly one.
     let mut hit_rows = 0usize;
-    for chunk_start in (0..line.data.len()).step_by(stride) {
+    for (idx, chunk_start) in (0..line.data.len()).step_by(stride).enumerate() {
         let row = &line.data[chunk_start..(chunk_start + stride).min(line.data.len())];
         let row_base = line.loc + chunk_start as u64;
         let row_end = row_base + row.len() as u64;
-        // Matches intersecting this row, strongest first — drives the gutter.
-        let mut row_notes: Vec<&Note> = notes
-            .iter()
-            .copied()
-            .filter(|n| n.off < row_end && row_base < n.off + u64::from(n.len.max(1)))
-            .collect();
-        row_notes.sort_by(|a, b| b.crit.cmp(&a.crit).then_with(|| a.off.cmp(&b.off)));
+        let row_notes = &row_notes_by_row[idx];
         let trail_here = row_notes.is_empty() && hit_rows == 1;
+        // A note-less row inside some hit's margin; only the full-context views
+        // draw these at all (litmus shows hit rows only).
+        let margin_here = full_context && row_notes.is_empty() && (!trim || margin_keep[idx]);
         if row_notes.is_empty() {
             hit_rows = 0;
         } else if opts
@@ -2775,8 +2835,9 @@ fn render_hex_unit(
         }
         // Without surrounding context (litmus), emit only rows that carry a
         // match — full rows, just none of the padding rows around them — plus
-        // the single trailing row a one-row focused hit earned.
-        if !full_context && row_notes.is_empty() && !trail_here {
+        // the single trailing row a one-row focused hit earned. With it, the
+        // margin rows around each hit (the terminal view: nothing further).
+        if row_notes.is_empty() && !trail_here && !margin_here {
             continue;
         }
         // A short trailing row (the leftover tail of the captured context) is a
@@ -3133,15 +3194,15 @@ fn render_suppressions(out: &mut String, file: &FileAnalysis, opts: &TinyOpts, c
     /// Legs shown per suppression.
     const MAX_LEGS: usize = 3;
 
+    if !has_shown_suppressions(file, opts) {
+        return;
+    }
     let shown: Vec<&crate::types::Suppression> = file
         .suppressions
         .iter()
         .filter(|s| s.crit >= opts.min_crit)
         .take(MAX_SHOWN)
         .collect();
-    if shown.is_empty() {
-        return;
-    }
 
     let rich = matches!(opts.header, HeaderStyle::Rich);
     // Offsets in the same base the file's own rows carry, so a leg's bytes are
@@ -4330,6 +4391,46 @@ mod tests {
             color: false,
             ..TinyOpts::terminal()
         }
+    }
+
+    /// The terminal view draws a match's own rows plus one row either side —
+    /// two for a hostile hit — however many bytes capture reserved around it.
+    /// A criticality-sized window (up to 128/256 bytes) rendered whole turned a
+    /// single finding into a twenty-row block.
+    #[test]
+    fn terminal_hex_window_keeps_one_margin_row_two_when_hostile() {
+        let opts = TinyOpts {
+            color: false,
+            ..TinyOpts::terminal()
+        };
+        let rows = |crit: Criticality| {
+            let finding = Finding {
+                precomputed_spans: None,
+                src: None,
+                kind: FindingKind::Capability,
+                trait_refs: vec![],
+                id: "a/hit".to_string().into(),
+                desc: "a/hit desc".into(),
+                conf: 0.9,
+                crit,
+                mbc: None,
+                attack: None,
+                evidence: vec![],
+                match_count: 0,
+                source_file: None,
+            };
+            // 160 bytes of captured window; the match is four bytes in the middle.
+            let unit = byte_unit(0, &[0x41; 160], vec![ctx_note("a/hit", crit, 80)]);
+            let report = report_with_files(vec![bin_file(1, 50, vec![finding], vec![unit])]);
+            format_context(&report, &opts)
+                .lines()
+                .filter(|l| l.starts_with(|c: char| c.is_ascii_hexdigit()))
+                .count()
+        };
+        // One hit row (a 4-byte match cannot straddle more than two) plus its
+        // margin: 1 either side for notable, 2 for hostile.
+        assert_eq!(rows(Criticality::Notable), 3);
+        assert_eq!(rows(Criticality::Hostile), 5);
     }
 
     #[test]

@@ -143,6 +143,10 @@ fn report_with_only_suppressions(
 /// `findings`, so a file whose detections were *all* withheld rendered as
 /// nothing at all — the one case where the reader most needs to be told, and
 /// the one where silence is most convincingly mistaken for a clean file.
+///
+/// cleave's own terminal view is the exception: a human reading a verdict is
+/// spending screen height, and the withheld block routinely ran longer than the
+/// findings above it. The machine views — which this payload is — keep it.
 #[test]
 fn a_file_with_only_suppressions_still_reaches_the_payload() {
     use cleave::output::TinyOpts;
@@ -158,20 +162,21 @@ fn a_file_with_only_suppressions_still_reaches_the_payload() {
         }],
     }]);
 
-    for (name, opts) in [
-        ("tiny", TinyOpts::tiny()),
-        ("terminal", TinyOpts::terminal()),
-    ] {
-        let rendered = cleave::output::format_context(&report, &opts);
-        assert!(
-            rendered.contains("objectives/exfiltration/messaging/webhook::generic-webhook-url"),
-            "{name} view dropped a file whose only content was a suppression; got:\n{rendered}",
-        );
-        assert!(
-            rendered.contains("metadata/package/testing/harness/runtime::is-test"),
-            "{name} view lost the leg that did the withholding; got:\n{rendered}",
-        );
-    }
+    let rendered = cleave::output::format_context(&report, &TinyOpts::tiny());
+    assert!(
+        rendered.contains("objectives/exfiltration/messaging/webhook::generic-webhook-url"),
+        "tiny view dropped a file whose only content was a suppression; got:\n{rendered}",
+    );
+    assert!(
+        rendered.contains("metadata/package/testing/harness/runtime::is-test"),
+        "tiny view lost the leg that did the withholding; got:\n{rendered}",
+    );
+
+    let terminal = cleave::output::format_context(&report, &TinyOpts::terminal());
+    assert!(
+        !terminal.contains("withheld"),
+        "the terminal view must not spend height on withheld traits; got:\n{terminal}",
+    );
 }
 
 /// A suppression is never silently trimmed: past the per-file cap the payload

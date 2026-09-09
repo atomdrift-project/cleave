@@ -671,6 +671,8 @@ impl From<filefacts::FileType> for FileType {
             Ff::GoSum => Self::GoSum,
             // Documents / media
             Ff::Plist => Self::Plist,
+            Ff::Pbxproj => Self::Pbxproj,
+            Ff::Cmake => Self::Cmake,
             Ff::Rtf => Self::Rtf,
             Ff::OleDoc => Self::OleDoc,
             Ff::Msi => Self::Msi,
@@ -1017,6 +1019,34 @@ pub(crate) fn default_file_types() -> Vec<FileType> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every filefacts type a rule can name must convert to its rule-engine
+    /// counterpart. A missing arm here falls through to `Unknown`, and the
+    /// engine then skips every trait whose `for:` names that type -- silently,
+    /// with the file still reported under its correct detected type, so the
+    /// rules simply never fire and nothing says why.
+    ///
+    /// `pbxproj` and `cmake` were added to the enum, to `from_str`, and to the
+    /// `build` group without this arm, which cost an afternoon: `cleave
+    /// test-rules` reported "Detected file type: Pbxproj" on the line above
+    /// "file is Unknown".
+    #[test]
+    fn build_file_types_convert_from_filefacts() {
+        use filefacts::FileType as Ff;
+        for (ff, expected) in [
+            (Ff::Pbxproj, FileType::Pbxproj),
+            (Ff::Cmake, FileType::Cmake),
+            (Ff::Makefile, FileType::Makefile),
+            (Ff::Dockerfile, FileType::Dockerfile),
+            (Ff::Plist, FileType::Plist),
+        ] {
+            assert_eq!(
+                FileType::from(ff),
+                expected,
+                "{ff:?} must not fall through to Unknown"
+            );
+        }
+    }
 
     /// Every Office extension filefacts recognises has to route to a rule
     /// file type, or the rules written for that format never reach the file.

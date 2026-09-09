@@ -451,6 +451,10 @@ pub(crate) enum FileType {
     Registry,
     /// Apple Property List (.plist)
     Plist,
+    /// Xcode project file (project.pbxproj)
+    Pbxproj,
+    /// CMake build script (CMakeLists.txt, *.cmake)
+    Cmake,
     /// Rich Text Format (.rtf)
     Rtf,
     /// Legacy Microsoft Office document (OLE2/CFBF: .doc, .xls, .ppt, .msg)
@@ -938,6 +942,8 @@ impl FileType {
             "pickle" | "pkl" => FileType::Pickle,
             // Additional formats
             "plist" => FileType::Plist,
+            "pbxproj" | "xcodeproj" => FileType::Pbxproj,
+            "cmake" | "cmakelists" => FileType::Cmake,
             "pkginfo" | "pkg-info" | "pkg_info" => FileType::PkgInfo,
             "rtf" => FileType::Rtf,
             // Every legacy Office extension filefacts recognises. The

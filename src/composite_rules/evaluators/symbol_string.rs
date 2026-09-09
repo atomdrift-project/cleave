@@ -2391,6 +2391,16 @@ pub(crate) fn eval_encoded<'a>(
         }
 
         let mut matches = false;
+        // The span a `regex:`/`word:` matcher actually hit. `is:` validates
+        // this rather than the whole decoded string, matching how the `text`
+        // evaluator treats a regex match: a whole-string validator such as
+        // `random_like` judges the most letter-dense token it can find, so
+        // handing it the entire line lets unrelated text outvote the span the
+        // rule selected (`--connect-timeout` outscoring a DGA hostname in the
+        // same `curl` command). Falls back to the whole value when the match
+        // came from `exact:`/`substr:`, where the span is the value or a
+        // caller-supplied literal and there is nothing to narrow to.
+        let mut matched_span: Option<&str> = None;
 
         // Check exact match (full string equality)
         if let Some(exact_str) = exact {
@@ -2414,8 +2424,12 @@ pub(crate) fn eval_encoded<'a>(
         }
 
         // Check regex or word match
-        if !matches && let Some(ref re) = regex_matcher {
-            matches = re.is_match(&string_info.value);
+        if !matches
+            && let Some(ref re) = regex_matcher
+            && let Some(m) = re.find(&string_info.value)
+        {
+            matches = true;
+            matched_span = Some(m.as_str());
         }
 
         if matches {
@@ -2424,7 +2438,8 @@ pub(crate) fn eval_encoded<'a>(
                 .map(|exceptions| exceptions.iter().any(|exc| exc.matches(&string_info.value)))
                 .unwrap_or(false);
             // Apply validator: filter
-            let excluded_by_is = !validate_match(&string_info.value, is_check);
+            let excluded_by_is =
+                !validate_match(matched_span.unwrap_or(string_info.value.as_str()), is_check);
 
             if !excluded_by_not && !excluded_by_is {
                 match_count += 1;

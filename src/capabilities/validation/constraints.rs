@@ -1640,6 +1640,14 @@ pub(crate) fn find_excessive_file_types(
         FileType::Lnk,
         FileType::Dockerfile,
     ];
+    // Executable build logic, as opposed to the declarative metadata in
+    // `manifests`. Overlaps it on Dockerfile, which is both.
+    let build: &[FileType] = &[
+        FileType::Makefile,
+        FileType::Cmake,
+        FileType::Pbxproj,
+        FileType::Dockerfile,
+    ];
     let documents: &[FileType] = &[
         FileType::Pdf,
         FileType::Rtf,
@@ -1672,6 +1680,7 @@ pub(crate) fn find_excessive_file_types(
         (scripts, "scripts"),
         (source, "source"),
         (manifests, "manifests"),
+        (build, "build"),
         (documents, "documents"),
         (images, "images"),
         (data, "data"),

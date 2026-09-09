@@ -416,6 +416,7 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                     | "scripts"
                     | "source"
                     | "manifests"
+                    | "build"
                     | "documents"
                     | "images"
                     | "media"
@@ -499,6 +500,20 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                     RuleFileType::Registry,
                     RuleFileType::Plist,
                     RuleFileType::Lnk,
+                    RuleFileType::Dockerfile,
+                ],
+                // Build definitions: executable build logic, as opposed to the
+                // declarative metadata in `manifests`. A Makefile recipe, a
+                // Dockerfile `RUN`, a CMake `execute_process`, and an Xcode
+                // build phase all run commands on the machine that builds the
+                // project, which is what a supply-chain rule needs to name.
+                // Overlaps `manifests` on Dockerfile deliberately -- it is both
+                // an image manifest and a script -- so existing rules that
+                // reach it through `manifests` keep working.
+                "build" => vec![
+                    RuleFileType::Makefile,
+                    RuleFileType::Cmake,
+                    RuleFileType::Pbxproj,
                     RuleFileType::Dockerfile,
                 ],
                 "documents" => vec![
@@ -589,6 +604,8 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 "pickle" | "pkl" => vec![RuleFileType::Pickle],
                 // Other formats
                 "plist" => vec![RuleFileType::Plist],
+                "pbxproj" | "xcodeproj" => vec![RuleFileType::Pbxproj],
+                "cmake" | "cmakelists" => vec![RuleFileType::Cmake],
                 "pkginfo" => vec![RuleFileType::PkgInfo],
                 "rtf" => vec![RuleFileType::Rtf],
                 "lnk" => vec![RuleFileType::Lnk],
@@ -785,6 +802,7 @@ pub(crate) fn resolve_platform_filetype_conflicts(
                 | RuleFileType::Swift
                 | RuleFileType::ObjectiveC
                 | RuleFileType::Plist
+                | RuleFileType::Pbxproj
                 | RuleFileType::Ipa => has_darwin,
                 // Perl is a unix/linux scripting language, not a macOS-native concern
                 RuleFileType::Perl => has_unix,
@@ -830,6 +848,7 @@ pub(crate) fn resolve_platform_filetype_conflicts(
                 | RuleFileType::Swift
                 | RuleFileType::ObjectiveC
                 | RuleFileType::Plist
+                | RuleFileType::Pbxproj
                 | RuleFileType::Ipa => (has_darwin, "macos, ios, or unix"),
                 RuleFileType::Perl => (has_unix, "linux or unix"),
                 RuleFileType::Python

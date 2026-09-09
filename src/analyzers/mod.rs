@@ -175,6 +175,8 @@ pub fn analyzer_for_file_type(
         | FileType::PackageLockJson
         | FileType::Json
         | FileType::Plist
+        | FileType::Pbxproj
+        | FileType::Cmake
         | FileType::SystemdService
         | FileType::DesktopEntry
         | FileType::Xml
@@ -302,6 +304,8 @@ pub(crate) fn analyzer_for_file_type_arc(
         | FileType::PackageLockJson
         | FileType::Json
         | FileType::Plist
+        | FileType::Pbxproj
+        | FileType::Cmake
         | FileType::SystemdService
         | FileType::DesktopEntry
         | FileType::Xml
@@ -728,6 +732,8 @@ impl FileTypeExt for FileType {
             FileType::Flatpak => vec!["flatpak", "archive"],
             FileType::AppleScript => vec!["scpt", "applescript"],
             FileType::Plist => vec!["plist", "xml", "apple"],
+            FileType::Pbxproj => vec!["pbxproj", "xcodeproj", "plist", "apple"],
+            FileType::Cmake => vec!["cmake", "cmakelists", "build"],
             FileType::Rtf => vec!["rtf", "doc"],
             FileType::OleDoc => vec!["doc", "xls", "ppt", "ole", "msg"],
             FileType::Msi => vec!["msi", "msp", "mst", "msm", "ole"],

@@ -418,6 +418,15 @@ pub(crate) fn detect_format(path: &Path, content: &[u8]) -> StructuredFormat {
         if name_lower.ends_with(".plist") {
             return StructuredFormat::Plist;
         }
+
+        // Xcode project files are OpenStep-style plists, which the plist
+        // parser reads alongside the XML and binary dialects. Routing them
+        // here is what lets a rule address build settings and build-phase
+        // scripts by path (`objects[*].shellScript`) instead of scraping the
+        // whole file as text.
+        if name_lower.ends_with(".pbxproj") {
+            return StructuredFormat::Plist;
+        }
     }
 
     // Limited content sniffing for special cases only
@@ -425,6 +434,13 @@ pub(crate) fn detect_format(path: &Path, content: &[u8]) -> StructuredFormat {
 
     // Check for Binary Plist (binary format)
     if content.starts_with(b"bplist") {
+        return StructuredFormat::Plist;
+    }
+
+    // OpenStep plist written by Xcode. The header comment is the format's only
+    // signature, and it is what identifies a `project.pbxproj` copied out of
+    // its `.xcodeproj` bundle under another name.
+    if content.starts_with(b"// !$*UTF8*$!") {
         return StructuredFormat::Plist;
     }
 

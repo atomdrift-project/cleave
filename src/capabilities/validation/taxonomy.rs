@@ -2322,6 +2322,14 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     // plist ProgramArguments, systemd ExecStart, etc.
     "text:objectives/command-and-control/dropper/delivery/download-execute/",
     "text:objectives/command-and-control/dropper/delivery/hidden-stage/",
+    // The decoded form of the same dropper one-liner. These match the *decoded*
+    // string corpus, so the host language is whatever happened to carry the
+    // blob: the identical payload has been observed in a Gradle Kotlin task, an
+    // Xcode build setting, a Makefile recipe, `build.rs`, and `setup.py`. The
+    // encoding is what travels between build systems, so narrowing `for:` here
+    // drops whole ecosystems rather than trimming a matcher — the file type is
+    // not a property of the technique.
+    "encoded:micro-behaviors/communications/http/download/encoded/",
     // Hardcoded C2 URL string literals (IP-pinned URLs, .php panel endpoints)
     // appear in any source language — same rationale as communications/url/.
     // The directory's -encoded and -binary legs are already narrowly scoped.

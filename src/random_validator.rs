@@ -119,44 +119,81 @@ fn index_of(b: u8) -> Option<usize> {
     }
 }
 
-/// Longest consecutive run of ASCII letters in `s`.
+/// Whether `b` continues the current token.
 ///
-/// A matched span is rarely just the identifier: a DGA hit arrives as
-/// `kqjxwvbnmz.com`, and scoring the whole span would average the random
-/// label against the very ordinary `com`. Taking the longest run picks the
-/// label out on its own.
-fn longest_letter_run(s: &str) -> &str {
-    let bytes = s.as_bytes();
-    let (mut best_start, mut best_len) = (0usize, 0usize);
-    let (mut start, mut len) = (0usize, 0usize);
-    for (i, &b) in bytes.iter().enumerate() {
-        if index_of(b).is_some() {
-            if len == 0 {
-                start = i;
-            }
-            len += 1;
-            if len > best_len {
-                best_start = start;
-                best_len = len;
-            }
-        } else {
-            len = 0;
-        }
-    }
-    &s[best_start..best_start + best_len]
+/// Letters, digits and `-` are *inside* a name; everything else (`.`, `/`,
+/// `:`, quotes, whitespace) ends it. The distinction is what separates the two
+/// jobs below: a dot is a real boundary, a digit is not.
+fn is_token_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'-'
 }
 
-/// Mean log10 transition probability of the longest letter run in `s`.
+/// The token in `s` carrying the most letters.
 ///
-/// Returns `None` when that run is shorter than [`MIN_LEN`]. Higher is more
-/// word-like; scores run from roughly -0.8 (ordinary English) to -3.0.
+/// A matched span is rarely just the identifier: a DGA hit arrives as
+/// `kqjxwvbnmz.com`, and scoring the whole span would average the random label
+/// against the very ordinary `com`. Splitting on non-token bytes picks the
+/// label out on its own.
+///
+/// Digits and dashes stay *within* the token rather than ending it, because a
+/// generated name is routinely spelled with them interspersed —
+/// `ejntin6hkjt7gj2`, `qdgs232i-q`. Treating them as boundaries scored only the
+/// longest uninterrupted letter run, which reads far more word-like than the
+/// whole name does: `ejntin6hkjt7gj2` was judged on `ejntin` alone and passed
+/// as ordinary, and `qdgs232i-q` had no run long enough to judge at all. The
+/// letters are gathered across them instead, so the name is scored as the one
+/// string it is. Selection is by letter count, not byte length, since only
+/// letters carry a bigram score.
+fn longest_token(s: &str) -> &str {
+    let bytes = s.as_bytes();
+    let (mut best_start, mut best_end, mut best_letters) = (0usize, 0usize, 0usize);
+    let (mut start, mut letters) = (0usize, 0usize);
+    let mut in_token = false;
+    for (i, &b) in bytes.iter().enumerate() {
+        if is_token_byte(b) {
+            if !in_token {
+                start = i;
+                letters = 0;
+                in_token = true;
+            }
+            if index_of(b).is_some() {
+                letters += 1;
+            }
+            if letters > best_letters {
+                best_letters = letters;
+                best_start = start;
+                best_end = i + 1;
+            }
+        } else if in_token {
+            in_token = false;
+        }
+    }
+    // Extend the winning token to its full extent; the loop closed it at the
+    // last *letter*, so a trailing `2` in `…gj2` would otherwise be dropped.
+    // Guarded on having found a letter at all, so an all-digit input has no
+    // winning token to extend and stays empty rather than returning itself.
+    if best_letters > 0 {
+        while best_end < bytes.len() && is_token_byte(bytes[best_end]) {
+            best_end += 1;
+        }
+    }
+    &s[best_start..best_end]
+}
+
+/// Mean log10 transition probability of the most letter-dense token in `s`.
+///
+/// Returns `None` when that token carries fewer than [`MIN_LEN`] letters.
+/// Higher is more word-like; scores run from roughly -0.8 (ordinary English)
+/// to -3.0. Digits and dashes within the token are skipped rather than scored:
+/// the bigram table is over letters, and a name's letters carry its shape
+/// whether or not digits were sprinkled through them.
 #[must_use]
 pub fn random_score(s: &str) -> Option<f64> {
-    let run = longest_letter_run(s);
-    if run.len() < MIN_LEN {
+    let run = longest_token(s);
+    let idx: Vec<usize> = run.bytes().filter_map(index_of).collect();
+    if idx.len() < MIN_LEN {
         return None;
     }
-    let idx: Vec<usize> = run.bytes().filter_map(index_of).collect();
     let mut sum = 0.0f64;
     let mut prev = START;
     for &i in &idx {
@@ -339,13 +376,28 @@ mod tests {
     }
 
     #[test]
-    fn scores_the_longest_letter_run() {
+    fn scores_the_most_letter_dense_token() {
         // A DGA hit arrives with its TLD attached; averaging the random label
-        // against `com` would pull it back over the threshold.
-        assert_eq!(longest_letter_run("kqjxwvbnmz.com"), "kqjxwvbnmz");
-        assert_eq!(longest_letter_run("a-longestrun-b"), "longestrun");
-        assert_eq!(longest_letter_run("12345"), "");
+        // against `com` would pull it back over the threshold, so the dot is a
+        // real boundary.
+        assert_eq!(longest_token("kqjxwvbnmz.com"), "kqjxwvbnmz");
+        assert_eq!(longest_token("12345"), "");
         assert!(is_random_like("kqjxwvbnmz.com"));
+
+        // Digits and dashes stay inside the token: a generated name spelled
+        // with them interspersed is scored whole, not as its longest
+        // uninterrupted letter run. `a-longestrun-b` is therefore one token,
+        // and both DGA hostnames below are judged on all their letters --
+        // scoring only `ejntin` or `qdgs` let them read as ordinary words.
+        assert_eq!(longest_token("a-longestrun-b"), "a-longestrun-b");
+        assert_eq!(longest_token("5yotmxcc54l9xda.ru"), "5yotmxcc54l9xda");
+        assert!(is_random_like("ejntin6hkjt7gj2"));
+        assert!(is_random_like("qdgs232i-q"));
+
+        // Real names that carry digits must not be swept up by that change.
+        assert!(!is_random_like("s3-us-west-2"));
+        assert!(!is_random_like("log4j2"));
+        assert!(!is_random_like("oauth2-proxy"));
     }
 
     #[test]

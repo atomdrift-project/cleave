@@ -158,7 +158,10 @@ test: ## Run all tests (unit + integration)
 	@# Phase 1: the ~200 pure integration tests share ONE libtest process (one
 	@# capability-mapper build instead of one-per-test), ~20s vs ~10min.
 	@echo "Phase 1: shared-process integration tests (cargo test)..."
-	@cargo test --test it -- $(IT_SKIP)
+	@# --test-threads=48: many of these tests WAIT on spawned cleave subprocesses,
+	@# so threads > cores overlaps that waiting instead of idling test slots.
+	@# Measured: 26.5s at the default (16) vs 19.5s at 48 on a 16-core machine.
+	@cargo test --test it -- $(IT_SKIP) --test-threads=48
 	@echo ""
 	@# Phase 2: lib + workspace tests AND the global-state integration modules,
 	@# each isolated in its own process by nextest. The filter runs everything

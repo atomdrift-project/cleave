@@ -154,7 +154,7 @@ jobs:
           chmod +x compat/cleave
 
       - name: Smoke test on openEuler
-        uses: vmactions/openeuler-vm@b8191b00fdc7bf7703d1404062bfde47aa805c1f # v1.0.1
+        uses: vmactions/openeuler-vm@5a34950c59ffac4a8e69b22c208b02fa64236b90 # v1.0.2
         with:
           release: "25.09"
           usesh: true

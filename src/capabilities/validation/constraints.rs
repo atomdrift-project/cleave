@@ -1558,6 +1558,139 @@ pub(crate) fn find_none_only_with_proximity(composite_rules: &[CompositeTrait]) 
         .map(|rule| rule.id.clone())
         .collect()
 }
+/// The named file-type groups rules may target, and the only place they are
+/// defined for validation purposes.
+///
+/// **Every file type appears in exactly one group.** Group membership is how
+/// `for:` breadth is judged, and a type in two groups makes the judgement
+/// ambiguous: while Dockerfile sat in both `manifests` and `build`, naming
+/// either complete group read as a hand-written enumeration because the set
+/// "touched" the other group through that one shared type. The invariant is
+/// enforced by `named_groups_are_disjoint`.
+const BINARIES: &[FileType] = &[
+    FileType::Elf,
+    FileType::Macho,
+    FileType::Pe,
+    FileType::Class,
+    FileType::Pyc,
+    FileType::Beam,
+    FileType::Wasm,
+    FileType::Dex,
+    FileType::StaticLib,
+];
+const SCRIPTS: &[FileType] = &[
+    FileType::Shell,
+    FileType::Batch,
+    FileType::Jcl,
+    FileType::Python,
+    FileType::JavaScript,
+    FileType::Ruby,
+    FileType::Php,
+    FileType::Perl,
+    FileType::Lua,
+    FileType::PowerShell,
+    FileType::AppleScript,
+    FileType::Vbs,
+];
+const SOURCE: &[FileType] = &[
+    FileType::TypeScript,
+    FileType::Rust,
+    FileType::Java,
+    FileType::C,
+    FileType::Cpp,
+    FileType::Go,
+    FileType::CSharp,
+    FileType::Swift,
+    FileType::ObjectiveC,
+    FileType::Groovy,
+    FileType::Kotlin,
+    FileType::Scala,
+    FileType::Zig,
+    FileType::Elixir,
+];
+const MANIFESTS: &[FileType] = &[
+    FileType::PackageJson,
+    FileType::PackageLockJson,
+    FileType::GoMod,
+    FileType::Json,
+    FileType::ChromeManifest,
+    FileType::CargoToml,
+    FileType::PyProjectToml,
+    FileType::GithubActions,
+    FileType::SystemdService,
+    FileType::DesktopEntry,
+    FileType::Xml,
+    FileType::ComposerJson,
+    FileType::PkgInfo,
+    FileType::Plist,
+    FileType::Lnk,
+];
+// Executable build logic, as opposed to the declarative metadata in
+// `manifests`. Overlaps it on Dockerfile, which is both.
+const BUILD: &[FileType] = &[
+    FileType::Makefile,
+    FileType::Cmake,
+    FileType::Pbxproj,
+    FileType::Dockerfile,
+];
+const DOCUMENTS: &[FileType] = &[
+    FileType::Pdf,
+    FileType::Rtf,
+    FileType::Html,
+    FileType::Text,
+    FileType::OleDoc,
+    FileType::Ooxml,
+];
+// `Text` lives in `documents` alongside the other readable formats; it was in
+// both groups, which the one-group-per-type invariant forbids. These tables
+// only decide whether a `for:` list reads as named groups — expansion happens
+// in capabilities/parsing.rs — so moving it changes no rule's matching.
+const DATA: &[FileType] = &[FileType::Ipa, FileType::Data];
+const ARCHIVES: &[FileType] = &[
+    FileType::Archive,
+    FileType::Zip,
+    FileType::Apk,
+    FileType::Jar,
+    FileType::Tar,
+    FileType::Npm,
+    FileType::Nupkg,
+    FileType::Gem,
+    FileType::Whl,
+    FileType::Deb,
+    FileType::Rpm,
+    FileType::Crx,
+    FileType::Cab,
+    FileType::VsixArchive,
+    FileType::Xpi,
+];
+// Every passive container that can carry a payload — fonts, raster and
+// vector images, audio, video. They share one `media.*` fact namespace
+// precisely so a carrier rule is written once rather than a dozen times.
+const MEDIA: &[FileType] = &[
+    FileType::Font,
+    FileType::Png,
+    FileType::Jpeg,
+    FileType::Svg,
+    FileType::Wav,
+    FileType::Aiff,
+    FileType::Mp3,
+    FileType::Mp4,
+    FileType::Ico,
+    FileType::Gif,
+    FileType::Bmp,
+    FileType::Webp,
+];
+pub(crate) const ALL_GROUPS: &[(&[FileType], &str)] = &[
+    (MEDIA, "media"),
+    (BINARIES, "binaries"),
+    (SCRIPTS, "scripts"),
+    (SOURCE, "source"),
+    (MANIFESTS, "manifests"),
+    (BUILD, "build"),
+    (DOCUMENTS, "documents"),
+    (DATA, "data"),
+    (ARCHIVES, "archives"),
+];
 
 /// Find traits and composite rules with 9 or more explicit file types in their `for:` field.
 ///
@@ -1581,138 +1714,34 @@ pub(crate) fn find_excessive_file_types(
 ) -> Vec<(String, usize, &'static str, bool)> {
     const MIN_FOR_WARNING: usize = 9;
 
-    let binaries: &[FileType] = &[
-        FileType::Elf,
-        FileType::Macho,
-        FileType::Pe,
-        FileType::Class,
-        FileType::Pyc,
-        FileType::Beam,
-        FileType::Wasm,
-        FileType::Dex,
-        FileType::StaticLib,
-    ];
-    let scripts: &[FileType] = &[
-        FileType::Shell,
-        FileType::Batch,
-        FileType::Jcl,
-        FileType::Python,
-        FileType::JavaScript,
-        FileType::Ruby,
-        FileType::Php,
-        FileType::Perl,
-        FileType::Lua,
-        FileType::PowerShell,
-        FileType::AppleScript,
-        FileType::Vbs,
-    ];
-    let source: &[FileType] = &[
-        FileType::TypeScript,
-        FileType::Rust,
-        FileType::Java,
-        FileType::C,
-        FileType::Cpp,
-        FileType::Go,
-        FileType::CSharp,
-        FileType::Swift,
-        FileType::ObjectiveC,
-        FileType::Groovy,
-        FileType::Kotlin,
-        FileType::Scala,
-        FileType::Zig,
-        FileType::Elixir,
-    ];
-    let manifests: &[FileType] = &[
-        FileType::PackageJson,
-        FileType::PackageLockJson,
-        FileType::GoMod,
-        FileType::Json,
-        FileType::ChromeManifest,
-        FileType::CargoToml,
-        FileType::PyProjectToml,
-        FileType::GithubActions,
-        FileType::SystemdService,
-        FileType::DesktopEntry,
-        FileType::Xml,
-        FileType::ComposerJson,
-        FileType::PkgInfo,
-        FileType::Plist,
-        FileType::Lnk,
-        FileType::Dockerfile,
-    ];
-    // Executable build logic, as opposed to the declarative metadata in
-    // `manifests`. Overlaps it on Dockerfile, which is both.
-    let build: &[FileType] = &[
-        FileType::Makefile,
-        FileType::Cmake,
-        FileType::Pbxproj,
-        FileType::Dockerfile,
-    ];
-    let documents: &[FileType] = &[
-        FileType::Pdf,
-        FileType::Rtf,
-        FileType::Html,
-        FileType::Text,
-        FileType::OleDoc,
-        FileType::Ooxml,
-    ];
-    let images: &[FileType] = &[FileType::Jpeg, FileType::Png];
-    let data: &[FileType] = &[FileType::Ipa, FileType::Text, FileType::Data];
-    let archives: &[FileType] = &[
-        FileType::Archive,
-        FileType::Zip,
-        FileType::Apk,
-        FileType::Jar,
-        FileType::Tar,
-        FileType::Npm,
-        FileType::Nupkg,
-        FileType::Gem,
-        FileType::Whl,
-        FileType::Deb,
-        FileType::Rpm,
-        FileType::Crx,
-        FileType::Cab,
-        FileType::VsixArchive,
-        FileType::Xpi,
-    ];
-    let all_groups: &[(&[FileType], &str)] = &[
-        (binaries, "binaries"),
-        (scripts, "scripts"),
-        (source, "source"),
-        (manifests, "manifests"),
-        (build, "build"),
-        (documents, "documents"),
-        (images, "images"),
-        (data, "data"),
-        (archives, "archives"),
-    ];
+    let all_groups = ALL_GROUPS;
 
-    // Returns true if `types` is an exact union of complete named groups.
-    // Each group must be either fully included or fully excluded — partial
-    // groups are not expressible and should be flagged.
+    // Returns true if `types` is a union of complete named groups.
+    //
+    // A type set is expressible when every type in it is covered by at least
+    // one group that lies *entirely* inside the set. The earlier form asked
+    // the opposite question — that every group the set *touches* be complete —
+    // which is wrong as soon as one file type belongs to two groups. Dockerfile
+    // is in both `manifests` and `build`, so `for: [manifests]` "touched"
+    // `build` through that single shared type and was reported as an
+    // unexpressible enumeration despite being exactly one named group; the same
+    // happened to `for: [carriers]`, which shares Xml with `manifests`.
+    // Asking what covers the set makes overlapping groups work: a shared type
+    // is satisfied by whichever group is fully present.
     let is_group_expressible = |types: &[FileType]| -> bool {
-        let type_set: std::collections::HashSet<_> = types.iter().collect();
-        // Every type must belong to some group
-        if !type_set
+        let type_set: std::collections::HashSet<&FileType> = types.iter().collect();
+        let covered: std::collections::HashSet<&FileType> = all_groups
             .iter()
-            .all(|ft| all_groups.iter().any(|(group, _)| group.contains(ft)))
-        {
-            return false;
-        }
-        // Each touched group must be completely included (no partial groups)
-        for (group, _) in all_groups {
-            let overlap = group.iter().filter(|ft| type_set.contains(ft)).count();
-            if overlap > 0 && overlap != group.len() {
-                return false;
-            }
-        }
-        true
+            .filter(|(group, _)| group.iter().all(|ft| type_set.contains(ft)))
+            .flat_map(|(group, _)| group.iter())
+            .collect();
+        type_set.iter().all(|ft| covered.contains(*ft))
     };
 
     // Only called when is_group_expressible returned false — suggest combining
     // named groups rather than listing every type (or the rejected `for: [all]`).
     let suggest = |_types: &[FileType]| -> &'static str {
-        "combine named groups (binaries, scripts, source, manifests, documents, media, data, archives)"
+        "combine named groups (binaries, scripts, source, manifests, build, documents, media, data, archives)"
     };
 
     let mut violations = Vec::new();

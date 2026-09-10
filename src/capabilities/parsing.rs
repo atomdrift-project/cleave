@@ -526,7 +526,38 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                     RuleFileType::Ooxml,
                     RuleFileType::Odf,
                 ],
-                "images" | "media" => vec![RuleFileType::Jpeg, RuleFileType::Png],
+                // Every passive container a package copies verbatim and no
+                // reviewer opens: fonts, raster and vector images, audio and
+                // video. One group, so a carrier rule is written once rather
+                // than a dozen times, and every file type belongs to exactly
+                // one group in the validator's table.
+                "media" | "carriers" => vec![
+                    RuleFileType::Font,
+                    RuleFileType::Png,
+                    RuleFileType::Jpeg,
+                    RuleFileType::Svg,
+                    RuleFileType::Wav,
+                    RuleFileType::Aiff,
+                    RuleFileType::Mp3,
+                    RuleFileType::Mp4,
+                    RuleFileType::Ico,
+                    RuleFileType::Gif,
+                    RuleFileType::Bmp,
+                    RuleFileType::Webp,
+                ],
+                // Convenience subsets, not groups: a rule naming one of these
+                // is writing a short explicit list, which is what the
+                // group-expressibility check will treat it as.
+                "images" => vec![
+                    RuleFileType::Jpeg,
+                    RuleFileType::Png,
+                    RuleFileType::Ico,
+                    RuleFileType::Gif,
+                    RuleFileType::Bmp,
+                    RuleFileType::Webp,
+                ],
+                "fonts" => vec![RuleFileType::Font],
+                "audio" => vec![RuleFileType::Wav, RuleFileType::Aiff, RuleFileType::Mp3],
                 "ipa" => vec![RuleFileType::Ipa],
                 "archives" => RuleFileType::archive_family_types().to_vec(),
                 "unknown" => vec![RuleFileType::Unknown],
@@ -594,12 +625,27 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 "desktop-entry" | "desktop_entry" | "desktop" | ".desktop" | "xdg-desktop" => {
                     vec![RuleFileType::DesktopEntry]
                 }
-                "xml" | "csproj" | "msbuild" | "xaml" | "svg" | "xml-document" => {
+                "xml" | "csproj" | "msbuild" | "xaml" | "xml-document" => {
                     vec![RuleFileType::Xml]
                 }
+                "svg" => vec![RuleFileType::Svg],
                 // Image formats
                 "jpeg" | "jpg" => vec![RuleFileType::Jpeg],
                 "png" => vec![RuleFileType::Png],
+                // Font containers
+                "font" | "ttf" | "otf" | "ttc" | "woff" | "woff2" | "eot" => {
+                    vec![RuleFileType::Font]
+                }
+                "wav" | "wave" => vec![RuleFileType::Wav],
+                "aiff" | "aif" | "aifc" => vec![RuleFileType::Aiff],
+                "mp3" => vec![RuleFileType::Mp3],
+                // `video` is an alias here rather than its own arm: it
+                // resolves to the one ISO base-media type.
+                "mp4" | "m4a" | "m4v" | "mov" | "video" => vec![RuleFileType::Mp4],
+                "ico" | "cur" | "favicon" => vec![RuleFileType::Ico],
+                "gif" => vec![RuleFileType::Gif],
+                "bmp" | "dib" => vec![RuleFileType::Bmp],
+                "webp" => vec![RuleFileType::Webp],
                 // Serialized data
                 "pickle" | "pkl" => vec![RuleFileType::Pickle],
                 // Other formats

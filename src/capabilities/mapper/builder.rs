@@ -48,6 +48,10 @@ impl super::CapabilityMapper {
             trait_id_map: std::collections::HashMap::new(),
             platforms: vec![Platform::All],
             slow_rule_ms: Self::DEFAULT_SLOW_RULE_MS,
+            // No traits loaded: a revision distinct from every real tree, so
+            // results produced with no rules can never be served to a run that
+            // has them.
+            traits_revision: 0,
         }
     }
 

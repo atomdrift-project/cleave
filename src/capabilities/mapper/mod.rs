@@ -197,6 +197,22 @@ pub struct CapabilityMapper {
     pub(super) platforms: Vec<Platform>,
     /// Warn threshold for slow rule evaluation in milliseconds (default: 4000)
     pub(super) slow_rule_ms: u64,
+    /// Fingerprint of the traits this mapper was built from, mixed with the
+    /// binary's identity — i.e. the analysis-cache revision under which every
+    /// result this mapper produces must be stored.
+    ///
+    /// Pinned at load rather than read from the process-global traits scan at
+    /// store time, because the two can disagree. `reload_capability_mapper`
+    /// (the `/reload` endpoint, scan's periodic renewal task) drops the
+    /// memoized fingerprint and installs a new mapper while analyses are still
+    /// in flight; a report evaluated against the *old* rules would then be
+    /// written under the *new* rules' fingerprint and served to later scans as
+    /// though the update had been applied to it. Carrying the revision on the
+    /// mapper makes "the rules used" and "the key stored under" the same fact.
+    ///
+    /// `0` means "no traits" — [`Self::empty`], including the
+    /// `CLEAVE_SKIP_TRAITS` mapper — which is distinct from any loaded tree.
+    pub(super) traits_revision: i64,
 }
 
 /// Every trait id the loaded rule set can reference through a
@@ -379,12 +395,17 @@ impl CapabilityMapper {
         self.trait_eval_flags.get_or_init(|| {
             use crate::composite_rules::{Condition, RawQuery, TextQuery};
             let indexes = self.match_indexes();
+            let proximity_refs = self.proximity_ref_index();
             self.trait_definitions
                 .iter()
                 .enumerate()
                 .map(|(idx, t)| {
                     let mut bits: u16 = 0;
-                    let counts_plain = t.count_min.unwrap_or(1) == 1
+                    let needs_locations = proximity_refs.possibly_referenced(&t.id);
+                    if needs_locations {
+                        bits |= flags::NEEDS_LOCATIONS;
+                    }
+                    let counts_plain = !needs_locations && t.count_min.unwrap_or(1) == 1
                         && t.count_max.is_none()
                         && t.per_kb_min.is_none()
                         && t.per_kb_max.is_none();
@@ -444,6 +465,39 @@ impl CapabilityMapper {
                 })
                 .collect()
         })
+    }
+
+    /// Find atomic producers whose evidence can reach a proximity constraint.
+    /// Follow positive references through aliases and intermediate composites;
+    /// directory refs are conservative, and cycles terminate at the fixed point.
+    fn proximity_ref_index(&self) -> TraitRefIndex {
+        let mut refs = std::collections::BTreeSet::new();
+        for rule in &self.composite_rules {
+            if rule.near_bytes.is_some() || rule.near_lines.is_some() {
+                for condition in rule.all.iter().flatten().chain(rule.any.iter().flatten()) {
+                    condition.collect_trait_refs(&mut refs);
+                }
+            }
+        }
+        loop {
+            let count = refs.len();
+            let index = TraitRefIndex::build(refs.clone());
+            for rule in &self.composite_rules {
+                if index.possibly_referenced(&rule.id) {
+                    for condition in rule.all.iter().flatten().chain(rule.any.iter().flatten()) {
+                        condition.collect_trait_refs(&mut refs);
+                    }
+                }
+            }
+            for atom in &self.trait_definitions {
+                if index.possibly_referenced(&atom.id) {
+                    atom.r#if.collect_trait_refs(&mut refs);
+                }
+            }
+            if refs.len() == count {
+                return index;
+            }
+        }
     }
 
     /// Atomic-trait work list for `(file_type, dependent_only)`: applicable
@@ -1153,4 +1207,84 @@ pub(super) mod flags {
     pub(super) const CONTENT_TEXT: u16 = 1 << 7;
     pub(super) const RAW_INDEXED: u16 = 1 << 8;
     pub(super) const NEEDS_COUNT: u16 = 1 << 9;
+    pub(super) const NEEDS_LOCATIONS: u16 = 1 << 10;
+}
+
+#[cfg(test)]
+mod proximity_offset_tests {
+    use super::*;
+    use crate::composite_rules::{Condition, EvaluationContext, TextQuery};
+    use crate::types::{AnalysisReport, TargetInfo};
+
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn raw_regex_proximity_uses_later_calls_in_mapper() {
+        let mut mapper = CapabilityMapper::empty();
+        for (id, pattern) in [
+            ("test::run", r"task\.(run|execute)\(\)"),
+            ("test::remote", r"remote\.install\(\)"),
+        ] {
+            mapper.trait_definitions.push(TraitDefinition {
+                id: id.into(),
+                desc: id.into(),
+                r#if: Condition::Text(TextQuery {
+                    regex: Some(pattern.into()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            });
+        }
+        mapper.composite_rules.push(CompositeTrait {
+            id: "test::cluster".into(),
+            all: Some(vec![
+                Condition::Trait {
+                    id: "test::run".into(),
+                },
+                Condition::Trait {
+                    id: "test::remote".into(),
+                },
+            ]),
+            near_bytes: Some(64),
+            ..Default::default()
+        });
+        for (suffix, expected) in [
+            ("remote.install(); task.run();", true),
+            ("remote.install(); task.execute();", true),
+            ("remote.install();", false),
+        ] {
+            let source = format!("{}{}{suffix}", "task.run();".repeat(40), " ".repeat(256));
+            let mut report = AnalysisReport::new(TargetInfo {
+                path: "bundle.js".into(),
+                file_type: "javascript".into(),
+                size_bytes: source.len() as u64,
+                sha256: String::new(),
+                architectures: None,
+            });
+            report.findings = mapper.evaluate_traits(&report, source.as_bytes());
+            let ctx = EvaluationContext::new(
+                &report,
+                source.as_bytes(),
+                RuleFileType::JavaScript,
+                &[Platform::All],
+                None,
+                None,
+            );
+            let matched = mapper.composite_rules[0].evaluate(&ctx);
+            assert_eq!(matched.is_some(), expected);
+            if let Some(finding) = matched {
+                for item in finding.evidence.iter().filter(|item| item.method == "raw") {
+                    assert_eq!(item.count, item.offsets.len());
+                    for offset in &item.offsets {
+                        let offset =
+                            usize::try_from(*offset).expect("test source offsets fit in usize");
+                        assert_eq!(
+                            &source.as_bytes()[offset..offset + item.value.len()],
+                            item.value.as_bytes(),
+                            "winning-window evidence must describe its actual match"
+                        );
+                    }
+                }
+            }
+        }
+    }
 }

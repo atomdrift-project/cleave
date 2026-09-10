@@ -2773,6 +2773,43 @@ mod tests {
     use ::tar;
     use ::zip;
 
+    #[test]
+    fn archive_manifest_retains_filefacts_identity_claims() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bundle.zip");
+        let manifest =
+            br#"{"name":"example-package","version":"1.2.3","author":"Example Publisher"}"#;
+        let mut zip = zip::ZipWriter::new(File::create(&path).unwrap());
+        zip.start_file(
+            "package/package.json",
+            zip::write::SimpleFileOptions::default(),
+        )
+        .unwrap();
+        zip.write_all(manifest).unwrap();
+        zip.finish().unwrap();
+        let report = ArchiveAnalyzer::new()
+            .with_capability_mapper(CapabilityMapper::empty())
+            .analyze(&path)
+            .unwrap();
+        let member = report
+            .files
+            .iter()
+            .find(|file| file.path.ends_with("package/package.json"))
+            .expect("manifest member");
+        let expected =
+            crate::analysis_context::AnalysisContext::open(Path::new("package.json"), manifest)
+                .unwrap()
+                .identity()
+                .expect("standalone manifest identity");
+        assert_eq!(expected.name.as_ref().unwrap().value, "example-package");
+        assert_eq!(expected.name.as_ref().unwrap().source, "npm.name");
+        assert_eq!(
+            serde_json::to_value(&member.identity).unwrap(),
+            serde_json::to_value(Some(expected)).unwrap(),
+            "archive member must preserve the same manifest claims as standalone extraction",
+        );
+    }
+
     fn pack_manifest(publisher: &str, entries: &[&str]) -> AnalysisReport {
         let mut f = FileAnalysis::new(
             0,

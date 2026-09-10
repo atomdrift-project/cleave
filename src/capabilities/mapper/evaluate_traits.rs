@@ -462,14 +462,18 @@ impl super::CapabilityMapper {
         }
 
         trait_ctx.current_trait_idx = Some(idx);
-        trait_ctx.cached_evidence = if tf & super::flags::NEEDS_COUNT != 0 {
-            None
-        } else {
-            base_cached_evidence
-        };
+        trait_ctx.cached_evidence =
+            if tf & (super::flags::NEEDS_COUNT | super::flags::NEEDS_LOCATIONS) != 0 {
+                None
+            } else {
+                base_cached_evidence
+            };
 
         // Both index sources (the work list, and the tiny-DOS bypass
         // above) apply the platform gate before an index reaches here.
+        let _locations = crate::composite_rules::evaluators::MatchLocationsGuard::set(
+            tf & super::flags::NEEDS_LOCATIONS != 0,
+        );
         trait_def.evaluate_pregated(trait_ctx)
     }
 

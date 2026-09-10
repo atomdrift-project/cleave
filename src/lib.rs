@@ -47,6 +47,7 @@ pub(crate) mod validation_controls;
 
 // Public modules
 pub mod analyzers;
+mod base64_validator;
 pub mod bitcoin_validator;
 pub mod capabilities;
 pub mod cli;
@@ -2563,7 +2564,19 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     let threads_ctx = file_type.is_source_code()
         || matches!(
             file_type,
-            FileType::Jpeg | FileType::Png | FileType::Wasm | FileType::Dex
+            FileType::Jpeg
+                | FileType::Png
+                | FileType::Font
+                | FileType::Wav
+                | FileType::Aiff
+                | FileType::Mp3
+                | FileType::Mp4
+                | FileType::Ico
+                | FileType::Gif
+                | FileType::Bmp
+                | FileType::Webp
+                | FileType::Wasm
+                | FileType::Dex
         );
     let yara_prefetch = |ftypes: &[&str]| {
         if cancel_for_yara
@@ -3186,11 +3199,27 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         fa.parent_id = None;
         fa.depth = 0;
         fa.extracted_path = None;
-        analysis_cache::file_analysis_cache_store(&sha256_hex, file_type_key, options, &fa);
+        analysis_cache::file_analysis_cache_store(
+            &sha256_hex,
+            file_type_key,
+            options,
+            &fa,
+            &report,
+            capability_mapper.traits_revision(),
+        );
     }
 
     // Store result in analysis cache for future lookups
-    analysis_cache::report_cache_store(&sha256_hex, file_type_key, options, &report);
+    // Key on the mapper this analysis ran with, not on the process-global
+    // traits scan: a reload (`/reload`, scan's renewal task) can have replaced
+    // the latter while this file was being analyzed.
+    analysis_cache::report_cache_store(
+        &sha256_hex,
+        file_type_key,
+        options,
+        &report,
+        capability_mapper.traits_revision(),
+    );
     if let Some(flight) = flight {
         flight.complete(Some(&report));
     }

@@ -537,6 +537,9 @@ impl super::CapabilityMapper {
                                     trait_id_map,
                                     platforms: vec![Platform::All],
                                     slow_rule_ms: Self::DEFAULT_SLOW_RULE_MS,
+                                    // Pinned at load; see the fresh-load arm.
+                                    traits_revision: crate::cache::traits_revision_fingerprint()
+                                        .unwrap_or_default(),
                                 });
                             }
                             Err(e) => {
@@ -4826,6 +4829,10 @@ impl super::CapabilityMapper {
             trait_id_map,
             platforms: vec![Platform::All],
             slow_rule_ms: Self::DEFAULT_SLOW_RULE_MS,
+            // Pinned at load: every result this mapper produces is stored
+            // under this revision, even if a concurrent reload has already
+            // replaced the process-global traits scan.
+            traits_revision: crate::cache::traits_revision_fingerprint().unwrap_or_default(),
         })
     }
 }

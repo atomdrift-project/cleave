@@ -39,6 +39,96 @@ pub(crate) fn toplevel_draining() -> bool {
 }
 static NEXT_TOPLEVEL_ID: AtomicU64 = AtomicU64::new(1);
 
+/// The in-flight counter for the calling thread.
+///
+/// Production always reads the process-global one. Tests may install a
+/// private set (see [`isolate_counters`]) so their assertions are not moved
+/// by an unrelated test that happens to be running an analysis: these
+/// counters are global by design — every analysis in the process shares them
+/// — so a unit test asserting `TOPLEVEL_IN_FLIGHT == 0` was really asserting
+/// something about the whole test binary.
+#[inline]
+fn toplevel_in_flight() -> &'static AtomicUsize {
+    #[cfg(test)]
+    {
+        if let Some(counters) = ISOLATED_COUNTERS.with(Cell::get) {
+            return &counters.toplevel_in_flight;
+        }
+    }
+    &TOPLEVEL_IN_FLIGHT
+}
+
+#[inline]
+fn foreground_inner_owners() -> &'static AtomicUsize {
+    #[cfg(test)]
+    {
+        if let Some(counters) = ISOLATED_COUNTERS.with(Cell::get) {
+            return &counters.inner_owners;
+        }
+    }
+    &INNER_PARALLEL_OWNERS
+}
+
+#[inline]
+fn background_inner_owners() -> &'static AtomicUsize {
+    #[cfg(test)]
+    {
+        if let Some(counters) = ISOLATED_COUNTERS.with(Cell::get) {
+            return &counters.background_inner_owners;
+        }
+    }
+    &BACKGROUND_INNER_PARALLEL_OWNERS
+}
+
+/// A private counter set for one test.
+#[cfg(test)]
+pub(crate) struct IsolatedCounters {
+    toplevel_in_flight: AtomicUsize,
+    inner_owners: AtomicUsize,
+    background_inner_owners: AtomicUsize,
+}
+
+#[cfg(test)]
+impl IsolatedCounters {
+    pub(crate) fn toplevel_in_flight(&self) -> usize {
+        self.toplevel_in_flight.load(Ordering::Acquire)
+    }
+    pub(crate) fn inner_owners(&self) -> usize {
+        self.inner_owners.load(Ordering::Acquire)
+    }
+    pub(crate) fn background_inner_owners(&self) -> usize {
+        self.background_inner_owners.load(Ordering::Acquire)
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static ISOLATED_COUNTERS: Cell<Option<&'static IsolatedCounters>> = const { Cell::new(None) };
+}
+
+/// Install a fresh private counter set on this thread and return it.
+///
+/// Leaked on purpose: the handle is `'static` so a test can hand it to the
+/// threads it spawns (via [`adopt_isolation`]), and a test binary exits long
+/// before a few dozen leaked triples matter.
+#[cfg(test)]
+pub(crate) fn isolate_counters() -> &'static IsolatedCounters {
+    let counters: &'static IsolatedCounters = Box::leak(Box::new(IsolatedCounters {
+        toplevel_in_flight: AtomicUsize::new(0),
+        inner_owners: AtomicUsize::new(0),
+        background_inner_owners: AtomicUsize::new(0),
+    }));
+    adopt_isolation(counters);
+    counters
+}
+
+/// Join a thread to a test's private counter set. Every thread a test spawns
+/// must call this, or it will fall through to the process-global counters.
+#[cfg(test)]
+pub(crate) fn adopt_isolation(counters: &'static IsolatedCounters) {
+    ISOLATED_COUNTERS.with(|slot| slot.set(Some(counters)));
+}
+
 /// Work a lane can do instead of idling in a single-flight wait: the next
 /// top-level path of the ordered scan queue. Installed by `for_each_ordered`
 /// for the duration of the scan (`None` outside it). Callers take the lock,
@@ -211,9 +301,9 @@ fn inner_owner_slots() -> (&'static AtomicUsize, usize) {
             0 => 1,
             cap => cap,
         };
-        (&BACKGROUND_INNER_PARALLEL_OWNERS, cap)
+        (background_inner_owners(), cap)
     } else {
-        (&INNER_PARALLEL_OWNERS, max_inner_parallel_owners())
+        (foreground_inner_owners(), max_inner_parallel_owners())
     }
 }
 
@@ -245,16 +335,16 @@ impl Drop for ToplevelInFlightGuard {
         let owned = OWNS_INNER_PARALLELISM.with(|value| value.replace(self.previous_owned));
         if owned {
             let owners = if self.background {
-                &BACKGROUND_INNER_PARALLEL_OWNERS
+                background_inner_owners()
             } else {
-                &INNER_PARALLEL_OWNERS
+                foreground_inner_owners()
             };
             owners.fetch_sub(1, Ordering::Release);
         }
         TOPLEVEL_ID.with(|value| value.set(self.previous_id));
         DEDICATED_POOL.with(|value| value.set(self.previous_dedicated));
         if !self.dedicated {
-            TOPLEVEL_IN_FLIGHT.fetch_sub(1, Ordering::Release);
+            toplevel_in_flight().fetch_sub(1, Ordering::Release);
         }
     }
 }
@@ -274,7 +364,7 @@ pub(crate) fn enter_toplevel_analysis_on(dedicated_pool: bool) -> ToplevelInFlig
     let previous_owned = OWNS_INNER_PARALLELISM.with(|value| value.replace(false));
     let previous_dedicated = DEDICATED_POOL.with(|value| value.replace(dedicated_pool));
     if !dedicated_pool {
-        TOPLEVEL_IN_FLIGHT.fetch_add(1, Ordering::AcqRel);
+        toplevel_in_flight().fetch_add(1, Ordering::AcqRel);
     }
     ToplevelInFlightGuard {
         previous_id,
@@ -412,7 +502,7 @@ pub(crate) fn try_enter_nested_member_parallelism(
 /// fan out only while this returns true, and run its analyses inline
 /// otherwise.
 pub(crate) fn pool_has_headroom() -> bool {
-    TOPLEVEL_IN_FLIGHT.load(Ordering::Acquire) <= 1 || toplevel_draining()
+    toplevel_in_flight().load(Ordering::Acquire) <= 1 || toplevel_draining()
 }
 
 /// Whether this top-level analysis owns one of the bounded inner-parallel slots.
@@ -429,7 +519,7 @@ pub(crate) fn inner_work_parallel() -> bool {
     if DEDICATED_POOL.with(Cell::get) {
         return true;
     }
-    if TOPLEVEL_IN_FLIGHT.load(Ordering::Acquire) <= 1 || toplevel_draining() {
+    if toplevel_in_flight().load(Ordering::Acquire) <= 1 || toplevel_draining() {
         return true;
     }
     if NESTED_MEMBER_PARALLELISM.with(Cell::get) {
@@ -474,27 +564,68 @@ mod tests {
         let _lock = TEST_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let before = TOPLEVEL_IN_FLIGHT.load(Ordering::Acquire);
+        let counters = isolate_counters();
         let _shared_a = enter_toplevel_analysis_on(false);
-        let shared_b = std::thread::spawn(|| {
+        let shared_b = std::thread::spawn(move || {
+            adopt_isolation(counters);
             let _g = enter_toplevel_analysis_on(false);
             std::thread::sleep(std::time::Duration::from_millis(30));
         });
-        let dedicated = std::thread::spawn(|| {
+        let dedicated = std::thread::spawn(move || {
+            adopt_isolation(counters);
             let _g = enter_toplevel_analysis_on(true);
             assert!(inner_work_parallel(), "dedicated pool always parallel");
-            TOPLEVEL_IN_FLIGHT.load(Ordering::Acquire)
+            counters.toplevel_in_flight()
         })
         .join()
         .unwrap();
         assert!(
-            dedicated <= before + 2,
+            dedicated <= 2,
             "dedicated analysis must not count as in flight"
         );
         shared_b.join().unwrap();
         drop(_shared_a);
-        assert_eq!(TOPLEVEL_IN_FLIGHT.load(Ordering::Acquire), before);
+        assert_eq!(counters.toplevel_in_flight(), 0);
         assert!(!DEDICATED_POOL.with(Cell::get));
+    }
+
+    /// The counters these tests assert on are process-global: every analysis
+    /// in the binary moves them. Before the tests took a private set, an
+    /// unrelated test running an analysis at the wrong moment made them fail
+    /// — the observed symptom was `assert_eq!(TOPLEVEL_IN_FLIGHT, before)`
+    /// reporting 1, and `inner_work_parallel()` returning false at what the
+    /// test believed was zero in-flight. This reproduces that interference
+    /// deliberately and shows isolation holds against it.
+    #[test]
+    fn isolated_counters_ignore_concurrent_global_analyses() {
+        let _lock = TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let counters = isolate_counters();
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stop_writer = std::sync::Arc::clone(&stop);
+        // A stand-in for any other test in this binary running an analysis:
+        // it enters and leaves the *global* counter continuously.
+        let noise = std::thread::spawn(move || {
+            while !stop_writer.load(Ordering::Acquire) {
+                let _g = enter_toplevel_analysis_on(false);
+                std::thread::yield_now();
+            }
+        });
+        for _ in 0..2000 {
+            assert_eq!(counters.toplevel_in_flight(), 0);
+            assert!(inner_work_parallel(), "no analysis in flight on this set");
+            let one = enter_toplevel_analysis_on(false);
+            assert_eq!(counters.toplevel_in_flight(), 1);
+            drop(one);
+        }
+        stop.store(true, Ordering::Release);
+        noise.join().unwrap();
+        assert_eq!(counters.toplevel_in_flight(), 0);
+        assert!(
+            TOPLEVEL_IN_FLIGHT.load(Ordering::Acquire) == 0,
+            "the noise thread balanced its own global entries"
+        );
     }
 
     static TEST_LOCK: Mutex<()> = Mutex::new(());
@@ -504,6 +635,7 @@ mod tests {
         let _lock = TEST_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _counters = isolate_counters();
         assert!(inner_work_parallel());
         let one = enter_toplevel_analysis_on(false);
         assert!(inner_work_parallel());
@@ -516,10 +648,18 @@ mod tests {
         let _lock = TEST_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let counters = isolate_counters();
         let a = enter_toplevel_analysis_on(false);
         let b = enter_toplevel_analysis_on(false);
         assert!(inner_work_parallel());
-        assert!(!std::thread::spawn(inner_work_parallel).join().unwrap());
+        assert!(
+            !std::thread::spawn(move || {
+                adopt_isolation(counters);
+                inner_work_parallel()
+            })
+            .join()
+            .unwrap()
+        );
         drop(b);
         assert!(inner_work_parallel());
         drop(a);
@@ -534,15 +674,17 @@ mod tests {
         let _lock = TEST_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let counters = isolate_counters();
         set_parallel_owner_caps(16, 8);
         let (ready_tx, ready_rx) = std::sync::mpsc::channel();
         let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
         let background = std::thread::spawn(move || {
+            adopt_isolation(counters);
             mark_thread_background();
             let _a = enter_toplevel_analysis_on(false);
             let _b = enter_toplevel_analysis_on(false);
             assert!(inner_work_parallel(), "background claims its own slot");
-            assert_eq!(BACKGROUND_INNER_PARALLEL_OWNERS.load(Ordering::Acquire), 1);
+            assert_eq!(counters.background_inner_owners(), 1);
             ready_tx.send(()).unwrap();
             done_rx.recv().unwrap();
         });
@@ -551,18 +693,18 @@ mod tests {
         // foreground slot is untouched, so the first foreground claim wins.
         let a = enter_toplevel_analysis_on(false);
         let b = enter_toplevel_analysis_on(false);
-        assert_eq!(INNER_PARALLEL_OWNERS.load(Ordering::Acquire), 0);
+        assert_eq!(counters.inner_owners(), 0);
         assert!(
             inner_work_parallel(),
             "foreground slot was not consumed by background work"
         );
-        assert_eq!(INNER_PARALLEL_OWNERS.load(Ordering::Acquire), 1);
+        assert_eq!(counters.inner_owners(), 1);
         drop(b);
         drop(a);
         done_tx.send(()).unwrap();
         background.join().unwrap();
-        assert_eq!(BACKGROUND_INNER_PARALLEL_OWNERS.load(Ordering::Acquire), 0);
-        assert_eq!(INNER_PARALLEL_OWNERS.load(Ordering::Acquire), 0);
+        assert_eq!(counters.background_inner_owners(), 0);
+        assert_eq!(counters.inner_owners(), 0);
     }
 
     #[test]

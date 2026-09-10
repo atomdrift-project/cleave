@@ -475,6 +475,32 @@ pub(crate) enum FileType {
     Jpeg,
     /// PNG image
     Png,
+    /// SVG image (`.svg`) — XML-based vector graphic. A distinct rule type
+    /// rather than an alias for `Xml`: it is a media carrier (a payload can
+    /// ride after `</svg>`), and folding it into `Xml` meant every `for: [svg]`
+    /// rule silently targeted Android manifests and MSBuild projects too.
+    Svg,
+    /// RIFF audio (`.wav`).
+    Wav,
+    /// IFF audio (`.aiff`, `.aifc`).
+    Aiff,
+    /// MPEG audio with ID3 tags (`.mp3`).
+    Mp3,
+    /// ISO base media (`.mp4`, `.m4a`, `.mov`).
+    Mp4,
+    /// Windows icon or cursor (`.ico`, `.cur`).
+    Ico,
+    /// GIF image (`.gif`).
+    Gif,
+    /// Windows bitmap (`.bmp`).
+    Bmp,
+    /// RIFF image (`.webp`).
+    Webp,
+    /// Font container: sfnt (`.ttf`/`.otf`/`.ttc`), WOFF, WOFF2, EOT.
+    /// filefacts validates the table directory and reports `font.*` facts, so
+    /// rules can separate a real font from a payload wearing a font name and
+    /// from a valid font carrying a stowaway in its unclaimed bytes.
+    Font,
     /// Python pickle serialized data
     Pickle,
     /// PDF document
@@ -663,7 +689,7 @@ impl From<filefacts::FileType> for FileType {
             Ff::GithubActions => Self::GithubActions,
             Ff::SystemdService => Self::SystemdService,
             Ff::DesktopEntry => Self::DesktopEntry,
-            Ff::Xml | Ff::Svg => Self::Xml,
+            Ff::Xml => Self::Xml,
             Ff::PkgInfo => Self::PkgInfo,
             Ff::SrcInfo => Self::SrcInfo,
             Ff::Registry => Self::Registry,
@@ -681,6 +707,16 @@ impl From<filefacts::FileType> for FileType {
             Ff::Lnk => Self::Lnk,
             Ff::Jpeg => Self::Jpeg,
             Ff::Png => Self::Png,
+            Ff::Font => Self::Font,
+            Ff::Svg => Self::Svg,
+            Ff::Wav => Self::Wav,
+            Ff::Aiff => Self::Aiff,
+            Ff::Mp3 => Self::Mp3,
+            Ff::Mp4 => Self::Mp4,
+            Ff::Ico => Self::Ico,
+            Ff::Gif => Self::Gif,
+            Ff::Bmp => Self::Bmp,
+            Ff::Webp => Self::Webp,
             Ff::Pickle => Self::Pickle,
             Ff::Pdf => Self::Pdf,
             Ff::Html => Self::Html,
@@ -937,10 +973,20 @@ impl FileType {
             "desktop-entry" | "desktop_entry" | "desktop" | ".desktop" | "xdg-desktop" => {
                 FileType::DesktopEntry
             }
-            "xml" | "csproj" | "msbuild" | "xaml" | "svg" | "xml-document" => FileType::Xml,
+            "xml" | "csproj" | "msbuild" | "xaml" | "xml-document" => FileType::Xml,
+            "svg" => FileType::Svg,
             "composer-json" | "composerjson" | "composer.json" => FileType::ComposerJson,
             "jpeg" | "jpg" => FileType::Jpeg,
             "png" => FileType::Png,
+            "font" | "ttf" | "otf" | "ttc" | "woff" | "woff2" | "eot" => FileType::Font,
+            "wav" | "wave" => FileType::Wav,
+            "aiff" | "aif" | "aifc" => FileType::Aiff,
+            "mp3" => FileType::Mp3,
+            "mp4" | "m4a" | "m4v" | "mov" => FileType::Mp4,
+            "ico" | "cur" | "favicon" => FileType::Ico,
+            "gif" => FileType::Gif,
+            "bmp" | "dib" => FileType::Bmp,
+            "webp" => FileType::Webp,
             "pickle" | "pkl" => FileType::Pickle,
             // Additional formats
             "plist" => FileType::Plist,
@@ -1294,7 +1340,10 @@ mod tests {
             FileType::from_str(Ff::TypeScript.label()),
             FileType::JavaScript
         );
-        assert_eq!(FileType::from_str(Ff::Svg.label()), FileType::Xml);
+        // SVG is its own rule type, not an alias for XML: it is a media
+        // carrier, and while it was folded into `Xml` every `for: [svg]` rule
+        // silently targeted Android manifests and MSBuild projects as well.
+        assert_eq!(FileType::from_str(Ff::Svg.label()), FileType::Svg);
         assert_eq!(FileType::from_str(Ff::ApkAndroid.label()), FileType::Apk);
         assert_eq!(FileType::from_str(Ff::Dex.label()), FileType::Dex);
         assert_eq!(FileType::from_str("dex"), FileType::Dex);

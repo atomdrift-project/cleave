@@ -808,6 +808,36 @@ pub(crate) fn cache_revision() -> Result<RuleFilesRevision> {
     Ok(*CACHE_REVISION.write().get_or_insert(revision))
 }
 
+/// The analysis-cache revision fingerprint for the traits currently on disk,
+/// or `None` when unavailable.
+///
+/// Mixes the trait-files fingerprint with the cleave binary's package version
+/// and mtime so that recompiling cleave invalidates the analysis cache even
+/// when the trait YAMLs are unchanged. Analyzer logic, file type detection,
+/// and capability evaluation all live in the binary — when they change, the
+/// cached `AnalysisReport` for the same SHA can be stale.
+///
+/// A `CapabilityMapper` pins this at load and every store keys on that pinned
+/// value; only a lookup samples it live. (`cache_revision()` alone — used by
+/// the YARA and capability-mapper caches — is deterministic from trait inputs
+/// and should not depend on the binary.)
+pub(crate) fn traits_revision_fingerprint() -> Option<i64> {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let traits_fingerprint = cache_revision().ok().map(RuleFilesRevision::cache_i64)?;
+
+    let mut hasher = DefaultHasher::new();
+    traits_fingerprint.hash(&mut hasher);
+    env!("CARGO_PKG_VERSION").hash(&mut hasher);
+    if let Ok(mtime) = binary_mtime()
+        && let Ok(d) = mtime.duration_since(std::time::UNIX_EPOCH)
+    {
+        d.as_nanos().hash(&mut hasher);
+    }
+    Some(i64::from_ne_bytes(hasher.finish().to_ne_bytes()))
+}
+
 /// Generate a cache key based on the newest `.yar`/`.yara` file mtime and third-party flag.
 ///
 /// Only pure YARA rule files are considered, so editing trait YAMLs does not

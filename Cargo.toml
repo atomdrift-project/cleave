@@ -1,6 +1,6 @@
 [package]
 name = "cleave"
-version = "2.10.0"
+version = "2.11.0"
 edition = "2024"
 # support current + two older releases
 rust-version = "1.94"
@@ -239,6 +239,18 @@ name = "cleave"
 path = "src/main.rs"
 test = false  # Tests run via lib.rs - eliminates ~1700 duplicate tests
 
+# No #[test] lives in these; without test = false every `cargo test` links a
+# full debug harness binary for each of them for nothing.
+[[bin]]
+name = "regenerate_testdata"
+path = "src/bin/regenerate_testdata.rs"
+test = false
+
+[[bin]]
+name = "yara-precompile"
+path = "src/bin/yara-precompile.rs"
+test = false
+
 [features]
 default = ["jemalloc"]
 # Skip YARA rule loading in tests for faster execution
@@ -327,11 +339,14 @@ opt-level = 3
 [profile.dev.package.regex-syntax]
 opt-level = 3
 
+# wasmtime/cranelift at O2, not O3 (mirrors scan): the extra compile minutes
+# are the largest cold-build cost and the runtime difference on YARA workloads
+# is single-digit percent.
 [profile.dev.package.wasmtime]
-opt-level = 3
+opt-level = 2
 
 [profile.dev.package.cranelift-codegen]
-opt-level = 3
+opt-level = 2
 
 [profile.dev.package.regalloc2]
 opt-level = 3
@@ -363,3 +378,8 @@ opt-level = 3
 tree-sitter = { git = "https://github.com/tstromberg/tree-sitter", branch = "master" }
 tree-sitter-language = { git = "https://github.com/tstromberg/tree-sitter", branch = "master" }
 
+
+# LOCAL DEV OVERRIDE — do not commit. Points filefacts at the working tree so
+# the font support added there can be built and tested against cleave before
+# it is published. `make install-hooks` installs a pre-commit hook that
+# rejects exactly this.

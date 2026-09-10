@@ -10,9 +10,9 @@ use super::condition::{
 };
 use super::context::{ConditionResult, EvaluationContext, StringParams};
 use super::evaluators::{
-    ContentLocationParams, MatchCountGuard, SectionParams, eval_ast, eval_encoded, eval_hex,
-    eval_metrics, eval_path, eval_raw, eval_section, eval_string_literal, eval_symbol,
-    eval_syscall, eval_text, eval_trait, eval_yara_inline,
+    ContentLocationParams, MatchCountGuard, MatchLocationsGuard, SectionParams, eval_ast,
+    eval_encoded, eval_hex, eval_metrics, eval_path, eval_raw, eval_section, eval_string_literal,
+    eval_symbol, eval_syscall, eval_text, eval_trait, eval_yara_inline,
 };
 use super::types::{
     Arch, FileType, Platform, default_architectures, default_file_types, default_platforms,
@@ -2446,7 +2446,9 @@ impl CompositeTrait {
         };
 
         // Composite traits have no count/density filter, so raw/text matching in
-        // their conditions can stop at the first match. Restored on drop.
+        // their conditions can stop early unless proximity needs later hits.
+        let _locations =
+            MatchLocationsGuard::set(self.near_bytes.is_some() || self.near_lines.is_some());
         let _mcg = MatchCountGuard::set(self.needs_match_count());
 
         // Check platform match
@@ -3694,19 +3696,32 @@ impl CompositeTrait {
         // Filter evidence to only items within the winning proximity window
         let filtered: Vec<Evidence> = evidence
             .into_iter()
-            .filter(|ev| {
+            .filter_map(|mut ev| {
+                if !ev.offsets.is_empty() {
+                    ev.offsets.retain(|offset| {
+                        if let (Some((start, end)), Some(ls)) = (line_window, &line_starts_cache) {
+                            let line = byte_offset_to_line(ls, *offset as usize);
+                            return line >= start && line <= end;
+                        }
+                        byte_window.is_none_or(|(start, end)| *offset >= start && *offset <= end)
+                    });
+                    let first = *ev.offsets.first()?;
+                    ev.count = ev.offsets.len();
+                    ev.location = Some(format!("0x{first:x}"));
+                    return Some(ev);
+                }
                 if let (Some((start, end)), Some(ls)) = (line_window, &line_starts_cache)
-                    && let Some(line) = evidence_to_line(ev, ls)
+                    && let Some(line) = evidence_to_line(&ev, ls)
                 {
-                    return line >= start && line <= end;
+                    return (line >= start && line <= end).then_some(ev);
                 }
                 if let Some((start, end)) = byte_window
-                    && let Some(offset) = evidence_to_byte_offset(ev)
+                    && let Some(offset) = evidence_to_byte_offset(&ev)
                 {
-                    return offset >= start && offset <= end;
+                    return (offset >= start && offset <= end).then_some(ev);
                 }
                 // Evidence without location info: keep (e.g., exclusion sentinels from none:)
-                true
+                Some(ev)
             })
             .collect();
 
@@ -3786,15 +3801,35 @@ fn tagged_to_byte_offset(tagged: &TaggedLocation) -> Option<u64> {
 }
 
 /// Extract TaggedLocations from a condition's evidence items.
+///
+/// One evidence item can hold several occurrences of the same match, and
+/// proximity needs each of them, so an item with `offsets` expands to one tag
+/// per offset. Every expanded tag keeps the item's `location`: the offset says
+/// *where inside* the analyzed unit the match sits, while the location names
+/// the unit itself (archive member, decoded layer, `row:col`) and is what
+/// [`Scope::key`] buckets on. Dropping it collapses every scope key to the
+/// empty string, which silently degrades `scope: leaf`/`file`/`archive` to
+/// `outer` for all offset-carrying evidence.
 fn tag_evidence(evidence: &[Evidence], condition_index: usize) -> Vec<TaggedLocation> {
-    evidence
-        .iter()
-        .map(|ev| TaggedLocation {
-            byte_offset: ev.offsets.first().copied(),
-            location: ev.location.clone(),
-            condition_index,
-        })
-        .collect()
+    let mut tags = Vec::new();
+    for ev in evidence {
+        if ev.offsets.is_empty() {
+            tags.push(TaggedLocation {
+                byte_offset: None,
+                location: ev.location.clone(),
+                condition_index,
+            });
+        } else {
+            for offset in &ev.offsets {
+                tags.push(TaggedLocation {
+                    byte_offset: Some(*offset),
+                    location: ev.location.clone(),
+                    condition_index,
+                });
+            }
+        }
+    }
+    tags
 }
 
 pub(super) fn build_line_index(data: &[u8]) -> Vec<usize> {

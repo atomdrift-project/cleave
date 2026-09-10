@@ -6093,6 +6093,66 @@ mod excessive_file_types_tests {
         let result = find_excessive_file_types(&traits, &[]);
         assert_eq!(result.len(), 1, "manual listing should still be flagged");
     }
+    /// The check must still catch a genuine hand-enumeration: a set no
+    /// complete group covers.
+    #[test]
+    fn partial_enumeration_is_still_reported() {
+        let hand_picked = vec![
+            FileType::Png,
+            FileType::Jpeg,
+            FileType::Wav,
+            FileType::Elf,
+            FileType::Macho,
+            FileType::Pe,
+            FileType::Python,
+            FileType::Shell,
+            FileType::Ruby,
+        ];
+        let violations =
+            find_excessive_file_types(&[trait_with_for("t/handpicked", hand_picked)], &[]);
+        assert_eq!(violations.len(), 1, "{violations:?}");
+    }
+
+    /// Every file type belongs to exactly one named group.
+    ///
+    /// Group membership is how `for:` breadth is judged, so a type in two
+    /// groups makes that judgement ambiguous: naming one complete group then
+    /// partially "touches" the other through the shared type and reads as a
+    /// hand-written enumeration. Dockerfile was in both `manifests` and
+    /// `build`, and folding SVG into `media` while `Xml` stayed in `manifests`
+    /// would have reintroduced it. This test is the enforcement.
+    #[test]
+    fn named_groups_are_disjoint() {
+        use crate::capabilities::validation::constraints::ALL_GROUPS;
+        let mut owner: std::collections::HashMap<FileType, &str> = std::collections::HashMap::new();
+        let mut clashes = Vec::new();
+        for (types, name) in ALL_GROUPS {
+            for ft in *types {
+                if let Some(prev) = owner.insert(*ft, name) {
+                    clashes.push(format!("{ft:?} is in both `{prev}` and `{name}`"));
+                }
+            }
+        }
+        assert!(
+            clashes.is_empty(),
+            "file-type groups must be disjoint:\n  {}",
+            clashes.join("\n  ")
+        );
+    }
+
+    /// A complete named group is expressible however many types it holds.
+    #[test]
+    fn each_named_group_is_expressible_on_its_own() {
+        use crate::capabilities::validation::constraints::ALL_GROUPS;
+        for (types, name) in ALL_GROUPS {
+            let violations =
+                find_excessive_file_types(&[trait_with_for("t/g", types.to_vec())], &[]);
+            assert!(
+                violations.is_empty(),
+                "group `{name}` should be expressible: {violations:?}"
+            );
+        }
+    }
 }
 
 mod defaults_tests {

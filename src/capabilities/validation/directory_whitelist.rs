@@ -768,6 +768,8 @@ const ALLOWED_METADATA: &[&str] = &[
     "build",      // Build system detection (cmake, cargo, docker, CI/CD)
     "document",   // Document format internals (office, PDF, RTF, OLE, HTML)
     "file",       // File-level observables (magic bytes, extension, encoded content)
+    "font",       // Font container structure (table directory, coverage, validity)
+    "media",      // Media-container structure (coverage, stowaway classification)
     "hardening",  // Security hardening features (sandbox, seccomp, pledge)
     "image",      // Image-specific neutral measurements (entropy, edge density)
     "import",     // Dependencies/imports (auto-generated)
@@ -846,6 +848,30 @@ const ALLOWED_METADATA_FILE: &[&str] = &[
 /// metadata/binary/provenance/ with the other structure-derived facts.
 const ALLOWED_METADATA_IMAGE: &[&str] = &[
     "metrics", // Pixel/channel/statistical image measurements
+];
+
+/// Allowed subdirectories in metadata/font/
+///
+/// Font container structure, as reported by filefacts's sfnt/WOFF/EOT walk:
+/// which container it is, whether the table directory is self-consistent, and
+/// whether every byte in the file is claimed by a table. Neutral measurements
+/// only — the masquerade and stowaway *objectives* built on them live under
+/// `objectives/evasion/masquerade/` and `objectives/anti-static/`.
+/// Allowed subdirectories in metadata/media/
+///
+/// Shared structural facts for every passive container that can carry a
+/// payload — fonts, images, audio, video. filefacts reports which bytes each
+/// format's own structure accounts for; these describe the remainder. Neutral
+/// measurements only, as with `font/`: the masquerade and stowaway objectives
+/// built on them live under `objectives/`.
+const ALLOWED_METADATA_MEDIA: &[&str] = &[
+    "container", // Container identity and whether its structure is self-consistent
+    "layout",    // Byte coverage: holes, trailing data, and what fills them
+];
+
+const ALLOWED_METADATA_FONT: &[&str] = &[
+    "container", // Format identity and header/table-directory validity
+    "layout",    // Byte coverage: gaps, trailing data, oversized private tables
 ];
 
 /// Allowed subdirectories in metadata/lang/
@@ -1409,7 +1435,9 @@ pub(crate) fn validate_directory_structure(traits_path: &Path) -> Result<(), Vec
         ("binary", ALLOWED_METADATA_BINARY),
         ("document", ALLOWED_METADATA_DOCUMENT),
         ("file", ALLOWED_METADATA_FILE),
+        ("font", ALLOWED_METADATA_FONT),
         ("image", ALLOWED_METADATA_IMAGE),
+        ("media", ALLOWED_METADATA_MEDIA),
         ("lang", ALLOWED_METADATA_LANG),
         ("package", ALLOWED_METADATA_PACKAGE),
         ("permission", ALLOWED_METADATA_PERMISSION),

@@ -53,15 +53,17 @@ pub(crate) mod pe_extractors;
 pub(crate) mod chrome_manifest;
 pub(crate) mod elf;
 pub(crate) mod embedded_binary_detector;
+pub(crate) mod font;
 pub(crate) mod java_class;
 pub(crate) mod jpeg;
 pub(crate) mod macho;
+pub(crate) mod media;
 pub(crate) mod office;
 pub(crate) mod package_json;
 pub mod pdf;
 pub mod pe;
 pub(crate) mod pickle;
-pub(crate) mod png;
+mod png;
 pub(crate) mod rtf;
 pub(crate) mod sfx_detector;
 pub(crate) mod vsix_manifest;
@@ -149,6 +151,23 @@ pub fn analyzer_for_file_type(
         )),
         FileType::Png => Some(Box::new(
             png::PngAnalyzer::new().with_capability_mapper(mapper_or_empty),
+        )),
+
+        // Fonts — structural validation and stowaway detection.
+        FileType::Font => Some(Box::new(
+            font::FontAnalyzer::new().with_capability_mapper(mapper_or_empty),
+        )),
+        // One analyzer for every non-font, non-raster container: they all
+        // defer to filefacts and read the same shared `media.*` facts.
+        FileType::Wav
+        | FileType::Aiff
+        | FileType::Mp3
+        | FileType::Mp4
+        | FileType::Ico
+        | FileType::Gif
+        | FileType::Bmp
+        | FileType::Webp => Some(Box::new(
+            media::MediaAnalyzer::new().with_capability_mapper(mapper_or_empty),
         )),
 
         // Pickle - deserialization attack detection
@@ -277,6 +296,21 @@ pub(crate) fn analyzer_for_file_type_arc(
         )),
         FileType::Png => Some(Box::new(
             png::PngAnalyzer::new().with_capability_mapper_arc(mapper_or_empty),
+        )),
+        FileType::Font => Some(Box::new(
+            font::FontAnalyzer::new().with_capability_mapper_arc(mapper_or_empty),
+        )),
+        // One analyzer for every non-font, non-raster container: they all
+        // defer to filefacts and read the same shared `media.*` facts.
+        FileType::Wav
+        | FileType::Aiff
+        | FileType::Mp3
+        | FileType::Mp4
+        | FileType::Ico
+        | FileType::Gif
+        | FileType::Bmp
+        | FileType::Webp => Some(Box::new(
+            media::MediaAnalyzer::new().with_capability_mapper_arc(mapper_or_empty),
         )),
 
         // Pickle - deserialization attack detection
@@ -741,6 +775,15 @@ impl FileTypeExt for FileType {
             FileType::Lnk => vec!["lnk", "shortcut"],
             FileType::Jpeg => vec!["jpeg", "jpg"],
             FileType::Png => vec!["png"],
+            FileType::Font => vec!["ttf", "otf", "ttc", "otc", "woff", "woff2", "eot"],
+            FileType::Wav => vec!["wav", "wave"],
+            FileType::Aiff => vec!["aiff", "aif", "aifc"],
+            FileType::Mp3 => vec!["mp3"],
+            FileType::Mp4 => vec!["mp4", "m4a", "m4v", "mov"],
+            FileType::Ico => vec!["ico", "cur"],
+            FileType::Gif => vec!["gif"],
+            FileType::Bmp => vec!["bmp", "dib"],
+            FileType::Webp => vec!["webp"],
             FileType::Pickle => vec!["pkl", "pickle", "joblib"],
             FileType::Pdf => vec!["pdf"],
             FileType::Html => vec!["html", "htm"],

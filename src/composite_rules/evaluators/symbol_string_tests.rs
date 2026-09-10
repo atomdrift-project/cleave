@@ -119,6 +119,126 @@ fn create_test_context<'a>(report: &'a AnalysisReport, data: &'a [u8]) -> Evalua
 }
 
 #[test]
+fn raw_regex_retains_later_offsets_for_proximity() {
+    let report = create_test_report();
+    let data = b"task.run(); unrelated code; task.run();";
+    let ctx = create_test_context(&report, data);
+    let pattern = r"task\.run\(\)".to_string();
+    let result = eval_raw(
+        None,
+        None,
+        Some(&pattern),
+        None,
+        false,
+        false,
+        None,
+        None,
+        &ContentLocationParams::default(),
+        &ctx,
+        None,
+    );
+    assert!(result.matched);
+    assert_eq!(result.match_count, 2);
+    let offsets: Vec<u64> = result
+        .evidence
+        .iter()
+        .flat_map(|evidence| evidence.offsets.iter().copied())
+        .collect();
+    assert_eq!(
+        offsets,
+        vec![0, 28],
+        "proximity needs later occurrences too"
+    );
+}
+
+#[test]
+fn raw_regex_proximity_guard_preserves_fast_path_and_nesting() {
+    let report = create_test_report();
+    let data = b"task.run(); unrelated code; task.run();";
+    let ctx = create_test_context(&report, data);
+    let pattern = r"task\.run\(\)".to_string();
+    let _count = MatchCountGuard::set(false);
+    let run = || {
+        eval_raw(
+            None,
+            None,
+            Some(&pattern),
+            None,
+            false,
+            false,
+            None,
+            None,
+            &ContentLocationParams::default(),
+            &ctx,
+            None,
+        )
+    };
+    assert_eq!(run().match_count, 1, "ordinary presence checks stay cheap");
+    {
+        let _locations = MatchLocationsGuard::set(true);
+        let _nested = MatchLocationsGuard::set(false);
+        let _nested_count = MatchCountGuard::set(false);
+        let result = run();
+        assert_eq!(result.match_count, 2);
+        assert_eq!(result.evidence[0].offsets, vec![0, 28]);
+    }
+    assert_eq!(run().match_count, 1, "guard restores the previous state");
+}
+
+#[test]
+fn raw_regex_locations_keep_each_matching_value_and_length() {
+    for (data, pattern) in [
+        (
+            "task.run(); task.execute(); task.run();",
+            r"task\.[a-z]+\(\)",
+        ),
+        (
+            "tâche.run(); tâche.execute(); tâche.run();",
+            r"tâche\.[a-z]+\(\)",
+        ),
+    ] {
+        let report = create_test_report();
+        let ctx = create_test_context(&report, data.as_bytes());
+        let _count = MatchCountGuard::set(false);
+        let _locations = MatchLocationsGuard::set(true);
+        let result = eval_raw(
+            None,
+            None,
+            Some(&pattern.to_string()),
+            None,
+            false,
+            false,
+            None,
+            None,
+            &ContentLocationParams::default(),
+            &ctx,
+            None,
+        );
+        assert!(result.matched);
+        assert_eq!(result.match_count, 3);
+        assert_eq!(
+            result.evidence.len(),
+            2,
+            "only identical matches share offsets"
+        );
+        assert_eq!(result.evidence[0].offsets.len(), 2);
+        assert_eq!(result.evidence[1].offsets.len(), 1);
+        for item in &result.evidence {
+            assert_eq!(item.count, item.offsets.len());
+            for offset in &item.offsets {
+                let offset = usize::try_from(*offset).unwrap();
+                let length =
+                    usize::try_from(item.match_len.unwrap_or(item.value.len() as u64)).unwrap();
+                assert_eq!(
+                    &data.as_bytes()[offset..offset + length],
+                    item.value.as_bytes()
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn test_eval_symbol_fact_member_location_required_without_offset() {
     let mut report = create_test_report();
     report.filefacts = Some(crate::types::FilefactsView {
@@ -996,6 +1116,56 @@ fn test_eval_string_literal_matches_only_ast_strings() {
     assert_eq!(result.match_count, 1);
     assert_eq!(result.evidence[0].value, "literal_value");
     assert_eq!(result.evidence[0].source, "ast");
+}
+
+#[test]
+fn test_base64_validator_filters_complete_literal_candidates_before_counting() {
+    use crate::composite_rules::condition::StringValidator;
+    let mut report = create_test_report();
+    for (index, value) in [
+        "AAAA".repeat(256),
+        format!("{}Zg==", "AAAA".repeat(256)),
+        "____".repeat(256),
+        format!("{}A", "AAAA".repeat(256)),
+        format!("{}Zh==", "AAAA".repeat(256)),
+        format!("!{}", "AAAA".repeat(256)),
+        "AA+_".repeat(256),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        report.strings.push(StringInfo {
+            value: value.into(),
+            offset: Some(index as u64 * 4096),
+            encoding: "utf8".to_string(),
+            string_type: None,
+            section: Some("ast".to_string()),
+            encoding_chain: Vec::new(),
+            fragments: None,
+        });
+    }
+    let ctx = EvaluationContext::test_only_new(&report, &[], FileType::JavaScript);
+    let pattern = "^[A-Za-z0-9+/_-]{1024,}={0,2}$".to_string();
+    let params = StringParams {
+        length_min: None,
+        length_max: None,
+        exact: None,
+        substr: None,
+        regex: Some(&pattern),
+        word: None,
+        case_insensitive: false,
+        is_check: Some(StringValidator::Base64),
+        section: None,
+        offset: None,
+        offset_range: None,
+        section_offset: None,
+        section_offset_range: None,
+        arch_clamp: None,
+    };
+    let result = eval_string_literal(&params, None, &ctx);
+    assert!(result.matched);
+    assert_eq!(result.match_count, 3);
+    assert_eq!(result.evidence.len(), 3);
 }
 
 #[test]

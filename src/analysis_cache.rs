@@ -28,7 +28,7 @@
 //! multiple days) without ever stalling the hot path.
 
 use crate::AnalysisOptions;
-use crate::cache::{cache_dir, cache_revision};
+use crate::cache::cache_dir;
 use crate::types::AnalysisReport;
 use crate::types::FileAnalysis;
 use rusqlite::Connection;
@@ -428,7 +428,7 @@ fn acquire_flight(
         kind: kind.to_string(),
         sha256: sha256.to_string(),
         options_hash: typed_options_hash(options, file_type),
-        traits_revision: traits_revision_key().unwrap_or_default(),
+        traits_revision: ambient_traits_revision().unwrap_or_default(),
     };
     let flights = IN_FLIGHT.get_or_init(|| Mutex::new(HashMap::new()));
     let mut flights = flights
@@ -764,8 +764,11 @@ fn options_hash(options: &AnalysisOptions) -> String {
     // `cm=` separates compact-member-retention entries: the two modes fold
     // members with different retained fields (`kv`, `filefacts.values`), so
     // an entry written in one mode would change the other mode's output.
+    // v=10: the per-file cache now stores only complete leaf reports. Older
+    // entries may be root-only projections of archives or decoded trees;
+    // falling back to one after full-report eviction silently loses children.
     let key = format!(
-        "v=9,cm={},3p={},yara={},r2={},upx={},plat={},hp={},sp={},ps={},fv={},rizin={}",
+        "v=10,cm={},3p={},yara={},r2={},upx={},plat={},hp={},sp={},ps={},fv={},rizin={}",
         crate::shared_resources::compact_member_retention(),
         options.enable_third_party_yara,
         !options.disable_yara,
@@ -794,33 +797,36 @@ fn typed_options_hash(options: &AnalysisOptions, file_type: &str) -> String {
     hex::encode(hash)[..16].to_string()
 }
 
-/// Get the active analysis-cache revision fingerprint, or `None` if unavailable.
+/// The ambient analysis-cache revision: the fingerprint of the traits a fresh
+/// analysis would use *right now*.
 ///
-/// Mixes the trait-files fingerprint with the cleave binary's package version
-/// and mtime so that recompiling cleave invalidates the analysis cache even
-/// when the trait YAMLs are unchanged. Analyzer logic, file type detection,
-/// and capability evaluation all live in the binary — when they change, the
-/// cached `AnalysisReport` for the same SHA can be stale.
-///
-/// (`cache_revision()` alone — used by the YARA and capability-mapper caches —
-/// is deterministic from trait inputs and should not depend on the binary.)
-fn traits_revision_key() -> Option<i64> {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-
-    let traits_fingerprint = cache_revision()
-        .ok()
-        .map(super::cache::RuleFilesRevision::cache_i64)?;
-
-    let mut hasher = DefaultHasher::new();
-    traits_fingerprint.hash(&mut hasher);
-    env!("CARGO_PKG_VERSION").hash(&mut hasher);
-    if let Ok(mtime) = super::cache::binary_mtime()
-        && let Ok(d) = mtime.duration_since(SystemTime::UNIX_EPOCH)
-    {
-        d.as_nanos().hash(&mut hasher);
+/// Correct for a cache *lookup*, which asks "is there a result for the rules I
+/// am about to run?". A *store* must not use it — see
+/// [`crate::capabilities::CapabilityMapper::traits_revision`]; it passes the
+/// revision the analysis actually ran under.
+fn ambient_traits_revision() -> Option<i64> {
+    // `0` is the "no traits" revision that `CapabilityMapper::empty()` pins,
+    // so a skip-traits run reuses its own entries and never exchanges them
+    // with a run that has rules. Nothing else in the key encodes the flag:
+    // invalidating the traits scan on a flag flip only forces a re-walk of the
+    // same directory, which yields the same fingerprint.
+    if crate::shared_resources::skip_traits_requested() {
+        return Some(0);
     }
-    Some(i64::from_ne_bytes(hasher.finish().to_ne_bytes()))
+    crate::cache::traits_revision_fingerprint()
+}
+
+/// Store revision for the rare caller with no mapper handle in scope: the
+/// loaded global mapper's pinned revision, else the ambient one.
+///
+/// Prefer passing `mapper.traits_revision()` — that is the mapper the analysis
+/// actually ran under. This fallback is only as good as the assumption that
+/// the installed mapper is still the one that produced the report.
+pub(crate) fn store_revision_without_mapper() -> i64 {
+    crate::shared_resources::loaded_capability_mapper()
+        .map(|m| m.traits_revision())
+        .or_else(ambient_traits_revision)
+        .unwrap_or_default()
 }
 
 /// Current time as Unix seconds.
@@ -965,11 +971,12 @@ pub(crate) fn log_analysis_memo_stats() {
     );
 }
 
-fn memo_key(sha256: &str, opts_hash: &str) -> String {
-    format!(
-        "{sha256}:{opts_hash}:{}",
-        traits_revision_key().unwrap_or_default()
-    )
+/// Memo key. Mirrors the persistent cache's key exactly, `traits_revision`
+/// included — a store passes the revision its analysis ran under, a lookup the
+/// ambient one, so the in-process memo can never serve a result across a
+/// traits reload either.
+fn memo_key(sha256: &str, opts_hash: &str, traits_revision: i64) -> String {
+    format!("{sha256}:{opts_hash}:{traits_revision}")
 }
 
 /// Look up a cached toplevel analysis report for the given file hash and options.
@@ -981,13 +988,15 @@ pub(crate) fn report_cache_lookup(
     options: &AnalysisOptions,
 ) -> Option<AnalysisReport> {
     let opts_hash = typed_options_hash(options, file_type);
-    let key = memo_key(sha256, &opts_hash);
+    // A lookup keys on the ambient revision: it asks for a result computed
+    // under the rules this caller is about to run.
+    let traits_ts = ambient_traits_revision()?;
+    let key = memo_key(sha256, &opts_hash, traits_ts);
     if let Some(bytes) = memo::get(memo::Kind::Report, &key)
         && let Ok(report) = serde_json::from_slice::<AnalysisReport>(&bytes)
     {
         return Some(report);
     }
-    let traits_ts = traits_revision_key()?;
     let hit =
         with_conn(|conn| report_cache_lookup_conn(conn, sha256, &opts_hash, traits_ts)).flatten();
     if let Some(report) = &hit
@@ -1017,14 +1026,17 @@ pub(crate) fn report_cache_store(
     file_type: &str,
     options: &AnalysisOptions,
     report: &AnalysisReport,
+    traits_revision: i64,
 ) {
     let opts_hash = typed_options_hash(options, file_type);
     if let Ok(bytes) = serde_json::to_vec(report) {
-        memo::put(memo::Kind::Report, memo_key(sha256, &opts_hash), bytes);
+        memo::put(
+            memo::Kind::Report,
+            memo_key(sha256, &opts_hash, traits_revision),
+            bytes,
+        );
     }
-    let Some(traits_ts) = traits_revision_key() else {
-        return;
-    };
+    let traits_ts = traits_revision;
     with_conn(|conn| {
         report_cache_store_conn(conn, sha256, &opts_hash, traits_ts, report);
         // Sample across all threads and evict in the background.
@@ -1043,14 +1055,20 @@ pub(crate) fn file_analysis_cache_lookup(
     file_type: &str,
     options: &AnalysisOptions,
 ) -> Option<FileAnalysis> {
+    // FileAnalysis has no child inventory. An archive must use a full report
+    // cache hit or be analyzed again, never be reconstructed as a leaf.
+    if archive_file_type(file_type) {
+        return None;
+    }
     let opts_hash = typed_options_hash(options, file_type);
-    let key = memo_key(sha256, &opts_hash);
+    // See `report_cache_lookup`: ambient revision, not a pinned one.
+    let traits_ts = ambient_traits_revision()?;
+    let key = memo_key(sha256, &opts_hash, traits_ts);
     if let Some(bytes) = memo::get(memo::Kind::FileAnalysis, &key)
         && let Ok(fa) = serde_json::from_slice::<FileAnalysis>(&bytes)
     {
         return Some(fa);
     }
-    let traits_ts = traits_revision_key()?;
     let hit =
         with_conn(|conn| file_analysis_cache_lookup_conn(conn, sha256, &opts_hash, traits_ts))
             .flatten();
@@ -1062,7 +1080,19 @@ pub(crate) fn file_analysis_cache_lookup(
     hit
 }
 
-/// Store a `FileAnalysis` in the file analysis cache.
+fn archive_file_type(file_type: &str) -> bool {
+    filefacts::FileType::from_label(file_type).is_some_and(|kind| kind.is_archive())
+}
+
+/// Whether projecting this report to one FileAnalysis preserves its tree.
+/// This also excludes source files with decoded children, not just archives.
+fn complete_leaf_report(report: &AnalysisReport) -> bool {
+    !archive_file_type(&report.target.file_type)
+        && report.files.is_empty()
+        && report.archive_contents.is_empty()
+}
+
+/// Store a `FileAnalysis` only when it represents a complete leaf report.
 ///
 /// Silently does nothing if caching is unavailable or any error occurs.
 pub(crate) fn file_analysis_cache_store(
@@ -1070,18 +1100,21 @@ pub(crate) fn file_analysis_cache_store(
     file_type: &str,
     options: &AnalysisOptions,
     fa: &FileAnalysis,
+    report: &AnalysisReport,
+    traits_revision: i64,
 ) {
+    if archive_file_type(file_type) || !complete_leaf_report(report) {
+        return;
+    }
     let opts_hash = typed_options_hash(options, file_type);
     if let Ok(bytes) = serde_json::to_vec(fa) {
         memo::put(
             memo::Kind::FileAnalysis,
-            memo_key(sha256, &opts_hash),
+            memo_key(sha256, &opts_hash, traits_revision),
             bytes,
         );
     }
-    let Some(traits_ts) = traits_revision_key() else {
-        return;
-    };
+    let traits_ts = traits_revision;
     with_conn(|conn| {
         file_analysis_cache_store_conn(conn, sha256, &opts_hash, traits_ts, fa);
         let count = FILE_ANALYSIS_STORE_COUNT.fetch_add(1, Ordering::Relaxed);
@@ -1198,6 +1231,40 @@ mod tests {
         AnalysisReport::new(target)
     }
 
+    /// A store must key on the traits the analysis actually ran under, not on
+    /// whatever the process-global traits scan holds by the time it finishes.
+    ///
+    /// `reload_capability_mapper` — the server's `/reload` endpoint and scan's
+    /// periodic renewal task — drops the memoized traits fingerprint and
+    /// installs a new mapper while analyses are still in flight. Keying the
+    /// store on the ambient fingerprint filed a report evaluated against the
+    /// OLD rules under the NEW rules' revision, so every later scan of that
+    /// file was served a pre-update verdict: precisely the staleness the
+    /// reload's own invalidation exists to prevent, and a detection miss when
+    /// the update is what added the rule.
+    ///
+    /// Deliberately does not switch the traits override to produce the second
+    /// revision: that is process-global state, and mutating it here would
+    /// corrupt every sibling test sharing this process. Passing a revision
+    /// that differs from the ambient one models the same thing — an analysis
+    /// that ran under a tree the process is no longer pointing at.
+    #[test]
+    fn store_keys_on_the_traits_the_analysis_ran_under() {
+        let ambient = ambient_traits_revision().expect("an ambient revision must be derivable");
+        // The mapper this analysis held was built from a different tree.
+        let ran_under = ambient.wrapping_add(1);
+
+        let sha = "5d7b1f0e00000000000000000000000000000000000000000000000000000000";
+        let opts = AnalysisOptions::default();
+        report_cache_store(sha, "elf", &opts, &test_report(sha), ran_under);
+
+        assert!(
+            report_cache_lookup(sha, "elf", &opts).is_none(),
+            "a report evaluated under the pre-reload traits was served to a \
+             caller running the post-reload traits"
+        );
+    }
+
     fn test_conn() -> Connection {
         let conn = Connection::open_in_memory().expect("in-memory SQLite must succeed in test");
         conn.execute_batch(
@@ -1245,6 +1312,61 @@ mod tests {
             sha256.to_string(),
             512,
         )
+    }
+
+    #[test]
+    fn file_cache_rejects_archive_roots_even_without_retained_members() {
+        let options = AnalysisOptions::default();
+        for kind in ["zip", "tar", "npm", "whl", "jar", "python_sdist"] {
+            let mut report = test_report("archive-leaf-cache-regression");
+            report.target.file_type = kind.to_string();
+            assert!(archive_file_type(kind), "{kind}");
+            assert!(!complete_leaf_report(&report), "{kind}");
+            // Reject before consulting either the process memo or SQLite.
+            assert!(file_analysis_cache_lookup(&report.target.sha256, kind, &options).is_none());
+        }
+    }
+
+    #[test]
+    fn file_cache_rejects_lossy_decoded_tree_projection() {
+        let mut report = test_report("decoded-tree-cache-regression");
+        report.target.file_type = "javascript".to_string();
+        report
+            .files
+            .push(test_file_analysis("decoded-child", "javascript"));
+        let projected = report.to_file_analysis(0);
+        let restored = crate::report_from_file_analysis(projected, "loader.js".to_string());
+        // This is the lossy representation the old secondary cache accepted.
+        assert_eq!(report.files.len(), 1);
+        assert!(restored.files.is_empty());
+        assert!(!complete_leaf_report(&report));
+
+        report.files.clear();
+        report
+            .archive_contents
+            .push(crate::types::ArchiveEntry::default());
+        assert!(!complete_leaf_report(&report));
+        report.archive_contents.clear();
+        assert!(complete_leaf_report(&report));
+    }
+
+    #[test]
+    fn full_report_cache_preserves_children_when_leaf_projection_is_rejected() {
+        let conn = test_conn();
+        let mut report = test_report("full-tree-cache-regression");
+        report.target.file_type = "zip".to_string();
+        report.files.push(test_file_analysis("member-sha", "php"));
+        report.archive_contents.push(crate::types::ArchiveEntry {
+            path: "plugin/main.php".to_string(),
+            ..Default::default()
+        });
+        assert!(!complete_leaf_report(&report));
+        report_cache_store_conn(&conn, &report.target.sha256, "opts", 1, &report);
+        let restored = report_cache_lookup_conn(&conn, &report.target.sha256, "opts", 1)
+            .expect("full report cache hit");
+        assert_eq!(restored.files.len(), 1);
+        assert_eq!(restored.files[0].sha256, "member-sha");
+        assert_eq!(restored.archive_contents[0].path, "plugin/main.php");
     }
 
     #[test]

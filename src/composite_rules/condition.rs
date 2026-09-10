@@ -866,6 +866,10 @@ enum ConditionDeser {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Hash, Copy, clap::ValueEnum)]
 #[serde(rename_all = "snake_case")]
 pub enum StringValidator {
+    /// Require the entire match to be Base64-compatible (standard or URL-safe,
+    /// padded or unpadded; ASCII wrapping whitespace is allowed). Validates
+    /// canonical trailing bits, not decoded content or execution intent.
+    Base64,
     /// Require match to contain a valid external IPv4 address
     ExternalIp,
     /// Require match to contain a structurally valid IPv4 address of any

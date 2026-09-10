@@ -2291,6 +2291,15 @@ pub(crate) const BROAD_PLATFORM_ALLOWLIST: &[&str] = &[
 /// `text` matcher in an allowlisted `text:` directory passes; the same directory
 /// does **not** license a broad `value`/`symbol`/etc. matcher.
 pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
+    // `media.*` is one fact namespace shared by every passive container that
+    // can carry a payload — font, png, jpeg, wav, aiff, mp3, mp4, ico, gif,
+    // bmp, webp. The namespace exists precisely so a carrier rule is written
+    // once instead of eleven times, and the value paths it reads are emitted
+    // only for those types, so breadth here is the design rather than a
+    // missing filter. Splitting the rules per format to satisfy the cap would
+    // duplicate the same matcher eleven times, which the near-duplicate check
+    // rejects anyway.
+    "value:metadata/media/",
     // IP addresses and port numbers are embedded in binaries, scripts, manifests, docs
     "text:micro-behaviors/communications/ip/",
     // URLs and URL fragments appear in any file type

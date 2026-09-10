@@ -86,6 +86,7 @@ fn for_each_ascii_ci_substr(
 pub(crate) fn validate_match(s: &str, validator: Option<StringValidator>) -> bool {
     match validator {
         None => true,
+        Some(StringValidator::Base64) => crate::base64_validator::is_base64(s),
         Some(StringValidator::ExternalIp) => contains_external_ip_cached(s),
         Some(StringValidator::ValidIp) => contains_valid_ip(s),
         Some(StringValidator::BitcoinAddr) => contains_bitcoin_address(s),
@@ -98,6 +99,31 @@ use crate::types::{Evidence, MAX_EVIDENCE_PER_TRAIT, truncate_evidence_value};
 /// Maximum number of matches to process from regex find_iter() to prevent DoS on pattern-dense files
 const MAX_MATCHES_TO_PROCESS: usize = 10_000;
 
+/// Keep locations attached to the text and source span they actually matched.
+/// A regex can match different values and lengths; borrowing the first value
+/// for every offset produces incorrect evidence after proximity filtering.
+fn record_raw_match(evidence: &mut Vec<Evidence>, value: &str, offset: usize, length: usize) {
+    let match_len = (length != value.len()).then_some(length as u64);
+    if let Some(existing) = evidence
+        .iter_mut()
+        .find(|item| item.value == value && item.match_len == match_len)
+    {
+        existing.offsets.push(offset as u64);
+        existing.count += 1;
+    } else if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
+        evidence.push(Evidence {
+            method: "raw".to_string(),
+            source: "raw_content".to_string(),
+            value: value.to_string(),
+            location: Some(format!("0x{offset:x}")),
+            offsets: vec![offset as u64],
+            count: 1,
+            match_len,
+            ..Default::default()
+        });
+    }
+}
+
 thread_local! {
     /// Per-thread flag: does the trait currently being evaluated need the exact
     /// `match_count`? Set by [`MatchCountGuard`] at the top of each trait's
@@ -105,11 +131,29 @@ thread_local! {
     /// (tests, `cleave test-rules`) that doesn't install a guard. When `false`,
     /// `eval_raw` stops at the first passing match (the dominant RSS lever).
     static NEEDS_MATCH_COUNT: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+    static NEEDS_MATCH_LOCATIONS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Preserve locations for proximity consumers, including nested trait refs.
+/// Unlike counts, this requirement must survive inner evaluation guards.
+#[must_use]
+pub(crate) struct MatchLocationsGuard(bool);
+
+impl MatchLocationsGuard {
+    pub(crate) fn set(needs: bool) -> Self {
+        Self(NEEDS_MATCH_LOCATIONS.with(|cell| cell.replace(cell.get() || needs)))
+    }
+}
+
+impl Drop for MatchLocationsGuard {
+    fn drop(&mut self) {
+        NEEDS_MATCH_LOCATIONS.with(|cell| cell.set(self.0));
+    }
 }
 
 /// Read the per-thread "needs exact match_count" flag.
 fn match_count_needed() -> bool {
-    NEEDS_MATCH_COUNT.with(std::cell::Cell::get)
+    NEEDS_MATCH_COUNT.with(std::cell::Cell::get) || NEEDS_MATCH_LOCATIONS.with(std::cell::Cell::get)
 }
 
 /// RAII guard that sets the per-thread `NEEDS_MATCH_COUNT` flag for the duration
@@ -1709,8 +1753,6 @@ pub(crate) fn eval_raw<'a>(
             };
 
             if let Some(ref lean) = lean {
-                let mut first_match = None;
-                let mut first_offset = None;
                 let mut idx = 0usize;
                 let mut visit = |abs_start: usize, abs_end: usize| -> bool {
                     if idx >= MAX_MATCHES_TO_PROCESS {
@@ -1735,30 +1777,18 @@ pub(crate) fn eval_raw<'a>(
                         return true;
                     }
                     let match_bytes = &ctx.binary_data[abs_start..abs_end];
-
-                    // For validators or not filters, convert only the match to string
-                    if is_check.is_some() || not.is_some() {
-                        let match_str = String::from_utf8_lossy(match_bytes);
-                        if !validate_match(&match_str, is_check) {
-                            return true;
-                        }
-                        if let Some(not_filters) = not
-                            && not_filters.iter().any(|filter| filter.matches(&match_str))
-                        {
-                            return true;
-                        }
-                        if first_match.is_none() {
-                            first_match = Some(match_str.to_string());
-                            first_offset = Some(abs_start as u64);
-                        }
-                    } else if first_match.is_none() {
-                        // No filters, just count
-                        first_match = Some(String::from_utf8_lossy(match_bytes).to_string());
-                        first_offset = Some(abs_start as u64);
+                    let match_str = String::from_utf8_lossy(match_bytes);
+                    if !validate_match(&match_str, is_check) {
+                        return true;
                     }
-
+                    if let Some(not_filters) = not
+                        && not_filters.iter().any(|filter| filter.matches(&match_str))
+                    {
+                        return true;
+                    }
+                    record_raw_match(&mut evidence, &match_str, abs_start, match_bytes.len());
                     match_count += 1;
-                    // No density constraint and nobody reads the exact count:
+                    // No density constraint and nobody needs later locations:
                     // stop at the first passing match instead of scanning the
                     // whole file.
                     needs_count
@@ -1787,19 +1817,6 @@ pub(crate) fn eval_raw<'a>(
                         visit(search_start + start, search_start + end)
                     });
                 }
-                if match_count > 0
-                    && evidence.len() < MAX_EVIDENCE_PER_TRAIT
-                    && let Some(matched) = first_match
-                {
-                    evidence.push(Evidence {
-                        method: "raw".to_string(),
-                        source: "raw_content".to_string(),
-                        value: matched,
-                        location: Some(format!("0x{:x}", first_offset.unwrap_or(0))),
-                        offsets: first_offset.into_iter().collect(),
-                        ..Default::default()
-                    });
-                }
             }
         } else {
             // UNICODE PATH: compile the unicode engine now — only non-ASCII
@@ -1821,8 +1838,6 @@ pub(crate) fn eval_raw<'a>(
                     } else {
                         super::utf8_view(ctx.binary_data, (search_start, search_end))
                     };
-                let mut first_match = None;
-                let mut first_offset = None;
                 let mut idx = 0usize;
                 re.for_each_find(&content, |mat_start, match_str| {
                     // Limit match processing to prevent DoS on pattern-dense files
@@ -1858,27 +1873,16 @@ pub(crate) fn eval_raw<'a>(
                         return true;
                     }
                     match_count += 1;
-                    if first_match.is_none() {
-                        first_match = Some(match_str.to_string());
-                        first_offset = Some((search_start + mat_start) as u64);
-                    }
+                    record_raw_match(
+                        &mut evidence,
+                        match_str,
+                        search_start + mat_start,
+                        match_str.len(),
+                    );
                     // See bytes branch: stop at first match when the count is
                     // unneeded, to avoid scanning the whole file.
                     needs_count
                 });
-                if match_count > 0
-                    && evidence.len() < MAX_EVIDENCE_PER_TRAIT
-                    && let Some(matched) = first_match
-                {
-                    evidence.push(Evidence {
-                        method: "raw".to_string(),
-                        source: "raw_content".to_string(),
-                        value: matched,
-                        location: Some(format!("0x{:x}", first_offset.unwrap_or(0))),
-                        offsets: first_offset.into_iter().collect(),
-                        ..Default::default()
-                    });
-                }
             }
         }
     } else if let Some(exact_str) = exact {
@@ -2581,9 +2585,23 @@ mod multi_arg_tests {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod validator_wiring_tests {
     use super::validate_match;
     use crate::composite_rules::condition::StringValidator;
+
+    #[test]
+    fn base64_yaml_selector_reaches_the_validator() -> anyhow::Result<()> {
+        let validator: StringValidator = serde_yaml::from_str("base64")?;
+        assert_eq!(validator, StringValidator::Base64);
+        assert_eq!(serde_json::to_string(&validator)?, "\"base64\"");
+        assert!(validate_match("Zg==", Some(validator)));
+        assert!(!validate_match("Zh==", Some(validator)));
+        assert!(!validate_match("Zg=", Some(validator)));
+        assert!(!validate_match("not base64!", Some(validator)));
+        assert!(validate_match("not base64!", None));
+        Ok(())
+    }
 
     #[test]
     fn random_like_reaches_the_validator() {

@@ -1698,12 +1698,21 @@ impl ArchiveAnalyzer {
                 // the persistent cross-context cache. The in-process flight
                 // still shares full archive reports between simultaneous users.
                 if !is_archive {
+                    // The revision the member was actually evaluated under, so
+                    // a traits reload landing mid-archive cannot file this
+                    // member's verdict under the new rules' fingerprint.
+                    let traits_revision =
+                        self.capability_mapper.as_ref().map_or_else(
+                            crate::analysis_cache::store_revision_without_mapper,
+                            |m| m.traits_revision(),
+                        );
                     if !report.files.is_empty() || !report.archive_contents.is_empty() {
                         crate::analysis_cache::report_cache_store(
                             sha256,
                             file_type_key,
                             options,
                             report,
+                            traits_revision,
                         );
                     }
                     let mut fa = report.to_file_analysis(0);
@@ -1724,6 +1733,8 @@ impl ArchiveAnalyzer {
                         file_type_key,
                         options,
                         &fa,
+                        report,
+                        traits_revision,
                     );
                 }
                 flight.complete(Some(report));
@@ -1988,18 +1999,21 @@ impl ArchiveAnalyzer {
                 crate::rayon_nest::try_enter_nested_member_parallelism(data.len());
             let mut report = analyzer.analyze_input(&input)?;
 
-            // Attach the filefacts view for any member analyzer that didn't,
+            // Attach identity and the filefacts view for member analyzers that didn't,
             // reusing the member context opened above (no re-parse) — so a
             // member's declared references (e.g. a package.json's dependencies)
             // are never lost to an analyzer that forgets. Mirrors the standalone
             // safety net in `analyze`. Gated on `is_none` so analyzers that
             // already attach keep theirs.
-            if report.filefacts.is_none()
-                && let Some(ctx) = input.parsed_ctx.as_ref()
-            {
-                let view = crate::types::FilefactsView::from_ctx(ctx);
-                if !view.is_empty() {
-                    report.filefacts = Some(view);
+            if let Some(ctx) = input.parsed_ctx.as_ref() {
+                if report.identity.is_none() {
+                    report.identity = ctx.identity();
+                }
+                if report.filefacts.is_none() {
+                    let view = crate::types::FilefactsView::from_ctx(ctx);
+                    if !view.is_empty() {
+                        report.filefacts = Some(view);
+                    }
                 }
             }
 

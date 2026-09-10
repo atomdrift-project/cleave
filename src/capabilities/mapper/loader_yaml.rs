@@ -200,6 +200,9 @@ impl super::CapabilityMapper {
             trait_id_map,
             platforms: vec![Platform::All],
             slow_rule_ms: Self::DEFAULT_SLOW_RULE_MS,
+            // Pinned at load: results key on the traits this mapper read, not
+            // on whatever the process-global scan holds when they are stored.
+            traits_revision: crate::cache::traits_revision_fingerprint().unwrap_or_default(),
         })
     }
 }

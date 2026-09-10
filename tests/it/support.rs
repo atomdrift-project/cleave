@@ -138,6 +138,102 @@ fn shared_bucket_has_no_global_state_mutation() {
     );
 }
 
+/// The `IT_ISOLATED` module list declared by the Makefile `test` target.
+///
+/// Parses the `IT_ISOLATED := ...` assignment, following `\`-continued lines.
+/// Returns `None` when the Makefile isn't readable (packaged CI without the
+/// source tree), so callers can skip rather than fail.
+fn makefile_isolated_modules() -> Option<Vec<String>> {
+    let makefile = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Makefile");
+    let src = std::fs::read_to_string(makefile).ok()?;
+    let start = src.find("\nIT_ISOLATED :=")? + 1;
+    let mut modules = Vec::new();
+    for line in src[start..].lines() {
+        let continued = line.ends_with('\\');
+        let names = line
+            .trim_end_matches('\\')
+            .trim_start_matches("IT_ISOLATED :=");
+        modules.extend(names.split_whitespace().map(str::to_string));
+        if !continued {
+            break;
+        }
+    }
+    Some(modules)
+}
+
+/// The Makefile `--skip` list and [`ISOLATED_MODULES`] must name the same
+/// modules.
+///
+/// Both comments claim they are "kept in sync", but nothing checked it: the
+/// `shared_bucket_has_no_global_state_mutation` guard only polices the opposite
+/// direction (a shared module that starts mutating globals). A module added to
+/// one list and not the other runs in the shared process and corrupts its
+/// siblings — the failure lands in *other* modules and shifts with thread
+/// scheduling, so it reads as flakiness rather than as a partition bug.
+#[test]
+fn isolated_module_list_matches_makefile() {
+    let Some(mut from_makefile) = makefile_isolated_modules() else {
+        skip_missing("Makefile (source tree unavailable)");
+        return;
+    };
+    let mut declared: Vec<String> = ISOLATED_MODULES.iter().map(|m| (*m).to_string()).collect();
+    from_makefile.sort();
+    declared.sort();
+    assert_eq!(
+        declared, from_makefile,
+        "`support::ISOLATED_MODULES` and the Makefile `IT_ISOLATED` list have drifted. \
+         Every module that mutates process-global state must appear in BOTH, or it runs \
+         in the shared `cargo test --test it` process and corrupts sibling modules."
+    );
+}
+
+/// A shared-process run must skip every [`ISOLATED_MODULES`] module.
+///
+/// `make test` passes `--skip <module>::` for each one (Phase 1) and runs them
+/// one-process-each under nextest (Phase 2). A bare `cargo test --test it`
+/// passes no skips, so the isolated modules run as threads beside everything
+/// else: whichever loads traits first wins the process-global mapper and cache
+/// fingerprint, and the rest evaluate against the wrong rules. The resulting
+/// failures land in unrelated modules and move between runs.
+///
+/// Worse, the damage outlives the run. An analysis cached under another
+/// module's traits fingerprint persists in the on-disk cache, so a later
+/// *correct* run can still be served the poisoned entry — which is why
+/// `make test` also exports `CLEAVE_SKIP_CACHE=1`.
+///
+/// A filtered invocation (`cargo test --test it <filter>`, or nextest's
+/// per-test `--exact`) is left alone: the caller has named what to run.
+#[test]
+fn shared_run_skips_isolated_modules() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    // Any positional filter, or nextest's per-test invocation, means the caller
+    // chose the test set explicitly.
+    let filtered = args
+        .iter()
+        .any(|a| a == "--exact" || (!a.starts_with('-') && a != "--"));
+    if filtered || std::env::var_os("NEXTEST").is_some() {
+        return;
+    }
+    let missing: Vec<&str> = ISOLATED_MODULES
+        .iter()
+        .filter(|m| !args.iter().any(|a| a == &format!("{m}::")))
+        .copied()
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "this is an unpartitioned `cargo test --test it` run: {} global-state module(s) \
+         are executing as threads beside the shared tests and will corrupt them \
+         (first missing: {}).\n\
+         Run `make test` instead — it skips these in the shared process and runs each \
+         in its own process under nextest.\n\
+         If a run like this already happened, its findings may have been cached under \
+         the wrong traits fingerprint; re-run with CLEAVE_SKIP_CACHE=1 to bypass the \
+         poisoned entries.",
+        missing.len(),
+        missing[0],
+    );
+}
+
 /// Report that a test is skipping because a fixture the host doesn't have is
 /// missing. Callers `return` (or fall through an `else`) immediately after.
 ///

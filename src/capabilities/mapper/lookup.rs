@@ -20,6 +20,15 @@ impl super::CapabilityMapper {
         &self.composite_rules
     }
 
+    /// The analysis-cache revision every result this mapper produces must be
+    /// stored under: the fingerprint of the traits it was loaded from, pinned
+    /// at load. See [`CapabilityMapper::traits_revision`] for why a store must
+    /// use this rather than re-reading the process-global traits scan.
+    #[must_use]
+    pub(crate) fn traits_revision(&self) -> i64 {
+        self.traits_revision
+    }
+
     /// Get the number of loaded trait definitions
     #[allow(dead_code)] // Used in tests
     #[must_use]

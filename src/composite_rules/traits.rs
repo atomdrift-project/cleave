@@ -2019,6 +2019,14 @@ fn strip_decode_suffix(location: &str) -> &str {
 /// `archive:path/to/member:<inner-location>`, so preserve the archive
 /// member key while dropping a trailing byte offset.
 fn strip_byte_offset_location(location: &str) -> &str {
+    // Structured-value paths identify facts on this leaf, not separate files.
+    // Keep archive/decoded ownership while discarding field detail.
+    if location.starts_with("value:") {
+        return "";
+    }
+    if let Some((prefix, _)) = location.rsplit_once(":value:") {
+        return prefix;
+    }
     if parse_location_as_byte_offset(location).is_some() {
         return "";
     }
@@ -4317,6 +4325,20 @@ mod scope_tests {
 
     #[test]
     fn leaf_returns_exact_location() {
+        assert_eq!(
+            Scope::Leaf.key(Some("value:source.execution.module_http")),
+            ""
+        );
+        assert_eq!(
+            Scope::Leaf.key(Some(
+                "archive:a.zip!!pkg/index.js:value:source.execution.module_http"
+            )),
+            "archive:a.zip!!pkg/index.js"
+        );
+        assert_ne!(
+            Scope::Leaf.key(Some("archive:a.zip!!one.js:value:x")),
+            Scope::Leaf.key(Some("archive:a.zip!!two.js:value:x"))
+        );
         assert_eq!(Scope::Leaf.key(None), "");
         assert_eq!(Scope::Leaf.key(Some("archive:foo.so")), "archive:foo.so");
         assert_eq!(

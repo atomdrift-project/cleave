@@ -1974,6 +1974,7 @@ pub(crate) fn report_from_file_analysis(
     report.syscalls = fa.syscalls;
     report.yara_matches = fa.yara_matches;
     report.filefacts = fa.filefacts;
+    report.analysis_gaps = fa.analysis_gaps;
     report.filefacts_metrics = fa.filefacts_metrics;
     report.identity = fa.identity;
     report.paths = fa.paths;

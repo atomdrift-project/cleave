@@ -28,6 +28,11 @@ use serde::{Deserialize, Serialize};
 /// inside `symbols` tagged by kind.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct FilefactsView {
+    /// Typed, policy-free value links, independent of the producing format.
+    /// None means unavailable, not an empty graph or a clean verdict.
+    /// Dropped after member evaluation in compact mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flow: Option<filefacts::Flow>,
     /// Structural key-value tree (`pe.*`, `elf.*`, `macho.*`, …). Mirrors
     /// `ctx.parsed.values()`. Retained because host-PE detectors read
     /// `pe.signatures[*].subject` and `pe.debug.pdb.path` from it. Small for
@@ -72,6 +77,7 @@ impl FilefactsView {
     pub fn from_ctx(ctx: &crate::analysis_context::AnalysisContext<'_>) -> Self {
         let parsed = &ctx.parsed;
         Self {
+            flow: parsed.flow().cloned(),
             values: parsed.values().as_json().clone(),
             symbols: retained_symbols(parsed),
             errors: serialize_to_array(parsed.errors()),
@@ -85,6 +91,7 @@ impl FilefactsView {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         is_null_or_empty_object(&self.values)
+            && self.flow.is_none()
             && self.symbols.is_empty()
             && self.errors.is_empty()
             && self.references.is_empty()
@@ -179,5 +186,11 @@ mod tests {
             _ => None,
         });
         assert_eq!(call_target.as_deref(), Some("fetch"));
+        let flow = view.flow.as_ref().expect("source flow available");
+        assert_eq!(flow.producer, "tree-sitter");
+        let json = serde_json::to_value(&view).expect("serialize flow");
+        assert!(json.get("flow").is_some());
+        let decoded: FilefactsView = serde_json::from_value(json).expect("deserialize flow");
+        assert_eq!(decoded.flow.unwrap().values.len(), flow.values.len());
     }
 }

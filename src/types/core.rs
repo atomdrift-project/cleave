@@ -162,6 +162,9 @@ impl Criticality {
 /// Main analysis output structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AnalysisReport {
+    /// Incomplete analysis is not a malware finding or a clean verdict.
+    #[serde(default, skip_serializing_if = "super::AnalysisGaps::is_empty")]
+    pub analysis_gaps: super::AnalysisGaps,
     /// Schema version ("3" after finalize, "3.0" pre-finalize/cached).
     /// v3.0 adds the `filefacts` field mirroring filefacts's typed views.
     #[serde(alias = "schema_version")]
@@ -474,6 +477,7 @@ impl AnalysisReport {
     pub fn new_with_timestamp(target: TargetInfo, timestamp: chrono::DateTime<Utc>) -> Self {
         Self {
             version: "3.0".to_string(),
+            analysis_gaps: super::AnalysisGaps::default(),
             analysis_timestamp: Some(timestamp),
             target,
             traits: Vec::new(),
@@ -1173,6 +1177,18 @@ impl AnalysisReport {
     pub fn merge_encoding_layers(&mut self) -> Vec<usize> {
         use super::file_analysis::ENCODING_DELIMITER;
 
+        let parent_ids: std::collections::HashMap<String, u32> = self
+            .files
+            .iter()
+            .filter(|file| !file.path.contains(ENCODING_DELIMITER))
+            .map(|file| (file.path.clone(), file.id))
+            .collect();
+        let mut merged_ids = std::collections::HashMap::new();
+        let mut layer_sources = std::collections::HashMap::<
+            String,
+            std::collections::BTreeMap<String, Vec<super::file_analysis::CompositeSource>>,
+        >::new();
+
         // Identify which files are encoding layers and map them to their parent path
         // A layer path looks like: "parent_path##encoding@offset"
         // The parent is everything before the first "##"
@@ -1183,10 +1199,23 @@ impl AnalysisReport {
         for (i, file) in self.files.iter().enumerate() {
             if let Some(pos) = file.path.find(ENCODING_DELIMITER) {
                 let parent_path = &file.path[..pos];
+                // A filtered/missing parent cannot receive this evidence.
+                // Keep orphan layers instead of silently deleting them.
+                let Some(&parent_id) = parent_ids.get(parent_path) else {
+                    continue;
+                };
+                merged_ids.insert(file.id, parent_id);
+                let sources = layer_sources.entry(parent_path.to_string()).or_default();
+                for (id, refs) in &file.composite_sources {
+                    sources.entry(id.clone()).or_default().extend(refs.clone());
+                }
                 layer_findings
                     .entry(parent_path.to_string())
                     .or_default()
-                    .extend(file.findings.clone());
+                    .extend(file.findings.iter().cloned().map(|mut finding| {
+                        finding.src.get_or_insert(file.id);
+                        finding
+                    }));
                 layer_indices.push(i);
             }
         }
@@ -1204,6 +1233,11 @@ impl AnalysisReport {
         let mut merged_file_indices = Vec::new();
         for (i, file) in self.files.iter_mut().enumerate() {
             if let Some(findings) = layer_findings.remove(&file.path) {
+                if let Some(sources) = layer_sources.remove(&file.path) {
+                    for (id, refs) in sources {
+                        file.composite_sources.entry(id).or_default().extend(refs);
+                    }
+                }
                 // Merge findings, deduplicating by ID (keep highest criticality)
                 for finding in findings {
                     if let Some(existing) = file.findings.iter_mut().find(|f| f.id == finding.id) {
@@ -1217,6 +1251,44 @@ impl AnalysisReport {
                 Self::refresh_formula(file);
                 file.compute_summary();
                 merged_file_indices.push(i);
+            }
+        }
+
+        // Every source edge must follow a removed layer to its surviving
+        // carrier, including references from other files. Decoded coordinates
+        // cannot be reused as carrier coordinates without an explicit map.
+        for file in &mut self.files {
+            if let Some(parent) = file.parent_id.and_then(|id| merged_ids.get(&id)) {
+                file.parent_id = (*parent != file.id).then_some(*parent);
+            }
+            for finding in &mut file.findings {
+                if let Some(&parent) = finding.src.and_then(|id| merged_ids.get(&id)) {
+                    finding.src = Some(parent);
+                    finding.precomputed_spans = None;
+                    for ev in &mut finding.evidence {
+                        if !ev
+                            .location
+                            .as_deref()
+                            .is_some_and(|loc| loc.starts_with("archive:"))
+                        {
+                            ev.location = Some(format!(
+                                "archive:decoded:{}",
+                                ev.location.as_deref().unwrap_or("unknown")
+                            ));
+                        }
+                    }
+                }
+            }
+            for sources in file.composite_sources.values_mut() {
+                for source in sources.iter_mut() {
+                    if let Some(&parent) = merged_ids.get(&source.file) {
+                        source.file = parent;
+                        source.line = None;
+                        source.offset = None;
+                    }
+                }
+                sources.sort_unstable_by_key(|source| (source.file, source.line, source.offset));
+                sources.dedup();
             }
         }
 
@@ -1864,6 +1936,7 @@ impl AnalysisReport {
         let _ = std::mem::take(&mut self.traits);
         let _ = std::mem::take(&mut self.findings);
         let _ = std::mem::take(&mut self.suppressions);
+        let _ = std::mem::take(&mut self.analysis_gaps);
         let _ = std::mem::take(&mut self.structure);
         let _ = std::mem::take(&mut self.functions);
         let _ = std::mem::take(&mut self.strings);
@@ -1909,6 +1982,7 @@ impl AnalysisReport {
         file.traits = self.traits.clone();
         file.findings = self.findings.clone();
         file.suppressions = self.suppressions.clone();
+        file.analysis_gaps = self.analysis_gaps.clone();
         file.context = self.context.clone();
         file.filefacts = self.filefacts.clone();
         file.identity = self.identity.clone();
@@ -1935,6 +2009,8 @@ impl AnalysisReport {
             && retain_folded_kv(&file.path)
         {
             flatten_kv_for_output(tree, &mut file.kv);
+        } else if let Some(tree) = self.values_tree.as_deref() {
+            retain_cargo_context_values(&file.path, tree, &mut file.kv);
         }
         drop_unread_folded_fields(&mut file);
         file
@@ -1969,6 +2045,7 @@ impl AnalysisReport {
         file.arch = arch;
         file.traits = self.traits;
         file.findings = self.findings;
+        file.analysis_gaps = self.analysis_gaps;
         file.context = self.context;
         file.filefacts = self.filefacts;
         file.identity = self.identity;
@@ -1998,6 +2075,8 @@ impl AnalysisReport {
             flatten_kv_for_output(tree, &mut file.kv);
         } else if let Some(kv) = self.cached_member_kv.take() {
             file.kv = kv;
+        } else if let Some(tree) = self.values_tree.as_deref() {
+            retain_cargo_context_values(&file.path, tree, &mut file.kv);
         }
         drop_unread_folded_fields(&mut file);
         precompact_member_facts(&mut file);
@@ -2140,6 +2219,7 @@ fn drop_unread_folded_fields(file: &mut FileAnalysis) {
     }
     if let Some(view) = file.filefacts.as_mut() {
         view.values = serde_json::Value::Null;
+        view.flow = None;
     }
     // Sub-notable findings never render as finding rows on any compact-path
     // surface (terminal focus starts at notable; compact traits carry no
@@ -2152,6 +2232,74 @@ fn drop_unread_folded_fields(file: &mut FileAnalysis) {
             for e in &mut f.evidence {
                 e.value = String::new();
             }
+        }
+    }
+}
+
+/// Cargo graph analysis runs after members fold. Compact mode may discard the
+/// rest of the value tree, but not these bounded parser facts. Keep only the
+/// graph inputs rather than retaining every Rust member's complete values.
+fn retain_cargo_context_values(
+    path: &str,
+    tree: &serde_json::Value,
+    out: &mut std::collections::BTreeMap<String, serde_json::Value>,
+) {
+    let basename = path.rsplit(['/', '\\', '!']).next().unwrap_or(path);
+    if basename.eq_ignore_ascii_case("Cargo.toml") {
+        flatten_kv_for_output(
+            &serde_json::json!({
+                "cargo": tree.get("cargo"),
+                "package": {"build": tree.pointer("/package/build")},
+                "lib": tree.get("lib"),
+            }),
+            out,
+        );
+    }
+    if tree.pointer("/source/rust").is_some() {
+        flatten_kv_for_output(
+            &serde_json::json!({
+                "source": {
+                    "rust": tree.pointer("/source/rust"),
+                    "payload_flow": tree.pointer("/source/payload_flow"),
+                }
+            }),
+            out,
+        );
+    }
+}
+
+#[cfg(test)]
+mod cargo_compact_retention_tests {
+    use super::retain_cargo_context_values;
+    use serde_json::json;
+    use std::collections::BTreeMap;
+    #[test]
+    fn retains_graph_inputs_without_unrelated_member_values() {
+        let tree = json!({"source":{"rust":{"modules":[{"name":"helper","path":"helper.rs"}]},
+            "payload_flow":{"events":[{"kind":"file-http-body"}]}},"large_unused_tree":"discard"});
+        let mut kept = BTreeMap::new();
+        retain_cargo_context_values("a.crate!!pkg/src/lib.rs", &tree, &mut kept);
+        assert_eq!(
+            kept.get("source.rust.modules[0].name"),
+            Some(&json!("helper"))
+        );
+        assert_eq!(
+            kept.get("source.payload_flow.events[0].kind"),
+            Some(&json!("file-http-body"))
+        );
+        assert!(!kept.contains_key("large_unused_tree"));
+    }
+    #[test]
+    fn retains_explicit_disabled_and_custom_build_context() {
+        for mode in ["disabled", "custom"] {
+            let mut kept = BTreeMap::new();
+            retain_cargo_context_values(
+                "a.crate!!pkg/Cargo.toml",
+                &json!({"cargo":{"build_mode":mode},"package":{"build":"bootstrap.rs"},"lib":{"proc-macro":true}}),
+                &mut kept,
+            );
+            assert_eq!(kept.get("cargo.build_mode"), Some(&json!(mode)));
+            assert_eq!(kept.get("lib.proc-macro"), Some(&json!(true)));
         }
     }
 }
@@ -3311,6 +3459,82 @@ mod tests {
     }
 
     // ==================== merge_encoding_layers Tests ====================
+
+    #[test]
+    fn test_merge_layers_preserves_reference_integrity() {
+        use super::super::file_analysis::CompositeSource;
+        let mut report = AnalysisReport::new(test_target());
+        let mut inherited = test_finding("cap/decoded", Criticality::Notable);
+        inherited.src = Some(7);
+        let mut parent = test_file("/worker.js", vec![inherited.clone()]);
+        parent.id = 3;
+        parent.composite_sources.insert(
+            "cap/decoded".into(),
+            vec![CompositeSource {
+                file: 7,
+                line: Some(10),
+                offset: Some(100),
+            }],
+        );
+        let mut layer = test_file("/worker.js##base64@20", vec![inherited.clone()]);
+        layer.id = 7;
+        let mut decoded_native = test_finding("cap/native", Criticality::Notable);
+        decoded_native.precomputed_spans = Some(vec![[100, 5]]);
+        layer.findings.push(decoded_native);
+        layer.composite_sources.insert(
+            "cap/native".into(),
+            vec![CompositeSource {
+                file: 12,
+                line: Some(4),
+                offset: Some(20),
+            }],
+        );
+        let mut sibling = test_file("/other.js", vec![inherited]);
+        sibling.id = 12;
+        sibling.parent_id = Some(7);
+        report.files = vec![parent, layer, sibling];
+        assert_eq!(report.merge_encoding_layers(), vec![0]);
+        assert_eq!(report.files.len(), 2);
+        assert_eq!(report.files[0].findings[0].src, Some(3));
+        assert_eq!(report.files[1].findings[0].src, Some(3));
+        assert_eq!(report.files[1].parent_id, Some(3));
+        let decoded_native = report.files[0]
+            .findings
+            .iter()
+            .find(|f| f.id == "cap/native")
+            .unwrap();
+        assert_eq!(decoded_native.src, Some(3));
+        assert!(decoded_native.precomputed_spans.is_none());
+        let external = &report.files[0].composite_sources["cap/native"][0];
+        assert_eq!(
+            (external.file, external.line, external.offset),
+            (12, Some(4), Some(20))
+        );
+        let source = &report.files[0].composite_sources["cap/decoded"][0];
+        assert_eq!(source.file, 3);
+        assert_eq!(source.line, None, "decoded lines are not carrier lines");
+        assert_eq!(
+            source.offset, None,
+            "decoded offsets are not carrier offsets"
+        );
+        let compact = super::super::compact::compact_from_files(&report.files);
+        assert_eq!(compact.files.len(), 2);
+    }
+
+    #[test]
+    fn test_merge_layers_keeps_orphan_evidence() {
+        let mut report = AnalysisReport::new(test_target());
+        report.files = vec![test_file(
+            "/missing.js##base64@20",
+            vec![test_finding("cap/decoded", Criticality::Notable)],
+        )];
+        assert!(report.merge_encoding_layers().is_empty());
+        assert_eq!(
+            report.files.len(),
+            1,
+            "no parent exists to retain the evidence"
+        );
+    }
 
     fn test_file(path: &str, findings: Vec<Finding>) -> FileAnalysis {
         let mut fa = FileAnalysis::new(

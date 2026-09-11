@@ -2299,7 +2299,7 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     // missing filter. Splitting the rules per format to satisfy the cap would
     // duplicate the same matcher eleven times, which the near-duplicate check
     // rejects anyway.
-    "value:metadata/media/",
+    "value:metadata/file/format/media/",
     // IP addresses and port numbers are embedded in binaries, scripts, manifests, docs
     "text:micro-behaviors/communications/ip/",
     // URLs and URL fragments appear in any file type
@@ -2604,6 +2604,43 @@ pub(crate) fn find_broad_filetype_traits(
             ))
         })
         .collect()
+}
+
+#[cfg(test)]
+mod media_filetype_allowance_tests {
+    use super::{TraitDefinition, find_broad_filetype_traits};
+    use std::collections::HashMap;
+
+    #[test]
+    fn relocated_media_allowance_stays_matcher_and_directory_scoped() -> anyhow::Result<()> {
+        let value: TraitDefinition = serde_yaml::from_str(
+            "id: carrier\ndesc: Container signature\ncrit: baseline\nconf: 0.9\nfor: [jpeg, png, svg, wav, aiff, mp3, mp4, ico, gif, bmp, webp, font]\nif:\n  type: value\n  path: media.container\n",
+        )?;
+        assert_eq!(value.r#for.len(), 12);
+        for (path, permitted) in [
+            ("/traits/metadata/file/format/media/container.yaml", true),
+            (
+                "/traits/metadata/file/format/media-extra/container.yaml",
+                false,
+            ),
+            ("/traits/metadata/file/format/structured/traits.yaml", false),
+        ] {
+            let sources = HashMap::from([(value.id.clone(), path.to_string())]);
+            assert_eq!(
+                find_broad_filetype_traits(std::slice::from_ref(&value), &sources).is_empty(),
+                permitted,
+                "{path}"
+            );
+        }
+        let mut raw = value.clone();
+        raw.r#if = serde_yaml::from_str("type: raw\nsubstr: RIFF\n")?;
+        let sources = HashMap::from([(
+            raw.id.clone(),
+            "/traits/metadata/file/format/media/container.yaml".to_string(),
+        )]);
+        assert_eq!(find_broad_filetype_traits(&[raw], &sources).len(), 1);
+        Ok(())
+    }
 }
 
 /// Find well-known/ atomic traits targeting binaries without any file size filter.

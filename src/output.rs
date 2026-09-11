@@ -698,13 +698,51 @@ pub fn format_context_badged(
     opts: &TinyOpts,
     badge: HeaderBadge<'_>,
 ) -> String {
+    // Report analysis gaps independently of finding/severity focus. Incomplete
+    // analysis must remain visible even when no malware trait matched.
+    let mut gaps = String::new();
+    let affected: Vec<_> = report
+        .files
+        .iter()
+        .filter(|f| !f.analysis_gaps.is_empty())
+        .collect();
+    for file in affected.iter().take(200) {
+        let reasons = file
+            .analysis_gaps
+            .iter()
+            .map(|g| g.label())
+            .collect::<Vec<_>>()
+            .join(", ");
+        gaps.push_str(&format!(
+            "Analysis incomplete for {:?}: {reasons}\n",
+            file.path
+        ));
+    }
+    if affected.len() > 200 {
+        gaps.push_str(&format!(
+            "Analysis incomplete for {} additional files; see JSON analysis_gaps.\n",
+            affected.len() - 200
+        ));
+    }
+    if report.files.is_empty() && !report.analysis_gaps.is_empty() {
+        let reasons = report
+            .analysis_gaps
+            .iter()
+            .map(|g| g.label())
+            .collect::<Vec<_>>()
+            .join(", ");
+        gaps.push_str(&format!(
+            "Analysis incomplete for {:?}: {reasons}\n",
+            report.target.path
+        ));
+    }
     let files: Vec<&FileAnalysis> = report
         .files
         .iter()
         .filter(|f| file_has_output(f, opts) || f.identity.is_some())
         .collect();
     if files.is_empty() {
-        return String::new();
+        return gaps;
     }
     let colorize = opts.color && colored::control::SHOULD_COLORIZE.should_colorize();
     let term_width = terminal_width();
@@ -743,7 +781,7 @@ pub fn format_context_badged(
         None
     }
 
-    let mut out = String::with_capacity(4096);
+    let mut out = gaps;
     let mut emitted = false;
     // The machine/LLM view shows each distinct finding once across the whole
     // sample: an identical finding repeated across many archive members (product
@@ -5450,6 +5488,7 @@ mod tests {
 
     fn create_test_report(findings: Vec<Finding>, yara_matches: Vec<YaraMatch>) -> AnalysisReport {
         let mut report = AnalysisReport {
+            analysis_gaps: Default::default(),
             version: "3.0".to_string(),
             analysis_timestamp: Some(Utc::now()),
             target: TargetInfo {

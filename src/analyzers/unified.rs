@@ -27,6 +27,27 @@ use std::sync::Arc;
 /// O(n²) memcmp on minified members (the CRT memcpy/memcmp bucket).
 type SeenStringKey = (u64, u8, u64, u64);
 
+/// Bound retained AST/decoded strings in aggregate, not by literal length.
+/// Large embedded resources must remain visible to literal-based rules.
+#[derive(Default)]
+struct SeenStrings {
+    keys: FxHashSet<SeenStringKey>,
+    bytes: usize,
+    truncated: bool,
+}
+
+impl SeenStrings {
+    fn has_room(&mut self, length: usize) -> bool {
+        let fits = self.keys.len() < crate::strings::MAX_STRINGS_PER_FILE
+            && length <= crate::strings::MAX_TOTAL_STRING_BYTES.saturating_sub(self.bytes);
+        if !fits && !self.truncated {
+            tracing::warn!("source string retention limit reached; some literal evidence omitted");
+            self.truncated = true;
+        }
+        fits
+    }
+}
+
 fn seen_string_key(info: &StringInfo) -> SeenStringKey {
     let mut value_hash = FxHasher::default();
     value_hash.write(info.value.as_bytes());
@@ -48,12 +69,11 @@ fn seen_string_key(info: &StringInfo) -> SeenStringKey {
     )
 }
 
-fn push_unique_string(
-    report: &mut AnalysisReport,
-    seen: &mut FxHashSet<SeenStringKey>,
-    info: StringInfo,
-) {
-    if seen.insert(seen_string_key(&info)) {
+fn push_unique_string(report: &mut AnalysisReport, seen: &mut SeenStrings, info: StringInfo) {
+    let key = seen_string_key(&info);
+    if !seen.keys.contains(&key) && seen.has_room(info.value.len()) {
+        seen.keys.insert(key);
+        seen.bytes += info.value.len();
         report.strings.push(info);
     }
 }
@@ -503,7 +523,7 @@ impl UnifiedSourceAnalyzer {
         let tree = source_ast.map(|ast| ast.tree);
 
         let mut ast_kind_cache = None;
-        let mut seen_strings = FxHashSet::default();
+        let mut seen_strings = SeenStrings::default();
         if let Some(tree) = tree {
             // One walk for functions, string/number/comment literals, call
             // sites, and the trait kind-cache. A second cursor pass in
@@ -910,7 +930,7 @@ impl UnifiedSourceAnalyzer {
         required_node_types: &FxHashSet<&str>,
         call_node_types: &FxHashSet<&'static str>,
         kind_cache: &mut FxHashMap<String, Vec<Evidence>>,
-        seen_strings: &mut FxHashSet<SeenStringKey>,
+        seen_strings: &mut SeenStrings,
     ) {
         let source = content.as_bytes();
         let mut cursor = tree.walk();
@@ -938,7 +958,7 @@ impl UnifiedSourceAnalyzer {
         required_node_types: &FxHashSet<&str>,
         call_node_types: &FxHashSet<&'static str>,
         kind_cache: &mut FxHashMap<String, Vec<Evidence>>,
-        seen_strings: &mut FxHashSet<SeenStringKey>,
+        seen_strings: &mut SeenStrings,
     ) {
         loop {
             let node = cursor.node();
@@ -1040,7 +1060,7 @@ impl UnifiedSourceAnalyzer {
         node: &tree_sitter::Node<'_>,
         source: &[u8],
         report: &mut AnalysisReport,
-        seen_strings: &mut FxHashSet<SeenStringKey>,
+        seen_strings: &mut SeenStrings,
     ) {
         let Ok(text) = node.utf8_text(source) else {
             return;
@@ -1058,7 +1078,7 @@ impl UnifiedSourceAnalyzer {
             .trim_end_matches("\"@")
             .trim_start_matches(':'); // Ruby symbol literals like :alias_method
 
-        if s.is_empty() || s.len() >= 10000 {
+        if s.is_empty() || !seen_strings.has_room(s.len()) {
             return;
         }
         // `s` is a subslice of `text` after the leading quote/
@@ -1404,6 +1424,48 @@ impl Analyzer for UnifiedSourceAnalyzer {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_string_budget_counts_unique_retained_bytes() {
+        let mut report = AnalysisReport::new(TargetInfo::default());
+        let mut seen = SeenStrings::default();
+        let literal = StringInfo {
+            value: "abc".into(),
+            offset: Some(1),
+            section: Some("ast".to_string()),
+            string_type: None,
+            encoding: "utf-8".to_string(),
+            encoding_chain: Vec::new(),
+            fragments: None,
+        };
+        push_unique_string(&mut report, &mut seen, literal.clone());
+        push_unique_string(&mut report, &mut seen, literal.clone());
+        assert_eq!(seen.bytes, 3);
+        assert_eq!(report.strings.len(), 1);
+        seen.bytes = crate::strings::MAX_TOTAL_STRING_BYTES - 3;
+        let mut next = literal.clone();
+        next.offset = Some(10);
+        push_unique_string(&mut report, &mut seen, next);
+        assert_eq!(seen.bytes, crate::strings::MAX_TOTAL_STRING_BYTES);
+        assert_eq!(report.strings.len(), 2);
+        let mut extra = literal;
+        extra.offset = Some(20);
+        push_unique_string(&mut report, &mut seen, extra);
+        assert_eq!(report.strings.len(), 2);
+        assert!(seen.truncated);
+    }
+
+    #[test]
+    fn source_string_budget_enforces_count_and_oversized_literal_limits() {
+        let mut seen = SeenStrings::default();
+        assert!(!seen.has_room(crate::strings::MAX_TOTAL_STRING_BYTES + 1));
+        assert!(seen.truncated);
+        assert!(seen.has_room(1)); // Smaller later literals remain observable.
+        seen.keys = (0..crate::strings::MAX_STRINGS_PER_FILE)
+            .map(|n| (u64::try_from(n).unwrap(), 0, 0, 0))
+            .collect();
+        assert!(!seen.has_room(1));
+    }
     use crate::analyzers::FileType;
     use std::path::PathBuf;
     use tempfile::NamedTempFile;

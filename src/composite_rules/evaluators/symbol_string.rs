@@ -1200,6 +1200,13 @@ pub(crate) fn eval_call<'a>(
     ctx: &EvaluationContext<'a>,
 ) -> ConditionResult {
     let Some(view) = ctx.report.filefacts.as_ref() else {
+        if arg_filter.is_some_and(|f| f.from.is_some())
+            || args_filters.is_some_and(|fs| fs.iter().any(|f| f.from.is_some()))
+        {
+            ctx.report
+                .analysis_gaps
+                .record(crate::types::AnalysisGap::FlowUnavailable);
+        }
         return ConditionResult::no_match();
     };
     let mut evidence = Vec::new();
@@ -1217,21 +1224,37 @@ pub(crate) fn eval_call<'a>(
             continue;
         };
         let target = target.as_deref().unwrap_or("");
+        let needs_flow = arg_filter.is_some_and(|f| f.from.is_some())
+            || args_filters.is_some_and(|fs| fs.iter().any(|f| f.from.is_some()));
+        let canonical = if needs_flow {
+            flow(ctx)
+                .and_then(|flow| flow_call(flow, *offset, target))
+                .and_then(|v| v.target.as_deref())
+        } else {
+            None
+        };
 
         // Match the target name against any name predicate.
-        let name_matches = match (exact, substr, compiled_regex.as_ref()) {
-            (None, None, None) => true, // no name filter — every call qualifies
-            (Some(e), _, _) => target == e,
-            (_, Some(s), _) => target.contains(s.as_str()),
-            (_, _, Some(re)) => re.is_match(target),
-        };
+        let name_matches = [Some(target), canonical]
+            .into_iter()
+            .flatten()
+            .any(|target| match (exact, substr, compiled_regex.as_ref()) {
+                (None, None, None) => true, // no name filter — every call qualifies
+                (Some(e), _, _) => target == e,
+                (_, Some(s), _) => target.contains(s.as_str()),
+                (_, _, Some(re)) => re.is_match(target),
+            });
         if !name_matches {
             continue;
         }
 
         // If an arg filter is set, require at least one arg to match it.
         if let Some(filter) = arg_filter
-            && !args.iter().any(|a| arg_matches(a, filter))
+            && !args.iter().enumerate().any(|(i, a)| {
+                filter.index.is_none_or(|wanted| wanted == i)
+                    && arg_matches(a, filter)
+                    && origin_matches(*offset, target, i, filter, ctx)
+            })
         {
             continue;
         }
@@ -1240,7 +1263,9 @@ pub(crate) fn eval_call<'a>(
         // a *distinct* arg (greedy assignment) — for matching a specific
         // multi-positional shape like `File.rename("a.png", "b.exe")`.
         if let Some(filters) = args_filters
-            && !all_filters_match_distinct(args, filters)
+            && !all_filters_match_distinct_with(args, filters, |i, filter| {
+                origin_matches(*offset, target, i, filter, ctx)
+            })
         {
             continue;
         }
@@ -1350,35 +1375,222 @@ pub(crate) fn eval_symbol_fact<'a>(
 /// without letting one arg satisfy two filters. Backtracks so a greedy
 /// mis-assignment can't produce a false negative; inputs are tiny (a handful of
 /// args and filters).
+#[cfg(test)]
 fn all_filters_match_distinct(
     args: &[filefacts::Arg],
     filters: &[crate::composite_rules::condition::ArgFilter],
 ) -> bool {
+    all_filters_match_distinct_with(args, filters, |_, filter| filter.from.is_none())
+}
+
+fn all_filters_match_distinct_with(
+    args: &[filefacts::Arg],
+    filters: &[crate::composite_rules::condition::ArgFilter],
+    extra: impl Fn(usize, &crate::composite_rules::condition::ArgFilter) -> bool,
+) -> bool {
     if filters.len() > args.len() {
         return false;
     }
-    fn assign(
-        fi: usize,
-        args: &[filefacts::Arg],
-        filters: &[crate::composite_rules::condition::ArgFilter],
-        used: &mut [bool],
-    ) -> bool {
-        if fi == filters.len() {
-            return true;
-        }
-        for (ai, a) in args.iter().enumerate() {
-            if !used[ai] && arg_matches(a, &filters[fi]) {
-                used[ai] = true;
-                if assign(fi + 1, args, filters, used) {
-                    return true;
+    // Precompute candidates once, including any bounded provenance queries.
+    // Augmenting paths avoid factorial backtracking on overlapping filters.
+    let candidates: Vec<Vec<usize>> = filters
+        .iter()
+        .map(|filter| {
+            args.iter()
+                .enumerate()
+                .filter(|(i, arg)| {
+                    filter.index.is_none_or(|wanted| wanted == *i)
+                        && arg_matches(arg, filter)
+                        && extra(*i, filter)
+                })
+                .map(|(i, _)| i)
+                .collect()
+        })
+        .collect();
+    let mut owners: Vec<Option<usize>> = vec![None; args.len()];
+    for start in 0..filters.len() {
+        let mut queue = std::collections::VecDeque::from([start]);
+        let mut previous: Vec<Option<(usize, usize)>> = vec![None; filters.len()];
+        let mut seen_args = vec![false; args.len()];
+        let mut end = None;
+        while let Some(filter) = queue.pop_front() {
+            for &arg in &candidates[filter] {
+                if seen_args[arg] {
+                    continue;
                 }
-                used[ai] = false;
+                seen_args[arg] = true;
+                if let Some(owner) = owners[arg] {
+                    if owner != start && previous[owner].is_none() {
+                        previous[owner] = Some((filter, arg));
+                        queue.push_back(owner);
+                    }
+                } else {
+                    end = Some((filter, arg));
+                    break;
+                }
+            }
+            if end.is_some() {
+                break;
             }
         }
-        false
+        let Some((mut filter, mut arg)) = end else {
+            return false;
+        };
+        loop {
+            owners[arg] = Some(filter);
+            let Some((parent, old_arg)) = previous[filter] else {
+                break;
+            };
+            filter = parent;
+            arg = old_arg;
+        }
     }
-    let mut used = vec![false; args.len()];
-    assign(0, args, filters, &mut used)
+    true
+}
+
+fn flow_call<'a>(
+    flow: &'a filefacts::Flow,
+    offset: Option<u64>,
+    target: &str,
+) -> Option<&'a filefacts::FlowValue> {
+    let mut candidates = flow
+        .values
+        .iter()
+        .filter(|v| v.kind == "call" && Some(v.offset as u64) == offset);
+    let first = candidates.next()?;
+    if first.target.as_deref() == Some(target) {
+        return Some(first);
+    }
+    let mut unique = true;
+    for value in candidates {
+        unique = false;
+        if value.target.as_deref() == Some(target) {
+            return Some(value);
+        }
+    }
+    // A unique call can have a canonical import spelling different from the
+    // raw symbol. Ambiguous same-offset calls must match their target too.
+    unique.then_some(first)
+}
+
+fn origin_matches(
+    offset: Option<u64>,
+    target: &str,
+    argument: usize,
+    filter: &crate::composite_rules::condition::ArgFilter,
+    ctx: &EvaluationContext<'_>,
+) -> bool {
+    use crate::types::AnalysisGap;
+    let gaps = &ctx.report.analysis_gaps;
+    let Some(origin) = &filter.from else {
+        return true;
+    };
+    let source_pattern = (!origin.call.is_empty())
+        .then(|| crate::composite_rules::condition::cached_regex(&origin.call))
+        .flatten();
+    let value_pattern = origin
+        .value
+        .as_ref()
+        .and_then(|p| crate::composite_rules::condition::cached_regex(p));
+    if source_pattern.is_none() && value_pattern.is_none() {
+        return false;
+    }
+    let Some(flow) = flow(ctx) else { return false };
+    let Some(call) = flow_call(flow, offset, target) else {
+        gaps.record(AnalysisGap::FlowCallUnavailable);
+        return false;
+    };
+    let Some(value) = call.inputs.get(argument).copied() else {
+        gaps.record(AnalysisGap::FlowCallUnavailable);
+        return false;
+    };
+    let mut models = Vec::new();
+    for model in &origin.through {
+        let Some(pattern) = crate::composite_rules::condition::cached_regex(&model.call) else {
+            return false;
+        };
+        let targets: std::collections::BTreeSet<_> = flow
+            .values
+            .iter()
+            .filter_map(|v| v.target.as_ref())
+            .filter(|t| pattern.is_match(t))
+            .collect();
+        models.extend(targets.into_iter().map(|target| filefacts::FlowTransfer {
+            call: target.clone(),
+            arguments: model.arguments.clone(),
+            receiver: model.receiver,
+        }));
+    }
+    // Selected sources are terminal evidence for this query. Their internal
+    // implementation need not be modeled to establish that they supply data.
+    // Argument constraints are still checked below, in the same invocation.
+    for target in flow
+        .values
+        .iter()
+        .filter_map(|v| v.target.as_ref())
+        .collect::<std::collections::BTreeSet<_>>()
+    {
+        if source_pattern.as_ref().is_some_and(|p| p.is_match(target)) {
+            models.push(filefacts::FlowTransfer {
+                call: target.clone(),
+                arguments: Vec::new(),
+                receiver: false,
+            });
+        }
+    }
+    let found = if let Some(field) = &origin.field {
+        flow.field_origins(value, field, &models, 10_000)
+    } else {
+        flow.origins(value, &models, 10_000)
+    };
+    if found.incomplete {
+        gaps.record(AnalysisGap::FlowQueryIncomplete);
+        if origin.field.is_some() {
+            gaps.record(AnalysisGap::FlowFieldUnavailable);
+        }
+    }
+    found.values.iter().any(|observation| {
+        let Some(value) = flow.values.get(observation.value) else { return false };
+        if let Some(pattern) = &value_pattern {
+            return value.literal.as_ref().is_some_and(|a| matches!(a,
+                filefacts::Arg::String { value } | filefacts::Arg::Template { value } if pattern.is_match(value)));
+        }
+        if value.kind != "call" || !value.target.as_ref().is_some_and(|t| source_pattern.as_ref().is_some_and(|p| p.is_match(t))) { return false; }
+        let Some(literal_pattern) = &origin.literal else { return true };
+        let Some(pattern) = crate::composite_rules::condition::cached_regex(literal_pattern) else { return false };
+        let arguments = flow.argument_origins(observation, origin.argument, &models, 10_000);
+        if arguments.incomplete { gaps.record(AnalysisGap::FlowQueryIncomplete); }
+        arguments.values.iter().any(|id| {
+            flow.values.get(id.value).and_then(|v| v.literal.as_ref())
+                .is_some_and(|a| matches!(a, filefacts::Arg::String { value } | filefacts::Arg::Template { value } if pattern.is_match(value)))
+        })
+    })
+}
+
+fn flow<'a>(ctx: &'a EvaluationContext<'_>) -> Option<&'a filefacts::Flow> {
+    use crate::types::AnalysisGap;
+    let Some(flow) = ctx.report.filefacts.as_ref().and_then(|v| v.flow.as_ref()) else {
+        ctx.report
+            .analysis_gaps
+            .record(AnalysisGap::FlowUnavailable);
+        return None;
+    };
+    if flow.version != 1 {
+        ctx.report
+            .analysis_gaps
+            .record(AnalysisGap::FlowSchemaUnsupported);
+        return None;
+    }
+    if flow
+        .limitations
+        .iter()
+        .any(|limit| limit != "source-local-may-flow-not-reachability")
+    {
+        ctx.report
+            .analysis_gaps
+            .record(AnalysisGap::FlowGraphLimited);
+    }
+    Some(flow)
 }
 
 /// Match one arg JSON value against an [`ArgFilter`]. Argstring/number/
@@ -2551,6 +2763,255 @@ mod multi_arg_tests {
         let args = [s("a.png"), s("b.exe")];
         let filters = [rx(r"\.png$"), rx(r"\.exe$")];
         assert!(all_filters_match_distinct(&args, &filters));
+    }
+
+    #[test]
+    fn positional_filters_do_not_match_other_arguments() {
+        let args = [s("source"), s("destination")];
+        let filter = ArgFilter {
+            index: Some(1),
+            exact: Some("destination".into()),
+            ..Default::default()
+        };
+        assert!(all_filters_match_distinct(
+            &args,
+            std::slice::from_ref(&filter)
+        ));
+        let wrong = ArgFilter {
+            index: Some(0),
+            ..filter.clone()
+        };
+        assert!(!all_filters_match_distinct(&args, &[wrong]));
+        let missing = ArgFilter {
+            index: Some(2),
+            ..filter.clone()
+        };
+        assert!(!all_filters_match_distinct(&args, &[missing]));
+        assert!(!all_filters_match_distinct(
+            &args,
+            &[filter.clone(), filter]
+        ));
+        assert!(all_filters_match_distinct(
+            &args,
+            &[
+                ArgFilter {
+                    index: Some(0),
+                    ..Default::default()
+                },
+                rx("destination")
+            ]
+        ));
+    }
+
+    #[test]
+    fn yaml_provenance_uses_models_and_exact_argument_positions() {
+        use crate::composite_rules::context::EvaluationContext;
+        use crate::composite_rules::types::FileType;
+        use crate::types::{AnalysisReport, FilefactsView, TargetInfo};
+        let filter: ArgFilter = serde_yaml::from_str("index: 1\nfrom:\n  call: '^acquire$'\n  literal: '^SERVICE_TOKEN$'\n  through:\n    - call: '^wrap$'\n      arguments: [0]\n").unwrap();
+        for (source, expected) in [
+            (
+                "function run(){send('url',wrap(acquire('SERVICE_TOKEN')));}",
+                true,
+            ),
+            (
+                "function identity(x){return x} function run(){send('url',identity(acquire('SERVICE_TOKEN')));}",
+                true,
+            ),
+            (
+                "function run(){send(acquire('SERVICE_TOKEN'),'constant');}",
+                false,
+            ),
+            (
+                "function run(){send('url',wrap(acquire('PUBLIC_SETTING')));}",
+                false,
+            ),
+            (
+                "function run(){send('url',opaque(acquire('SERVICE_TOKEN')));}",
+                false,
+            ),
+            (
+                "function read(name){return acquire(name)} function run(){send('url',read('SERVICE_TOKEN'));}",
+                true,
+            ),
+            (
+                "function read(name){return acquire(name)} function run(){read('SERVICE_TOKEN');send('url',read('PUBLIC_SETTING'));}",
+                false,
+            ),
+        ] {
+            let parsed =
+                filefacts::open_with_path(std::path::Path::new("a.js"), source.as_bytes()).unwrap();
+            let mut report = AnalysisReport::new(TargetInfo {
+                path: "a.js".into(),
+                file_type: "javascript".into(),
+                size_bytes: source.len() as u64,
+                sha256: String::new(),
+                architectures: None,
+            });
+            report.filefacts = Some(FilefactsView {
+                flow: parsed.flow().cloned(),
+                symbols: parsed.symbols().into_iter().cloned().collect(),
+                ..Default::default()
+            });
+            let ctx = EvaluationContext::new(
+                &report,
+                source.as_bytes(),
+                FileType::JavaScript,
+                &[],
+                None,
+                None,
+            );
+            let result =
+                super::eval_call(Some(&"send".into()), None, None, Some(&filter), None, &ctx);
+            assert_eq!(result.matched, expected, "{source}");
+            assert_eq!(
+                report.analysis_gaps.is_empty(),
+                !source.contains("opaque("),
+                "{source}: {:?}",
+                report.analysis_gaps
+            );
+        }
+    }
+
+    #[test]
+    fn flow_gaps_survive_negative_matches_folding_cache_and_compact_output() {
+        use crate::composite_rules::context::EvaluationContext;
+        use crate::composite_rules::types::FileType;
+        use crate::types::{AnalysisReport, FilefactsView, TargetInfo};
+        let source = "function run(){send(acquire(opaqueName()));}";
+        let parsed =
+            filefacts::open_with_path(std::path::Path::new("a.js"), source.as_bytes()).unwrap();
+        let base = AnalysisReport::new(TargetInfo {
+            path: "a.js".into(),
+            file_type: "javascript".into(),
+            size_bytes: source.len() as u64,
+            sha256: String::new(),
+            architectures: None,
+        });
+        let mut base = base;
+        base.filefacts = Some(FilefactsView {
+            flow: parsed.flow().cloned(),
+            symbols: parsed.symbols().into_iter().cloned().collect(),
+            ..Default::default()
+        });
+        let filter: ArgFilter =
+            serde_yaml::from_str("index: 0\nfrom:\n  call: '^acquire$'\n  literal: '^TOKEN$'\n")
+                .unwrap();
+        for (variant, expected) in [
+            (0, "flow-query-incomplete"),
+            (1, "flow-unavailable"),
+            (2, "flow-schema-unsupported"),
+            (3, "flow-call-unavailable"),
+            (4, "flow-graph-limited"),
+        ] {
+            let mut report = base.clone();
+            let view = report.filefacts.as_mut().unwrap();
+            match variant {
+                1 => view.flow = None,
+                2 => view.flow.as_mut().unwrap().version = 99,
+                3 => view.flow.as_mut().unwrap().values.clear(),
+                4 => {
+                    view.flow
+                        .as_mut()
+                        .unwrap()
+                        .limitations
+                        .insert("node-budget".into());
+                }
+                _ => {}
+            }
+            let ctx = EvaluationContext::new(
+                &report,
+                source.as_bytes(),
+                FileType::JavaScript,
+                &[],
+                None,
+                None,
+            );
+            let result =
+                super::eval_call(Some(&"send".into()), None, None, Some(&filter), None, &ctx);
+            assert!(!result.matched);
+            assert!(report.analysis_gaps.iter().any(|g| g.label() == expected));
+            let (file, _, _) = report.into_file_analysis(0);
+            let encoded = serde_json::to_string(&file).unwrap();
+            let file = serde_json::from_str(&encoded).unwrap();
+            let restored = crate::report_from_file_analysis(file, "a.js".into());
+            assert!(restored.analysis_gaps.iter().any(|g| g.label() == expected));
+            let (file, _, _) = restored.into_file_analysis(0);
+            let compact = crate::types::compact_from_files(&[file.clone()]);
+            assert!(
+                compact.files[0]
+                    .analysis_gaps
+                    .iter()
+                    .any(|g| g.label() == expected)
+            );
+            let mut display = base.clone();
+            display.files = vec![file];
+            let rendered =
+                crate::output::format_context(&display, &crate::output::TinyOpts::tiny());
+            assert!(rendered.contains("Analysis incomplete") && rendered.contains(expected));
+        }
+        assert!(
+            base.analysis_gaps.is_empty(),
+            "cloned evaluations must not contaminate another report"
+        );
+    }
+
+    #[test]
+    fn yaml_literal_provenance_keeps_position_and_helper_context() {
+        use crate::composite_rules::{Condition, context::EvaluationContext, types::FileType};
+        use crate::types::{AnalysisReport, FilefactsView, TargetInfo};
+        let filter: ArgFilter = serde_yaml::from_str("index: 0\nfrom:\n  value: '^needle$'\n  through:\n    - call: '^join$'\n      arguments: [0, 1]\n").unwrap();
+        for (source, expected) in [
+            ("function run(){write(join('root','needle'),'data')}", true),
+            (
+                "function identity(p){return p} function run(){write(identity('needle'),'data')}",
+                true,
+            ),
+            (
+                "function identity(p){return p} function run(){identity('needle');write(identity('public'),'needle')}",
+                false,
+            ),
+            ("function run(){write(opaque('needle'),'data')}", false),
+        ] {
+            let parsed =
+                filefacts::open_with_path(std::path::Path::new("a.js"), source.as_bytes()).unwrap();
+            let mut report = AnalysisReport::new(TargetInfo {
+                path: "a.js".into(),
+                file_type: "javascript".into(),
+                size_bytes: source.len() as u64,
+                sha256: String::new(),
+                architectures: None,
+            });
+            report.filefacts = Some(FilefactsView {
+                flow: parsed.flow().cloned(),
+                symbols: parsed.symbols().into_iter().cloned().collect(),
+                ..Default::default()
+            });
+            let ctx = EvaluationContext::new(
+                &report,
+                source.as_bytes(),
+                FileType::JavaScript,
+                &[],
+                None,
+                None,
+            );
+            let result =
+                super::eval_call(Some(&"write".into()), None, None, Some(&filter), None, &ctx);
+            assert_eq!(result.matched, expected, "{source}");
+        }
+        for (selection, valid) in [
+            ("{value: needle}", true),
+            ("{call: acquire}", true),
+            ("{}", false),
+            ("{call: acquire, value: needle}", false),
+            ("{value: needle, literal: x}", false),
+        ] {
+            let condition: Condition = serde_yaml::from_str(&format!(
+                "type: symbol\nkind: call\nexact: write\narg:\n  from: {selection}\n"
+            ))
+            .unwrap();
+            assert_eq!(condition.validate().is_ok(), valid, "{selection}");
+        }
     }
 
     #[test]

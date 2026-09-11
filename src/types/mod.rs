@@ -31,6 +31,8 @@ pub(crate) fn is_zero_i64(v: &i64) -> bool {
 }
 
 // Module declarations
+mod analysis_gaps;
+pub use analysis_gaps::{AnalysisGap, AnalysisGaps};
 pub mod binary;
 pub(crate) mod code_structure;
 pub mod compact;

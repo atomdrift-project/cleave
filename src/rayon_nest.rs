@@ -621,11 +621,14 @@ mod tests {
         }
         stop.store(true, Ordering::Release);
         noise.join().unwrap();
+        // Only the private set is asserted on. The guard's `Drop` is one code
+        // path whichever set it resolves, so this proves the balance the noise
+        // thread relies on too — whereas reading `TOPLEVEL_IN_FLIGHT` here
+        // would reintroduce exactly the dependency this test exists to remove:
+        // the global belongs to the whole binary, and any sibling test holding
+        // an analysis at this instant makes it non-zero through no fault of
+        // this one.
         assert_eq!(counters.toplevel_in_flight(), 0);
-        assert!(
-            TOPLEVEL_IN_FLIGHT.load(Ordering::Acquire) == 0,
-            "the noise thread balanced its own global entries"
-        );
     }
 
     static TEST_LOCK: Mutex<()> = Mutex::new(());

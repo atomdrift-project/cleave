@@ -22,6 +22,7 @@ enum Target {
         min_score: u32,
         min_hostile: usize,
         min_suspicious: usize,
+        traits: TraitExpectations,
     },
     /// Known-benign sample whose root-file score must stay under a per-file cap
     /// — and at or above a per-file floor, so the identity/functionality traits
@@ -31,6 +32,7 @@ enum Target {
         path: PathBuf,
         cap: u32,
         min_score: u32,
+        traits: TraitExpectations,
     },
     /// Walked-hostile sample (e.g. `testdata/drop-exec/`, `testdata/reverse-shell/`).
     /// Every file under the corpus directory must satisfy the configured score
@@ -386,6 +388,7 @@ fn collect_hostile_fixtures(
             min_score: expected.min_score,
             min_hostile: expected.min_hostile,
             min_suspicious: expected.min_suspicious,
+            traits: expected.traits.clone(),
         });
     }
     validate_fixture_table(
@@ -402,6 +405,7 @@ fn collect_benign_fixtures(dir: &Path, caps: &[BenignCap], out: &mut Vec<Target>
             path: dir.join(&entry.name),
             cap: entry.cap,
             min_score: entry.min_score,
+            traits: entry.traits.clone(),
         });
     }
     validate_fixture_table(dir, caps.iter().map(|entry| entry.name.as_str()), "benign")
@@ -417,7 +421,6 @@ fn validate_fixture_table<'a>(
     }
 
     let configured: HashSet<&str> = configured.collect();
-    let mut seen = HashSet::new();
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
         if !entry.file_type()?.is_file() {
@@ -431,11 +434,14 @@ fn validate_fixture_table<'a>(
                 entry.path().display()
             );
         }
-        seen.insert(name.into_owned());
     }
 
     for name in configured {
-        if !seen.contains(name) {
+        let relative = Path::new(name);
+        let safe = relative
+            .components()
+            .all(|component| matches!(component, std::path::Component::Normal(_)));
+        if !safe || !dir.join(relative).is_file() {
             anyhow::bail!(
                 "configured {label} fixture is missing: {}",
                 dir.join(name).display()
@@ -558,9 +564,12 @@ fn evaluate(
                 min_score,
                 min_hostile,
                 min_suspicious,
+                traits,
             } => {
                 stats.hostile_total += 1;
-                if judge_hostile(&path, min_score, min_hostile, min_suspicious, &report) {
+                let matched = judge_traits(&path, &traits, &report);
+                if judge_hostile(&path, min_score, min_hostile, min_suspicious, &report) && matched
+                {
                     stats.hostile_passed += 1;
                 } else {
                     failed += 1;
@@ -570,9 +579,11 @@ fn evaluate(
                 path,
                 cap,
                 min_score,
+                traits,
             } => {
                 stats.benign_total += 1;
-                if disable_score_caps || judge_benign(&path, cap, min_score, &report) {
+                let matched = judge_traits(&path, &traits, &report);
+                if (disable_score_caps || judge_benign(&path, cap, min_score, &report)) && matched {
                     stats.benign_passed += 1;
                 } else {
                     failed += 1;
@@ -826,6 +837,8 @@ struct HostileExpectation {
     min_score: u32,
     min_hostile: usize,
     min_suspicious: usize,
+    #[serde(flatten)]
+    traits: TraitExpectations,
 }
 
 #[derive(Debug, Deserialize)]
@@ -837,6 +850,139 @@ struct BenignCap {
     /// syscalls); this catches them silently regressing to invisible.
     #[serde(default)]
     min_score: u32,
+    #[serde(flatten)]
+    traits: TraitExpectations,
+}
+
+/// Taxonomy prefixes, evaluated over the sample and its own archive members.
+/// Unlike score caps these semantic assertions cannot be bypassed.
+#[derive(Clone, Debug, Default, Deserialize)]
+struct TraitExpectations {
+    #[serde(default)]
+    required_analysis_gaps: Vec<cleave::types::AnalysisGap>,
+    #[serde(default)]
+    required_prefixes: Vec<String>,
+    #[serde(default)]
+    forbidden_prefixes: Vec<String>,
+}
+
+fn prefix_matches(prefix: &str, id: &str) -> bool {
+    let hierarchy = id.split("::").next().unwrap_or(id);
+    let prefix = prefix.trim_end_matches('/');
+    hierarchy == prefix
+        || hierarchy
+            .strip_prefix(prefix)
+            .is_some_and(|suffix| suffix.starts_with('/'))
+}
+
+fn trait_expectation_errors(expected: &TraitExpectations, ids: &HashSet<&str>) -> Vec<String> {
+    let mut errors = Vec::new();
+    for prefix in expected
+        .required_prefixes
+        .iter()
+        .chain(&expected.forbidden_prefixes)
+    {
+        if prefix.is_empty()
+            || prefix.contains(':')
+            || prefix.starts_with('/')
+            || prefix.split('/').any(|part| part == ".." || part == ".")
+        {
+            errors.push(format!(
+                "invalid hierarchy prefix {prefix:?}: use taxonomy paths, not leaf IDs"
+            ));
+        }
+    }
+    for prefix in &expected.required_prefixes {
+        if !ids.iter().any(|id| prefix_matches(prefix, id)) {
+            errors.push(format!("missing required trait hierarchy {prefix}"));
+        }
+    }
+    for prefix in &expected.forbidden_prefixes {
+        if ids.iter().any(|id| prefix_matches(prefix, id)) {
+            errors.push(format!("unexpected forbidden trait hierarchy {prefix}"));
+        }
+    }
+    errors
+}
+
+fn judge_traits(path: &Path, expected: &TraitExpectations, report: &AnalysisReport) -> bool {
+    let ids = report
+        .files
+        .iter()
+        .flat_map(|file| file.findings.iter())
+        .filter(|finding| finding.crit != Criticality::Filtered)
+        .map(|finding| finding.id.as_str())
+        .collect();
+    let mut errors = trait_expectation_errors(expected, &ids);
+    for gap in &expected.required_analysis_gaps {
+        if !report
+            .files
+            .iter()
+            .any(|f| f.analysis_gaps.iter().any(|actual| actual == *gap))
+        {
+            errors.push(format!("missing required analysis gap {}", gap.label()));
+        }
+    }
+    for error in &errors {
+        eprintln!("❌ {}: {error}", path.display());
+    }
+    errors.is_empty()
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod trait_expectation_tests {
+    use super::{HostileExpectation, TraitExpectations, trait_expectation_errors};
+    use std::collections::HashSet;
+    #[test]
+    fn defaults_preserve_existing_fixture_tables() {
+        let expected: HostileExpectation =
+            toml::from_str("name='x'\nmin_score=35\nmin_hostile=0\nmin_suspicious=1").unwrap();
+        assert!(trait_expectation_errors(&expected.traits, &HashSet::new()).is_empty());
+    }
+    #[test]
+    fn gap_expectations_accept_only_known_diagnostics() {
+        let expected: TraitExpectations =
+            toml::from_str("required_analysis_gaps=['flow-query-incomplete']").unwrap();
+        assert_eq!(expected.required_analysis_gaps.len(), 1);
+        assert!(
+            toml::from_str::<TraitExpectations>("required_analysis_gaps=['a/b::local-trait']")
+                .is_err()
+        );
+    }
+    #[test]
+    fn hierarchy_positive_and_negative_assertions_survive_leaf_renames() {
+        let expected: TraitExpectations =
+            toml::from_str("required_prefixes=['objectives/exfiltration']\nforbidden_prefixes=['objectives/persistence']")
+                .unwrap();
+        for id in [
+            "objectives/exfiltration::old-name",
+            "objectives/exfiltration/stealer::renamed",
+        ] {
+            assert!(trait_expectation_errors(&expected, &HashSet::from([id])).is_empty());
+        }
+        assert_eq!(
+            trait_expectation_errors(
+                &expected,
+                &HashSet::from([
+                    "objectives/exfiltration-lookalike::x",
+                    "objectives/persistence/subtree::y"
+                ])
+            )
+            .len(),
+            2
+        );
+    }
+    #[test]
+    fn leaf_ids_are_rejected_in_expectations() {
+        let expected: TraitExpectations =
+            toml::from_str("required_prefixes=['a/b::leaf']").unwrap();
+        assert!(
+            trait_expectation_errors(&expected, &HashSet::from(["a/b::leaf"]))
+                .iter()
+                .any(|error| error.contains("invalid hierarchy"))
+        );
+    }
 }
 
 #[derive(Debug, Deserialize)]

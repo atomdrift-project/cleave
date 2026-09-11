@@ -448,6 +448,22 @@ mod tests {
     }
 
     /// RAII guard to restore an env var on drop (including panics).
+    ///
+    /// The env var, not `traits_repo::set_override_dir`: the API setter
+    /// invalidates the global mapper, and `test_reload_rollback_on_bad_traits`
+    /// exists to prove the previously loaded mapper *survives* a failed
+    /// reload. Only the env var changes the traits source without disturbing
+    /// the installed mapper.
+    ///
+    /// SAFETY NOTE: `set_var` is unsound if another thread reads the
+    /// environment concurrently, and `test_lock` cannot promise that — it
+    /// serializes this module, while any other test in the binary may be
+    /// resolving traits on another thread. These tests therefore require a
+    /// process to themselves: `make test` runs the lib suite under nextest
+    /// (one process per test), and its no-nextest fallback uses
+    /// `--test-threads=1`. A bare multi-threaded `cargo test --lib` can race
+    /// them, and a sibling analysis that resolves traits mid-window fails with
+    /// "traits dir override ... does not exist".
     struct EnvVarGuard {
         key: &'static str,
         original: Option<String>,
@@ -456,8 +472,8 @@ mod tests {
     impl EnvVarGuard {
         fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
             let original = std::env::var(key).ok();
-            // SAFETY: tests using EnvVarGuard hold `test_lock`, so no other
-            // thread is reading these vars while we mutate them.
+            // SAFETY: see the type-level note; requires a test process with no
+            // concurrent environment readers.
             unsafe {
                 std::env::set_var(key, value);
             }
@@ -488,8 +504,11 @@ mod tests {
 
     /// Verify that a failed reload preserves the previous mapper.
     ///
-    /// Uses CLEAVE_TRAITS_DIR pointed at a temp directory containing invalid YAML.
-    /// The reload should return Err and leave the previous global mapper intact.
+    /// Points `CLEAVE_TRAITS_DIR` at a path that does not exist, which is the
+    /// only way to make the reload return `Err`: a directory of unparseable
+    /// YAML does *not* fail it — the loader deliberately skips files it cannot
+    /// parse (one bad trait file must not kill a scan) and returns a mapper
+    /// missing those rules. The previous global mapper must stay installed.
     #[test]
     fn test_reload_rollback_on_bad_traits() {
         let _guard = test_lock()
@@ -545,6 +564,13 @@ traits:
             "Global mapper should be the same Arc after failed reload"
         );
 
+        // Uninstall the override BEFORE `good` is dropped. Relying on drop
+        // order left a window in which the process-global traits dir named a
+        // directory that had just been deleted, and any test analyzing on
+        // another thread in that window died with "traits dir override ...
+        // does not exist" rather than merely seeing the wrong rules.
+        drop(_guard);
         drop(good_guard);
+        drop(good);
     }
 }

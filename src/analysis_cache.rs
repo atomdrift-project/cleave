@@ -767,8 +767,12 @@ fn options_hash(options: &AnalysisOptions) -> String {
     // v=10: the per-file cache now stores only complete leaf reports. Older
     // entries may be root-only projections of archives or decoded trees;
     // falling back to one after full-report eviction silently loses children.
+    // v=11: AST literals above 10 KB are retained under aggregate string
+    // budgets; old reports omit that evidence even for unchanged rule packs.
+    // v=12: per-query flow diagnostics and contextual field/literal traversal.
+    // Older reports cannot distinguish unresolved evidence from a non-match.
     let key = format!(
-        "v=10,cm={},3p={},yara={},r2={},upx={},plat={},hp={},sp={},ps={},fv={},rizin={}",
+        "v=12,cm={},3p={},yara={},r2={},upx={},plat={},hp={},sp={},ps={},fv={},rizin={}",
         crate::shared_resources::compact_member_retention(),
         options.enable_third_party_yara,
         !options.disable_yara,

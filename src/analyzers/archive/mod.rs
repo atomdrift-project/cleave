@@ -6,6 +6,7 @@ mod guards;
 #[cfg(test)]
 mod guards_test;
 mod iso;
+mod source_context;
 mod system_packages;
 mod tar;
 pub(crate) mod utils;
@@ -2369,6 +2370,9 @@ impl ArchiveAnalyzer {
             metrics.insert("vsix.extension_pack_self_entries".to_string(), own as f64);
         }
 
+        // Context is input to atomic value traits as well as composites.
+        // Attach it before either pass (library callers need not re-evaluate).
+        source_context::attach(report);
         let Some(mapper) = &self.capability_mapper else {
             return;
         };
@@ -2772,6 +2776,86 @@ mod tests {
     // Import external crate types (our modules shadow these names)
     use ::tar;
     use ::zip;
+
+    #[test]
+    fn archive_go_workspace_metadata_reaches_dependency_context() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("workspace.tar");
+        let mut archive = tar::Builder::new(File::create(&path).unwrap());
+        for (name, source) in [
+            (
+                "go.work",
+                "use ./app\nreplace example.test/lib => example.test/reviewed v2.0.0\n",
+            ),
+            (
+                "app/go.mod",
+                "module app\nrequire example.test/lib v1.0.0\nrequire example.test/local v1.0.0\nreplace example.test/local => ../local\n",
+            ),
+            (
+                "app/go.sum",
+                "example.test/reviewed v2.0.0/go.mod h1:METADATA\nexample.test/lib v9.0.0 h1:HISTORY\n",
+            ),
+            ("go.work.sum", "example.test/reviewed v2.0.0 h1:TREE\n"),
+            ("local/go.mod", "module example.test/local\n"),
+            (
+                "vendored/go.mod",
+                "module vendorapp\nrequire example.test/bundled v1.0.0\n",
+            ),
+            (
+                "vendored/vendor/modules.txt",
+                "# example.test/bundled v1.0.0\n## explicit\nexample.test/bundled\n",
+            ),
+            (
+                "vendored/vendor/example.test/bundled/library.go",
+                "package bundled\nfunc Version() string { return \"test\" }\n",
+            ),
+        ] {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(source.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            archive
+                .append_data(&mut header, name, source.as_bytes())
+                .unwrap();
+        }
+        archive.finish().unwrap();
+        drop(archive);
+        let report = ArchiveAnalyzer::new()
+            .with_capability_mapper(CapabilityMapper::empty())
+            .analyze(&path)
+            .unwrap();
+        let members: Vec<_> = report
+            .files
+            .iter()
+            .map(|f| filefacts::ReferenceMember {
+                path: &f.path,
+                references: f
+                    .filefacts
+                    .as_ref()
+                    .map_or(&[][..], |v| v.references.as_slice()),
+            })
+            .collect();
+        let context = filefacts::go_dependency_context(&members);
+        let dependencies: Vec<_> = context
+            .values()
+            .flatten()
+            .filter(|r| r.kind == filefacts::RefKind::Dependency)
+            .collect();
+        assert_eq!(dependencies.len(), 1);
+        assert_eq!(
+            dependencies[0].locator,
+            filefacts::RefLocator::Purl("pkg:golang/example.test/reviewed@v2.0.0".into())
+        );
+        assert_eq!(dependencies[0].pinned_hash.as_ref().unwrap().value, "TREE");
+        assert_eq!(
+            context
+                .values()
+                .flatten()
+                .filter(|r| r.kind == filefacts::RefKind::Local)
+                .count(),
+            2
+        );
+    }
 
     #[test]
     fn archive_manifest_retains_filefacts_identity_claims() {

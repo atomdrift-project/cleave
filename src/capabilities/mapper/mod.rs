@@ -1113,8 +1113,29 @@ pub(super) fn build_all_symbols(report: &crate::types::AnalysisReport) -> Vec<&s
     all.extend(report.functions.iter().map(|f| f.name.as_str()));
     if let Some(view) = report.filefacts.as_ref() {
         all.extend(view.symbols.iter().filter_map(|s| s.name()));
+        // Provenance predicates also match canonical targets (for example
+        // net/http.Post behind a Go import alias). The candidate index must
+        // include them or it can discard a rule before its evaluator runs.
+        if let Some(flow) = &view.flow {
+            all.extend(flow.values.iter().filter_map(|value| value.target.as_deref()));
+        }
     }
     all
+}
+
+#[cfg(test)]
+mod flow_prefilter_tests {
+    #[test]
+    fn includes_canonical_targets_without_changing_raw_symbols() {
+        use crate::types::{AnalysisReport, FilefactsView, TargetInfo};
+        let source = b"package p\nimport client \"net/http\"\nfunc run(){client.Post(\"url\",\"text/plain\",nil)}";
+        let parsed = filefacts::open_with_path(std::path::Path::new("a.go"), source).unwrap();
+        let mut report = AnalysisReport::new(TargetInfo {path:"a.go".into(), file_type:"go".into(), size_bytes:source.len() as u64, sha256:String::new(), architectures:None});
+        report.filefacts = Some(FilefactsView {flow:parsed.flow().cloned(), symbols:parsed.symbols().into_iter().cloned().collect(), ..Default::default()});
+        let names = super::build_all_symbols(&report);
+        assert!(names.contains(&"net/http.Post"));
+        assert!(names.contains(&"client.Post"));
+    }
 }
 
 /// Map a symbol name to its file-offset (hex string such as `"0x1234"`),

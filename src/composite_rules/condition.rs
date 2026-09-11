@@ -959,6 +959,13 @@ pub(crate) enum SymbolKind {
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ArgFilter {
+    /// Zero-based argument position. Omitted means any argument. This is shared
+    /// by every source language and by single- and multi-argument matching.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index: Option<usize>,
+    /// Require value provenance from a selected call, using filefacts' graph.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<FlowOriginFilter>,
     /// Arg shape to match: `string`, `number`, `identifier`, `bool`,
     /// `template`, `null`, `object`, `array`, `function`, `call`,
     /// `expression`. Omitted → any shape.
@@ -988,6 +995,41 @@ pub(crate) struct ArgFilter {
     /// Identifier name exact match (kind=identifier).
     #[serde(default)]
     pub name: Option<String>,
+}
+
+/// Source-call selection and explicit, policy-owned library transfers.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct FlowOriginFilter {
+    /// Select a field of an object/keyword argument before following values.
+    #[serde(default)]
+    pub field: Option<String>,
+    /// Regex over the source call's canonical target.
+    #[serde(default)]
+    pub call: String,
+    /// Alternatively, match a literal value contributing to the sink argument.
+    /// Mutually exclusive with `call` and its argument/literal constraints.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+    /// Position of the source call's literal argument to match (default zero).
+    #[serde(default)]
+    pub argument: usize,
+    /// Optional regex over that literal argument's value.
+    #[serde(default)]
+    pub literal: Option<String>,
+    /// External calls whose return values preserve selected inputs.
+    #[serde(default)]
+    pub through: Vec<FlowTransferModel>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct FlowTransferModel {
+    pub call: String,
+    #[serde(default)]
+    pub arguments: Vec<usize>,
+    #[serde(default)]
+    pub receiver: bool,
 }
 
 /// Filter for a source-language import's local alias — the `sp` in
@@ -3000,6 +3042,50 @@ impl Condition {
     /// the `ast-query-compile` validator.
     pub(crate) fn validate(&self) -> Result<()> {
         match self {
+            Condition::Symbol(query) => {
+                for arg in query.arg.iter().chain(query.args.iter().flatten()) {
+                    if arg.index.is_some() || arg.from.is_some() {
+                        if !matches!(query.kind, Some(SymbolKind::Call)) {
+                            return Err(anyhow::anyhow!(
+                                "argument positions/provenance require kind: call"
+                            ));
+                        }
+                    }
+                    if let Some(origin) = &arg.from {
+                        let has_call = !origin.call.trim().is_empty();
+                        if has_call == origin.value.is_some() || origin.through.len() > 32 {
+                            return Err(anyhow::anyhow!(
+                                "provenance requires exactly one of call/value and at most 32 transfer models"
+                            ));
+                        }
+                        if !has_call && (origin.literal.is_some() || origin.argument != 0) {
+                            return Err(anyhow::anyhow!(
+                                "literal/argument constraints require a source call"
+                            ));
+                        }
+                        for pattern in std::iter::once(&origin.call)
+                            .filter(|s| !s.is_empty())
+                            .chain(origin.value.iter())
+                            .chain(origin.literal.iter())
+                            .chain(origin.through.iter().map(|m| &m.call))
+                        {
+                            regex::Regex::new(pattern)
+                                .map_err(|e| anyhow::anyhow!("invalid provenance regex: {e}"))?;
+                        }
+                        for model in &origin.through {
+                            if model.call.trim().is_empty()
+                                || model.arguments.len() > 32
+                                || model.arguments.is_empty() && !model.receiver
+                            {
+                                return Err(anyhow::anyhow!(
+                                    "transfer model requires a call and contributing arguments or receiver"
+                                ));
+                            }
+                        }
+                    }
+                }
+                Ok(())
+            }
             Condition::Yara { source, .. } => {
                 // Only validate syntax - add_source catches parse errors
                 // Don't call build() here as it triggers expensive JIT compilation

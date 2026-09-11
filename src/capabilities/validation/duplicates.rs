@@ -705,6 +705,31 @@ fn normalize_pattern_for_comparison(pattern: &str, is_regex: bool) -> String {
 
 /// Extract all searchable patterns from a trait definition
 /// Returns: Vec<(normalized_value, PatternLocation)>
+fn symbol_argument_discriminator(
+    arg: Option<&crate::composite_rules::condition::ArgFilter>,
+    args: Option<&[crate::composite_rules::condition::ArgFilter]>,
+) -> String {
+    // Preserve the whole predicate, including positions and provenance. A
+    // first-literal shortcut collapses distinct body/header and source rules.
+    let mut key = String::new();
+    if let Some(arg) = arg {
+        key.push_str("#arg:");
+        key.push_str(&serde_json::to_string(arg).expect("argument filters serialize"));
+    }
+    if let Some(args) = args.filter(|args| !args.is_empty()) {
+        let mut predicates: Vec<_> = args
+            .iter()
+            .map(|arg| serde_json::to_string(arg).expect("argument filters serialize"))
+            .collect();
+        // `args` is a conjunction over distinct positions, not an ordered
+        // sequence. Keep multiplicity, but ignore YAML list ordering.
+        predicates.sort();
+        key.push_str("#args:");
+        key.push_str(&serde_json::to_string(&predicates).expect("strings serialize"));
+    }
+    key
+}
+
 fn extract_patterns(trait_def: &TraitDefinition) -> Vec<(String, PatternLocation)> {
     let mut patterns = Vec::new();
 
@@ -769,6 +794,7 @@ fn extract_patterns(trait_def: &TraitDefinition) -> Vec<(String, PatternLocation
             substr,
             regex,
             arg,
+            args,
             kind,
             alias,
             ..
@@ -788,21 +814,7 @@ fn extract_patterns(trait_def: &TraitDefinition) -> Vec<(String, PatternLocation
             // pattern key so the dedup checker doesn't collapse them into one
             // "reusable atom". (Same name AND same arg still collide.)
             let disc = {
-                let arg_disc = arg
-                    .as_ref()
-                    .map(|a| {
-                        let v = a
-                            .exact
-                            .as_deref()
-                            .or(a.substr.as_deref())
-                            .or(a.regex.as_deref())
-                            .or(a.name.as_deref())
-                            .map(str::to_string)
-                            .or_else(|| a.value.map(|n| n.to_string()))
-                            .unwrap_or_else(|| "*".to_string());
-                        format!("#arg:{v}")
-                    })
-                    .unwrap_or_default();
+                let arg_disc = symbol_argument_discriminator(arg.as_ref(), args.as_deref());
                 // An `alias:` filter narrows to *aliased* imports
                 // (`import base64 as x`) — a different atom from the plain
                 // import (`import base64`). Fold its presence/value in so the
@@ -4273,6 +4285,43 @@ pub(crate) fn find_structural_regex_duplicates(
 #[cfg(test)]
 mod literal_regex_tests {
     use super::*;
+
+    #[test]
+    fn symbol_arguments_keep_positions_shapes_and_provenance_distinct() {
+        use crate::composite_rules::condition::ArgFilter;
+        let parse = |yaml: &str| serde_yaml::from_str::<ArgFilter>(yaml).unwrap();
+        let variants = [
+            "{exact: token}",
+            "{substr: token}",
+            "{exact: token, index: 0}",
+            "{exact: token, index: 1}",
+            "{kind: number, value: 511, radix: 8}",
+            "{kind: number, value: 511, radix: 10}",
+            "{from: {call: read, literal: TOKEN, field: body}}",
+            "{from: {call: read, literal: TOKEN, field: headers}}",
+            "{from: {call: read, literal: PASSWORD, field: body}}",
+        ];
+        let keys: HashSet<_> = variants
+            .iter()
+            .map(|yaml| symbol_argument_discriminator(Some(&parse(yaml)), None))
+            .collect();
+        assert_eq!(keys.len(), variants.len());
+        let a = parse("{exact: a}");
+        let b = parse("{exact: b}");
+        let pair = symbol_argument_discriminator(None, Some(&[a.clone(), b.clone()]));
+        assert_eq!(
+            pair,
+            symbol_argument_discriminator(None, Some(&[b, a.clone()]))
+        );
+        assert_ne!(
+            pair,
+            symbol_argument_discriminator(None, Some(&[a.clone()]))
+        );
+        assert_ne!(
+            symbol_argument_discriminator(None, Some(&[a.clone(), a.clone()])),
+            symbol_argument_discriminator(None, Some(&[a]))
+        );
+    }
 
     #[test]
     fn pure_literal_with_escaped_dot_decodes() {

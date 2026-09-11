@@ -81,6 +81,9 @@ impl Default for CompactReport {
 /// Per-file analysis in v7 schema
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CompactFile {
+    /// Per-file analysis limitations, retained even without findings.
+    #[serde(default, skip_serializing_if = "super::AnalysisGaps::is_empty")]
+    pub analysis_gaps: super::AnalysisGaps,
     /// Sequential file ID
     pub id: u32,
     /// File path (archive paths use !! delimiter)
@@ -987,6 +990,7 @@ fn convert_file(file: &super::file_analysis::FileAnalysis, id: u32) -> CompactFi
 
     CompactFile {
         id,
+        analysis_gaps: file.analysis_gaps.clone(),
         path: file.path.clone(),
         file_type: file.file_type.clone(),
         sha: file.sha256.clone(),

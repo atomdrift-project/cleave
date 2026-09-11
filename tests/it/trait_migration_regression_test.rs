@@ -26,6 +26,54 @@ defaults:
   conf: 0.9
 
 traits:
+  # metadata/file/encoded::gzip-base64-like-literal. Validate the whole
+  # parsed string, not an arbitrary Base64-looking substring in source text.
+  - id: fx-gzip-base64-literal
+    desc: Base64-compatible literal with gzip prefix
+    for: [javascript, typescript]
+    if:
+      type: literal
+      kind: string
+      regex: '^H4sIA[A-Za-z0-9+/]{192,}={0,2}$'
+      is: base64
+
+  # Bind the computed key and module call to the SAME declaration. Byte
+  # proximity to an unrelated import cannot establish this relationship.
+  - id: fx-computed-child-process-binding
+    desc: Computed child_process member binding
+    for: [javascript, typescript]
+    if:
+      type: tree-sitter
+      language: javascript
+      query: |
+        (variable_declarator
+          name: (object_pattern
+            (pair_pattern key: (computed_property_name))) @pattern
+          value: (call_expression
+            function: (identifier) @fn
+            arguments: (arguments (string) @module))
+          (#eq? @fn "require")
+          (#match? @module "^['\"](node:)?child_process['\"]$"))
+
+  # Matcher contract for metadata/file/encoded::require-expression-text.
+  # No intent or decoded-language claim: `for` constrains the carrier only.
+  - id: fx-encoded-require-text
+    desc: Encoded text contains require expression
+    crit: notable
+    for: [javascript, typescript]
+    if:
+      type: encoded
+      encoding: [base64, base64-obf, hex, base32, base85, xor, stack]
+      regex: '\brequire\s*\('
+
+  - id: fx-host-require-call
+    desc: Source calls require
+    for: [javascript, typescript]
+    if:
+      type: symbol
+      kind: call
+      exact: require
+
   # `micro-behaviors/hardware/display/screen/python::mss-grab`, verbatim.
   # Matches `.grab` only on mss-style capture receivers, against the
   # pre-extracted `call` fact — the tightening that keeps `queue.grab()` /
@@ -90,6 +138,52 @@ traits:
       min: 5
 "#;
 
+// The production metadata/file/profile/metrics::numeric-suffix-identifiers
+// count/size matcher, isolated from checkout-dependent context exclusions.
+const IDENTIFIER_METRIC_TRAIT: &str = r#"
+traits:
+  - id: fx-numeric-suffix-identifiers
+    desc: At least 100 numeric-suffixed identifier names
+    crit: notable
+    conf: 0.75
+    for: [scripts, pe, elf, macho]
+    platforms: [windows, unix]
+    size_min: 15001
+    if:
+      type: metrics
+      field: identifiers.numeric_suffix_count
+      min: 100
+      min_size: 15001
+"#;
+
+// File creation can set execute bits without a subsequent chmod. A nested
+// data-producing call and a conditional mode must not hide that observation.
+const EXECUTABLE_WRITE_TRAITS: &str = r#"
+defaults:
+  for: [javascript, typescript]
+  platforms: [unix, windows]
+  crit: notable
+traits:
+  - id: fx-write-call
+    desc: Calls synchronous file write
+    if:
+      type: symbol
+      kind: call
+      regex: '(^|\.)writeFileSync$'
+  - id: fx-write-mode
+    desc: Writes with executable mode
+    if:
+      type: text
+      regex: 'writeFile(Sync)?.{0,300}\bmode\s*:.{0,100}\b0o755\b'
+composite_rules:
+  - id: fx-executable-write
+    desc: Calls write with executable mode evidence
+    all:
+      - id: fx-write-call
+      - id: fx-write-mode
+    near_bytes: 2048
+"#;
+
 /// The fixture traits directory, built once per process.
 fn fixture_traits_dir() -> &'static std::path::Path {
     static DIR: OnceLock<TempDir> = OnceLock::new();
@@ -98,6 +192,12 @@ fn fixture_traits_dir() -> &'static std::path::Path {
         let dir = td.path().join("micro-behaviors/migration");
         std::fs::create_dir_all(&dir).expect("create fixture namespace dir");
         std::fs::write(dir.join("facts.yaml"), FIXTURE_TRAITS).expect("write fixture traits");
+        std::fs::write(dir.join("executable-write.yaml"), EXECUTABLE_WRITE_TRAITS)
+            .expect("write executable creation fixture");
+        let metrics = td.path().join("metadata/file/profile/metrics");
+        std::fs::create_dir_all(&metrics).expect("create metadata namespace");
+        std::fs::write(metrics.join("identifiers.yaml"), IDENTIFIER_METRIC_TRAIT)
+            .expect("write identifier metric trait");
         td
     })
     .path()
@@ -113,6 +213,181 @@ fn fires(id_suffix: &str, name: &str, src: &str) -> bool {
     let report = cleave::analyze_bytes(src.as_bytes(), name, &opts).expect("analyze");
     cleave::traits_repo::set_override_dir(None);
     report.findings.iter().any(|f| f.id.ends_with(id_suffix))
+}
+
+#[test]
+fn executable_creation_mode_survives_nested_data_and_conditional_mode() {
+    for source in [
+        "import { writeFileSync } from 'fs'; writeFileSync(dst, inflate(data), {mode: win ? 0o644 : 0o755});",
+        "const fs = require('fs'); fs.writeFileSync(dst, data, {mode: 0o755});",
+    ] {
+        assert!(fires("::fx-executable-write", "writer.js", source));
+    }
+    for source in [
+        "import { writeFileSync } from 'fs'; writeFileSync(dst, inflate(data), {mode: 0o644});",
+        "import { writeFileSync } from 'fs'; writeFileSync(dst, data);",
+        "const documentation = 'writeFileSync(dst, data, {mode: 0o755})';",
+    ] {
+        assert!(!fires("::fx-executable-write", "writer.js", source));
+    }
+}
+
+#[test]
+fn gzip_literal_requires_canonical_whole_string_not_source_mentions() {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    use std::io::Write;
+
+    let mut gzip = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    gzip.write_all(&(0..=255).collect::<Vec<u8>>()).unwrap();
+    let encoded = STANDARD.encode(gzip.finish().unwrap());
+    assert!(encoded.starts_with("H4sIA") && encoded.len() >= 200);
+    // Embedded worker bundles exceed the short-string display/extraction
+    // limits. Validation must inspect full literal bytes, not a preview.
+    let mut large = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::none());
+    large
+        .write_all(&(0..=255).cycle().take(100_000).collect::<Vec<u8>>())
+        .unwrap();
+    let large_encoded = STANDARD.encode(large.finish().unwrap());
+    assert!(fires(
+        "::fx-gzip-base64-literal",
+        "large-worker.js",
+        &format!("module.exports = {large_encoded:?};")
+    ));
+    for name in ["worker.js", "worker.ts"] {
+        assert!(fires(
+            "::fx-gzip-base64-literal",
+            name,
+            &format!("module.exports = {encoded:?};")
+        ));
+        assert!(fires(
+            "::fx-gzip-base64-literal",
+            name,
+            &format!("// __wbindgen_placeholder__\nmodule.exports = {encoded:?};")
+        ));
+    }
+    for value in [
+        format!("prefix{encoded}"),
+        format!("{encoded}suffix"),
+        // Both pass the regex alphabet/length check, but not Base64 validation.
+        format!("H4sIA{}", "A".repeat(196)), // length 1 modulo 4
+        format!("H4sIA{}B==", "A".repeat(192)), // nonzero unused trailing bits
+        format!("H4sIA{}=A", "A".repeat(192)), // interior padding
+    ] {
+        assert!(
+            !fires(
+                "::fx-gzip-base64-literal",
+                "worker.js",
+                &format!("module.exports = {value:?};")
+            ),
+            "{value}"
+        );
+    }
+    assert!(!fires(
+        "::fx-gzip-base64-literal",
+        "worker.js",
+        &format!("// {encoded}\nmodule.exports = 1;")
+    ));
+}
+
+#[test]
+fn numeric_suffix_metric_counts_unique_code_names_at_size_boundary() {
+    let source = |count: usize, size: usize| {
+        let mut src = (0..count)
+            .map(|i| format!("let item{i} = 0;\n"))
+            .collect::<String>();
+        src.push_str("/*");
+        src.extend(std::iter::repeat_n(' ', size - src.len() - 2));
+        src.push_str("*/");
+        assert_eq!(src.len(), size);
+        src
+    };
+    for (count, size, expected) in [(99, 15001, false), (100, 15000, false), (100, 15001, true)] {
+        assert_eq!(
+            fires(
+                "::fx-numeric-suffix-identifiers",
+                "bundle.js",
+                &source(count, size)
+            ),
+            expected,
+            "{count} identifiers in {size} bytes",
+        );
+    }
+    let mentions = (0..120).map(|i| format!("item{i} ")).collect::<String>();
+    for src in [
+        format!("/*{mentions}*/\n{}", source(0, 15001)),
+        format!("const names = {mentions:?};\n{}", source(0, 15001)),
+        format!("{}\n{}", "item1++;\n".repeat(120), source(0, 15001)),
+    ] {
+        assert!(!fires("::fx-numeric-suffix-identifiers", "bundle.js", &src));
+    }
+}
+
+/// Decoded text is not a call-site fact in the carrier's source language.
+/// Small in-memory sources exercise parsing and decoding without corpus scans.
+#[test]
+fn encoded_require_text_migration_preserves_language_neutral_evidence() {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+
+    for payload in [
+        "local db = require('storage')\nlocal function read(key) return db.get(key) end\n",
+        "const db = require('storage'); function read(key) { return db.get(key); }",
+        "Documentation: require('storage') is an example, not a call in this carrier.",
+    ] {
+        let carrier = format!("export default {:?};", STANDARD.encode(payload));
+        assert!(
+            fires("::fx-encoded-require-text", "carrier.js", &carrier),
+            "decoded require text must remain observable: {payload}",
+        );
+    }
+
+    let lua = "local db = require('storage')\nlocal function read(key) return db.get(key) end\n";
+    let carrier = format!("export default {:?};", STANDARD.encode(lua));
+    assert!(
+        !fires("::fx-host-require-call", "carrier.js", &carrier),
+        "Lua require text must not become a JavaScript carrier call",
+    );
+    assert!(fires(
+        "::fx-host-require-call",
+        "loader.js",
+        "const db = require('storage'); db.get('key');",
+    ));
+
+    for payload in [
+        "const db = prerequire('storage'); function read(key) { return db.get(key); }",
+        "const db = _require('storage'); function read(key) { return db.get(key); }",
+    ] {
+        let carrier = format!("export default {:?};", STANDARD.encode(payload));
+        assert!(!fires("::fx-encoded-require-text", "carrier.js", &carrier));
+    }
+}
+
+#[test]
+fn computed_child_process_binding_requires_the_same_declaration() {
+    for source in [
+        "const { [method]: run } = require('child_process');",
+        "const { [table[0x12]]: run } = require('node:child_process');",
+        "const { [decode(12)]: run } = require(\"child_process\");",
+    ] {
+        assert!(fires(
+            "::fx-computed-child-process-binding",
+            "loader.js",
+            source
+        ));
+    }
+    for source in [
+        // The UiPath/open platform-selector shape: nearby unrelated import.
+        "import cp from 'node:child_process'; function select(binary) { const { [arch]: archBinary } = binary; return archBinary; }",
+        "const cp = require('child_process'); const { [arch]: value } = binary;",
+        "const { exec: run = fallback[0] } = require('child_process');",
+        "const { [method]: run } = require('not_child_process');",
+        "const { [method]: run } = other('child_process');",
+        "// const { [method]: run } = require('child_process');\nexport default 1;",
+    ] {
+        assert!(
+            !fires("::fx-computed-child-process-binding", "selector.js", source),
+            "{source}"
+        );
+    }
 }
 
 /// `mss-grab` migrated from `(call (attribute attribute:(identifier) @method)

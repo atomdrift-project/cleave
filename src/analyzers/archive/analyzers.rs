@@ -324,6 +324,7 @@ fn par_filter_fold_members<T, U, F>(
 /// Result of analyzing a single archive member, collected lock-free during par_iter
 /// and aggregated single-threaded afterwards.
 struct MemberAnalysisResult {
+    go_source: Option<String>,
     entry_path: String,
     archive_location: String,
     entry_metadata: ArchiveEntry,
@@ -512,6 +513,9 @@ fn rebuild_slim_member(mut file: FileAnalysis) -> FileAnalysis {
 /// member-heavy archives (e.g. a 4 MB wheel with thousands of members).
 #[derive(Default)]
 struct MemberAccumulator {
+    go_sources: Vec<(String, String)>,
+    go_source_bytes: usize,
+    go_incomplete: bool,
     /// Distinct finding ids seen across all members. Reported as both the trait
     /// and capability tally (the two are identical — every finding id counts as
     /// one of each), kept once rather than in two parallel sets.
@@ -528,6 +532,18 @@ impl MemberAccumulator {
     /// Member order is preserved because callers fold windows sequentially and
     /// each window's `par_iter` collect is index-ordered.
     fn fold(&mut self, result: MemberAnalysisResult) {
+        if let Some(source) = result.go_source {
+            if source.is_empty() {
+                self.go_incomplete = true;
+            }
+            if self.go_source_bytes + source.len() <= 8 * 1024 * 1024 && self.go_sources.len() < 512
+            {
+                self.go_source_bytes += source.len();
+                self.go_sources.push((result.entry_path.clone(), source));
+            } else {
+                self.go_incomplete = true;
+            }
+        }
         let _aggregate = crate::mem_profile::phase(crate::mem_profile::Phase::Aggregate);
         self.collected_archive_entries.push(result.entry_metadata);
         let Some(file_report) = result.report else {
@@ -657,6 +673,16 @@ impl MemberAccumulator {
     /// fallback, or a fully inline run) to the consumer's aggregate, with the
     /// same per-id max-crit/conf and YARA dedup rules as [`Self::fold`].
     fn absorb(&mut self, other: MemberAccumulator) {
+        self.go_incomplete |= other.go_incomplete;
+        for (path, source) in other.go_sources {
+            if self.go_source_bytes + source.len() <= 8 * 1024 * 1024 && self.go_sources.len() < 512
+            {
+                self.go_source_bytes += source.len();
+                self.go_sources.push((path, source));
+            } else {
+                self.go_incomplete = true;
+            }
+        }
         use std::collections::hash_map::Entry;
         self.distinct_finding_ids.extend(other.distinct_finding_ids);
         for ym in other.collected_yara {
@@ -704,6 +730,7 @@ impl MemberAccumulator {
     /// tallies each archive type folds into its own summary line. Writes no
     /// metadata — callers append their format-specific summary and tools after.
     fn merge_into(self, report: &mut AnalysisReport) -> MemberCounts {
+        super::source_context::attach_go(report, &self.go_sources, self.go_incomplete);
         let distinct = self.distinct_finding_ids.len();
         let counts = MemberCounts {
             files_analyzed: self.files_analyzed,
@@ -1200,7 +1227,14 @@ impl ArchiveAnalyzer {
         crate::analyzers::unified::UnifiedSourceAnalyzer::for_file_type(file_type).is_some()
     }
 
-    fn archive_member_analysis_skip_reason(&self, file_type: &FileType) -> Option<&'static str> {
+    fn archive_member_analysis_skip_reason(
+        &self,
+        file_type: &FileType,
+        path: &str,
+    ) -> Option<&'static str> {
+        if filefacts::has_named_reference_metadata(Path::new(path)) {
+            return None;
+        }
         if self
             .analysis_options
             .as_ref()
@@ -1447,7 +1481,7 @@ impl ArchiveAnalyzer {
             default_options = crate::AnalysisOptions::default();
             &default_options
         };
-        if let Some(reason) = self.archive_member_analysis_skip_reason(file_type) {
+        if let Some(reason) = self.archive_member_analysis_skip_reason(file_type, relative_path) {
             tracing::debug!(
                 relative_path,
                 file_type = %file_type.report_file_type(),
@@ -1772,7 +1806,7 @@ impl ArchiveAnalyzer {
         // archive's members — fanned across the whole rayon pool — are all named.
         let _breadcrumb = crate::breadcrumb::scope("member", relative_path);
 
-        if let Some(reason) = self.archive_member_analysis_skip_reason(file_type) {
+        if let Some(reason) = self.archive_member_analysis_skip_reason(file_type, relative_path) {
             tracing::debug!(
                 relative_path,
                 file_type = %file_type.report_file_type(),
@@ -2147,6 +2181,7 @@ impl ArchiveAnalyzer {
             .analysis_options
             .as_ref()
             .is_some_and(|opts| opts.all_files)
+            || filefacts::has_named_reference_metadata(Path::new(relative_path))
         {
             // `all_files` promises analysis, not merely a path ledger. Treat an
             // unclassified blob as generic data so data-oriented facts and
@@ -3388,6 +3423,13 @@ impl ArchiveAnalyzer {
         });
 
         Some(MemberAnalysisResult {
+            go_source: (member.file_type == FileType::Go).then(|| {
+                if member.data.len() <= 2 * 1024 * 1024 {
+                    String::from_utf8_lossy(&member.data).into_owned()
+                } else {
+                    String::new()
+                }
+            }),
             entry_path,
             archive_location,
             entry_metadata,
@@ -3829,6 +3871,7 @@ impl ArchiveAnalyzer {
                 }
 
                 Some(MemberAnalysisResult {
+                    go_source: None,
                     entry_path,
                     archive_location,
                     entry_metadata,
@@ -3999,6 +4042,7 @@ impl ArchiveAnalyzer {
                 }
 
                 Some(MemberAnalysisResult {
+                    go_source: None,
                     entry_path,
                     archive_location,
                     entry_metadata,
@@ -4209,6 +4253,13 @@ impl ArchiveAnalyzer {
                 });
 
                 Some(MemberAnalysisResult {
+                    go_source: (file_type == FileType::Go).then(|| {
+                        if file_data.len() <= 2 * 1024 * 1024 {
+                            String::from_utf8_lossy(file_data).into_owned()
+                        } else {
+                            String::new()
+                        }
+                    }),
                     entry_path,
                     archive_location,
                     entry_metadata,
@@ -4343,17 +4394,27 @@ mod tests {
     fn archive_member_analysis_skip_matches_all_files_policy() {
         let default_analyzer = ArchiveAnalyzer::new();
         assert_eq!(
-            default_analyzer.archive_member_analysis_skip_reason(&FileType::Unknown),
+            default_analyzer.archive_member_analysis_skip_reason(&FileType::Unknown, "member"),
             Some("non-program archive member and all_files is false")
         );
+        for path in [
+            "go.work",
+            "package/go.work.sum",
+            "package/vendor/modules.txt",
+        ] {
+            assert_eq!(
+                default_analyzer.archive_member_analysis_skip_reason(&FileType::Unknown, path),
+                None
+            );
+        }
         // HTML members are analyzed by default: they carry inline <script> and
         // are the whole payload of the npm-as-CDN phishing packages.
         assert_eq!(
-            default_analyzer.archive_member_analysis_skip_reason(&FileType::Html),
+            default_analyzer.archive_member_analysis_skip_reason(&FileType::Html, "member"),
             None
         );
         assert_eq!(
-            default_analyzer.archive_member_analysis_skip_reason(&FileType::Pe),
+            default_analyzer.archive_member_analysis_skip_reason(&FileType::Pe, "member"),
             None
         );
 
@@ -4363,11 +4424,11 @@ mod tests {
                 ..crate::AnalysisOptions::default()
             }));
         assert_eq!(
-            all_files_analyzer.archive_member_analysis_skip_reason(&FileType::Unknown),
+            all_files_analyzer.archive_member_analysis_skip_reason(&FileType::Unknown, "member"),
             None
         );
         assert_eq!(
-            all_files_analyzer.archive_member_analysis_skip_reason(&FileType::Html),
+            all_files_analyzer.archive_member_analysis_skip_reason(&FileType::Html, "member"),
             None
         );
     }

@@ -90,6 +90,9 @@ impl Role {
 /// This replaces the recursive sub_reports structure with a flat array.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct FileAnalysis {
+    /// Per-file analysis limitations, independent of findings and severity.
+    #[serde(default, skip_serializing_if = "super::AnalysisGaps::is_empty")]
+    pub analysis_gaps: super::AnalysisGaps,
     /// Unique ID within this report (sequential, 0-based)
     pub id: u32,
 
@@ -278,6 +281,7 @@ impl FileAnalysis {
     #[must_use]
     pub(crate) fn new(id: u32, path: String, file_type: String, sha256: String, size: u64) -> Self {
         Self {
+            analysis_gaps: super::AnalysisGaps::default(),
             id,
             path,
             parent_id: None,

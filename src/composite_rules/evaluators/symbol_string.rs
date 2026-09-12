@@ -2740,6 +2740,12 @@ pub(crate) fn eval_encoded<'a>(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::cloned_ref_to_slice_refs
+)]
 mod multi_arg_tests {
     use super::all_filters_match_distinct;
     use crate::composite_rules::condition::ArgFilter;

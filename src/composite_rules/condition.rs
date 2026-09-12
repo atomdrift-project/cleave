@@ -1103,6 +1103,7 @@ impl SyscallArg {
 /// Internal tagged enum for serializing/deserializing conditions with explicit `type` field
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+#[allow(clippy::large_enum_variant)]
 enum ConditionTagged {
     Symbol {
         #[serde(default)]
@@ -2418,6 +2419,7 @@ impl From<Condition> for ConditionTagged {
 /// 2. Shorthand: `{ id: my-trait }` - defaults to Trait when only `id` is present
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(from = "ConditionDeser", into = "ConditionTagged")]
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum Condition {
     /// Match a symbol (import/export/function/forward)
     Symbol(SymbolQuery),
@@ -3044,12 +3046,12 @@ impl Condition {
         match self {
             Condition::Symbol(query) => {
                 for arg in query.arg.iter().chain(query.args.iter().flatten()) {
-                    if arg.index.is_some() || arg.from.is_some() {
-                        if !matches!(query.kind, Some(SymbolKind::Call)) {
-                            return Err(anyhow::anyhow!(
-                                "argument positions/provenance require kind: call"
-                            ));
-                        }
+                    if (arg.index.is_some() || arg.from.is_some())
+                        && !matches!(query.kind, Some(SymbolKind::Call))
+                    {
+                        return Err(anyhow::anyhow!(
+                            "argument positions/provenance require kind: call"
+                        ));
                     }
                     if let Some(origin) = &arg.from {
                         let has_call = !origin.call.trim().is_empty();

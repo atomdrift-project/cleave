@@ -709,23 +709,24 @@ fn symbol_argument_discriminator(
     arg: Option<&crate::composite_rules::condition::ArgFilter>,
     args: Option<&[crate::composite_rules::condition::ArgFilter]>,
 ) -> String {
+    fn serialize<T: serde::Serialize + std::fmt::Debug>(value: &T) -> String {
+        serde_json::to_string(value).unwrap_or_else(|_| format!("{value:?}"))
+    }
+
     // Preserve the whole predicate, including positions and provenance. A
     // first-literal shortcut collapses distinct body/header and source rules.
     let mut key = String::new();
     if let Some(arg) = arg {
         key.push_str("#arg:");
-        key.push_str(&serde_json::to_string(arg).expect("argument filters serialize"));
+        key.push_str(&serialize(arg));
     }
     if let Some(args) = args.filter(|args| !args.is_empty()) {
-        let mut predicates: Vec<_> = args
-            .iter()
-            .map(|arg| serde_json::to_string(arg).expect("argument filters serialize"))
-            .collect();
+        let mut predicates: Vec<_> = args.iter().map(serialize).collect();
         // `args` is a conjunction over distinct positions, not an ordered
         // sequence. Keep multiplicity, but ignore YAML list ordering.
         predicates.sort();
         key.push_str("#args:");
-        key.push_str(&serde_json::to_string(&predicates).expect("strings serialize"));
+        key.push_str(&serialize(&predicates));
     }
     key
 }
@@ -4283,6 +4284,12 @@ pub(crate) fn find_structural_regex_duplicates(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::cloned_ref_to_slice_refs
+)]
 mod literal_regex_tests {
     use super::*;
 

@@ -200,6 +200,17 @@ impl OfficeAnalyzer {
             .push("office-analyzer".to_string());
         report.findings.extend(findings);
 
+        // Surface the filefacts string corpus on the report so `type: text`
+        // conditions can search container bytes. The office parsers never
+        // populated `report.strings`, leaving every text trait inert on
+        // Msi/OleDoc/Ooxml leaves — only `type: raw` could reach them.
+        report.strings = office_ctx
+            .as_ref()
+            .map(|ctx| {
+                crate::strings::StringExtractor::new().convert_stng_strings(&ctx.text_rows())
+            })
+            .unwrap_or_default();
+
         // Stash the synthesized office values tree on the report so the
         // value evaluator can consult it (`type: value path: summary.author`
         // etc.). Empty/null trees are dropped so JSON output stays

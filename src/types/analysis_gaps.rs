@@ -35,6 +35,7 @@ const ALL: [AnalysisGap; 7] = [
 
 impl AnalysisGap {
     /// Stable diagnostic label, independent of taxonomy identifiers.
+    #[must_use]
     pub fn label(self) -> &'static str {
         match self {
             Self::FlowUnavailable => "flow-unavailable",
@@ -92,6 +93,7 @@ impl From<AnalysisGaps> for Vec<AnalysisGap> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
     use super::*;
     #[test]
     fn parallel_gaps_are_bounded_serializable_and_snapshot_cloned() {

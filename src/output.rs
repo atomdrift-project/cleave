@@ -13,7 +13,9 @@
 
 #[allow(unused_imports)] // Used by binary target via format_human_single
 use crate::malecule_bridge;
-use crate::types::{AnalysisReport, ContextLine, Criticality, FileAnalysis, Finding, Note};
+use crate::types::{
+    AnalysisGap, AnalysisReport, ContextLine, Criticality, FileAnalysis, Finding, Note,
+};
 use anyhow::Result;
 use colored::Colorize;
 use std::collections::{HashMap, HashSet};
@@ -710,7 +712,7 @@ pub fn format_context_badged(
         let reasons = file
             .analysis_gaps
             .iter()
-            .map(|g| g.label())
+            .map(AnalysisGap::label)
             .collect::<Vec<_>>()
             .join(", ");
         gaps.push_str(&format!(
@@ -728,7 +730,7 @@ pub fn format_context_badged(
         let reasons = report
             .analysis_gaps
             .iter()
-            .map(|g| g.label())
+            .map(AnalysisGap::label)
             .collect::<Vec<_>>()
             .join(", ");
         gaps.push_str(&format!(

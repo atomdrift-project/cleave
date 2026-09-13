@@ -16,6 +16,14 @@ use tempfile::TempDir;
 /// unnecessary. Returns the compact-format JSON output equivalent to
 /// `cleave --json analyze <path>`.
 fn analyze_file_for_traits(file_path: &str) -> serde_json::Value {
+    // `set_skip_traits_override` is process-wide and the tests in this module
+    // run concurrently, so the flag has to be held for the whole
+    // mutate-then-observe window. Without the lock a sibling test's clearing
+    // call lands mid-analysis here, trait loading switches back on, and the
+    // extracted symbol set changes underneath the assertions -- which is why
+    // `test_java_symbol_extraction` passed alone and failed beside its siblings.
+    let _guard = crate::support::global_lock();
+
     // Tests in this file don't depend on trait content; force-skip trait
     // loading so the mapper stays empty and startup is fast.
     cleave::set_skip_traits_override(Some(true));

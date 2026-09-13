@@ -32,7 +32,7 @@ Traits live in `traits/` under four tiers:
 | Known Entities | `well-known/` | Specific malware family or tool signatures |
 | Metadata | `metadata/` | Informational file properties |
 
-If you're unsure where a rule belongs, the decision framework in [TAXONOMY.md](./TAXONOMY.md) will walk you through it. For YAML syntax, condition types, and composite rules, see [RULES.md](./RULES.md). For precision scoring (hostile composites need >= 3.5), see [PRECISION.md](./PRECISION.md).
+If you're unsure where a rule belongs, the decision framework in [TAXONOMY.md](./TAXONOMY.md) will walk you through it. For YAML syntax, condition types, and composite rules, see [RULES.md](./RULES.md). Hostile composites need a precision score >= 3.5; `cleave test-rules --rules <dir::id> <file>` prints a rule's score and the terms behind it.
 
 ### Step by step
 
@@ -94,7 +94,7 @@ All compiler warnings must be clean. If you're not sure about the right approach
 
 - [ ] `make ci` passes
 - [ ] New traits follow [TAXONOMY.md](./TAXONOMY.md) placement and tier dependency rules
-- [ ] Composite rules meet [PRECISION.md](./PRECISION.md) thresholds
+- [ ] Hostile composites meet the precision >= 3.5 threshold (`cleave test-rules`)
 - [ ] Hostile rules live in `objectives/` or `well-known/`, never in `micro-behaviors/`
 - [ ] Tested against at least one real sample with `cleave test-rules`
 

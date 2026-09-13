@@ -790,6 +790,7 @@ fn generate_embedded_language_trait(detected_lang: &FileType, offset: u64, value
         }],
         match_count: 0,
         source_file: None,
+        downgraded: false,
     }
 }
 
@@ -821,6 +822,7 @@ fn generate_encoded_layer_traits(encoding_chain: &[String], offset: u64) -> Vec<
             }],
             match_count: 0,
             source_file: None,
+            downgraded: false,
         })
         .collect()
 }
@@ -1179,6 +1181,7 @@ fn detect_base64_binary(
         match_count: 1,
         trait_refs: vec![],
         source_file: Some(parent_path.to_string()),
+        downgraded: false,
     };
 
     let mut entry = FileAnalysis::new(
@@ -1389,6 +1392,7 @@ fn encoded_powershell_finding(parent_path: &str, decoded_len: usize, offset: u64
         match_count: 1,
         trait_refs: vec![],
         source_file: Some(parent_path.to_string()),
+        downgraded: false,
     }
 }
 

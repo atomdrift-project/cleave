@@ -383,3 +383,7 @@ tree-sitter-language = { git = "https://github.com/tstromberg/tree-sitter", bran
 # the font support added there can be built and tested against cleave before
 # it is published. `make install-hooks` installs a pre-commit hook that
 # rejects exactly this.
+
+# TEMPORARY (validation only): build against the local filefacts working copy
+# so the symbol-format change can be measured end-to-end. Replace with a
+# filefacts release + version bump before committing.

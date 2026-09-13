@@ -318,6 +318,189 @@ fn inline_condition_value(cond: &Condition) -> Option<(&'static str, &'static st
     Some((ct, mt, normalized))
 }
 
+/// Whole-file content matchers: kinds whose pattern is compared against the
+/// file's own content, so the same literal means the same thing regardless of
+/// which rule holds it. Positional variants (`section:`, `offset:`, …) are
+/// excluded by [`content_condition_is_positional`], since a pattern pinned to a
+/// section is not equivalent to the same pattern searched file-wide.
+const CONTENT_MATCHER_KINDS: &[&str] = &["text", "raw", "string_literal", "encoded"];
+
+/// True when a content condition is pinned to a section or offset, making its
+/// pattern non-equivalent to the same pattern matched across the whole file.
+fn content_condition_is_positional(cond: &Condition) -> bool {
+    macro_rules! positional {
+        ($q:expr) => {
+            $q.section.is_some()
+                || $q.offset.is_some()
+                || $q.offset_range.is_some()
+                || $q.section_offset.is_some()
+                || $q.section_offset_range.is_some()
+        };
+    }
+    match cond {
+        Condition::Text(q) => positional!(q),
+        Condition::Raw(q) => positional!(q),
+        Condition::Literal(q) => positional!(q),
+        Condition::Encoded(q) => positional!(q),
+        _ => false,
+    }
+}
+
+/// Inline conditions in `unless:`/`downgrade:` that duplicate a whole-file
+/// content matcher which already exists — either as a named atomic trait, or as
+/// the same inline repeated in another file.
+///
+/// An inline content matcher is invisible to every other duplicate check, so a
+/// literal can be spelled once as a named trait and again inline in a
+/// suppression, and nothing notices the two must move together. Both shapes are
+/// reported:
+///
+/// - **duplicates a named trait** — reference it by `- id:` instead. This needs
+///   no repetition threshold: one inline copy of an existing trait is already a
+///   drift hazard, and it hides the relationship from anyone reading either side.
+/// - **repeated inline in two or more files** — promote it to a named trait in
+///   the directory that describes what it finds, then reference that.
+///
+/// `not:` is out of scope: it negates against the host matcher's *matched span*
+/// rather than the file, so an identical literal there is not the same
+/// assertion. `metrics:`/`value:` are also out of scope — a threshold or a
+/// structured field lookup carries its meaning locally.
+///
+/// Returns `(owner_rule_id, clause, description, advice)`.
+#[must_use]
+pub(crate) fn find_inline_content_duplicates(
+    trait_definitions: &[TraitDefinition],
+    composite_rules: &[CompositeTrait],
+) -> Vec<(String, &'static str, String, String)> {
+    // Signature -> the named trait that already owns this matcher, plus the
+    // file types it applies to. Suggesting a reference is only sound when the
+    // owner's `for:` covers the consumer's: referencing a `for: [powershell]`
+    // trait from a JavaScript rule silently switches the exclusion off.
+    let mut named: HashMap<(&'static str, &'static str, String), (String, Vec<RuleFileType>)> =
+        HashMap::new();
+    for t in trait_definitions {
+        if content_condition_is_positional(&t.r#if) {
+            continue;
+        }
+        if let Some(sig) = inline_condition_value(&t.r#if)
+            && CONTENT_MATCHER_KINDS.contains(&sig.0)
+        {
+            named
+                .entry(sig)
+                .or_insert_with(|| (t.id.clone(), t.r#for.clone()));
+        }
+    }
+
+    // Collect every inline occurrence, keyed by signature.
+    type Occurrence = (String, &'static str, String, Vec<RuleFileType>);
+    let mut seen: HashMap<(&'static str, &'static str, String), Vec<Occurrence>> = HashMap::new();
+    let collect = |id: &str,
+                       file: &std::path::Path,
+                       clause: &'static str,
+                       for_types: &[RuleFileType],
+                       conds: &[Condition],
+                       seen: &mut HashMap<_, Vec<Occurrence>>| {
+        for cond in conds {
+            if content_condition_is_positional(cond) {
+                continue;
+            }
+            if let Some(sig) = inline_condition_value(cond)
+                && CONTENT_MATCHER_KINDS.contains(&sig.0)
+            {
+                seen.entry(sig).or_default().push((
+                    id.to_string(),
+                    clause,
+                    file.to_string_lossy().to_string(),
+                    for_types.to_vec(),
+                ));
+            }
+        }
+    };
+    for t in trait_definitions {
+        if let Some(u) = &t.unless {
+            collect(&t.id, &t.defined_in, "unless", &t.r#for, u, &mut seen);
+        }
+        if let Some(d) = &t.downgrade {
+            for (clause, set) in [("downgrade", &d.any), ("downgrade", &d.all), ("downgrade", &d.none)] {
+                if let Some(c) = set {
+                    collect(&t.id, &t.defined_in, clause, &t.r#for, c, &mut seen);
+                }
+            }
+        }
+    }
+    for r in composite_rules {
+        if let Some(u) = &r.unless {
+            collect(&r.id, &r.defined_in, "unless", &r.r#for, u, &mut seen);
+        }
+        if let Some(d) = &r.downgrade {
+            for (clause, set) in [("downgrade", &d.any), ("downgrade", &d.all), ("downgrade", &d.none)] {
+                if let Some(c) = set {
+                    collect(&r.id, &r.defined_in, clause, &r.r#for, c, &mut seen);
+                }
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+    for (sig, occurrences) in seen {
+        let (kind, matcher, value) = &sig;
+        let shown: String = value.chars().take(60).collect();
+        // An owner only helps when its `for:` covers the consumer's. An empty
+        // `for:` means every type, so it covers anything.
+        let covered_by = |owner_for: &[RuleFileType], user_for: &[RuleFileType]| {
+            owner_for.is_empty() || user_for.iter().all(|f| owner_for.contains(f))
+        };
+        let mut unreferenceable = Vec::new();
+        if let Some((owner, owner_for)) = named.get(&sig) {
+            for (id, clause, file, user_for) in &occurrences {
+                if id == owner {
+                    continue; // a trait may legitimately restate its own matcher
+                }
+                if !covered_by(owner_for, user_for) {
+                    // Same matcher, incompatible scope — referencing it would
+                    // quietly drop the exclusion for the types it omits.
+                    unreferenceable.push((id.clone(), *clause, file.clone(), user_for.clone()));
+                    continue;
+                }
+                out.push((
+                    id.clone(),
+                    *clause,
+                    format!("inline {kind} {matcher}: {shown:?}"),
+                    format!("already defined as '{owner}' — reference it with `- id: {owner}`"),
+                ));
+            }
+            for (id, clause, _file, _) in &unreferenceable {
+                out.push((
+                    id.clone(),
+                    *clause,
+                    format!("inline {kind} {matcher}: {shown:?}"),
+                    format!(
+                        "'{owner}' has the same matcher but its `for:` does not cover this rule —                          promote a scope-neutral trait rather than referencing it"
+                    ),
+                ));
+            }
+            continue;
+        }
+        let files: std::collections::BTreeSet<&String> =
+            occurrences.iter().map(|(_, _, f, _)| f).collect();
+        if files.len() >= 2 {
+            for (id, clause, _file, _) in &occurrences {
+                out.push((
+                    id.clone(),
+                    *clause,
+                    format!("inline {kind} {matcher}: {shown:?}"),
+                    format!(
+                        "the same inline matcher appears in {} files — promote it to a named trait and reference that",
+                        files.len()
+                    ),
+                ));
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
 /// Detect the same inline `unless:` exclusion condition repeated across many
 /// files. Inline conditions inside `unless:` arrays are not atomic traits, so
 /// neither [`find_duplicate_atomic_traits`] nor [`find_string_pattern_duplicates`]
@@ -3444,6 +3627,36 @@ fn platforms_equivalent(a: &[Platform], b: &[Platform]) -> bool {
     covered_by(a, b) && covered_by(b, a)
 }
 
+/// True when two platform lists can both apply to the same file.
+///
+/// Mirrors the engine's `composite_rules::types::platforms_intersect`: an empty
+/// list means "all platforms", and umbrella platforms match their family
+/// members. Equality is the wrong test for duplicate detection — `[windows]`
+/// and `[windows, unix]` never compare equal yet both fire on a PE.
+fn platforms_overlap(a: &[Platform], b: &[Platform]) -> bool {
+    if a.is_empty() || b.is_empty() {
+        return true;
+    }
+    a.iter()
+        .any(|x| b.iter().any(|y| x.matches_filter(y)))
+}
+
+/// True when two `(min, max)` bounds describe overlapping ranges, treating an
+/// absent bound as unbounded — the same way the engine applies `size_min`/
+/// `size_max`/`entropy_*` gates at match time.
+///
+/// A band is *scope*, not identity: two traits with the same matcher and
+/// overlapping bands both fire on a file in the shared window, so the band must
+/// not be part of the grouping key. Where a band genuinely needs to change a
+/// verdict, that is one trait with a `downgrade:`, not two traits.
+fn ranges_overlap<T: PartialOrd + Copy>(a: (Option<T>, Option<T>), b: (Option<T>, Option<T>)) -> bool {
+    let lo_le_hi = |lo: Option<T>, hi: Option<T>| match (lo, hi) {
+        (Some(l), Some(h)) => l <= h,
+        _ => true,
+    };
+    lo_le_hi(a.0, b.1) && lo_le_hi(b.0, a.1)
+}
+
 /// Find traits with identical matching logic but different metadata.
 ///
 /// The grouping signature is the **matcher only** (`if` + `not` + numeric/size
@@ -3473,19 +3686,11 @@ pub(crate) fn find_atomic_logic_duplicates(
     let mut groups: HashMap<String, Vec<&TraitDefinition>> = HashMap::new();
 
     for t in trait_definitions {
-        let signature = format!(
-            "{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}",
-            t.r#if,
-            t.not,
-            t.size_min,
-            t.size_max,
-            t.count_min,
-            t.count_max,
-            t.per_kb_min,
-            t.per_kb_max,
-            t.entropy_min,
-            t.entropy_max,
-        );
+        // Matcher only. Size/count/density/entropy bands are scope, not identity:
+        // including them split the buckets so that any band difference hid the
+        // duplicate entirely (e.g. an identical PE ProductName matcher, one copy
+        // size-gated to the real app's range and one not).
+        let signature = format!("{:?}:{:?}", t.r#if, t.not);
         groups.entry(signature).or_default().push(t);
     }
 
@@ -3501,8 +3706,27 @@ pub(crate) fn find_atomic_logic_duplicates(
                 let a = traits[i];
                 let b = traits[j];
 
-                // Check if file types overlap
+                // Both must be able to fire on one file: every scope dimension has
+                // to overlap. Disjoint scope means two targets, not a duplicate.
                 if !file_types_overlap(&a.r#for, &b.r#for) {
+                    continue;
+                }
+                if !platforms_overlap(&a.platforms, &b.platforms) {
+                    continue;
+                }
+                if !ranges_overlap((a.size_min, a.size_max), (b.size_min, b.size_max)) {
+                    continue;
+                }
+                if !ranges_overlap(
+                    (a.entropy_min, a.entropy_max),
+                    (b.entropy_min, b.entropy_max),
+                ) {
+                    continue;
+                }
+                if !ranges_overlap((a.count_min, a.count_max), (b.count_min, b.count_max)) {
+                    continue;
+                }
+                if !ranges_overlap((a.per_kb_min, a.per_kb_max), (b.per_kb_min, b.per_kb_max)) {
                     continue;
                 }
 
@@ -3512,12 +3736,24 @@ pub(crate) fn find_atomic_logic_duplicates(
                 let unless_differs = format!("{:?}", a.unless) != format!("{:?}", b.unless);
                 let downgrade_differs =
                     format!("{:?}", a.downgrade) != format!("{:?}", b.downgrade);
+                // Overlapping-but-unequal bands are themselves a reason to report:
+                // the same matcher split across size/count/density/entropy windows
+                // is one detection, expressible as a single trait plus `downgrade:`.
+                let bands_differ = a.size_min != b.size_min
+                    || a.size_max != b.size_max
+                    || a.count_min != b.count_min
+                    || a.count_max != b.count_max
+                    || a.per_kb_min != b.per_kb_min
+                    || a.per_kb_max != b.per_kb_max
+                    || a.entropy_min != b.entropy_min
+                    || a.entropy_max != b.entropy_max;
 
                 if !crit_differs
                     && !conf_differs
                     && !platforms_differ
                     && !unless_differs
                     && !downgrade_differs
+                    && !bands_differ
                 {
                     // Everything outside the matcher is the same too — an exact
                     // duplicate handled by the exact-duplicate checks, not this one.
@@ -3536,8 +3772,11 @@ pub(crate) fn find_atomic_logic_duplicates(
                 // inconsistency like `textrel` vs `text-relocations` still flags). The
                 // same local id across directories is always a copy-paste — never skipped.
                 let exceptions_differ = unless_differs || downgrade_differs;
-                let only_exceptions_differ =
-                    exceptions_differ && !crit_differs && !conf_differs && !platforms_differ;
+                let only_exceptions_differ = exceptions_differ
+                    && !crit_differs
+                    && !conf_differs
+                    && !platforms_differ
+                    && !bands_differ;
                 let both_metadata = a.id.starts_with("metadata/") && b.id.starts_with("metadata/");
                 let same_local_id = a.id.rsplit("::").next() == b.id.rsplit("::").next();
                 // A bare existence-gate matcher discriminated by `unless:` is the
@@ -3562,6 +3801,34 @@ pub(crate) fn find_atomic_logic_duplicates(
                 if platforms_differ {
                     diffs.push(format!("platforms: {:?} vs {:?}", a.platforms, b.platforms));
                 }
+                if bands_differ {
+                    let mut bands = Vec::new();
+                    if a.size_min != b.size_min || a.size_max != b.size_max {
+                        bands.push(format!(
+                            "size {:?}..{:?} vs {:?}..{:?}",
+                            a.size_min, a.size_max, b.size_min, b.size_max
+                        ));
+                    }
+                    if a.count_min != b.count_min || a.count_max != b.count_max {
+                        bands.push(format!(
+                            "count {:?}..{:?} vs {:?}..{:?}",
+                            a.count_min, a.count_max, b.count_min, b.count_max
+                        ));
+                    }
+                    if a.per_kb_min != b.per_kb_min || a.per_kb_max != b.per_kb_max {
+                        bands.push(format!(
+                            "per_kb {:?}..{:?} vs {:?}..{:?}",
+                            a.per_kb_min, a.per_kb_max, b.per_kb_min, b.per_kb_max
+                        ));
+                    }
+                    if a.entropy_min != b.entropy_min || a.entropy_max != b.entropy_max {
+                        bands.push(format!(
+                            "entropy {:?}..{:?} vs {:?}..{:?}",
+                            a.entropy_min, a.entropy_max, b.entropy_min, b.entropy_max
+                        ));
+                    }
+                    diffs.push(format!("overlapping bands — {}", bands.join("; ")));
+                }
                 if unless_differs {
                     diffs.push("unless: differs".to_string());
                 }
@@ -3571,7 +3838,8 @@ pub(crate) fn find_atomic_logic_duplicates(
 
                 // When the only differences are criticality and/or exceptions, the pair
                 // is a single detection split in two — recommend collapsing it.
-                let mergeable_via_downgrade = crit_differs || unless_differs || downgrade_differs;
+                let mergeable_via_downgrade =
+                    crit_differs || unless_differs || downgrade_differs || bands_differ;
                 let recommendation = if mergeable_via_downgrade {
                     " — merge into one trait and express the difference as a downgrade:"
                 } else {

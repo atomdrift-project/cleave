@@ -341,6 +341,7 @@ impl MachOAnalyzer {
                 evidence: vec![],
                 match_count: 0,
                 source_file: None,
+                downgraded: false,
             });
         }
         tools_used.push("stng".to_string());
@@ -1040,6 +1041,7 @@ fn signature_finding(
         }],
         match_count: 0,
         source_file: None,
+        downgraded: false,
     }
 }
 
@@ -1645,6 +1647,7 @@ impl MachOAnalyzer {
                 match_count: 0,
                 trait_refs: vec![],
                 source_file: None,
+                downgraded: false,
             });
         }
 

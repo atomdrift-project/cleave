@@ -986,6 +986,7 @@ fn test_finding(id: &str) -> Finding {
         evidence: vec![],
         match_count: 0,
         source_file: None,
+        downgraded: false,
     }
 }
 

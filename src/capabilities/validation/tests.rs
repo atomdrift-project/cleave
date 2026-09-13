@@ -127,6 +127,27 @@ mod duplicate_tests {
     // ========================================================================
 
     /// Create a minimal trait definition for testing
+    /// A `type: text` `substr:` condition, optionally pinned to a section.
+    fn text_substr_cond(value: &str, section: Option<&str>) -> Condition {
+        Condition::Text(TextQuery {
+            length_min: None,
+            length_max: None,
+            exact: None,
+            substr: Some(value.to_string()),
+            regex: None,
+            word: None,
+            case_insensitive: false,
+            is_check: None,
+            not: None,
+            platforms: None,
+            section: section.map(str::to_string),
+            offset: None,
+            offset_range: None,
+            section_offset: None,
+            section_offset_range: None,
+        })
+    }
+
     fn create_test_trait(
         id: &str,
         condition: Condition,
@@ -481,6 +502,59 @@ mod duplicate_tests {
     // ========================================================================
     // Phase 1: Hex Escape Normalization Tests
     // ========================================================================
+
+    /// A whole-file content matcher inlined in `unless:` while the identical
+    /// matcher already exists as a named trait must be reported — it is invisible
+    /// to every other duplicate check, so the two copies silently drift apart.
+    #[test]
+    fn test_inline_content_matcher_duplicating_named_trait_is_flagged() {
+        let owner = create_test_trait(
+            "pack/detect::enigma-protector",
+            text_substr_cond("Enigma Protector", None),
+            vec![FileType::Pe],
+            "pack.yaml",
+        );
+        let mut borrower = create_test_trait(
+            "hardening/memory::wx-section",
+            text_substr_cond("writable executable", None),
+            vec![FileType::Pe],
+            "wx.yaml",
+        );
+        borrower.unless = Some(vec![text_substr_cond("Enigma Protector", None)]);
+
+        let found = find_inline_content_duplicates(&[owner, borrower], &[]);
+        assert_eq!(found.len(), 1, "expected one finding, got {found:?}");
+        assert_eq!(found[0].0, "hardening/memory::wx-section");
+        assert_eq!(found[0].1, "unless");
+        assert!(
+            found[0].3.contains("pack/detect::enigma-protector"),
+            "advice should name the trait to reference: {}",
+            found[0].3
+        );
+    }
+
+    /// A matcher pinned to a section is not the same assertion as the same
+    /// pattern searched file-wide, so it must not be reported as a duplicate.
+    #[test]
+    fn test_section_pinned_inline_is_not_a_content_duplicate() {
+        let owner = create_test_trait(
+            "a::file-wide",
+            text_substr_cond("Enigma Protector", None),
+            vec![FileType::Pe],
+            "a.yaml",
+        );
+        let mut borrower = create_test_trait(
+            "b::section-pinned",
+            text_substr_cond("something else", None),
+            vec![FileType::Pe],
+            "b.yaml",
+        );
+        borrower.unless = Some(vec![text_substr_cond("Enigma Protector", Some(".rsrc"))]);
+        assert!(
+            find_inline_content_duplicates(&[owner, borrower], &[]).is_empty(),
+            "a section-pinned inline is a different assertion"
+        );
+    }
 
     #[test]
     fn test_hex_escape_single_byte() {
@@ -4153,6 +4227,7 @@ mod taxonomy_tests {
 mod constraint_tests {
     use crate::capabilities::validation::constraints::{
         find_empty_condition_clauses, find_needs_zero, find_none_only_with_proximity,
+        MISSING_CONDITIONS,
         find_pure_alias_traits, find_too_short_patterns,
     };
     use crate::capabilities::validation::{
@@ -4206,6 +4281,7 @@ mod constraint_tests {
                     all: None,
                     none: None,
                     needs: None,
+                    scope: None,
                 })
             } else {
                 None
@@ -4315,6 +4391,46 @@ mod constraint_tests {
             section_offset_range,
             not: None,
         })
+    }
+
+    fn short_hex_trait(id: &str, pattern: &str, offset: Option<i64>) -> Condition {
+        Condition::Hex(crate::composite_rules::condition::HexQuery {
+            pattern: pattern.to_string(),
+            not: None,
+            offset,
+            offset_range: None,
+            section: None,
+            section_offset: None,
+            section_offset_range: None,
+        })
+    }
+
+    #[test]
+    fn short_hex_patterns_rejected_unpinned_and_allowed_pinned() {
+        // Unpinned two-byte pattern is impossibly short; offset-pinned is fine.
+        let traits = vec![
+            short_raw_trait("test/hex-unpinned", short_hex_trait("test/hex-unpinned", "5C ?? 44", None)),
+            short_raw_trait(
+                "test/hex-pinned",
+                short_hex_trait("test/hex-pinned", "5C ?? 44", Some(0)),
+            ),
+        ];
+        let violations = find_too_short_patterns(&traits);
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].0, "test/hex-unpinned");
+    }
+
+    #[test]
+    fn hex_alternation_counts_as_one_concrete_byte() {
+        // (5C|5D) constrains a full byte, exactly like a nibble wildcard does.
+        let traits = vec![short_raw_trait(
+            "test/hex-alternation",
+            short_hex_trait("test/hex-alternation", "A3 (5C|5D) 19", None),
+        )];
+        assert!(
+            find_too_short_patterns(&traits).is_empty(),
+            "literal + alternation + literal = 3 concrete bytes"
+        );
     }
 
     #[test]
@@ -4653,6 +4769,7 @@ mod constraint_tests {
                 all: all.map(conv),
                 none: none.map(conv),
                 needs: None,
+                scope: None,
             }
         }
         fn unless(v: &[&str]) -> Vec<Condition> {
@@ -4753,6 +4870,7 @@ mod constraint_tests {
             all: None,
             none: None,
             needs: None,
+            scope: None,
         });
 
         // A reference to a different directory is legitimate.
@@ -5035,6 +5153,126 @@ mod constraint_tests {
         assert_eq!(result[0], ("test/empty-all-none".to_string(), "all"));
     }
 
+    /// A composite with neither `all:` nor `any:` fires on nothing —
+    /// `evaluate_with_gates` matches `(None, None)` and bails — so it must be
+    /// flagged. This is the shape authors actually write, since YAML omits a
+    /// key rather than spelling out `all: []`.
+    #[test]
+    fn test_absent_all_and_any_is_flagged() {
+        let rules = vec![CompositeTrait {
+            required_trait_indices: Vec::new(),
+            id: "test/no-conditions".to_string(),
+            desc: "test".to_string(),
+            conf: 1.0,
+            crit: Criticality::Suspicious,
+            mbc: None,
+            attack: None,
+            platforms: vec![Platform::All],
+            arch: vec![Arch::All],
+            r#for: vec![FileType::All],
+            for_from_groups: false,
+            size_min: None,
+            size_max: None,
+            all: None,
+            any: None,
+            unless: None,
+            not: None,
+            downgrade: None,
+            needs: None,
+            near_lines: None,
+            near_bytes: None,
+            scope: None,
+            defined_in: PathBuf::from("test.yaml"),
+            precision: None,
+            ..Default::default()
+        }];
+        let result = find_empty_condition_clauses(&rules);
+        assert_eq!(result.len(), 1);
+        assert_eq!(
+            result[0],
+            ("test/no-conditions".to_string(), MISSING_CONDITIONS)
+        );
+    }
+
+    /// Filter fields and `unless:` constrain or withhold evidence; they never
+    /// supply it. A composite carrying only those still fires on nothing.
+    #[test]
+    fn test_filters_and_unless_do_not_count_as_conditions() {
+        let rules = vec![CompositeTrait {
+            required_trait_indices: Vec::new(),
+            id: "test/filters-only".to_string(),
+            desc: "test".to_string(),
+            conf: 1.0,
+            crit: Criticality::Notable,
+            mbc: None,
+            attack: None,
+            platforms: vec![Platform::All],
+            arch: vec![Arch::All],
+            r#for: vec![FileType::Pe],
+            for_from_groups: false,
+            size_min: Some(512),
+            size_max: Some(102_400),
+            all: None,
+            any: None,
+            unless: Some(vec![Condition::Trait {
+                id: "some-trait".to_string(),
+            }]),
+            not: None,
+            downgrade: None,
+            needs: None,
+            near_lines: None,
+            near_bytes: None,
+            scope: None,
+            defined_in: PathBuf::from("test.yaml"),
+            precision: None,
+            ..Default::default()
+        }];
+        let result = find_empty_condition_clauses(&rules);
+        assert_eq!(result.len(), 1);
+        assert_eq!(
+            result[0],
+            ("test/filters-only".to_string(), MISSING_CONDITIONS)
+        );
+    }
+
+    /// A composite that carries real conditions is untouched, and the check
+    /// only ever inspects composites — a size-only *atomic* trait is legal
+    /// (`parsing.rs` synthesizes an always-true condition for it) and cannot
+    /// reach this validator at all.
+    #[test]
+    fn test_populated_conditions_are_not_flagged() {
+        let rules = vec![CompositeTrait {
+            required_trait_indices: Vec::new(),
+            id: "test/has-conditions".to_string(),
+            desc: "test".to_string(),
+            conf: 1.0,
+            crit: Criticality::Notable,
+            mbc: None,
+            attack: None,
+            platforms: vec![Platform::All],
+            arch: vec![Arch::All],
+            r#for: vec![FileType::All],
+            for_from_groups: false,
+            size_min: None,
+            size_max: None,
+            all: Some(vec![Condition::Trait {
+                id: "some-trait".to_string(),
+            }]),
+            any: None,
+            unless: None,
+            not: None,
+            downgrade: None,
+            needs: None,
+            near_lines: None,
+            near_bytes: None,
+            scope: None,
+            defined_in: PathBuf::from("test.yaml"),
+            precision: None,
+            ..Default::default()
+        }];
+        assert!(find_empty_condition_clauses(&rules).is_empty());
+    }
+
     #[test]
     fn test_needs_zero_is_flagged() {
         let rules = vec![CompositeTrait {
@@ -5183,6 +5421,7 @@ mod autoprefix_tests {
                     id: "none-local".to_string(),
                 }]),
                 needs: None,
+                scope: None,
             }),
         );
 
@@ -5218,6 +5457,7 @@ mod autoprefix_tests {
                     id: "dg-none-ref".to_string(),
                 }]),
                 needs: None,
+                scope: None,
             }),
         );
 
@@ -5270,6 +5510,7 @@ mod autoprefix_tests {
                 any: None,
                 none: None,
                 needs: None,
+                scope: None,
             }),
         );
 
@@ -5350,6 +5591,7 @@ mod excessive_skip_tests {
                 all: Some(raw_conds(downgrade_all)),
                 none: None,
                 needs: None,
+                scope: None,
             }),
             ..Default::default()
         }
@@ -5634,6 +5876,7 @@ mod orphan_tests {
                     id: "test::comp-none-ref".to_string(),
                 }]),
                 needs: None,
+                scope: None,
             }),
         )];
 
@@ -7530,6 +7773,7 @@ mod exception_validation_tests {
             all: None,
             none: None,
             needs: None,
+            scope: None,
         });
         let composites = vec![c];
         let src = sources(&["well-known/tool/foo::exc"]);
@@ -7872,6 +8116,7 @@ mod bare_or_crit_escalation_tests {
                 all: None,
                 none: None,
                 needs: None,
+                scope: None,
             }),
             ..base.clone()
         };
@@ -7941,5 +8186,134 @@ mod bare_or_crit_escalation_tests {
             &["d::a", "d/sub"],
         )];
         assert!(flagged_legs(&traits, &rules).is_empty());
+    }
+}
+
+/// `find_uncallable_symbol_matchers` — a `type: symbol` literal that no
+/// extracted symbol can equal.
+mod uncallable_symbol_matchers {
+    use crate::capabilities::validation::find_uncallable_symbol_matchers;
+    use crate::composite_rules::condition::{Condition, SymbolQuery};
+    use crate::composite_rules::traits::TraitDefinition;
+    use std::path::PathBuf;
+
+    fn symbol_trait(id: &str, exact: &str) -> TraitDefinition {
+        TraitDefinition {
+            id: id.to_string(),
+            desc: "test".to_string(),
+            conf: 0.8,
+            crit: crate::types::Criticality::Notable,
+            r#if: Condition::Symbol(SymbolQuery {
+                exact: Some(exact.to_string()),
+                ..Default::default()
+            }),
+            defined_in: PathBuf::from("test.yml"),
+            ..Default::default()
+        }
+    }
+
+    fn flagged(exact: &str) -> bool {
+        !find_uncallable_symbol_matchers(&[symbol_trait("t", exact)], &[]).is_empty()
+    }
+
+    /// A symbol is a dotted path of identifiers, so any spelling of the call
+    /// itself is dead on arrival — including the trailing `()` that reads as
+    /// the natural way to write a call.
+    #[test]
+    fn call_syntax_is_flagged() {
+        assert!(flagged(".system()"), "trailing call marker");
+        assert!(flagged("open().read"), "inner call marker");
+        assert!(flagged("open(\"/tmp/x\").read"), "argument text");
+        assert!(flagged(".eval("), "half-open call");
+    }
+
+    /// `exact:`/`substr:` compare literally, so a regex there matches nothing.
+    #[test]
+    fn regex_in_a_literal_field_is_flagged() {
+        assert!(flagged("os\\.environ"), "escaped dot");
+        assert!(flagged("os\\.environ\\[.{0,50}\\]"), "character class");
+        assert!(flagged("clone|rename"), "alternation");
+        assert!(flagged("^setup"), "anchor");
+    }
+
+    /// Names that really do occur must not be flagged. Go binaries export the
+    /// receiver form; PE ordinal imports are named `ORDINAL <n>`; C++ has
+    /// `operator delete`; and `$` is a legal JavaScript identifier character.
+    #[test]
+    fn real_symbol_names_are_left_alone() {
+        for name in [
+            "net.(*Dialer).Dial",
+            "exec.(*Cmd).Run",
+            "ORDINAL 187",
+            "operator delete",
+            "platform.system",
+            "Date.getTimezoneOffset",
+            "$",
+            "jQuery$",
+            "__import__.decompress",
+            "s.replace.replace",
+        ] {
+            assert!(!flagged(name), "{name:?} is a real symbol and must not flag");
+        }
+    }
+}
+
+/// `find_stale_filetype_allowlist_entries` — an allowlist entry whose
+/// directory prefix matches no trait.
+mod stale_filetype_allowlist {
+    use crate::capabilities::validation::find_stale_filetype_allowlist_entries;
+    use crate::capabilities::validation::taxonomy::BROAD_FILETYPE_ALLOWLIST;
+    use std::collections::HashMap;
+
+    /// Every shipped entry must match a real directory. When one does not, the
+    /// exemption it encodes is silently gone -- the usual cause is a directory
+    /// renamed without updating the entry, and the symptom is a pile of
+    /// file-type cap violations nowhere near the rename.
+    #[test]
+    fn shipped_entries_all_match_a_real_directory() {
+        // Stand in for the loaded taxonomy: one source path per entry prefix.
+        let sources: HashMap<String, String> = BROAD_FILETYPE_ALLOWLIST
+            .iter()
+            .enumerate()
+            .filter_map(|(i, e)| {
+                e.split_once(':')
+                    .map(|(_, p)| (format!("t{i}"), format!("./{p}traits.yaml")))
+            })
+            .collect();
+        assert!(
+            find_stale_filetype_allowlist_entries(&sources).is_empty(),
+            "every entry should match when each prefix has a source file"
+        );
+    }
+
+    /// With no traits at all, every entry is stale — the check is actually
+    /// looking at the sources rather than always passing.
+    #[test]
+    fn every_entry_is_stale_when_nothing_matches() {
+        let empty: HashMap<String, String> = HashMap::new();
+        assert_eq!(
+            find_stale_filetype_allowlist_entries(&empty).len(),
+            BROAD_FILETYPE_ALLOWLIST.len()
+        );
+    }
+
+    /// A prefix that no longer exists is reported while its neighbours are not.
+    #[test]
+    fn only_the_unmatched_prefix_is_reported() {
+        let mut sources: HashMap<String, String> = HashMap::new();
+        let mut skipped = None;
+        for (i, e) in BROAD_FILETYPE_ALLOWLIST.iter().enumerate() {
+            let Some((_, prefix)) = e.split_once(':') else {
+                continue;
+            };
+            if skipped.is_none() {
+                skipped = Some(*e);
+                continue;
+            }
+            sources.insert(format!("t{i}"), format!("./{prefix}traits.yaml"));
+        }
+        let stale = find_stale_filetype_allowlist_entries(&sources);
+        let skipped = skipped.expect("at least one entry");
+        assert!(stale.contains(&skipped), "the dropped prefix must be flagged");
     }
 }

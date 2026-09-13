@@ -145,6 +145,7 @@ pub(crate) fn process_yara_result(
             evidence,
             match_count: 0,
             source_file: None,
+            downgraded: false,
         });
     }
     if !report

@@ -813,6 +813,7 @@ mod tests {
             evidence: Vec::new(),
             match_count: 1,
             source_file: None,
+            downgraded: false,
         }
     }
 

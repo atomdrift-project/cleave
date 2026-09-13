@@ -613,6 +613,7 @@ pub(crate) enum AnalysisWarning {
     AstParseError,
     AstQueryLimited { limit: usize },
     PatternTruncated { pattern: String, limit: usize },
+    HexPatternTooShort { concrete: usize },
 }
 
 impl std::fmt::Display for AnalysisWarning {
@@ -626,6 +627,13 @@ impl std::fmt::Display for AnalysisWarning {
             }
             Self::AstQueryLimited { limit } => {
                 write!(f, "AST query match limit hit (limit: {})", limit)
+            }
+            Self::HexPatternTooShort { concrete } => {
+                write!(
+                    f,
+                    "hex pattern has {concrete} concrete byte(s); the floor is 3 unless the \
+                     search space is pinned (offset/offset_range, or section + section_offset/size_max)"
+                )
             }
             Self::PatternTruncated { pattern, limit } => {
                 write!(

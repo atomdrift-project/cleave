@@ -98,6 +98,7 @@ mod tests {
             evidence: vec![],
             match_count: 0,
             source_file: None,
+            downgraded: false,
         }
     }
 
@@ -593,6 +594,7 @@ mod tests {
             }],
             match_count: 0,
             source_file: Some("test.yaml".to_string()),
+            downgraded: false,
         };
 
         let findings = vec![original_finding.clone()];

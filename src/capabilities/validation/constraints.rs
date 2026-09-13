@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use crate::capabilities::models::{RawCompositeRule, RawTraitDefinition, TraitDefaults};
 use crate::capabilities::validation::shared::is_limited_byte_range;
 use crate::composite_rules::{
-    CompositeTrait, Condition, DowngradeConditions, FileType, KvQuery, TraitDefinition,
+    CompositeTrait, Condition, DowngradeConditions, FileType, KvQuery, Scope, TraitDefinition,
 };
 use crate::composite_rules::{
     EncodedQuery, HexQuery, LiteralQuery, PathQuery, RawQuery, SectionQuery, SymbolQuery, TextQuery,
@@ -289,13 +289,35 @@ pub(crate) fn find_impossible_count_constraints(
     violations
 }
 
-/// Find composite rules with empty `any:` or `all:` clauses.
+/// Find composite rules whose positive conditions are empty or absent.
 ///
-/// An empty `all:` vacuously matches everything (zero conditions all satisfied).
-/// An empty `any:` with `needs > 0` can never match; with `needs: 0` or default it vacuously matches.
-/// Both are authoring mistakes.
+/// A composite draws all of its evidence from `all:`/`any:`, and the two ways of
+/// getting that wrong fail in *opposite* directions:
 ///
-/// Returns: `Vec<(rule_id, clause_type)>`
+/// - **Present but empty** (`all: []`, `any: []`). An empty `all:` vacuously
+///   matches everything, because `eval_requires_all` returns `matched: true`
+///   over an empty slice — the rule fires on every file that clears its
+///   platform/type/size gates, carrying no evidence. An empty `any:` with
+///   `needs > 0` can never match; with `needs: 0` or the default it vacuously
+///   matches.
+/// - **Absent entirely** (neither key present). The rule fires on nothing:
+///   `CompositeTrait::evaluate_with_gates` matches `(None, None)` and returns
+///   `None`, calling it an invalid rule. Nothing else reports it, so the rule
+///   loads, counts toward the taxonomy, and silently never fires.
+///
+/// The absent case is the one authors actually hit, since YAML omits a key
+/// rather than spelling out an empty list. Filter fields (`for:`, `size_min`,
+/// `size_max`, `platforms:`) do not rescue it — they constrain evidence rather
+/// than supplying it — and neither does `unless:`, which can only withhold a
+/// match. A rule whose whole predicate *is* a size/type filter belongs in
+/// `traits:`, where `parsing.rs` synthesizes an always-true condition for
+/// size-only atomic traits; as a composite it is simply dead.
+///
+/// Atomic traits are deliberately out of scope: this only ever inspects
+/// composites, so a legitimate size-only trait cannot be caught by it.
+///
+/// Returns: `Vec<(rule_id, clause_type)>`, where `clause_type` is `"all"` or
+/// `"any"` for an empty clause and [`MISSING_CONDITIONS`] when both are absent.
 #[must_use]
 pub(crate) fn find_empty_condition_clauses(
     composite_rules: &[CompositeTrait],
@@ -303,6 +325,11 @@ pub(crate) fn find_empty_condition_clauses(
     let mut violations = Vec::new();
 
     for rule in composite_rules {
+        if rule.all.is_none() && rule.any.is_none() {
+            violations.push((rule.id.clone(), MISSING_CONDITIONS));
+            continue;
+        }
+
         if let Some(all) = &rule.all
             && all.is_empty()
         {
@@ -318,6 +345,11 @@ pub(crate) fn find_empty_condition_clauses(
 
     violations
 }
+
+/// `clause_type` marker for a composite carrying neither `all:` nor `any:`.
+/// Distinguishes "the clause is there but empty" from "there is no clause",
+/// which need different messages because they fail in opposite directions.
+pub(crate) const MISSING_CONDITIONS: &str = "__missing__";
 
 /// Find composite rules where `needs` is set but `any:` is absent.
 ///
@@ -609,6 +641,14 @@ pub(crate) fn find_dead_downgrades(
         let (Some(unless), Some(downgrade)) = (unless, downgrade) else {
             return;
         };
+        // `unless:` resolves against the file the rule matched in. A downgrade
+        // that asks for a different scope is evaluating a different subject --
+        // the enclosing archive, say -- so a shared id is not dead there: the
+        // suppressor can miss at leaf scope while the downgrade still fires at
+        // outer scope. Only same-scope clauses can kill each other.
+        if downgrade.scope.is_some_and(|sc| sc != Scope::File) {
+            return;
+        }
         let suppressed: HashSet<&str> = unless.iter().filter_map(trait_ref).collect();
         if suppressed.is_empty() {
             return;
@@ -1048,6 +1088,16 @@ pub(crate) fn find_too_short_patterns(
 /// Excludes full `??` wildcards and `[N]` gap specifiers, but counts nibble
 /// wildcards like `4?` or `?F` since they still constrain one nibble.
 fn count_concrete_hex_bytes(pattern: &str) -> usize {
+    fn is_hex_alternation(token: &str) -> bool {
+        let Some(inner) = token.strip_prefix('(').and_then(|t| t.strip_suffix(')')) else {
+            return false;
+        };
+        !inner.is_empty()
+            && inner.split('|').all(|b| {
+                b.len() == 2 && b.chars().all(|c| c.is_ascii_hexdigit() || c == '?')
+            })
+    }
+
     pattern
         .split_whitespace()
         .filter(|token| {
@@ -1061,7 +1111,10 @@ fn count_concrete_hex_bytes(pattern: &str) -> usize {
             }
             // Accept nibble wildcards (4?, ?F) — they constrain one nibble
             // Accept full hex bytes (4D, 5A)
-            token.len() == 2 && token.chars().all(|c| c.is_ascii_hexdigit() || c == '?')
+            // Accept alternations ((5C|5D)) — one constrained byte regardless
+            // of branch count; mirrors the matcher's floor in evaluators/yara.rs
+            (token.len() == 2 && token.chars().all(|c| c.is_ascii_hexdigit() || c == '?'))
+                || is_hex_alternation(token)
         })
         .count()
 }
@@ -1197,6 +1250,22 @@ pub(crate) fn find_hostile_composites_without_notable_leg(
     violations
 }
 
+/// Does directory reference `dir` cover trait id `trait_id`?
+///
+/// Two details the naive `format!("{dir}::")` prefix missed, both of which made
+/// a referenced component look orphaned:
+/// * the reference is usually written with a trailing slash
+///   (`metadata/file/catalog/identity/`), which turned the prefix into
+///   `.../identity/::` and matched nothing;
+/// * a directory also covers traits in its *sub*directories, which a `::`-only
+///   prefix never matched.
+fn directory_covers(dir: &str, trait_id: &str) -> bool {
+    let dir = dir.trim_end_matches('/');
+    trait_id
+        .strip_prefix(dir)
+        .is_some_and(|rest| rest.starts_with("::") || rest.starts_with('/'))
+}
+
 pub(crate) fn find_orphaned_components(
     trait_definitions: &[TraitDefinition],
     composite_rules: &[CompositeTrait],
@@ -1232,9 +1301,8 @@ pub(crate) fn find_orphaned_components(
                         referenced_ids.insert(id.clone());
                     } else {
                         // Directory reference - mark all traits in that directory as referenced
-                        let prefix = format!("{}::", id);
                         for component_id in &component_ids {
-                            if component_id.starts_with(&prefix) {
+                            if directory_covers(id, component_id) {
                                 referenced_ids.insert((*component_id).to_string());
                             }
                         }
@@ -1250,9 +1318,8 @@ pub(crate) fn find_orphaned_components(
                     if id.contains("::") {
                         referenced_ids.insert(id.clone());
                     } else {
-                        let prefix = format!("{}::", id);
                         for component_id in &component_ids {
-                            if component_id.starts_with(&prefix) {
+                            if directory_covers(id, component_id) {
                                 referenced_ids.insert((*component_id).to_string());
                             }
                         }
@@ -1311,9 +1378,8 @@ pub(crate) fn find_orphaned_components(
                     if id.contains("::") {
                         referenced_ids.insert(id.clone());
                     } else {
-                        let prefix = format!("{}::", id);
                         for component_id in &component_ids {
-                            if component_id.starts_with(&prefix) {
+                            if directory_covers(id, component_id) {
                                 referenced_ids.insert((*component_id).to_string());
                             }
                         }
@@ -1817,3 +1883,400 @@ pub(crate) fn find_hex_binary_missing_section(
 // single per-matcher-type threshold table (text/value/symbol/ast) plus a
 // type-qualified allowlist. The former `find_condition_scope_violations`
 // (tree-sitter ≤2, symbol/hex/yara ≤4) is subsumed by those caps.
+
+/// Direct `downgrade:` entries allowed on a rule declared `notable`.
+///
+/// A `downgrade:` on a notable rule lands it on `Baseline`, and `Baseline`
+/// means something specific: functionality nearly every program has. A clear
+/// behavior does not become universal because of where it sits — `pkill <name>`
+/// terminates a process by name in shipped code and in a test file alike. So
+/// crossing that line is a claim about the matcher, not the context, and it
+/// should be rare and argued rather than reached for as routine FP control.
+pub(crate) const MAX_NOTABLE_DOWNGRADE_DIRECT: usize = 4;
+
+/// Same limit once aggregator references are expanded.
+///
+/// A single directory reference can stand for hundreds of traits — one
+/// `metadata/package/testing/presence/harness/` leg expands to 126, any one of
+/// which fires the downgrade. Counting only the literal entries would let a
+/// rule hide an unbounded trigger set behind one line.
+pub(crate) const MAX_NOTABLE_DOWNGRADE_EXPANDED: usize = 8;
+
+/// A rule declared `notable` whose `downgrade:` reaches too broadly.
+pub(crate) struct BroadNotableDowngrade {
+    /// The offending rule's ID.
+    pub id: String,
+    /// True for a composite rule, false for an atomic trait.
+    pub is_composite: bool,
+    /// `downgrade:` entries written literally on the rule.
+    pub direct: usize,
+    /// Distinct exceptions once aggregator references are expanded.
+    pub expanded: usize,
+}
+
+/// Find `notable` rules whose `downgrade:` crosses into `Baseline` on too broad
+/// a trigger set.
+///
+/// Sibling of [`find_excessive_skip_conditions`], and deliberately the same
+/// shape — a direct cap plus an expanded cap — but scoped to the one transition
+/// that reclassifies a behavior rather than merely de-emphasizing it. Rules at
+/// `suspicious`/`hostile` are untouched: those downgrades land on `notable` or
+/// `suspicious`, which say nothing false about the matcher.
+#[must_use]
+pub(crate) fn find_broad_notable_downgrades<'a>(
+    trait_definitions: &'a [TraitDefinition],
+    composite_rules: &'a [CompositeTrait],
+) -> Vec<BroadNotableDowngrade> {
+    let composite_map: HashMap<&'a str, &'a CompositeTrait> =
+        composite_rules.iter().map(|r| (r.id.as_str(), r)).collect();
+
+    let mut violations = Vec::new();
+
+    let mut flag = |id: &'a str,
+                    crit: crate::types::Criticality,
+                    downgrade: Option<&'a DowngradeConditions>,
+                    is_composite: bool| {
+        if crit != crate::types::Criticality::Notable {
+            return;
+        }
+        let Some(downgrade) = downgrade else { return };
+        // Breadth is how many *independent* things can fire the downgrade, so
+        // `any:`/`none:` legs count one each while a whole `all:` block counts
+        // once: its legs must all match, which narrows the trigger rather than
+        // widening it. Summing them punished well-targeted conjunctions like
+        // "many imports AND a graphics import AND one of three runtime markers".
+        let all_len = downgrade.all.as_ref().map_or(0, Vec::len);
+        let widening = DowngradeConditions {
+            all: None,
+            any: downgrade.any.clone(),
+            none: downgrade.none.clone(),
+            needs: downgrade.needs,
+            scope: downgrade.scope,
+        };
+        let conjunction = usize::from(all_len > 0);
+        let (_, direct) = direct_suppression_counts(None, Some(&widening));
+        let direct = direct + conjunction;
+        let (expanded, _) = expand_suppressions(None, Some(&widening), &composite_map);
+        let expanded = expanded + conjunction;
+        if direct > MAX_NOTABLE_DOWNGRADE_DIRECT || expanded > MAX_NOTABLE_DOWNGRADE_EXPANDED {
+            violations.push(BroadNotableDowngrade {
+                id: id.to_string(),
+                is_composite,
+                direct,
+                expanded,
+            });
+        }
+    };
+
+    for t in trait_definitions {
+        flag(t.id.as_str(), t.crit, t.downgrade.as_ref(), false);
+    }
+    for r in composite_rules {
+        flag(r.id.as_str(), r.crit, r.downgrade.as_ref(), true);
+    }
+
+    violations
+}
+
+/// A clause that lists two references where one already covers the other.
+pub(crate) struct ShadowedRef {
+    /// The offending rule's ID.
+    pub id: String,
+    /// True for a composite rule, false for an atomic trait.
+    pub is_composite: bool,
+    /// Which clause the pair sits in (`unless`, `any`, `all`, `none`, …).
+    pub clause: &'static str,
+    /// The reference that is already covered by `covered_by`.
+    pub specific: String,
+    /// The reference that covers it — a duplicate, a parent directory, or a
+    /// directory containing the trait.
+    pub directory: String,
+    /// How the pair overlaps, for the message.
+    pub kind: &'static str,
+}
+
+/// Find clauses that list two references where one already covers the other.
+///
+/// Three shapes, all the same defect — a leg that cannot change the clause's
+/// outcome because a sibling leg already subsumes it:
+///
+/// * **duplicate** — the same reference written twice.
+/// * **directory over trait** — `a/b/` beside `a/b::c`.
+/// * **directory over directory** — `well-known/lib/` beside
+///   `well-known/lib/utext/`.
+///
+/// A covered leg is dead weight: `any:` was already satisfied by the covering
+/// leg, `unless:` already suppressed on it. It makes a rule read as broader
+/// than it is and inflates both suppression budgets
+/// ([`find_excessive_skip_conditions`] and [`find_broad_notable_downgrades`])
+/// with entries that carry no reach.
+///
+/// Keep the covering reference and drop the covered one — or, if only the
+/// narrower one was meant, drop the broad reference, which is the case where
+/// this check has found a real behavior bug rather than redundancy.
+#[must_use]
+pub(crate) fn find_directory_shadowed_refs(
+    trait_definitions: &[TraitDefinition],
+    composite_rules: &[CompositeTrait],
+) -> Vec<ShadowedRef> {
+    let mut out = Vec::new();
+
+    // A directory reference has no `::` and at least one path separator.
+    fn as_directory(r: &str) -> Option<&str> {
+        let r = r.trim_end_matches('/');
+        (!r.contains("::") && r.contains('/')).then_some(r)
+    }
+
+    /// Does `a` cover `b`? True when `a` is a directory and `b` names a trait
+    /// or directory beneath it.
+    fn covers(a: &str, b: &str) -> bool {
+        let Some(dir) = as_directory(a) else {
+            return false;
+        };
+        let b = b.trim_end_matches('/');
+        b.strip_prefix(dir)
+            .is_some_and(|rest| rest.starts_with("::") || rest.starts_with('/'))
+    }
+
+    // Directory references deliberately exclude `crit: exception` members, so a
+    // directory does NOT cover an exception that lives under it and the pair is
+    // not redundant. Skip those, or this check would advise deleting a
+    // reference that is doing real work.
+    let exceptions: HashSet<&str> = trait_definitions
+        .iter()
+        .filter(|t| t.crit == crate::types::Criticality::Exception)
+        .map(|t| t.id.as_str())
+        .chain(
+            composite_rules
+                .iter()
+                .filter(|r| r.crit == crate::types::Criticality::Exception)
+                .map(|r| r.id.as_str()),
+        )
+        .collect();
+
+    let mut scan = |id: &str, is_composite: bool, clause: &'static str, list: &[Condition]| {
+        let refs: Vec<&str> = list.iter().filter_map(trait_ref).collect();
+        for (i, b) in refs.iter().enumerate() {
+            if exceptions.contains(*b) {
+                continue;
+            }
+            for (j, a) in refs.iter().enumerate() {
+                if i == j {
+                    continue;
+                }
+                let same = a.trim_end_matches('/') == b.trim_end_matches('/');
+                // For an exact duplicate only the later copy is reported, so a
+                // pair yields one finding rather than two.
+                let kind = if same && j < i {
+                    "duplicate"
+                } else if !same && covers(a, b) {
+                    if b.contains("::") {
+                        "directory over trait"
+                    } else {
+                        "directory over directory"
+                    }
+                } else {
+                    continue;
+                };
+                out.push(ShadowedRef {
+                    id: id.to_string(),
+                    is_composite,
+                    clause,
+                    specific: (*b).to_string(),
+                    directory: (*a).to_string(),
+                    kind,
+                });
+                break;
+            }
+        }
+    };
+
+    let mut visit = |id: &str,
+                     is_composite: bool,
+                     all: Option<&Vec<Condition>>,
+                     any: Option<&Vec<Condition>>,
+                     none: Option<&Vec<Condition>>,
+                     unless: Option<&Vec<Condition>>,
+                     downgrade: Option<&DowngradeConditions>| {
+        for (clause, list) in [
+            ("all", all),
+            ("any", any),
+            ("none", none),
+            ("unless", unless),
+        ] {
+            if let Some(list) = list {
+                scan(id, is_composite, clause, list);
+            }
+        }
+        if let Some(d) = downgrade {
+            for (clause, list) in [
+                ("downgrade.all", d.all.as_ref()),
+                ("downgrade.any", d.any.as_ref()),
+                ("downgrade.none", d.none.as_ref()),
+            ] {
+                if let Some(list) = list {
+                    scan(id, is_composite, clause, list);
+                }
+            }
+        }
+    };
+
+    for t in trait_definitions {
+        visit(
+            t.id.as_str(),
+            false,
+            None,
+            None,
+            None,
+            t.unless.as_ref(),
+            t.downgrade.as_ref(),
+        );
+    }
+    for r in composite_rules {
+        visit(
+            r.id.as_str(),
+            true,
+            r.all.as_ref(),
+            r.any.as_ref(),
+            None,
+            r.unless.as_ref(),
+            r.downgrade.as_ref(),
+        );
+    }
+
+    out
+}
+
+/// A `type: symbol` matcher whose literal no extracted symbol can ever equal.
+pub(crate) struct UncallableSymbolMatcher {
+    /// The offending rule's ID.
+    pub id: String,
+    /// True for a composite rule, false for an atomic trait.
+    pub is_composite: bool,
+    /// Which clause the matcher sits in (`if`, `unless`, …).
+    pub clause: &'static str,
+    /// Which field carried the literal (`exact` or `substr`).
+    pub field: &'static str,
+    /// The literal as written.
+    pub literal: String,
+    /// The same literal with argument text removed — what it should say.
+    pub suggestion: String,
+}
+
+/// Is the `(` at `open` the Go receiver form, as in `net.(*Dialer).Dial`?
+///
+/// Compiled Go binaries really do export symbols spelled that way, so those
+/// parentheses are part of a legitimate name and carry a type, not arguments.
+fn is_go_receiver_paren(literal: &str, open: usize) -> bool {
+    literal[..open].ends_with('.') && literal[open + 1..].starts_with('*')
+}
+
+/// Rewrite a matcher literal into the symbol format: drop every call.
+fn strip_call_syntax(literal: &str) -> String {
+    let mut out = String::with_capacity(literal.len());
+    let mut depth = 0usize;
+    for (i, ch) in literal.char_indices() {
+        match ch {
+            '(' if depth == 0 && !is_go_receiver_paren(literal, i) => depth += 1,
+            '(' if depth > 0 => depth += 1,
+            ')' if depth > 0 => depth -= 1,
+            _ if depth == 0 => out.push(ch),
+            _ => {}
+        }
+    }
+    // `.system()` collapses to `.system`; a trailing dot from `foo().` would
+    // be a dangling separator.
+    out.trim_end_matches('.').to_string()
+}
+
+/// Find `type: symbol` matchers that are not symbols.
+///
+/// Two shapes, both silent: a matcher that spells out a call, and a regex
+/// sitting in `exact:`/`substr:`, which compare literally.
+///
+/// A symbol is a dotted path of identifiers — `platform.system`,
+/// `open.read`, `Date.getTimezoneOffset` — with no parentheses and no
+/// argument text, whatever the language and whether the file was source or a
+/// stripped binary. A matcher that writes the call (`.system()`,
+/// `open().read`, `open("/tmp/x").read`, or a half-open `.eval(`) matches
+/// nothing at all.
+///
+/// These fail silently: the trait loads, validates, and never fires. Run
+/// `cleave facts <file>` on a sample to see the exact strings to match.
+///
+/// `regex:` is exempt — a pattern legitimately escapes `\(` — and so is the Go
+/// receiver form `net.(*Dialer).Dial`, which is a real symbol in a compiled
+/// binary rather than a call.
+#[must_use]
+pub(crate) fn find_uncallable_symbol_matchers(
+    trait_definitions: &[TraitDefinition],
+    composite_rules: &[CompositeTrait],
+) -> Vec<UncallableSymbolMatcher> {
+    /// Characters that never appear in a symbol we emit, so their presence
+    /// means the author put a regex in `exact:`/`substr:`.
+    ///
+    /// Deliberately narrow. `*` is excluded because Go binaries really export
+    /// `net.(*Dialer).Dial`; whitespace is excluded because PE ordinal imports
+    /// are named `ORDINAL 187` and C++ has `operator delete`; and a trailing
+    /// `$` is excluded because it is a legal JavaScript identifier character
+    /// (`$`, `jQuery$`). What is left cannot occur in any name: a subscript is
+    /// normalised to a dot, so brackets never survive either.
+    fn looks_like_regex(literal: &str) -> bool {
+        literal.contains('\\')
+            || literal.contains('|')
+            || literal.contains('^')
+            || literal.contains('[')
+            || literal.contains(']')
+            || literal.contains(".{")
+    }
+
+    /// Does this literal name something no symbol can be?
+    fn carries_call_syntax(literal: &str) -> bool {
+        literal
+            .char_indices()
+            .any(|(i, c)| c == '(' && !is_go_receiver_paren(literal, i))
+    }
+
+    let mut out = Vec::new();
+
+    let mut check = |id: &str, is_composite: bool, clause: &'static str, cond: &Condition| {
+        let Condition::Symbol(q) = cond else { return };
+        for (field, literal) in [("exact", q.exact.as_ref()), ("substr", q.substr.as_ref())] {
+            let Some(literal) = literal else { continue };
+            if !carries_call_syntax(literal) && !looks_like_regex(literal) {
+                continue;
+            }
+            // A literal carrying regex metacharacters is a pattern in the
+            // wrong field, not a symbol with arguments. Emptying its parens
+            // would produce nonsense (`\.clone\(` -> `\.clone\()`), so say
+            // what is actually wrong.
+            let suggestion = if looks_like_regex(literal) {
+                format!("move it to `regex:` -- {literal:?} is a pattern, not a symbol")
+            } else {
+                format!("write it as {:?}", strip_call_syntax(literal))
+            };
+            out.push(UncallableSymbolMatcher {
+                id: id.to_string(),
+                is_composite,
+                clause,
+                field,
+                literal: literal.clone(),
+                suggestion,
+            });
+        }
+    };
+
+    for t in trait_definitions {
+        check(&t.id, false, "if", &t.r#if);
+        for c in t.unless.iter().flatten() {
+            check(&t.id, false, "unless", c);
+        }
+    }
+    for r in composite_rules {
+        for c in r.unless.iter().flatten() {
+            check(&r.id, true, "unless", c);
+        }
+    }
+
+    out
+}

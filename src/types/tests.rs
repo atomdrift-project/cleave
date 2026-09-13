@@ -221,6 +221,7 @@ fn test_finding_constructor() {
         evidence,
         match_count: 1,
         source_file: None,
+        downgraded: false,
     };
 
     assert_eq!(finding.id, "net/socket");

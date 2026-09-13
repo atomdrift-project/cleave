@@ -42,14 +42,57 @@ fn test_version_command() {
         .stdout(predicate::str::contains("cleave"));
 }
 
+/// A minimal but *complete* traits directory: one YAML trait and one YARA rule.
+///
+/// Both halves are required for silence — a traits dir with no `.yar` under it
+/// makes the engine warn "No YARA rules loaded", which is exactly the kind of
+/// operational complaint [`test_self_analysis_is_silent`] exists to catch.
+fn write_minimal_traits(dir: &std::path::Path) {
+    const TRAIT_YAML: &str = r#"
+defaults:
+  platforms: [unix, windows]
+  crit: notable
+  conf: 0.9
+traits:
+  - id: fx-probe
+    desc: Probe trait for the silence smoke test
+    for: [package.json]
+    if:
+      type: value
+      path: name
+      exists: true
+"#;
+    const YARA_RULE: &str = r#"
+rule fx_probe_yara {
+  strings:
+    $a = "cleave-silence-probe-never-matches"
+  condition:
+    $a
+}
+"#;
+    let ns = dir.join("metadata/package/manifest");
+    fs::create_dir_all(&ns).unwrap();
+    fs::write(ns.join("probe.yaml"), TRAIT_YAML).unwrap();
+    fs::write(dir.join("probe.yar"), YARA_RULE).unwrap();
+}
+
 /// An ordinary self-analysis should be silent on stderr. `RUST_LOG=error`
 /// suppresses only the intentional debug-build startup notice; operational
 /// errors still reach stderr and fail this assertion.
+///
+/// Runs against a fixture traits directory rather than the machine's installed
+/// one. The installed tree is developer-mutable data from a *different* repo —
+/// a single mid-edit YAML file there makes cleave (correctly) warn that it
+/// skipped a trait file, which would fail this test for a defect cleave does
+/// not have. What is under test here is cleave's own output discipline.
 #[test]
 fn test_self_analysis_is_silent() {
     let cleave = env!("CARGO_BIN_EXE_cleave");
+    let traits = TempDir::new().unwrap();
+    write_minimal_traits(traits.path());
     let output = assert_cmd::cargo_bin_cmd!("cleave")
         .env("RUST_LOG", "error")
+        .env("CLEAVE_TRAITS_DIR", traits.path())
         .args(["--json", "analyze", cleave])
         .output()
         .unwrap();

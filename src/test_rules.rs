@@ -78,6 +78,14 @@ pub(crate) struct RuleDebugResult {
     /// rule can MATCH here yet never appear in a production scan, so the report
     /// flags it (see `CapabilityMapper::is_low_value_any_rule`).
     pub low_value_any: bool,
+    /// Why a rule that matched its conditions here is nonetheless absent from
+    /// (or emitted at a different criticality than) the real scan's findings.
+    ///
+    /// `test-rules` evaluates a rule in isolation, so it reports the raw match.
+    /// The scan then applies `unless:`, `downgrade:` and the low-tier strip, any
+    /// of which can change or remove the finding — and a bare "MATCHED" with no
+    /// trace of that is the most misleading output this command can produce.
+    pub emission_notes: Vec<String>,
 }
 
 /// Mirror of `CapabilityMapper::is_low_value_any_rule` for a single rule: a
@@ -414,6 +422,7 @@ impl<'a> RuleDebugger<'a> {
                 precision: Some(precision_value),
                 precision_details: precision_detail_lines(None, Some(trait_def)),
                 low_value_any: false,
+                emission_notes: Vec::new(),
             };
         }
 
@@ -446,6 +455,7 @@ impl<'a> RuleDebugger<'a> {
             precision: Some(precision_value),
             precision_details: precision_detail_lines(None, Some(trait_def)),
             low_value_any: false,
+            emission_notes: Vec::new(),
         }
     }
 
@@ -493,6 +503,7 @@ impl<'a> RuleDebugger<'a> {
                 precision: Some(precision_value),
                 precision_details: precision_detail_lines(Some(composite), None),
                 low_value_any: composite_is_low_value_any(composite),
+                emission_notes: Vec::new(),
             };
         }
 
@@ -606,6 +617,7 @@ impl<'a> RuleDebugger<'a> {
             precision: Some(precision_value),
             precision_details: precision_detail_lines(Some(composite), None),
             low_value_any: composite_is_low_value_any(composite),
+            emission_notes: Vec::new(),
         }
     }
 
@@ -613,7 +625,9 @@ impl<'a> RuleDebugger<'a> {
     pub(crate) fn debug_rule(&self, rule_id: &str) -> Option<RuleDebugResult> {
         // First try to find as a trait definition
         if let Some(trait_def) = self.find_trait_definition(rule_id) {
-            return Some(self.debug_trait_via_evaluation(trait_def));
+            let mut result = self.debug_trait_via_evaluation(trait_def);
+            result.emission_notes = self.explain_emission(trait_def, result.matched);
+            return Some(result);
         }
 
         // Then try as a composite rule
@@ -993,6 +1007,74 @@ impl<'a> RuleDebugger<'a> {
         }
 
         result
+    }
+
+    /// Reconcile a raw `test-rules` match against what the scan actually
+    /// emitted, and say what changed it.
+    ///
+    /// A rule can match its conditions here and still be absent from a scan, or
+    /// present at a lower criticality. Three things do that, and all three used
+    /// to be invisible — the command printed a bare `MATCHED` either way:
+    ///
+    /// 1. `unless:` skipped it outright.
+    /// 2. `downgrade:` lowered its criticality.
+    /// 3. `strip_unmatched_traits` dropped it as a low-tier finding that no
+    ///    fired composite references.
+    ///
+    /// Cause 3 is the one nobody guesses: a trait declared `baseline`/`component`
+    /// simply disappears unless some composite that fired names it, which makes
+    /// the same trait look present in one scan and missing in another for
+    /// reasons that have nothing to do with its own matcher.
+    fn explain_emission(&self, trait_def: &TraitDefinition, matched: bool) -> Vec<String> {
+        if !matched {
+            return Vec::new();
+        }
+        let id = trait_def.id.as_str();
+        let mut out = Vec::new();
+
+        // `test-rules` evaluates in isolation, so its own report holds the trait
+        // at its declared criticality even when a scan would change or drop it.
+        // Re-derive each transform rather than reading it back off the report.
+        let emitted = self.report.findings.iter().find(|f| f.id.as_str() == id);
+        if let Some(f) = emitted
+            && f.crit != trait_def.crit
+        {
+            out.push(format!(
+                "\u{2193} emitted at {:?}, not the declared {:?}",
+                f.crit, trait_def.crit
+            ));
+        }
+
+        out.extend(self.explain_unless_downgrade(trait_def));
+
+        // The low-tier strip: `strip_unmatched_traits` drops a
+        // `baseline`/`component` finding unless a fired composite names it. This
+        // is the cause nobody guesses, because it depends on what *else* matched
+        // — the same trait survives in one scan and vanishes in another.
+        let effective_crit = trait_def
+            .downgrade
+            .as_ref()
+            .map_or(trait_def.crit, |_| {
+                crate::composite_rules::traits::downgrade_crit(trait_def.crit)
+            });
+        if matches!(
+            effective_crit,
+            crate::types::Criticality::Baseline | crate::types::Criticality::Component
+        ) {
+            let referenced = self
+                .report
+                .findings
+                .iter()
+                .any(|f| f.trait_refs.iter().any(|r| r.as_str() == id));
+            if !referenced && trait_def.downgrade.is_none() {
+                out.push(format!(
+                    "\u{2717} would be stripped from scan output: {:?} and no fired composite \
+                     references it (strip_unmatched_traits)",
+                    effective_crit
+                ));
+            }
+        }
+        out
     }
 
     /// Attribute why a trait that matched its primary condition is nonetheless
@@ -2329,6 +2411,13 @@ pub(crate) fn format_debug_output(results: &[RuleDebugResult]) -> String {
             ));
         }
 
+        // What the scan actually did with this match: a bare MATCHED is
+        // misleading when `unless:`, `downgrade:` or the low-tier strip changed
+        // or removed the finding.
+        for note in &result.emission_notes {
+            output.push_str(&format!("  {} {}\n", "Emission:".yellow().bold(), note));
+        }
+
         if let Some(precision) = result.precision {
             output.push_str(&format!("  Precision: {:.1}\n", precision));
             for detail in &result.precision_details {
@@ -2544,6 +2633,7 @@ composite_rules:
             evidence: vec![],
             source_file: None,
             match_count: 0,
+            downgraded: false,
         }
     }
 

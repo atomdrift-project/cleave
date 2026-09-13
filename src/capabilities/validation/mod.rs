@@ -112,6 +112,7 @@ pub(crate) use duplicates::{
     find_atomic_logic_duplicates, find_case_insensitive_overlap_issues,
     find_duplicate_atomic_traits, find_duplicate_composite_rules, find_duplicate_inline_exclusions,
     find_duplicate_traits_and_composites, find_for_only_duplicates,
+    find_inline_content_duplicates,
     find_regex_literal_overlap_issues, find_string_content_collisions,
     find_string_pattern_duplicates, find_structural_regex_duplicates,
 };
@@ -129,7 +130,8 @@ pub(crate) use composite::{
 pub(crate) use patterns::{
     find_ast_function_call_should_use_symbol, find_brittle_path_patterns,
     find_incompatible_regex_features, find_memory_hungry_regex_patterns, find_non_capturing_groups,
-    find_raw_should_use_text, find_short_pattern_warnings, find_slow_regex_patterns,
+    find_literal_regex_patterns, find_raw_should_use_text, find_short_pattern_warnings,
+    find_slow_regex_patterns,
     find_string_literal_should_use_text, find_uncompilable_ast_queries,
 };
 pub(crate) use regex_cost::find_pathological_regex_patterns;
@@ -140,6 +142,7 @@ pub(crate) use taxonomy::{
     BROAD_PLATFORM_ALLOWLIST, MAX_SUBDIRECTORIES_PER_DIRECTORY, MAX_TRAITS_PER_DIRECTORY,
     ObjectivesWellknownViolation, find_banned_directory_segments, find_benign_misplaced,
     find_broad_filetype_traits, find_broad_platform_traits, find_cap_obj_violations,
+    find_stale_filetype_allowlist_entries,
     find_cap_wellknown_violations, find_composite_only_wellknown_files, find_depth_violations,
     find_duplicate_second_level_directories, find_exception_atomic_traits,
     find_exception_inline_conditions, find_exception_non_notable_members,
@@ -157,15 +160,19 @@ pub(crate) use taxonomy::{
 // Logic constraint validation
 #[allow(unused_imports)] // find_needs_zero used by binary target
 pub(crate) use constraints::{
-    find_dead_downgrades, find_empty_condition_clauses, find_excessive_file_types,
+    MAX_NOTABLE_DOWNGRADE_DIRECT, MAX_NOTABLE_DOWNGRADE_EXPANDED,
+    find_broad_notable_downgrades, find_dead_downgrades, find_directory_shadowed_refs,
+    find_empty_condition_clauses,
+    find_excessive_file_types,
     find_excessive_skip_conditions, find_hex_binary_missing_section,
     find_hostile_composites_without_notable_leg, find_impossible_count_constraints,
     find_impossible_length_bounds, find_impossible_needs, find_impossible_size_constraints,
     find_invalid_not_usage, find_kv_exists_with_matcher, find_length_bounds_without_regex,
+    find_uncallable_symbol_matchers,
     find_missing_search_patterns, find_needs_without_any, find_needs_zero,
     find_none_only_with_proximity, find_orphaned_components, find_pure_alias_traits,
     find_redundant_explicit_defaults, find_redundant_needs_one, find_should_use_defaults,
-    find_too_short_patterns,
+    find_too_short_patterns, MISSING_CONDITIONS,
 };
 
 // Utility functions

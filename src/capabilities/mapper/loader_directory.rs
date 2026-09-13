@@ -17,10 +17,15 @@ use crate::capabilities::validation::{
     find_ast_function_call_should_use_symbol, find_atomic_logic_duplicates,
     find_banned_directory_segments, find_bare_or_crit_escalations, find_benign_misplaced,
     find_brittle_path_patterns, find_broad_filetype_traits, find_broad_platform_traits,
+    find_stale_filetype_allowlist_entries,
     find_cap_obj_violations, find_cap_wellknown_violations, find_case_insensitive_overlap_issues,
-    find_composite_only_wellknown_files, find_dead_downgrades, find_depth_violations,
+    MAX_NOTABLE_DOWNGRADE_DIRECT, MAX_NOTABLE_DOWNGRADE_EXPANDED,
+    find_broad_notable_downgrades, find_composite_only_wellknown_files, find_dead_downgrades,
+    find_directory_shadowed_refs, find_uncallable_symbol_matchers,
+    find_depth_violations,
     find_duplicate_atomic_traits, find_duplicate_composite_rules, find_duplicate_inline_exclusions,
     find_duplicate_second_level_directories, find_empty_condition_clauses,
+    find_inline_content_duplicates, MISSING_CONDITIONS,
     find_exception_atomic_traits, find_exception_inline_conditions,
     find_exception_non_notable_members, find_exception_positive_refs, find_excessive_file_types,
     find_excessive_skip_conditions, find_for_only_duplicates, find_generic_wellknown_leaf_dirs,
@@ -36,7 +41,8 @@ use crate::capabilities::validation::{
     find_none_only_with_proximity, find_objectives_wellknown_violations, find_orphaned_components,
     find_overlapping_conditions, find_oversized_trait_directories, find_parent_duplicate_segments,
     find_platform_named_directories, find_pure_alias_traits, find_pure_directory_alias_composites,
-    find_raw_should_use_text, find_redundant_any_refs, find_redundant_explicit_defaults,
+    find_literal_regex_patterns, find_raw_should_use_text, find_redundant_any_refs,
+    find_redundant_explicit_defaults,
     find_redundant_needs_one, find_redundant_unix_platforms, find_regex_literal_overlap_issues,
     find_self_referencing_composites, find_self_referencing_traits, find_self_suppressing_traits,
     find_short_pattern_warnings, find_should_use_defaults, find_single_item_clauses,
@@ -70,6 +76,47 @@ use std::path::Path;
 struct MapperCacheData {
     trait_definitions: Vec<TraitDefinition>,
     composite_rules: Vec<CompositeTrait>,
+    /// Files the load that produced this cache could not parse, already
+    /// rendered for display.
+    ///
+    /// Carried through the cache because the rules in those files are missing
+    /// from `trait_definitions` — and stay missing on every cache hit. Without
+    /// this the warning is printed exactly once, on the run that happens to
+    /// rebuild the cache, and detection is quietly degraded from then on with
+    /// nothing on stderr to say so. Defaults to empty so caches written before
+    /// this field still load.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    parse_errors: Vec<String>,
+}
+
+/// Print the analysis-time warning for trait files this build could not parse.
+///
+/// Unparseable files are fatal under `cleave validate` but only a warning here
+/// (forward compatibility — a rule pack using newer condition fields must not
+/// brick an older build): the remaining rules still load and run, and the
+/// skipped ones simply don't fire until the tool is upgraded.
+fn warn_unparseable_traits(parse_errors: &[String]) {
+    if parse_errors.is_empty() {
+        return;
+    }
+    let prog = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.file_name().map(|s| s.to_string_lossy().into_owned()))
+        .unwrap_or_else(|| "cleave".to_string());
+    tracing::warn!(
+        skipped_files = parse_errors.len(),
+        "skipped trait file(s) this build of {prog} could not parse"
+    );
+    eprintln!(
+        "\n\u{26a0}\u{fe0f}  WARNING: skipped {} trait file(s) this build of {prog} could not parse; \
+         their rules will not run.\n   If they use newer rule features, upgrade {prog} \
+         to the latest version.\n",
+        parse_errors.len()
+    );
+    for error in parse_errors {
+        eprintln!("   {error}");
+    }
+    eprintln!();
 }
 
 #[derive(Debug, Clone)]
@@ -178,8 +225,7 @@ fn normalize_ref_path(path: &Path) -> String {
 /// `imports.rs` (`metadata/import/…`, `metadata/dylib…`), `macho.rs`/`pe.rs`
 /// (`metadata/signed/…`, `metadata/entitlement/…`, `metadata/binary/linking::macho-*`),
 /// `embedded_code_detector.rs` (`metadata/lang/embedded::…`, `metadata/lang/encoded/…`),
-/// and the structural analyzers (`metadata/build/debug::elf-debuglink`,
-/// `metadata/binary/anomaly::inflated-section-headers`). The trailing ids below are
+/// and the debug-info analyzer (`metadata/build/debug::elf-debuglink`). The trailing ids below are
 /// specific, not prefixes, because their directories also hold static YAML traits
 /// (e.g. `metadata/binary/linking::ifunc`) that must still be validated.
 fn is_dynamic_metadata_ref(ref_id: &str) -> bool {
@@ -196,9 +242,8 @@ fn is_dynamic_metadata_ref(ref_id: &str) -> bool {
         "metadata/binary/linking::macho-install-name",
         "metadata/binary/linking::macho-dylib",
         "metadata/binary/linking::macho-rpath",
-        // Emitted by the debug-info and section structural analyzers.
+        // Emitted by the debug-info analyzer.
         "metadata/build/debug::elf-debuglink",
-        "metadata/binary/anomaly::inflated-section-headers",
     ];
     DYNAMIC_PREFIXES
         .iter()
@@ -480,6 +525,11 @@ impl super::CapabilityMapper {
                                 // process start. The one piece of real state it rebuilt is the
                                 // `not:` exceptions' pre-lowered memo (#[serde(skip)]), which is
                                 // cheap string work — kept below.
+                                // The cached trait set is missing whatever the
+                                // producing load could not parse, so say so on
+                                // every hit — not just on the run that rebuilt it.
+                                warn_unparseable_traits(&cache_data.parse_errors);
+
                                 for trait_def in &mut cache_data.trait_definitions {
                                     if let Some(ref mut exceptions) = trait_def.not {
                                         for exc in exceptions.iter_mut() {
@@ -1374,6 +1424,9 @@ impl super::CapabilityMapper {
             warnings.collect_as("raw-should-use-text", |warnings| {
                 find_raw_should_use_text(&trait_definitions, warnings);
             });
+            warnings.collect_as("literal-regex", |warnings| {
+                find_literal_regex_patterns(&trait_definitions, warnings);
+            });
             tracing::trace!("Step 1h3 completed in {:?}", step_start.elapsed());
 
             // Detect string_literal patterns that should use text
@@ -1882,6 +1935,124 @@ impl super::CapabilityMapper {
                     format!(
                         "{} rules have a dead downgrade clause",
                         dead_downgrades.len()
+                    ),
+                );
+            }
+
+            // A `downgrade:` on a `notable` rule lands it on `Baseline`, which
+            // asserts the matcher is functionality nearly every program has.
+            // That is a claim about the matcher, not the context, so it must be
+            // rare and narrow: capped at 4 literal entries and 8 once
+            // aggregator references expand. Sibling of the excessive-suppression
+            // rule above, scoped to the one transition that reclassifies a
+            // behavior instead of merely de-emphasizing it.
+            // A clause that names a directory and a trait inside it: the
+            // directory already matches that trait, so the specific entry can
+            // never change the outcome. Dead weight that reads as extra reach
+            // and inflates the suppression budgets.
+            let disable_shadowed =
+                crate::validation_controls::is_validator_disabled("directory-shadowed-ref");
+            let shadowed = find_directory_shadowed_refs(&trait_definitions, &composite_rules);
+            if !disable_shadowed && !shadowed.is_empty() {
+                eprintln!(
+                    "\n❌ ERROR: {} clauses list a directory and a trait inside it",
+                    shadowed.len()
+                );
+                eprintln!(
+                    "   A sibling leg already subsumes these - a duplicate, a parent directory,\n   \
+                     or a directory containing the trait - so they cannot change the clause.\n   \
+                     Drop the covered leg, or the broad one if only the narrow leg was meant\n   \
+                     (that case is a behavior bug, not redundancy).\n"
+                );
+                for s in shadowed.iter().take(40) {
+                    let kind = if s.is_composite { "Rule" } else { "Trait" };
+                    eprintln!(
+                        "   {} '{}': {} leg '{}' covered by '{}' ({})",
+                        kind, s.id, s.clause, s.specific, s.directory, s.kind
+                    );
+                }
+                if shadowed.len() > 40 {
+                    eprintln!("   ... and {} more", shadowed.len() - 40);
+                }
+                eprintln!();
+                warnings.push_id(
+                    "directory-shadowed-ref",
+                    format!(
+                        "{} clauses list a directory and a trait inside it",
+                        shadowed.len()
+                    ),
+                );
+            }
+
+            // `type: symbol` matchers written as source text. A symbol never
+            // contains a call, so these match nothing -- silently, forever.
+            let disable_uncallable =
+                crate::validation_controls::is_validator_disabled("uncallable-symbol-matcher");
+            let uncallable =
+                find_uncallable_symbol_matchers(&trait_definitions, &composite_rules);
+            if !disable_uncallable && !uncallable.is_empty() {
+                eprintln!(
+                    "\n❌ ERROR: {} symbol matchers are not symbols",
+                    uncallable.len()
+                );
+                eprintln!(
+                    "   A symbol is a dotted path of identifiers -- `platform.system`,\n   \
+                     `open.read`, `Date.getTimezoneOffset` -- with no parentheses and no\n   \
+                     argument text, in every language and for source and binaries alike.\n   \
+                     Spelling out the call matches nothing, and `exact:`/`substr:` compare\n   \
+                     literally, so a regex in those fields matches nothing either. Both\n   \
+                     load cleanly and then never fire. Run `cleave facts <file>` to see\n   \
+                     the exact strings.\n"
+                );
+                for u in uncallable.iter().take(40) {
+                    let kind = if u.is_composite { "Rule" } else { "Trait" };
+                    eprintln!(
+                        "   {} '{}' {}: {}: {:?}\n      {}",
+                        kind, u.id, u.clause, u.field, u.literal, u.suggestion
+                    );
+                }
+                if uncallable.len() > 40 {
+                    eprintln!("   ... and {} more", uncallable.len() - 40);
+                }
+                eprintln!();
+                warnings.push_id(
+                    "uncallable-symbol-matcher",
+                    format!(
+                        "{} symbol matchers are not symbols",
+                        uncallable.len()
+                    ),
+                );
+            }
+
+            let disable_broad_downgrade =
+                crate::validation_controls::is_validator_disabled("broad-notable-downgrade");
+            let broad_downgrades =
+                find_broad_notable_downgrades(&trait_definitions, &composite_rules);
+            if !disable_broad_downgrade && !broad_downgrades.is_empty() {
+                eprintln!(
+                    "\n❌ ERROR: {} notable rules downgrade to baseline on too broad a trigger",
+                    broad_downgrades.len()
+                );
+                eprintln!(
+                    "   `baseline` means functionality nearly every program has. A behavior does\n   \
+                     not become universal because of where it sits, so a notable rule may cross\n   \
+                     that line only on a narrow, argued trigger: at most {} direct `downgrade:`\n   \
+                     entries and {} after expanding aggregator/directory references.\n",
+                    MAX_NOTABLE_DOWNGRADE_DIRECT, MAX_NOTABLE_DOWNGRADE_EXPANDED
+                );
+                for d in &broad_downgrades {
+                    let kind = if d.is_composite { "Rule" } else { "Trait" };
+                    eprintln!(
+                        "   {} '{}': {} direct, {} expanded",
+                        kind, d.id, d.direct, d.expanded
+                    );
+                }
+                eprintln!();
+                warnings.push_id(
+                    "broad-notable-downgrade",
+                    format!(
+                        "{} notable rules downgrade to baseline on too broad a trigger",
+                        broad_downgrades.len()
                     ),
                 );
             }
@@ -2874,6 +3045,38 @@ impl super::CapabilityMapper {
                 ));
             }
 
+            // An allowlist entry that matches no trait is a dead exemption --
+            // usually a directory that was renamed out from under it, which
+            // strips the exemption silently and surfaces as a pile of cap
+            // violations far from the rename.
+            let stale_allow = if crate::validation_controls::is_validator_disabled(
+                "stale-filetype-allowlist",
+            ) {
+                Vec::new()
+            } else {
+                find_stale_filetype_allowlist_entries(&rule_source_files)
+            };
+            if !stale_allow.is_empty() {
+                eprintln!(
+                    "\n❌ ERROR: {} file-type allowlist entries match no trait",
+                    stale_allow.len()
+                );
+                eprintln!(
+                    "   These lift the file-type cap for a directory prefix that no longer\n   \
+                     exists -- most often a directory renamed without updating the entry,\n   \
+                     which drops the exemption for every trait under it. Point the entry at\n   \
+                     the new path, or delete it if the directory is gone.\n"
+                );
+                for entry in &stale_allow {
+                    eprintln!("   {entry:?} in BROAD_FILETYPE_ALLOWLIST");
+                }
+                eprintln!();
+                warnings.push_id(
+                    "stale-filetype-allowlist",
+                    format!("{} file-type allowlist entries match no trait", stale_allow.len()),
+                );
+            }
+
             // Validate: traits with too many file types (10+ multi-platform, 12+ single-platform)
             tracing::trace!("Checking for over-broad file type scope");
             let broad_ft =
@@ -3389,6 +3592,42 @@ impl super::CapabilityMapper {
                 ));
             }
 
+            // Validate: inline whole-file content matchers duplicating a named
+            // trait, or repeated inline across files. Invisible to every other
+            // duplicate check, so a literal can be named once and inlined again
+            // with nothing noticing the two must move together.
+            let inline_dups =
+                find_inline_content_duplicates(&trait_definitions, &composite_rules);
+            if !inline_dups.is_empty() {
+                eprintln!(
+                    "\n❌ ERROR: {} inline content matchers duplicate an existing matcher",
+                    inline_dups.len()
+                );
+                eprintln!(
+                    "   An inline matcher in `unless:`/`downgrade:` is invisible to the other\n                        duplicate checks, so it drifts from the copy it was taken from:\n"
+                );
+                for (rule_id, clause, what, advice) in &inline_dups {
+                    let source = rule_source_files
+                        .get(rule_id)
+                        .map(std::string::String::as_str)
+                        .unwrap_or("unknown");
+                    if let Some(line) = find_line_number(source, rule_id) {
+                        eprintln!("   {source}:{line}: '{rule_id}' {clause}: {what}");
+                    } else {
+                        eprintln!("   {source}: '{rule_id}' {clause}: {what}");
+                    }
+                    eprintln!("      {advice}");
+                }
+                eprintln!();
+                warnings.push_id(
+                    "inline-content-duplicate",
+                    format!(
+                        "{} inline content matchers duplicate an existing matcher",
+                        inline_dups.len()
+                    ),
+                );
+            }
+
             // Validate: traits with identical matching logic but different metadata
             let logic_duplicates = find_atomic_logic_duplicates(&trait_definitions);
             if !logic_duplicates.is_empty() {
@@ -3578,37 +3817,41 @@ impl super::CapabilityMapper {
                 );
             }
 
-            // Validate: empty any:/all: clauses with no other conditions
+            // Validate: `all:`/`any:` empty, or absent altogether
             let empty_clauses = find_empty_condition_clauses(&composite_rules);
             if !empty_clauses.is_empty() {
                 eprintln!(
-                    "\n❌ ERROR: {} composite rules have empty condition clauses",
+                    "\n❌ ERROR: {} composite rules have empty or missing condition clauses",
                     empty_clauses.len()
                 );
-                eprintln!("   Empty `any:` or `all:` clauses make rules meaningless:\n");
+                eprintln!(
+                    "   A composite draws its evidence from `all:`/`any:`. An empty \
+                     clause fires on everything; an absent one fires on nothing.\n"
+                );
                 for (rule_id, clause_type) in &empty_clauses {
                     let source = rule_source_files
                         .get(rule_id)
                         .map(std::string::String::as_str)
                         .unwrap_or("unknown");
-                    let line_hint = find_line_number(source, rule_id);
-                    if let Some(line) = line_hint {
-                        eprintln!(
-                            "   {}:{}: '{}' has empty `{}:` clause",
-                            source, line, rule_id, clause_type
-                        );
+                    let detail = if *clause_type == MISSING_CONDITIONS {
+                        "has no `all:` or `any:` conditions, so it can never fire \
+                         (filter fields and `unless:` do not supply evidence; a rule whose \
+                         whole predicate is a size/type filter belongs in `traits:`)"
+                            .to_string()
                     } else {
-                        eprintln!(
-                            "   {}: '{}' has empty `{}:` clause",
-                            source, rule_id, clause_type
-                        );
+                        format!("has empty `{clause_type}:` clause")
+                    };
+                    if let Some(line) = find_line_number(source, rule_id) {
+                        eprintln!("   {source}:{line}: '{rule_id}' {detail}");
+                    } else {
+                        eprintln!("   {source}: '{rule_id}' {detail}");
                     }
                 }
                 eprintln!();
                 warnings.push_id(
                     "malformed-condition",
                     format!(
-                        "{} composite rules have empty condition clauses",
+                        "{} composite rules have empty or missing condition clauses",
                         empty_clauses.len()
                     ),
                 );
@@ -4685,32 +4928,7 @@ impl super::CapabilityMapper {
                 }
                 eprintln!("\n   Fix these issues in the YAML files before continuing.\n");
             } else {
-                // Forward compatibility at analysis time: a file this build
-                // cannot parse — most often a rule using a condition field, type,
-                // or value introduced in a newer release — is skipped with a
-                // warning instead of aborting the whole rule set. The remaining
-                // rules still load and run; the skipped ones simply don't fire
-                // until the tool is upgraded. (Already-shipped older builds can't
-                // be retrofitted, but this keeps every build from this point on
-                // tolerant of newer rule packs.)
-                let prog = std::env::current_exe()
-                    .ok()
-                    .and_then(|p| p.file_name().map(|s| s.to_string_lossy().into_owned()))
-                    .unwrap_or_else(|| "cleave".to_string());
-                tracing::warn!(
-                    skipped_files = parse_errors.len(),
-                    "skipped trait file(s) this build of {prog} could not parse"
-                );
-                eprintln!(
-                    "\n⚠️  WARNING: skipped {} trait file(s) this build of {prog} could not parse; \
-                     their rules will not run.\n   If they use newer rule features, upgrade {prog} \
-                     to the latest version.\n",
-                    parse_errors.len()
-                );
-                for error in &parse_errors {
-                    eprintln!("   {}", error);
-                }
-                eprintln!();
+                warn_unparseable_traits(&parse_errors);
             }
         }
 
@@ -4771,6 +4989,7 @@ impl super::CapabilityMapper {
             let cache_data = MapperCacheData {
                 trait_definitions: trait_definitions.clone(),
                 composite_rules: composite_rules.clone(),
+                parse_errors: parse_errors.clone(),
             };
             match serde_json::to_vec(&cache_data) {
                 Ok(bytes) => {

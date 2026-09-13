@@ -830,6 +830,7 @@ where
             evidence,
             match_count: 0,
             source_file: None,
+            downgraded: false,
         });
     }
     if !report.metadata.tools_used.iter().any(|t| t == "yara-x") {
@@ -2200,6 +2201,7 @@ pub(crate) fn process_encoded_payloads(
             }],
             match_count: 0,
             source_file: None,
+            downgraded: false,
         });
 
         // Unknown-type payloads have no analyzer and would immediately bail — skip
@@ -2247,6 +2249,7 @@ pub(crate) fn process_encoded_payloads(
                 }],
                 match_count: 0,
                 source_file: None,
+                downgraded: false,
             });
             break;
         }

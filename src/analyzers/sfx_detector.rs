@@ -239,6 +239,7 @@ fn build_finding(kind: SfxKind, extracted: bool, marker_offset: Option<usize>) -
         match_count: 1,
         trait_refs: vec![],
         source_file: None,
+        downgraded: false,
     }
 }
 
@@ -262,6 +263,7 @@ fn build_innoextract_finding(diagnostic: &InnoExtractDiagnostic) -> Finding {
         match_count: 1,
         trait_refs: vec![],
         source_file: None,
+        downgraded: false,
     }
 }
 

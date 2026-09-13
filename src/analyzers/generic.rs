@@ -147,15 +147,12 @@ impl GenericAnalyzer {
         // e.g. oversized source), AST-based extraction is silently
         // skipped — text and string features still flow downstream.
         let t_tree = std::time::Instant::now();
-        if let (Some(ast), Some(node_types)) = (source_ast, node_types) {
-            symbol_extraction::extract_symbols_from_tree(
-                ast.tree,
-                ast.source,
-                node_types,
-                &mut report,
-            );
-        }
         if let Some(ctx) = source_ctx {
+            // Calls first: `ingest_filefacts_imports` rewrites Python
+            // `__import__` aliases across everything already in
+            // `report.imports`, so the call sites have to be there for
+            // `alias.decompress` to become `zlib.decompress`.
+            symbol_extraction::ingest_filefacts_calls(&ctx.parsed, &mut report);
             symbol_extraction::ingest_filefacts_imports(&ctx.parsed, &self.file_type, &mut report);
         }
         let tree = source_ast.map(|ast| ast.tree);

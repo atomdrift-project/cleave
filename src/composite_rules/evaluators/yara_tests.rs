@@ -50,6 +50,63 @@ fn full_scan_location() -> ContentLocationParams {
 
 // ==================== Hex Pattern Matching Tests ====================
 
+// The 3-concrete-byte floor (unpinned search): a too-short pattern must
+// say WHY it did not match instead of silently returning nothing — this is
+// the feedback `cleave test-match --type hex` surfaces to authors. An
+// alternation counts as one concrete byte, so `48 (8B|FF) A3` clears the
+// floor while `48 (8B|FF)` does not.
+#[test]
+fn test_eval_hex_short_unpinned_pattern_warns() {
+    let binary_data = vec![0x48, 0x8B, 0x03];
+    let report = create_test_report();
+    let ctx = create_test_context(report, binary_data);
+    let location = ContentLocationParams::default();
+
+    let result = eval_hex("48 8B", &location, &ctx, None);
+    assert!(!result.matched, "Two concrete bytes must not match unpinned");
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|w| matches!(w, crate::composite_rules::context::AnalysisWarning::HexPatternTooShort { concrete: 2 })),
+        "expected a HexPatternTooShort warning, got {:?}",
+        result.warnings
+    );
+}
+
+#[test]
+fn test_eval_hex_alternation_counts_as_concrete() {
+    let binary_data = vec![0x48, 0x8B, 0xA3, 0x00, 0x48, 0xFF, 0xA3];
+    let report = create_test_report();
+    let ctx = create_test_context(report, binary_data);
+    let location = ContentLocationParams::default();
+
+    // Two literals + one alternation = 3 constrained bytes: clears the floor.
+    let result = eval_hex("48 (8B|FF) A3", &location, &ctx, None);
+    assert!(result.matched, "Alternation should count as a concrete byte");
+    assert_eq!(result.match_count, 2, "Both alternation branches match");
+
+    // One literal + one alternation = 2: below the floor, warns.
+    let result = eval_hex("48 (8B|FF)", &location, &ctx, None);
+    assert!(!result.matched);
+    assert!(!result.warnings.is_empty());
+}
+
+#[test]
+fn test_eval_hex_short_pattern_allowed_when_pinned() {
+    let binary_data = vec![0x00, 0x48, 0x8B];
+    let report = create_test_report();
+    let ctx = create_test_context(report, binary_data);
+
+    let pinned = ContentLocationParams {
+        offset: Some(1),
+        ..ContentLocationParams::default()
+    };
+    let result = eval_hex("48 8B", &pinned, &ctx, None);
+    assert!(result.matched, "A pinned two-byte pattern is allowed");
+    assert!(result.warnings.is_empty());
+}
+
 #[test]
 fn test_eval_hex_simple_match() {
     let binary_data = vec![0x4D, 0x5A, 0x90, 0x00, 0x03, 0x00, 0x00, 0x00];

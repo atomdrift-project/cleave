@@ -63,6 +63,7 @@ fn create_test_finding(id: &str) -> Finding {
         }],
         match_count: 0,
         source_file: None,
+        downgraded: false,
     }
 }
 

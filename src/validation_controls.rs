@@ -843,6 +843,13 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         fix: "Use symbol matching when context is not needed.",
     },
     ValidatorSpec {
+        id: "literal-regex",
+        category: ValidatorCategory::Policy,
+        display_id: "lit-regex",
+        description: "Regex matcher spells out a plain literal.",
+        fix: "Use `exact:` when the pattern is fully anchored, `substr:` when it is unanchored.",
+    },
+    ValidatorSpec {
         id: "raw-should-use-text",
         category: ValidatorCategory::Policy,
         display_id: "raw-text",
@@ -946,6 +953,13 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         display_id: "malformed",
         description: "Condition is structurally broken (e.g. not: without regex:, proximity on a none-only rule).",
         fix: "Fix the condition so it expresses a valid match.",
+    },
+    ValidatorSpec {
+        id: "inline-content-duplicate",
+        category: ValidatorCategory::Dedup,
+        display_id: "inline-dup",
+        description: "Inline whole-file content matcher duplicates a named trait, or the same inline is repeated across files.",
+        fix: "Reference the existing trait with `- id:`, or promote the repeated inline to a named trait.",
     },
     ValidatorSpec {
         id: "invalid-id-chars",

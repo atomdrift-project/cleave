@@ -313,6 +313,7 @@ impl super::CapabilityMapper {
                         .get(finding.id.as_str())
                         .map(|&i| &self.composite_rules[i])
                         && let Some(downgrade_rules) = &rule.downgrade
+                        && downgrade_spans_container(downgrade_rules)
                     {
                         let new_crit =
                             rule.evaluate_downgrade(downgrade_rules, &finding.crit, &ctx);
@@ -327,6 +328,10 @@ impl super::CapabilityMapper {
 
         // Second pass: apply updates
         for (idx, new_crit) in updates {
+            // Mark the demotion so `strip_unmatched_traits` keeps the finding at
+            // the tier the downgrade asked for instead of dropping it as an
+            // unreferenced low-tier finding.
+            findings[idx].downgraded = true;
             findings[idx].crit = new_crit;
         }
     }
@@ -389,9 +394,12 @@ impl super::CapabilityMapper {
             // re-evaluate its downgrade clause if any.
             if let Some(&idx) = self.trait_id_map.get(finding.id.as_str()) {
                 let trait_def = &self.trait_definitions[idx];
-                if let Some(downgrade) = &trait_def.downgrade {
+                if let Some(downgrade) = &trait_def.downgrade
+                    && downgrade_spans_container(downgrade)
+                {
                     let new_crit = trait_def.evaluate_downgrade(downgrade, &trait_def.crit, &ctx);
                     if new_crit != finding.crit {
+                        finding.downgraded = true;
                         finding.crit = new_crit;
                     }
                     continue;
@@ -403,9 +411,11 @@ impl super::CapabilityMapper {
                 .get(finding.id.as_str())
                 .map(|&i| &self.composite_rules[i])
                 && let Some(downgrade) = &rule.downgrade
+                && downgrade_spans_container(downgrade)
             {
                 let new_crit = rule.evaluate_downgrade(downgrade, &rule.crit, &ctx);
                 if new_crit != finding.crit {
+                    finding.downgraded = true;
                     finding.crit = new_crit;
                 }
             }
@@ -568,6 +578,7 @@ impl super::CapabilityMapper {
                 }],
                 match_count: 0,
                 source_file: None,
+                downgraded: false,
             })
         };
         if crate::rayon_nest::inner_work_parallel() {
@@ -777,6 +788,21 @@ impl super::CapabilityMapper {
         }
         new_findings
     }
+}
+
+/// Whether a `downgrade:` asked to see evidence from outside its own file.
+///
+/// The default is [`Scope::File`], which is what `unless:` has always done: a
+/// suppressor resolves against the file the rule matched in. Only a block that
+/// explicitly widens its scope takes part in the container pass below, so one
+/// archive member can no longer silence a rule in an unrelated member unless
+/// the rule author asked for exactly that.
+fn downgrade_spans_container(downgrade: &crate::composite_rules::DowngradeConditions) -> bool {
+    use crate::composite_rules::traits::Scope;
+    matches!(
+        downgrade.scope.unwrap_or_default(),
+        Scope::Archive | Scope::Outer | Scope::Package
+    )
 }
 
 #[cfg(test)]
@@ -1020,6 +1046,9 @@ traits:
       type: basename
       exact: "target.js"
     downgrade:
+      # Container scope is opt-in: without this the downgrade resolves within
+      # the file, like `unless:`, and the cross-scope pass skips it.
+      scope: archive
       any:
       - id: "test/gate::gate-trait"
 
@@ -1032,6 +1061,77 @@ traits:
 "#;
         let file = write_test_traits(yaml);
         super::super::CapabilityMapper::from_yaml(file.path()).expect("load cross-scope mapper")
+    }
+
+    /// Same rule as `make_cross_scope_mapper`, minus the `scope: archive`
+    /// opt-in — i.e. the default.
+    #[allow(clippy::expect_used)]
+    fn make_file_scoped_mapper() -> super::super::CapabilityMapper {
+        let yaml = r#"
+traits:
+  - id: "test/target::target-trait"
+    desc: "target trait with a default-scoped downgrade"
+    crit: suspicious
+    if:
+      type: basename
+      exact: "target.js"
+    downgrade:
+      any:
+      - id: "test/gate::gate-trait"
+
+  - id: "test/gate::gate-trait"
+    desc: "gate trait — container-level marker"
+    crit: baseline
+    if:
+      type: basename
+      exact: "gate.json"
+"#;
+        let file = write_test_traits(yaml);
+        super::super::CapabilityMapper::from_yaml(file.path()).expect("load file-scoped mapper")
+    }
+
+    /// A `downgrade:` with no `scope:` must not reach across archive members.
+    ///
+    /// This is the regression guard for the bug that motivated the default: a
+    /// vendored `tests/` tree in one member silently downgraded — and, before
+    /// the strip fix, deleted — an unrelated trait in another member, with
+    /// nothing in the rule text suggesting it could.
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn test_default_scoped_downgrade_ignores_container_findings() {
+        use crate::composite_rules::{FileType as RuleFileType, SectionMap};
+
+        let mapper = make_file_scoped_mapper();
+        let report = make_test_report();
+
+        let mut target_findings = vec![make_test_finding(
+            "test/target::target-trait",
+            Criticality::Suspicious,
+        )];
+        // The gate fires only at container level — a sibling member, not this file.
+        let extras = vec![make_test_finding(
+            "test/gate::gate-trait",
+            Criticality::Baseline,
+        )];
+
+        mapper.reeval_downgrades_cross_scope(
+            &mut target_findings,
+            &extras,
+            &report,
+            &[],
+            RuleFileType::All,
+            &SectionMap::default(),
+        );
+
+        assert_eq!(
+            target_findings[0].crit,
+            Criticality::Suspicious,
+            "a default-scoped downgrade must ignore findings from other members"
+        );
+        assert!(
+            !target_findings[0].downgraded,
+            "no downgrade fired, so the finding must not be flagged as demoted"
+        );
     }
 
     #[test]

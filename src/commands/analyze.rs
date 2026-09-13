@@ -474,6 +474,7 @@ mod tests {
             evidence: vec![],
             match_count: 0,
             source_file: None,
+            downgraded: false,
         }
     }
 

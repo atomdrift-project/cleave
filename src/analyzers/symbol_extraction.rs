@@ -62,6 +62,63 @@ pub(crate) fn ingest_filefacts_imports(
     }
 }
 
+/// Ingest filefacts's `Call` symbols as call-site imports.
+///
+/// filefacts already resolves every call in the file to a target name, and
+/// `cleave facts` prints those names verbatim — so a rule author can read the
+/// exact string their `type: symbol` matcher has to equal straight off the
+/// tool. That only holds while there is one renderer. cleave used to walk the
+/// same cached tree a second time and name calls its own way, which meant a
+/// chained call had two spellings depending on whether a rule set `kind: call`
+/// (filefacts, `open().read`) or not (cleave, `open("/tmp/x","w").read`), and
+/// the second one embedded the caller's argument text so no fixed matcher
+/// could ever equal it.
+///
+/// Targets filefacts reports as `None` are dynamic calls with no static name;
+/// there is nothing to match on, so they are skipped.
+pub(crate) fn ingest_filefacts_calls(
+    parsed: &filefacts::ParsedFile<'_>,
+    report: &mut AnalysisReport,
+) {
+    // Names are pushed exactly as filefacts reports them. `Import::with_offset`
+    // would strip leading underscores -- right for a Mach-O `_malloc`, wrong
+    // for a source-language `__import__`, and a second way for `cleave facts`
+    // and `cleave symbols` to disagree about one call.
+    //
+    // Offsets are capped per symbol so a minified or deeply repetitive file
+    // cannot explode the imports vector; 32 is more than any proximity window
+    // needs.
+    let mut per_symbol: std::collections::HashMap<&str, usize> =
+        std::collections::HashMap::new();
+    let mut total = 0usize;
+    for sym in parsed.symbols().iter_kind(filefacts::SymbolKind::Call) {
+        let filefacts::Symbol::Call { target, offset, .. } = sym else {
+            continue;
+        };
+        let (Some(target), Some(offset)) = (target.as_ref(), offset) else {
+            continue;
+        };
+        if target.len() < 2 || target.len() >= 100 {
+            continue;
+        }
+        if total >= MAX_TOTAL_CALL_SITES {
+            break;
+        }
+        let seen = per_symbol.entry(target.as_str()).or_insert(0);
+        if *seen >= MAX_OFFSETS_PER_SYMBOL {
+            continue;
+        }
+        *seen += 1;
+        total += 1;
+        report.imports.push(Import {
+            symbol: target.clone(),
+            library: None,
+            offset: Some(format!("0x{offset:x}")),
+            alias: None,
+        });
+    }
+}
+
 /// Collect `foo = __import__('module')` alias mappings from Python AST.
 /// Builds a map of alias_variable -> module_name so that later symbol resolution
 /// can replace `foo.b64decode` with `base64.b64decode`.
@@ -170,105 +227,6 @@ fn extract_string_content<'a>(node: &tree_sitter::Node<'a>, source: &[u8]) -> Op
         Some(trimmed.to_string())
     }
 }
-
-/// Extract function calls from source code and add to report.imports.
-///
-/// Primarily for capability matching, not module imports — use
-/// [`ingest_filefacts_imports`] for `require`/`import` statements.
-///
-/// Each call site emits its own `Import` entry tagged with the node's
-/// byte offset, so composite rules with `near_bytes`/`near_lines`
-/// proximity constraints can cluster multiple calls (e.g. `exec` +
-/// `base64.b64decode` + `zlib.decompress` in a single decoder stub).
-/// Entries are capped per-symbol to bound report size on pathological
-/// inputs.
-pub(crate) fn extract_symbols_from_tree(
-    tree: &tree_sitter::Tree,
-    source: &str,
-    call_types: &[&str],
-    report: &mut AnalysisReport,
-) {
-    let mut call_sites: Vec<(String, u64)> = Vec::new();
-    let mut cursor = tree.walk();
-    extract_calls(&mut cursor, source.as_bytes(), call_types, &mut call_sites);
-    push_capped_call_imports(call_sites, report);
-}
-
-/// Cap per-symbol offsets so minified or deeply repetitive files
-/// don't explode the imports vector. 32 is enough for proximity
-/// (any window that needs more hits than that is pathological).
-pub(crate) fn push_capped_call_imports(
-    call_sites: Vec<(String, u64)>,
-    report: &mut AnalysisReport,
-) {
-    let mut per_symbol_count: std::collections::HashMap<String, usize> =
-        std::collections::HashMap::new();
-
-    for (symbol, offset) in call_sites {
-        if symbol.len() < 2 {
-            continue;
-        }
-        let count = per_symbol_count.entry(symbol.clone()).or_insert(0);
-        if *count >= MAX_OFFSETS_PER_SYMBOL {
-            continue;
-        }
-        *count += 1;
-        report
-            .imports
-            .push(Import::with_offset(symbol, None, offset));
-    }
-}
-
-/// Walk AST iteratively to find function calls (avoids stack overflow on deep nesting).
-/// Emits `(symbol, byte_offset)` pairs in source order, one per call site.
-fn extract_calls<'a>(
-    cursor: &mut tree_sitter::TreeCursor<'a>,
-    source: &[u8],
-    call_types: &[&str],
-    call_sites: &mut Vec<(String, u64)>,
-) {
-    // Use iterative traversal with explicit depth tracking to avoid stack overflow
-    // on maliciously crafted or minified files with extreme nesting
-    loop {
-        if call_sites.len() >= MAX_TOTAL_CALL_SITES {
-            return;
-        }
-        let node = cursor.node();
-        let node_type = node.kind();
-
-        // Check if this is a call node type we're interested in
-        if call_types.contains(&node_type)
-            && let Some(func_name) = extract_function_name(&node, source)
-        {
-            // Clean up the function name
-            let clean_name = func_name
-                .trim()
-                .trim_start_matches('_')
-                .trim_start_matches('$');
-            if !clean_name.is_empty() && clean_name.len() < 100 {
-                call_sites.push((clean_name.to_string(), node.start_byte() as u64));
-            }
-        }
-
-        // Iterative tree traversal: try to go deeper, then sideways, then back up
-        if cursor.goto_first_child() {
-            continue;
-        }
-        if cursor.goto_next_sibling() {
-            continue;
-        }
-        // Go back up until we can go sideways or reach the root
-        loop {
-            if !cursor.goto_parent() {
-                return; // Reached root, done
-            }
-            if cursor.goto_next_sibling() {
-                break; // Found a sibling, continue outer loop
-            }
-        }
-    }
-}
-
 /// Extract the function name or identifier from a call, assignment, or declaration.
 /// Public to the crate so the AST evaluator can populate `Evidence.alt_value`
 /// for call-kind nodes — without that, `type: tree-sitter kind: call exact: <name>`
@@ -531,12 +489,10 @@ exec(compile(data, '<>', 'exec'))
             architectures: None,
         });
 
-        // Extract symbols first (call extraction)
+        // Call sites first, then imports: the alias pass rewrites whatever is
+        // already in `report.imports`, so the calls have to land first.
         let parsed = parse_for_test(code, &FileType::Python);
-        let tree = parsed.source_ast().expect("source_ast").tree;
-        extract_symbols_from_tree(tree, code, &["call"], &mut report);
-
-        // Then extract imports (which resolves __import__ aliases)
+        ingest_filefacts_calls(&parsed, &mut report);
         ingest_filefacts_imports(&parsed, &FileType::Python, &mut report);
 
         let all_symbols: Vec<&str> = report.imports.iter().map(|i| i.symbol.as_str()).collect();
@@ -678,7 +634,6 @@ func main() {
         }
 
         let parsed = parse_for_test(&code, &FileType::JavaScript);
-        let tree = parsed.source_ast().expect("source_ast").tree;
         let mut report = AnalysisReport::new(TargetInfo {
             path: "/test/file.js".to_string(),
             file_type: "javascript".to_string(),
@@ -687,7 +642,7 @@ func main() {
             architectures: None,
         });
 
-        extract_symbols_from_tree(tree, &code, &["call_expression"], &mut report);
+        ingest_filefacts_calls(&parsed, &mut report);
 
         assert_eq!(report.imports.len(), MAX_TOTAL_CALL_SITES);
         assert!(report.imports.iter().any(|i| i.symbol == "f0"));
@@ -719,14 +674,20 @@ func main() {
         assert!(extract_function_name(&call, code.as_bytes()).is_none());
     }
 
+    /// A method called on the result of another call keeps a dotted name:
+    /// `s.replace(/a/g,'b').replace(/c/g,'d')` is the symbol
+    /// `s.replace.replace`. A call contributes the name of what it called and
+    /// nothing else -- no parentheses, no argument text -- so one call shape
+    /// is one symbol however it is spelled.
+    ///
+    /// This reverses B1g, which kept a locally-synthesised name because
+    /// filefacts reported `Call.target: None` for this shape. filefacts names
+    /// it now, and one renderer is the point: `cleave facts` prints the same
+    /// string a `type: symbol` matcher has to equal.
     #[test]
-    fn chained_replace_calls_keep_synthetic_dot_names() {
-        // B1g: filefacts Call.target is None / `replace().replace` for a method
-        // on a call result. Symbol traits (`regex: \.replace\.replace`) need
-        // the synthetic `replace.replace` name from extract_function_name.
+    fn chained_replace_calls_keep_dotted_name() {
         let code = "s.replace(/a/g, 'b').replace(/c/g, 'd');\n";
         let parsed = parse_for_test(code, &FileType::JavaScript);
-        let tree = parsed.source_ast().expect("source_ast").tree;
         let mut report = AnalysisReport::new(TargetInfo {
             path: "/test/file.js".to_string(),
             file_type: "javascript".to_string(),
@@ -734,12 +695,12 @@ func main() {
             sha256: "test".to_string(),
             architectures: None,
         });
-        extract_symbols_from_tree(tree, code, &["call_expression"], &mut report);
+        ingest_filefacts_calls(&parsed, &mut report);
         assert!(
             report
                 .imports
                 .iter()
-                .any(|imp| imp.symbol.contains("replace.replace")),
+                .any(|imp| imp.symbol == "s.replace.replace"),
             "chained replace must stay a dotted name, got {:?}",
             report
                 .imports

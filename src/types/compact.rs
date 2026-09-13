@@ -1614,6 +1614,7 @@ mod formula_tests {
             }],
             match_count: 1,
             source_file: None,
+            downgraded: false,
         }
     }
 

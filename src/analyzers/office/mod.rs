@@ -718,6 +718,7 @@ impl OfficeAnalyzer {
                 evidence: vec![],
                 match_count: 0,
                 source_file: None,
+                downgraded: false,
             });
         }
 
@@ -759,6 +760,7 @@ impl OfficeAnalyzer {
                 evidence: vec![],
                 match_count: 0,
                 source_file: None,
+                downgraded: false,
             });
         }
 
@@ -791,6 +793,7 @@ impl OfficeAnalyzer {
                 evidence: vec![],
                 match_count: 0,
                 source_file: None,
+                downgraded: false,
             });
         }
 
@@ -817,6 +820,7 @@ impl OfficeAnalyzer {
                 evidence: vec![],
                 match_count: 0,
                 source_file: None,
+                downgraded: false,
             });
         }
 
@@ -961,6 +965,7 @@ impl OfficeAnalyzer {
                 evidence: vec![],
                 match_count: 0,
                 source_file: None,
+                downgraded: false,
             });
 
             if doc.doc_subtype == ooxml::OoxmlSubtype::Word {
@@ -981,6 +986,7 @@ impl OfficeAnalyzer {
                     evidence: vec![],
                     match_count: 0,
                     source_file: None,
+                    downgraded: false,
                 });
             }
         }
@@ -1131,6 +1137,7 @@ impl OfficeAnalyzer {
                     evidence: vec![],
                     match_count: 0,
                     source_file: None,
+                    downgraded: false,
                 });
             }
         }
@@ -1174,6 +1181,7 @@ impl OfficeAnalyzer {
                 evidence: vec![],
                 match_count: endpoints.len(),
                 source_file: None,
+                downgraded: false,
             });
         }
 
@@ -1208,6 +1216,7 @@ impl OfficeAnalyzer {
                 evidence: vec![],
                 match_count: 0,
                 source_file: None,
+                downgraded: false,
             });
         }
 
@@ -1259,6 +1268,7 @@ impl OfficeAnalyzer {
                 evidence: vec![],
                 match_count: 0,
                 source_file: None,
+                downgraded: false,
             });
         }
 
@@ -1280,6 +1290,7 @@ impl OfficeAnalyzer {
                 evidence: vec![],
                 match_count: 0,
                 source_file: None,
+                downgraded: false,
             });
         }
 
@@ -1302,6 +1313,7 @@ impl OfficeAnalyzer {
                 evidence: vec![],
                 match_count: 0,
                 source_file: None,
+                downgraded: false,
             });
         }
 
@@ -1521,6 +1533,7 @@ fn add_metadata_findings(meta: &ole2::DocumentMetadata, findings: &mut Vec<Findi
             evidence: vec![],
             match_count: 0,
             source_file: None,
+            downgraded: false,
         });
     }
 }

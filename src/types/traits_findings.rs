@@ -314,6 +314,19 @@ pub struct Finding {
     /// from byte offsets that only make sense in the child's own byte space.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub src: Option<u32>,
+    /// This finding reached its current `crit` because its own `downgrade:`
+    /// clause fired, not because the rule is declared at that tier.
+    ///
+    /// `strip_unmatched_traits` drops `Baseline`/`Component` findings that no
+    /// fired composite references, on the reasoning that an unreferenced
+    /// low-tier finding is noise. That reasoning does not hold for a finding
+    /// that was *demoted into* the low tier: the rule author asked for less
+    /// emphasis, not for deletion, and dropping it means a notable behavior
+    /// disappears from the report and from `--format=json` with no trace. The
+    /// strip honours this flag and keeps such findings at their downgraded
+    /// tier.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub downgraded: bool,
 }
 
 impl Finding {
@@ -339,6 +352,7 @@ impl Finding {
             match_count: 0,
             source_file: None,
             src: None,
+            downgraded: false,
         }
     }
 

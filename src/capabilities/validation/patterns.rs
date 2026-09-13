@@ -1869,3 +1869,82 @@ mod tests {
         assert!(issues(r".*BackdoorConfig", "raw").is_empty());
     }
 }
+
+/// A regex whose pattern is a plain literal once anchors are stripped.
+///
+/// Returns the literal text and whether it was anchored at both ends. A regex
+/// is "literal" when every character either stands for itself or is a
+/// backslash-escaped metacharacter (`\.`, `\-`, `\$`). Class shorthands
+/// (`\d`, `\w`, `\b`, `\s`) and any unescaped metacharacter disqualify it.
+fn regex_is_plain_literal(pattern: &str) -> Option<(String, bool)> {
+    let anchored_start = pattern.starts_with('^');
+    let body = pattern.strip_prefix('^').unwrap_or(pattern);
+    // A trailing `$` is an anchor only when it is not itself escaped.
+    let anchored_end = body.ends_with('$') && !body.ends_with("\\$");
+    let body = if anchored_end {
+        &body[..body.len() - 1]
+    } else {
+        body
+    };
+
+    let mut out = String::with_capacity(body.len());
+    let mut chars = body.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => match chars.next() {
+                // `\.` and friends are literal; `\d`/`\w`/`\b`/`\s` are not.
+                Some(e) if !e.is_alphanumeric() => out.push(e),
+                _ => return None,
+            },
+            '.' | '[' | ']' | '(' | ')' | '*' | '+' | '?' | '{' | '}' | '|' | '^' | '$' => {
+                return None;
+            }
+            _ => out.push(c),
+        }
+    }
+    // A one-sided anchor is real regex work: `\.debug$` means "ends with
+    // .debug", which neither `exact:` nor `substr:` can express. Only a
+    // fully-anchored pattern (`exact:`) or a fully unanchored one (`substr:`)
+    // is a literal wearing a regex.
+    if anchored_start != anchored_end {
+        return None;
+    }
+    (!out.is_empty()).then_some((out, anchored_start && anchored_end))
+}
+
+/// Flag `regex:` matchers that are really literals.
+///
+/// `regex: '^\.text$'` is `exact: .text` written the long way: it costs a
+/// regex compile and a regex match per candidate, and it hides the fact that
+/// the trait wants one specific value. A literal in `exact:`/`substr:` is
+/// cheaper, reads as what it is, and takes part in the duplicate-detection
+/// passes that compare literals across traits.
+pub(crate) fn find_literal_regex_patterns(traits: &[TraitDefinition], warnings: &mut Vec<String>) {
+    for trait_def in traits {
+        let Some((pattern, case_insensitive)) = condition_regex(&trait_def.r#if) else {
+            continue;
+        };
+        // A case-insensitive match is not expressible as a plain literal.
+        if case_insensitive {
+            continue;
+        }
+        let Some((literal, anchored)) = regex_is_plain_literal(pattern) else {
+            continue;
+        };
+        let field = if anchored { "exact" } else { "substr" };
+        let source_file = trait_def
+            .defined_in
+            .to_str()
+            .unwrap_or("unknown")
+            .to_string();
+        let location = match find_line_number(&source_file, &trait_def.id) {
+            Some(line) => format!("{}:{}", source_file, line),
+            None => source_file,
+        };
+        warnings.push(format!(
+            "Wasted regex: trait '{}' in {} matches the literal {:?} via `regex: {}` — \
+             write it as `{}: {}`, which is cheaper and takes part in duplicate detection",
+            trait_def.id, location, literal, pattern, field, literal
+        ));
+    }
+}

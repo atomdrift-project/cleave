@@ -311,6 +311,7 @@ impl ElfAnalyzer {
                         }],
                         match_count: 1,
                         source_file: None,
+                        downgraded: false,
                     });
                     embedded_archive_count = embedded_archive_count.saturating_add(1);
                 } else if let Ok(Some(ov)) = crate::analyzers::overlay::analyze_overlay(
@@ -418,6 +419,7 @@ impl ElfAnalyzer {
                 match_count: 0,
                 trait_refs: vec![],
                 source_file: None,
+                downgraded: false,
             });
 
             // Architecture salvage from raw header bytes — `e_machine` at
@@ -576,6 +578,7 @@ impl ElfAnalyzer {
                 evidence: vec![],
                 match_count: 0,
                 source_file: None,
+                downgraded: false,
             });
         }
         tools_used.push("stng".to_string());
@@ -611,6 +614,7 @@ impl ElfAnalyzer {
                 evidence: vec![],
                 match_count: 0,
                 source_file: None,
+                downgraded: false,
             });
         }
 

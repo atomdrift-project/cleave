@@ -1058,9 +1058,15 @@ impl AnalysisReport {
         }
 
         // A component/baseline finding is strippable unless a fired composite
-        // references it.
+        // references it — or unless it *arrived* at that tier via its own
+        // `downgrade:`. A rule that downgrades asked for less emphasis, not for
+        // deletion; stripping those made a notable behavior vanish from the
+        // report and from `--format=json` whenever nothing happened to
+        // reference it, while an identical referenced trait survived at the
+        // lower tier. Honour the tier the downgrade asked for.
         let strippable = |f: &Finding| {
             matches!(f.crit, Criticality::Component | Criticality::Baseline)
+                && !f.downgraded
                 && !referenced.contains(f.id.as_str())
         };
 
@@ -1778,6 +1784,7 @@ impl AnalysisReport {
             evidence: Vec::new(),
             match_count: 0,
             source_file: None,
+            downgraded: false,
         });
         file.composite_sources.insert(id.to_string(), sources);
     }
@@ -2117,7 +2124,12 @@ fn early_strip_member_findings(file: &mut FileAnalysis) {
 /// the reference oracle so tests exercise the keep-set logic without touching
 /// process-global state.
 fn early_strip_impl(file: &mut FileAnalysis, possibly_referenced: impl Fn(&str) -> bool) {
-    let strippable = |f: &Finding| matches!(f.crit, Criticality::Baseline | Criticality::Filtered);
+    // Mirrors `strip_unmatched_traits`: a finding demoted into a low tier by its
+    // own `downgrade:` is kept, since the author asked to de-emphasize it rather
+    // than remove it.
+    let strippable = |f: &Finding| {
+        matches!(f.crit, Criticality::Baseline | Criticality::Filtered) && !f.downgraded
+    };
     if !file.findings.iter().any(&strippable) {
         return;
     }
@@ -2727,6 +2739,7 @@ mod tests {
             evidence: vec![],
             match_count: 0,
             source_file: None,
+            downgraded: false,
         }
     }
 

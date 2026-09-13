@@ -420,6 +420,32 @@ fn extract_wildcard_bytes(data: &[u8], pos: usize, segments: &[HexSegment]) -> V
 /// 2. Use fast memmem search to find atom candidates
 /// 3. Verify full pattern only at candidate positions
 #[must_use]
+/// Count bytes that actually constrain the match: full hex bytes, nibble
+/// wildcards (`4?`), and alternations (`(5C|5D)` — one constrained byte no
+/// matter how many branches). `??` and gap specifiers (`[N]`) constrain
+/// nothing. Mirrors the validator's counter so `validate` and the matcher
+/// agree on which patterns clear the floor.
+fn count_concrete_hex_bytes(pattern: &str) -> usize {
+    pattern.split_whitespace()
+        .filter(|t| !t.starts_with('[') && *t != "??")
+        .filter(|t| {
+            (t.len() == 2 && t.chars().all(|c| c.is_ascii_hexdigit() || c == '?'))
+                || is_hex_alternation(t)
+        })
+        .count()
+}
+
+/// `(NN|NN|...)` where every branch is a hex or nibble-wildcard byte.
+fn is_hex_alternation(token: &str) -> bool {
+    let Some(inner) = token.strip_prefix('(').and_then(|t| t.strip_suffix(')')) else {
+        return false;
+    };
+    !inner.is_empty()
+        && inner.split('|').all(|b| {
+            b.len() == 2 && b.chars().all(|c| c.is_ascii_hexdigit() || c == '?')
+        })
+}
+
 pub(crate) fn eval_hex<'a>(
     pattern: &str,
     location: &super::ContentLocationParams,
@@ -429,22 +455,20 @@ pub(crate) fn eval_hex<'a>(
     // Reject short hex patterns unless search space is bounded (~1KB).
     // Acceptable: offset/offset_range, or section + (section_offset* or small file).
     // Density constraints (count_min, per_kb_min) are checked at trait level, not here.
+    // A rejection carries a warning (not a silent no-match) so test-match and
+    // test-rules can tell the author why the pattern never fires; `cleave
+    // validate` reports the same floor for unpinned traits at load time.
     {
         let has_pinpoint = location.offset.is_some() || location.offset_range.is_some();
         let has_section_pinpoint = location.section.is_some()
             && (location.section_offset.is_some() || location.section_offset_range.is_some());
         if !has_pinpoint && !has_section_pinpoint {
-            let concrete_bytes = pattern
-                .split_whitespace()
-                .filter(|t| {
-                    !t.starts_with('[')
-                        && *t != "??"
-                        && t.len() == 2
-                        && t.chars().all(|c| c.is_ascii_hexdigit() || c == '?')
-                })
-                .count();
+            let concrete_bytes = count_concrete_hex_bytes(pattern);
             if concrete_bytes < 3 {
-                return ConditionResult::no_match();
+                return ConditionResult {
+                    warnings: vec![AnalysisWarning::HexPatternTooShort { concrete: concrete_bytes }],
+                    ..ConditionResult::no_match()
+                };
             }
         }
     }

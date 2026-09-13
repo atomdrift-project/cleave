@@ -767,6 +767,7 @@ fn archive_finding(
         evidence,
         match_count,
         source_file: None,
+        downgraded: false,
     }
 }
 
@@ -836,6 +837,7 @@ fn drain_extraction_notes(report: &mut AnalysisReport, guard: &ExtractionGuard) 
         evidence,
         match_count: notes.len(),
         source_file: None,
+        downgraded: false,
     });
 
     report.metadata.errors.extend(notes);
@@ -946,6 +948,7 @@ fn push_archive_hostile_findings(
                     }],
                     match_count: 1,
                     source_file: None,
+                    downgraded: false,
                 });
             }
             HostileArchiveReason::ExcessiveEntryName { len, preview } => {

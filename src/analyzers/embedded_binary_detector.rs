@@ -240,6 +240,7 @@ pub(crate) fn finding_for(binary: &EmbeddedBinary, parent_path: &str) -> Finding
         match_count: 1,
         trait_refs: vec![],
         source_file: Some(parent_path.to_string()),
+        downgraded: false,
     }
 }
 

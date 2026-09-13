@@ -4314,6 +4314,7 @@ mod tests {
             evidence: vec![],
             match_count: 0,
             source_file: None,
+            downgraded: false,
         }
     }
 
@@ -4458,6 +4459,7 @@ mod tests {
                 evidence: vec![],
                 match_count: 0,
                 source_file: None,
+                downgraded: false,
             };
             // 160 bytes of captured window; the match is four bytes in the middle.
             let unit = byte_unit(0, &[0x41; 160], vec![ctx_note("a/hit", crit, 80)]);
@@ -5563,6 +5565,7 @@ mod tests {
                 evidence: vec![],
                 match_count: 0,
                 source_file: None,
+                downgraded: false,
             },
             Finding {
                 precomputed_spans: None,
@@ -5578,6 +5581,7 @@ mod tests {
                 evidence: vec![],
                 match_count: 0,
                 source_file: None,
+                downgraded: false,
             },
         ];
         let aggregated = aggregate_findings_by_directory(&findings);
@@ -5605,6 +5609,7 @@ mod tests {
                 evidence: vec![],
                 match_count: 0,
                 source_file: None,
+                downgraded: false,
             },
             Finding {
                 precomputed_spans: None,
@@ -5620,6 +5625,7 @@ mod tests {
                 evidence: vec![],
                 match_count: 0,
                 source_file: None,
+                downgraded: false,
             },
         ];
         let aggregated = aggregate_findings_by_directory(&findings);
@@ -5647,6 +5653,7 @@ mod tests {
                 evidence: vec![],
                 match_count: 0,
                 source_file: None,
+                downgraded: false,
             },
             Finding {
                 precomputed_spans: None,
@@ -5662,6 +5669,7 @@ mod tests {
                 evidence: vec![],
                 match_count: 0,
                 source_file: None,
+                downgraded: false,
             },
         ];
         let aggregated = aggregate_findings_by_directory(&findings);
@@ -5726,6 +5734,7 @@ mod tests {
             evidence: vec![],
             match_count: 0,
             source_file: None,
+            downgraded: false,
         };
         assert_eq!(format_evidence(&trait_item), "");
     }
@@ -5761,6 +5770,7 @@ mod tests {
             ],
             match_count: 2,
             source_file: None,
+            downgraded: false,
         };
         let formatted = format_evidence(&trait_item);
         assert!(formatted.contains("cmd.exe"));
@@ -5790,6 +5800,7 @@ mod tests {
             evidence: vec![],
             match_count: 0,
             source_file: None,
+            downgraded: false,
         }];
         let report = create_test_report(capabilities, vec![]);
         let output = format_terminal(&report);
@@ -5818,6 +5829,7 @@ mod tests {
             }],
             match_count: 1,
             source_file: None,
+            downgraded: false,
         }];
         let report = create_test_report(findings, vec![]);
 
@@ -5852,6 +5864,7 @@ mod tests {
             }],
             match_count: 1,
             source_file: None,
+            downgraded: false,
         }];
         let report = create_test_report(findings, vec![]);
 
@@ -5993,6 +6006,7 @@ mod tests {
                 evidence: vec![],
                 match_count: 0,
                 source_file: None,
+                downgraded: false,
             }],
             vec![],
         );
@@ -6049,6 +6063,7 @@ mod tests {
                     evidence: vec![],
                     match_count: 0,
                     source_file: None,
+                    downgraded: false,
                 },
                 Finding {
                     precomputed_spans: None,
@@ -6064,6 +6079,7 @@ mod tests {
                     evidence: vec![],
                     match_count: 0,
                     source_file: None,
+                    downgraded: false,
                 },
             ],
             vec![],
@@ -6129,6 +6145,7 @@ mod tests {
             evidence: vec![],
             match_count: 0,
             source_file: None,
+            downgraded: false,
         };
         let report = create_test_report(vec![finding("a/one"), finding("b/two")], vec![]);
         let mut report = report;
@@ -6178,6 +6195,7 @@ mod tests {
             evidence: vec![],
             match_count: 0,
             source_file: None,
+            downgraded: false,
         };
         // `b/dominated` matched at byte 0 (same span as `a/win`), so it has a local
         // offset — the mark of a dominated finding, not a location-less one.
@@ -6248,6 +6266,7 @@ mod tests {
             evidence: vec![],
             match_count: 0,
             source_file: None,
+            downgraded: false,
         };
 
         // One window at 0x1000, two matches in it — the second in a later row.
@@ -6326,6 +6345,7 @@ mod tests {
                 evidence: vec![],
                 match_count: 0,
                 source_file: None,
+                downgraded: false,
             }],
             vec![],
         );

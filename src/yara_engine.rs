@@ -3009,6 +3009,7 @@ impl YaraEngine {
                     evidence,
                     match_count: 0,
                     source_file: None,
+                    downgraded: false,
                 });
             }
         }

@@ -91,6 +91,9 @@ const PLATFORM_NAMES: &[&str] = &[
 /// These make the taxonomy harder to navigate and provide no value for ML classification.
 const BANNED_DIRECTORY_SEGMENTS: &[&str] = &[
     "advanced", // subjective
+    "anomaly",  // a judgment about a value, not a part or a technique: the fact
+                //   belongs with the thing it describes and "how unusual" belongs
+                //   in `crit:`
     "api",      // almost everything is an API
     "assorted", // dumping ground
     "atomic",   // vague
@@ -98,7 +101,24 @@ const BANNED_DIRECTORY_SEGMENTS: &[&str] = &[
     "basic",    // meaningless
     "behavior",
     "behaviors",
+    "core",     // catch-all: "the main part" says nothing the siblings do not
     "canonical", // describes "the textbook example of X", not a technique
+    // A verdict about what was matched, not a description of it. A directory
+    // names what its traits search for; whether that turns out to be fine is
+    // `crit:`, and a benign-context suppressor belongs in the directory for
+    // the thing it detects (TAXONOMY: "relocate a genuine suppressor to the
+    // directory that matches what it detects"). `os/service/legitimate/` held
+    // `uv publish` and `curl | sh` installer markers -- neither a service nor
+    // a judgment anyone could act on -- until they moved to the package
+    // publishing and shell-pipeline directories that actually describe them.
+    "legitimate",
+    "benign",
+    "known-good",
+    "harmless",
+    "safe",
+    "trusted",
+    "whitelist",
+    "allowlist",
     "component",
     "components",
     "commands",
@@ -140,6 +160,8 @@ const BANNED_DIRECTORY_SEGMENTS: &[&str] = &[
     "kinds",  // too vague
     "method", // everything is a method
     "methods",
+    "metrics",  // everything here is measured; put the count with the part it
+                //   counts and let the threshold live in the trait name
     "marker",  // says only that a trait is a marker
     "markers", // says only that traits are markers
     "misc",    // dumping ground
@@ -153,6 +175,8 @@ const BANNED_DIRECTORY_SEGMENTS: &[&str] = &[
     "pattern",    // vague
     "patterns",   // vague
     "protocol",   // vague
+    "quality",    // a judgment, not a subject: "whose quality, by what standard?"
+                  //   an absent author field is an absent field, not low quality
     "go-runtime", // platform
     "simple",     // meaningless
     "stuff",      // obviously bad
@@ -188,6 +212,14 @@ const BANNED_SEGMENT_EXCEPTIONS: &[(&str, &str)] = &[
         "types", // package.json `types`/`typings` entry point field
     ),
     (
+        "metadata/binary/code",
+        // "code" is vague anywhere else, but under metadata/binary/ it names one
+        // of the format's parts -- the executable bytes themselves (basic blocks,
+        // functions, complexity, density) -- exactly as ALLOWED_METADATA_BINARY
+        // declares it and as the `metrics` migration notes point traits toward.
+        "code",
+    ),
+    (
         "well-known/tool",
         "tool", // `well-known/tool/` is an established tier category, not a vague segment
     ),
@@ -199,7 +231,7 @@ const BANNED_SEGMENT_EXCEPTIONS: &[(&str, &str)] = &[
 
 /// Maximum number of traits allowed in a single directory.
 /// Directories exceeding this should be split into subdirectories.
-pub(crate) const MAX_TRAITS_PER_DIRECTORY: usize = 80;
+pub(crate) const MAX_TRAITS_PER_DIRECTORY: usize = 75;
 
 /// Directories explicitly allowed to exceed `MAX_TRAITS_PER_DIRECTORY`.
 /// Use sparingly — splitting by sub-technique is preferred. Listed here
@@ -1737,6 +1769,8 @@ const WELL_KNOWN_TOOL_CATEGORIES: &[&str] = &[
     "detection",
     "development",
     "forensics",
+    "media",
+    "packaging",
     "offensive",
     "reverse-engineering",
     "sysadmin",
@@ -1775,18 +1809,23 @@ const WELL_KNOWN_APP_CATEGORIES: &[&str] = &[
 const WELL_KNOWN_LIB_CATEGORIES: &[&str] = &[
     "ai",
     "cloud",
-    "core",
     "crypto",
     "data",
     "development",
     "format",
     "media",
     "network",
+    "observability",
     "platform",
     "runtime",
     "native",
     "ui",
     "web",
+    "concurrency",
+    "datetime",
+    "stdlib",
+    "vendor-sdk",
+    "testing",
 ];
 
 /// Allowed top-level categories under `well-known/`.
@@ -2354,6 +2393,8 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     "text:metadata/file/catalog/",
     "text:metadata/file/format/",
     "text:metadata/file/profile/",
+    "text:metadata/lang/natural/",
+    "text:metadata/lang/locale/",
     "text:metadata/file/string/",
     "text:metadata/file/extension/",
     "text:micro-behaviors/data/encoded/",
@@ -2365,10 +2406,8 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     "text:objectives/command-and-control/backdoor/keywords/",
     "text:objectives/command-and-control/botnet/keywords/",
     "text:objectives/command-and-control/backdoor/rat/keywords/",
-    "text:objectives/command-and-control/dropper/keywords/",
     "text:objectives/command-and-control/remote-command/keywords/",
     "text:objectives/command-and-control/remote-command/llm/",
-    "text:objectives/collection/clipboard/keywords/",
     "text:objectives/exfiltration/stealer/surveillance/",
     "text:objectives/evasion/kernel-hide/keywords/",
     "text:objectives/evasion/indicator-removal/keywords/",
@@ -2385,7 +2424,6 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     "text:objectives/privilege-escalation/exploit/keywords/",
     "text:micro-behaviors/hardware/input/keyboard/label/",
     "text:well-known/tool/detection/",
-    "text:well-known/app/context/",
     "text:well-known/malware/trojan/family/",
     "text:well-known/tool/offensive/payload-corpus/",
     // Marking a file executable (chmod +x / mode 0o755) is a delivery step that
@@ -2403,9 +2441,6 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     // C2 messaging-channel indicators (e.g. Discord webhook URLs) are string
     // markers embedded in malware written in any language.
     "text:objectives/command-and-control/channel/messaging/",
-    // VSS / shadow-copy deletion commands (vssadmin, \\?\GLOBALROOT, robocopy
-    // \Device\Harddisk…) can be shelled out from any language.
-    "text:objectives/evasion/indicator-removal/shadow-copy/",
     // String *literals* (parser-extracted) for the same cross-language content
     // classes allowlisted for `text:` above: a hardcoded C2 IP/port, URL,
     // credential path, or text marker is written as a quoted literal in source
@@ -2413,7 +2448,6 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     "literal:micro-behaviors/communications/ip/",
     "literal:micro-behaviors/communications/http/url/",
     "literal:objectives/command-and-control/infrastructure/",
-    "literal:micro-behaviors/fs/path/sensitive/credentials/",
     "literal:micro-behaviors/process/create/shell/lang/",
     "literal:metadata/file/catalog/",
     "literal:metadata/file/extension/",
@@ -2603,6 +2637,34 @@ pub(crate) fn find_broad_filetype_traits(
                 cap,
             ))
         })
+        .collect()
+}
+
+/// Find [`BROAD_FILETYPE_ALLOWLIST`] entries that no longer match any trait.
+///
+/// Entries are matched by directory *prefix*, so renaming or retiring a
+/// directory silently strips its exemption: the entry stops matching, every
+/// trait it covered starts failing the cap, and nothing points at the entry as
+/// the cause. The failure surfaces far from the rename, as a pile of unrelated
+/// cap violations.
+///
+/// An entry matching nothing is either that mistake or a leftover from a
+/// directory that is gone. Either way it is dead text pretending to be a
+/// policy, so say so.
+#[must_use]
+pub(crate) fn find_stale_filetype_allowlist_entries(
+    rule_source_files: &HashMap<String, String>,
+) -> Vec<&'static str> {
+    BROAD_FILETYPE_ALLOWLIST
+        .iter()
+        .filter(|entry| {
+            let Some((_, prefix)) = entry.split_once(':') else {
+                // A malformed entry can never match; report it too.
+                return true;
+            };
+            !rule_source_files.values().any(|src| src.contains(prefix))
+        })
+        .copied()
         .collect()
 }
 

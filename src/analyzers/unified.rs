@@ -525,10 +525,23 @@ impl UnifiedSourceAnalyzer {
         let mut ast_kind_cache = None;
         let mut seen_strings = SeenStrings::default();
         if let Some(tree) = tree {
-            // One walk for functions, string/number/comment literals, call
-            // sites, and the trait kind-cache. A second cursor pass in
-            // evaluate_and_merge was pure walk tax — keep extract_function_name
-            // chained names (B1g: do not ingest filefacts Call.target).
+            // One walk for functions, string/number/comment literals and the
+            // trait kind-cache. A second cursor pass in evaluate_and_merge was
+            // pure walk tax.
+            //
+            // Call sites are NOT collected here: filefacts already named every
+            // call while parsing this same tree, and `cleave facts` prints
+            // those names, so a rule author can read the exact string their
+            // matcher must equal off the tool. Naming calls a second way here
+            // gave chained calls two spellings — filefacts `open().read`
+            // versus this walk's `open("/tmp/x","w").read`, which embedded the
+            // caller's argument text and so could never be matched by a fixed
+            // string at all.
+            //
+            // This reverses B1g, which kept the local names because filefacts
+            // reported `Call.target: None` for a method on a call result.
+            // filefacts now returns `s.replace().replace` for that shape, so
+            // the reason no longer holds.
             let mapper = Arc::clone(&self.capability_mapper);
             let rule_ft = mapper.detect_file_type(self.config.file_type);
             let (required, call_types) = mapper.ast_kind_cache_plan(rule_ft);
@@ -545,6 +558,9 @@ impl UnifiedSourceAnalyzer {
             if !required.is_empty() {
                 ast_kind_cache = Some(cache);
             }
+        }
+        if let Some(ctx) = source_ctx {
+            symbol_extraction::ingest_filefacts_calls(&ctx.parsed, &mut report);
         }
 
         // Use pre-extracted stng strings if available, otherwise use parallel extracted ones
@@ -833,7 +849,10 @@ impl UnifiedSourceAnalyzer {
         }
 
         if tree.is_some() {
-            // Call sites were collected in `extract_ast_facts` above.
+            // Call sites were ingested from filefacts above, before this:
+            // the alias pass below rewrites everything already in
+            // `report.imports`, so they have to be present for
+            // `alias.decompress` to resolve to `zlib.decompress`.
             // Module imports come from filefacts's per-language queries; cleave
             // only adds Python `__import__` alias resolution on top.
             if let Some(ctx) = source_ctx {
@@ -934,6 +953,8 @@ impl UnifiedSourceAnalyzer {
     ) {
         let source = content.as_bytes();
         let mut cursor = tree.walk();
+        // Collected by the walk so call-kind nodes get an `Evidence.alt_value`;
+        // the imports themselves are ingested from filefacts.
         let mut call_sites: Vec<(String, u64)> = Vec::new();
         self.walk_ast_facts(
             &mut cursor,
@@ -945,7 +966,8 @@ impl UnifiedSourceAnalyzer {
             kind_cache,
             seen_strings,
         );
-        symbol_extraction::push_capped_call_imports(call_sites, report);
+        // `call_sites` is collected by the walk for `Evidence.alt_value` on
+        // call-kind nodes; the imports themselves come from filefacts.
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1157,6 +1179,16 @@ impl UnifiedSourceAnalyzer {
         }
     }
 
+    /// Name a function definition.
+    ///
+    /// A function symbol is the function's name and nothing else -- `g`, not
+    /// `g(void)`. In C the configured field (`declarator`) does not hold the
+    /// name: it holds a `function_declarator` whose own text is the whole
+    /// signature, wrapped in a `pointer_declarator` when the function returns
+    /// a pointer. Taking that node's text verbatim named every C function
+    /// after its parameter list, which no `type: symbol` matcher could equal
+    /// and which disagreed with the name filefacts reports for the same node.
+    /// Descend to the identifier instead.
     fn extract_function_name<'a>(
         &self,
         node: &tree_sitter::Node<'a>,
@@ -1164,10 +1196,9 @@ impl UnifiedSourceAnalyzer {
     ) -> Option<String> {
         // Try the configured field name first
         if let Some(name_node) = node.child_by_field_name(self.config.function_name_field)
-            && let Ok(name) = name_node.utf8_text(source)
-            && !name.is_empty()
+            && let Some(name) = declarator_identifier(&name_node, source, 0)
         {
-            return Some(name.to_string());
+            return Some(name);
         }
 
         // Fallback: look for identifier children
@@ -1188,6 +1219,52 @@ impl UnifiedSourceAnalyzer {
         }
         None
     }
+}
+
+/// Resolve a declarator to the identifier it declares.
+///
+/// Returns the node's own text when it already names something; otherwise
+/// follows the `declarator` field inward (`pointer_declarator` ->
+/// `function_declarator` -> `identifier`) and, failing that, takes the first
+/// identifier-ish named child. Bounded so a pathological declarator chain
+/// cannot recurse without end.
+fn declarator_identifier(
+    node: &tree_sitter::Node<'_>,
+    source: &[u8],
+    depth: usize,
+) -> Option<String> {
+    const MAX_DECLARATOR_DEPTH: usize = 32;
+    if depth > MAX_DECLARATOR_DEPTH {
+        return None;
+    }
+    if matches!(
+        node.kind(),
+        "identifier"
+            | "name"
+            | "field_identifier"
+            | "type_identifier"
+            | "property_identifier"
+            | "simple_identifier"
+            | "word"
+    ) {
+        return node
+            .utf8_text(source)
+            .ok()
+            .map(str::to_string)
+            .filter(|n| !n.is_empty());
+    }
+    if let Some(inner) = node.child_by_field_name("declarator")
+        && let Some(name) = declarator_identifier(&inner, source, depth + 1)
+    {
+        return Some(name);
+    }
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        if let Some(name) = declarator_identifier(&child, source, depth + 1) {
+            return Some(name);
+        }
+    }
+    None
 }
 
 /// Decode a parser-confirmed hexadecimal string literal when it yields a

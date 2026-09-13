@@ -852,26 +852,6 @@ impl PEAnalyzer {
             );
         }
 
-        // Detect inflated section headers (declared size extends
-        // beyond EOF). Reads filefacts's typed Sections view.
-        if filefacts_ok {
-            let has_inflated = ctx
-                .parsed
-                .sections()
-                .iter()
-                .any(|s| s.file_offset.saturating_add(s.file_size) > file_size);
-            if has_inflated {
-                report.findings.push(
-                    Finding::structural(
-                        "metadata/binary/anomaly::inflated-section-headers".to_string(),
-                        "PE section headers declare sizes beyond end of file".to_string(),
-                        0.9,
-                    )
-                    .with_criticality(Criticality::Notable),
-                );
-            }
-        }
-
         // Functions come straight from filefacts: goblin-extracted entries
         // for symbols, plus rizin-recovered ones (with CFG fields) when
         // filefacts's rizin fallback fired during `open`.
@@ -939,6 +919,7 @@ impl PEAnalyzer {
                 }],
                 match_count: 1,
                 source_file: None,
+                downgraded: false,
             });
 
             report.structure.push(StructuralFeature {
@@ -1003,6 +984,7 @@ impl PEAnalyzer {
                 evidence: vec![],
                 match_count: 0,
                 source_file: None,
+                downgraded: false,
             });
         }
         tools_used.push("stng".to_string());
@@ -1071,6 +1053,7 @@ impl PEAnalyzer {
                     }],
                     match_count: 1,
                     source_file: None,
+                    downgraded: false,
                 });
                 if idx == 0 {
                     // Prefer the O attribute when present (organisation
@@ -1101,6 +1084,7 @@ impl PEAnalyzer {
                         }],
                         match_count: 1,
                         source_file: None,
+                        downgraded: false,
                     });
                 }
             }
@@ -1486,6 +1470,7 @@ impl PEAnalyzer {
                 }],
                 match_count: 1,
                 source_file: None,
+                downgraded: false,
             });
 
             // Check for additional tampering in the actual PE data
@@ -1521,6 +1506,7 @@ impl PEAnalyzer {
                 }],
                 match_count: 1,
                 source_file: None,
+                downgraded: false,
             });
         }
 
@@ -1581,6 +1567,7 @@ impl PEAnalyzer {
                     }],
                     match_count: 1,
                     source_file: None,
+                    downgraded: false,
                 });
                 break; // Only report the most prominent injection
             }
@@ -1615,6 +1602,7 @@ impl PEAnalyzer {
                     }],
                     match_count: 1,
                     source_file: None,
+                    downgraded: false,
                 });
             }
         }

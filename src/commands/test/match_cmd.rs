@@ -1289,6 +1289,13 @@ pub fn run(
                     match_count, density
                 ));
 
+                if !result.warnings.is_empty() {
+                    out.push_str("\n  Warnings:\n");
+                    for warning in &result.warnings {
+                        out.push_str(&format!("    - {warning}\n"));
+                    }
+                }
+
                 // Show available sections as suggestion
                 if section_map.has_sections() && section.is_none() {
                     out.push_str(&format!(

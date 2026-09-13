@@ -135,6 +135,13 @@ rollout-bastille: ## Deploy to Bastille jails (BUILD=jail RUN=jail)
 # otherwise mask or fabricate a finding across runs). See docs/FAST_SAFE_TESTING_PLAN.md.
 test test-fast test-unit: export FILEFACTS_CACHE := 0
 test test-fast test-unit: export CLEAVE_SKIP_CACHE := 1
+# CLEAVE_SKIP_CACHE also disables the compiled-YARA (.yrc) cache, so every
+# spawned cleave recompiles its rule buckets. Re-enabling it with
+# CLEAVE_SKIP_YARA_CACHE=0 looks like free speed and is not: measured on this
+# suite it costs ~30% wall (29.7s -> 38.8s) and MORE CPU (100s -> 156s user),
+# because ~150 concurrent processes each deserialize, re-JIT and then re-write
+# the same buckets — more work than lazily compiling the one bucket a fixture
+# actually needs. Leave it off.
 
 # Integration-test modules that mutate process-global state (traits override dir,
 # analysis skip-overrides, env vars) and MUST run isolated under nextest — never

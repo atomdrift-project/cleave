@@ -378,6 +378,7 @@ fn suspicious_composite_directory_ref_drops_exception_keeps_notable() {
         }],
         match_count: 0,
         source_file: None,
+        downgraded: false,
     };
     report
         .findings
@@ -687,6 +688,7 @@ fn test_unless_directive_skips_trait() {
         evidence: vec![],
         match_count: 0,
         source_file: None,
+        downgraded: false,
     }];
 
     let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None)
@@ -809,6 +811,7 @@ fn test_downgrade_to_notable() {
         evidence: vec![],
         match_count: 0,
         source_file: None,
+        downgraded: false,
     }];
 
     let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None)
@@ -859,6 +862,7 @@ fn test_downgrade_to_notable() {
             all: None,
             none: None,
             needs: None,
+            scope: None,
         }),
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
@@ -891,6 +895,7 @@ fn test_downgrade_one_level() {
         evidence: vec![],
         match_count: 0,
         source_file: None,
+        downgraded: false,
     }];
 
     let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None)
@@ -936,6 +941,7 @@ fn test_downgrade_one_level() {
             all: None,
             none: None,
             needs: None,
+            scope: None,
         }),
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
@@ -996,6 +1002,7 @@ fn test_downgrade_no_match_keeps_original() {
             all: None,
             none: None,
             needs: None,
+            scope: None,
         }),
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
@@ -1029,6 +1036,7 @@ fn test_downgrade_from_hostile() {
         evidence: vec![],
         match_count: 0,
         source_file: None,
+        downgraded: false,
     }];
 
     let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None)
@@ -1074,6 +1082,7 @@ fn test_downgrade_from_hostile() {
             all: None,
             none: None,
             needs: None,
+            scope: None,
         }),
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
@@ -1127,6 +1136,7 @@ fn test_all_three_directives_combined() {
         evidence: vec![],
         match_count: 0,
         source_file: None,
+        downgraded: false,
     }];
 
     let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None)
@@ -1177,6 +1187,7 @@ fn test_all_three_directives_combined() {
             all: None,
             none: None,
             needs: None,
+            scope: None,
         }),
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
@@ -2005,6 +2016,7 @@ fn test_composite_unless_skips_rule() {
         evidence: vec![],
         match_count: 0,
         source_file: None,
+        downgraded: false,
     }];
 
     let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None)
@@ -3044,6 +3056,7 @@ fn finding_at_line(id: &str, line: usize, col: usize) -> Finding {
         }],
         match_count: 0,
         source_file: None,
+        downgraded: false,
     }
 }
 
@@ -3071,6 +3084,7 @@ fn finding_at_offset(id: &str, offset: u64) -> Finding {
         }],
         match_count: 0,
         source_file: None,
+        downgraded: false,
     }
 }
 
@@ -3572,6 +3586,7 @@ fn test_near_lines_no_location_evidence_fails() {
             }],
             match_count: 0,
             source_file: None,
+            downgraded: false,
         },
         Finding {
             precomputed_spans: None,
@@ -3593,6 +3608,7 @@ fn test_near_lines_no_location_evidence_fails() {
             }],
             match_count: 0,
             source_file: None,
+            downgraded: false,
         },
     ];
     let ctx = proximity_ctx(&report, data, &findings);
@@ -3632,6 +3648,7 @@ fn test_near_lines_hex_offset_location() {
             }],
             match_count: 0,
             source_file: None,
+            downgraded: false,
         },
         // Hex offset 0x0f = byte 15 = start of line 4
         Finding {
@@ -3654,6 +3671,7 @@ fn test_near_lines_hex_offset_location() {
             }],
             match_count: 0,
             source_file: None,
+            downgraded: false,
         },
     ];
     let ctx = proximity_ctx(&report, data, &findings);
@@ -3833,6 +3851,7 @@ fn test_downgrade_combined_all_and_none_blocked_by_none() {
         evidence: vec![],
         match_count: 0,
         source_file: None,
+        downgraded: false,
     }];
 
     let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None)
@@ -3901,6 +3920,7 @@ fn test_downgrade_combined_all_and_none_blocked_by_none() {
                 id: "file/type/binary".to_string(),
             }]),
             needs: None,
+            scope: None,
         }),
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
@@ -3996,6 +4016,7 @@ fn test_downgrade_combined_all_and_none_pass() {
                 id: "nonexistent/trait".to_string(),
             }]),
             needs: None,
+            scope: None,
         }),
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
@@ -4028,6 +4049,7 @@ fn test_downgrade_needs_threshold_not_met() {
         evidence: vec![],
         match_count: 0,
         source_file: None,
+        downgraded: false,
     }];
 
     let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None)
@@ -4086,6 +4108,7 @@ fn test_downgrade_needs_threshold_not_met() {
             ]),
             none: None,
             needs: Some(2), // Requires 2 matches, only 1 present
+            scope: None,
         }),
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
@@ -4119,6 +4142,7 @@ fn test_downgrade_needs_threshold_met() {
             evidence: vec![],
             match_count: 0,
             source_file: None,
+            downgraded: false,
         },
         Finding {
             precomputed_spans: None,
@@ -4134,6 +4158,7 @@ fn test_downgrade_needs_threshold_met() {
             evidence: vec![],
             match_count: 0,
             source_file: None,
+            downgraded: false,
         },
     ];
 
@@ -4193,6 +4218,7 @@ fn test_downgrade_needs_threshold_met() {
             ]),
             none: None,
             needs: Some(2), // Requires 2 matches, 2 present
+            scope: None,
         }),
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
@@ -4236,6 +4262,7 @@ fn test_composite_downgrade_all_match() {
             evidence: vec![],
             match_count: 0,
             source_file: None,
+            downgraded: false,
         },
         Finding {
             precomputed_spans: None,
@@ -4251,6 +4278,7 @@ fn test_composite_downgrade_all_match() {
             evidence: vec![],
             match_count: 0,
             source_file: None,
+            downgraded: false,
         },
     ];
 
@@ -4302,6 +4330,7 @@ fn test_composite_downgrade_all_match() {
             any: None,
             none: None,
             needs: None,
+            scope: None,
         }),
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
@@ -4340,6 +4369,7 @@ fn test_composite_downgrade_none_blocks() {
         evidence: vec![],
         match_count: 0,
         source_file: None,
+        downgraded: false,
     }];
 
     let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None)
@@ -4387,6 +4417,7 @@ fn test_composite_downgrade_none_blocks() {
                 id: "file/signed/apple".to_string(), // IS in findings → blocks downgrade
             }]),
             needs: None,
+            scope: None,
         }),
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
@@ -4434,6 +4465,7 @@ fn finding_at_lines(id: &str, lines: &[(usize, usize)]) -> Finding {
             .collect(),
         match_count: 0,
         source_file: None,
+        downgraded: false,
     }
 }
 
@@ -4742,6 +4774,7 @@ fn member_finding(id: &str) -> Finding {
         }],
         match_count: 1,
         source_file: None,
+        downgraded: false,
     }
 }
 

@@ -404,6 +404,7 @@ impl super::CapabilityMapper {
                         kind: FindingKind::Capability,
                         trait_refs: vec![],
                         source_file: get_relative_source_file(&trait_def.defined_in),
+                        downgraded: false,
                     });
                 }
                 return None;

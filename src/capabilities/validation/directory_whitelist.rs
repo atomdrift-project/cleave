@@ -413,6 +413,7 @@ const ALLOWED_MB_OS: &[&str] = &[
     "pam",
     "privilege",
     "random",
+    "recovery",
     "registry",
     "security",
     "service",
@@ -698,6 +699,8 @@ const ALLOWED_TOOLS: &[&str] = &[
     "detection",           // Detection and scanning tools
     "development",         // Developer tooling (IDEs, build systems, package managers)
     "forensics",           // Memory, disk, and incident-forensics tools
+    "media",               // Media acquisition and conversion tools (downloaders, transcoders)
+    "packaging",           // Package managers, version managers, and installer builders
     "offensive",           // Offensive security / red team tools
     "reverse-engineering", // RE tools (disassemblers, debuggers, decompilers)
     "sysadmin",            // System administration tools
@@ -741,18 +744,23 @@ const ALLOWED_APPS: &[&str] = &[
 const ALLOWED_LIBS: &[&str] = &[
     "ai",
     "cloud",
-    "core",
     "crypto",
     "data",
     "development",
     "format",
     "media",
     "network",
+    "observability",
     "platform",
     "runtime",
     "native",
     "ui",
     "web",
+    "concurrency",
+    "datetime",
+    "stdlib",
+    "vendor-sdk",
+    "testing",
 ];
 
 /// Allowed top-level subdirectories in metadata/
@@ -789,24 +797,34 @@ const ALLOWED_METADATA: &[&str] = &[
 /// Document parsing (OLE, OOXML, PDF) belongs in document/, not here.
 ///
 /// Prefer technology-neutral subdirectory names. Technology names belong in filenames.
+/// One organizing axis: the ANATOMY of the binary format. Each entry names a
+/// PART of the artifact and holds facts about that part. The rule that settles
+/// placement is in TAXONOMY.md: a directory holds facts about a part of the
+/// format, never facts about what the contents of that part MEAN.
+///   "the import table has three entries"  -> symbols
+///   "it imports GetProcAddress"           -> micro-behaviors/
+///   "its exports impersonate version.dll" -> objectives/ (sideload)
+///   "those exports are libcurl's ABI"     -> well-known/lib/
 const ALLOWED_METADATA_BINARY: &[&str] = &[
-    "anomaly",     // Structural violations and anomalies
-    "bundle",      // Bundle-format metadata (Info.plist, CFBundleIdentifier, XPC, launchd)
-    "debug",       // Debug symbols (PDB, DWARF)
-    "framework",   // Runtime/framework detection (.NET, Java, VB6, MFC)
-    "installer",   // Installer framework detection
+    // -- the format's parts -------------------------------------------------
+    "header",      // Machine, characteristics, timestamps, entry point, malformed fields
+    "section",     // Sections: names, count, size, entropy, permissions, alignment
+    "symbols",     // Shape of the import/export/symbol tables (counts, ordinals, stripping)
+    "code",        // The code itself: basic blocks, functions, complexity, code size
     "instruction", // Instruction-level patterns (indirect calls, CPUID)
-    "layout",      // File-level structure (overlay, embedded, bundles)
-    "license",     // Embedded license-notice strings (GPL, etc.)
-    "linking",     // Runtime linking and dynamic resolution
-    "metrics",     // Structural measurements (counts, entropy, ratios, size)
-    "provenance",  // Source-tree / VCS-ident / build-origin markers
-    "resource",    // Embedded resource analysis
-    "section",     // Section analysis
-    "signing",     // Code-signing technologies (Authenticode, Apple codesign)
-    "symbols",     // Import/export symbol analysis
-    "toolchain",   // Compiler/linker fingerprints (MSVC, Xcode, etc.)
-    "vendor",      // Vendor-identity detection from format-native metadata
+    "resource",    // Embedded resources
+    "linking",     // Dynamic dependencies, RPATH/RUNPATH, delay-load
+    "debug",       // Debug directories and symbol files (PDB, DWARF)
+    "layout",      // Whole-file structure: overlay, embedded payloads, bundles
+    "bundle",      // Bundle-format structure (Info.plist, CFBundleIdentifier, XPC, launchd)
+    "provenance",  // Build origin: toolchain/compiler markers, source-tree and VCS idents
+    // Identity is not a format property (see the metadata/ rules in TAXONOMY.md).
+    "installer",   // TRANSITIONAL -> well-known/ (named products); "is self-extracting" -> layout/
+    "framework",   // TRANSITIONAL -> well-known/lib/; keep only format-level consequences
+    "vendor",      // TRANSITIONAL -> metadata/vendor/ (the sanctioned home) or well-known/
+    "signing",     // TRANSITIONAL -> metadata/signed/
+    "license",     // TRANSITIONAL -> provenance/
+    "toolchain",   // TRANSITIONAL -> provenance/
 ];
 
 /// Allowed subdirectories in metadata/document/
@@ -827,15 +845,26 @@ const ALLOWED_METADATA_DOCUMENT: &[&str] = &[
 /// File-level observables — properties visible without deep parsing.
 /// These are primarily component traits used as building blocks in composite rules.
 const ALLOWED_METADATA_FILE: &[&str] = &[
+    "archive",           // Member counts of the archive itself
+    "arithmetic",        // Density of arithmetic operator nodes
     "catalog",           // File/catalog identity and generated registries
+    "comment",           // Comment volume and span
+    "data-blob",         // Bytes that read as an opaque blob (entropy, NUL domination, one huge string)
     "encoded",           // Encoded content presence (base64)
     "extension",         // File extension classification
     "format",            // Text/data format identification (JSON, makefile)
+    "function",          // Shape of the functions the parser recovered
     "invisible-unicode", // Invisible Unicode text properties
+    "import",            // How many distinct modules the file imports
+    "line",              // Line geometry: one-liners, very long lines, line counts
+    "literal",           // Literal collections, such as long numeric arrays
     "magic",             // Magic byte signatures
     "metrics",           // Text/file-level measurements
+    "naming",            // How names are formed (numeric suffixes, single-char ratio)
+    "padding",           // Runs of repeated filler: whitespace, uppercase, blank lines
     "policy",            // Policy/config text identities
     "profile",           // Text profile and wrapper shapes
+    "size",              // Degenerate file size and shape: tiny scripts, sparse strings
     "string",            // Neutral string identities
 ];
 
@@ -847,7 +876,9 @@ const ALLOWED_METADATA_FILE: &[&str] = &[
 /// credentials) needs the container parsed, so it lives under
 /// metadata/binary/provenance/ with the other structure-derived facts.
 const ALLOWED_METADATA_IMAGE: &[&str] = &[
-    "metrics", // Pixel/channel/statistical image measurements
+    "pixel",    // Measurements over the decoded pixels (entropy, histogram, channels, edges)
+    "segment",  // Size and shape of the container's own metadata segments (JPEG COM, APP1)
+    "trailing", // Bytes carried past the end of the image proper (after EOI / IEND)
 ];
 
 /// Allowed subdirectories in metadata/font/
@@ -885,6 +916,8 @@ const ALLOWED_METADATA_LANG: &[&str] = &[
     "go-build",            // Go build specifics
     "javascript-features", // JavaScript language features
     "linking",             // Linker properties
+    "locale",              // Localization resources and locale-specific keyword tables
+    "natural",             // Natural-language and writing-script detection (English, Han)
     "optimization",        // Optimization flags
     "scripted",            // Scripted language detection
     "security",            // Language security features
@@ -899,12 +932,14 @@ const ALLOWED_METADATA_LANG: &[&str] = &[
 /// Behavioral supply-chain detection belongs in objectives/supply-chain/, not here.
 const ALLOWED_METADATA_PACKAGE: &[&str] = &[
     "config",         // Configuration file detection
+    "completeness",   // Whether the package carries the trappings of a maintained project
     "contributors",   // Contributor metadata
     "dependencies",   // Dependency analysis
     "documentation",  // Documentation presence
     "error-handling", // Error handling patterns
     "files",          // File counts and types
     "help",           // Help/usage interface
+    "integrity",      // Checksums, lockfile hashes, and signature-manifest agreement
     "keywords",       // Package keywords
     "license",        // License detection
     "logging",        // Logging patterns
@@ -912,7 +947,7 @@ const ALLOWED_METADATA_PACKAGE: &[&str] = &[
     "manager",        // Package-manager fingerprints (homebrew, composer)
     "manifest",       // Package manifest fields
     "metrics",        // Code metrics
-    "quality",        // Quality signals
+    "scaffold",       // Unedited `npm init` scaffolding published as-is
     "scripts",        // Package scripts
     "testing",        // Testing detection
     "tooling",        // Benign package-manager, bundler, and generated-source contexts
@@ -943,6 +978,7 @@ const ALLOWED_METADATA_PERMISSION: &[&str] = &[
     "management",    // Extension-management authority
     "manifest",      // Extension manifest structure and manifest-only fields
     "network",       // Request interception/filtering/modification authority
+    "prose",         // Permission-request wording as it appears to the user
     "offscreen",     // Offscreen document authority
     "runtime",       // Runtime lifecycle callbacks and extension context
     "storage",       // Extension storage authority
@@ -1896,14 +1932,16 @@ mod tests {
     }
 
     #[test]
-    fn test_allows_image_metrics_but_not_file_identity() {
+    fn test_allows_image_measurements_but_not_file_identity() {
         let temp_dir = TempDir::new().unwrap();
         let traits_path = temp_dir.path();
 
-        std::fs::create_dir_all(traits_path.join("metadata/image/metrics")).unwrap();
+        // `metrics` was replaced by the three things it actually held: pixel
+        // statistics, container metadata segments, and bytes past the image.
+        std::fs::create_dir_all(traits_path.join("metadata/image/pixel")).unwrap();
         assert!(
             validate_directory_structure(traits_path).is_ok(),
-            "metadata/image/metrics should be allowed for neutral image measurements"
+            "metadata/image/pixel should be allowed for neutral image measurements"
         );
 
         std::fs::create_dir_all(traits_path.join("metadata/image/magic")).unwrap();

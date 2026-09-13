@@ -145,6 +145,7 @@ pub(crate) fn analyze_overlay(
                 }],
                 match_count: 1,
                 source_file: Some(binary_path.to_string()),
+                downgraded: false,
             };
 
             Ok(Some(OverlayAnalysis {
@@ -193,6 +194,7 @@ pub(crate) fn analyze_overlay(
                 ],
                 match_count: 1,
                 source_file: Some(binary_path.to_string()),
+                downgraded: false,
             };
 
             Ok(Some(OverlayAnalysis {

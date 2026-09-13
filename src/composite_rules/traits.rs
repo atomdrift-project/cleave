@@ -46,6 +46,17 @@ const MAX_COMPOSITE_DESCRIPTION_CHARS: usize = 80;
 /// Lower a criticality by one level when a downgrade condition fires. Hostile →
 /// Suspicious → Notable → Baseline; anything already at or below Baseline floors
 /// at Component.
+/// Reduce a rule's criticality by one level for a `downgrade:` that fired.
+///
+/// A `Notable` behavior lands on `Baseline` here, which is a de-emphasis, not a
+/// deletion — but `strip_unmatched_traits` treats `Baseline`/`Component`
+/// findings as strippable unless a fired composite references them. A notable
+/// trait downgraded to `Baseline` therefore used to vanish from the report
+/// entirely (and from `--format=json`) when nothing referenced it, while an
+/// otherwise identical trait that *was* referenced survived at the lower tier.
+/// Findings that reach a low tier by downgrade are now flagged via
+/// [`Finding::downgraded`] and exempted from that strip, so the tier a
+/// `downgrade:` asks for is the tier the analyst actually sees.
 pub(crate) fn downgrade_crit(c: Criticality) -> Criticality {
     match c {
         Criticality::Hostile => Criticality::Suspicious,
@@ -175,6 +186,20 @@ pub(crate) struct DowngradeConditions {
     /// Minimum number of `any` conditions that must match
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub needs: Option<usize>,
+    /// Where this downgrade's conditions may find their evidence.
+    ///
+    /// Defaults to [`Scope::File`], matching `unless:`: a suppressor resolves
+    /// against the file the rule matched in. Anything broader must be asked for
+    /// explicitly, because an archive-scoped suppressor lets one member silence
+    /// a rule in a completely unrelated member — a vendored `tests/` tree four
+    /// directories deep used to cancel a `pkill` call in first-party code, and
+    /// nothing in the rule text hinted that could happen.
+    ///
+    /// `scope: archive` opts back in, for the cases that genuinely want
+    /// container context — a signed installer whose signature legitimately
+    /// covers the members it carries, for instance.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub scope: Option<Scope>,
 }
 
 impl DowngradeConditions {
@@ -1178,6 +1203,7 @@ impl TraitDefinition {
                 }],
                 match_count: 0,
                 source_file: get_relative_source_file(&self.defined_in),
+                downgraded: false,
             };
 
             return Some(timeout_warning);
@@ -1297,23 +1323,29 @@ impl TraitDefinition {
                 let triggered = self.eval_downgrade_conditions(downgrade_conds, ctx);
                 if triggered {
                     final_crit = downgrade_crit(self.crit);
-                    if final_crit != self.crit {
-                        tracing::debug!(
-                            "Downgrade applied: trait '{}' from {:?} → {:?}",
-                            self.id,
-                            self.crit,
-                            final_crit
-                        );
-                        if self.crit >= crate::types::MIN_RECORDED_SUPPRESSION {
-                            ctx.record_suppression(|| crate::types::Suppression {
-                                id: self.shared_id(),
-                                crit: self.crit,
-                                kind: crate::types::SuppressionKind::Downgrade,
-                                by: downgrade_legs(downgrade_conds, |c| {
-                                    self.eval_condition(c, ctx)
-                                }),
-                            });
+                    tracing::debug!(
+                        "Downgrade applied: trait '{}' from {:?} → {:?}{}",
+                        self.id,
+                        self.crit,
+                        final_crit,
+                        if final_crit == self.crit {
+                            " (floored at notable)"
+                        } else {
+                            ""
                         }
+                    );
+                    // Record on `triggered`, not on a criticality change: a
+                    // downgrade floored at notable still fired, and the analyst
+                    // needs to see that a clause is trying to suppress this
+                    // finding. Keying the record to `final_crit != self.crit`
+                    // would make every floored downgrade invisible.
+                    if self.crit >= crate::types::MIN_RECORDED_SUPPRESSION {
+                        ctx.record_suppression(|| crate::types::Suppression {
+                            id: self.shared_id(),
+                            crit: self.crit,
+                            kind: crate::types::SuppressionKind::Downgrade,
+                            by: downgrade_legs(downgrade_conds, |c| self.eval_condition(c, ctx)),
+                        });
                     }
                 }
 
@@ -1351,6 +1383,7 @@ impl TraitDefinition {
                 desc: self.shared_desc(),
                 conf: self.conf,
                 crit: final_crit,
+                downgraded: final_crit != self.crit,
                 mbc: self.mbc.as_deref().map(Into::into),
                 attack: self.attack.as_deref().map(Into::into),
                 trait_refs: vec![],
@@ -2705,9 +2738,9 @@ impl CompositeTrait {
                 let triggered = self.eval_downgrade_conditions(downgrade_conds, ctx);
                 if triggered {
                     final_crit = downgrade_crit(self.crit);
-                    if final_crit != self.crit
-                        && self.crit >= crate::types::MIN_RECORDED_SUPPRESSION
-                    {
+                    // Recorded whenever the clause fires, including when
+                    // `downgrade_crit` floors it at notable — see that function.
+                    if self.crit >= crate::types::MIN_RECORDED_SUPPRESSION {
                         ctx.record_suppression(|| crate::types::Suppression {
                             id: self.shared_id(),
                             crit: self.crit,
@@ -2777,6 +2810,7 @@ impl CompositeTrait {
                     }],
                     match_count: 0,
                     source_file: get_relative_source_file(&self.defined_in),
+                    downgraded: false,
                 });
             }
 
@@ -2788,6 +2822,7 @@ impl CompositeTrait {
                 desc: self.shared_desc(),
                 conf: self.conf,
                 crit: final_crit,
+                downgraded: final_crit != self.crit,
                 mbc: self.mbc.as_deref().map(Into::into),
                 attack: self.attack.as_deref().map(Into::into),
                 trait_refs: result.matched_trait_ids.clone(),

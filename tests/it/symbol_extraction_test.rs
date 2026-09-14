@@ -592,11 +592,13 @@ fn test_java_symbol_extraction() {
     let symbols = get_symbols(&json);
     eprintln!("Java symbols: {:?}", symbols);
 
-    // Check for security-relevant symbols
-    // Runtime class should be extracted
+    // Check for security-relevant symbols. Source call targets use the
+    // filefacts canonical form: callable names are emitted without call
+    // punctuation, while receiver/class names are not standalone call
+    // targets in Java's grammar.
     assert!(
-        symbols.iter().any(|s| s == "Runtime"),
-        "Should extract Runtime class, got: {:?}",
+        symbols.iter().any(|s| s == "getRuntime") && symbols.iter().any(|s| s == "exec"),
+        "Should extract Runtime access and exec call targets, got: {:?}",
         symbols
     );
 }

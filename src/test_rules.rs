@@ -1051,12 +1051,9 @@ impl<'a> RuleDebugger<'a> {
         // `baseline`/`component` finding unless a fired composite names it. This
         // is the cause nobody guesses, because it depends on what *else* matched
         // — the same trait survives in one scan and vanishes in another.
-        let effective_crit = trait_def
-            .downgrade
-            .as_ref()
-            .map_or(trait_def.crit, |_| {
-                crate::composite_rules::traits::downgrade_crit(trait_def.crit)
-            });
+        let effective_crit = trait_def.downgrade.as_ref().map_or(trait_def.crit, |_| {
+            crate::composite_rules::traits::downgrade_crit(trait_def.crit)
+        });
         if matches!(
             effective_crit,
             crate::types::Criticality::Baseline | crate::types::Criticality::Component

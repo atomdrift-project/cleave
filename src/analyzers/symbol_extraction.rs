@@ -88,8 +88,7 @@ pub(crate) fn ingest_filefacts_calls(
     // Offsets are capped per symbol so a minified or deeply repetitive file
     // cannot explode the imports vector; 32 is more than any proximity window
     // needs.
-    let mut per_symbol: std::collections::HashMap<&str, usize> =
-        std::collections::HashMap::new();
+    let mut per_symbol: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
     let mut total = 0usize;
     for sym in parsed.symbols().iter_kind(filefacts::SymbolKind::Call) {
         let filefacts::Symbol::Call { target, offset, .. } = sym else {

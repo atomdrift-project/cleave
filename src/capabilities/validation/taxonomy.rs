@@ -92,8 +92,8 @@ const PLATFORM_NAMES: &[&str] = &[
 const BANNED_DIRECTORY_SEGMENTS: &[&str] = &[
     "advanced", // subjective
     "anomaly",  // a judgment about a value, not a part or a technique: the fact
-                //   belongs with the thing it describes and "how unusual" belongs
-                //   in `crit:`
+    //   belongs with the thing it describes and "how unusual" belongs
+    //   in `crit:`
     "api",      // almost everything is an API
     "assorted", // dumping ground
     "atomic",   // vague
@@ -101,7 +101,7 @@ const BANNED_DIRECTORY_SEGMENTS: &[&str] = &[
     "basic",    // meaningless
     "behavior",
     "behaviors",
-    "core",     // catch-all: "the main part" says nothing the siblings do not
+    "core",      // catch-all: "the main part" says nothing the siblings do not
     "canonical", // describes "the textbook example of X", not a technique
     // A verdict about what was matched, not a description of it. A directory
     // names what its traits search for; whether that turns out to be fine is
@@ -160,8 +160,8 @@ const BANNED_DIRECTORY_SEGMENTS: &[&str] = &[
     "kinds",  // too vague
     "method", // everything is a method
     "methods",
-    "metrics",  // everything here is measured; put the count with the part it
-                //   counts and let the threshold live in the trait name
+    "metrics", // everything here is measured; put the count with the part it
+    //   counts and let the threshold live in the trait name
     "marker",  // says only that a trait is a marker
     "markers", // says only that traits are markers
     "misc",    // dumping ground
@@ -172,11 +172,11 @@ const BANNED_DIRECTORY_SEGMENTS: &[&str] = &[
     "other",   // dumping ground
     "operations",
     "operation",
-    "pattern",    // vague
-    "patterns",   // vague
-    "protocol",   // vague
-    "quality",    // a judgment, not a subject: "whose quality, by what standard?"
-                  //   an absent author field is an absent field, not low quality
+    "pattern",  // vague
+    "patterns", // vague
+    "protocol", // vague
+    "quality",  // a judgment, not a subject: "whose quality, by what standard?"
+    //   an absent author field is an absent field, not low quality
     "go-runtime", // platform
     "simple",     // meaningless
     "stuff",      // obviously bad
@@ -186,6 +186,50 @@ const BANNED_DIRECTORY_SEGMENTS: &[&str] = &[
     "suspicious", // dumping ground
     "technique",  // dumping ground
     "techniques", // dumping ground
+    // Same failure as `technique`, one word further up the kill chain: every
+    // child of an objective directory is a tactic, so the segment restates its
+    // parent instead of narrowing it, and in practice collects whatever did not
+    // fit the precise siblings. `credential-access/phishing/tactics/` held
+    // bundled login-page assets, CVV and ATM-PIN form fields, a Cordova webview
+    // wrapper and console poisoning -- four different subjects with existing
+    // homes in `lure/`, `credential/`, `kit/` and `anti-analysis/` -- while
+    // spending the last ML-visible level to say nothing about any of them.
+    "tactic",
+    "tactics",
+    // The same habit one step further: a rule that chains several steps is
+    // still named for the technique it performs, not for the fact that it has
+    // steps. Every stealer is a workflow, so `collection/stealer/workflow/`
+    // narrowed nothing and grew into that directory's largest child (143
+    // traits, more than the `tactics/` it sat beside) while collecting three
+    // named malware fingerprints that belong in `well-known/malware/`.
+    "workflow",
+    "workflows",
+    // An adjective partitions by value rather than by subject, so it splits
+    // facts that belong together and spends the visible level saying nothing --
+    // TAXONOMY names `sparse/`, `dense/` and `structural/` for this. The one
+    // `structural/` in the tree held a Mach-O stealer rule whose own
+    // description reads "Structural + Behavioral" and most of whose legs are
+    // behavioral, so the segment described half the rule's shape rather than
+    // what it detects.
+    //
+    // The noun `structure/` is deliberately NOT banned, and matching here is
+    // exact segment equality so it stays untouched: a PDF, an RTF and an ISO
+    // image each genuinely have a structure, and it is a part of the format in
+    // the same way `header/`, `section/` and `symbols/` are.
+    "structural",
+    "sparse",
+    "dense",
+    // Grab-bag wherever the siblings are techniques -- everything a stealer
+    // takes is data, so `collection/stealer/data/` collected a bounded file
+    // sweep, browser and wallet paths, an award scam and nine credential
+    // stealers, and `collection/archive/data/` held the `tar`/`gzip`/`hdiutil`
+    // commands that its own `create/` and `compress/` siblings are named for.
+    //
+    // It is a real subject in one position: as a peer domain classifier, beside
+    // `crypto/`, `network/`, `media/`, `finance/`. `well-known/lib/data/` names
+    // the data-layer libraries the way `lib/crypto/` names the cryptographic
+    // ones. Those cases are listed in BANNED_SEGMENT_EXCEPTIONS below.
+    "data",
     "text",
     "things", // obviously bad
     "tools",
@@ -207,6 +251,25 @@ const PARENT_DUPLICATE_EXCEPTIONS: &[&str] = &[
 
 /// Directories where a normally-vague segment has precise local meaning.
 const BANNED_SEGMENT_EXCEPTIONS: &[(&str, &str)] = &[
+    (
+        // A peer of `crypto/`, `communications/`, `fs/`, `mem/`, `process/`:
+        // the domain of encoding, serialization, parsing and databases, not
+        // "whatever a rule happens to touch".
+        "micro-behaviors/data",
+        "data",
+    ),
+    (
+        // A peer of `ai/`, `finance/`, `media/`, `enterprise/`: database and
+        // data-platform applications (postgresql, mysql-router).
+        "well-known/app/data",
+        "data",
+    ),
+    (
+        // A peer of `crypto/`, `network/`, `format/`, `datetime/`: data-layer
+        // libraries (redis, mysqlclient, postgrest-js).
+        "well-known/lib/data",
+        "data",
+    ),
     (
         "metadata/package/fields/types",
         "types", // package.json `types`/`typings` entry point field
@@ -1636,9 +1699,14 @@ pub(crate) fn find_parent_duplicate_segments(trait_dirs: &[String]) -> Vec<(Stri
                 }
 
                 // Product names naturally begin with their category noun (DataEase,
-                // MediaForge, BrowserStack). Exact and plural duplicates above
-                // still apply at this boundary; only prefix-abbreviation matching does not.
-                if segments.first() == Some(&"well-known") && segment_index == 2 {
+                // MediaForge, BrowserStack, `lint/linter`, `debug/debugpy`). Exact and
+                // plural duplicates above still apply at this boundary; only
+                // prefix-abbreviation matching does not.
+                //
+                // `>= 2` rather than `== 2`: a category may carry a grouping layer
+                // (`tool/development/lint/…`), which puts the product one level
+                // deeper without changing why its name echoes the category.
+                if segments.first() == Some(&"well-known") && segment_index >= 2 {
                     continue;
                 }
 
@@ -1650,7 +1718,15 @@ pub(crate) fn find_parent_duplicate_segments(trait_dirs: &[String]) -> Vec<(Stri
                 } else {
                     (&child, &parent)
                 };
-                if shorter.len() <= 5 && longer.starts_with(shorter) {
+                // A child that repeats its parent verbatim and then qualifies it
+                // -- `clipboard/clipboard-write`, `registry/registry-run-key` --
+                // stutters at any length: the path already said the noun, so the
+                // child should carry only what it adds (`clipboard/write`). The
+                // separator is what distinguishes this from a name that merely
+                // starts with the same letters (`browser/browserstack`), which is
+                // why the length-limited prefix rule below cannot see it.
+                let restates_parent = longer.starts_with(&format!("{shorter}-"));
+                if (restates_parent || shorter.len() <= 5) && longer.starts_with(shorter) {
                     // Check if this path is in the exceptions list
                     if !PARENT_DUPLICATE_EXCEPTIONS
                         .iter()
@@ -1665,6 +1741,71 @@ pub(crate) fn find_parent_duplicate_segments(trait_dirs: &[String]) -> Vec<(Stri
     }
 
     violations
+}
+
+/// Sibling directories whose names say the same thing twice.
+///
+/// Siblings answer one question, so two names built from one stem are usually
+/// that answer written twice. Two shapes carry the signal:
+///
+/// * **a refinement filed as a sibling** -- `encrypt/` beside `encrypt-dotnet/`,
+///   `script/` beside `script-dropper/`. The longer name spells the shorter one
+///   and then qualifies it, which is what a *child* is: it belongs under what it
+///   refines, not next to it. The separator is the discriminator -- without it,
+///   `cloud`/`cloudflare` and `libev`/`libevent` are coincidences, not restatements.
+/// * **two word-forms of one noun** -- `header`/`headers`, `check`/`checks`,
+///   `encode`/`encoded`, `resolve`/`resolver`. Nothing distinguishes them, so
+///   traits land in whichever the author saw first and both fill up.
+///
+/// Only same-parent siblings are compared, and `well-known/` is exempt: it names
+/// products, and a family legitimately shares a stem (`boto`/`boto3`).
+///
+/// Returns: `Vec<(parent, shorter, longer)>`
+#[must_use]
+pub(crate) fn find_sibling_name_restatement(
+    trait_dirs: &[String],
+) -> Vec<(String, String, String)> {
+    const WORD_FORMS: &[&str] = &["s", "es", "d", "ed", "ing", "r", "er"];
+
+    let mut by_parent: HashMap<&str, Vec<&str>> = HashMap::new();
+    for dir in trait_dirs {
+        if let Some(idx) = dir.rfind('/') {
+            by_parent
+                .entry(&dir[..idx])
+                .or_default()
+                .push(&dir[idx + 1..]);
+        }
+    }
+
+    let mut out = Vec::new();
+    for (parent, mut names) in by_parent {
+        if parent.starts_with("well-known") {
+            continue;
+        }
+        names.sort_unstable();
+        names.dedup();
+        for i in 0..names.len() {
+            for j in (i + 1)..names.len() {
+                let (short, long) = if names[i].len() <= names[j].len() {
+                    (names[i], names[j])
+                } else {
+                    (names[j], names[i])
+                };
+                if short.len() < 4 {
+                    continue;
+                }
+                let restates = long.starts_with(&format!("{short}-"))
+                    || long
+                        .strip_prefix(short)
+                        .is_some_and(|tail| WORD_FORMS.contains(&tail));
+                if restates {
+                    out.push((parent.to_string(), short.to_string(), long.to_string()));
+                }
+            }
+        }
+    }
+    out.sort();
+    out
 }
 
 /// Find directories with too many traits (suggests need for subdirectories).
@@ -2350,7 +2491,7 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     // C2 infrastructure indicators (IPs, domains, ports, tunnels) appear in any file
     "text:objectives/command-and-control/infrastructure/",
     // HTTP header names and values appear in binaries, scripts, and documents
-    "text:micro-behaviors/communications/http/headers/",
+    "text:micro-behaviors/communications/http/header/",
     // Credential access patterns (passwords, tokens, keys, wallets) appear in any file
     "text:objectives/credential-access/",
     // Filesystem path strings (/etc/passwd, ~/.aws/credentials, %APPDATA%\…) are
@@ -2431,7 +2572,7 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     // launches a payload — so the chmod-executable atoms scan broadly.
     "text:micro-behaviors/fs/chmod/executable/",
     // "Code generated … DO NOT EDIT" markers appear in generated code of every language.
-    "text:metadata/lang/source/generated.yaml",
+    "text:metadata/lang/generated/generated.yaml",
     // The Racket language classifier matches `#lang racket` to identify the
     // language of otherwise-unknown files, so it must scan broadly.
     "text:metadata/lang/scripted/racket.yaml",
@@ -2470,6 +2611,7 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     // `__fixtures__/`) are detected inside package archives of every ecosystem,
     // so these path matchers legitimately span the archive family.
     "path:metadata/package/testing/presence/harness/",
+    "path:metadata/package/testing/presence/path/",
     // Test-path / embedded-runtime FP-suppression: excluding `…/test/…` and
     // `jruby-complete.jar!…` paths from obfuscation flags applies across every
     // code/archive type the obfuscation composites run on.
@@ -2863,4 +3005,45 @@ mod parent_duplicate_tests {
         ]);
         assert!(find_parent_duplicate_segments(&input).is_empty());
     }
+}
+
+/// Find trait directories whose path segments are the same set in a different
+/// order — `fs/write/file/direct` beside `fs/file/write/direct`.
+///
+/// Independent dimensions (the action, the thing acted on, the manner) have no
+/// inherent order, so nesting them lets the same subject be filed two ways.
+/// Nobody notices, because each path reads correctly on its own; the traits
+/// then diverge in two places that no duplicate check compares, since their
+/// matchers are genuinely different. Naming the collision is the only cheap
+/// way to catch it — see the orthogonality rule in TAXONOMY.md.
+///
+/// Returns `(path_a, path_b)` pairs, each reported once.
+#[must_use]
+pub(crate) fn find_permuted_directory_paths(trait_dirs: &[String]) -> Vec<(String, String)> {
+    use std::collections::{BTreeSet, HashMap};
+
+    let mut by_segments: HashMap<BTreeSet<&str>, Vec<&String>> = HashMap::new();
+    for dir in trait_dirs {
+        let segments: BTreeSet<&str> = dir.split('/').collect();
+        // A one-segment path cannot be a permutation of anything else.
+        if segments.len() < 2 {
+            continue;
+        }
+        by_segments.entry(segments).or_default().push(dir);
+    }
+
+    let mut out = Vec::new();
+    for (_, mut paths) in by_segments {
+        if paths.len() < 2 {
+            continue;
+        }
+        paths.sort();
+        for (i, a) in paths.iter().enumerate() {
+            for b in &paths[i + 1..] {
+                out.push(((*a).clone(), (*b).clone()));
+            }
+        }
+    }
+    out.sort();
+    out
 }

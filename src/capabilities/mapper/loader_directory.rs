@@ -8,7 +8,8 @@ use crate::capabilities::error_formatting::enhance_yaml_error;
 use crate::capabilities::models::TraitMappings;
 use crate::capabilities::parsing::{apply_composite_defaults, apply_trait_defaults};
 use crate::capabilities::validation::{
-    BROAD_PLATFORM_ALLOWLIST, MAX_SUBDIRECTORIES_PER_DIRECTORY, MAX_TRAITS_PER_DIRECTORY,
+    BROAD_PLATFORM_ALLOWLIST, MAX_NOTABLE_DOWNGRADE_DIRECT, MAX_NOTABLE_DOWNGRADE_EXPANDED,
+    MAX_SUBDIRECTORIES_PER_DIRECTORY, MAX_TRAITS_PER_DIRECTORY, MISSING_CONDITIONS,
     ObjectivesWellknownViolation, autoprefix_trait_refs, check_basename_pattern_duplicates,
     check_exact_contained_by_substr, check_overlapping_regex_patterns,
     check_regex_alternative_subsets, check_regex_or_overlapping_exact, check_regex_should_be_exact,
@@ -16,45 +17,45 @@ use crate::capabilities::validation::{
     collect_trait_refs_from_trait_def, find_alternation_merge_candidates,
     find_ast_function_call_should_use_symbol, find_atomic_logic_duplicates,
     find_banned_directory_segments, find_bare_or_crit_escalations, find_benign_misplaced,
-    find_brittle_path_patterns, find_broad_filetype_traits, find_broad_platform_traits,
-    find_stale_filetype_allowlist_entries,
-    find_cap_obj_violations, find_cap_wellknown_violations, find_case_insensitive_overlap_issues,
-    MAX_NOTABLE_DOWNGRADE_DIRECT, MAX_NOTABLE_DOWNGRADE_EXPANDED,
-    find_broad_notable_downgrades, find_composite_only_wellknown_files, find_dead_downgrades,
-    find_directory_shadowed_refs, find_uncallable_symbol_matchers,
-    find_depth_violations,
+    find_brittle_path_patterns, find_broad_filetype_traits, find_broad_notable_downgrades,
+    find_broad_platform_traits, find_cap_obj_violations, find_cap_wellknown_violations,
+    find_case_insensitive_overlap_issues, find_composite_only_wellknown_files,
+    find_dead_downgrades, find_depth_violations, find_directory_shadowed_refs,
     find_duplicate_atomic_traits, find_duplicate_composite_rules, find_duplicate_inline_exclusions,
     find_duplicate_second_level_directories, find_empty_condition_clauses,
-    find_inline_content_duplicates, MISSING_CONDITIONS,
     find_exception_atomic_traits, find_exception_inline_conditions,
     find_exception_non_notable_members, find_exception_positive_refs, find_excessive_file_types,
     find_excessive_skip_conditions, find_for_only_duplicates, find_generic_wellknown_leaf_dirs,
     find_hex_binary_missing_section, find_hostile_cap_rules,
     find_hostile_composites_without_notable_leg, find_hostile_meta_rules,
     find_impossible_count_constraints, find_impossible_length_bounds, find_impossible_needs,
-    find_impossible_size_constraints, find_incompatible_regex_features, find_invalid_not_usage,
-    find_invalid_trait_ids, find_kv_exists_with_matcher, find_length_bounds_without_regex,
-    find_line_number, find_malware_subcategory_violations, find_many_directory_refs,
+    find_impossible_size_constraints, find_incompatible_regex_features,
+    find_inline_content_duplicates, find_invalid_not_usage, find_invalid_trait_ids,
+    find_kv_exists_with_matcher, find_length_bounds_without_regex, find_line_number,
+    find_literal_regex_patterns, find_literals_covered_by_regexes,
+    find_malware_subcategory_violations, find_many_directory_refs,
     find_memory_hungry_regex_patterns, find_meta_missing_section_filter,
     find_metadata_content_dirs, find_metadata_cross_tier_refs, find_missing_search_patterns,
     find_needs_without_any, find_needs_zero, find_non_capturing_groups,
     find_none_only_with_proximity, find_objectives_wellknown_violations, find_orphaned_components,
     find_overlapping_conditions, find_oversized_trait_directories, find_parent_duplicate_segments,
-    find_platform_named_directories, find_pure_alias_traits, find_pure_directory_alias_composites,
-    find_literal_regex_patterns, find_raw_should_use_text, find_redundant_any_refs,
-    find_redundant_explicit_defaults,
-    find_redundant_needs_one, find_redundant_unix_platforms, find_regex_literal_overlap_issues,
-    find_self_referencing_composites, find_self_referencing_traits, find_self_suppressing_traits,
-    find_short_pattern_warnings, find_should_use_defaults, find_single_item_clauses,
-    find_slow_regex_patterns, find_string_content_collisions, find_string_literal_should_use_text,
+    find_permuted_directory_paths, find_platform_named_directories, find_pure_alias_traits,
+    find_pure_directory_alias_composites, find_raw_should_use_text, find_redundant_any_refs,
+    find_redundant_explicit_defaults, find_redundant_needs_one, find_redundant_unix_platforms,
+    find_regex_literal_overlap_issues, find_self_referencing_composites,
+    find_self_referencing_traits, find_self_suppressing_traits, find_short_pattern_warnings,
+    find_should_use_defaults, find_sibling_name_restatement, find_single_item_clauses,
+    find_slow_regex_patterns, find_stale_filetype_allowlist_entries,
+    find_string_content_collisions, find_string_literal_should_use_text,
     find_string_pattern_duplicates, find_structural_regex_duplicates,
     find_suppression_only_building_blocks, find_too_short_patterns,
-    find_unanchored_wellknown_composites, find_uncompilable_ast_queries,
-    find_unreferenced_exceptions, find_wellknown_category_violations,
-    find_wellknown_missing_section_filter, find_wellknown_missing_size_filter,
-    find_wide_trait_directories, precalculate_all_composite_precisions,
-    validate_composite_trait_only, validate_directory_structure,
-    validate_hostile_composite_precision, validate_hostile_trait_precision,
+    find_unanchored_wellknown_composites, find_uncallable_symbol_matchers,
+    find_uncompilable_ast_queries, find_unreferenced_exceptions,
+    find_wellknown_category_violations, find_wellknown_missing_section_filter,
+    find_wellknown_missing_size_filter, find_wide_trait_directories,
+    precalculate_all_composite_precisions, validate_composite_trait_only,
+    validate_directory_structure, validate_hostile_composite_precision,
+    validate_hostile_trait_precision,
 };
 use crate::composite_rules::MetricsQuery;
 use crate::composite_rules::{
@@ -1283,6 +1284,11 @@ impl super::CapabilityMapper {
                     find_string_pattern_duplicates(&trait_definitions, warnings);
                 });
             }
+            if !crate::validation_controls::is_validator_disabled("literal-covered-by-regexes") {
+                warnings.collect_as("literal-covered-by-regexes", |warnings| {
+                    find_literals_covered_by_regexes(&trait_definitions, warnings);
+                });
+            }
             tracing::trace!("Step 1d completed in {:?}", step_start.elapsed());
 
             // Check for regex OR patterns overlapping with exact matches
@@ -1740,6 +1746,58 @@ impl super::CapabilityMapper {
                 ));
             }
 
+            // Two paths made of the same segments in a different order are the
+            // same subject filed twice; the traits then drift apart in places no
+            // duplicate check compares.
+            let permuted = find_permuted_directory_paths(&dir_list);
+            if !permuted.is_empty() {
+                eprintln!(
+                    "\n❌ ERROR: {} directory pairs use the same segments in a different order",
+                    permuted.len()
+                );
+                eprintln!(
+                    "   Independent dimensions have no inherent order, so nesting them lets one\n   \
+                     subject be filed two ways. Each path reads correctly alone, which is why\n   \
+                     this goes unnoticed until the two copies have diverged. Keep one:\n"
+                );
+                for (a, b) in &permuted {
+                    eprintln!("   {a}   vs   {b}");
+                }
+                eprintln!();
+                warnings.push(format!(
+                    "{} directory pairs are segment-order permutations of each other",
+                    permuted.len()
+                ));
+            }
+
+            // Two sibling names built from one stem are that name said twice:
+            // the level asks one question and both claim to answer it.
+            let restated = find_sibling_name_restatement(&dir_list);
+            if !restated.is_empty() {
+                eprintln!(
+                    "\n⚠️  WARNING: {} sibling directory pairs restate one name",
+                    restated.len()
+                );
+                eprintln!(
+                    "   Siblings answer one question. A name that spells another and then\n   \
+                     qualifies it is a child of it, not its peer; two word-forms of one noun\n   \
+                     are the same name twice. Nest the refinement, or merge the pair.\n   \
+                     Reported as a warning: this is a standing backlog, not a regression gate.\n"
+                );
+                for (parent, short, long) in &restated {
+                    eprintln!("   {parent}/  {short}  vs  {long}");
+                }
+                eprintln!();
+                warnings.push_count(
+                    "sibling-restate",
+                    restated.len(),
+                    format!(
+                        "{} sibling directory pairs restate one name",
+                        restated.len()
+                    ),
+                );
+            }
+
             // Forbid content/ directories under metadata/ (content describes
             // behavior/capability, never a neutral structural property).
             let metadata_content_dirs = find_metadata_content_dirs(&dir_list);
@@ -1988,8 +2046,7 @@ impl super::CapabilityMapper {
             // contains a call, so these match nothing -- silently, forever.
             let disable_uncallable =
                 crate::validation_controls::is_validator_disabled("uncallable-symbol-matcher");
-            let uncallable =
-                find_uncallable_symbol_matchers(&trait_definitions, &composite_rules);
+            let uncallable = find_uncallable_symbol_matchers(&trait_definitions, &composite_rules);
             if !disable_uncallable && !uncallable.is_empty() {
                 eprintln!(
                     "\n❌ ERROR: {} symbol matchers are not symbols",
@@ -2017,10 +2074,7 @@ impl super::CapabilityMapper {
                 eprintln!();
                 warnings.push_id(
                     "uncallable-symbol-matcher",
-                    format!(
-                        "{} symbol matchers are not symbols",
-                        uncallable.len()
-                    ),
+                    format!("{} symbol matchers are not symbols", uncallable.len()),
                 );
             }
 
@@ -3049,13 +3103,12 @@ impl super::CapabilityMapper {
             // usually a directory that was renamed out from under it, which
             // strips the exemption silently and surfaces as a pile of cap
             // violations far from the rename.
-            let stale_allow = if crate::validation_controls::is_validator_disabled(
-                "stale-filetype-allowlist",
-            ) {
-                Vec::new()
-            } else {
-                find_stale_filetype_allowlist_entries(&rule_source_files)
-            };
+            let stale_allow =
+                if crate::validation_controls::is_validator_disabled("stale-filetype-allowlist") {
+                    Vec::new()
+                } else {
+                    find_stale_filetype_allowlist_entries(&rule_source_files)
+                };
             if !stale_allow.is_empty() {
                 eprintln!(
                     "\n❌ ERROR: {} file-type allowlist entries match no trait",
@@ -3073,7 +3126,10 @@ impl super::CapabilityMapper {
                 eprintln!();
                 warnings.push_id(
                     "stale-filetype-allowlist",
-                    format!("{} file-type allowlist entries match no trait", stale_allow.len()),
+                    format!(
+                        "{} file-type allowlist entries match no trait",
+                        stale_allow.len()
+                    ),
                 );
             }
 
@@ -3596,8 +3652,7 @@ impl super::CapabilityMapper {
             // trait, or repeated inline across files. Invisible to every other
             // duplicate check, so a literal can be named once and inlined again
             // with nothing noticing the two must move together.
-            let inline_dups =
-                find_inline_content_duplicates(&trait_definitions, &composite_rules);
+            let inline_dups = find_inline_content_duplicates(&trait_definitions, &composite_rules);
             if !inline_dups.is_empty() {
                 eprintln!(
                     "\n❌ ERROR: {} inline content matchers duplicate an existing matcher",

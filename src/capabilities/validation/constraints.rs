@@ -1093,9 +1093,9 @@ fn count_concrete_hex_bytes(pattern: &str) -> usize {
             return false;
         };
         !inner.is_empty()
-            && inner.split('|').all(|b| {
-                b.len() == 2 && b.chars().all(|c| c.is_ascii_hexdigit() || c == '?')
-            })
+            && inner
+                .split('|')
+                .all(|b| b.len() == 2 && b.chars().all(|c| c.is_ascii_hexdigit() || c == '?'))
     }
 
     pattern

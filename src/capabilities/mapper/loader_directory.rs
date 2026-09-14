@@ -4538,13 +4538,13 @@ impl super::CapabilityMapper {
                     "   Why: the ML pipeline sees directory structure, not trait IDs; broad directories hide shared behavior."
                 );
                 eprintln!(
-                    "   Split by language/platform-neutral technique so similar behavior groups across implementations."
+                    "   First audit this directory for duplicate or redundant traits; remove or consolidate those that do not add distinct signal."
                 );
                 eprintln!(
-                    "   Use platform directories only when the technique itself is platform-specific."
+                    "   Then reorganize the remaining traits into meaningful subdirectories only when each child adds precision under TAXONOMY.md."
                 );
                 eprintln!(
-                    "   Keep depth reasonable; prefer one meaningful subdirectory level over a deep taxonomy.\n"
+                    "   Merely moving the same broad set to another location is not a fix; keep splits technique-based, platform-neutral where possible, and within depth/leaf caps.\n"
                 );
                 for (dir_path, count) in &oversized_dirs {
                     eprintln!("   {}: {} traits", dir_path, count);
@@ -4553,7 +4553,7 @@ impl super::CapabilityMapper {
                 warnings.push_id(
                     "oversized-dir",
                     format!(
-                        "{} directories exceed {} traits (split by portable technique; keep depth reasonable)",
+                        "{} directories exceed {} traits (audit duplicates, then reorganize only into TAXONOMY.md-precise subdirectories; relocation alone is not a fix)",
                         oversized_dirs.len(),
                         MAX_TRAITS_PER_DIRECTORY
                     ),

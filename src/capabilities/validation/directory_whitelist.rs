@@ -258,13 +258,15 @@ const ALLOWED_MB_COMMUNICATIONS: &[&str] = &[
     "icmp",
     "ip",
     "ipc",
+    "mcp",       // Model Context Protocol (stdio and HTTP transports)
     "messaging", // Chat/bot messaging-platform send APIs (sendMessage, etc.)
     "modbus",    // Modbus industrial control protocol          (TCP 502)
     "nats",      // NATS pub/sub messaging                      (TCP 4222)
     "opcua",     // OPC UA industrial interoperability          (TCP 4840)
     "profinet",  // PROFINET industrial Ethernet                (RT/IRT)
     "proxy",
-    "s7", // Siemens S7comm/ISO-TSAP                     (TCP 102)
+    "rpc", // Remote procedure-call protocols, independent of local IPC
+    "s7",  // Siemens S7comm/ISO-TSAP                     (TCP 102)
     "socket",
     "ssh",
     "url",
@@ -293,6 +295,7 @@ const ALLOWED_MB_DATA: &[&str] = &[
     "crypto",
     "db",
     "decode",
+    "decompress",
     "dns",
     "embedded",
     "encode",

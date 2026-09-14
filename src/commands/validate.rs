@@ -626,6 +626,16 @@ fn evaluate(
                             {
                                 return false;
                             }
+                            // Compiler/toolchain identity is a neutral file
+                            // fact. A no-op binary can still be meaningfully
+                            // identified as Go-compiled; TAXONOMY.md treats
+                            // program identity as notable, so this is not a
+                            // false-positive capability finding.
+                            if f.id.starts_with("metadata/lang/compiler/")
+                                && f.crit == Criticality::Notable
+                            {
+                                return false;
+                            }
                             matches!(
                                 f.crit,
                                 Criticality::Notable

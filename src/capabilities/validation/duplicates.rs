@@ -4154,6 +4154,29 @@ pub(crate) fn find_atomic_logic_duplicates(
                     continue;
                 }
 
+                // Quantitative filters define the observation's precision. A broad
+                // matcher and a thresholded matcher may overlap in their accepted
+                // values, but they are intentionally different features (for example,
+                // "contains a PE resource" versus "contains at least three PE
+                // resources"). Forcing those into one trait plus a downgrade would
+                // erase the threshold and reduce both analyst and ML signal. Only
+                // compare metadata when the complete quantitative scope is identical.
+                // `count_min: 1` is the default and carries no additional precision,
+                // so normalize that spelling before comparing scopes.
+                let a_count_min = (a.count_min != Some(1)).then_some(a.count_min).flatten();
+                let b_count_min = (b.count_min != Some(1)).then_some(b.count_min).flatten();
+                let bands_differ = a.size_min != b.size_min
+                    || a.size_max != b.size_max
+                    || a_count_min != b_count_min
+                    || a.count_max != b.count_max
+                    || a.per_kb_min != b.per_kb_min
+                    || a.per_kb_max != b.per_kb_max
+                    || a.entropy_min != b.entropy_min
+                    || a.entropy_max != b.entropy_max;
+                if bands_differ {
+                    continue;
+                }
+
                 let crit_differs = !criticalities_equivalent(a.crit, b.crit);
                 // A `not:` difference with a different `crit:` is a deliberate
                 // specialization — a generic matcher beside a narrowed one that
@@ -4168,18 +4191,6 @@ pub(crate) fn find_atomic_logic_duplicates(
                 let unless_differs = format!("{:?}", a.unless) != format!("{:?}", b.unless);
                 let downgrade_differs =
                     format!("{:?}", a.downgrade) != format!("{:?}", b.downgrade);
-                // Overlapping-but-unequal bands are themselves a reason to report:
-                // the same matcher split across size/count/density/entropy windows
-                // is one detection, expressible as a single trait plus `downgrade:`.
-                let bands_differ = a.size_min != b.size_min
-                    || a.size_max != b.size_max
-                    || a.count_min != b.count_min
-                    || a.count_max != b.count_max
-                    || a.per_kb_min != b.per_kb_min
-                    || a.per_kb_max != b.per_kb_max
-                    || a.entropy_min != b.entropy_min
-                    || a.entropy_max != b.entropy_max;
-
                 if !crit_differs
                     && !not_differs
                     && !conf_differs

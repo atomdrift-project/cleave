@@ -355,9 +355,9 @@ fn flags_to_permissions(flags: &[String]) -> Option<String> {
         .iter()
         .any(|f| f == "readable" || f == "read" || f == "alloc");
     let w = flags.iter().any(|f| f == "writable" || f == "write");
-    let x = flags
-        .iter()
-        .any(|f| f == "executable" || f == "execinstr" || f == "code");
+    // `code` describes section contents (PE IMAGE_SCN_CNT_CODE), not loader
+    // protection. Only explicit execute flags contribute the x permission.
+    let x = flags.iter().any(|f| f == "executable" || f == "execinstr");
     Some(format!(
         "{}{}{}",
         if r { 'r' } else { '-' },
@@ -371,6 +371,29 @@ mod tests {
     #![allow(clippy::expect_used, clippy::panic)]
 
     use super::*;
+
+    #[test]
+    fn pe_code_flag_does_not_imply_execute_permission() {
+        let flags = vec![
+            "code".to_string(),
+            "readable".to_string(),
+            "writable".to_string(),
+        ];
+
+        assert_eq!(flags_to_permissions(&flags).as_deref(), Some("rw-"));
+    }
+
+    #[test]
+    fn explicit_execute_flags_project_to_execute_permission() {
+        assert_eq!(
+            flags_to_permissions(&["readable".to_string(), "executable".to_string()]).as_deref(),
+            Some("r-x")
+        );
+        assert_eq!(
+            flags_to_permissions(&["alloc".to_string(), "execinstr".to_string()]).as_deref(),
+            Some("r-x")
+        );
+    }
 
     #[test]
     fn imports_include_owner_qualified_jvm_method_refs() {

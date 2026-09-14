@@ -1722,7 +1722,7 @@ dependencies = [
 [[package]]
 name = "filefacts"
 version = "1.7.0"
-source = "git+https://github.com/atomdrift-project/filefacts.git#9871ac76516d6007a807447ceaca7b9380ce6f80"
+source = "git+https://github.com/atomdrift-project/filefacts.git#0f132783f5d624243ec945401b0af74f80aed652"
 dependencies = [
  "aho-corasick",
  "cfb 0.10.0",
@@ -3413,9 +3413,9 @@ checksum = "439ee305def115ba05938db6eb1644ff94165c5ab5e9420d1c1bcedbba909391"
 
 [[package]]
 name = "ppmd-rust"
-version = "1.4.1"
+version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e9219bcb9d7aca6b2f63c83cf100cf78bcd619ac46e6ecbd0dd90869a39345d"
+checksum = "196a7c80b9a7652aba7cc070827516c2abe4ccdf53d128e1944003cf5726cff1"
 
 [[package]]
 name = "ppv-lite86"
@@ -4671,7 +4671,7 @@ dependencies = [
 [[package]]
 name = "stng"
 version = "1.11.0"
-source = "git+https://github.com/atomdrift-project/stng.git#2a56e8b922c7954c232c847037e68964b060007b"
+source = "git+https://github.com/atomdrift-project/stng.git#0f2d2ddd21d3e73a718edfde07ea8e3bb75d5583"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -5328,7 +5328,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-clojure"
 version = "0.1.0"
-source = "git+https://github.com/atomdrift-project/filefacts.git#9871ac76516d6007a807447ceaca7b9380ce6f80"
+source = "git+https://github.com/atomdrift-project/filefacts.git#0f132783f5d624243ec945401b0af74f80aed652"
 dependencies = [
  "cc",
  "tree-sitter",

@@ -115,7 +115,7 @@ mod precision_tests {
 mod duplicate_tests {
     use super::super::duplicates::*;
     use super::super::helpers::extract_tier;
-    use crate::composite_rules::condition::EncodingSpec;
+    use crate::composite_rules::condition::{ArgFilter, EncodingSpec, SymbolKind};
     use crate::composite_rules::{
         Arch, Condition, EncodedQuery, FileType, LiteralQuery, PathQuery, Platform, RawQuery,
         SymbolQuery, TextQuery, TraitDefinition,
@@ -410,6 +410,129 @@ mod duplicate_tests {
                 args: None,
                 alias: None,
                 not: None,
+            }),
+            for_types,
+            file_path,
+        )
+    }
+
+    fn create_symbol_exact_with_kind(
+        id: &str,
+        pattern: &str,
+        kind: SymbolKind,
+        for_types: Vec<FileType>,
+        file_path: &str,
+    ) -> TraitDefinition {
+        create_test_trait(
+            id,
+            Condition::Symbol(SymbolQuery {
+                exact: Some(pattern.to_string()),
+                substr: None,
+                regex: None,
+                platforms: None,
+                is_check: None,
+                kind: Some(kind),
+                arg: None,
+                args: None,
+                alias: None,
+                not: None,
+            }),
+            for_types,
+            file_path,
+        )
+    }
+
+    fn create_symbol_exact_with_arg(
+        id: &str,
+        pattern: &str,
+        arg: &str,
+        for_types: Vec<FileType>,
+        file_path: &str,
+    ) -> TraitDefinition {
+        create_test_trait(
+            id,
+            Condition::Symbol(SymbolQuery {
+                exact: Some(pattern.to_string()),
+                substr: None,
+                regex: None,
+                platforms: None,
+                is_check: None,
+                kind: Some(SymbolKind::Call),
+                arg: Some(ArgFilter {
+                    exact: Some(arg.to_string()),
+                    ..Default::default()
+                }),
+                args: None,
+                alias: None,
+                not: None,
+            }),
+            for_types,
+            file_path,
+        )
+    }
+
+    fn create_text_regex_trait(
+        id: &str,
+        pattern: &str,
+        for_types: Vec<FileType>,
+        file_path: &str,
+    ) -> TraitDefinition {
+        create_test_trait(
+            id,
+            Condition::Text(TextQuery {
+                regex: Some(pattern.to_string()),
+                ..Default::default()
+            }),
+            for_types,
+            file_path,
+        )
+    }
+
+    fn create_string_literal_regex(
+        id: &str,
+        pattern: &str,
+        for_types: Vec<FileType>,
+        file_path: &str,
+    ) -> TraitDefinition {
+        create_test_trait(
+            id,
+            Condition::Literal(LiteralQuery {
+                regex: Some(pattern.to_string()),
+                ..Default::default()
+            }),
+            for_types,
+            file_path,
+        )
+    }
+
+    fn create_text_word(
+        id: &str,
+        pattern: &str,
+        for_types: Vec<FileType>,
+        file_path: &str,
+    ) -> TraitDefinition {
+        create_test_trait(
+            id,
+            Condition::Text(TextQuery {
+                word: Some(pattern.to_string()),
+                ..Default::default()
+            }),
+            for_types,
+            file_path,
+        )
+    }
+
+    fn create_text_substr(
+        id: &str,
+        pattern: &str,
+        for_types: Vec<FileType>,
+        file_path: &str,
+    ) -> TraitDefinition {
+        create_test_trait(
+            id,
+            Condition::Text(TextQuery {
+                substr: Some(pattern.to_string()),
+                ..Default::default()
             }),
             for_types,
             file_path,
@@ -819,6 +942,290 @@ mod duplicate_tests {
 
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("I want to play a game"));
+    }
+
+    /// A kinded symbol and a text matcher for the same API name are the same
+    /// evidence read off two surfaces. Keying the symbol as
+    /// `<literal>#kind:Call` used to file it in a bucket no text matcher could
+    /// reach, so this pair -- by far the most common duplicate shape in the
+    /// tree -- went unreported.
+    #[test]
+    fn test_cross_type_flags_kinded_symbol_against_text_word() {
+        let symbol = create_symbol_exact_with_kind(
+            "micro-behaviors/fs/write/file/direct::php-file-put-contents",
+            "file_put_contents",
+            SymbolKind::Call,
+            vec![FileType::Php],
+            "micro-behaviors/fs/write/file/direct/write-php.yaml",
+        );
+        let text = create_text_word(
+            "micro-behaviors/fs/write/file/direct::file-put-contents",
+            "file_put_contents",
+            vec![FileType::Php],
+            "micro-behaviors/fs/write/file/direct/php.yaml",
+        );
+
+        let mut warnings = Vec::new();
+        check_same_string_different_types(&[symbol, text], &mut warnings);
+
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("file_put_contents"));
+        // The advice must preserve both surfaces: a stripped binary keeps the
+        // string and loses the symbol, and a source file does the reverse.
+        assert!(warnings[0].contains("`any:` composite"));
+    }
+
+    /// `word` and `exact` both demand the whole token, so they are the same
+    /// question asked on two surfaces even though they are spelled differently.
+    #[test]
+    fn test_cross_type_flags_word_against_exact() {
+        let symbol = create_symbol_exact(
+            "micro-behaviors/communications/http/client/winhttp::winhttp-connect",
+            "WinHttpConnect",
+            vec![FileType::Pe],
+            "micro-behaviors/communications/http/client/winhttp/traits.yaml",
+        );
+        let text = create_text_word(
+            "micro-behaviors/communications/http/client/winhttp::winhttp-connect-api-name",
+            "WinHttpConnect",
+            vec![FileType::Pe],
+            "micro-behaviors/communications/http/client/winhttp/traits.yaml",
+        );
+
+        let mut warnings = Vec::new();
+        check_same_string_different_types(&[symbol, text], &mut warnings);
+
+        assert_eq!(warnings.len(), 1);
+    }
+
+    /// Exporting an API is the opposite of calling it: the file implements the
+    /// Windows surface rather than abusing it, which is exactly what
+    /// metadata/binary/vendor distinguishes. Pairing an export with a text
+    /// reference would call a discriminator a duplicate of what it discriminates.
+    #[test]
+    fn test_cross_type_keeps_export_against_text_reference() {
+        let export = create_symbol_exact_with_kind(
+            "metadata/binary/vendor::exports-mem-map-inject-api--virtualallocex",
+            "VirtualAllocEx",
+            SymbolKind::Export,
+            vec![FileType::Pe],
+            "metadata/binary/vendor/wine.yaml",
+        );
+        let text = create_text_word(
+            "micro-behaviors/mem/alloc/remote::virtual-alloc-ex-text",
+            "VirtualAllocEx",
+            vec![FileType::Pe],
+            "micro-behaviors/mem/alloc/remote/traits.yaml",
+        );
+
+        let mut warnings = Vec::new();
+        check_same_string_different_types(&[export, text], &mut warnings);
+
+        assert_eq!(warnings.len(), 0);
+    }
+
+    /// Four same-context, same-tier regexes matching one literal phrase is the
+    /// shape this reports: the phrase is covered several times over.
+    #[test]
+    fn test_literal_covered_by_four_regexes() {
+        let mut defs = vec![create_text_word(
+            "micro-behaviors/os/module/load::get-proc-address-reference",
+            "GetProcAddress",
+            vec![FileType::Pe],
+            "micro-behaviors/os/module/load/windows-loader.yaml",
+        )];
+        for (i, pat) in [
+            r"(?m)^GetProcAddress$",
+            r"(?i)getprocaddress",
+            r"\bGetProcAddress\b",
+            r"Get(Proc|Module)Address",
+        ]
+        .iter()
+        .enumerate()
+        {
+            defs.push(create_text_regex_trait(
+                &format!("objectives/evasion/dynamic::resolver-{i}"),
+                pat,
+                vec![FileType::Pe],
+                "objectives/evasion/dynamic/traits.yaml",
+            ));
+        }
+
+        let mut warnings = Vec::new();
+        find_literals_covered_by_regexes(&defs, &mut warnings);
+
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("GetProcAddress"));
+        assert!(warnings[0].contains("consolidate"));
+    }
+
+    /// Three is under the threshold: a couple of rules sharing a token is
+    /// ordinary, and reporting it would bury the real cases.
+    #[test]
+    fn test_literal_covered_by_three_regexes_is_quiet() {
+        let mut defs = vec![create_text_word(
+            "micro-behaviors/os/module/load::get-proc-address-reference",
+            "GetProcAddress",
+            vec![FileType::Pe],
+            "micro-behaviors/os/module/load/windows-loader.yaml",
+        )];
+        for (i, pat) in [
+            r"GetProcAddress\s*\(",
+            r"(?i)getprocaddress",
+            r"\bGetProcAddress\b",
+        ]
+        .iter()
+        .enumerate()
+        {
+            defs.push(create_text_regex_trait(
+                &format!("objectives/evasion/dynamic::resolver-{i}"),
+                pat,
+                vec![FileType::Pe],
+                "objectives/evasion/dynamic/traits.yaml",
+            ));
+        }
+
+        let mut warnings = Vec::new();
+        find_literals_covered_by_regexes(&defs, &mut warnings);
+
+        assert!(warnings.is_empty(), "{warnings:?}");
+    }
+
+    /// A regex that needs context the phrase does not carry is not counted, even
+    /// though both rules fire on a real file. Counting it would mean guessing at
+    /// what surrounds the phrase.
+    #[test]
+    fn test_literal_coverage_ignores_regexes_needing_context() {
+        let mut defs = vec![create_text_word(
+            "micro-behaviors/os/module/load::get-proc-address-reference",
+            "GetProcAddress",
+            vec![FileType::Pe],
+            "micro-behaviors/os/module/load/windows-loader.yaml",
+        )];
+        for (i, pat) in [
+            r"GetProcAddress\s*\(",
+            r"GetProcAddress[^\n]{0,80}LoadLibrary",
+            r"LoadLibrary[^\n]{0,80}GetProcAddress",
+            r"\bGetProcAddress\b\s*=\s*\w+",
+        ]
+        .iter()
+        .enumerate()
+        {
+            defs.push(create_text_regex_trait(
+                &format!("objectives/evasion/dynamic::resolver-{i}"),
+                pat,
+                vec![FileType::Pe],
+                "objectives/evasion/dynamic/traits.yaml",
+            ));
+        }
+
+        let mut warnings = Vec::new();
+        find_literals_covered_by_regexes(&defs, &mut warnings);
+
+        assert!(warnings.is_empty(), "{warnings:?}");
+    }
+
+    /// A literal `#` inside a pattern is not a symbol discriminator. Splitting
+    /// on the first one truncated these regexes to a shared `[?&]\w{1,24}=[^&`
+    /// prefix and filed four unrelated injection patterns in one bucket.
+    #[test]
+    fn test_cross_type_keeps_regexes_sharing_only_a_prefix() {
+        let text = create_text_regex_trait(
+            "objectives/execution/exploit/http-command-injection::url-pipe-interpreter-raw",
+            r#"(?i)[?&]\w{1,24}=[^&#\r\n"]{0,48}\| *(sh|bash)\b"#,
+            vec![FileType::Python],
+            "objectives/execution/exploit/http-command-injection/remote-query.yaml",
+        );
+        let literal = create_string_literal_regex(
+            "objectives/execution/exploit/http-command-injection::url-pipe-command-encoded",
+            r#"(?i)[?&]\w{1,24}=[^&#]{0,48}%7c(%20|\+)*(id|whoami)\b"#,
+            vec![FileType::Python],
+            "objectives/execution/exploit/http-command-injection/remote-query.yaml",
+        );
+
+        let mut warnings = Vec::new();
+        check_same_string_different_types(&[text, literal], &mut warnings);
+
+        assert_eq!(warnings.len(), 0);
+    }
+
+    /// A text matcher that stands down wherever the symbol matcher fires is the
+    /// runtime-resolution case: the API name is present as a string but the
+    /// binary does not import it. That is distinct evidence, not a second
+    /// reading of the same fact.
+    #[test]
+    fn test_cross_type_keeps_pair_where_one_suppresses_the_other() {
+        let symbol = create_symbol_exact(
+            "micro-behaviors/communications/http/client/winhttp::winhttp-connect",
+            "WinHttpConnect",
+            vec![FileType::Pe],
+            "micro-behaviors/communications/http/client/winhttp/traits.yaml",
+        );
+        let mut text = create_text_word(
+            "micro-behaviors/communications/http/client/winhttp::winhttp-connect-api-name",
+            "WinHttpConnect",
+            vec![FileType::Pe],
+            "micro-behaviors/communications/http/client/winhttp/traits.yaml",
+        );
+        text.unless = Some(vec![Condition::Trait {
+            id: "winhttp-connect".to_string(),
+        }]);
+
+        let mut warnings = Vec::new();
+        check_same_string_different_types(&[symbol, text], &mut warnings);
+
+        assert_eq!(warnings.len(), 0);
+    }
+
+    /// `substr` reaches inside longer tokens (`WriteFile` inside
+    /// `WriteFileEx`), so pairing it with a whole-token matcher would call two
+    /// different reaches a duplicate and invite the author to drop the broader
+    /// one -- a loss of detection, which is the opposite of the point.
+    #[test]
+    fn test_cross_type_keeps_substr_against_whole_token_match() {
+        let symbol = create_symbol_exact(
+            "micro-behaviors/fs/write/file/direct::write-file",
+            "WriteFile",
+            vec![FileType::Pe],
+            "micro-behaviors/fs/write/file/direct/file-write.yaml",
+        );
+        let text = create_text_substr(
+            "micro-behaviors/fs/write/file/direct::native-binary-write-file-text",
+            "WriteFile",
+            vec![FileType::Pe],
+            "micro-behaviors/fs/write/file/direct/go-binary.yaml",
+        );
+
+        let mut warnings = Vec::new();
+        check_same_string_different_types(&[symbol, text], &mut warnings);
+
+        assert_eq!(warnings.len(), 0);
+    }
+
+    /// An `arg:` filter changes which fact the token names: `require('fs')` is
+    /// not `require('dns')`, and a text matcher for the bare token is neither
+    /// of them. Only `kind:` -- which narrows where the token was found, not
+    /// what it means -- may be dropped when comparing across surfaces.
+    #[test]
+    fn test_cross_type_keeps_arg_discriminated_symbol_against_text() {
+        let symbol = create_symbol_exact_with_arg(
+            "micro-behaviors/process/create/spawn::require-child-process",
+            "require",
+            "child_process",
+            vec![FileType::JavaScript],
+            "micro-behaviors/process/create/spawn/javascript.yaml",
+        );
+        let text = create_text_word(
+            "metadata/lang/scripted::js-require-keyword",
+            "require",
+            vec![FileType::JavaScript],
+            "metadata/lang/scripted/javascript.yaml",
+        );
+
+        let mut warnings = Vec::new();
+        check_same_string_different_types(&[symbol, text], &mut warnings);
+
+        assert_eq!(warnings.len(), 0);
     }
 
     #[test]
@@ -2805,6 +3212,115 @@ mod duplicate_tests {
         assert!(duplicates[0].2.contains("crit:"));
     }
 
+    /// `not:` is a carve-out, not the assertion — two traits that match the same
+    /// thing at the same criticality are one detection however their exclusions
+    /// are spelled, so the pair must still be reported.
+    #[test]
+    fn test_atomic_logic_duplicates_not_differs_at_same_crit_is_reported() {
+        use crate::capabilities::validation::duplicates::find_atomic_logic_duplicates;
+        use crate::composite_rules::condition::NotException;
+
+        let matcher = || {
+            Condition::Raw(RawQuery {
+                length_min: None,
+                length_max: None,
+                exact: Some("shared_pattern".to_string()),
+                substr: None,
+                regex: None,
+                word: None,
+                case_insensitive: false,
+                is_check: None,
+                section: None,
+                offset: None,
+                offset_range: None,
+                section_offset: None,
+                section_offset_range: None,
+                not: None,
+            })
+        };
+        let mut a = create_test_trait_with_conf_crit(
+            "a",
+            matcher(),
+            vec![FileType::Elf],
+            "a.yaml",
+            1.0,
+            crate::types::Criticality::Notable,
+        );
+        let mut b = create_test_trait_with_conf_crit(
+            "b",
+            matcher(),
+            vec![FileType::Elf],
+            "b.yaml",
+            1.0,
+            crate::types::Criticality::Notable,
+        );
+        a.not = Some(vec![NotException::Shorthand("carve_out_one".to_string())]);
+        b.not = Some(vec![NotException::Shorthand("carve_out_two".to_string())]);
+
+        let duplicates = find_atomic_logic_duplicates(&[a, b]);
+        assert_eq!(
+            duplicates.len(),
+            1,
+            "same matcher + same crit is one detection"
+        );
+        assert!(
+            duplicates[0].2.contains("not: differs"),
+            "the report must say what differs: {}",
+            duplicates[0].2
+        );
+    }
+
+    /// The opposite case: a generic matcher beside one narrowed by `not:` that
+    /// says something stronger is a deliberate specialization, and the differing
+    /// `crit:` is what marks it as intentional. Reporting it would be noise.
+    #[test]
+    fn test_atomic_logic_duplicates_not_differs_at_different_crit_is_quiet() {
+        use crate::capabilities::validation::duplicates::find_atomic_logic_duplicates;
+        use crate::composite_rules::condition::NotException;
+
+        let matcher = || {
+            Condition::Raw(RawQuery {
+                length_min: None,
+                length_max: None,
+                exact: Some("ip_pattern".to_string()),
+                substr: None,
+                regex: None,
+                word: None,
+                case_insensitive: false,
+                is_check: None,
+                section: None,
+                offset: None,
+                offset_range: None,
+                section_offset: None,
+                section_offset_range: None,
+                not: None,
+            })
+        };
+        let generic = create_test_trait_with_conf_crit(
+            "any-ip",
+            matcher(),
+            vec![FileType::Elf],
+            "generic.yaml",
+            1.0,
+            crate::types::Criticality::Baseline,
+        );
+        let mut external_only = create_test_trait_with_conf_crit(
+            "external-ip",
+            matcher(),
+            vec![FileType::Elf],
+            "external.yaml",
+            1.0,
+            crate::types::Criticality::Notable,
+        );
+        external_only.not = Some(vec![NotException::Shorthand("10.".to_string())]);
+
+        let duplicates = find_atomic_logic_duplicates(&[generic, external_only]);
+        assert!(
+            duplicates.is_empty(),
+            "a narrowed matcher at a higher crit is a specialization, not a duplicate: {duplicates:?}"
+        );
+    }
+
     #[test]
     fn test_atomic_logic_duplicates_same_logic_different_conf() {
         use crate::capabilities::validation::duplicates::find_atomic_logic_duplicates;
@@ -4226,9 +4742,8 @@ mod taxonomy_tests {
 #[cfg(test)]
 mod constraint_tests {
     use crate::capabilities::validation::constraints::{
-        find_empty_condition_clauses, find_needs_zero, find_none_only_with_proximity,
-        MISSING_CONDITIONS,
-        find_pure_alias_traits, find_too_short_patterns,
+        MISSING_CONDITIONS, find_empty_condition_clauses, find_needs_zero,
+        find_none_only_with_proximity, find_pure_alias_traits, find_too_short_patterns,
     };
     use crate::capabilities::validation::{
         find_many_directory_refs, find_pure_directory_alias_composites,
@@ -4393,7 +4908,7 @@ mod constraint_tests {
         })
     }
 
-    fn short_hex_trait(id: &str, pattern: &str, offset: Option<i64>) -> Condition {
+    fn short_hex_trait(pattern: &str, offset: Option<i64>) -> Condition {
         Condition::Hex(crate::composite_rules::condition::HexQuery {
             pattern: pattern.to_string(),
             not: None,
@@ -4409,11 +4924,8 @@ mod constraint_tests {
     fn short_hex_patterns_rejected_unpinned_and_allowed_pinned() {
         // Unpinned two-byte pattern is impossibly short; offset-pinned is fine.
         let traits = vec![
-            short_raw_trait("test/hex-unpinned", short_hex_trait("test/hex-unpinned", "5C ?? 44", None)),
-            short_raw_trait(
-                "test/hex-pinned",
-                short_hex_trait("test/hex-pinned", "5C ?? 44", Some(0)),
-            ),
+            short_raw_trait("test/hex-unpinned", short_hex_trait("5C ?? 44", None)),
+            short_raw_trait("test/hex-pinned", short_hex_trait("5C ?? 44", Some(0))),
         ];
         let violations = find_too_short_patterns(&traits);
         assert_eq!(violations.len(), 1);
@@ -4425,7 +4937,7 @@ mod constraint_tests {
         // (5C|5D) constrains a full byte, exactly like a nibble wildcard does.
         let traits = vec![short_raw_trait(
             "test/hex-alternation",
-            short_hex_trait("test/hex-alternation", "A3 (5C|5D) 19", None),
+            short_hex_trait("A3 (5C|5D) 19", None),
         )];
         assert!(
             find_too_short_patterns(&traits).is_empty(),
@@ -8253,7 +8765,10 @@ mod uncallable_symbol_matchers {
             "__import__.decompress",
             "s.replace.replace",
         ] {
-            assert!(!flagged(name), "{name:?} is a real symbol and must not flag");
+            assert!(
+                !flagged(name),
+                "{name:?} is a real symbol and must not flag"
+            );
         }
     }
 }
@@ -8314,6 +8829,9 @@ mod stale_filetype_allowlist {
         }
         let stale = find_stale_filetype_allowlist_entries(&sources);
         let skipped = skipped.expect("at least one entry");
-        assert!(stale.contains(&skipped), "the dropped prefix must be flagged");
+        assert!(
+            stale.contains(&skipped),
+            "the dropped prefix must be flagged"
+        );
     }
 }

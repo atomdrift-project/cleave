@@ -508,6 +508,13 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         fix: "Split by language/platform-neutral technique so ML can group similar behavior; use platform dirs only when the technique requires them.",
     },
     ValidatorSpec {
+        id: "sibling-restate",
+        category: ValidatorCategory::Policy,
+        display_id: "sibling-restate",
+        description: "Two sibling directories are one name said twice.",
+        fix: "Nest the refinement under what it refines, or merge the two word-forms into one directory.",
+    },
+    ValidatorSpec {
         id: "wide-dir",
         category: ValidatorCategory::Policy,
         display_id: "wide-dir",
@@ -534,6 +541,13 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         display_id: "dir-alias",
         description: "Composite is equivalent to a directory reference.",
         fix: "Delete the composite and reference the directory directly.",
+    },
+    ValidatorSpec {
+        id: "literal-covered-by-regexes",
+        category: ValidatorCategory::Dedup,
+        display_id: "lit-covered",
+        description: "Several same-tier regexes already match a literal phrase.",
+        fix: "Look for opportunities to consolidate the regular expressions and/or literals in a way that adheres to TAXONOMY.md",
     },
     ValidatorSpec {
         id: "duplicate-patterns",

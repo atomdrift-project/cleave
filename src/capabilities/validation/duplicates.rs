@@ -24,7 +24,7 @@ use crate::composite_rules::{
 };
 use crate::types::Criticality;
 use rustc_hash::{FxHashMap, FxHashSet};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::OnceLock;
 
 const RELAXED_DATA_TEXT_ALTERNATION_LIMIT: usize = 6;
@@ -395,11 +395,11 @@ pub(crate) fn find_inline_content_duplicates(
     type Occurrence = (String, &'static str, String, Vec<RuleFileType>);
     let mut seen: HashMap<(&'static str, &'static str, String), Vec<Occurrence>> = HashMap::new();
     let collect = |id: &str,
-                       file: &std::path::Path,
-                       clause: &'static str,
-                       for_types: &[RuleFileType],
-                       conds: &[Condition],
-                       seen: &mut HashMap<_, Vec<Occurrence>>| {
+                   file: &std::path::Path,
+                   clause: &'static str,
+                   for_types: &[RuleFileType],
+                   conds: &[Condition],
+                   seen: &mut HashMap<_, Vec<Occurrence>>| {
         for cond in conds {
             if content_condition_is_positional(cond) {
                 continue;
@@ -421,7 +421,11 @@ pub(crate) fn find_inline_content_duplicates(
             collect(&t.id, &t.defined_in, "unless", &t.r#for, u, &mut seen);
         }
         if let Some(d) = &t.downgrade {
-            for (clause, set) in [("downgrade", &d.any), ("downgrade", &d.all), ("downgrade", &d.none)] {
+            for (clause, set) in [
+                ("downgrade", &d.any),
+                ("downgrade", &d.all),
+                ("downgrade", &d.none),
+            ] {
                 if let Some(c) = set {
                     collect(&t.id, &t.defined_in, clause, &t.r#for, c, &mut seen);
                 }
@@ -433,7 +437,11 @@ pub(crate) fn find_inline_content_duplicates(
             collect(&r.id, &r.defined_in, "unless", &r.r#for, u, &mut seen);
         }
         if let Some(d) = &r.downgrade {
-            for (clause, set) in [("downgrade", &d.any), ("downgrade", &d.all), ("downgrade", &d.none)] {
+            for (clause, set) in [
+                ("downgrade", &d.any),
+                ("downgrade", &d.all),
+                ("downgrade", &d.none),
+            ] {
                 if let Some(c) = set {
                     collect(&r.id, &r.defined_in, clause, &r.r#for, c, &mut seen);
                 }
@@ -914,6 +922,27 @@ fn symbol_argument_discriminator(
     key
 }
 
+/// Whether a symbol discriminator changes which fact the literal names, rather
+/// than only which syntactic position it was found in.
+fn discriminator_narrows_the_fact(discriminator: &str) -> bool {
+    // `kind: export`/`forward` reverse the direction of the relationship: the
+    // file *provides* the API instead of calling it. A Wine or ReactOS
+    // reimplementation of kernel32 exports `VirtualAllocEx` precisely because
+    // it is the provider, which is the opposite of the malware that imports it
+    // — see metadata/binary/vendor/wine.yaml, where that direction is the whole
+    // point of the trait. Treating those as one fact read twice would invite an
+    // author to collapse a discriminator into the thing it discriminates.
+    [
+        "#arg:",
+        "#args:",
+        "#alias:",
+        "#kind:Export",
+        "#kind:Forward",
+    ]
+    .iter()
+    .any(|marker| discriminator.contains(marker))
+}
+
 fn extract_patterns(trait_def: &TraitDefinition) -> Vec<(String, PatternLocation)> {
     let mut patterns = Vec::new();
 
@@ -925,17 +954,45 @@ fn extract_patterns(trait_def: &TraitDefinition) -> Vec<(String, PatternLocation
 
     let file_path = trait_def.defined_in.to_string_lossy().to_string();
 
+    // `unless:` legs that name another trait. A trait carrying one is scoped to
+    // "this pattern, except where that trait already explains it", which is a
+    // different question from the same pattern unscoped.
+    let suppressed_by: Vec<String> = trait_def
+        .unless
+        .iter()
+        .flatten()
+        .filter_map(|cond| match cond {
+            Condition::Trait { id } => Some(id.clone()),
+            _ => None,
+        })
+        .collect();
+
     // Helper to add a pattern
     let mut add_pattern = |condition_type: &str,
                            match_type: &str,
                            value: String,
+                           discriminator: &str,
                            section: Option<String>,
                            encoding: Option<Vec<String>>| {
         let is_regex = match_type == "regex";
-        let normalized = normalize_pattern_for_comparison(&value, is_regex);
+        let keyed = format!("{value}{discriminator}");
+        let normalized = normalize_pattern_for_comparison(&keyed, is_regex);
+        // Only `#kind:` may be dropped when asking whether two surfaces search
+        // the same string: it narrows *where* the token was found, which a text
+        // matcher does not distinguish. `#arg:`/`#args:`/`#alias:` narrow *which
+        // fact* the token names — `require('fs')` is not `require('dns')` — and
+        // no text matcher for the bare token means either, so those keep the
+        // full key and never pair across surfaces.
+        let bare_normalized =
+            if discriminator.is_empty() || discriminator_narrows_the_fact(discriminator) {
+                normalized.clone()
+            } else {
+                normalize_pattern_for_comparison(&value, is_regex)
+            };
         if is_non_reusable_atom(condition_type, match_type, &normalized) {
             return;
         }
+        let value = keyed;
 
         // If the regex contained only literal text (after stripping anchors
         // and decoding `\<punct>` escapes), `normalize_pattern_for_comparison`
@@ -957,6 +1014,8 @@ fn extract_patterns(trait_def: &TraitDefinition) -> Vec<(String, PatternLocation
                 match_type: effective_match_type.to_string(),
                 encoding,
                 original_value: value,
+                bare_normalized,
+                suppressed_by: suppressed_by.clone(),
                 for_types: for_types.clone(),
                 section,
                 count_min: trait_def.count_min,
@@ -1018,13 +1077,13 @@ fn extract_patterns(trait_def: &TraitDefinition) -> Vec<(String, PatternLocation
                 format!("{kind_disc}{arg_disc}{alias_disc}")
             };
             if let Some(v) = exact {
-                add_pattern("symbol", "exact", format!("{v}{disc}"), None, None);
+                add_pattern("symbol", "exact", v.clone(), &disc, None, None);
             }
             if let Some(v) = substr {
-                add_pattern("symbol", "substr", format!("{v}{disc}"), None, None);
+                add_pattern("symbol", "substr", v.clone(), &disc, None, None);
             }
             if let Some(v) = regex {
-                add_pattern("symbol", "regex", format!("{v}{disc}"), None, None);
+                add_pattern("symbol", "regex", v.clone(), &disc, None, None);
             }
         }
         Condition::Raw(RawQuery {
@@ -1037,16 +1096,16 @@ fn extract_patterns(trait_def: &TraitDefinition) -> Vec<(String, PatternLocation
         }) => {
             let sec = section.clone();
             if let Some(v) = exact {
-                add_pattern("raw", "exact", v.clone(), sec.clone(), None);
+                add_pattern("raw", "exact", v.clone(), "", sec.clone(), None);
             }
             if let Some(v) = substr {
-                add_pattern("raw", "substr", v.clone(), sec.clone(), None);
+                add_pattern("raw", "substr", v.clone(), "", sec.clone(), None);
             }
             if let Some(v) = word {
-                add_pattern("raw", "word", v.clone(), sec.clone(), None);
+                add_pattern("raw", "word", v.clone(), "", sec.clone(), None);
             }
             if let Some(v) = regex {
-                add_pattern("raw", "regex", v.clone(), sec.clone(), None);
+                add_pattern("raw", "regex", v.clone(), "", sec.clone(), None);
             }
         }
         Condition::Text(TextQuery {
@@ -1059,16 +1118,16 @@ fn extract_patterns(trait_def: &TraitDefinition) -> Vec<(String, PatternLocation
         }) => {
             let sec = section.clone();
             if let Some(v) = exact {
-                add_pattern("text", "exact", v.clone(), sec.clone(), None);
+                add_pattern("text", "exact", v.clone(), "", sec.clone(), None);
             }
             if let Some(v) = substr {
-                add_pattern("text", "substr", v.clone(), sec.clone(), None);
+                add_pattern("text", "substr", v.clone(), "", sec.clone(), None);
             }
             if let Some(v) = word {
-                add_pattern("text", "word", v.clone(), sec.clone(), None);
+                add_pattern("text", "word", v.clone(), "", sec.clone(), None);
             }
             if let Some(v) = regex {
-                add_pattern("text", "regex", v.clone(), sec.clone(), None);
+                add_pattern("text", "regex", v.clone(), "", sec.clone(), None);
             }
         }
         Condition::Literal(LiteralQuery {
@@ -1081,16 +1140,16 @@ fn extract_patterns(trait_def: &TraitDefinition) -> Vec<(String, PatternLocation
         }) => {
             let sec = section.clone();
             if let Some(v) = exact {
-                add_pattern("string_literal", "exact", v.clone(), sec.clone(), None);
+                add_pattern("string_literal", "exact", v.clone(), "", sec.clone(), None);
             }
             if let Some(v) = substr {
-                add_pattern("string_literal", "substr", v.clone(), sec.clone(), None);
+                add_pattern("string_literal", "substr", v.clone(), "", sec.clone(), None);
             }
             if let Some(v) = word {
-                add_pattern("string_literal", "word", v.clone(), sec.clone(), None);
+                add_pattern("string_literal", "word", v.clone(), "", sec.clone(), None);
             }
             if let Some(v) = regex {
-                add_pattern("string_literal", "regex", v.clone(), sec.clone(), None);
+                add_pattern("string_literal", "regex", v.clone(), "", sec.clone(), None);
             }
         }
         Condition::Path(PathQuery {
@@ -1100,13 +1159,13 @@ fn extract_patterns(trait_def: &TraitDefinition) -> Vec<(String, PatternLocation
             ..
         }) => {
             if let Some(v) = exact {
-                add_pattern("basename", "exact", v.clone(), None, None);
+                add_pattern("basename", "exact", v.clone(), "", None, None);
             }
             if let Some(v) = substr {
-                add_pattern("basename", "substr", v.clone(), None, None);
+                add_pattern("basename", "substr", v.clone(), "", None, None);
             }
             if let Some(v) = regex {
-                add_pattern("basename", "regex", v.clone(), None, None);
+                add_pattern("basename", "regex", v.clone(), "", None, None);
             }
         }
         Condition::Encoded(EncodedQuery {
@@ -1121,16 +1180,16 @@ fn extract_patterns(trait_def: &TraitDefinition) -> Vec<(String, PatternLocation
             let sec = section.clone();
             let enc = canonical_encoding_scope(encoding);
             if let Some(v) = exact {
-                add_pattern("encoded", "exact", v.clone(), sec.clone(), enc.clone());
+                add_pattern("encoded", "exact", v.clone(), "", sec.clone(), enc.clone());
             }
             if let Some(v) = substr {
-                add_pattern("encoded", "substr", v.clone(), sec.clone(), enc.clone());
+                add_pattern("encoded", "substr", v.clone(), "", sec.clone(), enc.clone());
             }
             if let Some(v) = word {
-                add_pattern("encoded", "word", v.clone(), sec.clone(), enc.clone());
+                add_pattern("encoded", "word", v.clone(), "", sec.clone(), enc.clone());
             }
             if let Some(v) = regex {
-                add_pattern("encoded", "regex", v.clone(), sec.clone(), enc.clone());
+                add_pattern("encoded", "regex", v.clone(), "", sec.clone(), enc.clone());
             }
         }
         _ => {} // Skip Yara, Hex, Trait, Syscall, Metrics, Section, Kv, Ast.
@@ -1890,7 +1949,7 @@ pub(crate) fn check_same_string_different_types(
     for trait_def in trait_definitions {
         let patterns = extract_patterns(trait_def);
 
-        for (normalized, location) in patterns {
+        for (_normalized, location) in patterns {
             // Only compare matcher families that can reasonably be canonicalized
             // as alternate spellings of the same search surface. `encoded` and
             // `basename` are intentionally different scopes.
@@ -1898,8 +1957,14 @@ pub(crate) fn check_same_string_different_types(
                 continue;
             }
 
+            // Bucket on the literal alone. Keying on the full pattern hid every
+            // symbol matcher that sets `kind:`/`arg:` from its text and raw
+            // counterparts: `symbol {kind: call, exact: file_put_contents}` was
+            // keyed as `file_put_contents#kind:call` and so never shared a
+            // bucket with `text {word: file_put_contents}`.
+            let key = location.bare_normalized.clone();
             pattern_by_type
-                .entry(normalized)
+                .entry(key)
                 .or_default()
                 .entry(location.condition_type.clone())
                 .or_default()
@@ -1928,7 +1993,11 @@ pub(crate) fn check_same_string_different_types(
                 // `section_scope_equivalent` convention used by
                 // matcher_context_reusable_as_is / exact_substr_context_reusable_as_is.
                 if all_locations[i].condition_type != all_locations[j].condition_type
-                    && all_locations[i].match_type == all_locations[j].match_type
+                    && !either_suppresses_the_other(all_locations[i], all_locations[j])
+                    && literal_reach_is_equivalent(
+                        &all_locations[i].match_type,
+                        &all_locations[j].match_type,
+                    )
                     && section_scope_equivalent(
                         all_locations[i].section.as_deref(),
                         all_locations[j].section.as_deref(),
@@ -1959,15 +2028,30 @@ pub(crate) fn check_same_string_different_types(
                             types.sort();
                             types.join(", ")
                         };
-                        format!("{}::{} (for: {})", loc.file_path, loc.trait_id, for_str)
+                        format!(
+                            "{}::{} ({} {}, for: {})",
+                            loc.file_path,
+                            loc.trait_id,
+                            loc.condition_type,
+                            loc.match_type,
+                            for_str
+                        )
                     })
                     .collect();
                 format!("   type: {} in: {}", type_name, location_strs.join(", "))
             })
             .collect();
 
+        // Prefer the more precise surface: a symbol or a language literal says
+        // the token was *used*, where text and raw only say the bytes appear.
+        // Collapsing to the precise atom is the Single-Trait Rule applied to
+        // matchers. The exception is real coverage: a stripped binary keeps the
+        // string and loses the symbol, and a `for:` list can name types the
+        // precise surface cannot parse -- there, both atoms earn their place as
+        // `component` legs of one `any:` composite, which counts the evidence
+        // once and leaves a single ML feature.
         warnings.push(format!(
-            "Pattern '{}' appears with multiple types and overlapping file type coverage (choose one canonical type):\n{}",
+            "Pattern '{}' is searched on multiple surfaces with overlapping file type coverage — keep the more precise surface (symbol or literal over text or raw) and reference it; keep both only when each surface reaches files the other cannot, as `component` legs of one `any:` composite:\n{}",
             pattern,
             type_details.join("\n")
         ));
@@ -1979,6 +2063,323 @@ pub(crate) fn check_same_string_different_types(
         start.elapsed(),
         type_conflicts_found
     );
+}
+
+/// A phrase this many same-context, same-tier regexes also match is reported.
+///
+/// Four is where the observed distribution turns over: sampling `text`/`notable`
+/// phrases, coverage runs 9, 5, 5, 4, 4, 4, 4 and then falls straight to 3, so a
+/// lower bound catches the ordinary case of two or three rules legitimately
+/// sharing a token, while a higher one drops the knee.
+const MAX_REGEXES_COVERING_A_LITERAL: usize = 4;
+
+/// Patterns per combined automaton before the first attempt. Chosen as the
+/// widest batch that compiles across this tree's buckets; a batch that still
+/// overflows is halved, so this is a starting point rather than a limit.
+const REGEX_SET_START_WIDTH: usize = 256;
+
+/// Compiled-size ceiling for one combined automaton. The set is split in half
+/// and retried whenever a batch exceeds it, so this bounds peak memory rather
+/// than deciding how many patterns go in a set.
+const REGEX_SET_SIZE_LIMIT: usize = 64 * 1024 * 1024;
+
+/// Report literal phrases that several regexes in the same matcher context and
+/// criticality tier already match.
+///
+/// When four or more regexes match a `word`/`exact`/`substr` phrase, the rule
+/// set has grown around the same evidence from both directions: the phrase is
+/// covered several times over, and whichever side is redundant, the file is
+/// paying for all of it. Which side to keep is a taxonomy question — sometimes
+/// the literal is the canonical atom and the regexes are an over-split
+/// alternation, sometimes the reverse — so the report names both and leaves the
+/// direction to the author.
+///
+/// Cost: the naive shape is every regex against every phrase, which is ~291M
+/// executions over this tree. Compiling each bucket into one `RegexSet` and
+/// running each phrase through it once makes it one pass per distinct phrase
+/// (~28k), because `matches` returns every hit in a single scan. The crate's
+/// own Aho-Corasick prefilter over required literals does the skipping, so
+/// there is no hand-rolled prefilter here.
+///
+/// Deliberately conservative: the phrase is tested as written, wrapped in
+/// newlines so `(?m)^…$` anchors behave. A regex needing context the phrase
+/// does not carry (`\bfoo\b[^\n]{0,80}bar`) is not counted even though both
+/// rules would fire on a real file, and a case-insensitive literal is not
+/// lowercased to meet a case-sensitive regex. Both would trade a real reading
+/// for a guess.
+pub(crate) fn find_literals_covered_by_regexes(
+    trait_definitions: &[TraitDefinition],
+    warnings: &mut Vec<String>,
+) {
+    let start = std::time::Instant::now();
+
+    // Bucket by (matcher context, overlap tier): a regex can only stand in for a
+    // literal if it searches the same surface at the same signal strength.
+    let mut regexes: BTreeMap<(String, Criticality), Vec<PatternLocation>> = BTreeMap::new();
+    let mut literals: BTreeMap<(String, Criticality), BTreeMap<String, Vec<PatternLocation>>> =
+        BTreeMap::new();
+
+    for trait_def in trait_definitions {
+        for (_, location) in extract_patterns(trait_def) {
+            let key = (
+                location.condition_type.clone(),
+                criticality_for_overlap(location.criticality),
+            );
+            match location.match_type.as_str() {
+                "regex" => regexes.entry(key).or_default().push(location),
+                "exact" | "word" | "substr" => literals
+                    .entry(key)
+                    .or_default()
+                    .entry(location.original_value.clone())
+                    .or_default()
+                    .push(location),
+                _ => {}
+            }
+        }
+    }
+
+    let mut findings: Vec<String> = Vec::new();
+    for (key, phrase_map) in &literals {
+        let Some(bucket) = regexes.get(key) else {
+            continue;
+        };
+        if bucket.len() < MAX_REGEXES_COVERING_A_LITERAL {
+            continue;
+        }
+
+        // Gate on mandatory atoms instead of running every regex against every
+        // phrase. `mandatory_atom_set` returns literals such that any match is
+        // guaranteed to contain at least one of them, so an Aho-Corasick pass
+        // over the phrase names the only regexes that can possibly match it.
+        // Patterns the engine rejects (lookaround, backreferences) are already
+        // reported by `incompatible-regex`; skipping them keeps this check from
+        // failing on a problem that has its own message.
+        // Parse the HIR rather than compiling: this only needs to know whether
+        // the engine accepts the pattern, and compiling every pattern in the
+        // bucket to throw the result away costs more than the rest of the check.
+        let compilable: Vec<&PatternLocation> = bucket
+            .iter()
+            .filter(|location| {
+                regex_syntax::ParserBuilder::new()
+                    .build()
+                    .parse(&location.original_value)
+                    .is_ok()
+            })
+            .collect();
+
+        let mut atoms: Vec<String> = Vec::new();
+        let mut atom_owners: Vec<Vec<usize>> = Vec::new();
+        let mut ci_atoms: Vec<String> = Vec::new();
+        let mut ci_owners: Vec<Vec<usize>> = Vec::new();
+        let mut ungated: Vec<usize> = Vec::new();
+        let mut by_atom: HashMap<(String, bool), usize> = HashMap::new();
+        for (idx, location) in compilable.iter().enumerate() {
+            match crate::capabilities::derivation_memo::mandatory_atom_set(&location.original_value)
+            {
+                Some(set) if !set.is_empty() => {
+                    for (atom, case_insensitive) in set {
+                        let slot = *by_atom
+                            .entry((atom.clone(), case_insensitive))
+                            .or_insert_with(|| {
+                                if case_insensitive {
+                                    ci_atoms.push(atom.clone());
+                                    ci_owners.push(Vec::new());
+                                    ci_owners.len() - 1
+                                } else {
+                                    atoms.push(atom.clone());
+                                    atom_owners.push(Vec::new());
+                                    atom_owners.len() - 1
+                                }
+                            });
+                        if case_insensitive {
+                            ci_owners[slot].push(idx);
+                        } else {
+                            atom_owners[slot].push(idx);
+                        }
+                    }
+                }
+                // No guaranteed atom (a leading `.*`, an inextractable branch):
+                // this one has to be tried against every phrase.
+                _ => ungated.push(idx),
+            }
+        }
+
+        let literal_gate = aho_corasick::AhoCorasick::new(&atoms).ok();
+        let ci_gate = aho_corasick::AhoCorasick::builder()
+            .ascii_case_insensitive(true)
+            .build(&ci_atoms)
+            .ok();
+
+        // The ungated remainder is small enough to stay a combined automaton,
+        // split in half whenever a batch overflows the size ceiling.
+        let mut ungated_sets: Vec<(Vec<usize>, regex::RegexSet)> = Vec::new();
+        let mut pending: Vec<Vec<usize>> = ungated
+            .chunks(REGEX_SET_START_WIDTH)
+            .map(<[usize]>::to_vec)
+            .collect();
+        while let Some(window) = pending.pop() {
+            if window.is_empty() {
+                continue;
+            }
+            let pats: Vec<&str> = window
+                .iter()
+                .map(|&i| compilable[i].original_value.as_str())
+                .collect();
+            match regex::RegexSetBuilder::new(&pats)
+                .size_limit(REGEX_SET_SIZE_LIMIT)
+                .build()
+            {
+                Ok(set) => ungated_sets.push((window, set)),
+                Err(err) => {
+                    if window.len() > 1 {
+                        let half = window.len() / 2;
+                        pending.push(window[half..].to_vec());
+                        pending.push(window[..half].to_vec());
+                    } else {
+                        tracing::debug!(
+                            "literal-coverage: skipping oversized pattern {}: {err}",
+                            compilable[window[0]].trait_id
+                        );
+                    }
+                }
+            }
+        }
+
+        // Compiled lazily: most gated patterns are never a candidate for any
+        // phrase, so compiling the whole bucket up front would be wasted.
+        let mut compiled: Vec<Option<Option<regex::Regex>>> = vec![None; compilable.len()];
+        let mut covering: BTreeMap<&String, Vec<&PatternLocation>> = BTreeMap::new();
+        for (phrase, holders) in phrase_map {
+            // Newlines let multiline anchors see a line boundary without adding
+            // any content the phrase did not have.
+            let haystack = format!("\n{phrase}\n");
+            let mut candidates: HashSet<usize> = HashSet::new();
+            if let Some(gate) = &literal_gate {
+                for hit in gate.find_overlapping_iter(&haystack) {
+                    candidates.extend(atom_owners[hit.pattern().as_usize()].iter().copied());
+                }
+            }
+            if let Some(gate) = &ci_gate {
+                for hit in gate.find_overlapping_iter(&haystack) {
+                    candidates.extend(ci_owners[hit.pattern().as_usize()].iter().copied());
+                }
+            }
+
+            let mut hits: Vec<usize> = Vec::new();
+            for &idx in &candidates {
+                let compiled_pattern = compiled[idx]
+                    .get_or_insert_with(|| regex::Regex::new(&compilable[idx].original_value).ok());
+                if compiled_pattern
+                    .as_ref()
+                    .is_some_and(|pattern| pattern.is_match(&haystack))
+                {
+                    hits.push(idx);
+                }
+            }
+            for (window, set) in &ungated_sets {
+                hits.extend(set.matches(&haystack).into_iter().map(|hit| window[hit]));
+            }
+
+            for idx in hits {
+                let location = compilable[idx];
+                // A regex scoped to file types the literal never sees is not
+                // covering it. Filtering the hits rather than the candidates
+                // keeps the gate doing the cheap work.
+                if holders
+                    .iter()
+                    .any(|holder| has_filetype_overlap(holder, location))
+                {
+                    covering.entry(phrase).or_default().push(location);
+                }
+            }
+        }
+
+        for (phrase, mut covering) in covering {
+            let holders = &phrase_map[phrase];
+            covering.sort_by(|a, b| a.trait_id.cmp(&b.trait_id));
+            covering.dedup_by(|a, b| a.trait_id == b.trait_id);
+            if covering.len() < MAX_REGEXES_COVERING_A_LITERAL {
+                continue;
+            }
+
+            let shown: Vec<String> = covering
+                .iter()
+                .take(6)
+                .map(|location| {
+                    format!(
+                        "      {}::{} => {}",
+                        location.file_path, location.trait_id, location.original_value
+                    )
+                })
+                .collect();
+            let more = covering.len().saturating_sub(shown.len());
+            let holder_names: Vec<String> = holders
+                .iter()
+                .take(3)
+                .map(|holder| format!("{}::{}", holder.file_path, holder.trait_id))
+                .collect();
+            findings.push(format!(
+                "Literal {:?} ({} {}) is also matched by {} regexes in the same context and tier:\n   held by: {}\n{}{}\n   → Action: Look for opportunities to consolidate the regular expressions and/or literals in a way that adheres to TAXONOMY.md",
+                phrase,
+                key.0,
+                format!("{:?}", key.1).to_lowercase(),
+                covering.len(),
+                holder_names.join(", "),
+                shown.join("\n"),
+                if more > 0 {
+                    format!("\n      … and {more} more")
+                } else {
+                    String::new()
+                },
+            ));
+        }
+    }
+
+    findings.sort();
+    warnings.extend(findings);
+
+    tracing::debug!(
+        "Literal-coverage detection completed in {:?}",
+        start.elapsed()
+    );
+}
+
+/// Whether one of the pair stands down wherever the other fires.
+///
+/// A text matcher for an API name and a symbol matcher for the same name look
+/// like one fact read twice — until the text trait carries
+/// `unless: [<the symbol trait>]`. Then it means "the name is present but it is
+/// *not* imported", which is the runtime-resolution case and genuinely distinct
+/// evidence. The pair partitions the surface instead of sharing it, so reporting
+/// it as a duplicate would push an author to delete the half carrying the more
+/// interesting signal.
+fn either_suppresses_the_other(a: &PatternLocation, b: &PatternLocation) -> bool {
+    let names = |loc: &PatternLocation, other: &PatternLocation| {
+        loc.suppressed_by.iter().any(|id| {
+            // Suppressors are written fully qualified (`dir::id`) or bare when
+            // the two traits share a directory.
+            id == &other.trait_id || other.trait_id.ends_with(&format!("::{id}"))
+        })
+    };
+    names(a, b) || names(b, a)
+}
+
+/// Whether two matchers select the same set of occurrences of a literal, so a
+/// cross-surface pair is the same fact searched twice rather than two different
+/// questions.
+///
+/// `exact` and `word` both demand the whole token, so they are interchangeable
+/// across surfaces even though they are spelled differently — this is the shape
+/// nearly every duplicated atom takes (`text {word: fputs}` beside
+/// `symbol {kind: call, exact: fputs}`). `substr` is deliberately not equivalent
+/// to either: it also matches inside longer tokens (`WriteFile` inside
+/// `WriteFileEx`), so pairing it with a whole-token matcher would report two
+/// matchers with genuinely different reach as duplicates and invite an author to
+/// drop the broader one. Identical match types stay equivalent to themselves, so
+/// `substr`/`substr` is still compared.
+fn literal_reach_is_equivalent(a: &str, b: &str) -> bool {
+    const WHOLE_TOKEN: [&str; 2] = ["exact", "word"];
+    a == b || (WHOLE_TOKEN.contains(&a) && WHOLE_TOKEN.contains(&b))
 }
 
 fn is_cross_type_canonicalization_candidate(condition_type: &str) -> bool {
@@ -3637,8 +4038,7 @@ fn platforms_overlap(a: &[Platform], b: &[Platform]) -> bool {
     if a.is_empty() || b.is_empty() {
         return true;
     }
-    a.iter()
-        .any(|x| b.iter().any(|y| x.matches_filter(y)))
+    a.iter().any(|x| b.iter().any(|y| x.matches_filter(y)))
 }
 
 /// True when two `(min, max)` bounds describe overlapping ranges, treating an
@@ -3649,12 +4049,32 @@ fn platforms_overlap(a: &[Platform], b: &[Platform]) -> bool {
 /// overlapping bands both fire on a file in the shared window, so the band must
 /// not be part of the grouping key. Where a band genuinely needs to change a
 /// verdict, that is one trait with a `downgrade:`, not two traits.
-fn ranges_overlap<T: PartialOrd + Copy>(a: (Option<T>, Option<T>), b: (Option<T>, Option<T>)) -> bool {
+fn ranges_overlap<T: PartialOrd + Copy>(
+    a: (Option<T>, Option<T>),
+    b: (Option<T>, Option<T>),
+) -> bool {
     let lo_le_hi = |lo: Option<T>, hi: Option<T>| match (lo, hi) {
         (Some(l), Some(h)) => l <= h,
         _ => true,
     };
     lo_le_hi(a.0, b.1) && lo_le_hi(b.0, a.1)
+}
+
+/// Matcher signature with trivially-equivalent spellings folded together.
+///
+/// `type: value` with a bare `path:` and no predicate already means "the path
+/// resolves", so an explicit `exists: true` is the same assertion written the
+/// long way. Hashing the Debug form directly treats the two spellings as
+/// different matchers and hides the duplicate.
+fn matcher_signature(cond: &Condition) -> String {
+    match cond {
+        Condition::Kv(q) if q.exists == Some(true) => {
+            let mut normalized = q.clone();
+            normalized.exists = None;
+            format!("{:?}", Condition::Kv(normalized))
+        }
+        other => format!("{other:?}"),
+    }
 }
 
 /// Find traits with identical matching logic but different metadata.
@@ -3690,7 +4110,11 @@ pub(crate) fn find_atomic_logic_duplicates(
         // including them split the buckets so that any band difference hid the
         // duplicate entirely (e.g. an identical PE ProductName matcher, one copy
         // size-gated to the real app's range and one not).
-        let signature = format!("{:?}:{:?}", t.r#if, t.not);
+        // `not:` is excluded for the same reason as `unless:` — it is a
+        // carve-out, not the assertion. Keeping it in the key meant an author
+        // who wrote exclusions inline (`not:`) instead of as references
+        // (`unless:`) made their trait invisible to this check.
+        let signature = matcher_signature(&t.r#if);
         groups.entry(signature).or_default().push(t);
     }
 
@@ -3731,6 +4155,14 @@ pub(crate) fn find_atomic_logic_duplicates(
                 }
 
                 let crit_differs = !criticalities_equivalent(a.crit, b.crit);
+                // A `not:` difference with a different `crit:` is a deliberate
+                // specialization — a generic matcher beside a narrowed one that
+                // says something stronger. Only a `not:` difference at the SAME
+                // criticality is two spellings of one assertion.
+                let not_differs = format!("{:?}", a.not) != format!("{:?}", b.not);
+                if not_differs && crit_differs {
+                    continue;
+                }
                 let conf_differs = (a.conf - b.conf).abs() >= 0.1;
                 let platforms_differ = !platforms_equivalent(&a.platforms, &b.platforms);
                 let unless_differs = format!("{:?}", a.unless) != format!("{:?}", b.unless);
@@ -3749,6 +4181,7 @@ pub(crate) fn find_atomic_logic_duplicates(
                     || a.entropy_max != b.entropy_max;
 
                 if !crit_differs
+                    && !not_differs
                     && !conf_differs
                     && !platforms_differ
                     && !unless_differs
@@ -3828,6 +4261,11 @@ pub(crate) fn find_atomic_logic_duplicates(
                         ));
                     }
                     diffs.push(format!("overlapping bands — {}", bands.join("; ")));
+                }
+                if not_differs {
+                    // Same criticality, so this is one assertion with drifted
+                    // carve-outs rather than a deliberate narrowing.
+                    diffs.push("not: differs at the same crit:".to_string());
                 }
                 if unless_differs {
                     diffs.push("unless: differs".to_string());
@@ -4419,6 +4857,10 @@ pub(crate) fn find_structural_regex_duplicates(
                 match_type: "regex".to_string(),
                 encoding: None,
                 original_value: regex.clone(),
+                // This collector only ever holds regexes, which carry no symbol
+                // discriminator, so the literal and the key are the same string.
+                bare_normalized: regex.clone(),
+                suppressed_by: Vec::new(),
                 for_types,
                 section,
                 count_min: trait_def.count_min,

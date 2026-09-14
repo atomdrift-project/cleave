@@ -63,12 +63,15 @@ fn test_eval_hex_short_unpinned_pattern_warns() {
     let location = ContentLocationParams::default();
 
     let result = eval_hex("48 8B", &location, &ctx, None);
-    assert!(!result.matched, "Two concrete bytes must not match unpinned");
     assert!(
-        result
-            .warnings
-            .iter()
-            .any(|w| matches!(w, crate::composite_rules::context::AnalysisWarning::HexPatternTooShort { concrete: 2 })),
+        !result.matched,
+        "Two concrete bytes must not match unpinned"
+    );
+    assert!(
+        result.warnings.iter().any(|w| matches!(
+            w,
+            crate::composite_rules::context::AnalysisWarning::HexPatternTooShort { concrete: 2 }
+        )),
         "expected a HexPatternTooShort warning, got {:?}",
         result.warnings
     );
@@ -83,7 +86,10 @@ fn test_eval_hex_alternation_counts_as_concrete() {
 
     // Two literals + one alternation = 3 constrained bytes: clears the floor.
     let result = eval_hex("48 (8B|FF) A3", &location, &ctx, None);
-    assert!(result.matched, "Alternation should count as a concrete byte");
+    assert!(
+        result.matched,
+        "Alternation should count as a concrete byte"
+    );
     assert_eq!(result.match_count, 2, "Both alternation branches match");
 
     // One literal + one alternation = 2: below the floor, warns.

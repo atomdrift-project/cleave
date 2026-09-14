@@ -181,6 +181,7 @@ const ALLOWED_EXFILTRATION: &[&str] = &[
     "dns",            // DNS-based exfil (subdomain encoding)           T1048
     "ftp",            // FTP-based exfil
     "http",           // HTTP/HTTPS exfil (POST, upload, paste)         T1041
+    "llm",            // Exfil through an LLM assistant or agent channel
     "messaging",      // Messaging platform abuse (Discord, Slack, Telegram)
     "oob",            // Out-of-band data collection (interactsh, pipedream)
     "sensitive-data", // Sensitive file targeting before transport
@@ -309,6 +310,7 @@ const ALLOWED_MB_DATA: &[&str] = &[
     "manipulation",
     "nezha",
     "parse",
+    "reassembly",
     "parsing",
     "path",
     "plugin",
@@ -819,12 +821,12 @@ const ALLOWED_METADATA_BINARY: &[&str] = &[
     "bundle",      // Bundle-format structure (Info.plist, CFBundleIdentifier, XPC, launchd)
     "provenance",  // Build origin: toolchain/compiler markers, source-tree and VCS idents
     // Identity is not a format property (see the metadata/ rules in TAXONOMY.md).
-    "installer",   // TRANSITIONAL -> well-known/ (named products); "is self-extracting" -> layout/
-    "framework",   // TRANSITIONAL -> well-known/lib/; keep only format-level consequences
-    "vendor",      // TRANSITIONAL -> metadata/vendor/ (the sanctioned home) or well-known/
-    "signing",     // TRANSITIONAL -> metadata/signed/
-    "license",     // TRANSITIONAL -> provenance/
-    "toolchain",   // TRANSITIONAL -> provenance/
+    "installer", // TRANSITIONAL -> well-known/ (named products); "is self-extracting" -> layout/
+    "framework", // TRANSITIONAL -> well-known/lib/; keep only format-level consequences
+    "vendor",    // TRANSITIONAL -> metadata/vendor/ (the sanctioned home) or well-known/
+    "signing",   // TRANSITIONAL -> metadata/signed/
+    "license",   // TRANSITIONAL -> provenance/
+    "toolchain", // TRANSITIONAL -> provenance/
 ];
 
 /// Allowed subdirectories in metadata/document/
@@ -849,23 +851,23 @@ const ALLOWED_METADATA_FILE: &[&str] = &[
     "arithmetic",        // Density of arithmetic operator nodes
     "catalog",           // File/catalog identity and generated registries
     "comment",           // Comment volume and span
-    "data-blob",         // Bytes that read as an opaque blob (entropy, NUL domination, one huge string)
-    "encoded",           // Encoded content presence (base64)
-    "extension",         // File extension classification
-    "format",            // Text/data format identification (JSON, makefile)
-    "function",          // Shape of the functions the parser recovered
+    "data-blob", // Bytes that read as an opaque blob (entropy, NUL domination, one huge string)
+    "encoded",   // Encoded content presence (base64)
+    "extension", // File extension classification
+    "format",    // Text/data format identification (JSON, makefile)
+    "function",  // Shape of the functions the parser recovered
     "invisible-unicode", // Invisible Unicode text properties
-    "import",            // How many distinct modules the file imports
-    "line",              // Line geometry: one-liners, very long lines, line counts
-    "literal",           // Literal collections, such as long numeric arrays
-    "magic",             // Magic byte signatures
-    "metrics",           // Text/file-level measurements
-    "naming",            // How names are formed (numeric suffixes, single-char ratio)
-    "padding",           // Runs of repeated filler: whitespace, uppercase, blank lines
-    "policy",            // Policy/config text identities
-    "profile",           // Text profile and wrapper shapes
-    "size",              // Degenerate file size and shape: tiny scripts, sparse strings
-    "string",            // Neutral string identities
+    "import",    // How many distinct modules the file imports
+    "line",      // Line geometry: one-liners, very long lines, line counts
+    "literal",   // Literal collections, such as long numeric arrays
+    "magic",     // Magic byte signatures
+    "metrics",   // Text/file-level measurements
+    "naming",    // How names are formed (numeric suffixes, single-char ratio)
+    "padding",   // Runs of repeated filler: whitespace, uppercase, blank lines
+    "policy",    // Policy/config text identities
+    "profile",   // Text profile and wrapper shapes
+    "size",      // Degenerate file size and shape: tiny scripts, sparse strings
+    "string",    // Neutral string identities
 ];
 
 /// Allowed subdirectories in metadata/image/
@@ -913,6 +915,8 @@ const ALLOWED_METADATA_LANG: &[&str] = &[
     "compiled",            // Compiled language detection
     "compiler",            // Compiler identification
     "encoded",             // Encoded strings (unicode, wide)
+    "generated",           // Emitted by a code generator rather than hand-written
+    "runtime",             // Language runtime markers left in a compiled binary
     "go-build",            // Go build specifics
     "javascript-features", // JavaScript language features
     "linking",             // Linker properties
@@ -923,6 +927,7 @@ const ALLOWED_METADATA_LANG: &[&str] = &[
     "security",            // Language security features
     "shebang",             // Shebang detection
     "source",              // Source language identification
+    "upstream",            // Belongs to a recognized upstream project tree
     "version",             // Language version detection
 ];
 
@@ -945,7 +950,33 @@ const ALLOWED_METADATA_PACKAGE: &[&str] = &[
     "logging",        // Logging patterns
     "maintainers",    // Maintainer counts
     "manager",        // Package-manager fingerprints (homebrew, composer)
-    "manifest",       // Package manifest fields
+    // Manifest fields, each at the ML-visible level rather than buried under a
+    // `manifest/` container: its former siblings (keywords, license, scripts,
+    // dependencies) are manifest fields too, so the level separated nothing
+    // while spending the last visible segment.
+    "agent-skill",    // Agent skill manifests (SKILL.md frontmatter and friends)
+    "author",         // Manifest author field
+    "cargo-windows",  // Cargo manifest Windows-specific fields
+    "compat",         // Declared compatibility fields
+    "description",    // Manifest description field
+    "ecosystem",      // Ecosystem-identifying manifest fields
+    "empty",          // Absent or empty manifest fields
+    "entrypoint",     // Declared entry point (main, bin, exports)
+    "freeform",       // Unconstrained manifest text fields
+    "homepage",       // Manifest homepage field
+    "injective",      // Manifest fields carrying injected content
+    "inline-script",  // Scripts written inline in a manifest field
+    "name",           // Manifest name field
+    "placeholder",    // Unedited placeholder field values
+    "publishing",     // Publishing and registry fields
+    "pypi",           // PyPI-specific manifest fields
+    "repository",     // Manifest repository field
+    "runtime",        // Declared runtime/engine fields
+    "security-label", // Declared security labels
+    "tracking",       // Analytics/tracking declarations
+    "vendor",         // Vendor-identifying manifest fields
+    "version",        // Manifest version field
+    "workspace",      // Workspace/monorepo manifest fields
     "metrics",        // Code metrics
     "scaffold",       // Unedited `npm init` scaffolding published as-is
     "scripts",        // Package scripts

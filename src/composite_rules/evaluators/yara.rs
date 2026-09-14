@@ -414,19 +414,14 @@ fn extract_wildcard_bytes(data: &[u8], pos: usize, segments: &[HexSegment]) -> V
     extracted
 }
 
-/// Evaluate hex pattern condition
-/// Uses YARA-style atom extraction for efficient searching:
-/// 1. Extract longest fixed byte sequence from pattern
-/// 2. Use fast memmem search to find atom candidates
-/// 3. Verify full pattern only at candidate positions
-#[must_use]
 /// Count bytes that actually constrain the match: full hex bytes, nibble
 /// wildcards (`4?`), and alternations (`(5C|5D)` — one constrained byte no
 /// matter how many branches). `??` and gap specifiers (`[N]`) constrain
 /// nothing. Mirrors the validator's counter so `validate` and the matcher
 /// agree on which patterns clear the floor.
 fn count_concrete_hex_bytes(pattern: &str) -> usize {
-    pattern.split_whitespace()
+    pattern
+        .split_whitespace()
         .filter(|t| !t.starts_with('[') && *t != "??")
         .filter(|t| {
             (t.len() == 2 && t.chars().all(|c| c.is_ascii_hexdigit() || c == '?'))
@@ -441,11 +436,18 @@ fn is_hex_alternation(token: &str) -> bool {
         return false;
     };
     !inner.is_empty()
-        && inner.split('|').all(|b| {
-            b.len() == 2 && b.chars().all(|c| c.is_ascii_hexdigit() || c == '?')
-        })
+        && inner
+            .split('|')
+            .all(|b| b.len() == 2 && b.chars().all(|c| c.is_ascii_hexdigit() || c == '?'))
 }
 
+/// Evaluate hex pattern condition
+///
+/// Uses YARA-style atom extraction for efficient searching:
+/// 1. Extract longest fixed byte sequence from pattern
+/// 2. Use fast memmem search to find atom candidates
+/// 3. Verify full pattern only at candidate positions
+#[must_use]
 pub(crate) fn eval_hex<'a>(
     pattern: &str,
     location: &super::ContentLocationParams,
@@ -466,7 +468,9 @@ pub(crate) fn eval_hex<'a>(
             let concrete_bytes = count_concrete_hex_bytes(pattern);
             if concrete_bytes < 3 {
                 return ConditionResult {
-                    warnings: vec![AnalysisWarning::HexPatternTooShort { concrete: concrete_bytes }],
+                    warnings: vec![AnalysisWarning::HexPatternTooShort {
+                        concrete: concrete_bytes,
+                    }],
                     ..ConditionResult::no_match()
                 };
             }

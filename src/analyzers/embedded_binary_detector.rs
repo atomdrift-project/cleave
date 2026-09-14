@@ -6,10 +6,20 @@
 
 use crate::types::{Criticality, Evidence, Finding, FindingKind};
 use memchr::memmem;
+use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Maximum embedded binaries to report per file (prevents noise on heavily packed files).
 const MAX_EMBEDDED: usize = 20;
+
+/// Candidate validation is spread across the file so a dense prefix cannot
+/// starve a later stage. Per-region quotas cap header checks at 8,192 and valid
+/// candidates at 1,024 per encoding/kind scan while the magic-byte walk stays
+/// linear and allocation-free.
+const CANDIDATE_BUCKETS: usize = 256;
+const CANDIDATES_PER_BUCKET: u8 = 4;
+const HEADER_CHECKS_PER_BUCKET: u8 = 32;
 
 /// Minimum credible embedded binary size in bytes.
 const MIN_BINARY_SIZE: usize = 512;
@@ -45,7 +55,7 @@ impl EmbeddedKind {
 }
 
 /// A validated embedded binary found within a larger file.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct EmbeddedBinary {
     /// Byte offset within the host file. For base64-encoded payloads
     /// this is the start of the *encoded* run — the dropper's
@@ -80,8 +90,10 @@ impl EmbeddedBinary {
 /// Scan binary data for embedded PE and ELF files.
 ///
 /// Uses strict header validation to minimize false positives. Skips the first
-/// few bytes (the host binary's own header). Returns at most [`MAX_EMBEDDED`]
-/// results sorted by offset. Includes both raw-magic finds and
+/// few bytes (the host binary's own header). Candidate discovery is intentionally
+/// wider than the reporting budget: content-distinct images are selected first,
+/// then remaining slots are filled with offset-stratified duplicates. Returns at
+/// most [`MAX_EMBEDDED`] results sorted by offset. Includes both raw-magic finds and
 /// base64-encoded payloads — droppers that hide a stage-2 binary
 /// inside `.rodata` (Kong-ingress-controller 2024) appear as a
 /// single `EmbeddedBinary` entry per detection.
@@ -95,8 +107,89 @@ pub(crate) fn scan_for_embedded_binaries(
     scan_elf(data, &mut results, cancelled);
     scan_base64_packed(data, &mut results, cancelled);
     results.sort_by_key(|e| e.offset);
-    results.truncate(MAX_EMBEDDED);
-    results
+    select_embedded_candidates(data, results)
+}
+
+/// Select candidates for recursive analysis without letting repeated content
+/// consume every slot. When there are more unique payloads than the budget,
+/// sample them across the entire file rather than taking only the earliest.
+fn select_embedded_candidates(data: &[u8], candidates: Vec<EmbeddedBinary>) -> Vec<EmbeddedBinary> {
+    if candidates.len() <= MAX_EMBEDDED {
+        return candidates;
+    }
+
+    let mut seen = HashSet::new();
+    let mut unique = Vec::new();
+    let mut duplicates = Vec::new();
+    for candidate in candidates {
+        let fingerprint = embedded_fingerprint(data, &candidate);
+        if seen.insert(fingerprint) {
+            unique.push(candidate);
+        } else {
+            duplicates.push(candidate);
+        }
+    }
+
+    let mut selected = take_stratified(unique, MAX_EMBEDDED);
+    if selected.len() < MAX_EMBEDDED {
+        let remaining = MAX_EMBEDDED - selected.len();
+        selected.extend(take_stratified(duplicates, remaining));
+    }
+    selected.sort_by_key(|e| e.offset);
+    selected
+}
+
+/// SHA-256 over a bounded, position-independent representation of a candidate.
+/// Small payloads are hashed in full. Large ones use head/middle/tail windows so
+/// nested or overlapping multi-hundred-megabyte images cannot amplify scan cost.
+fn embedded_fingerprint(data: &[u8], candidate: &EmbeddedBinary) -> [u8; 32] {
+    const WINDOW: usize = 8 * 1024;
+    let mut hasher = Sha256::new();
+    hasher.update(candidate.kind.as_str().as_bytes());
+    hasher.update(candidate.encoding.unwrap_or("raw").as_bytes());
+    hasher.update(candidate.estimated_size.to_le_bytes());
+
+    let available = data.get(candidate.offset..).unwrap_or_default();
+    let encoded_size = if candidate.encoding == Some("base64") {
+        candidate.estimated_size.saturating_mul(4).div_ceil(3)
+    } else {
+        candidate.estimated_size
+    };
+    let bytes = &available[..available.len().min(encoded_size)];
+    if bytes.len() <= WINDOW * 3 {
+        hasher.update(bytes);
+    } else {
+        hasher.update(&bytes[..WINDOW]);
+        let middle = bytes.len() / 2;
+        hasher.update(&bytes[middle - WINDOW / 2..middle + WINDOW / 2]);
+        hasher.update(&bytes[bytes.len() - WINDOW..]);
+    }
+    hasher.finalize().into()
+}
+
+fn candidate_bucket(offset: usize, file_size: usize) -> usize {
+    let bucket_width = file_size.div_ceil(CANDIDATE_BUCKETS).max(1);
+    (offset / bucket_width).min(CANDIDATE_BUCKETS - 1)
+}
+
+/// Deterministically retain the first and last items and spread the remaining
+/// picks across the full ordered input.
+fn take_stratified(items: Vec<EmbeddedBinary>, limit: usize) -> Vec<EmbeddedBinary> {
+    if items.len() <= limit {
+        return items;
+    }
+    if limit == 0 {
+        return Vec::new();
+    }
+    if limit == 1 {
+        return items.into_iter().take(1).collect();
+    }
+
+    let last = items.len() - 1;
+    (0..limit)
+        .map(|slot| slot * last / (limit - 1))
+        .map(|index| items[index].clone())
+        .collect()
 }
 
 // ── Base64-encoded payload scanning ──────────────────────────────────────────
@@ -124,10 +217,19 @@ fn scan_base64_packed(
     cancelled: Option<&AtomicBool>,
 ) {
     for (prefix, expected_kind) in [(ELF_BASE64_PREFIX, "elf"), (PE_BASE64_PREFIX, "pe")] {
+        let mut retained_per_bucket = [0u8; CANDIDATE_BUCKETS];
+        let mut checked_per_bucket = [0u8; CANDIDATE_BUCKETS];
         for marker_off in memmem::find_iter(data, prefix) {
             if cancelled.is_some_and(|f| f.load(Ordering::Acquire)) {
                 return;
             }
+            let bucket = candidate_bucket(marker_off, data.len());
+            if retained_per_bucket[bucket] >= CANDIDATES_PER_BUCKET
+                || checked_per_bucket[bucket] >= HEADER_CHECKS_PER_BUCKET
+            {
+                continue;
+            }
+            checked_per_bucket[bucket] += 1;
             // Walk forward from the marker while we stay inside the
             // base64 alphabet. This bounds the run cheaply.
             let run_end = marker_off
@@ -169,6 +271,7 @@ fn scan_base64_packed(
                 encoding: Some("base64"),
                 format_hint: None,
             });
+            retained_per_bucket[bucket] += 1;
         }
     }
 }
@@ -251,15 +354,23 @@ fn scan_pe(data: &[u8], results: &mut Vec<EmbeddedBinary>, cancelled: Option<&At
     let search_start = 2.min(data.len());
     let finder = memmem::Finder::new(b"MZ");
     let mut pe_results = Vec::new();
+    let mut retained_per_bucket = [0u8; CANDIDATE_BUCKETS];
+    let mut checked_per_bucket = [0u8; CANDIDATE_BUCKETS];
     for pos in finder.find_iter(&data[search_start..]) {
-        if pe_results.len() >= MAX_EMBEDDED {
-            break;
-        }
         if cancelled.is_some_and(|f| f.load(Ordering::Acquire)) {
             break;
         }
-        if let Some(emb) = validate_pe(data, pos + search_start) {
+        let offset = pos + search_start;
+        let bucket = candidate_bucket(offset, data.len());
+        if retained_per_bucket[bucket] >= CANDIDATES_PER_BUCKET
+            || checked_per_bucket[bucket] >= HEADER_CHECKS_PER_BUCKET
+        {
+            continue;
+        }
+        checked_per_bucket[bucket] += 1;
+        if let Some(emb) = validate_pe(data, offset) {
             pe_results.push(emb);
+            retained_per_bucket[bucket] += 1;
         }
     }
     results.extend(pe_results);
@@ -441,15 +552,23 @@ fn scan_elf(data: &[u8], results: &mut Vec<EmbeddedBinary>, cancelled: Option<&A
     // Start past byte 0 so we skip the host ELF's own magic.
     let search_start = 4.min(data.len());
     let finder = memmem::Finder::new(b"\x7fELF");
+    let mut retained_per_bucket = [0u8; CANDIDATE_BUCKETS];
+    let mut checked_per_bucket = [0u8; CANDIDATE_BUCKETS];
     for pos in finder.find_iter(&data[search_start..]) {
-        if results.len() >= MAX_EMBEDDED {
-            break;
-        }
         if cancelled.is_some_and(|f| f.load(Ordering::Acquire)) {
             break;
         }
-        if let Some(emb) = validate_elf(data, pos + search_start) {
+        let offset = pos + search_start;
+        let bucket = candidate_bucket(offset, data.len());
+        if retained_per_bucket[bucket] >= CANDIDATES_PER_BUCKET
+            || checked_per_bucket[bucket] >= HEADER_CHECKS_PER_BUCKET
+        {
+            continue;
+        }
+        checked_per_bucket[bucket] += 1;
+        if let Some(emb) = validate_elf(data, offset) {
             results.push(emb);
+            retained_per_bucket[bucket] += 1;
         }
     }
 }
@@ -1025,6 +1144,32 @@ mod tests {
         }
         let found = scan_for_embedded_binaries(&buf, None);
         assert!(found.len() <= MAX_EMBEDDED);
+    }
+
+    #[test]
+    fn test_duplicate_prefix_does_not_hide_unique_tail_pe() {
+        let count = MAX_EMBEDDED + 6;
+        let stride = 4096;
+        let mut buf = vec![0u8; stride];
+        buf[0] = b'M';
+        buf[1] = b'Z';
+        for i in 0..count {
+            make_synthetic_pe(&mut buf, stride * (i + 1));
+        }
+
+        // All earlier images are byte-identical. Make only the final image
+        // distinct at a byte covered by the content fingerprint.
+        let tail_offset = stride * count;
+        buf[tail_offset + 700] = 0xA5;
+
+        let found = scan_for_embedded_binaries(&buf, None);
+        assert_eq!(found.len(), MAX_EMBEDDED);
+        assert!(
+            found
+                .iter()
+                .any(|candidate| candidate.offset == tail_offset),
+            "a distinct late stage must survive a duplicate-heavy prefix"
+        );
     }
 
     #[test]

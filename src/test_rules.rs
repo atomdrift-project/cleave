@@ -789,11 +789,42 @@ impl<'a> RuleDebugger<'a> {
                 exact,
                 substr,
                 regex,
+                word,
                 case_insensitive,
-                ..
+                length_min,
+                length_max,
+                is_check,
+                not,
+                platforms: _,
+                section,
+                offset,
+                offset_range,
+                section_offset,
+                section_offset_range,
             }) => {
                 let desc = describe_condition(condition);
-                let result = evaluate_condition_simple(condition, &ctx);
+                let params = crate::composite_rules::context::StringParams {
+                    exact: exact.as_ref(),
+                    substr: substr.as_ref(),
+                    regex: regex.as_ref(),
+                    word: word.as_ref(),
+                    case_insensitive: *case_insensitive,
+                    length_min: *length_min,
+                    length_max: *length_max,
+                    is_check: *is_check,
+                    section: section.as_ref(),
+                    offset: *offset,
+                    offset_range: *offset_range,
+                    section_offset: *section_offset,
+                    section_offset_range: *section_offset_range,
+                    arch_clamp: None,
+                };
+                let result = crate::composite_rules::evaluators::eval_text(
+                    &params,
+                    not.as_ref(),
+                    &ctx,
+                    None,
+                );
                 let mut debug =
                     ConditionDebugResult::new(desc, result.matched).with_evidence(result.evidence);
                 // When a raw-text-mode file fails `text exact:` but the pattern is present as
@@ -2662,6 +2693,39 @@ composite_rules:
                 "Rule marked as matched but no conditions show as matched"
             );
         }
+    }
+
+    #[test]
+    fn test_debug_text_condition_uses_real_text_evaluator() {
+        let mut report = create_test_report_with_findings(vec![]);
+        report.target.file_type = "elf".to_string();
+        report.strings = crate::strings::StringExtractor::default().convert_stng_strings(&[
+            stng::ExtractedString {
+                value: "ZSTD".to_string(),
+                data_offset: 12,
+                method: stng::StringMethod::RawScan,
+                ..Default::default()
+            },
+        ]);
+        let mapper = create_debug_test_mapper();
+        let debugger = RuleDebugger::new(
+            &mapper,
+            &report,
+            b"binary fixture",
+            vec![Platform::All],
+            None,
+        );
+
+        let result = debugger
+            .debug_rule("micro-behaviors/data/embedded/zstd-magic")
+            .expect("expected local zstd trait fixture");
+
+        assert!(result.matched, "real trait evaluation should match");
+        assert_eq!(result.condition_results.len(), 1);
+        assert!(
+            result.condition_results[0].matched,
+            "debug condition must agree with real text evaluation"
+        );
     }
 
     /// Test that skip reasons are correctly captured

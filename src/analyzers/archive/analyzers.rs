@@ -59,6 +59,66 @@ fn posix_relative_path(path: &Path, root: &Path) -> String {
         .replace('\\', "/")
 }
 
+/// Cheap constant-pool salience score used to choose the bounded set of JAR
+/// classes that receive full analysis. Archive order is attacker-controlled;
+/// taking the first twenty non-library classes lets a payload hide behind
+/// inert padding classes even though the payload contains conspicuous APIs.
+fn jar_class_triage_score(data: &[u8]) -> usize {
+    const MARKERS: &[&[u8]] = &[
+        b"java/lang/ProcessBuilder",
+        b"java/lang/Runtime",
+        b"java/net/http/HttpClient",
+        b"java/net/HttpURLConnection",
+        b"okhttp3/MultipartBody",
+        b"javax/net/ssl/X509TrustManager",
+        b"com/sun/jna/",
+        b"java/awt/Robot",
+        b"java/awt/datatransfer/Clipboard",
+        b"java/util/zip/ZipOutputStream",
+        b"java/io/FileOutputStream",
+        b"java/nio/file/Files",
+        b"javax/crypto/Cipher",
+        b"java/lang/invoke/ConstantCallSite",
+    ];
+
+    static MATCHER: std::sync::OnceLock<Option<aho_corasick::AhoCorasick>> =
+        std::sync::OnceLock::new();
+    let Some(matcher) = MATCHER
+        .get_or_init(|| aho_corasick::AhoCorasick::new(MARKERS).ok())
+        .as_ref()
+    else {
+        return 0;
+    };
+
+    let mut seen = [false; MARKERS.len()];
+    let mut score = 0usize;
+    for hit in matcher.find_iter(data) {
+        let pattern = hit.pattern().as_usize();
+        if !seen[pattern] {
+            seen[pattern] = true;
+            score += 1;
+        }
+        if score == MARKERS.len() {
+            break;
+        }
+    }
+    score
+}
+
+/// Keep the best `limit` entries in linear time, then order only that bounded
+/// prefix for deterministic analysis/output order.
+fn keep_top_ranked<T>(
+    items: &mut Vec<T>,
+    limit: usize,
+    mut compare: impl FnMut(&T, &T) -> std::cmp::Ordering,
+) {
+    if items.len() > limit {
+        items.select_nth_unstable_by(limit, &mut compare);
+        items.truncate(limit);
+    }
+    items.sort_unstable_by(compare);
+}
+
 /// Read one in-memory archive member into `out`, keeping whatever decoded when
 /// the member's stream fails partway.
 ///
@@ -2939,20 +2999,21 @@ impl ArchiveAnalyzer {
         })
     }
 
-    /// Phase 1 of jar triage: YARA over every class, restricted to the class
-    /// buckets, answering the index of each flagged class with its matches.
+    /// Phase 1 of jar triage: score every class and optionally run YARA,
+    /// restricted to the class buckets. Returns each readable class's index,
+    /// salience score, and YARA matches.
     ///
     /// Shared by the in-memory and extracted paths so they cannot drift. They
     /// once did: the extracted path called the unfiltered `scan_file`, which
     /// after rule tiering meant every bucket for every class — 77 buckets ×
     /// 70k classes for h2o.jar, an analysis that never finished and held the
     /// whole rayon pool while it tried.
-    fn yara_triage_classes<T: Sync>(
+    fn triage_jar_classes<T: Sync>(
         &self,
-        yara_engine: &crate::yara_engine::YaraEngine,
+        yara_engine: Option<&crate::yara_engine::YaraEngine>,
         classes: &[T],
         bytes: impl for<'a> Fn(&'a T) -> Option<std::borrow::Cow<'a, [u8]>> + Sync,
-    ) -> Vec<(usize, Vec<YaraMatch>)> {
+    ) -> Vec<(usize, usize, Vec<YaraMatch>)> {
         let filetypes = FileType::JavaClass.yara_filetypes();
         let filter = (!filetypes.is_empty()).then_some(filetypes.as_slice());
         let indexes: Vec<usize> = (0..classes.len()).collect();
@@ -2961,19 +3022,22 @@ impl ArchiveAnalyzer {
                 return None;
             }
             let data = bytes(&classes[i])?;
+            let score = jar_class_triage_score(&data);
+            let Some(yara_engine) = yara_engine else {
+                return Some((i, score, Vec::new()));
+            };
             let scanned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 yara_engine.scan_bytes_filtered(&data, filter)
             }));
             match scanned {
-                Ok(Ok(matches)) if !matches.is_empty() => Some((i, matches)),
-                Ok(Ok(_)) => None,
+                Ok(Ok(matches)) => Some((i, score, matches)),
                 Ok(Err(e)) => {
                     debug!("YARA scan failed for class {i}: {e}");
-                    None
+                    Some((i, score, Vec::new()))
                 }
                 Err(_panic) => {
                     tracing::error!(class = i, "panic during YARA scan (caught)");
-                    None
+                    Some((i, score, Vec::new()))
                 }
             }
         })
@@ -2999,16 +3063,19 @@ impl ArchiveAnalyzer {
 
         let mut flagged_classes = HashSet::<String>::new();
         let mut collected_yara = Vec::<YaraMatch>::with_capacity(50);
-        if let Some(ref yara_engine) = self.yara_engine {
-            let yara_results = self.yara_triage_classes(yara_engine, &class_members, |m| {
+        let mut class_scores = vec![0usize; class_members.len()];
+        let triage_results =
+            self.triage_jar_classes(self.yara_engine.as_deref(), &class_members, |m| {
                 Some(std::borrow::Cow::Borrowed(m.data.as_slice()))
             });
-            for (i, matches) in yara_results {
+        for (i, score, matches) in triage_results {
+            class_scores[i] = score;
+            if !matches.is_empty() {
                 flagged_classes.insert(class_members[i].relative_path.clone());
-                for ym in matches {
-                    if !collected_yara.iter().any(|m: &YaraMatch| m.rule == ym.rule) {
-                        collected_yara.push(ym);
-                    }
+            }
+            for ym in matches {
+                if !collected_yara.iter().any(|m: &YaraMatch| m.rule == ym.rule) {
+                    collected_yara.push(ym);
                 }
             }
         }
@@ -3030,22 +3097,30 @@ impl ArchiveAnalyzer {
             })
             .collect();
 
-        let mut sample_count = 0usize;
-        for member in class_members.iter().copied() {
-            if sample_count >= 20 {
-                break;
-            }
-            if is_benign_java_path(Path::new(&member.relative_path))
-                || flagged_classes.contains(&member.relative_path)
-                || selected
-                    .iter()
-                    .any(|selected| selected.relative_path == member.relative_path)
-            {
-                continue;
-            }
-            selected.push(member);
-            sample_count += 1;
-        }
+        let selected_paths: HashSet<&str> = selected
+            .iter()
+            .map(|member| member.relative_path.as_str())
+            .collect();
+        let mut sample_candidates: Vec<(usize, &MemoryArchiveMember)> = class_members
+            .iter()
+            .copied()
+            .enumerate()
+            .filter(|(_, member)| {
+                !is_benign_java_path(Path::new(&member.relative_path))
+                    && !selected_paths.contains(member.relative_path.as_str())
+            })
+            .collect();
+        keep_top_ranked(
+            &mut sample_candidates,
+            20,
+            |(left_idx, left), (right_idx, right)| {
+                class_scores[*right_idx]
+                    .cmp(&class_scores[*left_idx])
+                    .then_with(|| right.data.len().cmp(&left.data.len()))
+                    .then_with(|| left.relative_path.cmp(&right.relative_path))
+            },
+        );
+        selected.extend(sample_candidates.into_iter().map(|(_, member)| member));
 
         selected.extend(
             members
@@ -3656,12 +3731,11 @@ impl ArchiveAnalyzer {
         let total_class_files = class_files.len();
         debug!("Found {} .class files", total_class_files);
 
-        // Phase 1: YARA over every class, class buckets only.
-        let (flagged_classes, collected_yara_matches) = if let Some(ref yara_engine) =
-            self.yara_engine
-        {
-            let yara_start = std::time::Instant::now();
-            let yara_results = self.yara_triage_classes(yara_engine, &class_files, |entry| {
+        // Phase 1: score every class and optionally run class-bucket YARA in
+        // the same read, so salience ranking does not add a second archive walk.
+        let yara_start = std::time::Instant::now();
+        let triage_results =
+            self.triage_jar_classes(self.yara_engine.as_deref(), &class_files, |entry| {
                 match std::fs::read(entry.path()) {
                     Ok(data) => Some(std::borrow::Cow::Owned(data)),
                     Err(e) => {
@@ -3670,25 +3744,28 @@ impl ArchiveAnalyzer {
                     }
                 }
             });
-            debug!(
-                "YARA scan completed in {:.2}s",
-                yara_start.elapsed().as_secs_f64()
-            );
+        debug!(
+            "JAR class triage completed in {:.2}s",
+            yara_start.elapsed().as_secs_f64()
+        );
 
-            let mut flagged = HashSet::new();
-            let mut matches = Vec::with_capacity(50);
-            for (i, file_matches) in yara_results {
-                flagged.insert(class_files[i].path().to_path_buf());
-                for ym in file_matches {
-                    if !matches.iter().any(|m: &YaraMatch| m.rule == ym.rule) {
-                        matches.push(ym);
-                    }
+        let mut flagged_classes = HashSet::new();
+        let mut collected_yara_matches = Vec::with_capacity(50);
+        let mut class_scores = vec![0usize; class_files.len()];
+        for (i, score, file_matches) in triage_results {
+            class_scores[i] = score;
+            if !file_matches.is_empty() {
+                flagged_classes.insert(class_files[i].path().to_path_buf());
+            }
+            for ym in file_matches {
+                if !collected_yara_matches
+                    .iter()
+                    .any(|m: &YaraMatch| m.rule == ym.rule)
+                {
+                    collected_yara_matches.push(ym);
                 }
             }
-            (flagged, matches)
-        } else {
-            (HashSet::new(), Vec::new())
-        };
+        }
 
         // Add collected YARA matches to report
         for ym in collected_yara_matches {
@@ -3732,16 +3809,38 @@ impl ArchiveAnalyzer {
             })
             .collect();
 
-        // Also include a small sample of non-benign, non-flagged classes
-        let sample_classes: Vec<_> = class_files
+        // Also include a bounded sample of non-benign, non-flagged classes,
+        // prioritizing classes with salient APIs rather than attacker-controlled
+        // archive order. Exclude main/YARA classes already selected.
+        let interesting_paths: HashSet<&Path> = interesting_classes
             .iter()
-            .filter(|e| !is_benign_java_path(e.path()) && !flagged_classes.contains(e.path()))
-            .take(20) // Limit to 20 non-flagged classes
+            .map(|entry| entry.path())
             .collect();
+        let mut sample_classes: Vec<(usize, u64, _)> = class_files
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| {
+                !is_benign_java_path(entry.path()) && !interesting_paths.contains(entry.path())
+            })
+            .map(|(index, entry)| {
+                let len = entry.metadata().map_or(0, |meta| meta.len());
+                (index, len, entry)
+            })
+            .collect();
+        keep_top_ranked(
+            &mut sample_classes,
+            20,
+            |(left_idx, left_len, left), (right_idx, right_len, right)| {
+                class_scores[*right_idx]
+                    .cmp(&class_scores[*left_idx])
+                    .then_with(|| right_len.cmp(left_len))
+                    .then_with(|| left.path().cmp(right.path()))
+            },
+        );
 
         let classes_to_analyze: Vec<_> = interesting_classes
             .into_iter()
-            .chain(sample_classes)
+            .chain(sample_classes.into_iter().map(|(_, _, entry)| entry))
             .collect();
 
         debug!("Full analysis on {} classes", classes_to_analyze.len());
@@ -4343,11 +4442,25 @@ impl ArchiveAnalyzer {
 #[cfg(test)]
 mod tests {
     use super::{
-        ArchiveAnalyzer, archive_entry_json, archive_entry_metadata,
-        rebase_nested_archive_entry_path, rebase_nested_file_path,
+        ArchiveAnalyzer, archive_entry_json, archive_entry_metadata, jar_class_triage_score,
+        keep_top_ranked, rebase_nested_archive_entry_path, rebase_nested_file_path,
     };
     use crate::analyzers::FileType;
     use std::sync::Arc;
+
+    #[test]
+    fn jar_class_triage_prioritizes_salient_apis_over_archive_padding() {
+        let padding = b"ordinary/application/Padding java/lang/Object";
+        let payload = b"java/lang/ProcessBuilder okhttp3/MultipartBody com/sun/jna/Pointer";
+
+        assert_eq!(jar_class_triage_score(padding), 0);
+        assert_eq!(jar_class_triage_score(payload), 3);
+        assert!(jar_class_triage_score(payload) > jar_class_triage_score(padding));
+
+        let mut ranked = vec![1, 5, 2, 4, 3];
+        keep_top_ranked(&mut ranked, 3, |left, right| right.cmp(left));
+        assert_eq!(ranked, [5, 4, 3]);
+    }
 
     #[test]
     fn archive_member_yara_filetypes_use_detected_binary_type() {

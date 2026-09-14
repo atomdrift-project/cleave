@@ -4,7 +4,7 @@
 #[cfg(test)]
 #[allow(clippy::module_inception)]
 mod tests {
-    use crate::analyzers::{Analyzer, java_class::JavaClassAnalyzer};
+    use crate::analyzers::{AnalysisInput, Analyzer, FileType, java_class::JavaClassAnalyzer};
     use crate::types::{AnalysisReport, TargetInfo};
     use std::path::Path;
 
@@ -61,6 +61,34 @@ mod tests {
         assert!(
             symbols.contains("java/lang/ProcessBuilder.start"),
             "ProcessBuilder.start should be available to symbol traits"
+        );
+    }
+
+    #[test]
+    fn test_analyze_input_preserves_preextracted_strings() {
+        let path = Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/java/Suspicious.class"
+        ));
+        let data = std::fs::read(path).expect("read Java class fixture");
+        let strings = [stng::ExtractedString {
+            value: "java-text-regression-marker".to_string(),
+            data_offset: 42,
+            method: stng::StringMethod::RawScan,
+            ..Default::default()
+        }];
+        let input = AnalysisInput::with_strings(path, &data, &strings, FileType::JavaClass);
+
+        let report = JavaClassAnalyzer::new()
+            .analyze_input(&input)
+            .expect("analyze Java class fixture");
+
+        assert!(
+            report
+                .strings
+                .iter()
+                .any(|row| &*row.value == "java-text-regression-marker"),
+            "Java analysis must retain AnalysisInput strings for text traits"
         );
     }
 

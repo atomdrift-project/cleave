@@ -114,6 +114,12 @@ impl SectionMap {
     /// Checks if a section name matches a required section name (exact or fuzzy).
     #[must_use]
     pub(crate) fn section_matches(actual: &str, required: &str) -> bool {
+        // `section: any` means any mapped binary section (but not headers or
+        // overlay bytes). The validator accepts this spelling, so treating it
+        // as a literal section name silently disables otherwise valid rules.
+        if required.eq_ignore_ascii_case("any") {
+            return true;
+        }
         if actual == required {
             return true;
         }
@@ -167,6 +173,16 @@ impl SectionMap {
 
     /// Internal logic for computing section bounds without caching
     fn compute_bounds(&self, name: &str) -> Option<(u64, u64)> {
+        if name.eq_ignore_ascii_case("any") {
+            let start = self.sections.iter().map(|section| section.start).min()?;
+            let end = self
+                .sections
+                .iter()
+                .map(|section| section.end.min(self.file_size))
+                .max()?;
+            return (start < end).then_some((start, end));
+        }
+
         // Try exact match first
         for section in &self.sections {
             if section.name == name {
@@ -431,6 +447,17 @@ mod tests {
         assert!(!SectionMap::section_matches(".rsrc2", "rsrc"));
         assert!(!SectionMap::section_matches(".text", "rsrc"));
         assert_eq!(map.bounds("nope"), None);
+    }
+
+    #[test]
+    fn test_any_matches_and_spans_all_mapped_sections() {
+        let map = SectionMap::from_sections_and_size(
+            vec![("UPX0", 0x400, 0x2400), (".rsrc", 0x3000, 0x3800)],
+            0x5000,
+        );
+        assert!(SectionMap::section_matches("UPX0", "any"));
+        assert!(SectionMap::section_matches(".rsrc", "ANY"));
+        assert_eq!(map.bounds("any"), Some((0x400, 0x3800)));
     }
 
     #[test]

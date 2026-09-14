@@ -453,7 +453,25 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
         }
     }
 
-    if augment.is_empty() {
+    let mut augment = Value::Object(augment);
+    if report.target.file_type == "pe"
+        && let Some(resource_data) = report.sections.iter().find_map(|section| {
+            if !section
+                .name
+                .trim_start_matches('.')
+                .eq_ignore_ascii_case("rsrc")
+            {
+                return None;
+            }
+            let start = section.offset? as usize;
+            let end = start.checked_add(section.size as usize)?;
+            raw_data.get(start..end)
+        })
+    {
+        super::pe_extractors::augment_version_info_tree(&mut augment, resource_data);
+    }
+
+    if augment.as_object().is_none_or(serde_json::Map::is_empty) {
         return;
     }
 
@@ -463,7 +481,7 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
         .take()
         .map(|b| *b)
         .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
-    let merged = deep_merge(existing, Value::Object(augment));
+    let merged = deep_merge(existing, augment);
     report.values_tree = Some(Box::new(merged));
 }
 

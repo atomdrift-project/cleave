@@ -158,7 +158,23 @@ fn format_output(entries: &[KvEntry], target: &str, format: &cli::OutputFormat) 
 /// flows through this single helper.
 fn filefacts_values(path: &Path, content: &[u8]) -> Option<Value> {
     let ctx = crate::analysis_context::AnalysisContext::open(path, content).ok()?;
-    let value = ctx.values_tree_if_nonempty()?;
+    let mut value = ctx.values_tree();
+    if value.get("pe").is_some()
+        && let Some(resource_data) = ctx.parsed.sections().iter().find_map(|section| {
+            if !section
+                .name
+                .trim_start_matches('.')
+                .eq_ignore_ascii_case("rsrc")
+            {
+                return None;
+            }
+            let start = section.file_offset as usize;
+            let end = start.checked_add(section.file_size as usize)?;
+            content.get(start..end)
+        })
+    {
+        analyzers::pe_extractors::augment_version_info_tree(&mut value, resource_data);
+    }
     if has_only_path_derived(&value) {
         return None;
     }

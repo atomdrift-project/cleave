@@ -1344,19 +1344,39 @@ fn resolve_report_section_constraints(
         return (0, 0);
     };
 
-    let Some(section) = sections.iter().find(|section| {
-        crate::composite_rules::section_map::SectionMap::section_matches(
-            section.name.as_str(),
-            section_name,
-        )
-    }) else {
-        return (0, 0);
-    };
+    let (base_start, base_end) = if section_name.eq_ignore_ascii_case("any") {
+        let start = sections
+            .iter()
+            .filter_map(|section| section.offset.or(section.address))
+            .min();
+        let end = sections
+            .iter()
+            .filter_map(|section| {
+                section
+                    .offset
+                    .or(section.address)
+                    .map(|base| base.saturating_add(section.size))
+            })
+            .max();
+        match (start, end) {
+            (Some(start), Some(end)) if start < end => (start as usize, end as usize),
+            _ => return (0, 0),
+        }
+    } else {
+        let Some(section) = sections.iter().find(|section| {
+            crate::composite_rules::section_map::SectionMap::section_matches(
+                section.name.as_str(),
+                section_name,
+            )
+        }) else {
+            return (0, 0);
+        };
 
-    let Some(base_start) = section.offset.or(section.address).map(|v| v as usize) else {
-        return (0, 0);
+        let Some(base_start) = section.offset.or(section.address).map(|v| v as usize) else {
+            return (0, 0);
+        };
+        (base_start, base_start.saturating_add(section.size as usize))
     };
-    let base_end = base_start.saturating_add(section.size as usize);
 
     if let Some(sec_off) = location.section_offset {
         let start = resolve_relative_offset(sec_off, base_start, base_end, false);

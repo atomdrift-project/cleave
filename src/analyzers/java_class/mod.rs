@@ -93,24 +93,41 @@ impl JavaClassAnalyzer {
 impl Analyzer for JavaClassAnalyzer {
     fn analyze_input(&self, input: &AnalysisInput<'_>) -> Result<AnalysisReport> {
         let start = std::time::Instant::now();
-        // Open the filefacts parse once and thread it through structural
-        // analysis (constant-pool facts), import projection, and the mapper.
-        let filefacts_ctx = AnalysisContext::open(input.path, input.data).ok();
+        // Reuse the caller's filefacts parse when available; otherwise open it
+        // once and thread it through structural analysis (constant-pool
+        // facts), import projection, and the mapper.
+        let fallback_ctx = input.open_ctx_fallback();
+        let filefacts_ctx = input.parsed_ctx.as_ref().or(fallback_ctx.as_ref());
         let mut report = self.analyze_structural_with_ctx(
             input.path,
             input.data,
             input.sha256.clone(),
-            filefacts_ctx.as_ref(),
+            filefacts_ctx,
         )?;
 
-        if let Some(ctx) = filefacts_ctx.as_ref() {
+        // AnalysisInput is the authoritative pre-extracted string flow. Java
+        // used to omit this assignment entirely, leaving every `type: text`
+        // Java trait inert even though filefacts/stng had extracted the rows.
+        // Keep a context fallback for direct/internal callers that do not
+        // pre-extract strings.
+        let string_extractor = crate::strings::StringExtractor::default();
+        report.strings = if input.strings.is_empty() {
+            filefacts_ctx
+                .map(AnalysisContext::text_rows)
+                .map(|rows| string_extractor.convert_stng_strings(&rows))
+                .unwrap_or_default()
+        } else {
+            string_extractor.convert_stng_strings(input.strings)
+        };
+
+        if let Some(ctx) = filefacts_ctx {
             report.imports.extend(ctx.imports_from_filefacts());
         }
         self.capability_mapper
             .evaluate_and_merge_findings_with_precomputed(
                 &mut report,
                 input.data,
-                crate::capabilities::AnalysisBorrow::with_filefacts(None, filefacts_ctx.as_ref()),
+                crate::capabilities::AnalysisBorrow::with_filefacts(None, filefacts_ctx),
                 None,
                 None,
                 None,
@@ -131,6 +148,8 @@ impl Analyzer for JavaClassAnalyzer {
             self.analyze_structural_with_ctx(file_path, &data, None, filefacts_ctx.as_ref())?;
 
         if let Some(ctx) = filefacts_ctx.as_ref() {
+            report.strings =
+                crate::strings::StringExtractor::default().convert_stng_strings(&ctx.text_rows());
             report.imports.extend(ctx.imports_from_filefacts());
         }
         self.capability_mapper

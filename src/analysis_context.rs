@@ -109,17 +109,6 @@ impl<'a> AnalysisContext<'a> {
         }
     }
 
-    /// Return `Some(values_tree)` when filefacts emitted residual values.
-    #[must_use]
-    pub fn values_tree_if_nonempty(&self) -> Option<Value> {
-        let value = self.values_tree();
-        match &value {
-            Value::Null => None,
-            Value::Object(map) if map.is_empty() => None,
-            _ => Some(value),
-        }
-    }
-
     /// Borrow filefacts's cached tree-sitter source parse, when available.
     #[must_use]
     pub fn source_ast(&self) -> Option<filefacts::SourceAst<'_>> {
@@ -143,8 +132,21 @@ impl<'a> AnalysisContext<'a> {
     /// every file.
     #[must_use]
     pub fn identity(&self) -> Option<filefacts::Identity> {
-        let identity = self.parsed.identity();
-        (!identity.is_empty()).then(|| identity.clone())
+        let mut identity = self.parsed.identity().clone();
+        if identity.title.is_none()
+            && let Some(description) = self
+                .parsed
+                .values()
+                .get("pe.version.description")
+                .and_then(Value::as_str)
+                .filter(|description| !description.trim().is_empty())
+        {
+            identity.title = Some(filefacts::Claim::claimed(
+                description,
+                "pe.version.description",
+            ));
+        }
+        (!identity.is_empty()).then_some(identity)
     }
 
     /// Archive member index emitted by filefacts.
@@ -437,5 +439,21 @@ mod tests {
             imports.is_empty(),
             "native shared-library imports should not gain synthetic dotted symbols"
         );
+    }
+
+    #[test]
+    fn pe_description_projects_to_identity_title() {
+        let path = Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/dotnet_utf16_clipboard.dll"
+        ));
+        let bytes = std::fs::read(path).expect("read PE fixture");
+        let ctx = AnalysisContext::open(path, &bytes).expect("parse PE fixture");
+        let identity = ctx.identity().expect("PE identity");
+        let title = identity.title.expect("PE description title");
+
+        assert_eq!(title.value, "DotCarbon.Plugins.Clipboard");
+        assert_eq!(title.source, "pe.version.description");
+        assert!(!title.verified);
     }
 }

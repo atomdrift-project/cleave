@@ -2563,8 +2563,8 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     // Types whose analyzer reads from a filefacts `AnalysisContext`: open it
     // once here and thread it through `AnalysisInput` so the file is parsed a
     // single time. Source code (unified/generic) plus the image analyzers
-    // (jpeg/png) qualify; binaries take the dedicated arms above, and types
-    // with their own parsers (office/java_class) are intentionally excluded.
+    // (jpeg/png) and Java bytecode qualify; binaries take the dedicated arms
+    // above, and Office types with their own parser are intentionally excluded.
     let threads_ctx = file_type.is_source_code()
         || matches!(
             file_type,
@@ -2581,6 +2581,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
                 | FileType::Webp
                 | FileType::Wasm
                 | FileType::Dex
+                | FileType::JavaClass
         );
     let yara_prefetch = |ftypes: &[&str]| {
         if cancel_for_yara
@@ -2979,18 +2980,18 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         // is free. Re-`open`ing instead, as this used to, re-ran the *entire*
         // extraction pipeline (a second rizin pass per binary) just to recompute
         // an identity that is empty for stripped/unsigned files. Only open a
-        // fresh context for paths that never opened one (archives, and the
-        // source/image arms that moved theirs into the analyzer input).
-        let fresh;
-        let ctx = match file_ctx.as_ref() {
-            Some(ctx) => Some(ctx),
-            None => {
-                fresh = crate::analysis_context::AnalysisContext::open(path, file_data)
-                    .map(|c| c.with_cancellation(options.cancellation.as_deref()))
-                    .ok();
-                fresh.as_ref()
-            }
+        // fresh context only for paths that never opened one (archives).
+        let fresh = if file_ctx.is_none() && input.parsed_ctx.is_none() {
+            crate::analysis_context::AnalysisContext::open(path, file_data)
+                .map(|c| c.with_cancellation(options.cancellation.as_deref()))
+                .ok()
+        } else {
+            None
         };
+        let ctx = file_ctx
+            .as_ref()
+            .or(input.parsed_ctx.as_ref())
+            .or(fresh.as_ref());
         if let Some(ctx) = ctx {
             if report.identity.is_none() {
                 report.identity = ctx.identity();

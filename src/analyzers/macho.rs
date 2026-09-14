@@ -927,49 +927,53 @@ fn emit_signature_findings(
         .as_ref()
         .and_then(|s| s.organization.as_deref().or(s.common_name.as_deref()));
     let is_platform = matches!(identity.trust, Trust::System | Trust::Platform);
-    let (category, signer, desc) = match identity.trust {
+    // `None` = this trust class is carried by a YAML trait instead. Engine-
+    // emitted traits are being retired in favour of engine-emitted *metrics*
+    // with traits written on top, and ad-hoc signing is the first class where
+    // the YAML side already exists: `metadata/signed/trust-level::adhoc` reads
+    // the same `ad_hoc` flag from `macho.code_signature.flags`, and no rule
+    // references the engine id. Emitting both reported one fact twice.
+    let emitted = match identity.trust {
         Trust::DeveloperId | Trust::CaSigned => {
             let team = team_id.unwrap_or("unknown");
             let company = signer_org.unwrap_or(team);
-            (
+            Some((
                 "developer",
                 team.to_string(),
                 format!("Developer ID: {company}"),
-            )
+            ))
         }
-        Trust::System | Trust::Platform => (
+        Trust::System | Trust::Platform => Some((
             "platform",
             "apple".to_string(),
             "macOS Platform Binary".to_string(),
-        ),
-        Trust::AdHoc => (
-            "adhoc",
-            "unsigned".to_string(),
-            "Ad-hoc Signature".to_string(),
-        ),
-        Trust::SelfSigned => (
+        )),
+        Trust::AdHoc => None,
+        Trust::SelfSigned => Some((
             "self-signed",
             signer_org.unwrap_or("unknown").to_string(),
             "Self-signed".to_string(),
-        ),
+        )),
         // A signature offset existed but filefacts resolved no trust
         // tier (`Unsigned`) or a tier added after this match: surface it
         // as an unknown signature rather than dropping it.
-        _ => (
+        _ => Some((
             "unknown",
             "unknown".to_string(),
             "Unknown Signature".to_string(),
-        ),
+        )),
     };
-    let signer_value = signer_org.map_or_else(|| signer.clone(), str::to_string);
-    report.findings.push(signature_finding(
-        format!("metadata/signed/{category}::{signer}"),
-        desc,
-        Criticality::Notable,
-        "code_signature",
-        format!("{category}::{signer_value}"),
-        &location,
-    ));
+    if let Some((category, signer, desc)) = emitted {
+        let signer_value = signer_org.map_or_else(|| signer.clone(), str::to_string);
+        report.findings.push(signature_finding(
+            format!("metadata/signed/{category}::{signer}"),
+            desc,
+            Criticality::Notable,
+            "code_signature",
+            format!("{category}::{signer_value}"),
+            &location,
+        ));
+    }
 
     // Bundle / executable identifier — the identity the binary claims.
     // Notable across all formats (see trust-level/traits.yaml rationale).

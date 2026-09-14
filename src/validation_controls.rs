@@ -732,11 +732,11 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         fix: "Narrow the platform scope, or move to an allowlisted directory (objectives/supply-chain/).",
     },
     ValidatorSpec {
-        id: "hostile-missing-notable-leg",
+        id: "hostile-too-few-notable-legs",
         category: ValidatorCategory::Policy,
-        display_id: "hostile-no-notable",
-        description: "Hostile composite references no notable-or-higher leg, so its capability is buried at the wrong tier.",
-        fix: "Upgrade the best purpose-defining leg to notable per TAXONOMY.md, relocate a mislabelled capability, or delete the composite.",
+        display_id: "hostile-notable-legs",
+        description: "Hostile composite references fewer than two distinct notable-or-higher evidence legs, so its capability is buried at the wrong tier.",
+        fix: "Upgrade purpose-defining legs to notable per TAXONOMY.md, relocate mislabelled capabilities, or delete a low-quality hostile composite.",
     },
     ValidatorSpec {
         id: "unknown-subdirectory",
@@ -1262,7 +1262,7 @@ mod tests {
             "wellknown-composite-only",
             "pure-alias",
             "broad-platform-scope",
-            "hostile-missing-notable-leg",
+            "hostile-too-few-notable-legs",
             // Forward-compat degradation on older engines, not a load-breaking flaw.
             "unknown-metric-field",
             "unknown-file-type",

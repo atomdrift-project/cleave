@@ -1686,7 +1686,7 @@ enum ConditionTagged {
 
 impl From<ConditionDeser> for Condition {
     fn from(deser: ConditionDeser) -> Self {
-        match deser {
+        let mut condition = match deser {
             ConditionDeser::TraitShorthand(inner) => Condition::Trait { id: inner.id },
             ConditionDeser::Tagged(tagged) => match *tagged {
                 ConditionTagged::Symbol {
@@ -2082,7 +2082,9 @@ impl From<ConditionDeser> for Condition {
                     is_check,
                 }),
             },
-        }
+        };
+        condition.normalize_legacy_call_targets();
+        condition
     }
 }
 
@@ -2602,6 +2604,52 @@ pub(crate) struct KvQuery {
 }
 
 impl Condition {
+    /// Rewrite the pre-filefacts call-target spelling in YAML conditions.
+    ///
+    /// Older filefacts versions represented a chained call such as
+    /// `open(...).read()` as `open().read`. Current filefacts emits the
+    /// canonical dotted target `open.read`. Keep existing trait YAML working
+    /// by applying that compatibility rewrite to call-symbol predicates as
+    /// they are deserialized; the facts themselves remain in the new form.
+    fn normalize_legacy_call_targets(&mut self) {
+        let Condition::Symbol(SymbolQuery {
+            kind: Some(SymbolKind::Call),
+            exact,
+            substr,
+            regex,
+            arg,
+            args,
+            ..
+        }) = self
+        else {
+            return;
+        };
+
+        for pattern in exact.iter_mut().chain(substr.iter_mut()) {
+            normalize_legacy_call_literal(pattern);
+        }
+        if let Some(pattern) = regex {
+            normalize_legacy_call_regex(pattern);
+        }
+
+        let normalize_origin = |origin: &mut FlowOriginFilter| {
+            normalize_legacy_call_regex(&mut origin.call);
+            for transfer in &mut origin.through {
+                normalize_legacy_call_regex(&mut transfer.call);
+            }
+        };
+        if let Some(filter) = arg.as_mut().and_then(|filter| filter.from.as_mut()) {
+            normalize_origin(filter);
+        }
+        if let Some(filters) = args {
+            for filter in filters {
+                if let Some(origin) = filter.from.as_mut() {
+                    normalize_origin(origin);
+                }
+            }
+        }
+    }
+
     /// Record the lowercased `<filename>::` sibling basenames this
     /// condition's kv paths reference. Only `type: value` queries can reach
     /// a sibling file's flattened `kv`; every other variant contributes
@@ -3852,6 +3900,21 @@ impl Condition {
     }
 }
 
+/// Remove the legacy literal `()` call marker from a symbol predicate.
+fn normalize_legacy_call_literal(pattern: &mut String) {
+    if pattern.contains("()") {
+        *pattern = pattern.replace("()", "");
+    }
+}
+
+/// Remove escaped literal `()` call markers from a symbol regex. Unescaped
+/// parentheses retain their regex meaning and are intentionally untouched.
+fn normalize_legacy_call_regex(pattern: &mut String) {
+    if pattern.contains(r"\(\)") {
+        *pattern = pattern.replace(r"\(\)", "");
+    }
+}
+
 /// Detect regex patterns that cause catastrophic backtracking.
 ///
 /// Returns a short description of the first issue found, or None if the
@@ -4531,6 +4594,77 @@ exact: main
                 exact: Some(ref s),
                 ..
             }) if s == "main"
+        ));
+    }
+
+    #[test]
+    fn legacy_call_target_spellings_are_normalized_when_loaded() {
+        let cond: Condition = serde_yaml::from_str(
+            r#"
+type: symbol
+kind: call
+exact: Runtime.getRuntime()
+"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            cond,
+            Condition::Symbol(SymbolQuery {
+                exact: Some(ref value),
+                kind: Some(SymbolKind::Call),
+                ..
+            }) if value == "Runtime.getRuntime"
+        ));
+
+        let cond: Condition = serde_yaml::from_str(
+            r#"
+type: symbol
+kind: call
+substr: open().read
+"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            cond,
+            Condition::Symbol(SymbolQuery {
+                substr: Some(ref value),
+                kind: Some(SymbolKind::Call),
+                ..
+            }) if value == "open.read"
+        ));
+
+        let cond: Condition = serde_yaml::from_str(
+            r#"
+type: symbol
+kind: call
+regex: 'open\(\)\.read$'
+"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            cond,
+            Condition::Symbol(SymbolQuery {
+                regex: Some(ref value),
+                kind: Some(SymbolKind::Call),
+                ..
+            }) if value == r"open\.read$"
+        ));
+
+        let cond: Condition = serde_yaml::from_str(
+            r#"
+type: symbol
+kind: member
+exact: Runtime.getRuntime()
+"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            cond,
+            Condition::Symbol(SymbolQuery {
+                exact: Some(ref value),
+                kind: Some(SymbolKind::Member),
+                ..
+            }) if value == "Runtime.getRuntime()"
         ));
     }
 

@@ -27,7 +27,7 @@ use crate::capabilities::validation::{
     find_exception_non_notable_members, find_exception_positive_refs, find_excessive_file_types,
     find_excessive_skip_conditions, find_for_only_duplicates, find_generic_wellknown_leaf_dirs,
     find_hex_binary_missing_section, find_hostile_cap_rules,
-    find_hostile_composites_without_notable_leg, find_hostile_meta_rules,
+    find_hostile_composites_with_too_few_notable_legs, find_hostile_meta_rules,
     find_impossible_count_constraints, find_impossible_length_bounds, find_impossible_needs,
     find_impossible_size_constraints, find_incompatible_regex_features,
     find_inline_content_duplicates, find_invalid_not_usage, find_invalid_trait_ids,
@@ -4456,25 +4456,26 @@ impl super::CapabilityMapper {
                 ));
             }
 
-            // Validate: hostile composites must reference a notable-or-higher leg.
-            // A hostile rule built only from component/baseline fragments means a
-            // purpose-defining capability is buried at the wrong tier (or the rule is
-            // low quality). Pick the best leg and upgrade it to `notable`, relocate a
-            // mislabelled capability, or delete the composite.
-            let disable_hostile_notable_leg =
-                crate::validation_controls::is_validator_disabled("hostile-missing-notable-leg");
-            let hostile_missing_notable =
-                find_hostile_composites_without_notable_leg(&trait_definitions, &composite_rules);
-            if !disable_hostile_notable_leg && !hostile_missing_notable.is_empty() {
+            // Validate: hostile composites must reference at least two distinct
+            // notable-or-higher evidence legs, following nested composites and
+            // directory references transitively.
+            let disable_hostile_notable_legs = crate::validation_controls::is_validator_disabled(
+                "hostile-too-few-notable-legs",
+            );
+            let hostile_too_few_notable = find_hostile_composites_with_too_few_notable_legs(
+                &trait_definitions,
+                &composite_rules,
+            );
+            if !disable_hostile_notable_legs && !hostile_too_few_notable.is_empty() {
                 eprintln!(
-                    "\n❌ ERROR: {} hostile composites reference no notable-or-higher leg",
-                    hostile_missing_notable.len()
+                    "\n❌ ERROR: {} hostile composites reference fewer than two notable-or-higher legs",
+                    hostile_too_few_notable.len()
                 );
-                eprintln!("   Every hostile composite must reference at least one trait at crit");
-                eprintln!("   notable/suspicious/hostile in its any:/all: tree. Upgrade the best");
-                eprintln!("   purpose-defining leg (comms, exec, crypto, encode, persist, ...) to");
-                eprintln!("   notable per TAXONOMY.md, or delete a low-quality composite:\n");
-                for rule_id in &hostile_missing_notable {
+                eprintln!("   Every hostile composite must reference at least two distinct");
+                eprintln!("   notable/suspicious/hostile evidence legs in its any:/all: tree.");
+                eprintln!("   Upgrade purpose-defining legs to notable per TAXONOMY.md, or");
+                eprintln!("   delete a low-quality hostile composite:\n");
+                for rule_id in &hostile_too_few_notable {
                     let source = rule_source_files
                         .get(rule_id)
                         .map(std::string::String::as_str)
@@ -4489,7 +4490,7 @@ impl super::CapabilityMapper {
                 eprintln!();
                 warnings.push(format!(
                     "{} hostile composites reference no notable-or-higher leg",
-                    hostile_missing_notable.len()
+                    hostile_too_few_notable.len()
                 ));
             }
 

@@ -174,7 +174,7 @@ pub(crate) use constraints::{
     MAX_NOTABLE_DOWNGRADE_DIRECT, MAX_NOTABLE_DOWNGRADE_EXPANDED, MISSING_CONDITIONS,
     find_broad_notable_downgrades, find_dead_downgrades, find_directory_shadowed_refs,
     find_empty_condition_clauses, find_excessive_file_types, find_excessive_skip_conditions,
-    find_hex_binary_missing_section, find_hostile_composites_without_notable_leg,
+    find_hex_binary_missing_section, find_hostile_composites_with_too_few_notable_legs,
     find_impossible_count_constraints, find_impossible_length_bounds, find_impossible_needs,
     find_impossible_size_constraints, find_invalid_not_usage, find_kv_exists_with_matcher,
     find_length_bounds_without_regex, find_missing_search_patterns, find_needs_without_any,

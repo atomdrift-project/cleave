@@ -4459,9 +4459,8 @@ impl super::CapabilityMapper {
             // Validate: hostile composites must reference at least two distinct
             // notable-or-higher evidence legs, following nested composites and
             // directory references transitively.
-            let disable_hostile_notable_legs = crate::validation_controls::is_validator_disabled(
-                "hostile-too-few-notable-legs",
-            );
+            let disable_hostile_notable_legs =
+                crate::validation_controls::is_validator_disabled("hostile-too-few-notable-legs");
             let hostile_too_few_notable = find_hostile_composites_with_too_few_notable_legs(
                 &trait_definitions,
                 &composite_rules,
@@ -4489,7 +4488,7 @@ impl super::CapabilityMapper {
                 }
                 eprintln!();
                 warnings.push(format!(
-                    "{} hostile composites reference no notable-or-higher leg",
+                    "{} hostile composites reference fewer than two notable-or-higher legs",
                     hostile_too_few_notable.len()
                 ));
             }

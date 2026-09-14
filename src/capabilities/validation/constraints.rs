@@ -1171,18 +1171,16 @@ fn resolve_reference<'a>(reference: &str, all_ids: &[&'a str]) -> Vec<&'a str> {
         .collect()
 }
 
-/// Find `crit: hostile` composites that reference no `notable`-or-higher trait
-/// anywhere in their positive (`all:`/`any:`) reference tree.
+/// Find `crit: hostile` composites that reference fewer than two distinct
+/// notable-or-higher evidence legs anywhere in their positive (`all:`/`any:`)
+/// reference tree.
 ///
-/// Every genuine hostile pattern should rest on at least one leg an analyst would
-/// want surfaced on its own — a communications, code-execution, crypto, encoding,
-/// privilege-escalation, sensitive-file, registry, or persistence capability (the
-/// behaviours that earn at least `notable` per TAXONOMY.md). A hostile composite
-/// assembled purely from `component`/`baseline` fragments signals that a
-/// purpose-defining capability has been buried at the wrong tier (polluting the
-/// `component`/`baseline` namespace and the ML feature space), or that the rule is
-/// low quality. The fix is to upgrade the best-fitting leg to `notable`, relocate a
-/// mislabelled capability, or delete a weak composite.
+/// Every genuine hostile pattern should rest on at least two legs an analyst would
+/// want surfaced on their own — communications, code-execution, crypto, encoding,
+/// privilege-escalation, sensitive-file, registry, or persistence capabilities
+/// (the behaviours that earn at least `notable` per TAXONOMY.md). A hostile
+/// composite assembled from fewer than two such legs signals that purpose-defining
+/// capability has been buried at the wrong tier, or that the rule is low quality.
 ///
 /// Resolution mirrors the loader: trait ids are fully qualified (`dir::id`),
 /// directory references (`dir/path`, no `::`) expand to every id under that prefix,
@@ -1190,7 +1188,7 @@ fn resolve_reference<'a>(reference: &str, all_ids: &[&'a str]) -> Vec<&'a str> {
 ///
 /// Returns the ids of the offending hostile composites.
 #[must_use]
-pub(crate) fn find_hostile_composites_without_notable_leg(
+pub(crate) fn find_hostile_composites_with_too_few_notable_legs(
     trait_definitions: &[TraitDefinition],
     composite_rules: &[CompositeTrait],
 ) -> Vec<String> {
@@ -1209,43 +1207,151 @@ pub(crate) fn find_hostile_composites_without_notable_leg(
     let composite_by_id: HashMap<&str, &CompositeTrait> =
         composite_rules.iter().map(|c| (c.id.as_str(), c)).collect();
 
+    fn add_limited(out: &mut Vec<String>, values: impl IntoIterator<Item = String>) {
+        for value in values {
+            if !out.contains(&value) {
+                out.push(value);
+                if out.len() == 2 {
+                    break;
+                }
+            }
+        }
+    }
+
+    fn collect_notable_for_id(
+        id: &str,
+        crit_by_id: &HashMap<&str, Criticality>,
+        all_ids: &[&str],
+        composite_by_id: &HashMap<&str, &CompositeTrait>,
+        reference_cache: &mut HashMap<String, Vec<String>>,
+        terminal_cache: &mut HashMap<String, Vec<String>>,
+        visiting: &mut HashSet<String>,
+    ) -> Vec<String> {
+        if let Some(cached) = terminal_cache.get(id) {
+            return cached.clone();
+        }
+        if !visiting.insert(id.to_string()) {
+            return Vec::new();
+        }
+
+        let mut terminals = Vec::new();
+        if let Some(sub) = composite_by_id.get(id) {
+            for child in positive_trait_refs(sub) {
+                let child_terms = collect_notable_for_reference(
+                    &child,
+                    crit_by_id,
+                    all_ids,
+                    composite_by_id,
+                    reference_cache,
+                    terminal_cache,
+                    visiting,
+                );
+                add_limited(&mut terminals, child_terms);
+                if terminals.len() == 2 {
+                    break;
+                }
+            }
+            // A named notable composite with no notable terminal children is
+            // itself the strongest honest evidence available.
+            if terminals.is_empty()
+                && crit_by_id
+                    .get(id)
+                    .is_some_and(|crit| *crit >= Criticality::Notable)
+            {
+                terminals.push(id.to_string());
+            }
+        } else if crit_by_id
+            .get(id)
+            .is_some_and(|crit| *crit >= Criticality::Notable)
+        {
+            terminals.push(id.to_string());
+        }
+
+        visiting.remove(id);
+        terminal_cache.insert(id.to_string(), terminals.clone());
+        terminals
+    }
+
+    fn collect_notable_for_reference(
+        reference: &str,
+        crit_by_id: &HashMap<&str, Criticality>,
+        all_ids: &[&str],
+        composite_by_id: &HashMap<&str, &CompositeTrait>,
+        reference_cache: &mut HashMap<String, Vec<String>>,
+        terminal_cache: &mut HashMap<String, Vec<String>>,
+        visiting: &mut HashSet<String>,
+    ) -> Vec<String> {
+        let key = reference.trim_end_matches('/').to_string();
+        let resolved = if let Some(cached) = reference_cache.get(&key) {
+            cached.clone()
+        } else {
+            let ids = if key.contains("::") {
+                crit_by_id
+                    .contains_key(key.as_str())
+                    .then_some(vec![key.clone()])
+                    .unwrap_or_default()
+            } else {
+                resolve_reference(&key, all_ids)
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect()
+            };
+            reference_cache.insert(key, ids.clone());
+            ids
+        };
+
+        let mut terminals = Vec::new();
+        for id in resolved {
+            add_limited(
+                &mut terminals,
+                collect_notable_for_id(
+                    &id,
+                    crit_by_id,
+                    all_ids,
+                    composite_by_id,
+                    reference_cache,
+                    terminal_cache,
+                    visiting,
+                ),
+            );
+            if terminals.len() == 2 {
+                break;
+            }
+        }
+        terminals
+    }
+
     let mut violations = Vec::new();
-    'rules: for rule in composite_rules {
+    let mut reference_cache = HashMap::new();
+    let mut terminal_cache = HashMap::new();
+    for rule in composite_rules {
         if rule.crit != Criticality::Hostile {
             continue;
         }
 
-        let mut stack: Vec<String> = positive_trait_refs(rule);
-        let mut visited: HashSet<String> = HashSet::new();
-        while let Some(reference) = stack.pop() {
-            if !visited.insert(reference.clone()) {
-                continue;
-            }
-            // Fast path: an exact `::` reference is a single O(1) lookup.
-            let trimmed = reference.trim_end_matches('/');
-            if trimmed.contains("::") {
-                match crit_by_id.get(trimmed) {
-                    Some(&crit) if crit >= Criticality::Notable => continue 'rules,
-                    _ => {}
-                }
-                if let Some(sub) = composite_by_id.get(trimmed) {
-                    stack.extend(positive_trait_refs(sub));
-                }
-                continue;
-            }
-            // Bare or directory reference: resolve to every id it matches.
-            for id in resolve_reference(&reference, &all_ids) {
-                match crit_by_id.get(id) {
-                    Some(&crit) if crit >= Criticality::Notable => continue 'rules,
-                    _ => {}
-                }
-                if let Some(sub) = composite_by_id.get(id) {
-                    stack.extend(positive_trait_refs(sub));
-                }
+        let mut terminals = Vec::new();
+        let mut visiting = HashSet::new();
+        for reference in positive_trait_refs(rule) {
+            add_limited(
+                &mut terminals,
+                collect_notable_for_reference(
+                    &reference,
+                    &crit_by_id,
+                    &all_ids,
+                    &composite_by_id,
+                    &mut reference_cache,
+                    &mut terminal_cache,
+                    &mut visiting,
+                ),
+            );
+            if terminals.len() == 2 {
+                break;
             }
         }
 
-        violations.push(rule.id.clone());
+        if terminals.len() < 2 {
+            violations.push(rule.id.clone());
+        }
     }
     violations
 }

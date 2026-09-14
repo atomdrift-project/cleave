@@ -4224,11 +4224,11 @@ mod taxonomy_tests {
         }
     }
 
-    // ---- hostile composites must reference a notable+ leg ----
+    // ---- hostile composites must reference two notable+ legs ----
 
     #[test]
-    fn test_hostile_without_notable_leg() {
-        use crate::capabilities::validation::find_hostile_composites_without_notable_leg;
+    fn test_hostile_with_too_few_notable_legs() {
+        use crate::capabilities::validation::find_hostile_composites_with_too_few_notable_legs;
 
         fn leaf(id: &str, crit: Criticality) -> TraitDefinition {
             TraitDefinition {
@@ -4240,8 +4240,10 @@ mod taxonomy_tests {
             leaf("objectives/x::a", Criticality::Component),
             leaf("objectives/x::b", Criticality::Component),
             leaf("objectives/x::notable-leg", Criticality::Notable),
-            // notable trait reachable only via a directory-subtree reference
+            leaf("objectives/x::notable-leg-2", Criticality::Notable),
+            // notable traits reachable only via a directory-subtree reference
             leaf("micro-behaviors/comms/http::client", Criticality::Notable),
+            leaf("micro-behaviors/comms/http::request", Criticality::Notable),
         ];
 
         let mut all_component =
@@ -4250,7 +4252,11 @@ mod taxonomy_tests {
 
         let mut direct_notable = make_composite(
             "objectives/x::good-direct",
-            &["objectives/x::a", "objectives/x::notable-leg"],
+            &[
+                "objectives/x::a",
+                "objectives/x::notable-leg",
+                "objectives/x::notable-leg-2",
+            ],
         );
         direct_notable.crit = Criticality::Hostile;
 
@@ -4258,8 +4264,11 @@ mod taxonomy_tests {
         let mut dir_ref = make_composite("objectives/x::good-dir", &["micro-behaviors/comms/http"]);
         dir_ref.crit = Criticality::Hostile;
 
-        // transitive: hostile -> component sub-composite -> notable leg
-        let sub = make_composite("objectives/x::sub", &["objectives/x::notable-leg"]); // Baseline
+        // transitive: hostile -> component sub-composite -> two notable legs
+        let sub = make_composite(
+            "objectives/x::sub",
+            &["objectives/x::notable-leg", "objectives/x::notable-leg-2"],
+        ); // Baseline
         let mut transitive =
             make_composite("objectives/x::good-transitive", &["objectives/x::sub"]);
         transitive.crit = Criticality::Hostile;
@@ -4275,7 +4284,7 @@ mod taxonomy_tests {
             transitive,
             non_hostile,
         ];
-        let v = find_hostile_composites_without_notable_leg(&traits, &composites);
+        let v = find_hostile_composites_with_too_few_notable_legs(&traits, &composites);
         assert_eq!(v, vec!["objectives/x::bad".to_string()]);
     }
 

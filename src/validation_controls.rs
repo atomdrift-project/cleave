@@ -505,7 +505,7 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         category: ValidatorCategory::Policy,
         display_id: "oversized-dir",
         description: "Directory is too broad for useful ML directory signal.",
-        fix: "Split by language/platform-neutral technique so ML can group similar behavior; use platform dirs only when the technique requires them.",
+        fix: "Audit this directory for duplicate or redundant traits first; then reorganize the remaining traits into meaningful subdirectories only when each child adds precision under TAXONOMY.md. Merely moving the same broad set to another location is not a fix; keep the split technique-based, platform-neutral where possible, and within depth/leaf caps.",
     },
     ValidatorSpec {
         id: "sibling-restate",

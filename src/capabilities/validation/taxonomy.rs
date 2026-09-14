@@ -2509,7 +2509,7 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     // Download-execute dropper patterns are malicious whether they appear in a
     // shell script, package.json postinstall, setup.py cmdclass, Dockerfile RUN,
     // plist ProgramArguments, systemd ExecStart, etc.
-    "text:objectives/command-and-control/dropper/delivery/download-execute/",
+    "text:objectives/command-and-control/dropper/delivery/execute-download/",
     "text:objectives/command-and-control/dropper/delivery/hidden-stage/",
     // The decoded form of the same dropper one-liner. These match the *decoded*
     // string corpus, so the host language is whatever happened to carry the

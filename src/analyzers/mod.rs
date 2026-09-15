@@ -446,6 +446,7 @@ pub(crate) fn detect_file_type_from_path(file_path: &Path) -> FileType {
         .map(|d| d.file_type)
         .filter(|ft| *ft != FileType::Unknown)
         .or_else(|| known_manifest_type_from_basename(file_path))
+        .or_else(|| known_data_type_from_extension(file_path))
         .unwrap_or(FileType::Unknown)
 }
 
@@ -484,6 +485,7 @@ pub(crate) fn detect_file_type_from_detected(
         .filter(|ft| *ft != FileType::Unknown)
         .or_else(|| sniff_script_type_from_content(file_data))
         .or_else(|| known_manifest_type_from_basename(file_path))
+        .or_else(|| known_data_type_from_extension(file_path))
         .unwrap_or(FileType::Unknown)
 }
 
@@ -597,6 +599,15 @@ fn known_manifest_type_from_basename(file_path: &Path) -> Option<FileType> {
         "pyproject.toml" => Some(FileType::PyProjectToml),
         _ => None,
     }
+}
+
+fn known_data_type_from_extension(file_path: &Path) -> Option<FileType> {
+    let extension = file_path.extension()?.to_str()?.to_ascii_lowercase();
+    matches!(
+        extension.as_str(),
+        "dat" | "bin" | "payload" | "raw" | "map"
+    )
+    .then_some(FileType::Data)
 }
 
 fn is_arch_package_metadata_name(file_path: &Path) -> bool {
@@ -792,7 +803,7 @@ impl FileTypeExt for FileType {
             FileType::Dockerfile => vec!["dockerfile", "docker", "containerfile"],
             FileType::PgpSignature => vec!["sig", "asc", "pgp"],
             FileType::Text => vec!["txt", "text"],
-            FileType::Data => vec!["dat", "bin", "payload", "raw"],
+            FileType::Data => vec!["dat", "bin", "payload", "raw", "map"],
             _ => vec![],
         }
     }
@@ -920,6 +931,15 @@ mod tests {
         );
         assert_eq!(
             detect_file_type_from_data(Path::new("Canon.dat"), &[0, 0, 0, 0]),
+            FileType::Data
+        );
+    }
+
+    #[test]
+    fn bridge_source_map_extension_is_analyzable_data() {
+        let encoded = b"data:application/javascript;base64,Y29uc3QgYSAgPSAxOw==";
+        assert_eq!(
+            detect_file_type_from_data(Path::new("package/parse.ts.map"), encoded),
             FileType::Data
         );
     }

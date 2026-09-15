@@ -701,12 +701,7 @@ impl<'a> RuleDebugger<'a> {
 
         match condition {
             Condition::Trait { id } => self.debug_trait_reference(id),
-            Condition::Symbol(SymbolQuery {
-                exact,
-                substr,
-                regex,
-                ..
-            }) => self.debug_symbol_condition(exact, substr, regex),
+            Condition::Symbol(query) => Self::debug_symbol_condition(query, &ctx),
             Condition::Metrics(MetricsQuery {
                 field, min, max, ..
             }) => self.debug_metrics_condition(field, *min, *max),
@@ -1230,100 +1225,59 @@ impl<'a> RuleDebugger<'a> {
     }
 
     fn debug_symbol_condition(
-        &self,
-        exact: &Option<String>,
-        substr: &Option<String>,
-        regex: &Option<String>,
+        query: &SymbolQuery,
+        ctx: &EvaluationContext<'_>,
     ) -> ConditionDebugResult {
-        let pattern_desc = if let Some(e) = exact {
-            format!("exact: \"{}\"", e)
-        } else if let Some(c) = substr {
-            format!("substr: \"{}\"", c)
-        } else if let Some(r) = regex {
-            format!("regex: /{}/", r)
-        } else {
-            "unknown".to_string()
+        use crate::composite_rules::condition::SymbolKind;
+        use crate::composite_rules::evaluators::symbol_string::{
+            eval_call, eval_symbol, eval_symbol_fact,
         };
 
-        let desc = format!("symbol: {}", pattern_desc);
-
-        let symbols: Vec<&str> = self
-            .report
-            .imports
-            .iter()
-            .map(|i| i.symbol.as_str())
-            .chain(self.report.exports.iter().map(|e| e.symbol.as_str()))
-            .chain(self.report.functions.iter().map(|f| f.name.as_str()))
-            .collect();
-
-        let matched_symbols = find_matching_symbols(&symbols, exact, substr, regex, false);
-        let matched = !matched_symbols.is_empty();
-
-        let mut result = ConditionDebugResult::new(desc, matched);
-
-        result.details.push(format!(
-            "Total symbols: {} ({} imports, {} exports)",
-            symbols.len(),
-            self.report.imports.len(),
-            self.report.exports.len()
-        ));
-        result
+        // Use the production evaluators, including symbol-family selection,
+        // canonical flow targets, argument predicates, and import aliases.
+        // Searching flattened import/export names cannot explain a call rule.
+        let result = match query.kind {
+            Some(SymbolKind::Call) => eval_call(
+                query.exact.as_ref(),
+                query.substr.as_ref(),
+                query.regex.as_ref(),
+                query.arg.as_ref(),
+                query.args.as_deref(),
+                ctx,
+            ),
+            Some(kind @ (SymbolKind::Member | SymbolKind::Bind | SymbolKind::Identifier)) => {
+                eval_symbol_fact(
+                    kind,
+                    query.exact.as_ref(),
+                    query.substr.as_ref(),
+                    query.regex.as_ref(),
+                    ctx,
+                )
+            }
+            _ => eval_symbol(
+                query.exact.as_ref(),
+                query.substr.as_ref(),
+                query.regex.as_ref(),
+                query.platforms.as_ref(),
+                query.is_check,
+                query.kind,
+                query.not.as_ref(),
+                query.alias.as_ref(),
+                ctx,
+            ),
+        };
+        let desc = describe_condition(&Condition::Symbol(query.clone()));
+        let mut debug =
+            ConditionDebugResult::new(desc, result.matched).with_evidence(result.evidence);
+        debug
             .details
-            .push(format!("Matching symbols: {}", matched_symbols.len()));
-
-        if !matched_symbols.is_empty() {
-            let display_count = matched_symbols.len().min(10);
-            for s in matched_symbols.iter().take(display_count) {
-                result.details.push(format!("  Matched: \"{}\"", s));
-            }
-            if matched_symbols.len() > display_count {
-                result.details.push(format!(
-                    "  ... and {} more",
-                    matched_symbols.len() - display_count
-                ));
-            }
-        } else if symbols.len() <= 20 {
-            result.details.push("All symbols:".to_string());
-            for s in &symbols {
-                result.details.push(format!("  \"{}\"", s));
-            }
+            .push(format!("Matching symbol records: {}", result.match_count));
+        if query.arg.is_some() || query.args.is_some() {
+            debug.details.push(
+                "Call-site argument predicates applied, including requested provenance.".into(),
+            );
         }
-
-        // Check alternatives if no symbol match
-        if !matched {
-            // Check strings
-            let string_values: Vec<&str> = self
-                .report
-                .strings
-                .iter()
-                .map(|s| s.value.as_str())
-                .collect();
-            let string_matches =
-                find_matching_strings(&string_values, exact, &None, regex, &None, false);
-            if !string_matches.is_empty() {
-                result.details.push(format!(
-                    "💡 Found in strings ({} matches) - try `string:` instead",
-                    string_matches.len()
-                ));
-            }
-
-            // Check content
-            let content = String::from_utf8_lossy(self.binary_data);
-            let content_matched = if let Some(e) = exact {
-                content.contains(e)
-            } else if let Some(r) = regex {
-                regex::Regex::new(r).is_ok_and(|re| re.is_match(&content))
-            } else {
-                false
-            };
-            if content_matched {
-                result
-                    .details
-                    .push("💡 Found in raw bytes - try `type: raw` instead".to_string());
-            }
-        }
-
-        result
+        debug
     }
 
     fn debug_metrics_condition(
@@ -2726,6 +2680,90 @@ composite_rules:
             result.condition_results[0].matched,
             "debug condition must agree with real text evaluation"
         );
+    }
+
+    #[test]
+    fn debug_call_conditions_agree_with_canonical_provenance_and_arguments() {
+        let yaml = r#"
+defaults:
+  platforms: [unix, windows]
+traits:
+  - id: canonical-call
+    desc: Fixture bytes enter request body
+    crit: notable
+    conf: 0.9
+    for: [go]
+    if:
+      type: symbol
+      kind: call
+      exact: net/http.Post
+      arg:
+        index: 2
+        from:
+          call: '^os\.ReadFile$'
+          literal: '^fixture\.txt$'
+          through:
+            - call: '^bytes\.NewReader$'
+              arguments: [0]
+  - id: wrong-arguments
+    desc: Fixture request uses JSON content type
+    crit: notable
+    conf: 0.9
+    for: [go]
+    if:
+      type: symbol
+      kind: call
+      exact: client.Post
+      args:
+        - index: 0
+          exact: https://fixture.invalid/upload
+        - index: 1
+          exact: application/json
+"#;
+        let (_dir, path) = create_test_yaml(yaml);
+        let mapper = CapabilityMapper::from_yaml(&path).unwrap();
+        for (filename, expected) in [("fixture.txt", true), ("public.txt", false)] {
+            let source = format!(
+                r#"package fixture
+import (client "net/http"; files "os"; "bytes")
+func upload() {{
+    data, _ := files.ReadFile("{filename}")
+    client.Post("https://fixture.invalid/upload", "text/plain", bytes.NewReader(data))
+}}
+"#
+            );
+            let parsed =
+                filefacts::open_with_path(std::path::Path::new("fixture.go"), source.as_bytes())
+                    .unwrap();
+            let mut report = create_test_report_with_findings(vec![]);
+            report.target.path = "fixture.go".into();
+            report.target.file_type = "go".into();
+            report.target.size_bytes = source.len() as u64;
+            report.filefacts = Some(crate::types::FilefactsView {
+                symbols: parsed.symbols().into_iter().cloned().collect(),
+                flow: parsed.flow().cloned(),
+                ..Default::default()
+            });
+            let debugger = RuleDebugger::new(
+                &mapper,
+                &report,
+                source.as_bytes(),
+                vec![Platform::All],
+                None,
+            );
+            for (id, expected) in [("canonical-call", expected), ("wrong-arguments", false)] {
+                let result = debugger.debug_rule(id).unwrap();
+                assert_eq!(result.matched, expected, "{id}: {filename}");
+                assert_eq!(result.condition_results.len(), 1);
+                assert_eq!(
+                    result.condition_results[0].matched, expected,
+                    "{id}: {filename}"
+                );
+                if expected {
+                    assert!(!result.condition_results[0].evidence.is_empty());
+                }
+            }
+        }
     }
 
     /// Test that skip reasons are correctly captured

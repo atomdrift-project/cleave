@@ -577,6 +577,8 @@ impl UnifiedSourceAnalyzer {
                 es.method,
                 stng::StringMethod::Base64Decode
                     | stng::StringMethod::Base64ObfuscatedDecode
+                    | stng::StringMethod::Base32Decode
+                    | stng::StringMethod::Base85Decode
                     | stng::StringMethod::XorDecode
                     | stng::StringMethod::HexDecode
                     | stng::StringMethod::UrlDecode
@@ -588,6 +590,8 @@ impl UnifiedSourceAnalyzer {
                 let encoding_method = match es.method {
                     stng::StringMethod::Base64Decode => "base64",
                     stng::StringMethod::Base64ObfuscatedDecode => "base64-obf",
+                    stng::StringMethod::Base32Decode => "base32",
+                    stng::StringMethod::Base85Decode => "base85",
                     stng::StringMethod::XorDecode => "xor",
                     stng::StringMethod::HexDecode => "hex",
                     stng::StringMethod::UrlDecode => "url",
@@ -1501,6 +1505,41 @@ impl Analyzer for UnifiedSourceAnalyzer {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_retains_predecoded_base32_and_base85_evidence() {
+        let analyzer = UnifiedSourceAnalyzer::for_file_type(&FileType::JavaScript).unwrap();
+        for (method, encoding) in [
+            (stng::StringMethod::Base32Decode, "base32"),
+            (stng::StringMethod::Base85Decode, "base85"),
+        ] {
+            let extracted = stng::ExtractedString {
+                value: "harmless decoded evidence".into(),
+                data_offset: 12,
+                data_len: 40,
+                method,
+                ..Default::default()
+            };
+            let report = analyzer.analyze_source_impl(
+                Path::new("sample.js"),
+                "const data = 'recorded decoder input';",
+                &[extracted],
+                &[],
+                None,
+                None,
+                None,
+            );
+            assert!(
+                report.strings.iter().any(|s| {
+                    &*s.value == "harmless decoded evidence"
+                        && s.encoding_chain == [encoding]
+                        && s.offset == Some(12)
+                        && s.section.as_deref() == Some("decoded")
+                }),
+                "lost {encoding} evidence"
+            );
+        }
+    }
 
     #[test]
     fn source_string_budget_counts_unique_retained_bytes() {

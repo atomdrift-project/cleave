@@ -213,8 +213,9 @@ pub(crate) fn eval_section<'a>(
                         matched_total_size,
                         denom,
                     ),
-                    // Aggregate over several sections — anchor at the header.
-                    location: Some("0x0".to_string()),
+                    // Aggregate over several sections — no single byte is an
+                    // honest location for the ratio.
+                    location: None,
                     ..Default::default()
                 });
             }
@@ -281,8 +282,9 @@ pub(crate) fn eval_section<'a>(
                             denom_desc,
                             denom_mean,
                         ),
-                        // Aggregate over several sections — anchor at the header.
-                        location: Some("0x0".to_string()),
+                        // Aggregate over several sections — no single byte is
+                        // an honest location for the ratio.
+                        location: None,
                         ..Default::default()
                     });
                 }

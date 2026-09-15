@@ -295,6 +295,28 @@ fn detect_language_inner(
     None
 }
 
+/// Source-map sidecars often contain a complete original file encoded as one
+/// Base64 string. Small configuration modules may be valid JavaScript but too
+/// declaration-light for stng's general-purpose classifier; keep that content
+/// visible when it came from a decoded `.map` member.
+fn looks_like_source_map_javascript(value: &str) -> bool {
+    let has_declaration = [
+        "const ",
+        "let ",
+        "var ",
+        "function ",
+        "class ",
+        "module.exports",
+        "require(",
+        "process.env",
+    ]
+    .iter()
+    .any(|marker| value.contains(marker));
+    let has_statement_shape =
+        value.contains(';') && (value.contains('{') || value.contains('=') || value.contains('('));
+    has_declaration && has_statement_shape
+}
+
 fn is_source_map_payload(value: &str) -> bool {
     let trimmed = value.trim_start();
     if !trimmed.starts_with('{') {
@@ -893,6 +915,12 @@ fn analyze_embedded_haystack(
         Some((lang, code)) => (lang, code),
         None => {
             let ft = detect_language_value(value, string_type, is_encoded, host_file_type)
+                .or_else(|| {
+                    (is_encoded
+                        && parent_path.to_ascii_lowercase().ends_with(".map")
+                        && looks_like_source_map_javascript(value))
+                    .then_some(FileType::JavaScript)
+                })
                 .context("No language detected in string")?;
             // Bail before analyzing the host as "embedded". Offset-0 plain
             // source is the host file; `is_source_code` hosts always
@@ -2127,6 +2155,29 @@ mod tests {
                 .all(|f| f.id != "metadata/lang/embedded::python"),
             "component source markup should not be reported as embedded Python"
         );
+    }
+
+    #[test]
+    fn test_short_base64_source_map_javascript_is_analyzed() {
+        let value = "const JWTSECRET = process.env.JWTSECRET;\nconst ENDPOINT_CONFIG = { API_GATEWAY: \"aHR0cHM6Ly9leGFtcGxlLmNvbQ==\" };\nmodule.exports = ENDPOINT_CONFIG;";
+        let mut info = make_string_info(value);
+        info.encoding_chain = vec!["base64".to_string()];
+        let result = analyze_embedded_string(
+            "package/init.ts.map",
+            &info,
+            0,
+            &Arc::new(CapabilityMapper::empty()),
+            0,
+            Some(&FileType::Data),
+        );
+        assert!(
+            matches!(&result, Ok(EmbeddedAnalysisResult::EncodedLayer(_))),
+            "encoded source-map JavaScript should become a typed layer: {result:?}",
+        );
+        if let Ok(EmbeddedAnalysisResult::EncodedLayer(layer)) = result {
+            assert_eq!(layer.file_type, "javascript");
+            assert!(layer.path.contains("##base64@0"));
+        }
     }
 
     #[test]

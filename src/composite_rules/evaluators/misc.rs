@@ -269,10 +269,9 @@ pub(crate) fn eval_path(
                 method: "path".to_string(),
                 source: "target".to_string(),
                 value: target.to_string(),
-                // A path/filename match describes the file as a whole, not a
-                // byte range. Anchor it at the header (offset 0) so scope and
-                // proximity bucketing always have a location to key on.
-                location: Some("0x0".to_string()),
+                // A path/filename match is metadata about the target path, not
+                // bytes in the file. It has no honest file offset.
+                location: None,
                 ..Default::default()
             }]
         } else {

@@ -4472,6 +4472,10 @@ mod tests {
             ArchiveAnalyzer::archive_member_yara_filetypes(&FileType::Pe),
             vec!["pe", "exe", "dll", "bat", "ps1"]
         );
+        assert_eq!(
+            ArchiveAnalyzer::archive_member_yara_filetypes(&FileType::Data),
+            vec!["dat", "bin", "payload", "raw", "map"]
+        );
         assert!(ArchiveAnalyzer::archive_member_yara_filetypes(&FileType::Unknown).is_empty());
     }
 
@@ -4528,6 +4532,11 @@ mod tests {
         );
         assert_eq!(
             default_analyzer.archive_member_analysis_skip_reason(&FileType::Pe, "member"),
+            None
+        );
+        assert_eq!(
+            default_analyzer
+                .archive_member_analysis_skip_reason(&FileType::Data, "package/parse.ts.map"),
             None
         );
 

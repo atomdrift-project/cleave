@@ -1228,7 +1228,7 @@ pub(crate) fn eval_call<'a>(
             || args_filters.is_some_and(|fs| fs.iter().any(|f| f.from.is_some()));
         let canonical = if needs_flow {
             flow(ctx)
-                .and_then(|flow| flow_call(flow, *offset, target))
+                .and_then(|flow| flow_call(flow, *offset, target, args.len()))
                 .and_then(|v| v.target.as_deref())
         } else {
             None
@@ -1253,7 +1253,7 @@ pub(crate) fn eval_call<'a>(
             && !args.iter().enumerate().any(|(i, a)| {
                 filter.index.is_none_or(|wanted| wanted == i)
                     && arg_matches(a, filter)
-                    && origin_matches(*offset, target, i, filter, ctx)
+                    && origin_matches(*offset, target, args.len(), i, filter, ctx)
             })
         {
             continue;
@@ -1264,7 +1264,7 @@ pub(crate) fn eval_call<'a>(
         // multi-positional shape like `File.rename("a.png", "b.exe")`.
         if let Some(filters) = args_filters
             && !all_filters_match_distinct_with(args, filters, |i, filter| {
-                origin_matches(*offset, target, i, filter, ctx)
+                origin_matches(*offset, target, args.len(), i, filter, ctx)
             })
         {
             continue;
@@ -1452,11 +1452,11 @@ fn flow_call<'a>(
     flow: &'a filefacts::Flow,
     offset: Option<u64>,
     target: &str,
+    argument_count: usize,
 ) -> Option<&'a filefacts::FlowValue> {
-    let mut candidates = flow
-        .values
-        .iter()
-        .filter(|v| v.kind == "call" && Some(v.offset as u64) == offset);
+    let mut candidates = flow.values.iter().filter(|v| {
+        v.kind == "call" && Some(v.offset as u64) == offset && v.inputs.len() == argument_count
+    });
     let first = candidates.next()?;
     if first.target.as_deref() == Some(target) {
         return Some(first);
@@ -1468,14 +1468,16 @@ fn flow_call<'a>(
             return Some(value);
         }
     }
-    // A unique call can have a canonical import spelling different from the
-    // raw symbol. Ambiguous same-offset calls must match their target too.
+    // Chained calls can share an offset but have different argument counts.
+    // A unique candidate can have a canonical import spelling different from
+    // the raw symbol; still-ambiguous candidates must match their target too.
     unique.then_some(first)
 }
 
 fn origin_matches(
     offset: Option<u64>,
     target: &str,
+    argument_count: usize,
     argument: usize,
     filter: &crate::composite_rules::condition::ArgFilter,
     ctx: &EvaluationContext<'_>,
@@ -1496,7 +1498,7 @@ fn origin_matches(
         return false;
     }
     let Some(flow) = flow(ctx) else { return false };
-    let Some(call) = flow_call(flow, offset, target) else {
+    let Some(call) = flow_call(flow, offset, target, argument_count) else {
         gaps.record(AnalysisGap::FlowCallUnavailable);
         return false;
     };
@@ -2876,6 +2878,50 @@ mod multi_arg_tests {
                 "{source}: {:?}",
                 report.analysis_gaps
             );
+        }
+    }
+
+    #[test]
+    fn canonical_chained_call_provenance_uses_its_own_arguments() {
+        use crate::composite_rules::context::EvaluationContext;
+        use crate::composite_rules::types::FileType;
+        use crate::types::{AnalysisReport, FilefactsView, TargetInfo};
+
+        let filter: ArgFilter =
+            serde_yaml::from_str("index: 0\nfrom:\n  call: '^acquire$'\n").unwrap();
+        for (expression, expected) in [
+            ("rt.Send(acquire()).Finish()", true),
+            ("rt.Send(\"public\").Finish()", false),
+            ("rt.Send(\"public\").Finish(acquire())", false),
+        ] {
+            let source = format!(
+                "package p\nimport rt \"example.org/runtime\"\nfunc run(){{ {expression} }}"
+            );
+            let parsed =
+                filefacts::open_with_path(std::path::Path::new("a.go"), source.as_bytes()).unwrap();
+            let mut report = AnalysisReport::new(TargetInfo {
+                path: "a.go".into(),
+                file_type: "go".into(),
+                size_bytes: source.len() as u64,
+                sha256: String::new(),
+                architectures: None,
+            });
+            report.filefacts = Some(FilefactsView {
+                flow: parsed.flow().cloned(),
+                symbols: parsed.symbols().into_iter().cloned().collect(),
+                ..Default::default()
+            });
+            let ctx =
+                EvaluationContext::new(&report, source.as_bytes(), FileType::Go, &[], None, None);
+            let result = super::eval_call(
+                Some(&"example.org/runtime.Send".into()),
+                None,
+                None,
+                Some(&filter),
+                None,
+                &ctx,
+            );
+            assert_eq!(result.matched, expected, "{expression}");
         }
     }
 

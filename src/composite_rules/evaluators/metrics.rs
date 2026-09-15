@@ -69,8 +69,8 @@ pub(crate) fn eval_metrics<'a>(
         // A *located* metric carries the byte spans it was measured from (e.g.
         // `binary.peak_region_entropy` → the high-entropy runs). When present,
         // anchor the evidence at those spans so the finding points at the bytes
-        // (prism). Otherwise a metric describes the whole file, so anchor at the
-        // header (offset 0) for scope/proximity bucketing.
+        // (prism). Otherwise the metric is file-global and has no honest single
+        // byte anchor; leave the location empty rather than claiming offset 0.
         let spans = ctx
             .report
             .filefacts_metric_spans
@@ -89,7 +89,7 @@ pub(crate) fn eval_metrics<'a>(
                 // largest run is first, so its length is the representative span.
                 Some(first.len),
             ),
-            None => (Some("0x0".to_string()), Vec::new(), None),
+            None => (None, Vec::new(), None),
         };
         vec![Evidence {
             method: "metrics".to_string(),

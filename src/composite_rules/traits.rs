@@ -154,13 +154,36 @@ fn get_relative_source_file(path: &std::path::Path) -> Option<String> {
 fn report_locationless_evidence(trait_id: &str, evidence: &[crate::types::Evidence]) {
     for ev in evidence {
         if ev.location.is_none() {
-            tracing::error!(
-                trait_id,
-                method = %ev.method,
-                source = %ev.source,
-                "evidence has no location — evaluator bug; locationless evidence \
-                 breaks composite scope bucketing and is slated to become fatal"
+            let content_match = matches!(
+                ev.method.as_str(),
+                "string"
+                    | "symbol"
+                    | "symbols"
+                    | "raw"
+                    | "text"
+                    | "literal"
+                    | "string_literal"
+                    | "ast"
+                    | "ast_query"
+                    | "encoded_string"
+                    | "hex"
+                    | "xor"
             );
+            if content_match {
+                tracing::error!(
+                    trait_id,
+                    method = %ev.method,
+                    source = %ev.source,
+                    "content match has no file offset — evaluator should record its byte span"
+                );
+            } else {
+                tracing::debug!(
+                    trait_id,
+                    method = %ev.method,
+                    source = %ev.source,
+                    "file-global evidence has no single byte offset"
+                );
+            }
         }
     }
 }

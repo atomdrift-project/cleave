@@ -66,9 +66,10 @@ impl GenericAnalyzer {
     fn analyze_source(&self, file_path: &Path, content: &str) -> AnalysisReport {
         let ctx =
             crate::analysis_context::AnalysisContext::open(file_path, content.as_bytes()).ok();
-        self.analyze_source_internal(file_path, content, None, None, None, ctx.as_ref())
+        self.analyze_source_internal(file_path, content, None, None, None, ctx.as_ref(), None)
     }
 
+    #[allow(clippy::too_many_arguments)] // Existing input projections plus cancellation.
     fn analyze_source_internal(
         &self,
         file_path: &Path,
@@ -77,6 +78,7 @@ impl GenericAnalyzer {
         original_bytes: Option<&[u8]>,
         precomputed_sha256: Option<String>,
         source_ctx: Option<&crate::analysis_context::AnalysisContext<'_>>,
+        cancellation: Option<&Arc<std::sync::atomic::AtomicBool>>,
     ) -> AnalysisReport {
         let start = std::time::Instant::now();
         tracing::debug!(
@@ -249,6 +251,12 @@ impl GenericAnalyzer {
                 report.filefacts = Some(view);
             }
             report.identity = ctx.identity();
+            super::declared_sources::append(
+                &ctx.parsed,
+                &self.capability_mapper,
+                &mut report,
+                cancellation,
+            );
         }
 
         // Evaluate all rules (atomic + composite) and merge into report.
@@ -535,6 +543,7 @@ impl Analyzer for GenericAnalyzer {
             Some(input.data),
             input.sha256.clone(),
             source_ctx,
+            input.cancellation.as_ref(),
         ))
     }
 

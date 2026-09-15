@@ -173,10 +173,11 @@ impl DoomedSkipIndex {
         traits: &[TraitDefinition],
         composites: &[CompositeTrait],
         mapper_platforms: &[Platform],
-        file_type: FileType,
+        ctx: &crate::composite_rules::EvaluationContext<'_>,
         indexes: &MatchIndexes,
         cache: &TraitEvalCache<'_>,
     ) -> bool {
+        let file_type = ctx.file_type;
         if trait_idx >= self.never_skip.len() || self.never_skip[trait_idx] {
             return false;
         }
@@ -206,7 +207,15 @@ impl DoomedSkipIndex {
         }
         applicable.iter().all(|c| {
             c.other_partners.iter().any(|&p| {
-                partner_cannot_match(p, traits, mapper_platforms, file_type, indexes, cache)
+                partner_cannot_match(
+                    p,
+                    traits,
+                    mapper_platforms,
+                    file_type,
+                    ctx.binary_data,
+                    indexes,
+                    cache,
+                )
             })
         })
     }
@@ -354,6 +363,7 @@ fn partner_cannot_match(
     traits: &[TraitDefinition],
     mapper_platforms: &[Platform],
     file_type: FileType,
+    binary_data: &[u8],
     indexes: &MatchIndexes,
     cache: &TraitEvalCache<'_>,
 ) -> bool {
@@ -372,7 +382,9 @@ fn partner_cannot_match(
         Condition::Raw(RawQuery { regex: Some(_), .. })
         | Condition::Raw(RawQuery { word: Some(_), .. }) => true,
         Condition::Text(TextQuery { regex: Some(_), .. })
-        | Condition::Text(TextQuery { word: Some(_), .. }) => file_type.uses_raw_text_search(),
+        | Condition::Text(TextQuery { word: Some(_), .. }) => {
+            file_type.uses_raw_text_search_for(binary_data)
+        }
         _ => false,
     };
     if has_content_regex
@@ -386,14 +398,15 @@ fn partner_cannot_match(
     {
         return true;
     }
-    let use_string_index = cache.source_text_prefiltered || !file_type.uses_raw_text_search();
+    let use_string_index =
+        cache.source_text_prefiltered || !file_type.uses_raw_text_search_for(binary_data);
     if use_string_index
         && indexes.string_match_index.is_exact_trait(partner_idx)
         && !cache.string_matched_traits.contains(&partner_idx)
     {
         return true;
     }
-    if !file_type.uses_raw_text_search()
+    if !file_type.uses_raw_text_search_for(binary_data)
         && indexes.string_match_index.is_substr_trait(partner_idx)
         && !cache.string_matched_traits.contains(&partner_idx)
     {

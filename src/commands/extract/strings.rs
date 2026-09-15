@@ -71,6 +71,14 @@ fn run_direct(target: &str, min_length: usize, format: &cli::OutputFormat) -> Re
 
     let data = fs::read(path)?;
 
+    // Compiled SCPT stores UTF-16BE literals that raw stng rows cannot expose.
+    // Use the same parsed-literal conversion as the AppleScript analyzer.
+    if scpt::is_scpt(&data) {
+        let mut rows = strings::strings_from_filefacts(path, &data);
+        rows.retain(|s| s.value.len() >= min_length);
+        return format_strings_output(&rows, format);
+    }
+
     // For source code files with AST support, extract strings via AST parsing
     if let Ok(file_type) = detect_file_type(path)
         && file_type.is_source_code()
@@ -288,5 +296,57 @@ fn format_strings_output(
             }
             Ok(output)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    #[test]
+    fn scpt_base64_strings_command_includes_parsed_rows() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/scpt-base64.scpt");
+        let output = super::run(
+            path.to_str().unwrap(),
+            4,
+            None,
+            &crate::cli::OutputFormat::Json,
+        )
+        .unwrap();
+        let rows: Vec<serde_json::Value> = serde_json::from_str(&output).unwrap();
+        let decoded: Vec<_> = rows
+            .iter()
+            .filter(|s| {
+                s["value"] == r"printf '%s\n' 'SCPT_BASE64_OK'"
+                    && s["encoding_chain"] == serde_json::json!(["scpt", "base64"])
+            })
+            .collect();
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(
+            decoded[0]["encoding_chain"],
+            serde_json::json!(["scpt", "base64"])
+        );
+        let parent = rows
+            .iter()
+            .find(|s| {
+                s["encoding"] == "utf16be"
+                    && s["value"] == "cHJpbnRmICclc1xuJyAnU0NQVF9CQVNFNjRfT0sn"
+            })
+            .unwrap();
+        // Section is internal provenance and intentionally omitted from JSON.
+        assert!(decoded[0].get("section").is_none());
+        assert!(decoded[0]["offset"].is_string());
+        assert_eq!(decoded[0]["offset"], parent["offset"]);
+        let filtered = super::run(
+            path.to_str().unwrap(),
+            4096,
+            None,
+            &crate::cli::OutputFormat::Json,
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&filtered).unwrap(),
+            serde_json::json!([])
+        );
     }
 }

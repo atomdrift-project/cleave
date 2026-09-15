@@ -2,6 +2,7 @@
 
 pub(crate) mod analyzers;
 mod asar;
+mod cpio;
 mod guards;
 #[cfg(test)]
 mod guards_test;
@@ -1925,6 +1926,24 @@ impl ArchiveAnalyzer {
             report.identity = ctx.identity();
             filefacts_archive_entries = ctx.archive_entries();
             crate::capabilities::merge_filefacts_context(&mut report, &ctx);
+            if matches!(file_type, FileType::Rpm) {
+                // Header-declared scripts are independent of payload decoding.
+                // Reuse the existing bounded source adapter, never execute RPM.
+                if let Some(mapper) = &self.capability_mapper {
+                    super::declared_sources::append(
+                        &ctx.parsed,
+                        mapper,
+                        &mut report,
+                        self.cancelled.as_ref(),
+                    );
+                }
+                for error in ctx.parsed.errors() {
+                    guard.add_extraction_note(format!(
+                        "RPM header evidence incomplete: {}",
+                        error.message
+                    ));
+                }
+            }
         }
 
         // Seed the member list from filefacts. For an image this is the only
@@ -1932,13 +1951,29 @@ impl ArchiveAnalyzer {
         // dropped from the report, so a name-matching rule would never see the
         // lure that named it. The extraction pass merges its own per-member
         // metadata onto these entries by path rather than appending duplicates.
-        if is_zip_container(file_type) || matches!(file_type, FileType::Iso) {
+        if is_zip_container(file_type) || matches!(file_type, FileType::Iso | FileType::Cpio) {
             report.archive_contents.extend(
                 filefacts_archive_entries
                     .iter()
                     .filter(|entry| entry.entry_type.as_deref() != Some("directory"))
                     .cloned(),
             );
+        }
+
+        if matches!(file_type, FileType::Cpio) {
+            let indexed_every_member = report
+                .filefacts
+                .as_ref()
+                .and_then(|ff| ff.values.get("cpio"))
+                .and_then(|cpio| cpio.get("complete"))
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            if !indexed_every_member {
+                guard.add_extraction_note(
+                    "CPIO index is incomplete; only validated member extents are analyzed"
+                        .to_string(),
+                );
+            }
         }
 
         if matches!(file_type, FileType::Chm) {
@@ -2177,6 +2212,17 @@ impl ArchiveAnalyzer {
                     .errors
                     .push(format!("ISO member extraction failed: {e}"));
             }
+            // RPM headers remain useful when an unsupported or damaged CPIO
+            // payload cannot be opened. Keep those parsed facts and explicitly
+            // report the missing traversal instead of losing the whole result.
+            let preserved_rpm_facts = matches!(file_type, FileType::Rpm)
+                && report
+                    .filefacts
+                    .as_ref()
+                    .is_some_and(|ff| ff.values.get("rpm").is_some());
+            if preserved_rpm_facts {
+                guard.add_extraction_note(format!("RPM payload extraction incomplete: {e}"));
+            }
 
             let extracted_count = walkdir::WalkDir::new(temp_dir.path())
                 .min_depth(1)
@@ -2192,7 +2238,7 @@ impl ArchiveAnalyzer {
                 ));
             }
             if extracted_count == 0 {
-                if preserved_7z_metadata || preserved_iso_facts {
+                if preserved_7z_metadata || preserved_iso_facts || preserved_rpm_facts {
                     drain_extraction_notes(&mut report, &guard);
                     let suppress_path_traversal =
                         should_suppress_path_traversal_findings(archive_path, &hostile_reasons);
@@ -2523,6 +2569,7 @@ impl ArchiveAnalyzer {
         }
 
         match file_type {
+            FileType::Cpio => cpio::extract_from_data(data, filefacts_members, dest_dir, guard),
             // A gem is an uncompressed `ustar` tar (members: metadata.gz,
             // data.tar.gz, checksums.yaml.gz); recursion descends into
             // data.tar.gz for the installed files.
@@ -2664,14 +2711,13 @@ fn tar_in_memory_enabled() -> bool {
 
 impl Analyzer for ArchiveAnalyzer {
     fn analyze_input(&self, input: &AnalysisInput<'_>) -> Result<AnalysisReport> {
-        if input.path.exists() {
-            // File is already on disk — read it once and analyse in-memory.
-            let data = fs::read(input.path)?;
-            self.analyze_archive_with_data(&data, input.path)
-        } else {
-            // Data arrived in-memory (e.g. via analyze_bytes or a nested archive).
-            self.analyze_archive_with_data(input.data, input.path)
-        }
+        // `input.data` is authoritative — the caller already read the file, and
+        // `input.path` may be a label rather than a location (`analyze_bytes`, a
+        // nested archive member). Re-reading the path here analyzed whatever
+        // happened to sit at that name in the process's working directory
+        // instead of the bytes handed in, and failed outright when the name
+        // resolved to a directory.
+        self.analyze_archive_with_data(input.data, input.path)
     }
 
     fn analyze(&self, file_path: &Path) -> Result<AnalysisReport> {

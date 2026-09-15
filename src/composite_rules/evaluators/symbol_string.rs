@@ -786,7 +786,7 @@ pub(crate) fn eval_text<'a, 'b>(
     trait_id: Option<&str>,
 ) -> ConditionResult {
     let _mp = crate::mem_profile::phase(crate::mem_profile::Phase::EvalText);
-    if ctx.file_type.uses_raw_text_search() {
+    if ctx.file_type.uses_raw_text_search_for(ctx.binary_data) {
         let location = ContentLocationParams {
             section: params.section.cloned(),
             offset: params.offset,
@@ -954,9 +954,16 @@ pub(crate) fn eval_text<'a, 'b>(
                     // `string_info_location` (its section start, else `0x0`) —
                     // mirrors the exact-match branch above and `eval_string_literal`,
                     // so a content match never reaches `fallback_anchor` locationless.
-                    let within = (match_value.as_ptr() as usize)
-                        .saturating_sub(string_info.value.as_ptr() as usize)
-                        as u64;
+                    // A parsed literal may be reconstructed or UTF-16, so a
+                    // decoded substring index is not a file displacement at
+                    // all; those keep the parser's own anchor.
+                    let within = if string_info.section.as_deref() == Some("literal") {
+                        0
+                    } else {
+                        (match_value.as_ptr() as usize)
+                            .saturating_sub(string_info.value.as_ptr() as usize)
+                            as u64
+                    };
                     let location = match string_info.offset {
                         Some(o) => format!("{:#x}", o.saturating_add(within)),
                         None => string_info_location(ctx.report, string_info),
@@ -1089,17 +1096,13 @@ fn merge_text_passes(mut raw: ConditionResult, mut encoded: ConditionResult) -> 
     raw
 }
 
-/// Evaluate string-literal condition using AST-derived string entries only.
+/// Evaluate string literals from source ASTs or format parsers.
 #[must_use]
 pub(crate) fn eval_string_literal<'a, 'b>(
     params: &StringParams<'a>,
     trait_not: Option<&Vec<NotException>>,
     ctx: &EvaluationContext<'b>,
 ) -> ConditionResult {
-    if !ctx.file_type.supports_ast_queries() {
-        return ConditionResult::no_match();
-    }
-
     let effective_range = resolve_string_effective_range(params, ctx);
     let matcher = StringMatcher::resolve(params);
 
@@ -1111,7 +1114,7 @@ pub(crate) fn eval_string_literal<'a, 'b>(
     let mut seen_match_spans: FxHashSet<(u64, usize)> = FxHashSet::default();
 
     for string_info in &ctx.report.strings {
-        if string_info.section.as_deref() != Some("ast") {
+        if !matches!(string_info.section.as_deref(), Some("ast" | "literal")) {
             continue;
         }
         if !offset_in_range(string_info.offset, effective_range) {
@@ -1130,7 +1133,14 @@ pub(crate) fn eval_string_literal<'a, 'b>(
                 let within = (match_value.as_ptr() as usize)
                     .saturating_sub(string_info.value.as_ptr() as usize)
                     as u64;
-                let match_offset = string_info.offset.map(|o| o.saturating_add(within));
+                // A compiled literal may be UTF-16 or reconstructed from many
+                // instructions. Its decoded substring index is not a byte
+                // displacement in the file; preserve the parser's anchor.
+                let match_offset = if string_info.section.as_deref() == Some("literal") {
+                    string_info.offset
+                } else {
+                    string_info.offset.map(|o| o.saturating_add(within))
+                };
                 if let Some(offset) = match_offset
                     && !seen_match_spans.insert((offset, match_value.len()))
                 {
@@ -1148,7 +1158,7 @@ pub(crate) fn eval_string_literal<'a, 'b>(
                     };
                     evidence.push(Evidence {
                         method: "string_literal".to_string(),
-                        source: "ast".to_string(),
+                        source: string_info.section.clone().unwrap_or_default(),
                         value: truncate_evidence_value(match_value),
                         location: Some(location),
                         ..Default::default()
@@ -1607,6 +1617,20 @@ fn arg_matches(
     {
         return false;
     }
+    // Value constraints imply a compatible shape even when `kind` is omitted.
+    // Unknown arguments cannot satisfy a literal predicate by skipping its
+    // match arm. Provenance-only filters still defer to origin_matches.
+    if (filter.exact.is_some() || filter.substr.is_some() || filter.regex.is_some())
+        && !matches!(arg, Arg::String { .. } | Arg::Template { .. })
+    {
+        return false;
+    }
+    if (filter.value.is_some() || filter.radix.is_some()) && !matches!(arg, Arg::Number { .. }) {
+        return false;
+    }
+    if filter.name.is_some() && !matches!(arg, Arg::Identifier { .. }) {
+        return false;
+    }
     match arg {
         Arg::Number { value, radix, .. } => {
             if let Some(want_value) = filter.value
@@ -1645,9 +1669,8 @@ fn arg_matches(
                 return false;
             }
         }
-        // Other shapes (null, object, array, function, call, expression)
-        // carry no matchable value — a shape match alone (checked above) is
-        // sufficient.
+        // Other shapes carry no matchable scalar value. Only shape/position
+        // and separately evaluated provenance constraints can match them.
         _ => {}
     }
     true
@@ -1747,7 +1770,7 @@ fn source_raw_windows(
     search_end: usize,
 ) -> Option<Vec<(usize, usize)>> {
     use super::raw_window_stats as ws;
-    if !ctx.file_type.uses_raw_text_search() {
+    if !ctx.file_type.uses_raw_text_search_for(ctx.binary_data) {
         ws::bump(&ws::NOT_SOURCE_TYPE);
         ws::LAST_REASON.with(|r| r.set(3));
         return None;
@@ -2762,6 +2785,53 @@ mod multi_arg_tests {
             kind: Some("string".to_string()),
             regex: Some(pat.to_string()),
             ..Default::default()
+        }
+    }
+
+    #[test]
+    fn argument_value_filters_require_compatible_shapes() {
+        let values: Vec<filefacts::Arg> = serde_json::from_value(serde_json::json!([
+            {"shape": "string", "value": "needle"},
+            {"shape": "template", "value": "needle"},
+            {"shape": "identifier", "name": "needle"},
+            {"shape": "number", "text": "7", "value": 7, "radix": 10},
+            {"shape": "bool", "value": true},
+            {"shape": "null"}, {"shape": "object"}, {"shape": "array"},
+            {"shape": "function"}, {"shape": "call"}, {"shape": "expression"}
+        ]))
+        .unwrap();
+        for (yaml, accepted) in [
+            ("regex: '^needle$'", vec![0, 1]),
+            ("exact: needle", vec![0, 1]),
+            ("substr: eed", vec![0, 1]),
+            ("value: 7", vec![3]),
+            ("radix: 10", vec![3]),
+            ("name: needle", vec![2]),
+        ] {
+            let filter: ArgFilter = serde_yaml::from_str(yaml).unwrap();
+            for (index, value) in values.iter().enumerate() {
+                assert_eq!(
+                    super::arg_matches(value, &filter),
+                    accepted.contains(&index),
+                    "{yaml} must not ignore its constraint on {value:?}"
+                );
+            }
+        }
+        let named: ArgFilter = serde_yaml::from_str("regex: '^needle$'").unwrap();
+        // The unknown call argument cannot substitute for the missing literal.
+        assert!(!all_filters_match_distinct(
+            &[filefacts::Arg::Call, s("other")],
+            &[named]
+        ));
+        let provenance: ArgFilter = serde_yaml::from_str("from:\n  value: '^needle$'").unwrap();
+        for value in &values {
+            // Shape-only filters remain valid; origin checks run separately.
+            let shape = ArgFilter {
+                kind: Some(super::arg_shape(value).into()),
+                ..Default::default()
+            };
+            assert!(super::arg_matches(value, &shape));
+            assert!(super::arg_matches(value, &provenance));
         }
     }
 

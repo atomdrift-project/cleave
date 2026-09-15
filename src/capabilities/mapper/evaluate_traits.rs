@@ -588,7 +588,11 @@ impl super::CapabilityMapper {
         let raw_regex_hits = self
             .match_indexes()
             .raw_content_regex_index
-            .find_matches_detailed(binary_data, &file_type, file_type.uses_raw_text_search());
+            .find_matches_detailed(
+                binary_data,
+                &file_type,
+                file_type.uses_raw_text_search_for(binary_data),
+            );
 
         let cache = TraitEvalCache {
             raw_regex_matches: Some(&raw_regex_hits.traits),
@@ -705,7 +709,11 @@ impl super::CapabilityMapper {
         let raw_regex_hits = if self.match_indexes().raw_content_regex_index.has_patterns() {
             self.match_indexes()
                 .raw_content_regex_index
-                .find_matches_detailed(binary_data, &file_type, file_type.uses_raw_text_search())
+                .find_matches_detailed(
+                    binary_data,
+                    &file_type,
+                    file_type.uses_raw_text_search_for(binary_data),
+                )
         } else {
             crate::capabilities::indexes::RawGateHits::default()
         };
@@ -801,7 +809,7 @@ impl super::CapabilityMapper {
         // Determine file type from report
         let file_type = self.detect_file_type(&report.target.file_type);
         let use_string_prefilters =
-            !file_type.uses_raw_text_search() || cache.source_text_prefiltered;
+            !file_type.uses_raw_text_search_for(binary_data) || cache.source_text_prefiltered;
 
         let mut ctx = EvaluationContext::new(
             report,
@@ -834,7 +842,7 @@ impl super::CapabilityMapper {
         if let Some(ranges) = cache.arch_ranges {
             ctx = ctx.with_arch_ranges(ranges);
         }
-        if file_type.uses_raw_text_search() {
+        if file_type.uses_raw_text_search_for(binary_data) {
             ctx = ctx.with_raw_atom_offsets(cache.raw_atom_offsets);
         }
 
@@ -967,7 +975,7 @@ impl super::CapabilityMapper {
                     &self.trait_definitions,
                     &self.composite_rules,
                     &self.platforms,
-                    file_type,
+                    &ctx,
                     indexes,
                     cache,
                 )
@@ -987,7 +995,7 @@ impl super::CapabilityMapper {
         // load balancing. `CLEAVE_PAR_TRAIT_CHUNK` is the benchmark override.
         let eval_flags = self.trait_eval_flags();
         let base_cached_evidence = ctx.cached_evidence;
-        let is_raw_text = file_type.uses_raw_text_search();
+        let is_raw_text = file_type.uses_raw_text_search_for(binary_data);
         let trait_chunk = parallel_trait_chunk();
 
         // Decoded-layer skip map for `eval_text`: indexed `type: text` traits

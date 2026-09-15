@@ -72,6 +72,7 @@ pub(crate) mod vsix_manifest;
 pub(crate) mod unified;
 
 // Fallback for languages without tree-sitter support
+mod declared_sources;
 pub(crate) mod generic;
 
 // Embedded code detector (analyzes code found in strings)
@@ -763,6 +764,7 @@ impl FileTypeExt for FileType {
             FileType::Rar => vec!["rar", "archive"],
             FileType::Deb => vec!["deb", "archive"],
             FileType::Rpm => vec!["rpm", "archive"],
+            FileType::Cpio => vec!["cpio", "archive"],
             FileType::Crx => vec!["crx", "archive"],
             FileType::Dmg => vec!["dmg", "archive"],
             FileType::OciImage => vec!["oci_image", "archive"],

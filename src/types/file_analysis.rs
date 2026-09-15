@@ -134,7 +134,7 @@ pub struct FileAnalysis {
     pub size: u64,
 
     // === Per-file summary (for easy filtering) ===
-    /// Weighted risk score: sum(ceil(criticality_weight * confidence)) across findings
+    /// Rounded-up sum of maximum weighted scores per three-segment trait group.
     #[serde(rename = "x", default, skip_serializing_if = "is_zero")]
     pub score: u32,
 
@@ -372,8 +372,13 @@ impl FileAnalysis {
             }
         }
 
-        let total_score: f32 = scores_by_group.values().sum();
-        self.score = total_score.ceil() as u32;
+        // Hash/insertion order must not change an integer risk score. Sum in
+        // a canonical order with a wider accumulator, then round once to the
+        // existing f32 score precision before ceil (not after every addition).
+        let mut group_scores: Vec<f32> = scores_by_group.into_values().collect();
+        group_scores.sort_unstable_by(f32::total_cmp);
+        let total_score: f64 = group_scores.into_iter().map(f64::from).sum();
+        self.score = (total_score as f32).ceil() as u32;
 
         self.counts = if counts.hostile > 0 || counts.suspicious > 0 || counts.notable > 0 {
             Some(counts)
@@ -851,7 +856,7 @@ mod tests {
         file.compute_summary();
 
         // Different top-3 paths: "test/hostile/a" and "test/suspicious/b"
-        // Both contribute: ceil(120*0.9) + ceil(40*0.8) = 108 + 32 = 140
+        // Both contribute: ceil(120*0.9 + 40*0.8) = 140
         assert_eq!(file.score, 140);
         let counts = file.counts.unwrap();
         assert_eq!(counts.hostile, 1);
@@ -888,6 +893,85 @@ mod tests {
         let counts = file.counts.unwrap();
         assert_eq!(counts.hostile, 1);
         assert_eq!(counts.suspicious, 1);
+    }
+
+    #[test]
+    fn score_is_independent_of_group_accumulation_order() {
+        // These four f32 values sum exactly to 3 in wider arithmetic, but
+        // some f32 accumulation orders yield 3.0000002 and ceil to 4.
+        let confidence = [0.7, 0.8, 0.9, 0.6];
+        for a in 0..4 {
+            for b in 0..4 {
+                for c in 0..4 {
+                    for d in 0..4 {
+                        let order = [a, b, c, d];
+                        let mut unique = order;
+                        unique.sort_unstable();
+                        if unique != [0, 1, 2, 3] {
+                            continue;
+                        }
+                        let mut file = FileAnalysis::new(
+                            0,
+                            "control.rs".into(),
+                            "rust".into(),
+                            "score-order".into(),
+                            0,
+                        );
+                        for (group, index) in order.into_iter().enumerate() {
+                            file.findings.push(
+                                Finding::capability(
+                                    format!("metadata/score/group-{group}::observation"),
+                                    "Neutral test observation".into(),
+                                    confidence[index],
+                                )
+                                .with_criticality(Criticality::Notable),
+                            );
+                        }
+                        file.compute_summary();
+                        assert_eq!(file.score, 3, "confidence order: {order:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn stable_sum_preserves_score_precision_and_real_fractional_excess() {
+        let mut file = FileAnalysis::new(
+            0,
+            "control.rs".into(),
+            "rust".into(),
+            "score-precision".into(),
+            0,
+        );
+        for group in 0..5 {
+            file.findings.push(
+                Finding::capability(
+                    format!("metadata/score/group-{group}::baseline"),
+                    "Baseline".into(),
+                    1.0,
+                )
+                .with_criticality(Criticality::Baseline),
+            );
+        }
+        file.compute_summary();
+        assert_eq!(
+            file.score, 1,
+            "five 0.2 baselines retain the existing score precision"
+        );
+        file.findings.clear();
+        for (group, conf) in [0.7, 0.8, 0.9, 0.6001].into_iter().enumerate() {
+            file.findings.push(
+                Finding::capability(
+                    format!("metadata/score/group-{group}::notable"),
+                    "Notable".into(),
+                    conf,
+                )
+                .with_criticality(Criticality::Notable),
+            );
+        }
+        file.compute_summary();
+        assert_eq!(file.score, 4, "a real fractional excess still rounds up");
     }
 
     #[test]

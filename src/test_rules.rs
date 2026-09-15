@@ -826,7 +826,7 @@ impl<'a> RuleDebugger<'a> {
                 // substring, surface the per-line semantic explicitly. Authors hit this when
                 // they expect `exact:` to find an identifier anywhere in source code.
                 if !result.matched
-                    && self.file_type.uses_raw_text_search()
+                    && self.file_type.uses_raw_text_search_for(self.binary_data)
                     && exact.is_some()
                     && substr.is_none()
                     && regex.is_none()

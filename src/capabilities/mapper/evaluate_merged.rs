@@ -212,7 +212,10 @@ impl super::CapabilityMapper {
         // absent, but do **not** record offsets or window (B1l did, +42 s).
         // Specimen: 61 MiB `re2-exhaustive.txt` has no `font-family` and
         // still paid 7.3 s for that regex (S4 / S2p).
-        let record_offsets = raw_gate_plan(binary_data.len(), file_type.uses_raw_text_search())?;
+        let record_offsets = raw_gate_plan(
+            binary_data.len(),
+            file_type.uses_raw_text_search_for(binary_data),
+        )?;
         let index = &self.match_indexes().raw_content_regex_index;
         if !index.has_patterns() {
             return None;

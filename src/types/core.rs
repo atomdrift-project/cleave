@@ -1829,6 +1829,33 @@ impl AnalysisReport {
             self.files.insert(0, root_file);
         }
 
+        // Nested analyzers often return local IDs (or no parent ID). After
+        // flattening and renumbering, fill missing containment links from the
+        // same logical-path relationship used by wrapper finding inheritance.
+        // Explicit graft/reference links remain authoritative.
+        // Resolve against a borrowed index, then apply: the index keys point
+        // into the very paths the update walks, so the two passes cannot
+        // overlap. An owning index would clone every member path to say so.
+        let path_ids: rustc_hash::FxHashMap<&str, u32> = self
+            .files
+            .iter()
+            .map(|file| (file.path.as_str(), file.id))
+            .collect();
+        let parent_ids: Vec<Option<u32>> = self
+            .files
+            .iter()
+            .map(|file| {
+                file.parent_id.or_else(|| {
+                    immediate_wrapper_path(&file.path)
+                        .and_then(|parent| path_ids.get(parent).copied())
+                        .filter(|id| *id != file.id)
+                })
+            })
+            .collect();
+        for (file, parent_id) in self.files.iter_mut().zip(parent_ids) {
+            file.parent_id = parent_id;
+        }
+
         self.inherit_child_findings_into_wrappers();
 
         // Attribute findings that arrived via the archive *aggregate* (their

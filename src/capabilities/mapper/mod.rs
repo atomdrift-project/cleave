@@ -24,12 +24,13 @@
 
 use std::sync::{Arc, OnceLock};
 
+#[cfg(test)]
+mod compiled_text_tests;
+
 use crate::capabilities::indexes::{
     RawContentRegexIndex, StringMatchIndex, SymbolMatchIndex, TraitIndex,
 };
-use crate::composite_rules::{
-    CompositeTrait, Condition, FileType as RuleFileType, Platform, TraitDefinition,
-};
+use crate::composite_rules::{CompositeTrait, FileType as RuleFileType, Platform, TraitDefinition};
 
 /// The four match indexes, built together as a pure function of the mapper's
 /// `trait_definitions` and `platforms`. Held behind a [`OnceLock`] so they are
@@ -143,12 +144,6 @@ pub struct CapabilityMapper {
     /// once on first use. The member-fold early strip keeps any finding this
     /// index can reach.
     pub(super) trait_ref_index: Arc<OnceLock<TraitRefIndex>>,
-    /// Ids of every trait and composite whose findings depend on the file's
-    /// path (`Condition::depends_on_path`, closed over `trait:` references),
-    /// computed once on first use. The content-keyed `FileAnalysis` cache
-    /// keeps the evaluation path on a report that carries any of these, and
-    /// only serves it back under that same path.
-    pub(super) path_dependent_ids: Arc<OnceLock<rustc_hash::FxHashSet<String>>>,
     pub(super) path_inputs: Arc<OnceLock<Vec<crate::composite_rules::PathInput>>>,
     /// Like `trait_ref_index`, but restricted to rules that can evaluate at
     /// container (archive) scope — `for:` containing `all` or any
@@ -685,106 +680,8 @@ impl CapabilityMapper {
         })
     }
 
-    /// The referenced-trait index restricted to container-scope-capable rules.
-    /// See the `container_ref_index` field doc.
-    /// See the `path_dependent_ids` field.
-    pub(crate) fn path_dependent_ids(&self) -> &rustc_hash::FxHashSet<String> {
-        self.path_dependent_ids
-            .get_or_init(|| self.path_ids_closed_over_refs(Condition::depends_on_path))
-    }
-
-    fn path_ids_closed_over_refs(
-        &self,
-        pred: fn(&Condition) -> bool,
-    ) -> rustc_hash::FxHashSet<String> {
-        {
-            fn conds_depend_on_path<'a>(
-                pred: fn(&Condition) -> bool,
-                conds: impl Iterator<Item = &'a Condition>,
-            ) -> bool {
-                let mut conds = conds;
-                conds.any(pred)
-            }
-            fn downgrade_conds(
-                d: &crate::composite_rules::DowngradeConditions,
-            ) -> impl Iterator<Item = &Condition> {
-                d.any
-                    .iter()
-                    .flatten()
-                    .chain(d.all.iter().flatten())
-                    .chain(d.none.iter().flatten())
-            }
-            let mut index = PathRefIndex::default();
-            for t in &self.trait_definitions {
-                let direct = pred(&t.r#if)
-                    || conds_depend_on_path(pred, t.unless.iter().flatten())
-                    || t.downgrade
-                        .as_ref()
-                        .is_some_and(|d| conds_depend_on_path(pred, downgrade_conds(d)));
-                if direct {
-                    index.insert(t.id.as_str());
-                }
-            }
-            for r in &self.composite_rules {
-                if conds_depend_on_path(pred, r.all.iter().flatten().chain(r.any.iter().flatten()))
-                {
-                    index.insert(r.id.as_str());
-                }
-            }
-            // Close over `trait:` references: a rule built on a path-dependent
-            // finding is itself path-dependent. Each pass is one linear scan
-            // over the rules with O(1) reference probes; it runs until no rule
-            // is added, bounded by the reference-chain depth (a handful).
-            let mut refs = std::collections::BTreeSet::new();
-            loop {
-                let mut grew = false;
-                for t in &self.trait_definitions {
-                    if index.ids.contains(t.id.as_str()) {
-                        continue;
-                    }
-                    refs.clear();
-                    t.r#if.collect_trait_refs(&mut refs);
-                    for c in t.unless.iter().flatten() {
-                        c.collect_trait_refs(&mut refs);
-                    }
-                    if refs.iter().any(|r| index.hits(r)) {
-                        index.insert(t.id.as_str());
-                        grew = true;
-                    }
-                }
-                for r in &self.composite_rules {
-                    if index.ids.contains(r.id.as_str()) {
-                        continue;
-                    }
-                    refs.clear();
-                    for c in r.all.iter().flatten().chain(r.any.iter().flatten()) {
-                        c.collect_trait_refs(&mut refs);
-                    }
-                    if refs.iter().any(|x| index.hits(x)) {
-                        index.insert(r.id.as_str());
-                        grew = true;
-                    }
-                }
-                if !grew {
-                    break;
-                }
-            }
-            index.ids
-        }
-    }
-
-    /// Whether any finding on `report` comes from a path-dependent rule.
-    pub(crate) fn report_has_path_dependent_findings(
-        &self,
-        report: &crate::types::core::AnalysisReport,
-    ) -> bool {
-        let ids = self.path_dependent_ids();
-        !ids.is_empty() && report.findings.iter().any(|f| ids.contains(f.id.as_str()))
-    }
-
-    /// Every direct path input of the rule set (top-level `if:`/`unless:`/
-    /// `downgrade:` conditions and composite `all:`/`any:` lists — the same
-    /// scope `path_dependent_ids` considers).
+    /// Every direct path input of the rule set, including composite
+    /// suppressors and downgrades. A negative match can change a verdict too.
     fn path_inputs(&self) -> &[crate::composite_rules::PathInput] {
         self.path_inputs.get_or_init(|| {
             let mut out = Vec::new();
@@ -806,8 +703,25 @@ impl CapabilityMapper {
                 }
             }
             for r in &self.composite_rules {
-                for c in r.all.iter().flatten().chain(r.any.iter().flatten()) {
+                for c in r
+                    .all
+                    .iter()
+                    .flatten()
+                    .chain(r.any.iter().flatten())
+                    .chain(r.unless.iter().flatten())
+                {
                     c.collect_path_inputs(&mut out);
+                }
+                if let Some(d) = &r.downgrade {
+                    for c in d
+                        .any
+                        .iter()
+                        .flatten()
+                        .chain(d.all.iter().flatten())
+                        .chain(d.none.iter().flatten())
+                    {
+                        c.collect_path_inputs(&mut out);
+                    }
                 }
             }
             out
@@ -889,64 +803,42 @@ impl CapabilityMapper {
         // also lazy; cold it costs ~70 ms inside the first archive's member
         // fold, which holds the fold lock while every other member waits.
         let _ = self.trait_ref_index();
-        // Same story for the path-dependence index the content-keyed cache
-        // consults on every member store.
-        let _ = self.path_dependent_ids();
-    }
-}
-
-/// Path-dependent ids plus the two derived forms a `trait:` reference can
-/// use to reach them — every directory prefix (`a/b/` reaches `a/b/c::x`)
-/// and the bare name after `::` — so a reference resolves in O(1). Mirrors
-/// the forms `eval_trait` accepts; over-matching only widens what the cache
-/// refuses to share, under-matching would leak path findings across paths.
-#[derive(Default)]
-struct PathRefIndex {
-    ids: rustc_hash::FxHashSet<String>,
-    prefixes: rustc_hash::FxHashSet<String>,
-    names: rustc_hash::FxHashSet<String>,
-}
-
-impl PathRefIndex {
-    fn insert(&mut self, id: &str) {
-        if !self.ids.insert(id.to_string()) {
-            return;
-        }
-        let path = id.split("::").next().unwrap_or(id);
-        let mut acc = String::new();
-        for seg in path.split('/') {
-            if !acc.is_empty() {
-                acc.push('/');
-            }
-            acc.push_str(seg);
-            self.prefixes.insert(acc.clone());
-        }
-        if let Some(name) = id.rsplit("::").next() {
-            self.names.insert(name.to_string());
-        }
-    }
-
-    fn hits(&self, r: &str) -> bool {
-        self.ids.contains(r)
-            || self.prefixes.contains(r.trim_end_matches('/'))
-            || self.names.contains(r)
+        // Warm the direct path inputs used to validate cache sharing.
+        let _ = self.path_inputs();
     }
 }
 
 #[cfg(test)]
 mod path_ref_tests {
-    use super::PathRefIndex;
 
     #[test]
-    fn exact_prefix_and_bare_name_references_reach_path_dependent_ids() {
-        let mut idx = PathRefIndex::default();
-        idx.insert("well-known/lib/crypto/better-auth::core-path");
-        assert!(idx.hits("well-known/lib/crypto/better-auth::core-path"));
-        assert!(idx.hits("well-known/lib/crypto/"));
-        assert!(idx.hits("well-known/lib/crypto/better-auth"));
-        assert!(idx.hits("core-path"));
-        assert!(!idx.hits("well-known/lib/cryptoX/"));
-        assert!(!idx.hits("path"));
+    #[allow(clippy::expect_used)]
+    fn composite_suppressors_and_downgrades_are_path_inputs() {
+        use super::CapabilityMapper;
+        use crate::composite_rules::CompositeTrait;
+        for condition in [
+            "unless:\n  - type: path\n    substr: /vendor/\n",
+            "downgrade:\n  any:\n    - type: path\n      substr: /vendor/\n",
+            "downgrade:\n  all:\n    - type: path\n      substr: /vendor/\n",
+            "downgrade:\n  none:\n    - type: path\n      substr: /vendor/\n",
+        ] {
+            let mut mapper = CapabilityMapper::new();
+            let yaml = format!("id: context\ndesc: Context\nconf: 1.0\n{condition}");
+            let rule: CompositeTrait = serde_yaml::from_str(&yaml).expect("test composite");
+            mapper.composite_rules.push(rule);
+            assert!(
+                !mapper.paths_equivalent("pkg/lib.rs", "pkg/vendor/lib.rs"),
+                "{condition}"
+            );
+            assert!(
+                !mapper.paths_equivalent("pkg/vendor/lib.rs", "pkg/lib.rs"),
+                "{condition}"
+            );
+            assert!(
+                mapper.paths_equivalent("one/lib.rs", "two/lib.rs"),
+                "{condition}"
+            );
+        }
     }
 }
 
@@ -1035,7 +927,7 @@ pub(super) fn build_string_prefilter(
     binary_data: &[u8],
     report: &crate::types::AnalysisReport,
 ) -> StringPrefilter {
-    if file_type.uses_raw_text_search() {
+    if file_type.uses_raw_text_search_for(binary_data) {
         if let Some((mut matched, regex_candidates)) = index.find_matches_in_raw_source(binary_data)
         {
             let decoded: Vec<&crate::types::StringInfo> = report

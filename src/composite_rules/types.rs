@@ -731,7 +731,7 @@ impl From<filefacts::FileType> for FileType {
             Ff::Xz => Self::Xz,
             Ff::Lzma => Self::Lzma,
             Ff::Zst => Self::Zst,
-            Ff::SevenZ | Ff::Rar => Self::Archive,
+            Ff::SevenZ | Ff::Rar | Ff::Cpio => Self::Archive,
             Ff::Iso => Self::Iso,
             Ff::Deb => Self::Deb,
             Ff::StaticLib => Self::StaticLib,
@@ -888,6 +888,12 @@ impl FileType {
             )
     }
 
+    /// Select the text haystack for this file's content.
+    #[must_use]
+    pub(crate) fn uses_raw_text_search_for(&self, bytes: &[u8]) -> bool {
+        self.uses_raw_text_search() && !(*self == FileType::AppleScript && scpt::is_scpt(bytes))
+    }
+
     /// Returns true if this file type typically has a section structure (ELF, Mach-O, PE)
     #[must_use]
     pub(crate) fn has_sections(&self) -> bool {
@@ -1010,7 +1016,7 @@ impl FileType {
             "lnk" => FileType::Lnk,
             "ipa" => FileType::Ipa,
             "pdf" => FileType::Pdf,
-            "archive" | "rar" | "7z" => FileType::Archive,
+            "archive" | "rar" | "7z" | "cpio" => FileType::Archive,
             // "unknown" falls through to the `_` wildcard arm below.
             "zip" => FileType::Zip,
             // Both `.apk` ecosystems match generic `apk`-scoped traits; the

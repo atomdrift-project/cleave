@@ -732,136 +732,158 @@ fn skip_rpm_header<R: Read>(reader: &mut R) -> Result<usize> {
     Ok(16 + index_size + hsize)
 }
 
+/// `st_mode` file-type bits, as CPIO stores them (POSIX `S_IFMT` family).
+const S_IFMT: u32 = 0o170000;
+const S_IFDIR: u32 = 0o040000;
+const S_IFREG: u32 = 0o100000;
+const S_IFLNK: u32 = 0o120000;
+
+/// Longest symlink target worth retaining for the escape check.
+const MAX_SYMLINK_TARGET: u64 = 4096;
+
 fn extract_cpio<R: Read>(mut reader: R, dest_dir: &Path, guard: &ExtractionGuard) -> Result<()> {
     loop {
-        // Check file count limit
+        if guard.is_cancelled() {
+            anyhow::bail!("cancelled");
+        }
         if !guard.check_file_count() {
             anyhow::bail!("Exceeded maximum file count");
         }
 
-        // Try to read next CPIO entry
-        let entry_reader = match cpio::newc::Reader::new(&mut reader) {
-            Ok(r) => r,
-            Err(e) => {
-                // End of archive or invalid entry
-                if e.kind() == std::io::ErrorKind::InvalidData {
-                    break;
-                }
-                return Err(e.into());
-            }
-        };
+        // The dependency allocates namesize bytes before reading the name.
+        // Bound that allocation before handing the unchanged header to it.
+        // This is a resource preflight, not a second CPIO metadata parser.
+        let mut header = [0u8; 110];
+        reader
+            .read_exact(&mut header[..6])
+            .context("Truncated CPIO magic")?;
+        match &header[..6] {
+            b"070701" | b"070702" => {}
+            b"07070X" => anyhow::bail!(
+                "Unsupported RPM stripped CPIO payload: requires RPM file-index metadata"
+            ),
+            b"070707" => anyhow::bail!("Unsupported old-ASCII CPIO payload"),
+            _ => anyhow::bail!("Invalid CPIO magic"),
+        }
+        reader
+            .read_exact(&mut header[6..])
+            .context("Truncated CPIO header")?;
+        let name_size = u32::from_str_radix(std::str::from_utf8(&header[94..102])?, 16)
+            .context("Invalid CPIO name size")?;
+        anyhow::ensure!(
+            (1..=1024 * 1024).contains(&name_size),
+            "CPIO name size exceeds limit"
+        );
+        // Large names in many compressed entries also consume resources;
+        // do not charge only retained file bodies against the stream budget.
+        if !guard.check_bytes(110 + u64::from(name_size), "CPIO header/name") {
+            anyhow::bail!("Exceeded maximum total extraction size");
+        }
+        let prefixed = Cursor::new(header).chain(&mut reader);
+        let mut entry_reader = cpio::newc::Reader::new(prefixed).context("Invalid CPIO entry")?;
 
         let entry = entry_reader.entry();
         let name = entry.name().to_string();
-
+        let mode = entry.mode() & S_IFMT;
+        let file_size = u64::from(entry.file_size());
         if name == "TRAILER!!!" {
+            anyhow::ensure!(file_size == 0, "CPIO trailer has file data");
             break;
         }
 
-        // Skip . and empty entries
-        if name.is_empty() || name == "." {
-            // Consume remaining data to advance reader
-            let mut sink = std::io::sink();
-            std::io::copy(&mut { entry_reader }, &mut sink).ok();
-            continue;
-        }
-
-        // Clean up path (remove leading ./ or /)
-        let clean_name = name.trim_start_matches("./").trim_start_matches('/');
-        if clean_name.is_empty() {
-            let mut sink = std::io::sink();
-            std::io::copy(&mut { entry_reader }, &mut sink).ok();
-            continue;
-        }
-
-        // Sanitize path to prevent traversal
-        let Some(out_path) = sanitize_entry_path(clean_name, dest_dir) else {
-            guard.add_hostile_reason(HostileArchiveReason::PathTraversal(name.clone()));
-            let mut sink = std::io::sink();
-            std::io::copy(&mut { entry_reader }, &mut sink).ok();
-            continue;
-        };
-
-        let mode = entry.mode();
-        let file_size = entry.file_size() as u64;
-        // Directories (S_IFDIR) keep their name; files are disambiguated.
-        let out_path = if mode & 0o170000 == 0o040000 {
-            out_path
+        // Preserve the original name for the shared sanitizer. Stripping a
+        // leading slash would conceal that the archive supplied an absolute path.
+        let out_path = if matches!(name.as_str(), "" | "." | "./") {
+            None
         } else {
-            guard.claim_output_path(out_path)
+            let path = sanitize_entry_path(&name, dest_dir);
+            if path.is_none() {
+                guard.add_hostile_reason(HostileArchiveReason::PathTraversal(name.clone()));
+            }
+            path.map(|path| {
+                if mode == S_IFDIR {
+                    path
+                } else {
+                    guard.claim_output_path(path)
+                }
+            })
         };
-
-        // Check file size limit
         if file_size > MAX_FILE_SIZE {
             guard.add_hostile_reason(HostileArchiveReason::ExcessiveFileSize {
-                file: clean_name.to_string(),
+                file: name.clone(),
                 size: file_size,
             });
-            let mut sink = std::io::sink();
-            std::io::copy(&mut { entry_reader }, &mut sink).ok();
-            continue;
+            anyhow::bail!("Exceeded maximum CPIO file size");
         }
 
-        if mode & 0o170000 == 0o040000 {
-            // Directory
-            fs::create_dir_all(&out_path).ok();
-            // Consume remaining data
-            let mut sink = std::io::sink();
-            std::io::copy(&mut { entry_reader }, &mut sink).ok();
-        } else if mode & 0o170000 == 0o100000 {
-            // Regular file
-            if let Some(parent) = out_path.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            let mut file = File::create(&out_path)?;
-            let mut limited = LimitedReader::new(entry_reader, MAX_FILE_SIZE);
-            // Check cancellation every 64 KiB so a large single entry doesn't
-            // block indefinitely after a timeout fires.
-            let mut buf = [0u8; 65536];
-            let mut written = 0u64;
-            loop {
-                if guard.is_cancelled() {
-                    anyhow::bail!("cancelled");
+        let mut file = None;
+        if let Some(path) = out_path.as_ref() {
+            if mode == S_IFDIR {
+                fs::create_dir_all(path)?;
+            } else if mode == S_IFREG {
+                if let Some(parent) = path.parent() {
+                    fs::create_dir_all(parent)?;
                 }
-                let n = limited.read(&mut buf)?;
-                if n == 0 {
-                    break;
-                }
-                file.write_all(&buf[..n])?;
-                written += n as u64;
+                file = Some(File::create(path)?);
             }
-
-            // Track total bytes
-            if !guard.check_bytes(written, clean_name) {
-                anyhow::bail!("Exceeded maximum total extraction size");
+        }
+        // Every entry is drained under the same bounds; only the destination
+        // differs. A retained symlink target goes to a buffer, a regular file
+        // to disk, and everything else — devices, skipped names — to a sink.
+        let mut target_buf = Vec::new();
+        let mut discard = std::io::sink();
+        let writer: &mut dyn Write = match file.as_mut() {
+            Some(file) => file,
+            None if mode == S_IFLNK && out_path.is_some() && file_size < MAX_SYMLINK_TARGET => {
+                &mut target_buf
             }
-        } else if mode & 0o170000 == 0o120000 {
-            // Symlink - target is stored as file data
-            let mut target_buf = Vec::new();
-            if file_size > 0 && file_size < 4096 {
-                // Reasonable symlink path length
-                let mut limited = LimitedReader::new(entry_reader, file_size.min(4096));
-                if limited.read_to_end(&mut target_buf).is_ok()
-                    && let Ok(target_str) = String::from_utf8(target_buf)
-                    && symlink_escapes(&out_path, &target_str, dest_dir)
-                {
-                    guard.add_hostile_reason(HostileArchiveReason::SymlinkEscape(format!(
-                        "{} -> {}",
-                        clean_name, target_str
-                    )));
-                }
-            } else {
-                // Consume the entry data
-                let mut sink = std::io::sink();
-                std::io::copy(&mut { entry_reader }, &mut sink).ok();
-            }
-        } else {
-            // Skip other types (devices, etc.)
-            let mut sink = std::io::sink();
-            std::io::copy(&mut { entry_reader }, &mut sink).ok();
+            None => &mut discard,
+        };
+        copy_cpio_data(&mut entry_reader, writer, file_size, guard, &name)?;
+        // Reading to EOF consumes only file data, NOT the alignment padding.
+        // Finish every entry, including ignored names, links and directories.
+        entry_reader
+            .finish()
+            .context("Truncated CPIO entry padding")?;
+        if let Some(path) = out_path.as_ref()
+            && let Ok(target) = std::str::from_utf8(&target_buf)
+            && !target.is_empty()
+            && symlink_escapes(path, target, dest_dir)
+        {
+            guard.add_hostile_reason(HostileArchiveReason::SymlinkEscape(format!(
+                "{name} -> {target}"
+            )));
         }
     }
 
+    Ok(())
+}
+
+/// Drain each entry exactly, with the same bounds for retained and skipped data.
+fn copy_cpio_data(
+    reader: &mut dyn Read,
+    writer: &mut dyn Write,
+    expected: u64,
+    guard: &ExtractionGuard,
+    name: &str,
+) -> Result<()> {
+    let mut buf = [0u8; 65536];
+    let mut copied = 0u64;
+    loop {
+        if guard.is_cancelled() {
+            anyhow::bail!("cancelled");
+        }
+        let n = reader.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        if !guard.check_bytes(n as u64, name) {
+            anyhow::bail!("Exceeded maximum total extraction size");
+        }
+        writer.write_all(&buf[..n])?;
+        copied += n as u64;
+    }
+    anyhow::ensure!(copied == expected, "Truncated CPIO entry data: {name}");
     Ok(())
 }
 
@@ -1034,6 +1056,207 @@ pub(crate) fn extract_cab_from_reader<R: Read + Seek>(
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
+
+    fn cpio_fixture(entries: &[(&str, u32, &[u8])]) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        for (name, mode, body) in entries {
+            let mut writer = cpio::newc::Builder::new(name)
+                .mode(*mode)
+                .write(&mut bytes, body.len() as u32);
+            writer.write_all(body).unwrap();
+            writer.finish().unwrap();
+        }
+        cpio::newc::trailer(&mut bytes).unwrap();
+        bytes
+    }
+
+    #[test]
+    fn cpio_entry_padding_preserves_following_files() {
+        let bytes = cpio_fixture(&[
+            ("one.txt", 0o100644, b"1"),
+            ("two.txt", 0o100644, b"22"),
+            ("three.txt", 0o100644, b"333"),
+            ("four.txt", 0o100644, b"4444"),
+        ]);
+        let dir = tempfile::tempdir().unwrap();
+        extract_cpio(bytes.as_slice(), dir.path(), &ExtractionGuard::new()).unwrap();
+        for (name, content) in [
+            ("one.txt", "1"),
+            ("two.txt", "22"),
+            ("three.txt", "333"),
+            ("four.txt", "4444"),
+        ] {
+            assert_eq!(fs::read_to_string(dir.path().join(name)).unwrap(), content);
+        }
+    }
+
+    #[test]
+    fn cpio_malformed_header_is_not_successful_end_of_archive() {
+        let dir = tempfile::tempdir().unwrap();
+        let invalid = [b'x'; 110];
+        assert!(extract_cpio(invalid.as_slice(), dir.path(), &ExtractionGuard::new()).is_err());
+        let mut after_file = cpio_fixture(&[("ok.txt", 0o100644, b"okay")]);
+        let trailer = after_file
+            .windows(6)
+            .rposition(|magic| magic == b"070701")
+            .unwrap();
+        after_file[trailer] = b'x';
+        assert!(extract_cpio(after_file.as_slice(), dir.path(), &ExtractionGuard::new()).is_err());
+    }
+
+    #[test]
+    fn cpio_empty_archive_with_trailer_succeeds() {
+        let dir = tempfile::tempdir().unwrap();
+        extract_cpio(
+            cpio_fixture(&[]).as_slice(),
+            dir.path(),
+            &ExtractionGuard::new(),
+        )
+        .unwrap();
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn cpio_skipped_names_and_links_do_not_hide_following_files() {
+        let bytes = cpio_fixture(&[
+            (".", 0o040755, b""),
+            ("../escape", 0o100644, b"one"),
+            ("./../escape", 0o100644, b"two"),
+            ("/absolute", 0o100644, b"three"),
+            ("link", 0o120777, b"../outside"),
+            ("safe.txt", 0o100644, b"safe"),
+        ]);
+        let dir = tempfile::tempdir().unwrap();
+        let guard = ExtractionGuard::new();
+        extract_cpio(bytes.as_slice(), dir.path(), &guard).unwrap();
+        assert_eq!(
+            fs::read_to_string(dir.path().join("safe.txt")).unwrap(),
+            "safe"
+        );
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+        let reasons = guard.take_reasons();
+        assert_eq!(
+            reasons
+                .iter()
+                .filter(|r| matches!(r, HostileArchiveReason::PathTraversal(_)))
+                .count(),
+            3
+        );
+        assert!(
+            reasons
+                .iter()
+                .any(|r| matches!(r, HostileArchiveReason::SymlinkEscape(_)))
+        );
+    }
+
+    #[test]
+    fn cpio_truncation_never_reports_complete_extraction() {
+        let bytes = cpio_fixture(&[("ok.txt", 0o100644, b"abc")]);
+        let dir = tempfile::tempdir().unwrap();
+        for len in 0..bytes.len() {
+            assert!(
+                extract_cpio(&bytes[..len], dir.path(), &ExtractionGuard::new()).is_err(),
+                "accepted prefix of {len} bytes"
+            );
+        }
+    }
+
+    #[test]
+    fn cpio_duplicate_names_preserve_both_bodies() {
+        let bytes = cpio_fixture(&[
+            ("same.txt", 0o100644, b"one"),
+            ("same.txt", 0o100644, b"two"),
+        ]);
+        let dir = tempfile::tempdir().unwrap();
+        extract_cpio(bytes.as_slice(), dir.path(), &ExtractionGuard::new()).unwrap();
+        let mut bodies: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| fs::read_to_string(entry.unwrap().path()).unwrap())
+            .collect();
+        bodies.sort();
+        assert_eq!(bodies, ["one", "two"]);
+    }
+
+    #[test]
+    fn cpio_name_allocation_is_bounded_before_dependency_parser() {
+        let mut header = cpio_fixture(&[]);
+        header[94..102].copy_from_slice(b"ffffffff");
+        let dir = tempfile::tempdir().unwrap();
+        let error =
+            extract_cpio(header.as_slice(), dir.path(), &ExtractionGuard::new()).unwrap_err();
+        assert!(error.to_string().contains("name size exceeds limit"));
+    }
+
+    #[test]
+    fn cpio_metadata_cannot_bypass_total_byte_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let guard = ExtractionGuard::new();
+        assert!(guard.check_bytes(MAX_TOTAL_SIZE - 100, "previous entries"));
+        let error = extract_cpio(cpio_fixture(&[]).as_slice(), dir.path(), &guard).unwrap_err();
+        assert!(error.to_string().contains("maximum total extraction size"));
+    }
+
+    #[test]
+    fn cpio_known_unsupported_formats_are_not_called_corrupt() {
+        let dir = tempfile::tempdir().unwrap();
+        for magic in [b"07070X", b"070707"] {
+            let error =
+                extract_cpio(magic.as_slice(), dir.path(), &ExtractionGuard::new()).unwrap_err();
+            assert!(error.to_string().starts_with("Unsupported"));
+        }
+    }
+
+    #[test]
+    fn cpio_trailer_cannot_silently_discard_claimed_data() {
+        let mut bytes = cpio_fixture(&[]);
+        bytes[54..62].copy_from_slice(b"00000004");
+        bytes.extend_from_slice(b"data");
+        let dir = tempfile::tempdir().unwrap();
+        assert!(
+            extract_cpio(bytes.as_slice(), dir.path(), &ExtractionGuard::new())
+                .unwrap_err()
+                .to_string()
+                .contains("trailer has file data")
+        );
+    }
+
+    #[test]
+    fn cpio_cancellation_interrupts_discarded_member_data() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+        struct CancelReader {
+            inner: Cursor<Vec<u8>>,
+            flag: Arc<AtomicBool>,
+        }
+        impl Read for CancelReader {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                let n = self.inner.read(buf)?;
+                if self.inner.position() > 128 * 1024 {
+                    self.flag.store(true, Ordering::Release);
+                }
+                Ok(n)
+            }
+        }
+        let flag = Arc::new(AtomicBool::new(false));
+        // A large ignored link must not bypass cancellation or byte accounting.
+        let body = vec![b'x'; 256 * 1024];
+        let bytes = cpio_fixture(&[("link", 0o120777, &body)]);
+        let reader = CancelReader {
+            inner: Cursor::new(bytes),
+            flag: Arc::clone(&flag),
+        };
+        let guard = ExtractionGuard::with_cancellation(Some(flag));
+        let dir = tempfile::tempdir().unwrap();
+        assert!(
+            extract_cpio(reader, dir.path(), &guard)
+                .unwrap_err()
+                .to_string()
+                .contains("cancelled")
+        );
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
 
     /// A crafted DMG: valid `koly` trailer + a plist whose only `blkx` carries a
     /// `Data` blob too short for the BLKXTable header. dmgwiz navigates the plist

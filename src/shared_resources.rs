@@ -86,25 +86,6 @@ pub(crate) fn trait_possibly_referenced(id: &str) -> bool {
         .is_some_and(|m| m.trait_ref_index().possibly_referenced(id))
 }
 
-/// Whether a container-scope-capable rule (one whose `for:` includes `all`
-/// or an archive-family type) could reference finding id `id`. Container
-/// composite evaluation is the only rule pass that runs after the member
-/// fold, so this — not the full index above — is the evidence-retention
-/// oracle for fold-time member slimming. Conservative superset, same match
-/// modes as `eval_trait`.
-/// Whether `report` carries a finding from a path-dependent rule (see
-/// `CapabilityMapper::path_dependent_ids`). With no mapper loaded the answer
-/// is conservative (`true`): the cache then keeps the path and refuses
-/// cross-path hits rather than risk serving a path finding elsewhere.
-pub(crate) fn report_has_path_dependent_findings(
-    report: &crate::types::core::AnalysisReport,
-) -> bool {
-    let guard = CAPABILITY_MAPPER.read();
-    guard
-        .as_ref()
-        .is_none_or(|m| m.report_has_path_dependent_findings(report))
-}
-
 /// Diagnostics for a refused share: which rule path inputs differ.
 pub(crate) fn paths_inequivalent_inputs(a: &str, b: &str) -> Vec<String> {
     let guard = CAPABILITY_MAPPER.read();
@@ -113,7 +94,8 @@ pub(crate) fn paths_inequivalent_inputs(a: &str, b: &str) -> Vec<String> {
         .map_or_else(Vec::new, |m| m.paths_inequivalent_inputs(a, b))
 }
 
-/// Adopt a report evaluated under `owner_path` for `new_path`, or refuse.
+/// Adopt `report`, evaluated under its own `target.path`, for `new_path`.
+/// Returns whether it was adopted; a refusal leaves the report untouched.
 ///
 /// Same path: nothing to do. Otherwise every rule's direct path inputs must
 /// read the same value under both paths (`CapabilityMapper::paths_equivalent`)
@@ -122,12 +104,14 @@ pub(crate) fn paths_inequivalent_inputs(a: &str, b: &str) -> Vec<String> {
 /// the member path; those child paths are then rebased onto `new_path`.
 pub(crate) fn adopt_report_under(
     report: &mut crate::types::core::AnalysisReport,
-    owner_path: &str,
     new_path: &str,
 ) -> bool {
-    if owner_path == new_path {
+    if report.target.path == new_path {
         return true;
     }
+    // Borrowed, not cloned: `target.path` is disjoint from the `files` and
+    // `archive_contents` the rebase below walks and rewrites.
+    let owner_path = report.target.path.as_str();
     let rebase = |p: &str| -> Option<String> {
         p.strip_prefix(owner_path)
             .map(|rest| format!("{new_path}{rest}"))
@@ -161,6 +145,7 @@ pub(crate) fn adopt_report_under(
             e.path = np;
         }
     }
+    report.target.path = new_path.to_string();
     true
 }
 
@@ -173,6 +158,8 @@ pub(crate) fn loaded_capability_mapper() -> Option<Arc<CapabilityMapper>> {
     CAPABILITY_MAPPER.read().clone()
 }
 
+/// Whether a container-scope rule could reference this finding. Conservative
+/// evidence-retention oracle for member folding, with eval_trait's match modes.
 pub(crate) fn trait_referenced_at_container_scope(id: &str) -> bool {
     let guard = CAPABILITY_MAPPER.read();
     guard

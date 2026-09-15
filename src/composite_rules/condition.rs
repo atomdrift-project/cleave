@@ -2650,32 +2650,6 @@ impl Condition {
         }
     }
 
-    /// Record the lowercased `<filename>::` sibling basenames this
-    /// condition's kv paths reference. Only `type: value` queries can reach
-    /// a sibling file's flattened `kv`; every other variant contributes
-    /// nothing. Feeds the member-retention gate: a member whose basename no
-    /// rule references can drop its `kv` when it folds
-    /// (see `shared_resources::kv_sibling_basename_referenced`).
-    /// Record the trait ids this condition can reference, for the
-    /// early-strip keep-set. Mirrors `eval_trait`'s matching exactly: an id
-    /// is stored raw (trailing `/` trimmed); classification into
-    /// exact / short-suffix / directory-prefix happens at index build.
-    /// Whether evaluating this condition reads the file's own path: `type:
-    /// path` (full path, `basename`, `dirname`) and `type: value` queries over
-    /// the synthetic `file.*` keys (`file.basename`, `file.path`, …). A finding
-    /// produced through such a condition is only valid for the path it was
-    /// evaluated under — the content-keyed caches must not serve it elsewhere.
-    pub(crate) fn depends_on_path(&self) -> bool {
-        match self {
-            Self::Path(_) => true,
-            Self::Kv(q) => [Some(q.path.as_str()), q.eq.as_deref(), q.ne.as_deref()]
-                .into_iter()
-                .flatten()
-                .any(|p| p.starts_with("file.")),
-            _ => false,
-        }
-    }
-
     /// The direct path inputs of this condition, for
     /// `CapabilityMapper::paths_equivalent`: a `type: path` query, or the
     /// `file.*` value keys a `kv` condition reads.
@@ -3014,9 +2988,10 @@ impl Condition {
             // PE/ELF/Mach-O; source members never populate `report.syscalls`.
             Condition::Section(SectionQuery { .. }) | Condition::Syscall { .. } => is_binary,
 
-            // AST-backed searches require source code support
-            Condition::TreeSitter(TreeSitterQuery { .. })
-            | Condition::Literal(LiteralQuery { .. }) => file_type.supports_ast_queries(),
+            // AST-backed searches require source code support. `type: literal`
+            // does not: format parsers also emit literals (compiled AppleScript
+            // among them), so it falls through to the permissive wildcard.
+            Condition::TreeSitter(TreeSitterQuery { .. }) => file_type.supports_ast_queries(),
 
             // `section:` / `section_offset:` need a PE/ELF/Mach-O section
             // map. On `uses_raw_text_search` files the map is empty, so

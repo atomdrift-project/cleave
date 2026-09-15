@@ -1554,45 +1554,33 @@ impl ArchiveAnalyzer {
         let file_type_key = file_type.label();
         if !is_archive {
             // A member can emit decoded child files (`##base64`,
-            // `##unicode-escape`, ...). The compact FileAnalysis cache stores
-            // only the parent, so reusing it after one side of a diff was
-            // analyzed fresh made those children appear removed on the cached
-            // side. Preserve the complete report in the report cache and use
-            // it when the logical member path is identical. If the same bytes
-            // occur under another path, child paths and evidence are
-            // path-dependent, so fall through to a fresh analysis rather than
-            // rebasing them incompletely.
-            let mut cached_has_path_dependent_children = false;
-            if let Some(mut report) =
-                crate::analysis_cache::report_cache_lookup(sha256, file_type_key, options)
-            {
-                cached_has_path_dependent_children =
-                    !report.files.is_empty() || !report.archive_contents.is_empty();
-                if report.target.path == relative_path {
-                    report.analysis_timestamp = Some(chrono::Utc::now());
-                    crate::restamp_path_derived_values(&mut report, Path::new(relative_path));
-                    tracing::debug!(
-                        sha256,
-                        relative_path,
-                        "Archive member full-report cache hit"
-                    );
-                    return Ok(Some(report));
-                }
+            // `##unicode-escape`, ...). Only the full report cache carries
+            // that child inventory; `file_analysis_cache_store` refuses any
+            // report with children, so the compact fallback below can never
+            // resurrect a member with its decoded children stripped. Both
+            // lookups validate the member path themselves and refuse a hit
+            // whose evaluation origin is not equivalent to this one.
+            if let Some(mut report) = crate::analysis_cache::report_cache_lookup(
+                sha256,
+                file_type_key,
+                options,
+                relative_path,
+            ) {
+                report.analysis_timestamp = Some(chrono::Utc::now());
+                tracing::debug!(
+                    sha256,
+                    relative_path,
+                    "Archive member full-report cache hit"
+                );
+                return Ok(Some(report));
             }
 
-            if !cached_has_path_dependent_children
-                && let Some(fa) = crate::analysis_cache::file_analysis_cache_lookup(
-                    sha256,
-                    file_type_key,
-                    options,
-                )
-                // A cached analysis that carries path-derived findings
-                // (`type: path`, `file.basename` values) is only valid under
-                // the path it was evaluated for: the same bytes under another
-                // path would otherwise inherit, e.g., a `<lib>/core-path`
-                // finding they never matched.
-                && (fa.path.is_empty() || fa.path == relative_path)
-            {
+            if let Some(fa) = crate::analysis_cache::file_analysis_cache_lookup(
+                sha256,
+                file_type_key,
+                options,
+                relative_path,
+            ) {
                 let mut report = crate::report_from_file_analysis(fa, relative_path.to_string());
                 crate::restamp_path_derived_values(&mut report, Path::new(relative_path));
                 tracing::debug!(sha256, relative_path, "Archive member cache hit");
@@ -1739,19 +1727,15 @@ impl ArchiveAnalyzer {
                 // path it was evaluated for. Sharing it across paths let
                 // `testing/harness` basename findings from one archive
                 // surface on another's container record.
-                let owner_path = report.target.path.clone();
-                let path_bound = !crate::shared_resources::adopt_report_under(
-                    &mut report,
-                    &owner_path,
-                    relative_path,
-                );
-                if path_bound {
+                if !crate::shared_resources::adopt_report_under(&mut report, relative_path) {
+                    // Refused, so the report still carries its owner's path.
+                    let owner_path = report.target.path.as_str();
                     tracing::debug!(
                         sha256,
                         relative_path,
-                        owner_path = %owner_path,
+                        owner_path,
                         children = report.files.len() + report.archive_contents.len(),
-                        differing = ?crate::shared_resources::paths_inequivalent_inputs(&owner_path, relative_path),
+                        differing = ?crate::shared_resources::paths_inequivalent_inputs(owner_path, relative_path),
                         "Archive member single-flight hit is path-bound; analyzing independently"
                     );
                     return self.analyze_extracted_member_uncached(
@@ -1762,7 +1746,6 @@ impl ArchiveAnalyzer {
                         sha256,
                     );
                 }
-                report.target.path = relative_path.to_string();
                 crate::restamp_path_derived_values(&mut report, Path::new(relative_path));
                 tracing::debug!(sha256, relative_path, "Archive member single-flight hit");
                 return Ok(Some(report));
@@ -1810,14 +1793,9 @@ impl ArchiveAnalyzer {
                         );
                     }
                     let mut fa = report.to_file_analysis(0);
-                    // Content-keyed, so path-derived findings must pin the
-                    // path they were evaluated under (see the lookup below).
-                    fa.path = if crate::shared_resources::report_has_path_dependent_findings(report)
-                    {
-                        relative_path.to_string()
-                    } else {
-                        String::new()
-                    };
+                    // Negative path matches are path-dependent too. Keep the
+                    // origin so the cache can check equivalence on every hit.
+                    fa.path = relative_path.to_string();
                     fa.id = 0;
                     fa.parent_id = None;
                     fa.depth = 0;

@@ -1493,9 +1493,12 @@ pub fn analyze_file<P: AsRef<Path>>(path: P, options: &AnalysisOptions) -> Resul
         let file_data = file_io::read_file_smart(path)?;
         let sha256 = analyzers::utils::calculate_sha256(file_data.as_slice());
         let file_type = analyzers::detect_file_type_from_data(path, file_data.as_slice());
-        if let Some(mut report) =
-            analysis_cache::report_cache_lookup(&sha256, file_type.label(), options)
-        {
+        if let Some(mut report) = analysis_cache::report_cache_lookup(
+            &sha256,
+            file_type.label(),
+            options,
+            &path.display().to_string(),
+        ) {
             report.target.path = path.display().to_string();
             report.analysis_timestamp = Some(chrono::Utc::now());
             report.cache_hit = true;
@@ -1563,7 +1566,7 @@ pub fn analyze_bytes_owned(
     let sha256 = analyzers::utils::calculate_sha256(&data);
     let file_type = analyzers::detect_file_type_from_data(path, &data);
     if let Some(mut report) =
-        analysis_cache::report_cache_lookup(&sha256, file_type.label(), options)
+        analysis_cache::report_cache_lookup(&sha256, file_type.label(), options, filename)
     {
         report.target.path = filename.to_string();
         report.analysis_timestamp = Some(chrono::Utc::now());
@@ -1740,7 +1743,7 @@ pub fn analyze_bytes_shared(
     let sha256 = analyzers::utils::calculate_sha256(&data);
     let file_type = analyzers::detect_file_type_from_data(path, &data);
     if let Some(mut report) =
-        analysis_cache::report_cache_lookup(&sha256, file_type.label(), options)
+        analysis_cache::report_cache_lookup(&sha256, file_type.label(), options, filename)
     {
         report.target.path = filename.to_string();
         report.analysis_timestamp = Some(chrono::Utc::now());
@@ -2402,9 +2405,12 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
 
     // Check analysis cache before running the full pipeline
     set_phase("cleave:cache_lookup");
-    if let Some(mut cached_report) =
-        analysis_cache::report_cache_lookup(&sha256_hex, file_type_key, options)
-    {
+    if let Some(mut cached_report) = analysis_cache::report_cache_lookup(
+        &sha256_hex,
+        file_type_key,
+        options,
+        &path.display().to_string(),
+    ) {
         cached_report.target.path = path.display().to_string();
         cached_report.analysis_timestamp = Some(chrono::Utc::now());
         cached_report.cache_hit = true;
@@ -2419,10 +2425,12 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     }
 
     // Secondary check: per-file cache (cross-context, shared with archive members)
-    if let Some(fa) =
-        analysis_cache::file_analysis_cache_lookup(&sha256_hex, file_type_key, options)
-        && (fa.path.is_empty() || fa.path == path.display().to_string())
-    {
+    if let Some(fa) = analysis_cache::file_analysis_cache_lookup(
+        &sha256_hex,
+        file_type_key,
+        options,
+        &path.display().to_string(),
+    ) {
         tracing::debug!("File cache hit (cross-context)");
         let report = report_from_file_analysis(fa, path.display().to_string());
         memory_tracker::log_after_file_processing(
@@ -2446,15 +2454,13 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             // bound to the path it was evaluated under (same guard as the
             // archive-member flight); fall through to a fresh analysis.
             let path_string = path.display().to_string();
-            let owner_path = report.target.path.clone();
-            if !shared_resources::adopt_report_under(&mut report, &owner_path, &path_string) {
+            if !shared_resources::adopt_report_under(&mut report, &path_string) {
                 tracing::debug!(
                     sha256 = %sha256_hex,
                     "Analysis single-flight hit is path-bound; analyzing independently"
                 );
                 break None;
             }
-            report.target.path = path_string;
             report.analysis_timestamp = Some(chrono::Utc::now());
             restamp_path_derived_values(&mut report, path);
             tracing::debug!(sha256 = %sha256_hex, "Analysis single-flight hit");
@@ -2478,9 +2484,12 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
 
     // Recheck persistent caches after becoming owner. A non-overlapping
     // caller may have completed between the first lookup and acquisition.
-    if let Some(mut cached_report) =
-        analysis_cache::report_cache_lookup(&sha256_hex, file_type_key, options)
-    {
+    if let Some(mut cached_report) = analysis_cache::report_cache_lookup(
+        &sha256_hex,
+        file_type_key,
+        options,
+        &path.display().to_string(),
+    ) {
         cached_report.target.path = path.display().to_string();
         cached_report.analysis_timestamp = Some(chrono::Utc::now());
         cached_report.cache_hit = true;
@@ -2490,10 +2499,12 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         }
         return Ok(cached_report);
     }
-    if let Some(fa) =
-        analysis_cache::file_analysis_cache_lookup(&sha256_hex, file_type_key, options)
-        && (fa.path.is_empty() || fa.path == path.display().to_string())
-    {
+    if let Some(fa) = analysis_cache::file_analysis_cache_lookup(
+        &sha256_hex,
+        file_type_key,
+        options,
+        &path.display().to_string(),
+    ) {
         let report = report_from_file_analysis(fa, path.display().to_string());
         if let Some(flight) = flight {
             flight.complete(None);
@@ -3194,12 +3205,9 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     // Store result in per-file cache (cross-context: shared with archive member analysis)
     {
         let mut fa = report.to_file_analysis(0);
-        // Content-keyed: pin the path when the findings depend on it.
-        fa.path = if shared_resources::report_has_path_dependent_findings(&report) {
-            path.display().to_string()
-        } else {
-            String::new()
-        };
+        // Keep the origin even when no path-dependent rule matched: negative
+        // matches must also be checked before sharing with another path.
+        fa.path = path.display().to_string();
         fa.id = 0;
         fa.parent_id = None;
         fa.depth = 0;

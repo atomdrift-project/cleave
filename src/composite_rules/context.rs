@@ -250,7 +250,7 @@ impl<'a> EvaluationContext<'a> {
         // Pre-validate UTF-8 once for source-code file types. AST/text evaluators
         // otherwise re-run from_utf8 on the full file for every rule they touch,
         // which dominates CPU time on large source archives.
-        let cached_source_utf8 = if file_type.uses_raw_text_search() {
+        let cached_source_utf8 = if file_type.uses_raw_text_search_for(binary_data) {
             std::str::from_utf8(binary_data).ok()
         } else {
             None

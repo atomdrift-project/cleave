@@ -21,9 +21,11 @@ pub enum AnalysisGap {
     FlowQueryIncomplete,
     /// Additional diagnostic-only member records were elided from compact output.
     ReportRetentionLimited,
+    /// A declared script has an unsupported shell or exceeded analysis limits.
+    EmbeddedSourceIncomplete,
 }
 
-const ALL: [AnalysisGap; 7] = [
+const ALL: [AnalysisGap; 8] = [
     AnalysisGap::FlowUnavailable,
     AnalysisGap::FlowSchemaUnsupported,
     AnalysisGap::FlowGraphLimited,
@@ -31,6 +33,7 @@ const ALL: [AnalysisGap; 7] = [
     AnalysisGap::FlowFieldUnavailable,
     AnalysisGap::FlowQueryIncomplete,
     AnalysisGap::ReportRetentionLimited,
+    AnalysisGap::EmbeddedSourceIncomplete,
 ];
 
 impl AnalysisGap {
@@ -45,6 +48,7 @@ impl AnalysisGap {
             Self::FlowFieldUnavailable => "flow-field-unavailable",
             Self::FlowQueryIncomplete => "flow-query-incomplete",
             Self::ReportRetentionLimited => "report-retention-limited",
+            Self::EmbeddedSourceIncomplete => "embedded-source-incomplete",
         }
     }
 }

@@ -771,8 +771,20 @@ fn options_hash(options: &AnalysisOptions) -> String {
     // budgets; old reports omit that evidence even for unchanged rule packs.
     // v=12: per-query flow diagnostics and contextual field/literal traversal.
     // Older reports cannot distinguish unresolved evidence from a non-match.
+    // v=13: cached verdicts retain and validate their originating path,
+    // including negative path matches. Older entries may contain findings
+    // inherited from a non-equivalent filename or parent directory.
+    // v=14: risk aggregation is order-independent. Cached per-file scores
+    // from older builds may have rounded differently for identical findings.
+    // v=15: format-declared run bodies are separate analyzed source members;
+    // older manifest reports omit their findings and analysis limitations.
+    // v=16: CPIO entries consume alignment padding and reject malformed data;
+    // older RPM reports may silently omit later members or extraction errors.
+    // v=18: RPM header scriptlets are independently analyzed declared sources.
+    // v=19: compound assignment flow retains both the old value and RHS;
+    // cached verdicts may omit or misattribute those source relationships.
     let key = format!(
-        "v=12,cm={},3p={},yara={},r2={},upx={},plat={},hp={},sp={},ps={},fv={},rizin={}",
+        "v=19,cm={},3p={},yara={},r2={},upx={},plat={},hp={},sp={},ps={},fv={},rizin={}",
         crate::shared_resources::compact_member_retention(),
         options.enable_third_party_yara,
         !options.disable_yara,
@@ -990,6 +1002,7 @@ pub(crate) fn report_cache_lookup(
     sha256: &str,
     file_type: &str,
     options: &AnalysisOptions,
+    path: &str,
 ) -> Option<AnalysisReport> {
     let opts_hash = typed_options_hash(options, file_type);
     // A lookup keys on the ambient revision: it asks for a result computed
@@ -999,7 +1012,7 @@ pub(crate) fn report_cache_lookup(
     if let Some(bytes) = memo::get(memo::Kind::Report, &key)
         && let Ok(report) = serde_json::from_slice::<AnalysisReport>(&bytes)
     {
-        return Some(report);
+        return cached_report_under(report, path);
     }
     let hit =
         with_conn(|conn| report_cache_lookup_conn(conn, sha256, &opts_hash, traits_ts)).flatten();
@@ -1008,7 +1021,33 @@ pub(crate) fn report_cache_lookup(
     {
         memo::put(memo::Kind::Report, key, bytes);
     }
-    hit
+    hit.and_then(|report| cached_report_under(report, path))
+}
+
+/// A content hit is not a verdict hit until every path input agrees. Reuse
+/// the same check as single-flight sharing, including decoded child paths.
+fn cached_report_under(mut report: AnalysisReport, path: &str) -> Option<AnalysisReport> {
+    if report.target.path.is_empty()
+        || !crate::shared_resources::adopt_report_under(&mut report, path)
+    {
+        return None;
+    }
+    crate::restamp_path_derived_values(&mut report, Path::new(path));
+    Some(report)
+}
+
+fn cached_file_under(mut file: FileAnalysis, path: &str) -> Option<FileAnalysis> {
+    // No findings under one path does not prove independence from that path.
+    // In particular, lib.rs cannot donate a negative build.rs-name result.
+    if file.path.is_empty()
+        || (file.path != path
+            && !crate::shared_resources::loaded_capability_mapper()
+                .is_some_and(|mapper| mapper.paths_equivalent(&file.path, path)))
+    {
+        return None;
+    }
+    file.path = path.to_string();
+    Some(file)
 }
 
 /// Count entries currently in the toplevel report cache. Returns `None` if unavailable.
@@ -1058,6 +1097,7 @@ pub(crate) fn file_analysis_cache_lookup(
     sha256: &str,
     file_type: &str,
     options: &AnalysisOptions,
+    path: &str,
 ) -> Option<FileAnalysis> {
     // FileAnalysis has no child inventory. An archive must use a full report
     // cache hit or be analyzed again, never be reconstructed as a leaf.
@@ -1071,7 +1111,7 @@ pub(crate) fn file_analysis_cache_lookup(
     if let Some(bytes) = memo::get(memo::Kind::FileAnalysis, &key)
         && let Ok(fa) = serde_json::from_slice::<FileAnalysis>(&bytes)
     {
-        return Some(fa);
+        return cached_file_under(fa, path);
     }
     let hit =
         with_conn(|conn| file_analysis_cache_lookup_conn(conn, sha256, &opts_hash, traits_ts))
@@ -1081,7 +1121,7 @@ pub(crate) fn file_analysis_cache_lookup(
     {
         memo::put(memo::Kind::FileAnalysis, key, bytes);
     }
-    hit
+    hit.and_then(|fa| cached_file_under(fa, path))
 }
 
 fn archive_file_type(file_type: &str) -> bool {
@@ -1263,7 +1303,7 @@ mod tests {
         report_cache_store(sha, "elf", &opts, &test_report(sha), ran_under);
 
         assert!(
-            report_cache_lookup(sha, "elf", &opts).is_none(),
+            report_cache_lookup(sha, "elf", &opts, "/test/sample.bin").is_none(),
             "a report evaluated under the pre-reload traits was served to a \
              caller running the post-reload traits"
         );
@@ -1311,11 +1351,26 @@ mod tests {
     fn test_file_analysis(sha256: &str, file_type: &str) -> FileAnalysis {
         FileAnalysis::new(
             0,
-            String::new(), // normalized: no path
+            "pkg/source.js".to_string(),
             file_type.to_string(),
             sha256.to_string(),
             512,
         )
+    }
+
+    #[test]
+    fn cached_negative_results_require_an_origin() {
+        let mut file = test_file_analysis("path-origin", "rust");
+        file.path.clear();
+        assert!(cached_file_under(file.clone(), "build.rs").is_none());
+        file.path = "build.rs".to_string();
+        assert!(cached_file_under(file, "build.rs").is_some());
+
+        let mut report = test_report("path-origin");
+        report.target.path.clear();
+        assert!(cached_report_under(report.clone(), "build.rs").is_none());
+        report.target.path = "build.rs".to_string();
+        assert!(cached_report_under(report, "build.rs").is_some());
     }
 
     #[test]
@@ -1327,7 +1382,15 @@ mod tests {
             assert!(archive_file_type(kind), "{kind}");
             assert!(!complete_leaf_report(&report), "{kind}");
             // Reject before consulting either the process memo or SQLite.
-            assert!(file_analysis_cache_lookup(&report.target.sha256, kind, &options).is_none());
+            assert!(
+                file_analysis_cache_lookup(
+                    &report.target.sha256,
+                    kind,
+                    &options,
+                    &report.target.path
+                )
+                .is_none()
+            );
         }
     }
 
@@ -1817,8 +1880,8 @@ mod tests {
         assert_eq!(cached.sha256, sha);
         assert_eq!(cached.file_type, "javascript");
         assert_eq!(cached.size, 512);
-        // path is empty (normalized)
-        assert_eq!(cached.path, "");
+        // Even a report with no findings must retain its evaluation origin.
+        assert_eq!(cached.path, "pkg/source.js");
     }
 
     #[test]

@@ -1119,6 +1119,56 @@ fn test_eval_string_literal_matches_only_ast_strings() {
 }
 
 #[test]
+fn compiled_literals_match_without_ast_and_keep_their_source_anchor() {
+    let mut report = create_test_report();
+    for section in [None, Some("literal")] {
+        report.strings.push(StringInfo {
+            value: "prefix Cookies.binarycookies".to_string().into(),
+            offset: Some(0x20),
+            encoding: "utf16be".into(),
+            string_type: None,
+            section: section.map(str::to_string),
+            encoding_chain: vec!["scpt".into()],
+            fragments: None,
+        });
+    }
+    let pattern = "Cookies.binarycookies".to_string();
+    let params = StringParams {
+        length_min: None,
+        length_max: None,
+        exact: None,
+        substr: Some(&pattern),
+        regex: None,
+        word: None,
+        case_insensitive: false,
+        is_check: None,
+        section: None,
+        offset: None,
+        offset_range: None,
+        section_offset: None,
+        section_offset_range: None,
+        arch_clamp: None,
+    };
+    let ctx = EvaluationContext::test_only_new(&report, &[], FileType::AppleScript);
+    let result = eval_string_literal(&params, None, &ctx);
+    assert!(result.matched);
+    assert_eq!(result.match_count, 1, "byte-scan rows are not literals");
+    assert_eq!(result.evidence[0].location.as_deref(), Some("0x20"));
+    assert_eq!(result.evidence[0].source, "literal");
+    let condition: crate::composite_rules::Condition =
+        serde_yaml::from_str("type: literal\nexact: Cookies.binarycookies").unwrap();
+    assert!(condition.can_match_file_type(&FileType::AppleScript));
+
+    report
+        .strings
+        .retain(|s| s.section.as_deref() == Some("literal"));
+    let ctx = EvaluationContext::test_only_new(&report, b"FasdUAS 1.101.10", FileType::AppleScript);
+    let result = eval_text(&params, None, &ctx, None);
+    assert!(result.matched);
+    assert_eq!(result.evidence[0].location.as_deref(), Some("0x20"));
+}
+
+#[test]
 fn test_base64_validator_filters_complete_literal_candidates_before_counting() {
     use crate::composite_rules::condition::StringValidator;
     let mut report = create_test_report();

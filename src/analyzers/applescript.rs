@@ -5,18 +5,16 @@
 use crate::analyzers::{AnalysisInput, Analyzer};
 use crate::capabilities::CapabilityMapper;
 use crate::strings::StringExtractor;
-use crate::types::{AnalysisReport, Import, TargetInfo};
+use crate::types::{AnalysisReport, TargetInfo};
 use anyhow::Result;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 
 #[derive(Debug)]
 pub(crate) struct AppleScriptAnalyzer {
     capability_mapper: Arc<CapabilityMapper>,
     string_extractor: StringExtractor,
-    cancellation: Option<Arc<AtomicBool>>,
 }
 
 impl AppleScriptAnalyzer {
@@ -25,7 +23,6 @@ impl AppleScriptAnalyzer {
         Self {
             capability_mapper: Arc::new(CapabilityMapper::new()),
             string_extractor: StringExtractor::new(),
-            cancellation: None,
         }
     }
 
@@ -46,48 +43,19 @@ impl AppleScriptAnalyzer {
         self
     }
 
-    /// Extract symbols from compiled AppleScript using the scpt parser
-    fn extract_scpt_symbols(&self, data: &[u8], report: &mut AnalysisReport) {
-        if let Ok(parser) = scpt::ScptParser::new(data) {
-            // Extract all symbols
-            for symbol in parser.symbols() {
-                let library = match symbol.kind {
-                    scpt::SymbolKind::Variable => None,
-                    scpt::SymbolKind::AppleEvent => Some("AppleEvents"),
-                    scpt::SymbolKind::FourCharCode => Some("OSType"),
-                    scpt::SymbolKind::Application => Some("Applications"),
-                    scpt::SymbolKind::StringLiteral => continue, // Skip string literals for imports
-                };
-
-                report.imports.push(Import {
-                    symbol: symbol.name,
-                    library: library.map(String::from),
-                    offset: None,
-                    alias: None,
-                });
-            }
-
-            // Add Apple Event details as special imports for rule matching
-            for event in parser.apple_events() {
-                // Add the combined class.event format
-                report.imports.push(Import {
-                    symbol: format!("{}.{}", event.class_code, event.event_code),
-                    library: Some("AppleEvents".to_string()),
-                    offset: None,
-                    alias: None,
-                });
-
-                // Also add the description for easier rule matching
-                if event.desc != "unknown" {
-                    report.imports.push(Import {
-                        symbol: event.desc.to_string(),
-                        library: Some("AppleScript".to_string()),
-                        offset: None,
-                        alias: None,
-                    });
-                }
-            }
+    /// Add parsed events and recovered strings to the report and embedded scan.
+    fn add_scpt_facts(
+        ctx: &crate::analysis_context::AnalysisContext<'_>,
+        report: &mut AnalysisReport,
+    ) {
+        if !scpt::is_scpt(ctx.content) {
+            return;
         }
+        report.imports = ctx.imports_from_filefacts();
+        report.filefacts = Some(crate::types::FilefactsView::from_ctx(ctx));
+        report
+            .strings
+            .extend(crate::strings::scpt_literal_strings(ctx));
     }
 }
 
@@ -109,19 +77,23 @@ impl Analyzer for AppleScriptAnalyzer {
 
         let mut report = AnalysisReport::new(target);
 
-        // Extract symbols from compiled AppleScript
-        self.extract_scpt_symbols(input.data, &mut report);
+        // Reuse the threaded context, else open one on the same `input.data`.
+        let fallback = input.open_ctx_fallback();
+        let filefacts_ctx = input.parsed_ctx.as_ref().or(fallback.as_ref());
 
         // Use pre-extracted strings if available, otherwise source them from
         // filefacts (the string-extraction authority).
         if !input.strings.is_empty() {
             report.strings = self.string_extractor.convert_stng_strings(input.strings);
-        } else {
-            report.strings = crate::strings::strings_from_filefacts(input.path, input.data);
+        } else if let Some(ctx) = filefacts_ctx {
+            let text = ctx.parsed.text();
+            report.strings = self
+                .string_extractor
+                .convert_stng_iter(text.iter(), text.len());
         }
-
-        // Prefer the struct's cancellation flag; fall back to the input's flag.
-        let cancellation = self.cancellation.as_ref().or(input.cancellation.as_ref());
+        if let Some(ctx) = filefacts_ctx {
+            Self::add_scpt_facts(ctx, &mut report);
+        }
 
         // Analyze embedded code in strings
         let (encoded_layers, plain_findings) =
@@ -131,19 +103,17 @@ impl Analyzer for AppleScriptAnalyzer {
                 &self.capability_mapper,
                 0,
                 Some(&crate::FileType::AppleScript),
-                cancellation.map(Arc::as_ref),
+                input.cancellation.as_deref(),
             );
         report.files.extend(encoded_layers);
         report.findings.extend(plain_findings);
 
         // Evaluate all rules (atomic + composite) and merge into report
-        let filefacts_ctx =
-            crate::analysis_context::AnalysisContext::open(input.path, input.data).ok();
         self.capability_mapper
             .evaluate_and_merge_findings_with_precomputed(
                 &mut report,
                 input.data,
-                crate::capabilities::AnalysisBorrow::with_filefacts(None, filefacts_ctx.as_ref()),
+                crate::capabilities::AnalysisBorrow::with_filefacts(None, filefacts_ctx),
                 None,
                 None,
                 None,
@@ -172,52 +142,80 @@ impl Analyzer for AppleScriptAnalyzer {
         }
         false
     }
+}
 
-    fn analyze(&self, file_path: &Path) -> Result<AnalysisReport> {
-        let data = fs::read(file_path)?;
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use super::*;
 
-        let target = TargetInfo {
-            path: file_path.display().to_string(),
-            file_type: "applescript".to_string(),
-            size_bytes: data.len() as u64,
-            sha256: crate::analyzers::utils::calculate_sha256(&data),
+    #[test]
+    fn scpt_base64_facts_use_shared_literal_rows_once() {
+        let bytes = include_bytes!("../../tests/fixtures/scpt-base64.scpt");
+        let ctx = crate::analysis_context::AnalysisContext::open(Path::new("base64.scpt"), bytes)
+            .unwrap();
+        let mut report = AnalysisReport::new(TargetInfo {
+            path: "base64.scpt".into(),
+            file_type: "applescript".into(),
+            size_bytes: bytes.len() as u64,
+            sha256: String::new(),
             architectures: None,
-        };
+        });
+        let text = ctx.parsed.text();
+        report.strings = StringExtractor::new().convert_stng_iter(text.iter(), text.len());
+        AppleScriptAnalyzer::add_scpt_facts(&ctx, &mut report);
+        let rows: Vec<_> = report
+            .strings
+            .iter()
+            .filter(|s| {
+                s.section.as_deref() == Some("literal")
+                    && s.value == r"printf '%s\n' 'SCPT_BASE64_OK'"
+            })
+            .collect();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].encoding_chain, ["scpt", "base64"]);
+        assert_eq!(
+            report
+                .strings
+                .iter()
+                .filter(|s| s.section.as_deref() == Some("literal"))
+                .count(),
+            ctx.parsed.literals().iter().count()
+        );
+    }
 
-        let mut report = AnalysisReport::new(target);
-
-        // Extract symbols from compiled AppleScript
-        self.extract_scpt_symbols(&data, &mut report);
-
-        // Strings come from filefacts (the string-extraction authority).
-        report.strings = crate::strings::strings_from_filefacts(file_path, &data);
-
-        // Analyze embedded code in strings
-        let (encoded_layers, plain_findings) =
-            crate::analyzers::embedded_code_detector::process_all_strings(
-                &file_path.display().to_string(),
-                &report.strings,
-                &self.capability_mapper,
-                0,
-                Some(&crate::FileType::AppleScript),
-                self.cancellation.as_deref(),
-            );
-        report.files.extend(encoded_layers);
-        report.findings.extend(plain_findings);
-
-        // Evaluate all rules (atomic + composite) and merge into report
-        let filefacts_ctx = crate::analysis_context::AnalysisContext::open(file_path, &data).ok();
-        self.capability_mapper
-            .evaluate_and_merge_findings_with_precomputed(
-                &mut report,
-                &data,
-                crate::capabilities::AnalysisBorrow::with_filefacts(None, filefacts_ctx.as_ref()),
-                None,
-                None,
-                None,
-                None,
-            );
-
-        Ok(report)
+    #[test]
+    fn compiled_facts_reach_rule_inputs() {
+        let bytes = include_bytes!("../../crates/scpt/tests/fixtures/shell_script.scpt");
+        let ctx =
+            crate::analysis_context::AnalysisContext::open(Path::new("shell_script.scpt"), bytes)
+                .unwrap();
+        let mut report = AnalysisReport::new(TargetInfo {
+            path: "shell_script.scpt".into(),
+            file_type: "applescript".into(),
+            size_bytes: bytes.len() as u64,
+            sha256: String::new(),
+            architectures: None,
+        });
+        AppleScriptAnalyzer::add_scpt_facts(&ctx, &mut report);
+        assert!(
+            report
+                .strings
+                .iter()
+                .any(|s| s.value == "whoami" && s.section.as_deref() == Some("literal"))
+        );
+        assert!(
+            report
+                .filefacts
+                .as_ref()
+                .unwrap()
+                .symbols
+                .iter()
+                .any(|s| matches!(s,
+                    filefacts::Symbol::Call { target: Some(target), args, .. }
+                    if target == "syso.exec" && matches!(args.first(),
+                        Some(filefacts::Arg::String { value }) if value == "whoami")
+                ))
+        );
     }
 }

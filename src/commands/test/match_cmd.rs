@@ -579,7 +579,7 @@ pub fn run(
             let matched =
                 result.matched && count_min_ok && count_max_ok && per_kb_min_ok && per_kb_max_ok;
 
-            let mode = if internal_file_type.uses_raw_text_search() {
+            let mode = if internal_file_type.uses_raw_text_search_for(binary_data) {
                 "raw-text"
             } else {
                 "extracted-strings"
@@ -1777,7 +1777,7 @@ pub fn run(
                 }
             }
             cli::SearchType::Text => {
-                if internal_file_type.uses_raw_text_search() {
+                if internal_file_type.uses_raw_text_search_for(binary_data) {
                     // For raw-text mode, `type: text exact:` matches a complete trimmed line.
                     // If the pattern appears as substring but never as a standalone line, the
                     // author almost certainly wanted `substr:` or a word-boundary regex.

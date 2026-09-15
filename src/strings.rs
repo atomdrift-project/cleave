@@ -11,8 +11,8 @@ use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use stng::{ExtractedString, StringMethod};
 
-/// Strings for a file, sourced from filefacts' `text()` view — the single
-/// string-extraction authority — and classified via [`StringExtractor`].
+/// Strings from filefacts' text view, plus format-parsed SCPT literals.
+/// Byte extraction and literal decoding remain owned by filefacts.
 /// Returns empty when filefacts can't open the bytes. Use this at call
 /// sites that have a path + bytes but no pre-opened [`AnalysisContext`].
 ///
@@ -23,7 +23,50 @@ pub(crate) fn strings_from_filefacts(path: &std::path::Path, data: &[u8]) -> Vec
     };
     // Convert straight from the context's `text()` view — no intermediate Vec.
     let text = ctx.parsed.text();
-    StringExtractor::new().convert_stng_iter(text.iter(), text.len())
+    let mut strings = StringExtractor::new().convert_stng_iter(text.iter(), text.len());
+    strings.extend(scpt_literal_strings(&ctx));
+    strings
+}
+
+/// Convert compiled AppleScript literals without rescanning or decoding them.
+/// Decoded rows retain their parent's source anchor and the literal section.
+pub(crate) fn scpt_literal_strings(
+    ctx: &crate::analysis_context::AnalysisContext<'_>,
+) -> Vec<StringInfo> {
+    if !scpt::is_scpt(ctx.content) {
+        return Vec::new();
+    }
+    ctx.parsed
+        .literals()
+        .iter()
+        .map(scpt_literal_string)
+        .collect()
+}
+
+fn scpt_literal_string(literal: &filefacts::ExtractedString) -> StringInfo {
+    // Only decoders cleave can name contribute a chain; anything else is a
+    // literal the parser read verbatim.
+    let encoding_chain = match literal
+        .method
+        .as_deref()
+        .and_then(|m| m.strip_prefix("scpt-"))
+    {
+        Some("constant") => vec!["scpt".into()],
+        Some(
+            encoding @ ("base64" | "hex" | "url" | "unicode-escape" | "base32" | "base85"
+            | "rot13-base64" | "base64-obf"),
+        ) => vec!["scpt".into(), encoding.into()],
+        _ => Vec::new(),
+    };
+    StringInfo {
+        value: literal.text.clone().into(),
+        offset: Some(literal.offset as u64),
+        encoding: literal.encoding.clone().unwrap_or_else(|| "utf8".into()),
+        string_type: None,
+        section: Some("literal".into()),
+        encoding_chain,
+        fragments: None,
+    }
 }
 
 /// Convert stng StringMethod to a string for encoding_chain tracking
@@ -140,7 +183,7 @@ impl StringExtractor {
 
     /// Shared conversion core: apply the per-file string + byte retention caps
     /// and the base64 sidecar over any `stng::ExtractedString` source.
-    fn convert_stng_iter<'a>(
+    pub(crate) fn convert_stng_iter<'a>(
         &self,
         source: impl Iterator<Item = &'a ExtractedString>,
         len_hint: usize,
@@ -306,6 +349,79 @@ mod tests {
     fn test_default() {
         let extractor = StringExtractor::default();
         assert_eq!(extractor.min_length, 4);
+    }
+
+    #[test]
+    fn scpt_literal_methods_preserve_provenance() {
+        for suffix in [
+            "base64",
+            "hex",
+            "url",
+            "unicode-escape",
+            "base32",
+            "base85",
+            "rot13-base64",
+            "base64-obf",
+            "constant",
+            "literal",
+        ] {
+            let mut literal = filefacts::ExtractedString::default();
+            literal.text = "decoded command".into();
+            literal.offset = 73;
+            literal.method = Some(format!("scpt-{suffix}"));
+            literal.encoding = Some(
+                if suffix == "literal" {
+                    "utf16be"
+                } else {
+                    "utf8"
+                }
+                .into(),
+            );
+            let row = scpt_literal_string(&literal);
+            let expected = match suffix {
+                "literal" => vec![],
+                "constant" => vec!["scpt"],
+                _ => vec!["scpt", suffix],
+            };
+            assert_eq!(row.encoding_chain, expected, "{suffix}");
+            assert_eq!(row.value, literal.text);
+            assert_eq!(row.offset, Some(73));
+            assert_eq!(row.section.as_deref(), Some("literal"));
+            assert_eq!(Some(row.encoding), literal.encoding);
+        }
+    }
+
+    #[test]
+    fn scpt_base64_literals_preserve_parent_and_cached_text() {
+        let bytes = include_bytes!("../tests/fixtures/scpt-base64.scpt");
+        let path = std::path::Path::new("base64.scpt");
+        let ctx = crate::analysis_context::AnalysisContext::open(path, bytes).unwrap();
+        let cached = ctx.text_rows();
+        let rows = scpt_literal_strings(&ctx);
+        assert!(std::sync::Arc::ptr_eq(&cached, &ctx.text_rows()));
+        let parent = rows
+            .iter()
+            .find(|s| s.value == "cHJpbnRmICclc1xuJyAnU0NQVF9CQVNFNjRfT0sn")
+            .unwrap();
+        let decoded: Vec<_> = rows
+            .iter()
+            .filter(|s| s.value == r"printf '%s\n' 'SCPT_BASE64_OK'")
+            .collect();
+        assert_eq!(decoded.len(), 1);
+        assert!(parent.encoding_chain.is_empty());
+        assert_eq!(parent.encoding, "utf16be");
+        assert_eq!(decoded[0].encoding_chain, ["scpt", "base64"]);
+        assert_eq!(decoded[0].encoding, "utf8");
+        assert_eq!(decoded[0].offset, parent.offset);
+        assert_eq!(decoded[0].section.as_deref(), Some("literal"));
+        let combined = strings_from_filefacts(path, bytes);
+        assert_eq!(
+            combined
+                .iter()
+                .filter(|s| s.section.as_deref() == Some("literal"))
+                .count(),
+            rows.len()
+        );
     }
 
     #[test]

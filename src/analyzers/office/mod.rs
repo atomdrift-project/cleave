@@ -1227,8 +1227,18 @@ impl OfficeAnalyzer {
                 continue;
             }
 
+            // A chart part links the workbook it plots through an oleObject
+            // relationship, and when that workbook lives on SharePoint or
+            // OneDrive the target is an ordinary https URL. That is the most
+            // common linked-chart shape in enterprise decks -- LibreOffice
+            // even ships one as chart2 import test data. The CVE-2017-0199
+            // oleObject vector is declared from the *document* body's rels,
+            // not from a chart's, so let the chart case fall through to the
+            // remote-but-not-a-template tier below.
+            let chart_data_link = ext_ref.rel_type.contains("oleObject")
+                && ext_ref.source.contains("/charts/");
             let is_template = ext_ref.rel_type.contains("attachedTemplate")
-                || ext_ref.rel_type.contains("oleObject")
+                || (ext_ref.rel_type.contains("oleObject") && !chart_data_link)
                 || ext_ref.rel_type.contains("frame");
             // A template/oleObject/frame ref is only an injection vector when it
             // fetches from a remote host. A local-template back-reference

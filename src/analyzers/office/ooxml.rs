@@ -432,12 +432,33 @@ fn find_dde_links<R: OoxmlEntryReader>(reader: &mut R, entry_names: &[String]) -
         let text = String::from_utf8_lossy(&data);
         let text_upper = text.to_uppercase();
 
-        // Look for DDE/DDEAUTO in field codes
-        if text_upper.contains("DDEAUTO") || text_upper.contains("DDE ") {
+        // A spreadsheet's external link is a DDE link only when the part
+        // actually carries a `<ddeLink>` element. Anything else in
+        // xl/externalLinks/ is a reference to another workbook, and its cached
+        // cell values are ordinary text -- a Zurich district-heating tariff
+        // sheet caches labels like "NDDE Kernzone Pspez. Kondensat", which a
+        // bare "DDE " substring search reads as a command.
+        let is_spreadsheet_link = entry_path.starts_with("xl/externalLinks/");
+        let has_dde = if is_spreadsheet_link {
+            text_upper.contains("<DDELINK")
+        } else {
+            // Word field codes: DDEAUTO, or a DDE field inside an instruction
+            // run. `w:instrText` is what carries a field code; a "DDE " in
+            // body text is prose.
+            text_upper.contains("DDEAUTO")
+                || (text_upper.contains("DDE ") && text_upper.contains("INSTRTEXT"))
+        };
+        if has_dde {
             // Extract the DDE command context
             for line in text.lines() {
                 let line_upper = line.to_uppercase();
-                if line_upper.contains("DDEAUTO") || line_upper.contains("DDE ") {
+                let line_has_dde = if is_spreadsheet_link {
+                    line_upper.contains("<DDELINK")
+                } else {
+                    line_upper.contains("DDEAUTO")
+                        || (line_upper.contains("DDE ") && line_upper.contains("INSTRTEXT"))
+                };
+                if line_has_dde {
                     let trimmed = line.trim();
                     if trimmed.len() > 200 {
                         dde_links.push(format!(

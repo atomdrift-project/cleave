@@ -8,6 +8,20 @@
 //! plus the manifest's per-artifact sha256 (which catches corruption). The
 //! manifest is already cosign-signed upstream, so authenticity checking can be
 //! added later without changing the publish side.
+//!
+//! # Channels
+//!
+//! There are two, and they publish the same layout. The public bucket carries
+//! the open-source release, rolled up every four hours. The enriched channel
+//! carries each ruleset the hour it clears QA, and is reached through a small
+//! service that checks a subscription key and serves the private bucket
+//! behind it.
+//!
+//! A key in `ISOTOPE13_TOKEN` or `~/.tok/isotope13` selects the enriched
+//! channel; without one, nothing changes and nothing is sent anywhere new. A
+//! key Beamline refuses falls back to the public channel with a warning rather
+//! than failing the update: an expired subscription should leave a CI gate
+//! running on last week's rules, not stop it.
 
 use std::collections::BTreeMap;
 use std::io::Cursor;
@@ -19,6 +33,20 @@ use sha2::{Digest, Sha256};
 
 /// Base URL for the public update bucket (`<base>/versions.toml`, `<base>/traits/...`).
 const BASE_URL: &str = "https://updates.atomdrift.org/cleave";
+
+/// Base URL for the enriched channel, which serves the identical layout from
+/// the private bucket once the key has been checked.
+///
+/// The counterpart of [`BASE_URL`] rather than a different shape: both are
+/// `updates.<org>` and both resolve the manifest's relative `file` paths the
+/// same way, so the only thing this constant changes is which bucket answers.
+const ENRICHED_URL: &str = "https://updates.isotope13.ai/v1/rules/cleave";
+
+/// Environment override for a subscription key, checked before the file.
+const TOKEN_ENV: &str = "ISOTOPE13_TOKEN";
+/// Where a subscription key lives otherwise — the same `~/.tok/<service>`
+/// convention every other isotope13 service reads one from.
+const TOKEN_FILE: &str = "isotope13";
 
 /// Whole-request budget for manifest + bundle downloads.
 const TIMEOUT: Duration = Duration::from_secs(60);
@@ -98,7 +126,7 @@ pub fn update(dir: &Path, force: bool, quiet: bool) -> Result<(), String> {
     // fast if the bucket is unreachable. A first-ever download — or any explicit,
     // non-quiet update — stays patient so a slow first fetch still completes.
     let connect = (quiet && installed(dir).is_some()).then_some(CONNECT_TIMEOUT);
-    let manifest = fetch_manifest(connect)?;
+    let (manifest, channel) = fetch_manifest(connect)?;
     let (key, source) = resolve(&manifest)?;
     let artifact = artifact_for(&manifest, &key)?;
 
@@ -119,7 +147,7 @@ pub fn update(dir: &Path, force: bool, quiet: bool) -> Result<(), String> {
             source
         );
     }
-    install(dir, artifact, &source)?;
+    install(dir, artifact, &source, &channel)?;
     if !quiet {
         eprintln!(
             "Traits updated to {} ({}) at {}",
@@ -141,7 +169,7 @@ pub fn check(dir: &Path) -> Result<(), String> {
         );
         return Ok(());
     }
-    let manifest = fetch_manifest(None)?;
+    let (manifest, _) = fetch_manifest(None)?;
     let (key, source) = resolve(&manifest)?;
     let artifact = artifact_for(&manifest, &key)?;
 
@@ -169,7 +197,7 @@ pub fn check(dir: &Path) -> Result<(), String> {
 
 /// Pin to a specific commit, if a bundle for it was published.
 pub fn pin(dir: &Path, commit: &str) -> Result<(), String> {
-    let manifest = fetch_manifest(None)?;
+    let (manifest, channel) = fetch_manifest(None)?;
     let key = manifest
         .artifacts
         .keys()
@@ -182,7 +210,7 @@ pub fn pin(dir: &Path, commit: &str) -> Result<(), String> {
         })?;
     let artifact = artifact_for(&manifest, &key)?;
     eprintln!("Pinning traits to {} ({})...", key, artifact.date);
-    install(dir, artifact, &format!("pin:{key}"))?;
+    install(dir, artifact, &format!("pin:{key}"), &channel)?;
     eprintln!("Traits pinned to {} at {}", key, dir.display());
     Ok(())
 }
@@ -219,18 +247,87 @@ fn warn_if_behind(m: &Manifest) {
     }
 }
 
-fn fetch_manifest(connect: Option<Duration>) -> Result<Manifest, String> {
-    let url = format!("{BASE_URL}/versions.toml");
-    let text = http_get(&url, connect)?;
+/// Which channel answered, carried from the manifest fetch to the bundle fetch.
+///
+/// Threaded rather than recomputed on purpose: a manifest from the enriched
+/// channel names bundles that exist only there, so resolving the two against
+/// different bases would 404 on a subscriber whose key expired between the two
+/// requests. One decision, made once, used twice.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Channel {
+    Public,
+    Enriched(String),
+}
+
+impl Channel {
+    fn base(&self) -> &'static str {
+        match self {
+            Channel::Public => BASE_URL,
+            Channel::Enriched(_) => ENRICHED_URL,
+        }
+    }
+
+    fn token(&self) -> Option<&str> {
+        match self {
+            Channel::Public => None,
+            Channel::Enriched(token) => Some(token),
+        }
+    }
+}
+
+/// The subscription key, if this host has one. Trimmed, and an empty value is
+/// the same as none — an unset variable and one set to "" mean the same thing
+/// to whoever wrote the script.
+fn subscription_key() -> Option<String> {
+    if let Some(key) = std::env::var(TOKEN_ENV).ok().and_then(|k| key_from(&k)) {
+        return Some(key);
+    }
+    let path = dirs::home_dir()?.join(".tok").join(TOKEN_FILE);
+    key_from(&std::fs::read_to_string(path).ok()?)
+}
+
+/// The first non-empty line, trimmed, or `None`.
+///
+/// Both sources go through this so a key pasted into a file with a trailing
+/// newline and one exported with a stray space behave identically — and so an
+/// empty variable means "no key" rather than a key that is the empty string,
+/// which would be sent as `Authorization: Bearer ` and rejected.
+fn key_from(text: &str) -> Option<String> {
+    text.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(str::to_string)
+}
+
+fn fetch_manifest(connect: Option<Duration>) -> Result<(Manifest, Channel), String> {
+    let mut channel = subscription_key().map_or(Channel::Public, Channel::Enriched);
+    let mut bytes = download(&channel, "versions.toml", connect);
+
+    // A key the server will not accept is a subscription that lapsed, a token
+    // that was revoked, or a typo. None of those should stop a scan: fall back
+    // to what every non-subscriber gets, and say so once.
+    if let (Channel::Enriched(_), Err(err)) = (&channel, &bytes)
+        && err.unauthorized()
+    {
+        tracing::warn!(
+            "isotope13 subscription key was not accepted ({}); using public rules. Check https://dash.isotope13.ai",
+            err.status_text()
+        );
+        channel = Channel::Public;
+        bytes = download(&channel, "versions.toml", connect);
+    }
+
+    let text = bytes.map_err(|e| e.message)?;
     let text = String::from_utf8(text).map_err(|e| format!("manifest is not valid UTF-8: {e}"))?;
-    toml::from_str(&text).map_err(|e| format!("parsing manifest {url}: {e}"))
+    let manifest = toml::from_str(&text)
+        .map_err(|e| format!("parsing manifest {}/versions.toml: {e}", channel.base()))?;
+    Ok((manifest, channel))
 }
 
 /// Download a bundle, verify its sha256, and atomically swap it into `dir`.
-fn install(dir: &Path, artifact: &Artifact, source: &str) -> Result<(), String> {
-    let url = format!("{BASE_URL}/{}", artifact.file);
+fn install(dir: &Path, artifact: &Artifact, source: &str, channel: &Channel) -> Result<(), String> {
     // Patient: the manifest fetch already reached the bucket.
-    let bytes = http_get(&url, None)?;
+    let bytes = download(channel, &artifact.file, None).map_err(|e| e.message)?;
 
     let got = hex(Sha256::digest(&bytes).as_slice());
     if got != artifact.sha256 {
@@ -304,22 +401,137 @@ fn sibling(parent: &Path, name: &str) -> PathBuf {
     parent.join(name)
 }
 
-fn http_get(url: &str, connect: Option<Duration>) -> Result<Vec<u8>, String> {
+/// A failed download, with the HTTP status when there was one.
+///
+/// The status is what tells a lapsed subscription apart from a bucket that is
+/// down. The first should quietly drop to the public channel; the second is an
+/// error the operator needs to see, and swallowing it would leave a host
+/// silently pinned to whatever it installed last.
+struct FetchError {
+    status: Option<u16>,
+    message: String,
+}
+
+impl FetchError {
+    fn unauthorized(&self) -> bool {
+        matches!(self.status, Some(401 | 403))
+    }
+
+    /// Whether asking again could plausibly answer differently. A transport
+    /// failure has no status at all and is the commonest thing worth retrying.
+    fn retryable(&self) -> bool {
+        match self.status {
+            None => true,
+            Some(status) => status == 408 || status == 429 || status >= 500,
+        }
+    }
+
+    fn status_text(&self) -> String {
+        self.status
+            .map_or_else(|| "no response".to_string(), |s| format!("HTTP {s}"))
+    }
+}
+
+/// How many times a download is attempted before it is called a failure.
+const ATTEMPTS: u32 = 4;
+/// First backoff step; each retry doubles it, and jitter is applied on top.
+const RETRY_BASE: Duration = Duration::from_millis(250);
+/// Ceiling for one backoff step, so a run of failures cannot stall a scan.
+const RETRY_MAX: Duration = Duration::from_secs(8);
+
+/// Fetch one artifact, retrying the failures that are worth retrying.
+///
+/// A rules update runs at startup on every scan, so a single dropped
+/// connection to the bucket should not cost a host its update — it would go on
+/// scanning with whatever it installed last, silently a week behind. Only
+/// transport errors and 5xx are retried: a 404 means the manifest names a
+/// bundle that is not published, and a 401 means the subscription key was
+/// refused, which the caller handles by falling back to the public channel.
+/// Asking either of those again just spends the user's time.
+fn download(
+    channel: &Channel,
+    path: &str,
+    connect: Option<Duration>,
+) -> Result<Vec<u8>, FetchError> {
+    let mut backoff = RETRY_BASE;
+    let mut attempt = 1;
+    loop {
+        match download_once(channel, path, connect) {
+            Ok(bytes) => {
+                if attempt > 1 {
+                    tracing::info!(attempt, path, "rules download succeeded after a retry");
+                }
+                return Ok(bytes);
+            }
+            Err(err) => {
+                if attempt >= ATTEMPTS || !err.retryable() {
+                    return Err(err);
+                }
+                let wait = jitter(backoff);
+                tracing::warn!(
+                    attempt,
+                    path,
+                    wait_ms = wait.as_millis(),
+                    error = %err.message,
+                    "rules download failed; retrying"
+                );
+                std::thread::sleep(wait);
+                backoff = (backoff * 2).min(RETRY_MAX);
+                attempt += 1;
+            }
+        }
+    }
+}
+
+/// Full jitter: anywhere between nothing and the whole step.
+///
+/// Every host in a CI fleet starts its scans on the same schedule, so a fixed
+/// backoff would send them all back at the bucket together — which is the
+/// shape of load that keeps something down once it is.
+fn jitter(step: Duration) -> Duration {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.subsec_nanos());
+    let span = u64::try_from(step.as_millis()).unwrap_or(u64::MAX).max(1);
+    Duration::from_millis(u64::from(nanos) % span)
+}
+
+fn download_once(
+    channel: &Channel,
+    path: &str,
+    connect: Option<Duration>,
+) -> Result<Vec<u8>, FetchError> {
+    let url = format!("{}/{path}", channel.base());
     tracing::debug!("fetching {url}");
     let mut builder = reqwest::blocking::Client::builder().timeout(TIMEOUT);
     if let Some(connect) = connect {
         builder = builder.connect_timeout(connect);
     }
-    let client = builder.build().map_err(|e| format!("http client: {e}"))?;
-    let resp = client
-        .get(url)
-        .send()
-        .map_err(|e| format!("GET {url}: {e}"))?
-        .error_for_status()
-        .map_err(|e| format!("GET {url}: {e}"))?;
-    resp.bytes()
-        .map(|b| b.to_vec())
-        .map_err(|e| format!("reading {url}: {e}"))
+    let client = builder.build().map_err(|e| FetchError {
+        status: None,
+        message: format!("http client: {e}"),
+    })?;
+
+    let mut request = client.get(&url);
+    if let Some(key) = channel.token() {
+        request = request.bearer_auth(key);
+    }
+    let resp = request.send().map_err(|e| FetchError {
+        status: None,
+        message: format!("GET {url}: {e}"),
+    })?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(FetchError {
+            status: Some(status.as_u16()),
+            message: format!("GET {url}: {status}"),
+        });
+    }
+    resp.bytes().map(|b| b.to_vec()).map_err(|e| FetchError {
+        status: Some(status.as_u16()),
+        message: format!("reading {url}: {e}"),
+    })
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -338,6 +550,90 @@ mod tests {
     use super::*;
 
     /// Stage a directory holding a single marker file.
+    #[test]
+    fn a_key_is_the_first_non_empty_line() {
+        assert_eq!(
+            key_from("i13_krypton85_abc\n"),
+            Some("i13_krypton85_abc".into())
+        );
+        assert_eq!(key_from("  i13_x  "), Some("i13_x".into()));
+        assert_eq!(key_from("\n\n  \ni13_y\nignored\n"), Some("i13_y".into()));
+        // An empty value is no key, not an empty bearer token.
+        assert_eq!(key_from(""), None);
+        assert_eq!(key_from("   \n\t\n"), None);
+    }
+
+    #[test]
+    fn only_the_enriched_channel_sends_a_key() {
+        let public = Channel::Public;
+        assert_eq!(public.base(), BASE_URL);
+        assert_eq!(public.token(), None);
+
+        let enriched = Channel::Enriched("i13_krypton85_abc".into());
+        assert_eq!(enriched.base(), ENRICHED_URL);
+        assert_eq!(enriched.token(), Some("i13_krypton85_abc"));
+    }
+
+    #[test]
+    fn only_failures_that_could_answer_differently_are_retried() {
+        let at = |status| FetchError {
+            status: Some(status),
+            message: String::new(),
+        };
+        // A dropped connection is the commonest thing worth asking again about.
+        assert!(
+            FetchError {
+                status: None,
+                message: String::new(),
+            }
+            .retryable()
+        );
+        assert!(at(500).retryable());
+        assert!(at(503).retryable());
+        assert!(at(429).retryable());
+        assert!(at(408).retryable());
+        // A bundle that is not published stays unpublished however many times
+        // we ask, and a refused key is handled by falling back, not by asking.
+        assert!(!at(404).retryable());
+        assert!(!at(401).retryable());
+        assert!(!at(400).retryable());
+    }
+
+    #[test]
+    fn backoff_jitter_never_exceeds_its_step() {
+        // Full jitter: the wait is somewhere in [0, step), so a fleet that
+        // starts together does not come back together.
+        for step in [RETRY_BASE, Duration::from_secs(1), RETRY_MAX] {
+            let wait = jitter(step);
+            assert!(wait < step, "{wait:?} must be under {step:?}");
+        }
+        // A zero step must not divide by zero.
+        assert_eq!(jitter(Duration::ZERO), Duration::ZERO);
+    }
+
+    #[test]
+    fn a_refused_key_falls_back_but_an_outage_does_not() {
+        let refused = |status| FetchError {
+            status: Some(status),
+            message: String::new(),
+        };
+        // A lapsed subscription drops to the public channel...
+        assert!(refused(401).unauthorized());
+        assert!(refused(403).unauthorized());
+        // ...but a bucket that is down is an error the operator must see, not
+        // a host silently pinned to whatever it installed last.
+        assert!(!refused(404).unauthorized());
+        assert!(!refused(500).unauthorized());
+        assert!(
+            !FetchError {
+                status: None,
+                message: String::new(),
+            }
+            .unauthorized()
+        );
+        assert_eq!(refused(401).status_text(), "HTTP 401");
+    }
+
     fn staged(root: &Path) -> PathBuf {
         let staging = root.join(".cleave-traits-staging");
         std::fs::create_dir_all(staging.join("objectives")).unwrap();

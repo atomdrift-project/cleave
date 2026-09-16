@@ -1225,6 +1225,22 @@ fn is_interesting_jar_non_class(path: &str) -> bool {
     !lower.contains("meta-inf/") || lower.ends_with("manifest.mf") || lower.ends_with(".xml")
 }
 
+/// Keep nested archives in the JAR resource candidate set even when they live
+/// below `META-INF/`. That directory is normally full of low-value Java
+/// metadata, but a nested JAR is a real analysis container: dropping it here
+/// prevents `analyze_extracted_member` from recursing into it and loses every
+/// trait from its classes/resources. The in-memory path can use the detected
+/// member type; the extracted-directory path also gets the extension fallback.
+fn is_nested_archive_member(path: &std::path::Path, file_type: Option<&FileType>) -> bool {
+    file_type.is_some_and(filefacts::FileType::is_archive)
+        || crate::analyzers::detect_file_type_from_path(path).is_archive()
+}
+
+fn is_interesting_jar_resource(path: &std::path::Path, file_type: Option<&FileType>) -> bool {
+    is_nested_archive_member(path, file_type)
+        || is_interesting_jar_non_class(&path.to_string_lossy())
+}
+
 /// Total number of successful archive member analyses (cumulative, for logging)
 static SUCCESSFUL_ANALYSES: AtomicU64 = AtomicU64::new(0);
 
@@ -3104,8 +3120,13 @@ impl ArchiveAnalyzer {
             members
                 .iter()
                 .filter(|m| !m.relative_path.ends_with(".class"))
-                .filter(|m| !is_benign_java_path(Path::new(&m.relative_path)))
-                .filter(|m| is_interesting_jar_non_class(&m.relative_path))
+                .filter(|m| {
+                    let path = Path::new(&m.relative_path);
+                    is_nested_archive_member(path, Some(&m.file_type)) || !is_benign_java_path(path)
+                })
+                .filter(|m| {
+                    is_interesting_jar_resource(Path::new(&m.relative_path), Some(&m.file_type))
+                })
                 .take(100),
         );
 
@@ -3974,14 +3995,8 @@ impl ArchiveAnalyzer {
         // verdict rests on sort to the front and survive it.
         let mut non_class_files: Vec<_> = other_files
             .into_iter()
-            .filter(|e| !is_benign_java_path(e.path()))
-            .filter(|e| {
-                // Only analyze potentially interesting files
-                let path_str = e.path().to_string_lossy().to_lowercase();
-                !path_str.contains("meta-inf/")
-                    || path_str.ends_with("manifest.mf")
-                    || path_str.ends_with(".xml")
-            })
+            .filter(|e| is_nested_archive_member(e.path(), None) || !is_benign_java_path(e.path()))
+            .filter(|e| is_interesting_jar_resource(e.path(), None))
             .collect();
         // Path breaks rank ties so the selection is reproducible; walkdir
         // order is filesystem order, which is not.
@@ -4420,8 +4435,9 @@ impl ArchiveAnalyzer {
 #[cfg(test)]
 mod tests {
     use super::{
-        ArchiveAnalyzer, archive_entry_json, archive_entry_metadata, jar_class_triage_score,
-        keep_top_ranked, rebase_nested_archive_entry_path, rebase_nested_file_path,
+        ArchiveAnalyzer, archive_entry_json, archive_entry_metadata, is_interesting_jar_resource,
+        jar_class_triage_score, keep_top_ranked, rebase_nested_archive_entry_path,
+        rebase_nested_file_path,
     };
     use crate::analyzers::FileType;
     use std::sync::Arc;
@@ -4531,6 +4547,22 @@ mod tests {
             all_files_analyzer.archive_member_analysis_skip_reason(&FileType::Html, "member"),
             None
         );
+    }
+
+    #[test]
+    fn jar_resource_selector_keeps_nested_archives_under_meta_inf() {
+        let nested = std::path::Path::new("META-INF/jars/loader.jar");
+        assert!(is_interesting_jar_resource(nested, Some(&FileType::Jar)));
+        // The extracted-directory path has no precomputed member type, so the
+        // extension fallback must preserve the same nested archive.
+        assert!(is_interesting_jar_resource(nested, None));
+
+        let service = std::path::Path::new("META-INF/services/example.Service");
+        assert!(!is_interesting_jar_resource(service, Some(&FileType::Text)));
+        assert!(is_interesting_jar_resource(
+            std::path::Path::new("META-INF/MANIFEST.MF"),
+            Some(&FileType::Text)
+        ));
     }
 
     #[test]

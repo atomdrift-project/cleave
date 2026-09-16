@@ -42,11 +42,23 @@ impl super::JavaClassAnalyzer {
     /// `strings` are expected to have passed [`Self::is_interesting_string`].
     pub(super) fn detect_capabilities_from_facts(
         &self,
-        _class_refs: &[String],
+        class_refs: &[String],
         strings: &[String],
         report: &mut AnalysisReport,
     ) {
         let target_path = report.target.path.to_lowercase();
+        // The Swing/AWT allowlist in the keylogging branch is evaluated one
+        // string at a time, so a class that plainly implements the keystroke
+        // API still trips on an unrelated diagnostic message that happens to
+        // contain the bare word: the JDK's own
+        // MetaData$java_awt_AWTKeyStroke_PersistenceDelegate carries
+        // "Unsupported KeyStroke: ", which is not any of the allowlisted
+        // spellings. Decide once, over the whole constant pool, whether this
+        // class is a user of the platform keystroke API.
+        let declares_java_keystroke_api = class_refs.iter().chain(strings.iter()).any(|s| {
+            let l = s.to_lowercase();
+            l.contains("awtkeystroke") || l.contains("javax/swing") || l.contains("javax.swing")
+        });
         let is_sig_stub = target_path.ends_with(".sig") || target_path.contains("ct.sym");
         let is_demo_artifact = target_path.contains("/demo/") || target_path.contains("j2ddemo");
         let is_plantuml_brotli_dictionary =
@@ -146,6 +158,7 @@ impl super::JavaClassAnalyzer {
                 || s_lower.contains("o-keylogger")
                 || (Self::contains_word(&s_lower, "keystroke")
                     && !is_java_keystroke_api
+                    && !declares_java_keystroke_api
                     && !s_lower.contains("jline/console")
                     && !s_lower.contains("ljline/console"))
             {

@@ -679,6 +679,30 @@ impl super::CapabilityMapper {
             let new_findings: Vec<Finding> = self
                 .composite_rules
                 .iter()
+                // Only cross-file scopes may pool here. Nested findings arrive
+                // without per-member evidence locations, so `Scope::key` maps
+                // them all to the empty key: a `scope: file` (the default) or
+                // `scope: leaf` composite would then treat two legs found in
+                // two unrelated archive members as same-file evidence and fire.
+                // That is the same hazard `evaluate_package_composites` below
+                // already documents and excludes for.
+                //
+                // Nothing is lost by skipping them: file/leaf composites are
+                // evaluated per member in the ordinary per-file pass, and
+                // against the container itself when the archive is analyzed as
+                // a file. Worked example: a source tarball carrying an HTML doc
+                // with a `function foo(` and, in a different member, a `.js`
+                // that calls `String.fromCharCode` satisfied
+                // `noncode-container-selfdecoding-script` -- a hostile verdict
+                // on OpenSSH, Caddy and llama_index, despite the rule declaring
+                // `for: [chm, oledoc, ooxml, rtf, pdf]` and `scope: file`.
+                .filter(|rule| {
+                    !matches!(
+                        rule.scope,
+                        Some(crate::composite_rules::Scope::File)
+                            | Some(crate::composite_rules::Scope::Leaf)
+                    )
+                })
                 .filter_map(|rule| rule.evaluate(&ctx))
                 .filter(|f| !seen_ids.contains(f.id.as_str()))
                 .collect();

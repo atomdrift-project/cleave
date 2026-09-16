@@ -55,9 +55,8 @@ pub(crate) fn map_kind_to_node_types(kind: &str, file_type: FileType) -> Vec<&'s
             FileType::Lua => vec!["function_definition", "local_function_definition_statement"],
             FileType::Perl => vec!["subroutine_declaration_statement"],
             FileType::PowerShell => vec!["function_statement"],
-            FileType::Swift => vec!["function_declaration"],
+            FileType::Swift | FileType::Zig => vec!["function_declaration"],
             FileType::Groovy => vec!["method_definition"],
-            FileType::Zig => vec!["fn_decl"],
             FileType::Elixir => vec!["call"], // def/defp are function calls in Elixir AST
             FileType::Makefile => vec!["rule"],
             _ => vec![],
@@ -76,7 +75,15 @@ pub(crate) fn map_kind_to_node_types(kind: &str, file_type: FileType) -> Vec<&'s
             }
             FileType::Perl => vec!["package_statement"],
             FileType::PowerShell => vec!["class_statement"],
-            FileType::Zig => vec!["container_decl"],
+            // Zig has no class construct; containers are the closest
+            // declaration-level analogue and are represented by distinct
+            // struct/enum/union/opaque nodes in tree-sitter-zig.
+            FileType::Zig => vec![
+                "struct_declaration",
+                "enum_declaration",
+                "union_declaration",
+                "opaque_declaration",
+            ],
             FileType::Elixir => vec!["call"], // defmodule is a function call in Elixir AST
             _ => vec![],
         },
@@ -102,7 +109,7 @@ pub(crate) fn map_kind_to_node_types(kind: &str, file_type: FileType) -> Vec<&'s
             FileType::Lua => vec!["function_call"], // require is a function call
             FileType::Perl => vec!["use_statement", "require_statement"],
             FileType::PowerShell => vec!["using_statement"],
-            FileType::Zig => vec!["builtin_call_expr"], // @import
+            FileType::Zig => vec!["builtin_function"], // @import
             _ => vec![],
         },
 
@@ -111,9 +118,10 @@ pub(crate) fn map_kind_to_node_types(kind: &str, file_type: FileType) -> Vec<&'s
             FileType::JavaScript | FileType::TypeScript => vec!["string", "template_string"],
             FileType::Ruby => vec!["string", "string_content", "heredoc_body"],
             FileType::Go => vec!["interpreted_string_literal", "raw_string_literal"],
-            FileType::C | FileType::ObjectiveC | FileType::Java | FileType::Zig => {
+            FileType::C | FileType::ObjectiveC | FileType::Java => {
                 vec!["string_literal"]
             }
+            FileType::Zig => vec!["string", "multiline_string"],
             FileType::Rust => vec!["string_literal", "raw_string_literal"],
             FileType::CSharp => vec!["string_literal", "verbatim_string_literal"],
             FileType::Php => vec!["string", "encapsed_string"],
@@ -168,7 +176,7 @@ pub(crate) fn map_kind_to_node_types(kind: &str, file_type: FileType) -> Vec<&'s
             FileType::Lua => vec!["assignment_statement"],
             FileType::Swift => vec!["value_binding_pattern"],
             FileType::Scala => vec!["val_definition", "var_definition"],
-            FileType::Zig => vec!["var_decl"],
+            FileType::Zig => vec!["assignment_expression", "variable_declaration"],
             FileType::Elixir => vec!["binary_operator"], // = is a binary operator in Elixir
             _ => vec![],
         },
@@ -258,7 +266,8 @@ pub(crate) fn map_kind_to_node_types(kind: &str, file_type: FileType) -> Vec<&'s
             | FileType::Scala => {
                 vec!["field_expression"]
             }
-            FileType::Java | FileType::Zig => vec!["field_access"],
+            FileType::Java => vec!["field_access"],
+            FileType::Zig => vec!["field_expression"],
             FileType::CSharp | FileType::Php => vec!["member_access_expression"],
             // Shell doesn't have attribute access
             FileType::Perl => vec!["method_call_expression"],
@@ -277,7 +286,8 @@ pub(crate) fn map_kind_to_node_types(kind: &str, file_type: FileType) -> Vec<&'s
             FileType::C | FileType::ObjectiveC | FileType::Php | FileType::Swift => {
                 vec!["subscript_expression"]
             }
-            FileType::Java | FileType::Zig => vec!["array_access"],
+            FileType::Java => vec!["array_access"],
+            FileType::Zig => vec!["index_expression"],
             FileType::CSharp => vec!["element_access_expression"],
             // Shell uses ${array[index]} syntax
             FileType::Lua => vec!["bracket_index_expression"],

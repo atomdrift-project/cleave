@@ -5646,4 +5646,92 @@ traits:
             report.structure.iter().map(|s| &s.id).collect::<Vec<_>>()
         );
     }
+
+    /// Every container format must reach a member extractor.
+    ///
+    /// `extract_from_data` ends in `_ => bail!("Unsupported archive type")`, so a
+    /// newly added container that is registered as an archive but missed here
+    /// fails silently: members are never extracted, no child findings exist, and
+    /// nothing is promoted to the parent. The container then scores as if it
+    /// were empty, which is indistinguishable from a clean file.
+    ///
+    /// The list mirrors `filefacts::FileType::is_archive`, which is the source
+    /// of truth for "this is a container"; the two are hand-written, so this
+    /// test exists to stop them drifting apart. `Chm` and `Asar` are handled by
+    /// dedicated in-memory paths in `analyze_archive` that return before the
+    /// match, so they are listed as handled here too.
+    #[test]
+    fn every_archive_type_reaches_an_extractor() {
+        let source = include_str!("mod.rs");
+        let dispatch_start = source
+            .find("fn extract_from_data")
+            .expect("extract_from_data present");
+        let dispatch_end = source[dispatch_start..]
+            .find("Unsupported archive type")
+            .expect("fallback arm present")
+            + dispatch_start;
+        let dispatch = &source[dispatch_start..dispatch_end];
+
+        // Handled ahead of the match, in `analyze_archive`.
+        let dedicated = ["Chm", "Asar"];
+
+        // Mirrors `FileType::is_archive()`.
+        let containers = [
+            "Zip",
+            "Tar",
+            "Cpio",
+            "TarGz",
+            "TarBz2",
+            "TarXz",
+            "TarZst",
+            "Gz",
+            "Bz2",
+            "Xz",
+            "Lzma",
+            "Zst",
+            "SevenZ",
+            "Rar",
+            "Deb",
+            "Rpm",
+            "PkgMacos",
+            "Dmg",
+            "Iso",
+            "Cab",
+            "Chm",
+            "Crx",
+            "Xpi",
+            "Whl",
+            "Gem",
+            "ApkAndroid",
+            "ApkAlpine",
+            "Npm",
+            "Crate",
+            "Conda",
+            "Egg",
+            "Nupkg",
+            "Ipa",
+            "Vsix",
+            "PkgFreebsd",
+            "PkgArch",
+            "PythonSdist",
+            "OciImage",
+            "Xbps",
+            "GentooBinpkg",
+            "Asar",
+            "Jar",
+        ];
+
+        let missing: Vec<&str> = containers
+            .iter()
+            .copied()
+            .filter(|name| {
+                !dedicated.contains(name) && !dispatch.contains(&format!("FileType::{name}"))
+            })
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "container types with no member extractor (their children would never \
+             be analyzed and nothing would promote to the parent): {missing:?}"
+        );
+    }
 }

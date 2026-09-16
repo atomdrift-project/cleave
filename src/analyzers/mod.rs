@@ -979,11 +979,26 @@ mod tests {
 
     #[test]
     fn bridge_ooxml() {
-        let mut data = b"PK\x03\x04".to_vec();
-        data.resize(12, 0);
+        // An Office extension is believed only when the bytes back it up:
+        // every OOXML document is an OPC package and names
+        // `[Content_Types].xml` as its first entry. A zip that merely carries
+        // the extension is a zip, and is walked as one -- which is what lets
+        // its members be analyzed at all.
+        let mut package = b"PK\x03\x04".to_vec();
+        package.extend_from_slice(&[0u8; 22]);
+        package.extend_from_slice(&19u16.to_le_bytes());
+        package.extend_from_slice(&0u16.to_le_bytes());
+        package.extend_from_slice(b"[Content_Types].xml");
         assert_eq!(
-            detect_file_type_from_data(Path::new("s.pptx"), &data),
+            detect_file_type_from_data(Path::new("s.pptx"), &package),
             FileType::Ooxml
+        );
+
+        let mut bare = b"PK\x03\x04".to_vec();
+        bare.resize(12, 0);
+        assert_eq!(
+            detect_file_type_from_data(Path::new("s.pptx"), &bare),
+            FileType::Zip
         );
     }
 

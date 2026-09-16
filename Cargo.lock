@@ -1722,7 +1722,7 @@ dependencies = [
 [[package]]
 name = "filefacts"
 version = "1.7.0"
-source = "git+https://github.com/atomdrift-project/filefacts.git#82308af4327f374325cd4322b659461c9c1a35db"
+source = "git+https://github.com/atomdrift-project/filefacts.git#2d8dad6a795125c04a312daf0974f66246a8adc9"
 dependencies = [
  "aho-corasick",
  "cab",
@@ -3871,11 +3871,10 @@ dependencies = [
 
 [[package]]
 name = "redox_users"
-version = "0.5.2"
+version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a4e608c6638b9c18977b00b475ac1f28d14e84b27d8d42f70e0bf1e3dec127ac"
+checksum = "60dc65c0ff1a7ae1294b0c67b9f14baf70b644404010370171787bfac1038fc0"
 dependencies = [
- "getrandom 0.2.17",
  "libredox",
  "thiserror 2.0.20",
 ]
@@ -4673,7 +4672,7 @@ dependencies = [
 [[package]]
 name = "stng"
 version = "1.12.0"
-source = "git+https://github.com/atomdrift-project/stng.git#c64d035ed443c784dc7ca3cfb6136843a6f632bc"
+source = "git+https://github.com/atomdrift-project/stng.git#b605d04dbf382ca63d7b9aab3c71515bebe0d00d"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -5341,7 +5340,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-clojure"
 version = "0.1.0"
-source = "git+https://github.com/atomdrift-project/filefacts.git#82308af4327f374325cd4322b659461c9c1a35db"
+source = "git+https://github.com/atomdrift-project/filefacts.git#2d8dad6a795125c04a312daf0974f66246a8adc9"
 dependencies = [
  "cc",
  "tree-sitter",

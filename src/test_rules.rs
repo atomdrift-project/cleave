@@ -2115,10 +2115,17 @@ fn build_composite_requirements(composite: &crate::composite_rules::CompositeTra
 
 fn truncate_string(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
-        s.to_string()
-    } else {
-        format!("{}...", &s[..max_len])
+        return s.to_string();
     }
+    // `max_len` is a byte budget, and rule patterns are not all ASCII -- a
+    // vendor-identity regex holding CJK company names put a char boundary in
+    // the middle of the cut and panicked the whole command. Walk back to the
+    // nearest boundary instead.
+    let mut end = max_len;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...", &s[..end])
 }
 
 pub(crate) fn find_matching_strings<'a>(

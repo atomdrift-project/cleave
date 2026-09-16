@@ -1433,21 +1433,12 @@ mod numeric_literal_tests {
 
 impl Analyzer for UnifiedSourceAnalyzer {
     fn analyze_input(&self, input: &AnalysisInput<'_>) -> Result<AnalysisReport> {
-        // Handle UTF-16 encoding (same as analyze())
-        let bytes: std::borrow::Cow<'_, [u8]> =
-            if input.data.len() >= 2 && input.data[0] == 0xFF && input.data[1] == 0xFE {
-                // UTF-16 LE BOM
-                use encoding_rs::UTF_16LE;
-                let (decoded, _, _) = UTF_16LE.decode(&input.data[2..]);
-                std::borrow::Cow::Owned(decoded.into_owned().into_bytes())
-            } else if input.data.len() >= 2 && input.data[0] == 0xFE && input.data[1] == 0xFF {
-                // UTF-16 BE BOM
-                use encoding_rs::UTF_16BE;
-                let (decoded, _, _) = UTF_16BE.decode(&input.data[2..]);
-                std::borrow::Cow::Owned(decoded.into_owned().into_bytes())
-            } else {
-                std::borrow::Cow::Borrowed(input.data)
-            };
+        // Handle UTF-16 encoding. Shares `normalize_text_encoding` with the
+        // rest of the engine rather than repeating the BOM check, so a BOM
+        // that lies about the encoding is treated the same everywhere: this
+        // copy decoded on the BOM alone, which left source analysis reading
+        // mojibake for any single-byte script with `FF FE` in front of it.
+        let bytes = crate::file_io::normalize_text_encoding(input.data);
 
         let content = String::from_utf8_lossy(&bytes);
 

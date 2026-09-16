@@ -1235,8 +1235,8 @@ impl OfficeAnalyzer {
             // oleObject vector is declared from the *document* body's rels,
             // not from a chart's, so let the chart case fall through to the
             // remote-but-not-a-template tier below.
-            let chart_data_link = ext_ref.rel_type.contains("oleObject")
-                && ext_ref.source.contains("/charts/");
+            let chart_data_link =
+                ext_ref.rel_type.contains("oleObject") && ext_ref.source.contains("/charts/");
             let is_template = ext_ref.rel_type.contains("attachedTemplate")
                 || (ext_ref.rel_type.contains("oleObject") && !chart_data_link)
                 || ext_ref.rel_type.contains("frame");

@@ -3537,6 +3537,58 @@ fn test_near_bytes_with_offsets() {
     );
 }
 
+/// A finding with no offsets, the shape a `type: path` match produces: it is a
+/// fact about the file's name, so there is nowhere in the file to point at.
+fn finding_without_offsets(id: &str) -> Finding {
+    let mut finding = finding_at_offset(id, 0);
+    finding.evidence[0].offsets = Vec::new();
+    finding
+}
+
+/// A leg that can never carry an offset must not make `near_bytes`
+/// unsatisfiable.
+///
+/// `chocolatey-install-remote-powershell-eval` required a filename leg, a
+/// download and an `iex` within 1024 bytes. The filename leg has no position,
+/// so the window could never hold all three and the rule stopped firing on
+/// every file, including a six-line install script whose download and `iex` are
+/// on consecutive lines. The window now has to co-locate the legs that can be
+/// located, and the unlocatable leg still has to match -- it just does not have
+/// to be *somewhere* in particular.
+#[test]
+fn near_bytes_ignores_legs_that_carry_no_offset() {
+    let report = empty_report();
+    let data = b"some file content here";
+    let findings = vec![
+        finding_without_offsets("path-leg"),
+        finding_at_offset("trait-a", 100),
+        finding_at_offset("trait-b", 150),
+    ];
+    let ctx = proximity_ctx(&report, data, &findings);
+
+    let rule = proximity_rule(&["path-leg", "trait-a", "trait-b"], None, Some(100));
+    assert!(
+        rule.evaluate(&ctx).is_some(),
+        "the located legs are 50 bytes apart, so the unlocatable leg must not block the window"
+    );
+
+    // The relaxation is about which legs the window must hold, not about how
+    // far apart they may be: the located legs are still bound by the span.
+    let too_far = proximity_rule(&["path-leg", "trait-a", "trait-b"], None, Some(30));
+    assert!(
+        too_far.evaluate(&ctx).is_none(),
+        "near_bytes: 30 must still fail -- trait-a and trait-b are 50 bytes apart"
+    );
+
+    // And a rule whose legs are *all* unlocatable has no proximity to check,
+    // so it must not slip through on an empty window.
+    let unlocatable = proximity_rule(&["path-leg"], None, Some(100));
+    assert!(
+        unlocatable.evaluate(&ctx).is_none(),
+        "a single unlocatable leg cannot satisfy a proximity constraint"
+    );
+}
+
 #[test]
 fn test_near_bytes_boundary_exact() {
     let report = empty_report();

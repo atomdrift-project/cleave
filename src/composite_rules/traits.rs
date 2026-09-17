@@ -4008,6 +4008,28 @@ fn parse_hex_or_dec_offset(s: &str) -> Option<u64> {
 }
 
 /// Check if at least `min_required` evidence items have line numbers within `max_line_span`.
+/// The distinct condition count a window must cover.
+///
+/// `min_distinct` counts every positive leg, but some legs can never appear in
+/// a window: a `type: path` match is a fact about the file's name, so it
+/// carries no byte offset or line. Requiring it to sit inside the span makes
+/// the constraint unsatisfiable no matter what the file contains --
+/// `chocolatey-install-remote-powershell-eval` paired a filename leg with a
+/// download and an `iex` under `near_bytes: 1024` and stopped firing entirely,
+/// including on a specimen whose whole script is six lines.
+///
+/// `required_all` already holds only the located `all:` legs, so the honest
+/// floor is those plus the `any:` quota. Never raises the caller's figure.
+fn effective_min_distinct(
+    required_all: &rustc_hash::FxHashSet<usize>,
+    any_required: usize,
+    min_distinct: usize,
+) -> usize {
+    min_distinct
+        .min(required_all.len() + any_required)
+        .max(2)
+}
+
 /// Returns the (start_line, end_line) of the first qualifying window, or None.
 fn evidence_within_line_range(
     evidence: &[Evidence],
@@ -4119,11 +4141,11 @@ fn evidence_within_line_range_grouped(
     any_required: usize,
     min_distinct: usize,
 ) -> Option<(usize, usize)> {
+    let required_all = located_all_indices(items.iter().map(|&(_, idx)| idx), all_count);
+    let min_distinct = effective_min_distinct(&required_all, any_required, min_distinct);
     if items.len() < min_distinct {
         return None;
     }
-
-    let required_all = located_all_indices(items.iter().map(|&(_, idx)| idx), all_count);
 
     let mut sorted: SmallVec<[(usize, usize); MAX_EVIDENCE_PER_TRAIT]> = items.into();
     sorted.sort_unstable_by_key(|&(line, _)| line);
@@ -4161,11 +4183,11 @@ fn evidence_within_byte_range_grouped(
     any_required: usize,
     min_distinct: usize,
 ) -> Option<(u64, u64)> {
+    let required_all = located_all_indices(items.iter().map(|&(_, idx)| idx), all_count);
+    let min_distinct = effective_min_distinct(&required_all, any_required, min_distinct);
     if items.len() < min_distinct {
         return None;
     }
-
-    let required_all = located_all_indices(items.iter().map(|&(_, idx)| idx), all_count);
 
     let mut sorted: SmallVec<[(u64, usize); MAX_EVIDENCE_PER_TRAIT]> = items.into();
     sorted.sort_unstable_by_key(|&(offset, _)| offset);

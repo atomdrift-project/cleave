@@ -2686,6 +2686,16 @@ pub(crate) fn find_convictions_without_content(
         for cond in rule.all.iter().flatten().chain(rule.any.iter().flatten()) {
             match cond {
                 Condition::Trait { id } => {
+                    // A reference into a runtime-synthesized namespace resolves
+                    // to nothing statically, but it is not absent evidence: an
+                    // import, a code signature or an entitlement is a fact about
+                    // the file's contents, recovered per-scan. Counting those as
+                    // "no content" reported rules like `setup-py-ctypes-imports`
+                    // as resting on their filename alone.
+                    if is_runtime_synthesized_namespace(id) {
+                        saw_inline_content = true;
+                        continue;
+                    }
                     // Every id this leg can reach, required or alternative: one
                     // content-derived possibility is enough to clear the rule.
                     let mut stack = resolve_cached(id, &all_ids, &mut cache);

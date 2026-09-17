@@ -4025,9 +4025,7 @@ fn effective_min_distinct(
     any_required: usize,
     min_distinct: usize,
 ) -> usize {
-    min_distinct
-        .min(required_all.len() + any_required)
-        .max(2)
+    min_distinct.min(required_all.len() + any_required).max(2)
 }
 
 /// Returns the (start_line, end_line) of the first qualifying window, or None.

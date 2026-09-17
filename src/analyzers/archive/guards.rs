@@ -522,6 +522,18 @@ pub(crate) fn sanitize_entry_path(entry_name: &str, dest_dir: &Path) -> Option<P
     Some(result)
 }
 
+/// True when `entry_name` names the extraction root itself rather than anything
+/// outside it: `""`, `.`, `./`, `./.` and friends, which
+/// [`escaped_relative_path`] reduces to no segments at all.
+///
+/// This is the other reason `sanitize_entry_path` returns `None`, and it is an
+/// entirely ordinary entry: `tar -cf archive.tar .` records one for the
+/// directory it was pointed at, and cpio and RPM payloads carry it too. Callers
+/// that report a rejected entry as zip-slip must exclude it first.
+pub(crate) fn names_extraction_root(entry_name: &str) -> bool {
+    !is_anchored(entry_name) && split_entry_segments(entry_name).is_empty()
+}
+
 /// The relative path [`sanitize_entry_path`] would produce for `entry_name`, as
 /// a `/`-joined string, or `None` for an entry it would reject.
 ///

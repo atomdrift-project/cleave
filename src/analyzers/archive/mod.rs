@@ -33,7 +33,7 @@ use crate::composite_rules::SectionMap;
 use ::zip::ZipArchive;
 use guards::{
     ExtractedMemberMetadata, ExtractionGuard, MAX_FILE_COUNT, MAX_FILE_SIZE, MAX_TOTAL_SIZE,
-    escaped_relative_path, sanitize_entry_path,
+    escaped_relative_path, names_extraction_root, sanitize_entry_path,
 };
 use utils::calculate_sha256;
 
@@ -857,6 +857,15 @@ fn push_archive_hostile_findings(
         match reason {
             HostileArchiveReason::PathTraversal(path) => {
                 if suppress_path_traversal {
+                    continue;
+                }
+
+                // An entry that resolves to the extraction root is not an
+                // escape. Extractors reject it for the same reason they reject
+                // `../`, so it arrives here as the same variant -- but every
+                // `tar -cf x.tar .` produces one, and reporting it as zip-slip
+                // flags a large share of ordinary source tarballs.
+                if names_extraction_root(&path) {
                     continue;
                 }
 
@@ -2825,6 +2834,62 @@ mod tests {
     // Import external crate types (our modules shadow these names)
     use ::tar;
     use ::zip;
+
+    /// Builds a tar the way `tar -cf x.tar .` does -- a leading `./` entry for
+    /// the directory itself -- and asserts it is not reported as zip-slip,
+    /// while a sibling tar carrying a real `../` escape still is.
+    #[test]
+    fn tar_dot_slash_root_entry_is_not_zip_slip() {
+        fn traversal_findings(names: &[&str]) -> usize {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("sample.tar");
+            let mut archive = tar::Builder::new(File::create(&path).unwrap());
+            for name in names {
+                let body = b"placeholder contents\n";
+                let mut header = tar::Header::new_gnu();
+                header.set_size(if name.ends_with('/') {
+                    0
+                } else {
+                    body.len() as u64
+                });
+                header.set_mode(0o644);
+                header.set_entry_type(if name.ends_with('/') {
+                    tar::EntryType::Directory
+                } else {
+                    tar::EntryType::Regular
+                });
+                // Written straight into the header block: the `tar` crate's
+                // `append_data` refuses a `..` path, which is exactly the entry
+                // the escape half of this test needs.
+                let raw = header.as_gnu_mut().unwrap();
+                raw.name[..name.len()].copy_from_slice(name.as_bytes());
+                header.set_cksum();
+                let payload: &[u8] = if name.ends_with('/') { b"" } else { body };
+                archive.append(&header, payload).unwrap();
+            }
+            archive.finish().unwrap();
+            drop(archive);
+            ArchiveAnalyzer::new()
+                .with_capability_mapper(CapabilityMapper::empty())
+                .analyze(&path)
+                .unwrap()
+                .findings
+                .iter()
+                .filter(|f| f.id.as_ref() == "anti-analysis/archive/path-traversal")
+                .count()
+        }
+
+        assert_eq!(
+            traversal_findings(&["./", "./library.c", "./library.h"]),
+            0,
+            "`./` names the extraction root, not an escape from it"
+        );
+        assert_eq!(
+            traversal_findings(&["./", "./library.c", "../escape.sh"]),
+            1,
+            "a genuine `../` entry must still be reported"
+        );
+    }
 
     #[test]
     fn archive_go_workspace_metadata_reaches_dependency_context() {

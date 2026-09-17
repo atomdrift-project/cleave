@@ -839,21 +839,26 @@ pub(crate) fn resolve_platform_filetype_conflicts(
                 RuleFileType::Elf | RuleFileType::Apk => has_unix || has_android,
                 RuleFileType::Dex => has_android,
                 RuleFileType::Jcl => has_zos,
-                // Mach-O/Plist/Ipa and AppleScript/Swift/ObjC are macOS/iOS-native;
+                // Mach-O/Plist/Ipa and AppleScript/ObjC are macOS/iOS-native;
                 // Shell runs on all unix-like systems. macOS is a Unix, so the
                 // `unix` umbrella reaches all of them.
                 RuleFileType::Macho
                 | RuleFileType::Shell
                 | RuleFileType::AppleScript
-                | RuleFileType::Swift
                 | RuleFileType::ObjectiveC
                 | RuleFileType::Plist
                 | RuleFileType::Pbxproj
                 | RuleFileType::Ipa => has_darwin,
-                // Perl is a unix/linux scripting language, not a macOS-native concern
-                RuleFileType::Perl => has_unix,
-                // Server/desktop-only languages — not meaningful on mobile-only targets
-                RuleFileType::Python
+                // Swift packages can target Windows, Linux, macOS, and iOS.
+                RuleFileType::Swift => has_windows || has_unix || has_macos || has_ios,
+                // Server/desktop-only languages — not meaningful on mobile-only
+                // targets. Perl belongs here: it is a normal script carrier on
+                // every desktop/server OS. PowerShell intentionally remains
+                // Windows-only above — its runtime is cross-platform, but
+                // non-Windows package delivery is not a realistic malware
+                // distribution model for our rules.
+                RuleFileType::Perl
+                | RuleFileType::Python
                 | RuleFileType::Pyc
                 | RuleFileType::Ruby
                 | RuleFileType::Php
@@ -891,13 +896,16 @@ pub(crate) fn resolve_platform_filetype_conflicts(
                 // includes macOS, so a unix-targeting trait satisfies them.
                 RuleFileType::Macho
                 | RuleFileType::AppleScript
-                | RuleFileType::Swift
                 | RuleFileType::ObjectiveC
                 | RuleFileType::Plist
                 | RuleFileType::Pbxproj
                 | RuleFileType::Ipa => (has_darwin, "macos, ios, or unix"),
-                RuleFileType::Perl => (has_unix, "linux or unix"),
-                RuleFileType::Python
+                RuleFileType::Swift => (
+                    has_windows || has_unix || has_macos || has_ios,
+                    "windows, linux, unix, macos, or ios",
+                ),
+                RuleFileType::Perl
+                | RuleFileType::Python
                 | RuleFileType::Pyc
                 | RuleFileType::Ruby
                 | RuleFileType::Php
@@ -2032,8 +2040,7 @@ mod tests {
         assert!(ft.contains(&RuleFileType::Php));
         assert!(ft.contains(&RuleFileType::Lua));
         assert!(ft.contains(&RuleFileType::PowerShell));
-        // Perl requires unix — filtered out for windows-only
-        assert!(!ft.contains(&RuleFileType::Perl));
+        assert!(ft.contains(&RuleFileType::Perl));
         // AppleScript requires macos/ios — filtered out for windows-only
         assert!(!ft.contains(&RuleFileType::AppleScript));
         // Shell requires unix/apple — filtered out for windows-only
@@ -2061,6 +2068,26 @@ mod tests {
         assert!(ft.contains(&RuleFileType::Macho));
         assert!(!ft.contains(&RuleFileType::Pe));
         assert!(!ft.contains(&RuleFileType::Elf));
+    }
+
+    #[test]
+    fn test_group_filter_macos_keeps_perl_not_powershell() {
+        let mut w = Vec::new();
+        let mut ft = vec![RuleFileType::Perl, RuleFileType::PowerShell];
+        resolve_platform_filetype_conflicts("test", &[Platform::MacOS], &mut ft, true, &mut w);
+        assert!(w.is_empty(), "group filtering should not warn: {w:?}");
+        assert!(ft.contains(&RuleFileType::Perl));
+        assert!(!ft.contains(&RuleFileType::PowerShell));
+    }
+
+    #[test]
+    fn test_group_filter_windows_keeps_swift() {
+        let mut w = Vec::new();
+        let mut ft = vec![RuleFileType::Swift, RuleFileType::ObjectiveC];
+        resolve_platform_filetype_conflicts("test", &[Platform::Windows], &mut ft, true, &mut w);
+        assert!(w.is_empty(), "group filtering should not warn: {w:?}");
+        assert!(ft.contains(&RuleFileType::Swift));
+        assert!(!ft.contains(&RuleFileType::ObjectiveC));
     }
 
     // ==================== parse_file_types Tests ====================

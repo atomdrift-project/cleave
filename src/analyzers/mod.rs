@@ -979,6 +979,7 @@ mod tests {
 
     #[test]
     fn bridge_ooxml() {
+<<<<<<< HEAD
         // An Office extension is believed only when the bytes back it up:
         // every OOXML document is an OPC package and names
         // `[Content_Types].xml` as its first entry. A zip that merely carries
@@ -989,6 +990,21 @@ mod tests {
         package.extend_from_slice(&19u16.to_le_bytes());
         package.extend_from_slice(&0u16.to_le_bytes());
         package.extend_from_slice(b"[Content_Types].xml");
+||||||| parent of c3e0b959 (fix perl/swift categorization)
+        let mut data = b"PK\x03\x04".to_vec();
+        data.resize(12, 0);
+=======
+        // An Office extension is a claim; the package has to name
+        // `[Content_Types].xml` as a top-level entry for filefacts to agree.
+        // A zip that only *calls* itself .pptx is the zip it is, and goes to
+        // the archive analyzer so its members get walked.
+        const CONTENT_TYPES: &[u8] = b"[Content_Types].xml";
+        let mut data = b"PK\x03\x04".to_vec();
+        data.resize(26, 0);
+        data.extend_from_slice(&(CONTENT_TYPES.len() as u16).to_le_bytes());
+        data.extend_from_slice(&0u16.to_le_bytes());
+        data.extend_from_slice(CONTENT_TYPES);
+>>>>>>> c3e0b959 (fix perl/swift categorization)
         assert_eq!(
             detect_file_type_from_data(Path::new("s.pptx"), &package),
             FileType::Ooxml

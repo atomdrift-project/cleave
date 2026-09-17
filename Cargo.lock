@@ -1722,7 +1722,13 @@ dependencies = [
 [[package]]
 name = "filefacts"
 version = "1.7.0"
+<<<<<<< HEAD
 source = "git+https://github.com/atomdrift-project/filefacts.git#d9f654e25b6efdb1e9f5da4feaea93b0448fc414"
+||||||| parent of c3e0b959 (fix perl/swift categorization)
+source = "git+https://github.com/atomdrift-project/filefacts.git#82308af4327f374325cd4322b659461c9c1a35db"
+=======
+source = "git+https://github.com/atomdrift-project/filefacts.git#0e0df79de1c6e63248720ffc0d7b794ddff4a388"
+>>>>>>> c3e0b959 (fix perl/swift categorization)
 dependencies = [
  "aho-corasick",
  "cab",
@@ -4672,7 +4678,13 @@ dependencies = [
 [[package]]
 name = "stng"
 version = "1.12.0"
+<<<<<<< HEAD
 source = "git+https://github.com/atomdrift-project/stng.git#adcf2d63f193e3f3b2a0a9b337498d01b6dfe4a2"
+||||||| parent of c3e0b959 (fix perl/swift categorization)
+source = "git+https://github.com/atomdrift-project/stng.git#c64d035ed443c784dc7ca3cfb6136843a6f632bc"
+=======
+source = "git+https://github.com/atomdrift-project/stng.git#e27cec70cad1684c9dc26b2759cba2d18242b69a"
+>>>>>>> c3e0b959 (fix perl/swift categorization)
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -5340,7 +5352,13 @@ dependencies = [
 [[package]]
 name = "tree-sitter-clojure"
 version = "0.1.0"
+<<<<<<< HEAD
 source = "git+https://github.com/atomdrift-project/filefacts.git#d9f654e25b6efdb1e9f5da4feaea93b0448fc414"
+||||||| parent of c3e0b959 (fix perl/swift categorization)
+source = "git+https://github.com/atomdrift-project/filefacts.git#82308af4327f374325cd4322b659461c9c1a35db"
+=======
+source = "git+https://github.com/atomdrift-project/filefacts.git#0e0df79de1c6e63248720ffc0d7b794ddff4a388"
+>>>>>>> c3e0b959 (fix perl/swift categorization)
 dependencies = [
  "cc",
  "tree-sitter",
@@ -5568,9 +5586,21 @@ checksum = "eaea85b334db583fe3274d12b4cd1880032beab409c0d774be044d4480ab9a94"
 
 [[package]]
 name = "unicode-ident"
+<<<<<<< HEAD
 version = "1.0.26"
+||||||| parent of c3e0b959 (fix perl/swift categorization)
+version = "1.0.24"
+=======
+version = "1.0.25"
+>>>>>>> c3e0b959 (fix perl/swift categorization)
 source = "registry+https://github.com/rust-lang/crates.io-index"
+<<<<<<< HEAD
 checksum = "d245f478577f809a851594d02313b640fb437e0bb33866753cff937863096954"
+||||||| parent of c3e0b959 (fix perl/swift categorization)
+checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
+=======
+checksum = "ab72a15cf68d77cb0987d3684aa8a45c5ef827e8cb49ee2f30bfd7ba2feb519f"
+>>>>>>> c3e0b959 (fix perl/swift categorization)
 
 [[package]]
 name = "unicode-width"

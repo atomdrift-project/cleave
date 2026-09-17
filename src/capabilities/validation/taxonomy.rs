@@ -2373,7 +2373,7 @@ const BROAD_FILETYPE_THRESHOLD_PATH: usize = 4; // full-path matchers — start 
 // They also cover the complete generated manifest and archive families. These
 // are the family widths, not arbitrary exceptions for individual traits: adding
 // a supported format must not make the shipped taxonomy unloadable.
-const BROAD_FILETYPE_THRESHOLD_TEXT: usize = 29; // text / literal / comment
+const BROAD_FILETYPE_THRESHOLD_TEXT: usize = 31; // text / literal / comment
 const BROAD_FILETYPE_THRESHOLD_METRICS: usize = 25; // whole-file metrics
 // A basename matches the *filename*, which is artifact-specific — a filename
 // pattern that fires across many languages is almost always mis-scoped. Kept

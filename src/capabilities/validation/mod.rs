@@ -165,7 +165,8 @@ pub(crate) use taxonomy::{
     find_stale_filetype_allowlist_entries, find_suppression_only_building_blocks,
     find_unanchored_wellknown_composites, find_unreferenced_exceptions,
     find_wellknown_category_violations, find_wellknown_missing_section_filter,
-    find_wellknown_missing_size_filter, find_wide_trait_directories,
+    find_wellknown_missing_size_filter, find_wellknown_version_path_traits,
+    find_wide_trait_directories,
 };
 
 // Logic constraint validation

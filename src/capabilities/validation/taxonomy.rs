@@ -2877,6 +2877,74 @@ pub(crate) fn find_wellknown_missing_size_filter(
         .collect()
 }
 
+/// Find well-known/ traits that identify a family by registry metadata alone.
+///
+/// Two shapes, both blocklist rows rather than signatures:
+///
+/// * A `value` match on `version` / `npm.version`, anywhere under `well-known/`.
+///   It asks only "is this release numbered X", which every package in the
+///   registry can answer, so the trait fires on unrelated software that happens
+///   to share a version string -- `1.0.0` alone matches every `npm init -y`
+///   scaffold and every first publish. The finding still carries the family's
+///   name, so innocent software gets reported as that malware.
+/// * A `value` match on `name` / `npm.name` under `well-known/malware/supply-chain/`.
+///   Naming the package says which artifact was published, not what it did.
+///   The tier is for infamous, behaviour-characterised campaigns -- the ones an
+///   engineer recognises by technique -- and a per-package name list is the
+///   opposite of that. Outside the malware tier a package name *is* a
+///   legitimate identity (that is how `well-known/lib/.../jquery` works), so the
+///   name check is deliberately limited to the supply-chain malware directory.
+///
+/// Pinning a known-bad release is real work; it belongs in dependency/advisory
+/// analysis, which resolves name and version together and is updated
+/// continuously. A trait earns its place by describing behaviour that survives
+/// a rename or a repack.
+///
+/// Binding the name *and* version inside one matcher (a `text` regex over the
+/// manifest) is unaffected: such a matcher cannot fire on a different package.
+///
+/// Returns `Vec<(trait_id, source_file)>` for violations.
+#[must_use]
+pub(crate) fn find_wellknown_version_path_traits(
+    trait_definitions: &[TraitDefinition],
+    rule_source_files: &HashMap<String, String>,
+) -> Vec<(String, String)> {
+    trait_definitions
+        .iter()
+        .filter(|t| {
+            if extract_trait_tier(&t.id) != "well-known" {
+                return false;
+            }
+            let in_supply_chain = t.id.starts_with("well-known/malware/supply-chain");
+            condition_keys_on_registry_identity(&t.r#if, in_supply_chain)
+        })
+        .map(|t| {
+            let source = rule_source_files
+                .get(&t.id)
+                .cloned()
+                .unwrap_or_else(|| "unknown".to_string());
+            (t.id.clone(), source)
+        })
+        .collect()
+}
+
+/// True when a condition selects a bare registry-identity path.
+///
+/// Matches the key itself (`version`, `npm.name`, …) and the same key reached
+/// through a sibling-file prefix (`package.json::version`), while leaving
+/// compound paths such as `versions.1_0_0.dist` alone -- those address a
+/// specific release record rather than asking what this artifact is called.
+fn condition_keys_on_registry_identity(cond: &Condition, include_name: bool) -> bool {
+    match cond {
+        Condition::Kv(KvQuery { path, .. }) => {
+            let key = path.rsplit("::").next().unwrap_or(path).trim();
+            matches!(key, "version" | "npm.version")
+                || (include_name && matches!(key, "name" | "npm.name"))
+        }
+        _ => false,
+    }
+}
+
 /// Find well-known/ atomic traits targeting binary file types whose condition lacks a section filter.
 ///
 /// For binary targets (PE, ELF, Mach-O, etc.), section-scoped matching significantly reduces

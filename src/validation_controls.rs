@@ -767,6 +767,13 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         fix: "Place malware-family rules under the malware/ tier, not as a subcategory.",
     },
     ValidatorSpec {
+        id: "wellknown-version-path",
+        category: ValidatorCategory::Policy,
+        display_id: "wk-registry-id",
+        description: "well-known/ trait identifies a family by registry metadata (version anywhere; name under malware/supply-chain).",
+        fix: "Detect what the code does, not which package published it. Known-bad name/version pairs belong in dependency analysis.",
+    },
+    ValidatorSpec {
         id: "wellknown-composite-only",
         category: ValidatorCategory::Policy,
         display_id: "wk-comp-only",

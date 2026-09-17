@@ -52,10 +52,10 @@ use crate::capabilities::validation::{
     find_unanchored_wellknown_composites, find_uncallable_symbol_matchers,
     find_uncompilable_ast_queries, find_unreferenced_exceptions,
     find_wellknown_category_violations, find_wellknown_missing_section_filter,
-    find_wellknown_missing_size_filter, find_wide_trait_directories,
-    precalculate_all_composite_precisions, validate_composite_trait_only,
-    validate_directory_structure, validate_hostile_composite_precision,
-    validate_hostile_trait_precision,
+    find_wellknown_missing_size_filter, find_wellknown_version_path_traits,
+    find_wide_trait_directories, precalculate_all_composite_precisions,
+    validate_composite_trait_only, validate_directory_structure,
+    validate_hostile_composite_precision, validate_hostile_trait_precision,
 };
 use crate::composite_rules::MetricsQuery;
 use crate::composite_rules::{
@@ -3211,6 +3211,48 @@ impl super::CapabilityMapper {
                 warnings.push(format!(
                     "{} well-known/ traits lack file size filters (add size_min/size_max)",
                     wk_no_size.len()
+                ));
+            }
+
+            // Validate well-known/ traits do not identify a family by version alone
+            tracing::trace!("Checking well-known/ for bare version-path traits");
+            let wk_version =
+                find_wellknown_version_path_traits(&trait_definitions, &rule_source_files);
+            if !crate::validation_controls::is_validator_disabled("wellknown-version-path")
+                && !wk_version.is_empty()
+            {
+                eprintln!(
+                    "\n❌ ERROR: {} well-known/ traits identify a family by registry metadata",
+                    wk_version.len()
+                );
+                eprintln!(
+                    "   well-known/malware/supply-chain/ is for behaviour-based detection of infamous"
+                );
+                eprintln!("   attacks -- campaigns an engineer recognises by technique -- not a");
+                eprintln!("   metadata-based blacklist of published artifacts.\n");
+                eprintln!(
+                    "   A `value` match on version asks only \"is this release numbered X\", which"
+                );
+                eprintln!(
+                    "   every package can answer; a match on name says which artifact was published,"
+                );
+                eprintln!(
+                    "   not what it did. Either way the finding still names the family, so unrelated"
+                );
+                eprintln!("   software is reported as that malware.\n");
+                for (trait_id, source_file) in &wk_version {
+                    eprintln!("   {}: Trait '{}'", source_file, trait_id);
+                }
+                eprintln!(
+                    "\n   Describe behaviour that survives a rename or repack. Known-bad name and"
+                );
+                eprintln!(
+                    "   version pairs are dependency-analysis data, resolved together and updated"
+                );
+                eprintln!("   continuously; traits are not a blocklist.");
+                warnings.push(format!(
+                    "{} well-known/ traits identify a family by version alone (use name, hash or behaviour)",
+                    wk_version.len()
                 ));
             }
 

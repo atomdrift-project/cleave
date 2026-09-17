@@ -10,7 +10,7 @@
 
 use anyhow::Result;
 use bytes::Bytes;
-use encoding_rs::{UTF_16BE, UTF_16LE};
+use encoding_rs::{Encoding, UTF_16BE, UTF_16LE};
 use memmap2::Mmap;
 use std::borrow::Cow;
 use std::fs::File;
@@ -85,6 +85,60 @@ fn mislabelled_bom_payload(data: &[u8]) -> Option<&[u8]> {
     (!text.is_empty() && !text.contains(&0) && std::str::from_utf8(text).is_ok()).then_some(payload)
 }
 
+/// Detect UTF-16 that arrived without a byte-order mark.
+///
+/// A BOM is a courtesy, not a requirement, and dropping it is free evasion: a
+/// VBS or PowerShell dropper saved as bare UTF-16LE still runs under Windows
+/// Script Host, but every text rule reads `S\0e\0t\0` and matches nothing.
+/// Whole samples come back with zero findings for no reason but the encoding.
+///
+/// ASCII-range text in UTF-16 has a NUL beside every character, on the high
+/// half of each unit -- odd offsets for LE, even for BE. Requiring nearly all
+/// of them to be NUL, and the other half to be ordinary text bytes, keeps this
+/// away from binaries, which have NULs in both halves and control bytes
+/// between them.
+fn bomless_utf16_encoding(data: &[u8]) -> Option<&'static Encoding> {
+    // Two bytes per character, and short runs are too easy to hit by accident.
+    const MIN_LEN: usize = 32;
+    const SAMPLE: usize = 4096;
+    if data.len() < MIN_LEN || !data.len().is_multiple_of(2) {
+        return None;
+    }
+    let sample = &data[..data.len().min(SAMPLE)];
+
+    // `high` is the half that should be NUL; `low` carries the character.
+    let score = |high: usize| -> Option<f32> {
+        let low = 1 - high;
+        let mut pairs = 0usize;
+        let mut high_nul = 0usize;
+        let mut low_text = 0usize;
+        for chunk in sample.as_chunks::<2>().0 {
+            pairs += 1;
+            if chunk[high] == 0 {
+                high_nul += 1;
+            }
+            let c = chunk[low];
+            if c == b'\t' || c == b'\n' || c == b'\r' || (0x20..=0x7E).contains(&c) {
+                low_text += 1;
+            }
+        }
+        if pairs == 0 {
+            return None;
+        }
+        let high_ratio = high_nul as f32 / pairs as f32;
+        let low_ratio = low_text as f32 / pairs as f32;
+        (high_ratio >= 0.95 && low_ratio >= 0.90).then_some(high_ratio + low_ratio)
+    };
+
+    match (score(1), score(0)) {
+        // Both halves cannot be the NUL half unless the content is all NUL.
+        (Some(le), Some(be)) => Some(if le >= be { UTF_16LE } else { UTF_16BE }),
+        (Some(_), None) => Some(UTF_16LE),
+        (None, Some(_)) => Some(UTF_16BE),
+        (None, None) => None,
+    }
+}
+
 /// Detect if data is UTF-16 encoded and convert to UTF-8 if needed.
 ///
 /// Detects UTF-16 LE/BE by BOM (FF FE or FE FF) and converts to UTF-8.
@@ -132,7 +186,20 @@ pub fn normalize_text_encoding(data: &[u8]) -> Cow<'_, [u8]> {
         return Cow::Owned(decoded.into_owned().into_bytes());
     }
 
-    // No UTF-16 BOM detected, return original data
+    // No BOM. UTF-16 without one is still UTF-16, and reading it as bytes
+    // hides the whole file from every text rule.
+    if let Some(encoding) = bomless_utf16_encoding(data) {
+        tracing::debug!(
+            "Detected BOM-less {} encoding, converting to UTF-8",
+            encoding.name()
+        );
+        let (decoded, _encoding, had_errors) = encoding.decode(data);
+        if had_errors {
+            tracing::warn!("BOM-less UTF-16 decoding had some errors, using lossy conversion");
+        }
+        return Cow::Owned(decoded.into_owned().into_bytes());
+    }
+
     Cow::Borrowed(data)
 }
 
@@ -392,5 +459,56 @@ mod tests {
         let utf8_data = b"plain text";
         let result = normalize_text_encoding(utf8_data);
         assert_eq!(result.as_ref(), utf8_data);
+    }
+}
+
+#[cfg(test)]
+mod bomless_utf16_tests {
+    use super::*;
+
+    fn utf16le(s: &str) -> Vec<u8> {
+        s.encode_utf16().flat_map(u16::to_le_bytes).collect()
+    }
+
+    fn utf16be(s: &str) -> Vec<u8> {
+        s.encode_utf16().flat_map(u16::to_be_bytes).collect()
+    }
+
+    const SCRIPT: &str =
+        "Set ws = CreateObject(\"WScript.Shell\")\r\nws.Run \"cmd.exe /c calc\", 0\r\n";
+
+    #[test]
+    fn decodes_bomless_utf16le() {
+        let data = utf16le(SCRIPT);
+        let out = normalize_text_encoding(&data);
+        assert_eq!(String::from_utf8_lossy(&out), SCRIPT);
+    }
+
+    #[test]
+    fn decodes_bomless_utf16be() {
+        let data = utf16be(SCRIPT);
+        let out = normalize_text_encoding(&data);
+        assert_eq!(String::from_utf8_lossy(&out), SCRIPT);
+    }
+
+    #[test]
+    fn leaves_ascii_alone() {
+        let out = normalize_text_encoding(SCRIPT.as_bytes());
+        assert_eq!(&*out, SCRIPT.as_bytes());
+    }
+
+    #[test]
+    fn leaves_binaries_alone() {
+        // A PE header: NULs on both halves and control bytes between them.
+        let mut pe = b"MZ\x90\x00\x03\x00\x00\x00\x04\x00\x00\x00\xff\xff\x00\x00".to_vec();
+        pe.extend_from_slice(&[0u8; 64]);
+        let out = normalize_text_encoding(&pe);
+        assert_eq!(&*out, pe.as_slice());
+    }
+
+    #[test]
+    fn ignores_odd_length_and_short_input() {
+        let short = utf16le("Set x");
+        assert_eq!(&*normalize_text_encoding(&short), short.as_slice());
     }
 }

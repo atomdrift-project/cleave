@@ -2527,10 +2527,12 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     // normalize the content the matcher reads rather than reroute `type: text`
     // to the per-line stng strings, which would lose those cross-line patterns.
     //
-    // Gating on the BOM alone is safe and mirrors `file_io::read_file_normalized`:
-    // no real binary/archive format begins with FF FE / FE FF, and SHA +
+    // Normalization mirrors `file_io::read_file_normalized`. A BOM is the easy
+    // case; BOM-less UTF-16 is recognized by the NUL-interleaving itself, which
+    // no binary or archive format survives (it needs ~95% of one byte of every
+    // pair to be NUL and ~90% of the other to be printable text). SHA and
     // file-type detection above already ran on the original bytes, so file
-    // identity is unchanged.
+    // identity is unchanged either way.
     let normalized_data: Option<file_io::FileData> =
         match file_io::normalize_text_encoding(file_data) {
             std::borrow::Cow::Owned(decoded) => Some(file_io::FileData::Owned(decoded)),

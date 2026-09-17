@@ -3214,6 +3214,9 @@ composite_rules:
   - id: "test/supply-chain::npm-package-with-exe"
     desc: "NPM package with embedded exe"
     crit: suspicious
+    # Cross-file by design: the manifest and the binary are
+    # different archive members, so this must opt in to pooling.
+    scope: archive
     all:
       - id: "test/archive::package-json-basename"
       - id: "test/archive::exe-extension-basename"
@@ -3221,6 +3224,9 @@ composite_rules:
   - id: "test/supply-chain::python-package-with-dll"
     desc: "Python package with embedded dll"
     crit: suspicious
+    # Cross-file by design: the manifest and the binary are
+    # different archive members, so this must opt in to pooling.
+    scope: archive
     all:
       - id: "test/archive::setup-py-basename"
       - id: "test/archive::dll-extension-basename"
@@ -3228,6 +3234,9 @@ composite_rules:
   - id: "test/supply-chain::npm-package-with-image"
     desc: "NPM package with embedded image"
     crit: notable
+    # Cross-file by design: the manifest and the binary are
+    # different archive members, so this must opt in to pooling.
+    scope: archive
     all:
       - id: "test/archive::package-json-basename"
       - id: "test/archive::png-extension-basename"

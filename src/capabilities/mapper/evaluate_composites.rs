@@ -697,10 +697,21 @@ impl super::CapabilityMapper {
                 // on OpenSSH, Caddy and llama_index, despite the rule declaring
                 // `for: [chm, oledoc, ooxml, rtf, pdf]` and `scope: file`.
                 .filter(|rule| {
+                    // `scope:` omitted resolves to `Scope::File`: it is the
+                    // enum's `#[default]`, and `apply_scope_filter` reads it
+                    // through `unwrap_or_default`. Matching the raw `Option`
+                    // here exempted only *explicit* `scope: file`, so the ~98%
+                    // of composites that omit `scope:` pooled across unrelated
+                    // archive members — the hazard described above, reached via
+                    // the default instead of an explicit scope. Worked example:
+                    // `perl-packed-hex-command-loader` (`for: [perl]`, hostile)
+                    // fired on a Fedora source RPM with its four legs coming
+                    // from four unrelated vendored files. Resolve the default,
+                    // so only rules that opt in to cross-file pooling
+                    // (archive/outer/package) are evaluated here.
                     !matches!(
-                        rule.scope,
-                        Some(crate::composite_rules::Scope::File)
-                            | Some(crate::composite_rules::Scope::Leaf)
+                        rule.scope.unwrap_or_default(),
+                        crate::composite_rules::Scope::File | crate::composite_rules::Scope::Leaf
                     )
                 })
                 .filter_map(|rule| rule.evaluate(&ctx))

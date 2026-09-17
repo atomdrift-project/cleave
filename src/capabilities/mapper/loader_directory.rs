@@ -20,7 +20,8 @@ use crate::capabilities::validation::{
     find_brittle_path_patterns, find_broad_filetype_traits, find_broad_notable_downgrades,
     find_broad_platform_traits, find_cap_obj_violations, find_cap_wellknown_violations,
     find_case_insensitive_overlap_issues, find_composite_only_wellknown_files,
-    find_container_name_convictions, find_dead_downgrades, find_depth_violations,
+    find_container_name_convictions, find_convictions_without_content,
+    find_dangling_directory_refs, find_dead_downgrades, find_depth_violations,
     find_directory_shadowed_refs, find_duplicate_atomic_traits, find_duplicate_composite_rules,
     find_duplicate_inline_exclusions, find_duplicate_second_level_directories,
     find_empty_condition_clauses, find_exception_atomic_traits, find_exception_inline_conditions,
@@ -47,7 +48,7 @@ use crate::capabilities::validation::{
     find_should_use_defaults, find_sibling_name_restatement, find_single_item_clauses,
     find_slow_regex_patterns, find_stale_filetype_allowlist_entries,
     find_string_content_collisions, find_string_literal_should_use_text,
-    find_string_pattern_duplicates, find_structural_regex_duplicates,
+    find_string_pattern_duplicates, find_structural_regex_duplicates, find_subsumed_required_legs,
     find_suppression_only_building_blocks, find_too_short_patterns,
     find_unanchored_wellknown_composites, find_uncallable_symbol_matchers,
     find_uncompilable_ast_queries, find_unreferenced_exceptions,
@@ -3361,7 +3362,7 @@ impl super::CapabilityMapper {
                     redundant_any_refs.len()
                 );
                 eprintln!(
-                    "   Rules hand-listing this many traits from one directory should use directory\n   notation (cap: 5, or 10 when the clause carries needs: > 1):\n"
+                    "   Rules with 4+ trait references from the same directory should use directory notation:\n"
                 );
                 for (rule_id, dir, count, trait_ids, source_file) in &redundant_any_refs {
                     let line_hint = find_line_number(source_file, rule_id);
@@ -4579,6 +4580,129 @@ impl super::CapabilityMapper {
                     "{} convictions require a collector-assigned container filename",
                     container_name_convictions.len()
                 ));
+            }
+
+            // Validate: an all: leg that another leg already requires. The rule
+            // matches the same files without it, but reads as more evidence.
+            if !crate::validation_controls::is_validator_disabled("subsumed-required-leg") {
+                let subsumed = find_subsumed_required_legs(&trait_definitions, &composite_rules);
+                if !subsumed.is_empty() {
+                    eprintln!(
+                        "\n❌ ERROR: {} all: legs are already required by another leg",
+                        subsumed.len()
+                    );
+                    eprintln!("   The rule matches exactly the same files without them, so it");
+                    eprintln!(
+                        "   counts one fact as several and looks better-evidenced than it is."
+                    );
+                    eprintln!("   Delete the redundant leg. If the two were meant to be different");
+                    eprintln!(
+                        "   evidence, one is not matching what its name claims -- look for an"
+                    );
+                    eprintln!("   exact and a regex spelling of one value, or a nested composite");
+                    eprintln!("   that already contains the other leg.\n");
+                    for (rule_id, redundant, covered_by) in &subsumed {
+                        let source = rule_source_files
+                            .get(rule_id)
+                            .map(std::string::String::as_str)
+                            .unwrap_or("unknown");
+                        match find_line_number(source, rule_id) {
+                            Some(line) => eprintln!("   {source}:{line}: '{rule_id}'"),
+                            None => eprintln!("   {source}: '{rule_id}'"),
+                        }
+                        eprintln!("      '{redundant}' adds nothing over '{covered_by}'");
+                    }
+                    eprintln!();
+                    warnings.push(format!(
+                        "{} all: legs are already required by another leg",
+                        subsumed.len()
+                    ));
+                }
+            }
+
+            // Validate: a conviction assembled only from name/size/metric facts
+            // fingerprints one artifact rather than detecting the malware.
+            if !crate::validation_controls::is_validator_disabled("conviction-without-content") {
+                let no_content =
+                    find_convictions_without_content(&trait_definitions, &composite_rules);
+                if !no_content.is_empty() {
+                    eprintln!(
+                        "\n❌ ERROR: {} convictions rest on no content evidence",
+                        no_content.len()
+                    );
+                    eprintln!(
+                        "   Every leg is a name, a size or a metric count -- what the file is"
+                    );
+                    eprintln!(
+                        "   called, weighs and counts, never what it does. That fingerprints"
+                    );
+                    eprintln!("   one artifact and misses the next build of the same malware.\n");
+                    eprintln!(
+                        "   Add a leg derived from the contents: a string, symbol, import or"
+                    );
+                    eprintln!(
+                        "   structural match stating what the sample actually does. If no such"
+                    );
+                    eprintln!(
+                        "   evidence exists for this family, it is an identity record and not"
+                    );
+                    eprintln!(
+                        "   a detection -- keep the traits at notable and drop the conviction.\n"
+                    );
+                    for (rule_id, resting_on) in &no_content {
+                        let source = rule_source_files
+                            .get(rule_id)
+                            .map(std::string::String::as_str)
+                            .unwrap_or("unknown");
+                        match find_line_number(source, rule_id) {
+                            Some(line) => eprintln!("   {source}:{line}: '{rule_id}'"),
+                            None => eprintln!("   {source}: '{rule_id}'"),
+                        }
+                        eprintln!("      rests only on: {}", resting_on.join(", "));
+                    }
+                    eprintln!();
+                    warnings.push(format!(
+                        "{} convictions rest on no content evidence",
+                        no_content.len()
+                    ));
+                }
+            }
+
+            // Validate: a directory/short-name reference that matches nothing.
+            // The leg contributes silently nothing, so the rule matches on
+            // whatever else it lists.
+            if !crate::validation_controls::is_validator_disabled("dangling-directory-ref") {
+                let dangling = find_dangling_directory_refs(&trait_definitions, &composite_rules);
+                if !dangling.is_empty() {
+                    let mut paths: Vec<&str> =
+                        dangling.iter().map(|(_, _, r)| r.as_str()).collect();
+                    paths.sort_unstable();
+                    paths.dedup();
+                    eprintln!(
+                        "\n❌ ERROR: {} legs reference something that does not exist ({} distinct paths)",
+                        dangling.len(),
+                        paths.len()
+                    );
+                    eprintln!("   These resolve to no traits, so the leg is dropped and the rule");
+                    eprintln!("   matches on whatever else it lists -- usually far more broadly");
+                    eprintln!("   than its name and description promise.\n");
+                    eprintln!("   Point each at a directory that exists, or delete the leg. If a");
+                    eprintln!("   reference never matched anything, the rule has been running");
+                    eprintln!("   without that evidence all along: fix the description too.\n");
+                    for path in &paths {
+                        let users: Vec<&str> = dangling
+                            .iter()
+                            .filter(|(_, _, r)| r == path)
+                            .map(|(rule, _, _)| rule.as_str())
+                            .collect();
+                        eprintln!("   {} — {} leg(s), e.g. '{}'", path, users.len(), users[0]);
+                    }
+                    eprintln!();
+                    warnings.push(format!(
+                        "{} legs reference a path that does not exist",
+                        dangling.len()
+                    ));
+                }
             }
 
             // Validate: short patterns that are likely to produce too many false positives

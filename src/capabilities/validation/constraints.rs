@@ -2483,3 +2483,331 @@ pub(crate) fn find_container_name_convictions(
     }
     found
 }
+
+/// Terminal trait ids a reference *requires*, following nested composites
+/// through their `all:` only.
+///
+/// `None` means indeterminate, and the callers treat that as "prove nothing".
+/// A directory reference (`objectives/foo/`) or a bare short name can resolve to
+/// many ids, and those are alternatives -- any one of them satisfies the leg --
+/// so they are not a required set. Reading them as a conjunction made every
+/// single-trait leg look like a subset of every directory leg.
+fn required_terminals<'a>(
+    reference: &str,
+    all_ids: &[&'a str],
+    composite_by_id: &HashMap<&str, &CompositeTrait>,
+    depth: usize,
+    cache: &mut HashMap<String, Vec<&'a str>>,
+) -> Option<HashSet<String>> {
+    if depth > 8 {
+        return None;
+    }
+    let resolved = resolve_cached(reference, all_ids, cache);
+    let [id] = resolved[..] else {
+        return None;
+    };
+    match composite_by_id.get(id) {
+        Some(sub) => {
+            // An `any:` clause makes the composite's requirements conditional,
+            // so its required set is not determinate either.
+            if sub.any.is_some() {
+                return None;
+            }
+            let mut out = HashSet::new();
+            for cond in sub.all.iter().flatten() {
+                let Condition::Trait { id: child } = cond else {
+                    return None;
+                };
+                out.extend(required_terminals(
+                    child,
+                    all_ids,
+                    composite_by_id,
+                    depth + 1,
+                    cache,
+                )?);
+            }
+            Some(out)
+        }
+        None => Some(HashSet::from([id.to_string()])),
+    }
+}
+
+/// Legs of one `all:` clause that another leg already requires.
+///
+/// Two families convicted on inflated evidence this way. `abot`'s
+/// `winlogon-userinit-persistence` required an exact filename *and* a regex
+/// matching the same filename; `antisocial`'s `family` required
+/// `source-archive` (readme + apee) alongside `polymorphic-macro-source`
+/// (readme + apee + aaa), which already contains it. Both read as several
+/// independent legs and are worth one.
+///
+/// Returns `(composite id, redundant leg, leg that subsumes it)`.
+pub(crate) fn find_subsumed_required_legs(
+    trait_definitions: &[TraitDefinition],
+    composite_rules: &[CompositeTrait],
+) -> Vec<(String, String, String)> {
+    let composite_by_id: HashMap<&str, &CompositeTrait> =
+        composite_rules.iter().map(|c| (c.id.as_str(), c)).collect();
+    let mut all_ids: Vec<&str> = trait_definitions.iter().map(|t| t.id.as_str()).collect();
+    all_ids.extend(composite_by_id.keys().copied());
+
+    let mut cache: HashMap<String, Vec<&str>> = HashMap::new();
+    let mut found = Vec::new();
+    for rule in composite_rules {
+        // Scoped to convictions. A repeated leg in a notable or exception
+        // composite is untidy; in a suspicious/hostile one it manufactures
+        // evidence, which is how `abot` and `antisocial` came to look
+        // substantiated.
+        if rule.crit < crate::types::Criticality::Suspicious {
+            continue;
+        }
+        let Some(required) = rule.all.as_ref() else {
+            continue;
+        };
+        let legs: Vec<&str> = required
+            .iter()
+            .filter_map(|c| match c {
+                Condition::Trait { id } => Some(id.as_str()),
+                _ => None,
+            })
+            .collect();
+        if legs.len() < 2 {
+            continue;
+        }
+        let expanded: Vec<Option<HashSet<String>>> = legs
+            .iter()
+            .map(|l| required_terminals(l, &all_ids, &composite_by_id, 0, &mut cache))
+            .collect();
+        for (i, a) in expanded.iter().enumerate() {
+            let Some(a) = a else { continue };
+            if a.is_empty() {
+                continue;
+            }
+            for (j, b) in expanded.iter().enumerate() {
+                let Some(b) = b else { continue };
+                // `a` adds nothing `b` does not already require. On an exact tie
+                // only report once, so the pair yields one finding.
+                if i == j || !a.is_subset(b) || (a == b && i > j) {
+                    continue;
+                }
+                found.push((rule.id.clone(), legs[i].to_string(), legs[j].to_string()));
+                break;
+            }
+        }
+    }
+    found
+}
+
+/// Cache for [`resolve_reference`], which scans every known id. These checks
+/// resolve the same handful of references across thousands of composites, and
+/// without memoising that is quadratic on a tree of this size.
+fn resolve_cached<'a>(
+    reference: &str,
+    all_ids: &[&'a str],
+    cache: &mut HashMap<String, Vec<&'a str>>,
+) -> Vec<&'a str> {
+    if let Some(hit) = cache.get(reference) {
+        return hit.clone();
+    }
+    let resolved = resolve_reference(reference, all_ids);
+    cache.insert(reference.to_string(), resolved.clone());
+    resolved
+}
+
+/// Whether a condition describes what a file *is called* or pins it to an exact
+/// measurement, rather than saying anything about its contents.
+///
+/// A path never reads the bytes. A metric usually does -- an overlay's entropy,
+/// a section ratio, a zeroed PE checksum are all measurements of the file
+/// itself, and rules built from them are doing real structural analysis. The
+/// exception is a metric pinned to a single value (`min == max`), which
+/// identifies one artifact the way a hash does: `digininja-postinstall` required
+/// `strings.count` of exactly 13.
+fn is_name_or_shape_only(condition: &Condition) -> bool {
+    match condition {
+        Condition::Path(_) => true,
+        Condition::Metrics(m) => matches!((m.min, m.max), (Some(lo), Some(hi)) if lo == hi),
+        _ => false,
+    }
+}
+
+/// Objective directories whose whole subject is the filename an attacker chose.
+const NAME_IS_THE_TECHNIQUE: &[&str] = &[
+    "objectives/evasion/masquerade/",
+    "objectives/supply-chain/impersonation/",
+    "objectives/execution/lure/",
+    "metadata/file/extension/",
+];
+
+/// Convictions assembled entirely from name, size and metric facts.
+///
+/// `digininja-postinstall` was the clearest: an exact `.tgz` basename, a file
+/// size pinned to 1917 bytes, and `strings.count` of exactly 13 -- a file hash
+/// wearing behavioural clothing, which matches one artifact and not the next
+/// build of the same malware. Names and shapes corroborate; they do not convict.
+///
+/// Returns `(composite id, the terminal ids it rests on)`.
+pub(crate) fn find_convictions_without_content(
+    trait_definitions: &[TraitDefinition],
+    composite_rules: &[CompositeTrait],
+) -> Vec<(String, Vec<String>)> {
+    use crate::types::Criticality;
+
+    let by_id: HashMap<&str, &TraitDefinition> = trait_definitions
+        .iter()
+        .map(|t| (t.id.as_str(), t))
+        .collect();
+    let composite_by_id: HashMap<&str, &CompositeTrait> =
+        composite_rules.iter().map(|c| (c.id.as_str(), c)).collect();
+    let mut all_ids: Vec<&str> = by_id.keys().copied().collect();
+    all_ids.extend(composite_by_id.keys().copied());
+
+    let mut cache: HashMap<String, Vec<&str>> = HashMap::new();
+    let mut found = Vec::new();
+    for rule in composite_rules {
+        if rule.crit < Criticality::Suspicious {
+            continue;
+        }
+        // Objectives where the name IS the finding. Masquerading, lures,
+        // typosquats and architecture-suffixed bot drops are detected precisely
+        // by what the attacker called the file -- `payment-receipt.pdf.exe` is
+        // the attack, not a label on it -- so a name-only conviction is correct
+        // there and nowhere else.
+        if NAME_IS_THE_TECHNIQUE
+            .iter()
+            .any(|prefix| rule.id.starts_with(prefix))
+        {
+            continue;
+        }
+        // Every positive leg counts here, `any:` included: one content-derived
+        // alternative is enough to say the rule rests on more than a filename.
+        let mut terminals: HashSet<String> = HashSet::new();
+        let mut saw_inline_content = false;
+        for cond in rule.all.iter().flatten().chain(rule.any.iter().flatten()) {
+            match cond {
+                Condition::Trait { id } => {
+                    // Every id this leg can reach, required or alternative: one
+                    // content-derived possibility is enough to clear the rule.
+                    let mut stack = resolve_cached(id, &all_ids, &mut cache);
+                    let mut seen = HashSet::new();
+                    while let Some(next) = stack.pop() {
+                        if !seen.insert(next.to_string()) {
+                            continue;
+                        }
+                        match composite_by_id.get(next) {
+                            Some(sub) => {
+                                for c in sub.all.iter().flatten().chain(sub.any.iter().flatten()) {
+                                    match c {
+                                        Condition::Trait { id: child } => {
+                                            stack.extend(resolve_cached(
+                                                child, &all_ids, &mut cache,
+                                            ));
+                                        }
+                                        other => {
+                                            if !is_name_or_shape_only(other) {
+                                                saw_inline_content = true;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            None => {
+                                terminals.insert(next.to_string());
+                            }
+                        }
+                    }
+                }
+                other => {
+                    if !is_name_or_shape_only(other) {
+                        saw_inline_content = true;
+                    }
+                }
+            }
+        }
+        if saw_inline_content || terminals.is_empty() {
+            continue;
+        }
+        let resting_on: Vec<String> = terminals.iter().cloned().collect();
+        let all_name_or_shape = terminals.iter().all(|t| {
+            by_id
+                .get(t.as_str())
+                .is_some_and(|d| is_name_or_shape_only(&d.r#if))
+        });
+        if all_name_or_shape {
+            let mut ids = resting_on;
+            ids.sort();
+            found.push((rule.id.clone(), ids));
+        }
+    }
+    found
+}
+
+/// Directory references that match no trait at all.
+///
+/// `broken-reference` validates exact `dir::id` references; a reference without
+/// `::` is treated as a directory or short-name lookup and silently contributes
+/// nothing when it resolves to zero traits.
+///
+/// Namespaces the analyzers synthesize at runtime are NOT dangling and must be
+/// skipped: `metadata/import/…`, `metadata/signed/…`, `metadata/entitlement/…`
+/// and the rest are built from the file's own imports, code signature and
+/// entitlements, so they never appear as static YAML and resolve only during a
+/// scan. `is_dynamic_metadata_ref` in the loader is the authority; this must
+/// stay in sync with it.
+///
+/// Returns `(rule id, clause, dangling reference)`.
+/// Mirror of `is_dynamic_metadata_ref` in the loader: prefixes the analyzers
+/// synthesize per-file rather than loading from YAML.
+fn is_runtime_synthesized_namespace(ref_id: &str) -> bool {
+    const DYNAMIC_PREFIXES: &[&str] = &[
+        "metadata/import/",
+        "metadata/dylib::",
+        "metadata/dylib/",
+        "metadata/signed/",
+        "metadata/entitlement/",
+        "metadata/lang/embedded::",
+        "metadata/lang/encoded/",
+        "metadata/binary/linking::macho-install-name",
+        "metadata/binary/linking::macho-dylib",
+        "metadata/binary/linking::macho-rpath",
+        "metadata/build/debug::elf-debuglink",
+    ];
+    DYNAMIC_PREFIXES
+        .iter()
+        .any(|prefix| ref_id.starts_with(prefix))
+}
+
+pub(crate) fn find_dangling_directory_refs(
+    trait_definitions: &[TraitDefinition],
+    composite_rules: &[CompositeTrait],
+) -> Vec<(String, &'static str, String)> {
+    let mut all_ids: Vec<&str> = trait_definitions.iter().map(|t| t.id.as_str()).collect();
+    all_ids.extend(composite_rules.iter().map(|c| c.id.as_str()));
+
+    let mut cache: HashMap<String, Vec<&str>> = HashMap::new();
+    let mut found = Vec::new();
+    for rule in composite_rules {
+        for (clause, conds) in [
+            ("all", rule.all.as_ref()),
+            ("any", rule.any.as_ref()),
+            ("unless", rule.unless.as_ref()),
+        ] {
+            for cond in conds.into_iter().flatten() {
+                let Condition::Trait { id } = cond else {
+                    continue;
+                };
+                // Exact references are already covered by `broken-reference`.
+                if id.contains("::") {
+                    continue;
+                }
+                if is_runtime_synthesized_namespace(id) {
+                    continue;
+                }
+                if resolve_cached(id, &all_ids, &mut cache).is_empty() {
+                    found.push((rule.id.clone(), clause, id.clone()));
+                }
+            }
+        }
+    }
+    found
+}

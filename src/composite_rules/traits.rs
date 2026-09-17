@@ -3684,6 +3684,11 @@ impl CompositeTrait {
             return Some(evidence);
         }
 
+        // Proximity needs at least 2 distinct conditions to be meaningful
+        // — a single item is vacuously close to itself. (Scope uses the
+        // same count without the `.max(2)` floor.)
+        let min_distinct = self.min_distinct_conditions().max(2);
+
         // Condition indices `< all_count` are `all:` legs (each must fall inside
         // the winning window); `>= all_count` are `any:` legs (at least
         // `any_required` distinct ones must). See `window_satisfies_groups`.
@@ -3692,11 +3697,6 @@ impl CompositeTrait {
             .any
             .as_ref()
             .map_or(0, |any| self.needs.unwrap_or(1).min(any.len()));
-
-        // Proximity needs at least 2 distinct conditions to be meaningful
-        // — a single item is vacuously close to itself. (Scope uses the
-        // same count without the `.max(2)` floor.)
-        let min_distinct = self.min_distinct_conditions().max(2);
 
         // Track the winning window range for evidence filtering
         let mut line_window: Option<(usize, usize)> = None;
@@ -3714,16 +3714,13 @@ impl CompositeTrait {
                         tagged_to_line(t, &line_starts).map(|line| (line, t.condition_index))
                     })
                     .collect();
-                let groups = LocatableGroups::from_tags(tagged_locations, all_count, any_required);
-                if let Some(effective_min) = groups.min_distinct() {
-                    line_window = Some(evidence_within_line_range_grouped(
-                        &items,
-                        max_line_span,
-                        all_count,
-                        groups.any_required,
-                        effective_min,
-                    )?);
-                }
+                line_window = Some(evidence_within_line_range_grouped(
+                    &items,
+                    max_line_span,
+                    all_count,
+                    any_required,
+                    min_distinct,
+                )?);
                 line_starts_cache = Some(line_starts);
             }
 
@@ -3732,16 +3729,13 @@ impl CompositeTrait {
                     .iter()
                     .filter_map(|t| tagged_to_byte_offset(t).map(|off| (off, t.condition_index)))
                     .collect();
-                let groups = LocatableGroups::from_tags(tagged_locations, all_count, any_required);
-                if let Some(effective_min) = groups.min_distinct() {
-                    byte_window = Some(evidence_within_byte_range_grouped(
-                        &items,
-                        max_byte_span,
-                        all_count,
-                        groups.any_required,
-                        effective_min,
-                    )?);
-                }
+                byte_window = Some(evidence_within_byte_range_grouped(
+                    &items,
+                    max_byte_span,
+                    all_count,
+                    any_required,
+                    min_distinct,
+                )?);
             }
         } else {
             // Fallback: no condition tags (shouldn't happen for composites, but safe default)
@@ -4106,67 +4100,6 @@ fn window_satisfies_groups(
     seen.len() >= min_distinct
         && required_all.iter().all(|idx| seen.contains(idx))
         && seen.iter().filter(|&&idx| idx >= all_count).count() >= any_required
-}
-
-/// Which of a rule's legs can take part in a proximity window.
-///
-/// A leg can be satisfied and still have nowhere to be. A `type: metrics` leg
-/// is a whole-file property (`text.lines`, `binary.entropy`) and a `type: path`
-/// leg is a fact about the target's name; both deliberately emit evidence with
-/// `location: None` rather than claim offset 0. Deriving the proximity
-/// threshold from the *declared* leg count therefore made any composite mixing
-/// such a leg with `near_lines`/`near_bytes` unsatisfiable -- it demanded N
-/// distinct located legs when only N-1 could ever exist, silently and with no
-/// validation error.
-///
-/// The test is on the **evidence**, not the condition's kind, because most legs
-/// are trait references (`Condition::Trait`): a reference to a path-only trait
-/// is not a `Condition::Path`, so a kind-based check never sees it. Evidence
-/// carries the distinction up from the evaluator either way:
-///
-/// - `location: None` **and** no offsets -- structurally location-less. The
-///   evaluator chose not to name a position because none exists. Exempt.
-/// - `location: Some(..)` that does not parse as an offset (e.g. `"import"`) --
-///   a leg that *has* a position concept but failed to resolve one. That is a
-///   data gap, and proximity must still reject it, or an extraction regression
-///   silently turns every `near_*` rule into a match-anything. See
-///   `test_near_lines_no_location_evidence_fails`.
-struct LocatableGroups {
-    /// `all:` legs that produced at least one placeable tag.
-    placeable_all: usize,
-    /// `any:` legs the window must still hold -- `needs`, capped by how many
-    /// `any:` legs are placeable.
-    any_required: usize,
-}
-
-impl LocatableGroups {
-    fn from_tags(
-        tagged_locations: &[TaggedLocation],
-        all_count: usize,
-        any_required: usize,
-    ) -> Self {
-        let placeable: rustc_hash::FxHashSet<usize> = tagged_locations
-            .iter()
-            .filter(|t| t.byte_offset.is_some() || t.location.is_some())
-            .map(|t| t.condition_index)
-            .collect();
-        let placeable_all = placeable.iter().filter(|&&i| i < all_count).count();
-        let placeable_any = placeable.iter().filter(|&&i| i >= all_count).count();
-        Self {
-            placeable_all,
-            any_required: any_required.min(placeable_any),
-        }
-    }
-
-    /// The window's distinct-condition threshold, or `None` when fewer than two
-    /// legs can be placed at all. With one placeable leg there is nothing to
-    /// co-locate, so the constraint is skipped rather than failed -- the same
-    /// choice `apply_scope_filter` makes when every scope key is empty.
-    /// Rejecting instead would turn `near_bytes` into an unconditional veto.
-    fn min_distinct(&self) -> Option<usize> {
-        let total = self.placeable_all + self.any_required;
-        (total >= 2).then_some(total)
-    }
 }
 
 /// The distinct `all:` condition indices (`< all_count`) that produced a

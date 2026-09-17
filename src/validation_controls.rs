@@ -732,6 +732,27 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         fix: "Narrow the platform scope, or move to an allowlisted directory (objectives/supply-chain/).",
     },
     ValidatorSpec {
+        id: "dangling-directory-ref",
+        category: ValidatorCategory::Quality,
+        display_id: "dangling-dir",
+        description: "A reference without `::` resolves to no traits, so the leg contributes nothing and the rule quietly matches on whatever is left.",
+        fix: "Point it at a directory that exists, or delete the leg and say so in the rule. Check the path first: a directory reference that never matched is not the same as one that stopped matching, and a rule whose name promises evidence it never had needs its description fixed too, not just its reference.",
+    },
+    ValidatorSpec {
+        id: "subsumed-required-leg",
+        category: ValidatorCategory::Policy,
+        display_id: "subsumed-leg",
+        description: "A suspicious/hostile composite has an all: leg that another leg already requires, so the conviction counts one fact as several and reads better-evidenced than it is.",
+        fix: "Delete the redundant leg -- the rule matches exactly the same files without it. If the two legs were meant to be different evidence, one of them is not matching what its name claims: check for an exact and a regex spelling of the same value, or a nested composite that already contains the other leg.",
+    },
+    ValidatorSpec {
+        id: "conviction-without-content",
+        category: ValidatorCategory::Policy,
+        display_id: "no-content",
+        description: "A suspicious/hostile composite rests only on name, size and metric facts, so it fingerprints one artifact instead of detecting the malware.",
+        fix: "Add a leg derived from the contents -- a string, symbol, import, or structural match that states what the sample does. Names, sizes and `strings.count` describe what a file is called, weighs and counts, so they corroborate a conviction but cannot be all of it; the next build changes every one of them. If no content evidence exists for this family, it is an identity record rather than a detection: keep the traits at notable and drop the conviction.",
+    },
+    ValidatorSpec {
         id: "container-name-conviction",
         category: ValidatorCategory::Policy,
         display_id: "container-name",

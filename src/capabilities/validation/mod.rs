@@ -173,7 +173,8 @@ pub(crate) use taxonomy::{
 #[allow(unused_imports)] // find_needs_zero used by binary target
 pub(crate) use constraints::{
     MAX_NOTABLE_DOWNGRADE_DIRECT, MAX_NOTABLE_DOWNGRADE_EXPANDED, MISSING_CONDITIONS,
-    find_broad_notable_downgrades, find_container_name_convictions, find_dead_downgrades,
+    find_broad_notable_downgrades, find_container_name_convictions,
+    find_convictions_without_content, find_dangling_directory_refs, find_dead_downgrades,
     find_directory_shadowed_refs, find_empty_condition_clauses, find_excessive_file_types,
     find_excessive_skip_conditions, find_hex_binary_missing_section,
     find_hostile_composites_with_too_few_notable_legs, find_impossible_count_constraints,
@@ -182,7 +183,7 @@ pub(crate) use constraints::{
     find_missing_search_patterns, find_needs_without_any, find_needs_zero,
     find_none_only_with_proximity, find_orphaned_components, find_pure_alias_traits,
     find_redundant_explicit_defaults, find_redundant_needs_one, find_should_use_defaults,
-    find_too_short_patterns, find_uncallable_symbol_matchers,
+    find_subsumed_required_legs, find_too_short_patterns, find_uncallable_symbol_matchers,
 };
 
 // Utility functions

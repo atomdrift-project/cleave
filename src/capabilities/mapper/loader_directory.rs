@@ -3251,7 +3251,7 @@ impl super::CapabilityMapper {
                 );
                 eprintln!("   continuously; traits are not a blocklist.");
                 warnings.push(format!(
-                    "{} well-known/ traits identify a family by version alone (use name, hash or behaviour)",
+                    "{} well-known/ traits identify a family by registry metadata (detect behaviour instead)",
                     wk_version.len()
                 ));
             }

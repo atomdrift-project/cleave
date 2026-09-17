@@ -2958,7 +2958,17 @@ impl ArchiveAnalyzer {
                     break;
                 }
 
-                if rel_path.split('/').count() > MAX_WALK_DEPTH {
+                let depth = rel_path.split('/').count();
+                if depth > MAX_WALK_DEPTH {
+                    // Skipping silently is an invitation: bury the payload
+                    // under `public/a/b/c/.../z/` and it is never scanned, as
+                    // the npm package `osinthell` does with 26 single-letter
+                    // directories. The depth limit stays -- the walk it mirrors
+                    // has one -- but the gap is recorded so the archive at
+                    // least reports that it was not read in full.
+                    guard.add_extraction_note(format!(
+                        "member {depth} levels deep, beyond the {MAX_WALK_DEPTH}-level analysis limit: {rel_path}"
+                    ));
                     continue;
                 }
 

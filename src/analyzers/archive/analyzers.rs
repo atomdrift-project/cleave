@@ -1381,6 +1381,17 @@ impl ArchiveAnalyzer {
             return Some("archive-like asar container");
         }
 
+        // A YARA rule file *is* a list of the strings and hex patterns that YARA
+        // rules search for, so scanning one with the YARA engine is guaranteed
+        // self-detection: any packaged rule corpus lights up the third-party
+        // tiers and reports the rule's own subject as a hostile hit. The
+        // member's string/trait analysis still runs; only the YARA pass is
+        // skipped. The traits side already handles the first-party half of this
+        // via `metadata/file/extension/identity::yara-extension`.
+        if lower_path.ends_with(".yar") || lower_path.ends_with(".yara") {
+            return Some("YARA rule source");
+        }
+
         if size_bytes >= 512 * 1024 && lower_path.ends_with(".map") {
             return Some("large source map");
         }
@@ -4481,6 +4492,32 @@ mod tests {
             vec!["dat", "bin", "payload", "raw", "map"]
         );
         assert!(ArchiveAnalyzer::archive_member_yara_filetypes(&FileType::Unknown).is_empty());
+    }
+
+    #[test]
+    fn archive_member_yara_skip_skips_yara_rule_sources() {
+        // A rule file lists the very strings the rules match on, so scanning it
+        // with YARA self-detects and reports the rule's subject as a hostile hit
+        // on the corpus that merely documents it.
+        for path in [
+            "rules/apt_cryptominer.yar",
+            "rules/APT_Cryptominer.YARA",
+            "third_party/elastic/Multi_Cryptominer_Xmrig.yara",
+        ] {
+            assert_eq!(
+                ArchiveAnalyzer::archive_member_yara_skip_reason(path, &FileType::Python, 4096),
+                Some("YARA rule source"),
+                "{path} should skip the YARA pass",
+            );
+        }
+        // Not a rule file: `.yarn` and a name merely containing "yara" are scanned.
+        for path in ["app/.yarnrc", "docs/yara-tutorial.py"] {
+            assert_eq!(
+                ArchiveAnalyzer::archive_member_yara_skip_reason(path, &FileType::Python, 4096),
+                None,
+                "{path} should still be scanned",
+            );
+        }
     }
 
     #[test]

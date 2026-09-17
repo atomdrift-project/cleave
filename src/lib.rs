@@ -3053,7 +3053,18 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     let handled_yara_internally =
         matches!(file_type, FileType::MachO | FileType::Elf | FileType::Pe)
             || file_type.is_archive();
+    // A YARA rule file lists the strings and hex patterns that YARA rules match
+    // on, so scanning one with the YARA engine self-detects: the rule's own
+    // subject is reported as a hostile hit on the corpus that documents it.
+    // Rule files are classified as PHP/Python/Kotlin/shell-like source, so they
+    // reach this arm as ordinary programs. Mirrors
+    // `archive_member_yara_skip_reason`, which does the same for members.
+    let is_yara_rule_source = AsRef::<Path>::as_ref(&path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("yar") || e.eq_ignore_ascii_case("yara"));
     if !handled_yara_internally
+        && !is_yara_rule_source
         && let Some(engine) = yara_engine
         && file_type.is_program()
         && engine.is_loaded()

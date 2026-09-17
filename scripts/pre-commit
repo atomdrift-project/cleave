@@ -4,7 +4,10 @@
 #   1. no active local path overrides in Cargo.toml (e.g. ../filefacts)
 #   2. `make test` passes
 #   3. `make lint` passes
-#   4. `make validate` passes (`cleave validate` exits 0)
+#
+# Trait-definition validation is deliberately NOT run here: the trait rules live
+# in their own repo and are gated by `cleave validate` there. `make validate`
+# still exists for running it by hand against a local traits checkout.
 #
 # Test runs BEFORE lint on purpose (mirrors scan): `cargo test` fully builds
 # the dependency tree, which clippy then reuses, so `make lint` re-checks only
@@ -33,8 +36,5 @@ make test
 
 echo "pre-commit: running make lint..."
 make lint
-
-echo "pre-commit: running make validate..."
-env CLEAVE_VALIDATE_SOFT=1 make validate
 
 echo "pre-commit: all checks passed."

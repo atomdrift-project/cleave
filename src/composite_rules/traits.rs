@@ -3684,11 +3684,6 @@ impl CompositeTrait {
             return Some(evidence);
         }
 
-        // Proximity needs at least 2 distinct conditions to be meaningful
-        // — a single item is vacuously close to itself. (Scope uses the
-        // same count without the `.max(2)` floor.)
-        let min_distinct = self.min_distinct_conditions().max(2);
-
         // Condition indices `< all_count` are `all:` legs (each must fall inside
         // the winning window); `>= all_count` are `any:` legs (at least
         // `any_required` distinct ones must). See `window_satisfies_groups`.
@@ -3697,6 +3692,11 @@ impl CompositeTrait {
             .any
             .as_ref()
             .map_or(0, |any| self.needs.unwrap_or(1).min(any.len()));
+
+        // Proximity needs at least 2 distinct conditions to be meaningful
+        // — a single item is vacuously close to itself. (Scope uses the
+        // same count without the `.max(2)` floor.)
+        let min_distinct = self.min_distinct_conditions().max(2);
 
         // Track the winning window range for evidence filtering
         let mut line_window: Option<(usize, usize)> = None;
@@ -3714,13 +3714,20 @@ impl CompositeTrait {
                         tagged_to_line(t, &line_starts).map(|line| (line, t.condition_index))
                     })
                     .collect();
-                line_window = Some(evidence_within_line_range_grouped(
-                    &items,
-                    max_line_span,
-                    all_count,
+                let groups = LocatableGroups::from_conditions(
+                    self.all.as_ref(),
+                    self.any.as_ref(),
                     any_required,
-                    min_distinct,
-                )?);
+                );
+                if let Some(effective_min) = groups.min_distinct() {
+                    line_window = Some(evidence_within_line_range_grouped(
+                        &items,
+                        max_line_span,
+                        all_count,
+                        groups.any_required,
+                        effective_min,
+                    )?);
+                }
                 line_starts_cache = Some(line_starts);
             }
 
@@ -3729,13 +3736,20 @@ impl CompositeTrait {
                     .iter()
                     .filter_map(|t| tagged_to_byte_offset(t).map(|off| (off, t.condition_index)))
                     .collect();
-                byte_window = Some(evidence_within_byte_range_grouped(
-                    &items,
-                    max_byte_span,
-                    all_count,
+                let groups = LocatableGroups::from_conditions(
+                    self.all.as_ref(),
+                    self.any.as_ref(),
                     any_required,
-                    min_distinct,
-                )?);
+                );
+                if let Some(effective_min) = groups.min_distinct() {
+                    byte_window = Some(evidence_within_byte_range_grouped(
+                        &items,
+                        max_byte_span,
+                        all_count,
+                        groups.any_required,
+                        effective_min,
+                    )?);
+                }
             }
         } else {
             // Fallback: no condition tags (shouldn't happen for composites, but safe default)
@@ -4100,6 +4114,79 @@ fn window_satisfies_groups(
     seen.len() >= min_distinct
         && required_all.iter().all(|idx| seen.contains(idx))
         && seen.iter().filter(|&&idx| idx >= all_count).count() >= any_required
+}
+
+/// Which of a rule's legs actually resolved to a position, for one
+/// proximity unit (lines or bytes).
+///
+/// A leg can be satisfied and still have nowhere to be. A `type: metrics`
+/// leg is a whole-file property (`text.lines`, `binary.entropy`); it is
+/// tagged like any other condition but `tagged_to_byte_offset` /
+/// `tagged_to_line` yield nothing for it, so it can never fall inside a
+/// window. Deriving the proximity threshold from the *declared* leg count
+/// therefore made any composite mixing such a leg with `near_lines` /
+/// `near_bytes` unsatisfiable — it demanded N distinct located indices
+/// when only N-1 could ever exist, silently and with no validation error.
+/// `required_all` already exempted those legs; this applies the same
+/// exemption to the counts, computed per unit because a location may
+/// resolve to a line but not a byte offset (or the reverse).
+struct LocatableGroups {
+    /// `all:` legs that are capable of reporting a position.
+    placeable_all: usize,
+    /// `any:` legs the window must still hold — `needs`, capped by how
+    /// many `any:` legs actually produced a position.
+    any_required: usize,
+}
+
+impl LocatableGroups {
+    /// `all` / `any` are the rule's declared legs, in the same order the
+    /// condition indices use.
+    fn from_conditions(
+        all: Option<&Vec<Condition>>,
+        any: Option<&Vec<Condition>>,
+        any_required: usize,
+    ) -> Self {
+        let placeable_all = all.map_or(0, |legs| legs.iter().filter(|c| is_placeable(c)).count());
+        let placeable_any = any.map_or(0, |legs| legs.iter().filter(|c| is_placeable(c)).count());
+        Self {
+            placeable_all,
+            any_required: any_required.min(placeable_any),
+        }
+    }
+
+    /// The window's distinct-condition threshold, or `None` when fewer
+    /// than two legs can be placed at all. With one placeable leg there is
+    /// nothing to co-locate, so the constraint is skipped rather than
+    /// failed — the same choice `apply_scope_filter` makes when every
+    /// scope key is empty. Rejecting instead would turn `near_bytes` into
+    /// an unconditional veto on such a rule.
+    fn min_distinct(&self) -> Option<usize> {
+        let total = self.placeable_all + self.any_required;
+        (total >= 2).then_some(total)
+    }
+}
+
+/// Whether a condition *can* report where it matched.
+///
+/// This is about the condition's kind, not about whether a location
+/// happened to resolve this time. A symbol leg that produced no offset is
+/// a data gap — proximity must still reject it, or an extraction
+/// regression silently turns every `near_*` rule into a match-anything
+/// (see `test_near_lines_no_location_evidence_fails`). The two kinds
+/// below are different in kind: they assert a property of the whole
+/// target and have no position to report, ever.
+///
+/// - `type: metrics` — a computed whole-file value (`text.lines`,
+///   `binary.entropy`).
+/// - `type: path` — the target's own path or filename. `eval_path` says
+///   so outright: "metadata about the target path, not bytes in the
+///   file. It has no honest file offset."
+///
+/// `type: section` is deliberately absent: its per-section evidence does
+/// carry an offset, and only the aggregate `section_ratio` /
+/// `section_entropy_ratio` sub-evidence goes without one.
+fn is_placeable(cond: &Condition) -> bool {
+    !matches!(cond, Condition::Metrics(_) | Condition::Path(_))
 }
 
 /// The distinct `all:` condition indices (`< all_count`) that produced a

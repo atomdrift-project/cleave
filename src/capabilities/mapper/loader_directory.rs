@@ -3361,7 +3361,7 @@ impl super::CapabilityMapper {
                     redundant_any_refs.len()
                 );
                 eprintln!(
-                    "   Rules with 4+ trait references from the same directory should use directory notation:\n"
+                    "   Rules hand-listing this many traits from one directory should use directory\n   notation (cap: 5, or 10 when the clause carries needs: > 1):\n"
                 );
                 for (rule_id, dir, count, trait_ids, source_file) in &redundant_any_refs {
                     let line_hint = find_line_number(source_file, rule_id);

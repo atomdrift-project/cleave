@@ -317,11 +317,26 @@ pub(crate) fn collect_trait_refs_from_trait_def(t: &TraitDefinition) -> Vec<(Str
     refs
 }
 
-/// Find `any:` clauses that reference 4+ traits from the same external directory.
+/// Find `any:` clauses that hand-list too many traits from the same external
+/// directory.
 ///
 /// This suggests the rule should either:
 /// - Use directory notation (e.g., `micro-behaviors/foo`) instead of listing individual traits
 /// - Move to a different directory where the traits are local
+///
+/// Two caps, because the advice is not equally good in both cases.
+///
+/// With `needs` absent or 1, the clause means "any of these", which is what a
+/// directory reference says more durably. The cap is still not 1: a directory
+/// can hold far more than the traits a rule wants -- `fs/path/application/browser`
+/// holds 43 -- so naming five of them is a narrower statement than referencing
+/// the directory, not a hand-maintained spelling of the same one.
+///
+/// With `needs: > 1` the clause states a cardinality, and directory notation
+/// cannot state it at all: a directory reference is a single leg, so `needs`
+/// cannot see inside it. Until that changes, the list is the only correct
+/// spelling, and the cap exists only to bound the rot -- a rule listing ten
+/// candidates will not notice an eleventh being added to the directory.
 ///
 /// Returns a list of `(rule_id, directory, trait_count, trait_ids)` for violations.
 #[must_use]
@@ -367,9 +382,17 @@ pub(crate) fn find_redundant_any_refs(
         }
     }
 
-    // Find directories with 4+ references
+    // See the doc comment for why a cardinality clause gets more room.
+    const MAX_SIBLINGS: usize = 5;
+    const MAX_SIBLINGS_WITH_NEEDS: usize = 10;
+    let cap = if rule.needs.is_some_and(|n| n > 1) {
+        MAX_SIBLINGS_WITH_NEEDS
+    } else {
+        MAX_SIBLINGS
+    };
+
     for (dir, trait_ids) in dir_refs {
-        if trait_ids.len() >= 4 {
+        if trait_ids.len() > cap {
             violations.push((rule.id.clone(), dir, trait_ids.len(), trait_ids));
         }
     }
@@ -775,4 +798,55 @@ pub(crate) fn find_overlapping_conditions(
     }
 
     violations
+}
+
+#[cfg(test)]
+mod redundant_any_cap_tests {
+    use super::*;
+    use crate::composite_rules::traits::CompositeTrait;
+
+    fn rule_with(n: usize, needs: Option<usize>) -> CompositeTrait {
+        let mut r = CompositeTrait {
+            id: "objectives/example/here::probe".to_string(),
+            ..Default::default()
+        };
+        r.needs = needs;
+        r.any = Some(
+            (0..n)
+                .map(|i| Condition::Trait {
+                    id: format!("micro-behaviors/other/place::atom-{i}"),
+                })
+                .collect(),
+        );
+        r
+    }
+
+    #[test]
+    fn five_siblings_without_needs_is_allowed() {
+        assert!(find_redundant_any_refs(&rule_with(5, None)).is_empty());
+    }
+
+    #[test]
+    fn six_siblings_without_needs_is_flagged() {
+        assert_eq!(find_redundant_any_refs(&rule_with(6, None)).len(), 1);
+    }
+
+    #[test]
+    fn ten_siblings_with_cardinality_is_allowed() {
+        // `needs: > 1` states a cardinality that directory notation cannot,
+        // so the list is the only correct spelling.
+        assert!(find_redundant_any_refs(&rule_with(10, Some(3))).is_empty());
+    }
+
+    #[test]
+    fn eleven_siblings_with_cardinality_is_flagged() {
+        assert_eq!(find_redundant_any_refs(&rule_with(11, Some(3))).len(), 1);
+    }
+
+    #[test]
+    fn needs_one_does_not_buy_the_higher_cap() {
+        // `needs: 1` is the default and says nothing a directory reference
+        // cannot, so it stays on the lower cap rather than opening a loophole.
+        assert_eq!(find_redundant_any_refs(&rule_with(6, Some(1))).len(), 1);
+    }
 }

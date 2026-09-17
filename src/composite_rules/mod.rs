@@ -56,6 +56,7 @@ mod description_validation_tests;
 mod python_aes_import_test;
 
 #[cfg(test)]
+mod proximity_metrics_test;
 mod proximity_scripting_symbols_test;
 
 #[cfg(test)]

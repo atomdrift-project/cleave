@@ -732,6 +732,13 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         fix: "Narrow the platform scope, or move to an allowlisted directory (objectives/supply-chain/).",
     },
     ValidatorSpec {
+        id: "container-name-conviction",
+        category: ValidatorCategory::Policy,
+        display_id: "container-name",
+        description: "A suspicious/hostile composite requires an exact match on the scanned container's filename, which a collector assigns rather than the attack, so the rule convicts one stored copy.",
+        fix: "Drop the basename leg and let the rule rest on what is inside the artifact -- the other legs usually already carry it. If the filename is real evidence, move it to any: so it corroborates instead of gating. A name the format mandates (SKILL.md, package.json, AUTOEXEC.BAT) is fine to require, but belongs in metadata/ or well-known/app/ as a notable format fact; a name the attacker chose survives only until the next build. See TAXONOMY.md, \"Names an attacker or a collector chose\".",
+    },
+    ValidatorSpec {
         id: "hostile-too-few-notable-legs",
         category: ValidatorCategory::Policy,
         display_id: "hostile-notable-legs",

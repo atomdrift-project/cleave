@@ -20,10 +20,10 @@ use crate::capabilities::validation::{
     find_brittle_path_patterns, find_broad_filetype_traits, find_broad_notable_downgrades,
     find_broad_platform_traits, find_cap_obj_violations, find_cap_wellknown_violations,
     find_case_insensitive_overlap_issues, find_composite_only_wellknown_files,
-    find_dead_downgrades, find_depth_violations, find_directory_shadowed_refs,
-    find_duplicate_atomic_traits, find_duplicate_composite_rules, find_duplicate_inline_exclusions,
-    find_duplicate_second_level_directories, find_empty_condition_clauses,
-    find_exception_atomic_traits, find_exception_inline_conditions,
+    find_container_name_convictions, find_dead_downgrades, find_depth_violations,
+    find_directory_shadowed_refs, find_duplicate_atomic_traits, find_duplicate_composite_rules,
+    find_duplicate_inline_exclusions, find_duplicate_second_level_directories,
+    find_empty_condition_clauses, find_exception_atomic_traits, find_exception_inline_conditions,
     find_exception_non_notable_members, find_exception_positive_refs, find_excessive_file_types,
     find_excessive_skip_conditions, find_for_only_duplicates, find_generic_wellknown_leaf_dirs,
     find_hex_binary_missing_section, find_hostile_cap_rules,
@@ -4531,6 +4531,53 @@ impl super::CapabilityMapper {
                 warnings.push(format!(
                     "{} hostile composites reference fewer than two notable-or-higher legs",
                     hostile_too_few_notable.len()
+                ));
+            }
+
+            // Validate: a conviction must not require the scanned container's own
+            // filename. That name is assigned when a specimen is fetched or filed,
+            // so the rule matches one stored copy and nothing the attacker ships.
+            let disable_container_name =
+                crate::validation_controls::is_validator_disabled("container-name-conviction");
+            let container_name_convictions =
+                find_container_name_convictions(&trait_definitions, &composite_rules);
+            if !disable_container_name && !container_name_convictions.is_empty() {
+                eprintln!(
+                    "\n❌ ERROR: {} convictions require a filename the attack does not control",
+                    container_name_convictions.len()
+                );
+                eprintln!("   A container's name is chosen by whoever downloaded it, so these");
+                eprintln!("   rules convict one stored copy and miss the malware everywhere else.");
+                eprintln!();
+                eprintln!("   Fix, in order of preference:");
+                eprintln!("     1. Delete the basename leg. The remaining legs usually already");
+                eprintln!(
+                    "        describe what is inside the artifact, which is the real evidence."
+                );
+                eprintln!(
+                    "     2. If the name is genuine evidence, move it from all: to any: so it"
+                );
+                eprintln!("        corroborates the content legs instead of gating them.");
+                eprintln!("     3. Only a name the FORMAT mandates may be required (SKILL.md,");
+                eprintln!("        package.json, AUTOEXEC.BAT) -- state it in metadata/ or");
+                eprintln!("        well-known/app/ as a notable format fact and reference that.");
+                eprintln!("   See TAXONOMY.md, \"Names an attacker or a collector chose\".\n");
+                for (rule_id, trait_id, literal, reason) in &container_name_convictions {
+                    let source = rule_source_files
+                        .get(rule_id)
+                        .map(std::string::String::as_str)
+                        .unwrap_or("unknown");
+                    match find_line_number(source, rule_id) {
+                        Some(line) => eprintln!("   {source}:{line}: '{rule_id}'"),
+                        None => eprintln!("   {source}: '{rule_id}'"),
+                    }
+                    eprintln!("      requires '{trait_id}' = \"{literal}\"");
+                    eprintln!("      {reason}");
+                }
+                eprintln!();
+                warnings.push(format!(
+                    "{} convictions require a collector-assigned container filename",
+                    container_name_convictions.len()
                 ));
             }
 

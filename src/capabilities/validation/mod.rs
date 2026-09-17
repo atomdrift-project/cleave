@@ -173,15 +173,16 @@ pub(crate) use taxonomy::{
 #[allow(unused_imports)] // find_needs_zero used by binary target
 pub(crate) use constraints::{
     MAX_NOTABLE_DOWNGRADE_DIRECT, MAX_NOTABLE_DOWNGRADE_EXPANDED, MISSING_CONDITIONS,
-    find_broad_notable_downgrades, find_dead_downgrades, find_directory_shadowed_refs,
-    find_empty_condition_clauses, find_excessive_file_types, find_excessive_skip_conditions,
-    find_hex_binary_missing_section, find_hostile_composites_with_too_few_notable_legs,
-    find_impossible_count_constraints, find_impossible_length_bounds, find_impossible_needs,
-    find_impossible_size_constraints, find_invalid_not_usage, find_kv_exists_with_matcher,
-    find_length_bounds_without_regex, find_missing_search_patterns, find_needs_without_any,
-    find_needs_zero, find_none_only_with_proximity, find_orphaned_components,
-    find_pure_alias_traits, find_redundant_explicit_defaults, find_redundant_needs_one,
-    find_should_use_defaults, find_too_short_patterns, find_uncallable_symbol_matchers,
+    find_broad_notable_downgrades, find_container_name_convictions, find_dead_downgrades,
+    find_directory_shadowed_refs, find_empty_condition_clauses, find_excessive_file_types,
+    find_excessive_skip_conditions, find_hex_binary_missing_section,
+    find_hostile_composites_with_too_few_notable_legs, find_impossible_count_constraints,
+    find_impossible_length_bounds, find_impossible_needs, find_impossible_size_constraints,
+    find_invalid_not_usage, find_kv_exists_with_matcher, find_length_bounds_without_regex,
+    find_missing_search_patterns, find_needs_without_any, find_needs_zero,
+    find_none_only_with_proximity, find_orphaned_components, find_pure_alias_traits,
+    find_redundant_explicit_defaults, find_redundant_needs_one, find_should_use_defaults,
+    find_too_short_patterns, find_uncallable_symbol_matchers,
 };
 
 // Utility functions

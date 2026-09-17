@@ -2386,3 +2386,100 @@ pub(crate) fn find_uncallable_symbol_matchers(
 
     out
 }
+
+/// Container filenames a collector assigns, not the attack.
+///
+/// A `suspicious`/`hostile` composite that *requires* an exact match on the
+/// scanned artifact's own filename detects one stored copy of a specimen. The
+/// name of the outer container is chosen when the sample is fetched or filed --
+/// `Win32.Volk.7z`, `2026-03-27-telnyx-v4.87.2.zip` -- so it changes on
+/// re-collection and carries no attack information. The same rule with the leg
+/// removed usually still fires on the archive's contents.
+///
+/// The real distinction is container versus member: a file *inside* an archive
+/// is named by the attacker or mandated by the format (`SKILL.md`,
+/// `package.json`, `AUTOEXEC.BAT`), and requiring one of those is legitimate.
+/// Validation is static and cannot know where a basename will land, so an
+/// archive extension stands in for "this can only ever match the container".
+const COLLECTOR_NAMED_CONTAINER_EXTS: &[&str] = &[
+    ".zip", ".7z", ".rar", ".tgz", ".tar.gz", ".tar.bz2", ".tar.xz", ".tar", ".apk", ".vsix",
+    ".nupkg", ".whl", ".jar", ".gem", ".crate", ".nupkg", ".xpi", ".crx",
+];
+
+/// A path/basename literal carrying a specimen-collection date (`2026-03-27-…`)
+/// is never an artifact name a registry or a victim would see.
+fn looks_like_collection_date(literal: &str) -> bool {
+    let b = literal.as_bytes();
+    b.windows(10).any(|w| {
+        w[0..4].iter().all(u8::is_ascii_digit)
+            && w[4] == b'-'
+            && w[5..7].iter().all(u8::is_ascii_digit)
+            && w[7] == b'-'
+            && w[8..10].iter().all(u8::is_ascii_digit)
+    })
+}
+
+/// The exact-filename literal a trait requires, if it matches a whole basename.
+fn required_basename_literal(trait_def: &TraitDefinition) -> Option<&str> {
+    // `type: basename` normalises into a Path query with `basename: true`, so
+    // this one arm covers both spellings.
+    match &trait_def.r#if {
+        Condition::Path(PathQuery {
+            exact: Some(x),
+            basename: true,
+            ..
+        }) => Some(x.as_str()),
+        _ => None,
+    }
+}
+
+/// Composites at `suspicious`+ whose `all:` requires a collector-assigned
+/// container filename. Returns `(composite id, trait id, literal, reason)`.
+pub(crate) fn find_container_name_convictions(
+    trait_definitions: &[TraitDefinition],
+    composite_rules: &[CompositeTrait],
+) -> Vec<(String, String, String, &'static str)> {
+    use crate::types::Criticality;
+
+    let by_id: HashMap<&str, &TraitDefinition> = trait_definitions
+        .iter()
+        .map(|t| (t.id.as_str(), t))
+        .collect();
+    let all_ids: Vec<&str> = by_id.keys().copied().collect();
+
+    let mut found = Vec::new();
+    for rule in composite_rules {
+        if rule.crit < Criticality::Suspicious {
+            continue;
+        }
+        let Some(required) = rule.all.as_ref() else {
+            continue;
+        };
+        for cond in required {
+            let Condition::Trait { id } = cond else {
+                continue;
+            };
+            for resolved in resolve_reference(id, &all_ids) {
+                let Some(def) = by_id.get(resolved) else {
+                    continue;
+                };
+                let Some(literal) = required_basename_literal(def) else {
+                    continue;
+                };
+                let lower = literal.to_ascii_lowercase();
+                let reason = if looks_like_collection_date(literal) {
+                    "carries a specimen-collection date, so it only ever matches our stored copy"
+                } else if COLLECTOR_NAMED_CONTAINER_EXTS
+                    .iter()
+                    .any(|ext| lower.ends_with(ext))
+                {
+                    "names the scanned container, which is assigned when the sample is fetched"
+                } else {
+                    continue;
+                };
+                found.push((rule.id.clone(), def.id.clone(), literal.to_string(), reason));
+            }
+        }
+    }
+    found
+}

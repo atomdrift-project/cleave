@@ -895,6 +895,10 @@ pub(crate) fn mapper_cache_key() -> Result<String> {
     let version = env!("CARGO_PKG_VERSION");
     let dir_tag = traits_dir_tag();
 
+    // v9 adds `encoding:` on `type: text`. A build without the field cannot
+    // parse a file that uses it, and records that failure in the snapshot's
+    // `parse_errors` -- which a later build replays on every hit, reporting a
+    // valid file as unparseable and serving a mapper missing its traits.
     // v8 adds literal/field provenance predicates. Older mapper snapshots
     // must not hide their new matching semantics in same-version builds.
     // v7: bumped after a same-version development build with different
@@ -902,7 +906,7 @@ pub(crate) fn mapper_cache_key() -> Result<String> {
     // Bump this prefix whenever the trait/composite schema or its evaluation
     // semantics change, even within a crate version.
     Ok(format!(
-        "capability-mapper-v8-{version}-{dir_tag}-{timestamp}-{fingerprint:016x}.bin"
+        "capability-mapper-v9-{version}-{dir_tag}-{timestamp}-{fingerprint:016x}.bin"
     ))
 }
 

@@ -382,8 +382,21 @@ impl super::CapabilityMapper {
         // sound. The evidence fast path below is PE-only — it would replace
         // `eval_raw` evidence with extracted-string hits.
         if !dependent_only && use_string_prefilters {
+            // `encoding: none` is invisible to the string prefilter, whose
+            // evidence does not record which layer each hit came from. A
+            // condition that has opted out of the decoded layers must be
+            // evaluated properly, or `analyze` synthesizes a finding here that
+            // `test-rules` and `test match` -- neither of which has this fast
+            // path -- correctly report as unmatched.
             if !is_raw_text
                 && (tf & (super::flags::SIMPLE_EXACT | super::flags::SIMPLE_SUBSTR)) != 0
+                && !matches!(
+                    &trait_def.r#if,
+                    crate::composite_rules::Condition::Text(crate::composite_rules::TextQuery {
+                        encoding: Some(crate::composite_rules::condition::TextEncodingScope::None),
+                        ..
+                    })
+                )
             {
                 // Simple exact/substr string trait: cached evidence is the
                 // whole answer (hit -> synthesized finding, miss -> None).

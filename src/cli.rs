@@ -602,7 +602,9 @@ pub enum Command {
 
         /// Filter by encoding method(s) for 'encoded' search type
         /// Examples: "base64", "xor,hex", "xor+base64"
-        /// Use comma for OR, plus for chain sequence
+        /// Use comma for OR, plus for chain sequence.
+        /// For 'text' searches, "none" restricts the scan to the undecoded
+        /// layer (the trait option `encoding: none`) and "any" is the default.
         #[arg(long)]
         encoding: Option<String>,
 

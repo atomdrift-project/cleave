@@ -1722,7 +1722,7 @@ dependencies = [
 [[package]]
 name = "filefacts"
 version = "1.7.0"
-source = "git+https://github.com/atomdrift-project/filefacts.git#a5a657d0edc90436d1d07ad57fa35f4388afec97"
+source = "git+https://github.com/atomdrift-project/filefacts.git#1460d978cf3bfb13d46a66c0029e7bccc912e132"
 dependencies = [
  "aho-corasick",
  "cab",
@@ -5340,7 +5340,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-clojure"
 version = "0.1.0"
-source = "git+https://github.com/atomdrift-project/filefacts.git#a5a657d0edc90436d1d07ad57fa35f4388afec97"
+source = "git+https://github.com/atomdrift-project/filefacts.git#1460d978cf3bfb13d46a66c0029e7bccc912e132"
 dependencies = [
  "cc",
  "tree-sitter",

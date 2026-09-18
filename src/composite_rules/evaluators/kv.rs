@@ -1518,10 +1518,11 @@ pub(crate) fn structured_format_from_file_type(
         // parser reads alongside the XML and binary dialects. Without this arm
         // a `project.pbxproj` reaching the evaluator by file type rather than
         // by filename falls through to Unknown and no `type: value` path
-        // resolves against it.
-        crate::composite_rules::FileType::Plist | crate::composite_rules::FileType::Pbxproj => {
-            StructuredFormat::Plist
-        }
+        // resolves against it. A keyed-archive nib is a binary plist too;
+        // the NIBArchive layout is not, and simply fails to parse here.
+        crate::composite_rules::FileType::Plist
+        | crate::composite_rules::FileType::Pbxproj
+        | crate::composite_rules::FileType::Nib => StructuredFormat::Plist,
         crate::composite_rules::FileType::PkgInfo => StructuredFormat::PkgInfo,
         crate::composite_rules::FileType::SystemdService => StructuredFormat::SystemdService,
         crate::composite_rules::FileType::DesktopEntry => StructuredFormat::DesktopEntry,

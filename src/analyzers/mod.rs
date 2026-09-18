@@ -195,6 +195,7 @@ pub fn analyzer_for_file_type(
         | FileType::PackageLockJson
         | FileType::Json
         | FileType::Plist
+        | FileType::Nib
         | FileType::Pbxproj
         | FileType::Cmake
         | FileType::SystemdService
@@ -339,6 +340,7 @@ pub(crate) fn analyzer_for_file_type_arc(
         | FileType::PackageLockJson
         | FileType::Json
         | FileType::Plist
+        | FileType::Nib
         | FileType::Pbxproj
         | FileType::Cmake
         | FileType::SystemdService
@@ -725,7 +727,15 @@ impl FileTypeExt for FileType {
             FileType::Yaml => vec!["yaml", "yml"],
             FileType::SystemdService => vec!["service", "systemd", "unit"],
             FileType::DesktopEntry => vec!["desktop", "desktop-entry", "freedesktop", "xdg"],
-            FileType::Xml => vec!["xml", "csproj", "xaml", "svg", "msbuild"],
+            FileType::Xml => vec![
+                "xml",
+                "csproj",
+                "xaml",
+                "svg",
+                "msbuild",
+                "xib",
+                "storyboard",
+            ],
             FileType::Svg => vec!["svg", "xml", "image/svg+xml"],
             FileType::Zip => vec!["zip", "archive"],
             FileType::Tar

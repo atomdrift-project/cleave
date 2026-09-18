@@ -532,6 +532,7 @@ pub fn run(
             let pattern_value = pattern.to_string();
             let section_value = section.map(str::to_owned);
             let params = StringParams {
+                encoding: None,
                 exact: (method == cli::MatchMethod::Exact).then_some(&pattern_value),
                 substr: (method == cli::MatchMethod::Contains).then_some(&pattern_value),
                 regex: (method == cli::MatchMethod::Regex).then_some(&pattern_value),
@@ -650,6 +651,7 @@ pub fn run(
             let pattern_value = pattern.to_string();
             let section_value = section.map(str::to_owned);
             let params = StringParams {
+                encoding: None,
                 exact: (method == cli::MatchMethod::Exact).then_some(&pattern_value),
                 substr: (method == cli::MatchMethod::Contains).then_some(&pattern_value),
                 regex: (method == cli::MatchMethod::Regex).then_some(&pattern_value),

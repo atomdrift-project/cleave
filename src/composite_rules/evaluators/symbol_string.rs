@@ -819,6 +819,17 @@ pub(crate) fn eval_text<'a, 'b>(
         if ctx.encoded_strings().is_empty() {
             return raw;
         }
+        // `encoding: none` opts the condition out of the decoded pass. A
+        // matcher that describes the file's own markup must not fire on bytes
+        // that only look like markup once decoded -- an RTF's embedded hex
+        // picture holding a run of `7b` decodes to `{{{{{{{{{`, which is not
+        // brace nesting.
+        if matches!(
+            params.encoding,
+            Some(crate::composite_rules::condition::TextEncodingScope::None)
+        ) {
+            return raw;
+        }
         // The raw-content gate swept the decoded values for atoms: when this
         // very `if:` pattern's atoms are absent there, the per-string pass
         // cannot match and is skipped (`decoded_skip` is keyed on the pattern

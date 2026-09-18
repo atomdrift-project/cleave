@@ -1199,6 +1199,7 @@ fn powershell_case_trait() -> TraitDefinition {
         })
     };
     let condition = Condition::Text(TextQuery {
+        encoding: None,
         length_min: None,
         length_max: None,
         exact: None,

@@ -155,6 +155,7 @@ fn compiled_text_reads_utf16_extraction_not_raw_bytes() {
     for (needle, matched) in [(SECRET, true), ("raw-only-marker", false)] {
         let needle = needle.to_string();
         let params = StringParams {
+            encoding: None,
             exact: None,
             substr: Some(&needle),
             regex: None,
@@ -276,6 +277,7 @@ fn compiled_text_small_source_exact_matches_a_complete_line() {
     assert_eq!(ctx.cached_source_utf8, Some(SECRET));
     let exact = SECRET.to_string();
     let params = StringParams {
+        encoding: None,
         exact: Some(&exact),
         substr: None,
         regex: None,

@@ -3318,7 +3318,7 @@ impl super::CapabilityMapper {
                 ));
             }
 
-            // Validate that `any:` clauses don't have 3+ traits from the same external directory
+            // Validate that `any:` clauses don't have 8+ traits from the same external directory
             // Recommend using directory references instead for better maintainability
             tracing::trace!("Step 14/15: Checking for redundant any refs");
             let mut redundant_any_refs = Vec::new();
@@ -3345,7 +3345,7 @@ impl super::CapabilityMapper {
                     redundant_any_refs.len()
                 );
                 eprintln!(
-                    "   Rules with 4+ trait references from the same directory should use directory notation:\n"
+                    "   Rules with 8+ trait references from the same directory should use directory notation:\n"
                 );
                 for (rule_id, dir, count, trait_ids, source_file) in &redundant_any_refs {
                     let line_hint = find_line_number(source_file, rule_id);

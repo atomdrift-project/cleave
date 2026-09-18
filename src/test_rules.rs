@@ -781,6 +781,7 @@ impl<'a> RuleDebugger<'a> {
                 *section_offset_range,
             ),
             Condition::Text(TextQuery {
+                encoding,
                 exact,
                 substr,
                 regex,
@@ -799,6 +800,7 @@ impl<'a> RuleDebugger<'a> {
             }) => {
                 let desc = describe_condition(condition);
                 let params = crate::composite_rules::context::StringParams {
+                    encoding: *encoding,
                     exact: exact.as_ref(),
                     substr: substr.as_ref(),
                     regex: regex.as_ref(),

@@ -1787,6 +1787,56 @@ traits:
 }
 
 #[test]
+fn text_encoding_none_skips_the_decoded_layer() {
+    // `type: text` unions the raw bytes with the decoded string layers, so a
+    // matcher describing a file's own markup can fire on content that only
+    // looks like markup after decoding -- an RTF's embedded hex picture
+    // holding a run of `7b` decodes to a brace run. `encoding: none` opts out.
+    let yaml = r#"
+defaults:
+  for: [javascript]
+traits:
+  - id: "test/source-text::decoded-default"
+    desc: "matches the decoded layer by default"
+    crit: notable
+    if:
+      type: text
+      regex: "ZXQ_ENCODING_SCOPE_NEEDLE_7b1d"
+  - id: "test/source-text::decoded-opted-out"
+    desc: "encoding none skips the decoded layer"
+    crit: notable
+    if:
+      type: text
+      encoding: none
+      regex: "ZXQ_ENCODING_SCOPE_NEEDLE_7b1d"
+"#;
+    let (_dir, path) = create_test_yaml(yaml);
+    let mapper = CapabilityMapper::from_yaml(&path).unwrap();
+    let source = pad_source(String::from("const x = 1;\n"));
+    assert!(!source.contains("ZXQ_ENCODING_SCOPE_NEEDLE_7b1d"));
+    let mut report = create_test_source_report("index.js", "javascript", source.len() as u64);
+    report.strings.push(crate::types::StringInfo {
+        value: "ZXQ_ENCODING_SCOPE_NEEDLE_7b1d".to_string().into(),
+        offset: Some(0),
+        encoding: "utf-8".to_string(),
+        string_type: None,
+        section: None,
+        encoding_chain: vec!["base64".to_string()],
+        fragments: None,
+    });
+    mapper.evaluate_and_merge_findings(&mut report, source.as_bytes(), None, None);
+    let fired = |id: &str| report.findings.iter().any(|f| f.id == id);
+    assert!(
+        fired("test/source-text::decoded-default"),
+        "plain `type: text` must still reach the decoded layer"
+    );
+    assert!(
+        !fired("test/source-text::decoded-opted-out"),
+        "`encoding: none` must not match content that exists only after decoding"
+    );
+}
+
+#[test]
 fn source_text_regex_decoded_only_still_fires() {
     let yaml = r#"
 defaults:

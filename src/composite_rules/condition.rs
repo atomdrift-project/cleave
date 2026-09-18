@@ -746,6 +746,28 @@ mod offset_range_serde {
     }
 }
 
+/// Which text layers a `type: text` condition is allowed to match against.
+///
+/// `type: text` normally scans the raw bytes *and* the decoded string layers
+/// (base64/hex/xor chains), so a pattern can match content that only exists
+/// after decoding. That is what makes an inline base64 payload searchable,
+/// but it also means a matcher describing the file's own markup can fire on
+/// bytes that are not markup at all: a run of `7b` in an RTF's embedded hex
+/// picture decodes to `{{{{{{{{{`, which is not brace nesting.
+///
+/// `encoding: none` restricts the condition to the undecoded layer. `type:
+/// raw` does the same for file types that already use raw text search, but it
+/// is not equivalent on binaries, where `type: text` scans extracted strings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum TextEncodingScope {
+    /// Raw bytes and plain string literals only; decoded layers are skipped.
+    None,
+    /// The default: undecoded content plus every decoded string layer.
+    #[default]
+    Any,
+}
+
 /// Encoding specification for encoded string searches
 /// Can be a single encoding, array of encodings (OR), or chain (sequence)
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -1190,6 +1212,9 @@ enum ConditionTagged {
         not: Option<Vec<NotException>>,
     },
     Text {
+        /// Restrict which text layers may match; see [`TextEncodingScope`].
+        #[serde(default)]
+        encoding: Option<TextEncodingScope>,
         #[serde(default)]
         exact: Option<String>,
         #[serde(default)]
@@ -1770,6 +1795,7 @@ impl From<ConditionDeser> for Condition {
                     not,
                 }),
                 ConditionTagged::Text {
+                    encoding,
                     exact,
                     substr,
                     regex,
@@ -1786,6 +1812,7 @@ impl From<ConditionDeser> for Condition {
                     section_offset,
                     section_offset_range,
                 } => Condition::Text(TextQuery {
+                    encoding,
                     exact,
                     substr,
                     regex,
@@ -2115,6 +2142,7 @@ impl From<Condition> for ConditionTagged {
                 not,
             },
             Condition::Text(TextQuery {
+                encoding,
                 exact,
                 substr,
                 regex,
@@ -2131,6 +2159,7 @@ impl From<Condition> for ConditionTagged {
                 section_offset,
                 section_offset_range,
             }) => ConditionTagged::Text {
+                encoding,
                 exact,
                 substr,
                 regex,
@@ -2707,6 +2736,8 @@ impl Condition {
 /// Payload for `type: text` — byte-scan over extracted strings / raw source text.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct TextQuery {
+    /// Restrict which text layers may match; see [`TextEncodingScope`].
+    pub encoding: Option<TextEncodingScope>,
     pub exact: Option<String>,
     pub substr: Option<String>,
     pub regex: Option<String>,
@@ -4213,6 +4244,7 @@ mod location_constraint_tests {
     fn test_condition_validate_string_location() {
         // Test that Condition::Text validates location constraints
         let condition = Condition::Text(TextQuery {
+            encoding: None,
             length_min: None,
             length_max: None,
             exact: Some("test".to_string()),

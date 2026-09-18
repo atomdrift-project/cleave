@@ -3668,6 +3668,7 @@ mod tests {
             r#for: vec![RuleFileType::All],
             for_from_groups: false,
             r#if: Condition::Text(TextQuery {
+                encoding: None,
                 length_min: None,
                 length_max: None,
                 exact: None,
@@ -3727,6 +3728,7 @@ mod tests {
             r#for: vec![RuleFileType::All],
             for_from_groups: false,
             r#if: Condition::Text(TextQuery {
+                encoding: None,
                 length_min: None,
                 length_max: None,
                 exact: None,

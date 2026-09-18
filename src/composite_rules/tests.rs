@@ -4950,3 +4950,123 @@ fn test_needs_two_not_met_by_single_dir_ref_member() {
         "only one member matched; needs:2 must not be satisfied"
     );
 }
+
+// ==================== Archive-scope file-type gate ====================
+//
+// A composite's `for:` names the node it is evaluated on, not the members it
+// reads. `scope: archive` already lets it pool findings from every member of
+// the enclosing archive -- the container inherits them -- so it does not also
+// need blanket permission to run on archive formats it was never declared for.
+//
+// Before this was fixed the gate carried two carve-outs, `wants_archive_family`
+// (the rule's `for:` names any archive type) and `pools_across_archive` (the
+// rule is archive/outer/package scoped). Either one alone admitted the rule on
+// *any* archive container, so `for:` silently meant nothing on 546 of the
+// tree's 2287 archive-scoped composites. Worked example:
+// `vscode-activated-curl-shell` declares `for: [vsix]` and scored hostile on
+// the Rust crate agentdiff-0.1.26, tying a VS Code extension marker in
+// scripts/vscode-extension/ to a `curl ... | sh` install line in README.md --
+// two unrelated members of an archive that is not a VSIX.
+
+fn archive_scoped_rule_for(types: Vec<FileType>) -> CompositeTrait {
+    CompositeTrait {
+        required_trait_indices: Vec::new(),
+        id: "test/archive-scope::gate".to_string(),
+        desc: "Archive scope gate".to_string(),
+        conf: 0.9,
+        crit: Criticality::Baseline,
+        mbc: None,
+        attack: None,
+        platforms: vec![Platform::All],
+        arch: vec![Arch::All],
+        r#for: types,
+        for_from_groups: false,
+        size_min: None,
+        size_max: None,
+        all: Some(vec![Condition::Symbol(SymbolQuery {
+            exact: None,
+            substr: None,
+            regex: Some("socket".to_string()),
+            platforms: None,
+            is_check: None,
+            kind: None,
+            arg: None,
+            args: None,
+            alias: None,
+            not: None,
+        })]),
+        any: None,
+        unless: None,
+        not: None,
+        downgrade: None,
+        needs: None,
+        near_lines: None,
+        near_bytes: None,
+        scope: Some(Scope::Archive),
+        defined_in: std::path::PathBuf::from("test.yaml"),
+        precision: None,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn archive_scoped_composite_skips_a_container_of_another_type() {
+    let (report, data) = create_test_context();
+    // A `.crate` container. The rule below is declared for VSIX only.
+    let ctx = EvaluationContext::new(
+        &report,
+        &data,
+        FileType::Crate,
+        &[Platform::All],
+        None,
+        None,
+    );
+
+    let rule = archive_scoped_rule_for(vec![FileType::VsixArchive]);
+
+    assert!(
+        rule.evaluate(&ctx).is_none(),
+        "a `for: [vsix]` composite must not evaluate on a crate container, \
+         however it is scoped"
+    );
+}
+
+#[test]
+fn archive_scoped_composite_runs_on_its_declared_container_type() {
+    let (report, data) = create_test_context();
+    let ctx = EvaluationContext::new(
+        &report,
+        &data,
+        FileType::VsixArchive,
+        &[Platform::All],
+        None,
+        None,
+    );
+
+    let rule = archive_scoped_rule_for(vec![FileType::VsixArchive]);
+
+    assert!(
+        rule.evaluate(&ctx).is_some(),
+        "a `for: [vsix]` composite must still evaluate on a VSIX container"
+    );
+}
+
+#[test]
+fn archive_scoped_composite_for_all_still_runs_on_any_container() {
+    let (report, data) = create_test_context();
+    let ctx = EvaluationContext::new(
+        &report,
+        &data,
+        FileType::Crate,
+        &[Platform::All],
+        None,
+        None,
+    );
+
+    let rule = archive_scoped_rule_for(vec![FileType::All]);
+
+    assert!(
+        rule.evaluate(&ctx).is_some(),
+        "`for: [all]` is the way to declare a container-type-agnostic rule"
+    );
+}

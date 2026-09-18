@@ -666,7 +666,8 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 }
                 "archive" | "rar" | "7z" => vec![RuleFileType::Archive],
                 "zip" => vec![RuleFileType::Zip],
-                "apk" => vec![RuleFileType::Apk],
+                "apk" | "apk_android" | "android_apk" => vec![RuleFileType::AndroidApk],
+                "apk_alpine" | "alpine_apk" => vec![RuleFileType::AlpineApk],
                 "jar" => vec![RuleFileType::Jar],
                 "tar" | "tgz" => vec![RuleFileType::Tar],
                 "npm" => vec![RuleFileType::Npm],
@@ -835,9 +836,11 @@ pub(crate) fn resolve_platform_filetype_conflicts(
                 | RuleFileType::Lnk
                 | RuleFileType::Msi
                 | RuleFileType::Nupkg => has_windows,
-                // ELF and APK both run on Linux/Android
-                RuleFileType::Elf | RuleFileType::Apk => has_unix || has_android,
-                RuleFileType::Dex => has_android,
+                // ELF runs on Linux/Unix generally; Android APKs and Dex are
+                // Android-specific, and Alpine's package format is
+                // Linux-specific like systemd/deb/rpm below.
+                RuleFileType::Elf => has_unix || has_android,
+                RuleFileType::AndroidApk | RuleFileType::Dex => has_android,
                 RuleFileType::Jcl => has_zos,
                 // Mach-O/Plist/Ipa and AppleScript/ObjC are macOS/iOS-native;
                 // Shell runs on all unix-like systems. macOS is a Unix, so the
@@ -865,8 +868,9 @@ pub(crate) fn resolve_platform_filetype_conflicts(
                 | RuleFileType::Groovy
                 | RuleFileType::Elixir
                 | RuleFileType::Scala => has_desktop,
-                // systemd/deb/rpm are Linux-specific, not generic Unix
-                RuleFileType::SystemdService
+                // systemd/deb/rpm/AlpineApk are Linux-specific, not generic Unix
+                RuleFileType::AlpineApk
+                | RuleFileType::SystemdService
                 | RuleFileType::DesktopEntry
                 | RuleFileType::Deb
                 | RuleFileType::Rpm => has_linux,
@@ -885,11 +889,8 @@ pub(crate) fn resolve_platform_filetype_conflicts(
                 | RuleFileType::Lnk
                 | RuleFileType::Msi
                 | RuleFileType::Nupkg => (has_windows, "windows"),
-                // ELF and APK both run on Linux/Android
-                RuleFileType::Elf | RuleFileType::Apk => {
-                    (has_unix || has_android, "linux, unix, or android")
-                }
-                RuleFileType::Dex => (has_android, "android"),
+                RuleFileType::Elf => (has_unix || has_android, "linux, unix, or android"),
+                RuleFileType::AndroidApk | RuleFileType::Dex => (has_android, "android"),
                 RuleFileType::Jcl => (has_zos, "zos"),
                 RuleFileType::Shell => (has_darwin, "linux, unix, macos, or ios"),
                 // macOS/iOS-native languages and formats — the `unix` umbrella
@@ -912,7 +913,8 @@ pub(crate) fn resolve_platform_filetype_conflicts(
                 | RuleFileType::Groovy
                 | RuleFileType::Elixir
                 | RuleFileType::Scala => (has_desktop, "linux, unix, macos, or windows"),
-                RuleFileType::SystemdService
+                RuleFileType::AlpineApk
+                | RuleFileType::SystemdService
                 | RuleFileType::DesktopEntry
                 | RuleFileType::Deb
                 | RuleFileType::Rpm => (has_linux, "linux"),

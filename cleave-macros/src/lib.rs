@@ -8,13 +8,22 @@ use proc_macro_crate::{crate_name, FoundCrate};
 use quote::quote;
 use syn::{parse_macro_input, Data, DeriveInput, Fields};
 
-/// Derive the routing-enum inventory and its archive-family membership.
+/// Derive the routing-enum inventory, its archive-family membership, and its
+/// package-family membership.
 ///
 /// The enum remains the single declaration site for Cleave's file-type
 /// vocabulary. Mark archive/container variants with `#[archive]`; this derive
 /// generates the concrete inventory, `is_archive`, and the family slice used
 /// by trait parsing and indexing.
-#[proc_macro_derive(EnumVariants, attributes(archive))]
+///
+/// Mark the subset that are *units of distribution* -- an ecosystem's package
+/// format rather than a generic container -- with `#[package]`, which
+/// generates `is_package` and `package_family_types`. `archive` says "this
+/// holds other files"; `package` says "this boundary means something to an
+/// ecosystem", which is what `scope: package` walks to and what picks a
+/// composite's default scope. Every `#[package]` variant is also `#[archive]`;
+/// nothing enforces that here, so `scope_plan_invariants` asserts it.
+#[proc_macro_derive(EnumVariants, attributes(archive, package))]
 pub fn derive_enum_variants(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = &input.ident;
@@ -31,6 +40,14 @@ pub fn derive_enum_variants(input: TokenStream) -> TokenStream {
         .filter(|v| v.attrs.iter().any(|attr| attr.path().is_ident("archive")))
         .map(|v| &v.ident)
         .collect();
+    let package_variants: Vec<_> = data_enum
+        .variants
+        .iter()
+        .filter(|v| v.attrs.iter().any(|attr| attr.path().is_ident("package")))
+        .map(|v| &v.ident)
+        .collect();
+
+    let variant_indices: Vec<usize> = (0..variants.len()).collect();
 
     let expanded = quote! {
         impl #name {
@@ -44,6 +61,28 @@ pub fn derive_enum_variants(input: TokenStream) -> TokenStream {
 
             pub(crate) const fn archive_family_types() -> &'static [Self] {
                 &[ #(Self::#archive_variants),* ]
+            }
+
+            /// This type's bit in a 128-bit type mask. The mask is how a
+            /// composite's `for:` list is intersected against the types a
+            /// finding's origin file can have: one AND per leg, instead of a
+            /// list scan per (leg x member x finding).
+            ///
+            /// A generated `match`, not a `position()` lookup -- this runs on
+            /// the hot path, once per finding considered at container level.
+            /// `scope_plan_invariants` asserts the enum still fits in 128 bits.
+            pub(crate) fn type_bit(&self) -> u128 {
+                match self {
+                    #(Self::#variants => 1u128 << #variant_indices,)*
+                }
+            }
+
+            pub(crate) fn is_package(&self) -> bool {
+                matches!(self, #(Self::#package_variants)|*)
+            }
+
+            pub(crate) const fn package_family_types() -> &'static [Self] {
+                &[ #(Self::#package_variants),* ]
             }
         }
     };

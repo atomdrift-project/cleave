@@ -706,11 +706,12 @@ impl super::CapabilityMapper {
                     // the default instead of an explicit scope. Worked example:
                     // `perl-packed-hex-command-loader` (`for: [perl]`, hostile)
                     // fired on a Fedora source RPM with its four legs coming
-                    // from four unrelated vendored files. Resolve the default,
-                    // so only rules that opt in to cross-file pooling
-                    // (archive/outer/package) are evaluated here.
+                    // from four unrelated vendored files. Resolve the default
+                    // via `effective_scope` (which also picks up the new
+                    // archive/package `for:`-based defaults), so only rules
+                    // that opt in to cross-file pooling are evaluated here.
                     !matches!(
-                        rule.scope.unwrap_or_default(),
+                        rule.effective_scope(),
                         crate::composite_rules::Scope::File | crate::composite_rules::Scope::Leaf
                     )
                 })
@@ -769,7 +770,7 @@ impl super::CapabilityMapper {
             .iter()
             .filter(|rule| {
                 matches!(
-                    rule.scope.unwrap_or_default(),
+                    rule.effective_scope(),
                     crate::composite_rules::Scope::File | crate::composite_rules::Scope::Leaf
                 )
             })
@@ -809,33 +810,40 @@ impl super::CapabilityMapper {
     /// container — there is no on-disk file for the pair — so only
     /// finding-based composites pool here.
     ///
-    /// Only composites with `scope: package` or `scope: outer` participate.
-    /// Both pool by presence (empty scope key). `file`/`archive`/`leaf`
-    /// composites are excluded on purpose: by the time the artifact and
-    /// registry reports meet they are both finalized, so their evidence
-    /// locations are gone — a location-keyed scope would collapse every item to
-    /// the empty key and fire spuriously. Returns only newly-matched composite
+    /// Only composites with `scope: outer` participate. `scope: package` no
+    /// longer means "pool by presence" — it now means "nearest enclosing
+    /// package-ecosystem archive," a real location-keyed scope evaluated
+    /// through the normal per-node pass, same as `archive`. `outer` is the
+    /// one scope left that pools by presence (empty scope key), which is what
+    /// this synthetic pass needs: by the time the artifact and registry
+    /// reports meet they are both finalized, so their evidence locations are
+    /// gone, and a location-keyed scope would collapse every item to the
+    /// empty key and fire spuriously. `file`/`archive`/`leaf`/`package` are
+    /// excluded for that reason. Returns only newly-matched composite
     /// findings (none of the `seed_findings` are echoed back).
     #[must_use]
     pub(crate) fn evaluate_package_composites(&self, seed_findings: &[Finding]) -> Vec<Finding> {
         use crate::composite_rules::Scope;
 
-        // Composites that explicitly pool across the artifact↔registry boundary.
+        // Composites that pool across the artifact↔registry boundary.
         let package_rules: Vec<&crate::composite_rules::CompositeTrait> = self
             .composite_rules
             .iter()
-            .filter(|r| matches!(r.scope, Some(Scope::Package | Scope::Outer)))
+            .filter(|r| matches!(r.scope, Some(Scope::Outer)))
             .collect();
         if package_rules.is_empty() {
             return Vec::new();
         }
 
-        // A synthetic container with no bytes of its own. `FileType::All` lets a
-        // package rule whose `for:` lists leaf types (e.g. `registry`,
-        // `package_json`) still evaluate at this pooled level.
+        // A synthetic node with no bytes of its own, typed `registry`: this is
+        // the registry-joined view of the artifact, and `for:` gates it like
+        // any other node. It used to be typed `all`, which worked only while
+        // the gate treated a node of type `All` as a wildcard admitting every
+        // rule. That carve-out is gone (see `evaluate_with_gates`), so a rule
+        // that wants to run here says so: `for: [registry, <what it mixes>]`.
         let report = AnalysisReport::new(crate::types::TargetInfo {
             path: String::new(),
-            file_type: "all".to_string(),
+            file_type: "registry".to_string(),
             size_bytes: 0,
             sha256: String::new(),
             architectures: None,
@@ -853,7 +861,7 @@ impl super::CapabilityMapper {
             let ctx = EvaluationContext::new(
                 &report,
                 no_bytes,
-                RuleFileType::All,
+                RuleFileType::Registry,
                 &self.platforms,
                 Some(&combined),
                 None,
@@ -1453,29 +1461,35 @@ traits:
     #[test]
     #[allow(clippy::expect_used)]
     fn test_scope_outer_composite_evaluates_at_archive_level() {
-        // A composite with `for: [javascript]` is normally gated out at the
-        // container/archive level (the container's file_type is the archive
-        // type, not javascript). But `scope: outer`/`archive` explicitly pools
-        // evidence across archive entries, so such a composite MUST be allowed
-        // to run at the container level — otherwise it can never see the
-        // cross-entry findings it was written for (e.g. a browser-extension
-        // rule whose content-script and manifest evidence live in different
-        // CRX entries). A plain file-scoped composite must stay gated out.
+        // `scope: outer`/`archive` pools evidence across archive entries, and
+        // the container inherits every member finding -- so a composite that
+        // ties a CRX's content script to its manifest sees both. What it must
+        // declare is the node it runs on: `for: [crx]`, the container.
+        //
+        // It used to be allowed to declare `for: [javascript]` and still run
+        // here, because the gate admitted any archive-scoped rule on any
+        // archive container. That made `for:` meaningless on 546 of the tree's
+        // 2287 archive-scoped composites -- `vscode-activated-curl-shell`
+        // (`for: [vsix]`) scored hostile on a Rust crate. The leaf-typed rule
+        // below is now the negative control.
+        //
+        // A plain file-scoped composite must stay gated out either way.
         let yaml = r#"
 defaults:
-  for: [javascript]
   platforms: [all]
 
 traits:
   - id: "test/ext::scrape"
     desc: "AI chat scrape"
     crit: suspicious
+    for: [javascript]
     if:
       type: text
       substr: "SCRAPE_MARKER"
   - id: "test/ext::cors"
     desc: "CORS rewrite"
     crit: suspicious
+    for: [javascript]
     if:
       type: text
       substr: "CORS_MARKER"
@@ -1485,6 +1499,16 @@ composite_rules:
     desc: "Outer-scoped cross-entry exfil"
     crit: hostile
     conf: 0.95
+    for: [crx]
+    scope: outer
+    all:
+      - id: "test/ext::scrape"
+      - id: "test/ext::cors"
+  - id: "test/ext::leaf-typed-outer"
+    desc: "Outer-scoped but leaf-typed control"
+    crit: hostile
+    conf: 0.95
+    for: [javascript]
     scope: outer
     all:
       - id: "test/ext::scrape"
@@ -1493,6 +1517,7 @@ composite_rules:
     desc: "File-scoped exfil (control)"
     crit: hostile
     conf: 0.95
+    for: [crx]
     all:
       - id: "test/ext::scrape"
       - id: "test/ext::cors"
@@ -1531,10 +1556,20 @@ composite_rules:
             container_findings.iter().map(|f| &f.id).collect::<Vec<_>>()
         );
 
-        // The file-scoped (default) composite with for: [javascript] must stay
-        // gated out at the archive container level — the relaxation is specific
-        // to outer/archive scope and must not turn every leaf-typed composite
-        // into a container-level rule.
+        // Declared `for: [javascript]`, it does not run on a crx node, however
+        // it is scoped. Scope selects which evidence may pool, not which nodes
+        // the rule runs on.
+        assert!(
+            !container_findings
+                .iter()
+                .any(|f| f.id == "test/ext::leaf-typed-outer"),
+            "leaf-typed outer composite must not fire on a crx container, got: {:?}",
+            container_findings.iter().map(|f| &f.id).collect::<Vec<_>>()
+        );
+
+        // A file-scoped composite must stay gated out of the container pass
+        // regardless of its `for:`, because nested findings carry no per-member
+        // location and would pool as same-file evidence.
         assert!(
             !container_findings
                 .iter()
@@ -1575,7 +1610,7 @@ composite_rules:
     desc: "Deprecated package shipping a native addon"
     crit: suspicious
     conf: 0.9
-    scope: package
+    scope: outer
     all:
       - id: "test/pkg::deprecated"
       - id: "test/pkg::native-addon"
@@ -1583,6 +1618,7 @@ composite_rules:
     desc: "Same members, file scope (must not span the boundary)"
     crit: suspicious
     conf: 0.9
+    for: [registry, javascript]
     all:
       - id: "test/pkg::deprecated"
       - id: "test/pkg::native-addon"
@@ -1595,9 +1631,11 @@ composite_rules:
     fn package_composite_spans_artifact_and_registry() {
         let mapper = package_scope_mapper();
         // One finding from the registry metadata report, one from the artifact
-        // report — the union the package pass evaluates over. Evidence carries
-        // no shared location (both reports are finalized), which is exactly the
-        // condition package scope is designed to tolerate.
+        // report — the union this pass evaluates over. Evidence carries no
+        // shared location (both reports are finalized), which is why `outer`,
+        // the one scope that pools by presence, is the only one that can join
+        // them. `scope: package` cannot: it keys on the nearest enclosing
+        // package archive, and registry findings have no location at all.
         let seed = vec![
             make_test_finding("test/pkg::deprecated", Criticality::Notable),
             make_test_finding("test/pkg::native-addon", Criticality::Notable),
@@ -1609,7 +1647,7 @@ composite_rules:
             new_findings
                 .iter()
                 .any(|f| f.id == "test/pkg::deprecated-with-addon"),
-            "scope: package composite should fire across the artifact↔registry union, got: {:?}",
+            "scope: outer composite should fire across the artifact↔registry union, got: {:?}",
             new_findings.iter().map(|f| &f.id).collect::<Vec<_>>()
         );
         // The file-scoped control must be excluded by the scope filter — it is

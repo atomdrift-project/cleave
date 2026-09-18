@@ -387,6 +387,41 @@ fn disabled_validator_override() -> &'static RwLock<Option<BTreeSet<String>>> {
 pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
     UNKNOWN_VALIDATOR,
     ValidatorSpec {
+        id: "impossible-composite-filetype",
+        category: ValidatorCategory::Policy,
+        display_id: "ft-impossible",
+        description: "Composite lists a file type a required leg cannot match.",
+        fix: "Drop the unreachable type. If the rule fires on a container, declare the container type -- its legs arrive as inherited member findings.",
+    },
+    ValidatorSpec {
+        id: "pooling-scope-no-container",
+        category: ValidatorCategory::Policy,
+        display_id: "scope-no-container",
+        description: "Composite pools across an archive but names no container type in `for:`.",
+        fix: "Name the container node the rule reports on (npm, zip, vsix, ...). archive/package/outer composites run on the container, never on a leaf, so one that declares only leaf types never runs.",
+    },
+    ValidatorSpec {
+        id: "unbindable-package-scope",
+        category: ValidatorCategory::Policy,
+        display_id: "scope-package",
+        description: "Composite declares a `scope: package` that can never bind to a package boundary.",
+        fix: "Use `scope: outer` -- the scope that pools a fetched artifact with its separately-fetched registry metadata. `scope: package` keys on the nearest enclosing package archive, which registry nodes never have.",
+    },
+    ValidatorSpec {
+        id: "exhaustive-suppressor",
+        category: ValidatorCategory::Policy,
+        display_id: "unless-exhaustive",
+        description: "A directory `unless:` expands to members that together cover every file.",
+        fix: "Reference the one member trait you meant instead of the directory, so the exclusion stops matching every file that emits the metric.",
+    },
+    ValidatorSpec {
+        id: "archive-filetype-mix",
+        category: ValidatorCategory::Policy,
+        display_id: "ft-archive-mix",
+        description: "Atomic trait declares both archive and non-archive file types.",
+        fix: "Split into two traits: one for the archive node, one for the files inside it. An atomic runs on a single node, and cleave never content-scans a container's own bytes.",
+    },
+    ValidatorSpec {
         id: "regex-length",
         category: ValidatorCategory::Quality,
         display_id: "re-len",

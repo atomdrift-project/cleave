@@ -1960,10 +1960,20 @@ impl TraitDefinition {
 /// extracted from a zip). Decoded payload layers below the file are
 /// pooled together at the file level.
 ///
+/// Every scope below has one fixed, unconditional definition, computed the
+/// same way regardless of where the consuming composite itself runs or how
+/// deeply nested it is. None of them ever widen to "pool everything" as a
+/// silent fallback -- only `Outer` does that, and only because that is its
+/// entire, explicit job.
+///
 /// ```text
-/// Outer    →  anywhere within the input given to cleave
-/// Archive  →  same nearest enclosing archive entry
-///             (degrades to Outer when no archive is in the path)
+/// Outer    →  anywhere within the current top-level analysis
+///             (one `analyze_file` call: one sample, however deeply nested)
+/// Package  →  nearest enclosing package-ecosystem archive (npm/gem/whl/
+///             nupkg/crate/conda/egg/python_sdist), always innermost
+///             (falls back to File when no such ancestor exists)
+/// Archive  →  nearest enclosing archive of any kind, always innermost
+///             (falls back to File when no such ancestor exists)
 /// File     →  same leaf-file (the deepest file-shaped unit, e.g. a
 ///             PE inside a zip; ignores decoded payload layers below)
 ///             (default)
@@ -1976,21 +1986,23 @@ impl TraitDefinition {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum Scope {
-    /// Anywhere within the input given to cleave.
+    /// Anywhere within the current top-level analysis (one `analyze_file`
+    /// call). This is the one scope that deliberately pools by presence
+    /// (empty key) rather than by location -- the explicit, auditable
+    /// choice for correlation that should reach beyond any single
+    /// archive/package boundary, e.g. tying a fetched artifact's bytes to
+    /// its separately-fetched registry metadata.
     Outer,
-    /// A fetched package artifact together with its registry metadata
-    /// (`*.registry.json`). Like [`Scope::Outer`] it pools by presence
-    /// (empty key), but it is only ever evaluated on the fetch-driven
-    /// package pass that unions an artifact's findings with its
-    /// registry record's findings — so a `scope: package` composite is
-    /// a no-op on a bare local scan and fires only under `--fetch` /
-    /// `pkg:`. Authored for rules that correlate registry facts
-    /// (deprecated, low downloads, fresh publish) with artifact
-    /// behavior.
+    /// Nearest enclosing package-ecosystem archive (npm/gem/whl/nupkg/
+    /// crate/conda/egg/python_sdist) -- always the innermost one, computed
+    /// the same way regardless of where the consuming composite runs. When
+    /// no such ancestor exists (nested or as the top-level analyzed file
+    /// itself), behaves exactly like [`Scope::File`] -- never widens to
+    /// pool globally as a fallback.
     Package,
-    /// Same nearest enclosing archive entry. For evidence that is not
-    /// inside an archive, degrades to [`Scope::Outer`] (empty key —
-    /// same key as every other non-archive evidence in the input).
+    /// Nearest enclosing archive of any kind -- always the innermost one.
+    /// When no enclosing archive exists, behaves exactly like
+    /// [`Scope::File`] -- never widens to pool globally as a fallback.
     Archive,
     /// Same leaf-file. The deepest file-shaped unit (e.g. a PE
     /// extracted from a zip). Decoded payload layers below the
@@ -2006,21 +2018,47 @@ impl Scope {
     /// `Evidence.location`. Two evidence items share scope iff their
     /// scope keys are equal.
     ///
+    /// `archive_contents` and `top_level_file_type` come from the current
+    /// analysis's `AnalysisReport` and are only consulted for
+    /// [`Scope::Package`]; every other scope ignores them.
+    ///
     /// The key is a borrowed substring of `location` (or the empty
     /// string), so this is allocation-free.
-    fn key(self, location: Option<&str>) -> &str {
+    fn key<'a>(
+        self,
+        location: Option<&'a str>,
+        archive_contents: &[crate::types::ArchiveEntry],
+        top_level_file_type: &str,
+    ) -> &'a str {
         match (self, location) {
-            // Outer/Package scope or no location info — all evidence shares one
-            // key. Package pools by presence; the artifact↔registry boundary it
-            // spans is two separate analyses with no shared location to key on.
-            (Scope::Outer | Scope::Package, _) | (_, None) => "",
+            // Outer scope or no location info — all evidence shares one key.
+            // This is the only scope that pools by presence, deliberately.
+            (Scope::Outer, _) | (_, None) => "",
             // Leaf: exact location match required.
             (Scope::Leaf, Some(loc)) => strip_byte_offset_location(loc),
             // File: strip any decoded-payload suffix; what remains is
             // the leaf-file identifier.
             (Scope::File, Some(loc)) => strip_byte_offset_location(strip_decode_suffix(loc)),
-            // Archive: nearest enclosing archive entry path.
-            (Scope::Archive, Some(loc)) => parent_archive(loc),
+            // Archive: nearest enclosing archive entry path, falling back to
+            // file-scope (never a global pool) when nothing encloses it.
+            (Scope::Archive, Some(loc)) => {
+                let p = parent_archive(loc);
+                if p.is_empty() {
+                    strip_byte_offset_location(strip_decode_suffix(loc))
+                } else {
+                    p
+                }
+            }
+            // Package: nearest enclosing package-ecosystem archive, same
+            // fall-back-to-file rule as Archive.
+            (Scope::Package, Some(loc)) => {
+                let p = parent_package(loc, archive_contents, top_level_file_type);
+                if p.is_empty() {
+                    strip_byte_offset_location(strip_decode_suffix(loc))
+                } else {
+                    p
+                }
+            }
         }
     }
 }
@@ -2156,6 +2194,72 @@ fn parent_archive(location: &str) -> &str {
         // prefix as their key.
         None => "archive:",
     }
+}
+
+/// Is this filefacts `label()` string an ecosystem package -- a unit of
+/// distribution (npm, deb, rpm, whl, vsix, ...) rather than a generic
+/// container (zip, tar, iso)?
+///
+/// Derived from the `#[package]` enum markers rather than a second hand-written
+/// list: this is the same question [`FileType::is_package`] answers, asked of a
+/// string instead of a variant. The two used to be separate `matches!` arms and
+/// drifted, which is exactly how the `ARCHIVES` / `is_archive()` split went
+/// wrong. `label` comes from `report_file_type()` (filefacts' label, not the
+/// `Debug` enum name), matching `AnalysisReport.archive_contents[].file_type`
+/// and `AnalysisReport.target.file_type`.
+fn is_package_label(label: &str) -> bool {
+    // `from_str` maps every alias and spelling filefacts emits onto the
+    // routing enum, so the marker set is consulted once, in one place.
+    FileType::from_str(label).is_package()
+}
+
+/// For an archive entry location, return the path of its nearest enclosing
+/// *package-ecosystem* archive (npm/gem/whl/nupkg/crate/conda/egg/
+/// python_sdist) -- a stricter version of [`parent_archive`] that skips past
+/// plain zip/tar wrappers to find the actual package boundary. For example,
+/// a member two levels inside `outer.zip!pkg.tgz!lib/x.js` keys to
+/// `archive:outer.zip!pkg.tgz` if `pkg.tgz` is npm-typed, even though
+/// `outer.zip` is the nearer archive in the generic sense.
+///
+/// Returns the empty string when no ancestor -- nested, or the top-level
+/// analyzed file itself -- is a package-ecosystem type; the caller falls
+/// back to file-scope in that case, matching `parent_archive`'s contract.
+///
+/// `archive_contents` entries are looked up by their `path`, which uses the
+/// same `!`-separated convention as `Evidence.location`
+/// (`AnalysisReport.archive_contents`'s own doc comment).
+fn parent_package<'a>(
+    location: &'a str,
+    archive_contents: &[crate::types::ArchiveEntry],
+    top_level_file_type: &str,
+) -> &'a str {
+    let Some(after_prefix) = location.strip_prefix("archive:") else {
+        return "";
+    };
+    let entry_path = match after_prefix.find("::") {
+        Some(idx) => &after_prefix[..idx],
+        None => after_prefix,
+    };
+    // Walk the `!`-delimited ancestors from innermost to outermost.
+    let mut end = entry_path.len();
+    while let Some(bang_idx) = entry_path[..end].rfind('!') {
+        let ancestor_path = &entry_path[..bang_idx];
+        let is_package = archive_contents
+            .iter()
+            .find(|m| m.path == ancestor_path)
+            .is_some_and(|m| is_package_label(&m.file_type));
+        if is_package {
+            return &location[.."archive:".len() + bang_idx];
+        }
+        end = bang_idx;
+    }
+    // No nested package-ecosystem ancestor found; a single-level entry
+    // (e.g. scanning a bare .whl directly) keys off the analyzed file's own
+    // type instead, since it never appears in `archive_contents` itself.
+    if is_package_label(top_level_file_type) {
+        return "archive:";
+    }
+    ""
 }
 
 /// Boolean logic for combining conditions/traits
@@ -2306,7 +2410,48 @@ impl Default for CompositeTrait {
     }
 }
 
+
+
 impl CompositeTrait {
+    /// The scope this composite runs under when it omits `scope:`, chosen
+    /// from `for:` rather than a single fixed default:
+    ///
+    /// - An ecosystem package type (`#[package]`-tagged: npm/deb/rpm/whl/
+    ///   vsix/...) → [`Scope::Package`]. A rule about a package means the
+    ///   package boundary, not whatever generic wrapper happens to sit closer
+    ///   to the evidence: for `pkg.tgz!vendor.zip!x.js`, `archive` keys to
+    ///   `vendor.zip` and `package` to `pkg.tgz`. Package wins the tie against
+    ///   archive for the types that are both, which is all of them.
+    /// - A generic container (`#[archive]`-tagged but not `#[package]`:
+    ///   zip/tar/iso/...) → [`Scope::Archive`]. The bug this replaces was a
+    ///   composite whose author forgot `scope: archive` on a container type,
+    ///   silently getting `Scope::File` and never seeing a member.
+    /// - [`FileType::Registry`] → [`Scope::Outer`]. Registry metadata is
+    ///   fetched beside the artifact, not from inside it, so its findings
+    ///   carry no location and every location-keyed scope collapses to the
+    ///   empty key. `outer` is the only scope that joins the two.
+    /// - Everything else → [`Scope::File`].
+    ///
+    /// Always explicit-overridable via `scope:`; this is only consulted when
+    /// that field is omitted.
+    fn default_scope(&self) -> Scope {
+        if self.r#for.iter().any(FileType::is_package) {
+            Scope::Package
+        } else if self.r#for.iter().any(FileType::is_archive) {
+            Scope::Archive
+        } else if self.r#for.contains(&FileType::Registry) {
+            Scope::Outer
+        } else {
+            Scope::File
+        }
+    }
+
+    /// The scope actually used for evaluation: the explicit `scope:` if
+    /// given, otherwise [`Self::default_scope`].
+    pub(crate) fn effective_scope(&self) -> Scope {
+        self.scope.unwrap_or_else(|| self.default_scope())
+    }
+
     /// Check for empty, too-short, or too-long descriptions. Composites get a
     /// roomier cap than atomic traits ([`MAX_COMPOSITE_DESCRIPTION_CHARS`]) because
     /// they summarize a combination, but the description must still fit one
@@ -2549,23 +2694,24 @@ impl CompositeTrait {
         // All as a universal wildcard for every script/source/binary rule.
         // Skipped when the caller's work list already proved it for this type.
         if !static_gates_prechecked {
-            let wants_archive_family = self.r#for.iter().any(super::types::FileType::is_archive);
-            // A composite scoped to the whole input (`outer`) or to the enclosing
-            // archive (`archive`) explicitly intends to pool evidence across archive
-            // entries, so it must be allowed to run at the container/archive level
-            // even when its `for:` lists only leaf types (e.g. a browser-extension
-            // rule `for: [javascript]` whose evidence is split across the CRX's
-            // content script and its manifest/rules JSON). Without this, such a rule
-            // would only ever evaluate on a single leaf and never see the pooled
-            // cross-entry findings it was written for.
-            let pools_across_archive = matches!(
-                self.scope,
-                Some(Scope::Outer | Scope::Archive | Scope::Package)
-            );
-            let file_type_match = self.r#for.contains(&FileType::All)
-                || self.r#for.contains(&ctx.file_type)
-                || ((ctx.file_type == FileType::All || ctx.file_type.is_archive())
-                    && (wants_archive_family || pools_across_archive));
+            // `for:` names the node this rule is evaluated on -- nothing more.
+            // A cross-archive scope (`archive`/`outer`/`package`) says which
+            // *evidence* may be pooled once the rule runs; it is not also a
+            // licence to run on archive formats the rule never declared. The
+            // container inherits every member finding, so a rule that wants to
+            // tie a CRX's content script to its manifest declares `for: [crx]`
+            // (the node it runs on) and still sees both.
+            //
+            // This previously carried two carve-outs -- `wants_archive_family`
+            // (the `for:` names any archive type) and `pools_across_archive`
+            // (the rule is archive-scoped) -- either of which admitted the rule
+            // on *any* archive container. `for:` therefore meant nothing on 546
+            // of the tree's 2287 archive-scoped composites:
+            // `vscode-activated-curl-shell` (`for: [vsix]`) scored hostile on
+            // the Rust crate agentdiff-0.1.26, tying a VS Code extension marker
+            // in one member to a `curl | sh` README line in another.
+            let file_type_match =
+                self.r#for.contains(&FileType::All) || self.r#for.contains(&ctx.file_type);
 
             if !file_type_match {
                 ctx.record_skip(|| SkipReason::FileTypeMismatch {
@@ -2711,7 +2857,12 @@ impl CompositeTrait {
 
         // Apply scope filter (e.g. `scope: leaf` for archive-FP suppression).
         // When the filter rejects all scope buckets, the rule does not fire.
-        let proximity_tags = match self.apply_scope_filter(result.evidence, proximity_tags) {
+        let proximity_tags = match self.apply_scope_filter(
+            result.evidence,
+            proximity_tags,
+            &ctx.report.archive_contents,
+            &ctx.report.target.file_type,
+        ) {
             Some((ev, tags)) => {
                 result.evidence = ev;
                 tags
@@ -3564,16 +3715,22 @@ impl CompositeTrait {
     /// minimum-distinct-conditions threshold; otherwise returns the
     /// filtered (`evidence`, `tagged_locations`) pair.
     ///
+    /// `archive_contents` and `top_level_file_type` come from the current
+    /// `AnalysisReport` and are passed straight through to [`Scope::key`],
+    /// which is the only place that reads them (for [`Scope::Package`]).
+    ///
     /// `Scope::Outer` is a no-op fast path: every key is the empty
     /// string, so all evidence is in one bucket.
     fn apply_scope_filter(
         &self,
         evidence: Vec<Evidence>,
         tagged_locations: Vec<TaggedLocation>,
+        archive_contents: &[crate::types::ArchiveEntry],
+        top_level_file_type: &str,
     ) -> Option<(Vec<Evidence>, Vec<TaggedLocation>)> {
-        let scope = self.scope.unwrap_or_default();
-        if matches!(scope, Scope::Outer | Scope::Package) {
-            // Both pool by presence (empty key) — every item is in one bucket.
+        let scope = self.effective_scope();
+        if matches!(scope, Scope::Outer) {
+            // Pools by presence (empty key) — every item is in one bucket.
             return Some((evidence, tagged_locations));
         }
         let min_distinct = self.min_distinct_conditions();
@@ -3588,7 +3745,7 @@ impl CompositeTrait {
         // tests and reproducibility.
         let unique_keys: std::collections::BTreeSet<&str> = tagged_locations
             .iter()
-            .map(|t| scope.key(t.location.as_deref()))
+            .map(|t| scope.key(t.location.as_deref(), archive_contents, top_level_file_type))
             .collect();
 
         if unique_keys.iter().all(|k| k.is_empty()) {
@@ -3602,10 +3759,13 @@ impl CompositeTrait {
 
         let winning_key = unique_keys
             .into_iter()
-            .find(|key| {
+            .find(|k| {
                 let conds: std::collections::BTreeSet<usize> = tagged_locations
                     .iter()
-                    .filter(|t| scope.key(t.location.as_deref()) == *key)
+                    .filter(|t| {
+                        scope.key(t.location.as_deref(), archive_contents, top_level_file_type)
+                            == *k
+                    })
                     .map(|t| t.condition_index)
                     .collect();
                 conds.len() >= min_distinct
@@ -3614,11 +3774,17 @@ impl CompositeTrait {
 
         let filtered_tags: Vec<TaggedLocation> = tagged_locations
             .into_iter()
-            .filter(|t| scope.key(t.location.as_deref()) == winning_key)
+            .filter(|t| {
+                scope.key(t.location.as_deref(), archive_contents, top_level_file_type)
+                    == winning_key
+            })
             .collect();
         let filtered_evidence: Vec<Evidence> = evidence
             .into_iter()
-            .filter(|ev| scope.key(ev.location.as_deref()) == winning_key)
+            .filter(|ev| {
+                scope.key(ev.location.as_deref(), archive_contents, top_level_file_type)
+                    == winning_key
+            })
             .collect();
         Some((filtered_evidence, filtered_tags))
     }
@@ -4381,22 +4547,143 @@ mod scope_tests {
             Some("encoding_chain:base64+zlib"),
             Some("0x1234"),
         ] {
-            assert_eq!(Scope::Outer.key(loc), "");
+            assert_eq!(Scope::Outer.key(loc, &[], ""), "");
+        }
+    }
+
+    /// Minimal `ArchiveEntry` for `parent_package` tests — only `path` and
+    /// `file_type` matter to the lookup.
+    fn archive_entry(path: &str, file_type: &str) -> crate::types::ArchiveEntry {
+        crate::types::ArchiveEntry {
+            path: path.to_string(),
+            file_type: file_type.to_string(),
+            ..Default::default()
         }
     }
 
     #[test]
-    fn package_collapses_every_location_to_empty_string() {
-        // Package pools by presence, exactly like Outer — the artifact↔registry
-        // boundary it spans is two separate analyses with no shared location.
-        for loc in [
-            None,
-            Some("archive:foo.zip!bar.so"),
-            Some("encoding_chain:base64+zlib"),
-            Some("0x1234"),
-        ] {
-            assert_eq!(Scope::Package.key(loc), "");
+    fn package_binds_to_nearest_enclosing_package_ancestor() {
+        // outer.zip!pkg.tgz!lib/x.js — pkg.tgz is npm-typed, outer.zip is not.
+        // Package skips past the plain zip wrapper to the npm boundary, even
+        // though outer.zip is the nearer archive in the generic sense.
+        let contents = [archive_entry("outer.zip!pkg.tgz", "npm")];
+        assert_eq!(
+            Scope::Package.key(Some("archive:outer.zip!pkg.tgz!lib/x.js"), &contents, ""),
+            "archive:outer.zip!pkg.tgz"
+        );
+    }
+
+    #[test]
+    fn package_ignores_non_package_archive_ancestors() {
+        // pkg.tgz!inner.zip!x.js — inner.zip is a plain zip, pkg.tgz is npm.
+        // Package must not stop at inner.zip just because it's the nearer
+        // archive; it keeps walking outward to the actual package boundary.
+        let contents = [
+            archive_entry("pkg.tgz", "npm"),
+            archive_entry("pkg.tgz!inner.zip", "zip"),
+        ];
+        assert_eq!(
+            Scope::Package.key(Some("archive:pkg.tgz!inner.zip!x.js"), &contents, ""),
+            "archive:pkg.tgz"
+        );
+    }
+
+    #[test]
+    fn package_binds_to_the_top_level_file_when_it_is_itself_a_package() {
+        // A bare .whl scanned directly, no nesting at all: the member never
+        // appears in archive_contents, so the top-level file's own type is
+        // what Package must consult.
+        assert_eq!(
+            Scope::Package.key(Some("archive:setup.py"), &[], "whl"),
+            "archive:"
+        );
+    }
+
+    #[test]
+    fn package_falls_back_to_file_scope_with_no_package_ancestor_anywhere() {
+        // Plain zip, no npm/gem/whl/... ancestor at any level and the
+        // top-level file isn't a package type either — same fall-back-to-file
+        // rule as Archive, never a global pool.
+        let contents = [archive_entry("outer.zip", "zip")];
+        assert_eq!(
+            Scope::Package.key(Some("archive:outer.zip!x.js"), &contents, "zip"),
+            Scope::File.key(Some("archive:outer.zip!x.js"), &contents, "zip")
+        );
+        assert_eq!(Scope::Package.key(None, &[], ""), "");
+    }
+
+    fn composite_for(types: Vec<FileType>) -> CompositeTrait {
+        CompositeTrait {
+            id: "t::x".to_string(),
+            desc: "d".to_string(),
+            conf: 1.0,
+            r#for: types,
+            ..Default::default()
         }
+    }
+
+    /// The default-scope table. An omitted `scope:` is the common case, so
+    /// what it resolves to is part of the rule language, not an implementation
+    /// detail.
+    #[test]
+    fn default_scope_follows_the_for_list() {
+        // An ecosystem package means the package boundary...
+        for ft in [FileType::Npm, FileType::Deb, FileType::Whl, FileType::VsixArchive] {
+            assert_eq!(
+                composite_for(vec![ft]).effective_scope(),
+                Scope::Package,
+                "{ft:?} should default to package scope"
+            );
+        }
+        // ...and wins the tie against a generic container in the same list,
+        // which is the whole point: `pkg.tgz!vendor.zip!x.js` keys to the
+        // package, not to the wrapper that happens to sit closer.
+        assert_eq!(
+            composite_for(vec![FileType::Zip, FileType::Npm]).effective_scope(),
+            Scope::Package
+        );
+        // A generic container still gets archive scope.
+        for ft in [FileType::Zip, FileType::Tar, FileType::Jar, FileType::Iso] {
+            assert_eq!(
+                composite_for(vec![ft]).effective_scope(),
+                Scope::Archive,
+                "{ft:?} should default to archive scope"
+            );
+        }
+        // Registry metadata has no location, so only `outer` can join it to
+        // the artifact.
+        assert_eq!(
+            composite_for(vec![FileType::Registry]).effective_scope(),
+            Scope::Outer
+        );
+        // Everything else stays file-scoped.
+        for ft in [FileType::JavaScript, FileType::Pe, FileType::PackageJson] {
+            assert_eq!(
+                composite_for(vec![ft]).effective_scope(),
+                Scope::File,
+                "{ft:?} should default to file scope"
+            );
+        }
+    }
+
+    /// An explicit `scope:` always wins; the table is consulted only when the
+    /// field is omitted.
+    #[test]
+    fn an_explicit_scope_overrides_the_default() {
+        let mut rule = composite_for(vec![FileType::Npm]);
+        assert_eq!(rule.effective_scope(), Scope::Package);
+        rule.scope = Some(Scope::File);
+        assert_eq!(rule.effective_scope(), Scope::File);
+    }
+
+    /// `for: [registry, javascript]` -- the artifact↔registry join -- must not
+    /// be dragged to `file` by the javascript half.
+    #[test]
+    fn registry_mixed_with_a_leaf_type_still_defaults_to_outer() {
+        assert_eq!(
+            composite_for(vec![FileType::Registry, FileType::JavaScript]).effective_scope(),
+            Scope::Outer
+        );
     }
 
     #[test]
@@ -4412,23 +4699,23 @@ mod scope_tests {
     #[test]
     fn leaf_returns_exact_location() {
         assert_eq!(
-            Scope::Leaf.key(Some("value:source.execution.module_http")),
+            Scope::Leaf.key(Some("value:source.execution.module_http"), &[], ""),
             ""
         );
         assert_eq!(
             Scope::Leaf.key(Some(
                 "archive:a.zip!!pkg/index.js:value:source.execution.module_http"
-            )),
+            ), &[], ""),
             "archive:a.zip!!pkg/index.js"
         );
         assert_ne!(
-            Scope::Leaf.key(Some("archive:a.zip!!one.js:value:x")),
-            Scope::Leaf.key(Some("archive:a.zip!!two.js:value:x"))
+            Scope::Leaf.key(Some("archive:a.zip!!one.js:value:x"), &[], ""),
+            Scope::Leaf.key(Some("archive:a.zip!!two.js:value:x"), &[], "")
         );
-        assert_eq!(Scope::Leaf.key(None), "");
-        assert_eq!(Scope::Leaf.key(Some("archive:foo.so")), "archive:foo.so");
+        assert_eq!(Scope::Leaf.key(None, &[], ""), "");
+        assert_eq!(Scope::Leaf.key(Some("archive:foo.so"), &[], ""), "archive:foo.so");
         assert_eq!(
-            Scope::Leaf.key(Some("encoding_chain:base64+zlib")),
+            Scope::Leaf.key(Some("encoding_chain:base64+zlib"), &[], ""),
             "encoding_chain:base64+zlib"
         );
     }
@@ -4437,14 +4724,14 @@ mod scope_tests {
     fn leaf_collapses_byte_offset_locations_to_containing_unit() {
         // Byte offsets identify where evidence was found inside the
         // leaf; they are not separate analysis-tree leaves.
-        assert_eq!(Scope::Leaf.key(Some("0x10")), "");
-        assert_eq!(Scope::Leaf.key(Some("offset:16")), "");
+        assert_eq!(Scope::Leaf.key(Some("0x10"), &[], ""), "");
+        assert_eq!(Scope::Leaf.key(Some("offset:16"), &[], ""), "");
         assert_eq!(
-            Scope::Leaf.key(Some("archive:pkg.zip!bin/payload:0x10")),
+            Scope::Leaf.key(Some("archive:pkg.zip!bin/payload:0x10"), &[], ""),
             "archive:pkg.zip!bin/payload"
         );
         assert_eq!(
-            Scope::Leaf.key(Some("archive:pkg.zip!bin/payload:offset:16")),
+            Scope::Leaf.key(Some("archive:pkg.zip!bin/payload:offset:16"), &[], ""),
             "archive:pkg.zip!bin/payload"
         );
     }
@@ -4452,14 +4739,14 @@ mod scope_tests {
     #[test]
     fn file_keeps_archive_path_drops_decoded_layers() {
         // Archive entry: file-level == leaf-level.
-        assert_eq!(Scope::File.key(Some("archive:foo.so")), "archive:foo.so");
+        assert_eq!(Scope::File.key(Some("archive:foo.so"), &[], ""), "archive:foo.so");
         assert_eq!(
-            Scope::File.key(Some("archive:foo.so:0x10")),
+            Scope::File.key(Some("archive:foo.so:0x10"), &[], ""),
             "archive:foo.so"
         );
         // Encoded payloads collapse to the input-wide key.
-        assert_eq!(Scope::File.key(Some("encoding_chain:base64+zlib")), "");
-        assert_eq!(Scope::File.key(None), "");
+        assert_eq!(Scope::File.key(Some("encoding_chain:base64+zlib"), &[], ""), "");
+        assert_eq!(Scope::File.key(None, &[], ""), "");
     }
 
     #[test]
@@ -4470,12 +4757,12 @@ mod scope_tests {
         // the same analyzed unit. Regression for the bug where every
         // AST match landed in its own bucket and composites with
         // `scope: file` never satisfied `min_distinct_conditions`.
-        assert_eq!(Scope::File.key(Some("6:14")), "");
-        assert_eq!(Scope::File.key(Some("1:1")), "");
-        assert_eq!(Scope::File.key(Some("123:456")), "");
+        assert_eq!(Scope::File.key(Some("6:14"), &[], ""), "");
+        assert_eq!(Scope::File.key(Some("1:1"), &[], ""), "");
+        assert_eq!(Scope::File.key(Some("123:456"), &[], ""), "");
         // Three-coord form (some evaluators may extend with a third
         // numeric coordinate) also collapses.
-        assert_eq!(Scope::File.key(Some("7:1:42")), "");
+        assert_eq!(Scope::File.key(Some("7:1:42"), &[], ""), "");
     }
 
     #[test]
@@ -4485,20 +4772,20 @@ mod scope_tests {
         // an archive don't get pooled. Only the empty/positional/decoded
         // cases collapse.
         assert_eq!(
-            Scope::File.key(Some("Analytics.php:10:5")),
+            Scope::File.key(Some("Analytics.php:10:5"), &[], ""),
             "Analytics.php:10:5"
         );
         assert_eq!(
-            Scope::File.key(Some("src/main.rs:42:1")),
+            Scope::File.key(Some("src/main.rs:42:1"), &[], ""),
             "src/main.rs:42:1"
         );
-        assert_eq!(Scope::File.key(Some("file:foo")), "file:foo");
+        assert_eq!(Scope::File.key(Some("file:foo"), &[], ""), "file:foo");
         // Edge cases that look numeric but aren't `row:col`.
-        assert_eq!(Scope::File.key(Some("1:")), "1:");
-        assert_eq!(Scope::File.key(Some(":")), ":");
-        assert_eq!(Scope::File.key(Some("1:abc")), "1:abc");
-        assert_eq!(Scope::File.key(Some("abc:1")), "abc:1");
-        assert_eq!(Scope::File.key(Some("")), "");
+        assert_eq!(Scope::File.key(Some("1:"), &[], ""), "1:");
+        assert_eq!(Scope::File.key(Some(":"), &[], ""), ":");
+        assert_eq!(Scope::File.key(Some("1:abc"), &[], ""), "1:abc");
+        assert_eq!(Scope::File.key(Some("abc:1"), &[], ""), "abc:1");
+        assert_eq!(Scope::File.key(Some(""), &[], ""), "");
     }
 
     #[test]
@@ -4511,13 +4798,13 @@ mod scope_tests {
         // `chmod-arms-hidden-stage` and `stealth-fetch-hidden-stage`
         // never fire on Dockerfile/GitHub Actions fixtures where
         // each shell command lands in its own extracted snippet.
-        assert_eq!(Scope::File.key(Some("embedded@0x3f:1:5")), "");
-        assert_eq!(Scope::File.key(Some("embedded@0xd2:2:10")), "");
+        assert_eq!(Scope::File.key(Some("embedded@0x3f:1:5"), &[], ""), "");
+        assert_eq!(Scope::File.key(Some("embedded@0xd2:2:10"), &[], ""), "");
         // Offset-only inner location (no row:col).
-        assert_eq!(Scope::File.key(Some("embedded@0x3f:0x10")), "");
+        assert_eq!(Scope::File.key(Some("embedded@0x3f:0x10"), &[], ""), "");
         // Older `embedded:<kind>@<offset>` form (used by base64 binary
         // payload detection and office/ole extractors) also pools.
-        assert_eq!(Scope::File.key(Some("embedded:base64@0x100")), "");
+        assert_eq!(Scope::File.key(Some("embedded:base64@0x100"), &[], ""), "");
     }
 
     #[test]
@@ -4643,10 +4930,10 @@ mod scope_tests {
         // `scope: leaf` is the strictest scope — every evidence must
         // share the EXACT location. We must NOT widen leaf semantics
         // when fixing the file-scope bug.
-        assert_eq!(Scope::Leaf.key(Some("6:14")), "6:14");
-        assert_eq!(Scope::Leaf.key(Some("7:1")), "7:1");
+        assert_eq!(Scope::Leaf.key(Some("6:14"), &[], ""), "6:14");
+        assert_eq!(Scope::Leaf.key(Some("7:1"), &[], ""), "7:1");
         assert_eq!(
-            Scope::Leaf.key(Some("Analytics.php:10:5")),
+            Scope::Leaf.key(Some("Analytics.php:10:5"), &[], ""),
             "Analytics.php:10:5"
         );
     }
@@ -4677,26 +4964,34 @@ mod scope_tests {
     #[test]
     fn archive_returns_parent_archive_for_nested() {
         assert_eq!(
-            Scope::Archive.key(Some("archive:outer.zip!inner.zip!bar.so")),
+            Scope::Archive.key(Some("archive:outer.zip!inner.zip!bar.so"), &[], ""),
             "archive:outer.zip!inner.zip"
         );
         assert_eq!(
-            Scope::Archive.key(Some("archive:outer.zip!bar.so")),
+            Scope::Archive.key(Some("archive:outer.zip!bar.so"), &[], ""),
             "archive:outer.zip"
         );
     }
 
     #[test]
     fn archive_returns_bare_prefix_for_single_level() {
-        assert_eq!(Scope::Archive.key(Some("archive:foo.so")), "archive:");
-        assert_eq!(Scope::Archive.key(Some("archive:bar.so")), "archive:");
+        assert_eq!(Scope::Archive.key(Some("archive:foo.so"), &[], ""), "archive:");
+        assert_eq!(Scope::Archive.key(Some("archive:bar.so"), &[], ""), "archive:");
     }
 
     #[test]
-    fn archive_degrades_to_empty_for_non_archive_locations() {
-        assert_eq!(Scope::Archive.key(Some("encoding_chain:base64+zlib")), "");
-        assert_eq!(Scope::Archive.key(Some("0x1234")), "");
-        assert_eq!(Scope::Archive.key(None), "");
+    fn archive_falls_back_to_file_scope_for_non_archive_locations() {
+        // No degradation: not being inside an archive means the same-node
+        // (File-scope) key, never the empty (pool-everything) key.
+        assert_eq!(
+            Scope::Archive.key(Some("encoding_chain:base64+zlib"), &[], ""),
+            Scope::File.key(Some("encoding_chain:base64+zlib"), &[], "")
+        );
+        assert_eq!(
+            Scope::Archive.key(Some("0x1234"), &[], ""),
+            Scope::File.key(Some("0x1234"), &[], "")
+        );
+        assert_eq!(Scope::Archive.key(None, &[], ""), "");
     }
 
     // ----- apply_scope_filter -----------------------------------------------
@@ -4708,7 +5003,7 @@ mod scope_tests {
         let tags = vec![tag(0, "archive:a.so"), tag(1, "archive:b.so")];
 
         let (filtered_ev, filtered_tags) = rule
-            .apply_scope_filter(evidence, tags)
+            .apply_scope_filter(evidence, tags, &[], "")
             .expect("outer never rejects");
         assert_eq!(filtered_ev.len(), 2);
         assert_eq!(filtered_tags.len(), 2);
@@ -4720,7 +5015,7 @@ mod scope_tests {
         let evidence = vec![ev("archive:a.so"), ev("archive:b.so")];
         let tags = vec![tag(0, "archive:a.so"), tag(1, "archive:b.so")];
 
-        assert!(rule.apply_scope_filter(evidence, tags).is_none());
+        assert!(rule.apply_scope_filter(evidence, tags, &[], "").is_none());
     }
 
     #[test]
@@ -4730,7 +5025,7 @@ mod scope_tests {
         let tags = vec![tag(0, "archive:a.so"), tag(1, "archive:a.so")];
 
         let (filtered_ev, _) = rule
-            .apply_scope_filter(evidence, tags)
+            .apply_scope_filter(evidence, tags, &[], "")
             .expect("both in same leaf");
         assert_eq!(filtered_ev.len(), 2);
     }
@@ -4742,7 +5037,7 @@ mod scope_tests {
         let tags = vec![tag(0, "0x10"), tag(1, "0x30")];
 
         let (filtered_ev, _) = rule
-            .apply_scope_filter(evidence, tags)
+            .apply_scope_filter(evidence, tags, &[], "")
             .expect("byte offsets share the raw input leaf");
         assert_eq!(filtered_ev.len(), 2);
     }
@@ -4753,7 +5048,7 @@ mod scope_tests {
         let evidence = vec![ev("archive:a.bin:0x10"), ev("archive:b.bin:0x30")];
         let tags = vec![tag(0, "archive:a.bin:0x10"), tag(1, "archive:b.bin:0x30")];
 
-        assert!(rule.apply_scope_filter(evidence, tags).is_none());
+        assert!(rule.apply_scope_filter(evidence, tags, &[], "").is_none());
     }
 
     #[test]
@@ -4770,7 +5065,7 @@ mod scope_tests {
         ];
 
         let (filtered_ev, filtered_tags) = rule
-            .apply_scope_filter(evidence, tags)
+            .apply_scope_filter(evidence, tags, &[], "")
             .expect("a.so bucket wins");
         assert_eq!(filtered_ev.len(), 2);
         assert!(
@@ -4788,7 +5083,7 @@ mod scope_tests {
         let tags = vec![tag(0, "archive:a.so"), tag(1, "archive:b.so")];
 
         let (filtered_ev, _) = rule
-            .apply_scope_filter(evidence, tags)
+            .apply_scope_filter(evidence, tags, &[], "")
             .expect("same archive");
         assert_eq!(filtered_ev.len(), 2);
     }
@@ -4805,7 +5100,7 @@ mod scope_tests {
             tag(1, "archive:outer.zip!inner2.zip!b.so"),
         ];
 
-        assert!(rule.apply_scope_filter(evidence, tags).is_none());
+        assert!(rule.apply_scope_filter(evidence, tags, &[], "").is_none());
     }
 
     #[test]
@@ -4821,7 +5116,7 @@ mod scope_tests {
         ];
 
         let (filtered_ev, _) = rule
-            .apply_scope_filter(evidence, tags)
+            .apply_scope_filter(evidence, tags, &[], "")
             .expect("same nested archive");
         assert_eq!(filtered_ev.len(), 2);
     }
@@ -4842,7 +5137,7 @@ mod scope_tests {
         ];
 
         let (filtered_ev, _) = rule
-            .apply_scope_filter(evidence, tags)
+            .apply_scope_filter(evidence, tags, &[], "")
             .expect("file scope pools input + decoded layers");
         assert_eq!(filtered_ev.len(), 2);
     }
@@ -4859,7 +5154,7 @@ mod scope_tests {
             tag(1, "encoding_chain:base64+zlib"),
         ];
 
-        assert!(rule.apply_scope_filter(evidence, tags).is_none());
+        assert!(rule.apply_scope_filter(evidence, tags, &[], "").is_none());
     }
 
     #[test]
@@ -4871,7 +5166,7 @@ mod scope_tests {
         let tags = vec![tag(0, "archive:a.so"), tag(0, "archive:b.so")];
 
         let (filtered_ev, _) = rule
-            .apply_scope_filter(evidence, tags)
+            .apply_scope_filter(evidence, tags, &[], "")
             .expect("single condition is trivially in-scope");
         assert_eq!(filtered_ev.len(), 1);
     }

@@ -142,6 +142,32 @@ pub fn skip_yara_cache() -> bool {
     false
 }
 
+/// Write `bytes` to `path` atomically: a temp file in the same directory
+/// (so the final `rename` stays on one filesystem), then an atomic rename.
+///
+/// Use this instead of `fs::write`/`fs::File::create` for anything under
+/// `cache_dir()`: those caches are read by `fs::read`-ing the exact same path
+/// from other threads and, in production, from an entirely different
+/// concurrently running `cleave` process sharing the directory. A direct
+/// in-place write truncates before it writes, so a reader racing it can see a
+/// truncated or empty file; a deserializer then either fails loudly (a
+/// spurious, expensive rebuild) or — the dangerous case — succeeds against a
+/// partial document, silently returning fewer entries than were written.
+///
+/// The temp name comes from [`tempfile::NamedTempFile`], not a
+/// process-ID-suffixed name: multiple threads in the same process can race to
+/// rebuild an empty/missing cache concurrently (`CapabilityMapper::try_new`
+/// documents this as intentional — "wasteful but correct" for the in-memory
+/// build), and a PID alone does not disambiguate threads of that same
+/// process, so two of them would step on each other's temp file.
+pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
+    std::io::Write::write_all(&mut tmp, bytes)?;
+    tmp.persist(path).map_err(|e| e.error)?;
+    Ok(())
+}
+
 /// Format seconds into a human-readable age string (e.g., "2h 30m", "3d 12h").
 #[must_use]
 pub fn format_age(secs: u64) -> String {
@@ -158,24 +184,75 @@ pub fn format_age(secs: u64) -> String {
 /// - macOS: ~/Library/Caches/atomdrift/cleave
 /// - Linux: ~/.cache/atomdrift/cleave
 /// - Windows: %LOCALAPPDATA%\atomdrift\cleave
+///
+/// `CLEAVE_CACHE_DIR` overrides this unconditionally (an explicit ops/test
+/// escape hatch, mirroring `CLEAVE_TRAITS_DIR`). Absent that, a `cfg(test)`
+/// build defaults to an isolated directory outside the real cache tree — see
+/// [`test_cache_dir`] — so `cargo test` never shares the on-disk SQLite
+/// analysis cache, the compiled-mapper cache, or the compiled-YARA cache
+/// with a concurrently running production `cleave` process. Sharing that
+/// tree with a live instance is not just non-deterministic (a lookup can
+/// race a concurrent writer of *unrelated* content), it is unsafe: a
+/// transient open failure under heavy multi-process contention is treated as
+/// "database corrupt" and recovered by deleting the file — which would
+/// delete the *other* process's cache out from under it.
 pub fn cache_dir() -> Result<PathBuf> {
-    let Some(base_cache) = dirs::cache_dir() else {
-        anyhow::bail!("Failed to resolve user cache directory");
-    };
-    let cache_path = base_cache.join("atomdrift").join("cleave");
-
-    if fs::create_dir_all(&cache_path).is_ok() {
-        let probe = cache_path.join(".write-test");
-        if fs::write(&probe, b"ok").is_ok() {
-            let _ = fs::remove_file(probe);
-            return Ok(cache_path);
-        }
+    if let Ok(explicit) = std::env::var("CLEAVE_CACHE_DIR") {
+        let cache_path = PathBuf::from(explicit);
+        fs::create_dir_all(&cache_path)
+            .with_context(|| format!("creating CLEAVE_CACHE_DIR at {}", cache_path.display()))?;
+        return Ok(cache_path);
     }
 
-    anyhow::bail!(
-        "Failed to create writable cache directory at {}",
-        cache_path.display()
-    )
+    #[cfg(test)]
+    {
+        Ok(test_cache_dir())
+    }
+
+    #[cfg(not(test))]
+    {
+        let Some(base_cache) = dirs::cache_dir() else {
+            anyhow::bail!("Failed to resolve user cache directory");
+        };
+        let cache_path = base_cache.join("atomdrift").join("cleave");
+
+        if fs::create_dir_all(&cache_path).is_ok() {
+            let probe = cache_path.join(".write-test");
+            if fs::write(&probe, b"ok").is_ok() {
+                let _ = fs::remove_file(probe);
+                return Ok(cache_path);
+            }
+        }
+
+        anyhow::bail!(
+            "Failed to create writable cache directory at {}",
+            cache_path.display()
+        )
+    }
+}
+
+/// Isolated cache directory for `cargo test` runs: a fixed path outside the
+/// real `~/.cache/atomdrift/cleave` tree, so test runs never read or write
+/// the same SQLite analysis-cache DB or compiled-rule caches a real,
+/// concurrently running `cleave` process is using.
+///
+/// Deliberately a *stable* path (not one randomized or PID-scoped per
+/// process) rather than a fresh `tempfile::TempDir`: the compiled-mapper and
+/// compiled-YARA caches this backs are expensive to rebuild (10s+ parsing
+/// ~6500 trait YAMLs, 4-18s compiling YARA rules) and are meant to persist
+/// *across* separate `cargo test` invocations, the same way the production
+/// cache does — only isolated from it. `TempDir`'s own cleanup would not run
+/// here anyway (this is a `static`, never dropped), so nothing is lost by
+/// using a plain path.
+#[cfg(test)]
+fn test_cache_dir() -> PathBuf {
+    static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| {
+        let dir = std::env::temp_dir().join("cleave-test-cache");
+        let _ = fs::create_dir_all(&dir);
+        dir
+    })
+    .clone()
 }
 
 /// Returns the traits directory path from override, env var, or platform data dir.
@@ -943,18 +1020,18 @@ pub(crate) fn rule_stats_cache_path() -> Result<PathBuf> {
 /// Save trait and composite counts to stats cache.
 /// Called when mapper cache is saved.
 pub fn save_rule_stats(trait_count: usize, composite_count: usize) -> Result<()> {
-    use std::io::Write;
-
     let path = rule_stats_cache_path()?;
     let timestamp = cache_timestamp()?
         .duration_since(SystemTime::UNIX_EPOCH)
         .context("Invalid timestamp")?
         .as_secs();
 
-    let mut file = fs::File::create(&path)?;
-    file.write_all(&(trait_count as u64).to_le_bytes())?;
-    file.write_all(&(composite_count as u64).to_le_bytes())?;
-    file.write_all(&timestamp.to_le_bytes())?;
+    let mut bytes = Vec::with_capacity(24);
+    bytes.extend_from_slice(&(trait_count as u64).to_le_bytes());
+    bytes.extend_from_slice(&(composite_count as u64).to_le_bytes());
+    bytes.extend_from_slice(&timestamp.to_le_bytes());
+
+    atomic_write(&path, &bytes)?;
     Ok(())
 }
 

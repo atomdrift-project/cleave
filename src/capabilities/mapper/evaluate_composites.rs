@@ -729,6 +729,58 @@ impl super::CapabilityMapper {
             }
         }
 
+        // The loop above deliberately skips `scope: file` and `scope: leaf`
+        // composites, because nested findings arrive without a member location
+        // and pooling two unrelated members' legs into one "file" is how
+        // OpenSSH and a Fedora source RPM earned hostile verdicts.
+        //
+        // That exclusion also caught a case with nothing to pool. A container's
+        // *own* traits -- `chm.html_entry_count`, `rpm.*`, `vsix.*`, the parent
+        // atomics evaluated above -- all describe one object: the container
+        // file itself. A `scope: file` composite over those is asking exactly
+        // what `scope: file` means, and the answer is unambiguous.
+        //
+        // So run the skipped rules once more against container-level findings
+        // alone. Nested findings are not in scope here, which is what makes it
+        // safe: there is only one file in this set, so nothing can pool.
+        //
+        // Symptom this fixes: fifteen abuse.ch CHM droppers scored four
+        // notables and nothing else, while `chm-tiny-payload`,
+        // `chm-single-entry-active-container` and two *hostile* rules written
+        // for exactly that shape never fired. `test-rules` resolved them all,
+        // which is the tell -- it evaluates a rule directly and never applies
+        // this filter.
+        let container_only: Vec<Finding> = container_report
+            .findings
+            .iter()
+            .chain(container_findings.iter())
+            .cloned()
+            .collect();
+        let self_ctx = EvaluationContext::new(
+            container_report,
+            &container_bytes,
+            rule_file_type,
+            &self.platforms,
+            Some(&container_only),
+            None, // No AST for container
+        );
+        let self_scope_findings: Vec<Finding> = self
+            .composite_rules
+            .iter()
+            .filter(|rule| {
+                matches!(
+                    rule.scope.unwrap_or_default(),
+                    crate::composite_rules::Scope::File | crate::composite_rules::Scope::Leaf
+                )
+            })
+            .filter_map(|rule| rule.evaluate(&self_ctx))
+            .filter(|f| !seen_ids.contains(f.id.as_str()))
+            .collect();
+        for finding in self_scope_findings {
+            seen_ids.insert(finding.id.clone().to_string());
+            container_findings.push(finding);
+        }
+
         // Mark container-level findings with source context
         for finding in &mut container_findings {
             if finding.evidence.is_empty() {
@@ -888,6 +940,93 @@ traits:
 "#;
         let file = write_test_traits(yaml);
         super::super::CapabilityMapper::from_yaml(file.path()).expect("load basename mapper")
+    }
+
+    #[allow(clippy::expect_used)]
+    fn make_self_scope_mapper() -> super::super::CapabilityMapper {
+        // Basename matchers that cannot match anything, so the only findings in
+        // play are the ones each test supplies explicitly.
+        let yaml = r#"
+traits:
+  - id: "test/container::alpha"
+    desc: "alpha"
+    crit: baseline
+    if:
+      type: basename
+      exact: "zz-never-alpha"
+  - id: "test/container::beta"
+    desc: "beta"
+    crit: baseline
+    if:
+      type: basename
+      exact: "zz-never-beta"
+
+composite_rules:
+  - id: "test/container::self-pair"
+    desc: "Two container-level legs"
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: "test/container::alpha"
+      - id: "test/container::beta"
+"#;
+        let file = write_test_traits(yaml);
+        super::super::CapabilityMapper::from_yaml(file.path()).expect("load self-scope mapper")
+    }
+
+    /// A composite with no `scope:` resolves to `Scope::File`, and the
+    /// cross-file pass skips those so two unrelated members cannot pool into
+    /// one "file". A container's *own* traits are not two members, though --
+    /// `chm.html_entry_count` and friends describe the single container file --
+    /// so a file-scoped composite over them must still fire.
+    ///
+    /// Regression: fifteen abuse.ch CHM droppers scored four notables and no
+    /// composite at all, including two hostile rules written for that shape.
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn container_own_findings_satisfy_file_scoped_composite() {
+        let mapper = make_self_scope_mapper();
+        let mut report = make_test_report();
+        report.findings.push(make_test_finding(
+            "test/container::alpha",
+            Criticality::Baseline,
+        ));
+        report.findings.push(make_test_finding(
+            "test/container::beta",
+            Criticality::Baseline,
+        ));
+
+        let found = mapper.evaluate_container_composites(&report, &[], "zip");
+        assert!(
+            found
+                .iter()
+                .any(|f| f.id.as_str() == "test/container::self-pair"),
+            "file-scoped composite over the container's own findings should fire, got {:?}",
+            found.iter().map(|f| f.id.as_str()).collect::<Vec<_>>()
+        );
+    }
+
+    /// The other half: legs coming from *nested* members must still not pool
+    /// into a file-scoped composite. Nested findings carry no member location,
+    /// so treating them as same-file evidence is what gave OpenSSH, Caddy and a
+    /// Fedora source RPM hostile verdicts.
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn nested_member_findings_do_not_pool_into_file_scoped_composite() {
+        let mapper = make_self_scope_mapper();
+        let report = make_test_report();
+        let nested = vec![
+            make_test_finding("test/container::alpha", Criticality::Baseline),
+            make_test_finding("test/container::beta", Criticality::Baseline),
+        ];
+
+        let found = mapper.evaluate_container_composites(&report, &nested, "zip");
+        assert!(
+            !found
+                .iter()
+                .any(|f| f.id.as_str() == "test/container::self-pair"),
+            "legs from two nested members must not satisfy a file-scoped composite"
+        );
     }
 
     #[test]

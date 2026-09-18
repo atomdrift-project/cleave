@@ -2419,16 +2419,25 @@ fn looks_like_collection_date(literal: &str) -> bool {
     })
 }
 
-/// The exact-filename literal a trait requires, if it matches a whole basename.
-fn required_basename_literal(trait_def: &TraitDefinition) -> Option<&str> {
-    // `type: basename` normalises into a Path query with `basename: true`, so
-    // this one arm covers both spellings.
+/// The filename a trait pins a whole basename to, whether written as an exact
+/// literal or as a regex.
+///
+/// `type: basename` normalises into a Path query with `basename: true`, so one
+/// arm covers both spellings. The regex arm matters: a rule can pin a specimen
+/// just as tightly with `^2026-03-21-yelp-react-component-badge-v99\.` as with
+/// an `exact:`, and checking only `exact:` let that form through.
+fn required_basename_literal(trait_def: &TraitDefinition) -> Option<(&str, bool)> {
     match &trait_def.r#if {
         Condition::Path(PathQuery {
             exact: Some(x),
             basename: true,
             ..
-        }) => Some(x.as_str()),
+        }) => Some((x.as_str(), false)),
+        Condition::Path(PathQuery {
+            regex: Some(x),
+            basename: true,
+            ..
+        }) => Some((x.as_str(), true)),
         _ => None,
     }
 }
@@ -2463,15 +2472,21 @@ pub(crate) fn find_container_name_convictions(
                 let Some(def) = by_id.get(resolved) else {
                     continue;
                 };
-                let Some(literal) = required_basename_literal(def) else {
+                let Some((literal, is_regex)) = required_basename_literal(def) else {
                     continue;
                 };
                 let lower = literal.to_ascii_lowercase();
+                // A regex basename is only damning when it pins one specimen. An
+                // extension alone (`(?i)\.vsix$`) is a file-type test, and a
+                // family's own naming convention (`^(T1|DCM-T[123])\.zip$`) is
+                // real evidence -- neither is a collector's choice. A collection
+                // date is, whichever way it is written.
                 let reason = if looks_like_collection_date(literal) {
                     "carries a specimen-collection date, so it only ever matches our stored copy"
-                } else if COLLECTOR_NAMED_CONTAINER_EXTS
-                    .iter()
-                    .any(|ext| lower.ends_with(ext))
+                } else if !is_regex
+                    && COLLECTOR_NAMED_CONTAINER_EXTS
+                        .iter()
+                        .any(|ext| lower.ends_with(ext))
                 {
                     "names the scanned container, which is assigned when the sample is fetched"
                 } else {
@@ -2759,18 +2774,23 @@ pub(crate) fn find_convictions_without_content(
 /// nothing when it resolves to zero traits.
 ///
 /// Namespaces the analyzers synthesize at runtime are NOT dangling and must be
-/// skipped: `metadata/import/…`, `metadata/signed/…`, `metadata/entitlement/…`
+/// skipped: `metadata/import/<ecosystem>/<target>::<local-name>`, `metadata/signed/…`,
+/// `metadata/entitlement/…`
 /// and the rest are built from the file's own imports, code signature and
 /// entitlements, so they never appear as static YAML and resolve only during a
 /// scan. `is_dynamic_metadata_ref` in the loader is the authority; this must
 /// stay in sync with it.
 ///
 /// Returns `(rule id, clause, dangling reference)`.
-/// Mirror of `is_dynamic_metadata_ref` in the loader: prefixes the analyzers
-/// synthesize per-file rather than loading from YAML.
-fn is_runtime_synthesized_namespace(ref_id: &str) -> bool {
+/// IDs synthesized per-file rather than loaded from YAML. Import findings use
+/// the target/local-name format emitted by `mapper/imports.rs`. Directory
+/// references under a source ecosystem match all bindings in that namespace.
+pub(crate) fn is_runtime_synthesized_namespace(ref_id: &str) -> bool {
+    if ref_id.starts_with("metadata/import/") {
+        return crate::capabilities::mapper::imports::is_dynamic_import_ref(ref_id);
+    }
+
     const DYNAMIC_PREFIXES: &[&str] = &[
-        "metadata/import/",
         "metadata/dylib::",
         "metadata/dylib/",
         "metadata/signed/",

@@ -739,6 +739,13 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         fix: "Point it at a directory that exists, or delete the leg and say so in the rule. Check the path first: a directory reference that never matched is not the same as one that stopped matching, and a rule whose name promises evidence it never had needs its description fixed too, not just its reference.",
     },
     ValidatorSpec {
+        id: "overlapping-scope-duplicate",
+        category: ValidatorCategory::Quality,
+        display_id: "scope-dup",
+        description: "Two composites carry identical evidence and their for:/platforms: scopes overlap, so both fire on the same file.",
+        fix: "Merge them into one rule covering the union of the scopes. If their crit: differs, decide which verdict the evidence earns before merging -- the same legs cannot be hostile in one file and suspicious in another, and whichever a reader sees is then an accident of which rule they opened. If the scopes were meant to be disjoint, make them disjoint.",
+    },
+    ValidatorSpec {
         id: "subsumed-required-leg",
         category: ValidatorCategory::Policy,
         display_id: "subsumed-leg",

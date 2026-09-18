@@ -2745,7 +2745,7 @@ fn test_collect_trait_refs_finds_internal_paths() {
                 id: "metadata/internal/symbols::printf".to_string(), // Forbidden!
             },
             Condition::Trait {
-                id: "metadata/import/python::socket".to_string(), // OK
+                id: "metadata/import/python/socket::socket".to_string(), // OK
             },
         ]),
         any: Some(vec![Condition::Trait {
@@ -2837,7 +2837,7 @@ fn test_meta_internal_paths_forbidden_in_composite_rules() {
     );
 
     // Document the allowed vs forbidden patterns:
-    // - metadata/import/{lang}::{module} : OK (dynamically generated, allowed in composites)
+    // - metadata/import/{lang}/{target}::{local} : OK (dynamically generated)
     // - metadata/dylib/{library}        : OK (dynamically generated, allowed in composites)
     // - metadata/internal/{anything}    : FORBIDDEN (ML-only, not for composite rules)
 }

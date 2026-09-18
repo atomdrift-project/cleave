@@ -40,6 +40,7 @@ pub use mapper::CapabilityMapper;
 pub(crate) use mapper::evaluate_merged::merge_filefacts_context;
 pub(crate) use mapper::evaluate_traits::log_raw_gate_stats;
 pub(crate) use mapper::evaluate_traits::record_ast_kind_node;
+pub(crate) use mapper::imports::is_dynamic_import_ref;
 
 // Test module needs access to internal types
 #[cfg(test)]

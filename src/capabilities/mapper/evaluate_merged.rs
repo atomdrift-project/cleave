@@ -66,6 +66,7 @@ pub(crate) fn merge_filefacts_context(
     report: &mut AnalysisReport,
     ctx: &crate::analysis_context::AnalysisContext<'_>,
 ) {
+    super::CapabilityMapper::generate_import_findings(report, &ctx.parsed);
     if let serde_json::Value::Object(map) = ctx.values_tree() {
         for (namespace, subtree) in map {
             report.merge_kv_subtree(&namespace, subtree);

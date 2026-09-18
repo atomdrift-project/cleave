@@ -2565,7 +2565,9 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     "text:objectives/privilege-escalation/exploit/keywords/",
     "text:micro-behaviors/hardware/input/keyboard/label/",
     "text:well-known/tool/detection/",
-    "text:well-known/malware/trojan/family/",
+    // The rickroll delimiter moved here when `trojan/family` was split up: a
+    // joke token used as a field separator is a packer property, not a family.
+    "text:objectives/anti-static/obfuscation/string/delimiter/",
     "text:well-known/tool/offensive/payload-corpus/",
     // Marking a file executable (chmod +x / mode 0o755) is a delivery step that
     // appears across every script, source language, and manifest that drops and

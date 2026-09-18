@@ -123,9 +123,9 @@ pub(crate) use duplicates::{
     find_atomic_logic_duplicates, find_case_insensitive_overlap_issues,
     find_duplicate_atomic_traits, find_duplicate_composite_rules, find_duplicate_inline_exclusions,
     find_duplicate_traits_and_composites, find_for_only_duplicates, find_inline_content_duplicates,
-    find_literals_covered_by_regexes, find_regex_literal_overlap_issues,
-    find_string_content_collisions, find_string_pattern_duplicates,
-    find_structural_regex_duplicates,
+    find_literals_covered_by_regexes, find_overlapping_scope_duplicates,
+    find_regex_literal_overlap_issues, find_string_content_collisions,
+    find_string_pattern_duplicates, find_structural_regex_duplicates,
 };
 
 // Composite rule validation
@@ -184,6 +184,7 @@ pub(crate) use constraints::{
     find_none_only_with_proximity, find_orphaned_components, find_pure_alias_traits,
     find_redundant_explicit_defaults, find_redundant_needs_one, find_should_use_defaults,
     find_subsumed_required_legs, find_too_short_patterns, find_uncallable_symbol_matchers,
+    is_runtime_synthesized_namespace,
 };
 
 // Utility functions

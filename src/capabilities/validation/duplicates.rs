@@ -25,6 +25,10 @@ use crate::composite_rules::{
 use crate::types::Criticality;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::{BTreeMap, HashMap, HashSet};
+
+/// The tree caps a single trait at four platforms; a wider union is a
+/// deliberate per-platform split, not a duplicate.
+const MAX_TRAIT_PLATFORMS: usize = 4;
 use std::sync::OnceLock;
 
 const RELAXED_DATA_TEXT_ALTERNATION_LIMIT: usize = 6;
@@ -3947,15 +3951,20 @@ pub(crate) fn find_for_only_duplicates(
 
     // Create signature excluding `for:` field but including everything else
     // Key: (if, crit, conf, platforms, size_min, size_max, not, unless) -> Vec<(trait_id, for)>
-    let mut groups: HashMap<String, Vec<(String, Vec<RuleFileType>)>> = HashMap::new();
+    let mut groups: HashMap<String, Vec<(String, Vec<RuleFileType>, Vec<Platform>)>> =
+        HashMap::new();
 
     for t in trait_definitions {
+        // Neither `for:` nor `platforms:` belongs in the key. Keying on
+        // platforms meant only a `for:` difference could ever be reported, so
+        // two traits identical but for their platform list stayed invisible --
+        // the same blind spot `overlapping-scope-duplicate` closed for
+        // composites.
         let signature = format!(
-            "{:?}:{:?}:{:.2}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}",
+            "{:?}:{:?}:{:.2}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}",
             t.r#if,
             t.crit,
             t.conf,
-            t.platforms,
             t.size_min,
             t.size_max,
             t.count_min,
@@ -3967,20 +3976,36 @@ pub(crate) fn find_for_only_duplicates(
             t.not,
             t.unless,
         );
-        groups
-            .entry(signature)
-            .or_default()
-            .push((t.id.clone(), t.r#for.clone()));
+        groups.entry(signature).or_default().push((
+            t.id.clone(),
+            t.r#for.clone(),
+            t.platforms.clone(),
+        ));
     }
 
-    // Find groups with multiple traits (different `for:` values)
+    // Report a group when its members differ in `for:`, in `platforms:`, or both.
     for (sig, traits) in groups {
         if traits.len() > 1 {
-            // Check that they actually have different `for:` values
             let unique_fors: HashSet<String> =
-                traits.iter().map(|(_, f)| format!("{:?}", f)).collect();
-            if unique_fors.len() > 1 {
-                let trait_ids: Vec<String> = traits.into_iter().map(|(id, _)| id).collect();
+                traits.iter().map(|(_, f, _)| format!("{f:?}")).collect();
+            let unique_platforms: HashSet<String> =
+                traits.iter().map(|(_, _, p)| format!("{p:?}")).collect();
+            // A platform-only difference is only worth reporting when merging is
+            // actually available: this tree separately caps a trait at four
+            // platforms, so a union that would breach that cap is not a
+            // duplicate to collapse but a deliberate per-platform split. A
+            // `for:` difference has no such cap and is always reportable.
+            let union_platforms: HashSet<String> = traits
+                .iter()
+                .flat_map(|(_, _, p)| p.iter().map(|x| format!("{x:?}")))
+                .collect();
+            let mergeable_platforms = union_platforms.len() < MAX_TRAIT_PLATFORMS;
+            // Report only what can actually be merged. A group whose platform
+            // union would breach the cap is a deliberate per-platform split --
+            // reporting it would ask the author to trade one validation error
+            // for another.
+            if mergeable_platforms && (unique_fors.len() > 1 || unique_platforms.len() > 1) {
+                let trait_ids: Vec<String> = traits.into_iter().map(|(id, _, _)| id).collect();
 
                 // Extract a brief pattern description from the signature
                 let pattern_desc = if sig.len() > 100 {
@@ -5002,6 +5027,73 @@ pub(crate) fn find_structural_regex_duplicates(
         start.elapsed(),
         dups_found
     );
+}
+
+/// Composites with identical evidence whose scopes overlap.
+///
+/// `for-only-duplicates` covers traits, and keys on `platforms:`, so it can only
+/// ever report a `for:` difference on an atomic. Neither limit is principled:
+/// two *composites* built from the same legs, differing only in `for:` or
+/// `platforms:`, both fire on any file in the intersection.
+///
+/// Whether their criticalities agree decides what the author is being told:
+///
+/// - same `crit:` — one finding reported twice, so merge the scopes.
+/// - different `crit:` — the same evidence convicts at two tiers, and which one
+///   a reader sees depends on which rule they happen to look at.
+///   `reverse-shell-mkfifo` (hostile) and `mkfifo-netcat-shell` (suspicious)
+///   share all three legs and both match a unix shell script.
+///
+/// Returns `(id a, id b, crit a, crit b, same_crit)`.
+pub(crate) fn find_overlapping_scope_duplicates(
+    composite_rules: &[CompositeTrait],
+) -> Vec<(String, String, String, String, bool)> {
+    let mut groups: HashMap<String, Vec<&CompositeTrait>> = HashMap::new();
+    for rule in composite_rules {
+        let legs = |conds: Option<&Vec<Condition>>| -> Vec<String> {
+            let mut v: Vec<String> = conds
+                .into_iter()
+                .flatten()
+                .map(|c| format!("{c:?}"))
+                .collect();
+            v.sort();
+            v
+        };
+        // Evidence only: what the rule looks for, and what suppresses it.
+        let signature = format!(
+            "{:?}|{:?}|{:?}|{:?}|{:?}",
+            legs(rule.all.as_ref()),
+            legs(rule.any.as_ref()),
+            rule.needs,
+            legs(rule.unless.as_ref()),
+            rule.not,
+        );
+        if rule.all.is_none() && rule.any.is_none() {
+            continue;
+        }
+        groups.entry(signature).or_default().push(rule);
+    }
+
+    let mut found = Vec::new();
+    for rules in groups.values() {
+        for (i, a) in rules.iter().enumerate() {
+            for b in &rules[i + 1..] {
+                if !platforms_overlap(&a.platforms, &b.platforms)
+                    || !file_types_overlap(&a.r#for, &b.r#for)
+                {
+                    continue;
+                }
+                found.push((
+                    a.id.clone(),
+                    b.id.clone(),
+                    format!("{:?}", a.crit).to_lowercase(),
+                    format!("{:?}", b.crit).to_lowercase(),
+                    a.crit == b.crit,
+                ));
+            }
+        }
+    }
+    found
 }
 
 #[cfg(test)]

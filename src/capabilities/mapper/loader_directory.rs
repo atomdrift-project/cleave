@@ -39,7 +39,8 @@ use crate::capabilities::validation::{
     find_metadata_content_dirs, find_metadata_cross_tier_refs, find_missing_search_patterns,
     find_needs_without_any, find_needs_zero, find_non_capturing_groups,
     find_none_only_with_proximity, find_objectives_wellknown_violations, find_orphaned_components,
-    find_overlapping_conditions, find_oversized_trait_directories, find_parent_duplicate_segments,
+    find_overlapping_conditions, find_overlapping_scope_duplicates,
+    find_oversized_trait_directories, find_parent_duplicate_segments,
     find_permuted_directory_paths, find_platform_named_directories, find_pure_alias_traits,
     find_pure_directory_alias_composites, find_raw_should_use_text, find_redundant_any_refs,
     find_redundant_explicit_defaults, find_redundant_needs_one, find_redundant_unix_platforms,
@@ -231,25 +232,7 @@ fn normalize_ref_path(path: &Path) -> String {
 /// specific, not prefixes, because their directories also hold static YAML traits
 /// (e.g. `metadata/binary/linking::ifunc`) that must still be validated.
 fn is_dynamic_metadata_ref(ref_id: &str) -> bool {
-    const DYNAMIC_PREFIXES: &[&str] = &[
-        "metadata/import/",
-        "metadata/dylib::",
-        "metadata/dylib/",
-        "metadata/signed/",
-        "metadata/entitlement/",
-        "metadata/lang/embedded::",
-        "metadata/lang/encoded/",
-        // Emitted by macho.rs from Mach-O load commands (LC_ID_DYLIB / LC_LOAD_DYLIB /
-        // LC_RPATH); the directory also holds static traits, so match the exact ids.
-        "metadata/binary/linking::macho-install-name",
-        "metadata/binary/linking::macho-dylib",
-        "metadata/binary/linking::macho-rpath",
-        // Emitted by the debug-info analyzer.
-        "metadata/build/debug::elf-debuglink",
-    ];
-    DYNAMIC_PREFIXES
-        .iter()
-        .any(|prefix| ref_id.starts_with(prefix))
+    crate::capabilities::validation::is_runtime_synthesized_namespace(ref_id)
 }
 
 /// Whether a metric path is one of filefacts' *templated* keys — the few
@@ -3656,17 +3639,58 @@ impl super::CapabilityMapper {
                 ));
             }
 
-            // Validate: traits that differ only in `for:` field should be merged
+            // Validate: traits identical but for their scope -- `for:`, `platforms:`
+            // or both -- should be one trait covering the union.
+            // The composite counterpart: identical evidence, overlapping scope.
+            if !crate::validation_controls::is_validator_disabled("overlapping-scope-duplicate") {
+                let scope_dups = find_overlapping_scope_duplicates(&composite_rules);
+                if !scope_dups.is_empty() {
+                    let contradictions = scope_dups.iter().filter(|d| !d.4).count();
+                    eprintln!(
+                        "\n❌ ERROR: {} composite pairs carry identical evidence with overlapping scope",
+                        scope_dups.len()
+                    );
+                    eprintln!("   Both fire on any file the two scopes share, so one set of facts");
+                    eprintln!(
+                        "   produces two findings. Merge them into one rule covering the union."
+                    );
+                    if contradictions > 0 {
+                        eprintln!(
+                            "   {contradictions} of them disagree on crit:, which is worse than a duplicate --"
+                        );
+                        eprintln!(
+                            "   the same legs cannot be hostile in one file and suspicious in"
+                        );
+                        eprintln!("   another. Settle the verdict, then merge.\n");
+                    } else {
+                        eprintln!();
+                    }
+                    for (a, b, ca, cb, same) in &scope_dups {
+                        let note = if *same { "same crit" } else { "CRIT DISAGREES" };
+                        eprintln!("   {note}: '{a}' ({ca}) vs '{b}' ({cb})");
+                    }
+                    eprintln!();
+                    warnings.push(format!(
+                        "{} composite pairs duplicate evidence across overlapping scopes",
+                        scope_dups.len()
+                    ));
+                }
+            }
+
             let for_duplicates = find_for_only_duplicates(&trait_definitions);
             if !for_duplicates.is_empty() {
                 eprintln!(
-                    "\n❌ ERROR: {} trait groups differ only in `for:` field",
+                    "\n❌ ERROR: {} trait groups differ only in scope (`for:`/`platforms:`)",
                     for_duplicates.len()
                 );
                 eprintln!(
-                    "   These traits have identical logic (same criticality, condition, etc.) but different file types."
+                    "   These traits have identical logic -- same matcher, criticality, confidence,"
                 );
-                eprintln!("   Merge them into a single trait with combined `for:` values:\n");
+                eprintln!(
+                    "   bounds and exclusions -- and differ only in which files or platforms"
+                );
+                eprintln!("   they are scoped to. Both fire on anything the scopes share.\n");
+                eprintln!("   Merge them into one trait covering the union of the scopes:\n");
                 for (trait_ids, _pattern) in &for_duplicates {
                     // Find source file for the first trait
                     let first_id = &trait_ids[0];
@@ -3681,11 +3705,11 @@ impl super::CapabilityMapper {
                         eprintln!("   {}: {}", source, trait_ids.join(", "));
                     }
                     eprintln!(
-                        "      Action: Merge into single trait with `for: [combined file types]`\n"
+                        "      Action: merge into one trait with the combined `for:`/`platforms:`\n"
                     );
                 }
                 warnings.push(format!(
-                    "{} trait groups differ only in `for:` field (should be merged)",
+                    "{} trait groups differ only in scope (should be merged)",
                     for_duplicates.len()
                 ));
             }

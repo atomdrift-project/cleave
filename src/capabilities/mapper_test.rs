@@ -1787,6 +1787,52 @@ traits:
 }
 
 #[test]
+fn text_encoding_none_is_honoured_past_the_prefilter_fast_path() {
+    // Regression: `analyze` synthesizes findings for simple exact/substr
+    // traits straight from the string prefilter's evidence, without calling
+    // `eval_text`. That cache does not record which layer a hit came from, so
+    // an `encoding: none` condition took the fast path and matched decoded
+    // content -- while `test-rules` and `test match`, which have no such
+    // cache, correctly reported no match. A disagreement between the three is
+    // worse than either answer, so the fast path now declines these traits.
+    let yaml = r#"
+defaults:
+  for: [javascript]
+traits:
+  - id: "test/source-text::substr-opted-out"
+    desc: "simple substr with encoding none"
+    crit: notable
+    if:
+      type: text
+      encoding: none
+      substr: "ZXQ_PREFILTER_NEEDLE_3f8c"
+"#;
+    let (_dir, path) = create_test_yaml(yaml);
+    let mapper = CapabilityMapper::from_yaml(&path).unwrap();
+    let source = pad_source(String::from("const x = 1;\n"));
+    assert!(!source.contains("ZXQ_PREFILTER_NEEDLE_3f8c"));
+    let mut report = create_test_source_report("index.js", "javascript", source.len() as u64);
+    report.strings.push(crate::types::StringInfo {
+        value: "ZXQ_PREFILTER_NEEDLE_3f8c".to_string().into(),
+        offset: Some(0),
+        encoding: "utf-8".to_string(),
+        string_type: None,
+        section: Some("decoded".to_string()),
+        encoding_chain: vec!["hex".to_string()],
+        fragments: None,
+    });
+    mapper.evaluate_and_merge_findings(&mut report, source.as_bytes(), None, None);
+    assert!(
+        !report
+            .findings
+            .iter()
+            .any(|f| f.id == "test/source-text::substr-opted-out"),
+        "a simple substr trait with `encoding: none` must not be answered from \
+         the prefilter cache, which cannot tell a decoded hit from a literal one"
+    );
+}
+
+#[test]
 fn text_encoding_none_skips_the_decoded_layer() {
     // `type: text` unions the raw bytes with the decoded string layers, so a
     // matcher describing a file's own markup can fire on content that only

@@ -529,10 +529,22 @@ pub fn run(
                 }
             };
 
+            // `--encoding none` on a text search is the CLI spelling of the
+            // trait option `encoding: none`, so `test-match` can reproduce
+            // what `analyze` and `test-rules` do for such a condition.
+            let text_encoding_scope = match encoding {
+                Some(e) if e.eq_ignore_ascii_case("none") => {
+                    Some(crate::composite_rules::condition::TextEncodingScope::None)
+                }
+                Some(e) if e.eq_ignore_ascii_case("any") => {
+                    Some(crate::composite_rules::condition::TextEncodingScope::Any)
+                }
+                _ => None,
+            };
             let pattern_value = pattern.to_string();
             let section_value = section.map(str::to_owned);
             let params = StringParams {
-                encoding: None,
+                encoding: text_encoding_scope,
                 exact: (method == cli::MatchMethod::Exact).then_some(&pattern_value),
                 substr: (method == cli::MatchMethod::Contains).then_some(&pattern_value),
                 regex: (method == cli::MatchMethod::Regex).then_some(&pattern_value),

@@ -850,10 +850,26 @@ pub(crate) fn eval_text<'a, 'b>(
         return merge_text_passes(raw, eval_text_encoded(params, trait_not, ctx));
     }
 
+    // Past this point the scan runs over `report.strings`, which holds the
+    // decoded layers alongside the literal ones, so `encoding: none` has to be
+    // honoured here too -- the early return above only covers file types that
+    // use raw text search. An RTF is not one of them: its embedded picture hex
+    // is extracted and decoded, and a run of 0x7B decodes to a brace run that
+    // never appears in the markup.
+    let skip_decoded = matches!(
+        params.encoding,
+        Some(crate::composite_rules::condition::TextEncodingScope::None)
+    );
     let effective_range = resolve_string_effective_range(params, ctx);
     let has_location_constraint = has_string_location_constraint(params);
 
-    if !has_location_constraint
+    // The precomputed evidence cache does not record which layer each hit came
+    // from, so a condition that has opted out of the decoded layers cannot be
+    // answered from it. Skipping the cache keeps `analyze` agreeing with
+    // `test-rules` and `test match`, which have no cache and always walk the
+    // strings below.
+    if !skip_decoded
+        && !has_location_constraint
         && trait_not.is_none()
         && params.is_check.is_none()
         && params.length_min.is_none()
@@ -886,6 +902,9 @@ pub(crate) fn eval_text<'a, 'b>(
             {
                 for &idx in match_list.iter().take(MAX_EVIDENCE_PER_TRAIT) {
                     let s = &ctx.report.strings[idx as usize];
+                    if skip_decoded && !s.encoding_chain.is_empty() {
+                        continue;
+                    }
                     let original_value = s.value.as_str();
                     let excluded_by_not = trait_not
                         .map(|exceptions| exceptions.iter().any(|exc| exc.matches(original_value)))
@@ -906,6 +925,9 @@ pub(crate) fn eval_text<'a, 'b>(
         } else if let Some(match_list) = ctx.get_string_exact_index().get(exact_str.as_str()) {
             for &idx in match_list.iter().take(MAX_EVIDENCE_PER_TRAIT) {
                 let s = &ctx.report.strings[idx as usize];
+                if skip_decoded && !s.encoding_chain.is_empty() {
+                    continue;
+                }
                 let excluded_by_not = trait_not
                     .map(|exceptions| exceptions.iter().any(|exc| exc.matches(exact_str)))
                     .unwrap_or(false);
@@ -941,6 +963,9 @@ pub(crate) fn eval_text<'a, 'b>(
     let mut match_count = 0usize;
 
     for string_info in &ctx.report.strings {
+        if skip_decoded && !string_info.encoding_chain.is_empty() {
+            continue;
+        }
         if !offset_in_range(string_info.offset, effective_range) {
             continue;
         }

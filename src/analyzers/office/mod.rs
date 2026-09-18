@@ -707,11 +707,21 @@ impl OfficeAnalyzer {
                 )
                 .into(),
                 conf: 1.0,
-                crit: if module_count == 0 {
-                    Criticality::Notable
-                } else {
-                    Criticality::Suspicious
-                },
+                // Notable, not suspicious. That a document carries VBA is a
+                // structural fact declared by the package itself -- a .docm or
+                // .xlsm is macro-enabled by definition -- and macro-bearing
+                // documents are ordinary enterprise content. `suspicious` is
+                // for hiding intent or crossing a boundary, which the mere
+                // presence of a module does not do, and because this finding
+                // is emitted here rather than by a trait, no `unless:` can
+                // moderate it: LibreOffice's own format test corpus
+                // (sw/qa/core/data/docm/, sc/qa/extras/testdocuments/) scored
+                // suspicious on dozens of fixtures whose entire purpose is to
+                // carry a macro for the importer to round-trip. The verdict
+                // belongs to the trait composites that look at what the macro
+                // does -- auto-exec entry points, shell, download, obfuscated
+                // identifiers -- which still fire alongside this.
+                crit: Criticality::Notable,
                 mbc: None,
                 attack: Some("T1059.005".into()),
                 trait_refs: vec![],
@@ -954,11 +964,21 @@ impl OfficeAnalyzer {
                 )
                 .into(),
                 conf: 1.0,
-                crit: if module_count == 0 {
-                    Criticality::Notable
-                } else {
-                    Criticality::Suspicious
-                },
+                // Notable, not suspicious. That a document carries VBA is a
+                // structural fact declared by the package itself -- a .docm or
+                // .xlsm is macro-enabled by definition -- and macro-bearing
+                // documents are ordinary enterprise content. `suspicious` is
+                // for hiding intent or crossing a boundary, which the mere
+                // presence of a module does not do, and because this finding
+                // is emitted here rather than by a trait, no `unless:` can
+                // moderate it: LibreOffice's own format test corpus
+                // (sw/qa/core/data/docm/, sc/qa/extras/testdocuments/) scored
+                // suspicious on dozens of fixtures whose entire purpose is to
+                // carry a macro for the importer to round-trip. The verdict
+                // belongs to the trait composites that look at what the macro
+                // does -- auto-exec entry points, shell, download, obfuscated
+                // identifiers -- which still fire alongside this.
+                crit: Criticality::Notable,
                 mbc: None,
                 attack: Some("T1059.005".into()),
                 trait_refs: vec![],

@@ -628,6 +628,142 @@ fn trait_ref(cond: &Condition) -> Option<&str> {
 ///
 /// Returns one entry per dead clause.
 #[must_use]
+/// A suppressor that can never let its rule through.
+#[derive(Debug, Clone)]
+pub(crate) struct ExhaustiveSuppressor {
+    /// The offending rule's ID.
+    pub id: String,
+    /// True for a composite rule, false for an atomic trait.
+    pub is_composite: bool,
+    /// The directory reference in the rule's `unless:`.
+    pub dir_ref: String,
+    /// The metric field whose buckets cover everything.
+    pub field: String,
+    /// The member trait covering the low end, and its `max:`.
+    pub low: (String, f64),
+    /// The member trait covering the high end, and its `min:`.
+    pub high: (String, f64),
+}
+
+/// Directory `unless:` references whose members bucket one metric field into
+/// complementary halves.
+///
+/// `- id: some/dir/` in an `unless:` expands to every trait under that
+/// directory. When two of them constrain the same `type: metrics` field, one
+/// with only `max: B` and the other with only `min: A` where `A <= B + 1`,
+/// their union is the whole domain: every file for which the metric is emitted
+/// matches one of them, so the rule is suppressed unconditionally and can
+/// never fire.
+///
+/// Found in the wild: `many-wx-sections` ("Multiple W+X sections (packer
+/// pattern)") suppressed on `metadata/binary/symbols/exports/`, which holds
+/// `no-exports` (`max: 0`) beside `has-exports` (`min: 1`). Every ELF that
+/// exports a symbol -- which is every shared object -- skipped the rule.
+///
+/// Only pairs whose `for:` lists intersect are reported, since two members
+/// that apply to disjoint file types never both cover a single file.
+pub(crate) fn find_exhaustive_suppressors(
+    trait_definitions: &[TraitDefinition],
+    composite_rules: &[CompositeTrait],
+) -> Vec<ExhaustiveSuppressor> {
+    use crate::composite_rules::condition::MetricsQuery;
+
+    // Bucket every trait by the directory that contains it.
+    let mut by_dir: HashMap<&str, Vec<&TraitDefinition>> = HashMap::new();
+    for t in trait_definitions {
+        if let Some((dir, _)) = t.id.rsplit_once("::") {
+            by_dir.entry(dir).or_default().push(t);
+        }
+    }
+
+    // A trait's metric bucket, if it has exactly one open end.
+    fn bucket(t: &TraitDefinition) -> Option<(&str, Option<f64>, Option<f64>)> {
+        match &t.r#if {
+            Condition::Metrics(MetricsQuery {
+                field, min, max, ..
+            }) => Some((field.as_str(), *min, *max)),
+            _ => None,
+        }
+    }
+
+    let types_intersect = |a: &TraitDefinition, b: &TraitDefinition| -> bool {
+        a.r#for.is_empty() || b.r#for.is_empty() || a.r#for.iter().any(|f| b.r#for.contains(f))
+    };
+
+    let mut out = Vec::new();
+    let mut check = |id: &str, unless: Option<&Vec<Condition>>, is_composite: bool| {
+        let Some(unless) = unless else { return };
+        for cond in unless {
+            let Some(r) = trait_ref(cond) else { continue };
+            if !r.ends_with('/') {
+                continue;
+            }
+            let dir = r.trim_end_matches('/');
+            let Some(members) = by_dir.get(dir) else {
+                continue;
+            };
+            // Group the members' one-sided metric buckets by field.
+            let mut lows: HashMap<&str, Vec<(&str, f64)>> = HashMap::new();
+            let mut highs: HashMap<&str, Vec<(&str, f64)>> = HashMap::new();
+            for m in members.iter() {
+                match bucket(m) {
+                    Some((f, None, Some(mx))) => {
+                        lows.entry(f).or_default().push((m.id.as_str(), mx))
+                    }
+                    Some((f, Some(mn), None)) => {
+                        highs.entry(f).or_default().push((m.id.as_str(), mn))
+                    }
+                    _ => {}
+                }
+            }
+            for (field, ls) in &lows {
+                let Some(hs) = highs.get(field) else { continue };
+                for (lid, lmax) in ls {
+                    for (hid, hmin) in hs {
+                        // Exhaustive when the ranges touch or overlap. The
+                        // `+1` step only applies to integer-valued metrics
+                        // (counts): `max: 0` beside `min: 1` leaves nothing
+                        // between them. On a continuous metric such as a 0..1
+                        // ratio there is no next value, so `<= 0.1` beside
+                        // `>= 0.95` is a real gap, not total coverage.
+                        let touches = *hmin <= *lmax;
+                        let integral = lmax.fract() == 0.0 && hmin.fract() == 0.0;
+                        let adjacent = integral && (*hmin - *lmax - 1.0).abs() < f64::EPSILON;
+                        if !touches && !adjacent {
+                            continue;
+                        }
+                        let (Some(lt), Some(ht)) = (
+                            members.iter().find(|m| m.id == *lid),
+                            members.iter().find(|m| m.id == *hid),
+                        ) else {
+                            continue;
+                        };
+                        if !types_intersect(lt, ht) {
+                            continue;
+                        }
+                        out.push(ExhaustiveSuppressor {
+                            id: id.to_string(),
+                            is_composite,
+                            dir_ref: r.to_string(),
+                            field: (*field).to_string(),
+                            low: ((*lid).to_string(), *lmax),
+                            high: ((*hid).to_string(), *hmin),
+                        });
+                    }
+                }
+            }
+        }
+    };
+
+    for t in trait_definitions {
+        check(&t.id, t.unless.as_ref(), false);
+    }
+    for c in composite_rules {
+        check(&c.id, c.unless.as_ref(), true);
+    }
+    out
+}
+
 pub(crate) fn find_dead_downgrades(
     trait_definitions: &[TraitDefinition],
     composite_rules: &[CompositeTrait],
@@ -1817,24 +1953,18 @@ const DOCUMENTS: &[FileType] = &[
 // both groups, which the one-group-per-type invariant forbids. These tables
 // only decide whether a `for:` list reads as named groups — expansion happens
 // in capabilities/parsing.rs — so moving it changes no rule's matching.
-const DATA: &[FileType] = &[FileType::Ipa, FileType::Data];
-const ARCHIVES: &[FileType] = &[
-    FileType::Archive,
-    FileType::Zip,
-    FileType::Apk,
-    FileType::Jar,
-    FileType::Tar,
-    FileType::Npm,
-    FileType::Nupkg,
-    FileType::Gem,
-    FileType::Whl,
-    FileType::Deb,
-    FileType::Rpm,
-    FileType::Crx,
-    FileType::Cab,
-    FileType::VsixArchive,
-    FileType::Xpi,
-];
+// `Ipa` is NOT here: it carries the `#[archive]` marker (an .ipa is a ZIP
+// container) and now that ARCHIVES is derived from that same marker set
+// instead of hand-duplicated, keeping Ipa in both groups would violate the
+// one-group-per-type invariant below.
+const DATA: &[FileType] = &[FileType::Data];
+// Derived from the same `#[archive]` enum markers that drive `is_archive()`
+// and the `archives` group expansion in capabilities/parsing.rs, instead of
+// hand-duplicating the member list here. The two lists had drifted before
+// (this one carried `Apk` while the macro-generated family did not, because
+// the old `Apk` variant lacked the `#[archive]` marker) -- deriving it
+// removes that class of bug permanently.
+const ARCHIVES: &[FileType] = FileType::archive_family_types();
 // Every passive container that can carry a payload — fonts, raster and
 // vector images, audio, video. They share one `media.*` fact namespace
 // precisely so a carrier rule is written once rather than a dozen times.
@@ -2837,6 +2967,364 @@ pub(crate) fn find_dangling_directory_refs(
                     found.push((rule.id.clone(), clause, id.clone()));
                 }
             }
+        }
+    }
+    found
+}
+
+/// Find atomic traits whose `for:` mixes archive types with non-archive types.
+///
+/// An atomic has one matcher and runs on one node, and an archive node and the
+/// files inside it are different nodes. cleave expands every archive into member
+/// nodes and never runs a content scan over the container's own bytes -- a
+/// `type: text` trait declared `for: [tar, shell]` can only ever fire through
+/// the `shell` half, even though the marker is present verbatim in the tar's
+/// bytes. (Compression is not what decides this: a *stored*, uncompressed zip
+/// behaves the same.) So the two halves never both apply, and declaring both
+/// hides which one the author meant.
+///
+/// Composites are deliberately exempt: one may bridge the two levels on
+/// purpose, firing at the container for an archive and at the member for a
+/// standalone file, and its `for:` says which nodes it is evaluated on.
+///
+/// `for: [all]` is exempt -- that is the sanctioned way to say "any node".
+/// Group-derived lists are exempt too, because a named group can legitimately
+/// expand to a mix (`data` covers `ipa` alongside `json`/`text`), and the YAML
+/// the author wrote is a single group name.
+///
+/// Returns `(trait_id, archive_types, non_archive_types)`.
+pub(crate) fn find_mixed_archive_filetype_traits(
+    trait_definitions: &[TraitDefinition],
+) -> Vec<(String, Vec<FileType>, Vec<FileType>)> {
+    let mut violations = Vec::new();
+    for t in trait_definitions {
+        if t.for_from_groups || t.r#for.contains(&FileType::All) {
+            continue;
+        }
+        let (archive, plain): (Vec<_>, Vec<_>) =
+            t.r#for.iter().partition(|ft| FileType::is_archive(ft));
+        if !archive.is_empty() && !plain.is_empty() {
+            violations.push((t.id.clone(), archive, plain));
+        }
+    }
+    violations
+}
+
+/// Find composites whose `for:` lists a file type no required leg can match on.
+///
+/// A composite fires on one node. On a *leaf* node its `all:` legs must each be
+/// able to match that node's type, so a declared type that some required leg
+/// cannot match is dead: the rule can never fire on it.
+///
+/// `prepare-decoded-command-loader` declared `for: [javascript, typescript]`
+/// while requiring `has-prepare`, which is a `package.json` field. On a
+/// JavaScript node that leg can never match, so both leaf types were
+/// unreachable -- the rule only ever fired on the npm package node, where the
+/// container inherits the member findings. The correct `for:` was `[npm]`.
+///
+/// Archive types in the `for:` are skipped, because on a container the legs are
+/// satisfied by inherited member findings rather than by matching the container
+/// itself -- that is the whole point of a cross-archive scope. Directory
+/// references and non-trait conditions are skipped too, since they resolve to
+/// many definitions with differing `for:` lists.
+///
+/// Returns `(composite_id, impossible_type, blocking_leg_id)`.
+pub(crate) fn find_impossible_composite_filetypes(
+    trait_definitions: &[TraitDefinition],
+    composite_rules: &[CompositeTrait],
+) -> Vec<(String, FileType, String)> {
+    let mut sink = Vec::new();
+    find_impossible_composite_filetypes_inner(trait_definitions, composite_rules, &mut sink)
+}
+
+fn find_impossible_composite_filetypes_inner(
+    trait_definitions: &[TraitDefinition],
+    composite_rules: &[CompositeTrait],
+    dead_rules: &mut Vec<String>,
+) -> Vec<(String, FileType, String)> {
+    let trait_for: HashMap<&str, &Vec<FileType>> = trait_definitions
+        .iter()
+        .map(|t| (t.id.as_str(), &t.r#for))
+        .collect();
+    let composite_for: HashMap<&str, &Vec<FileType>> = composite_rules
+        .iter()
+        .map(|c| (c.id.as_str(), &c.r#for))
+        .collect();
+
+    // A retired metric leaves behind a `__cleave_missing_*__` placeholder trait
+    // so its references do not dangle. That leg never matches anything, on any
+    // type, so every consumer looks unreachable here -- which is true but is a
+    // dead-leg problem, not a file-type one, and reporting it as the latter
+    // sends the reader to the wrong fix.
+    // The sentinel appears under whichever matcher the retired metric used --
+    // `section` for the section-ratio ones, `string_literal` for the macOS
+    // library fingerprints, and so on -- so match on the value wherever it
+    // sits rather than enumerating condition kinds. Tenorshare's
+    // `ts-lib-fingerprint-methods` is `string_literal: __cleave_missing_macos__`
+    // and on its own made all sixteen composites in that file look dead.
+    let is_retired_placeholder = |id: &str| -> bool {
+        trait_definitions
+            .iter()
+            .find(|t| t.id == id)
+            .is_some_and(|t| format!("{:?}", t.r#if).contains("__cleave_missing"))
+    };
+
+    let mut found = Vec::new();
+    for rule in composite_rules {
+        if rule.r#for.contains(&FileType::All) || rule.for_from_groups {
+            continue;
+        }
+        let Some(required) = rule.all.as_ref() else {
+            continue;
+        };
+        let before = found.len();
+        let mut checkable = 0usize;
+        for declared in &rule.r#for {
+            // On a container the legs arrive as inherited member findings.
+            if FileType::is_archive(declared) {
+                continue;
+            }
+            checkable += 1;
+            for cond in required {
+                let Condition::Trait { id } = cond else {
+                    continue;
+                };
+                // A *directory* reference resolves to many definitions with
+                // differing `for:` lists, so it proves nothing here. A bare
+                // same-directory name (`has-prepare`) is an ordinary trait
+                // reference and must still be resolved -- skipping those was
+                // what let `prepare-decoded-command-loader` past this check.
+                if id.contains('/') && !id.contains("::") {
+                    continue;
+                }
+                let own_dir = rule.id.split("::").next().unwrap_or("");
+                let qualified = format!("{own_dir}::{id}");
+                let Some(leg_for) = trait_for
+                    .get(id.as_str())
+                    .or_else(|| composite_for.get(id.as_str()))
+                    .or_else(|| trait_for.get(qualified.as_str()))
+                    .or_else(|| composite_for.get(qualified.as_str()))
+                else {
+                    continue;
+                };
+                if leg_for.contains(&FileType::All) || leg_for.contains(declared) {
+                    continue;
+                }
+                if is_retired_placeholder(id) || is_retired_placeholder(&qualified) {
+                    continue;
+                }
+                found.push((rule.id.clone(), *declared, id.clone()));
+                break;
+            }
+        }
+        // Every non-archive type it declares is unreachable AND it names no
+        // container type: the rule cannot fire anywhere. That is a different
+        // and worse problem than one dead entry in a list, so mark it. A
+        // declared archive type is not itself re-checked here (its legs
+        // arrive as inherited member findings, which this static check
+        // cannot simulate), but its mere presence means the rule has a live
+        // path to fire and must not be reported dead.
+        //
+        // A pooling scope (`outer`/`archive`/`package`) is the same escape
+        // hatch even when `for:` names a non-archive container -- a
+        // self-extracting PE (PyInstaller onefile) or an ISO with embedded
+        // members pools its children's findings the same way an archive
+        // does, without the container's FileType itself carrying the
+        // `#[archive]` marker. `Scope::Archive` also degrades to `Outer`
+        // (pools the whole input) when the container isn't nested inside an
+        // archive at all, so it is never narrower than the type check below.
+        let has_pooling_scope = matches!(
+            rule.scope,
+            Some(Scope::Outer | Scope::Archive | Scope::Package)
+        );
+        let names_container = rule.r#for.iter().any(FileType::is_archive) || has_pooling_scope;
+        if checkable > 0 && found.len() - before == checkable && !names_container {
+            dead_rules.push(rule.id.clone());
+        }
+    }
+    found
+}
+
+/// Composites that cannot fire on *any* declared type -- see
+/// [`find_impossible_composite_filetypes`], which records them as it goes.
+pub(crate) fn find_dead_composites(
+    trait_definitions: &[TraitDefinition],
+    composite_rules: &[CompositeTrait],
+) -> Vec<String> {
+    let mut dead = Vec::new();
+    let impossible =
+        find_impossible_composite_filetypes_inner(trait_definitions, composite_rules, &mut dead);
+    let _ = impossible;
+    dead
+}
+
+
+/// A `scope: package` declaration that can never bind to a package boundary.
+#[derive(Debug, Clone)]
+pub(crate) struct UnbindablePackageScope {
+    /// The offending composite's ID.
+    pub id: String,
+    /// Why it can never bind, phrased for the validator's output.
+    pub reason: String,
+}
+
+/// True for a node type no package archive can ever contain.
+///
+/// [`FileType::Registry`] is the only one: normalized registry metadata is
+/// synthesized from an API response *beside* the fetched artifact, not
+/// extracted from inside it, so its findings carry no `archive:` location for
+/// a package key to be derived from.
+fn is_synthetic_non_member_type(ft: &FileType) -> bool {
+    matches!(ft, FileType::Registry)
+}
+
+/// Resolve a leg reference to the `for:` list of the trait or composite it
+/// names. Bare same-directory names are qualified with the referring rule's
+/// own directory, the way the loader resolves them. Directory references
+/// resolve to many definitions with differing `for:` lists, so they return
+/// `None` -- they prove nothing here.
+fn leg_file_types<'a>(
+    id: &str,
+    own_dir: &str,
+    trait_for: &HashMap<&str, &'a Vec<FileType>>,
+    composite_for: &HashMap<&str, &'a Vec<FileType>>,
+) -> Option<&'a Vec<FileType>> {
+    if id.ends_with('/') || (id.contains('/') && !id.contains("::")) {
+        return None;
+    }
+    let qualified = format!("{own_dir}::{id}");
+    trait_for
+        .get(id)
+        .or_else(|| composite_for.get(id))
+        .or_else(|| trait_for.get(qualified.as_str()))
+        .or_else(|| composite_for.get(qualified.as_str()))
+        .copied()
+}
+
+/// Find `scope: package` composites that can never bind to a package boundary.
+///
+/// `scope: package` keys evidence by its nearest enclosing registry-fetch
+/// package archive (npm/gem/whl/nupkg/crate/conda/egg/python_sdist) and, when
+/// the evidence has no such ancestor, degrades to `scope: file` -- it never
+/// widens into a global pool. That makes a merely *unlikely* package ancestor
+/// harmless, which is why this check reports only declarations that can never
+/// bind at all. Two shapes qualify, both grounded in `Scope::key`:
+///
+/// 1. Every declared `for:` type is a synthetic node no package can contain
+///    (today: `registry`). Registry findings have no `archive:` location, so
+///    `parent_package` has nothing to walk.
+/// 2. The `all:` legs mix a registry-only leg with a leg that never runs on a
+///    registry node. Registry evidence keys to the empty string while
+///    artifact evidence keys to its archive or file path, so the two can never
+///    land in the same scope bucket and the rule is unsatisfiable.
+///
+/// Both shapes want [`Scope::Outer`] instead -- the one scope that
+/// deliberately pools by presence, which is exactly how the fetched artifact
+/// and its separately-fetched registry metadata are meant to be joined (see
+/// `evaluate_package_composites`).
+///
+/// Only rules that spell `scope: package` out are checked. The `for:`-derived
+/// default in `CompositeTrait::default_scope` is the engine's own choice and
+/// cannot be wrong in this way.
+pub(crate) fn find_scope_without_valid_container(
+    trait_definitions: &[TraitDefinition],
+    composite_rules: &[CompositeTrait],
+) -> Vec<UnbindablePackageScope> {
+    let trait_for: HashMap<&str, &Vec<FileType>> = trait_definitions
+        .iter()
+        .map(|t| (t.id.as_str(), &t.r#for))
+        .collect();
+    let composite_for: HashMap<&str, &Vec<FileType>> = composite_rules
+        .iter()
+        .map(|c| (c.id.as_str(), &c.r#for))
+        .collect();
+
+    let mut found = Vec::new();
+    for rule in composite_rules {
+        if rule.scope != Some(Scope::Package) {
+            continue;
+        }
+
+        // Shape 1: the node itself can never sit under a package.
+        if !rule.r#for.is_empty() && rule.r#for.iter().all(is_synthetic_non_member_type) {
+            found.push(UnbindablePackageScope {
+                id: rule.id.clone(),
+                reason: "for: names only registry nodes, which carry no archive location for a package key".to_string(),
+            });
+            continue;
+        }
+
+        // Shape 2: required legs straddle the registry/artifact boundary.
+        let Some(all) = rule.all.as_ref() else {
+            continue;
+        };
+        let own_dir = rule.id.split("::").next().unwrap_or("");
+        let mut registry_leg: Option<&str> = None;
+        let mut artifact_leg: Option<&str> = None;
+        for cond in all {
+            let Condition::Trait { id } = cond else {
+                continue;
+            };
+            // Only resolvable legs count: this check fires on certainty.
+            let Some(types) = leg_file_types(id, own_dir, &trait_for, &composite_for) else {
+                continue;
+            };
+            if types.is_empty() {
+                continue;
+            }
+            if types.iter().all(is_synthetic_non_member_type) {
+                registry_leg.get_or_insert(id.as_str());
+            } else if !types.contains(&FileType::All)
+                && !types.iter().any(is_synthetic_non_member_type)
+            {
+                // Runs only on real files -- never on a registry node.
+                artifact_leg.get_or_insert(id.as_str());
+            }
+        }
+        if let (Some(reg), Some(art)) = (registry_leg, artifact_leg) {
+            found.push(UnbindablePackageScope {
+                id: rule.id.clone(),
+                reason: format!(
+                    "registry-only leg '{reg}' can never share a package key with file-based leg '{art}'"
+                ),
+            });
+        }
+    }
+    found
+}
+
+/// Find composites whose pooling scope has no container to run on.
+///
+/// `archive`, `package` and `outer` are evaluated in the *container* pass —
+/// the per-node pass takes only `file`/`leaf` (see the scope filters in
+/// `evaluate_composites`). So a pooling-scoped composite runs only on a node
+/// whose own type is a container, and one that declares no container type in
+/// `for:` never runs at all: `for: [javascript]` + `scope: archive` reports on
+/// a JavaScript node that the container pass will never hand it.
+///
+/// A container is an `#[archive]` type, or `registry` for `scope: outer` (the
+/// synthetic artifact↔registry node is typed `registry`). `for: [all]` and
+/// group-derived lists are exempt — `all` runs everywhere by definition, and a
+/// named group's expansion is not what the author wrote.
+///
+/// Returns `(composite_id, scope, declared_types)`.
+pub(crate) fn find_pooling_scope_without_container(
+    composite_rules: &[CompositeTrait],
+) -> Vec<(String, Scope, Vec<FileType>)> {
+    let mut found = Vec::new();
+    for rule in composite_rules {
+        let scope = rule.effective_scope();
+        if !matches!(scope, Scope::Archive | Scope::Package | Scope::Outer) {
+            continue;
+        }
+        if rule.for_from_groups || rule.r#for.is_empty() || rule.r#for.contains(&FileType::All) {
+            continue;
+        }
+        let has_container = rule.r#for.iter().any(|ft| {
+            FileType::is_archive(ft) || (scope == Scope::Outer && *ft == FileType::Registry)
+        });
+        if !has_container {
+            found.push((rule.id.clone(), scope, rule.r#for.clone()));
         }
     }
     found

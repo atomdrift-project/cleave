@@ -713,7 +713,15 @@ impl AnalysisDisableGuards {
         // filefacts from writing to disk too. We only ever *disable* here —
         // re-enabling is left to filefacts' own default / `FILEFACTS_CACHE`,
         // so a test or ops env that disabled it isn't silently overridden.
-        if crate::cache::skip_cache() {
+        //
+        // A `cfg(test)` build disables it unconditionally, independent of
+        // `skip_cache()`: filefacts' own cache lives at a hardcoded
+        // `~/.cache/atomdrift/filefacts` cleave cannot redirect the way it
+        // redirects its own `cache_dir()` for tests (see `cache::cache_dir`),
+        // so the only way to keep `cargo test` from reading or writing the
+        // same tree a concurrently running production `cleave` is using is
+        // to turn its caching off for the whole test run.
+        if crate::cache::skip_cache() || cfg!(test) {
             filefacts::cache::set_caching_enabled(false);
         }
         Self {

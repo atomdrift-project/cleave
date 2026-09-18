@@ -421,11 +421,45 @@ mod tests {
         LOCK.get_or_init(|| Mutex::new(()))
     }
 
+    /// Restores whatever `CAPABILITY_MAPPER` held when created, on drop
+    /// (including on panic).
+    ///
+    /// `reload_capability_mapper()` installs its result as the process-wide
+    /// singleton — there is no per-test slot. A test that reloads it (to a
+    /// `CLEAVE_SKIP_TRAITS=1` empty mapper, or a temp dir with a single
+    /// synthetic trait) and does not undo that leaves every later caller in
+    /// this process — any other test analyzing with default options, on any
+    /// thread, including ones `test_lock()` does not serialize against —
+    /// permanently reading that stub instead of the real trait set. Observed:
+    /// `analyze_bytes_shared_matches_owned` intermittently saw 0 findings
+    /// against a mapper holding exactly the one trait
+    /// `test_reload_rollback_on_bad_traits` seeds, because that test had run
+    /// somewhere else in the same `cargo test --lib` process and never put
+    /// the original mapper back.
+    struct MapperRestoreGuard {
+        previous: Option<Arc<CapabilityMapper>>,
+    }
+
+    impl MapperRestoreGuard {
+        fn capture() -> Self {
+            Self {
+                previous: CAPABILITY_MAPPER.read().clone(),
+            }
+        }
+    }
+
+    impl Drop for MapperRestoreGuard {
+        fn drop(&mut self) {
+            *CAPABILITY_MAPPER.write() = self.previous.take();
+        }
+    }
+
     #[test]
     fn test_capability_mapper_singleton() {
         let _guard = test_lock()
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _restore_guard = MapperRestoreGuard::capture();
         let _skip_guard = EnvVarGuard::set("CLEAVE_SKIP_TRAITS", "1");
         reload_capability_mapper().expect("reload empty mapper");
         let m1 = capability_mapper().expect("mapper should load");
@@ -501,6 +535,7 @@ mod tests {
         let _guard = test_lock()
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _restore_guard = MapperRestoreGuard::capture();
         let _skip_guard = EnvVarGuard::unset("CLEAVE_SKIP_TRAITS");
 
         let good = tempfile::tempdir().expect("create tempdir");

@@ -526,6 +526,28 @@ fn open_connection(path: &Path) -> Result<Connection, rusqlite::Error> {
     Ok(conn)
 }
 
+/// Whether `err` reflects the *database file itself* being unreadable
+/// (corrupt header, wrong magic, wrong page size, …) rather than a busy or
+/// locked file. Only this class justifies deleting and recreating the file
+/// in [`with_conn`]'s recovery path — `SQLITE_BUSY`/`SQLITE_LOCKED` mean a
+/// concurrent writer (this process's own other threads, or an entirely
+/// different `cleave` process sharing the same cache directory) briefly held
+/// the file, which `busy_timeout` already retries around; treating that as
+/// "corrupt" and deleting the shared DB out from under a live sibling
+/// process would be a self-inflicted data-loss bug, not a repair.
+fn is_corruption_error(err: &rusqlite::Error) -> bool {
+    matches!(
+        err,
+        rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error {
+                code: rusqlite::ErrorCode::DatabaseCorrupt | rusqlite::ErrorCode::NotADatabase,
+                ..
+            },
+            _
+        )
+    )
+}
+
 /// Execute `f` with this thread's SQLite connection, initializing it if needed.
 /// Returns `None` if caching is disabled or the connection cannot be established.
 fn with_conn<T>(f: impl FnOnce(&Connection) -> T) -> Option<T> {
@@ -535,7 +557,15 @@ fn with_conn<T>(f: impl FnOnce(&Connection) -> T) -> Option<T> {
         if opt.is_none() {
             *opt = open_connection(path)
                 .or_else(|e| {
-                    // Database may be corrupt — delete and recreate.
+                    if !is_corruption_error(&e) {
+                        // Busy/locked (or any other transient failure): another
+                        // connection — possibly a different process — holds the
+                        // file right now. Leave it alone; this call just runs
+                        // without a cache, and a later call retries afresh.
+                        tracing::debug!("Cache open failed (transient, not recreating): {}", e);
+                        return Err(e);
+                    }
+                    // The database file itself is corrupt — delete and recreate.
                     tracing::debug!("Cache open failed, recreating: {}", e);
                     if let Err(e) = std::fs::remove_file(path) {
                         tracing::debug!("Failed to remove corrupt cache db: {}", e);

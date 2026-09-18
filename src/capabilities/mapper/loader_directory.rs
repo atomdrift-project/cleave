@@ -21,30 +21,33 @@ use crate::capabilities::validation::{
     find_broad_platform_traits, find_cap_obj_violations, find_cap_wellknown_violations,
     find_case_insensitive_overlap_issues, find_composite_only_wellknown_files,
     find_container_name_convictions, find_convictions_without_content,
-    find_dangling_directory_refs, find_dead_downgrades, find_depth_violations,
-    find_directory_shadowed_refs, find_duplicate_atomic_traits, find_duplicate_composite_rules,
-    find_duplicate_inline_exclusions, find_duplicate_second_level_directories,
-    find_empty_condition_clauses, find_exception_atomic_traits, find_exception_inline_conditions,
+    find_dangling_directory_refs, find_dead_composites, find_dead_downgrades,
+    find_depth_violations, find_directory_shadowed_refs, find_duplicate_atomic_traits,
+    find_duplicate_composite_rules, find_duplicate_inline_exclusions,
+    find_duplicate_second_level_directories, find_empty_condition_clauses,
+    find_exception_atomic_traits, find_exception_inline_conditions,
     find_exception_non_notable_members, find_exception_positive_refs, find_excessive_file_types,
-    find_excessive_skip_conditions, find_for_only_duplicates, find_generic_wellknown_leaf_dirs,
-    find_hex_binary_missing_section, find_hostile_cap_rules,
+    find_excessive_skip_conditions, find_exhaustive_suppressors, find_for_only_duplicates,
+    find_generic_wellknown_leaf_dirs, find_hex_binary_missing_section, find_hostile_cap_rules,
     find_hostile_composites_with_too_few_notable_legs, find_hostile_meta_rules,
-    find_impossible_count_constraints, find_impossible_length_bounds, find_impossible_needs,
-    find_impossible_size_constraints, find_incompatible_regex_features,
-    find_inline_content_duplicates, find_invalid_not_usage, find_invalid_trait_ids,
-    find_kv_exists_with_matcher, find_length_bounds_without_regex, find_line_number,
-    find_literal_regex_patterns, find_literals_covered_by_regexes,
+    find_impossible_composite_filetypes, find_impossible_count_constraints,
+    find_impossible_length_bounds, find_impossible_needs, find_impossible_size_constraints,
+    find_incompatible_regex_features, find_inline_content_duplicates, find_invalid_not_usage,
+    find_invalid_trait_ids, find_kv_exists_with_matcher, find_length_bounds_without_regex,
+    find_line_number, find_literal_regex_patterns, find_literals_covered_by_regexes,
     find_malware_subcategory_violations, find_many_directory_refs,
     find_memory_hungry_regex_patterns, find_meta_missing_section_filter,
     find_metadata_content_dirs, find_metadata_cross_tier_refs, find_missing_search_patterns,
-    find_needs_without_any, find_needs_zero, find_non_capturing_groups,
-    find_none_only_with_proximity, find_objectives_wellknown_violations, find_orphaned_components,
-    find_overlapping_conditions, find_overlapping_scope_duplicates,
+    find_mixed_archive_filetype_traits, find_needs_without_any, find_needs_zero,
+    find_non_capturing_groups, find_none_only_with_proximity, find_objectives_wellknown_violations,
+    find_orphaned_components, find_overlapping_conditions, find_overlapping_scope_duplicates,
     find_oversized_trait_directories, find_parent_duplicate_segments,
     find_permuted_directory_paths, find_platform_named_directories, find_pure_alias_traits,
     find_pure_directory_alias_composites, find_raw_should_use_text, find_redundant_any_refs,
     find_redundant_explicit_defaults, find_redundant_needs_one, find_redundant_unix_platforms,
-    find_regex_literal_overlap_issues, find_self_referencing_composites,
+    find_pooling_scope_without_container, find_regex_literal_overlap_issues,
+    find_scope_without_valid_container,
+    find_self_referencing_composites,
     find_self_referencing_traits, find_self_suppressing_traits, find_short_pattern_warnings,
     find_should_use_defaults, find_sibling_name_restatement, find_single_item_clauses,
     find_slow_regex_patterns, find_stale_filetype_allowlist_entries,
@@ -1980,6 +1983,40 @@ impl super::CapabilityMapper {
                 );
             }
 
+            // A directory `unless:` whose members bucket one metric field into
+            // complementary halves suppresses the rule for every file that
+            // emits the metric, so it can never fire.
+            let disable_exhaustive =
+                crate::validation_controls::is_validator_disabled("exhaustive-suppressor");
+            let exhaustive = find_exhaustive_suppressors(&trait_definitions, &composite_rules);
+            if !disable_exhaustive && !exhaustive.is_empty() {
+                eprintln!(
+                    "\n\u{274c} ERROR: {} rules are suppressed by a directory that covers every file",
+                    exhaustive.len()
+                );
+                eprintln!(
+                    "   A `- id: dir/` in `unless:` expands to every trait under it. When two of\n   \
+                     those bucket the same metric field into complementary halves, their union is\n   \
+                     the whole domain: the rule is skipped whenever the metric exists.\n   \
+                     Reference the one member you meant instead of the directory.\n"
+                );
+                for e in &exhaustive {
+                    let kind = if e.is_composite { "Rule" } else { "Trait" };
+                    eprintln!(
+                        "   {} '{}' unless '{}' on {}:\n      '{}' covers <= {} and '{}' covers >= {}",
+                        kind, e.id, e.dir_ref, e.field, e.low.0, e.low.1, e.high.0, e.high.1
+                    );
+                }
+                eprintln!();
+                warnings.push_id(
+                    "exhaustive-suppressor",
+                    format!(
+                        "{} rules are suppressed by a directory covering every file",
+                        exhaustive.len()
+                    ),
+                );
+            }
+
             // A `downgrade:` on a `notable` rule lands it on `Baseline`, which
             // asserts the matcher is functionality nearly every program has.
             // That is a claim about the matcher, not the context, so it must be
@@ -3112,6 +3149,198 @@ impl super::CapabilityMapper {
                     format!(
                         "{} file-type allowlist entries match no trait",
                         stale_allow.len()
+                    ),
+                );
+            }
+
+            // Validate: a composite may not declare a file type it cannot fire on.
+            tracing::trace!("Checking for impossible composite file types");
+            let impossible_ft = if crate::validation_controls::is_validator_disabled(
+                "impossible-composite-filetype",
+            ) {
+                Vec::new()
+            } else {
+                find_impossible_composite_filetypes(&trait_definitions, &composite_rules)
+            };
+            if !impossible_ft.is_empty() {
+                eprintln!(
+                    "\n❌ ERROR: {} composite file types cannot match a required leg",
+                    impossible_ft.len()
+                );
+                eprintln!(
+                    "   On a leaf node every `all:` leg has to match that node, so a type some"
+                );
+                eprintln!(
+                    "   required leg cannot match is dead. If the rule fires on a container,"
+                );
+                eprintln!("   declare the container type -- its legs arrive as member findings.\n");
+                for (rule_id, ft, leg) in &impossible_ft {
+                    let source_file = rule_source_files
+                        .get(rule_id)
+                        .map(std::string::String::as_str)
+                        .unwrap_or("unknown");
+                    eprintln!(
+                        "   {}: '{}' cannot fire on {:?} -- required leg '{}' does not match it",
+                        source_file, rule_id, ft, leg
+                    );
+                }
+                let dead = find_dead_composites(&trait_definitions, &composite_rules);
+                if !dead.is_empty() {
+                    eprintln!(
+                        "\n   Of those, {} composites cannot fire on ANY declared type:",
+                        dead.len()
+                    );
+                    for rule_id in &dead {
+                        eprintln!("     DEAD {rule_id}");
+                    }
+                }
+                eprintln!();
+                warnings.push_id(
+                    "impossible-composite-filetype",
+                    format!(
+                        "{} composite file types cannot match a required leg",
+                        impossible_ft.len()
+                    ),
+                );
+            }
+
+            // Validate: an atomic trait may not straddle the archive boundary.
+            tracing::trace!("Checking for archive/non-archive file-type mixes");
+            let mixed_ft =
+                if crate::validation_controls::is_validator_disabled("archive-filetype-mix") {
+                    Vec::new()
+                } else {
+                    find_mixed_archive_filetype_traits(&trait_definitions)
+                };
+            if !mixed_ft.is_empty() {
+                eprintln!(
+                    "\n❌ ERROR: {} atomic traits declare both archive and non-archive file types",
+                    mixed_ft.len()
+                );
+                eprintln!(
+                    "   An atomic runs on one node, and an archive node and the files inside it are"
+                );
+                eprintln!(
+                    "   different nodes -- cleave expands archives into members and never content-scans"
+                );
+                eprintln!(
+                    "   the container's own bytes, so only one half of the `for:` can ever fire.\n"
+                );
+                for (trait_id, archive, plain) in &mixed_ft {
+                    let fmt = |v: &Vec<RuleFileType>| {
+                        v.iter()
+                            .map(|ft| format!("{ft:?}").to_lowercase())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    };
+                    let source_file = rule_source_files
+                        .get(trait_id)
+                        .map(std::string::String::as_str)
+                        .unwrap_or("unknown");
+                    eprintln!(
+                        "   {}: '{}' archive=[{}] non-archive=[{}]",
+                        source_file,
+                        trait_id,
+                        fmt(archive),
+                        fmt(plain)
+                    );
+                }
+                eprintln!(
+                    "\n   Split it in two: one trait for the archive node, one for the files inside it.\n"
+                );
+                warnings.push_id(
+                    "archive-filetype-mix",
+                    format!(
+                        "{} atomic traits declare both archive and non-archive file types",
+                        mixed_ft.len()
+                    ),
+                );
+            }
+
+            // Validate: a pooling scope needs a container node to run on.
+            tracing::trace!("Checking for pooling scopes with no container");
+            let pooling_without_container =
+                if crate::validation_controls::is_validator_disabled("pooling-scope-no-container") {
+                    Vec::new()
+                } else {
+                    find_pooling_scope_without_container(&composite_rules)
+                };
+            if !pooling_without_container.is_empty() {
+                eprintln!(
+                    "\n\u{274c} ERROR: {} composites use a pooling scope with no container to run on",
+                    pooling_without_container.len()
+                );
+                eprintln!(
+                    "   archive/package/outer composites are evaluated on the container node, never"
+                );
+                eprintln!(
+                    "   on a leaf -- so one whose `for:` names no container type never runs at all."
+                );
+                eprintln!(
+                    "   Name the container the rule reports on; its members' findings arrive there.\n"
+                );
+                for (rule_id, scope, types) in &pooling_without_container {
+                    let source_file = rule_source_files
+                        .get(rule_id)
+                        .map(std::string::String::as_str)
+                        .unwrap_or("unknown");
+                    let names = types
+                        .iter()
+                        .map(|ft| format!("{ft:?}").to_lowercase())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    eprintln!("   {source_file}: '{rule_id}' scope: {scope:?} for: [{names}]");
+                }
+                eprintln!();
+                warnings.push_id(
+                    "pooling-scope-no-container",
+                    format!(
+                        "{} composites use a pooling scope with no container to run on",
+                        pooling_without_container.len()
+                    ),
+                );
+            }
+
+            // Validate: `scope: package` must be able to bind to a package.
+            tracing::trace!("Checking for unbindable package scopes");
+            let unbindable_package_scope = if crate::validation_controls::is_validator_disabled(
+                "unbindable-package-scope",
+            ) {
+                Vec::new()
+            } else {
+                find_scope_without_valid_container(&trait_definitions, &composite_rules)
+            };
+            if !unbindable_package_scope.is_empty() {
+                eprintln!(
+                    "\n\u{274c} ERROR: {} composites declare a `scope: package` that can never bind",
+                    unbindable_package_scope.len()
+                );
+                eprintln!(
+                    "   `scope: package` keys evidence by its nearest enclosing package archive"
+                );
+                eprintln!(
+                    "   (npm/gem/whl/nupkg/crate/conda/egg/python_sdist). Registry metadata is"
+                );
+                eprintln!(
+                    "   fetched beside the artifact, not from inside it, so it has no such ancestor"
+                );
+                eprintln!(
+                    "   and never shares a key with file evidence. Use `scope: outer`, the scope"
+                );
+                eprintln!("   that pools the artifact and its registry metadata together.\n");
+                for issue in &unbindable_package_scope {
+                    let source_file = rule_source_files
+                        .get(&issue.id)
+                        .map(std::string::String::as_str)
+                        .unwrap_or("unknown");
+                    eprintln!("   {}: '{}' -- {}", source_file, issue.id, issue.reason);
+                }
+                eprintln!();
+                warnings.push_id(
+                    "unbindable-package-scope",
+                    format!(
+                        "{} composites declare a `scope: package` that can never bind",
+                        unbindable_package_scope.len()
                     ),
                 );
             }
@@ -5284,7 +5513,15 @@ impl super::CapabilityMapper {
             };
             match serde_json::to_vec(&cache_data) {
                 Ok(bytes) => {
-                    if let Err(e) = fs::write(&cache_path, &bytes) {
+                    // Atomic write: a reader on another thread or process (a
+                    // concurrently running `cleave`, or nextest's isolated
+                    // processes sharing a non-isolated cache dir) can
+                    // `fs::read` this exact path at any time. A direct write
+                    // truncates in place, so a reader racing it can see a
+                    // truncated or empty file — `simd_json` then either
+                    // fails to parse (a spurious rebuild) or, worse, silently
+                    // accepts a partial document. See `cache::atomic_write`.
+                    if let Err(e) = crate::cache::atomic_write(&cache_path, &bytes) {
                         tracing::warn!("Failed to write mapper cache: {}", e);
                     } else {
                         tracing::info!(

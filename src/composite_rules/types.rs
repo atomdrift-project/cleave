@@ -470,6 +470,7 @@ pub(crate) enum FileType {
     Lnk,
     /// iOS App Package (.ipa) - not extractable by cleave
     #[archive]
+    #[package]
     Ipa,
     /// JPEG image
     Jpeg,
@@ -508,9 +509,23 @@ pub(crate) enum FileType {
     /// Generic ZIP archive
     #[archive]
     Zip,
-    /// Android application package (.apk)
-    #[serde(alias = "apk_android", alias = "apk_alpine")]
-    Apk,
+    /// Android application package (.apk) -- a ZIP container. `apk` is kept
+    /// as an alias since every existing trait's `for:` says `apk` meaning
+    /// this; new rules should prefer the explicit `android_apk` spelling.
+    /// Distinct from `AlpineApk` below: same file extension, unrelated
+    /// ecosystems and threat models (Dalvik bytecode/app sideloading vs. a
+    /// musl-libc Linux package manager format), previously conflated into
+    /// one `Apk` bucket that could never tell them apart.
+    #[archive]
+    #[package]
+    #[serde(rename = "android_apk", alias = "apk", alias = "apk_android")]
+    AndroidApk,
+    /// Alpine Linux package (.apk) -- a tar.gz container, unrelated to the
+    /// Android APK format above despite the shared extension.
+    #[archive]
+    #[package]
+    #[serde(rename = "alpine_apk", alias = "apk_alpine")]
+    AlpineApk,
     /// Java archive (.jar, .war, .ear)
     #[archive]
     Jar,
@@ -529,36 +544,46 @@ pub(crate) enum FileType {
     Lzma,
     /// npm package (.tgz)
     #[archive]
+    #[package]
     Npm,
     /// NuGet package (.nupkg)
     #[archive]
+    #[package]
     Nupkg,
     /// Rust crate (.crate)
     #[archive]
+    #[package]
     Crate,
     /// conda package (.conda)
     #[archive]
+    #[package]
     Conda,
     /// Python egg (.egg)
     #[archive]
+    #[package]
     Egg,
     /// OS installer package (.pkg) — macOS (xar), FreeBSD/Arch (compressed tar)
     #[archive]
+    #[package]
     Pkg,
     /// Apple disk image (.dmg, UDIF container)
     #[archive]
     Dmg,
     /// Ruby gem (.gem)
     #[archive]
+    #[package]
     Gem,
     /// Python wheel (.whl)
     #[archive]
+    #[package]
     Whl,
     /// Python source distribution (.tar.gz / .zip sdist)
     #[archive]
+    #[package]
     PythonSdist,
     /// Debian package (.deb)
     #[archive]
+    #[package]
     Deb,
     /// Unix static library (.a). Native object code, so it routes with the
     /// `binaries` family — NOT the archive family (which would apply zip/jar
@@ -566,9 +591,11 @@ pub(crate) enum FileType {
     StaticLib,
     /// RPM package (.rpm)
     #[archive]
+    #[package]
     Rpm,
     /// Chrome extension (.crx)
     #[archive]
+    #[package]
     Crx,
     /// Compiled HTML Help (.chm)
     #[archive]
@@ -585,21 +612,26 @@ pub(crate) enum FileType {
     Iso,
     /// OCI / Docker container image archive
     #[archive]
+    #[package]
     OciImage,
     /// Void Linux package (.xbps)
     #[archive]
+    #[package]
     Xbps,
     /// Gentoo binary package (.gpkg.tar)
     #[archive]
+    #[package]
     GentooBinpkg,
     /// Electron ASAR application archive (.asar)
     #[archive]
     Asar,
     /// VS Code extension (.vsix archive)
     #[archive]
+    #[package]
     VsixArchive,
     /// Firefox extension (.xpi)
     #[archive]
+    #[package]
     Xpi,
 }
 
@@ -749,7 +781,8 @@ impl From<filefacts::FileType> for FileType {
             Ff::Whl => Self::Whl,
             Ff::PythonSdist => Self::PythonSdist,
             Ff::Gem => Self::Gem,
-            Ff::ApkAndroid | Ff::ApkAlpine => Self::Apk,
+            Ff::ApkAndroid => Self::AndroidApk,
+            Ff::ApkAlpine => Self::AlpineApk,
             Ff::Npm => Self::Npm,
             Ff::Crate => Self::Crate,
             Ff::Conda => Self::Conda,
@@ -1019,10 +1052,12 @@ impl FileType {
             "archive" | "rar" | "7z" | "cpio" => FileType::Archive,
             // "unknown" falls through to the `_` wildcard arm below.
             "zip" => FileType::Zip,
-            // Both `.apk` ecosystems match generic `apk`-scoped traits; the
-            // fine-grained distinction lives in the report string for litmus /
-            // collimator, not in trait-capability routing.
-            "apk" | "apk_android" | "apk_alpine" => FileType::Apk,
+            // `apk` bare (and its old alias `apk_android`) means the Android
+            // ecosystem, matching the existing trait corpus's assumption; the
+            // Alpine Linux package format is a distinct, unrelated ecosystem
+            // (see `AndroidApk`/`AlpineApk` doc comments above).
+            "apk" | "apk_android" | "android_apk" => FileType::AndroidApk,
+            "apk_alpine" | "alpine_apk" => FileType::AlpineApk,
             "jar" | "war" | "ear" => FileType::Jar,
             "tar" | "tgz" | "tar.gz" | "tar.bz2" | "tar.xz" => FileType::Tar,
             "zst" => FileType::Zst,
@@ -1350,7 +1385,14 @@ mod tests {
         // carrier, and while it was folded into `Xml` every `for: [svg]` rule
         // silently targeted Android manifests and MSBuild projects as well.
         assert_eq!(FileType::from_str(Ff::Svg.label()), FileType::Svg);
-        assert_eq!(FileType::from_str(Ff::ApkAndroid.label()), FileType::Apk);
+        assert_eq!(
+            FileType::from_str(Ff::ApkAndroid.label()),
+            FileType::AndroidApk
+        );
+        assert_eq!(
+            FileType::from_str(Ff::ApkAlpine.label()),
+            FileType::AlpineApk
+        );
         assert_eq!(FileType::from_str(Ff::Dex.label()), FileType::Dex);
         assert_eq!(FileType::from_str("dex"), FileType::Dex);
         assert_eq!(FileType::from_str(Ff::Cab.label()), FileType::Cab);
@@ -1409,9 +1451,12 @@ mod tests {
         let parsed: RuleTarget = serde_yaml::from_str("for: [apk_android, apk_alpine, cab]")
             .expect("valid YAML rule target");
 
+        // apk_android and apk_alpine are unrelated ecosystems (Android app
+        // sideloading vs. a musl-libc Linux package manager) and must not
+        // collapse onto the same FileType.
         assert_eq!(
             parsed.file_types,
-            vec![FileType::Apk, FileType::Apk, FileType::Cab]
+            vec![FileType::AndroidApk, FileType::AlpineApk, FileType::Cab]
         );
     }
 
@@ -1664,5 +1709,80 @@ mod tests {
         assert!(!contains_word("X64BAR", "X64"));
         // Suffix match but not prefix
         assert!(!contains_word("FOX64", "X64"));
+    }
+}
+
+#[cfg(test)]
+mod package_family_tests {
+    use super::FileType;
+
+    /// Every `#[package]` variant must also be `#[archive]`. A package is a
+    /// container by definition, and `parent_package` only ever inspects
+    /// ancestors that the archive walk produced -- a package-but-not-archive
+    /// type would be unreachable there, silently.
+    #[test]
+    fn every_package_is_an_archive() {
+        let strays: Vec<_> = FileType::package_family_types()
+            .iter()
+            .filter(|ft| !FileType::is_archive(ft))
+            .collect();
+        assert!(strays.is_empty(), "package types missing #[archive]: {strays:?}");
+    }
+
+    /// The split is "unit of distribution" vs "generic container". Spelled out
+    /// so a new variant has to make a deliberate choice rather than inherit one.
+    #[test]
+    fn the_split_is_distribution_versus_container() {
+        for ft in [
+            FileType::Npm,
+            FileType::Gem,
+            FileType::Whl,
+            FileType::Deb,
+            FileType::Rpm,
+            FileType::AlpineApk,
+            FileType::AndroidApk,
+            FileType::Ipa,
+            FileType::VsixArchive,
+            FileType::Crx,
+            FileType::Xpi,
+            FileType::OciImage,
+        ] {
+            assert!(ft.is_package(), "{ft:?} is a unit of distribution");
+        }
+        for ft in [
+            FileType::Zip,
+            FileType::Tar,
+            FileType::Iso,
+            FileType::Asar,
+            FileType::Cab,
+            FileType::Dmg,
+            // A container format reused everywhere (jar-in-war, jar-in-ear),
+            // not a boundary an author means by "this package".
+            FileType::Jar,
+        ] {
+            assert!(!ft.is_package(), "{ft:?} is a generic container");
+        }
+    }
+
+    /// Both halves of the old hand-written pair are gone; `from_str` has to
+    /// route every label filefacts emits for a package onto a `#[package]`
+    /// variant, or the ancestor walk stops recognising it.
+    #[test]
+    fn package_labels_round_trip_through_from_str() {
+        for label in [
+            "npm", "nupkg", "gem", "whl", "python_sdist", "crate", "conda", "egg", "deb", "rpm",
+            "apk_alpine", "apk_android", "xbps", "oci_image",
+        ] {
+            assert!(
+                FileType::from_str(label).is_package(),
+                "label {label} must route to a #[package] type"
+            );
+        }
+        for label in ["zip", "tar", "iso", "jar", "elf", "javascript"] {
+            assert!(
+                !FileType::from_str(label).is_package(),
+                "label {label} must not be a package"
+            );
+        }
     }
 }

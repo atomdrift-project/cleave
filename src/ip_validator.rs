@@ -9,24 +9,35 @@
 //! - Invalid string formats (leading zeros like 010.001.001.001)
 
 use lru::LruCache;
+use std::cell::Cell;
 use std::net::Ipv4Addr;
 use std::num::NonZeroUsize;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Thread-local storage for the current file ID, used to invalidate caches.
-/// We use AtomicU64 to allow safe access from multiple threads via thread_local!
-static CURRENT_FILE_ID: AtomicU64 = AtomicU64::new(0);
+thread_local! {
+    /// Per-thread current file ID, used to invalidate `IP_CACHE`.
+    ///
+    /// Must be genuinely thread-local, not a shared `static`: two threads
+    /// analyzing different files concurrently each call `set_current_file_id`
+    /// for their own file, and a global counter would let one thread's write
+    /// clobber another's, making `IP_CACHE`'s staleness check compare against
+    /// the wrong file. Since the cache key is `(pointer, length)` rather than
+    /// content, a false "still current" reading (the racing write happens to
+    /// leave the right-looking value behind) can serve a stale cached result
+    /// for an unrelated string the allocator later reuses that same address
+    /// and length for.
+    static CURRENT_FILE_ID: Cell<u64> = const { Cell::new(0) };
+}
 
 /// Set the current file ID for the thread-local IP validation cache.
 /// Should be called at the start of analyzing each file.
 pub(crate) fn set_current_file_id(file_id: u64) {
-    CURRENT_FILE_ID.store(file_id, Ordering::Relaxed);
+    CURRENT_FILE_ID.with(|cell| cell.set(file_id));
 }
 
 /// Clear the current file ID, effectively disabling the IP validation cache.
 pub(crate) fn clear_current_file_id() {
-    CURRENT_FILE_ID.store(0, Ordering::Relaxed);
+    CURRENT_FILE_ID.with(|cell| cell.set(0));
 }
 
 /// Cache for IP validation results.
@@ -356,7 +367,7 @@ pub(crate) fn contains_valid_ip(text: &str) -> bool {
 /// to avoid re-scanning the same strings across different traits within the same file.
 #[must_use]
 pub(crate) fn contains_external_ip_cached(s: &str) -> bool {
-    let file_id = CURRENT_FILE_ID.load(Ordering::Relaxed);
+    let file_id = CURRENT_FILE_ID.with(Cell::get);
     if file_id == 0 {
         return contains_external_ip(s);
     }

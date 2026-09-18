@@ -1950,6 +1950,7 @@ const MANIFESTS: &[FileType] = &[
     FileType::ComposerJson,
     FileType::PkgInfo,
     FileType::Plist,
+    FileType::Nib,
     FileType::Lnk,
 ];
 // Executable build logic, as opposed to the declarative metadata in

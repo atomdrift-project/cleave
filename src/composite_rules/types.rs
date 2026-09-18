@@ -996,6 +996,7 @@ impl FileType {
                     | FileType::SrcInfo
                     | FileType::Registry
                     | FileType::Plist
+                    | FileType::Nib
                     | FileType::Text
             )
     }

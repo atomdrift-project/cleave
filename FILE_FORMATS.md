@@ -86,9 +86,10 @@ Extracted recursively. Path-traversal and zip-bomb guards apply.
 | OpenDocument | `.odt`, `.ods`, `.odp`, `.odg`, `.odf`, `.ott`, `.ots`, `.otp` | LibreOffice / OpenOffice |
 | Windows shortcut | `.lnk` | Windows Shell Link |
 | Property list | `.plist` | macOS/iOS preferences (binary or XML) |
+| Interface Builder nib | `.nib` | Compiled AppKit/UIKit object graph (NIBArchive or keyed-archive plist) |
 | HTML | `.html`, `.htm` | HTML document |
 | Markdown | `.md`, `.markdown` | Markdown document |
-| XML | `.xml`, `.xaml`, `.svg`, `.config`, `.csproj`, `.vbproj`, `.fsproj`, `.vcxproj`, `.props`, `.targets`, `.settings` | Generic XML, MSBuild project files, SVG |
+| XML | `.xml`, `.xaml`, `.svg`, `.config`, `.csproj`, `.vbproj`, `.fsproj`, `.vcxproj`, `.props`, `.targets`, `.settings`, `.xib`, `.storyboard` | Generic XML, MSBuild project files, SVG, Interface Builder sources |
 | Plain text | `.txt`, `LICENSE`, `COPYING` | Fallback text handling |
 | Opaque binary | `.dat`, `.bin`, `.payload`, `.raw`, `.b64`, `.base64` | Likely-encoded payloads (XOR, base64, AES) |
 

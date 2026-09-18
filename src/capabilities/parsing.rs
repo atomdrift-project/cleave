@@ -498,6 +498,7 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                     RuleFileType::SrcInfo,
                     RuleFileType::Registry,
                     RuleFileType::Plist,
+                    RuleFileType::Nib,
                     RuleFileType::Lnk,
                     RuleFileType::Dockerfile,
                 ],
@@ -840,7 +841,7 @@ pub(crate) fn resolve_platform_filetype_conflicts(
                 RuleFileType::Elf => has_unix || has_android,
                 RuleFileType::AndroidApk | RuleFileType::Dex => has_android,
                 RuleFileType::Jcl => has_zos,
-                // Mach-O/Plist/Ipa and AppleScript/ObjC are macOS/iOS-native;
+                // Mach-O/Plist/Nib/Ipa and AppleScript/ObjC are macOS/iOS-native;
                 // Shell runs on all unix-like systems. macOS is a Unix, so the
                 // `unix` umbrella reaches all of them.
                 RuleFileType::Macho

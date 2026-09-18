@@ -1569,6 +1569,7 @@ impl TraitDefinition {
                 }
             }
             Condition::Text(TextQuery {
+                encoding,
                 exact,
                 substr,
                 regex,
@@ -1586,6 +1587,7 @@ impl TraitDefinition {
                 section_offset_range,
             }) => {
                 let params = StringParams {
+                    encoding: *encoding,
                     exact: exact.as_ref(),
                     substr: substr.as_ref(),
                     regex: regex.as_ref(),
@@ -1620,6 +1622,7 @@ impl TraitDefinition {
                 platforms: _,
             }) => {
                 let params = StringParams {
+                    encoding: None,
                     exact: exact.as_ref(),
                     substr: substr.as_ref(),
                     regex: regex.as_ref(),
@@ -1678,6 +1681,7 @@ impl TraitDefinition {
                     )
                 } else {
                     let params = StringParams {
+                        encoding: None,
                         exact: exact.as_ref(),
                         substr: substr.as_ref(),
                         regex: regex.as_ref(),
@@ -3145,6 +3149,7 @@ impl CompositeTrait {
                 }
             }
             Condition::Text(TextQuery {
+                encoding,
                 exact,
                 substr,
                 regex,
@@ -3162,6 +3167,7 @@ impl CompositeTrait {
                 section_offset_range,
             }) => {
                 let params = StringParams {
+                    encoding: *encoding,
                     exact: exact.as_ref(),
                     substr: substr.as_ref(),
                     regex: regex.as_ref(),
@@ -3193,6 +3199,7 @@ impl CompositeTrait {
                 platforms: _,
             }) => {
                 let params = StringParams {
+                    encoding: None,
                     exact: exact.as_ref(),
                     substr: substr.as_ref(),
                     regex: regex.as_ref(),
@@ -3233,6 +3240,7 @@ impl CompositeTrait {
                 section_offset_range,
             }) => {
                 let params = StringParams {
+                    encoding: None,
                     exact: exact.as_ref(),
                     substr: substr.as_ref(),
                     regex: regex.as_ref(),

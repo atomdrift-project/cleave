@@ -247,6 +247,7 @@ fn test_string_exact_condition() {
         size_min: None,
         size_max: None,
         all: Some(vec![Condition::Text(TextQuery {
+            encoding: None,
             length_min: None,
             length_max: None,
             exact: Some("/bin/sh".to_string()),
@@ -462,6 +463,7 @@ fn test_not_directive_shorthand() {
         r#for: vec![FileType::All],
         for_from_groups: false,
         r#if: Condition::Text(TextQuery {
+            encoding: None,
             length_min: None,
             length_max: None,
             exact: None,
@@ -540,6 +542,7 @@ fn test_not_directive_exact() {
         r#for: vec![FileType::All],
         for_from_groups: false,
         r#if: Condition::Text(TextQuery {
+            encoding: None,
             length_min: None,
             length_max: None,
             exact: None,
@@ -623,6 +626,7 @@ fn test_not_directive_regex() {
         r#for: vec![FileType::All],
         for_from_groups: false,
         r#if: Condition::Text(TextQuery {
+            encoding: None,
             length_min: None,
             length_max: None,
             exact: None,
@@ -829,6 +833,7 @@ fn test_downgrade_to_notable() {
         r#for: vec![FileType::All],
         for_from_groups: false,
         r#if: Condition::Text(TextQuery {
+            encoding: None,
             length_min: None,
             length_max: None,
             exact: Some("/bin/sh".to_string()),
@@ -1154,6 +1159,7 @@ fn test_all_three_directives_combined() {
         r#for: vec![FileType::All],
         for_from_groups: false,
         r#if: Condition::Text(TextQuery {
+            encoding: None,
             length_min: None,
             length_max: None,
             exact: None,
@@ -1246,6 +1252,7 @@ fn test_string_exact_match_requires_full_equality() {
         r#for: vec![FileType::All],
         for_from_groups: false,
         r#if: Condition::Text(TextQuery {
+            encoding: None,
             length_min: None,
             length_max: None,
             exact: Some("hello".to_string()),
@@ -1325,6 +1332,7 @@ fn test_string_substr_matches_substrings() {
         r#for: vec![FileType::All],
         for_from_groups: false,
         r#if: Condition::Text(TextQuery {
+            encoding: None,
             length_min: None,
             length_max: None,
             exact: None,
@@ -1505,6 +1513,7 @@ fn test_string_case_insensitive_exact() {
         r#for: vec![FileType::All],
         for_from_groups: false,
         r#if: Condition::Text(TextQuery {
+            encoding: None,
             length_min: None,
             length_max: None,
             exact: Some("hello".to_string()),
@@ -1579,6 +1588,7 @@ fn test_string_word_boundary_match() {
         r#for: vec![FileType::All],
         for_from_groups: false,
         r#if: Condition::Text(TextQuery {
+            encoding: None,
             length_min: None,
             length_max: None,
             exact: None,
@@ -1666,6 +1676,7 @@ fn test_string_regex_match() {
         r#for: vec![FileType::All],
         for_from_groups: false,
         r#if: Condition::Text(TextQuery {
+            encoding: None,
             length_min: None,
             length_max: None,
             exact: None,
@@ -2246,6 +2257,7 @@ fn test_composite_unless_multiple_conditions_any_matches() {
                 dirname: false,
             }),
             Condition::Text(TextQuery {
+                encoding: None,
                 length_min: None,
                 length_max: None,
                 exact: None,
@@ -3921,6 +3933,7 @@ fn test_downgrade_combined_all_and_none_blocked_by_none() {
         r#for: vec![FileType::All],
         for_from_groups: false,
         r#if: Condition::Text(TextQuery {
+            encoding: None,
             length_min: None,
             length_max: None,
             exact: Some("suspicious_call".to_string()),
@@ -3950,6 +3963,7 @@ fn test_downgrade_combined_all_and_none_blocked_by_none() {
         downgrade: Some(DowngradeConditions {
             // all: passes (string matches)
             all: Some(vec![Condition::Text(TextQuery {
+                encoding: None,
                 length_min: None,
                 length_max: None,
                 exact: Some("/bin/sh".to_string()),
@@ -4018,6 +4032,7 @@ fn test_downgrade_combined_all_and_none_pass() {
         r#for: vec![FileType::All],
         for_from_groups: false,
         r#if: Condition::Text(TextQuery {
+            encoding: None,
             length_min: None,
             length_max: None,
             exact: Some("suspicious_call".to_string()),
@@ -4046,6 +4061,7 @@ fn test_downgrade_combined_all_and_none_pass() {
         unless: None,
         downgrade: Some(DowngradeConditions {
             all: Some(vec![Condition::Text(TextQuery {
+                encoding: None,
                 length_min: None,
                 length_max: None,
                 exact: Some("/bin/sh".to_string()),
@@ -4119,6 +4135,7 @@ fn test_downgrade_needs_threshold_not_met() {
         r#for: vec![FileType::All],
         for_from_groups: false,
         r#if: Condition::Text(TextQuery {
+            encoding: None,
             length_min: None,
             length_max: None,
             exact: Some("/bin/sh".to_string()),
@@ -4229,6 +4246,7 @@ fn test_downgrade_needs_threshold_met() {
         r#for: vec![FileType::All],
         for_from_groups: false,
         r#if: Condition::Text(TextQuery {
+            encoding: None,
             length_min: None,
             length_max: None,
             exact: Some("/bin/sh".to_string()),

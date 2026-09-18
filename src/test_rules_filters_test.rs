@@ -22,6 +22,7 @@ fn create_report_with_size(file_size: usize) -> AnalysisReport {
 #[test]
 fn test_trait_filter_size_min() {
     let condition = Condition::Text(TextQuery {
+        encoding: None,
         length_min: None,
         length_max: None,
         exact: Some("test_symbol".to_string()),
@@ -109,6 +110,7 @@ fn test_trait_filter_size_min() {
 #[test]
 fn test_trait_filter_size_max() {
     let condition = Condition::Text(TextQuery {
+        encoding: None,
         length_min: None,
         length_max: None,
         exact: Some("test_symbol".to_string()),

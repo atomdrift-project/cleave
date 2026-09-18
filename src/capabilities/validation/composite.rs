@@ -317,7 +317,11 @@ pub(crate) fn collect_trait_refs_from_trait_def(t: &TraitDefinition) -> Vec<(Str
     refs
 }
 
-/// Find `any:` clauses that reference 4+ traits from the same external directory.
+/// Minimum number of same-directory trait refs in an `any:` clause before the
+/// rule should name the directory instead of listing its members.
+const MIN_EXTERNAL_DIR_REFS: usize = 8;
+
+/// Find `any:` clauses that reference 8+ traits from the same external directory.
 ///
 /// This suggests the rule should either:
 /// - Use directory notation (e.g., `micro-behaviors/foo`) instead of listing individual traits
@@ -355,8 +359,7 @@ pub(crate) fn find_redundant_any_refs(
                 let trait_dir = &id[..idx];
 
                 // Only flag external directories (different from rule's directory)
-                // Skip metadata/ paths since those are auto-generated and can't use directory notation
-                if trait_dir != rule_dir && !trait_dir.starts_with("metadata/") {
+                if trait_dir != rule_dir {
                     dir_refs
                         .entry(trait_dir.to_string())
                         .or_default()
@@ -367,9 +370,9 @@ pub(crate) fn find_redundant_any_refs(
         }
     }
 
-    // Find directories with 4+ references
+    // Find directories with MIN_EXTERNAL_DIR_REFS+ references
     for (dir, trait_ids) in dir_refs {
-        if trait_ids.len() >= 4 {
+        if trait_ids.len() >= MIN_EXTERNAL_DIR_REFS {
             violations.push((rule.id.clone(), dir, trait_ids.len(), trait_ids));
         }
     }
@@ -457,11 +460,15 @@ pub(crate) fn find_many_directory_refs(
 ///
 /// and `foo/bar` contains exactly `a` and `b`. Callers should reference
 /// `foo/bar` directly instead of maintaining the extra composite rule.
+///
+/// Only directories holding four or more traits count: below that, spelling out
+/// the members is cheap and often clearer than the indirection.
 #[must_use]
 pub(crate) fn find_pure_directory_alias_composites(
     rules: &[CompositeTrait],
     dir_traits: &HashMap<String, HashSet<String>>,
 ) -> Vec<(String, String, usize, Vec<String>)> {
+    const MIN_ALIAS_DIRECTORY_TRAITS: usize = 4;
     let mut violations = Vec::new();
 
     for rule in rules {
@@ -514,7 +521,10 @@ pub(crate) fn find_pure_directory_alias_composites(
         if directory_ref_includes_rule(&dir, &rule.id) {
             continue;
         }
-        if traits.len() < 2 || refs.len() != traits.len() || !refs.is_superset(traits) {
+        if traits.len() < MIN_ALIAS_DIRECTORY_TRAITS
+            || refs.len() != traits.len()
+            || !refs.is_superset(traits)
+        {
             continue;
         }
 

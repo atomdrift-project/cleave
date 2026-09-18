@@ -130,6 +130,7 @@ mod duplicate_tests {
     /// A `type: text` `substr:` condition, optionally pinned to a section.
     fn text_substr_cond(value: &str, section: Option<&str>) -> Condition {
         Condition::Text(TextQuery {
+            encoding: None,
             length_min: None,
             length_max: None,
             exact: None,
@@ -245,6 +246,7 @@ mod duplicate_tests {
         create_test_trait(
             id,
             Condition::Text(TextQuery {
+                encoding: None,
                 length_min: None,
                 length_max: None,
                 exact: Some(pattern.to_string()),
@@ -4755,7 +4757,7 @@ mod constraint_tests {
         find_none_only_with_proximity, find_pure_alias_traits, find_too_short_patterns,
     };
     use crate::capabilities::validation::{
-        find_many_directory_refs, find_pure_directory_alias_composites,
+        find_many_directory_refs, find_pure_directory_alias_composites, find_redundant_any_refs,
         find_self_referencing_composites,
     };
     use crate::composite_rules::{
@@ -5240,10 +5242,13 @@ mod constraint_tests {
 
     #[test]
     fn test_pure_directory_alias_composite_detected() {
-        let traits = dir_traits("foo/bar", &["foo/bar::a", "foo/bar::b"]);
+        let traits = dir_traits(
+            "foo/bar",
+            &["foo/bar::a", "foo/bar::b", "foo/bar::c", "foo/bar::d"],
+        );
         let rules = vec![create_composite_any(
             "other/dir::alias",
-            &["foo/bar::a", "foo/bar::b"],
+            &["foo/bar::a", "foo/bar::b", "foo/bar::c", "foo/bar::d"],
         )];
 
         let violations = find_pure_directory_alias_composites(&rules, &traits);
@@ -5254,9 +5259,59 @@ mod constraint_tests {
     }
 
     #[test]
+    fn test_small_directory_alias_composite_not_flagged() {
+        // Three members is small enough that naming them beats the indirection.
+        let traits = dir_traits("foo/bar", &["foo/bar::a", "foo/bar::b", "foo/bar::c"]);
+        let rules = vec![create_composite_any(
+            "other/dir::alias",
+            &["foo/bar::a", "foo/bar::b", "foo/bar::c"],
+        )];
+
+        assert!(find_pure_directory_alias_composites(&rules, &traits).is_empty());
+    }
+
+    #[test]
+    fn test_redundant_any_refs_needs_eight_from_one_directory() {
+        let seven: Vec<String> = (0..7).map(|i| format!("foo/bar::t{i}")).collect();
+        let seven_refs: Vec<&str> = seven.iter().map(String::as_str).collect();
+        let rule = create_composite_any("other/dir::rule", &seven_refs);
+        assert!(
+            find_redundant_any_refs(&rule).is_empty(),
+            "seven refs are still hand-listable"
+        );
+
+        let eight: Vec<String> = (0..8).map(|i| format!("foo/bar::t{i}")).collect();
+        let eight_refs: Vec<&str> = eight.iter().map(String::as_str).collect();
+        let rule = create_composite_any("other/dir::rule", &eight_refs);
+        let violations = find_redundant_any_refs(&rule);
+
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].1, "foo/bar");
+        assert_eq!(violations[0].2, 8);
+    }
+
+    #[test]
+    fn test_redundant_any_refs_flags_metadata_directory() {
+        let refs: Vec<String> = (0..8).map(|i| format!("metadata/foo::t{i}")).collect();
+        let refs: Vec<&str> = refs.iter().map(String::as_str).collect();
+        let rule = create_composite_any("other/dir::rule", &refs);
+
+        let violations = find_redundant_any_refs(&rule);
+
+        assert_eq!(violations.len(), 1, "metadata/ is no longer exempt");
+        assert_eq!(violations[0].1, "metadata/foo");
+    }
+
+    #[test]
     fn test_same_directory_alias_composite_not_recommended() {
-        let traits = dir_traits("foo/bar", &["foo/bar::a", "foo/bar::b"]);
-        let rule = create_composite_any("foo/bar::alias", &["foo/bar::a", "foo/bar::b"]);
+        let traits = dir_traits(
+            "foo/bar",
+            &["foo/bar::a", "foo/bar::b", "foo/bar::c", "foo/bar::d"],
+        );
+        let rule = create_composite_any(
+            "foo/bar::alias",
+            &["foo/bar::a", "foo/bar::b", "foo/bar::c", "foo/bar::d"],
+        );
 
         assert!(
             find_many_directory_refs(&rule, &traits).is_empty(),
@@ -5431,8 +5486,14 @@ mod constraint_tests {
 
     #[test]
     fn test_directory_alias_with_constraints_not_flagged() {
-        let traits = dir_traits("foo/bar", &["foo/bar::a", "foo/bar::b"]);
-        let mut rule = create_composite_any("foo/bar::alias", &["foo/bar::a", "foo/bar::b"]);
+        let traits = dir_traits(
+            "foo/bar",
+            &["foo/bar::a", "foo/bar::b", "foo/bar::c", "foo/bar::d"],
+        );
+        let mut rule = create_composite_any(
+            "foo/bar::alias",
+            &["foo/bar::a", "foo/bar::b", "foo/bar::c", "foo/bar::d"],
+        );
         rule.needs = Some(2);
 
         let violations = find_pure_directory_alias_composites(&[rule], &traits);
@@ -7506,6 +7567,7 @@ mod section_filter_validation_tests {
             mbc: None,
             attack: None,
             r#if: Condition::Text(TextQuery {
+                encoding: None,
                 length_min: None,
                 length_max: None,
                 exact: None,
@@ -7697,6 +7759,7 @@ mod ast_function_call_should_use_symbol_tests {
 
     fn text_substr(value: &str) -> Condition {
         Condition::Text(TextQuery {
+            encoding: None,
             length_min: None,
             length_max: None,
             exact: None,
@@ -7717,6 +7780,7 @@ mod ast_function_call_should_use_symbol_tests {
 
     fn text_regex(value: &str) -> Condition {
         Condition::Text(TextQuery {
+            encoding: None,
             length_min: None,
             length_max: None,
             exact: None,

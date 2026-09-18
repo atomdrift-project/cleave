@@ -678,6 +678,9 @@ impl ConditionResult {
 /// Parameters for string condition evaluation
 #[derive(Debug)]
 pub(crate) struct StringParams<'a> {
+    /// Restrict which text layers may match; see `TextEncodingScope`. Only
+    /// consulted by `eval_text`; other evaluators have no decoded pass.
+    pub encoding: Option<crate::composite_rules::condition::TextEncodingScope>,
     pub exact: Option<&'a String>,
     pub substr: Option<&'a String>,
     pub regex: Option<&'a String>,

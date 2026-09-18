@@ -644,6 +644,7 @@ fn test_eval_string_exact_match() {
     let ctx = create_test_context(&report, &data);
 
     let params = StringParams {
+        encoding: None,
         length_min: None,
         length_max: None,
         exact: Some(&"/bin/sh".to_string()),
@@ -685,6 +686,7 @@ fn test_eval_string_exact_duplicate_offsets() {
     let ctx = create_test_context(&report, &data);
     let needle = "/bin/sh".to_string();
     let params = StringParams {
+        encoding: None,
         length_min: None,
         length_max: None,
         exact: Some(&needle),
@@ -727,6 +729,7 @@ fn test_eval_text_regex_length_bounds() {
 
     let regex = "[a-z]+".to_string();
     let mut params = StringParams {
+        encoding: None,
         length_min: Some(50),
         length_max: None,
         exact: None,
@@ -773,6 +776,7 @@ fn test_eval_text_length_bounds_scan_past_short_match() {
 
     let regex = "[a-z]+".to_string();
     let params = StringParams {
+        encoding: None,
         length_min: Some(50),
         length_max: None,
         exact: None,
@@ -851,6 +855,7 @@ fn test_eval_string_substr_match() {
     let ctx = create_test_context(&report, &data);
 
     let params = StringParams {
+        encoding: None,
         length_min: None,
         length_max: None,
         exact: None,
@@ -895,6 +900,7 @@ fn test_eval_text_offsetless_string_still_anchors() {
     let ctx = create_test_context(&report, &data);
 
     let params = StringParams {
+        encoding: None,
         length_min: None,
         length_max: None,
         exact: None,
@@ -943,6 +949,7 @@ fn test_eval_string_regex_match() {
 
     let pattern = r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}".to_string();
     let params = StringParams {
+        encoding: None,
         length_min: None,
         length_max: None,
         exact: None,
@@ -980,6 +987,7 @@ fn test_eval_string_case_insensitive() {
     let ctx = create_test_context(&report, &data);
 
     let params = StringParams {
+        encoding: None,
         length_min: None,
         length_max: None,
         exact: Some(&"createremotethread".to_string()),
@@ -1018,6 +1026,7 @@ fn test_eval_string_not_exception() {
 
     let not_exceptions = vec![NotException::Shorthand("/bin/sh".to_string())];
     let params = StringParams {
+        encoding: None,
         length_min: None,
         length_max: None,
         exact: Some(&"/bin/sh".to_string()),
@@ -1047,6 +1056,7 @@ fn test_eval_text_uses_raw_search_for_source_files() {
     let ctx = EvaluationContext::test_only_new(&report, &data, FileType::Shell);
     let pattern = "password marker".to_string();
     let params = StringParams {
+        encoding: None,
         length_min: None,
         length_max: None,
         exact: None,
@@ -1094,6 +1104,7 @@ fn test_eval_string_literal_matches_only_ast_strings() {
     let ctx = EvaluationContext::test_only_new(&report, &data, FileType::Python);
     let pattern = "literal_value".to_string();
     let params = StringParams {
+        encoding: None,
         length_min: None,
         length_max: None,
         exact: Some(&pattern),
@@ -1134,6 +1145,7 @@ fn compiled_literals_match_without_ast_and_keep_their_source_anchor() {
     }
     let pattern = "Cookies.binarycookies".to_string();
     let params = StringParams {
+        encoding: None,
         length_min: None,
         length_max: None,
         exact: None,
@@ -1197,6 +1209,7 @@ fn test_base64_validator_filters_complete_literal_candidates_before_counting() {
     let ctx = EvaluationContext::test_only_new(&report, &[], FileType::JavaScript);
     let pattern = "^[A-Za-z0-9+/_-]{1024,}={0,2}$".to_string();
     let params = StringParams {
+        encoding: None,
         length_min: None,
         length_max: None,
         exact: None,
@@ -1239,6 +1252,7 @@ fn test_eval_string_literal_counts_nested_ast_projection_once() {
     let ctx = EvaluationContext::test_only_new(&report, &data, FileType::C);
     let pattern = r"(?m)^GET\s+\S+\s+HTTP/\d(\.\d)?".to_string();
     let params = StringParams {
+        encoding: None,
         length_min: None,
         length_max: None,
         exact: None,
@@ -2160,6 +2174,7 @@ fn test_eval_string_match_count_exceeds_evidence_cap() {
 
     let substr_val = "token_match".to_string();
     let params = StringParams {
+        encoding: None,
         length_min: None,
         length_max: None,
         exact: None,
@@ -2393,6 +2408,7 @@ fn test_eval_string_external_ip_filters_private() {
 
     let substr = "connect to".to_string();
     let params = StringParams {
+        encoding: None,
         length_min: None,
         length_max: None,
         exact: None,
@@ -2519,6 +2535,7 @@ fn test_eval_string_word_boundary() {
 
     let word = "cat".to_string();
     let params = StringParams {
+        encoding: None,
         length_min: None,
         length_max: None,
         exact: None,
@@ -2728,6 +2745,7 @@ fn test_eval_string_section_offset_with_section_map() {
     let sec_text = ".text".to_string();
     let sec_data = ".data".to_string();
     let params = StringParams {
+        encoding: None,
         length_min: None,
         length_max: None,
         exact: None,
@@ -2753,6 +2771,7 @@ fn test_eval_string_section_offset_with_section_map() {
     // section .data + range covering [0, 0x100) — should match OTHER at .data+0x50
     let substr2 = "OTHER".to_string();
     let params2 = StringParams {
+        encoding: None,
         length_min: None,
         length_max: None,
         exact: None,
@@ -2776,6 +2795,7 @@ fn test_eval_string_section_offset_with_section_map() {
 
     // section .text — should NOT find OTHER (it's in .data)
     let params3 = StringParams {
+        encoding: None,
         length_min: None,
         length_max: None,
         exact: None,
@@ -2911,6 +2931,7 @@ fn test_eval_string_offset_range_filters() {
 
     // offset_range [0, 200) — should match only the string at offset 100
     let params = StringParams {
+        encoding: None,
         length_min: None,
         length_max: None,
         exact: None,
@@ -2935,6 +2956,7 @@ fn test_eval_string_offset_range_filters() {
 
     // offset_range [4000, 6000) — should match only the string at offset 5000
     let params2 = StringParams {
+        encoding: None,
         length_min: None,
         length_max: None,
         exact: None,

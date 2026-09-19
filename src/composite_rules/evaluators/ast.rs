@@ -72,6 +72,15 @@ static COMBINED_QUERY_CACHE: LazyLock<
 /// (`1..=65_536`). Keep the cap below the binding maximum so pathological
 /// queries truncate predictably instead of relying on binding/runtime behavior.
 const AST_QUERY_MATCH_LIMIT: u32 = 50_000;
+/// Cap on in-progress states one pattern may hold at one start depth (tree-sitter
+/// abandons the rest and flags the result as limited). A pattern with several
+/// unanchored wildcard siblings (`argument: (_) @a argument: (_) @b`) explores
+/// every alignment against a node with thousands of children, and tree-sitter's
+/// per-step state dedup is quadratic in that count: a Tcl file parsed as bash
+/// held 50k states for one pattern and burned 30+ CPU-seconds per query with no
+/// interruptible step. 256 keeps the pathological case under 0.2 s per query
+/// and changes no match on the JS/Python corpus files it was tested against.
+const AST_QUERY_GROUP_STATE_LIMIT: u32 = 256;
 const AST_QUERY_BYTE_LIMIT: usize = 10 * 1024 * 1024;
 pub(crate) const AST_QUERY_CAPTURE_LIMIT: usize = 100_000;
 
@@ -409,6 +418,7 @@ pub(crate) fn eval_ast_query<'a>(query_str: &str, ctx: &EvaluationContext<'a>) -
 
     // Set limits to prevent runaway queries on pathological inputs.
     query_cursor.set_match_limit(AST_QUERY_MATCH_LIMIT);
+    query_cursor.set_max_states_per_group(AST_QUERY_GROUP_STATE_LIMIT);
     query_cursor.set_byte_range(0..source.len().min(AST_QUERY_BYTE_LIMIT));
 
     let mut evidence = Vec::new();
@@ -480,7 +490,7 @@ pub(crate) fn eval_ast_query<'a>(query_str: &str, ctx: &EvaluationContext<'a>) -
             continue; // Skip matches that don't satisfy predicates
         }
 
-        for capture in m.captures {
+        for capture in m.captures() {
             if match_count >= AST_QUERY_CAPTURE_LIMIT {
                 capture_limited = true;
                 break 'matches;
@@ -667,6 +677,7 @@ pub(crate) fn batch_ast_queries(
 
     let mut query_cursor = tree_sitter::QueryCursor::new();
     query_cursor.set_match_limit(COMBINED_AST_QUERY_MATCH_LIMIT);
+    query_cursor.set_max_states_per_group(AST_QUERY_GROUP_STATE_LIMIT);
     query_cursor.set_byte_range(0..source.len().min(AST_QUERY_BYTE_LIMIT));
 
     let cancelled = || cancellation.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed));
@@ -729,7 +740,7 @@ pub(crate) fn batch_ast_queries(
             continue;
         }
         bucket.query_matches += 1;
-        for capture in m.captures {
+        for capture in m.captures() {
             if bucket.match_count >= AST_QUERY_CAPTURE_LIMIT {
                 bucket.capture_limited = true;
                 break;
@@ -753,13 +764,29 @@ pub(crate) fn batch_ast_queries(
             }
         }
     }
-    if timed_out || cancelled() || query_cursor.did_exceed_match_limit() {
+    if timed_out || cancelled() {
         return None;
+    }
+    // A pattern whose states were abandoned (the per-group state cap or the
+    // shared capture-list pool) has partial results. Leave its query out of
+    // the map so `eval_ast_query` walks it alone with its own limits, and keep
+    // every other query's complete result rather than re-walking the tree
+    // once per query for all of them.
+    let mut exceeded = vec![false; n];
+    if query_cursor.did_exceed_match_limit() {
+        for (pattern, &qi) in combined.pattern_to_query.iter().enumerate() {
+            if query_cursor.pattern_exceeded(pattern) {
+                exceeded[qi] = true;
+            }
+        }
     }
 
     let has_parse_errors = tree.root_node().has_error();
     let mut out = FxHashMap::default();
     for (i, (qstr, _)) in compiling.iter().enumerate() {
+        if exceeded[i] {
+            continue;
+        }
         let bucket = &mut buckets[i];
         let mut warnings = Vec::new();
         if has_parse_errors {

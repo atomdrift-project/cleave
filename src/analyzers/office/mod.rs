@@ -294,6 +294,9 @@ impl OfficeAnalyzer {
                 &report,
                 &nested_findings,
                 &report.target.file_type,
+                // Office subfile findings are not origin-stamped yet; see
+                // SCOPE_PLAN.md ("Open").
+                None,
             );
             report.findings.extend(container_findings);
         }

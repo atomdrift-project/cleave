@@ -19,7 +19,7 @@ use crate::capabilities::validation::{
 use crate::composite_rules::debug::{DebugCollector, EvaluationDebug, RuleType};
 use crate::composite_rules::{
     Arch, CompositeTrait, Condition, EvaluationContext, FileType as RuleFileType, KvQuery,
-    Platform, SectionMap, TraitDefinition,
+    Platform, SectionMap, TraitDefinition, TypeMask,
 };
 use crate::composite_rules::{
     HexQuery, MetricsQuery, PathQuery, RawQuery, SectionQuery, SymbolQuery, TextQuery,
@@ -306,6 +306,8 @@ impl<'a> RuleDebugger<'a> {
             slow_rule_ms: 4000,
             cached_evidence: None,
             current_trait_idx: None,
+            finding_origins: None,
+            for_mask: TypeMask::ALL,
             raw_atom_offsets: None,
             decoded_skip: None,
             cached_source_utf8: std::str::from_utf8(self.binary_data).ok(),
@@ -692,6 +694,8 @@ impl<'a> RuleDebugger<'a> {
             slow_rule_ms: 4000,
             cached_evidence: None,
             current_trait_idx: None,
+            finding_origins: None,
+            for_mask: TypeMask::ALL,
             raw_atom_offsets: None,
             decoded_skip: None,
             cached_source_utf8: None,
@@ -1366,6 +1370,8 @@ impl<'a> RuleDebugger<'a> {
             slow_rule_ms: 4000,
             cached_evidence: None,
             current_trait_idx: None,
+            finding_origins: None,
+            for_mask: TypeMask::ALL,
             raw_atom_offsets: None,
             decoded_skip: None,
             cached_source_utf8: None,
@@ -1769,6 +1775,8 @@ impl<'a> RuleDebugger<'a> {
             slow_rule_ms: 4000,
             cached_evidence: None,
             current_trait_idx: None,
+            finding_origins: None,
+            for_mask: TypeMask::ALL,
             raw_atom_offsets: None,
             decoded_skip: None,
             cached_source_utf8,
@@ -1909,6 +1917,8 @@ impl<'a> RuleDebugger<'a> {
             slow_rule_ms: 4000,
             cached_evidence: None,
             current_trait_idx: None,
+            finding_origins: None,
+            for_mask: TypeMask::ALL,
             raw_atom_offsets: None,
             decoded_skip: None,
             cached_source_utf8: None,

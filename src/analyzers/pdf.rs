@@ -104,6 +104,10 @@ impl PdfAnalyzer {
                 &report,
                 &nested_findings,
                 &report.target.file_type,
+                // PDF subfile findings are not origin-stamped yet; see
+                // SCOPE_PLAN.md ("Open"). `None` keeps every leg reachable here
+                // rather than silently dropping them.
+                None,
             );
             report.findings.extend(container_findings);
         }

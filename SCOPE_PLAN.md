@@ -1,6 +1,19 @@
 # `for:` and `scope:` — one meaning each
 
-Status: plan, not yet implemented. Written 2026-09-18.
+Status: engine landed, tree migration pending. Written 2026-09-18.
+
+| step | state |
+|---|---|
+| `#[package]` marker, both hand lists derived from it | done |
+| default scope table (package / archive / outer / file) | done |
+| registry pair node typed `registry` | done |
+| finding-origin filter (stamp, mask, per-rule intersect) | done |
+| `unbindable-package-scope`, `pooling-scope-no-container`, `leg-outside-for` | done |
+| traits-dev codemod (1393 legs, 500 containers) | pending |
+| corpus before/after | not run |
+
+`make test`: 3254 passed. `cleave validate` on traits-dev: 1393 `leg-outside-for`,
+500 `pooling-scope-no-container`, 0 `unbindable-package-scope`.
 
 ## The model
 
@@ -131,7 +144,8 @@ What the review changed:
    members, so it would have silently fallen back to the container type for
    every member — the filter would have been a no-op exactly where it matters.)
 
-   Carried as a `u128` type mask per finding id, intersected against a mask
+   Carried as a `TypeMask` (a 256-bit set, one bit per `FileType` variant,
+   checked at compile time) per finding id, intersected against a mask
    cached on the composite: no per-rule clone of a finding list that runs to
    millions of entries on a member-heavy archive.
 4. Pair node typed `registry`; registry-side findings stamped `registry`.

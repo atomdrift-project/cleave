@@ -5270,20 +5270,26 @@ mod constraint_tests {
         assert!(find_pure_directory_alias_composites(&rules, &traits).is_empty());
     }
 
+    /// A directory whose entire membership is what the rule enumerates.
+    fn fully_covered(dir: &str, n: usize) -> std::collections::HashMap<String, usize> {
+        std::collections::HashMap::from([(dir.to_string(), n)])
+    }
+
     #[test]
     fn test_redundant_any_refs_needs_eight_from_one_directory() {
+        let sizes = fully_covered("foo/bar", 8);
         let seven: Vec<String> = (0..7).map(|i| format!("foo/bar::t{i}")).collect();
         let seven_refs: Vec<&str> = seven.iter().map(String::as_str).collect();
         let rule = create_composite_any("other/dir::rule", &seven_refs);
         assert!(
-            find_redundant_any_refs(&rule).is_empty(),
+            find_redundant_any_refs(&rule, &sizes).is_empty(),
             "seven refs are still hand-listable"
         );
 
         let eight: Vec<String> = (0..8).map(|i| format!("foo/bar::t{i}")).collect();
         let eight_refs: Vec<&str> = eight.iter().map(String::as_str).collect();
         let rule = create_composite_any("other/dir::rule", &eight_refs);
-        let violations = find_redundant_any_refs(&rule);
+        let violations = find_redundant_any_refs(&rule, &sizes);
 
         assert_eq!(violations.len(), 1);
         assert_eq!(violations[0].1, "foo/bar");
@@ -5296,10 +5302,42 @@ mod constraint_tests {
         let refs: Vec<&str> = refs.iter().map(String::as_str).collect();
         let rule = create_composite_any("other/dir::rule", &refs);
 
-        let violations = find_redundant_any_refs(&rule);
+        let violations = find_redundant_any_refs(&rule, &fully_covered("metadata/foo", 8));
 
         assert_eq!(violations.len(), 1, "metadata/ is no longer exempt");
         assert_eq!(violations[0].1, "metadata/foo");
+    }
+
+    /// Eight references into a large directory is not redundancy — it is the
+    /// rule being specific. Collapsing to `id: <dir>` there would match the
+    /// other 295 members too. `generic-bundle-id-pattern` enumerates 8 of
+    /// ~303 ids under `metadata/signed/id`; naming the directory would have
+    /// matched every signed application, `com.apple.*` included.
+    #[test]
+    fn enumerating_a_small_slice_of_a_large_directory_is_not_redundant() {
+        let refs: Vec<String> = (0..8)
+            .map(|i| format!("metadata/signed/id::t{i}"))
+            .collect();
+        let refs: Vec<&str> = refs.iter().map(String::as_str).collect();
+        let rule = create_composite_any("other/dir::rule", &refs);
+
+        let violations = find_redundant_any_refs(&rule, &fully_covered("metadata/signed/id", 303));
+
+        assert!(
+            violations.is_empty(),
+            "8 of 303 is precision, not redundancy"
+        );
+    }
+
+    /// A directory cleave knows nothing about is never flagged: without its
+    /// size there is no way to tell a collapse from a widening.
+    #[test]
+    fn an_unknown_directory_is_not_flagged() {
+        let refs: Vec<String> = (0..8).map(|i| format!("foo/bar::t{i}")).collect();
+        let refs: Vec<&str> = refs.iter().map(String::as_str).collect();
+        let rule = create_composite_any("other/dir::rule", &refs);
+
+        assert!(find_redundant_any_refs(&rule, &std::collections::HashMap::new()).is_empty());
     }
 
     #[test]
@@ -6466,6 +6504,37 @@ mod excessive_skip_tests {
         // a -> b -> a(already counted, 0): the cycle contributes nothing past first visit,
         // so `comp` stays well under the cap and is not flagged.
         assert!(!v.iter().any(|e| e.id == "comp"));
+    }
+
+    // A `*-known-benign-context` composite is a named exception group: an author
+    // wrote it specifically to be referenced widely, and growing its own list is
+    // the fix this validator's message recommends when a rule's suppressions run
+    // long. Expanding through it counted the group's membership as the referrer's
+    // burden, so `js-global-object-alias-assignment` (real shape: 1 written,
+    // 112 expanded via `js-assign-common-root-known-benign-context`) tripped the
+    // cap for taking that advice. It must be treated as opaque, like a directory
+    // reference, regardless of how many benign shapes it enumerates internally.
+    #[test]
+    fn named_exception_group_counts_as_one_not_expanded() {
+        let leaves = leaf_ids("a", 112);
+        let leaf_refs: Vec<&str> = leaves.iter().map(String::as_str).collect();
+        let composites = vec![
+            aggregator(
+                "some/dir::js-assign-common-root-known-benign-context",
+                &leaf_refs,
+            ),
+            rule_unless(
+                "js-global-object-alias-assignment",
+                refs(&["some/dir::js-assign-common-root-known-benign-context"]),
+            ),
+        ];
+
+        let v = find_excessive_skip_conditions(&[], &composites);
+        assert!(
+            !v.iter()
+                .any(|e| e.id == "js-global-object-alias-assignment"),
+            "a single reference to a named exception group must not trip the expanded cap"
+        );
     }
 }
 
@@ -9100,6 +9169,89 @@ mod archive_filetype_mix_tests {
         assert!(find_mixed_archive_filetype_traits(&traits).is_empty());
     }
 
+    fn path_trait(id: &str, types: Vec<FileType>) -> TraitDefinition {
+        TraitDefinition {
+            id: id.to_string(),
+            desc: "test".to_string(),
+            conf: 1.0,
+            crit: crate::types::Criticality::Notable,
+            r#if: Condition::Path(crate::composite_rules::condition::PathQuery {
+                basename: true,
+                regex: Some("^installer\\.exe$".to_string()),
+                ..Default::default()
+            }),
+            r#for: types,
+            platforms: vec![Platform::Unix],
+            arch: vec![Arch::All],
+            defined_in: PathBuf::from("test.yml"),
+            ..Default::default()
+        }
+    }
+
+    /// `type: path`/`basename` reads the node's own path, which every node
+    /// has -- archive or not -- so mixing archive and plain types is not the
+    /// one-node-one-matcher conflation this validator exists to catch.
+    /// `izpack-package-path` (`for: [jar, pe, shell, javascript, java]`) is
+    /// the real shape: one basename check, whichever node it lands on.
+    #[test]
+    fn path_matchers_are_exempt_from_the_archive_boundary_check() {
+        let traits = vec![path_trait(
+            "test/mix::path-mix",
+            vec![FileType::Jar, FileType::Pe, FileType::Shell],
+        )];
+        assert!(find_mixed_archive_filetype_traits(&traits).is_empty());
+    }
+
+    fn metrics_trait(id: &str, types: Vec<FileType>) -> TraitDefinition {
+        TraitDefinition {
+            id: id.to_string(),
+            desc: "test".to_string(),
+            conf: 1.0,
+            crit: crate::types::Criticality::Notable,
+            r#if: Condition::Metrics(crate::composite_rules::condition::MetricsQuery {
+                field: "file.entropy".to_string(),
+                min: Some(7.9),
+                ..Default::default()
+            }),
+            r#for: types,
+            platforms: vec![Platform::Unix],
+            arch: vec![Arch::All],
+            defined_in: PathBuf::from("test.yml"),
+            ..Default::default()
+        }
+    }
+
+    /// `type: metrics` is measurement, not a content scan: `file.entropy` is
+    /// computed for whichever node is analysed, container and member alike,
+    /// so an archive type beside a leaf type is not the "only one half can
+    /// fire" conflation. `near-maximum-entropy-file` is the live shape.
+    #[test]
+    fn metrics_matchers_are_exempt_from_the_archive_boundary_check() {
+        let traits = vec![metrics_trait(
+            "test/mix::entropy-mix",
+            vec![FileType::Zip, FileType::Tar, FileType::Data],
+        )];
+        assert!(find_mixed_archive_filetype_traits(&traits).is_empty());
+    }
+
+    /// But `type: value` stays reported: a container-scoped fact such as
+    /// `archive.members[*].path` exists only on a node the archive analyser
+    /// cracked, so a leaf type listed beside an archive type really is dead.
+    #[test]
+    fn value_matchers_are_still_flagged() {
+        let mut t = trait_for(
+            "test/mix::member-path-mix",
+            vec![FileType::Zip, FileType::JavaScript],
+            false,
+        );
+        t.r#if = Condition::Kv(crate::composite_rules::condition::KvQuery {
+            path: "archive.members[*].path".to_string(),
+            substr: Some("node_modules/".to_string()),
+            ..Default::default()
+        });
+        assert_eq!(find_mixed_archive_filetype_traits(&[t]).len(), 1);
+    }
+
     #[test]
     fn static_lib_is_not_an_archive_so_it_may_pair_with_source() {
         // `ar` is the one container cleave does not expand: a `type: text`
@@ -9286,11 +9438,7 @@ mod unbindable_package_scope_tests {
             leg("t::reg", vec![FileType::Registry]),
             leg("t::manifest", vec![FileType::PackageJson]),
         ];
-        let rule = comp(
-            "t::bad",
-            vec![FileType::All],
-            vec!["t::reg", "t::manifest"],
-        );
+        let rule = comp("t::bad", vec![FileType::All], vec!["t::reg", "t::manifest"]);
         let bad = find_scope_without_valid_container(&traits, &[rule]);
         assert_eq!(bad.len(), 1);
         assert!(
@@ -9407,7 +9555,12 @@ mod unbindable_package_scope_tests {
             leg("t::reg", vec![FileType::Registry]),
             leg("t::manifest", vec![FileType::PackageJson]),
         ];
-        for scope in [None, Some(Scope::Outer), Some(Scope::Archive), Some(Scope::File)] {
+        for scope in [
+            None,
+            Some(Scope::Outer),
+            Some(Scope::Archive),
+            Some(Scope::File),
+        ] {
             let mut rule = comp(
                 "t::ok",
                 vec![FileType::Registry],
@@ -9473,6 +9626,26 @@ mod pooling_scope_container_tests {
         }
     }
 
+    /// MSI, OLE compound documents and OOXML hold more than one stream and
+    /// cleave pools their members' findings (the office analyser calls
+    /// `evaluate_container_composites` exactly as the archive analyser does).
+    /// They carry no `#[archive]` marker only because the *archive* analyser
+    /// is not what opens them. Without this, `find_impossible_composite_filetypes`
+    /// and this check deadlock: the first tells an MSI rule to declare its
+    /// container and take a pooling scope, and this one then rejects it.
+    #[test]
+    fn office_and_installer_containers_satisfy_the_pooling_requirement() {
+        for ft in [FileType::Msi, FileType::OleDoc, FileType::Ooxml] {
+            for scope in [Scope::Archive, Scope::Package, Scope::Outer] {
+                let rule = comp("t::office", vec![ft], Some(scope));
+                assert!(
+                    find_pooling_scope_without_container(&[rule]).is_empty(),
+                    "{ft:?} at {scope:?} is a container and must be accepted"
+                );
+            }
+        }
+    }
+
     /// The dead shape: pooling scopes are evaluated on the container node, so a
     /// leaf-only `for:` means the rule is never handed a node it declared.
     #[test]
@@ -9524,25 +9697,27 @@ mod pooling_scope_container_tests {
     /// but the check must read `effective_scope`, not the raw field.
     #[test]
     fn the_default_scope_is_evaluated_not_the_raw_field() {
-        assert!(find_pooling_scope_without_container(&[comp(
-            "t::ok-npm",
-            vec![FileType::Npm],
-            None
-        )])
-        .is_empty());
-        assert!(find_pooling_scope_without_container(&[comp(
-            "t::ok-js",
-            vec![FileType::JavaScript],
-            None
-        )])
-        .is_empty());
+        assert!(
+            find_pooling_scope_without_container(&[comp("t::ok-npm", vec![FileType::Npm], None)])
+                .is_empty()
+        );
+        assert!(
+            find_pooling_scope_without_container(&[comp(
+                "t::ok-js",
+                vec![FileType::JavaScript],
+                None
+            )])
+            .is_empty()
+        );
         // ...and a registry default (outer) is satisfied by registry itself.
-        assert!(find_pooling_scope_without_container(&[comp(
-            "t::ok-reg",
-            vec![FileType::Registry],
-            None
-        )])
-        .is_empty());
+        assert!(
+            find_pooling_scope_without_container(&[comp(
+                "t::ok-reg",
+                vec![FileType::Registry],
+                None
+            )])
+            .is_empty()
+        );
     }
 
     /// File-scoped composites run per node and are none of this check's
@@ -9573,5 +9748,394 @@ mod pooling_scope_container_tests {
             crate::validation_controls::validator_spec("pooling-scope-no-container").is_some(),
             "pooling-scope-no-container must be in VALIDATOR_SPECS"
         );
+    }
+
+    /// `Pe` is the established non-archive exception -- same precedent as
+    /// `find_dead_composites`'s `a_pooling_scope_keeps_a_non_archive_container_alive`.
+    /// A self-extracting PE (PyInstaller onefile) pools its children the same
+    /// way an archive does without carrying the `#[archive]` marker; the live
+    /// shape is `known-nondeployed-filename-context` (`for: [pe]`,
+    /// `scope: outer`), joining a PE's own version-resource fact with an
+    /// identity marker that may live in an embedded MSI/CAB member.
+    #[test]
+    fn pe_is_an_accepted_non_archive_pooling_container() {
+        for scope in [Scope::Outer, Scope::Archive, Scope::Package] {
+            let rule = comp("t::pe-pool", vec![FileType::Pe], Some(scope));
+            assert!(
+                find_pooling_scope_without_container(&[rule]).is_empty(),
+                "scope {scope:?} with for: [pe] must not be flagged"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod legs_outside_for_tests {
+    use crate::capabilities::validation::find_legs_outside_for;
+    use crate::composite_rules::condition::TextQuery;
+    use crate::composite_rules::{
+        Arch, CompositeTrait, Condition, FileType, Platform, Scope, TraitDefinition,
+    };
+    use std::path::PathBuf;
+
+    fn leg(id: &str, types: Vec<FileType>) -> TraitDefinition {
+        TraitDefinition {
+            id: id.to_string(),
+            desc: "leg".to_string(),
+            conf: 1.0,
+            crit: crate::types::Criticality::Notable,
+            r#if: Condition::Text(TextQuery {
+                substr: Some("X".to_string()),
+                ..Default::default()
+            }),
+            r#for: types,
+            platforms: vec![Platform::Unix],
+            arch: vec![Arch::All],
+            defined_in: PathBuf::from("t.yml"),
+            ..Default::default()
+        }
+    }
+
+    fn comp(
+        id: &str,
+        types: Vec<FileType>,
+        scope: Option<Scope>,
+        legs: Vec<&str>,
+    ) -> CompositeTrait {
+        CompositeTrait {
+            id: id.to_string(),
+            desc: "comp".to_string(),
+            conf: 1.0,
+            crit: crate::types::Criticality::Notable,
+            r#for: types,
+            scope,
+            platforms: vec![Platform::Unix],
+            arch: vec![Arch::All],
+            all: Some(
+                legs.into_iter()
+                    .map(|l| Condition::Trait { id: l.to_string() })
+                    .collect(),
+            ),
+            defined_in: PathBuf::from("t.yml"),
+            ..Default::default()
+        }
+    }
+
+    fn path_leg(id: &str, types: Vec<FileType>) -> TraitDefinition {
+        TraitDefinition {
+            r#if: Condition::Path(crate::composite_rules::condition::PathQuery {
+                basename: true,
+                exact: Some("package.json".to_string()),
+                ..Default::default()
+            }),
+            ..leg(id, types)
+        }
+    }
+
+    /// A `type: path` leg is not subject to the origin filter at all:
+    /// `evaluate_basename_traits_for_entries` runs every path trait against
+    /// the archive's entry list with no `for:` gate, and the finding is
+    /// stamped with the *container's* type. So a rule naming only its
+    /// container really can satisfy it, and flagging it is a false positive.
+    /// `runtime-shipped-without-publish-manifest` is the live shape: its
+    /// `unless: npm-publish-root-manifest` (`for: [package.json]`,
+    /// `type: path`) does fire on the npm node.
+    #[test]
+    fn a_path_leg_is_not_subject_to_the_origin_filter() {
+        let legs = vec![path_leg("t::manifest", vec![FileType::PackageJson])];
+        let rule = comp(
+            "t::npm-rule",
+            vec![FileType::Npm],
+            Some(Scope::Archive),
+            vec!["t::manifest"],
+        );
+        assert!(find_legs_outside_for(&legs, &[rule]).is_empty());
+    }
+
+    /// ...but a content leg in the same position stays reported, because that
+    /// one really is filtered by origin.
+    #[test]
+    fn a_content_leg_in_the_same_position_is_still_reported() {
+        let legs = vec![leg("t::script", vec![FileType::JavaScript])];
+        let rule = comp(
+            "t::npm-rule",
+            vec![FileType::Npm],
+            Some(Scope::Archive),
+            vec!["t::script"],
+        );
+        assert_eq!(find_legs_outside_for(&legs, &[rule]).len(), 1);
+    }
+
+    /// The `vscode-activated-curl-shell` shape: a rule naming only its
+    /// container, whose legs live in members. Before the origin filter this
+    /// rule was satisfied by any member at all; now it is dead, and the fix is
+    /// to say which members it is about.
+    #[test]
+    fn a_container_only_for_with_member_legs_is_flagged() {
+        let traits = vec![
+            leg("t::manifest", vec![FileType::Json]),
+            leg("t::script", vec![FileType::JavaScript]),
+        ];
+        let rule = comp(
+            "t::vsix-rule",
+            vec![FileType::VsixArchive],
+            Some(Scope::Archive),
+            vec!["t::manifest", "t::script"],
+        );
+        let bad = find_legs_outside_for(&traits, &[rule]);
+        assert_eq!(bad.len(), 2, "both member legs are outside for:");
+        // The message has to name the types to add, or the author is left
+        // guessing which of 127 file types the leg wanted.
+        assert_eq!(bad[0].leg_types, vec![FileType::Json]);
+        assert_eq!(bad[1].leg_types, vec![FileType::JavaScript]);
+    }
+
+    /// Declaring the member types is the fix.
+    #[test]
+    fn declaring_the_member_types_clears_it() {
+        let traits = vec![
+            leg("t::manifest", vec![FileType::Json]),
+            leg("t::script", vec![FileType::JavaScript]),
+        ];
+        let rule = comp(
+            "t::vsix-rule",
+            vec![FileType::VsixArchive, FileType::Json, FileType::JavaScript],
+            Some(Scope::Archive),
+            vec!["t::manifest", "t::script"],
+        );
+        assert!(find_legs_outside_for(&traits, &[rule]).is_empty());
+    }
+
+    /// A leg only needs *one* of its types declared: a trait that fires on
+    /// javascript or typescript is satisfiable by a rule that names only
+    /// javascript, and `for:` is allowed to be stricter than its children.
+    #[test]
+    fn one_overlapping_type_is_enough() {
+        let traits = vec![leg(
+            "t::script",
+            vec![FileType::JavaScript, FileType::TypeScript],
+        )];
+        let rule = comp(
+            "t::rule",
+            vec![FileType::Npm, FileType::JavaScript],
+            Some(Scope::Package),
+            vec!["t::script"],
+        );
+        assert!(find_legs_outside_for(&traits, &[rule]).is_empty());
+    }
+
+    /// File-scoped composites match within one node; they are
+    /// `find_impossible_composite_filetypes`'s business, not this check's.
+    #[test]
+    fn file_scoped_composites_are_not_this_checks_business() {
+        let traits = vec![leg("t::script", vec![FileType::JavaScript])];
+        let rule = comp(
+            "t::rule",
+            vec![FileType::PackageJson],
+            Some(Scope::File),
+            vec!["t::script"],
+        );
+        assert!(find_legs_outside_for(&traits, &[rule]).is_empty());
+    }
+
+    /// `for: [all]` opts out of the origin filter, so it cannot exclude
+    /// anything; a leg declared `for: [all]` fires anywhere, so it is never
+    /// excluded. Neither is a mistake.
+    #[test]
+    fn all_on_either_side_is_exempt() {
+        let traits = vec![leg("t::anywhere", vec![FileType::All])];
+        let rule = comp(
+            "t::rule",
+            vec![FileType::Npm],
+            Some(Scope::Package),
+            vec!["t::anywhere"],
+        );
+        assert!(find_legs_outside_for(&traits, &[rule]).is_empty());
+
+        let traits2 = vec![leg("t::script", vec![FileType::JavaScript])];
+        let rule2 = comp(
+            "t::rule2",
+            vec![FileType::All],
+            Some(Scope::Package),
+            vec!["t::script"],
+        );
+        assert!(find_legs_outside_for(&traits2, &[rule2]).is_empty());
+    }
+
+    /// A directory reference resolves to every definition under it, so the
+    /// union of their types is what must overlap -- one member is enough.
+    #[test]
+    fn a_directory_reference_unions_its_members_types() {
+        let traits = vec![
+            leg("objectives/exfil/http::a", vec![FileType::Python]),
+            leg("objectives/exfil/http::b", vec![FileType::JavaScript]),
+        ];
+        let ok = comp(
+            "t::ok",
+            vec![FileType::Npm, FileType::JavaScript],
+            Some(Scope::Package),
+            vec!["objectives/exfil/http/"],
+        );
+        assert!(find_legs_outside_for(&traits, &[ok]).is_empty());
+
+        let bad = comp(
+            "t::bad",
+            vec![FileType::Npm, FileType::Elf],
+            Some(Scope::Package),
+            vec!["objectives/exfil/http/"],
+        );
+        assert_eq!(find_legs_outside_for(&traits, &[bad]).len(), 1);
+    }
+
+    /// An unresolvable leg proves nothing -- dangling references are a
+    /// different validator's error, and reporting them here would send the
+    /// author to the wrong fix.
+    #[test]
+    fn an_unresolvable_leg_is_ignored() {
+        let traits = vec![leg("t::script", vec![FileType::JavaScript])];
+        let rule = comp(
+            "t::rule",
+            vec![FileType::Npm, FileType::JavaScript],
+            Some(Scope::Package),
+            vec!["t::script", "t::nowhere"],
+        );
+        assert!(find_legs_outside_for(&traits, &[rule]).is_empty());
+    }
+
+    /// The default scope counts: `for: [npm]` with no `scope:` is
+    /// package-scoped, so its legs are filtered and this check applies.
+    #[test]
+    fn the_default_scope_brings_a_rule_into_scope() {
+        let traits = vec![leg("t::script", vec![FileType::JavaScript])];
+        let rule = comp("t::rule", vec![FileType::Npm], None, vec!["t::script"]);
+        assert_eq!(
+            find_legs_outside_for(&traits, &[rule]).len(),
+            1,
+            "for: [npm] defaults to package scope, so the filter applies"
+        );
+    }
+
+    #[test]
+    fn the_validator_id_is_registered() {
+        assert!(
+            crate::validation_controls::validator_spec("leg-outside-for").is_some(),
+            "leg-outside-for must be in VALIDATOR_SPECS"
+        );
+    }
+}
+
+#[cfg(test)]
+mod leg_role_tests {
+    use crate::capabilities::validation::{LegRole, find_legs_outside_for};
+    use crate::composite_rules::condition::TextQuery;
+    use crate::composite_rules::{
+        Arch, CompositeTrait, Condition, FileType, Platform, Scope, TraitDefinition,
+    };
+    use std::path::PathBuf;
+
+    fn leg(id: &str, types: Vec<FileType>) -> TraitDefinition {
+        TraitDefinition {
+            id: id.to_string(),
+            desc: "leg".to_string(),
+            conf: 1.0,
+            crit: crate::types::Criticality::Notable,
+            r#if: Condition::Text(TextQuery {
+                substr: Some("X".to_string()),
+                ..Default::default()
+            }),
+            r#for: types,
+            platforms: vec![Platform::Unix],
+            arch: vec![Arch::All],
+            defined_in: PathBuf::from("t.yml"),
+            ..Default::default()
+        }
+    }
+
+    fn refs(ids: &[&str]) -> Vec<Condition> {
+        ids.iter()
+            .map(|i| Condition::Trait { id: i.to_string() })
+            .collect()
+    }
+
+    fn comp(types: Vec<FileType>) -> CompositeTrait {
+        CompositeTrait {
+            id: "t::rule".to_string(),
+            desc: "comp".to_string(),
+            conf: 1.0,
+            crit: crate::types::Criticality::Notable,
+            r#for: types,
+            scope: Some(Scope::Package),
+            platforms: vec![Platform::Unix],
+            arch: vec![Arch::All],
+            defined_in: PathBuf::from("t.yml"),
+            ..Default::default()
+        }
+    }
+
+    /// An `unless:` leg outside `for:` does NOT kill the rule -- it kills the
+    /// carve-out, so the rule keeps firing where the author excluded it. That
+    /// costs false positives rather than detections, which is the opposite
+    /// urgency from a dead `all:` leg, so it is reported with its own role.
+    ///
+    /// Found by review of the live tree: `readme-clone-foreign-npm-links`
+    /// suppresses on `archive-cargo-toml-entry` (`for: [tar, crate]`) while the
+    /// rule itself was narrowed to `[npm]`.
+    #[test]
+    fn a_suppressor_leg_outside_for_is_reported_as_a_false_positive_risk() {
+        let traits = vec![
+            leg("t::manifest", vec![FileType::PackageJson]),
+            leg("t::cargo", vec![FileType::Tar, FileType::Crate]),
+        ];
+        let mut rule = comp(vec![FileType::Npm, FileType::PackageJson]);
+        rule.all = Some(refs(&["t::manifest"]));
+        rule.unless = Some(refs(&["t::cargo"]));
+
+        let found = find_legs_outside_for(&traits, &[rule]);
+        assert_eq!(found.len(), 1, "the suppressor leg must be reported");
+        assert_eq!(found[0].role, LegRole::Suppressor);
+        assert_eq!(found[0].leg, "t::cargo");
+    }
+
+    /// One reachable `any:` branch is enough, so a partially-excluded `any:`
+    /// clause is working as written and must stay silent -- otherwise the
+    /// validator buries its real findings in noise.
+    #[test]
+    fn a_partially_reachable_any_clause_is_silent() {
+        let traits = vec![
+            leg("t::js", vec![FileType::JavaScript]),
+            leg("t::elf", vec![FileType::Elf]),
+        ];
+        let mut rule = comp(vec![FileType::Npm, FileType::JavaScript]);
+        rule.any = Some(refs(&["t::js", "t::elf"]));
+        assert!(find_legs_outside_for(&traits, &[rule]).is_empty());
+    }
+
+    /// When every alternative is excluded the clause can never be satisfied,
+    /// so the rule is dead and is reported once for the clause, not per leg.
+    #[test]
+    fn an_entirely_excluded_any_clause_is_reported_once() {
+        let traits = vec![
+            leg("t::elf", vec![FileType::Elf]),
+            leg("t::macho", vec![FileType::Macho]),
+        ];
+        let mut rule = comp(vec![FileType::Npm, FileType::JavaScript]);
+        rule.any = Some(refs(&["t::elf", "t::macho"]));
+
+        let found = find_legs_outside_for(&traits, &[rule]);
+        assert_eq!(found.len(), 1, "one finding per dead clause, not per leg");
+        assert_eq!(found[0].role, LegRole::EveryAlternative);
+    }
+
+    /// An `all:` leg keeps its own role, so the message can say "can never
+    /// fire" rather than the suppressor wording.
+    #[test]
+    fn a_required_leg_keeps_the_required_role() {
+        let traits = vec![leg("t::js", vec![FileType::JavaScript])];
+        let mut rule = comp(vec![FileType::Npm]);
+        rule.all = Some(refs(&["t::js"]));
+
+        let found = find_legs_outside_for(&traits, &[rule]);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].role, LegRole::Required);
     }
 }

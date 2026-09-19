@@ -41,6 +41,7 @@ pub(crate) use traits::{CompositeTrait, DowngradeConditions, Scope, TraitDefinit
 pub(crate) use types::Arch;
 pub(crate) use types::FileType;
 pub use types::Platform;
+pub(crate) use types::TypeMask;
 pub use types::platforms_intersect;
 
 #[cfg(test)]

@@ -48,6 +48,7 @@ pub fn derive_enum_variants(input: TokenStream) -> TokenStream {
         .collect();
 
     let variant_indices: Vec<usize> = (0..variants.len()).collect();
+    let variant_count = variants.len();
 
     let expanded = quote! {
         impl #name {
@@ -63,17 +64,23 @@ pub fn derive_enum_variants(input: TokenStream) -> TokenStream {
                 &[ #(Self::#archive_variants),* ]
             }
 
-            /// This type's bit in a 128-bit type mask. The mask is how a
-            /// composite's `for:` list is intersected against the types a
-            /// finding's origin file can have: one AND per leg, instead of a
-            /// list scan per (leg x member x finding).
+            /// Number of variants; the width a type mask must have to hold
+            /// one bit per variant. `TypeMask` asserts at compile time that
+            /// it still fits, so a new variant cannot overflow the mask
+            /// silently.
+            pub(crate) const VARIANT_COUNT: usize = #variant_count;
+
+            /// This variant's position in declaration order: its bit in a
+            /// type mask. The mask is how a composite's `for:` list is
+            /// intersected against the types a finding's origin file can
+            /// have: one AND per leg, instead of a list scan per
+            /// (leg x member x finding).
             ///
             /// A generated `match`, not a `position()` lookup -- this runs on
             /// the hot path, once per finding considered at container level.
-            /// `scope_plan_invariants` asserts the enum still fits in 128 bits.
-            pub(crate) fn type_bit(&self) -> u128 {
+            pub(crate) const fn variant_index(&self) -> usize {
                 match self {
-                    #(Self::#variants => 1u128 << #variant_indices,)*
+                    #(Self::#variants => #variant_indices,)*
                 }
             }
 

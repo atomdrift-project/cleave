@@ -4,7 +4,7 @@ use super::condition::StringValidator;
 use super::debug::{DebugCollector, EvaluationDebug, SkipReason};
 use super::evaluators::kv::StructuredFormat;
 use super::section_map::SectionMap;
-use super::types::{Arch, FileType, Platform};
+use super::types::{Arch, FileType, Platform, TypeMask};
 use crate::types::{AnalysisReport, Evidence, Finding};
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde_json::Value;
@@ -191,6 +191,20 @@ pub(crate) struct EvaluationContext<'a> {
     pub cached_evidence: Option<&'a FxHashMap<usize, Vec<Evidence>>>,
     /// Current trait index being evaluated
     pub current_trait_idx: Option<usize>,
+    /// Which file types each finding in scope came from, keyed by finding id
+    /// (the OR of every origin's `type_bit`). Present only for container-level
+    /// evaluation, where findings arrive from members of differing types.
+    ///
+    /// `None` means "origins unknown" and disables the `for:` filter for this
+    /// evaluation -- the per-file passes, where every finding came from the one
+    /// file being analyzed, and the office/pdf container paths, which do not
+    /// stamp origins yet. A call site that cannot stamp opts out visibly here
+    /// rather than leaving individual findings to silently default.
+    pub finding_origins: Option<&'a rustc_hash::FxHashMap<String, TypeMask>>,
+    /// The `for:` mask of the composite currently being evaluated, set per rule
+    /// by the container loop. `TypeMask::ALL` (the default) admits everything,
+    /// which is what every non-composite evaluation wants.
+    pub for_mask: TypeMask,
     /// Atom-hit offsets from the raw-content gate, keyed by trait index.
     /// Present only when that gate ran (source members ≤3 MiB). `eval_raw`
     /// windows bounded regexes around these; it must not memmem the haystack
@@ -284,6 +298,8 @@ impl<'a> EvaluationContext<'a> {
             slow_rule_ms: 4000,
             cached_evidence: None,
             current_trait_idx: None,
+            finding_origins: None,
+            for_mask: TypeMask::ALL,
             raw_atom_offsets: None,
             decoded_skip: None,
             cached_source_utf8,
@@ -542,6 +558,27 @@ impl<'a> EvaluationContext<'a> {
         self.findings.contains_id(id)
     }
 
+    /// May a finding with this id satisfy the composite currently being
+    /// evaluated -- i.e. did it come from a file whose type that composite
+    /// declared in `for:`?
+    ///
+    /// True whenever origins are unknown (`finding_origins: None`, every
+    /// per-file evaluation) or the rule declared `for: [all]`. A finding whose
+    /// id is absent from a *stamped* map came from no member this pass knows
+    /// about, so it is excluded: a missed stamp shows up as a rule that stops
+    /// firing, never as one that fires on anything.
+    pub(crate) fn origin_allows(&self, id: &str) -> bool {
+        if self.for_mask == TypeMask::ALL {
+            return true;
+        }
+        let Some(origins) = self.finding_origins else {
+            return true;
+        };
+        origins
+            .get(id)
+            .is_some_and(|origin_mask| origin_mask.intersects(self.for_mask))
+    }
+
     /// Create a dummy context for tests
     #[cfg(test)]
     #[must_use]
@@ -578,6 +615,8 @@ impl<'a> EvaluationContext<'a> {
             slow_rule_ms: 4000,
             cached_evidence: None,
             current_trait_idx: None,
+            finding_origins: None,
+            for_mask: TypeMask::ALL,
             raw_atom_offsets: None,
             decoded_skip: None,
             cached_source_utf8: None,

@@ -4732,7 +4732,7 @@ impl super::CapabilityMapper {
                     "   Enumerating many types is fragile and hard to maintain — use a named group:"
                 );
                 eprintln!(
-                    "   binaries, scripts, source, manifests, documents, media, data, or archives\n"
+                    "   binaries, scripts, source, manifests, build, documents, media, or data\n"
                 );
                 for (id, count, suggestion, is_composite) in &excessive_for {
                     let source = rule_source_files

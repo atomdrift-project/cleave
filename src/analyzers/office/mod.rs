@@ -298,6 +298,22 @@ impl OfficeAnalyzer {
             report.findings.extend(container_findings);
         }
 
+        // The office analyzer assembles its report in stages: `analyze_ole2` /
+        // `analyze_ooxml` findings, then the trait engine, then sub-file
+        // analysis, then container composites. A trait whose `unless:` names
+        // something produced by a later stage was evaluated when that
+        // suppressor did not exist yet, and nothing revisits it -- so
+        // `office-extension-without-package`, whose `unless:` names
+        // `ooxml-parse-error`, survived on every unparseable OOXML file and
+        // `analyze` disagreed with `test-rules` about the same bytes.
+        //
+        // Re-check once here, where this report's finding set is finally
+        // complete. Scoped to the office report on purpose: the same pass over
+        // a whole archive would resolve `unless:` legs across members that the
+        // scope rules keep apart.
+        self.capability_mapper
+            .apply_retroactive_unless_suppression_to_findings(&mut report.findings, None);
+
         report
     }
 

@@ -521,6 +521,11 @@ pub(crate) enum FileType {
     Registry,
     /// Apple Property List (.plist)
     Plist,
+    /// Compiled Interface Builder archive (.nib) in Xcode's `NIBArchive`
+    /// format. The older keyed-archive form is a binary plist on disk and
+    /// types as `Plist`; this variant is the distinct binary layout, whose
+    /// object graph filefacts publishes as `nib.*` facts and strings.
+    Nib,
     /// Xcode project file (project.pbxproj)
     Pbxproj,
     /// CMake build script (CMakeLists.txt, *.cmake)
@@ -800,6 +805,7 @@ impl From<filefacts::FileType> for FileType {
             Ff::GoSum => Self::GoSum,
             // Documents / media
             Ff::Plist => Self::Plist,
+            Ff::Nib => Self::Nib,
             Ff::Pbxproj => Self::Pbxproj,
             Ff::Cmake => Self::Cmake,
             Ff::Rtf => Self::Rtf,
@@ -1107,6 +1113,7 @@ impl FileType {
             Self::SrcInfo => "src_info",
             Self::Registry => "registry",
             Self::Plist => "plist",
+            Self::Nib => "nib",
             Self::Pbxproj => "pbxproj",
             Self::Cmake => "cmake",
             Self::Rtf => "rtf",
@@ -1253,6 +1260,7 @@ impl FileType {
             "pickle" | "pkl" => FileType::Pickle,
             // Additional formats
             "plist" => FileType::Plist,
+            "nib" => FileType::Nib,
             "pbxproj" | "xcodeproj" => FileType::Pbxproj,
             "cmake" | "cmakelists" => FileType::Cmake,
             "pkginfo" | "pkg-info" | "pkg_info" => FileType::PkgInfo,
@@ -1352,6 +1360,7 @@ mod tests {
             (Ff::Makefile, FileType::Makefile),
             (Ff::Dockerfile, FileType::Dockerfile),
             (Ff::Plist, FileType::Plist),
+            (Ff::Nib, FileType::Nib),
         ] {
             assert_eq!(
                 FileType::from(ff),

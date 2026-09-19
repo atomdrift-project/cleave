@@ -2062,7 +2062,7 @@ pub(crate) fn find_excessive_file_types(
     // Only called when is_group_expressible returned false — suggest combining
     // named groups rather than listing every type (or the rejected `for: [all]`).
     let suggest = |_types: &[FileType]| -> &'static str {
-        "combine named groups (binaries, scripts, source, manifests, build, documents, media, data, archives)"
+        "combine named groups (binaries, scripts, source, manifests, build, documents, media, data)"
     };
 
     let mut violations = Vec::new();

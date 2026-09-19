@@ -648,6 +648,7 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 "pickle" | "pkl" => vec![RuleFileType::Pickle],
                 // Other formats
                 "plist" => vec![RuleFileType::Plist],
+                "nib" => vec![RuleFileType::Nib],
                 "pbxproj" | "xcodeproj" => vec![RuleFileType::Pbxproj],
                 "cmake" | "cmakelists" => vec![RuleFileType::Cmake],
                 "pkginfo" => vec![RuleFileType::PkgInfo],
@@ -847,6 +848,7 @@ pub(crate) fn resolve_platform_filetype_conflicts(
                 | RuleFileType::AppleScript
                 | RuleFileType::ObjectiveC
                 | RuleFileType::Plist
+                | RuleFileType::Nib
                 | RuleFileType::Pbxproj
                 | RuleFileType::Ipa => has_darwin,
                 // Swift packages can target Windows, Linux, macOS, and iOS.
@@ -896,6 +898,7 @@ pub(crate) fn resolve_platform_filetype_conflicts(
                 | RuleFileType::AppleScript
                 | RuleFileType::ObjectiveC
                 | RuleFileType::Plist
+                | RuleFileType::Nib
                 | RuleFileType::Pbxproj
                 | RuleFileType::Ipa => (has_darwin, "macos, ios, or unix"),
                 RuleFileType::Swift => (

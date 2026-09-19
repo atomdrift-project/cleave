@@ -227,6 +227,7 @@ pub fn run(
         FileType::VsixManifest => composite_rules::FileType::VsixManifest,
         FileType::SystemdService => composite_rules::FileType::SystemdService,
         FileType::Plist => composite_rules::FileType::Plist,
+        FileType::Nib => composite_rules::FileType::Nib,
         FileType::PkgInfo => composite_rules::FileType::PkgInfo,
         _ => composite_rules::FileType::All,
     };

@@ -779,6 +779,7 @@ impl FileTypeExt for FileType {
             FileType::Flatpak => vec!["flatpak", "archive"],
             FileType::AppleScript => vec!["scpt", "applescript"],
             FileType::Plist => vec!["plist", "xml", "apple"],
+            FileType::Nib => vec!["nib", "xib", "apple"],
             FileType::Pbxproj => vec!["pbxproj", "xcodeproj", "plist", "apple"],
             FileType::Cmake => vec!["cmake", "cmakelists", "build"],
             FileType::Rtf => vec!["rtf", "doc"],

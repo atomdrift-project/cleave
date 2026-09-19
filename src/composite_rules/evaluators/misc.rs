@@ -201,9 +201,27 @@ pub(crate) fn path_dirname(path: &str) -> &str {
     }
 }
 
+/// The member-relative tail of a nested archive path: everything after the
+/// last `!`. A member of an archive inside an archive carries the accumulated
+/// chain (`outer.tar!inner/x.xls!vba/m.vbs`); a rule anchored at `^` was
+/// written against the path the innermost archive sees (`vba/m.vbs`).
+fn member_relative_tail(path: &str) -> Option<&str> {
+    path.rsplit_once('!').map(|(_, tail)| tail)
+}
+
 /// Evaluate a `type: path` condition against the file path. Matches the full
 /// path by default; `basename` scopes to the final component, `dirname` to the
 /// directory portion.
+///
+/// A nested archive member is matched under **both** spellings of its path:
+/// the accumulated chain and the member-relative tail after the last `!`.
+/// Only the tail used to be visible, which quietly put every outer directory
+/// out of reach of `type: path` rules one level down -- a fixture under
+/// `sc/qa/extras/testdocuments/X.xls` was matched as `vba/TestMacros.vbs`, so
+/// `test-directory-path` and every other `qa/`-style carve-out stopped at the
+/// archive boundary while the finding still rolled up to the container.
+/// Matching both keeps the `^`-anchored rules written against the tail
+/// (`^(usr|etc|var)/`, `^([^/]+/)?setup\.py$`) working unchanged.
 pub(crate) fn eval_path(
     exact: Option<&String>,
     substr: Option<&String>,
@@ -214,36 +232,62 @@ pub(crate) fn eval_path(
     dirname: bool,
     ctx: &EvaluationContext<'_>,
 ) -> ConditionResult {
+    // A named fn, not a closure: closure lifetime elision gives the return a
+    // fresh lifetime rather than tying it to the argument.
+    fn scope_of(p: &str, basename: bool, dirname: bool) -> &str {
+        if basename {
+            path_basename(p)
+        } else if dirname {
+            path_dirname(p)
+        } else {
+            p
+        }
+    }
+
     let full = ctx.report.target.path.as_str();
-    let target: &str = if basename {
-        path_basename(full)
-    } else if dirname {
-        path_dirname(full)
-    } else {
-        full
+
+    // `basename` already collapses to the last component, which is identical
+    // for both spellings, so only the full/dirname scopes need the second try.
+    let mut candidates: Vec<&str> = vec![scope_of(full, basename, dirname)];
+    if !basename && let Some(tail) = member_relative_tail(full) {
+        let scoped = scope_of(tail, basename, dirname);
+        if scoped != candidates[0] {
+            candidates.push(scoped);
+        }
+    }
+
+    let eval_one = |target: &str| -> bool {
+        if target.is_empty() {
+            return false;
+        }
+        let (cmp_target, cmp_exact, cmp_substr) = if case_insensitive {
+            (
+                target.to_lowercase(),
+                exact.map(|s| s.to_lowercase()),
+                substr.map(|s| s.to_lowercase()),
+            )
+        } else {
+            (target.to_string(), exact.cloned(), substr.cloned())
+        };
+
+        let matched = if let Some(e) = &cmp_exact {
+            cmp_target == *e
+        } else if let Some(s) = &cmp_substr {
+            cmp_target.contains(s.as_str())
+        } else if let Some(r) = regex {
+            crate::composite_rules::condition::lazy_regex(Some(r.as_str()), case_insensitive)
+                .map(|re| re.is_match(target))
+                .unwrap_or(false)
+        } else {
+            false
+        };
+
+        matched && validate_match(target, is_check)
     };
 
-    let (cmp_target, cmp_exact, cmp_substr) = if case_insensitive {
-        (
-            target.to_lowercase(),
-            exact.map(|s| s.to_lowercase()),
-            substr.map(|s| s.to_lowercase()),
-        )
-    } else {
-        (target.to_string(), exact.cloned(), substr.cloned())
-    };
-
-    let matched = if let Some(e) = &cmp_exact {
-        cmp_target == *e
-    } else if let Some(s) = &cmp_substr {
-        cmp_target.contains(s.as_str())
-    } else if let Some(r) = regex {
-        crate::composite_rules::condition::lazy_regex(Some(r.as_str()), case_insensitive)
-            .map(|re| re.is_match(target))
-            .unwrap_or(false)
-    } else {
-        false
-    };
+    // Report the spelling that actually matched, so the evidence names the
+    // path the rule was reasoning about.
+    let hit: Option<&str> = candidates.into_iter().find(|c| eval_one(c));
 
     let mut precision = 0.0f32;
     if exact.is_some() {
@@ -260,12 +304,10 @@ pub(crate) fn eval_path(
         precision += 0.5;
     }
 
-    let matched = matched && validate_match(target, is_check);
-
     ConditionResult {
-        matched,
-        evidence: if matched {
-            vec![Evidence {
+        matched: hit.is_some(),
+        evidence: match hit {
+            Some(target) => vec![Evidence {
                 method: "path".to_string(),
                 source: "target".to_string(),
                 value: target.to_string(),
@@ -273,11 +315,10 @@ pub(crate) fn eval_path(
                 // bytes in the file. It has no honest file offset.
                 location: None,
                 ..Default::default()
-            }]
-        } else {
-            Vec::new()
+            }],
+            None => Vec::new(),
         },
-        match_count: if matched { 1 } else { 0 },
+        match_count: usize::from(hit.is_some()),
         warnings: Vec::new(),
         precision,
         matched_trait_ids: Vec::new(),

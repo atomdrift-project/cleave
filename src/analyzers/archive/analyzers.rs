@@ -2027,7 +2027,21 @@ impl ArchiveAnalyzer {
             // from the original bytes, so identity is unchanged.
             let normalized_member = crate::file_io::normalize_text_encoding(data);
             let data: &[u8] = normalized_member.as_ref();
-            let logical_path = Path::new(relative_path);
+            // A nested member's logical path must carry the chain its parents
+            // already established (`outer.tar!inner.xls!vba/m.vbs`), not just
+            // its position inside the innermost archive. `AnalysisInput::path`
+            // is documented as the logical member path -- `backing_path` below
+            // is the extracted file tools reopen -- and `type: path` rules read
+            // it, so without the prefix every directory above the innermost
+            // archive is invisible: a fixture under
+            // `sc/qa/extras/testdocuments/X.xls` was matched as
+            // `vba/TestMacros.vbs`, putting it out of reach of
+            // `test-directory-path` while its finding still rolled up.
+            //
+            // `format_entry_path` is the identity at depth 0, so first-level
+            // members -- the overwhelming majority -- are unchanged.
+            let logical_path_buf = self.format_entry_path(relative_path);
+            let logical_path = Path::new(&logical_path_buf);
             // filefacts is the string authority and the parser: open the
             // member once and thread it into the analyzer (below) so it is
             // parsed a single time, regardless of member type.

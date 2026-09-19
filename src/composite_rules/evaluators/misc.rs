@@ -222,6 +222,28 @@ fn member_relative_tail(path: &str) -> Option<&str> {
 /// archive boundary while the finding still rolled up to the container.
 /// Matching both keeps the `^`-anchored rules written against the tail
 /// (`^(usr|etc|var)/`, `^([^/]+/)?setup\.py$`) working unchanged.
+/// A decoded payload layer is reported under its parent's path with a
+/// `##<codec>@<offset>` suffix (`bundle.js.map##unicode-escape@1854094`).
+/// Every `$`-anchored path identity stops matching there -- the source-map
+/// identity `\.[cm]?js\.map$` does not recognise a decoded layer of a source
+/// map -- so the base path is matched as well.
+fn decoded_layer_base(path: &str) -> Option<&str> {
+    path.split_once("##").map(|(base, _)| base)
+}
+
+/// Evaluate a `type: path` condition against the file path. Matches the full
+/// path by default; `basename` scopes to the final component, `dirname` to the
+/// directory portion.
+///
+/// A nested archive member is matched under **both** spellings of its path:
+/// the accumulated chain and the member-relative tail after the last `!`.
+/// Only the tail used to be visible, which quietly put every outer directory
+/// out of reach of `type: path` rules one level down -- a fixture under
+/// `sc/qa/extras/testdocuments/X.xls` was matched as `vba/TestMacros.vbs`, so
+/// `test-directory-path` and every other `qa/`-style carve-out stopped at the
+/// archive boundary while the finding still rolled up to the container.
+/// Matching both keeps the `^`-anchored rules written against the tail
+/// (`^(usr|etc|var)/`, `^([^/]+/)?setup\.py$`) working unchanged.
 pub(crate) fn eval_path(
     exact: Option<&String>,
     substr: Option<&String>,
@@ -249,9 +271,21 @@ pub(crate) fn eval_path(
     // `basename` already collapses to the last component, which is identical
     // for both spellings, so only the full/dirname scopes need the second try.
     let mut candidates: Vec<&str> = vec![scope_of(full, basename, dirname)];
+    if let Some(base) = decoded_layer_base(full) {
+        let scoped = scope_of(base, basename, dirname);
+        if !candidates.contains(&scoped) {
+            candidates.push(scoped);
+        }
+        if !basename && let Some(tail) = member_relative_tail(base) {
+            let scoped = scope_of(tail, basename, dirname);
+            if !candidates.contains(&scoped) {
+                candidates.push(scoped);
+            }
+        }
+    }
     if !basename && let Some(tail) = member_relative_tail(full) {
         let scoped = scope_of(tail, basename, dirname);
-        if scoped != candidates[0] {
+        if !candidates.contains(&scoped) {
             candidates.push(scoped);
         }
     }

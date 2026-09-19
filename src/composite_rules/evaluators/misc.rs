@@ -27,8 +27,11 @@ pub(crate) fn eval_trait<'a>(id: &str, ctx: &EvaluationContext<'a>) -> Condition
     // Check if this is a specific trait reference (contains ::)
     let is_specific = id.contains("::");
 
-    // Fast path: exact match using O(1) index lookup
-    if ctx.has_finding_exact(id) {
+    // Fast path: exact match using O(1) index lookup. `origin_allows` is the
+    // `for:` filter: at container level a finding only counts when it came
+    // from a file type the composite declared, so a rule about a vsix manifest
+    // and its bundled script is not satisfied by a README three members over.
+    if ctx.has_finding_exact(id) && ctx.origin_allows(id) {
         let evidence: Vec<_> = ctx
             .findings
             .iter()
@@ -72,6 +75,7 @@ pub(crate) fn eval_trait<'a>(id: &str, ctx: &EvaluationContext<'a>) -> Condition
             .findings
             .iter()
             .filter(|f| ends_with_ref(&f.id))
+            .filter(|f| ctx.origin_allows(&f.id))
             .collect();
 
         if !matching.is_empty() {
@@ -120,6 +124,7 @@ pub(crate) fn eval_trait<'a>(id: &str, ctx: &EvaluationContext<'a>) -> Condition
             .iter()
             .filter(|f| starts_with_ref(&f.id))
             .filter(|f| ctx.parent_is_exception || f.crit != Criticality::Exception)
+            .filter(|f| ctx.origin_allows(&f.id))
             .collect();
 
         if !matching.is_empty() {
@@ -209,19 +214,6 @@ fn member_relative_tail(path: &str) -> Option<&str> {
     path.rsplit_once('!').map(|(_, tail)| tail)
 }
 
-/// Evaluate a `type: path` condition against the file path. Matches the full
-/// path by default; `basename` scopes to the final component, `dirname` to the
-/// directory portion.
-///
-/// A nested archive member is matched under **both** spellings of its path:
-/// the accumulated chain and the member-relative tail after the last `!`.
-/// Only the tail used to be visible, which quietly put every outer directory
-/// out of reach of `type: path` rules one level down -- a fixture under
-/// `sc/qa/extras/testdocuments/X.xls` was matched as `vba/TestMacros.vbs`, so
-/// `test-directory-path` and every other `qa/`-style carve-out stopped at the
-/// archive boundary while the finding still rolled up to the container.
-/// Matching both keeps the `^`-anchored rules written against the tail
-/// (`^(usr|etc|var)/`, `^([^/]+/)?setup\.py$`) working unchanged.
 /// A decoded payload layer is reported under its parent's path with a
 /// `##<codec>@<offset>` suffix (`bundle.js.map##unicode-escape@1854094`).
 /// Every `$`-anchored path identity stops matching there -- the source-map

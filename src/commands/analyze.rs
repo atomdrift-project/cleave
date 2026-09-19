@@ -300,6 +300,10 @@ fn analyze_and_format(
                 &temp_report,
                 &file.findings,
                 &file.file_type,
+                // Every finding here came from this one file, so the `for:`
+                // filter has nothing to separate: the node gate already
+                // decided it.
+                None,
             );
             if !new_composites.is_empty() {
                 let file = &mut report.files[idx];

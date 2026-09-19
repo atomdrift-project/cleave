@@ -300,6 +300,69 @@ pub fn platforms_intersect(rule: &[Platform], filters: &[Platform]) -> bool {
     })
 }
 
+/// A set of [`FileType`]s as a fixed-width bitset: one bit per variant, in
+/// declaration order.
+///
+/// Carried per finding id at container level (the OR of every origin file's
+/// [`FileType::type_bit`]) and cached per composite from its `for:` list, so
+/// deciding whether a finding may satisfy a leg is one `intersects` instead
+/// of a list scan per (leg x member x finding).
+///
+/// Wider than the enum needs today on purpose: the mask was a bare `u128`
+/// until the 129th variant made `1 << 128` panic on every archive scanned.
+/// The `const` assertion below turns the next overrun into a build error.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub(crate) struct TypeMask([u64; TypeMask::WORDS]);
+
+impl TypeMask {
+    const WORDS: usize = 4;
+    /// Capacity in bits; [`FileType::VARIANT_COUNT`] must not exceed it.
+    pub(crate) const BITS: usize = Self::WORDS * u64::BITS as usize;
+    /// No types.
+    pub(crate) const EMPTY: Self = Self([0; Self::WORDS]);
+    /// Every type, including ones not yet declared: what `for: [all]` means.
+    pub(crate) const ALL: Self = Self([u64::MAX; Self::WORDS]);
+
+    /// The mask holding only the bit at `index`.
+    ///
+    /// `index` is a variant position, so it is always below `BITS` for a
+    /// real `FileType`; anything wider is a programming error caught by the
+    /// compile-time assertion rather than a runtime branch.
+    #[must_use]
+    pub(crate) const fn bit(index: usize) -> Self {
+        let mut words = [0u64; Self::WORDS];
+        words[index / u64::BITS as usize] = 1u64 << (index % u64::BITS as usize);
+        Self(words)
+    }
+
+    /// Whether the two sets share at least one type.
+    #[must_use]
+    pub(crate) fn intersects(self, other: Self) -> bool {
+        self.0.iter().zip(other.0).any(|(a, b)| a & b != 0)
+    }
+}
+
+impl std::ops::BitOr for TypeMask {
+    type Output = Self;
+    fn bitor(mut self, rhs: Self) -> Self {
+        self |= rhs;
+        self
+    }
+}
+
+impl std::ops::BitOrAssign for TypeMask {
+    fn bitor_assign(&mut self, rhs: Self) {
+        for (word, other) in self.0.iter_mut().zip(rhs.0) {
+            *word |= other;
+        }
+    }
+}
+
+const _: () = assert!(
+    FileType::VARIANT_COUNT <= TypeMask::BITS,
+    "FileType has more variants than TypeMask has bits; widen TypeMask::WORDS"
+);
+
 /// File type specifier for rule targeting
 #[derive(
     Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Hash, PartialOrd, Ord, EnumVariants,
@@ -308,9 +371,16 @@ pub fn platforms_intersect(rule: &[Platform], filters: &[Platform]) -> bool {
 pub(crate) enum FileType {
     /// Applies to all file types
     All,
-    /// Generic archive/container when the analyzer does not filefacts a subtype
+    /// RAR archive
     #[archive]
-    Archive,
+    Rar,
+    /// 7-Zip archive
+    #[archive]
+    #[serde(rename = "7z")]
+    SevenZ,
+    /// cpio archive
+    #[archive]
+    Cpio,
     /// Analyzer could not classify the file beyond opaque/unknown content
     Unknown,
     /// ELF binary (Linux/Unix executable or shared library)
@@ -604,8 +674,9 @@ pub(crate) enum FileType {
     #[archive]
     Cab,
     /// Optical-disc image (.iso) — ISO 9660 and/or UDF. Its own bucket
-    /// rather than part of [`FileType::Archive`] because the `iso.*` facts
-    /// its rules read exist on no other container, and because an image is
+    /// rather than folded into the generic archive family because the
+    /// `iso.*` facts its rules read exist on no other container, and
+    /// because an image is
     /// a filesystem: members are addressable sector runs, not compressed
     /// entries, so the archive-family content rules do not apply to it.
     #[archive]
@@ -763,7 +834,9 @@ impl From<filefacts::FileType> for FileType {
             Ff::Xz => Self::Xz,
             Ff::Lzma => Self::Lzma,
             Ff::Zst => Self::Zst,
-            Ff::SevenZ | Ff::Rar | Ff::Cpio => Self::Archive,
+            Ff::SevenZ => Self::SevenZ,
+            Ff::Rar => Self::Rar,
+            Ff::Cpio => Self::Cpio,
             Ff::Iso => Self::Iso,
             Ff::Deb => Self::Deb,
             Ff::StaticLib => Self::StaticLib,
@@ -942,6 +1015,157 @@ impl FileType {
             .collect()
     }
 
+    /// This type's bit in a [`TypeMask`].
+    #[must_use]
+    pub(crate) const fn type_bit(self) -> TypeMask {
+        TypeMask::bit(self.variant_index())
+    }
+
+    /// The canonical spelling an author writes in a rule's `for:` list.
+    ///
+    /// The inverse of [`Self::from_str`], and the only correct way to name a
+    /// file type in a message a rule author will act on. `format!("{:?}")`
+    /// is not: its lowercased Debug gives `packagejson`, `sevenz` and
+    /// `cargolock`, none of which parse back, so an author who pastes one
+    /// into `for:` silently gets `Unknown`.
+    ///
+    /// `label_round_trips_through_from_str` pins every arm, and the match is
+    /// exhaustive, so a new variant cannot be added without naming it here.
+    #[must_use]
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Rar => "rar",
+            Self::SevenZ => "7z",
+            Self::Cpio => "cpio",
+            Self::Unknown => "unknown",
+            Self::Elf => "elf",
+            Self::Macho => "macho",
+            Self::Pe => "pe",
+            Self::Class => "class",
+            Self::Pyc => "pyc",
+            Self::Beam => "beam",
+            Self::Wasm => "wasm",
+            Self::Dex => "dex",
+            Self::Shell => "shell",
+            Self::Batch => "batch",
+            Self::Jcl => "jcl",
+            Self::Python => "python",
+            Self::JavaScript => "javascript",
+            Self::TypeScript => "typescript",
+            Self::Rust => "rust",
+            Self::Java => "java",
+            Self::Ruby => "ruby",
+            Self::C => "c",
+            Self::Cpp => "cpp",
+            Self::Go => "go",
+            Self::Php => "php",
+            Self::CSharp => "csharp",
+            Self::Lua => "lua",
+            Self::Perl => "perl",
+            Self::PowerShell => "powershell",
+            Self::Swift => "swift",
+            Self::ObjectiveC => "objectivec",
+            Self::Groovy => "groovy",
+            Self::Kotlin => "kotlin",
+            Self::Scala => "scala",
+            Self::Zig => "zig",
+            Self::Elixir => "elixir",
+            Self::Clojure => "clojure",
+            Self::AppleScript => "applescript",
+            Self::Vbs => "vbs",
+            Self::Html => "html",
+            Self::Markdown => "markdown",
+            Self::Makefile => "makefile",
+            Self::Dockerfile => "dockerfile",
+            Self::Text => "text",
+            Self::Data => "data",
+            Self::Json => "json",
+            Self::Gyp => "gyp",
+            Self::PackageJson => "package.json",
+            Self::PackageLockJson => "package-lock.json",
+            Self::CargoLock => "cargo.lock",
+            Self::RequirementsTxt => "requirements.txt",
+            Self::PoetryLock => "poetry.lock",
+            Self::PipfileLock => "pipfile.lock",
+            Self::GemfileLock => "gemfile.lock",
+            Self::ComposerLock => "composer.lock",
+            Self::YarnLock => "yarn.lock",
+            Self::PnpmLock => "pnpm-lock.yaml",
+            Self::GoMod => "go.mod",
+            Self::GoSum => "go.sum",
+            Self::ChromeManifest => "chrome-manifest",
+            Self::VsixManifest => "vsixmanifest",
+            Self::CargoToml => "cargo-toml",
+            Self::PyProjectToml => "pyproject-toml",
+            Self::GithubActions => "github-actions",
+            Self::SystemdService => "systemd_service",
+            Self::DesktopEntry => "desktop_entry",
+            Self::Xml => "xml",
+            Self::ComposerJson => "composer-json",
+            Self::PkgInfo => "pkginfo",
+            Self::SrcInfo => "src_info",
+            Self::Registry => "registry",
+            Self::Plist => "plist",
+            Self::Pbxproj => "pbxproj",
+            Self::Cmake => "cmake",
+            Self::Rtf => "rtf",
+            Self::OleDoc => "ole",
+            Self::Msi => "msi",
+            Self::Ooxml => "ooxml",
+            Self::Odf => "odf",
+            Self::Lnk => "lnk",
+            Self::Ipa => "ipa",
+            Self::Jpeg => "jpeg",
+            Self::Png => "png",
+            Self::Svg => "svg",
+            Self::Wav => "wav",
+            Self::Aiff => "aiff",
+            Self::Mp3 => "mp3",
+            Self::Mp4 => "mp4",
+            Self::Ico => "ico",
+            Self::Gif => "gif",
+            Self::Bmp => "bmp",
+            Self::Webp => "webp",
+            Self::Font => "font",
+            Self::Pickle => "pickle",
+            Self::Pdf => "pdf",
+            Self::Zip => "zip",
+            Self::AndroidApk => "apk",
+            Self::AlpineApk => "apk_alpine",
+            Self::Jar => "jar",
+            Self::Tar => "tar",
+            Self::Zst => "zst",
+            Self::Gz => "gz",
+            Self::Bz2 => "bz2",
+            Self::Xz => "xz",
+            Self::Lzma => "lzma",
+            Self::Npm => "npm",
+            Self::Nupkg => "nupkg",
+            Self::Crate => "crate",
+            Self::Conda => "conda",
+            Self::Egg => "egg",
+            Self::Pkg => "pkg_macos",
+            Self::Dmg => "dmg",
+            Self::Gem => "gem",
+            Self::Whl => "whl",
+            Self::PythonSdist => "python_sdist",
+            Self::Deb => "deb",
+            Self::StaticLib => "static-lib",
+            Self::Rpm => "rpm",
+            Self::Crx => "crx",
+            Self::Chm => "chm",
+            Self::Cab => "cab",
+            Self::Iso => "iso",
+            Self::OciImage => "oci_image",
+            Self::Xbps => "xbps",
+            Self::GentooBinpkg => "gentoo_binpkg",
+            Self::Asar => "asar",
+            Self::VsixArchive => "vsix",
+            Self::Xpi => "xpi",
+        }
+    }
+
     /// Parse a file type string into a FileType enum variant.
     /// This is the canonical mapping used by both production scanning and test-rules.
     #[must_use]
@@ -1049,7 +1273,9 @@ impl FileType {
             "lnk" => FileType::Lnk,
             "ipa" => FileType::Ipa,
             "pdf" => FileType::Pdf,
-            "archive" | "rar" | "7z" | "cpio" => FileType::Archive,
+            "rar" => FileType::Rar,
+            "7z" => FileType::SevenZ,
+            "cpio" => FileType::Cpio,
             // "unknown" falls through to the `_` wildcard arm below.
             "zip" => FileType::Zip,
             // `apk` bare (and its old alias `apk_android`) means the Android
@@ -1427,8 +1653,78 @@ mod tests {
     }
 
     #[test]
+    fn every_variant_has_a_distinct_type_bit() {
+        // The mask was a bare `u128` until the 129th variant made
+        // `1 << 128` panic on every archive scanned. Each variant must land
+        // on its own bit, no bit may be shared, and a mask built from the
+        // whole inventory must intersect every single type -- across the
+        // word boundary that a one-word mask never crossed.
+        let variants = FileType::all_variants();
+        assert_eq!(variants.len(), FileType::VARIANT_COUNT);
+        let mut union = TypeMask::EMPTY;
+        for (i, ft) in variants.iter().enumerate() {
+            let bit = ft.type_bit();
+            assert_ne!(bit, TypeMask::EMPTY, "{ft:?} has no bit");
+            assert!(!union.intersects(bit), "{ft:?} shares a bit");
+            assert_eq!(ft.variant_index(), i);
+            union |= bit;
+        }
+        for ft in &variants {
+            assert!(union.intersects(ft.type_bit()));
+            assert!(TypeMask::ALL.intersects(ft.type_bit()));
+        }
+        assert!(!TypeMask::EMPTY.intersects(TypeMask::ALL));
+        // Two types on different words of the mask do not intersect.
+        let first = variants[0].type_bit();
+        let last = variants[variants.len() - 1].type_bit();
+        assert!(!first.intersects(last));
+        assert!((first | last).intersects(last));
+    }
+
+    #[test]
+    fn label_round_trips_through_from_str() {
+        // Every type name an author is shown must be one they can type back.
+        // Three deliberate exceptions, none of which `from_str` owns:
+        // `All` is a group keyword resolved in `capabilities::parsing`, and
+        // `TypeScript`/`Cpp` fold onto `JavaScript`/`C` (one grammar, one
+        // rule surface), so neither has a spelling of its own.
+        for ft in FileType::all_variants() {
+            if matches!(ft, FileType::TypeScript | FileType::Cpp | FileType::All) {
+                continue;
+            }
+            assert_eq!(
+                FileType::from_str(ft.label()),
+                ft,
+                "label() for {ft:?} is {:?}, which from_str does not map back",
+                ft.label()
+            );
+        }
+    }
+
+    #[test]
+    fn rar_7z_cpio_are_their_own_archive_family_members() {
+        // The old generic `archive` bucket collapsed rar/7z/cpio into one
+        // undifferentiated type; each now has its own concrete FileType so
+        // `for:` can target them individually, and the bare literal
+        // "archive" is retired -- it must not resolve to anything.
+        assert_eq!(FileType::from_str("rar"), FileType::Rar);
+        assert_eq!(FileType::from_str("7z"), FileType::SevenZ);
+        assert_eq!(FileType::from_str("cpio"), FileType::Cpio);
+        assert!(FileType::Rar.is_archive());
+        assert!(FileType::SevenZ.is_archive());
+        assert!(FileType::Cpio.is_archive());
+        assert_ne!(FileType::from_str("archive"), FileType::Rar);
+        assert_ne!(FileType::from_str("archive"), FileType::SevenZ);
+        assert_ne!(FileType::from_str("archive"), FileType::Cpio);
+        assert_eq!(FileType::from_str("archive"), FileType::Unknown);
+    }
+
+    #[test]
     fn archive_family_is_generated_from_enum_markers() {
         let family = FileType::archive_family_types();
+        assert!(family.contains(&FileType::Rar));
+        assert!(family.contains(&FileType::SevenZ));
+        assert!(family.contains(&FileType::Cpio));
         assert!(family.contains(&FileType::Dmg));
         assert!(family.contains(&FileType::Asar));
         assert!(family.contains(&FileType::OciImage));
@@ -1726,7 +2022,10 @@ mod package_family_tests {
             .iter()
             .filter(|ft| !FileType::is_archive(ft))
             .collect();
-        assert!(strays.is_empty(), "package types missing #[archive]: {strays:?}");
+        assert!(
+            strays.is_empty(),
+            "package types missing #[archive]: {strays:?}"
+        );
     }
 
     /// The split is "unit of distribution" vs "generic container". Spelled out
@@ -1770,8 +2069,20 @@ mod package_family_tests {
     #[test]
     fn package_labels_round_trip_through_from_str() {
         for label in [
-            "npm", "nupkg", "gem", "whl", "python_sdist", "crate", "conda", "egg", "deb", "rpm",
-            "apk_alpine", "apk_android", "xbps", "oci_image",
+            "npm",
+            "nupkg",
+            "gem",
+            "whl",
+            "python_sdist",
+            "crate",
+            "conda",
+            "egg",
+            "deb",
+            "rpm",
+            "apk_alpine",
+            "apk_android",
+            "xbps",
+            "oci_image",
         ] {
             assert!(
                 FileType::from_str(label).is_package(),

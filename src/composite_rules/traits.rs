@@ -15,7 +15,8 @@ use super::evaluators::{
     eval_symbol, eval_syscall, eval_text, eval_trait, eval_yara_inline,
 };
 use super::types::{
-    Arch, FileType, Platform, default_architectures, default_file_types, default_platforms,
+    Arch, FileType, Platform, TypeMask, default_architectures, default_file_types,
+    default_platforms,
 };
 use crate::types::{
     Criticality, Evidence, Finding, FindingKind, MAX_EVIDENCE_PER_TRAIT, deduplicate_evidence,
@@ -2279,6 +2280,12 @@ pub(crate) struct CompositeTrait {
     pub(crate) id_shared: std::sync::OnceLock<crate::types::Istr>,
     #[serde(skip)]
     pub(crate) desc_shared: std::sync::OnceLock<crate::types::Istr>,
+    /// `for:` as a type mask, built once on first use. Intersected
+    /// against the type of the file a candidate finding came from, so a leg is
+    /// satisfied only by evidence from a file this rule declared. `serde(skip)`:
+    /// derived from `for:`.
+    #[serde(skip)]
+    pub(crate) for_mask_cache: std::sync::OnceLock<TypeMask>,
     /// Confidence score for the generated finding
     pub conf: f32,
 
@@ -2379,6 +2386,7 @@ impl Default for CompositeTrait {
     /// construction (used widely in tests) matches what the YAML loader produces.
     fn default() -> Self {
         Self {
+            for_mask_cache: std::sync::OnceLock::new(),
             id: String::new(),
             desc: String::new(),
             id_shared: std::sync::OnceLock::new(),
@@ -2409,8 +2417,6 @@ impl Default for CompositeTrait {
         }
     }
 }
-
-
 
 impl CompositeTrait {
     /// The scope this composite runs under when it omits `scope:`, chosen
@@ -2450,6 +2456,26 @@ impl CompositeTrait {
     /// given, otherwise [`Self::default_scope`].
     pub(crate) fn effective_scope(&self) -> Scope {
         self.scope.unwrap_or_else(|| self.default_scope())
+    }
+
+    /// `for:` as a type mask: which files' findings may satisfy this rule's
+    /// legs. `for: [all]` is every bit set, which disables the filter.
+    ///
+    /// `for:` names the file types the rule is about -- the container it
+    /// reports on *and* the members whose evidence it may mix. A rule that
+    /// ties a vsix manifest to its bundled script says
+    /// `for: [vsix, javascript, json]`; one that says only `for: [vsix]`
+    /// pools nothing, because no member of a vsix is itself a vsix.
+    pub(crate) fn for_mask(&self) -> TypeMask {
+        *self.for_mask_cache.get_or_init(|| {
+            if self.r#for.contains(&FileType::All) || self.r#for.is_empty() {
+                TypeMask::ALL
+            } else {
+                self.r#for
+                    .iter()
+                    .fold(TypeMask::EMPTY, |acc, ft| acc | ft.type_bit())
+            }
+        })
     }
 
     /// Check for empty, too-short, or too-long descriptions. Composites get a
@@ -3782,8 +3808,11 @@ impl CompositeTrait {
         let filtered_evidence: Vec<Evidence> = evidence
             .into_iter()
             .filter(|ev| {
-                scope.key(ev.location.as_deref(), archive_contents, top_level_file_type)
-                    == winning_key
+                scope.key(
+                    ev.location.as_deref(),
+                    archive_contents,
+                    top_level_file_type,
+                ) == winning_key
             })
             .collect();
         Some((filtered_evidence, filtered_tags))
@@ -4628,7 +4657,12 @@ mod scope_tests {
     #[test]
     fn default_scope_follows_the_for_list() {
         // An ecosystem package means the package boundary...
-        for ft in [FileType::Npm, FileType::Deb, FileType::Whl, FileType::VsixArchive] {
+        for ft in [
+            FileType::Npm,
+            FileType::Deb,
+            FileType::Whl,
+            FileType::VsixArchive,
+        ] {
             assert_eq!(
                 composite_for(vec![ft]).effective_scope(),
                 Scope::Package,
@@ -4703,9 +4737,11 @@ mod scope_tests {
             ""
         );
         assert_eq!(
-            Scope::Leaf.key(Some(
-                "archive:a.zip!!pkg/index.js:value:source.execution.module_http"
-            ), &[], ""),
+            Scope::Leaf.key(
+                Some("archive:a.zip!!pkg/index.js:value:source.execution.module_http"),
+                &[],
+                ""
+            ),
             "archive:a.zip!!pkg/index.js"
         );
         assert_ne!(
@@ -4713,7 +4749,10 @@ mod scope_tests {
             Scope::Leaf.key(Some("archive:a.zip!!two.js:value:x"), &[], "")
         );
         assert_eq!(Scope::Leaf.key(None, &[], ""), "");
-        assert_eq!(Scope::Leaf.key(Some("archive:foo.so"), &[], ""), "archive:foo.so");
+        assert_eq!(
+            Scope::Leaf.key(Some("archive:foo.so"), &[], ""),
+            "archive:foo.so"
+        );
         assert_eq!(
             Scope::Leaf.key(Some("encoding_chain:base64+zlib"), &[], ""),
             "encoding_chain:base64+zlib"
@@ -4739,13 +4778,19 @@ mod scope_tests {
     #[test]
     fn file_keeps_archive_path_drops_decoded_layers() {
         // Archive entry: file-level == leaf-level.
-        assert_eq!(Scope::File.key(Some("archive:foo.so"), &[], ""), "archive:foo.so");
+        assert_eq!(
+            Scope::File.key(Some("archive:foo.so"), &[], ""),
+            "archive:foo.so"
+        );
         assert_eq!(
             Scope::File.key(Some("archive:foo.so:0x10"), &[], ""),
             "archive:foo.so"
         );
         // Encoded payloads collapse to the input-wide key.
-        assert_eq!(Scope::File.key(Some("encoding_chain:base64+zlib"), &[], ""), "");
+        assert_eq!(
+            Scope::File.key(Some("encoding_chain:base64+zlib"), &[], ""),
+            ""
+        );
         assert_eq!(Scope::File.key(None, &[], ""), "");
     }
 
@@ -4975,8 +5020,14 @@ mod scope_tests {
 
     #[test]
     fn archive_returns_bare_prefix_for_single_level() {
-        assert_eq!(Scope::Archive.key(Some("archive:foo.so"), &[], ""), "archive:");
-        assert_eq!(Scope::Archive.key(Some("archive:bar.so"), &[], ""), "archive:");
+        assert_eq!(
+            Scope::Archive.key(Some("archive:foo.so"), &[], ""),
+            "archive:"
+        );
+        assert_eq!(
+            Scope::Archive.key(Some("archive:bar.so"), &[], ""),
+            "archive:"
+        );
     }
 
     #[test]

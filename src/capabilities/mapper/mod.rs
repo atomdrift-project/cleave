@@ -1212,3 +1212,171 @@ mod proximity_offset_tests {
         }
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod scope_plan_dump {
+    //! Throwaway diagnostic for the SCOPE_PLAN.md trait-tree migration.
+    //! Loads the real tree via `CLEAVE_TRAITS_DIR` and dumps every rule's
+    //! ENGINE-RESOLVED `for:` (groups expanded, exclusions applied) plus,
+    //! for each `all:`/`any:`/`unless:` leg, its own resolved `for:` --
+    //! ground truth from the actual loader, not a hand-reimplemented parser.
+    //! Two independent Python reimplementations of group/exclusion
+    //! resolution already produced false "dead composite" results before
+    //! this was written; this sidesteps that whole bug class.
+    #[test]
+    #[ignore]
+    fn dump_resolved_for_lists() {
+        let mapper = super::CapabilityMapper::try_new_with_load_options(
+            super::CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION,
+            super::CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION,
+            false,
+            false,
+        )
+        .expect("load tree");
+
+        // `{:?}` on a compound name loses word boundaries (`SystemdService`
+        // -> "systemdservice", not the tree's "systemd-service") -- exactly
+        // the bug that put `systemdservice`/`pythonsdist` into 5 rules on the
+        // first run of this dump. Recover the real word boundaries from the
+        // Debug string itself (split before each uppercase letter) and prefer
+        // whichever separator -- hyphen or underscore -- the tree actually
+        // uses for that spelling, since the convention is not consistent
+        // (chrome-manifest vs android_apk). Verified against
+        // `FileType::from_str` so a spelling that doesn't round-trip is
+        // never emitted silently.
+        let spell_one = |t: &crate::composite_rules::FileType| -> String {
+            let debug = format!("{t:?}");
+            let mut words = Vec::new();
+            let mut cur = String::new();
+            for c in debug.chars() {
+                if c.is_uppercase() && !cur.is_empty() {
+                    words.push(std::mem::take(&mut cur));
+                }
+                cur.push(c.to_ascii_lowercase());
+            }
+            if !cur.is_empty() {
+                words.push(cur);
+            }
+            if words.len() == 1 {
+                return words.into_iter().next().unwrap_or_default();
+            }
+            let hyphenated = words.join("-");
+            let underscored = words.join("_");
+            let joined = words.join("");
+            for candidate in [&hyphenated, &underscored, &joined] {
+                if crate::composite_rules::FileType::from_str(candidate) == *t {
+                    return candidate.clone();
+                }
+            }
+            // No spelling round-trips: this variant cannot be written back
+            // into YAML at all (`FileType::TypeScript` is the known case --
+            // `from_str("typescript")` deliberately folds to `JavaScript`,
+            // per parse_file_types's own comment, so the variant only ever
+            // appears via the `source` group's literal expansion and has no
+            // token of its own). A sentinel, not a plausible-looking guess:
+            // the first version of this dump fell back to `hyphenated` here
+            // and silently wrote `type-script` into 7 rules' `for:` lists,
+            // which `cleave validate` then rejected as an unknown file type.
+            // The consuming script must skip anything carrying this marker.
+            "__UNSPELLABLE__".to_string()
+        };
+        let spell = |types: &[crate::composite_rules::FileType]| -> Vec<String> {
+            types.iter().map(spell_one).collect()
+        };
+        // Per-type archive/package flags, parallel to `spell`'s output --
+        // read from the engine's own `is_archive`/`is_package`, never a
+        // hand-copied type-name list (the exact mistake this migration's
+        // Python scripts made twice already).
+        let flags = |types: &[crate::composite_rules::FileType]| -> Vec<serde_json::Value> {
+            types
+                .iter()
+                .map(|t| {
+                    serde_json::json!({
+                        "type": spell_one(t),
+                        "is_archive": crate::composite_rules::FileType::is_archive(t),
+                        "is_package": t.is_package(),
+                    })
+                })
+                .collect()
+        };
+        let leg_ids = |conds: &Option<Vec<crate::composite_rules::Condition>>| -> Vec<String> {
+            conds
+                .as_ref()
+                .map(|v| {
+                    v.iter()
+                        .filter_map(|c| match c {
+                            crate::composite_rules::Condition::Trait { id } => Some(id.clone()),
+                            _ => None,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+
+        // Classify each atomic's matcher: does it read raw file bytes/decoded
+        // text (never visible on an archive container's own bytes -- cleave
+        // expands archives into members and never content-scans the
+        // container itself), or a structured `value`/`metrics`/`kv` path
+        // whose namespace ties it to a specific parsed format? The namespace
+        // prefix (`path`/`field` before the first `.`) is what
+        // `archive_filetype_mix_fix.py` uses to decide which half of a mixed
+        // `for:` list the fact actually belongs to.
+        let condition_shape =
+            |c: &crate::composite_rules::Condition| -> (&'static str, Option<String>) {
+                use crate::composite_rules::Condition;
+                match c {
+                    Condition::Metrics(q) => ("metrics", Some(q.field.clone())),
+                    Condition::Kv(q) => ("kv", Some(q.path.clone())),
+                    Condition::Path(_) => ("path", None),
+                    Condition::Text(_) => ("text", None),
+                    Condition::Comment(_) => ("comment", None),
+                    Condition::Literal(_) => ("literal", None),
+                    Condition::Symbol(_) => ("symbol", None),
+                    Condition::TreeSitter(_) => ("tree-sitter", None),
+                    Condition::Yara { .. } => ("yara", None),
+                    Condition::Syscall { .. } => ("syscall", None),
+                    Condition::Hex(_) => ("hex", None),
+                    Condition::Raw(_) => ("raw", None),
+                    Condition::Section(_) => ("section", None),
+                    Condition::Encoded(_) => ("encoded", None),
+                    Condition::Trait { .. } => ("trait", None),
+                }
+            };
+
+        let mut out = std::collections::BTreeMap::new();
+        for t in &mapper.trait_definitions {
+            let (kind, ns) = condition_shape(&t.r#if);
+            out.insert(
+                t.id.clone(),
+                serde_json::json!({
+                    "kind": "trait",
+                    "for": spell(&t.r#for),
+                    "for_flags": flags(&t.r#for),
+                    "for_from_groups": t.for_from_groups,
+                    "matcher": kind,
+                    "namespace": ns,
+                }),
+            );
+        }
+        for c in &mapper.composite_rules {
+            out.insert(
+                c.id.clone(),
+                serde_json::json!({
+                    "kind": "composite",
+                    "for": spell(&c.r#for),
+                    "scope": format!("{:?}", c.effective_scope()),
+                    "all": leg_ids(&c.all),
+                    "any": leg_ids(&c.any),
+                    "unless": leg_ids(&c.unless),
+                }),
+            );
+        }
+        std::fs::write(
+            "/home/t/tmp/fix/resolved_for_lists.json",
+            serde_json::to_string(&out).expect("serialize"),
+        )
+        .expect("write dump");
+        eprintln!("wrote {} entries", out.len());
+    }
+}

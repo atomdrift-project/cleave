@@ -15,8 +15,8 @@
 
 use super::shared::{MatchSignature, PatternLocation};
 use crate::composite_rules::{
-    CompositeTrait, Condition, FileType as RuleFileType, KvQuery, Platform, TraitDefinition,
-    condition::EncodingSpec, evaluators::build_regex,
+    CompositeTrait, Condition, DowngradeConditions, FileType as RuleFileType, KvQuery, Platform,
+    TraitDefinition, condition::EncodingSpec, evaluators::build_regex,
 };
 use crate::composite_rules::{
     EncodedQuery, LiteralQuery, PathQuery, RawQuery, SectionQuery, SymbolQuery, TextQuery,
@@ -953,7 +953,7 @@ fn extract_patterns(trait_def: &TraitDefinition) -> Vec<(String, PatternLocation
     let for_types: HashSet<String> = trait_def
         .r#for
         .iter()
-        .map(|ft| format!("{:?}", ft).to_lowercase())
+        .map(|ft| ft.label().to_string())
         .collect();
 
     let file_path = trait_def.defined_in.to_string_lossy().to_string();
@@ -5060,13 +5060,38 @@ pub(crate) fn find_overlapping_scope_duplicates(
             v
         };
         // Evidence only: what the rule looks for, and what suppresses it.
+        // `scope`, `downgrade`, `near_bytes`/`near_lines` and `size_min`/
+        // `size_max` all change what "the same evidence" means: two rules
+        // sharing every leg but pooling from a different scope draw on
+        // different evidence (`pkgsrc-maintainer-archive-context`,
+        // `scope: outer`, is not a duplicate of a file-scoped sibling that
+        // happens to share legs), a `downgrade:` changes the verdict the
+        // shared evidence produces (`excessive-line-length-large-pe` vs
+        // `...-protobuf-text` differ only in this), and a proximity or size
+        // gate narrows which files the shared legs actually convict.
+        let downgrade_sig = |d: Option<&DowngradeConditions>| {
+            d.map(|dg| {
+                format!(
+                    "{:?}|{:?}|{:?}|{:?}",
+                    legs(dg.all.as_ref()),
+                    legs(dg.any.as_ref()),
+                    legs(dg.none.as_ref()),
+                    dg.needs,
+                )
+            })
+        };
         let signature = format!(
-            "{:?}|{:?}|{:?}|{:?}|{:?}",
+            "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
             legs(rule.all.as_ref()),
             legs(rule.any.as_ref()),
             rule.needs,
             legs(rule.unless.as_ref()),
             rule.not,
+            rule.scope,
+            downgrade_sig(rule.downgrade.as_ref()),
+            rule.near_bytes,
+            rule.near_lines,
+            (rule.size_min, rule.size_max),
         );
         if rule.all.is_none() && rule.any.is_none() {
             continue;
@@ -5083,6 +5108,12 @@ pub(crate) fn find_overlapping_scope_duplicates(
                 {
                     continue;
                 }
+                // An exception is a suppressor, not a finding -- it never
+                // surfaces on its own, so "two findings report the same
+                // evidence" is false whenever either side is one.
+                if a.crit == Criticality::Exception || b.crit == Criticality::Exception {
+                    continue;
+                }
                 found.push((
                     a.id.clone(),
                     b.id.clone(),
@@ -5094,6 +5125,80 @@ pub(crate) fn find_overlapping_scope_duplicates(
         }
     }
     found
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod overlapping_scope_duplicate_tests {
+    use super::*;
+    use crate::composite_rules::{Condition, Scope};
+
+    fn leg(id: &str) -> Condition {
+        Condition::Trait { id: id.to_string() }
+    }
+
+    fn base(id: &str, crit: Criticality) -> CompositeTrait {
+        CompositeTrait {
+            id: id.to_string(),
+            desc: "r".to_string(),
+            crit,
+            all: Some(vec![leg("a"), leg("b")]),
+            r#for: vec![RuleFileType::Shell],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn same_legs_same_crit_is_flagged() {
+        let rules = vec![
+            base("r1", Criticality::Notable),
+            base("r2", Criticality::Notable),
+        ];
+        let found = find_overlapping_scope_duplicates(&rules);
+        assert_eq!(found.len(), 1);
+        assert!(found[0].4, "same crit should report same_crit = true");
+    }
+
+    /// `scope` changes what counts as the same evidence: two rules with identical
+    /// legs but different pooling scopes draw on different evidence and are not
+    /// duplicates (`pkgsrc-maintainer-archive-context`, `scope: outer`, looked
+    /// like a duplicate of a file-scoped sibling before this fix).
+    #[test]
+    fn differing_scope_is_not_a_duplicate() {
+        let mut a = base("r1", Criticality::Notable);
+        let mut b = base("r2", Criticality::Notable);
+        a.scope = Some(Scope::Outer);
+        b.scope = None;
+        assert!(find_overlapping_scope_duplicates(&[a, b]).is_empty());
+    }
+
+    /// A `downgrade:` changes the verdict the shared evidence produces, so two
+    /// rules differing only there are not reporting the same finding twice
+    /// (`excessive-line-length-large-pe` vs `...-protobuf-text`).
+    #[test]
+    fn differing_downgrade_is_not_a_duplicate() {
+        let mut a = base("r1", Criticality::Notable);
+        let b = base("r2", Criticality::Notable);
+        a.downgrade = Some(DowngradeConditions {
+            any: Some(vec![leg("x")]),
+            all: None,
+            none: None,
+            needs: None,
+            scope: None,
+        });
+        assert!(find_overlapping_scope_duplicates(&[a, b]).is_empty());
+    }
+
+    /// An exception is a suppressor, not a finding: it never surfaces on its
+    /// own, so "two findings report the same evidence" is false whenever
+    /// either side is one (`pkgsrc-maintainer-archive-context` alongside a
+    /// baseline sibling with the same legs looked like a duplicate pair).
+    #[test]
+    fn either_side_being_an_exception_is_not_a_duplicate() {
+        let a = base("r1", Criticality::Exception);
+        let b = base("r2", Criticality::Notable);
+        assert!(find_overlapping_scope_duplicates(&[a, b]).is_empty());
+    }
 }
 
 #[cfg(test)]

@@ -8,7 +8,9 @@
 
 use crate::capabilities::indexes::TraitBitSet;
 use crate::composite_rules::PathQuery;
-use crate::composite_rules::{Arch, EvaluationContext, FileType as RuleFileType, SectionMap};
+use crate::composite_rules::{
+    Arch, EvaluationContext, FileType as RuleFileType, SectionMap, TypeMask,
+};
 use crate::types::{AnalysisReport, Criticality, Evidence, Finding, FindingKind};
 use std::collections::HashMap;
 use std::path::Path;
@@ -588,11 +590,18 @@ impl super::CapabilityMapper {
         }
     }
 
+    /// `finding_origins` maps a finding id to the OR of the `type_bit`s of the
+    /// files it was found in, and drives the `for:` filter (see
+    /// `EvaluationContext::origin_allows`). `None` disables the filter for this
+    /// container -- the honest option for a call site that cannot say where its
+    /// findings came from, since the alternative is every composite here
+    /// silently losing its legs.
     pub(crate) fn evaluate_container_composites(
         &self,
         container_report: &AnalysisReport,
         nested_findings: &[Finding],
         file_type: &str,
+        finding_origins: Option<&rustc_hash::FxHashMap<String, TypeMask>>,
     ) -> Vec<Finding> {
         // Detect file type for the container
         let rule_file_type = self.detect_file_type(file_type);
@@ -668,7 +677,7 @@ impl super::CapabilityMapper {
         // Iterative evaluation to handle chained dependencies
         const MAX_ITERATIONS: usize = 5;
         for _ in 0..MAX_ITERATIONS {
-            let ctx = EvaluationContext::new(
+            let mut ctx = EvaluationContext::new(
                 container_report,
                 &container_bytes,
                 rule_file_type,
@@ -676,7 +685,13 @@ impl super::CapabilityMapper {
                 Some(&combined_findings),
                 None, // No AST for container
             );
-            let new_findings: Vec<Finding> = self
+            ctx.finding_origins = finding_origins;
+            // Rules are evaluated one at a time so `for_mask` can be set per
+            // rule: it is the only piece of per-rule state the condition
+            // evaluators need, and threading it through every evaluator
+            // signature would touch dozens of call sites to say one thing.
+            // Same shape as `current_trait_idx` in the atomic pass.
+            let candidates: Vec<&crate::composite_rules::CompositeTrait> = self
                 .composite_rules
                 .iter()
                 // Only cross-file scopes may pool here. Nested findings arrive
@@ -715,9 +730,17 @@ impl super::CapabilityMapper {
                         crate::composite_rules::Scope::File | crate::composite_rules::Scope::Leaf
                     )
                 })
-                .filter_map(|rule| rule.evaluate(&ctx))
-                .filter(|f| !seen_ids.contains(f.id.as_str()))
                 .collect();
+            let mut new_findings: Vec<Finding> = Vec::new();
+            for rule in candidates {
+                ctx.for_mask = rule.for_mask();
+                if let Some(finding) = rule.evaluate(&ctx)
+                    && !seen_ids.contains(finding.id.as_str())
+                {
+                    new_findings.push(finding);
+                }
+            }
+            ctx.for_mask = TypeMask::ALL;
 
             if new_findings.is_empty() {
                 break;
@@ -858,6 +881,11 @@ impl super::CapabilityMapper {
         // Fixed-point loop so a package composite can feed another.
         const MAX_ITERATIONS: usize = 5;
         for _ in 0..MAX_ITERATIONS {
+            // No `finding_origins` here: by the time the artifact and registry
+            // reports meet, both are finalized and merged into one seed list
+            // with no side marked, so nothing can be stamped. `for:` still
+            // gates the node (it must name `registry`); it just cannot also
+            // filter which side a leg came from. See SCOPE_PLAN.md ("Open").
             let ctx = EvaluationContext::new(
                 &report,
                 no_bytes,
@@ -902,6 +930,8 @@ fn downgrade_spans_container(downgrade: &crate::composite_rules::DowngradeCondit
 
 #[cfg(test)]
 mod tests {
+    use crate::capabilities::mapper::RuleFileType;
+    use crate::composite_rules::TypeMask;
     use crate::types::{AnalysisReport, Criticality, Finding, TargetInfo};
 
     fn make_test_report() -> AnalysisReport {
@@ -1004,7 +1034,7 @@ composite_rules:
             Criticality::Baseline,
         ));
 
-        let found = mapper.evaluate_container_composites(&report, &[], "zip");
+        let found = mapper.evaluate_container_composites(&report, &[], "zip", None);
         assert!(
             found
                 .iter()
@@ -1028,7 +1058,7 @@ composite_rules:
             make_test_finding("test/container::beta", Criticality::Baseline),
         ];
 
-        let found = mapper.evaluate_container_composites(&report, &nested, "zip");
+        let found = mapper.evaluate_container_composites(&report, &nested, "zip", None);
         assert!(
             !found
                 .iter()
@@ -1044,7 +1074,7 @@ composite_rules:
         let report = make_test_report();
 
         // With no nested findings, should return empty
-        let container_findings = mapper.evaluate_container_composites(&report, &[], "zip");
+        let container_findings = mapper.evaluate_container_composites(&report, &[], "zip", None);
         // Either empty or only rules that match on file type alone
         // (depends on the rules in traits directory)
         assert!(
@@ -1065,7 +1095,8 @@ composite_rules:
 
         // Evaluate with nested findings
         let nested = vec![make_test_finding("nested/finding", Criticality::Suspicious)];
-        let container_findings = mapper.evaluate_container_composites(&report, &nested, "zip");
+        let container_findings =
+            mapper.evaluate_container_composites(&report, &nested, "zip", None);
 
         // Should not include preexisting finding IDs
         assert!(
@@ -1091,7 +1122,8 @@ composite_rules:
             ),
         ];
 
-        let container_findings = mapper.evaluate_container_composites(&report, &nested, "zip");
+        let container_findings =
+            mapper.evaluate_container_composites(&report, &nested, "zip", None);
 
         // Any findings without evidence should get the container-composite marker
         for finding in &container_findings {
@@ -1122,7 +1154,7 @@ composite_rules:
             let nested = vec![make_test_finding("test/nested", Criticality::Notable)];
 
             // Should not panic for any archive type
-            let _ = mapper.evaluate_container_composites(&report, &nested, file_type);
+            let _ = mapper.evaluate_container_composites(&report, &nested, file_type, None);
         }
     }
 
@@ -1544,7 +1576,8 @@ composite_rules:
             finding_in_entry("test/ext::cors", "ext.crx!rules.json"),
         ];
 
-        let container_findings = mapper.evaluate_container_composites(&report, &nested, "crx");
+        let container_findings =
+            mapper.evaluate_container_composites(&report, &nested, "crx", None);
 
         // The scope: outer composite must fire at the archive container level
         // despite its `for: [javascript]` not matching the crx container type.
@@ -1625,6 +1658,188 @@ composite_rules:
 "#;
         let file = write_test_traits(yaml);
         super::super::CapabilityMapper::from_yaml(file.path()).expect("load package-scope mapper")
+    }
+
+    /// A mapper whose one composite ties a manifest fact to a script fact,
+    /// declaring both member types plus the container it reports on -- the
+    /// shape SCOPE_PLAN.md asks authors to write.
+    #[allow(clippy::expect_used)]
+    fn make_origin_filter_mapper(for_list: &str) -> super::super::CapabilityMapper {
+        let yaml = format!(
+            r#"
+defaults:
+  platforms: [unix, windows, macos]
+
+traits:
+  - id: "test/origin::manifest-marker"
+    desc: "Manifest marker"
+    crit: notable
+    if:
+      type: text
+      substr: "MANIFEST_MARKER"
+  - id: "test/origin::script-marker"
+    desc: "Script marker"
+    crit: notable
+    if:
+      type: text
+      substr: "SCRIPT_MARKER"
+
+composite_rules:
+  - id: "test/origin::manifest-plus-script"
+    desc: "Manifest fact tied to a script fact"
+    crit: suspicious
+    conf: 0.9
+    for: [{for_list}]
+    scope: archive
+    all:
+      - id: "test/origin::manifest-marker"
+      - id: "test/origin::script-marker"
+"#
+        );
+        let file = write_test_traits(&yaml);
+        super::super::CapabilityMapper::from_yaml(file.path()).expect("load origin-filter mapper")
+    }
+
+    /// `for:` names the file types the rule is about. A leg satisfied by a
+    /// member type the rule never declared does not count -- this is the
+    /// `vscode-activated-curl-shell` class, where a rule about an extension
+    /// manifest was satisfied by a README in an unrelated member.
+    #[test]
+    fn a_leg_from_an_undeclared_member_type_does_not_satisfy_the_rule() {
+        let mapper = make_origin_filter_mapper("zip, packagejson");
+        let report = make_test_report();
+        let nested = vec![
+            make_test_finding("test/origin::manifest-marker", Criticality::Notable),
+            make_test_finding("test/origin::script-marker", Criticality::Notable),
+        ];
+        // The script leg came from a markdown member, which `for:` does not name.
+        let mut origins: rustc_hash::FxHashMap<String, TypeMask> = rustc_hash::FxHashMap::default();
+        origins.insert(
+            "test/origin::manifest-marker".to_string(),
+            RuleFileType::PackageJson.type_bit(),
+        );
+        origins.insert(
+            "test/origin::script-marker".to_string(),
+            RuleFileType::Markdown.type_bit(),
+        );
+
+        let found = mapper.evaluate_container_composites(&report, &nested, "zip", Some(&origins));
+        assert!(
+            !found
+                .iter()
+                .any(|f| f.id.as_str() == "test/origin::manifest-plus-script"),
+            "a leg from an undeclared member type must not satisfy the rule, got {:?}",
+            found.iter().map(|f| f.id.as_str()).collect::<Vec<_>>()
+        );
+    }
+
+    /// The same evidence, with the member type declared, fires. Declaring what
+    /// you mix is the whole contract.
+    #[test]
+    fn declaring_the_member_type_lets_the_leg_count() {
+        let mapper = make_origin_filter_mapper("zip, packagejson, markdown");
+        let report = make_test_report();
+        let nested = vec![
+            make_test_finding("test/origin::manifest-marker", Criticality::Notable),
+            make_test_finding("test/origin::script-marker", Criticality::Notable),
+        ];
+        let mut origins: rustc_hash::FxHashMap<String, TypeMask> = rustc_hash::FxHashMap::default();
+        origins.insert(
+            "test/origin::manifest-marker".to_string(),
+            RuleFileType::PackageJson.type_bit(),
+        );
+        origins.insert(
+            "test/origin::script-marker".to_string(),
+            RuleFileType::Markdown.type_bit(),
+        );
+
+        let found = mapper.evaluate_container_composites(&report, &nested, "zip", Some(&origins));
+        assert!(
+            found
+                .iter()
+                .any(|f| f.id.as_str() == "test/origin::manifest-plus-script"),
+            "declared member types must satisfy the rule, got {:?}",
+            found.iter().map(|f| f.id.as_str()).collect::<Vec<_>>()
+        );
+    }
+
+    /// `for: [all]` opts out of the filter -- the sanctioned way to say "any
+    /// file". Without this, `all` would be the most restrictive setting there
+    /// is, since it names no concrete type to match an origin against.
+    #[test]
+    fn for_all_disables_the_origin_filter() {
+        let mapper = make_origin_filter_mapper("all");
+        let report = make_test_report();
+        let nested = vec![
+            make_test_finding("test/origin::manifest-marker", Criticality::Notable),
+            make_test_finding("test/origin::script-marker", Criticality::Notable),
+        ];
+        let mut origins: rustc_hash::FxHashMap<String, TypeMask> = rustc_hash::FxHashMap::default();
+        origins.insert(
+            "test/origin::manifest-marker".to_string(),
+            RuleFileType::Elf.type_bit(),
+        );
+        origins.insert(
+            "test/origin::script-marker".to_string(),
+            RuleFileType::Markdown.type_bit(),
+        );
+
+        let found = mapper.evaluate_container_composites(&report, &nested, "zip", Some(&origins));
+        assert!(
+            found
+                .iter()
+                .any(|f| f.id.as_str() == "test/origin::manifest-plus-script"),
+            "for: [all] must not be filtered, got {:?}",
+            found.iter().map(|f| f.id.as_str()).collect::<Vec<_>>()
+        );
+    }
+
+    /// An unstamped finding is excluded, not admitted: a call site that forgets
+    /// to stamp shows up as a rule that stops firing, which is noticed, rather
+    /// than one that fires on anything, which is not.
+    #[test]
+    fn an_unstamped_finding_does_not_satisfy_a_filtered_rule() {
+        let mapper = make_origin_filter_mapper("zip, packagejson, markdown");
+        let report = make_test_report();
+        let nested = vec![
+            make_test_finding("test/origin::manifest-marker", Criticality::Notable),
+            make_test_finding("test/origin::script-marker", Criticality::Notable),
+        ];
+        let mut origins: rustc_hash::FxHashMap<String, TypeMask> = rustc_hash::FxHashMap::default();
+        origins.insert(
+            "test/origin::manifest-marker".to_string(),
+            RuleFileType::PackageJson.type_bit(),
+        );
+        // script-marker deliberately left unstamped.
+
+        let found = mapper.evaluate_container_composites(&report, &nested, "zip", Some(&origins));
+        assert!(
+            !found
+                .iter()
+                .any(|f| f.id.as_str() == "test/origin::manifest-plus-script"),
+            "an unstamped finding must not satisfy a filtered leg, got {:?}",
+            found.iter().map(|f| f.id.as_str()).collect::<Vec<_>>()
+        );
+    }
+
+    /// Passing no origin map at all disables the filter for that call site --
+    /// the documented opt-out for office/pdf, which cannot stamp yet.
+    #[test]
+    fn no_origin_map_disables_the_filter() {
+        let mapper = make_origin_filter_mapper("zip, packagejson");
+        let report = make_test_report();
+        let nested = vec![
+            make_test_finding("test/origin::manifest-marker", Criticality::Notable),
+            make_test_finding("test/origin::script-marker", Criticality::Notable),
+        ];
+        let found = mapper.evaluate_container_composites(&report, &nested, "zip", None);
+        assert!(
+            found
+                .iter()
+                .any(|f| f.id.as_str() == "test/origin::manifest-plus-script"),
+            "an unstamped call site must keep its legs, got {:?}",
+            found.iter().map(|f| f.id.as_str()).collect::<Vec<_>>()
+        );
     }
 
     #[test]

@@ -421,7 +421,6 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                     | "images"
                     | "media"
                     | "ipa"
-                    | "archives"
             );
             if is_group && !is_exclusion {
                 used_groups = true;
@@ -559,7 +558,6 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 "fonts" => vec![RuleFileType::Font],
                 "audio" => vec![RuleFileType::Wav, RuleFileType::Aiff, RuleFileType::Mp3],
                 "ipa" => vec![RuleFileType::Ipa],
-                "archives" => RuleFileType::archive_family_types().to_vec(),
                 "unknown" => vec![RuleFileType::Unknown],
                 // Binary formats
                 "elf" | "so" => vec![RuleFileType::Elf],
@@ -664,7 +662,6 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 "ooxml" | "docx" | "xlsx" | "pptx" | "docm" | "xlsm" | "pptm" => {
                     vec![RuleFileType::Ooxml]
                 }
-                "archive" | "rar" | "7z" => vec![RuleFileType::Archive],
                 "zip" => vec![RuleFileType::Zip],
                 "apk" | "apk_android" | "android_apk" => vec![RuleFileType::AndroidApk],
                 "apk_alpine" | "alpine_apk" => vec![RuleFileType::AlpineApk],
@@ -1200,6 +1197,7 @@ pub(crate) fn apply_composite_defaults(
     }
 
     CompositeTrait {
+        for_mask_cache: std::sync::OnceLock::new(),
         id: raw.id,
         desc: raw.desc,
         id_shared: std::sync::OnceLock::new(),
@@ -2147,12 +2145,29 @@ mod tests {
     }
 
     #[test]
-    fn test_archives_group_uses_generated_archive_family() {
+    fn test_rar_7z_cpio_resolve_through_parse_file_types() {
+        let mut warnings = Vec::new();
+        let result = parse_file_types(
+            &["rar".to_string(), "7z".to_string(), "cpio".to_string()],
+            &mut warnings,
+        );
+        assert!(result.types.contains(&RuleFileType::Rar));
+        assert!(result.types.contains(&RuleFileType::SevenZ));
+        assert!(result.types.contains(&RuleFileType::Cpio));
+        assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+    }
+
+    #[test]
+    fn test_archives_group_name_is_banned() {
+        // "archives" used to expand to every #[archive]-tagged type; it is
+        // banned as a `for:` spelling (like the old "archive" bucket) so
+        // authors name concrete types instead. It must fall through to the
+        // unknown-type warning, not silently resolve to the archive family.
         let mut warnings = Vec::new();
         let result = parse_file_types(&["archives".to_string()], &mut warnings);
 
-        assert_eq!(result.types, RuleFileType::archive_family_types().to_vec());
-        assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+        assert!(result.types.is_empty());
+        assert!(!warnings.is_empty(), "expected an unknown-type warning");
     }
 
     #[test]

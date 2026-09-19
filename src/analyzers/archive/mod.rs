@@ -2446,6 +2446,31 @@ impl ArchiveAnalyzer {
         // every one — evidence vectors included — just to drop 90% of them at
         // the truncate was pure waste in the single-threaded finalize path.
         const MAX_NESTED_FINDINGS: usize = 50_000;
+
+        // Where each finding came from, as a type mask keyed by finding id.
+        // This is what makes `for:` mean "the file types this rule is about":
+        // a composite's leg is satisfied only by a finding from a member whose
+        // type it declared. Built here because this is the one place the
+        // member and its findings are both in hand -- `Finding` itself carries
+        // no usable origin (`source_file` is set only by the embedded-code and
+        // overlay analyzers).
+        let container_bit =
+            crate::composite_rules::FileType::from_str(&report.target.file_type).type_bit();
+        let mut finding_origins: rustc_hash::FxHashMap<String, crate::composite_rules::TypeMask> =
+            rustc_hash::FxHashMap::default();
+        for member in &report.files {
+            let bit = crate::composite_rules::FileType::from_str(&member.file_type).type_bit();
+            for finding in &member.findings {
+                *finding_origins.entry(finding.id.to_string()).or_default() |= bit;
+            }
+        }
+        // The container's own atomics, and the basename traits derived from its
+        // entry list, are findings *of the container node* -- they belong to
+        // its own type, not to any member.
+        for finding in &archive_atomic_findings {
+            *finding_origins.entry(finding.id.to_string()).or_default() |= container_bit;
+        }
+
         let mut ranked: Vec<&Finding> = report
             .files
             .iter()
@@ -2463,6 +2488,9 @@ impl ArchiveAnalyzer {
             .collect();
         if !entry_names.is_empty() {
             let basename_findings = mapper.evaluate_basename_traits_for_entries(&entry_names);
+            for finding in &basename_findings {
+                *finding_origins.entry(finding.id.to_string()).or_default() |= container_bit;
+            }
             nested_findings.extend(basename_findings);
         }
 
@@ -2470,6 +2498,7 @@ impl ArchiveAnalyzer {
             report,
             &nested_findings,
             &report.target.file_type,
+            Some(&finding_origins),
         );
         report.findings.extend(container_findings);
 
@@ -3171,7 +3200,7 @@ mod tests {
     fn make_archive_test_mapper() -> crate::capabilities::CapabilityMapper {
         let yaml = r#"
 defaults:
-  for: [binaries, scripts, source, manifests, documents, media, data, archives]
+  for: [binaries, scripts, source, manifests, documents, media, data, tar, zip, npm, whl]
   platforms: [unix, windows, macos]
 
 traits:

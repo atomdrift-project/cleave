@@ -394,11 +394,18 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         fix: "Drop the unreachable type. If the rule fires on a container, declare the container type -- its legs arrive as inherited member findings.",
     },
     ValidatorSpec {
+        id: "leg-outside-for",
+        category: ValidatorCategory::Policy,
+        display_id: "for-missing-leg-type",
+        description: "A required leg fires only on file types the composite's `for:` does not list.",
+        fix: "Add the leg's file types to `for:`, or drop the leg. `for:` lists what the rule is about -- the container it reports on and the members it may mix -- and naming those types is what keeps the rule from being satisfied by unrelated members.",
+    },
+    ValidatorSpec {
         id: "pooling-scope-no-container",
         category: ValidatorCategory::Policy,
         display_id: "scope-no-container",
         description: "Composite pools across an archive but names no container type in `for:`.",
-        fix: "Name the container node the rule reports on (npm, zip, vsix, ...). archive/package/outer composites run on the container, never on a leaf, so one that declares only leaf types never runs.",
+        fix: "Name the container node the rule reports on (npm, zip, vsix, ...). A pooling composite only attaches at a container, so one declaring only leaf types never pools across members -- it does still fire on a standalone file of that type, which is why such a rule looks like it works until its target arrives inside an archive. For `scope: outer` the fix is often to drop the scope instead: outer pools by presence, so on a leaf it is already a no-op.",
     },
     ValidatorSpec {
         id: "unbindable-package-scope",

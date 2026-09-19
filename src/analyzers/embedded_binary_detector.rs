@@ -529,7 +529,26 @@ fn detect_embedded_pe_format(data: &[u8]) -> Option<&'static str> {
     {
         return Some("nsis");
     }
-    if memmem::find(data, b"Inno Setup Setup Data").is_some() {
+    // The marker has to sit NEAR this candidate's header for the candidate to
+    // be an Inno stub. `data` runs from the candidate to end-of-file, so an
+    // unbounded search also matches the *host's* setup data lying far beyond an
+    // unrelated interior PE -- and the "inno" hint then sets the carve size to
+    // everything remaining (see `sfx_size` below), which has no upper bound the
+    // way `nsis_physical_size` does.
+    //
+    // AOMEI Backupper Standard is the worked case: a 190MB Inno installer whose
+    // helper `callbackctrl.dll` sits at 0x69e04, with an "Inno Setup Setup Data"
+    // occurrence 198MB further on at 0xbd17cd5. The DLL was carved as
+    // header-to-EOF (198,554,228 bytes), so a small helper DLL was analyzed as a
+    // 189MB binary: a vast appended blob with no resources and a handful of
+    // imports, which scored `huge-file-tiny-imports` and
+    // `pe-missing-rsrc-with-resource-imports` hostile. A genuine stub carries
+    // its setup data immediately after it -- this installer's own is at 0x15e5c,
+    // roughly 90KB in -- so a 1MiB window is generous for the real shape and
+    // excludes the far-away match.
+    const INNO_MARKER_WINDOW: usize = 1 << 20;
+    let inno_window = &data[..data.len().min(INNO_MARKER_WINDOW)];
+    if memmem::find(inno_window, b"Inno Setup Setup Data").is_some() {
         return Some("inno");
     }
     None

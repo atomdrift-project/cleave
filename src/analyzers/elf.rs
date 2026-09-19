@@ -61,6 +61,19 @@ fn arch_name_from_machine(e_machine: u16) -> String {
     }
 }
 
+/// A deliberately malformed binary under a test-fixture path.
+///
+/// A parser test suite has to ship inputs its parser rejects, and names them
+/// accordingly. PyPI's `packaging` ships
+/// `tests/manylinux/hello-world-invalid-class`, `-invalid-data` and a set of
+/// arch/ABI mismatches; every one of them failed the ELF parse and scored
+/// suspicious. Keep the structural anomaly visible at notable -- the file is
+/// genuinely malformed -- but a fixture directory is not evasion.
+fn is_test_fixture_path(path: &str) -> bool {
+    const DIRS: [&str; 4] = ["/tests/", "/test/", "/testdata/", "/fixtures/"];
+    DIRS.iter().any(|d| path.contains(d))
+}
+
 fn is_jvm_bundled_native_path(path: &str) -> bool {
     (path.contains(".jar!") || path.contains(".jar/"))
         && (path.contains("snappy-java")
@@ -392,6 +405,7 @@ impl ElfAnalyzer {
                     || has_android_gif_drawable_marker
                     || is_jvm_bundled_native_path(&report.target.path)
                     || is_snappy_s390x_native
+                    || is_test_fixture_path(&report.target.path)
                 {
                     // Very large Linuxbrew/Go CLI builds and some legacy
                     // Android native libraries can carry metadata layouts

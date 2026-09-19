@@ -33,24 +33,23 @@ use crate::capabilities::validation::{
     find_impossible_composite_filetypes, find_impossible_count_constraints,
     find_impossible_length_bounds, find_impossible_needs, find_impossible_size_constraints,
     find_incompatible_regex_features, find_inline_content_duplicates, find_invalid_not_usage,
-    find_invalid_trait_ids, find_kv_exists_with_matcher, find_length_bounds_without_regex,
-    find_line_number, find_literal_regex_patterns, find_literals_covered_by_regexes,
-    find_malware_subcategory_violations, find_many_directory_refs,
-    find_memory_hungry_regex_patterns, find_meta_missing_section_filter,
+    find_invalid_trait_ids, find_kv_exists_with_matcher, find_legs_outside_for,
+    find_length_bounds_without_regex, find_line_number, find_literal_regex_patterns,
+    find_literals_covered_by_regexes, find_malware_subcategory_violations,
+    find_many_directory_refs, find_memory_hungry_regex_patterns, find_meta_missing_section_filter,
     find_metadata_content_dirs, find_metadata_cross_tier_refs, find_missing_search_patterns,
     find_mixed_archive_filetype_traits, find_needs_without_any, find_needs_zero,
     find_non_capturing_groups, find_none_only_with_proximity, find_objectives_wellknown_violations,
     find_orphaned_components, find_overlapping_conditions, find_overlapping_scope_duplicates,
     find_oversized_trait_directories, find_parent_duplicate_segments,
-    find_permuted_directory_paths, find_platform_named_directories, find_pure_alias_traits,
+    find_permuted_directory_paths, find_platform_named_directories,
+    find_pooling_scope_without_container, find_pure_alias_traits,
     find_pure_directory_alias_composites, find_raw_should_use_text, find_redundant_any_refs,
     find_redundant_explicit_defaults, find_redundant_needs_one, find_redundant_unix_platforms,
-    find_pooling_scope_without_container, find_regex_literal_overlap_issues,
-    find_scope_without_valid_container,
-    find_self_referencing_composites,
-    find_self_referencing_traits, find_self_suppressing_traits, find_short_pattern_warnings,
-    find_should_use_defaults, find_sibling_name_restatement, find_single_item_clauses,
-    find_slow_regex_patterns, find_stale_filetype_allowlist_entries,
+    find_regex_literal_overlap_issues, find_scope_without_valid_container,
+    find_self_referencing_composites, find_self_referencing_traits, find_self_suppressing_traits,
+    find_short_pattern_warnings, find_should_use_defaults, find_sibling_name_restatement,
+    find_single_item_clauses, find_slow_regex_patterns, find_stale_filetype_allowlist_entries,
     find_string_content_collisions, find_string_literal_should_use_text,
     find_string_pattern_duplicates, find_structural_regex_duplicates, find_subsumed_required_legs,
     find_suppression_only_building_blocks, find_too_short_patterns,
@@ -3229,7 +3228,7 @@ impl super::CapabilityMapper {
                 for (trait_id, archive, plain) in &mixed_ft {
                     let fmt = |v: &Vec<RuleFileType>| {
                         v.iter()
-                            .map(|ft| format!("{ft:?}").to_lowercase())
+                            .map(|ft| ft.label().to_string())
                             .collect::<Vec<_>>()
                             .join(", ")
                     };
@@ -3257,14 +3256,87 @@ impl super::CapabilityMapper {
                 );
             }
 
-            // Validate: a pooling scope needs a container node to run on.
-            tracing::trace!("Checking for pooling scopes with no container");
-            let pooling_without_container =
-                if crate::validation_controls::is_validator_disabled("pooling-scope-no-container") {
+            // Validate: a pooling composite must declare the types it mixes.
+            tracing::trace!("Checking for required legs outside the for: list");
+            let legs_outside =
+                if crate::validation_controls::is_validator_disabled("leg-outside-for") {
                     Vec::new()
                 } else {
-                    find_pooling_scope_without_container(&composite_rules)
+                    find_legs_outside_for(&trait_definitions, &composite_rules)
                 };
+            if !legs_outside.is_empty() {
+                eprintln!(
+                    "\n\u{274c} ERROR: {} required legs come from file types the rule does not declare",
+                    legs_outside.len()
+                );
+                eprintln!(
+                    "   `for:` lists the file types a composite is about: the container it reports"
+                );
+                eprintln!(
+                    "   on AND the members whose findings may satisfy its legs. A leg that only"
+                );
+                eprintln!(
+                    "   fires on an undeclared type can never be satisfied -- and a rule that names"
+                );
+                eprintln!(
+                    "   only its container used to be satisfied by ANY member, which is how a rule"
+                );
+                eprintln!(
+                    "   about a VS Code extension scored hostile on a Rust crate. Declare what you"
+                );
+                eprintln!("   mix; that is what makes the rule targeted.\n");
+                for issue in &legs_outside {
+                    let source_file = rule_source_files
+                        .get(&issue.id)
+                        .map(std::string::String::as_str)
+                        .unwrap_or("unknown");
+                    let missing = issue
+                        .leg_types
+                        .iter()
+                        .map(|ft| ft.label().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    // The consequence differs per clause, so say which it is:
+                    // a dead `all:`/`any:` leg costs a detection, while a dead
+                    // `unless:` leg costs false positives, and the two want
+                    // different urgency from whoever reads this.
+                    let (clause, effect) = match issue.role {
+                        crate::capabilities::validation::LegRole::Required => {
+                            ("requires", "the rule can never fire")
+                        }
+                        crate::capabilities::validation::LegRole::EveryAlternative => (
+                            "has an any: clause whose every alternative, e.g.",
+                            "the rule can never fire",
+                        ),
+                        crate::capabilities::validation::LegRole::Suppressor => (
+                            "is suppressed by",
+                            "the carve-out never fires, so this reports false positives",
+                        ),
+                    };
+                    eprintln!(
+                        "   {}: '{}' (scope: {:?}) {} '{}', which fires only on [{}] -- {}; add it to for:, or drop the leg",
+                        source_file, issue.id, issue.scope, clause, issue.leg, missing, effect
+                    );
+                }
+                eprintln!();
+                warnings.push_id(
+                    "leg-outside-for",
+                    format!(
+                        "{} required legs come from file types the rule does not declare",
+                        legs_outside.len()
+                    ),
+                );
+            }
+
+            // Validate: a pooling scope needs a container node to run on.
+            tracing::trace!("Checking for pooling scopes with no container");
+            let pooling_without_container = if crate::validation_controls::is_validator_disabled(
+                "pooling-scope-no-container",
+            ) {
+                Vec::new()
+            } else {
+                find_pooling_scope_without_container(&composite_rules)
+            };
             if !pooling_without_container.is_empty() {
                 eprintln!(
                     "\n\u{274c} ERROR: {} composites use a pooling scope with no container to run on",
@@ -3286,7 +3358,7 @@ impl super::CapabilityMapper {
                         .unwrap_or("unknown");
                     let names = types
                         .iter()
-                        .map(|ft| format!("{ft:?}").to_lowercase())
+                        .map(|ft| ft.label().to_string())
                         .collect::<Vec<_>>()
                         .join(", ");
                     eprintln!("   {source_file}: '{rule_id}' scope: {scope:?} for: [{names}]");
@@ -3303,13 +3375,12 @@ impl super::CapabilityMapper {
 
             // Validate: `scope: package` must be able to bind to a package.
             tracing::trace!("Checking for unbindable package scopes");
-            let unbindable_package_scope = if crate::validation_controls::is_validator_disabled(
-                "unbindable-package-scope",
-            ) {
-                Vec::new()
-            } else {
-                find_scope_without_valid_container(&trait_definitions, &composite_rules)
-            };
+            let unbindable_package_scope =
+                if crate::validation_controls::is_validator_disabled("unbindable-package-scope") {
+                    Vec::new()
+                } else {
+                    find_scope_without_valid_container(&trait_definitions, &composite_rules)
+                };
             if !unbindable_package_scope.is_empty() {
                 eprintln!(
                     "\n\u{274c} ERROR: {} composites declare a `scope: package` that can never bind",
@@ -3373,7 +3444,7 @@ impl super::CapabilityMapper {
                     };
                     let types_str = matched_types
                         .iter()
-                        .map(|ft| format!("{ft:?}").to_lowercase())
+                        .map(|ft| ft.label().to_string())
                         .collect::<Vec<_>>()
                         .join(", ");
                     if let Some(line) = line_hint {
@@ -3550,9 +3621,25 @@ impl super::CapabilityMapper {
             // Validate that `any:` clauses don't have 8+ traits from the same external directory
             // Recommend using directory references instead for better maintainability
             tracing::trace!("Step 14/15: Checking for redundant any refs");
+            // How many definitions live under each directory prefix. Collapsing
+            // an enumerated `any:` to `id: <dir>` preserves the rule's meaning
+            // only when the enumeration already covers nearly all of them;
+            // short of that the advice widens the rule, so the check needs the
+            // directory's size as well as the reference count.
+            let mut dir_sizes: std::collections::HashMap<String, usize> =
+                std::collections::HashMap::new();
+            for id in trait_definitions
+                .iter()
+                .map(|t| &t.id)
+                .chain(composite_rules.iter().map(|c| &c.id))
+            {
+                if let Some(idx) = id.find("::") {
+                    *dir_sizes.entry(id[..idx].to_string()).or_default() += 1;
+                }
+            }
             let mut redundant_any_refs = Vec::new();
             for rule in &composite_rules {
-                let violations = find_redundant_any_refs(rule);
+                let violations = find_redundant_any_refs(rule, &dir_sizes);
                 for (rule_id, dir, count, trait_ids) in violations {
                     let source_file = rule_source_files
                         .get(&rule_id)

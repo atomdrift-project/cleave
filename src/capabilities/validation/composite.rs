@@ -321,16 +321,32 @@ pub(crate) fn collect_trait_refs_from_trait_def(t: &TraitDefinition) -> Vec<(Str
 /// rule should name the directory instead of listing its members.
 const MIN_EXTERNAL_DIR_REFS: usize = 8;
 
-/// Find `any:` clauses that reference 8+ traits from the same external directory.
+/// How much of a directory the enumerated refs must cover before "name the
+/// directory instead" is sound advice, in percent.
 ///
-/// This suggests the rule should either:
-/// - Use directory notation (e.g., `micro-behaviors/foo`) instead of listing individual traits
-/// - Move to a different directory where the traits are local
+/// A raw count does not justify it. `id: <dir>` in a positive `any:` means
+/// *any* member of that directory, so collapsing to it **widens** the rule by
+/// every member the author did not list. `generic-bundle-id-pattern`
+/// enumerates 8 of the ~303 ids under `metadata/signed/id`; taking the advice
+/// there would match every signed application, `com.apple.*` included — the
+/// enumeration *was* the precision. Only once the refs already cover nearly
+/// the whole directory is the collapse equivalent rather than a widening.
+const MIN_DIR_COVERAGE_PCT: usize = 80;
+
+/// Find `any:` clauses that enumerate most of an external directory.
+///
+/// Both conditions must hold: at least [`MIN_EXTERNAL_DIR_REFS`] references,
+/// **and** at least [`MIN_DIR_COVERAGE_PCT`] of that directory's definitions.
+/// The count alone is not enough — see [`MIN_DIR_COVERAGE_PCT`].
+///
+/// `dir_sizes` maps a directory prefix to how many definitions live under it.
+/// A directory absent from the map is treated as unknown and never flagged.
 ///
 /// Returns a list of `(rule_id, directory, trait_count, trait_ids)` for violations.
 #[must_use]
 pub(crate) fn find_redundant_any_refs(
     rule: &CompositeTrait,
+    dir_sizes: &HashMap<String, usize>,
 ) -> Vec<(String, String, usize, Vec<String>)> {
     let mut violations = Vec::new();
 
@@ -370,9 +386,17 @@ pub(crate) fn find_redundant_any_refs(
         }
     }
 
-    // Find directories with MIN_EXTERNAL_DIR_REFS+ references
+    // Enough references, AND enough of the directory for the collapse to be
+    // equivalent rather than a widening. An unknown directory is never
+    // flagged: without its size there is no way to tell the two apart.
     for (dir, trait_ids) in dir_refs {
-        if trait_ids.len() >= MIN_EXTERNAL_DIR_REFS {
+        if trait_ids.len() < MIN_EXTERNAL_DIR_REFS {
+            continue;
+        }
+        let Some(&dir_size) = dir_sizes.get(&dir) else {
+            continue;
+        };
+        if dir_size > 0 && trait_ids.len() * 100 >= dir_size * MIN_DIR_COVERAGE_PCT {
             violations.push((rule.id.clone(), dir, trait_ids.len(), trait_ids));
         }
     }

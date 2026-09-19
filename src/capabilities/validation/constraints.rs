@@ -922,6 +922,25 @@ impl<'a> SuppressionExpander<'a> {
         };
         let key = id.as_str();
 
+        // A `*-known-benign-context` composite is a named exception group, not an
+        // ad-hoc reference: authors write one to hold "the benign shapes this
+        // idiom legitimately has" and point every affected rule at it, which is
+        // exactly the fix this validator's own message recommends when a rule's
+        // own suppressions run long. Expanding through it counted the group's
+        // *membership* as the referrer's burden, so growing the shared list (or
+        // widening reuse) tripped the cap on every referrer -- the two rules that
+        // did this, `js-global-object-alias-assignment` and
+        // `js-global-object-self-assignment`, were penalized for taking the
+        // advice. Treat it as opaque, like a directory reference: one unit,
+        // regardless of how many benign shapes it enumerates internally.
+        if key.ends_with("known-benign-context") {
+            return SuppressionBranch {
+                label: format!("{key} (named exception group)"),
+                count: 1,
+                children: Vec::new(),
+            };
+        }
+
         // An aggregator composite expands into its legs; a leaf or directory reference
         // (no exact composite) counts as one.
         if self.composite_map.contains_key(key) {
@@ -3001,6 +3020,32 @@ pub(crate) fn find_mixed_archive_filetype_traits(
         if t.for_from_groups || t.r#for.contains(&FileType::All) {
             continue;
         }
+        // `type: path`/`basename` reads the analyzed node's OWN path, which
+        // every node has regardless of whether it is an archive container or
+        // a plain file -- unlike every other matcher kind, it never touches
+        // file *content*, so the "cleave never content-scans a container's
+        // own bytes" rationale this validator is built on does not apply to
+        // it. `izpack-package-path` (`for: [jar, pe, shell, javascript,
+        // java]`, `type: path`) is a legitimate single check on whichever
+        // node's path matches, not five conflated facts -- 394 of the
+        // tree's traits share this shape and none of them are the bug this
+        // validator exists to catch.
+        if matches!(t.r#if, Condition::Path(_)) {
+            continue;
+        }
+        // `type: metrics` is measurement, not a content scan: `file.entropy`,
+        // `consistency.*` and the `packing`/`obfuscation` scores are computed
+        // for whatever node is being analysed, container and member alike. So
+        // an archive type sitting beside a leaf type says nothing about
+        // whether "only one half can fire" -- both halves can. The same is
+        // NOT true of `type: value`: a container-scoped fact like
+        // `archive.members[*].path` exists only on a node the archive
+        // analyser cracked, so a leaf type listed beside it really is dead,
+        // and that is this validator catching a real defect rather than
+        // misfiring. Leave `value` alone.
+        if matches!(t.r#if, Condition::Metrics(_)) {
+            continue;
+        }
         let (archive, plain): (Vec<_>, Vec<_>) =
             t.r#for.iter().partition(|ft| FileType::is_archive(ft));
         if !archive.is_empty() && !plain.is_empty() {
@@ -3072,6 +3117,21 @@ fn find_impossible_composite_filetypes_inner(
     let mut found = Vec::new();
     for rule in composite_rules {
         if rule.r#for.contains(&FileType::All) || rule.for_from_groups {
+            continue;
+        }
+        // A pooling composite (`archive`/`package`/`outer`) runs on the
+        // container and legitimately declares the *member* types whose
+        // findings may satisfy its legs -- that is what `for:` means since the
+        // origin filter landed (see SCOPE_PLAN.md). Those member types are not
+        // leaf-match candidates, so asking "can every required leg match this
+        // declared type on one node" is the wrong question for them: it made
+        // this validator report a fresh violation for every member type the
+        // `for:`-migration correctly added. `find_legs_outside_for` covers the
+        // pooling case, from the other direction.
+        if matches!(
+            rule.effective_scope(),
+            Scope::Archive | Scope::Package | Scope::Outer
+        ) {
             continue;
         }
         let Some(required) = rule.all.as_ref() else {
@@ -3157,7 +3217,6 @@ pub(crate) fn find_dead_composites(
     let _ = impossible;
     dead
 }
-
 
 /// A `scope: package` declaration that can never bind to a package boundary.
 #[derive(Debug, Clone)]
@@ -3320,11 +3379,241 @@ pub(crate) fn find_pooling_scope_without_container(
         if rule.for_from_groups || rule.r#for.is_empty() || rule.r#for.contains(&FileType::All) {
             continue;
         }
+        // `Pe` is the established non-archive exception: a self-extracting PE
+        // (PyInstaller onefile) or one with embedded cabinet/resource members
+        // pools its children's findings the same way an archive does, without
+        // carrying the `#[archive]` marker. `find_impossible_composite_filetypes`
+        // already grants this exact carve-out (see its `has_pooling_scope`
+        // comment and `a_pooling_scope_keeps_a_non_archive_container_alive`);
+        // this check follows the same precedent rather than contradicting it.
+        // `known-nondeployed-filename-context` (`for: [pe]`, `scope: outer`) is
+        // the live shape: a PE's own version-resource fact joined with an
+        // identity marker that may live in an embedded MSI/CAB member's path.
+        // MSI, OLE compound documents and OOXML are containers too: each
+        // holds more than one stream/part, and cleave cracks them and pools
+        // their members' findings -- `analyzers/office/mod.rs` calls
+        // `evaluate_container_composites` exactly as the archive analyser
+        // does. They carry no `#[archive]` marker only because the *archive*
+        // analyser is not what opens them (filefacts's `is_archive()` excludes
+        // them; the office analyser owns them and emits `office.*` rather than
+        // `archive.*`). Without this arm the two validators deadlock:
+        // `find_impossible_composite_filetypes` tells an MSI or Office rule to
+        // declare its container and take a pooling scope, and then this one
+        // rejects the result -- 23 composites, most of
+        // `dropper/execution/msi/msi.yaml`, had no legal state to be in.
         let has_container = rule.r#for.iter().any(|ft| {
-            FileType::is_archive(ft) || (scope == Scope::Outer && *ft == FileType::Registry)
+            FileType::is_archive(ft)
+                || matches!(
+                    ft,
+                    FileType::Pe | FileType::Msi | FileType::OleDoc | FileType::Ooxml
+                )
+                || (scope == Scope::Outer && *ft == FileType::Registry)
         });
         if !has_container {
             found.push((rule.id.clone(), scope, rule.r#for.clone()));
+        }
+    }
+    found
+}
+
+/// Which clause a leg outside `for:` sits in — the consequence differs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LegRole {
+    /// An `all:` leg: the rule can never fire.
+    Required,
+    /// Every `any:` alternative is outside `for:`: the rule can never fire.
+    EveryAlternative,
+    /// An `unless:` leg: the *carve-out* can never fire, so the rule keeps
+    /// firing where the author said it should not. Reported separately because
+    /// this one costs false positives rather than detections.
+    Suppressor,
+}
+
+/// A leg whose evidence the rule's `for:` excludes.
+#[derive(Debug, Clone)]
+pub(crate) struct LegOutsideFor {
+    /// The composite.
+    pub id: String,
+    /// Its effective scope, for the message.
+    pub scope: Scope,
+    /// The leg that can never be satisfied.
+    pub leg: String,
+    /// The types that leg fires on — what `for:` is missing.
+    pub leg_types: Vec<FileType>,
+    /// Where the leg sits, which decides what breaks.
+    pub role: LegRole,
+}
+
+/// Find pooling composites whose `for:` excludes a required leg's file types.
+///
+/// `for:` lists the file types a composite is about: the container it reports
+/// on *and* the members whose findings may satisfy its legs (see
+/// `EvaluationContext::origin_allows`). A required leg that only ever fires on
+/// a type the rule does not name can therefore never be satisfied, and the
+/// rule is dead.
+///
+/// This is the check that makes a rule *targeted*. `for: [vsix]` with a
+/// JavaScript leg used to mean "any evidence in any member counts", which is
+/// how `vscode-activated-curl-shell` scored hostile on a Rust crate. Naming the
+/// member types is what narrows a rule to the files it is actually about, so
+/// this error asks for the one edit that removes a false-positive class:
+/// declare what you mix.
+///
+/// Only pooling scopes (`archive`/`package`/`outer`) are checked — they are the
+/// ones the origin filter applies to. File-scoped composites match within one
+/// node and are covered by `find_impossible_composite_filetypes`.
+///
+/// Skipped, because none of them proves a mistake: `for: [all]` (opts out of
+/// the filter), group-derived lists, a leg declared `for: [all]`, a leg that
+/// cannot be resolved, and a directory reference whose members' types are
+/// unioned (any overlap clears it).
+pub(crate) fn find_legs_outside_for(
+    trait_definitions: &[TraitDefinition],
+    composite_rules: &[CompositeTrait],
+) -> Vec<LegOutsideFor> {
+    let trait_for: HashMap<&str, &Vec<FileType>> = trait_definitions
+        .iter()
+        .map(|t| (t.id.as_str(), &t.r#for))
+        .collect();
+    let composite_for: HashMap<&str, &Vec<FileType>> = composite_rules
+        .iter()
+        .map(|c| (c.id.as_str(), &c.r#for))
+        .collect();
+
+    // A leg whose definition is a `type: path`/`basename`/`dirname` matcher is
+    // not subject to the origin filter at all:
+    // `evaluate_basename_traits_for_entries` runs every path trait against the
+    // archive's entry list with no `for:` gate, and `analyzers/archive`
+    // stamps those findings with the *container's* own type. So such a leg is
+    // satisfiable by a rule that names only the container, and reporting it
+    // here is a false positive -- 57 of them, 8 rules' worth entirely.
+    // (The container itself still has to be declared; that is
+    // `find_pooling_scope_without_container`'s job, not this one's.)
+    let path_legs: std::collections::HashSet<&str> = trait_definitions
+        .iter()
+        .filter(|t| matches!(t.r#if, Condition::Path(_)))
+        .map(|t| t.id.as_str())
+        .collect();
+
+    // Union of every definition under a directory reference.
+    let dir_types = |dir: &str| -> Vec<FileType> {
+        let prefix = dir.trim_end_matches('/');
+        let mut out: Vec<FileType> = Vec::new();
+        for (id, types) in trait_for.iter().chain(composite_for.iter()) {
+            if id.starts_with(prefix) && id[prefix.len()..].starts_with([':', '/']) {
+                for ft in types.iter() {
+                    if !out.contains(ft) {
+                        out.push(*ft);
+                    }
+                }
+            }
+        }
+        out
+    };
+
+    let mut found = Vec::new();
+    for rule in composite_rules {
+        if !matches!(
+            rule.effective_scope(),
+            Scope::Archive | Scope::Package | Scope::Outer
+        ) {
+            continue;
+        }
+        if rule.for_from_groups || rule.r#for.is_empty() || rule.r#for.contains(&FileType::All) {
+            continue;
+        }
+        let own_dir = rule.id.split("::").next().unwrap_or("");
+        let is_path_leg = |id: &String| -> bool {
+            let qualified = format!("{own_dir}::{id}");
+            path_legs.contains(id.as_str()) || path_legs.contains(qualified.as_str())
+        };
+        let resolve = |id: &String| -> Option<Vec<FileType>> {
+            if is_path_leg(id) {
+                return None;
+            }
+            let types: Vec<FileType> =
+                if id.ends_with('/') || (id.contains('/') && !id.contains("::")) {
+                    dir_types(id)
+                } else {
+                    let qualified = format!("{own_dir}::{id}");
+                    (*trait_for
+                        .get(id.as_str())
+                        .or_else(|| composite_for.get(id.as_str()))
+                        .or_else(|| trait_for.get(qualified.as_str()))
+                        .or_else(|| composite_for.get(qualified.as_str()))?)
+                    .clone()
+                };
+            if types.is_empty() || types.contains(&FileType::All) {
+                return None;
+            }
+            Some(types)
+        };
+        let excluded = |types: &[FileType]| !types.iter().any(|ft| rule.r#for.contains(ft));
+
+        // `any:`: only dead when EVERY alternative is excluded. One reachable
+        // branch is enough for the clause, so reporting per-leg here would be
+        // noise on rules that are working exactly as written.
+        if let Some(any) = rule.any.as_ref() {
+            let resolved: Vec<(String, Vec<FileType>)> = any
+                .iter()
+                .filter_map(|cond| match cond {
+                    Condition::Trait { id } => resolve(id).map(|t| (id.clone(), t)),
+                    _ => None,
+                })
+                .collect();
+            if !resolved.is_empty() && resolved.iter().all(|(_, t)| excluded(t)) {
+                let (leg, leg_types) = resolved[0].clone();
+                found.push(LegOutsideFor {
+                    id: rule.id.clone(),
+                    scope: rule.effective_scope(),
+                    leg,
+                    leg_types,
+                    role: LegRole::EveryAlternative,
+                });
+            }
+        }
+
+        // `unless:`: an excluded suppressor leg silently stops suppressing.
+        if let Some(unless) = rule.unless.as_ref() {
+            for cond in unless {
+                let Condition::Trait { id } = cond else {
+                    continue;
+                };
+                let Some(leg_types) = resolve(id) else {
+                    continue;
+                };
+                if excluded(&leg_types) {
+                    found.push(LegOutsideFor {
+                        id: rule.id.clone(),
+                        scope: rule.effective_scope(),
+                        leg: id.clone(),
+                        leg_types,
+                        role: LegRole::Suppressor,
+                    });
+                }
+            }
+        }
+
+        let Some(all) = rule.all.as_ref() else {
+            continue;
+        };
+        for cond in all {
+            let Condition::Trait { id } = cond else {
+                continue;
+            };
+            let Some(leg_types) = resolve(id) else {
+                continue;
+            };
+            if !excluded(&leg_types) {
+                continue;
+            }
+            found.push(LegOutsideFor {
+                id: rule.id.clone(),
+                scope: rule.effective_scope(),
+                leg: id.clone(),
+                leg_types,
+                role: LegRole::Required,
+            });
         }
     }
     found

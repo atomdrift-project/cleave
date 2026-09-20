@@ -38,6 +38,9 @@ pub(crate) struct TraitEvalCache<'a> {
     /// Batched `query:` results for this file. Missing → per-trait QueryCursor.
     pub ast_query_cache:
         Option<&'a FxHashMap<String, crate::composite_rules::context::ConditionResult>>,
+    /// The file holds no byte >= 0x80, so a `RAW_NON_ASCII` trait cannot
+    /// match it. `false` when unknown (never skips).
+    pub content_is_ascii: bool,
 }
 
 /// Which half of the trait set one filtered pass evaluates, plus any findings
@@ -474,6 +477,16 @@ impl super::CapabilityMapper {
             }
             return None;
         }
+        // A pattern that needs a non-ASCII byte cannot match ASCII-only
+        // content. These patterns have no literal atom to index, so without
+        // this they full-scan every source member: 103 such traits reach C#,
+        // ~1.3M full scans on one 12.5k-member module zip (2026-09-19).
+        if has_content_regex && tf & super::flags::RAW_NON_ASCII != 0 && cache.content_is_ascii {
+            if gate_stats_enabled() {
+                RAW_GATE_SKIPPED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            return None;
+        }
 
         trait_ctx.current_trait_idx = Some(idx);
         trait_ctx.cached_evidence =
@@ -620,6 +633,14 @@ impl super::CapabilityMapper {
             ast_kind_cache: ast_kind_cache.as_ref(),
             source_text_prefiltered,
             ast_query_cache: ast_query_cache.as_ref(),
+            // Decoded layers (`\uXXXX` escapes, base64, xor) can carry non-ASCII
+            // text that the raw bytes do not: a `\u30xx`-escaped JS bundle is
+            // pure ASCII yet its unicode-escape strings are Japanese, and the
+            // script traits match there. Gate only when the decoded strings are
+            // ASCII too (they are already extracted, so this is one pass over
+            // them, not a decode).
+            content_is_ascii: binary_data.is_ascii()
+                && report.strings.iter().all(|s| s.value.as_ref().is_ascii()),
         };
 
         // Pass 1: Evaluate independent traits
@@ -794,6 +815,7 @@ impl super::CapabilityMapper {
                 ast_kind_cache: None,
                 source_text_prefiltered,
                 ast_query_cache: None,
+                content_is_ascii: false,
             },
             None,
         )

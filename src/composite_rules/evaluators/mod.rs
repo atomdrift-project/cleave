@@ -328,17 +328,39 @@ pub(crate) fn regex_unicode_override() -> bool {
 /// symbol- and text-index gates already used.
 const MIN_ATOM_LEN: usize = 3;
 
-/// Extract the longest **mandatory** literal anywhere in `pattern` — one that must
-/// appear in every match (a direct `Concat` child, or inside a `min>=1` repetition
-/// or a capture). Returns `None` when no literal of at least [`MIN_ATOM_LEN`] is
-/// guaranteed (e.g. alternations without a shared literal, leading `.*`, pure
-/// character classes).
-///
-/// Used by `RawContentRegexIndex` and `SymbolMatchIndex` to route patterns to a
-/// cheap Aho-Corasick prefilter instead of the per-item `RegexSet` PikeVM scan. A
-/// *prefix*-only extractor leaves ~half of `type: text` and many `type: symbol`
-/// regexes atomless (`\s*foo`, `.*token`, `(get|set)Value`); finding the literal
-/// *anywhere* shrinks that slow no-literal residue dramatically (profiled win).
+pub(crate) fn requires_non_ascii(pattern: &str) -> bool {
+    use regex_syntax::hir::{Class, Hir, HirKind};
+    fn class_is_non_ascii(class: &Class) -> bool {
+        match class {
+            Class::Unicode(c) => {
+                !c.ranges().is_empty() && c.ranges().iter().all(|r| r.start() as u32 >= 0x80)
+            }
+            Class::Bytes(c) => {
+                !c.ranges().is_empty() && c.ranges().iter().all(|r| r.start() >= 0x80)
+            }
+        }
+    }
+    fn walk(hir: &Hir) -> bool {
+        match hir.kind() {
+            HirKind::Literal(lit) => lit.0.iter().any(|&b| b >= 0x80),
+            HirKind::Class(class) => class_is_non_ascii(class),
+            HirKind::Concat(items) => items.iter().any(walk),
+            HirKind::Alternation(items) => !items.is_empty() && items.iter().all(walk),
+            HirKind::Repetition(r) => r.min >= 1 && walk(&r.sub),
+            HirKind::Capture(c) => walk(&c.sub),
+            HirKind::Empty | HirKind::Look(_) => false,
+        }
+    }
+    let Ok(hir) = regex_syntax::ParserBuilder::new()
+        .utf8(false)
+        .build()
+        .parse(pattern)
+    else {
+        return false;
+    };
+    walk(&hir)
+}
+
 pub(crate) fn best_mandatory_atom(pattern: &str) -> Option<Vec<u8>> {
     fn walk(hir: &regex_syntax::hir::Hir, best: &mut Vec<u8>) {
         use regex_syntax::hir::HirKind;

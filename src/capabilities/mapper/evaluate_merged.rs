@@ -439,6 +439,14 @@ impl super::CapabilityMapper {
             ast_kind_cache,
             source_text_prefiltered,
             ast_query_cache: ast_query_cache.as_ref(),
+            // Decoded layers (`\uXXXX` escapes, base64, xor) can carry non-ASCII
+            // text that the raw bytes do not: a `\u30xx`-escaped JS bundle is
+            // pure ASCII yet its unicode-escape strings are Japanese, and the
+            // script traits match there. Gate only when the decoded strings are
+            // ASCII too (they are already extracted, so this is one pass over
+            // them, not a decode).
+            content_is_ascii: binary_data.is_ascii()
+                && report.strings.iter().all(|s| s.value.as_ref().is_ascii()),
         };
 
         if cancellation.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed)) {

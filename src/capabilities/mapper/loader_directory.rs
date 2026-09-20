@@ -40,9 +40,9 @@ use crate::capabilities::validation::{
     find_metadata_content_dirs, find_metadata_cross_tier_refs, find_missing_search_patterns,
     find_mixed_archive_filetype_traits, find_needs_without_any, find_needs_zero,
     find_non_capturing_groups, find_none_only_with_proximity, find_objectives_wellknown_violations,
-    find_orphaned_components, find_overlapping_conditions, find_overlapping_scope_duplicates,
-    find_oversized_trait_directories, find_parent_duplicate_segments,
-    find_permuted_directory_paths, find_platform_named_directories,
+    find_one_fact_convictions, find_orphaned_components, find_overlapping_conditions,
+    find_overlapping_scope_duplicates, find_oversized_trait_directories,
+    find_parent_duplicate_segments, find_permuted_directory_paths, find_platform_named_directories,
     find_pooling_scope_without_container, find_pure_alias_traits,
     find_pure_directory_alias_composites, find_raw_should_use_text, find_redundant_any_refs,
     find_redundant_explicit_defaults, find_redundant_needs_one, find_redundant_unix_platforms,
@@ -4956,6 +4956,41 @@ impl super::CapabilityMapper {
                     warnings.push(format!(
                         "{} all: legs are already required by another leg",
                         subsumed.len()
+                    ));
+                }
+            }
+
+            // Validate: two required legs that one value satisfies at once.
+            // The rule claims two pieces of evidence and has one, spelled
+            // twice.
+            if !crate::validation_controls::is_validator_disabled("one-fact-conviction") {
+                let one_fact = find_one_fact_convictions(&trait_definitions, &composite_rules);
+                if !one_fact.is_empty() {
+                    eprintln!(
+                        "\n❌ ERROR: {} convictions count one fact as two legs",
+                        one_fact.len()
+                    );
+                    eprintln!("   Both legs read the same fact, and a single value satisfies");
+                    eprintln!("   both -- so the rule rests on one observation while reading");
+                    eprintln!("   as two. Delete one leg, or replace it with evidence of a");
+                    eprintln!("   different kind. Legs that require two DIFFERENT values (a");
+                    eprintln!("   root launcher AND a staged binary) are not reported.\n");
+                    for (rule_id, first, second, fact) in &one_fact {
+                        let source = rule_source_files
+                            .get(rule_id)
+                            .map(std::string::String::as_str)
+                            .unwrap_or("unknown");
+                        match find_line_number(source, rule_id) {
+                            Some(line) => eprintln!("   {source}:{line}: '{rule_id}'"),
+                            None => eprintln!("   {source}: '{rule_id}'"),
+                        }
+                        eprintln!("      '{first}' and '{second}' both read {fact},");
+                        eprintln!("      and one value satisfies both");
+                    }
+                    eprintln!();
+                    warnings.push(format!(
+                        "{} convictions count one fact as two legs",
+                        one_fact.len()
                     ));
                 }
             }

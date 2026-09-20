@@ -183,10 +183,11 @@ pub(crate) use constraints::{
     find_invalid_not_usage, find_kv_exists_with_matcher, find_legs_outside_for,
     find_length_bounds_without_regex, find_missing_search_patterns,
     find_mixed_archive_filetype_traits, find_needs_without_any, find_needs_zero,
-    find_none_only_with_proximity, find_orphaned_components, find_pooling_scope_without_container,
-    find_pure_alias_traits, find_redundant_explicit_defaults, find_redundant_needs_one,
-    find_scope_without_valid_container, find_should_use_defaults, find_subsumed_required_legs,
-    find_too_short_patterns, find_uncallable_symbol_matchers, is_runtime_synthesized_namespace,
+    find_none_only_with_proximity, find_one_fact_convictions, find_orphaned_components,
+    find_pooling_scope_without_container, find_pure_alias_traits, find_redundant_explicit_defaults,
+    find_redundant_needs_one, find_scope_without_valid_container, find_should_use_defaults,
+    find_subsumed_required_legs, find_too_short_patterns, find_uncallable_symbol_matchers,
+    is_runtime_synthesized_namespace,
 };
 
 // Utility functions

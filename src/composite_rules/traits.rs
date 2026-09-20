@@ -1016,6 +1016,20 @@ impl TraitDefinition {
             || self.per_kb_max.is_some()
     }
 
+    /// Whether this trait says anything about the file as a whole, on top of
+    /// whatever its `if:` matches.
+    ///
+    /// A size or entropy bound measures a file; an `unless:` guard reads one
+    /// ("...unless the file also mentions `node-gyp-build`"). Both are written
+    /// by an author who has a single file in mind.
+    fn constrains_whole_file(&self) -> bool {
+        self.size_min.is_some()
+            || self.size_max.is_some()
+            || self.entropy_min.is_some()
+            || self.entropy_max.is_some()
+            || self.unless.is_some()
+    }
+
     /// Evaluate this trait definition against the analysis context
     pub(crate) fn evaluate<'a>(&self, ctx: &EvaluationContext<'a>) -> Option<Finding> {
         self.evaluate_with_gates(ctx, false)
@@ -1078,6 +1092,32 @@ impl TraitDefinition {
             ctx.record_skip(|| SkipReason::FileTypeMismatch {
                 rule: self.r#for.clone(),
                 context: ctx.file_type,
+            });
+            return None;
+        }
+
+        // A fragment -- a decoded layer, an unescaped layer, a string literal
+        // that sniffed as source -- has no name of its own, so `type: path`
+        // reads its host's (see `fragment_host_path`). For a bare identity that
+        // is what we want, and 34 path patterns across the rule tree depend on
+        // it: a decoded layer of `x.js` IS JavaScript.
+        //
+        // It stops being what we want as soon as the trait says anything more.
+        // `size_max: 500` would then measure the fragment while the name came
+        // from the host; `unless: {text: node-gyp-build}` would read the
+        // fragment while the name came from the host. One rule, two subjects --
+        // which is how `install.js` kept its installer finding after the
+        // carve-out text was added to the file.
+        //
+        // Standing down here costs nothing in practice: a trait that identifies
+        // a file by its name matches that name on the host, and the host is a
+        // node in its own right, judged against its own size and its own text.
+        if self.constrains_whole_file()
+            && matches!(self.r#if, Condition::Path(_))
+            && let Some(host) = super::evaluators::fragment_host_path(&ctx.report.target.path)
+        {
+            ctx.record_skip(|| SkipReason::InheritedIdentityOnFragment {
+                host: host.to_string(),
             });
             return None;
         }

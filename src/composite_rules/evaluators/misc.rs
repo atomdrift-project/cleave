@@ -214,13 +214,23 @@ fn member_relative_tail(path: &str) -> Option<&str> {
     path.rsplit_once('!').map(|(_, tail)| tail)
 }
 
-/// A decoded payload layer is reported under its parent's path with a
+/// The host file a derived fragment was carved out of, or `None` when this
+/// node is a file in its own right (a root file, or an archive member).
+///
+/// A fragment is a run of bytes the analyzer lifted out of a host and analyzed
+/// separately -- a decoded base64 payload, an unicode-unescaped layer, a string
+/// literal that sniffed as source. It is reported under its host's path with a
 /// `##<codec>@<offset>` suffix (`bundle.js.map##unicode-escape@1854094`).
-/// Every `$`-anchored path identity stops matching there -- the source-map
-/// identity `\.[cm]?js\.map$` does not recognise a decoded layer of a source
-/// map -- so the base path is matched as well.
-fn decoded_layer_base(path: &str) -> Option<&str> {
-    path.split_once("##").map(|(base, _)| base)
+///
+/// A fragment has no name of its own, so `type: path` reads its host's. That is
+/// what callers want for an identity question -- a decoded layer of `x.js` IS
+/// JavaScript -- and it is the reason `$`-anchored identities such as the
+/// source-map `\.[cm]?js\.map$` keep matching inside a layer. See
+/// [`TraitDefinition::constrains_whole_file`] for the case where it is not
+/// enough on its own.
+pub(crate) fn fragment_host_path(path: &str) -> Option<&str> {
+    path.split_once(crate::types::file_analysis::ENCODING_DELIMITER)
+        .map(|(host, _)| host)
 }
 
 /// Evaluate a `type: path` condition against the file path. Matches the full
@@ -263,7 +273,7 @@ pub(crate) fn eval_path(
     // `basename` already collapses to the last component, which is identical
     // for both spellings, so only the full/dirname scopes need the second try.
     let mut candidates: Vec<&str> = vec![scope_of(full, basename, dirname)];
-    if let Some(base) = decoded_layer_base(full) {
+    if let Some(base) = fragment_host_path(full) {
         let scoped = scope_of(base, basename, dirname);
         if !candidates.contains(&scoped) {
             candidates.push(scoped);

@@ -2013,6 +2013,45 @@ pub(crate) const ALL_GROUPS: &[(&[FileType], &str)] = &[
     (ARCHIVES, "archives"),
 ];
 
+/// Source file path fragments where an explicit `for:` list spanning most or
+/// all of the archive-type family is permitted despite `archives` not being a
+/// usable `for:` group (see [`ALL_GROUPS`] and the `archives` ban in
+/// `capabilities::parsing`). Each of these checks a structural, per-container
+/// fact -- member count, entropy, a path pattern inside `archive.members`,
+/// extension-vs-content consistency -- that the archive analyzer computes
+/// identically no matter which specific archive format produced the
+/// container, so enumerating the whole family is the correct targeting, not
+/// an author who forgot a group. Entries are file paths, not directories: a
+/// sibling file in the same directory that targets a specific format is not
+/// covered just because it shares a path prefix.
+pub(crate) const BROAD_ARCHIVE_FILETYPE_ALLOWLIST: &[&str] = &[
+    // Container-shape facts (member count, compression ratio, executable/script
+    // member counts, misplaced-executable heuristic, parse errors): all read
+    // metrics the archive analyzer emits the same way for every format.
+    "metadata/file/archive/archive.yaml",
+    "metadata/file/archive/many-members.yaml",
+    // Extension-vs-detected-format consistency is a property of "this file
+    // claims to be format X but the bytes say Y", which is meaningful for any
+    // archive format on either side of the mismatch.
+    "metadata/file/extension/identity/archive-mismatch.yaml",
+    // `archive.path_traversal_count` is a central-directory fact with the same
+    // meaning (a member path that escapes the extraction root) regardless of
+    // container format.
+    "metadata/package/files/archive-member/shape.yaml",
+    // `file.entropy` is computed over raw bytes; it has no dependency on the
+    // container format wrapping them.
+    "metadata/file/data-blob/near-maximum-entropy.yaml",
+    // These search `archive.members[*].path` for a literal filename/pattern
+    // (go.mod, Package.swift, a Vim swap file, a vendored node_modules tree):
+    // the member listing has the same shape for every archive format cleave
+    // extracts, so the check behaves identically across the family.
+    "metadata/package/files/included/package.yaml",
+    // `nested-source-package-context` requires two shell-scoped legs
+    // (`packaging/PKGBUILD`, `packaging/mktarball.sh` path matches) that fire
+    // on member paths, not on the container's own format.
+    "metadata/build/archive/source.yaml",
+];
+
 /// Find traits and composite rules with 9 or more explicit file types in their `for:` field.
 ///
 /// Listing many individual file types defeats the purpose of specific targeting and is
@@ -2065,13 +2104,24 @@ pub(crate) fn find_excessive_file_types(
         "combine named groups (binaries, scripts, source, manifests, build, documents, media, data)"
     };
 
+    let is_allowlisted = |defined_in: &std::path::Path| -> bool {
+        let source = defined_in.to_string_lossy();
+        BROAD_ARCHIVE_FILETYPE_ALLOWLIST
+            .iter()
+            .any(|suffix| source.contains(suffix))
+    };
+
     let mut violations = Vec::new();
 
     for t in trait_definitions {
         // Skip if the author already used named groups — platform filtering may
         // have removed some members, making the expanded set look like a partial
         // group, but the YAML source is correct.
-        if t.for_from_groups || t.r#for.contains(&FileType::All) || is_group_expressible(&t.r#for) {
+        if t.for_from_groups
+            || t.r#for.contains(&FileType::All)
+            || is_group_expressible(&t.r#for)
+            || is_allowlisted(&t.defined_in)
+        {
             continue;
         }
         if t.r#for.len() >= MIN_FOR_WARNING {
@@ -2080,7 +2130,11 @@ pub(crate) fn find_excessive_file_types(
     }
 
     for r in composite_rules {
-        if r.for_from_groups || r.r#for.contains(&FileType::All) || is_group_expressible(&r.r#for) {
+        if r.for_from_groups
+            || r.r#for.contains(&FileType::All)
+            || is_group_expressible(&r.r#for)
+            || is_allowlisted(&r.defined_in)
+        {
             continue;
         }
         if r.r#for.len() >= MIN_FOR_WARNING {

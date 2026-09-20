@@ -158,6 +158,22 @@ fn read_member_tolerant<R: Read>(
 
 /// Members at or above the single-flight wait floor stay on their lane
 /// thread in a parallel member window (see `par_filter_fold_members`).
+/// How many heavy members one archive analyzes at a time
+/// (`CLEAVE_HEAVY_MEMBER_PARALLEL`, default 32; 1 restores the serial walk).
+/// Measured on BootstrapBlazor alone: serial 76.8 s, 8-wide 35.0 s, 32-wide
+/// 26.6 s at +4% peak RSS; on the 55-zip corpus 32 costs ~1 GB more peak
+/// than 8 and was the only width that reached 71 s.
+fn heavy_member_parallelism() -> usize {
+    static N: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *N.get_or_init(|| {
+        std::env::var("CLEAVE_HEAVY_MEMBER_PARALLEL")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|&n| n > 0)
+            .unwrap_or(32)
+    })
+}
+
 fn member_is_heavy(bytes: usize) -> bool {
     bytes >= flight_wait_min_bytes()
 }
@@ -363,11 +379,17 @@ fn par_filter_fold_members<T, U, F>(
         let (heavy_items, light_items): (Vec<usize>, Vec<usize>) =
             (0..chunk.len()).partition(|&i| heavy(&chunk[i]));
         // `join`'s left side runs here; the right side is the only stealable
-        // job. Heavy members never enter a queue.
+        // job. Heavy members run a bounded number at a time rather than one
+        // after another: a module zip with ~30 multi-MB minified bundles spent
+        // 55 of its 77 s on one thread walking them serially while the pool
+        // idled (BootstrapBlazor, 2026-09-19); fully parallel it took 28 s at
+        // +4% peak RSS. The bound keeps the concurrent working set of big
+        // members — each holds its strings, parse tree and regex scratch —
+        // from multiplying across every archive in flight.
         rayon::join(
             || {
-                for i in heavy_items {
-                    deliver(i, f(&chunk[i]));
+                for group in heavy_items.chunks(heavy_member_parallelism()) {
+                    group.par_iter().for_each(|&i| deliver(i, f(&chunk[i])));
                 }
             },
             || {
@@ -2027,21 +2049,7 @@ impl ArchiveAnalyzer {
             // from the original bytes, so identity is unchanged.
             let normalized_member = crate::file_io::normalize_text_encoding(data);
             let data: &[u8] = normalized_member.as_ref();
-            // A nested member's logical path must carry the chain its parents
-            // already established (`outer.tar!inner.xls!vba/m.vbs`), not just
-            // its position inside the innermost archive. `AnalysisInput::path`
-            // is documented as the logical member path -- `backing_path` below
-            // is the extracted file tools reopen -- and `type: path` rules read
-            // it, so without the prefix every directory above the innermost
-            // archive is invisible: a fixture under
-            // `sc/qa/extras/testdocuments/X.xls` was matched as
-            // `vba/TestMacros.vbs`, putting it out of reach of
-            // `test-directory-path` while its finding still rolled up.
-            //
-            // `format_entry_path` is the identity at depth 0, so first-level
-            // members -- the overwhelming majority -- are unchanged.
-            let logical_path_buf = self.format_entry_path(relative_path);
-            let logical_path = Path::new(&logical_path_buf);
+            let logical_path = Path::new(relative_path);
             // filefacts is the string authority and the parser: open the
             // member once and thread it into the analyzer (below) so it is
             // parsed a single time, regardless of member type.

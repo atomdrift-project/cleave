@@ -1249,3 +1249,131 @@ fn test_condition_level_not_on_text_regex_is_honored() {
         "case-randomized pOwErShElL must still fire"
     );
 }
+
+// ==================== Fragment identity tests ====================
+//
+// A fragment -- a decoded layer, an unescaped layer, a string literal that
+// sniffed as source -- is reported under its host's path with a
+// `##<codec>@<offset>` suffix, and `type: path` reads through to the host.
+// That is right for a bare identity and wrong the moment the trait also
+// constrains the whole file: the name would come from the host while the size
+// and the `unless:` text came from the fragment.
+
+/// `if:` shaped like a file-name identity, e.g. `basename: true, regex: \.py$`.
+fn python_basename_identity() -> Condition {
+    Condition::Path(super::condition::PathQuery {
+        exact: None,
+        substr: None,
+        regex: Some(r"\.py$".to_string()),
+        case_insensitive: false,
+        is_check: None,
+        basename: true,
+        dirname: false,
+    })
+}
+
+fn report_at(path: &str, size_bytes: u64) -> AnalysisReport {
+    AnalysisReport::new(TargetInfo {
+        path: path.to_string(),
+        file_type: "python".to_string(),
+        size_bytes,
+        sha256: "test".to_string(),
+        architectures: None,
+    })
+}
+
+#[test]
+fn bare_identity_still_matches_through_to_the_host_name() {
+    // The ~30 rules that identify a decoded layer's language by its host's
+    // extension must keep working. No size bound, no `unless:`.
+    let t = create_test_trait("bare", python_basename_identity());
+    let ctx = create_test_context(report_at("a/host.py##plain@0x3", 120), vec![]);
+    assert!(
+        t.evaluate(&ctx).is_some(),
+        "a fragment of host.py is still Python"
+    );
+}
+
+#[test]
+fn size_bounded_identity_stands_down_on_a_fragment() {
+    // The `small-no-imports` shape: the cap measures a file, so it may not be
+    // spent on a piece of one.
+    let mut t = create_test_trait("sized", python_basename_identity());
+    t.size_max = Some(500);
+    let ctx = create_test_context(report_at("a/host.py##plain@0x3", 120), vec![]);
+    assert!(
+        t.evaluate(&ctx).is_none(),
+        "a 120-byte fragment must not satisfy a cap written about the file"
+    );
+}
+
+#[test]
+fn size_bounded_identity_still_evaluates_on_the_host_itself() {
+    // Standing down on the fragment loses nothing only because the host is a
+    // node too. Both halves of that claim are asserted.
+    let mut t = create_test_trait("sized", python_basename_identity());
+    t.size_max = Some(500);
+    assert!(
+        t.evaluate(&create_test_context(report_at("a/host.py", 120), vec![]))
+            .is_some(),
+        "the host is under the cap and must still match"
+    );
+    assert!(
+        t.evaluate(&create_test_context(report_at("a/host.py", 900), vec![]))
+            .is_none(),
+        "the host is over the cap and must be skipped for that reason"
+    );
+}
+
+#[test]
+fn guarded_identity_stands_down_on_a_fragment() {
+    // The `install-js-basename` shape: an `unless:` guard reads the whole file,
+    // so on a fragment it would read the wrong bytes and acquit nothing.
+    let mut t = create_test_trait("guarded", python_basename_identity());
+    t.unless = Some(vec![Condition::Text(TextQuery {
+        substr: Some("import ".to_string()),
+        ..Default::default()
+    })]);
+    let ctx = create_test_context(report_at("a/host.py##plain@0x3", 120), vec![]);
+    assert!(
+        t.evaluate(&ctx).is_none(),
+        "a guard written about the file must not be judged against a fragment"
+    );
+}
+
+#[test]
+fn a_fragments_own_content_still_gates_a_content_rule() {
+    // The rule is about inherited *identity*, not about fragments in general.
+    // A trait whose `if:` reads content is judged on the content it read, and
+    // its size bound measures the same bytes -- one subject, so it stands.
+    let mut t = create_test_trait(
+        "content",
+        Condition::Symbol(SymbolQuery {
+            exact: Some("os".to_string()),
+            ..Default::default()
+        }),
+    );
+    t.size_max = Some(500);
+    let mut report = report_at("a/host.py##plain@0x3", 120);
+    report.imports.push(Import {
+        symbol: "os".to_string(),
+        ..Default::default()
+    });
+    assert!(
+        t.evaluate(&create_test_context(report, vec![])).is_some(),
+        "a content rule reads the fragment and is sized against the same bytes"
+    );
+}
+
+#[test]
+fn archive_members_are_files_not_fragments() {
+    // `outer.tar!inner/x.py` is a real member with its own bytes; only the
+    // `##` suffix marks a fragment.
+    let mut t = create_test_trait("member", python_basename_identity());
+    t.size_max = Some(500);
+    let ctx = create_test_context(report_at("outer.tar!inner/x.py", 120), vec![]);
+    assert!(
+        t.evaluate(&ctx).is_some(),
+        "an archive member is a file and answers file-shaped questions"
+    );
+}

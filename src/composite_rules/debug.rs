@@ -33,6 +33,13 @@ pub(crate) enum SkipReason {
         /// File type of the file being evaluated
         context: FileType,
     },
+    /// The trait's identity came from the host file, but the trait also
+    /// constrains the whole file, and this node is only a piece of one.
+    /// See `TraitDefinition::constrains_whole_file`.
+    InheritedIdentityOnFragment {
+        /// Path of the host the fragment was carved from
+        host: String,
+    },
     /// File is smaller than rule's minimum size
     SizeTooSmall {
         /// Actual file size in bytes
@@ -118,6 +125,12 @@ impl std::fmt::Display for SkipReason {
                     f,
                     "File type mismatch: rule requires {:?}, file is {:?}",
                     rule, context
+                )
+            }
+            SkipReason::InheritedIdentityOnFragment { host } => {
+                write!(
+                    f,
+                    "Identity is the host's ({host}); trait also constrains the whole file, and this node is a fragment of one"
                 )
             }
             SkipReason::SizeTooSmall { actual, min } => {

@@ -795,6 +795,13 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         fix: "Delete the redundant leg -- the rule matches exactly the same files without it. If the two legs were meant to be different evidence, one of them is not matching what its name claims: check for an exact and a regex spelling of the same value, or a nested composite that already contains the other leg.",
     },
     ValidatorSpec {
+        id: "one-fact-conviction",
+        category: ValidatorCategory::Policy,
+        display_id: "one-fact",
+        description: "A suspicious/hostile composite requires two all: legs that read the same fact and match the same text, so it counts one observation as two pieces of evidence.",
+        fix: "Delete one leg, or replace it with evidence of a different kind. The two legs are the same match spelled differently -- an exact and a regex naming one value, or two extension lists that meet on the spelling the sample actually uses -- so the rule convicts on a single fact while reading as though it had corroboration. Legs that require two DIFFERENT values are not reported: a root launcher AND a staged binary is a layout, not a restatement.",
+    },
+    ValidatorSpec {
         id: "conviction-without-content",
         category: ValidatorCategory::Policy,
         display_id: "no-content",

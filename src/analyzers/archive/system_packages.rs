@@ -945,7 +945,16 @@ pub(crate) fn extract_rar(
                         fs::create_dir_all(parent)?;
                     }
 
-                    // Extract the file
+                    // One encrypted member does not make the rest unreadable.
+                    // Names, sizes and times still come from the filefacts header walk.
+                    if header.is_encrypted() {
+                        guard.add_extraction_note(format!("{filename}: encrypted, skipped"));
+                        archive = file_archive
+                            .skip()
+                            .context("Failed to skip encrypted RAR entry")?;
+                        continue;
+                    }
+
                     archive = file_archive
                         .extract_to(&out_path)
                         .context("Failed to extract RAR entry")?;

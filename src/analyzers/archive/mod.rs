@@ -2233,6 +2233,19 @@ impl ArchiveAnalyzer {
                 guard.add_extraction_note(format!("RPM payload extraction incomplete: {e}"));
             }
 
+            // RAR payloads are often encrypted while the headers stay in the
+            // clear. Keep the filefacts member table rather than dropping the
+            // whole archive the way an unreadable ZIP central directory would.
+            let preserved_rar_metadata = matches!(file_type, FileType::Rar)
+                && filefacts_archive_entries
+                    .iter()
+                    .any(|entry| entry.entry_type.as_deref() != Some("directory"));
+            if preserved_rar_metadata {
+                merge_filefacts_archive_listing(&mut report, &filefacts_archive_entries);
+                report.metadata.errors.push(format!(
+                    "RAR extraction failed; preserved header listing: {e}"
+                ));
+            }
             let extracted_count = walkdir::WalkDir::new(temp_dir.path())
                 .min_depth(1)
                 .into_iter()
@@ -2247,7 +2260,11 @@ impl ArchiveAnalyzer {
                 ));
             }
             if extracted_count == 0 {
-                if preserved_7z_metadata || preserved_iso_facts || preserved_rpm_facts {
+                if preserved_7z_metadata
+                    || preserved_iso_facts
+                    || preserved_rpm_facts
+                    || preserved_rar_metadata
+                {
                     drain_extraction_notes(&mut report, &guard);
                     let suppress_path_traversal =
                         should_suppress_path_traversal_findings(archive_path, &hostile_reasons);
@@ -2326,6 +2343,9 @@ impl ArchiveAnalyzer {
         let member_metadata = guard.take_member_metadata();
         if !member_metadata.is_empty() {
             merge_archive_member_metadata(&mut report, member_metadata);
+        }
+        if matches!(file_type, FileType::Rar) {
+            merge_filefacts_archive_listing(&mut report, &filefacts_archive_entries);
         }
 
         let analysis_elapsed = start.elapsed();
@@ -2766,6 +2786,57 @@ impl Analyzer for ArchiveAnalyzer {
         crate::analyzers::detect_file_type(file_path)
             .map(|ft| ft.is_archive())
             .unwrap_or(false)
+    }
+}
+
+/// Overlay a filefacts archive listing onto `report.archive_contents`.
+///
+/// Extracted members keep the sha256 and type the unpack pass learned; listing
+/// fields the extractor never saw (encrypted, host OS, header offsets, packed
+/// size) are filled in. Names that could not be unpacked — the usual encrypted
+/// RAR case — are appended so path matchers still see them.
+fn merge_filefacts_archive_listing(report: &mut AnalysisReport, listing: &[ArchiveEntry]) {
+    use std::collections::HashMap;
+
+    let mut by_path: HashMap<String, usize> = HashMap::new();
+    for (i, entry) in report.archive_contents.iter().enumerate() {
+        by_path.entry(entry.path.clone()).or_insert(i);
+    }
+    for entry in listing {
+        if entry.entry_type.as_deref() == Some("directory") {
+            continue;
+        }
+        if let Some(&i) = by_path.get(&entry.path) {
+            let dest = &mut report.archive_contents[i];
+            dest.encrypted |= entry.encrypted;
+            if dest.mtime_unix.is_none() {
+                dest.mtime_unix = entry.mtime_unix;
+            }
+            if dest.host_os.is_none() {
+                dest.host_os = entry.host_os.clone();
+            }
+            if dest.compressed_size.is_none() {
+                dest.compressed_size = entry.compressed_size;
+            }
+            if dest.compression_method.is_none() {
+                dest.compression_method = entry.compression_method.clone();
+            }
+            if dest.crc32.is_none() {
+                dest.crc32 = entry.crc32;
+            }
+            if dest.header_offset.is_none() {
+                dest.header_offset = entry.header_offset;
+            }
+            if dest.data_offset.is_none() {
+                dest.data_offset = entry.data_offset;
+            }
+            if dest.linkname.is_none() {
+                dest.linkname = entry.linkname.clone();
+            }
+        } else {
+            by_path.insert(entry.path.clone(), report.archive_contents.len());
+            report.archive_contents.push(entry.clone());
+        }
     }
 }
 

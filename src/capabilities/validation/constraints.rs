@@ -1178,6 +1178,28 @@ fn has_short_pattern_constraints(t: &TraitDefinition, cond: &Condition) -> bool 
     false
 }
 
+/// Find hex conditions that the matcher cannot parse.
+///
+/// A malformed hex pattern is a detection-integrity failure: evaluation would
+/// otherwise degrade to a runtime no-match. Keep this validator hard so invalid
+/// rules cannot load into a silently dead trait set.
+#[must_use]
+pub(crate) fn find_invalid_hex_patterns(
+    trait_definitions: &[TraitDefinition],
+) -> Vec<(String, String, String)> {
+    trait_definitions
+        .iter()
+        .filter_map(|trait_def| {
+            let Condition::Hex(HexQuery { pattern, .. }) = &trait_def.r#if else {
+                return None;
+            };
+            crate::composite_rules::evaluators::validate_hex_pattern(pattern)
+                .err()
+                .map(|error| (trait_def.id.clone(), pattern.clone(), error))
+        })
+        .collect()
+}
+
 /// Find raw/hex traits with patterns too short to be useful without sufficient constraints.
 ///
 /// Short patterns (1-2 chars for raw substr/exact, 1-2 concrete bytes for hex) are

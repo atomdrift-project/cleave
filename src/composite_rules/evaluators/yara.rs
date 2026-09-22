@@ -141,8 +141,113 @@ enum HexSegment {
         low_mask: u8,
         value: u8,
     },
+    /// Negated byte (`~XX` in YARA hex syntax).
+    NotByte { mask: u8, value: u8 },
     /// Byte alternation: matches any byte in the set
     ByteSet(Vec<u8>),
+    /// Nibble-wildcard alternation, for example `(0?|1?)`.
+    NibbleSet(Vec<(u8, u8)>),
+    /// General YARA alternation. Each branch is a sequence, not necessarily
+    /// a single byte (for example `(33 C0 | 31 C0)`).
+    Alternative(Vec<Vec<HexSegment>>),
+}
+
+/// Parse one YARA hex byte into `(value, mask)`. A mask bit of one is
+/// significant; a zero bit is a nibble wildcard.
+fn parse_masked_byte(token: &str) -> Result<(u8, u8), String> {
+    if token.len() != 2 {
+        return Err(format!(
+            "invalid alternation byte {token}: expected two hex digits"
+        ));
+    }
+    let chars: Vec<char> = token.chars().collect();
+    let mut value = 0;
+    let mut mask = 0xFF;
+    if chars[0] == '?' {
+        mask &= 0x0F;
+    } else {
+        value |= (chars[0]
+            .to_digit(16)
+            .ok_or_else(|| format!("invalid alternation byte {token}: invalid hex digit"))?
+            as u8)
+            << 4;
+    }
+    if chars[1] == '?' {
+        mask &= 0xF0;
+    } else {
+        value |= chars[1]
+            .to_digit(16)
+            .ok_or_else(|| format!("invalid alternation byte {token}: invalid hex digit"))?
+            as u8;
+    }
+    Ok((value, mask))
+}
+
+/// Split a hex pattern into tokens while preserving whitespace inside YARA
+/// alternations. `str::split_whitespace` alone would turn `(AA BB|CC DD)`
+/// into invalid fragments.
+fn tokenize_hex_pattern(pattern: &str) -> Result<Vec<String>, String> {
+    let mut tokens = Vec::new();
+    let mut group = None::<String>;
+    for part in pattern.split_whitespace() {
+        if let Some(current) = &mut group {
+            current.push(' ');
+            current.push_str(part);
+            if part.ends_with(')') {
+                tokens.push(std::mem::take(current));
+                group = None;
+            }
+        } else if part.starts_with('(') && !part.ends_with(')') {
+            group = Some(part.to_string());
+        } else {
+            tokens.push(part.to_string());
+        }
+    }
+    if group.is_some() {
+        return Err("unterminated hex alternation".to_string());
+    }
+    Ok(tokens)
+}
+
+fn single_byte_mask(segment: &HexSegment) -> Option<(u8, u8)> {
+    match segment {
+        HexSegment::Bytes(bytes) if bytes.len() == 1 => Some((bytes[0], 0xFF)),
+        HexSegment::NibbleMask {
+            high_mask,
+            low_mask,
+            value,
+        } => Some((*value, high_mask | low_mask)),
+        _ => None,
+    }
+}
+
+fn parse_alternation(inner: &str) -> Result<HexSegment, String> {
+    let branches: Result<Vec<Vec<HexSegment>>, String> = inner
+        .split('|')
+        .map(|branch| parse_hex_pattern(branch.trim()))
+        .collect();
+    let branches = branches?;
+    if branches.is_empty() || branches.iter().any(Vec::is_empty) {
+        return Err("empty hex alternation branch".to_string());
+    }
+
+    let byte_alternatives: Option<Vec<(u8, u8)>> = branches
+        .iter()
+        .map(|branch| {
+            (branch.len() == 1)
+                .then(|| single_byte_mask(&branch[0]))
+                .flatten()
+        })
+        .collect();
+    if let Some(alternatives) = byte_alternatives {
+        if alternatives.iter().all(|(_, mask)| *mask == 0xFF) {
+            return Ok(HexSegment::ByteSet(
+                alternatives.into_iter().map(|(value, _)| value).collect(),
+            ));
+        }
+        return Ok(HexSegment::NibbleSet(alternatives));
+    }
+    Ok(HexSegment::Alternative(branches))
 }
 
 /// Parse a hex pattern string into segments
@@ -151,7 +256,7 @@ fn parse_hex_pattern(pattern: &str) -> Result<Vec<HexSegment>, String> {
     let mut segments: Vec<HexSegment> = Vec::new();
     let mut current_bytes: Vec<u8> = Vec::new();
 
-    for token in pattern.split_whitespace() {
+    for token in tokenize_hex_pattern(pattern)? {
         if token == "??" {
             // Flush current bytes
             if !current_bytes.is_empty() {
@@ -192,30 +297,26 @@ fn parse_hex_pattern(pattern: &str) -> Result<Vec<HexSegment>, String> {
                 continue;
             }
             // Fall through to regular hex byte parsing for non-wildcard 2-char tokens
-            let byte = u8::from_str_radix(token, 16)
+            let byte = u8::from_str_radix(&token, 16)
                 .map_err(|e| format!("invalid hex byte {token}: {e}"))?;
             current_bytes.push(byte);
         } else if token.starts_with('(') && token.ends_with(')') {
-            // Byte alternation: (XX|YY|ZZ)
+            // Byte/general alternation: `(XX|YY|ZZ)` or `(AA BB|CC DD)`.
             if !current_bytes.is_empty() {
                 segments.push(HexSegment::Bytes(std::mem::take(&mut current_bytes)));
             }
 
             let inner = &token[1..token.len() - 1];
-            let alternatives: Result<Vec<u8>, String> = inner
-                .split('|')
-                .map(|s| {
-                    u8::from_str_radix(s.trim(), 16)
-                        .map_err(|e| format!("invalid alternation byte {s}: {e}"))
-                })
-                .collect();
-
-            let bytes = alternatives?;
-            if bytes.is_empty() {
-                return Err("empty byte alternation".to_string());
+            segments.push(parse_alternation(inner)?);
+        } else if token.contains('|') {
+            // Retain compatibility with the legacy cleave spelling `AA|BB`.
+            segments.push(parse_alternation(&token)?);
+        } else if token.starts_with('~') && token.len() == 3 {
+            if !current_bytes.is_empty() {
+                segments.push(HexSegment::Bytes(std::mem::take(&mut current_bytes)));
             }
-
-            segments.push(HexSegment::ByteSet(bytes));
+            let (value, mask) = parse_masked_byte(&token[1..])?;
+            segments.push(HexSegment::NotByte { mask, value });
         } else if token.starts_with('[') && token.ends_with(']') {
             // Gap: [N] or [N-M]
             if !current_bytes.is_empty() {
@@ -237,10 +338,9 @@ fn parse_hex_pattern(pattern: &str) -> Result<Vec<HexSegment>, String> {
                 segments.push(HexSegment::Gap { min: n, max: n });
             }
         } else {
-            // Regular hex byte
-            let byte = u8::from_str_radix(token, 16)
-                .map_err(|e| format!("invalid hex byte {token}: {e}"))?;
-            current_bytes.push(byte);
+            return Err(format!(
+                "invalid hex token {token}: expected a two-digit byte, wildcard, alternation, or gap"
+            ));
         }
     }
 
@@ -250,6 +350,37 @@ fn parse_hex_pattern(pattern: &str) -> Result<Vec<HexSegment>, String> {
     }
 
     Ok(segments)
+}
+
+/// Validate a cleave hex pattern without exposing the matcher representation.
+pub(crate) fn validate_hex_pattern(pattern: &str) -> Result<(), String> {
+    parse_hex_pattern(pattern).map(|_| ())
+}
+
+fn segment_length_bounds(segment: &HexSegment) -> (usize, usize) {
+    match segment {
+        HexSegment::Bytes(bytes) => (bytes.len(), bytes.len()),
+        HexSegment::Wildcard
+        | HexSegment::NibbleMask { .. }
+        | HexSegment::NotByte { .. }
+        | HexSegment::ByteSet(_)
+        | HexSegment::NibbleSet(_) => (1, 1),
+        HexSegment::Gap { min, max } => (*min, *max),
+        HexSegment::Alternative(branches) => {
+            let mut lengths = branches.iter().map(|branch| {
+                branch.iter().fold((0, 0), |(min, max), segment| {
+                    let (segment_min, segment_max) = segment_length_bounds(segment);
+                    (min + segment_min, max + segment_max)
+                })
+            });
+            let Some(first) = lengths.next() else {
+                return (0, 0);
+            };
+            lengths.fold(first, |(min, max), (branch_min, branch_max)| {
+                (min.min(branch_min), max.max(branch_max))
+            })
+        }
+    }
 }
 
 /// Check if pattern is simple (no wildcards or gaps)
@@ -278,91 +409,58 @@ fn extract_best_atom(segments: &[HexSegment]) -> Option<&[u8]> {
 
 /// Match pattern at a specific position in data
 fn match_pattern_at(data: &[u8], pos: usize, segments: &[HexSegment]) -> bool {
-    let mut offset = pos;
+    match_pattern_sequence(data, pos, segments)
+}
 
-    for (i, segment) in segments.iter().enumerate() {
-        match segment {
-            HexSegment::Bytes(bytes) => {
-                if offset + bytes.len() > data.len() {
-                    return false;
-                }
-                if &data[offset..offset + bytes.len()] != bytes.as_slice() {
-                    return false;
-                }
-                offset += bytes.len();
+fn match_pattern_sequence(data: &[u8], pos: usize, segments: &[HexSegment]) -> bool {
+    let Some((segment, rest)) = segments.split_first() else {
+        return true;
+    };
+
+    match segment {
+        HexSegment::Bytes(bytes) => {
+            if pos + bytes.len() > data.len() || &data[pos..pos + bytes.len()] != bytes.as_slice() {
+                return false;
             }
-            HexSegment::Wildcard => {
-                if offset >= data.len() {
-                    return false;
-                }
-                offset += 1;
-            }
-            HexSegment::Gap { min, max } => {
-                if *min == *max {
-                    // Fixed gap - just skip
-                    offset += min;
-                } else {
-                    let remaining_segments = &segments[i + 1..];
-                    // If the next segment is a known byte sequence, use memmem to
-                    // locate it within the gap window instead of trying every
-                    // possible gap length. This turns O(max-min) recursive calls
-                    // into a single SIMD-accelerated search.
-                    if let Some(HexSegment::Bytes(needle)) = remaining_segments.first()
-                        && !needle.is_empty()
-                    {
-                        let window_start = (offset + min).min(data.len());
-                        // Needle can start at most at offset+max; include
-                        // needle.len() extra bytes so the last position fits.
-                        let window_end = (offset + max + needle.len()).min(data.len());
-                        if window_start < window_end {
-                            let finder = memchr::memmem::Finder::new(needle.as_slice());
-                            let after_needle = &remaining_segments[1..];
-                            for hit in finder.find_iter(&data[window_start..window_end]) {
-                                let needle_end = window_start + hit + needle.len();
-                                if match_pattern_at(data, needle_end, after_needle) {
-                                    return true;
-                                }
-                            }
-                        }
-                        return false;
-                    }
-                    // Fallback: try each gap length
-                    for gap_len in *min..=*max {
-                        if match_pattern_at(data, offset + gap_len, remaining_segments) {
-                            return true;
-                        }
-                    }
-                    return false;
-                }
-            }
-            HexSegment::NibbleMask {
-                high_mask,
-                low_mask,
-                value,
-            } => {
-                if offset >= data.len() {
-                    return false;
-                }
-                let byte = data[offset];
-                let mask = high_mask | low_mask;
-                if (byte & mask) != *value {
-                    return false;
-                }
-                offset += 1;
-            }
-            HexSegment::ByteSet(bytes) => {
-                if offset >= data.len() {
-                    return false;
-                }
-                if !bytes.contains(&data[offset]) {
-                    return false;
-                }
-                offset += 1;
-            }
+            match_pattern_sequence(data, pos + bytes.len(), rest)
         }
+        HexSegment::Wildcard => pos < data.len() && match_pattern_sequence(data, pos + 1, rest),
+        HexSegment::Gap { min, max } => {
+            (*min..=*max).any(|gap_len| match_pattern_sequence(data, pos + gap_len, rest))
+        }
+        HexSegment::NibbleMask {
+            high_mask,
+            low_mask,
+            value,
+        } => {
+            let mask = high_mask | low_mask;
+            pos < data.len()
+                && (data[pos] & mask) == *value
+                && match_pattern_sequence(data, pos + 1, rest)
+        }
+        HexSegment::NotByte { mask, value } => {
+            pos < data.len()
+                && (data[pos] & mask) != *value
+                && match_pattern_sequence(data, pos + 1, rest)
+        }
+        HexSegment::ByteSet(bytes) => {
+            pos < data.len()
+                && bytes.contains(&data[pos])
+                && match_pattern_sequence(data, pos + 1, rest)
+        }
+        HexSegment::NibbleSet(alternatives) => {
+            pos < data.len()
+                && alternatives
+                    .iter()
+                    .any(|(value, mask)| (data[pos] & *mask) == *value)
+                && match_pattern_sequence(data, pos + 1, rest)
+        }
+        HexSegment::Alternative(branches) => branches.iter().any(|branch| {
+            let mut combined = branch.clone();
+            combined.extend_from_slice(rest);
+            match_pattern_sequence(data, pos, &combined)
+        }),
     }
-
-    true
 }
 
 /// Extract bytes corresponding to '??' wildcards in the matched pattern
@@ -402,11 +500,34 @@ fn extract_wildcard_bytes(data: &[u8], pos: usize, segments: &[HexSegment]) -> V
                     offset += 1;
                 }
             }
+            HexSegment::NotByte { .. } => {
+                offset += 1;
+            }
             HexSegment::ByteSet(_) => {
                 // Extract the matched byte for byte sets
                 if offset < data.len() {
                     extracted.push(data[offset]);
                     offset += 1;
+                }
+            }
+            HexSegment::NibbleSet(_) => {
+                // Extract the matched byte for nibble-wildcard alternatives
+                if offset < data.len() {
+                    extracted.push(data[offset]);
+                    offset += 1;
+                }
+            }
+            HexSegment::Alternative(branches) => {
+                if let Some(branch) = branches
+                    .iter()
+                    .find(|branch| match_pattern_at(data, offset, branch))
+                {
+                    extracted.extend(extract_wildcard_bytes(data, offset, branch));
+                    let (_, branch_end) = branch.iter().fold((0, 0), |(min, max), segment| {
+                        let (segment_min, segment_max) = segment_length_bounds(segment);
+                        (min + segment_min, max + segment_max)
+                    });
+                    offset += branch_end;
                 }
             }
         }
@@ -562,12 +683,9 @@ pub(crate) fn eval_hex<'a>(
             let (prefix_min, prefix_max): (usize, usize) = segments
                 .iter()
                 .take_while(|s| !matches!(s, HexSegment::Bytes(b) if b.as_slice() == atom))
-                .fold((0usize, 0usize), |(lo, hi), s| match s {
-                    HexSegment::Bytes(b) => (lo + b.len(), hi + b.len()),
-                    HexSegment::Gap { min, max } => (lo + *min, hi + *max),
-                    HexSegment::Wildcard
-                    | HexSegment::NibbleMask { .. }
-                    | HexSegment::ByteSet(_) => (lo + 1, hi + 1),
+                .fold((0usize, 0usize), |(lo, hi), s| {
+                    let (segment_min, segment_max) = segment_length_bounds(s);
+                    (lo + segment_min, hi + segment_max)
                 });
 
             // Search for atom, then verify full pattern at every plausible start.
@@ -946,6 +1064,42 @@ mod tests {
             }
             _ => panic!("expected ByteSet"),
         }
+    }
+
+    #[test]
+    fn test_parse_nibble_wildcard_alternation() {
+        // YARA/YARA-X accept nibble wildcards inside alternatives.
+        let segments = parse_hex_pattern("1F 8B 08 (0?|1?)").unwrap();
+        assert!(matches!(&segments[0], HexSegment::Bytes(b) if b == &[0x1F, 0x8B, 0x08]));
+        assert!(matches!(
+            &segments[1],
+            HexSegment::NibbleSet(alternatives)
+                if alternatives == &[(0x00, 0xF0), (0x10, 0xF0)]
+        ));
+    }
+
+    #[test]
+    fn test_match_spaced_sequence_alternation() {
+        let segments = parse_hex_pattern("(33 C0 | 31 C0) C3").unwrap();
+        assert!(match_pattern_at(&[0x33, 0xC0, 0xC3], 0, &segments));
+        assert!(match_pattern_at(&[0x31, 0xC0, 0xC3], 0, &segments));
+        assert!(!match_pattern_at(&[0x33, 0xC1, 0xC3], 0, &segments));
+    }
+
+    #[test]
+    fn test_match_negated_byte_alternation() {
+        let segments = parse_hex_pattern("(~00 ??|00 ~00)").unwrap();
+        assert!(match_pattern_at(&[0x01, 0x00], 0, &segments));
+        assert!(match_pattern_at(&[0x00, 0x01], 0, &segments));
+        assert!(!match_pattern_at(&[0x00, 0x00], 0, &segments));
+    }
+
+    #[test]
+    fn test_match_nibble_wildcard_alternation() {
+        let segments = parse_hex_pattern("1F 8B 08 (0?|1?)").unwrap();
+        assert!(match_pattern_at(&[0x1F, 0x8B, 0x08, 0x00], 0, &segments));
+        assert!(match_pattern_at(&[0x1F, 0x8B, 0x08, 0x1F], 0, &segments));
+        assert!(!match_pattern_at(&[0x1F, 0x8B, 0x08, 0x20], 0, &segments));
     }
 
     #[test]

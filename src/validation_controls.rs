@@ -83,6 +83,9 @@ const HARD_VALIDATOR_IDS: &[&str] = &[
     // The pattern uses lookaround/backreferences the linear-time engine can't
     // compile, so the condition silently never matches — the rule is dead.
     "incompatible-regex",
+    // A malformed hex pattern cannot be evaluated, so the trait would be
+    // silently dead if it were allowed to load.
+    "invalid-hex-pattern",
     // A `type: tree-sitter` `query:` that compiles against no grammar it can
     // run on. Evaluation caches the compile failure and the rule never fires.
     "ast-query-compile",
@@ -464,6 +467,13 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
                       or an over-escaped pattern), so the rule silently never fires.",
         fix: "Rewrite with \\b or an anchored alternation; unescape `\\\\b`→`\\b`; or split \
               into composite legs.",
+    },
+    ValidatorSpec {
+        id: "invalid-hex-pattern",
+        category: ValidatorCategory::Quality,
+        display_id: "hex-invalid",
+        description: "Hex pattern cannot be parsed by cleave, so the trait would never fire.",
+        fix: "Use valid YARA-style two-digit bytes, wildcards, alternations, or gaps.",
     },
     ValidatorSpec {
         id: "brittle-path-pattern",

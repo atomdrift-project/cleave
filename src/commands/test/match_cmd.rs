@@ -1218,7 +1218,8 @@ pub fn run(
                 platforms,
                 None,
                 None,
-            );
+            )
+            .with_section_map(&section_map);
 
             // Evaluate hex pattern with resolved location constraints
             let result = eval_hex(

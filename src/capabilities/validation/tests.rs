@@ -4753,8 +4753,9 @@ mod taxonomy_tests {
 #[cfg(test)]
 mod constraint_tests {
     use crate::capabilities::validation::constraints::{
-        MISSING_CONDITIONS, find_empty_condition_clauses, find_needs_zero,
-        find_none_only_with_proximity, find_pure_alias_traits, find_too_short_patterns,
+        MISSING_CONDITIONS, find_empty_condition_clauses, find_invalid_hex_patterns,
+        find_needs_zero, find_none_only_with_proximity, find_pure_alias_traits,
+        find_too_short_patterns,
     };
     use crate::capabilities::validation::{
         find_many_directory_refs, find_pure_directory_alias_composites, find_redundant_any_refs,
@@ -4764,6 +4765,7 @@ mod constraint_tests {
         Arch, CompositeTrait, Condition, FileType, KvQuery, Platform, RawQuery, TraitDefinition,
     };
     use crate::types::Criticality;
+    use crate::validation_controls::{Severity, validator_severity};
     use std::collections::{HashMap, HashSet};
     use std::path::PathBuf;
 
@@ -4953,6 +4955,29 @@ mod constraint_tests {
         assert!(
             find_too_short_patterns(&traits).is_empty(),
             "literal + alternation + literal = 3 concrete bytes"
+        );
+    }
+
+    #[test]
+    fn invalid_hex_patterns_are_reported_as_hard_validation_inputs() {
+        let traits = vec![
+            short_raw_trait(
+                "test/valid-yara-nibble-alternation",
+                short_hex_trait("1F 8B 08 (0?|1?)", None),
+            ),
+            short_raw_trait(
+                "test/invalid-hex",
+                short_hex_trait("1F 8B 08 (0?|ZZ)", None),
+            ),
+        ];
+        let violations = find_invalid_hex_patterns(&traits);
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].0, "test/invalid-hex");
+        assert!(violations[0].2.contains("invalid"));
+        assert_eq!(
+            validator_severity("invalid-hex-pattern"),
+            Severity::Hard,
+            "unparseable hex must fail even in --soft validation"
         );
     }
 

@@ -32,11 +32,12 @@ use crate::capabilities::validation::{
     find_hostile_composites_with_too_few_notable_legs, find_hostile_meta_rules,
     find_impossible_composite_filetypes, find_impossible_count_constraints,
     find_impossible_length_bounds, find_impossible_needs, find_impossible_size_constraints,
-    find_incompatible_regex_features, find_inline_content_duplicates, find_invalid_not_usage,
-    find_invalid_trait_ids, find_kv_exists_with_matcher, find_legs_outside_for,
-    find_length_bounds_without_regex, find_line_number, find_literal_regex_patterns,
-    find_literals_covered_by_regexes, find_malware_subcategory_violations,
-    find_many_directory_refs, find_memory_hungry_regex_patterns, find_meta_missing_section_filter,
+    find_incompatible_regex_features, find_inline_content_duplicates, find_invalid_hex_patterns,
+    find_invalid_not_usage, find_invalid_trait_ids, find_kv_exists_with_matcher,
+    find_legs_outside_for, find_length_bounds_without_regex, find_line_number,
+    find_literal_regex_patterns, find_literals_covered_by_regexes,
+    find_malware_subcategory_violations, find_many_directory_refs,
+    find_memory_hungry_regex_patterns, find_meta_missing_section_filter,
     find_metadata_content_dirs, find_metadata_cross_tier_refs, find_missing_search_patterns,
     find_mixed_archive_filetype_traits, find_needs_without_any, find_needs_zero,
     find_non_capturing_groups, find_none_only_with_proximity, find_objectives_wellknown_violations,
@@ -4352,6 +4353,40 @@ impl super::CapabilityMapper {
                     format!(
                         "{} composite rules have `needs: 0` (vacuous match)",
                         needs_zero.len()
+                    ),
+                );
+            }
+
+            // Validate: hex patterns must be parseable by the matcher. A
+            // malformed pattern would otherwise load and degrade to a
+            // runtime no-match, silently disabling the trait.
+            let invalid_hex = find_invalid_hex_patterns(&trait_definitions);
+            if !invalid_hex.is_empty() {
+                eprintln!(
+                    "\n❌ ERROR: {} hex pattern(s) cannot be parsed by cleave\n",
+                    invalid_hex.len()
+                );
+                for (id, pattern, error) in &invalid_hex {
+                    let source = rule_source_files
+                        .get(id)
+                        .map(std::string::String::as_str)
+                        .unwrap_or("unknown");
+                    let line_hint = find_line_number(source, id);
+                    if let Some(line) = line_hint {
+                        eprintln!(
+                            "   {}:{}: '{}' (hex: \"{}\"): {}",
+                            source, line, id, pattern, error
+                        );
+                    } else {
+                        eprintln!("   {}: '{}' (hex: \"{}\"): {}", source, id, pattern, error);
+                    }
+                }
+                eprintln!();
+                warnings.push_id(
+                    "invalid-hex-pattern",
+                    format!(
+                        "{} hex pattern(s) cannot be parsed by cleave",
+                        invalid_hex.len()
                     ),
                 );
             }

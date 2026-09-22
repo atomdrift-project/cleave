@@ -44,7 +44,7 @@ impl SectionMap {
     /// Create a section map from cleave's report-side section list.
     #[must_use]
     pub(crate) fn from_report_sections(sections: &[crate::types::Section], file_size: u64) -> Self {
-        let sections: Vec<SectionInfo> = sections
+        let mut sections: Vec<SectionInfo> = sections
             .iter()
             .filter_map(|s| {
                 let start = s.offset?;
@@ -55,6 +55,7 @@ impl SectionMap {
                 })
             })
             .collect();
+        append_overlay(&mut sections, file_size);
         Self {
             sections,
             file_size,
@@ -65,7 +66,7 @@ impl SectionMap {
     /// Create a section map from a borrowed filefacts parse.
     #[must_use]
     pub(crate) fn from_filefacts(parsed: &filefacts::ParsedFile<'_>, file_size: u64) -> Self {
-        let sections: Vec<SectionInfo> = parsed
+        let mut sections: Vec<SectionInfo> = parsed
             .sections()
             .iter()
             .map(|s| SectionInfo {
@@ -74,6 +75,7 @@ impl SectionMap {
                 end: s.file_offset.saturating_add(s.file_size),
             })
             .collect();
+        append_overlay(&mut sections, file_size);
         Self {
             sections,
             file_size,
@@ -174,10 +176,16 @@ impl SectionMap {
     /// Internal logic for computing section bounds without caching
     fn compute_bounds(&self, name: &str) -> Option<(u64, u64)> {
         if name.eq_ignore_ascii_case("any") {
-            let start = self.sections.iter().map(|section| section.start).min()?;
+            let start = self
+                .sections
+                .iter()
+                .filter(|section| section.name != "overlay")
+                .map(|section| section.start)
+                .min()?;
             let end = self
                 .sections
                 .iter()
+                .filter(|section| section.name != "overlay")
                 .map(|section| section.end.min(self.file_size))
                 .max()?;
             return (start < end).then_some((start, end));
@@ -294,6 +302,23 @@ impl SectionMap {
     }
 }
 
+/// Expose bytes after the last mapped section as the synthetic `overlay`
+/// section. PE/ELF/Mach-O overlays are not named sections, but rules need a
+/// location constraint for appended archives and compressed payloads.
+fn append_overlay(sections: &mut Vec<SectionInfo>, file_size: u64) {
+    let Some(start) = sections.iter().map(|section| section.end).max() else {
+        return;
+    };
+    let start = start.min(file_size);
+    if start < file_size {
+        sections.push(SectionInfo {
+            name: "overlay".to_string(),
+            start,
+            end: file_size,
+        });
+    }
+}
+
 /// Resolve a potentially negative offset to an absolute position.
 fn resolve_offset_start(offset: i64, base_start: u64, base_end: u64) -> Option<u64> {
     let base_size = base_end.saturating_sub(base_start);
@@ -397,6 +422,22 @@ mod tests {
         let map = make_test_map();
         assert_eq!(map.bounds(".text"), Some((0x1000, 0x2000)));
         assert_eq!(map.bounds(".data"), Some((0x2000, 0x3000)));
+    }
+
+    #[test]
+    fn report_sections_expose_trailing_overlay() {
+        let sections = vec![crate::types::Section {
+            name: ".text".to_string(),
+            address: None,
+            offset: Some(0x100),
+            size: 0x200,
+            entropy: 0.0,
+            permissions: None,
+            flags: Vec::new(),
+        }];
+        let map = SectionMap::from_report_sections(&sections, 0x500);
+        assert_eq!(map.bounds("overlay"), Some((0x300, 0x500)));
+        assert_eq!(map.bounds("any"), Some((0x100, 0x300)));
     }
 
     #[test]

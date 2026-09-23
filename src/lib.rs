@@ -3221,6 +3221,13 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             .set_u("file.size", size);
     }
 
+    // A standalone scanner binary is finalized here. Archive containers are
+    // not: their findings are the member rollup, and a sibling member's
+    // signature hits must survive when one member is the scanner.
+    if !file_type.is_archive() {
+        report.suppress_scanner_catalog_self_hits();
+    }
+
     // Collapse duplicate findings (same id) before anything downstream sees
     // the report. Some analyzers emit one finding per match site; consumers
     // (diff, ML feature extraction, JSON viewers) want one logical finding

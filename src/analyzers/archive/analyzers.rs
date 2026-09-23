@@ -2254,6 +2254,7 @@ impl ArchiveAnalyzer {
             // without a per-member capture the member would carry findings but no
             // byte/line context. Rides up into `files[].context` via
             // `into_file_analysis`.
+            report.suppress_scanner_catalog_self_hits();
             report.dedupe_findings();
             // The container's end-of-analysis low-value filter has not run yet,
             // so resolve what it will delete and keep those out of the windows.

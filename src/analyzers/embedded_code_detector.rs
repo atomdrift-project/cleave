@@ -1169,9 +1169,17 @@ fn detect_base64_binary(
     {
         return Vec::new();
     }
+    // sudo-prompt's published helper is a base64 zip inside the module.
+    // Test and fixture trees are the other benign carriers of the same shape.
     if matches!(inner_type, "gz" | "zip" | "xz" | "lzma" | "bz2")
         && parent_path.split(['/', '\\', '!']).any(|component| {
             matches!(component, "testdata" | "fixture" | "fixtures")
+                || component == "sudo-prompt"
+                || component.starts_with("sudo-prompt-")
+                // SheetJS xlsx.zahl.js embeds the library as a base64 zip.
+                // mongodb saslprep ships Unicode code points as a base64 gzip.
+                || component.starts_with("xlsx.zahl.")
+                || component == "saslprep"
                 || component.ends_with("_test.go")
                 || component.ends_with(".test.js")
                 || component.ends_with(".spec.js")
@@ -2503,6 +2511,67 @@ IAAAAAAAsDyZDwU=";
 
     #[test]
     #[allow(clippy::unwrap_used)]
+    fn test_detect_base64_binary_skips_sudo_prompt_helper() {
+        // sudo-prompt embeds its elevation helper as a base64 zip. That is the
+        // module, not a smuggled archive.
+        let mut payload = Vec::with_capacity(192);
+        payload.extend_from_slice(&[0x1F, 0x8B, 0x08, 0x00]);
+        payload.resize(192, 0u8);
+        use base64::Engine;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&payload);
+        let info = make_string_info(&encoded);
+        assert!(
+            detect_base64_binary(
+                "node_modules/sudo-prompt/index.js",
+                &info,
+                0,
+                &test_mapper()
+            )
+            .is_empty()
+        );
+        assert!(
+            detect_base64_binary(
+                "node_modules/sudo-prompt-programfiles-x86/index.js",
+                &info,
+                0,
+                &test_mapper()
+            )
+            .is_empty()
+        );
+        assert!(
+            detect_base64_binary(
+                "node_modules/xlsx/dist/xlsx.zahl.js",
+                &info,
+                0,
+                &test_mapper()
+            )
+            .is_empty()
+        );
+        assert!(
+            detect_base64_binary(
+                "node_modules/xlsx/dist/xlsx.zahl.mjs",
+                &info,
+                0,
+                &test_mapper()
+            )
+            .is_empty()
+        );
+        assert!(
+            detect_base64_binary(
+                "node_modules/@mongodb-js/saslprep/dist/code-points-data.js",
+                &info,
+                0,
+                &test_mapper()
+            )
+            .is_empty()
+        );
+        assert!(
+            !detect_base64_binary("node_modules/evil/payload.js", &info, 0, &test_mapper())
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn test_detect_base64_binary_skipped_at_depth_gt_0() {
         use base64::Engine;
         let mut payload = vec![0x1F, 0x8Bu8, 0x08, 0x00];

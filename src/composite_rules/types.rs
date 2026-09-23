@@ -1027,6 +1027,11 @@ impl FileType {
                     | FileType::SystemdService
                     | FileType::DesktopEntry
                     | FileType::Xml
+                    // SVG is markup. A smuggled script often sits on one long
+                    // line after a comment pad; string extraction keeps a
+                    // prefix of that line and the loader never reaches a
+                    // `type: text` rule.
+                    | FileType::Svg
                     | FileType::ComposerJson
                     | FileType::PkgInfo
                     | FileType::SrcInfo
@@ -1528,6 +1533,12 @@ mod tests {
     fn test_is_source_code_false_for_systemd_service() {
         assert!(!FileType::SystemdService.is_source_code());
         assert!(FileType::SystemdService.uses_raw_text_search());
+    }
+
+    #[test]
+    fn test_svg_is_raw_text() {
+        assert!(!FileType::Svg.is_source_code());
+        assert!(FileType::Svg.uses_raw_text_search());
     }
 
     #[test]

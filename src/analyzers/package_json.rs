@@ -1326,6 +1326,9 @@ impl PackageJsonAnalyzer {
             "color-string",
             "colors",
             "lodash",
+            // Official lodash 3 line, published beside lodash 4 so both can
+            // be installed. One inserted digit is not a typosquat here.
+            "lodash3",
             "lodash-es",
             "preact",
             "asynct",
@@ -1785,6 +1788,7 @@ mod tests {
         assert!(analyzer.check_typosquat("axio").is_some());
         assert!(analyzer.check_typosquat("reac").is_some());
         assert!(analyzer.check_typosquat("lodash").is_none()); // Legitimate
+        assert!(analyzer.check_typosquat("lodash3").is_none());
     }
 
     #[test]

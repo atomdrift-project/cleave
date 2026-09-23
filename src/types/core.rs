@@ -952,6 +952,20 @@ impl AnalysisReport {
         }
     }
 
+    /// Drop suspicious and hostile hits on a file that is itself a defensive
+    /// scanner's embedded rule catalog. The catalog contains the strings those
+    /// rules look for, so the scanner is reported as every family it knows.
+    /// Other files in the same archive keep their own hits: this only looks at
+    /// the findings of the report it is called on.
+    pub fn suppress_scanner_catalog_self_hits(&mut self) {
+        const CTX: &str =
+            "well-known/tool/detection/malcontent::malcontent-defensive-scanner-context";
+        if self.findings.iter().any(|f| f.id.as_str() == CTX) {
+            self.findings
+                .retain(|f| !matches!(f.crit, Criticality::Suspicious | Criticality::Hostile));
+        }
+    }
+
     /// Filter findings using a predicate function.
     /// Applies the filter to both the top-level findings and findings within files.
     /// Returns the number of findings removed.
@@ -2773,6 +2787,44 @@ mod tests {
             source_file: None,
             downgraded: false,
         }
+    }
+
+    #[test]
+    fn scanner_catalog_self_hits_drop_only_that_files_signatures() {
+        let mut report = AnalysisReport::new(test_target());
+        report.findings.push(test_finding(
+            "well-known/tool/detection/malcontent::malcontent-defensive-scanner-context",
+            Criticality::Exception,
+        ));
+        report.findings.push(test_finding(
+            "third_party/elastic/Linux_Trojan_Mirai/linux/trojan/mirai",
+            Criticality::Hostile,
+        ));
+        report.findings.push(test_finding(
+            "objectives/evasion/kernel-hide/module::reptile-name",
+            Criticality::Suspicious,
+        ));
+        report.findings.push(test_finding(
+            "metadata/file/size::something",
+            Criticality::Notable,
+        ));
+        let mut sibling = FileAnalysis::default();
+        sibling.findings.push(test_finding(
+            "third_party/elastic/Linux_Trojan_Mirai/linux/trojan/mirai",
+            Criticality::Hostile,
+        ));
+        report.files.push(sibling);
+
+        report.suppress_scanner_catalog_self_hits();
+
+        let ids: Vec<&str> = report.findings.iter().map(|f| f.id.as_str()).collect();
+        assert!(ids.contains(
+            &"well-known/tool/detection/malcontent::malcontent-defensive-scanner-context"
+        ));
+        assert!(ids.contains(&"metadata/file/size::something"));
+        assert!(!ids.iter().any(|id| id.starts_with("third_party/")));
+        assert!(!ids.contains(&"objectives/evasion/kernel-hide/module::reptile-name"));
+        assert_eq!(report.files[0].findings.len(), 1);
     }
 
     #[test]

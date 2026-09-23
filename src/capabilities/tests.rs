@@ -2693,7 +2693,7 @@ fn test_parse_file_types_groups_and_exclusions() {
 
     let scripts = parsing::parse_file_types(&["scripts".to_string()], &mut warnings);
     assert!(scripts.from_groups);
-    assert_eq!(scripts.types.len(), 12); // TypeScript maps to JavaScript, not separate
+    assert_eq!(scripts.types.len(), 14); // TypeScript maps to JavaScript; mIRC and IRC II are distinct
     assert!(scripts.types.contains(&RuleFileType::Python));
     assert!(scripts.types.contains(&RuleFileType::Shell));
     assert!(scripts.types.contains(&RuleFileType::Jcl));

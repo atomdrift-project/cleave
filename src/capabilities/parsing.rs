@@ -453,6 +453,8 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                     RuleFileType::PowerShell,
                     RuleFileType::AppleScript,
                     RuleFileType::Vbs,
+                    RuleFileType::Mirc,
+                    RuleFileType::IrcII,
                 ],
                 "source" => vec![
                     RuleFileType::TypeScript,
@@ -579,6 +581,15 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 "applescript" | "scpt" => vec![RuleFileType::AppleScript],
                 "vbs" | "vbe" | "wsf" | "wsc" | "vbscript" => vec![RuleFileType::Vbs],
                 "html" | "htm" => vec![RuleFileType::Html],
+                "jsp" | "jspx" => vec![RuleFileType::Jsp],
+                "asp" | "aspx" => vec![RuleFileType::Asp],
+                "cfml" | "cfm" | "cfc" => vec![RuleFileType::Cfml],
+                "mirc" | "mrc" => vec![RuleFileType::Mirc],
+                "ircii" => vec![RuleFileType::IrcII],
+                "tex" => vec![RuleFileType::Tex],
+                "yara" | "yar" => vec![RuleFileType::Yara],
+                "postscript" | "ps" | "eps" => vec![RuleFileType::PostScript],
+                "dos_com" | "dos-com" | "doscom" => vec![RuleFileType::DosCom],
                 "markdown" | "md" => vec![RuleFileType::Markdown],
                 "makefile" | "make" | "mk" | "mak" => vec![RuleFileType::Makefile],
                 "dockerfile" | "docker" | "containerfile" => vec![RuleFileType::Dockerfile],
@@ -832,9 +843,14 @@ pub(crate) fn resolve_platform_filetype_conflicts(
                 | RuleFileType::Batch
                 | RuleFileType::Vbs
                 | RuleFileType::PowerShell
+                | RuleFileType::Mirc
+                | RuleFileType::Asp
+                | RuleFileType::DosCom
                 | RuleFileType::Lnk
                 | RuleFileType::Msi
-                | RuleFileType::Nupkg => has_windows,
+                | RuleFileType::Nupkg
+                | RuleFileType::Cab
+                | RuleFileType::Chm => has_windows,
                 // ELF runs on Linux/Unix generally; Android APKs and Dex are
                 // Android-specific, and Alpine's package format is
                 // Linux-specific like systemd/deb/rpm below.
@@ -848,10 +864,13 @@ pub(crate) fn resolve_platform_filetype_conflicts(
                 | RuleFileType::Shell
                 | RuleFileType::AppleScript
                 | RuleFileType::ObjectiveC
+                | RuleFileType::IrcII
                 | RuleFileType::Plist
                 | RuleFileType::Nib
                 | RuleFileType::Pbxproj
-                | RuleFileType::Ipa => has_darwin,
+                | RuleFileType::Ipa
+                | RuleFileType::Pkg
+                | RuleFileType::Dmg => has_darwin,
                 // Swift packages can target Windows, Linux, macOS, and iOS.
                 RuleFileType::Swift => has_windows || has_unix || has_macos || has_ios,
                 // Server/desktop-only languages — not meaningful on mobile-only
@@ -867,13 +886,42 @@ pub(crate) fn resolve_platform_filetype_conflicts(
                 | RuleFileType::Php
                 | RuleFileType::Groovy
                 | RuleFileType::Elixir
-                | RuleFileType::Scala => has_desktop,
+                | RuleFileType::Scala
+                | RuleFileType::Clojure
+                | RuleFileType::Jsp
+                | RuleFileType::Cfml
+                | RuleFileType::Beam
+                | RuleFileType::Makefile
+                | RuleFileType::Cmake
+                | RuleFileType::Dockerfile
+                | RuleFileType::PostScript
+                | RuleFileType::Tex
+                | RuleFileType::Ooxml
+                | RuleFileType::OleDoc
+                | RuleFileType::Rtf => has_desktop,
+                // These languages and their bytecode ship on desktops and on
+                // both phone platforms. iOS rules already match C, Rust, Go,
+                // Zig, Kotlin, and C#; Android rules match class and jar files.
+                RuleFileType::C
+                | RuleFileType::Cpp
+                | RuleFileType::Rust
+                | RuleFileType::Go
+                | RuleFileType::Zig
+                | RuleFileType::CSharp
+                | RuleFileType::StaticLib
+                | RuleFileType::Java
+                | RuleFileType::Kotlin
+                | RuleFileType::Class
+                | RuleFileType::Jar => has_desktop || has_android || has_ios,
                 // systemd/deb/rpm/AlpineApk are Linux-specific, not generic Unix
                 RuleFileType::AlpineApk
                 | RuleFileType::SystemdService
                 | RuleFileType::DesktopEntry
                 | RuleFileType::Deb
-                | RuleFileType::Rpm => has_linux,
+                | RuleFileType::Rpm
+                | RuleFileType::SrcInfo
+                | RuleFileType::Xbps
+                | RuleFileType::GentooBinpkg => has_linux,
                 _ => true,
             }
         });
@@ -886,22 +934,28 @@ pub(crate) fn resolve_platform_filetype_conflicts(
                 | RuleFileType::Batch
                 | RuleFileType::Vbs
                 | RuleFileType::PowerShell
+                | RuleFileType::Mirc
+                | RuleFileType::Asp
+                | RuleFileType::DosCom
                 | RuleFileType::Lnk
                 | RuleFileType::Msi
-                | RuleFileType::Nupkg => (has_windows, "windows"),
+                | RuleFileType::Nupkg
+                | RuleFileType::Cab
+                | RuleFileType::Chm => (has_windows, "windows"),
                 RuleFileType::Elf => (has_unix || has_android, "linux, unix, or android"),
                 RuleFileType::AndroidApk | RuleFileType::Dex => (has_android, "android"),
                 RuleFileType::Jcl => (has_zos, "zos"),
-                RuleFileType::Shell => (has_darwin, "linux, unix, macos, or ios"),
-                // macOS/iOS-native languages and formats — the `unix` umbrella
-                // includes macOS, so a unix-targeting trait satisfies them.
                 RuleFileType::Macho
+                | RuleFileType::Shell
                 | RuleFileType::AppleScript
                 | RuleFileType::ObjectiveC
+                | RuleFileType::IrcII
                 | RuleFileType::Plist
                 | RuleFileType::Nib
                 | RuleFileType::Pbxproj
-                | RuleFileType::Ipa => (has_darwin, "macos, ios, or unix"),
+                | RuleFileType::Ipa
+                | RuleFileType::Pkg
+                | RuleFileType::Dmg => (has_darwin, "linux, unix, macos, or ios"),
                 RuleFileType::Swift => (
                     has_windows || has_unix || has_macos || has_ios,
                     "windows, linux, unix, macos, or ios",
@@ -913,12 +967,41 @@ pub(crate) fn resolve_platform_filetype_conflicts(
                 | RuleFileType::Php
                 | RuleFileType::Groovy
                 | RuleFileType::Elixir
-                | RuleFileType::Scala => (has_desktop, "linux, unix, macos, or windows"),
+                | RuleFileType::Scala
+                | RuleFileType::Clojure
+                | RuleFileType::Jsp
+                | RuleFileType::Cfml
+                | RuleFileType::Beam
+                | RuleFileType::Makefile
+                | RuleFileType::Cmake
+                | RuleFileType::Dockerfile
+                | RuleFileType::PostScript
+                | RuleFileType::Tex
+                | RuleFileType::Ooxml
+                | RuleFileType::OleDoc
+                | RuleFileType::Rtf => (has_desktop, "linux, unix, macos, or windows"),
+                RuleFileType::C
+                | RuleFileType::Cpp
+                | RuleFileType::Rust
+                | RuleFileType::Go
+                | RuleFileType::Zig
+                | RuleFileType::CSharp
+                | RuleFileType::StaticLib
+                | RuleFileType::Java
+                | RuleFileType::Kotlin
+                | RuleFileType::Class
+                | RuleFileType::Jar => (
+                    has_desktop || has_android || has_ios,
+                    "linux, unix, macos, windows, android, or ios",
+                ),
                 RuleFileType::AlpineApk
                 | RuleFileType::SystemdService
                 | RuleFileType::DesktopEntry
                 | RuleFileType::Deb
-                | RuleFileType::Rpm => (has_linux, "linux"),
+                | RuleFileType::Rpm
+                | RuleFileType::SrcInfo
+                | RuleFileType::Xbps
+                | RuleFileType::GentooBinpkg => (has_linux, "linux"),
                 _ => continue,
             };
             if !supported {
@@ -1810,7 +1893,7 @@ mod tests {
         );
         assert_eq!(w.len(), 1);
         assert!(
-            w[0].contains("macos, ios, or unix"),
+            w[0].contains("linux, unix, macos, or ios"),
             "message should name required platforms"
         );
     }
@@ -2031,12 +2114,16 @@ mod tests {
             RuleFileType::PowerShell,
             RuleFileType::AppleScript,
             RuleFileType::Vbs,
+            RuleFileType::Mirc,
+            RuleFileType::IrcII,
         ];
         resolve_platform_filetype_conflicts("test", &[Platform::Windows], &mut ft, true, &mut w);
         assert!(w.is_empty(), "from_groups should not warn: {w:?}");
         // Windows-specific script types kept
         assert!(ft.contains(&RuleFileType::Batch));
         assert!(ft.contains(&RuleFileType::Vbs));
+        assert!(ft.contains(&RuleFileType::Mirc));
+        assert!(!ft.contains(&RuleFileType::IrcII));
         // Platform-agnostic script types kept
         assert!(ft.contains(&RuleFileType::Python));
         assert!(ft.contains(&RuleFileType::JavaScript));
@@ -2051,6 +2138,85 @@ mod tests {
         assert!(!ft.contains(&RuleFileType::Shell));
         // JCL requires z/OS — filtered out for windows-only
         assert!(!ft.contains(&RuleFileType::Jcl));
+    }
+
+    #[test]
+    fn test_group_filter_unix_keeps_ircii_not_mirc() {
+        let mut w = Vec::new();
+        let mut ft = vec![
+            RuleFileType::Shell,
+            RuleFileType::Batch,
+            RuleFileType::Mirc,
+            RuleFileType::IrcII,
+            RuleFileType::JavaScript,
+            RuleFileType::Lua,
+            RuleFileType::PowerShell,
+        ];
+        resolve_platform_filetype_conflicts("test", &[Platform::Unix], &mut ft, true, &mut w);
+        assert!(w.is_empty(), "from_groups should not warn: {w:?}");
+        assert!(ft.contains(&RuleFileType::Shell));
+        assert!(ft.contains(&RuleFileType::IrcII));
+        assert!(ft.contains(&RuleFileType::JavaScript));
+        assert!(ft.contains(&RuleFileType::Lua));
+        assert!(!ft.contains(&RuleFileType::Mirc));
+        assert!(!ft.contains(&RuleFileType::Batch));
+        assert!(!ft.contains(&RuleFileType::PowerShell));
+    }
+
+    #[test]
+    fn jsp_token_stays_on_desktop_platforms() {
+        let mut w = Vec::new();
+        let parsed = parse_file_types(
+            &["jsp".to_string(), "python".to_string(), "html".to_string()],
+            &mut w,
+        );
+        assert!(w.is_empty(), "{w:?} types {:?}", parsed.types);
+        assert!(parsed.types.contains(&RuleFileType::Jsp));
+        let mut types = parsed.types;
+        let platforms = parse_platforms(&["unix".to_string(), "windows".to_string()], &mut w);
+        resolve_platform_filetype_conflicts(
+            "t",
+            &platforms,
+            &mut types,
+            parsed.from_groups,
+            &mut w,
+        );
+        assert!(
+            types.contains(&RuleFileType::Jsp),
+            "jsp dropped: {types:?} from_groups {} warnings {w:?}",
+            parsed.from_groups
+        );
+    }
+
+    #[test]
+    fn test_explicit_mirc_requires_windows_and_ircii_requires_unix() {
+        let mut w = Vec::new();
+        resolve_platform_filetype_conflicts(
+            "rule.test",
+            &[Platform::Unix],
+            &mut vec![RuleFileType::Mirc],
+            false,
+            &mut w,
+        );
+        assert_eq!(w.len(), 1, "{w:?}");
+        w.clear();
+        resolve_platform_filetype_conflicts(
+            "rule.test",
+            &[Platform::Windows],
+            &mut vec![RuleFileType::IrcII],
+            false,
+            &mut w,
+        );
+        assert_eq!(w.len(), 1, "{w:?}");
+        w.clear();
+        resolve_platform_filetype_conflicts(
+            "rule.test",
+            &[Platform::Windows, Platform::Unix],
+            &mut vec![RuleFileType::Mirc, RuleFileType::IrcII],
+            false,
+            &mut w,
+        );
+        assert!(w.is_empty(), "{w:?}");
     }
 
     #[test]

@@ -457,6 +457,25 @@ pub(crate) enum FileType {
     Vbs,
     /// HTML file
     Html,
+    /// JavaServer Pages
+    Jsp,
+    /// Classic ASP and ASP.NET
+    Asp,
+    /// ColdFusion Markup Language
+    Cfml,
+    /// TeX or LaTeX source
+    Tex,
+    /// YARA rule source
+    Yara,
+    /// PostScript or EPS
+    PostScript,
+    /// DOS COM executable
+    #[serde(rename = "dos_com")]
+    DosCom,
+    /// mIRC script
+    Mirc,
+    /// ircII or EPIC script
+    IrcII,
     /// Markdown file
     Markdown,
     /// Makefile / GNU Make build file
@@ -829,6 +848,15 @@ impl From<filefacts::FileType> for FileType {
             Ff::Pickle => Self::Pickle,
             Ff::Pdf => Self::Pdf,
             Ff::Html => Self::Html,
+            Ff::Jsp => Self::Jsp,
+            Ff::Asp => Self::Asp,
+            Ff::Cfml => Self::Cfml,
+            Ff::Tex => Self::Tex,
+            Ff::Yara => Self::Yara,
+            Ff::PostScript => Self::PostScript,
+            Ff::DosCom => Self::DosCom,
+            Ff::Mirc => Self::Mirc,
+            Ff::IrcII => Self::IrcII,
             Ff::Markdown => Self::Markdown,
             Ff::Text => Self::Text,
             Ff::Data => Self::Data,
@@ -912,6 +940,14 @@ impl FileType {
                 | FileType::AppleScript
                 | FileType::Vbs
                 | FileType::Html
+                | FileType::Jsp
+                | FileType::Asp
+                | FileType::Cfml
+                | FileType::Tex
+                | FileType::Yara
+                | FileType::PostScript
+                | FileType::Mirc
+                | FileType::IrcII
                 | FileType::Markdown
                 | FileType::Makefile
                 | FileType::Dockerfile
@@ -1082,6 +1118,15 @@ impl FileType {
             Self::AppleScript => "applescript",
             Self::Vbs => "vbs",
             Self::Html => "html",
+            Self::Jsp => "jsp",
+            Self::Asp => "asp",
+            Self::Cfml => "cfml",
+            Self::Tex => "tex",
+            Self::Yara => "yara",
+            Self::PostScript => "postscript",
+            Self::DosCom => "dos_com",
+            Self::Mirc => "mirc",
+            Self::IrcII => "ircii",
             Self::Markdown => "markdown",
             Self::Makefile => "makefile",
             Self::Dockerfile => "dockerfile",
@@ -1221,6 +1266,15 @@ impl FileType {
             "applescript" | "scpt" => FileType::AppleScript,
             "vbs" | "vbscript" => FileType::Vbs,
             "html" | "htm" => FileType::Html,
+            "jsp" | "jspx" => FileType::Jsp,
+            "asp" | "aspx" => FileType::Asp,
+            "cfml" | "cfm" | "cfc" => FileType::Cfml,
+            "tex" => FileType::Tex,
+            "yara" | "yar" => FileType::Yara,
+            "postscript" | "ps" | "eps" => FileType::PostScript,
+            "dos_com" | "dos-com" | "doscom" => FileType::DosCom,
+            "mirc" | "mrc" => FileType::Mirc,
+            "ircii" => FileType::IrcII,
             "markdown" | "md" => FileType::Markdown,
             "makefile" | "make" | "mk" | "mak" => FileType::Makefile,
             "dockerfile" | "docker" | "containerfile" => FileType::Dockerfile,

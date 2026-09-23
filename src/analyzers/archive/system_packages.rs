@@ -302,6 +302,7 @@ pub(crate) fn extract_dmg_from_data(
 
     // Stage 1: 7-Zip reads from a path, not a stream; materialize the image.
     let temp = tempfile::Builder::new()
+        .prefix("cleave-dmg-")
         .suffix(".dmg")
         .tempfile()
         .context("Failed to create temp file for DMG extraction")?;

@@ -1940,6 +1940,8 @@ const SCRIPTS: &[FileType] = &[
     FileType::PowerShell,
     FileType::AppleScript,
     FileType::Vbs,
+    FileType::Mirc,
+    FileType::IrcII,
 ];
 const SOURCE: &[FileType] = &[
     FileType::TypeScript,
@@ -1956,6 +1958,7 @@ const SOURCE: &[FileType] = &[
     FileType::Scala,
     FileType::Zig,
     FileType::Elixir,
+    FileType::Clojure,
 ];
 const MANIFESTS: &[FileType] = &[
     FileType::PackageJson,
@@ -3603,12 +3606,6 @@ fn find_impossible_composite_filetypes_inner(
                 };
                 if leg_for.contains(&FileType::All) || leg_for.contains(declared) {
                     continue;
-                }
-                if rule.id.contains("wscript-shell-exec-command") {
-                    eprintln!(
-                        "DEBUG impossible {} declared={declared:?} leg={id} leg_for={leg_for:?} rule_for={:?}",
-                        rule.id, rule.r#for
-                    );
                 }
                 if is_retired_placeholder(id) || is_retired_placeholder(&qualified) {
                     continue;

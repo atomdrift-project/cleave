@@ -205,6 +205,14 @@ pub fn analyzer_for_file_type(
         | FileType::PgpSignature
         | FileType::Svg
         | FileType::Html
+        | FileType::Jsp
+        | FileType::Asp
+        | FileType::Cfml
+        | FileType::Tex
+        | FileType::Yara
+        | FileType::PostScript
+        | FileType::Mirc
+        | FileType::IrcII
         | FileType::Markdown
         | FileType::Text
         | FileType::Dockerfile
@@ -348,6 +356,14 @@ pub(crate) fn analyzer_for_file_type_arc(
         | FileType::Xml
         | FileType::Svg
         | FileType::Html
+        | FileType::Jsp
+        | FileType::Asp
+        | FileType::Cfml
+        | FileType::Tex
+        | FileType::Yara
+        | FileType::PostScript
+        | FileType::Mirc
+        | FileType::IrcII
         | FileType::Markdown
         | FileType::Text
         | FileType::Dockerfile
@@ -811,6 +827,15 @@ impl FileTypeExt for FileType {
             FileType::Pickle => vec!["pkl", "pickle", "joblib"],
             FileType::Pdf => vec!["pdf"],
             FileType::Html => vec!["html", "htm"],
+            FileType::Jsp => vec!["jsp", "jspx"],
+            FileType::Asp => vec!["asp", "aspx"],
+            FileType::Cfml => vec!["cfm", "cfc", "cfml"],
+            FileType::Tex => vec!["tex", "sty", "ltx", "dtx"],
+            FileType::Yara => vec!["yar", "yara"],
+            FileType::PostScript => vec!["ps", "eps", "postscript"],
+            FileType::DosCom => vec!["com", "dos"],
+            FileType::Mirc => vec!["mrc", "mirc"],
+            FileType::IrcII => vec!["ircii"],
             FileType::Markdown => vec!["md", "markdown"],
             FileType::Makefile => vec!["makefile", "make", "mk"],
             FileType::Dockerfile => vec!["dockerfile", "docker", "containerfile"],

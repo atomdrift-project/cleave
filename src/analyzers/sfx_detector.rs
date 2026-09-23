@@ -290,7 +290,14 @@ fn try_extract(
         };
     }
 
-    let Some(tmp) = tempfile::tempdir().ok() else {
+    // Distinct prefix from the archive extractor's: both sites strand dirs on
+    // an abnormal exit, and identical names would make the two leaks
+    // indistinguishable on disk. See archive/mod.rs for the full reasoning.
+    let Some(tmp) = tempfile::Builder::new()
+        .prefix("cleave-sfx-")
+        .tempdir()
+        .ok()
+    else {
         return SfxExtraction {
             archive_report: None,
             inno_diagnostics: vec![],

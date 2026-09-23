@@ -2180,7 +2180,16 @@ impl ArchiveAnalyzer {
             return Ok(report);
         }
 
-        let temp_dir = tempfile::tempdir().context("Failed to create temporary directory")?;
+        // Explicit prefix, not tempfile's default. A bare `tempdir()` is named
+        // `.tmpXXXXXX`, which is indistinguishable from every other crate's
+        // scratch and attributable to cleave only by inspecting its contents.
+        // These dirs outlive the process whenever the caller dies without
+        // unwinding — a watchdog `process::exit`, an abort, a SIGKILL — so the
+        // name is the only handle an operator or a reaper has on them.
+        let temp_dir = tempfile::Builder::new()
+            .prefix("cleave-archive-")
+            .tempdir()
+            .context("Failed to create temporary directory")?;
         let extraction_result = self.extract_from_data(
             data,
             archive_path,

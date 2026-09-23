@@ -11,15 +11,18 @@ fn zip_analysis_does_not_extract_to_tmpdir_by_default() -> anyhow::Result<()> {
 
     let work = tempfile::tempdir()?;
     let zip_path = work.path().join("sample.zip");
+    // The process temp dir is shared with other test processes. Give this
+    // member a unique basename so parallel archive tests cannot look like a
+    // leak from this analysis.
+    let marker = format!("cleave-zip-tmp-regression-{}.cs", std::process::id());
+    let member_path =
+        format!("ILSpy-10.0-preview2/ICSharpCode.Decompiler.Tests/TestCases/ILPretty/{marker}");
 
     {
         let zip_file = fs::File::create(&zip_path)?;
         let mut zip = zip::ZipWriter::new(zip_file);
         let options = zip::write::FileOptions::<()>::default();
-        zip.start_file(
-            "ILSpy-10.0-preview2/ICSharpCode.Decompiler.Tests/TestCases/ILPretty/Issue3552.cs",
-            options,
-        )?;
+        zip.start_file(&member_path, options)?;
         zip.write_all(
             b"class Issue3552 { static void Main() { System.Console.WriteLine(\"ok\"); } }",
         )?;
@@ -32,7 +35,7 @@ fn zip_analysis_does_not_extract_to_tmpdir_by_default() -> anyhow::Result<()> {
     // scratch directory: TMPDIR is process-global, and mutating it here raced
     // with every other test in this binary creating its own temp files.
     let tmp = std::env::temp_dir();
-    let before = extraction_leftovers(&tmp)?;
+    let before = extraction_leftovers(&tmp, &marker)?;
 
     cleave::set_skip_traits_override(Some(true));
     let result = cleave::analyze_file(
@@ -46,7 +49,7 @@ fn zip_analysis_does_not_extract_to_tmpdir_by_default() -> anyhow::Result<()> {
     cleave::set_skip_traits_override(None);
     result?;
 
-    let leftovers: Vec<_> = extraction_leftovers(&tmp)?
+    let leftovers: Vec<_> = extraction_leftovers(&tmp, &marker)?
         .into_iter()
         .filter(|path| !before.contains(path))
         .collect();
@@ -60,16 +63,13 @@ fn zip_analysis_does_not_extract_to_tmpdir_by_default() -> anyhow::Result<()> {
 
 /// Entries under `dir` whose names look like they came from extracting the
 /// zip built above, or from cleave's archive-extraction scratch space.
-fn extraction_leftovers(dir: &std::path::Path) -> anyhow::Result<HashSet<PathBuf>> {
+fn extraction_leftovers(dir: &std::path::Path, marker: &str) -> anyhow::Result<HashSet<PathBuf>> {
     Ok(fs::read_dir(dir)?
         .filter_map(Result::ok)
         .filter(|entry| {
             let name = entry.file_name();
             let name = name.to_string_lossy();
-            name.contains("Issue3552")
-                || name.contains("ILPretty")
-                || name.contains("package.json")
-                || name.starts_with("cleave-archive")
+            name == marker
         })
         .map(|entry| entry.path())
         .collect())

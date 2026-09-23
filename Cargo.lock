@@ -1722,7 +1722,7 @@ dependencies = [
 [[package]]
 name = "filefacts"
 version = "1.7.0"
-source = "git+https://github.com/atomdrift-project/filefacts.git#ef8f4faa594f222dd28c94b21db2d3cd8e995be1"
+source = "git+https://github.com/atomdrift-project/filefacts.git#e76900d80c9cd60b9da8c03a84644df8259be985"
 dependencies = [
  "aho-corasick",
  "cab",
@@ -2098,8 +2098,6 @@ version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 dependencies = [
- "allocator-api2",
- "equivalent",
  "foldhash",
  "serde",
  "serde_core",
@@ -2745,9 +2743,9 @@ dependencies = [
 
 [[package]]
 name = "lru"
-version = "0.18.4"
+version = "0.18.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff9840bcc50b71349309900da0ce7279aa336ae71d73250b07998932c7d97c25"
+checksum = "ef9ac18847474e638e3702b76c65d4eb93428471a74778ef0f1be711717f89b5"
 dependencies = [
  "hashbrown 0.17.1",
 ]
@@ -3557,9 +3555,9 @@ dependencies = [
 
 [[package]]
 name = "psl"
-version = "2.1.235"
+version = "2.1.236"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8319b56ff38ca0522b4e1e40bfa2b5de7f62dc89fc1e9033eac365551ec58e0e"
+checksum = "95538218f9dd0a4b7e06f87b3d7a4e176c99b8a57bb2836f35e40a69ffda3dd9"
 dependencies = [
  "psl-types",
 ]
@@ -4672,7 +4670,7 @@ dependencies = [
 [[package]]
 name = "stng"
 version = "1.12.0"
-source = "git+https://github.com/atomdrift-project/stng.git#d115bef8b3316d63592ff9b8b8686951d9b5d889"
+source = "git+https://github.com/atomdrift-project/stng.git#660badeeebf3d262605776fabd62fd10337e002b"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -5340,7 +5338,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-clojure"
 version = "0.1.0"
-source = "git+https://github.com/atomdrift-project/filefacts.git#ef8f4faa594f222dd28c94b21db2d3cd8e995be1"
+source = "git+https://github.com/atomdrift-project/filefacts.git#e76900d80c9cd60b9da8c03a84644df8259be985"
 dependencies = [
  "cc",
  "tree-sitter",

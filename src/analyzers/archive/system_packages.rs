@@ -454,6 +454,27 @@ pub(crate) fn extract_pkg_from_reader<R: Read + Seek + std::fmt::Debug>(
             guard.add_hostile_reason(HostileArchiveReason::PathTraversal(path.clone()));
             continue;
         };
+
+        // A directory record has no heap payload. Treating it as a file makes
+        // `write_file_data_decoded_from_file` return FileNoData, and the `?`
+        // used to abort the archive there — so every member after the first
+        // directory (the install scripts) was never unpacked.
+        use apple_xar::table_of_contents::FileType as XarFileType;
+        if matches!(file_entry.file_type, XarFileType::Directory) {
+            fs::create_dir_all(&out_path)?;
+            continue;
+        }
+        if matches!(
+            file_entry.file_type,
+            XarFileType::Link | XarFileType::HardLink
+        ) {
+            // For XAR files, we conservatively flag all symlinks as potentially escaping
+            // TODO: Extract link target from XAR metadata if apple_xar exposes it
+            guard.add_hostile_reason(HostileArchiveReason::SymlinkEscape(path.clone()));
+            // Skip symlinks regardless (we don't extract them)
+            continue;
+        }
+
         // XAR extraction only ever creates files.
         let out_path = guard.claim_output_path(out_path);
 
@@ -465,19 +486,6 @@ pub(crate) fn extract_pkg_from_reader<R: Read + Seek + std::fmt::Debug>(
                 file: path.clone(),
                 size,
             });
-            continue;
-        }
-
-        // Check symlinks and hardlinks
-        use apple_xar::table_of_contents::FileType as XarFileType;
-        if matches!(
-            file_entry.file_type,
-            XarFileType::Link | XarFileType::HardLink
-        ) {
-            // For XAR files, we conservatively flag all symlinks as potentially escaping
-            // TODO: Extract link target from XAR metadata if apple_xar exposes it
-            guard.add_hostile_reason(HostileArchiveReason::SymlinkEscape(path.clone()));
-            // Skip symlinks regardless (we don't extract them)
             continue;
         }
 
@@ -1322,5 +1330,71 @@ mod tests {
             err.to_string().contains("panicked"),
             "expected the dmgwiz panic to be caught, got: {err}"
         );
+    }
+
+    /// A macOS flat package lists directories before the install scripts.
+    /// A directory has no heap data; skipping it must not abandon the files
+    /// that follow.
+    #[test]
+    fn pkg_directory_does_not_hide_following_files() {
+        let payload = b"echo installed\n";
+        let toc = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<xar>
+ <toc>
+  <creation-time>2020-01-01T00:00:00Z</creation-time>
+  <checksum style="none">
+   <offset>0</offset>
+   <size>0</size>
+  </checksum>
+  <file id="1">
+   <type>directory</type>
+   <name>Scripts</name>
+  </file>
+  <file id="2">
+   <data>
+    <length>{len}</length>
+    <offset>0</offset>
+    <size>{len}</size>
+    <encoding style="application/octet-stream"/>
+    <extracted-checksum style="none">00</extracted-checksum>
+    <archived-checksum style="none">00</archived-checksum>
+   </data>
+   <type>file</type>
+   <name>postinstall</name>
+  </file>
+ </toc>
+</xar>
+"#,
+            len = payload.len()
+        );
+        let compressed = {
+            use std::io::Write as _;
+            let mut enc =
+                flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+            enc.write_all(toc.as_bytes()).unwrap();
+            enc.finish().unwrap()
+        };
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"xar!");
+        bytes.extend_from_slice(&28u16.to_be_bytes());
+        bytes.extend_from_slice(&1u16.to_be_bytes());
+        bytes.extend_from_slice(&(compressed.len() as u64).to_be_bytes());
+        bytes.extend_from_slice(&(toc.len() as u64).to_be_bytes());
+        bytes.extend_from_slice(&0u32.to_be_bytes());
+        bytes.extend_from_slice(&compressed);
+        bytes.extend_from_slice(payload);
+
+        let dir = tempfile::tempdir().unwrap();
+        let data_len = bytes.len() as u64;
+        extract_pkg_from_reader(
+            std::io::Cursor::new(bytes),
+            data_len,
+            dir.path(),
+            &ExtractionGuard::new(),
+        )
+        .unwrap();
+        assert_eq!(fs::read(dir.path().join("postinstall")).unwrap(), payload);
+        assert!(dir.path().join("Scripts").is_dir());
     }
 }

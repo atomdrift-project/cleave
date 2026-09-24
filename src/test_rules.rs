@@ -129,6 +129,9 @@ pub(crate) struct RuleDebugger<'a> {
     /// the archive analyzer builds it for container composites. `None` for a
     /// plain file, where production evaluation passes no origins either.
     finding_origins: Option<rustc_hash::FxHashMap<String, TypeMask>>,
+    /// `for:` mask of the composite whose legs are being traced, so a leg the
+    /// origin filter drops is shown as ✗ rather than "found in findings".
+    leg_for_mask: std::cell::Cell<TypeMask>,
 }
 
 /// Origin masks for a container report, mirroring
@@ -199,6 +202,7 @@ impl<'a> RuleDebugger<'a> {
             inline_yara_results,
             parsed,
             finding_origins: container_finding_origins(report),
+            leg_for_mask: std::cell::Cell::new(TypeMask::ALL),
         }
     }
 
@@ -411,14 +415,18 @@ impl<'a> RuleDebugger<'a> {
             .into_inner()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
 
-        // Convert to RuleDebugResult, using composite requirements
+        // Convert to RuleDebugResult, using composite requirements. The leg
+        // trace runs under this composite's `for:` mask, like the evaluation.
         let requirements = build_composite_requirements(composite);
-        self.convert_composite_debug_to_result(
+        self.leg_for_mask.set(composite.for_mask());
+        let result = self.convert_composite_debug_to_result(
             eval_debug,
             composite,
             finding.is_some(),
             &requirements,
-        )
+        );
+        self.leg_for_mask.set(TypeMask::ALL);
+        result
     }
 
     /// Convert EvaluationDebug to RuleDebugResult for traits
@@ -916,6 +924,20 @@ impl<'a> RuleDebugger<'a> {
         let exact_match: Vec<_> = self.report.findings.iter().filter(|f| f.id == id).collect();
 
         if !exact_match.is_empty() {
+            // Same gate as `EvaluationContext::origin_allows`: inside a
+            // container, a finding counts only if some member that produced it
+            // has a type the composite lists in `for:`.
+            let mask = self.leg_for_mask.get();
+            if mask != TypeMask::ALL
+                && let Some(origins) = &self.finding_origins
+                && !origins.get(id).is_some_and(|m| m.intersects(mask))
+            {
+                let mut result = ConditionDebugResult::new(desc, false);
+                result.details.push(format!(
+                    "✗ In findings ({id}), but only from member types this rule's `for:` does not list -- the origin filter drops it"
+                ));
+                return result;
+            }
             let mut result = ConditionDebugResult::new(desc, true);
             result.details.push(format!(
                 "✓ Found exact match in findings: {}",

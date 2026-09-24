@@ -954,9 +954,17 @@ impl PEAnalyzer {
         // stng rows also feed embedded-child analysis below.
         let raw_stng_strings = ctx.text_rows();
         let _ = r2_strings;
+        // Keep the binary's own symbol names ahead of the cap (Go pclntab
+        // names in a large binary), then record what the caps left.
+        self.string_extractor.prioritize_report_symbols(&report);
         report.strings = self
             .string_extractor
             .convert_stng_strings(&raw_stng_strings);
+        self.string_extractor.record_count_metrics(
+            report
+                .filefacts_metrics
+                .get_or_insert_with(Default::default),
+        );
 
         // Report string truncation if limits were hit
         if self
@@ -969,13 +977,7 @@ impl PEAnalyzer {
                 src: None,
                 id: "metadata/strings-truncated".to_string().into(),
                 kind: FindingKind::Structural,
-                desc: format!(
-                    "String extraction truncated due to limits (count: {}, total bytes: {} MB)",
-                    crate::strings::MAX_STRINGS_PER_FILE,
-                    crate::strings::MAX_TOTAL_STRING_BYTES / (1024 * 1024)
-                )
-                .to_string()
-                .into(),
+                desc: self.string_extractor.truncation_desc().into(),
                 conf: 1.0,
                 crit: Criticality::Notable,
                 mbc: None,

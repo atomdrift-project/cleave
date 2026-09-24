@@ -492,9 +492,17 @@ impl ElfAnalyzer {
         // string-extraction authority (cleave no longer scans). The raw stng
         // rows also feed embedded-child analysis below.
         let raw_stng_strings = ctx.text_rows();
+        // Keep the binary's own symbol names ahead of the cap (Go pclntab
+        // names in a large binary), then record what the caps left.
+        self.string_extractor.prioritize_report_symbols(&report);
         report.strings = self
             .string_extractor
             .convert_stng_strings(&raw_stng_strings);
+        self.string_extractor.record_count_metrics(
+            report
+                .filefacts_metrics
+                .get_or_insert_with(Default::default),
+        );
 
         // Embedded ELF / PE scanning (host-agnostic, scans raw bytes)
         if !self.skip_embedded_scan && !is_core_dump {
@@ -577,13 +585,7 @@ impl ElfAnalyzer {
                 src: None,
                 id: "metadata/strings-truncated".to_string().into(),
                 kind: FindingKind::Structural,
-                desc: format!(
-                    "String extraction truncated due to limits (count: {}, total bytes: {} MB)",
-                    crate::strings::MAX_STRINGS_PER_FILE,
-                    crate::strings::MAX_TOTAL_STRING_BYTES / (1024 * 1024)
-                )
-                .to_string()
-                .into(),
+                desc: self.string_extractor.truncation_desc().into(),
                 conf: 1.0,
                 crit: Criticality::Notable,
                 mbc: None,
@@ -1297,6 +1299,36 @@ mod tests {
         assert_eq!(report.target.file_type, "elf");
         assert!(report.target.size_bytes > 0);
         assert!(!report.target.sha256.is_empty());
+    }
+
+    /// The analyzer records how many strings it was offered and kept, so a
+    /// rule or reviewer can tell when text matchers searched only part of a
+    /// binary. Checks the wiring, not the cap (the fixture is small).
+    #[test]
+    fn test_elf_records_string_count_metrics() {
+        let test_file = test_elf_path();
+        if !test_file.exists() {
+            return;
+        }
+        let report = ElfAnalyzer::new().analyze(&test_file).unwrap();
+        let m = report
+            .filefacts_metrics
+            .as_ref()
+            .expect("ELF report carries metrics");
+        let extracted = m
+            .get("strings.extracted_count")
+            .copied()
+            .expect("extracted_count");
+        let retained = m
+            .get("strings.retained_count")
+            .copied()
+            .expect("retained_count");
+        assert!(extracted > 0.0, "fixture has strings");
+        assert!(
+            retained >= extracted,
+            "no cap on a small fixture (sidecars may add)"
+        );
+        assert_eq!(m.get("strings.truncated").copied(), Some(0.0));
     }
 
     #[test]

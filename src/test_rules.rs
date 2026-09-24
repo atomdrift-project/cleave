@@ -3050,6 +3050,85 @@ regex: '(?i)\.html?$'
         );
     }
 
+    /// test-rules applies the same member-type origin filter as production
+    /// container evaluation.
+    #[test]
+    fn container_origin_mask_matches_production() {
+        // A zip holding a zip-typed member (leg a) and an ELF member (leg b),
+        // both rolled up to the container. Production counts a member's
+        // finding only when its type is in the composite's `for:`; test-rules
+        // used to allow every origin and reported MATCHED for the narrow rule.
+        let yaml = r#"
+defaults:
+  for: [zip, elf]
+  crit: notable
+  conf: 0.9
+
+traits:
+  - id: "fixture/origin::leg-a"
+    desc: "leg a"
+    if:
+      type: text
+      exact: "AAAA"
+  - id: "fixture/origin::leg-b"
+    desc: "leg b"
+    if:
+      type: text
+      exact: "BBBB"
+
+composite_rules:
+  - id: "fixture/origin::narrow"
+    desc: "names only the container"
+    for: [zip]
+    scope: archive
+    all:
+      - id: "fixture/origin::leg-a"
+      - id: "fixture/origin::leg-b"
+  - id: "fixture/origin::wide"
+    desc: "names the ELF member too"
+    for: [zip, elf]
+    scope: archive
+    all:
+      - id: "fixture/origin::leg-a"
+      - id: "fixture/origin::leg-b"
+"#;
+        let (_dir, path) = create_test_yaml(yaml);
+        let mapper = CapabilityMapper::from_yaml(&path).unwrap();
+
+        let a = create_test_finding("fixture/origin::leg-a");
+        let b = create_test_finding("fixture/origin::leg-b");
+        let mut report = create_test_report_with_findings(vec![a.clone(), b.clone()]);
+        report.target.path = "release.zip".into();
+        report.target.file_type = "zip".into();
+        report.files = vec![
+            crate::types::FileAnalysis {
+                path: "release.zip!!inner.zip".into(),
+                file_type: "zip".into(),
+                findings: vec![a],
+                ..Default::default()
+            },
+            crate::types::FileAnalysis {
+                path: "release.zip!!provider".into(),
+                file_type: "elf".into(),
+                findings: vec![b],
+                ..Default::default()
+            },
+        ];
+
+        let debugger = RuleDebugger::new(&mapper, &report, b"", vec![Platform::All], None);
+
+        let narrow = debugger.debug_rule("fixture/origin::narrow").unwrap();
+        assert!(!narrow.matched, "ELF leg must not count for for: [zip]");
+        let text = format_debug_output(std::slice::from_ref(&narrow));
+        assert!(
+            text.contains("origin filter drops it"),
+            "trace must say why leg b failed:\n{text}"
+        );
+
+        let wide = debugger.debug_rule("fixture/origin::wide").unwrap();
+        assert!(wide.matched, "listing elf lets the ELF leg count");
+    }
+
     /// Test that exact trait ID match in findings is detected
     #[test]
     fn test_debug_trait_reference_exact_match_in_findings() {

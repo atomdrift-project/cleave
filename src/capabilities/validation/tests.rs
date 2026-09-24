@@ -10057,7 +10057,9 @@ mod legs_outside_for_tests {
 
 #[cfg(test)]
 mod leg_role_tests {
-    use crate::capabilities::validation::{LegRole, find_legs_outside_for};
+    use crate::capabilities::validation::{
+        LegRole, find_dead_any_alternatives, find_legs_outside_for,
+    };
     use crate::composite_rules::condition::TextQuery;
     use crate::composite_rules::{
         Arch, CompositeTrait, Condition, FileType, Platform, Scope, TraitDefinition,
@@ -10139,6 +10141,27 @@ mod leg_role_tests {
         let mut rule = comp(vec![FileType::Npm, FileType::JavaScript]);
         rule.any = Some(refs(&["t::js", "t::elf"]));
         assert!(find_legs_outside_for(&traits, &[rule]).is_empty());
+    }
+
+    /// The same clause is still worth a warning: its ELF branch is dead code.
+    /// A release-zip correlator with `for: [zip, tar, go]` fired on source
+    /// tarballs through its Go branch and never on the ELF it was written for.
+    #[test]
+    fn a_dead_any_alternative_is_warned_per_leg() {
+        let traits = vec![
+            leg("t::js", vec![FileType::JavaScript]),
+            leg("t::elf", vec![FileType::Elf]),
+        ];
+        let mut rule = comp(vec![FileType::Npm, FileType::JavaScript]);
+        rule.any = Some(refs(&["t::js", "t::elf"]));
+
+        let found = find_dead_any_alternatives(&traits, std::slice::from_ref(&rule));
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].role, LegRole::DeadAlternative);
+        assert_eq!(found[0].leg, "t::elf");
+
+        rule.r#for.push(FileType::Elf);
+        assert!(find_dead_any_alternatives(&traits, &[rule]).is_empty());
     }
 
     /// When every alternative is excluded the clause can never be satisfied,

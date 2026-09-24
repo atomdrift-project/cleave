@@ -3864,6 +3864,10 @@ pub(crate) enum LegRole {
     /// firing where the author said it should not. Reported separately because
     /// this one costs false positives rather than detections.
     Suppressor,
+    /// One `any:` alternative is outside `for:` while another is reachable:
+    /// the rule still fires, but never through this branch. Reported only by
+    /// [`find_dead_any_alternatives`], as a warning.
+    DeadAlternative,
 }
 
 /// A leg whose evidence the rule's `for:` excludes.
@@ -3907,6 +3911,32 @@ pub(crate) struct LegOutsideFor {
 pub(crate) fn find_legs_outside_for(
     trait_definitions: &[TraitDefinition],
     composite_rules: &[CompositeTrait],
+) -> Vec<LegOutsideFor> {
+    legs_outside_for(trait_definitions, composite_rules, false)
+}
+
+/// `any:` alternatives the rule's `for:` makes unreachable while a sibling
+/// alternative keeps the clause alive.
+///
+/// The rule works, so this is a warning rather than an error, but the branch
+/// is dead code with a detection's name on it. Example: a release-zip
+/// correlator with `for: [zip, tar, go]` and `any: [source-hash-names,
+/// binary-hash-names]` fired on source tarballs and never on the release zip
+/// it was written for, because the binary alternative only fires on ELF.
+pub(crate) fn find_dead_any_alternatives(
+    trait_definitions: &[TraitDefinition],
+    composite_rules: &[CompositeTrait],
+) -> Vec<LegOutsideFor> {
+    legs_outside_for(trait_definitions, composite_rules, true)
+        .into_iter()
+        .filter(|l| l.role == LegRole::DeadAlternative)
+        .collect()
+}
+
+fn legs_outside_for(
+    trait_definitions: &[TraitDefinition],
+    composite_rules: &[CompositeTrait],
+    partial_any: bool,
 ) -> Vec<LegOutsideFor> {
     let trait_for: HashMap<&str, &Vec<FileType>> = trait_definitions
         .iter()
@@ -4007,6 +4037,16 @@ pub(crate) fn find_legs_outside_for(
                     leg_types,
                     role: LegRole::EveryAlternative,
                 });
+            } else if partial_any {
+                for (leg, leg_types) in resolved.iter().filter(|(_, t)| excluded(t)) {
+                    found.push(LegOutsideFor {
+                        id: rule.id.clone(),
+                        scope: rule.effective_scope(),
+                        leg: leg.clone(),
+                        leg_types: leg_types.clone(),
+                        role: LegRole::DeadAlternative,
+                    });
+                }
             }
         }
 

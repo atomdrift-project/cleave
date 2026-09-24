@@ -404,6 +404,13 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         fix: "Add the leg's file types to `for:`, or drop the leg. `for:` lists what the rule is about -- the container it reports on and the members it may mix -- and naming those types is what keeps the rule from being satisfied by unrelated members.",
     },
     ValidatorSpec {
+        id: "dead-any-alternative",
+        category: ValidatorCategory::Policy,
+        display_id: "for-missing-any-type",
+        description: "An `any:` alternative fires only on file types the pooling composite's `for:` does not list, while another alternative keeps the rule alive (warning only).",
+        fix: "Add the alternative's file types to `for:`, or drop the alternative. The rule still fires through its other branches, so this one is dead code that reads like coverage.",
+    },
+    ValidatorSpec {
         id: "pooling-scope-no-container",
         category: ValidatorCategory::Policy,
         display_id: "scope-no-container",

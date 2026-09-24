@@ -405,8 +405,12 @@ pub(crate) fn eval_symbol<'a>(
                 let excluded_by_not = not
                     .map(|exceptions| exceptions.iter().any(|exc| exc.matches(&func.name)))
                     .unwrap_or(false);
+                // `is:` applies here as it does to imports and exports; without
+                // it a `kind: function` + `is: random_like` rule counted every
+                // name its regex admitted.
+                let excluded_by_is = !validate_match(&func.name, is_check);
 
-                if !excluded_by_not {
+                if !excluded_by_not && !excluded_by_is {
                     match_count += 1;
                     if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
                         evidence.push(Evidence {

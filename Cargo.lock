@@ -1653,13 +1653,12 @@ checksum = "34aa73646ffb006b8f5147f3dc182bd4bcb190227ce861fc4a4844bf8e3cb2c0"
 
 [[package]]
 name = "encoding_rs"
-version = "0.8.41"
+version = "0.8.42"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b5ef0006ac9ab233c38522f5ae99cae3625151de8f706cacee1cba4b8e2832a"
+checksum = "8e985e0451871ad22fb8d2b6b076e2028a502a0d3950998c2c5c0a4f9b5d9679"
 dependencies = [
  "cfg-if",
  "core_detect",
- "multiversion",
  "multiversion_no_op",
  "rustversion",
  "scopeguard",
@@ -1722,7 +1721,7 @@ dependencies = [
 [[package]]
 name = "filefacts"
 version = "1.7.0"
-source = "git+https://github.com/atomdrift-project/filefacts.git#3a527df31d08831122aebd09137da15c15a352d1"
+source = "git+https://github.com/atomdrift-project/filefacts.git#c53cfe3bed7a39146224542aa6e9d8207c45fb50"
 dependencies = [
  "aho-corasick",
  "cab",
@@ -2966,27 +2965,6 @@ dependencies = [
  "mime",
  "spin",
  "version_check",
-]
-
-[[package]]
-name = "multiversion"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b4ca4bea16ffc3f443cf7d866912118196bfef4c6a1556ca00f9f9b00bb43f7c"
-dependencies = [
- "multiversion-macros",
-]
-
-[[package]]
-name = "multiversion-macros"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d416831a7317ef4b08bee00b69cbbb9c8763da7959a7026244d6266869f9c83"
-dependencies = [
- "proc-macro2",
- "quote",
- "rustversion",
- "syn 3.0.6",
 ]
 
 [[package]]
@@ -4670,7 +4648,7 @@ dependencies = [
 [[package]]
 name = "stng"
 version = "1.12.0"
-source = "git+https://github.com/atomdrift-project/stng.git#56e9368d975cfac6be9c7818b594030367525343"
+source = "git+https://github.com/atomdrift-project/stng.git#48942b06f780899c17cf48f80c8fe111b0279236"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -5338,7 +5316,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-clojure"
 version = "0.1.0"
-source = "git+https://github.com/atomdrift-project/filefacts.git#3a527df31d08831122aebd09137da15c15a352d1"
+source = "git+https://github.com/atomdrift-project/filefacts.git#c53cfe3bed7a39146224542aa6e9d8207c45fb50"
 dependencies = [
  "cc",
  "tree-sitter",

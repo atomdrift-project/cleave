@@ -16,9 +16,10 @@
 //! makes analysis-cache hits dedupe as well.
 //!
 //! The pool holds strong references and sweeps entries whose only owner is
-//! the pool itself once growth crosses a threshold — dynamic descriptions
-//! (per-package names and the like) are reclaimed after their reports drop,
-//! so a long-running worker does not accumulate every string it ever saw.
+//! the pool itself once it has doubled since the last sweep — dynamic
+//! descriptions (per-package names and the like) are reclaimed after their
+//! reports drop, so a long-running worker does not accumulate every string
+//! it ever saw.
 
 use std::fmt;
 use std::sync::Arc;
@@ -26,35 +27,60 @@ use std::sync::Arc;
 use rustc_hash::FxHashSet;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-/// Sweep the pool when it exceeds this many entries; entries only the pool
-/// still holds (`strong_count == 1`) are dropped. Distinct trait ids and
+/// The pool never sweeps below this many entries. Distinct trait ids and
 /// static descriptions number in the low tens of thousands, so a healthy
-/// steady state sits far below this.
+/// steady state never sweeps at all.
 const SWEEP_THRESHOLD: usize = 262_144;
 
-fn pool() -> &'static parking_lot::Mutex<FxHashSet<Arc<str>>> {
-    static POOL: std::sync::OnceLock<parking_lot::Mutex<FxHashSet<Arc<str>>>> =
-        std::sync::OnceLock::new();
-    POOL.get_or_init(|| parking_lot::Mutex::new(FxHashSet::default()))
+/// The dedup pool, and the size at which it next sweeps.
+///
+/// A sweep walks every entry under the process-wide lock, so it must stay
+/// rare however many strings remain live. `sweep_at` doubles from what the
+/// last sweep kept, which bounds sweeping to amortized O(1) per intern. A
+/// fixed threshold did not: once more strings than that stayed live, every
+/// miss swept the whole pool. Measured 2026-09-24 on a 128-thread worker
+/// holding 601k live import ids: a 10 ms sweep per miss, the lock held 99.9%
+/// of the time, and a 3 KB archive member taking 48 s.
+struct Pool {
+    set: FxHashSet<Arc<str>>,
+    sweep_at: usize,
 }
 
-fn intern(s: &str) -> Arc<str> {
-    let mut pool = pool().lock();
-    if let Some(existing) = pool.get(s) {
-        return Arc::clone(existing);
+impl Pool {
+    fn new() -> Self {
+        Self {
+            set: FxHashSet::default(),
+            sweep_at: SWEEP_THRESHOLD,
+        }
     }
-    if pool.len() >= SWEEP_THRESHOLD {
-        pool.retain(|e| Arc::strong_count(e) > 1);
+
+    fn intern(&mut self, s: &str) -> Arc<str> {
+        if let Some(existing) = self.set.get(s) {
+            return Arc::clone(existing);
+        }
+        if self.set.len() >= self.sweep_at {
+            self.sweep();
+        }
+        let arc: Arc<str> = Arc::from(s);
+        self.set.insert(Arc::clone(&arc));
+        arc
+    }
+
+    /// Drop the entries only the pool still holds (`strong_count == 1`).
+    fn sweep(&mut self) {
+        self.set.retain(|e| Arc::strong_count(e) > 1);
+        let live = self.set.len();
+        self.sweep_at = live.saturating_mul(2).max(SWEEP_THRESHOLD);
         // Staying large after a sweep means a high-cardinality field is being
         // interned, so the pool pins strings that would otherwise be freed —
         // `Finding::source_file` did this (one member path per member) and cost
-        // ~0.3-1.2 GB. Warn once; past the threshold every intern re-sweeps.
-        let live = pool.len();
+        // ~0.3-1.2 GB. Warn once.
         if live >= SWEEP_THRESHOLD / 2 {
             static WARNED: std::sync::Once = std::sync::Once::new();
             WARNED.call_once(|| {
                 tracing::warn!(
                     live,
+                    next_sweep_at = self.sweep_at,
                     "istr: intern pool stayed large after sweep — a high-cardinality \
                      field is likely being interned; Istr is for low-cardinality \
                      identifiers only"
@@ -62,9 +88,13 @@ fn intern(s: &str) -> Arc<str> {
             });
         }
     }
-    let arc: Arc<str> = Arc::from(s);
-    pool.insert(Arc::clone(&arc));
-    arc
+}
+
+fn intern(s: &str) -> Arc<str> {
+    static POOL: std::sync::OnceLock<parking_lot::Mutex<Pool>> = std::sync::OnceLock::new();
+    POOL.get_or_init(|| parking_lot::Mutex::new(Pool::new()))
+        .lock()
+        .intern(s)
 }
 
 /// An interned immutable string. See the module docs.
@@ -237,18 +267,39 @@ mod tests {
         assert!(Arc::ptr_eq(&a.0, &back.0), "deserialize must intern");
     }
 
-    /// The sweep drops pool-only entries and keeps live ones.
+    /// A sweep drops pool-only entries, keeps live ones, and re-arms at the
+    /// floor once the pool is small again.
     #[test]
     fn sweep_reclaims_dead_entries() {
-        let live = Istr::from("istr-test-live");
-        {
-            let _dead = Istr::from("istr-test-dead");
+        let mut pool = Pool::new();
+        let live = pool.intern("live");
+        for i in 0..SWEEP_THRESHOLD {
+            pool.intern(&i.to_string());
         }
-        let mut pool = pool().lock();
-        pool.retain(|e| Arc::strong_count(e) > 1);
-        assert!(pool.get("istr-test-live").is_some());
-        assert!(pool.get("istr-test-dead").is_none());
-        drop(pool);
+        // The last intern found the pool at the threshold and swept first.
+        assert_eq!(pool.set.len(), 2, "only `live` and the newest survive");
+        assert!(pool.set.contains("live"));
+        assert_eq!(pool.sweep_at, SWEEP_THRESHOLD);
         drop(live);
+    }
+
+    /// With more strings live than the threshold, the next sweep is always
+    /// ahead of the pool, so a miss does not sweep again — the sweep point
+    /// doubles instead: once at the threshold, once at twice it.
+    #[test]
+    fn sweeps_stay_rare_when_most_strings_stay_live() {
+        let mut pool = Pool::new();
+        let mut held = Vec::with_capacity(2 * SWEEP_THRESHOLD + 1);
+        for i in 0..=2 * SWEEP_THRESHOLD {
+            held.push(pool.intern(&i.to_string()));
+            assert!(
+                pool.set.len() <= pool.sweep_at,
+                "pool of {} live strings would sweep again at {}",
+                pool.set.len(),
+                pool.sweep_at
+            );
+        }
+        assert_eq!(pool.sweep_at, 4 * SWEEP_THRESHOLD);
+        assert_eq!(pool.set.len(), held.len());
     }
 }

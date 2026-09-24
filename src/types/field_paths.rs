@@ -178,6 +178,12 @@ pub(crate) const CLEAVE_OWNED_METRIC_FIELDS: &[&str] = &[
     // different path from the fetch records the two counts above come from: a
     // dependency can resolve without a live download and still have a record.
     "references.security_hold_count",
+    // Cleave's own string-retention policy: filefacts offers every text row,
+    // cleave's per-file caps decide what rules search. Only the side that
+    // applies the cap can say how many rows it dropped.
+    "strings.extracted_count",
+    "strings.retained_count",
+    "strings.truncated",
     // Per-file measurements that should move into filefacts.
     "binary.embedded_binaries",
     "pe.directory_section_mismatch_count",

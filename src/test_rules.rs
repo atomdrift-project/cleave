@@ -125,6 +125,39 @@ pub(crate) struct RuleDebugger<'a> {
     section_map: SectionMap,
     inline_yara_results: Option<&'a HashMap<String, Vec<Evidence>>>,
     parsed: Option<filefacts::ParsedFile<'a>>,
+    /// Finding id → type mask of the members that produced it, built the way
+    /// the archive analyzer builds it for container composites. `None` for a
+    /// plain file, where production evaluation passes no origins either.
+    finding_origins: Option<rustc_hash::FxHashMap<String, TypeMask>>,
+}
+
+/// Origin masks for a container report, mirroring
+/// `analyzers::archive` (member findings carry their member's type bit;
+/// anything no member produced belongs to the container itself).
+///
+/// Without this, test-rules evaluated container composites with every origin
+/// allowed and reported MATCHED for correlators whose legs a real scan drops
+/// because the leg's member type is missing from the rule's `for:`.
+fn container_finding_origins(
+    report: &AnalysisReport,
+) -> Option<rustc_hash::FxHashMap<String, TypeMask>> {
+    if report.files.is_empty() {
+        return None;
+    }
+    let mut origins: rustc_hash::FxHashMap<String, TypeMask> = rustc_hash::FxHashMap::default();
+    for member in &report.files {
+        let bit = RuleFileType::from_str(&member.file_type).type_bit();
+        for finding in &member.findings {
+            *origins.entry(finding.id.to_string()).or_default() |= bit;
+        }
+    }
+    let container_bit = RuleFileType::from_str(&report.target.file_type).type_bit();
+    for finding in &report.findings {
+        origins
+            .entry(finding.id.to_string())
+            .or_insert(container_bit);
+    }
+    Some(origins)
 }
 
 impl<'a> RuleDebugger<'a> {
@@ -165,6 +198,7 @@ impl<'a> RuleDebugger<'a> {
             section_map,
             inline_yara_results,
             parsed,
+            finding_origins: container_finding_origins(report),
         }
     }
 
@@ -306,7 +340,7 @@ impl<'a> RuleDebugger<'a> {
             slow_rule_ms: 4000,
             cached_evidence: None,
             current_trait_idx: None,
-            finding_origins: None,
+            finding_origins: self.finding_origins.as_ref(),
             for_mask: TypeMask::ALL,
             raw_atom_offsets: None,
             decoded_skip: None,
@@ -363,8 +397,11 @@ impl<'a> RuleDebugger<'a> {
         // Create debug collector
         let debug = RwLock::new(EvaluationDebug::new(&composite.id, RuleType::Composite));
 
-        // Create context with debug collector
-        let ctx = self.create_eval_context(Some(&debug));
+        // Create context with debug collector. `for_mask` is per rule, as in
+        // `evaluate_container_composites`: with origins stamped, a leg counts
+        // only when it came from a member type the rule declared.
+        let mut ctx = self.create_eval_context(Some(&debug));
+        ctx.for_mask = composite.for_mask();
 
         // Run real evaluation
         let finding = composite.evaluate(&ctx);

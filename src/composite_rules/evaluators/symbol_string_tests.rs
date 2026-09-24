@@ -624,6 +624,53 @@ fn test_eval_symbol_in_functions() {
     assert_eq!(result.evidence[0].value, "runtime.newproc");
 }
 
+#[test]
+fn test_eval_symbol_functions_apply_is_check() {
+    let mut report = create_test_report();
+    for name in [
+        "resourceDockerContainerCreate",
+        "kqjxwvbnmzqt",
+        "zxqvkwpjfbtn",
+    ] {
+        report.functions.push(Function {
+            name: name.to_string(),
+            offset: Some("0x2000".to_string()),
+            size: Some(100),
+            complexity: None,
+            calls: vec![],
+            control_flow: None,
+            register_usage: None,
+            constants: vec![],
+            signature: None,
+            nesting: None,
+            call_patterns: None,
+        });
+    }
+    let data = vec![];
+    let ctx = create_test_context(&report, &data);
+
+    let result = super::eval_symbol(
+        None,
+        None,
+        Some(&r"^\w{6,}$".to_string()),
+        None,
+        Some(crate::composite_rules::condition::StringValidator::RandomLike),
+        Some(SymbolKind::Function),
+        None,
+        None,
+        &ctx,
+    );
+
+    assert!(result.matched);
+    assert_eq!(result.match_count, 2, "only the generated names count");
+    assert!(
+        result
+            .evidence
+            .iter()
+            .all(|e| e.value != "resourceDockerContainerCreate")
+    );
+}
+
 // =============================================================================
 // eval_text tests (formerly eval_string)
 // =============================================================================

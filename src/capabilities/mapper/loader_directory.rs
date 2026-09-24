@@ -3313,6 +3313,10 @@ impl super::CapabilityMapper {
                             "is suppressed by",
                             "the carve-out never fires, so this reports false positives",
                         ),
+                        // Only `find_dead_any_alternatives` emits this role.
+                        crate::capabilities::validation::LegRole::DeadAlternative => {
+                            ("has an any: alternative", "that branch can never fire")
+                        }
                     };
                     eprintln!(
                         "   {}: '{}' (scope: {:?}) {} '{}', which fires only on [{}] -- {}; add it to for:, or drop the leg",
@@ -3327,6 +3331,43 @@ impl super::CapabilityMapper {
                         legs_outside.len()
                     ),
                 );
+            }
+
+            // Non-fatal: `any:` branches that `for:` makes unreachable while a
+            // sibling branch keeps the rule alive. Summarised by default (the
+            // corpus has a backlog); `CLEAVE_WARN_DEAD_ANY=1` lists them.
+            if !crate::validation_controls::is_validator_disabled("dead-any-alternative") {
+                let dead_any = crate::capabilities::validation::find_dead_any_alternatives(
+                    &trait_definitions,
+                    &composite_rules,
+                );
+                if !dead_any.is_empty() {
+                    let rules: std::collections::BTreeSet<&str> =
+                        dead_any.iter().map(|l| l.id.as_str()).collect();
+                    eprintln!(
+                        "\n\u{26a0}\u{fe0f}  WARNING: {} any: alternatives in {} pooling composites come from file types the rule does not declare (that branch can never fire); CLEAVE_WARN_DEAD_ANY=1 lists them",
+                        dead_any.len(),
+                        rules.len()
+                    );
+                    if std::env::var_os("CLEAVE_WARN_DEAD_ANY").is_some() {
+                        for issue in &dead_any {
+                            let source_file = rule_source_files
+                                .get(&issue.id)
+                                .map(std::string::String::as_str)
+                                .unwrap_or("unknown");
+                            let missing = issue
+                                .leg_types
+                                .iter()
+                                .map(|ft| ft.label().to_string())
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            eprintln!(
+                                "   {}: '{}' any: '{}' fires only on [{}]",
+                                source_file, issue.id, issue.leg, missing
+                            );
+                        }
+                    }
+                }
             }
 
             // Validate: a pooling scope needs a container node to run on.

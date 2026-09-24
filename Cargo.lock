@@ -1721,7 +1721,7 @@ dependencies = [
 [[package]]
 name = "filefacts"
 version = "1.7.0"
-source = "git+https://github.com/atomdrift-project/filefacts.git#b68d606e00c0f3fb320c06913cdde2433866d7f3"
+source = "git+https://github.com/atomdrift-project/filefacts.git#1e0a15f2995b00c04271274c25352d659259efff"
 dependencies = [
  "aho-corasick",
  "cab",
@@ -2251,16 +2251,17 @@ dependencies = [
 
 [[package]]
 name = "hyper-util"
-version = "0.1.20"
+version = "0.1.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "96547c2556ec9d12fb1578c4eaf448b04993e7fb79cbaad930a656880a6bdfa0"
+checksum = "ddc03d96684f9226b8a787cdb71488417b53ab5ea8fdb1dac946cb9431cc8bff"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "bytes",
  "futures-channel",
  "futures-util",
  "http",
  "http-body",
+ "httparse",
  "hyper",
  "ipnet",
  "libc",
@@ -4648,7 +4649,7 @@ dependencies = [
 [[package]]
 name = "stng"
 version = "1.12.0"
-source = "git+https://github.com/atomdrift-project/stng.git#d5056d785644d5403e0a3e18f3f8621ffee91ce1"
+source = "git+https://github.com/atomdrift-project/stng.git#3d8acbb2765eeb8838d37229ddd979f939648a07"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -5316,7 +5317,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-clojure"
 version = "0.1.0"
-source = "git+https://github.com/atomdrift-project/filefacts.git#b68d606e00c0f3fb320c06913cdde2433866d7f3"
+source = "git+https://github.com/atomdrift-project/filefacts.git#1e0a15f2995b00c04271274c25352d659259efff"
 dependencies = [
  "cc",
  "tree-sitter",

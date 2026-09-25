@@ -21,7 +21,7 @@ impl AppleScriptAnalyzer {
     #[must_use]
     pub(crate) fn new() -> Self {
         Self {
-            capability_mapper: Arc::new(CapabilityMapper::new()),
+            capability_mapper: Arc::new(CapabilityMapper::empty()),
             string_extractor: StringExtractor::new(),
         }
     }

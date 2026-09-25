@@ -1320,32 +1320,87 @@ fn positive_trait_refs(rule: &CompositeTrait) -> Vec<String> {
     refs
 }
 
-/// Resolve a reference to the concrete ids it matches, mirroring the runtime
-/// resolver in `evaluate_merged`: an exact `::` reference matches one id; a bare
-/// short name (no `/`) suffix-matches `::name`/`/name`; a directory reference
-/// (has `/`, no `::`) prefix-matches the id itself, `dir::*`, and the whole
-/// `dir/*` subtree. A trailing slash is trimmed first.
-fn resolve_reference<'a>(reference: &str, all_ids: &[&'a str]) -> Vec<&'a str> {
-    let id = reference.trim_end_matches('/');
-    if id.contains("::") {
-        return all_ids.iter().copied().filter(|f| *f == id).collect();
+/// Every id a reference can name, indexed so that resolving one is a lookup.
+///
+/// Resolution used to scan every id in the tree for each distinct reference.
+/// With ~40,000 ids and the tens of thousands of references the conviction
+/// checks follow, that scan was over a minute of `cleave validate`, all of it
+/// on the main thread.
+pub(super) struct ReferenceIndex<'a> {
+    ids: Vec<&'a str>,
+    /// Positions into `ids`, ordered by id: exact and directory references
+    /// are prefix ranges of it.
+    sorted: Vec<usize>,
+    /// Positions into `ids`, keyed by the text after each id's last `:` or
+    /// `/`, which is where a short-name reference must match.
+    by_tail: HashMap<&'a str, Vec<usize>>,
+}
+
+/// The text after the last `:` or `/`, or all of `id` when it has neither.
+fn tail(id: &str) -> &str {
+    id.rsplit([':', '/']).next().unwrap_or(id)
+}
+
+impl<'a> ReferenceIndex<'a> {
+    pub(super) fn new(ids: Vec<&'a str>) -> Self {
+        let mut sorted: Vec<usize> = (0..ids.len()).collect();
+        sorted.sort_unstable_by_key(|&i| ids[i]);
+        let mut by_tail: HashMap<&'a str, Vec<usize>> = HashMap::new();
+        for (i, id) in ids.iter().enumerate() {
+            by_tail.entry(tail(id)).or_default().push(i);
+        }
+        Self {
+            ids,
+            sorted,
+            by_tail,
+        }
     }
-    if !id.contains('/') {
-        let suffix_new = format!("::{id}");
-        let suffix_legacy = format!("/{id}");
-        return all_ids
+
+    /// Resolve a reference to the concrete ids it matches, mirroring the
+    /// runtime resolver in `evaluate_merged`: an exact `::` reference matches
+    /// one id; a bare short name (no `/`) suffix-matches `::name`/`/name`; a
+    /// directory reference (has `/`, no `::`) prefix-matches the id itself,
+    /// `dir::*`, and the whole `dir/*` subtree. A trailing slash is trimmed
+    /// first. Matches come back in the order the ids were given.
+    pub(super) fn resolve(&self, reference: &str) -> Vec<&'a str> {
+        let id = reference.trim_end_matches('/');
+        let mut hits: Vec<usize> = if id.contains("::") {
+            self.starting_with(id)
+                .filter(|&i| self.ids[i] == id)
+                .collect()
+        } else if !id.contains('/') {
+            let (suffix_new, suffix_legacy) = (format!("::{id}"), format!("/{id}"));
+            self.by_tail
+                .get(tail(id))
+                .into_iter()
+                .flatten()
+                .copied()
+                .filter(|&i| {
+                    let f = self.ids[i];
+                    f.ends_with(&suffix_new) || f.ends_with(&suffix_legacy)
+                })
+                .collect()
+        } else {
+            let (prefix_new, prefix_legacy) = (format!("{id}::"), format!("{id}/"));
+            self.starting_with(id)
+                .filter(|&i| {
+                    let f = self.ids[i];
+                    f == id || f.starts_with(&prefix_new) || f.starts_with(&prefix_legacy)
+                })
+                .collect()
+        };
+        hits.sort_unstable();
+        hits.into_iter().map(|i| self.ids[i]).collect()
+    }
+
+    /// Positions of the ids that begin with `prefix`.
+    fn starting_with<'s>(&'s self, prefix: &'s str) -> impl Iterator<Item = usize> + 's {
+        let start = self.sorted.partition_point(|&i| self.ids[i] < prefix);
+        self.sorted[start..]
             .iter()
             .copied()
-            .filter(|f| f.ends_with(&suffix_new) || f.ends_with(&suffix_legacy))
-            .collect();
+            .take_while(move |&i| self.ids[i].starts_with(prefix))
     }
-    let prefix_new = format!("{id}::");
-    let prefix_legacy = format!("{id}/");
-    all_ids
-        .iter()
-        .copied()
-        .filter(|f| *f == id || f.starts_with(&prefix_new) || f.starts_with(&prefix_legacy))
-        .collect()
 }
 
 /// Find `crit: hostile` composites that reference fewer than two distinct
@@ -1380,7 +1435,7 @@ pub(crate) fn find_hostile_composites_with_too_few_notable_legs(
     for c in composite_rules {
         crit_by_id.insert(c.id.as_str(), c.crit);
     }
-    let all_ids: Vec<&str> = crit_by_id.keys().copied().collect();
+    let index = ReferenceIndex::new(crit_by_id.keys().copied().collect());
     let composite_by_id: HashMap<&str, &CompositeTrait> =
         composite_rules.iter().map(|c| (c.id.as_str(), c)).collect();
 
@@ -1398,7 +1453,7 @@ pub(crate) fn find_hostile_composites_with_too_few_notable_legs(
     fn collect_notable_for_id(
         id: &str,
         crit_by_id: &HashMap<&str, Criticality>,
-        all_ids: &[&str],
+        index: &ReferenceIndex<'_>,
         composite_by_id: &HashMap<&str, &CompositeTrait>,
         reference_cache: &mut HashMap<String, Vec<String>>,
         terminal_cache: &mut HashMap<String, Vec<String>>,
@@ -1417,7 +1472,7 @@ pub(crate) fn find_hostile_composites_with_too_few_notable_legs(
                 let child_terms = collect_notable_for_reference(
                     &child,
                     crit_by_id,
-                    all_ids,
+                    index,
                     composite_by_id,
                     reference_cache,
                     terminal_cache,
@@ -1452,7 +1507,7 @@ pub(crate) fn find_hostile_composites_with_too_few_notable_legs(
     fn collect_notable_for_reference(
         reference: &str,
         crit_by_id: &HashMap<&str, Criticality>,
-        all_ids: &[&str],
+        index: &ReferenceIndex<'_>,
         composite_by_id: &HashMap<&str, &CompositeTrait>,
         reference_cache: &mut HashMap<String, Vec<String>>,
         terminal_cache: &mut HashMap<String, Vec<String>>,
@@ -1468,10 +1523,7 @@ pub(crate) fn find_hostile_composites_with_too_few_notable_legs(
                     .then_some(vec![key.clone()])
                     .unwrap_or_default()
             } else {
-                resolve_reference(&key, all_ids)
-                    .into_iter()
-                    .map(str::to_owned)
-                    .collect()
+                index.resolve(&key).into_iter().map(str::to_owned).collect()
             };
             reference_cache.insert(key, ids.clone());
             ids
@@ -1484,7 +1536,7 @@ pub(crate) fn find_hostile_composites_with_too_few_notable_legs(
                 collect_notable_for_id(
                     &id,
                     crit_by_id,
-                    all_ids,
+                    index,
                     composite_by_id,
                     reference_cache,
                     terminal_cache,
@@ -1514,7 +1566,7 @@ pub(crate) fn find_hostile_composites_with_too_few_notable_legs(
                 collect_notable_for_reference(
                     &reference,
                     &crit_by_id,
-                    &all_ids,
+                    &index,
                     &composite_by_id,
                     &mut reference_cache,
                     &mut terminal_cache,
@@ -2683,7 +2735,7 @@ pub(crate) fn find_container_name_convictions(
         .iter()
         .map(|t| (t.id.as_str(), t))
         .collect();
-    let all_ids: Vec<&str> = by_id.keys().copied().collect();
+    let index = ReferenceIndex::new(by_id.keys().copied().collect());
 
     let mut found = Vec::new();
     for rule in composite_rules {
@@ -2697,7 +2749,7 @@ pub(crate) fn find_container_name_convictions(
             let Condition::Trait { id } = cond else {
                 continue;
             };
-            for resolved in resolve_reference(id, &all_ids) {
+            for resolved in index.resolve(id) {
                 let Some(def) = by_id.get(resolved) else {
                     continue;
                 };
@@ -2738,7 +2790,7 @@ pub(crate) fn find_container_name_convictions(
 /// single-trait leg look like a subset of every directory leg.
 fn required_terminals<'a>(
     reference: &str,
-    all_ids: &[&'a str],
+    index: &ReferenceIndex<'a>,
     composite_by_id: &HashMap<&str, &CompositeTrait>,
     depth: usize,
     cache: &mut HashMap<String, Vec<&'a str>>,
@@ -2746,7 +2798,7 @@ fn required_terminals<'a>(
     if depth > 8 {
         return None;
     }
-    let resolved = resolve_cached(reference, all_ids, cache);
+    let resolved = resolve_cached(reference, index, cache);
     let [id] = resolved[..] else {
         return None;
     };
@@ -2764,7 +2816,7 @@ fn required_terminals<'a>(
                 };
                 out.extend(required_terminals(
                     child,
-                    all_ids,
+                    index,
                     composite_by_id,
                     depth + 1,
                     cache,
@@ -2794,6 +2846,7 @@ pub(crate) fn find_subsumed_required_legs(
         composite_rules.iter().map(|c| (c.id.as_str(), c)).collect();
     let mut all_ids: Vec<&str> = trait_definitions.iter().map(|t| t.id.as_str()).collect();
     all_ids.extend(composite_by_id.keys().copied());
+    let index = ReferenceIndex::new(all_ids);
 
     let mut cache: HashMap<String, Vec<&str>> = HashMap::new();
     let mut found = Vec::new();
@@ -2820,7 +2873,7 @@ pub(crate) fn find_subsumed_required_legs(
         }
         let expanded: Vec<Option<HashSet<String>>> = legs
             .iter()
-            .map(|l| required_terminals(l, &all_ids, &composite_by_id, 0, &mut cache))
+            .map(|l| required_terminals(l, &index, &composite_by_id, 0, &mut cache))
             .collect();
         for (i, a) in expanded.iter().enumerate() {
             let Some(a) = a else { continue };
@@ -2916,7 +2969,11 @@ fn leg_value_pattern(cond: &Condition) -> Option<String> {
 
 /// A value-set automaton: the byte strings a leg accepts, searched the way the
 /// engine searches them (a pattern with no anchor matches anywhere).
-fn value_set_dfa(pattern: &str) -> Option<regex_automata::dfa::dense::DFA<Vec<u32>>> {
+type ValueSetDfa = regex_automata::dfa::dense::DFA<Vec<u32>>;
+
+/// Build the [`ValueSetDfa`] for `pattern`, or `None` when it exceeds the
+/// determinization budget.
+fn value_set_dfa(pattern: &str) -> Option<ValueSetDfa> {
     use regex_automata::dfa::dense;
 
     // `MatchKind::All` keeps the automaton reporting every match rather than
@@ -2940,8 +2997,8 @@ fn value_set_dfa(pattern: &str) -> Option<regex_automata::dfa::dense::DFA<Vec<u3
 /// space is, and `None` means it hit its budget without deciding. Callers
 /// supply what counts as a witness at the end of the value.
 fn product_walk(
-    dfa_a: &regex_automata::dfa::dense::DFA<Vec<u32>>,
-    dfa_b: &regex_automata::dfa::dense::DFA<Vec<u32>>,
+    dfa_a: &ValueSetDfa,
+    dfa_b: &ValueSetDfa,
     anchored: bool,
     witness: impl Fn(bool, bool) -> bool,
     prune_on_b_match: bool,
@@ -3032,15 +3089,8 @@ fn product_walk(
 /// It is deliberately not "one value satisfies both". A preinstall script
 /// holding `http://…` and an `xxd` call satisfies a URL leg and a hex-encode
 /// leg at once, but those legs match different text and are two observations.
-fn same_span_satisfies_both(a: &str, b: &str) -> Option<bool> {
-    let (dfa_a, dfa_b) = (value_set_dfa(a)?, value_set_dfa(b)?);
-    product_walk(
-        &dfa_a,
-        &dfa_b,
-        true,
-        |done_a, done_b| done_a && done_b,
-        true,
-    )
+fn same_span_satisfies_both(a: &ValueSetDfa, b: &ValueSetDfa) -> Option<bool> {
+    product_walk(a, b, true, |done_a, done_b| done_a && done_b, true)
 }
 
 /// Whether every value `a` accepts, `b` accepts too.
@@ -3050,15 +3100,8 @@ fn same_span_satisfies_both(a: &str, b: &str) -> Option<bool> {
 /// `docs/Invoice-90233.xlsx` alongside a regex leg for `\.(xlsx|xls)$` matches
 /// different *text*, but every member the first accepts the second accepts,
 /// so the second is not telling the rule anything new.
-fn value_set_contains(a: &str, b: &str) -> Option<bool> {
-    let (dfa_a, dfa_b) = (value_set_dfa(a)?, value_set_dfa(b)?);
-    let witness = product_walk(
-        &dfa_a,
-        &dfa_b,
-        false,
-        |done_a, done_b| done_a && !done_b,
-        false,
-    )?;
+fn value_set_contains(a: &ValueSetDfa, b: &ValueSetDfa) -> Option<bool> {
+    let witness = product_walk(a, b, false, |done_a, done_b| done_a && !done_b, false)?;
     Some(!witness)
 }
 
@@ -3115,8 +3158,13 @@ pub(crate) fn find_one_fact_convictions(
         .collect();
     let mut all_ids: Vec<&str> = by_id.keys().copied().collect();
     all_ids.extend(composite_by_id.keys().copied());
+    let index = ReferenceIndex::new(all_ids);
 
     let mut cache: HashMap<String, Vec<&str>> = HashMap::new();
+    // Every pair of legs is compared three ways, and the same patterns recur
+    // across pairs and rules, so each is determinized once per run rather than
+    // up to six times per pair.
+    let mut dfas: HashMap<String, Option<ValueSetDfa>> = HashMap::new();
     let mut found = Vec::new();
     for rule in composite_rules {
         // Scoped to convictions. Two spellings of one fact in a notable rule
@@ -3145,7 +3193,7 @@ pub(crate) fn find_one_fact_convictions(
         let resolved: Vec<Option<&TraitDefinition>> = legs
             .iter()
             .map(|leg| {
-                let ids = resolve_cached(leg, &all_ids, &mut cache);
+                let ids = resolve_cached(leg, &index, &mut cache);
                 let [id] = ids[..] else { return None };
                 by_id.get(id).copied()
             })
@@ -3176,9 +3224,19 @@ pub(crate) fn find_one_fact_convictions(
                 // The same evidence, either because the two matchers can
                 // match one span or because one leg's values are all already
                 // accepted by the other.
-                let same_evidence = same_span_satisfies_both(&pattern_a, &pattern_b) == Some(true)
-                    || value_set_contains(&pattern_a, &pattern_b) == Some(true)
-                    || value_set_contains(&pattern_b, &pattern_a) == Some(true);
+                for pattern in [&pattern_a, &pattern_b] {
+                    if !dfas.contains_key(pattern) {
+                        dfas.insert(pattern.clone(), value_set_dfa(pattern));
+                    }
+                }
+                let (Some(Some(dfa_a)), Some(Some(dfa_b))) =
+                    (dfas.get(&pattern_a), dfas.get(&pattern_b))
+                else {
+                    continue;
+                };
+                let same_evidence = same_span_satisfies_both(dfa_a, dfa_b) == Some(true)
+                    || value_set_contains(dfa_a, dfa_b) == Some(true)
+                    || value_set_contains(dfa_b, dfa_a) == Some(true);
                 if !same_evidence {
                     continue;
                 }
@@ -3199,18 +3257,17 @@ pub(crate) fn find_one_fact_convictions(
     found
 }
 
-/// Cache for [`resolve_reference`], which scans every known id. These checks
-/// resolve the same handful of references across thousands of composites, and
-/// without memoising that is quadratic on a tree of this size.
+/// Cache for [`ReferenceIndex::resolve`]. These checks resolve the same
+/// handful of references across thousands of composites.
 fn resolve_cached<'a>(
     reference: &str,
-    all_ids: &[&'a str],
+    index: &ReferenceIndex<'a>,
     cache: &mut HashMap<String, Vec<&'a str>>,
 ) -> Vec<&'a str> {
     if let Some(hit) = cache.get(reference) {
         return hit.clone();
     }
-    let resolved = resolve_reference(reference, all_ids);
+    let resolved = index.resolve(reference);
     cache.insert(reference.to_string(), resolved.clone());
     resolved
 }
@@ -3262,6 +3319,7 @@ pub(crate) fn find_convictions_without_content(
         composite_rules.iter().map(|c| (c.id.as_str(), c)).collect();
     let mut all_ids: Vec<&str> = by_id.keys().copied().collect();
     all_ids.extend(composite_by_id.keys().copied());
+    let index = ReferenceIndex::new(all_ids);
 
     let mut cache: HashMap<String, Vec<&str>> = HashMap::new();
     let mut found = Vec::new();
@@ -3299,7 +3357,7 @@ pub(crate) fn find_convictions_without_content(
                     }
                     // Every id this leg can reach, required or alternative: one
                     // content-derived possibility is enough to clear the rule.
-                    let mut stack = resolve_cached(id, &all_ids, &mut cache);
+                    let mut stack = resolve_cached(id, &index, &mut cache);
                     let mut seen = HashSet::new();
                     while let Some(next) = stack.pop() {
                         if !seen.insert(next.to_string()) {
@@ -3310,9 +3368,7 @@ pub(crate) fn find_convictions_without_content(
                                 for c in sub.all.iter().flatten().chain(sub.any.iter().flatten()) {
                                     match c {
                                         Condition::Trait { id: child } => {
-                                            stack.extend(resolve_cached(
-                                                child, &all_ids, &mut cache,
-                                            ));
+                                            stack.extend(resolve_cached(child, &index, &mut cache));
                                         }
                                         other => {
                                             if !is_name_or_shape_only(other) {
@@ -3399,6 +3455,7 @@ pub(crate) fn find_dangling_directory_refs(
 ) -> Vec<(String, &'static str, String)> {
     let mut all_ids: Vec<&str> = trait_definitions.iter().map(|t| t.id.as_str()).collect();
     all_ids.extend(composite_rules.iter().map(|c| c.id.as_str()));
+    let index = ReferenceIndex::new(all_ids);
 
     let mut cache: HashMap<String, Vec<&str>> = HashMap::new();
     let mut found = Vec::new();
@@ -3419,7 +3476,7 @@ pub(crate) fn find_dangling_directory_refs(
                 if is_runtime_synthesized_namespace(id) {
                     continue;
                 }
-                if resolve_cached(id, &all_ids, &mut cache).is_empty() {
+                if resolve_cached(id, &index, &mut cache).is_empty() {
                     found.push((rule.id.clone(), clause, id.clone()));
                 }
             }

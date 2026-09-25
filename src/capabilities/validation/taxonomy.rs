@@ -838,11 +838,14 @@ pub(crate) fn find_suppression_only_building_blocks<'a>(
     use std::collections::{HashSet, VecDeque};
 
     // Every rule id, for expanding bare directory references to the rules beneath them.
-    let all_ids: Vec<&str> = trait_definitions
+    // Sorted, so the rules under a prefix are one contiguous range rather than a scan
+    // of the whole tree per reference.
+    let mut all_ids: Vec<&str> = trait_definitions
         .iter()
         .map(|t| t.id.as_str())
         .chain(composite_rules.iter().map(|r| r.id.as_str()))
         .collect();
+    all_ids.sort_unstable();
 
     // Positive-reference edges parent → child. A specific `dir::id` reference is one edge;
     // a bare directory reference fans out to every rule beneath the prefix.
@@ -854,7 +857,11 @@ pub(crate) fn find_suppression_only_building_blocks<'a>(
         } else {
             let prefix_new = format!("{ref_id}::");
             let prefix_legacy = format!("{ref_id}/");
-            for &c in &all_ids {
+            let start = all_ids.partition_point(|c| *c < ref_id);
+            for &c in all_ids[start..]
+                .iter()
+                .take_while(|c| c.starts_with(ref_id))
+            {
                 if c.starts_with(&prefix_new) || c.starts_with(&prefix_legacy) {
                     children.push(c);
                 }

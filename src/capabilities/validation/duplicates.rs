@@ -2115,6 +2115,9 @@ pub(crate) fn find_literals_covered_by_regexes(
     trait_definitions: &[TraitDefinition],
     warnings: &mut Vec<String>,
 ) {
+    use rayon::prelude::*;
+    use std::sync::OnceLock;
+
     let start = std::time::Instant::now();
 
     // Bucket by (matcher context, overlap tier): a regex can only stand in for a
@@ -2162,7 +2165,7 @@ pub(crate) fn find_literals_covered_by_regexes(
         // the engine accepts the pattern, and compiling every pattern in the
         // bucket to throw the result away costs more than the rest of the check.
         let compilable: Vec<&PatternLocation> = bucket
-            .iter()
+            .par_iter()
             .filter(|location| {
                 regex_syntax::ParserBuilder::new()
                     .build()
@@ -2177,9 +2180,14 @@ pub(crate) fn find_literals_covered_by_regexes(
         let mut ci_owners: Vec<Vec<usize>> = Vec::new();
         let mut ungated: Vec<usize> = Vec::new();
         let mut by_atom: HashMap<(String, bool), usize> = HashMap::new();
-        for (idx, location) in compilable.iter().enumerate() {
-            match crate::capabilities::derivation_memo::mandatory_atom_set(&location.original_value)
-            {
+        let atom_sets: Vec<Option<Vec<(String, bool)>>> = compilable
+            .par_iter()
+            .map(|location| {
+                crate::capabilities::derivation_memo::mandatory_atom_set(&location.original_value)
+            })
+            .collect();
+        for (idx, atom_set) in atom_sets.into_iter().enumerate() {
+            match atom_set {
                 Some(set) if !set.is_empty() => {
                     for (atom, case_insensitive) in set {
                         let slot = *by_atom
@@ -2250,53 +2258,59 @@ pub(crate) fn find_literals_covered_by_regexes(
         }
 
         // Compiled lazily: most gated patterns are never a candidate for any
-        // phrase, so compiling the whole bucket up front would be wasted.
-        let mut compiled: Vec<Option<Option<regex::Regex>>> = vec![None; compilable.len()];
-        let mut covering: BTreeMap<&String, Vec<&PatternLocation>> = BTreeMap::new();
-        for (phrase, holders) in phrase_map {
-            // Newlines let multiline anchors see a line boundary without adding
-            // any content the phrase did not have.
-            let haystack = format!("\n{phrase}\n");
-            let mut candidates: HashSet<usize> = HashSet::new();
-            if let Some(gate) = &literal_gate {
-                for hit in gate.find_overlapping_iter(&haystack) {
-                    candidates.extend(atom_owners[hit.pattern().as_usize()].iter().copied());
+        // phrase, so compiling the whole bucket up front would be wasted. The
+        // phrases run in parallel, and compiling candidates was most of this
+        // check's time when they ran one by one.
+        let compiled: Vec<OnceLock<Option<regex::Regex>>> =
+            (0..compilable.len()).map(|_| OnceLock::new()).collect();
+        let covering: BTreeMap<&String, Vec<&PatternLocation>> = phrase_map
+            .par_iter()
+            .filter_map(|(phrase, holders)| {
+                // Newlines let multiline anchors see a line boundary without adding
+                // any content the phrase did not have.
+                let haystack = format!("\n{phrase}\n");
+                let mut candidates: HashSet<usize> = HashSet::new();
+                if let Some(gate) = &literal_gate {
+                    for hit in gate.find_overlapping_iter(&haystack) {
+                        candidates.extend(atom_owners[hit.pattern().as_usize()].iter().copied());
+                    }
                 }
-            }
-            if let Some(gate) = &ci_gate {
-                for hit in gate.find_overlapping_iter(&haystack) {
-                    candidates.extend(ci_owners[hit.pattern().as_usize()].iter().copied());
+                if let Some(gate) = &ci_gate {
+                    for hit in gate.find_overlapping_iter(&haystack) {
+                        candidates.extend(ci_owners[hit.pattern().as_usize()].iter().copied());
+                    }
                 }
-            }
 
-            let mut hits: Vec<usize> = Vec::new();
-            for &idx in &candidates {
-                let compiled_pattern = compiled[idx]
-                    .get_or_insert_with(|| regex::Regex::new(&compilable[idx].original_value).ok());
-                if compiled_pattern
-                    .as_ref()
-                    .is_some_and(|pattern| pattern.is_match(&haystack))
-                {
-                    hits.push(idx);
+                let mut hits: Vec<usize> = Vec::new();
+                for &idx in &candidates {
+                    let compiled_pattern = compiled[idx]
+                        .get_or_init(|| regex::Regex::new(&compilable[idx].original_value).ok());
+                    if compiled_pattern
+                        .as_ref()
+                        .is_some_and(|pattern| pattern.is_match(&haystack))
+                    {
+                        hits.push(idx);
+                    }
                 }
-            }
-            for (window, set) in &ungated_sets {
-                hits.extend(set.matches(&haystack).into_iter().map(|hit| window[hit]));
-            }
+                for (window, set) in &ungated_sets {
+                    hits.extend(set.matches(&haystack).into_iter().map(|hit| window[hit]));
+                }
 
-            for idx in hits {
-                let location = compilable[idx];
                 // A regex scoped to file types the literal never sees is not
                 // covering it. Filtering the hits rather than the candidates
                 // keeps the gate doing the cheap work.
-                if holders
-                    .iter()
-                    .any(|holder| has_filetype_overlap(holder, location))
-                {
-                    covering.entry(phrase).or_default().push(location);
-                }
-            }
-        }
+                let covered_by: Vec<&PatternLocation> = hits
+                    .into_iter()
+                    .map(|idx| compilable[idx])
+                    .filter(|location| {
+                        holders
+                            .iter()
+                            .any(|holder| has_filetype_overlap(holder, location))
+                    })
+                    .collect();
+                (!covered_by.is_empty()).then_some((phrase, covered_by))
+            })
+            .collect();
 
         for (phrase, mut covering) in covering {
             let holders = &phrase_map[phrase];
@@ -3414,6 +3428,8 @@ pub(crate) fn check_regex_alternative_subsets(
     trait_definitions: &[TraitDefinition],
     warnings: &mut Vec<String>,
 ) {
+    use rayon::prelude::*;
+
     let start = std::time::Instant::now();
     let initial_warning_count = warnings.len();
 
@@ -3523,61 +3539,72 @@ pub(crate) fn check_regex_alternative_subsets(
         }
     }
 
-    // Check each pair for subset relationships
-    for i in 0..regex_patterns.len() {
-        for j in (i + 1)..regex_patterns.len() {
+    // Alternative-subset reuse only makes sense for the same matcher surface.
+    // Cross-type cases such as decoded `encoded` strings vs source `text`, or
+    // `symbol` vs decoded content, are intentionally separate extractor
+    // semantics. So each pattern is compared only with the later patterns of
+    // its own type, one pattern per task, and the findings are joined back in
+    // the original pair order.
+    let mut by_type: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (i, pattern) in regex_patterns.iter().enumerate() {
+        by_type
+            .entry(pattern.condition_type.as_str())
+            .or_default()
+            .push(i);
+    }
+    let findings: Vec<Vec<String>> = (0..regex_patterns.len())
+        .into_par_iter()
+        .map(|i| {
+            let mut warnings = Vec::new();
             let p1 = &regex_patterns[i];
-            let p2 = &regex_patterns[j];
+            let peers = by_type
+                .get(p1.condition_type.as_str())
+                .map_or(&[][..], Vec::as_slice);
+            let later = peers.partition_point(|&j| j <= i);
+            for &j in &peers[later..] {
+                let p2 = &regex_patterns[j];
 
-            // Skip same file
-            if p1.file_path == p2.file_path {
-                continue;
-            }
+                // Skip same file
+                if p1.file_path == p2.file_path {
+                    continue;
+                }
 
-            // Check file type overlap
-            if !has_filetype_overlap_case(&p1.for_types, &p2.for_types) {
-                continue;
-            }
+                // Check file type overlap
+                if !has_filetype_overlap_case(&p1.for_types, &p2.for_types) {
+                    continue;
+                }
 
-            // Alternative-subset reuse only makes sense for the same matcher
-            // surface. Cross-type cases such as decoded `encoded` strings vs
-            // source `text`, or `symbol` vs decoded content, are intentionally
-            // separate extractor semantics.
-            if p1.condition_type != p2.condition_type {
-                continue;
-            }
+                // Convert to sets for subset comparison
+                let set1: HashSet<&String> = p1.alternatives.iter().collect();
+                let set2: HashSet<&String> = p2.alternatives.iter().collect();
 
-            // Convert to sets for subset comparison
-            let set1: HashSet<&String> = p1.alternatives.iter().collect();
-            let set2: HashSet<&String> = p2.alternatives.iter().collect();
+                // Check if one is a subset of the other
+                let mut p1_subset_of_p2 =
+                    !set1.is_empty() && set1.is_subset(&set2) && set1.len() < set2.len();
+                let mut p2_subset_of_p1 =
+                    !set2.is_empty() && set2.is_subset(&set1) && set2.len() < set1.len();
 
-            // Check if one is a subset of the other
-            let mut p1_subset_of_p2 =
-                !set1.is_empty() && set1.is_subset(&set2) && set1.len() < set2.len();
-            let mut p2_subset_of_p1 =
-                !set2.is_empty() && set2.is_subset(&set1) && set2.len() < set1.len();
+                if !(p1_subset_of_p2 || p2_subset_of_p1)
+                    && let (Some((prefix1, alts1, suffix1)), Some((prefix2, alts2, suffix2))) =
+                        (&p1.grouped_alternatives, &p2.grouped_alternatives)
+                    && prefix1 == prefix2
+                    && suffix1 == suffix2
+                {
+                    let set1: HashSet<&String> = alts1.iter().collect();
+                    let set2: HashSet<&String> = alts2.iter().collect();
+                    p1_subset_of_p2 = set1.is_subset(&set2) && set1.len() < set2.len();
+                    p2_subset_of_p1 = set2.is_subset(&set1) && set2.len() < set1.len();
+                }
 
-            if !(p1_subset_of_p2 || p2_subset_of_p1)
-                && let (Some((prefix1, alts1, suffix1)), Some((prefix2, alts2, suffix2))) =
-                    (&p1.grouped_alternatives, &p2.grouped_alternatives)
-                && prefix1 == prefix2
-                && suffix1 == suffix2
-            {
-                let set1: HashSet<&String> = alts1.iter().collect();
-                let set2: HashSet<&String> = alts2.iter().collect();
-                p1_subset_of_p2 = set1.is_subset(&set2) && set1.len() < set2.len();
-                p2_subset_of_p1 = set2.is_subset(&set1) && set2.len() < set1.len();
-            }
+                if (p1_subset_of_p2 && relaxed_data_text_superset(p2))
+                    || (p2_subset_of_p1 && relaxed_data_text_superset(p1))
+                {
+                    continue;
+                }
 
-            if (p1_subset_of_p2 && relaxed_data_text_superset(p2))
-                || (p2_subset_of_p1 && relaxed_data_text_superset(p1))
-            {
-                continue;
-            }
-
-            if p1_subset_of_p2 {
-                let tier_note = make_tier_note(&p1.trait_id, &p2.trait_id);
-                warnings.push(format!(
+                if p1_subset_of_p2 {
+                    let tier_note = make_tier_note(&p1.trait_id, &p2.trait_id);
+                    warnings.push(format!(
                     "REGEX ALTERNATIVE SUBSET{}: First pattern's alternatives are subset of second
    Subset: '{}' ({}) in {}::{}
    Superset: '{}' ({}) in {}::{}
@@ -3592,9 +3619,9 @@ pub(crate) fn check_regex_alternative_subsets(
                     p2.file_path,
                     p2.trait_id,
                 ));
-            } else if p2_subset_of_p1 {
-                let tier_note = make_tier_note(&p1.trait_id, &p2.trait_id);
-                warnings.push(format!(
+                } else if p2_subset_of_p1 {
+                    let tier_note = make_tier_note(&p1.trait_id, &p2.trait_id);
+                    warnings.push(format!(
                     "REGEX ALTERNATIVE SUBSET{}: Second pattern's alternatives are subset of first
    Superset: '{}' ({}) in {}::{}
    Subset: '{}' ({}) in {}::{}
@@ -3609,47 +3636,48 @@ pub(crate) fn check_regex_alternative_subsets(
                     p2.file_path,
                     p2.trait_id,
                 ));
-            }
+                }
 
-            // Check for case-insensitive subsumption
-            // If patterns have same alternatives but different case_insensitive flags
-            if p1.case_insensitive != p2.case_insensitive {
-                let alternatives_same_ignoring_case = if !p1.alternatives.is_empty()
-                    && !p2.alternatives.is_empty()
-                {
-                    let set1_lower: HashSet<String> =
-                        p1.alternatives.iter().map(|a| a.to_lowercase()).collect();
-                    let set2_lower: HashSet<String> =
-                        p2.alternatives.iter().map(|a| a.to_lowercase()).collect();
-                    set1_lower == set2_lower
-                } else if let (Some((prefix1, alts1, suffix1)), Some((prefix2, alts2, suffix2))) =
-                    (&p1.grouped_alternatives, &p2.grouped_alternatives)
-                {
-                    prefix1.eq_ignore_ascii_case(prefix2)
-                        && suffix1.eq_ignore_ascii_case(suffix2)
-                        && {
+                // Check for case-insensitive subsumption
+                // If patterns have same alternatives but different case_insensitive flags
+                if p1.case_insensitive != p2.case_insensitive {
+                    let alternatives_same_ignoring_case =
+                        if !p1.alternatives.is_empty() && !p2.alternatives.is_empty() {
                             let set1_lower: HashSet<String> =
-                                alts1.iter().map(|a| a.to_lowercase()).collect();
+                                p1.alternatives.iter().map(|a| a.to_lowercase()).collect();
                             let set2_lower: HashSet<String> =
-                                alts2.iter().map(|a| a.to_lowercase()).collect();
-                            !set1_lower.is_empty() && set1_lower == set2_lower
-                        }
-                } else {
-                    false
-                };
+                                p2.alternatives.iter().map(|a| a.to_lowercase()).collect();
+                            set1_lower == set2_lower
+                        } else if let (
+                            Some((prefix1, alts1, suffix1)),
+                            Some((prefix2, alts2, suffix2)),
+                        ) = (&p1.grouped_alternatives, &p2.grouped_alternatives)
+                        {
+                            prefix1.eq_ignore_ascii_case(prefix2)
+                                && suffix1.eq_ignore_ascii_case(suffix2)
+                                && {
+                                    let set1_lower: HashSet<String> =
+                                        alts1.iter().map(|a| a.to_lowercase()).collect();
+                                    let set2_lower: HashSet<String> =
+                                        alts2.iter().map(|a| a.to_lowercase()).collect();
+                                    !set1_lower.is_empty() && set1_lower == set2_lower
+                                }
+                        } else {
+                            false
+                        };
 
-                if alternatives_same_ignoring_case {
-                    let (case_insensitive_pat, case_sensitive_pat) = if p1.case_insensitive {
-                        (p1, p2)
-                    } else {
-                        (p2, p1)
-                    };
+                    if alternatives_same_ignoring_case {
+                        let (case_insensitive_pat, case_sensitive_pat) = if p1.case_insensitive {
+                            (p1, p2)
+                        } else {
+                            (p2, p1)
+                        };
 
-                    let tier_note = make_tier_note(
-                        &case_insensitive_pat.trait_id,
-                        &case_sensitive_pat.trait_id,
-                    );
-                    warnings.push(format!(
+                        let tier_note = make_tier_note(
+                            &case_insensitive_pat.trait_id,
+                            &case_sensitive_pat.trait_id,
+                        );
+                        warnings.push(format!(
                         "REGEX CASE SUBSUMPTION{}: case_insensitive regex subsumes case_sensitive
    Case-insensitive: '{}' ({}) in {}::{}
    Subsumes: '{}' ({}) in {}::{}
@@ -3664,10 +3692,13 @@ pub(crate) fn check_regex_alternative_subsets(
                         case_sensitive_pat.file_path,
                         case_sensitive_pat.trait_id,
                     ));
+                    }
                 }
             }
-        }
-    }
+            warnings
+        })
+        .collect();
+    warnings.extend(findings.into_iter().flatten());
 
     let subsets_found = warnings.len() - initial_warning_count;
     tracing::debug!(

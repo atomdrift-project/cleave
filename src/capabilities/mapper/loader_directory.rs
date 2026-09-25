@@ -181,31 +181,25 @@ fn push_parsing_warning(
 }
 
 fn find_non_leaf_yaml_files(yaml_files: &[std::path::PathBuf], root: &Path) -> Vec<String> {
-    let mut yaml_dirs: Vec<_> = yaml_files
+    // A directory holds YAML below it exactly when it is a proper ancestor of
+    // some YAML file's directory. Collecting those ancestors once replaces
+    // testing every file against every directory, which was ~20s on the tree.
+    let non_leaf: FxHashSet<&Path> = yaml_files
         .iter()
         .filter_map(|path| path.parent())
-        .map(Path::to_path_buf)
+        .flat_map(|dir| dir.ancestors().skip(1))
         .collect();
-    yaml_dirs.sort_unstable();
-    yaml_dirs.dedup();
 
-    let mut violations = Vec::new();
-    for file in yaml_files {
-        let Some(dir) = file.parent() else {
-            continue;
-        };
-        let has_yaml_descendant = yaml_dirs
-            .iter()
-            .any(|child| child != dir && child.starts_with(dir));
-        if has_yaml_descendant {
-            let display = file
-                .strip_prefix(root)
+    let mut violations: Vec<String> = yaml_files
+        .iter()
+        .filter(|file| file.parent().is_some_and(|dir| non_leaf.contains(dir)))
+        .map(|file| {
+            file.strip_prefix(root)
                 .unwrap_or(file)
                 .to_string_lossy()
-                .to_string();
-            violations.push(display);
-        }
-    }
+                .to_string()
+        })
+        .collect();
     violations.sort_unstable();
     violations
 }
@@ -5783,7 +5777,29 @@ impl super::CapabilityMapper {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_open_filefacts_metric_path, matches_metric_family};
+    use super::{find_non_leaf_yaml_files, is_open_filefacts_metric_path, matches_metric_family};
+    use std::path::{Path, PathBuf};
+
+    /// A file is non-leaf when YAML lives anywhere below its directory, by
+    /// path component: `c-d/` shares a string prefix with `c/` but is a
+    /// sibling, not a child.
+    #[test]
+    fn non_leaf_yaml_files_have_yaml_below_their_directory() {
+        let files: Vec<PathBuf> = [
+            "traits/a/x.yaml",
+            "traits/a/b/y.yaml",
+            "traits/c/z.yaml",
+            "traits/c-d/w.yaml",
+            "traits/top.yaml",
+        ]
+        .into_iter()
+        .map(PathBuf::from)
+        .collect();
+        assert_eq!(
+            find_non_leaf_yaml_files(&files, Path::new("traits")),
+            ["a/x.yaml", "top.yaml"]
+        );
+    }
 
     /// Fixed keys are accepted by exact name, not because their namespace is
     /// waved through. The second list is the point of the change: these are

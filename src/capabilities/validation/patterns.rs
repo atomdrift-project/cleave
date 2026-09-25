@@ -18,6 +18,7 @@ use crate::composite_rules::{
 use crate::composite_rules::{
     CompositeTrait, Condition, DowngradeConditions, FileType, KvQuery, TraitDefinition,
 };
+use rayon::prelude::*;
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
@@ -818,21 +819,65 @@ pub(crate) fn find_memory_hungry_regex_patterns(
     composites: &[CompositeTrait],
     warnings: &mut Vec<String>,
 ) {
-    let mut check = |kind: &str,
-                     id: &str,
-                     defined_in: &std::path::Path,
-                     pattern: &str,
-                     case_insensitive: bool| {
-        // Measure what evaluation compiles: `lazy_regex` prepends `(?i)`.
-        let compiled;
-        let measured = if case_insensitive {
-            compiled = format!("(?i){pattern}");
-            compiled.as_str()
-        } else {
-            pattern
+    // Every regex in rule order, then measured in parallel: each measurement
+    // compiles NFAs, which made this ~15s of the load when run one by one.
+    let mut regexes: Vec<(&str, &str, &std::path::Path, String, bool)> = Vec::new();
+    for trait_def in traits {
+        let mut report = |pattern: &str, case_insensitive: bool| {
+            regexes.push((
+                "trait",
+                &trait_def.id,
+                &trait_def.defined_in,
+                pattern.to_string(),
+                case_insensitive,
+            ));
         };
-        let Some(issue) = regex_memory_issue(measured) else {
-            return;
+        for_each_condition_regex(&trait_def.r#if, &mut report);
+        for_each_not_exception_regex(trait_def.not.as_deref().unwrap_or_default(), &mut report);
+        for condition in trait_def.unless.as_deref().unwrap_or_default() {
+            for_each_condition_regex(condition, &mut report);
+        }
+        if let Some(downgrade) = &trait_def.downgrade {
+            for_each_downgrade_regex(downgrade, &mut report);
+        }
+    }
+    for rule in composites {
+        let mut report = |pattern: &str, case_insensitive: bool| {
+            regexes.push((
+                "composite",
+                &rule.id,
+                &rule.defined_in,
+                pattern.to_string(),
+                case_insensitive,
+            ));
+        };
+        for condition in [&rule.all, &rule.any, &rule.unless]
+            .into_iter()
+            .flat_map(|legs| legs.as_deref().unwrap_or_default())
+        {
+            for_each_condition_regex(condition, &mut report);
+        }
+        for_each_not_exception_regex(rule.not.as_deref().unwrap_or_default(), &mut report);
+        if let Some(downgrade) = &rule.downgrade {
+            for_each_downgrade_regex(downgrade, &mut report);
+        }
+    }
+
+    let issues: Vec<Option<RegexMemoryIssue>> = regexes
+        .par_iter()
+        .map(|(_, _, _, pattern, case_insensitive)| {
+            // Measure what evaluation compiles: `lazy_regex` prepends `(?i)`.
+            if *case_insensitive {
+                regex_memory_issue(&format!("(?i){pattern}"))
+            } else {
+                regex_memory_issue(pattern)
+            }
+        })
+        .collect();
+
+    for ((kind, id, defined_in, pattern, _), issue) in regexes.iter().zip(issues) {
+        let Some(issue) = issue else {
+            continue;
         };
         let source_file = defined_in.to_str().unwrap_or("unknown");
         let location = match find_line_number(source_file, id) {
@@ -862,47 +907,6 @@ pub(crate) fn find_memory_hungry_regex_patterns(
                 REGEX_NFA_RUNTIME_LIMIT_BYTES >> 20,
             ),
         });
-    };
-
-    for trait_def in traits {
-        let mut report = |pattern: &str, case_insensitive: bool| {
-            check(
-                "trait",
-                &trait_def.id,
-                &trait_def.defined_in,
-                pattern,
-                case_insensitive,
-            );
-        };
-        for_each_condition_regex(&trait_def.r#if, &mut report);
-        for_each_not_exception_regex(trait_def.not.as_deref().unwrap_or_default(), &mut report);
-        for condition in trait_def.unless.as_deref().unwrap_or_default() {
-            for_each_condition_regex(condition, &mut report);
-        }
-        if let Some(downgrade) = &trait_def.downgrade {
-            for_each_downgrade_regex(downgrade, &mut report);
-        }
-    }
-    for rule in composites {
-        let mut report = |pattern: &str, case_insensitive: bool| {
-            check(
-                "composite",
-                &rule.id,
-                &rule.defined_in,
-                pattern,
-                case_insensitive,
-            );
-        };
-        for condition in [&rule.all, &rule.any, &rule.unless]
-            .into_iter()
-            .flat_map(|legs| legs.as_deref().unwrap_or_default())
-        {
-            for_each_condition_regex(condition, &mut report);
-        }
-        for_each_not_exception_regex(rule.not.as_deref().unwrap_or_default(), &mut report);
-        if let Some(downgrade) = &rule.downgrade {
-            for_each_downgrade_regex(downgrade, &mut report);
-        }
     }
 }
 

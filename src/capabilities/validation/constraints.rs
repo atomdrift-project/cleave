@@ -3322,6 +3322,10 @@ pub(crate) fn find_convictions_without_content(
     let index = ReferenceIndex::new(all_ids);
 
     let mut cache: HashMap<String, Vec<&str>> = HashMap::new();
+    // What a leg reaches depends only on its reference, and the same legs
+    // recur across thousands of rules, so each is walked once: its terminals,
+    // and whether any condition on the way reads content.
+    let mut legs: HashMap<&str, (Vec<&str>, bool)> = HashMap::new();
     let mut found = Vec::new();
     for rule in composite_rules {
         if rule.crit < Criticality::Suspicious {
@@ -3340,7 +3344,7 @@ pub(crate) fn find_convictions_without_content(
         }
         // Every positive leg counts here, `any:` included: one content-derived
         // alternative is enough to say the rule rests on more than a filename.
-        let mut terminals: HashSet<String> = HashSet::new();
+        let mut terminals: HashSet<&str> = HashSet::new();
         let mut saw_inline_content = false;
         for cond in rule.all.iter().flatten().chain(rule.any.iter().flatten()) {
             match cond {
@@ -3353,36 +3357,45 @@ pub(crate) fn find_convictions_without_content(
                     // as resting on their filename alone.
                     if is_runtime_synthesized_namespace(id) {
                         saw_inline_content = true;
-                        continue;
+                        break;
                     }
                     // Every id this leg can reach, required or alternative: one
                     // content-derived possibility is enough to clear the rule.
-                    let mut stack = resolve_cached(id, &index, &mut cache);
-                    let mut seen = HashSet::new();
-                    while let Some(next) = stack.pop() {
-                        if !seen.insert(next.to_string()) {
-                            continue;
-                        }
-                        match composite_by_id.get(next) {
-                            Some(sub) => {
-                                for c in sub.all.iter().flatten().chain(sub.any.iter().flatten()) {
-                                    match c {
-                                        Condition::Trait { id: child } => {
-                                            stack.extend(resolve_cached(child, &index, &mut cache));
-                                        }
-                                        other => {
-                                            if !is_name_or_shape_only(other) {
-                                                saw_inline_content = true;
+                    let (reached, reads_content) = legs.entry(id.as_str()).or_insert_with(|| {
+                        let mut reached = Vec::new();
+                        let mut reads_content = false;
+                        let mut stack = resolve_cached(id, &index, &mut cache);
+                        let mut seen: HashSet<&str> = HashSet::new();
+                        while let Some(next) = stack.pop() {
+                            if !seen.insert(next) {
+                                continue;
+                            }
+                            match composite_by_id.get(next) {
+                                Some(sub) => {
+                                    for c in
+                                        sub.all.iter().flatten().chain(sub.any.iter().flatten())
+                                    {
+                                        match c {
+                                            Condition::Trait { id: child } => {
+                                                stack.extend(resolve_cached(
+                                                    child, &index, &mut cache,
+                                                ));
+                                            }
+                                            other => {
+                                                if !is_name_or_shape_only(other) {
+                                                    reads_content = true;
+                                                }
                                             }
                                         }
                                     }
                                 }
-                            }
-                            None => {
-                                terminals.insert(next.to_string());
+                                None => reached.push(next),
                             }
                         }
-                    }
+                        (reached, reads_content)
+                    });
+                    terminals.extend(reached.iter().copied());
+                    saw_inline_content |= *reads_content;
                 }
                 other => {
                     if !is_name_or_shape_only(other) {
@@ -3390,16 +3403,18 @@ pub(crate) fn find_convictions_without_content(
                     }
                 }
             }
+            // One content-reading leg clears the rule; the rest cannot change that.
+            if saw_inline_content {
+                break;
+            }
         }
         if saw_inline_content || terminals.is_empty() {
             continue;
         }
-        let resting_on: Vec<String> = terminals.iter().cloned().collect();
-        let all_name_or_shape = terminals.iter().all(|t| {
-            by_id
-                .get(t.as_str())
-                .is_some_and(|d| is_name_or_shape_only(&d.r#if))
-        });
+        let resting_on: Vec<String> = terminals.iter().map(|t| (*t).to_string()).collect();
+        let all_name_or_shape = terminals
+            .iter()
+            .all(|t| by_id.get(t).is_some_and(|d| is_name_or_shape_only(&d.r#if)));
         if all_name_or_shape {
             let mut ids = resting_on;
             ids.sort();

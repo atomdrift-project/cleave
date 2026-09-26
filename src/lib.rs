@@ -41,6 +41,7 @@ pub mod test_rules;
 #[cfg(test)]
 /// Test module for rule filters.
 pub mod test_rules_filters_test;
+pub(crate) mod traits_fingerprint;
 pub mod traits_repo;
 mod upx;
 pub(crate) mod validation_controls;
@@ -1513,7 +1514,7 @@ pub fn analyze_file<P: AsRef<Path>>(path: P, options: &AnalysisOptions) -> Resul
         let file_type = analyzers::detect_file_type_from_data(path, file_data.as_slice());
         if let Some(mut report) = analysis_cache::report_cache_lookup(
             &sha256,
-            file_type.label(),
+            &analysis_cache::report_type_key(file_type.label(), path),
             options,
             &path.display().to_string(),
         ) {
@@ -1583,9 +1584,12 @@ pub fn analyze_bytes_owned(
 
     let sha256 = analyzers::utils::calculate_sha256(&data);
     let file_type = analyzers::detect_file_type_from_data(path, &data);
-    if let Some(mut report) =
-        analysis_cache::report_cache_lookup(&sha256, file_type.label(), options, filename)
-    {
+    if let Some(mut report) = analysis_cache::report_cache_lookup(
+        &sha256,
+        &analysis_cache::report_type_key(file_type.label(), path),
+        options,
+        filename,
+    ) {
         report.target.path = filename.to_string();
         report.analysis_timestamp = Some(chrono::Utc::now());
         report.cache_hit = true;
@@ -1760,9 +1764,12 @@ pub fn analyze_bytes_shared(
 
     let sha256 = analyzers::utils::calculate_sha256(&data);
     let file_type = analyzers::detect_file_type_from_data(path, &data);
-    if let Some(mut report) =
-        analysis_cache::report_cache_lookup(&sha256, file_type.label(), options, filename)
-    {
+    if let Some(mut report) = analysis_cache::report_cache_lookup(
+        &sha256,
+        &analysis_cache::report_type_key(file_type.label(), path),
+        options,
+        filename,
+    ) {
         report.target.path = filename.to_string();
         report.analysis_timestamp = Some(chrono::Utc::now());
         report.cache_hit = true;
@@ -2373,6 +2380,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     tracing::debug!("Detecting file type for: {}", path.display());
     let file_type = analyzers::detect_file_type_from_data(path, file_data);
     let file_type_key = file_type.label();
+    let report_type_key = analysis_cache::report_type_key(file_type_key, path);
     tracing::debug!(
         "Detected file type: {:?} for: {}",
         file_type,
@@ -2425,7 +2433,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     set_phase("cleave:cache_lookup");
     if let Some(mut cached_report) = analysis_cache::report_cache_lookup(
         &sha256_hex,
-        file_type_key,
+        &report_type_key,
         options,
         &path.display().to_string(),
     ) {
@@ -2463,7 +2471,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     // the same SHA256 at the same time. The persistent cache cannot prevent
     // that first-wave race, so single-flight identical analyses in-process.
     let flight = loop {
-        let flight = analysis_cache::acquire_report_flight(&sha256_hex, file_type_key, options);
+        let flight = analysis_cache::acquire_report_flight(&sha256_hex, &report_type_key, options);
         if flight.is_owner() {
             break Some(flight);
         }
@@ -2504,7 +2512,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     // caller may have completed between the first lookup and acquisition.
     if let Some(mut cached_report) = analysis_cache::report_cache_lookup(
         &sha256_hex,
-        file_type_key,
+        &report_type_key,
         options,
         &path.display().to_string(),
     ) {
@@ -3266,7 +3274,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     // the latter while this file was being analyzed.
     analysis_cache::report_cache_store(
         &sha256_hex,
-        file_type_key,
+        &report_type_key,
         options,
         &report,
         capability_mapper.traits_revision(),

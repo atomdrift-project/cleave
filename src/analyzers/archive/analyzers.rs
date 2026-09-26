@@ -1601,6 +1601,10 @@ impl ArchiveAnalyzer {
         }
         let is_archive = file_type.is_archive();
         let file_type_key = file_type.label();
+        let report_type_key = crate::analysis_cache::report_type_key(
+            file_type_key,
+            std::path::Path::new(relative_path),
+        );
         if !is_archive {
             // A member can emit decoded child files (`##base64`,
             // `##unicode-escape`, ...). Only the full report cache carries
@@ -1611,7 +1615,7 @@ impl ArchiveAnalyzer {
             // whose evaluation origin is not equivalent to this one.
             if let Some(mut report) = crate::analysis_cache::report_cache_lookup(
                 sha256,
-                file_type_key,
+                &report_type_key,
                 options,
                 relative_path,
             ) {
@@ -1835,7 +1839,7 @@ impl ArchiveAnalyzer {
                     if !report.files.is_empty() || !report.archive_contents.is_empty() {
                         crate::analysis_cache::report_cache_store(
                             sha256,
-                            file_type_key,
+                            &report_type_key,
                             options,
                             report,
                             traits_revision,

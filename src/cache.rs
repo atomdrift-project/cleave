@@ -297,12 +297,6 @@ pub(crate) struct RuleFilesRevision {
     pub fingerprint: u64,
 }
 
-impl RuleFilesRevision {
-    pub(crate) fn cache_i64(self) -> i64 {
-        i64::from_ne_bytes(self.fingerprint.to_ne_bytes())
-    }
-}
-
 fn system_time_nanos(t: SystemTime) -> Result<u128> {
     Ok(t.duration_since(SystemTime::UNIX_EPOCH)
         .context("Invalid cache timestamp")?
@@ -364,20 +358,45 @@ fn rule_source_digest(traits_dir: &Path, path: &Path, bytes: &[u8]) -> u64 {
     fnv_fold(h, bytes)
 }
 
-fn hash_path_metadata(
-    hasher: &mut std::collections::hash_map::DefaultHasher,
-    traits_dir: &Path,
-    path: &Path,
-    metadata: &fs::Metadata,
-) {
-    use std::hash::Hash;
+/// SHA-256 of one rule or trait file: its traits-relative path, length and
+/// full contents, each length-prefixed.
+fn rule_file_digest(traits_dir: &Path, path: &Path, bytes: &[u8]) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
 
-    let rel = path.strip_prefix(traits_dir).unwrap_or(path);
-    rel.hash(hasher);
-    metadata.len().hash(hasher);
-    if let Ok(mtime) = metadata.modified() {
-        system_time_nanos(mtime).unwrap_or(0).hash(hasher);
-    }
+    let rel = path
+        .strip_prefix(traits_dir)
+        .unwrap_or(path)
+        .as_os_str()
+        .as_encoded_bytes();
+    let mut h = Sha256::new();
+    h.update((rel.len() as u64).to_le_bytes());
+    h.update(rel);
+    h.update((bytes.len() as u64).to_le_bytes());
+    h.update(bytes);
+    h.finalize().into()
+}
+
+/// Read one rule or trait file: its mtime (for display only) and its
+/// [`rule_file_digest`]. `None` when it cannot be read, which the loader
+/// cannot do either.
+fn read_rule_file(traits_dir: &Path, path: &Path) -> Option<(Option<SystemTime>, [u8; 32])> {
+    use std::io::Read;
+
+    let mut file = fs::File::open(path).ok()?;
+    let metadata = file.metadata().ok()?;
+    let mut bytes = Vec::with_capacity(usize::try_from(metadata.len()).unwrap_or(0));
+    file.read_to_end(&mut bytes).ok()?;
+    Some((
+        metadata.modified().ok(),
+        rule_file_digest(traits_dir, path, &bytes),
+    ))
+}
+
+/// The first eight bytes of a digest, for keys that carry a `u64`.
+fn digest_u64(digest: &[u8; 32]) -> u64 {
+    let mut head = [0u8; 8];
+    head.copy_from_slice(&digest[..8]);
+    u64::from_le_bytes(head)
 }
 
 /// Count of full traits-directory walks this process has performed.
@@ -396,7 +415,7 @@ static TRAITS_WALK_COUNT: AtomicU64 = AtomicU64::new(0);
 /// YAML, the YARA key over `.yar`/`.yara`, the analysis-cache key over every
 /// rule/trait file, plus a stats-display pass — so a warm scan traversed a large
 /// traits checkout four times before it could even consult a cache. This bundles
-/// all of those into one traversal (see [`scan_traits_dir`]); [`traits_scan`]
+/// all of those into one traversal (see [`scan_traits_dir`]); [`traits_scan_for`]
 /// memoizes it for the process.
 #[derive(Clone, Debug)]
 struct TraitsScan {
@@ -410,26 +429,42 @@ struct TraitsScan {
     /// Revision fingerprint over all rule+trait files (`.yar`/`.yara`/`.yaml`/`.yml`,
     /// third-party included), plus the newest mtime across them.
     rule_revision: Option<RuleFilesRevision>,
+    /// What [`TraitsContent`] reports for this tree.
+    content: TraitsContent,
+}
+
+/// Content digests of a traits tree.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct TraitsContent {
+    /// SHA-256 over every rule and trait file's path, length and contents, in
+    /// path order: what `rule_revision` truncates.
+    pub(crate) rules: [u8; 32],
+    /// SHA-256 over the path of every directory, `.git` excluded. Validation
+    /// judges directory names as well as files, so a new empty or
+    /// non-rule directory changes what it would report; the caches, which
+    /// only read rule files, do not key on this.
+    pub(crate) layout: [u8; 32],
 }
 
 /// Walk the traits directory once, computing every rule/mapper cache input in a
 /// single pass.
 ///
-/// This replaces the four separate per-key walks. It descends everything except
-/// `.git` (which holds no rule files but adds thousands of entries to stat) and
-/// stats each rule/trait file exactly once, versus the two stats — `is_file()`
-/// then `metadata()` — the previous walks did per entry. Skipping only `.git`
-/// (rather than all hidden/underscore dirs) keeps the revision fingerprints
-/// byte-identical to the previous functions, so existing caches are not
-/// invalidated.
+/// Every key it produces is a digest of file *contents*, never of stat data.
+/// Stat keys (path, size, mtime) looked cheaper but could not be trusted: `git
+/// archive` and checkouts stamp every file with one commit time at one-second
+/// resolution, so two trees differing by a same-length edit shared a key and
+/// served each other's mapper and analysis results. Reading the ~63 MB of rule
+/// sources is spread across rayon and done once per process.
+///
+/// Entries are visited in file-name order, so the digests are a function of
+/// the tree alone, not of the filesystem's directory order.
 ///
 /// A pure function of the directory's contents, so a caller that must observe a
-/// mid-process edit (the tests) calls it directly; [`traits_scan`] memoizes it
-/// for the hot path so a warm scan walks the tree exactly once.
+/// mid-process edit (the tests, [`traits_content_uncached`]) calls it directly;
+/// [`traits_scan_for`] memoizes it for the hot path.
 fn scan_traits_dir(traits_dir: &Path) -> TraitsScan {
     use rayon::prelude::*;
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
+    use sha2::{Digest, Sha256};
 
     let ordinal = TRAITS_WALK_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
     let started = Instant::now();
@@ -440,13 +475,14 @@ fn scan_traits_dir(traits_dir: &Path) -> TraitsScan {
     let mut newest_yar_path = PathBuf::new();
     let mut newest_rule = SystemTime::UNIX_EPOCH;
 
-    let mut yaml_hasher = DefaultHasher::new();
-    let mut rule_hasher = DefaultHasher::new();
+    let mut yaml_hasher = Sha256::new();
+    let mut rule_hasher = Sha256::new();
+    let mut layout_hasher = Sha256::new();
     let mut yaml_count = 0u64;
     let mut rule_count = 0u64;
 
     // One matching rule/trait file, classified during the (cheap) directory read
-    // so the (expensive) stat can be deferred and parallelized below.
+    // so the (expensive) read can be parallelized below.
     struct Candidate {
         path: PathBuf,
         is_yaml: bool,
@@ -454,28 +490,35 @@ fn scan_traits_dir(traits_dir: &Path) -> TraitsScan {
         third_party: bool,
     }
 
-    // Phase 1 — walk the tree and collect matching files, in order. This is just
-    // the directory reads (`readdir`); no per-file stat happens yet. Extension and
-    // third-party classification are pure path inspection, so they belong here.
+    // Phase 1 — walk the tree in name order and collect matching files. This is
+    // just the directory reads (`readdir`); extension and third-party
+    // classification are pure path inspection, so they belong here.
     let mut candidates: Vec<Candidate> = Vec::new();
     if traits_dir.exists() {
         let walker = WalkDir::new(traits_dir)
             .follow_links(true)
+            .sort_by_file_name()
             .into_iter()
             .filter_entry(|entry| {
                 // Never descend into `.git`: it carries no rule/trait files yet
-                // dwarfs the trait set in entry count. Everything else is walked,
-                // so the hashed file set (and thus the fingerprint) is unchanged.
+                // dwarfs the trait set in entry count.
                 entry.depth() == 0
                     || !entry.file_type().is_dir()
                     || entry.file_name().to_str() != Some(".git")
             });
         for entry in walker.flatten() {
             // `file_type()` comes from the directory read, no extra stat.
+            let path = entry.path();
+            if entry.file_type().is_dir() {
+                let rel = path.strip_prefix(traits_dir).unwrap_or(path);
+                let rel = rel.as_os_str().as_encoded_bytes();
+                layout_hasher.update((rel.len() as u64).to_le_bytes());
+                layout_hasher.update(rel);
+                continue;
+            }
             if !entry.file_type().is_file() {
                 continue;
             }
-            let path = entry.path();
             let (is_yaml, is_yar) = match path.extension().and_then(|e| e.to_str()) {
                 Some("yaml" | "yml") => (true, false),
                 Some("yar" | "yara") => (false, true),
@@ -491,44 +534,35 @@ fn scan_traits_dir(traits_dir: &Path) -> TraitsScan {
     }
     let entries_visited = candidates.len() as u64;
 
-    // Phase 2 — stat every candidate at once. This is the bulk of the wall-clock
-    // and is pure independent I/O, so a parallel map turns ~10k serial stats into
-    // a handful of parallel batches. `collect` preserves order, so phase 3 still
-    // folds the hashers deterministically. (Runs inside `traits_scan`'s memoized
-    // init, which is only ever triggered from the main thread — see there — so
-    // this rayon use cannot re-enter that `OnceLock`.)
-    //
-    // Stat, not read: this walk runs on every scan, and opening all ~15k rule
-    // and trait files costs several times what stat'ing them does. The one
-    // caller that needs the bytes — the YARA source tag — reads them itself,
-    // rarely (see [`rules_source_tag`]).
-    let metadatas: Vec<Option<fs::Metadata>> = candidates
+    // Phase 2 — read and digest every candidate at once. This is the bulk of
+    // the wall-clock and is pure independent I/O plus hashing, so a parallel
+    // map spreads it across the pool. `collect` preserves order, so phase 3
+    // still folds deterministically. (Runs inside `traits_scan_for`'s memoized
+    // init with no lock held — see there — so this rayon use cannot deadlock.)
+    let files: Vec<Option<(Option<SystemTime>, [u8; 32])>> = candidates
         .par_iter()
-        .map(|c| fs::metadata(&c.path).ok())
+        .map(|c| read_rule_file(traits_dir, &c.path))
         .collect();
 
-    // Phase 3 — fold the fingerprints in walk order. Identical hash inputs and
-    // order to the previous serial walk, so the revision fingerprints are
-    // unchanged (and cached mappers stay valid).
-    let mut files_statted = 0u64;
-    for (c, metadata) in candidates.iter().zip(&metadatas) {
-        let Some(metadata) = metadata else {
+    // Phase 3 — fold the per-file digests in walk order.
+    let mut files_read = 0u64;
+    for (c, file) in candidates.iter().zip(&files) {
+        let Some((mtime, digest)) = file else {
             continue;
         };
-        files_statted += 1;
-        let mtime = metadata.modified().ok();
+        files_read += 1;
 
         // Analysis-cache revision: every rule/trait file, third-party included.
         rule_count += 1;
-        hash_path_metadata(&mut rule_hasher, traits_dir, &c.path, metadata);
-        if let Some(m) = mtime
+        rule_hasher.update(digest);
+        if let Some(m) = *mtime
             && m > newest_rule
         {
             newest_rule = m;
         }
 
         if c.is_yar
-            && let Some(m) = mtime
+            && let Some(m) = *mtime
             && m > newest_yar
         {
             newest_yar = m;
@@ -538,8 +572,8 @@ fn scan_traits_dir(traits_dir: &Path) -> TraitsScan {
         // Mapper revision + newest trait YAML: `.yaml`/`.yml`, third-party excluded.
         if c.is_yaml && !c.third_party {
             yaml_count += 1;
-            hash_path_metadata(&mut yaml_hasher, traits_dir, &c.path, metadata);
-            if let Some(m) = mtime
+            yaml_hasher.update(digest);
+            if let Some(m) = *mtime
                 && m > newest_yaml
             {
                 newest_yaml = m;
@@ -547,22 +581,23 @@ fn scan_traits_dir(traits_dir: &Path) -> TraitsScan {
             }
         }
     }
+    yaml_hasher.update(yaml_count.to_le_bytes());
+    rule_hasher.update(rule_count.to_le_bytes());
+    let yaml_digest: [u8; 32] = yaml_hasher.finalize().into();
+    let rule_digest: [u8; 32] = rule_hasher.finalize().into();
 
-    // Fold the counts in exactly as the previous per-key walks did, so the
-    // fingerprints match byte-for-byte.
-    yaml_count.hash(&mut yaml_hasher);
-    rule_count.hash(&mut rule_hasher);
-
+    // Info, not debug: reading the rule sources is a per-process cost every
+    // scan pays once, and worth seeing when a scan is slow.
     let elapsed = started.elapsed();
-    tracing::debug!(
+    tracing::info!(
         walk = ordinal,
         dir = %traits_dir.display(),
         entries = entries_visited,
-        stats = files_statted,
+        reads = files_read,
         yaml_files = yaml_count,
         rule_files = rule_count,
         elapsed_ms = elapsed.as_millis(),
-        "walked traits directory"
+        "hashed traits directory"
     );
 
     TraitsScan {
@@ -570,13 +605,17 @@ fn scan_traits_dir(traits_dir: &Path) -> TraitsScan {
             .then_some((newest_yaml, newest_yaml_path)),
         yaml_revision: (yaml_count > 0).then(|| RuleFilesRevision {
             newest_mtime: newest_yaml,
-            fingerprint: yaml_hasher.finish(),
+            fingerprint: digest_u64(&yaml_digest),
         }),
         newest_yar: (newest_yar != SystemTime::UNIX_EPOCH).then_some((newest_yar, newest_yar_path)),
         rule_revision: (rule_count > 0).then(|| RuleFilesRevision {
             newest_mtime: newest_rule,
-            fingerprint: rule_hasher.finish(),
+            fingerprint: digest_u64(&rule_digest),
         }),
+        content: TraitsContent {
+            rules: rule_digest,
+            layout: layout_hasher.finalize().into(),
+        },
     }
 }
 
@@ -585,12 +624,10 @@ fn scan_traits_dir(traits_dir: &Path) -> TraitsScan {
 /// traits-relative path and contents, no mtimes — or `None` when the traits
 /// directory holds none.
 ///
-/// Reading every rule source costs several times what the stat-only
-/// [`scan_traits_dir`] walk does, and this runs on every rule load, so the
-/// result is memoized on disk against that walk's stat fingerprint (path, size,
-/// and nanosecond mtime of every rule and trait file). An unchanged tree
-/// therefore reads one short file instead of tens of megabytes; any edit misses
-/// the memo and re-reads.
+/// This runs on every rule load, so the result is memoized on disk against the
+/// [`scan_traits_dir`] content fingerprint of every rule and trait file. An
+/// unchanged tree therefore reads one short file instead of re-deriving the
+/// tag; any edit misses the memo and re-reads.
 ///
 /// That memo is for *loading* only. Anything that stamps a tag into an artifact
 /// others will trust — [`rules_source_tag_uncached`] — hashes the bytes every
@@ -614,8 +651,7 @@ pub(crate) fn rules_source_tag() -> Option<u64> {
 ///
 /// Used where the tag is written into an artifact rather than merely compared
 /// against one — pre-compilation and the staleness check that gates publishing.
-/// Those must not be able to inherit a tag from a memo whose key (size + mtime)
-/// happened to survive an edit.
+/// Those hash the bytes themselves rather than trust any memo.
 pub(crate) fn rules_source_tag_uncached() -> Option<u64> {
     compute_rules_source_tag(&traits_path())
 }
@@ -624,8 +660,8 @@ pub(crate) fn rules_source_tag_uncached() -> Option<u64> {
 /// contents.
 ///
 /// Walks separately from [`scan_traits_dir`] rather than riding along with it:
-/// that walk feeds every cache key on every scan and must stay stat-only, while
-/// this one reads file bytes and runs only when the memo above misses.
+/// its fold is a portable, order-independent FNV the compiled artifacts carry,
+/// and it runs only when the memo above misses.
 fn compute_rules_source_tag(traits_dir: &Path) -> Option<u64> {
     use rayon::prelude::*;
 
@@ -687,15 +723,15 @@ fn compute_rules_source_tag(traits_dir: &Path) -> Option<u64> {
     Some(tag)
 }
 
-/// Single-entry memo pairing a stat fingerprint with the content tag computed
+/// Single-entry memo pairing a content fingerprint with the source tag computed
 /// under it. Rewritten in place, so it can neither grow nor go stale.
 fn source_tag_memo_path() -> Option<PathBuf> {
     Some(cache_dir().ok()?.join("yara-source-tag"))
 }
 
 /// The stored tag, if it was computed for this traits directory at exactly this
-/// stat fingerprint. The directory is part of the key because the tag itself is
-/// path-relative: two checkouts can share a fingerprint without sharing bytes.
+/// content fingerprint. The directory is part of the key because the memo holds
+/// one entry and several checkouts may alternate over it.
 fn memoized_source_tag(traits_dir: &Path, revision: RuleFilesRevision) -> Option<u64> {
     let text = fs::read_to_string(source_tag_memo_path()?).ok()?;
     let mut fields = text.split_whitespace();
@@ -733,55 +769,86 @@ fn store_source_tag(traits_dir: &Path, revision: RuleFilesRevision, tag: u64) {
     }
 }
 
-/// The memoized traits-directory scan, or `None` before the first scan and
-/// after [`invalidate_traits_scan`].
-static TRAITS_SCAN: parking_lot::RwLock<Option<Arc<TraitsScan>>> = parking_lot::RwLock::new(None);
+/// The memoized traits-directory scans, one per traits directory this process
+/// has keyed a cache on, newest last. Emptied by [`invalidate_traits_scan`].
+static TRAITS_SCANS: parking_lot::RwLock<Vec<(PathBuf, Arc<TraitsScan>)>> =
+    parking_lot::RwLock::new(Vec::new());
 
-/// Memoized cache timestamp derived from [`TRAITS_SCAN`].
+/// Most directories [`TRAITS_SCANS`] remembers. A process scans against one
+/// traits tree; a long-lived one that loads several keeps only the recent.
+const MAX_TRAITS_SCANS: usize = 8;
+
+/// Memoized cache timestamp derived from the [`traits_path`] scan.
 static CACHE_TIMESTAMP: parking_lot::RwLock<Option<SystemTime>> = parking_lot::RwLock::new(None);
 
-/// Memoized cache revision fingerprint derived from [`TRAITS_SCAN`].
-static CACHE_REVISION: parking_lot::RwLock<Option<RuleFilesRevision>> =
-    parking_lot::RwLock::new(None);
+/// Memoized [`traits_revision_fingerprint`] for the [`traits_path`] tree.
+static TRAITS_REVISION: parking_lot::RwLock<Option<i64>> = parking_lot::RwLock::new(None);
 
-/// Drop the memoized traits scan, and the cache keys derived from it, so the
-/// next lookup re-walks the tree.
+/// Drop the memoized traits scans, and the cache keys derived from them, so
+/// the next lookup re-reads the tree.
 ///
 /// Called when the traits source changes (see [`crate::traits_repo::set_override_dir`]
 /// and [`crate::shared_resources::reload_capability_mapper`]). Every cache key —
-/// analysis, mapper, YARA — derives from this bundle, so a stale one means a
+/// analysis, mapper, YARA — derives from these, so a stale one means a
 /// re-scan after a rule update is served from cache under the *old* rules'
 /// fingerprint and the update silently doesn't take effect.
 pub(crate) fn invalidate_traits_scan() {
-    *TRAITS_SCAN.write() = None;
+    TRAITS_SCANS.write().clear();
     *CACHE_TIMESTAMP.write() = None;
-    *CACHE_REVISION.write() = None;
+    *TRAITS_REVISION.write() = None;
 }
 
-/// The memoized traits-directory scan.
+/// The memoized scan of `traits_dir`.
 ///
-/// Every cache key derives from this one traversal, so it is walked once and
-/// reused — a large traits checkout used to be traversed four times per scan
-/// before any cache could be consulted. It stays valid until the traits source
-/// changes, which is what [`invalidate_traits_scan`] signals; a caller that must
-/// observe an arbitrary mid-process edit walks [`scan_traits_dir`] directly (as
-/// the tests do).
+/// Every cache key derives from this one traversal, so it is read once per
+/// directory and reused. It stays valid until the traits source changes, which
+/// is what [`invalidate_traits_scan`] signals; a caller that must observe an
+/// arbitrary mid-process edit calls [`scan_traits_dir`] directly.
 ///
-/// Built with no lock held. [`scan_traits_dir`] stats files with rayon, and a
+/// Keyed by the directory actually being loaded, not by [`traits_path`]: a
+/// mapper loaded from one tree under keys derived from another would be cached,
+/// and served, as the other.
+///
+/// Built with no lock held. [`scan_traits_dir`] reads files with rayon, and a
 /// rayon worker can steal an unrelated analysis task that re-enters here, so any
 /// lock held across the build would deadlock against itself. Concurrent first
 /// callers may each build a copy; the first writer wins and the rest are dropped.
-fn traits_scan() -> Arc<TraitsScan> {
+fn traits_scan_for(traits_dir: &Path) -> Arc<TraitsScan> {
+    let key = fs::canonicalize(traits_dir).unwrap_or_else(|_| traits_dir.to_path_buf());
     // Scoped so the read guard is released before the build below, which
     // re-enters this function through rayon.
     {
-        if let Some(scan) = TRAITS_SCAN.read().as_ref() {
+        if let Some((_, scan)) = TRAITS_SCANS.read().iter().find(|(dir, _)| *dir == key) {
             return Arc::clone(scan);
         }
     }
-    let scan = Arc::new(scan_traits_dir(&traits_path()));
-    let mut guard = TRAITS_SCAN.write();
-    Arc::clone(guard.get_or_insert(scan))
+    let scan = Arc::new(scan_traits_dir(traits_dir));
+    let mut scans = TRAITS_SCANS.write();
+    if let Some((_, existing)) = scans.iter().find(|(dir, _)| *dir == key) {
+        return Arc::clone(existing);
+    }
+    if scans.len() >= MAX_TRAITS_SCANS {
+        scans.remove(0);
+    }
+    scans.push((key, Arc::clone(&scan)));
+    scan
+}
+
+/// The memoized scan of the process's [`traits_path`].
+fn traits_scan() -> Arc<TraitsScan> {
+    traits_scan_for(&traits_path())
+}
+
+/// Content digests of `traits_dir`, from the memoized scan.
+#[must_use]
+pub(crate) fn traits_content_for(traits_dir: &Path) -> TraitsContent {
+    traits_scan_for(traits_dir).content
+}
+
+/// Content digests of `traits_dir` as it stands now, bypassing the memo.
+#[must_use]
+pub(crate) fn traits_content_uncached(traits_dir: &Path) -> TraitsContent {
+    scan_traits_dir(traits_dir).content
 }
 
 /// Returns the most recently modified `.yaml`/`.yml` trait file and its mtime.
@@ -795,33 +862,15 @@ pub fn most_recent_yaml_file() -> Result<(SystemTime, PathBuf)> {
         .context("No .yaml/.yml files found")
 }
 
-/// Returns a stable revision fingerprint for YAML trait files.
+/// Returns a content revision fingerprint for the YAML trait files of
+/// `traits_dir`.
 ///
 /// This excludes `third-party/` because those files feed the YARA cache, not the
-/// trait mapper. It includes path, file size, and nanosecond mtime so mapper
-/// cache keys change even for same-second edits.
-///
-/// Reads the memoized [`traits_scan`] bundle, so the mapper cache key shares the
-/// single per-process traits walk with every other cache key.
-pub(crate) fn trait_yaml_revision() -> Result<RuleFilesRevision> {
-    traits_scan()
+/// trait mapper.
+fn trait_yaml_revision_for(traits_dir: &Path) -> Result<RuleFilesRevision> {
+    traits_scan_for(traits_dir)
         .yaml_revision
         .context("No .yaml/.yml files found")
-}
-
-/// Returns a stable revision fingerprint for all rule and trait files.
-///
-/// Used by caches that must invalidate on trait/YARA edits. The newest mtime is
-/// kept for human-readable stats, while the fingerprint includes file paths,
-/// sizes, and nanosecond mtimes so same-second edits do not reuse stale cache
-/// entries.
-///
-/// Reads the memoized [`traits_scan`] bundle, so this and every other cache key
-/// share one walk of the traits tree per process.
-pub(crate) fn rule_files_revision() -> Result<RuleFilesRevision> {
-    traits_scan()
-        .rule_revision
-        .context("No YARA/trait files found")
 }
 
 /// Returns the most recent modification time across all rule and trait files.
@@ -865,54 +914,42 @@ pub(crate) fn cache_timestamp() -> Result<SystemTime> {
     Ok(*CACHE_TIMESTAMP.write().get_or_insert(ts))
 }
 
-/// Returns the active rule/trait revision fingerprint for cache invalidation.
-pub(crate) fn cache_revision() -> Result<RuleFilesRevision> {
-    let cached = *CACHE_REVISION.read();
+/// The analysis-cache revision fingerprint for the process's traits tree.
+/// Memoized; see [`traits_revision_fingerprint_for`].
+pub(crate) fn traits_revision_fingerprint() -> i64 {
+    let cached = *TRAITS_REVISION.read();
     if let Some(revision) = cached {
-        return Ok(revision);
+        return revision;
     }
     // Built with no lock held, as in `cache_timestamp`.
-    let revision = match rule_files_revision() {
-        Ok(revision) => revision,
-        Err(_) => {
-            let mtime = binary_mtime()?;
-            RuleFilesRevision {
-                newest_mtime: mtime,
-                fingerprint: system_time_nanos(mtime)? as u64,
-            }
-        }
-    };
-    Ok(*CACHE_REVISION.write().get_or_insert(revision))
+    let revision = traits_revision_fingerprint_for(&traits_path());
+    *TRAITS_REVISION.write().get_or_insert(revision)
 }
 
-/// The analysis-cache revision fingerprint for the traits currently on disk,
-/// or `None` when unavailable.
+/// The analysis-cache revision fingerprint for the traits in `traits_dir`.
 ///
-/// Mixes the trait-files fingerprint with the cleave binary's package version
-/// and mtime so that recompiling cleave invalidates the analysis cache even
-/// when the trait YAMLs are unchanged. Analyzer logic, file type detection,
-/// and capability evaluation all live in the binary — when they change, the
-/// cached `AnalysisReport` for the same SHA can be stale.
+/// Mixes the content digest of every rule and trait file with the running
+/// build's identity (its ELF build-id, see
+/// [`crate::traits_fingerprint::binary_identity`]) so that any change to the
+/// rules or to the analyzer code invalidates the analysis cache, and nothing
+/// else does: rebuilding identical code, touching files, or checking the same
+/// tree out again keeps every entry. Analyzer logic, file type detection, and
+/// capability evaluation all live in the binary — when they change, the cached
+/// `AnalysisReport` for the same SHA can be stale.
 ///
 /// A `CapabilityMapper` pins this at load and every store keys on that pinned
-/// value; only a lookup samples it live. (`cache_revision()` alone — used by
-/// the YARA and capability-mapper caches — is deterministic from trait inputs
-/// and should not depend on the binary.)
-pub(crate) fn traits_revision_fingerprint() -> Option<i64> {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
+/// value; only a lookup samples it live.
+pub(crate) fn traits_revision_fingerprint_for(traits_dir: &Path) -> i64 {
+    use sha2::{Digest, Sha256};
 
-    let traits_fingerprint = cache_revision().ok().map(RuleFilesRevision::cache_i64)?;
-
-    let mut hasher = DefaultHasher::new();
-    traits_fingerprint.hash(&mut hasher);
-    env!("CARGO_PKG_VERSION").hash(&mut hasher);
-    if let Ok(mtime) = binary_mtime()
-        && let Ok(d) = mtime.duration_since(std::time::UNIX_EPOCH)
-    {
-        d.as_nanos().hash(&mut hasher);
-    }
-    Some(i64::from_ne_bytes(hasher.finish().to_ne_bytes()))
+    let mut h = Sha256::new();
+    h.update(b"cleave-traits-revision 2\0");
+    h.update(traits_scan_for(traits_dir).content.rules);
+    h.update(env!("CARGO_PKG_VERSION").as_bytes());
+    h.update(b"\0");
+    h.update(crate::traits_fingerprint::binary_identity().as_bytes());
+    let digest: [u8; 32] = h.finalize().into();
+    i64::from_ne_bytes(digest_u64(&digest).to_ne_bytes())
 }
 
 /// Generate a cache key based on the newest `.yar`/`.yara` file mtime and third-party flag.
@@ -946,32 +983,30 @@ pub fn yara_cache_path(third_party_enabled: bool) -> Result<PathBuf> {
     Ok(cache_dir()?.join(cache_key))
 }
 
-/// Generate a cache key for the capability mapper.
+/// Generate a cache key for the capability mapper built from `traits_dir`.
 ///
-/// Keyed on the newest `.yaml`/`.yml` trait file mtime (third-party directory excluded),
-/// so YARA-only rule updates do not force a trait mapper rebuild.
-/// Falls back to binary mtime when no YAML files exist.
+/// Keyed on the content fingerprint of the `.yaml`/`.yml` trait files
+/// (third-party directory excluded, so YARA-only rule updates do not force a
+/// trait mapper rebuild) and on the running build's identity, since the parser
+/// and the trait schema live in the binary. Falls back to the binary's mtime
+/// when no YAML files exist.
 ///
 /// Also incorporates a short hash of the absolute traits-directory path so that
 /// distinct trait roots — `--traits-dir /tmp/A/traits` vs `/tmp/B/traits` — never
-/// collide on the same cache file. Without this discriminator, parallel test
-/// processes (or any two cleave invocations against different `--traits-dir`
-/// values whose newest YAML mtime rounds to the same second) could read each
-/// other's compiled mapper.
-pub(crate) fn mapper_cache_key() -> Result<String> {
-    let revision = trait_yaml_revision().or_else(|_| {
-        let mtime = binary_mtime()?;
-        Ok::<RuleFilesRevision, anyhow::Error>(RuleFilesRevision {
-            newest_mtime: mtime,
-            fingerprint: system_time_nanos(mtime)? as u64,
-        })
-    })?;
-    let timestamp = system_time_nanos(revision.newest_mtime)?;
-    let fingerprint = revision.fingerprint;
-
+/// share a cache file even when their contents match: a mapper records the
+/// source paths it was parsed from.
+pub(crate) fn mapper_cache_key_for(traits_dir: &Path) -> Result<String> {
+    let fingerprint = match trait_yaml_revision_for(traits_dir) {
+        Ok(revision) => revision.fingerprint,
+        Err(_) => system_time_nanos(binary_mtime()?)? as u64,
+    };
     let version = env!("CARGO_PKG_VERSION");
-    let dir_tag = traits_dir_tag();
+    let dir_tag = traits_dir_tag(traits_dir);
+    let build = digest_bytes(crate::traits_fingerprint::binary_identity().as_bytes());
 
+    // v11: keyed on trait-file contents and the build-id instead of path, size
+    // and mtime, which a same-length edit under a restored mtime (every `git
+    // archive` of two same-second commits) could not tell apart.
     // v10: new file types (jsp, asp, cfml, mirc, ircii, …) were unknown
     // tokens to the previous parser. That build stored them as parse errors,
     // and a later build replayed the snapshot with those types missing from
@@ -984,31 +1019,35 @@ pub(crate) fn mapper_cache_key() -> Result<String> {
     // must not hide their new matching semantics in same-version builds.
     // v7: bumped after a same-version development build with different
     // CompositeTrait semantics collided on this key and served a stale mapper.
-    // Bump this prefix whenever the trait/composite schema or its evaluation
-    // semantics change, even within a crate version.
+    // The build-id now covers that case; bump this prefix when the key's
+    // meaning changes.
     Ok(format!(
-        "capability-mapper-v10-{version}-{dir_tag}-{timestamp}-{fingerprint:016x}.bin"
+        "capability-mapper-v11-{version}-{dir_tag}-{fingerprint:016x}-{build:016x}.bin"
     ))
 }
 
-/// Short stable tag for the active traits directory, suitable for cache keys.
-/// Uses the absolute canonical path to discriminate concurrent processes that
-/// each pass `--traits-dir` at distinct locations.
-fn traits_dir_tag() -> String {
+/// Short stable tag for a traits directory, suitable for cache keys. Uses the
+/// absolute canonical path to discriminate concurrent processes that each pass
+/// `--traits-dir` at distinct locations.
+fn traits_dir_tag(traits_dir: &Path) -> String {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
-    let path = traits_path();
-    let canonical = std::fs::canonicalize(&path).unwrap_or(path);
+    let canonical = std::fs::canonicalize(traits_dir).unwrap_or_else(|_| traits_dir.to_path_buf());
     let mut h = DefaultHasher::new();
     canonical.hash(&mut h);
     // 8 hex chars is enough discrimination for a filename component without bloating it.
     format!("{:08x}", (h.finish() & 0xFFFF_FFFF) as u32)
 }
 
-/// Get the path to the capability mapper cache file
+/// Get the path to the capability mapper cache file for the process's
+/// [`traits_path`].
 pub fn mapper_cache_path() -> Result<PathBuf> {
-    let cache_key = mapper_cache_key()?;
-    Ok(cache_dir()?.join(cache_key))
+    mapper_cache_path_for(&traits_path())
+}
+
+/// Get the path to the capability mapper cache file for `traits_dir`.
+pub(crate) fn mapper_cache_path_for(traits_dir: &Path) -> Result<PathBuf> {
+    Ok(cache_dir()?.join(mapper_cache_key_for(traits_dir)?))
 }
 
 /// Rule stats stored in a tiny cache file for fast banner display.
@@ -1297,6 +1336,147 @@ mod tests {
 
         assert_eq!(first.newest_mtime, second.newest_mtime);
         assert_ne!(first.fingerprint, second.fingerprint);
+    }
+
+    /// Rewrite `path` with `contents` and put its mtime back, so only the bytes
+    /// differ from what a stat key would see.
+    fn rewrite_keeping_mtime(path: &Path, contents: &str) {
+        let mtime = fs::metadata(path).unwrap().modified().unwrap();
+        let len = fs::metadata(path).unwrap().len();
+        fs::write(path, contents).unwrap();
+        fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(mtime)
+            .unwrap();
+        assert_eq!(fs::metadata(path).unwrap().modified().unwrap(), mtime);
+        assert_eq!(fs::metadata(path).unwrap().len(), len);
+    }
+
+    // The edit a stat key cannot see: same path, same length, same mtime.
+    #[test]
+    fn same_length_edit_with_mtime_restored_changes_every_revision() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (_, trait_file) = traits_tree(tmp.path());
+        let before = scan_traits_dir(tmp.path());
+
+        rewrite_keeping_mtime(
+            &trait_file,
+            "traits:\n  - id: net/socket\n    if: {type: string, value: cOnnect}\n",
+        );
+        let after = scan_traits_dir(tmp.path());
+
+        assert_ne!(
+            after.rule_revision.unwrap().fingerprint,
+            before.rule_revision.unwrap().fingerprint,
+            "analysis-cache revision"
+        );
+        assert_ne!(
+            after.yaml_revision.unwrap().fingerprint,
+            before.yaml_revision.unwrap().fingerprint,
+            "mapper-cache revision"
+        );
+        assert_ne!(after.content.rules, before.content.rules);
+        assert_eq!(after.content.layout, before.content.layout);
+    }
+
+    // Content keys neither trust mtimes nor depend on them: a checkout that
+    // restamps every file must keep every cache entry.
+    #[test]
+    fn touching_files_changes_no_revision() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (rule, trait_file) = traits_tree(tmp.path());
+        let before = scan_traits_dir(tmp.path());
+        let later = SystemTime::UNIX_EPOCH + Duration::from_secs(1_900_000_000);
+        for path in [&rule, &trait_file] {
+            fs::File::options()
+                .write(true)
+                .open(path)
+                .unwrap()
+                .set_modified(later)
+                .unwrap();
+        }
+        let after = scan_traits_dir(tmp.path());
+        assert_eq!(
+            after.rule_revision.unwrap().fingerprint,
+            before.rule_revision.unwrap().fingerprint
+        );
+        assert_eq!(
+            after.yaml_revision.unwrap().fingerprint,
+            before.yaml_revision.unwrap().fingerprint
+        );
+        assert_eq!(after.content, before.content);
+        assert_ne!(
+            after.rule_revision.unwrap().newest_mtime,
+            before.rule_revision.unwrap().newest_mtime
+        );
+    }
+
+    /// A one-trait tree whose trait description is `desc`.
+    fn probe_tree(desc: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let yaml = dir.path().join("objectives/probe/memo.yaml");
+        fs::create_dir_all(yaml.parent().unwrap()).unwrap();
+        fs::write(&yaml, probe_yaml(desc)).unwrap();
+        dir
+    }
+
+    fn probe_yaml(desc: &str) -> String {
+        format!(
+            "traits:\n  - id: memo-probe\n    desc: {desc}\n    crit: notable\n    \
+             conf: 0.8\n    for: [python]\n    if:\n      type: text\n      \
+             exact: memo-probe-needle\n"
+        )
+    }
+
+    fn load_probe_desc(dir: &Path, full_validation: bool) -> Option<String> {
+        let mapper = crate::capabilities::CapabilityMapper::from_directory_with_options(
+            dir,
+            crate::capabilities::CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION,
+            crate::capabilities::CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION,
+            full_validation,
+            false,
+        )
+        .unwrap();
+        mapper
+            .trait_definitions()
+            .iter()
+            .find(|t| t.id.ends_with("memo-probe"))
+            .map(|t| t.desc.clone())
+    }
+
+    // The mapper cache written for one tree must not be served for a
+    // same-length edit of it under a restored mtime, whether the load
+    // validates nothing or skips validation on a clean mark. Invalidating the
+    // scan stands in for the next process, which reads the tree afresh.
+    #[test]
+    fn mapper_cache_misses_on_a_same_length_edit() {
+        let dir = probe_tree("probe aaa");
+        let yaml = dir.path().join("objectives/probe/memo.yaml");
+        assert_eq!(
+            load_probe_desc(dir.path(), false).as_deref(),
+            Some("probe aaa")
+        );
+        assert!(mapper_cache_path_for(dir.path()).unwrap().exists());
+
+        rewrite_keeping_mtime(&yaml, &probe_yaml("probe bbb"));
+        invalidate_traits_scan();
+        assert_eq!(
+            load_probe_desc(dir.path(), false).as_deref(),
+            Some("probe bbb")
+        );
+
+        // Full validation requested, skipped on a mark for the edited tree.
+        rewrite_keeping_mtime(&yaml, &probe_yaml("probe ccc"));
+        invalidate_traits_scan();
+        crate::traits_fingerprint::CleanMark::for_traits(dir.path(), None)
+            .unwrap()
+            .set_if_unchanged(dir.path());
+        assert_eq!(
+            load_probe_desc(dir.path(), true).as_deref(),
+            Some("probe ccc")
+        );
     }
 
     #[test]

@@ -13,8 +13,9 @@
 //!
 //! Cache entries are automatically invalidated when:
 //! - The file content changes (different SHA256)
-//! - Trait definitions are modified (different `cache_revision()`)
-//! - The cleave binary is updated (different binary mtime in production mode)
+//! - Trait definitions are modified (different content digest, see
+//!   `cache::traits_revision_fingerprint_for`)
+//! - The cleave binary is updated (different ELF build-id)
 //! - Analysis options change (different options hash)
 //!
 //! # Eviction
@@ -428,7 +429,7 @@ fn acquire_flight(
         kind: kind.to_string(),
         sha256: sha256.to_string(),
         options_hash: typed_options_hash(options, file_type),
-        traits_revision: ambient_traits_revision().unwrap_or_default(),
+        traits_revision: ambient_traits_revision(),
     };
     let flights = IN_FLIGHT.get_or_init(|| Mutex::new(HashMap::new()));
     let mut flights = flights
@@ -843,6 +844,27 @@ fn typed_options_hash(options: &AnalysisOptions, file_type: &str) -> String {
     hex::encode(hash)[..16].to_string()
 }
 
+/// The report cache's type key: the detected type plus the file's name.
+///
+/// The table holds one row per key, and a row serves another path only when
+/// the path guard finds the two equivalent. So byte-identical files whose
+/// names the traits read differently -- `sample.cmd` beside `sample.bat`, two
+/// same-bytes zips named for different payloads -- replaced each other's row
+/// on every store, and every scan that met both re-analyzed one of them,
+/// paying for the match indexes on the way: `cleave validate` spent 2.7 of
+/// its 4.9 seconds on one such fixture. Keying on the name gives each its own
+/// row. Same-named files in different directories still share one, which is
+/// what callers scanning temporary copies rely on, and the path guard still
+/// checks them. A finer key only ever turns a hit into a miss, never into a
+/// wrong hit.
+pub(crate) fn report_type_key(file_type: &str, path: &std::path::Path) -> String {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy())
+        .unwrap_or_default();
+    format!("{file_type}/{name}")
+}
+
 /// The ambient analysis-cache revision: the fingerprint of the traits a fresh
 /// analysis would use *right now*.
 ///
@@ -850,14 +872,14 @@ fn typed_options_hash(options: &AnalysisOptions, file_type: &str) -> String {
 /// am about to run?". A *store* must not use it — see
 /// [`crate::capabilities::CapabilityMapper::traits_revision`]; it passes the
 /// revision the analysis actually ran under.
-fn ambient_traits_revision() -> Option<i64> {
+fn ambient_traits_revision() -> i64 {
     // `0` is the "no traits" revision that `CapabilityMapper::empty()` pins,
     // so a skip-traits run reuses its own entries and never exchanges them
     // with a run that has rules. Nothing else in the key encodes the flag:
     // invalidating the traits scan on a flag flip only forces a re-walk of the
     // same directory, which yields the same fingerprint.
     if crate::shared_resources::skip_traits_requested() {
-        return Some(0);
+        return 0;
     }
     crate::cache::traits_revision_fingerprint()
 }
@@ -870,9 +892,7 @@ fn ambient_traits_revision() -> Option<i64> {
 /// the installed mapper is still the one that produced the report.
 pub(crate) fn store_revision_without_mapper() -> i64 {
     crate::shared_resources::loaded_capability_mapper()
-        .map(|m| m.traits_revision())
-        .or_else(ambient_traits_revision)
-        .unwrap_or_default()
+        .map_or_else(ambient_traits_revision, |m| m.traits_revision())
 }
 
 /// Current time as Unix seconds.
@@ -1037,7 +1057,7 @@ pub(crate) fn report_cache_lookup(
     let opts_hash = typed_options_hash(options, file_type);
     // A lookup keys on the ambient revision: it asks for a result computed
     // under the rules this caller is about to run.
-    let traits_ts = ambient_traits_revision()?;
+    let traits_ts = ambient_traits_revision();
     let key = memo_key(sha256, &opts_hash, traits_ts);
     if let Some(bytes) = memo::get(memo::Kind::Report, &key)
         && let Ok(report) = serde_json::from_slice::<AnalysisReport>(&bytes)
@@ -1136,7 +1156,7 @@ pub(crate) fn file_analysis_cache_lookup(
     }
     let opts_hash = typed_options_hash(options, file_type);
     // See `report_cache_lookup`: ambient revision, not a pinned one.
-    let traits_ts = ambient_traits_revision()?;
+    let traits_ts = ambient_traits_revision();
     let key = memo_key(sha256, &opts_hash, traits_ts);
     if let Some(bytes) = memo::get(memo::Kind::FileAnalysis, &key)
         && let Ok(fa) = serde_json::from_slice::<FileAnalysis>(&bytes)
@@ -1323,8 +1343,49 @@ mod tests {
     /// that differs from the ambient one models the same thing — an analysis
     /// that ran under a tree the process is no longer pointing at.
     #[test]
+    fn byte_identical_twins_keep_their_own_rows() {
+        let sha = "7a1c0e0e00000000000000000000000000000000000000000000000000000000";
+        let opts = AnalysisOptions::default();
+        let revision = ambient_traits_revision();
+        let (cmd, bat) = (
+            std::path::Path::new("/t/sample.cmd"),
+            std::path::Path::new("/t/sample.bat"),
+        );
+        let key_cmd = report_type_key("batch", cmd);
+        let key_bat = report_type_key("batch", bat);
+        assert_ne!(key_cmd, key_bat);
+        assert_ne!(
+            report_type_key("zip", std::path::Path::new("/t/a.zip")),
+            report_type_key("zip", std::path::Path::new("/t/b.zip"))
+        );
+        // Same name in another directory: one row, left to the path guard.
+        assert_eq!(
+            key_cmd,
+            report_type_key("batch", std::path::Path::new("/u/sample.cmd"))
+        );
+
+        let mut for_cmd = test_report(sha);
+        for_cmd.target.path = "/t/sample.cmd".into();
+        let mut for_bat = test_report(sha);
+        for_bat.target.path = "/t/sample.bat".into();
+        report_cache_store(sha, &key_cmd, &opts, &for_cmd, revision);
+        report_cache_store(sha, &key_bat, &opts, &for_bat, revision);
+
+        let got_cmd = report_cache_lookup(sha, &key_cmd, &opts, "/t/sample.cmd");
+        let got_bat = report_cache_lookup(sha, &key_bat, &opts, "/t/sample.bat");
+        assert_eq!(
+            got_cmd.map(|r| r.target.path).as_deref(),
+            Some("/t/sample.cmd")
+        );
+        assert_eq!(
+            got_bat.map(|r| r.target.path).as_deref(),
+            Some("/t/sample.bat")
+        );
+    }
+
+    #[test]
     fn store_keys_on_the_traits_the_analysis_ran_under() {
-        let ambient = ambient_traits_revision().expect("an ambient revision must be derivable");
+        let ambient = ambient_traits_revision();
         // The mapper this analysis held was built from a different tree.
         let ran_under = ambient.wrapping_add(1);
 

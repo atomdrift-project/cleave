@@ -686,6 +686,13 @@ impl super::CapabilityMapper {
 
         tracing::info!("Found {} YAML files to parse", yaml_files.len());
         let _t_parse = std::time::Instant::now();
+        // Facts this validation derives from patterns are kept for the next
+        // one (see `facts_cache`); the session saves them when the load ends.
+        let _facts = if enable_full_validation {
+            crate::capabilities::validation::facts_cache::begin()
+        } else {
+            None
+        };
 
         // Load all YAML files in parallel, preserving path for prefix calculation
         // Use indexed_map to preserve sorted order
@@ -730,257 +737,51 @@ impl super::CapabilityMapper {
         let mut warnings = crate::validation_controls::ValidationIssues::new();
         let mut parse_errors: Vec<String> = Vec::new();
 
-        for result in sorted_results {
-            let (path, mappings, yaml_warnings) = match result {
-                Ok((_idx, p, m, w)) => (p, m, w),
+        // Everything a file contributes that does not depend on the files
+        // before it -- defaults, id prefixes, condition checks, per-trait
+        // warnings, regex precompilation -- is prepared for all files at
+        // once. The ordered pass below then does only what does: id conflicts
+        // and the maps, replaying each file's warnings and first error at the
+        // point the serial merge produced them.
+        let prepared: Vec<Result<PreparedFile>> = sorted_results
+            .into_par_iter()
+            .map(|result| {
+                result.map(|(_idx, path, mappings, yaml_warnings)| {
+                    prepare_trait_file(
+                        &path,
+                        mappings,
+                        yaml_warnings,
+                        dir_path,
+                        enable_full_validation,
+                        enable_precision_scoring,
+                    )
+                })
+            })
+            .collect();
+
+        for result in prepared {
+            let file = match result {
+                Ok(file) => file,
                 Err(e) => {
                     // Format error with full chain (includes filename from context)
                     parse_errors.push(format!("{:#}", e));
                     continue;
                 }
             };
+            let path = file.path;
             // Collect YAML pattern warnings
-            warnings.extend_legacy(yaml_warnings);
-
-            // Calculate the prefix from the directory path relative to traits/
-            // e.g., traits/credential/java/traits.yaml -> credential/java
-            let trait_prefix = path
-                .strip_prefix(dir_path)
-                .ok()
-                .and_then(|p| p.parent())
-                .map(|p| p.to_string_lossy().replace('\\', "/"))
-                .filter(|s| !s.is_empty());
-
-            // Per-file: check for values that should use defaults, and values redundant with defaults
-            if enable_full_validation
-                && !crate::validation_controls::is_validator_disabled("defaults-hoist")
-            {
-                let path_str = path.display().to_string();
-                for (field, value) in find_should_use_defaults(
-                    &mappings.traits,
-                    &mappings.composite_rules,
-                    &mappings.defaults,
-                ) {
-                    warnings.push_id("defaults-hoist", format!(
-                        "{path_str}: all {} items set '{field}' to {value} — move to 'defaults: {field}: {value}'",
-                        mappings.traits.len() + mappings.composite_rules.len(),
-                    ));
-                }
-                for (id, field) in find_redundant_explicit_defaults(
-                    &mappings.traits,
-                    &mappings.composite_rules,
-                    &mappings.defaults,
-                ) {
-                    warnings.push_id("defaults-hoist", format!(
-                        "'{id}' in {path_str}: '{field}' matches the file default — remove the explicit '{field}:' from this item",
-                    ));
-                }
+            warnings.extend_legacy(file.yaml_warnings);
+            for message in file.hoist {
+                warnings.push_id("defaults-hoist", message);
             }
 
-            // Merge trait definitions with auto-prefixed IDs, applying file-level defaults
-            let mut parsing_warnings = Vec::new();
-            for raw_trait in mappings.traits {
-                // Convert raw trait to final trait, applying file-level defaults
-                let mut trait_def = apply_trait_defaults(
-                    raw_trait,
-                    &mappings.defaults,
-                    &mut parsing_warnings,
-                    &path,
-                    enable_precision_scoring,
-                );
-
-                // Auto-prefix trait ID if it doesn't already have the path prefix
-                // Uses :: as delimiter between directory path and trait name
-                if let Some(ref prefix) = trait_prefix
-                    && !trait_def.id.starts_with(prefix)
-                    && !trait_def.id.contains("::")
-                    && !trait_def.id.contains('/')
-                {
-                    trait_def.id = format!("{}::{}", prefix, trait_def.id);
-                }
-                // Validate YARA/AST conditions at load time
-                trait_def
-                    .r#if
-                    .validate()
-                    .map_err(|e| anyhow::anyhow!("{}", e))
-                    .with_context(|| {
-                        format!(
-                            "invalid condition in trait '{}' from {:?}",
-                            trait_def.id, path
-                        )
-                    })?;
-                // Per-trait validation checks - skip when validation is disabled
-                if enable_full_validation {
-                    // Check for greedy regex patterns
-                    if !crate::validation_controls::is_validator_disabled("nested-quantifier")
-                        && let Some(warning) = trait_def.r#if.check_greedy_patterns()
-                    {
-                        warnings.push_id(
-                            "nested-quantifier",
-                            format!("trait '{}' in {:?}: {}", trait_def.id, path, warning),
-                        );
-                    }
-                    // Check for word boundary regex patterns that should use type: word
-                    if !crate::validation_controls::is_validator_disabled(
-                        "simple-word-boundary-regex",
-                    ) && let Some(warning) = trait_def.r#if.check_word_boundary_regex()
-                    {
-                        warnings.push_id(
-                            "simple-word-boundary-regex",
-                            format!("trait '{}' in {:?}: {}", trait_def.id, path, warning),
-                        );
-                    }
-
-                    // Check for short case-insensitive patterns (high collision risk)
-                    if let Some(warning) = trait_def
-                        .r#if
-                        .check_short_case_insensitive(trait_def.r#for.len())
-                    {
-                        warnings.push_legacy(format!(
-                            "trait '{}' in {:?}: {}",
-                            trait_def.id, path, warning
-                        ));
-                    }
-
-                    // Check for improper use of not: field
-                    if let Some(warning) = trait_def.check_not_field_usage() {
-                        warnings.push_legacy(format!(
-                            "trait '{}' in {:?}: {}",
-                            trait_def.id, path, warning
-                        ));
-                    }
-
-                    // Check for invalid criticality level
-                    if let Some(warning) = trait_def.check_criticality() {
-                        warnings.push_legacy(format!(
-                            "trait '{}' in {:?}: {}",
-                            trait_def.id, path, warning
-                        ));
-                    }
-
-                    // Check for invalid confidence value
-                    if let Some(warning) = trait_def.check_confidence() {
-                        warnings.push_legacy(format!(
-                            "trait '{}' in {:?}: {}",
-                            trait_def.id, path, warning
-                        ));
-                    }
-
-                    // Check for invalid size constraints
-                    if let Some(warning) = trait_def.check_size_constraints() {
-                        warnings.push_legacy(format!(
-                            "trait '{}' in {:?}: {}",
-                            trait_def.id, path, warning
-                        ));
-                    }
-
-                    // Check for invalid entropy constraints
-                    if let Some(warning) = trait_def.check_entropy_constraints() {
-                        warnings.push_legacy(format!(
-                            "trait '{}' in {:?}: {}",
-                            trait_def.id, path, warning
-                        ));
-                    }
-
-                    // Check for invalid count constraints
-                    if let Some(warning) = trait_def.check_count_constraints() {
-                        warnings.push_legacy(format!(
-                            "trait '{}' in {:?}: {}",
-                            trait_def.id, path, warning
-                        ));
-                    }
-
-                    // Check for invalid density constraints
-                    if let Some(warning) = trait_def.check_density_constraints() {
-                        warnings.push_legacy(format!(
-                            "trait '{}' in {:?}: {}",
-                            trait_def.id, path, warning
-                        ));
-                    }
-
-                    // Check for mutually exclusive match types in condition
-                    if let Some(warning) = trait_def.r#if.check_match_exclusivity() {
-                        warnings.push_legacy(format!(
-                            "trait '{}' in {:?}: {}",
-                            trait_def.id, path, warning
-                        ));
-                    }
-
-                    // Check for empty patterns
-                    if let Some(warning) = trait_def.r#if.check_empty_patterns() {
-                        warnings.push_legacy(format!(
-                            "trait '{}' in {:?}: {}",
-                            trait_def.id, path, warning
-                        ));
-                    }
-
-                    // Check for overly short patterns
-                    if let Some(warning) = trait_def.r#if.check_short_patterns() {
-                        warnings.push_legacy(format!(
-                            "trait '{}' in {:?}: {}",
-                            trait_def.id, path, warning
-                        ));
-                    }
-
-                    // Check for symbol regex patterns with whitespace or word boundaries
-                    if let Some(warning) = trait_def.r#if.check_symbol_regex_whitespace() {
-                        warnings.push_legacy(format!(
-                            "trait '{}' in {:?}: {}",
-                            trait_def.id, path, warning
-                        ));
-                    }
-
-                    // Check for literal strings used as regex
-                    if let Some(warning) = trait_def.r#if.check_literal_regex() {
-                        warnings.push_legacy(format!(
-                            "trait '{}' in {:?}: {}",
-                            trait_def.id, path, warning
-                        ));
-                    }
-
-                    // Check for useless case_insensitive
-                    if !crate::validation_controls::is_validator_disabled(
-                        "case-insensitive-no-effect",
-                    ) && let Some(warning) = trait_def.r#if.check_case_insensitive_on_non_alpha()
-                    {
-                        warnings.push_id(
-                            "case-insensitive-no-effect",
-                            format!("trait '{}' in {:?}: {}", trait_def.id, path, warning),
-                        );
-                    }
-
-                    // Check for count_min: 0
-                    if let Some(warning) = trait_def.check_count_min_value() {
-                        warnings.push_legacy(format!(
-                            "trait '{}' in {:?}: {}",
-                            trait_def.id, path, warning
-                        ));
-                    }
-
-                    // Check for description quality
-                    if let Some(warning) = trait_def.check_description_quality() {
-                        warnings.push_legacy(format!(
-                            "trait '{}' in {:?}: {}",
-                            trait_def.id, path, warning
-                        ));
-                    }
-
-                    // Check for empty not: array
-                    if let Some(warning) = trait_def.check_empty_not_array() {
-                        warnings.push_legacy(format!(
-                            "trait '{}' in {:?}: {}",
-                            trait_def.id, path, warning
-                        ));
-                    }
-
-                    // Check for empty unless: array
-                    if let Some(warning) = trait_def.check_empty_unless_array() {
-                        warnings.push_legacy(format!(
-                            "trait '{}' in {:?}: {}",
-                            trait_def.id, path, warning
-                        ));
-                    }
-                }
+            for prepared_trait in file.traits {
+                let PreparedTrait {
+                    def: trait_def,
+                    issues,
+                    precompiled,
+                } = prepared_trait;
+                issues.replay(&mut warnings);
 
                 // Check for ID conflicts with previously loaded traits (cross-file duplicates)
                 // Duplicate trait id — two atomic traits resolving to the same
@@ -1023,7 +824,7 @@ impl super::CapabilityMapper {
                 }
 
                 // Pre-compile regexes for this trait
-                if let Err(e) = trait_def.precompile_regexes() {
+                if let Err(e) = precompiled {
                     return Err(anyhow::anyhow!(
                         "Failed to compile regex for trait '{}' in {:?}: {:#}",
                         trait_def.id,
@@ -1039,35 +840,18 @@ impl super::CapabilityMapper {
                 trait_definitions_map.insert(trait_def.id.clone(), trait_def);
             }
 
+            if let Some(error) = file.trait_failure {
+                return Err(error);
+            }
+
             // Add file path to file-type warnings, append others as-is
             let path_str = path.display().to_string();
-            for warning in parsing_warnings {
+            for warning in file.trait_parsing_warnings {
                 push_parsing_warning(&mut warnings, &path_str, warning);
             }
 
-            // Merge composite_rules with auto-prefixed IDs, applying file-level defaults
-            let mut parsing_warnings = Vec::new();
-            for raw_rule in mappings.composite_rules {
-                // Convert raw rule to final rule, applying file-level defaults
-                let mut rule = apply_composite_defaults(
-                    raw_rule,
-                    &mappings.defaults,
-                    &mut parsing_warnings,
-                    &path,
-                );
-
-                // Auto-prefix composite rule ID if it doesn't already have the path prefix
-                if let Some(ref prefix) = trait_prefix {
-                    // Auto-prefix composite rule ID using :: delimiter
-                    if !rule.id.starts_with(prefix)
-                        && !rule.id.contains("::")
-                        && !rule.id.contains('/')
-                    {
-                        rule.id = format!("{}::{}", prefix, rule.id);
-                    }
-                    // Also auto-prefix trait references within the rule's conditions
-                    autoprefix_trait_refs(&mut rule, prefix);
-                }
+            for prepared_rule in file.rules {
+                let PreparedRule { rule, precompiled } = prepared_rule;
 
                 // Duplicate composite id — two composites resolving to the same
                 // `directory::id`. Same hazard as duplicate atomic ids: the
@@ -1103,7 +887,7 @@ impl super::CapabilityMapper {
                 }
 
                 // Pre-compile regexes for this composite rule
-                if let Err(e) = rule.precompile_regexes() {
+                if let Err(e) = precompiled {
                     return Err(anyhow::anyhow!(
                         "Failed to compile regex for composite '{}' in {:?}: {}",
                         rule.id,
@@ -1119,7 +903,7 @@ impl super::CapabilityMapper {
 
             // Add file path to file-type warnings, append others as-is
             let path_str = path.display().to_string();
-            for warning in parsing_warnings {
+            for warning in file.rule_parsing_warnings {
                 push_parsing_warning(&mut warnings, &path_str, warning);
             }
         }
@@ -1249,6 +1033,113 @@ impl super::CapabilityMapper {
         // Pre-calculate precision for ALL composite rules once
         // Atomic trait precisions are already calculated during parsing
         tracing::trace!("Validating trait definitions and composite rules");
+
+        // The costliest checks read the finished trait set and nothing else --
+        // the set does not change again after precision scoring -- so they run
+        // together here instead of one after another, and each step below
+        // reports its result where it always has. Serially they were most of
+        // the trait load; together they cost about as much as the longest.
+        let mut literal_coverage = None;
+        let mut regex_or_literal = None;
+        let mut overlapping_regex = None;
+        let mut cross_type = None;
+        let mut regex_memory = None;
+        let mut regex_explosion = None;
+        let mut ast_queries = None;
+        let mut incompatible_regex = None;
+        let mut regex_literal = None;
+        let mut alternative_subsets = None;
+        let mut exception_members = None;
+        let mut legs_outside = Vec::new();
+        let mut dead_any_alternatives = None;
+        let mut orphaned_components = Vec::new();
+        let mut one_fact_convictions = None;
+        let mut content_free_convictions = None;
+        if enable_full_validation {
+            let (traits, rules) = (&trait_definitions, &composite_rules);
+            let sources = &rule_source_files;
+            let enabled = |id: &str| !crate::validation_controls::is_validator_disabled(id);
+            rayon::scope(|scope| {
+                scope.spawn(|_| {
+                    literal_coverage = collect_early("literal-covered-by-regexes", |w| {
+                        find_literals_covered_by_regexes(traits, w);
+                    });
+                });
+                scope.spawn(|_| {
+                    regex_or_literal = collect_early("regex-or-literal-overlap", |w| {
+                        check_regex_or_overlapping_exact(traits, w);
+                    });
+                });
+                scope.spawn(|_| {
+                    overlapping_regex = collect_early("overlapping-regex-patterns", |w| {
+                        check_overlapping_regex_patterns(traits, w);
+                    });
+                });
+                scope.spawn(|_| {
+                    cross_type = collect_early("cross-type-canonicalization", |w| {
+                        check_same_string_different_types(traits, w);
+                    });
+                });
+                scope.spawn(|_| {
+                    regex_memory = collect_early("regex-memory", |w| {
+                        find_memory_hungry_regex_patterns(traits, rules, w);
+                    });
+                });
+                scope.spawn(|_| {
+                    regex_explosion = collect_early("regex-explosion", |w| {
+                        crate::capabilities::validation::find_pathological_regex_patterns(
+                            traits, w,
+                        );
+                    });
+                });
+                scope.spawn(|_| {
+                    ast_queries = collect_early("ast-query-compile", |w| {
+                        find_uncompilable_ast_queries(traits, rules, w);
+                    });
+                });
+                scope.spawn(|_| {
+                    incompatible_regex = collect_early("incompatible-regex", |w| {
+                        find_incompatible_regex_features(traits, w);
+                    });
+                });
+                scope.spawn(|_| {
+                    regex_literal = (enabled("regex-contains-literal")
+                        || enabled("regex-vs-literal-duplicate"))
+                    .then(|| find_regex_literal_overlap_issues(traits));
+                });
+                scope.spawn(|_| {
+                    alternative_subsets = collect_early("regex-alternative-subset", |w| {
+                        check_regex_alternative_subsets(traits, w);
+                    });
+                });
+                scope.spawn(|_| {
+                    exception_members = enabled("exception-member-crit")
+                        .then(|| find_exception_non_notable_members(traits, rules, sources));
+                });
+                scope.spawn(|_| {
+                    if enabled("leg-outside-for") {
+                        legs_outside = find_legs_outside_for(traits, rules);
+                    }
+                });
+                scope.spawn(|_| {
+                    dead_any_alternatives = enabled("dead-any-alternative").then(|| {
+                        crate::capabilities::validation::find_dead_any_alternatives(traits, rules)
+                    });
+                });
+                scope.spawn(|_| {
+                    orphaned_components = find_orphaned_components(traits, rules, sources);
+                });
+                scope.spawn(|_| {
+                    one_fact_convictions = enabled("one-fact-conviction")
+                        .then(|| find_one_fact_convictions(traits, rules));
+                });
+                scope.spawn(|_| {
+                    content_free_convictions = enabled("conviction-without-content")
+                        .then(|| find_convictions_without_content(traits, rules));
+                });
+            });
+        }
+
         if enable_full_validation {
             let step_start = std::time::Instant::now();
             tracing::trace!("Step 1c/15: Detecting duplicate traits and composites");
@@ -1281,9 +1172,9 @@ impl super::CapabilityMapper {
                     find_string_pattern_duplicates(&trait_definitions, warnings);
                 });
             }
-            if !crate::validation_controls::is_validator_disabled("literal-covered-by-regexes") {
+            if let Some(messages) = literal_coverage {
                 warnings.collect_as("literal-covered-by-regexes", |warnings| {
-                    find_literals_covered_by_regexes(&trait_definitions, warnings);
+                    warnings.extend(messages)
                 });
             }
             tracing::trace!("Step 1d completed in {:?}", step_start.elapsed());
@@ -1291,9 +1182,9 @@ impl super::CapabilityMapper {
             // Check for regex OR patterns overlapping with exact matches
             let step_start = std::time::Instant::now();
             tracing::trace!("Step 1e/15: Checking for regex OR patterns overlapping exact matches");
-            if !crate::validation_controls::is_validator_disabled("regex-or-literal-overlap") {
+            if let Some(messages) = regex_or_literal {
                 warnings.collect_as("regex-or-literal-overlap", |warnings| {
-                    check_regex_or_overlapping_exact(&trait_definitions, warnings);
+                    warnings.extend(messages)
                 });
             }
             tracing::trace!("Step 1e completed in {:?}", step_start.elapsed());
@@ -1302,9 +1193,9 @@ impl super::CapabilityMapper {
             tracing::trace!(
                 "Step 1e2/15: Checking for overlapping regex patterns with same filetype coverage"
             );
-            if !crate::validation_controls::is_validator_disabled("overlapping-regex-patterns") {
+            if let Some(messages) = overlapping_regex {
                 warnings.collect_as("overlapping-regex-patterns", |warnings| {
-                    check_overlapping_regex_patterns(&trait_definitions, warnings);
+                    warnings.extend(messages)
                 });
             }
             tracing::trace!("Step 1e2 completed in {:?}", step_start.elapsed());
@@ -1333,9 +1224,9 @@ impl super::CapabilityMapper {
             // Check for same pattern with different types
             let step_start = std::time::Instant::now();
             tracing::trace!("Step 1g/15: Checking for patterns with conflicting types");
-            if !crate::validation_controls::is_validator_disabled("cross-type-canonicalization") {
+            if let Some(messages) = cross_type {
                 warnings.collect_as("cross-type-canonicalization", |warnings| {
-                    check_same_string_different_types(&trait_definitions, warnings);
+                    warnings.extend(messages)
                 });
             }
             tracing::trace!("Step 1g completed in {:?}", step_start.elapsed());
@@ -1353,14 +1244,8 @@ impl super::CapabilityMapper {
             // Detect regex patterns whose compiled engines hog memory
             let step_start = std::time::Instant::now();
             tracing::trace!("Step 1h1/15: Detecting memory-hungry regex patterns");
-            if !crate::validation_controls::is_validator_disabled("regex-memory") {
-                warnings.collect_as("regex-memory", |warnings| {
-                    find_memory_hungry_regex_patterns(
-                        &trait_definitions,
-                        &composite_rules,
-                        warnings,
-                    );
-                });
+            if let Some(messages) = regex_memory {
+                warnings.collect_as("regex-memory", |warnings| warnings.extend(messages));
             }
             tracing::trace!("Step 1h1 completed in {:?}", step_start.elapsed());
 
@@ -1368,13 +1253,8 @@ impl super::CapabilityMapper {
             // pattern that explodes there explodes on real bundles (soft).
             let step_start = std::time::Instant::now();
             tracing::trace!("Step 1h2/15: Probing regexes for lazy-DFA explosion");
-            if !crate::validation_controls::is_validator_disabled("regex-explosion") {
-                warnings.collect_as("regex-explosion", |warnings| {
-                    crate::capabilities::validation::find_pathological_regex_patterns(
-                        &trait_definitions,
-                        warnings,
-                    );
-                });
+            if let Some(messages) = regex_explosion {
+                warnings.collect_as("regex-explosion", |warnings| warnings.extend(messages));
             }
             tracing::trace!("Step 1h2 completed in {:?}", step_start.elapsed());
 
@@ -1382,10 +1262,8 @@ impl super::CapabilityMapper {
             // failure and caches it, so a broken query is a silently dead rule.
             let step_start = std::time::Instant::now();
             tracing::trace!("Step 1h1a/15: Compiling tree-sitter AST queries");
-            if !crate::validation_controls::is_validator_disabled("ast-query-compile") {
-                warnings.collect_as("ast-query-compile", |warnings| {
-                    find_uncompilable_ast_queries(&trait_definitions, &composite_rules, warnings);
-                });
+            if let Some(messages) = ast_queries {
+                warnings.collect_as("ast-query-compile", |warnings| warnings.extend(messages));
             }
             tracing::trace!("Step 1h1a completed in {:?}", step_start.elapsed());
 
@@ -1404,10 +1282,8 @@ impl super::CapabilityMapper {
             // backreferences) — a silently-dead condition, so this is Hard.
             let step_start = std::time::Instant::now();
             tracing::trace!("Step 1h2a/15: Detecting engine-incompatible regex features");
-            if !crate::validation_controls::is_validator_disabled("incompatible-regex") {
-                warnings.collect_as("incompatible-regex", |warnings| {
-                    find_incompatible_regex_features(&trait_definitions, warnings);
-                });
+            if let Some(messages) = incompatible_regex {
+                warnings.collect_as("incompatible-regex", |warnings| warnings.extend(messages));
             }
             tracing::trace!("Step 1h2a completed in {:?}", step_start.elapsed());
 
@@ -1483,11 +1359,8 @@ impl super::CapabilityMapper {
             // Check for regex vs literal overlaps (cross-type and containment)
             let step_start = std::time::Instant::now();
             tracing::trace!("Step 1k/15: Checking for regex vs literal overlaps");
-            if !crate::validation_controls::is_validator_disabled("regex-contains-literal")
-                || !crate::validation_controls::is_validator_disabled("regex-vs-literal-duplicate")
-            {
-                for (validator_id, message) in find_regex_literal_overlap_issues(&trait_definitions)
-                {
+            if let Some(issues) = regex_literal {
+                for (validator_id, message) in issues {
                     if !crate::validation_controls::is_validator_disabled(validator_id) {
                         warnings.push_id(validator_id, message);
                     }
@@ -1498,9 +1371,9 @@ impl super::CapabilityMapper {
             // Check for regex alternative subsets and case-insensitive regex overlaps
             let step_start = std::time::Instant::now();
             tracing::trace!("Step 1l/15: Checking for regex alternative subsets");
-            if !crate::validation_controls::is_validator_disabled("regex-alternative-subset") {
+            if let Some(messages) = alternative_subsets {
                 warnings.collect_as("regex-alternative-subset", |warnings| {
-                    check_regex_alternative_subsets(&trait_definitions, warnings);
+                    warnings.extend(messages)
                 });
             }
             tracing::trace!("Step 1l completed in {:?}", step_start.elapsed());
@@ -2723,42 +2596,37 @@ impl super::CapabilityMapper {
             }
 
             // V4: every member of an exception composite must be exactly `notable`.
-            if !crate::validation_controls::is_validator_disabled("exception-member-crit") {
-                let members = find_exception_non_notable_members(
-                    &trait_definitions,
-                    &composite_rules,
-                    &rule_source_files,
+            if let Some(members) = exception_members
+                && !members.is_empty()
+            {
+                eprintln!(
+                    "\n❌ ERROR: {} member(s) of `crit: exception` composites are not `notable`",
+                    members.len()
                 );
-                if !members.is_empty() {
-                    eprintln!(
-                        "\n❌ ERROR: {} member(s) of `crit: exception` composites are not `notable`",
-                        members.len()
-                    );
-                    eprintln!(
-                        "   A benign pattern is assembled from `notable` (\"defines program purpose\") facts."
-                    );
-                    eprintln!(
-                        "   Members that are baseline/component, or suspicious/hostile, do not belong in one.\n"
-                    );
-                    for (id, member_id, crit, source_file) in &members {
-                        let crit = format!("{crit:?}").to_lowercase();
-                        match find_line_number(source_file, member_id) {
-                            Some(l) => eprintln!(
-                                "   {source_file}:{l}: '{id}' member '{member_id}' is `{crit}`, not `notable`"
-                            ),
-                            None => eprintln!(
-                                "   {source_file}: '{id}' member '{member_id}' is `{crit}`, not `notable`"
-                            ),
-                        }
-                    }
-                    warnings.push_id(
-                        "exception-member-crit",
-                        format!(
-                            "{} member(s) of crit: exception composites are not notable",
-                            members.len()
+                eprintln!(
+                    "   A benign pattern is assembled from `notable` (\"defines program purpose\") facts."
+                );
+                eprintln!(
+                    "   Members that are baseline/component, or suspicious/hostile, do not belong in one.\n"
+                );
+                for (id, member_id, crit, source_file) in &members {
+                    let crit = format!("{crit:?}").to_lowercase();
+                    match find_line_number(source_file, member_id) {
+                        Some(l) => eprintln!(
+                            "   {source_file}:{l}: '{id}' member '{member_id}' is `{crit}`, not `notable`"
                         ),
-                    );
+                        None => eprintln!(
+                            "   {source_file}: '{id}' member '{member_id}' is `{crit}`, not `notable`"
+                        ),
+                    }
                 }
+                warnings.push_id(
+                    "exception-member-crit",
+                    format!(
+                        "{} member(s) of crit: exception composites are not notable",
+                        members.len()
+                    ),
+                );
             }
 
             // V2: an exception may only be referenced from unless:/downgrade:, never as
@@ -3270,12 +3138,6 @@ impl super::CapabilityMapper {
 
             // Validate: a pooling composite must declare the types it mixes.
             tracing::trace!("Checking for required legs outside the for: list");
-            let legs_outside =
-                if crate::validation_controls::is_validator_disabled("leg-outside-for") {
-                    Vec::new()
-                } else {
-                    find_legs_outside_for(&trait_definitions, &composite_rules)
-                };
             if !legs_outside.is_empty() {
                 eprintln!(
                     "\n\u{274c} ERROR: {} required legs come from file types the rule does not declare",
@@ -3347,36 +3209,32 @@ impl super::CapabilityMapper {
             // Non-fatal: `any:` branches that `for:` makes unreachable while a
             // sibling branch keeps the rule alive. Summarised by default (the
             // corpus has a backlog); `CLEAVE_WARN_DEAD_ANY=1` lists them.
-            if !crate::validation_controls::is_validator_disabled("dead-any-alternative") {
-                let dead_any = crate::capabilities::validation::find_dead_any_alternatives(
-                    &trait_definitions,
-                    &composite_rules,
+            if let Some(dead_any) = dead_any_alternatives
+                && !dead_any.is_empty()
+            {
+                let rules: std::collections::BTreeSet<&str> =
+                    dead_any.iter().map(|l| l.id.as_str()).collect();
+                eprintln!(
+                    "\n\u{26a0}\u{fe0f}  WARNING: {} any: alternatives in {} pooling composites come from file types the rule does not declare (that branch can never fire); CLEAVE_WARN_DEAD_ANY=1 lists them",
+                    dead_any.len(),
+                    rules.len()
                 );
-                if !dead_any.is_empty() {
-                    let rules: std::collections::BTreeSet<&str> =
-                        dead_any.iter().map(|l| l.id.as_str()).collect();
-                    eprintln!(
-                        "\n\u{26a0}\u{fe0f}  WARNING: {} any: alternatives in {} pooling composites come from file types the rule does not declare (that branch can never fire); CLEAVE_WARN_DEAD_ANY=1 lists them",
-                        dead_any.len(),
-                        rules.len()
-                    );
-                    if std::env::var_os("CLEAVE_WARN_DEAD_ANY").is_some() {
-                        for issue in &dead_any {
-                            let source_file = rule_source_files
-                                .get(&issue.id)
-                                .map(std::string::String::as_str)
-                                .unwrap_or("unknown");
-                            let missing = issue
-                                .leg_types
-                                .iter()
-                                .map(|ft| ft.label().to_string())
-                                .collect::<Vec<_>>()
-                                .join(", ");
-                            eprintln!(
-                                "   {}: '{}' any: '{}' fires only on [{}]",
-                                source_file, issue.id, issue.leg, missing
-                            );
-                        }
+                if std::env::var_os("CLEAVE_WARN_DEAD_ANY").is_some() {
+                    for issue in &dead_any {
+                        let source_file = rule_source_files
+                            .get(&issue.id)
+                            .map(std::string::String::as_str)
+                            .unwrap_or("unknown");
+                        let missing = issue
+                            .leg_types
+                            .iter()
+                            .map(|ft| ft.label().to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        eprintln!(
+                            "   {}: '{}' any: '{}' fires only on [{}]",
+                            source_file, issue.id, issue.leg, missing
+                        );
                     }
                 }
             }
@@ -4892,8 +4750,6 @@ impl super::CapabilityMapper {
             // Validate: orphaned component traits not referenced by any rule
             let disable_orphaned_components_validation =
                 crate::validation_controls::is_validator_disabled("orphaned-components");
-            let orphaned_components =
-                find_orphaned_components(&trait_definitions, &composite_rules, &rule_source_files);
             if !disable_orphaned_components_validation && !orphaned_components.is_empty() {
                 eprintln!(
                     "\n⚠️  WARNING: {} component traits are never referenced",
@@ -5050,84 +4906,71 @@ impl super::CapabilityMapper {
             // Validate: two required legs that one value satisfies at once.
             // The rule claims two pieces of evidence and has one, spelled
             // twice.
-            if !crate::validation_controls::is_validator_disabled("one-fact-conviction") {
-                let one_fact = find_one_fact_convictions(&trait_definitions, &composite_rules);
-                if !one_fact.is_empty() {
-                    eprintln!(
-                        "\n❌ ERROR: {} convictions count one fact as two legs",
-                        one_fact.len()
-                    );
-                    eprintln!("   Both legs read the same fact, and a single value satisfies");
-                    eprintln!("   both -- so the rule rests on one observation while reading");
-                    eprintln!("   as two. Delete one leg, or replace it with evidence of a");
-                    eprintln!("   different kind. Legs that require two DIFFERENT values (a");
-                    eprintln!("   root launcher AND a staged binary) are not reported.\n");
-                    for (rule_id, first, second, fact) in &one_fact {
-                        let source = rule_source_files
-                            .get(rule_id)
-                            .map(std::string::String::as_str)
-                            .unwrap_or("unknown");
-                        match find_line_number(source, rule_id) {
-                            Some(line) => eprintln!("   {source}:{line}: '{rule_id}'"),
-                            None => eprintln!("   {source}: '{rule_id}'"),
-                        }
-                        eprintln!("      '{first}' and '{second}' both read {fact},");
-                        eprintln!("      and one value satisfies both");
+            if let Some(one_fact) = one_fact_convictions
+                && !one_fact.is_empty()
+            {
+                eprintln!(
+                    "\n❌ ERROR: {} convictions count one fact as two legs",
+                    one_fact.len()
+                );
+                eprintln!("   Both legs read the same fact, and a single value satisfies");
+                eprintln!("   both -- so the rule rests on one observation while reading");
+                eprintln!("   as two. Delete one leg, or replace it with evidence of a");
+                eprintln!("   different kind. Legs that require two DIFFERENT values (a");
+                eprintln!("   root launcher AND a staged binary) are not reported.\n");
+                for (rule_id, first, second, fact) in &one_fact {
+                    let source = rule_source_files
+                        .get(rule_id)
+                        .map(std::string::String::as_str)
+                        .unwrap_or("unknown");
+                    match find_line_number(source, rule_id) {
+                        Some(line) => eprintln!("   {source}:{line}: '{rule_id}'"),
+                        None => eprintln!("   {source}: '{rule_id}'"),
                     }
-                    eprintln!();
-                    warnings.push(format!(
-                        "{} convictions count one fact as two legs",
-                        one_fact.len()
-                    ));
+                    eprintln!("      '{first}' and '{second}' both read {fact},");
+                    eprintln!("      and one value satisfies both");
                 }
+                eprintln!();
+                warnings.push(format!(
+                    "{} convictions count one fact as two legs",
+                    one_fact.len()
+                ));
             }
 
             // Validate: a conviction assembled only from name/size/metric facts
             // fingerprints one artifact rather than detecting the malware.
-            if !crate::validation_controls::is_validator_disabled("conviction-without-content") {
-                let no_content =
-                    find_convictions_without_content(&trait_definitions, &composite_rules);
-                if !no_content.is_empty() {
-                    eprintln!(
-                        "\n❌ ERROR: {} convictions rest on no content evidence",
-                        no_content.len()
-                    );
-                    eprintln!(
-                        "   Every leg is a name, a size or a metric count -- what the file is"
-                    );
-                    eprintln!(
-                        "   called, weighs and counts, never what it does. That fingerprints"
-                    );
-                    eprintln!("   one artifact and misses the next build of the same malware.\n");
-                    eprintln!(
-                        "   Add a leg derived from the contents: a string, symbol, import or"
-                    );
-                    eprintln!(
-                        "   structural match stating what the sample actually does. If no such"
-                    );
-                    eprintln!(
-                        "   evidence exists for this family, it is an identity record and not"
-                    );
-                    eprintln!(
-                        "   a detection -- keep the traits at notable and drop the conviction.\n"
-                    );
-                    for (rule_id, resting_on) in &no_content {
-                        let source = rule_source_files
-                            .get(rule_id)
-                            .map(std::string::String::as_str)
-                            .unwrap_or("unknown");
-                        match find_line_number(source, rule_id) {
-                            Some(line) => eprintln!("   {source}:{line}: '{rule_id}'"),
-                            None => eprintln!("   {source}: '{rule_id}'"),
-                        }
-                        eprintln!("      rests only on: {}", resting_on.join(", "));
+            if let Some(no_content) = content_free_convictions
+                && !no_content.is_empty()
+            {
+                eprintln!(
+                    "\n❌ ERROR: {} convictions rest on no content evidence",
+                    no_content.len()
+                );
+                eprintln!("   Every leg is a name, a size or a metric count -- what the file is");
+                eprintln!("   called, weighs and counts, never what it does. That fingerprints");
+                eprintln!("   one artifact and misses the next build of the same malware.\n");
+                eprintln!("   Add a leg derived from the contents: a string, symbol, import or");
+                eprintln!("   structural match stating what the sample actually does. If no such");
+                eprintln!("   evidence exists for this family, it is an identity record and not");
+                eprintln!(
+                    "   a detection -- keep the traits at notable and drop the conviction.\n"
+                );
+                for (rule_id, resting_on) in &no_content {
+                    let source = rule_source_files
+                        .get(rule_id)
+                        .map(std::string::String::as_str)
+                        .unwrap_or("unknown");
+                    match find_line_number(source, rule_id) {
+                        Some(line) => eprintln!("   {source}:{line}: '{rule_id}'"),
+                        None => eprintln!("   {source}: '{rule_id}'"),
                     }
-                    eprintln!();
-                    warnings.push(format!(
-                        "{} convictions rest on no content evidence",
-                        no_content.len()
-                    ));
+                    eprintln!("      rests only on: {}", resting_on.join(", "));
                 }
+                eprintln!();
+                warnings.push(format!(
+                    "{} convictions rest on no content evidence",
+                    no_content.len()
+                ));
             }
 
             // Validate: a directory/short-name reference that matches nothing.
@@ -5635,6 +5478,7 @@ impl super::CapabilityMapper {
             }
         } // End of enable_full_validation block for steps 11-15 and post-step validations
 
+        crate::capabilities::validation::facts_cache::completed();
         tracing::trace!("Validation complete");
 
         // The four match indexes build lazily on the first analysis (see
@@ -5887,4 +5731,370 @@ mod tests {
         // Literal text around the placeholder still has to line up.
         assert!(!matches_metric_family("ast.ops.xor", "ast.op.<operator>"));
     }
+}
+
+/// Run a `warnings.collect_as` check ahead of the step that reports it:
+/// `None` when the validator is disabled, which that step would skip.
+fn collect_early(validator_id: &str, check: impl FnOnce(&mut Vec<String>)) -> Option<Vec<String>> {
+    if crate::validation_controls::is_validator_disabled(validator_id) {
+        return None;
+    }
+    let mut messages = Vec::new();
+    check(&mut messages);
+    Some(messages)
+}
+
+/// Warnings recorded while a file is prepared, replayed in order by the merge.
+/// Mirrors the two `ValidationIssues` pushes the per-trait checks make, so the
+/// checks read the same wherever they run.
+#[derive(Default)]
+struct PendingIssues(Vec<(Option<&'static str>, String)>);
+
+impl PendingIssues {
+    fn push_legacy(&mut self, message: String) {
+        self.0.push((None, message));
+    }
+
+    fn push_id(&mut self, validator_id: &'static str, message: String) {
+        self.0.push((Some(validator_id), message));
+    }
+
+    fn replay(self, warnings: &mut crate::validation_controls::ValidationIssues) {
+        for (validator_id, message) in self.0 {
+            match validator_id {
+                Some(id) => warnings.push_id(id, message),
+                None => warnings.push_legacy(message),
+            }
+        }
+    }
+}
+
+/// A trait ready to merge: its per-trait warnings and precompilation outcome
+/// travel with it so the ordered pass reports them in place.
+struct PreparedTrait {
+    def: TraitDefinition,
+    issues: PendingIssues,
+    precompiled: Result<()>,
+}
+
+/// A composite ready to merge, with its precompilation outcome.
+struct PreparedRule {
+    rule: CompositeTrait,
+    precompiled: Result<()>,
+}
+
+/// Everything one trait file contributes that does not depend on any other
+/// file. `trait_failure` is the first trait whose condition does not validate:
+/// the serial merge stopped there, so `traits` holds only those before it and
+/// no composites were prepared.
+struct PreparedFile {
+    path: std::path::PathBuf,
+    yaml_warnings: Vec<String>,
+    hoist: Vec<String>,
+    traits: Vec<PreparedTrait>,
+    trait_failure: Option<anyhow::Error>,
+    trait_parsing_warnings: Vec<String>,
+    rules: Vec<PreparedRule>,
+    rule_parsing_warnings: Vec<String>,
+}
+
+/// Prepare one parsed trait file for the merge: apply its defaults and id
+/// prefixes, validate conditions, run the per-trait checks and precompile
+/// regexes. It depends on no other file, so files are prepared in parallel.
+fn prepare_trait_file(
+    path: &Path,
+    mappings: TraitMappings,
+    yaml_warnings: Vec<String>,
+    dir_path: &Path,
+    enable_full_validation: bool,
+    enable_precision_scoring: bool,
+) -> PreparedFile {
+    let mut file = PreparedFile {
+        path: path.to_path_buf(),
+        yaml_warnings,
+        hoist: Vec::new(),
+        traits: Vec::new(),
+        trait_failure: None,
+        trait_parsing_warnings: Vec::new(),
+        rules: Vec::new(),
+        rule_parsing_warnings: Vec::new(),
+    };
+    // Calculate the prefix from the directory path relative to traits/
+    // e.g., traits/credential/java/traits.yaml -> credential/java
+    let trait_prefix = path
+        .strip_prefix(dir_path)
+        .ok()
+        .and_then(|p| p.parent())
+        .map(|p| p.to_string_lossy().replace('\\', "/"))
+        .filter(|s| !s.is_empty());
+
+    // Per-file: check for values that should use defaults, and values redundant with defaults
+    if enable_full_validation
+        && !crate::validation_controls::is_validator_disabled("defaults-hoist")
+    {
+        let path_str = path.display().to_string();
+        for (field, value) in find_should_use_defaults(
+            &mappings.traits,
+            &mappings.composite_rules,
+            &mappings.defaults,
+        ) {
+            file.hoist.push(format!(
+                "{path_str}: all {} items set '{field}' to {value} — move to 'defaults: {field}: {value}'",
+                mappings.traits.len() + mappings.composite_rules.len(),
+            ));
+        }
+        for (id, field) in find_redundant_explicit_defaults(
+            &mappings.traits,
+            &mappings.composite_rules,
+            &mappings.defaults,
+        ) {
+            file.hoist.push(format!(
+                "'{id}' in {path_str}: '{field}' matches the file default — remove the explicit '{field}:' from this item",
+            ));
+        }
+    }
+
+    for raw_trait in mappings.traits {
+        // Convert raw trait to final trait, applying file-level defaults
+        let mut trait_def = apply_trait_defaults(
+            raw_trait,
+            &mappings.defaults,
+            &mut file.trait_parsing_warnings,
+            path,
+            enable_precision_scoring,
+        );
+
+        // Auto-prefix trait ID if it doesn't already have the path prefix
+        // Uses :: as delimiter between directory path and trait name
+        if let Some(ref prefix) = trait_prefix
+            && !trait_def.id.starts_with(prefix)
+            && !trait_def.id.contains("::")
+            && !trait_def.id.contains('/')
+        {
+            trait_def.id = format!("{}::{}", prefix, trait_def.id);
+        }
+        // Validate YARA/AST conditions at load time
+        let validated = trait_def
+            .r#if
+            .validate()
+            .map_err(|e| anyhow::anyhow!("{}", e))
+            .with_context(|| {
+                format!(
+                    "invalid condition in trait '{}' from {:?}",
+                    trait_def.id, path
+                )
+            });
+        if let Err(error) = validated {
+            file.trait_failure = Some(error);
+            return file;
+        }
+        let issues = if enable_full_validation {
+            trait_issues(&trait_def, path)
+        } else {
+            PendingIssues::default()
+        };
+        let precompiled = trait_def.precompile_regexes();
+        file.traits.push(PreparedTrait {
+            def: trait_def,
+            issues,
+            precompiled,
+        });
+    }
+
+    for raw_rule in mappings.composite_rules {
+        // Convert raw rule to final rule, applying file-level defaults
+        let mut rule = apply_composite_defaults(
+            raw_rule,
+            &mappings.defaults,
+            &mut file.rule_parsing_warnings,
+            path,
+        );
+
+        // Auto-prefix composite rule ID if it doesn't already have the path prefix
+        if let Some(ref prefix) = trait_prefix {
+            // Auto-prefix composite rule ID using :: delimiter
+            if !rule.id.starts_with(prefix) && !rule.id.contains("::") && !rule.id.contains('/') {
+                rule.id = format!("{}::{}", prefix, rule.id);
+            }
+            // Also auto-prefix trait references within the rule's conditions
+            autoprefix_trait_refs(&mut rule, prefix);
+        }
+
+        let precompiled = rule.precompile_regexes();
+        file.rules.push(PreparedRule { rule, precompiled });
+    }
+    file
+}
+
+/// The per-trait checks the merge reports for one trait, in report order.
+fn trait_issues(trait_def: &TraitDefinition, path: &Path) -> PendingIssues {
+    let mut warnings = PendingIssues::default();
+    // Check for greedy regex patterns
+    if !crate::validation_controls::is_validator_disabled("nested-quantifier")
+        && let Some(warning) = trait_def.r#if.check_greedy_patterns()
+    {
+        warnings.push_id(
+            "nested-quantifier",
+            format!("trait '{}' in {:?}: {}", trait_def.id, path, warning),
+        );
+    }
+    // Check for word boundary regex patterns that should use type: word
+    if !crate::validation_controls::is_validator_disabled("simple-word-boundary-regex")
+        && let Some(warning) = trait_def.r#if.check_word_boundary_regex()
+    {
+        warnings.push_id(
+            "simple-word-boundary-regex",
+            format!("trait '{}' in {:?}: {}", trait_def.id, path, warning),
+        );
+    }
+
+    // Check for short case-insensitive patterns (high collision risk)
+    if let Some(warning) = trait_def
+        .r#if
+        .check_short_case_insensitive(trait_def.r#for.len())
+    {
+        warnings.push_legacy(format!(
+            "trait '{}' in {:?}: {}",
+            trait_def.id, path, warning
+        ));
+    }
+
+    // Check for improper use of not: field
+    if let Some(warning) = trait_def.check_not_field_usage() {
+        warnings.push_legacy(format!(
+            "trait '{}' in {:?}: {}",
+            trait_def.id, path, warning
+        ));
+    }
+
+    // Check for invalid criticality level
+    if let Some(warning) = trait_def.check_criticality() {
+        warnings.push_legacy(format!(
+            "trait '{}' in {:?}: {}",
+            trait_def.id, path, warning
+        ));
+    }
+
+    // Check for invalid confidence value
+    if let Some(warning) = trait_def.check_confidence() {
+        warnings.push_legacy(format!(
+            "trait '{}' in {:?}: {}",
+            trait_def.id, path, warning
+        ));
+    }
+
+    // Check for invalid size constraints
+    if let Some(warning) = trait_def.check_size_constraints() {
+        warnings.push_legacy(format!(
+            "trait '{}' in {:?}: {}",
+            trait_def.id, path, warning
+        ));
+    }
+
+    // Check for invalid entropy constraints
+    if let Some(warning) = trait_def.check_entropy_constraints() {
+        warnings.push_legacy(format!(
+            "trait '{}' in {:?}: {}",
+            trait_def.id, path, warning
+        ));
+    }
+
+    // Check for invalid count constraints
+    if let Some(warning) = trait_def.check_count_constraints() {
+        warnings.push_legacy(format!(
+            "trait '{}' in {:?}: {}",
+            trait_def.id, path, warning
+        ));
+    }
+
+    // Check for invalid density constraints
+    if let Some(warning) = trait_def.check_density_constraints() {
+        warnings.push_legacy(format!(
+            "trait '{}' in {:?}: {}",
+            trait_def.id, path, warning
+        ));
+    }
+
+    // Check for mutually exclusive match types in condition
+    if let Some(warning) = trait_def.r#if.check_match_exclusivity() {
+        warnings.push_legacy(format!(
+            "trait '{}' in {:?}: {}",
+            trait_def.id, path, warning
+        ));
+    }
+
+    // Check for empty patterns
+    if let Some(warning) = trait_def.r#if.check_empty_patterns() {
+        warnings.push_legacy(format!(
+            "trait '{}' in {:?}: {}",
+            trait_def.id, path, warning
+        ));
+    }
+
+    // Check for overly short patterns
+    if let Some(warning) = trait_def.r#if.check_short_patterns() {
+        warnings.push_legacy(format!(
+            "trait '{}' in {:?}: {}",
+            trait_def.id, path, warning
+        ));
+    }
+
+    // Check for symbol regex patterns with whitespace or word boundaries
+    if let Some(warning) = trait_def.r#if.check_symbol_regex_whitespace() {
+        warnings.push_legacy(format!(
+            "trait '{}' in {:?}: {}",
+            trait_def.id, path, warning
+        ));
+    }
+
+    // Check for literal strings used as regex
+    if let Some(warning) = trait_def.r#if.check_literal_regex() {
+        warnings.push_legacy(format!(
+            "trait '{}' in {:?}: {}",
+            trait_def.id, path, warning
+        ));
+    }
+
+    // Check for useless case_insensitive
+    if !crate::validation_controls::is_validator_disabled("case-insensitive-no-effect")
+        && let Some(warning) = trait_def.r#if.check_case_insensitive_on_non_alpha()
+    {
+        warnings.push_id(
+            "case-insensitive-no-effect",
+            format!("trait '{}' in {:?}: {}", trait_def.id, path, warning),
+        );
+    }
+
+    // Check for count_min: 0
+    if let Some(warning) = trait_def.check_count_min_value() {
+        warnings.push_legacy(format!(
+            "trait '{}' in {:?}: {}",
+            trait_def.id, path, warning
+        ));
+    }
+
+    // Check for description quality
+    if let Some(warning) = trait_def.check_description_quality() {
+        warnings.push_legacy(format!(
+            "trait '{}' in {:?}: {}",
+            trait_def.id, path, warning
+        ));
+    }
+
+    // Check for empty not: array
+    if let Some(warning) = trait_def.check_empty_not_array() {
+        warnings.push_legacy(format!(
+            "trait '{}' in {:?}: {}",
+            trait_def.id, path, warning
+        ));
+    }
+
+    // Check for empty unless: array
+    if let Some(warning) = trait_def.check_empty_unless_array() {
+        warnings.push_legacy(format!(
+            "trait '{}' in {:?}: {}",
+            trait_def.id, path, warning
+        ));
+    }
+    warnings
 }

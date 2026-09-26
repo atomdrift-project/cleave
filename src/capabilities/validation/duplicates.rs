@@ -885,7 +885,7 @@ pub(super) fn extract_pure_literal_from_regex(pattern: &str) -> Option<String> {
 /// - For regex: strip anchors, then decode purely-literal regexes (e.g.
 ///   `\.aws/credentials`) to their substr-equivalent so they compare equal
 ///   to substr matches of the same content.
-fn normalize_pattern_for_comparison(pattern: &str, is_regex: bool) -> String {
+pub(super) fn normalize_pattern_for_comparison(pattern: &str, is_regex: bool) -> String {
     let mut normalized = decode_hex_escapes(pattern);
 
     if is_regex {
@@ -2116,7 +2116,6 @@ pub(crate) fn find_literals_covered_by_regexes(
     warnings: &mut Vec<String>,
 ) {
     use rayon::prelude::*;
-    use std::sync::OnceLock;
 
     let start = std::time::Instant::now();
 
@@ -2145,198 +2144,253 @@ pub(crate) fn find_literals_covered_by_regexes(
         }
     }
 
+    // Buckets are independent and the findings are sorted before they are
+    // reported, so the buckets run in parallel.
+    let mut findings: Vec<String> = literals
+        .par_iter()
+        .flat_map_iter(|(key, phrase_map)| match regexes.get(key) {
+            Some(bucket) if bucket.len() >= MAX_REGEXES_COVERING_A_LITERAL => {
+                literal_coverage_in_bucket(key, phrase_map, bucket)
+            }
+            _ => Vec::new(),
+        })
+        .collect();
+
+    findings.sort();
+    warnings.extend(findings);
+
+    tracing::debug!(
+        "Literal-coverage detection completed in {:?}",
+        start.elapsed()
+    );
+}
+
+/// Literal-coverage findings for one (matcher context, tier) bucket.
+fn literal_coverage_in_bucket(
+    key: &(String, Criticality),
+    phrase_map: &BTreeMap<String, Vec<PatternLocation>>,
+    bucket: &[PatternLocation],
+) -> Vec<String> {
+    use rayon::prelude::*;
+
     let mut findings: Vec<String> = Vec::new();
-    for (key, phrase_map) in &literals {
-        let Some(bucket) = regexes.get(key) else {
-            continue;
-        };
-        if bucket.len() < MAX_REGEXES_COVERING_A_LITERAL {
-            continue;
-        }
 
-        // Gate on mandatory atoms instead of running every regex against every
-        // phrase. `mandatory_atom_set` returns literals such that any match is
-        // guaranteed to contain at least one of them, so an Aho-Corasick pass
-        // over the phrase names the only regexes that can possibly match it.
-        // Patterns the engine rejects (lookaround, backreferences) are already
-        // reported by `incompatible-regex`; skipping them keeps this check from
-        // failing on a problem that has its own message.
-        // Parse the HIR rather than compiling: this only needs to know whether
-        // the engine accepts the pattern, and compiling every pattern in the
-        // bucket to throw the result away costs more than the rest of the check.
-        let compilable: Vec<&PatternLocation> = bucket
-            .par_iter()
-            .filter(|location| {
-                regex_syntax::ParserBuilder::new()
-                    .build()
-                    .parse(&location.original_value)
-                    .is_ok()
-            })
-            .collect();
-
-        let mut atoms: Vec<String> = Vec::new();
-        let mut atom_owners: Vec<Vec<usize>> = Vec::new();
-        let mut ci_atoms: Vec<String> = Vec::new();
-        let mut ci_owners: Vec<Vec<usize>> = Vec::new();
-        let mut ungated: Vec<usize> = Vec::new();
-        let mut by_atom: HashMap<(String, bool), usize> = HashMap::new();
-        let atom_sets: Vec<Option<Vec<(String, bool)>>> = compilable
-            .par_iter()
-            .map(|location| {
-                crate::capabilities::derivation_memo::mandatory_atom_set(&location.original_value)
-            })
-            .collect();
-        for (idx, atom_set) in atom_sets.into_iter().enumerate() {
-            match atom_set {
-                Some(set) if !set.is_empty() => {
-                    for (atom, case_insensitive) in set {
-                        let slot = *by_atom
-                            .entry((atom.clone(), case_insensitive))
-                            .or_insert_with(|| {
-                                if case_insensitive {
-                                    ci_atoms.push(atom.clone());
-                                    ci_owners.push(Vec::new());
-                                    ci_owners.len() - 1
-                                } else {
-                                    atoms.push(atom.clone());
-                                    atom_owners.push(Vec::new());
-                                    atom_owners.len() - 1
-                                }
-                            });
-                        if case_insensitive {
-                            ci_owners[slot].push(idx);
-                        } else {
-                            atom_owners[slot].push(idx);
-                        }
-                    }
-                }
-                // No guaranteed atom (a leading `.*`, an inextractable branch):
-                // this one has to be tried against every phrase.
-                _ => ungated.push(idx),
-            }
-        }
-
-        let literal_gate = aho_corasick::AhoCorasick::new(&atoms).ok();
-        let ci_gate = aho_corasick::AhoCorasick::builder()
-            .ascii_case_insensitive(true)
-            .build(&ci_atoms)
-            .ok();
-
-        // The ungated remainder is small enough to stay a combined automaton,
-        // split in half whenever a batch overflows the size ceiling.
-        let mut ungated_sets: Vec<(Vec<usize>, regex::RegexSet)> = Vec::new();
-        let mut pending: Vec<Vec<usize>> = ungated
-            .chunks(REGEX_SET_START_WIDTH)
-            .map(<[usize]>::to_vec)
-            .collect();
-        while let Some(window) = pending.pop() {
-            if window.is_empty() {
-                continue;
-            }
-            let pats: Vec<&str> = window
-                .iter()
-                .map(|&i| compilable[i].original_value.as_str())
-                .collect();
-            match regex::RegexSetBuilder::new(&pats)
-                .size_limit(REGEX_SET_SIZE_LIMIT)
+    // Gate on mandatory atoms instead of running every regex against every
+    // phrase. `mandatory_atom_set` returns literals such that any match is
+    // guaranteed to contain at least one of them, so an Aho-Corasick pass
+    // over the phrase names the only regexes that can possibly match it.
+    // Patterns the engine rejects (lookaround, backreferences) are already
+    // reported by `incompatible-regex`; skipping them keeps this check from
+    // failing on a problem that has its own message.
+    // Parse the HIR rather than compiling: this only needs to know whether
+    // the engine accepts the pattern, and compiling every pattern in the
+    // bucket to throw the result away costs more than the rest of the check.
+    let compilable: Vec<&PatternLocation> = bucket
+        .par_iter()
+        .filter(|location| {
+            regex_syntax::ParserBuilder::new()
                 .build()
-            {
-                Ok(set) => ungated_sets.push((window, set)),
-                Err(err) => {
-                    if window.len() > 1 {
-                        let half = window.len() / 2;
-                        pending.push(window[half..].to_vec());
-                        pending.push(window[..half].to_vec());
+                .parse(&location.original_value)
+                .is_ok()
+        })
+        .collect();
+
+    let mut atoms: Vec<String> = Vec::new();
+    let mut atom_owners: Vec<Vec<usize>> = Vec::new();
+    let mut ci_atoms: Vec<String> = Vec::new();
+    let mut ci_owners: Vec<Vec<usize>> = Vec::new();
+    let mut ungated: Vec<usize> = Vec::new();
+    let mut by_atom: HashMap<(String, bool), usize> = HashMap::new();
+    let atom_sets: Vec<Option<Vec<(String, bool)>>> = compilable
+        .par_iter()
+        .map(|location| {
+            crate::capabilities::derivation_memo::mandatory_atom_set(&location.original_value)
+        })
+        .collect();
+    for (idx, atom_set) in atom_sets.into_iter().enumerate() {
+        match atom_set {
+            Some(set) if !set.is_empty() => {
+                for (atom, case_insensitive) in set {
+                    let slot = *by_atom
+                        .entry((atom.clone(), case_insensitive))
+                        .or_insert_with(|| {
+                            if case_insensitive {
+                                ci_atoms.push(atom.clone());
+                                ci_owners.push(Vec::new());
+                                ci_owners.len() - 1
+                            } else {
+                                atoms.push(atom.clone());
+                                atom_owners.push(Vec::new());
+                                atom_owners.len() - 1
+                            }
+                        });
+                    if case_insensitive {
+                        ci_owners[slot].push(idx);
                     } else {
-                        tracing::debug!(
-                            "literal-coverage: skipping oversized pattern {}: {err}",
-                            compilable[window[0]].trait_id
-                        );
+                        atom_owners[slot].push(idx);
                     }
                 }
             }
+            // No guaranteed atom (a leading `.*`, an inextractable branch):
+            // this one has to be tried against every phrase.
+            _ => ungated.push(idx),
         }
+    }
 
-        // Compiled lazily: most gated patterns are never a candidate for any
-        // phrase, so compiling the whole bucket up front would be wasted. The
-        // phrases run in parallel, and compiling candidates was most of this
-        // check's time when they ran one by one.
-        let compiled: Vec<OnceLock<Option<regex::Regex>>> =
-            (0..compilable.len()).map(|_| OnceLock::new()).collect();
-        let covering: BTreeMap<&String, Vec<&PatternLocation>> = phrase_map
-            .par_iter()
-            .filter_map(|(phrase, holders)| {
-                // Newlines let multiline anchors see a line boundary without adding
-                // any content the phrase did not have.
-                let haystack = format!("\n{phrase}\n");
-                let mut candidates: HashSet<usize> = HashSet::new();
-                if let Some(gate) = &literal_gate {
-                    for hit in gate.find_overlapping_iter(&haystack) {
-                        candidates.extend(atom_owners[hit.pattern().as_usize()].iter().copied());
-                    }
-                }
-                if let Some(gate) = &ci_gate {
-                    for hit in gate.find_overlapping_iter(&haystack) {
-                        candidates.extend(ci_owners[hit.pattern().as_usize()].iter().copied());
-                    }
-                }
+    let literal_gate = aho_corasick::AhoCorasick::new(&atoms).ok();
+    let ci_gate = aho_corasick::AhoCorasick::builder()
+        .ascii_case_insensitive(true)
+        .build(&ci_atoms)
+        .ok();
 
-                let mut hits: Vec<usize> = Vec::new();
-                for &idx in &candidates {
-                    let compiled_pattern = compiled[idx]
-                        .get_or_init(|| regex::Regex::new(&compilable[idx].original_value).ok());
-                    if compiled_pattern
+    // Gate every phrase first -- two Aho-Corasick passes each -- then turn
+    // the candidate lists around, so each regex is compiled once and run by
+    // one thread over just the phrases that can hold it. Matching phrase by
+    // phrase ran each candidate from whichever thread held the phrase, and a
+    // thread's first use of a regex builds its own lazy-DFA cache: over this
+    // tree's ~15k text phrases that was most of the check.
+    let phrases: Vec<(&String, &Vec<PatternLocation>)> = phrase_map.iter().collect();
+    // Newlines let multiline anchors see a line boundary without adding any
+    // content the phrase did not have.
+    let haystacks: Vec<String> = phrases
+        .iter()
+        .map(|(phrase, _)| format!("\n{phrase}\n"))
+        .collect();
+    let gated: Vec<Vec<usize>> = haystacks
+        .par_iter()
+        .map(|haystack| {
+            let mut candidates: Vec<usize> = Vec::new();
+            if let Some(gate) = &literal_gate {
+                for hit in gate.find_overlapping_iter(haystack) {
+                    candidates.extend_from_slice(&atom_owners[hit.pattern().as_usize()]);
+                }
+            }
+            if let Some(gate) = &ci_gate {
+                for hit in gate.find_overlapping_iter(haystack) {
+                    candidates.extend_from_slice(&ci_owners[hit.pattern().as_usize()]);
+                }
+            }
+            candidates.sort_unstable();
+            candidates.dedup();
+            candidates
+        })
+        .collect();
+    // Whether a regex matches a phrase depends on the two alone, so during a
+    // full validation an earlier run's verdict stands (see `facts_cache`).
+    let facts = super::facts_cache::active();
+
+    // The ungated remainder is small enough to stay a combined automaton,
+    // split in half whenever a batch overflows the size ceiling. Chunks are
+    // independent, so each is matched on its own and in parallel: a phrase's
+    // matches in a chunk come from an earlier run when every pattern of the
+    // chunk and the phrase are unchanged, and the chunk's automata are built
+    // only when some phrase has none. Matches are kept in the order the single
+    // work stack used to produce them -- the last chunk first, each chunk's
+    // own windows ascending -- because a phrase's hits are collected in it.
+    let chunks: Vec<&[usize]> = ungated.chunks(REGEX_SET_START_WIDTH).collect();
+    let chunk_matches: Vec<Vec<Vec<usize>>> = chunks
+        .par_iter()
+        .map(|chunk| ungated_matches(chunk, &compilable, &haystacks, facts.as_deref()))
+        .collect();
+
+    let mut phrases_of: Vec<Vec<usize>> = vec![Vec::new(); compilable.len()];
+    for (phrase_idx, candidates) in gated.iter().enumerate() {
+        for &idx in candidates {
+            phrases_of[idx].push(phrase_idx);
+        }
+    }
+    let gated_hits: Vec<(usize, usize)> = phrases_of
+        .par_iter()
+        .enumerate()
+        .flat_map_iter(|(idx, phrase_idxs)| {
+            let source = &compilable[idx].original_value;
+            // Compiled only when some phrase has no stored verdict.
+            let mut compiled: Option<Option<regex::Regex>> = None;
+            phrase_idxs
+                .iter()
+                .copied()
+                .filter(|&phrase_idx| {
+                    let haystack = &haystacks[phrase_idx];
+                    let fact = facts.as_ref().map(|facts| {
+                        let key = super::facts_cache::key(
+                            "literal-coverage",
+                            &[source.as_bytes(), haystack.as_bytes()],
+                        );
+                        (facts, key)
+                    });
+                    if let Some(known) = fact
                         .as_ref()
-                        .is_some_and(|pattern| pattern.is_match(&haystack))
+                        .and_then(|(facts, key)| facts.get::<bool>(key))
                     {
-                        hits.push(idx);
+                        return known;
                     }
-                }
-                for (window, set) in &ungated_sets {
-                    hits.extend(set.matches(&haystack).into_iter().map(|hit| window[hit]));
-                }
+                    let matched = compiled
+                        .get_or_insert_with(|| regex::Regex::new(source).ok())
+                        .as_ref()
+                        .is_some_and(|pattern| pattern.is_match(haystack));
+                    if let Some((facts, key)) = fact {
+                        facts.put(key, &matched);
+                    }
+                    matched
+                })
+                .map(|phrase_idx| (phrase_idx, idx))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let mut hits_of: Vec<Vec<usize>> = vec![Vec::new(); phrases.len()];
+    for (phrase_idx, idx) in gated_hits {
+        hits_of[phrase_idx].push(idx);
+    }
 
-                // A regex scoped to file types the literal never sees is not
-                // covering it. Filtering the hits rather than the candidates
-                // keeps the gate doing the cheap work.
-                let covered_by: Vec<&PatternLocation> = hits
-                    .into_iter()
-                    .map(|idx| compilable[idx])
-                    .filter(|location| {
-                        holders
-                            .iter()
-                            .any(|holder| has_filetype_overlap(holder, location))
-                    })
-                    .collect();
-                (!covered_by.is_empty()).then_some((phrase, covered_by))
-            })
-            .collect();
-
-        for (phrase, mut covering) in covering {
-            let holders = &phrase_map[phrase];
-            covering.sort_by(|a, b| a.trait_id.cmp(&b.trait_id));
-            covering.dedup_by(|a, b| a.trait_id == b.trait_id);
-            if covering.len() < MAX_REGEXES_COVERING_A_LITERAL {
-                continue;
+    let covering: BTreeMap<&String, Vec<&PatternLocation>> = phrases
+        .par_iter()
+        .zip(hits_of.into_par_iter())
+        .enumerate()
+        .filter_map(|(phrase_idx, (&(phrase, holders), mut hits))| {
+            for matches in chunk_matches.iter().rev() {
+                hits.extend_from_slice(&matches[phrase_idx]);
             }
 
-            let shown: Vec<String> = covering
-                .iter()
-                .take(6)
-                .map(|location| {
-                    format!(
-                        "      {}::{} => {}",
-                        location.file_path, location.trait_id, location.original_value
-                    )
+            // A regex scoped to file types the literal never sees is not
+            // covering it. Filtering the hits rather than the candidates
+            // keeps the gate doing the cheap work.
+            let covered_by: Vec<&PatternLocation> = hits
+                .into_iter()
+                .map(|idx| compilable[idx])
+                .filter(|location| {
+                    holders
+                        .iter()
+                        .any(|holder| has_filetype_overlap(holder, location))
                 })
                 .collect();
-            let more = covering.len().saturating_sub(shown.len());
-            let holder_names: Vec<String> = holders
-                .iter()
-                .take(3)
-                .map(|holder| format!("{}::{}", holder.file_path, holder.trait_id))
-                .collect();
-            findings.push(format!(
+            (!covered_by.is_empty()).then_some((phrase, covered_by))
+        })
+        .collect();
+    for (phrase, mut covering) in covering {
+        let holders = &phrase_map[phrase];
+        covering.sort_by(|a, b| a.trait_id.cmp(&b.trait_id));
+        covering.dedup_by(|a, b| a.trait_id == b.trait_id);
+        if covering.len() < MAX_REGEXES_COVERING_A_LITERAL {
+            continue;
+        }
+
+        let shown: Vec<String> = covering
+            .iter()
+            .take(6)
+            .map(|location| {
+                format!(
+                    "      {}::{} => {}",
+                    location.file_path, location.trait_id, location.original_value
+                )
+            })
+            .collect();
+        let more = covering.len().saturating_sub(shown.len());
+        let holder_names: Vec<String> = holders
+            .iter()
+            .take(3)
+            .map(|holder| format!("{}::{}", holder.file_path, holder.trait_id))
+            .collect();
+        findings.push(format!(
                 "Literal {:?} ({} {}) is also matched by {} regexes in the same context and tier:\n   held by: {}\n{}{}\n   → Action: Look for opportunities to consolidate the regular expressions and/or literals in a way that adheres to TAXONOMY.md",
                 phrase,
                 key.0,
@@ -2350,16 +2404,111 @@ pub(crate) fn find_literals_covered_by_regexes(
                     String::new()
                 },
             ));
+    }
+    findings
+}
+
+/// Which patterns of one chunk of ungated patterns match each haystack, as
+/// indices into `compilable`, ascending within the chunk. A haystack's matches
+/// are stored under the chunk's patterns and the haystack, so an unchanged
+/// chunk and phrase reuse an earlier run's; the chunk's automata are built only
+/// when some haystack has no stored matches.
+fn ungated_matches(
+    chunk: &[usize],
+    compilable: &[&PatternLocation],
+    haystacks: &[String],
+    facts: Option<&super::facts_cache::FactsCache>,
+) -> Vec<Vec<usize>> {
+    use rayon::prelude::*;
+
+    let patterns: Vec<&[u8]> = chunk
+        .iter()
+        .map(|&i| compilable[i].original_value.as_bytes())
+        .collect();
+    let chunk_key = super::facts_cache::key("literal-coverage-chunk", &patterns);
+    let keys: Vec<super::facts_cache::FactKey> = haystacks
+        .par_iter()
+        .map(|haystack| {
+            super::facts_cache::key("literal-coverage-set", &[&chunk_key, haystack.as_bytes()])
+        })
+        .collect();
+    // Offsets into the chunk, so a stored match names a pattern by its place
+    // among exactly these patterns.
+    let known: Vec<Option<Vec<u32>>> = keys
+        .par_iter()
+        .map(|key| facts.and_then(|facts| facts.get(key)))
+        .collect();
+    let sets = if known.iter().any(Option::is_none) {
+        regex_sets_for_chunk(chunk, compilable)
+    } else {
+        Vec::new()
+    };
+    // Phrases are matched in parallel: a chunk of the largest bucket holds
+    // ~15k of them.
+    haystacks
+        .par_iter()
+        .zip(known)
+        .zip(keys)
+        .map(|((haystack, known), key)| {
+            let offsets = known.unwrap_or_else(|| {
+                let offsets: Vec<u32> = sets
+                    .iter()
+                    .flat_map(|(window, set)| {
+                        set.matches(haystack).into_iter().map(|hit| window[hit])
+                    })
+                    .filter_map(|idx| chunk.binary_search(&idx).ok())
+                    .filter_map(|offset| u32::try_from(offset).ok())
+                    .collect();
+                if let Some(facts) = facts {
+                    facts.put(key, &offsets);
+                }
+                offsets
+            });
+            offsets
+                .into_iter()
+                .filter_map(|offset| chunk.get(offset as usize).copied())
+                .collect()
+        })
+        .collect()
+}
+
+/// Build the combined automata for one chunk of ungated patterns, halving a
+/// window whenever it overflows the size ceiling. Windows come back in the
+/// order a depth-first split visits them, which is ascending.
+fn regex_sets_for_chunk(
+    chunk: &[usize],
+    compilable: &[&PatternLocation],
+) -> Vec<(Vec<usize>, regex::RegexSet)> {
+    let mut sets = Vec::new();
+    let mut pending: Vec<Vec<usize>> = vec![chunk.to_vec()];
+    while let Some(window) = pending.pop() {
+        if window.is_empty() {
+            continue;
+        }
+        let pats: Vec<&str> = window
+            .iter()
+            .map(|&i| compilable[i].original_value.as_str())
+            .collect();
+        match regex::RegexSetBuilder::new(&pats)
+            .size_limit(REGEX_SET_SIZE_LIMIT)
+            .build()
+        {
+            Ok(set) => sets.push((window, set)),
+            Err(err) => {
+                if window.len() > 1 {
+                    let half = window.len() / 2;
+                    pending.push(window[half..].to_vec());
+                    pending.push(window[..half].to_vec());
+                } else {
+                    tracing::debug!(
+                        "literal-coverage: skipping oversized pattern {}: {err}",
+                        compilable[window[0]].trait_id
+                    );
+                }
+            }
         }
     }
-
-    findings.sort();
-    warnings.extend(findings);
-
-    tracing::debug!(
-        "Literal-coverage detection completed in {:?}",
-        start.elapsed()
-    );
+    sets
 }
 
 /// Whether one of the pair stands down wherever the other fires.
@@ -3022,6 +3171,60 @@ pub(crate) fn check_regex_contains_literal(
     );
 }
 
+/// Regex metacharacters that may surround a literal in a trivial extension
+/// (`foo` → `foo.*`, `.exe` → `.*\.exe`).
+fn is_extension_meta(c: char) -> bool {
+    matches!(c, '.' | '*' | '+' | '?' | '$' | '^' | '\\')
+}
+
+/// Whether `regex` is `escaped_literal` with nothing but metacharacters around
+/// it (`foo` → `foo.*`, `\.exe` → `.*\.exe`), so the regex adds no content of
+/// its own. The first occurrence decides: as a prefix, then as a suffix, then
+/// anywhere.
+pub(super) fn trivially_extends(regex: &str, escaped_literal: &str) -> bool {
+    let all_meta = |s: &str| s.chars().all(is_extension_meta);
+    if let Some(rest) = regex.strip_prefix(escaped_literal) {
+        all_meta(rest)
+    } else if let Some(rest) = regex.strip_suffix(escaped_literal) {
+        all_meta(rest)
+    } else if let Some(idx) = regex.find(escaped_literal) {
+        all_meta(&regex[..idx]) && all_meta(&regex[idx + escaped_literal.len()..])
+    } else {
+        false
+    }
+}
+
+/// The literals a regex can possibly be reported against, as ascending
+/// indices: those with the regex's normalized form, and those whose escaped
+/// form is the regex minus leading and trailing metacharacters. Every pair
+/// `find_regex_literal_overlap_issues` reports is one of these; the caller
+/// still applies the full test to each.
+pub(super) fn regex_literal_candidates(
+    pattern: &str,
+    normalized: &str,
+    by_normalized: &HashMap<&str, Vec<usize>>,
+    by_escaped: &HashMap<String, Vec<usize>>,
+) -> Vec<usize> {
+    let mut candidates: Vec<usize> = by_normalized.get(normalized).cloned().unwrap_or_default();
+    // Metacharacters are ASCII, so every offset inside either run is a char
+    // boundary.
+    let lead = pattern.len() - pattern.trim_start_matches(is_extension_meta).len();
+    let trail = pattern.len() - pattern.trim_end_matches(is_extension_meta).len();
+    for start in 0..=lead {
+        for end in (pattern.len() - trail).max(start)..=pattern.len() {
+            if let Some(found) = pattern
+                .get(start..end)
+                .and_then(|core| by_escaped.get(core))
+            {
+                candidates.extend_from_slice(found);
+            }
+        }
+    }
+    candidates.sort_unstable();
+    candidates.dedup();
+    candidates
+}
+
 pub(crate) fn find_regex_literal_overlap_issues(
     trait_definitions: &[TraitDefinition],
 ) -> Vec<(&'static str, String)> {
@@ -3201,19 +3404,47 @@ pub(crate) fn find_regex_literal_overlap_issues(
         }
     }
 
+    // Only two outcomes below produce a warning, and each names its literals
+    // directly: an exact duplicate shares the regex's normalized form, and a
+    // trivial extension is the regex minus metacharacters at either end. So
+    // each regex is checked against just those literals rather than all of
+    // them -- the full cross product was hundreds of millions of matches, and
+    // most of `cleave validate`'s CPU.
+    let mut by_normalized: HashMap<&str, Vec<usize>> = HashMap::new();
+    let mut by_escaped: HashMap<String, Vec<usize>> = HashMap::new();
+    for (idx, literal_pat) in literal_patterns.iter().enumerate() {
+        by_normalized
+            .entry(literal_pat.normalized.as_str())
+            .or_default()
+            .push(idx);
+        by_escaped
+            .entry(regex::escape(&literal_pat.pattern))
+            .or_default()
+            .push(idx);
+    }
+
     // Check each regex against literals (parallelized for performance)
     use rayon::prelude::*;
 
     let new_warnings: Vec<(&'static str, String)> = regex_patterns
         .par_iter()
         .flat_map(|regex_pat| {
+            let candidates = regex_literal_candidates(
+                &regex_pat.pattern,
+                &regex_pat.normalized,
+                &by_normalized,
+                &by_escaped,
+            );
+            if candidates.is_empty() {
+                return Vec::new();
+            }
             // Try to compile regex to test matches (using cache)
             let Some(re) = get_cached_regex(&regex_pat.pattern) else {
                 return Vec::new();
             };
 
             let mut local_warnings = Vec::new();
-            for literal_pat in &literal_patterns {
+            for literal_pat in candidates.iter().map(|&idx| &literal_patterns[idx]) {
                 // Skip if criticalities are different (intentional layering)
                 // Note: Component/Baseline/Filtered are treated as equivalent "inert" levels
                 if !criticalities_equivalent(regex_pat.crit, literal_pat.crit) {
@@ -3255,37 +3486,8 @@ pub(crate) fn find_regex_literal_overlap_issues(
                 // "foo" vs "foo.*" -> block (literal + metacharacters)
                 // ".exe" vs ".*\.exe" -> block (metacharacters + escaped literal)
                 // ".exe" vs "7z\.exe" -> allow (actual content + escaped literal)
-                let escaped_literal = regex::escape(&literal_pat.pattern);
-                let is_trivial_extension = if regex_pat.pattern.starts_with(&escaped_literal) {
-                    // Literal is a prefix - check if remainder is just metacharacters/anchors
-                    let remainder = &regex_pat.pattern[escaped_literal.len()..];
-                    remainder
-                        .chars()
-                        .all(|c| matches!(c, '.' | '*' | '+' | '?' | '$' | '^' | '\\'))
-                } else if regex_pat.pattern.ends_with(&escaped_literal) {
-                    // Literal is a suffix - check if prefix is just metacharacters/anchors
-                    let prefix =
-                        &regex_pat.pattern[..regex_pat.pattern.len() - escaped_literal.len()];
-                    prefix
-                        .chars()
-                        .all(|c| matches!(c, '.' | '*' | '+' | '?' | '$' | '^' | '\\'))
-                } else if regex_pat.pattern.contains(&escaped_literal) {
-                    // Literal appears in the middle - check if surrounding chars are metacharacters
-                    if let Some(idx) = regex_pat.pattern.find(&escaped_literal) {
-                        let before = &regex_pat.pattern[..idx];
-                        let after = &regex_pat.pattern[idx + escaped_literal.len()..];
-                        before
-                            .chars()
-                            .all(|c| matches!(c, '.' | '*' | '+' | '?' | '$' | '^' | '\\'))
-                            && after
-                                .chars()
-                                .all(|c| matches!(c, '.' | '*' | '+' | '?' | '$' | '^' | '\\'))
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                };
+                let is_trivial_extension =
+                    trivially_extends(&regex_pat.pattern, &regex::escape(&literal_pat.pattern));
 
                 // Skip if significantly different length, no alternation, AND not a trivial extension
                 if len_diff_pct > 0.33 && !has_alternation && !is_trivial_extension {

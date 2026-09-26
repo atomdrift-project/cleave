@@ -3856,9 +3856,9 @@ impl Condition {
                 // Validate only — the compiled regex is resolved lazily and shared
                 // process-wide at eval time (see `cached_regex`), so it isn't stored
                 // per condition. Compile here purely to surface invalid patterns.
-                regex::Regex::new(regex_pattern).map_err(|e| {
-                    anyhow::anyhow!("Failed to compile symbol regex '{}': {}", regex_pattern, e)
-                })?;
+                if let Some(e) = regex_compile_error(regex_pattern) {
+                    anyhow::bail!("Failed to compile symbol regex '{}': {}", regex_pattern, e);
+                }
             }
             // Text/Literal `word:`/`substr:`/`exact:` are literal matches and
             // `regex:` compiles lazily (shared) on first eval — see
@@ -3877,21 +3877,21 @@ impl Condition {
                 regex: Some(regex_pattern),
                 ..
             }) => {
-                regex::Regex::new(regex_pattern).map_err(|e| {
-                    anyhow::anyhow!("Failed to compile value regex '{}': {}", regex_pattern, e)
-                })?;
+                if let Some(e) = regex_compile_error(regex_pattern) {
+                    anyhow::bail!("Failed to compile value regex '{}': {}", regex_pattern, e);
+                }
             }
             Condition::Path(PathQuery {
                 regex: Some(regex_pattern),
                 ..
             }) => {
-                regex::Regex::new(regex_pattern).map_err(|e| {
-                    anyhow::anyhow!(
+                if let Some(e) = regex_compile_error(regex_pattern) {
+                    anyhow::bail!(
                         "Failed to compile basename regex '{}': {}",
                         regex_pattern,
                         e
-                    )
-                })?;
+                    );
+                }
             }
             _ => {}
         }
@@ -3903,6 +3903,22 @@ impl Condition {
         // reused — so identical needles cost once and only needles that fire cost
         // anything, instead of an owned `Finder` per condition (tens of thousands).
         Ok(())
+    }
+}
+
+/// Why `pattern` does not compile, in `regex::Regex::new`'s words, or `None`
+/// when it does. Precompilation compiles only to validate, and during a full
+/// validation the verdict is kept across runs (see `facts_cache`): an
+/// unchanged pattern is not recompiled.
+fn regex_compile_error(pattern: &str) -> Option<String> {
+    use crate::capabilities::validation::facts_cache;
+    let compile = || regex::Regex::new(pattern).err().map(|e| e.to_string());
+    match facts_cache::active() {
+        Some(facts) => facts.get_or_compute(
+            facts_cache::key("regex-compile", &[pattern.as_bytes()]),
+            compile,
+        ),
+        None => compile(),
     }
 }
 

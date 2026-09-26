@@ -275,6 +275,9 @@ pub(crate) struct TraitDefinition {
     pub(crate) id_shared: std::sync::OnceLock<crate::types::Istr>,
     #[serde(skip)]
     pub(crate) desc_shared: std::sync::OnceLock<crate::types::Istr>,
+    /// Memo for [`Self::requires_non_ascii`]. `serde(skip)`: derived state only.
+    #[serde(skip)]
+    pub(crate) requires_non_ascii: std::sync::OnceLock<bool>,
     /// Confidence score (0.5 = heuristic, 1.0 = definitive)
     #[serde(default = "default_confidence")]
     pub conf: f32,
@@ -377,6 +380,7 @@ impl Default for TraitDefinition {
         Self {
             id_shared: std::sync::OnceLock::new(),
             desc_shared: std::sync::OnceLock::new(),
+            requires_non_ascii: std::sync::OnceLock::new(),
             id: String::new(),
             desc: String::new(),
             conf: default_confidence(),
@@ -923,6 +927,22 @@ impl TraitDefinition {
         self.desc_shared
             .get_or_init(|| self.desc.as_str().into())
             .clone()
+    }
+
+    /// Whether every match of this trait's `if:` regex needs a byte >= 0x80
+    /// (`\p{Arabic}{3,}`, `[ąćę]`, box-drawing runs), so it cannot match
+    /// ASCII-only content. Decided on first use rather than for every trait
+    /// when the mapper's flags are built: deciding means parsing the regex
+    /// (Unicode case folding included), which over the whole trait set cost
+    /// ~0.26 s, serially, in every process, though a file only ever asks for
+    /// the content-regex traits of its own type, and only when it is ASCII.
+    pub(crate) fn requires_non_ascii(&self) -> bool {
+        *self.requires_non_ascii.get_or_init(|| {
+            matches!(&self.r#if,
+                Condition::Raw(RawQuery { regex: Some(r), .. })
+                | Condition::Text(TextQuery { regex: Some(r), .. })
+                    if super::evaluators::requires_non_ascii(r))
+        })
     }
 
     /// Check if this trait has any dependencies on other traits via `trait:` conditions.

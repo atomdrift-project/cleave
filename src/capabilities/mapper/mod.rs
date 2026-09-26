@@ -299,18 +299,22 @@ pub(crate) fn drop_unreferenced_support_rules(
 impl TraitRefIndex {
     fn build(raw: std::collections::BTreeSet<String>) -> Self {
         let mut idx = Self::default();
-        for id in raw {
+        idx.extend(raw);
+        idx
+    }
+
+    fn extend(&mut self, ids: impl IntoIterator<Item = String>) {
+        for id in ids {
             if id.contains("::") {
-                idx.exact.insert(id);
+                self.exact.insert(id);
             } else if id.contains('/') {
                 // Directory refs also match exactly (legacy flat ids).
-                idx.dirs.insert(id.clone());
-                idx.exact.insert(id);
+                self.dirs.insert(id.clone());
+                self.exact.insert(id);
             } else {
-                idx.short.insert(id);
+                self.short.insert(id);
             }
         }
-        idx
     }
 
     /// Whether any loaded rule's trait reference can match `id`.
@@ -446,12 +450,6 @@ impl CapabilityMapper {
                         }
                         _ => {}
                     }
-                    if let Condition::Raw(RawQuery { regex: Some(r), .. })
-                    | Condition::Text(TextQuery { regex: Some(r), .. }) = &t.r#if
-                        && crate::composite_rules::evaluators::requires_non_ascii(r)
-                    {
-                        bits |= flags::RAW_NON_ASCII;
-                    }
                     if indexes.raw_content_regex_index.is_indexed_trait(idx) {
                         bits |= flags::RAW_INDEXED;
                     }
@@ -471,31 +469,53 @@ impl CapabilityMapper {
     /// Find atomic producers whose evidence can reach a proximity constraint.
     /// Follow positive references through aliases and intermediate composites;
     /// directory refs are conservative, and cycles terminate at the fixed point.
+    ///
+    /// Each rule's references are collected once, and only rules that make
+    /// references are probed: a pass adds the references of every rule the
+    /// index newly reaches, until a pass reaches none. Rebuilding the index from
+    /// all ~53k references and re-collecting every reached rule's references on
+    /// each of ~10 passes cost ~0.45 s, serially, in every process that
+    /// evaluated a trait.
     fn proximity_ref_index(&self) -> TraitRefIndex {
-        let mut refs = std::collections::BTreeSet::new();
+        let t0 = std::time::Instant::now();
+        let mut seeds = std::collections::BTreeSet::new();
+        let mut unreached = Vec::new();
         for rule in &self.composite_rules {
-            if rule.near_bytes.is_some() || rule.near_lines.is_some() {
-                for condition in rule.all.iter().flatten().chain(rule.any.iter().flatten()) {
-                    condition.collect_trait_refs(&mut refs);
-                }
+            let near = rule.near_bytes.is_some() || rule.near_lines.is_some();
+            let mut refs = std::collections::BTreeSet::new();
+            for condition in rule.all.iter().flatten().chain(rule.any.iter().flatten()) {
+                condition.collect_trait_refs(if near { &mut seeds } else { &mut refs });
+            }
+            if !refs.is_empty() {
+                unreached.push((rule.id.as_str(), refs));
             }
         }
+        for atom in &self.trait_definitions {
+            let mut refs = std::collections::BTreeSet::new();
+            atom.r#if.collect_trait_refs(&mut refs);
+            if !refs.is_empty() {
+                unreached.push((atom.id.as_str(), refs));
+            }
+        }
+        let mut index = TraitRefIndex::build(seeds);
+        let mut passes = 0;
         loop {
-            let count = refs.len();
-            let index = TraitRefIndex::build(refs.clone());
-            for rule in &self.composite_rules {
-                if index.possibly_referenced(&rule.id) {
-                    for condition in rule.all.iter().flatten().chain(rule.any.iter().flatten()) {
-                        condition.collect_trait_refs(&mut refs);
-                    }
+            passes += 1;
+            let before = unreached.len();
+            unreached.retain_mut(|(id, refs)| {
+                if !index.possibly_referenced(id) {
+                    return true;
                 }
-            }
-            for atom in &self.trait_definitions {
-                if index.possibly_referenced(&atom.id) {
-                    atom.r#if.collect_trait_refs(&mut refs);
-                }
-            }
-            if refs.len() == count {
+                index.extend(std::mem::take(refs));
+                false
+            });
+            if unreached.len() == before {
+                tracing::debug!(
+                    passes,
+                    unreached = before,
+                    elapsed_ms = t0.elapsed().as_millis() as u64,
+                    "proximity ref index built"
+                );
                 return index;
             }
         }
@@ -1143,11 +1163,6 @@ pub(super) mod flags {
     pub(super) const RAW_INDEXED: u16 = 1 << 8;
     pub(super) const NEEDS_COUNT: u16 = 1 << 9;
     pub(super) const NEEDS_LOCATIONS: u16 = 1 << 10;
-    /// The trait's `if:` regex cannot match pure-ASCII content (every match
-    /// needs a byte >= 0x80: `\p{Arabic}{3,}`, `[ąćę]`, box-drawing runs).
-    /// Such patterns have no ASCII literal to index, so they full-scan every
-    /// member; on an ASCII-only file they are skipped outright instead.
-    pub(super) const RAW_NON_ASCII: u16 = 1 << 11;
 }
 
 #[cfg(test)]

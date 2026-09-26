@@ -118,7 +118,7 @@ pub(crate) use precision::{
 
 // Duplicate detection
 pub(crate) use duplicates::{
-    check_basename_pattern_duplicates, check_exact_contained_by_substr,
+    ExtractedPatterns, check_basename_pattern_duplicates, check_exact_contained_by_substr,
     check_overlapping_regex_patterns, check_regex_alternative_subsets,
     check_regex_or_overlapping_exact, check_regex_should_be_exact,
     check_same_string_different_types, find_alternation_merge_candidates,

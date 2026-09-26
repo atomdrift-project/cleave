@@ -5,6 +5,7 @@
 //! - `StringMatchIndex`: Batched string matching using Aho-Corasick automaton
 //! - `RawContentRegexIndex`: Batched regex matching for binary content
 
+use crate::composite_rules::condition::{TraitRegex, cached_regex};
 use crate::composite_rules::evaluators::{MIN_HAYSTACK_TO_WINDOW, match_window, truncate_evidence};
 use crate::composite_rules::{
     Condition, FileType as RuleFileType, Platform, TraitDefinition, platforms_intersect,
@@ -316,19 +317,25 @@ pub(crate) struct SymbolMatchIndex {
     regex_literal_automaton: Option<AhoCorasick>,
     /// Maps AC pattern index -> trait indices that share that literal.
     regex_literal_to_traits: Vec<Vec<usize>>,
-    /// Per-trait compiled regex for verification after literal-prefilter hit.
+    /// Per-trait pattern and verifier regex, compiled on its first
+    /// literal-prefilter hit by [`compile_once`]. Compiling all ~1.2k symbol
+    /// regexes and ~0.5k fallbacks up front cost ~0.3 s, serially, in every
+    /// process that built the match indexes, though most never see a
+    /// candidate symbol and text files have no symbols at all.
     /// Dense Vec indexed by trait_idx (None = not a regex trait). Vec lookup is
     /// ~3× faster than a hashmap here because trait_idx is a dense usize range.
-    trait_regex: Vec<Option<std::sync::Arc<crate::composite_rules::condition::TraitRegex>>>,
+    trait_regex: Vec<Option<(String, OnceLock<Option<Arc<TraitRegex>>>)>>,
 
     /// Regex traits with no extractable literal prefix, compiled individually
     /// (str-based, unlike the bytes-based raw-content regexes elsewhere in
     /// this module). A `RegexSet` here ran the PikeVM with every pattern live
     /// on every symbol; per-pattern `is_match` uses the lazy DFA and, looped
     /// pattern-major, reuses its cache across the whole symbol list.
-    /// `regex_fallback_traits[i]` is the trait index for pattern `i`; a
-    /// pattern that fails to compile is dropped from both (warned at build).
-    regex_fallback_regexes: Vec<ScratchRegex>,
+    /// `regex_fallback_traits[i]` is the trait index for pattern `i`, whose
+    /// regex compiles on the first symbol list to reach it; a pattern that
+    /// fails to compile stays `None` (warned once).
+    regex_fallback_patterns: Vec<String>,
+    regex_fallback_regexes: Vec<OnceLock<Option<ScratchRegex>>>,
     regex_fallback_traits: Vec<usize>,
 }
 
@@ -352,9 +359,7 @@ impl SymbolMatchIndex {
         let mut regex_literal_to_traits: Vec<Vec<usize>> = Vec::new();
 
         // Dense Vec for per-trait regex lookup.
-        let mut trait_regex: Vec<
-            Option<std::sync::Arc<crate::composite_rules::condition::TraitRegex>>,
-        > = vec![None; num_traits];
+        let mut trait_regex = vec![None; num_traits];
 
         let mut regex_fallback_traits: Vec<usize> = Vec::new();
         let mut regex_fallback_patterns: Vec<String> = Vec::new();
@@ -403,12 +408,7 @@ impl SymbolMatchIndex {
                     ..
                 }) => {
                     symbol_trait_indices.insert(trait_idx);
-                    // Symbol regex is no longer precompiled per condition; resolve
-                    // it from the shared lazy cache. The index owns one engine per
-                    // symbol-regex trait (built once, bounded by trait count), so
-                    // clone it out of the shared `Arc` here.
-                    trait_regex[trait_idx] =
-                        crate::composite_rules::condition::cached_regex(regex_str);
+                    trait_regex[trait_idx] = Some((regex_str.clone(), OnceLock::new()));
                     // Prefer the longest *mandatory* literal anywhere in the
                     // pattern (not just a prefix). A prefix-only extractor dumps
                     // most symbol regexes into the no-literal `RegexSet`, whose
@@ -463,20 +463,10 @@ impl SymbolMatchIndex {
             })
             .flatten();
 
-        let mut regex_fallback_regexes: Vec<ScratchRegex> = Vec::new();
-        let mut kept_fallback_traits: Vec<usize> = Vec::new();
-        for (pattern, &trait_idx) in regex_fallback_patterns.iter().zip(&regex_fallback_traits) {
-            match ScratchRegex::new(pattern) {
-                Ok(re) => {
-                    regex_fallback_regexes.push(re);
-                    kept_fallback_traits.push(trait_idx);
-                }
-                Err(e) => {
-                    tracing::warn!(pattern, error = %e, "symbol fallback pattern failed to compile; skipping");
-                }
-            }
-        }
-        let regex_fallback_traits = kept_fallback_traits;
+        let regex_fallback_regexes = regex_fallback_patterns
+            .iter()
+            .map(|_| OnceLock::new())
+            .collect();
 
         tracing::debug!(
             "Built SymbolMatchIndex: {} exact, {} substr, {} regex-literal, {} regex-fallback",
@@ -494,6 +484,7 @@ impl SymbolMatchIndex {
             regex_literal_automaton,
             regex_literal_to_traits,
             trait_regex,
+            regex_fallback_patterns,
             regex_fallback_regexes,
             regex_fallback_traits,
         }
@@ -600,8 +591,9 @@ impl SymbolMatchIndex {
                         if !seen_candidates.insert(trait_idx) {
                             continue;
                         }
-                        if let Some(Some(re)) = self.trait_regex.get(trait_idx)
-                            && re.is_match(normalized)
+                        if let Some(Some((pattern, slot))) = self.trait_regex.get(trait_idx)
+                            && compile_once(slot, || cached_regex(pattern))
+                                .is_some_and(|re| re.is_match(normalized))
                         {
                             matched.insert(trait_idx);
                             Self::push_evidence(&mut evidence, trait_idx, symbol);
@@ -614,12 +606,20 @@ impl SymbolMatchIndex {
         // Regex fallback (no-literal patterns), pattern-major: each regex's
         // lazy-DFA cache stays hot across the whole symbol list instead of
         // being re-entered per symbol.
-        if !self.regex_fallback_regexes.is_empty() {
-            for (re, &trait_idx) in self
+        if !symbols.is_empty() {
+            for ((slot, pattern), &trait_idx) in self
                 .regex_fallback_regexes
                 .iter()
+                .zip(&self.regex_fallback_patterns)
                 .zip(&self.regex_fallback_traits)
             {
+                let Some(re) = compile_once(slot, || {
+                    ScratchRegex::new(pattern)
+                        .inspect_err(|e| tracing::warn!(pattern, error = %e, "symbol fallback pattern failed to compile; skipping"))
+                        .ok()
+                }) else {
+                    continue;
+                };
                 for &symbol in symbols {
                     let normalized = normalize(symbol);
                     if !normalized.is_empty() && re.is_match(normalized) {
@@ -2427,20 +2427,15 @@ impl FileTypeRegexSet {
             // rayon workers hitting a popular pattern during warmup — the
             // same idled-cores trap the bytes-regex cache documents (its
             // per-key OnceLock experiment raised wall ~35%).
-            let slot = &self.individual_regexes[pattern_idx];
-            if slot.get().is_none() {
-                let pattern = &self.patterns[pattern_idx];
-                let compiled = match compile_engine_mirrored(pattern) {
-                    Ok(re) => Some(Arc::new(re)),
-                    Err(e) => {
-                        tracing::warn!(pattern, error = %e, "raw content pattern failed to compile; skipping");
-                        None
-                    }
-                };
-                let _ = slot.set(compiled);
-            }
-            match slot.get() {
-                Some(Some(regex)) if regex.is_match(content) => Some(trait_indices),
+            let pattern = &self.patterns[pattern_idx];
+            let regex = compile_once(&self.individual_regexes[pattern_idx], || {
+                compile_engine_mirrored(pattern)
+                    .inspect_err(|e| tracing::warn!(pattern, error = %e, "raw content pattern failed to compile; skipping"))
+                    .ok()
+                    .map(Arc::new)
+            });
+            match regex {
+                Some(regex) if regex.is_match(content) => Some(trait_indices),
                 _ => None,
             }
         };
@@ -2498,6 +2493,16 @@ impl FileTypeRegexSet {
         }
         out
     }
+}
+
+/// The value in `slot`, compiling it with `compile` on first use; `None` is a
+/// pattern that failed to compile. Race-don't-block: concurrent first users
+/// each compile and the first `set` wins (see `verify_literal_candidates`).
+fn compile_once<T>(slot: &OnceLock<Option<T>>, compile: impl FnOnce() -> Option<T>) -> Option<&T> {
+    if slot.get().is_none() {
+        let _ = slot.set(compile());
+    }
+    slot.get().and_then(Option::as_ref)
 }
 
 /// Compile a raw-content pattern with the same parse mode the trait engines

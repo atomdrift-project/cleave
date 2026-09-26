@@ -947,6 +947,24 @@ fn discriminator_narrows_the_fact(discriminator: &str) -> bool {
     .any(|marker| discriminator.contains(marker))
 }
 
+/// Every trait's searchable patterns as `(normalized value, location)`, in
+/// trait order: extracted once for all the checks that compare patterns,
+/// rather than once by each of them.
+pub(crate) struct ExtractedPatterns(Vec<(String, PatternLocation)>);
+
+impl ExtractedPatterns {
+    pub(crate) fn of(trait_definitions: &[TraitDefinition]) -> Self {
+        use rayon::prelude::*;
+
+        Self(
+            trait_definitions
+                .par_iter()
+                .flat_map_iter(extract_patterns)
+                .collect(),
+        )
+    }
+}
+
 fn extract_patterns(trait_def: &TraitDefinition) -> Vec<(String, PatternLocation)> {
     let mut patterns = Vec::new();
 
@@ -1298,18 +1316,16 @@ fn has_same_count_density_filters(loc_a: &PatternLocation, loc_b: &PatternLocati
 /// Only detects exact matches of normalized patterns (regex anchors stripped)
 /// Checks string, symbol, and raw condition types (not encoded)
 pub(crate) fn find_string_pattern_duplicates(
-    trait_definitions: &[TraitDefinition],
+    patterns: &ExtractedPatterns,
     warnings: &mut Vec<String>,
 ) {
     let start = std::time::Instant::now();
 
     // Build index: normalized_pattern -> Vec<PatternLocation>
-    let mut pattern_index: HashMap<String, Vec<PatternLocation>> = HashMap::new();
+    let mut pattern_index: HashMap<&str, Vec<&PatternLocation>> = HashMap::new();
 
-    for trait_def in trait_definitions {
-        for (normalized, location) in extract_patterns(trait_def) {
-            pattern_index.entry(normalized).or_default().push(location);
-        }
+    for (normalized, location) in &patterns.0 {
+        pattern_index.entry(normalized).or_default().push(location);
     }
 
     // Find duplicates: same normalized pattern in multiple files with overlapping file types
@@ -1338,8 +1354,8 @@ pub(crate) fn find_string_pattern_duplicates(
         'outer: for i in 0..locations.len() {
             for j in (i + 1)..locations.len() {
                 if locations[i].file_path != locations[j].file_path
-                    && matcher_context_reusable_as_is(&locations[i], &locations[j])
-                    && has_filetype_overlap(&locations[i], &locations[j])
+                    && matcher_context_reusable_as_is(locations[i], locations[j])
+                    && has_filetype_overlap(locations[i], locations[j])
                 {
                     has_overlap = true;
                     break 'outer;
@@ -1515,7 +1531,7 @@ pub(crate) fn find_string_pattern_duplicates(
 
 /// Check for regex patterns with | (OR) that overlap with standalone exact/word/substr patterns.
 pub(crate) fn check_regex_or_overlapping_exact(
-    trait_definitions: &[TraitDefinition],
+    patterns: &ExtractedPatterns,
     warnings: &mut Vec<String>,
 ) {
     let start = std::time::Instant::now();
@@ -1526,27 +1542,26 @@ pub(crate) fn check_regex_or_overlapping_exact(
     }
 
     // Collect all regex patterns with | (OR operators), and all
-    // exact/word/substr patterns, from one extraction of each trait.
-    let mut regex_patterns: Vec<(String, PatternLocation)> = Vec::new();
-    let mut literal_patterns: HashMap<String, Vec<PatternLocation>> = HashMap::new();
+    // exact/word/substr patterns.
+    let mut regex_patterns: Vec<&PatternLocation> = Vec::new();
+    let mut literal_patterns: HashMap<&str, Vec<&PatternLocation>> = HashMap::new();
 
-    for trait_def in trait_definitions {
-        for (normalized, location) in extract_patterns(trait_def) {
-            if location.match_type != "regex" {
-                literal_patterns
-                    .entry(normalized)
-                    .or_default()
-                    .push(location);
-            } else if location.original_value.contains('|') {
-                regex_patterns.push((location.original_value.clone(), location));
-            }
+    for (normalized, location) in &patterns.0 {
+        if location.match_type != "regex" {
+            literal_patterns
+                .entry(normalized)
+                .or_default()
+                .push(location);
+        } else if location.original_value.contains('|') {
+            regex_patterns.push(location);
         }
     }
 
     // Check each regex OR pattern against all literals
-    for (regex_value, regex_loc) in regex_patterns {
+    for regex_loc in regex_patterns {
+        let regex_value = &regex_loc.original_value;
         // Split the regex on top-level | only (not inside parentheses/brackets)
-        let alternatives: Vec<&str> = split_top_level_alternation(&regex_value);
+        let alternatives: Vec<&str> = split_top_level_alternation(regex_value);
 
         let mut overlapping_literals: Vec<(String, Vec<String>)> = Vec::new();
 
@@ -1558,7 +1573,7 @@ pub(crate) fn check_regex_or_overlapping_exact(
             }
 
             // Check if this alternative exists as a literal pattern elsewhere
-            if let Some(literal_locs) = literal_patterns.get(&normalized_alt) {
+            if let Some(literal_locs) = literal_patterns.get(normalized_alt.as_str()) {
                 // Only report local taxonomy overlap. Cross-directory literal
                 // reuse is handled by broader duplicate-pattern validators; this
                 // check is for alternatives that should be split/reused inside
@@ -1568,7 +1583,7 @@ pub(crate) fn check_regex_or_overlapping_exact(
                     .filter(|loc| {
                         loc.file_path != regex_loc.file_path
                             && trait_dir(&loc.trait_id) == trait_dir(&regex_loc.trait_id)
-                            && has_filetype_overlap(loc, &regex_loc)
+                            && has_filetype_overlap(loc, regex_loc)
                     })
                     .map(|loc| format!("{}::{}", loc.file_path, loc.trait_id))
                     .collect();
@@ -1612,7 +1627,7 @@ pub(crate) fn check_regex_or_overlapping_exact(
 /// Instead of comparing every pair of patterns, we pre-compute normalized alternatives for
 /// each pattern and only compare patterns that share at least one alternative.
 pub(crate) fn check_overlapping_regex_patterns(
-    trait_definitions: &[TraitDefinition],
+    patterns: &ExtractedPatterns,
     warnings: &mut Vec<String>,
 ) {
     use rayon::prelude::*;
@@ -1621,8 +1636,8 @@ pub(crate) fn check_overlapping_regex_patterns(
     let initial_warning_count = warnings.len();
 
     // Collect all regex patterns with their pre-computed alternatives
-    struct RegexWithAlternatives {
-        location: PatternLocation,
+    struct RegexWithAlternatives<'a> {
+        location: &'a PatternLocation,
         alternatives: FxHashSet<String>,
         /// HIR-canonical form of the whole pattern (`None` if it does not parse).
         /// Equal canonical forms mean the two regexes match the same language.
@@ -1633,51 +1648,58 @@ pub(crate) fn check_overlapping_regex_patterns(
     // Comparison key for one top-level alternative: its HIR-canonical form when
     // the branch parses on its own, else the textually-normalized fallback. Two
     // branches that mean the same thing (`\d{3}` and `[0-9]{3}`) share a key.
-    let alternative_key = |branch: &str| -> Option<String> {
+    // A branch that is the whole pattern takes the pattern's own form rather
+    // than parsing it again.
+    let alternative_key = |branch: &str, whole: &str, whole_form: &Option<String>| {
         let branch = branch.trim();
         let normalized = normalize_regex(branch);
         if !meaningful_regex_alternative(&normalized) {
             return None;
         }
-        Some(canonical_regex_form(branch).unwrap_or(normalized))
+        let form = if branch == whole {
+            whole_form.clone()
+        } else {
+            canonical_regex_form(branch)
+        };
+        Some(form.unwrap_or(normalized))
     };
 
     // Parsing every regex is most of this check, and each one parses on its
     // own, so they are done in parallel; `collect` keeps them in trait order.
-    let regex_patterns: Vec<RegexWithAlternatives> = trait_definitions
+    let regex_patterns: Vec<RegexWithAlternatives<'_>> = patterns
+        .0
         .par_iter()
-        .flat_map_iter(|trait_def| {
-            extract_patterns(trait_def)
+        .map(|(_, location)| location)
+        .filter(|location| location.match_type == "regex")
+        .map(|location| {
+            let whole = location.original_value.trim();
+            let canonical = canonical_regex_form(whole);
+            let key = |branch: &str| alternative_key(branch, whole, &canonical);
+
+            // Pre-compute canonical keys for each meaningful alternative.
+            let alts: FxHashSet<String> = split_top_level_alternation(&location.original_value)
                 .into_iter()
-                .filter(|(_, location)| location.match_type == "regex")
-                .map(|(_, location)| {
-                    // Pre-compute canonical keys for each meaningful alternative.
-                    let alts: FxHashSet<String> =
-                        split_top_level_alternation(&location.original_value)
-                            .into_iter()
-                            .filter_map(&alternative_key)
-                            .collect();
+                .filter_map(key)
+                .collect();
 
-                    // If no alternatives, key on the whole pattern instead.
-                    let alternatives = if alts.is_empty() {
-                        let mut set = FxHashSet::default();
-                        if let Some(key) = alternative_key(&location.original_value) {
-                            set.insert(key);
-                        }
-                        set
-                    } else {
-                        alts
-                    };
+            // If no alternatives, key on the whole pattern instead.
+            let alternatives = if alts.is_empty() {
+                let mut set = FxHashSet::default();
+                if let Some(key) = key(&location.original_value) {
+                    set.insert(key);
+                }
+                set
+            } else {
+                alts
+            };
 
-                    let canonical = canonical_regex_form(location.original_value.trim());
-                    let has_alternation = location.original_value.contains('|');
-                    RegexWithAlternatives {
-                        location,
-                        alternatives,
-                        canonical,
-                        has_alternation,
-                    }
-                })
+            let has_alternation = location.original_value.contains('|');
+            RegexWithAlternatives {
+                location,
+                alternatives,
+                canonical,
+                has_alternation,
+            }
         })
         .collect();
 
@@ -1752,12 +1774,12 @@ pub(crate) fn check_overlapping_regex_patterns(
         }
 
         // Must overlap in filetype scope to be a real conflict.
-        if !has_filetype_overlap(&a.location, &b.location) {
+        if !has_filetype_overlap(a.location, b.location) {
             continue;
         }
 
         // Different count/per-kb thresholds are intentionally layered evidence.
-        if !has_same_count_density_filters(&a.location, &b.location) {
+        if !has_same_count_density_filters(a.location, b.location) {
             continue;
         }
 
@@ -1856,55 +1878,51 @@ pub(crate) fn check_overlapping_regex_patterns(
 /// Check for regex patterns that are just ^word$ and should use exact instead
 /// Regex should only be used when there are actual variations or special characters
 pub(crate) fn check_regex_should_be_exact(
-    trait_definitions: &[TraitDefinition],
+    patterns: &ExtractedPatterns,
     warnings: &mut Vec<String>,
 ) {
     let start = std::time::Instant::now();
     let initial_warning_count = warnings.len();
 
-    for trait_def in trait_definitions {
-        let patterns = extract_patterns(trait_def);
+    for (_, location) in &patterns.0 {
+        if location.match_type != "regex" {
+            continue;
+        }
 
-        for (_, location) in patterns {
-            if location.match_type != "regex" {
-                continue;
-            }
+        let regex_value = &location.original_value;
 
-            let regex_value = &location.original_value;
+        // Check if this is a simple anchored pattern: ^word$
+        // Allow common variations like ? * + but flag pure anchored words
+        if regex_value.starts_with('^') && regex_value.ends_with('$') {
+            let inner = &regex_value[1..regex_value.len() - 1];
 
-            // Check if this is a simple anchored pattern: ^word$
-            // Allow common variations like ? * + but flag pure anchored words
-            if regex_value.starts_with('^') && regex_value.ends_with('$') {
-                let inner = &regex_value[1..regex_value.len() - 1];
+            // Check if inner contains only word characters (no regex operators)
+            // Allow backslash escaping but flag if there are no actual regex features
+            let has_regex_operators = inner.chars().any(|c| {
+                matches!(
+                    c,
+                    '?' | '*' | '+' | '|' | '[' | ']' | '(' | ')' | '{' | '}' | '.'
+                )
+            });
 
-                // Check if inner contains only word characters (no regex operators)
-                // Allow backslash escaping but flag if there are no actual regex features
-                let has_regex_operators = inner.chars().any(|c| {
-                    matches!(
-                        c,
-                        '?' | '*' | '+' | '|' | '[' | ']' | '(' | ')' | '{' | '}' | '.'
-                    )
-                });
+            if !has_regex_operators {
+                // Additional check: if it's just a simple word or escaped word, flag it
+                let is_simple_word = inner.chars().all(|c| c.is_alphanumeric() || c == '_');
+                let is_escaped_word = inner
+                    .replace("\\\\", "")
+                    .chars()
+                    .filter(|&c| c == '\\')
+                    .count()
+                    <= 2;
 
-                if !has_regex_operators {
-                    // Additional check: if it's just a simple word or escaped word, flag it
-                    let is_simple_word = inner.chars().all(|c| c.is_alphanumeric() || c == '_');
-                    let is_escaped_word = inner
-                        .replace("\\\\", "")
-                        .chars()
-                        .filter(|&c| c == '\\')
-                        .count()
-                        <= 2;
-
-                    if is_simple_word || (is_escaped_word && inner.len() < 50) {
-                        warnings.push(format!(
-                            "Regex pattern '{}' is just ^word$ and should use exact: '{}' instead ({}::{})",
-                            regex_value,
-                            inner,
-                            location.file_path,
-                            location.trait_id
-                        ));
-                    }
+                if is_simple_word || (is_escaped_word && inner.len() < 50) {
+                    warnings.push(format!(
+                        "Regex pattern '{}' is just ^word$ and should use exact: '{}' instead ({}::{})",
+                        regex_value,
+                        inner,
+                        location.file_path,
+                        location.trait_id
+                    ));
                 }
             }
         }
@@ -1921,40 +1939,34 @@ pub(crate) fn check_regex_should_be_exact(
 /// Check for the same pattern appearing with different types across {string, symbol, raw}
 /// This indicates poor organization - pick one canonical type and extend language support
 pub(crate) fn check_same_string_different_types(
-    trait_definitions: &[TraitDefinition],
+    patterns: &ExtractedPatterns,
     warnings: &mut Vec<String>,
 ) {
     let start = std::time::Instant::now();
     let initial_warning_count = warnings.len();
 
     // Build index: normalized_pattern -> Vec<PatternLocation> grouped by type
-    let mut pattern_by_type: HashMap<String, HashMap<String, Vec<PatternLocation>>> =
-        HashMap::new();
+    let mut pattern_by_type: HashMap<&str, HashMap<&str, Vec<&PatternLocation>>> = HashMap::new();
 
-    for trait_def in trait_definitions {
-        let patterns = extract_patterns(trait_def);
-
-        for (_normalized, location) in patterns {
-            // Only compare matcher families that can reasonably be canonicalized
-            // as alternate spellings of the same search surface. `encoded` and
-            // `basename` are intentionally different scopes.
-            if !is_cross_type_canonicalization_candidate(location.condition_type.as_str()) {
-                continue;
-            }
-
-            // Bucket on the literal alone. Keying on the full pattern hid every
-            // symbol matcher that sets `kind:`/`arg:` from its text and raw
-            // counterparts: `symbol {kind: call, exact: file_put_contents}` was
-            // keyed as `file_put_contents#kind:call` and so never shared a
-            // bucket with `text {word: file_put_contents}`.
-            let key = location.bare_normalized.clone();
-            pattern_by_type
-                .entry(key)
-                .or_default()
-                .entry(location.condition_type.clone())
-                .or_default()
-                .push(location);
+    for (_normalized, location) in &patterns.0 {
+        // Only compare matcher families that can reasonably be canonicalized
+        // as alternate spellings of the same search surface. `encoded` and
+        // `basename` are intentionally different scopes.
+        if !is_cross_type_canonicalization_candidate(location.condition_type.as_str()) {
+            continue;
         }
+
+        // Bucket on the literal alone. Keying on the full pattern hid every
+        // symbol matcher that sets `kind:`/`arg:` from its text and raw
+        // counterparts: `symbol {kind: call, exact: file_put_contents}` was
+        // keyed as `file_put_contents#kind:call` and so never shared a
+        // bucket with `text {word: file_put_contents}`.
+        pattern_by_type
+            .entry(&location.bare_normalized)
+            .or_default()
+            .entry(&location.condition_type)
+            .or_default()
+            .push(location);
     }
 
     // Find patterns that appear with multiple types
@@ -1964,7 +1976,7 @@ pub(crate) fn check_same_string_different_types(
         }
 
         // Check if any pair of different types has file type overlap
-        let all_locations: Vec<&PatternLocation> = types_map.values().flatten().collect();
+        let all_locations: Vec<&PatternLocation> = types_map.values().flatten().copied().collect();
 
         let mut has_overlap = false;
         'outer: for i in 0..all_locations.len() {
@@ -2093,7 +2105,7 @@ const REGEX_SET_SIZE_LIMIT: usize = 64 * 1024 * 1024;
 /// lowercased to meet a case-sensitive regex. Both would trade a real reading
 /// for a guess.
 pub(crate) fn find_literals_covered_by_regexes(
-    trait_definitions: &[TraitDefinition],
+    patterns: &ExtractedPatterns,
     warnings: &mut Vec<String>,
 ) {
     use rayon::prelude::*;
@@ -2102,26 +2114,24 @@ pub(crate) fn find_literals_covered_by_regexes(
 
     // Bucket by (matcher context, overlap tier): a regex can only stand in for a
     // literal if it searches the same surface at the same signal strength.
-    let mut regexes: BTreeMap<(String, Criticality), Vec<PatternLocation>> = BTreeMap::new();
-    let mut literals: BTreeMap<(String, Criticality), BTreeMap<String, Vec<PatternLocation>>> =
+    let mut regexes: BTreeMap<(&str, Criticality), Vec<&PatternLocation>> = BTreeMap::new();
+    let mut literals: BTreeMap<(&str, Criticality), BTreeMap<&str, Vec<&PatternLocation>>> =
         BTreeMap::new();
 
-    for trait_def in trait_definitions {
-        for (_, location) in extract_patterns(trait_def) {
-            let key = (
-                location.condition_type.clone(),
-                criticality_for_overlap(location.criticality),
-            );
-            match location.match_type.as_str() {
-                "regex" => regexes.entry(key).or_default().push(location),
-                "exact" | "word" | "substr" => literals
-                    .entry(key)
-                    .or_default()
-                    .entry(location.original_value.clone())
-                    .or_default()
-                    .push(location),
-                _ => {}
-            }
+    for (_, location) in &patterns.0 {
+        let key = (
+            location.condition_type.as_str(),
+            criticality_for_overlap(location.criticality),
+        );
+        match location.match_type.as_str() {
+            "regex" => regexes.entry(key).or_default().push(location),
+            "exact" | "word" | "substr" => literals
+                .entry(key)
+                .or_default()
+                .entry(&location.original_value)
+                .or_default()
+                .push(location),
+            _ => {}
         }
     }
 
@@ -2148,9 +2158,9 @@ pub(crate) fn find_literals_covered_by_regexes(
 
 /// Literal-coverage findings for one (matcher context, tier) bucket.
 fn literal_coverage_in_bucket(
-    key: &(String, Criticality),
-    phrase_map: &BTreeMap<String, Vec<PatternLocation>>,
-    bucket: &[PatternLocation],
+    key: &(&str, Criticality),
+    phrase_map: &BTreeMap<&str, Vec<&PatternLocation>>,
+    bucket: &[&PatternLocation],
 ) -> Vec<String> {
     use rayon::prelude::*;
 
@@ -2166,13 +2176,30 @@ fn literal_coverage_in_bucket(
     // Parse the HIR rather than compiling: this only needs to know whether
     // the engine accepts the pattern, and compiling every pattern in the
     // bucket to throw the result away costs more than the rest of the check.
+    // Whether the engine accepts a pattern depends on the pattern alone, and
+    // whether a regex matches a phrase (below) on the two alone, so during a
+    // full validation an earlier run's verdicts stand (see `facts_cache`):
+    // parsing again, mostly case-folding `(?i)` classes, was most of a warm
+    // run's cost.
+    let facts = super::facts_cache::active();
     let compilable: Vec<&PatternLocation> = bucket
         .par_iter()
+        .copied()
         .filter(|location| {
-            regex_syntax::ParserBuilder::new()
-                .build()
-                .parse(&location.original_value)
-                .is_ok()
+            let pattern = &location.original_value;
+            let parses = || {
+                regex_syntax::ParserBuilder::new()
+                    .build()
+                    .parse(pattern)
+                    .is_ok()
+            };
+            match &facts {
+                Some(facts) => facts.get_or_compute(
+                    super::facts_cache::key("regex-parses", &[pattern.as_bytes()]),
+                    parses,
+                ),
+                None => parses(),
+            }
         })
         .collect();
 
@@ -2230,7 +2257,10 @@ fn literal_coverage_in_bucket(
     // phrase ran each candidate from whichever thread held the phrase, and a
     // thread's first use of a regex builds its own lazy-DFA cache: over this
     // tree's ~15k text phrases that was most of the check.
-    let phrases: Vec<(&String, &Vec<PatternLocation>)> = phrase_map.iter().collect();
+    let phrases: Vec<(&str, &Vec<&PatternLocation>)> = phrase_map
+        .iter()
+        .map(|(phrase, holders)| (*phrase, holders))
+        .collect();
     // Newlines let multiline anchors see a line boundary without adding any
     // content the phrase did not have.
     let haystacks: Vec<String> = phrases
@@ -2256,9 +2286,6 @@ fn literal_coverage_in_bucket(
             candidates
         })
         .collect();
-    // Whether a regex matches a phrase depends on the two alone, so during a
-    // full validation an earlier run's verdict stands (see `facts_cache`).
-    let facts = super::facts_cache::active();
 
     // The ungated remainder is small enough to stay a combined automaton,
     // split in half whenever a batch overflows the size ceiling. Chunks are
@@ -2323,7 +2350,7 @@ fn literal_coverage_in_bucket(
         hits_of[phrase_idx].push(idx);
     }
 
-    let covering: BTreeMap<&String, Vec<&PatternLocation>> = phrases
+    let covering: BTreeMap<&str, Vec<&PatternLocation>> = phrases
         .par_iter()
         .zip(hits_of.into_par_iter())
         .enumerate()
@@ -2548,7 +2575,7 @@ fn is_cross_type_canonicalization_candidate(condition_type: &str) -> bool {
 /// Important: Patterns must match exactly (after hex escape decoding).
 ///   "os.rename " ≠ "os.rename" (trailing space means different pattern)
 pub(crate) fn check_exact_contained_by_substr(
-    trait_definitions: &[TraitDefinition],
+    patterns: &ExtractedPatterns,
     warnings: &mut Vec<String>,
 ) {
     use super::helpers::extract_tier;
@@ -2557,25 +2584,23 @@ pub(crate) fn check_exact_contained_by_substr(
     let initial_warning_count = warnings.len();
 
     // Build indexes with normalized strings (hex escapes decoded)
-    let mut exact_patterns: HashMap<String, Vec<PatternLocation>> = HashMap::new();
-    let mut substr_patterns: HashMap<String, Vec<PatternLocation>> = HashMap::new();
+    let mut exact_patterns: HashMap<&str, Vec<&PatternLocation>> = HashMap::new();
+    let mut substr_patterns: HashMap<&str, Vec<&PatternLocation>> = HashMap::new();
 
-    for trait_def in trait_definitions {
-        for (normalized, location) in extract_patterns(trait_def) {
-            match location.match_type.as_str() {
-                "exact" => exact_patterns.entry(normalized).or_default().push(location),
-                "substr" => substr_patterns
-                    .entry(normalized)
-                    .or_default()
-                    .push(location),
-                _ => {}
-            }
+    for (normalized, location) in &patterns.0 {
+        match location.match_type.as_str() {
+            "exact" => exact_patterns.entry(normalized).or_default().push(location),
+            "substr" => substr_patterns
+                .entry(normalized)
+                .or_default()
+                .push(location),
+            _ => {}
         }
     }
 
     // Check for exact string match between exact and substr
     for (exact_pattern, exact_locs) in exact_patterns {
-        if let Some(substr_locs) = substr_patterns.get(&exact_pattern) {
+        if let Some(substr_locs) = substr_patterns.get(exact_pattern) {
             for exact_loc in &exact_locs {
                 for substr_loc in substr_locs {
                     // Check file type overlap
@@ -2602,14 +2627,14 @@ pub(crate) fn check_exact_contained_by_substr(
                     {
                         continue;
                     }
-                    if is_low_signal_lexicon_atom(&exact_pattern, exact_loc)
-                        || is_low_signal_lexicon_atom(&exact_pattern, substr_loc)
+                    if is_low_signal_lexicon_atom(exact_pattern, exact_loc)
+                        || is_low_signal_lexicon_atom(exact_pattern, substr_loc)
                     {
                         continue;
                     }
                     if !cross_tier
                         && trait_dir(&exact_loc.trait_id) != trait_dir(&substr_loc.trait_id)
-                        && is_low_value_exact_substr_atom(&exact_pattern)
+                        && is_low_value_exact_substr_atom(exact_pattern)
                     {
                         continue;
                     }
@@ -3723,27 +3748,54 @@ pub(crate) fn check_regex_alternative_subsets(
     // Alternative-subset reuse only makes sense for the same matcher surface.
     // Cross-type cases such as decoded `encoded` strings vs source `text`, or
     // `symbol` vs decoded content, are intentionally separate extractor
-    // semantics. So each pattern is compared only with the later patterns of
-    // its own type, one pattern per task, and the findings are joined back in
-    // the original pair order.
-    let mut by_type: HashMap<&str, Vec<usize>> = HashMap::new();
-    for (i, pattern) in regex_patterns.iter().enumerate() {
-        by_type
-            .entry(pattern.condition_type.as_str())
-            .or_default()
-            .push(i);
+    // semantics. And a pair is reported only when the two share an alternative
+    // ignoring case -- a subset shares all of its smaller side's, and case
+    // variants have the same ones lowercased -- so each pattern is compared
+    // only with the later patterns of its type that share one, found through
+    // an index, using alternative sets built once per pattern. One pattern per
+    // task; the findings are joined back in the original pair order.
+    let alternative_sets: Vec<(HashSet<&str>, HashSet<String>)> = regex_patterns
+        .iter()
+        .map(|pattern| {
+            let alternatives = match &pattern.grouped_alternatives {
+                Some((_, alternatives, _)) => alternatives,
+                None => &pattern.alternatives,
+            };
+            (
+                alternatives.iter().map(String::as_str).collect(),
+                alternatives.iter().map(|a| a.to_lowercase()).collect(),
+            )
+        })
+        .collect();
+    let mut sharing: HashMap<(&str, &str), Vec<usize>> = HashMap::new();
+    for (i, (pattern, (_, lowered))) in regex_patterns.iter().zip(&alternative_sets).enumerate() {
+        for alternative in lowered {
+            sharing
+                .entry((pattern.condition_type.as_str(), alternative.as_str()))
+                .or_default()
+                .push(i);
+        }
     }
     let findings: Vec<Vec<String>> = (0..regex_patterns.len())
         .into_par_iter()
         .map(|i| {
             let mut warnings = Vec::new();
             let p1 = &regex_patterns[i];
-            let peers = by_type
-                .get(p1.condition_type.as_str())
-                .map_or(&[][..], Vec::as_slice);
-            let later = peers.partition_point(|&j| j <= i);
-            for &j in &peers[later..] {
+            let (set1, set1_lower) = &alternative_sets[i];
+            let mut peers: Vec<usize> = set1_lower
+                .iter()
+                .filter_map(|alternative| {
+                    sharing.get(&(p1.condition_type.as_str(), alternative.as_str()))
+                })
+                .flatten()
+                .copied()
+                .filter(|&j| j > i)
+                .collect();
+            peers.sort_unstable();
+            peers.dedup();
+            for j in peers {
                 let p2 = &regex_patterns[j];
+                let (set2, set2_lower) = &alternative_sets[j];
 
                 // Skip same file
                 if p1.file_path == p2.file_path {
@@ -3755,27 +3807,18 @@ pub(crate) fn check_regex_alternative_subsets(
                     continue;
                 }
 
-                // Convert to sets for subset comparison
-                let set1: HashSet<&String> = p1.alternatives.iter().collect();
-                let set2: HashSet<&String> = p2.alternatives.iter().collect();
-
-                // Check if one is a subset of the other
-                let mut p1_subset_of_p2 =
-                    !set1.is_empty() && set1.is_subset(&set2) && set1.len() < set2.len();
-                let mut p2_subset_of_p1 =
-                    !set2.is_empty() && set2.is_subset(&set1) && set2.len() < set1.len();
-
-                if !(p1_subset_of_p2 || p2_subset_of_p1)
-                    && let (Some((prefix1, alts1, suffix1)), Some((prefix2, alts2, suffix2))) =
-                        (&p1.grouped_alternatives, &p2.grouped_alternatives)
-                    && prefix1 == prefix2
-                    && suffix1 == suffix2
-                {
-                    let set1: HashSet<&String> = alts1.iter().collect();
-                    let set2: HashSet<&String> = alts2.iter().collect();
-                    p1_subset_of_p2 = set1.is_subset(&set2) && set1.len() < set2.len();
-                    p2_subset_of_p1 = set2.is_subset(&set1) && set2.len() < set1.len();
-                }
+                // Alternatives compare only within one shape: two top-level
+                // alternations, or two single groups with the same text around
+                // them.
+                let comparable = match (&p1.grouped_alternatives, &p2.grouped_alternatives) {
+                    (None, None) => true,
+                    (Some((prefix1, _, suffix1)), Some((prefix2, _, suffix2))) => {
+                        prefix1 == prefix2 && suffix1 == suffix2
+                    }
+                    _ => false,
+                };
+                let p1_subset_of_p2 = comparable && set1.len() < set2.len() && set1.is_subset(set2);
+                let p2_subset_of_p1 = comparable && set2.len() < set1.len() && set2.is_subset(set1);
 
                 if (p1_subset_of_p2 && relaxed_data_text_superset(p2))
                     || (p2_subset_of_p1 && relaxed_data_text_superset(p1))
@@ -3823,28 +3866,14 @@ pub(crate) fn check_regex_alternative_subsets(
                 // If patterns have same alternatives but different case_insensitive flags
                 if p1.case_insensitive != p2.case_insensitive {
                     let alternatives_same_ignoring_case =
-                        if !p1.alternatives.is_empty() && !p2.alternatives.is_empty() {
-                            let set1_lower: HashSet<String> =
-                                p1.alternatives.iter().map(|a| a.to_lowercase()).collect();
-                            let set2_lower: HashSet<String> =
-                                p2.alternatives.iter().map(|a| a.to_lowercase()).collect();
-                            set1_lower == set2_lower
-                        } else if let (
-                            Some((prefix1, alts1, suffix1)),
-                            Some((prefix2, alts2, suffix2)),
-                        ) = (&p1.grouped_alternatives, &p2.grouped_alternatives)
-                        {
-                            prefix1.eq_ignore_ascii_case(prefix2)
-                                && suffix1.eq_ignore_ascii_case(suffix2)
-                                && {
-                                    let set1_lower: HashSet<String> =
-                                        alts1.iter().map(|a| a.to_lowercase()).collect();
-                                    let set2_lower: HashSet<String> =
-                                        alts2.iter().map(|a| a.to_lowercase()).collect();
-                                    !set1_lower.is_empty() && set1_lower == set2_lower
-                                }
-                        } else {
-                            false
+                        match (&p1.grouped_alternatives, &p2.grouped_alternatives) {
+                            (None, None) => set1_lower == set2_lower,
+                            (Some((prefix1, _, suffix1)), Some((prefix2, _, suffix2))) => {
+                                prefix1.eq_ignore_ascii_case(prefix2)
+                                    && suffix1.eq_ignore_ascii_case(suffix2)
+                                    && set1_lower == set2_lower
+                            }
+                            _ => false,
                         };
 
                     if alternatives_same_ignoring_case {

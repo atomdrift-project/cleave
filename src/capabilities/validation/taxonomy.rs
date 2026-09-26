@@ -1250,7 +1250,10 @@ pub(crate) fn find_exception_non_notable_members(
     for r in composite_rules {
         crit_by_id.insert(r.id.as_str(), r.crit);
     }
-    let all_ids: Vec<&str> = crit_by_id.keys().copied().collect();
+    // Sorted, so the ids beneath a directory are one range found by binary
+    // search rather than a scan of every id per member.
+    let mut all_ids: Vec<&str> = crit_by_id.keys().copied().collect();
+    all_ids.sort_unstable();
 
     let mut violations: Vec<(String, String, Criticality, String)> = Vec::new();
     for rule in composite_rules
@@ -1280,10 +1283,12 @@ pub(crate) fn find_exception_non_notable_members(
             } else {
                 // Bare directory: every concrete non-exception rule beneath the prefix
                 // must be notable. Exceptions beneath it are excluded from expansion.
-                let prefix_new = format!("{member_id}::");
-                let prefix_legacy = format!("{member_id}/");
-                for &cid in &all_ids {
-                    if cid.starts_with(&prefix_new) || cid.starts_with(&prefix_legacy) {
+                for prefix in [format!("{member_id}::"), format!("{member_id}/")] {
+                    let first = all_ids.partition_point(|&cid| cid < prefix.as_str());
+                    for &cid in all_ids[first..]
+                        .iter()
+                        .take_while(|cid| cid.starts_with(&prefix))
+                    {
                         let crit = crit_by_id.get(cid).copied().unwrap_or_default();
                         if crit != Criticality::Notable && crit != Criticality::Exception {
                             violations.push((

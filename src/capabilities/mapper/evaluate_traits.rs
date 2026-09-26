@@ -38,8 +38,8 @@ pub(crate) struct TraitEvalCache<'a> {
     /// Batched `query:` results for this file. Missing → per-trait QueryCursor.
     pub ast_query_cache:
         Option<&'a FxHashMap<String, crate::composite_rules::context::ConditionResult>>,
-    /// The file holds no byte >= 0x80, so a `RAW_NON_ASCII` trait cannot
-    /// match it. `false` when unknown (never skips).
+    /// The file holds no byte >= 0x80, so a trait whose regex
+    /// `requires_non_ascii` cannot match it. `false` when unknown (never skips).
     pub content_is_ascii: bool,
 }
 
@@ -481,7 +481,7 @@ impl super::CapabilityMapper {
         // content. These patterns have no literal atom to index, so without
         // this they full-scan every source member: 103 such traits reach C#,
         // ~1.3M full scans on one 12.5k-member module zip (2026-09-19).
-        if has_content_regex && tf & super::flags::RAW_NON_ASCII != 0 && cache.content_is_ascii {
+        if has_content_regex && cache.content_is_ascii && trait_def.requires_non_ascii() {
             if gate_stats_enabled() {
                 RAW_GATE_SKIPPED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }

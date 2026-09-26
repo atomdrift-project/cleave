@@ -336,7 +336,6 @@ pub(crate) fn cached_regex(pattern: &str) -> Option<Arc<TraitRegex>> {
     static CLAIMS: super::compile_claim::ClaimSet = super::compile_claim::ClaimSet::new();
     let compile_and_put = || {
         let arc = Arc::new(TraitRegex::compile(pattern)?);
-        super::regex_warm::record_str(pattern);
         let size = arc.heap_bytes();
         if let Ok(mut cache) = REGEX_CACHE.write() {
             cache.put(pattern.to_string(), Arc::clone(&arc), size);

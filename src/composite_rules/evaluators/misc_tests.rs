@@ -521,3 +521,64 @@ fn eval_basename_matches_nested_archive_root_member() {
     let result = eval_basename(Some(&pat), None, None, false, None, &ctx);
     assert!(result.matched);
 }
+
+/// The text-only shortcut must never change `requires_non_ascii`'s answer:
+/// it may only decline patterns the full parse would also call ASCII-safe.
+#[test]
+fn requires_non_ascii_shortcut_matches_the_parse() {
+    let cases = [
+        // Decided from text alone: printable ASCII, no escapes or ASCII-subtracting classes.
+        "abc",
+        "(?i)abc",
+        "(?i)k",
+        "(?i)[a-z0-9_]+",
+        r"\w+\s*=\s*\d+",
+        r"(?i)\W\D\S",
+        ".*",
+        "[[:alpha:]][[:punct:]]",
+        "(?i)[[:word:]]+",
+        // Must fall back to the parse, and some of these require non-ASCII.
+        r"\x{e9}",
+        r"(?i)\x{212A}",
+        r"é",
+        r"\p{Greek}",
+        r"\P{ASCII}",
+        r"[^\x00-\x7f]",
+        "[^[:ascii:]]",
+        "[[:^ascii:]]",
+        r"[\w--[:ascii:]]",
+        r"[\w&&[^[:ascii:]]]",
+        r"[\w~~[[:word:]]]",
+        "é",
+        "(?i)é",
+        "(?i)ſ",
+        "x\té",
+        "--help",
+    ];
+    for pattern in cases {
+        assert_eq!(
+            requires_non_ascii(pattern),
+            requires_non_ascii_parsed(pattern),
+            "shortcut changed the answer for {pattern:?}"
+        );
+        if text_cannot_require_non_ascii(pattern) {
+            assert!(
+                !requires_non_ascii_parsed(pattern),
+                "shortcut declined {pattern:?}"
+            );
+        }
+    }
+    // The escapes and class operations really can require non-ASCII.
+    for pattern in [
+        r"\x{e9}",
+        "[^[:ascii:]]",
+        "[[:^ascii:]]",
+        r"[\w--[:ascii:]]",
+        r"[\w~~[[:word:]]]",
+    ] {
+        assert!(
+            requires_non_ascii(pattern),
+            "{pattern:?} requires non-ASCII"
+        );
+    }
+}

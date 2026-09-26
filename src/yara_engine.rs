@@ -503,6 +503,23 @@ where
     all.into_iter().flat_map(|(_, v)| v).collect()
 }
 
+/// Whether a YAML document could contain a scalar equal to `yara`, the only
+/// way it can declare an inline YARA trait. Plain, single-quoted and block
+/// scalars can only spell it literally. A double-quoted scalar can also build
+/// it from `\x`/`\u`/`\U` escapes or join it across an escaped line
+/// break -- a backslash before `\n`, `\r`, NEL, LS or PS, which libyaml
+/// counts as breaks. No other escape yields a letter.
+fn may_spell_yara(content: &str) -> bool {
+    content.contains("yara")
+        || content
+            .as_bytes()
+            .windows(2)
+            .any(|w| w[0] == b'\\' && matches!(w[1], b'x' | b'u' | b'U' | b'\n' | b'\r'))
+        || ["\\\u{85}", "\\\u{2028}", "\\\u{2029}"]
+            .iter()
+            .any(|s| content.contains(s))
+}
+
 impl YaraEngine {
     /// An empty tier map pre-keyed with one `OnceLock` per bucket key.
     /// Keys are filetype strings (or [`FALLBACK_BUCKET`]) that actually carry
@@ -1407,6 +1424,12 @@ impl YaraEngine {
             let Ok(content) = fs::read_to_string(path) else {
                 return vec![];
             };
+            // Parsing every trait file to find the few that hold inline YARA
+            // was over a quarter of a small file's cold analysis; on
+            // 2026-09-26 only 457 of 19,611 files could hold one.
+            if !may_spell_yara(&content) {
+                return vec![];
+            }
             let Ok(doc) = serde_yaml::from_str::<serde_yaml::Value>(&content) else {
                 return vec![];
             };
@@ -3050,6 +3073,39 @@ impl YaraEngine {
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // Tests use direct assertions and helpers for brevity
 mod tests {
     use super::*;
+
+    /// A file the prefilter skips must hold no scalar equal to `yara`; every
+    /// way YAML can build that scalar must keep the file.
+    #[test]
+    fn may_spell_yara_keeps_every_spelling() {
+        let spelled = [
+            "traits:\n  - id: t\n    if:\n      type: yara\n",
+            "traits:\n  - id: t\n    if: {type: 'yara'}\n",
+            "t: \"\\x79ara\"\n",
+            "t: \"\\u0079ara\"\n",
+            "t: \"\\U00000079ara\"\n",
+            "t: \"ya\\\n  ra\"\n",
+            "t: \"ya\\\r\n  ra\"\n",
+        ];
+        for doc in spelled {
+            let value: serde_yaml::Value = serde_yaml::from_str(doc).unwrap();
+            let has = |v: &serde_yaml::Value| serde_yaml::to_string(v).unwrap().contains("yara");
+            assert!(has(&value), "fixture must really spell yara: {doc:?}");
+            assert!(may_spell_yara(doc), "prefilter dropped {doc:?}");
+        }
+        for doc in [
+            "traits:\n  - id: t\n    if:\n      type: text\n      regex: '\\d+'\n",
+            "t: \"ya\n  ra\"\n",
+            "t: ya ra\n",
+        ] {
+            assert!(!may_spell_yara(doc), "prefilter kept {doc:?}");
+            let value: serde_yaml::Value = serde_yaml::from_str(doc).unwrap();
+            assert!(
+                !serde_yaml::to_string(&value).unwrap().contains("yara"),
+                "{doc:?}"
+            );
+        }
+    }
 
     #[test]
     fn test_simple_rule() {

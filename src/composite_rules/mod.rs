@@ -20,7 +20,6 @@ pub(crate) mod debug;
 pub(crate) mod evaluators;
 pub(crate) mod regex_scratch;
 pub(crate) mod regex_store;
-pub(crate) mod regex_warm;
 pub(crate) mod section_map;
 pub(crate) mod trait_timing;
 pub(crate) mod traits;

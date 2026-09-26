@@ -235,22 +235,6 @@ pub(crate) fn bytes_regex_cache() -> &'static RwLock<BytesRegexCache> {
     })
 }
 
-/// Populate the raw-bytes store with `(pattern, case_insensitive)` if it is
-/// not already there. Used by the startup regex warm; a later lookup at the
-/// eval site then hits `peek` instead of compiling on the pool.
-pub(crate) fn warm_bytes_regex(pattern: &str, case_insensitive: bool) {
-    let key = (pattern.to_string(), case_insensitive);
-    let cache = bytes_regex_cache();
-    if cache.read().peek(&key).is_some() {
-        return;
-    }
-    if let Some(re) = compile_bytes_regex(pattern, case_insensitive) {
-        let arc = std::sync::Arc::new(re);
-        let size = arc.heap_bytes();
-        cache.write().put(key, arc, size);
-    }
-}
-
 /// Compile an ASCII-only pattern into a lean [`LeanRegex`] for
 /// zero-UTF-8-validation matching against raw file bytes. Returns `None` if the
 /// pattern uses features both engines reject (e.g. backreferences) — callers must
@@ -328,7 +312,39 @@ pub(crate) fn regex_unicode_override() -> bool {
 /// symbol- and text-index gates already used.
 const MIN_ATOM_LEN: usize = 3;
 
+/// Whether every match of `pattern` must contain a byte >= 0x80.
+///
+/// Called for every raw/text trait regex when a process first evaluates
+/// traits, so it must be cheap: the full parse below translates each pattern
+/// to HIR, which case-folds every `(?i)` class through the Unicode tables, and
+/// over the whole trait set that was a quarter of a small file's analysis.
+/// Most patterns are decided from their text alone (see
+/// [`text_cannot_require_non_ascii`]); only the rest are parsed.
 pub(crate) fn requires_non_ascii(pattern: &str) -> bool {
+    !text_cannot_require_non_ascii(pattern) && requires_non_ascii_parsed(pattern)
+}
+
+/// Whether `pattern`'s text alone proves no match needs a non-ASCII byte.
+///
+/// Printable ASCII text can only require one through an escape that names a
+/// code point or Unicode class (`\x`, `\u`, `\U`, `\p`, `\P`) or a class
+/// that subtracts ASCII: negation (`[^`, `[:^`) or set operations (`--`,
+/// `&&`, `~~`, e.g. `[\w--[:ascii:]]`). Without those every literal is
+/// ASCII, and every class -- `.`, Perl, POSIX, ranges, their union, and any
+/// `(?i)` folding, which only adds members -- keeps an ASCII member. Text
+/// containing any of them falls back to the parse.
+fn text_cannot_require_non_ascii(pattern: &str) -> bool {
+    let bytes = pattern.as_bytes();
+    bytes.iter().all(|b| (0x20..0x7f).contains(b))
+        && !bytes
+            .windows(2)
+            .any(|w| w[0] == b'\\' && matches!(w[1], b'x' | b'u' | b'U' | b'p' | b'P'))
+        && !["[^", "[:^", "--", "&&", "~~"]
+            .iter()
+            .any(|op| pattern.contains(op))
+}
+
+fn requires_non_ascii_parsed(pattern: &str) -> bool {
     use regex_syntax::hir::{Class, Hir, HirKind};
     fn class_is_non_ascii(class: &Class) -> bool {
         match class {
@@ -1211,7 +1227,6 @@ pub(crate) fn build_regex(pattern: &str, case_insensitive: bool) -> anyhow::Resu
         builder.dfa_size_limit(regex_dfa_cache_bytes());
         builder.build()?
     };
-    crate::composite_rules::regex_warm::record_facade(pattern, case_insensitive);
 
     // Insert with write lock (LRU will evict oldest if at capacity)
     {

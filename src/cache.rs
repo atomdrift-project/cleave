@@ -188,7 +188,7 @@ pub fn format_age(secs: u64) -> String {
 /// `CLEAVE_CACHE_DIR` overrides this unconditionally (an explicit ops/test
 /// escape hatch, mirroring `CLEAVE_TRAITS_DIR`). Absent that, a `cfg(test)`
 /// build defaults to an isolated directory outside the real cache tree — see
-/// [`test_cache_dir`] — so `cargo test` never shares the on-disk SQLite
+/// `test_cache_dir` — so `cargo test` never shares the on-disk SQLite
 /// analysis cache, the compiled-mapper cache, or the compiled-YARA cache
 /// with a concurrently running production `cleave` process. Sharing that
 /// tree with a live instance is not just non-deterministic (a lookup can
@@ -1470,9 +1470,12 @@ mod tests {
         // Full validation requested, skipped on a mark for the edited tree.
         rewrite_keeping_mtime(&yaml, &probe_yaml("probe ccc"));
         invalidate_traits_scan();
-        crate::traits_fingerprint::CleanMark::for_traits(dir.path(), None)
-            .unwrap()
-            .set_if_unchanged(dir.path());
+        // Marks are off under `make test` (CLEAVE_SKIP_CACHE=1), and this probe
+        // tree fails full validation, so there is no skip to exercise.
+        let Some(mark) = crate::traits_fingerprint::CleanMark::for_traits(dir.path(), None) else {
+            return;
+        };
+        mark.set_if_unchanged(dir.path());
         assert_eq!(
             load_probe_desc(dir.path(), true).as_deref(),
             Some("probe ccc")

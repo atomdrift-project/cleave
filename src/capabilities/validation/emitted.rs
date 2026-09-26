@@ -135,7 +135,7 @@ fn check_entitlement(category: &str, key: Option<&str>) -> Option<Result<(), Str
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
+#[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
     use super::*;
 
@@ -186,6 +186,131 @@ mod tests {
             "metadata/entitlement/bogus::com.apple.x",
         ] {
             assert_eq!(check_emitted_ref(id), None, "{id}");
+        }
+    }
+
+    #[test]
+    fn developer_leaf_is_an_apple_team_id() {
+        for ok in ["ABCDE12345", "0123456789", "unknown"] {
+            assert_eq!(
+                check_emitted_ref(&format!("metadata/signed/developer::{ok}")),
+                Some(Ok(())),
+                "{ok}"
+            );
+        }
+        for bad in ["ABCDE1234", "ABCDE123456", "abcde12345", "ABCDE-2345", ""] {
+            assert!(
+                matches!(
+                    check_emitted_ref(&format!("metadata/signed/developer::{bad}")),
+                    Some(Err(_))
+                ),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn signer_leaves_must_be_in_normalized_form() {
+        for ok in [
+            "acme",
+            "acme-inc.",
+            "sectigo-rsa-time-stamping-signer-#3",
+            "ооо-яндекс",
+        ] {
+            for cat in ["unknown", "leaf"] {
+                assert_eq!(
+                    check_emitted_ref(&format!("metadata/signed/{cat}::{ok}")),
+                    Some(Ok(()))
+                );
+            }
+        }
+        for bad in ["Acme", "acme inc", "acme,inc", "acme(inc)", ""] {
+            let got = check_emitted_ref(&format!("metadata/signed/leaf::{bad}"));
+            assert!(matches!(got, Some(Err(_))), "{bad}: {got:?}");
+        }
+        // The reason names the spelling the engine would have produced.
+        let Some(Err(why)) = check_emitted_ref("metadata/signed/leaf::Acme Inc") else {
+            panic!("expected a rejection");
+        };
+        assert!(why.contains("acme-inc"), "{why}");
+    }
+
+    #[test]
+    fn fixed_leaf_categories_accept_only_their_values() {
+        assert_eq!(
+            check_emitted_ref("metadata/signed/platform::apple"),
+            Some(Ok(()))
+        );
+        assert!(matches!(
+            check_emitted_ref("metadata/signed/platform::microsoft-windows"),
+            Some(Err(_))
+        ));
+        assert_eq!(
+            check_emitted_ref("metadata/signed/integrity::macho-code-directory-invalid"),
+            Some(Ok(()))
+        );
+        // Not an engine category: static validation decides.
+        assert_eq!(
+            check_emitted_ref("metadata/signed/integrity::anything-else"),
+            None
+        );
+    }
+
+    #[test]
+    fn directory_refs_into_engine_namespaces() {
+        for dir in [
+            "metadata/signed",
+            "metadata/signed/",
+            "metadata/signed/leaf/",
+            "metadata/signed/unknown",
+            "metadata/entitlement/",
+            "metadata/entitlement/keychain/",
+            "metadata/lang/embedded",
+        ] {
+            assert_eq!(check_emitted_ref(dir), Some(Ok(())), "{dir}");
+        }
+        // YAML-only directories fall through.
+        assert_eq!(check_emitted_ref("metadata/signed/trust-level/"), None);
+        assert_eq!(check_emitted_ref("metadata/entitlement/nonsense/"), None);
+    }
+
+    #[test]
+    fn every_encoded_layer_name_is_an_emitted_id() {
+        for name in ENCODED_LAYER_NAMES {
+            assert_eq!(
+                check_emitted_ref(&format!("metadata/lang/encoded/{name}")),
+                Some(Ok(())),
+                "{name}"
+            );
+        }
+        assert_eq!(check_emitted_ref("metadata/lang/encoded/rot47"), None);
+    }
+
+    #[test]
+    fn entitlement_rejection_names_the_emitted_category() {
+        let Some(Err(why)) =
+            check_emitted_ref("metadata/entitlement/network::com.apple.security.cs.allow-jit")
+        else {
+            panic!("expected a rejection");
+        };
+        assert!(why.contains("metadata/entitlement/security"), "{why}");
+    }
+
+    #[test]
+    fn import_ids_keep_their_own_shape_check() {
+        assert_eq!(
+            check_emitted_ref("metadata/import/python/json::loads"),
+            Some(Ok(()))
+        );
+        assert_eq!(check_emitted_ref("metadata/import/python/"), Some(Ok(())));
+        // Not an import ecosystem: left to static validation.
+        assert_eq!(check_emitted_ref("metadata/import/klingon/x::y"), None);
+    }
+
+    #[test]
+    fn exact_engine_ids_validate() {
+        for id in EXACT_IDS {
+            assert_eq!(check_emitted_ref(id), Some(Ok(())), "{id}");
         }
     }
 

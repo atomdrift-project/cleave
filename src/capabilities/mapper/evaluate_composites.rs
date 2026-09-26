@@ -311,19 +311,19 @@ impl super::CapabilityMapper {
                 .iter()
                 .enumerate()
                 .filter_map(|(i, finding)| {
-                    if let Some(rule) = composite_map
+                    // Every downgrade, whatever its scope: this context holds
+                    // only this file's findings, so a file-scoped downgrade
+                    // cannot reach another member here. (The scope filter
+                    // belongs to `reeval_downgrades_cross_scope`, whose context
+                    // adds container findings.) Evaluated from the declared
+                    // tier and applied only when lower, so a downgrade that
+                    // already fired at match time is not applied twice.
+                    let rule = composite_map
                         .get(finding.id.as_str())
-                        .map(|&i| &self.composite_rules[i])
-                        && let Some(downgrade_rules) = &rule.downgrade
-                        && downgrade_spans_container(downgrade_rules)
-                    {
-                        let new_crit =
-                            rule.evaluate_downgrade(downgrade_rules, &finding.crit, &ctx);
-                        if new_crit != finding.crit {
-                            return Some((i, new_crit));
-                        }
-                    }
-                    None
+                        .map(|&i| &self.composite_rules[i])?;
+                    let downgrade_rules = rule.downgrade.as_ref()?;
+                    let new_crit = rule.evaluate_downgrade(downgrade_rules, &rule.crit, &ctx);
+                    (new_crit < finding.crit).then_some((i, new_crit))
                 })
                 .collect()
         };
@@ -1302,6 +1302,146 @@ traits:
 "#;
         let file = write_test_traits(yaml);
         super::super::CapabilityMapper::from_yaml(file.path()).expect("load file-scoped mapper")
+    }
+
+    /// A file-scoped composite downgrade whose condition resolves after the
+    /// composite matched must still apply once every finding is in.
+    ///
+    /// Regression guard: pass 3 only re-evaluated container-scoped downgrades,
+    /// so when `metadata/signed/platform::microsoft` resolved late (its own
+    /// `unless:` waits on a retroactively-suppressed atom), a hostile
+    /// `av-product-killer` on a Microsoft installer kept its declared tier.
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn test_pass3_applies_late_file_scoped_composite_downgrade() {
+        use crate::composite_rules::{FileType as RuleFileType, SectionMap};
+
+        let yaml = r#"
+traits:
+  - id: "test/leg::leg-trait"
+    desc: "leg"
+    crit: notable
+    if:
+      type: basename
+      exact: "x"
+  - id: "test/gate::gate-trait"
+    desc: "gate"
+    crit: baseline
+    if:
+      type: basename
+      exact: "y"
+composite_rules:
+  - id: "test/target::target-rule"
+    desc: "target composite with a file-scoped downgrade"
+    crit: hostile
+    all:
+      - id: "test/leg::leg-trait"
+    downgrade:
+      any:
+        - id: "test/gate::gate-trait"
+"#;
+        let file = write_test_traits(yaml);
+        let mapper = super::super::CapabilityMapper::from_yaml(file.path()).expect("load mapper");
+        let report = make_test_report();
+
+        // As matched: the gate was not yet present, so the target kept its
+        // declared tier. The gate arrives before pass 3.
+        let mut findings = vec![
+            make_test_finding("test/target::target-rule", Criticality::Hostile),
+            make_test_finding("test/gate::gate-trait", Criticality::Baseline),
+        ];
+        let reeval = |findings: &mut Vec<Finding>| {
+            mapper.reeval_downgrades(
+                findings,
+                &report,
+                &[],
+                None,
+                RuleFileType::All,
+                &SectionMap::default(),
+                None,
+            );
+        };
+        reeval(&mut findings);
+        assert_eq!(findings[0].crit, Criticality::Suspicious);
+        assert!(findings[0].downgraded);
+
+        // Idempotent: a second pass (or a downgrade already applied at match
+        // time) must not lower it again.
+        reeval(&mut findings);
+        assert_eq!(findings[0].crit, Criticality::Suspicious);
+    }
+
+    /// Pass 3 changes nothing it has no reason to: no gate, no downgrade, or
+    /// a finding already at or below the downgraded tier.
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn test_pass3_leaves_unconditioned_findings_alone() {
+        use crate::composite_rules::{FileType as RuleFileType, SectionMap};
+
+        let yaml = r#"
+traits:
+  - id: "test/leg::leg-trait"
+    desc: "leg"
+    crit: notable
+    if:
+      type: basename
+      exact: "x"
+  - id: "test/gate::gate-trait"
+    desc: "gate"
+    crit: baseline
+    if:
+      type: basename
+      exact: "y"
+composite_rules:
+  - id: "test/target::target-rule"
+    desc: "target composite with a file-scoped downgrade"
+    crit: hostile
+    all:
+      - id: "test/leg::leg-trait"
+    downgrade:
+      any:
+        - id: "test/gate::gate-trait"
+  - id: "test/plain::plain-rule"
+    desc: "composite without a downgrade"
+    crit: suspicious
+    all:
+      - id: "test/leg::leg-trait"
+"#;
+        let file = write_test_traits(yaml);
+        let mapper = super::super::CapabilityMapper::from_yaml(file.path()).expect("load mapper");
+        let report = make_test_report();
+        let reeval = |findings: &mut Vec<Finding>| {
+            mapper.reeval_downgrades(
+                findings,
+                &report,
+                &[],
+                None,
+                RuleFileType::All,
+                &SectionMap::default(),
+                None,
+            );
+        };
+
+        // Gate absent: the target keeps its declared tier and is not flagged.
+        let mut findings = vec![
+            make_test_finding("test/target::target-rule", Criticality::Hostile),
+            make_test_finding("test/plain::plain-rule", Criticality::Suspicious),
+        ];
+        reeval(&mut findings);
+        assert_eq!(findings[0].crit, Criticality::Hostile);
+        assert!(!findings[0].downgraded);
+        assert_eq!(findings[1].crit, Criticality::Suspicious);
+        assert!(!findings[1].downgraded);
+
+        // Gate present, but the finding already sits below what the downgrade
+        // would give (lowered by something else): never raised back up.
+        let mut findings = vec![
+            make_test_finding("test/target::target-rule", Criticality::Notable),
+            make_test_finding("test/gate::gate-trait", Criticality::Baseline),
+        ];
+        reeval(&mut findings);
+        assert_eq!(findings[0].crit, Criticality::Notable);
+        assert!(!findings[0].downgraded);
     }
 
     /// A `downgrade:` with no `scope:` must not reach across archive members.

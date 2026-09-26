@@ -609,3 +609,29 @@ mod offset_tests {
         }
     }
 }
+
+/// Both compression layers the peeler adds are names reference validation
+/// accepts as `metadata/lang/encoded/<encoding>`.
+#[test]
+fn decompression_layers_are_known_encoded_layer_names() {
+    use crate::analyzers::embedded_code_detector::ENCODED_LAYER_NAMES;
+    use flate2::Compression;
+    use flate2::write::{GzEncoder, ZlibEncoder};
+    use std::io::Write;
+
+    let payload = b"echo layered payload; echo layered payload; echo layered payload";
+    let mut gz = GzEncoder::new(Vec::new(), Compression::default());
+    gz.write_all(payload).unwrap();
+    let mut zl = ZlibEncoder::new(Vec::new(), Compression::default());
+    zl.write_all(payload).unwrap();
+
+    for (bytes, expected) in [
+        (gz.finish().unwrap(), "gzip"),
+        (zl.finish().unwrap(), "zlib"),
+    ] {
+        let (out, name) = super::decompress_if_compressed(&bytes).unwrap();
+        assert_eq!(out, payload);
+        assert_eq!(name, expected);
+        assert!(ENCODED_LAYER_NAMES.contains(&name.as_str()), "{name}");
+    }
+}

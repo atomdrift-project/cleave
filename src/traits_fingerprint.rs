@@ -77,6 +77,11 @@ impl CleanMark {
         if marks_disabled() {
             return None;
         }
+        Self::slot(traits_dir, precision)
+    }
+
+    /// The mark slot for `traits_dir`, whether or not marks are switched on.
+    fn slot(traits_dir: &Path, precision: Option<(f32, f32)>) -> Option<Self> {
         let key = mark_key(crate::cache::traits_content_for(traits_dir), precision);
         let path = crate::cache::cache_dir()
             .ok()?
@@ -431,8 +436,9 @@ mod tests {
         let b = tree();
         fs::write(b.path().join("objectives/c2/irc.yaml"), "traits: [z]\n").unwrap();
 
-        let mark_a = CleanMark::for_traits(a.path(), None).unwrap();
-        let mark_b = CleanMark::for_traits(b.path(), None).unwrap();
+        // `slot`, not `for_traits`: `make test` sets CLEAVE_SKIP_CACHE=1.
+        let mark_a = CleanMark::slot(a.path(), None).unwrap();
+        let mark_b = CleanMark::slot(b.path(), None).unwrap();
         assert_ne!(mark_a.key, mark_b.key);
         // Keys live in a shared test cache dir; start from a clean slate.
         let _ = fs::remove_file(&mark_a.path);

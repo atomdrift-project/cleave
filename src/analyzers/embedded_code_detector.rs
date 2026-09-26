@@ -2075,6 +2075,32 @@ pub(crate) fn process_all_strings_with_host(
 mod tests {
     use super::*;
 
+    /// Script-deobfuscation layers name themselves from a closed set; each
+    /// must be listed so its `metadata/lang/encoded/<name>` id validates.
+    #[test]
+    fn deobfuscation_layers_are_known_encoded_layer_names() {
+        for (language, chain) in [
+            ("powershell", "powershell:encodedcommand+utf16le"),
+            ("powershell", "powershell:iex"),
+            ("python", "python:base64+zlib"),
+            ("php", "php:gzinflate+base64_decode"),
+        ] {
+            let result = stng::script::DeobfuscationResult {
+                decoded: String::new(),
+                offset: 0,
+                chain_description: chain.to_string(),
+                language,
+            };
+            for step in encoding_chain_for_deobfuscation(&result) {
+                assert!(
+                    ENCODED_LAYER_NAMES.contains(&step.as_str()),
+                    "{chain} -> {step}"
+                );
+            }
+        }
+        assert!(ENCODED_LAYER_NAMES.contains(&"unicode-variation-selector"));
+    }
+
     fn make_string_info(value: &str) -> StringInfo {
         StringInfo {
             value: (value.to_string()).into(),

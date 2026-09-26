@@ -3992,3 +3992,91 @@ fn test_inherited_composite_scores_are_compressed() {
     assert!(child_precision > validation::atomic_calibrated_max());
     assert!(parent_precision < child_precision);
 }
+
+/// End to end through the directory loader with full validation on: a
+/// reference to an id the engine can never emit is reported with the reason,
+/// a valid engine id is not, and a rule whose `unless:` covers its own leg is
+/// flagged by the leg-suppression validator.
+#[test]
+fn test_loader_reports_impossible_engine_ids_and_leg_suppression() {
+    use std::fs;
+    use tempfile::TempDir;
+
+    let temp_dir = TempDir::new().unwrap();
+    let dir = temp_dir.path().join("objectives/evasion/masquerade/cert");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("probe.yaml"),
+        r#"
+defaults:
+  platforms: [windows]
+  for: [pe]
+traits:
+  - id: probe-leg
+    desc: Probe leg marker
+    crit: notable
+    conf: 0.8
+    if:
+      type: text
+      exact: probe-leg-marker
+composite_rules:
+  - id: probe-dead-pe-developer
+    desc: Probe ref to a retired PE signer id
+    crit: suspicious
+    conf: 0.8
+    all:
+      - id: probe-leg
+    unless:
+      - id: metadata/signed/developer::acme-corporation
+      - id: metadata/signed/unknown::acme-corporation
+  - id: probe-self-suppressed
+    desc: Probe rule whose unless covers its leg
+    crit: suspicious
+    conf: 0.8
+    all:
+      - id: probe-leg
+    unless:
+      - id: objectives/evasion/masquerade/cert::probe-leg
+"#,
+    )
+    .unwrap();
+
+    let saved: Vec<(&str, Option<String>)> = ["CLEAVE_VALIDATE", "CLEAVE_SKIP_MAPPER_CACHE"]
+        .iter()
+        .map(|k| (*k, std::env::var(k).ok()))
+        .collect();
+    // SAFETY: this test is the only writer of these env vars for its duration.
+    unsafe {
+        std::env::set_var("CLEAVE_VALIDATE", "1");
+        std::env::set_var("CLEAVE_SKIP_MAPPER_CACHE", "1");
+    }
+    let result = CapabilityMapper::from_directory(temp_dir.path());
+    for (key, value) in saved {
+        match value {
+            Some(v) => unsafe { std::env::set_var(key, v) },
+            None => unsafe { std::env::remove_var(key) },
+        }
+    }
+
+    let err = format!(
+        "{:#}",
+        result.expect_err("validation must reject the probe traits")
+    );
+    // Exactly the retired PE id, with the reason; the valid unknown:: id is
+    // not counted.
+    assert!(err.contains("1 broken trait references"), "{err}");
+    assert!(
+        err.contains("'metadata/signed/developer::acme-corporation'"),
+        "{err}"
+    );
+    assert!(err.contains("10-char Apple team id"), "{err}");
+    assert!(
+        !err.contains("'metadata/signed/unknown::acme-corporation'"),
+        "{err}"
+    );
+    assert!(
+        err.contains("policy/unless-covers-leg 1 composites"),
+        "{err}"
+    );
+    assert!(!err.contains("self-referencing"), "{err}");
+}

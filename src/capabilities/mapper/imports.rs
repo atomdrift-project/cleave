@@ -1,4 +1,4 @@
-//! Runtime import findings: metadata/import/<ecosystem>/<target>::<local-name>.
+//! Runtime import findings: `metadata/import/<ecosystem>/<target>::<local-name>`.
 //!
 //! Read typed filefacts imports, never the report's mixed import/call list.
 

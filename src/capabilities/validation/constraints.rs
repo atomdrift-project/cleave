@@ -1610,8 +1610,9 @@ pub(crate) fn find_orphaned_components(
     use crate::types::Criticality;
     use std::collections::HashSet;
 
-    // Collect all component trait IDs
-    let component_ids: HashSet<&str> = trait_definitions
+    // Collect all component trait IDs, sorted so the ones under a directory
+    // are a single run found by binary search rather than a scan of all.
+    let mut component_ids: Vec<&str> = trait_definitions
         .iter()
         .filter(|t| t.crit == Criticality::Component)
         .map(|t| t.id.as_str())
@@ -1620,6 +1621,11 @@ pub(crate) fn find_orphaned_components(
     if component_ids.is_empty() {
         return Vec::new();
     }
+    component_ids.sort_unstable();
+    let starting_with = |prefix: &str| {
+        let run = &component_ids[component_ids.partition_point(|id| *id < prefix)..];
+        run[..run.partition_point(|id| id.starts_with(prefix))].to_vec()
+    };
 
     // Collect all trait references from composite rules
     let mut referenced_ids: HashSet<String> = HashSet::new();
@@ -1637,9 +1643,9 @@ pub(crate) fn find_orphaned_components(
                         referenced_ids.insert(id.clone());
                     } else {
                         // Directory reference - mark all traits in that directory as referenced
-                        for component_id in &component_ids {
+                        for component_id in starting_with(id.trim_end_matches('/')) {
                             if directory_covers(id, component_id) {
-                                referenced_ids.insert((*component_id).to_string());
+                                referenced_ids.insert(component_id.to_string());
                             }
                         }
                     }
@@ -1654,9 +1660,9 @@ pub(crate) fn find_orphaned_components(
                     if id.contains("::") {
                         referenced_ids.insert(id.clone());
                     } else {
-                        for component_id in &component_ids {
+                        for component_id in starting_with(id.trim_end_matches('/')) {
                             if directory_covers(id, component_id) {
-                                referenced_ids.insert((*component_id).to_string());
+                                referenced_ids.insert(component_id.to_string());
                             }
                         }
                     }
@@ -1679,10 +1685,8 @@ pub(crate) fn find_orphaned_components(
                             referenced_ids.insert(id.clone());
                         } else {
                             let prefix = format!("{}::", id);
-                            for component_id in &component_ids {
-                                if component_id.starts_with(&prefix) {
-                                    referenced_ids.insert((*component_id).to_string());
-                                }
+                            for component_id in starting_with(&prefix) {
+                                referenced_ids.insert(component_id.to_string());
                             }
                         }
                     }
@@ -1699,10 +1703,8 @@ pub(crate) fn find_orphaned_components(
             } else if id.contains('/') {
                 // Directory reference
                 let prefix = format!("{}::", id);
-                for component_id in &component_ids {
-                    if component_id.starts_with(&prefix) {
-                        referenced_ids.insert((*component_id).to_string());
-                    }
+                for component_id in starting_with(&prefix) {
+                    referenced_ids.insert(component_id.to_string());
                 }
             }
         }
@@ -1714,9 +1716,9 @@ pub(crate) fn find_orphaned_components(
                     if id.contains("::") {
                         referenced_ids.insert(id.clone());
                     } else {
-                        for component_id in &component_ids {
+                        for component_id in starting_with(id.trim_end_matches('/')) {
                             if directory_covers(id, component_id) {
-                                referenced_ids.insert((*component_id).to_string());
+                                referenced_ids.insert(component_id.to_string());
                             }
                         }
                     }
@@ -1739,10 +1741,8 @@ pub(crate) fn find_orphaned_components(
                             referenced_ids.insert(id.clone());
                         } else {
                             let prefix = format!("{}::", id);
-                            for component_id in &component_ids {
-                                if component_id.starts_with(&prefix) {
-                                    referenced_ids.insert((*component_id).to_string());
-                                }
+                            for component_id in starting_with(&prefix) {
+                                referenced_ids.insert(component_id.to_string());
                             }
                         }
                     }
@@ -4121,12 +4121,25 @@ fn legs_outside_for(
         .map(|t| t.id.as_str())
         .collect();
 
+    // Every definition sorted by id, so the ones under a directory are a
+    // single run found by binary search rather than a scan of all of them.
+    let mut by_id: Vec<(&str, &Vec<FileType>)> = trait_definitions
+        .iter()
+        .map(|t| (t.id.as_str(), &t.r#for))
+        .chain(composite_rules.iter().map(|c| (c.id.as_str(), &c.r#for)))
+        .collect();
+    by_id.sort_by_key(|&(id, _)| id);
+
     // Union of every definition under a directory reference.
     let dir_types = |dir: &str| -> Vec<FileType> {
         let prefix = dir.trim_end_matches('/');
         let mut out: Vec<FileType> = Vec::new();
-        for (id, types) in trait_for.iter().chain(composite_for.iter()) {
-            if id.starts_with(prefix) && id[prefix.len()..].starts_with([':', '/']) {
+        let first = by_id.partition_point(|&(id, _)| id < prefix);
+        for (id, types) in by_id[first..]
+            .iter()
+            .take_while(|(id, _)| id.starts_with(prefix))
+        {
+            if id[prefix.len()..].starts_with([':', '/']) {
                 for ft in types.iter() {
                     if !out.contains(ft) {
                         out.push(*ft);

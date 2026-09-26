@@ -1284,24 +1284,7 @@ fn condition_label(location: &PatternLocation) -> String {
 /// - "all" in either set = overlaps with everything
 /// - Regular intersection check for specific file types
 fn has_filetype_overlap(loc_a: &PatternLocation, loc_b: &PatternLocation) -> bool {
-    // Both have no restrictions -> overlap
-    if loc_a.for_types.is_empty() && loc_b.for_types.is_empty() {
-        return true;
-    }
-
-    // One has no restrictions -> overlaps with everything
-    if loc_a.for_types.is_empty() || loc_b.for_types.is_empty() {
-        return true;
-    }
-
-    // If either contains "all", they overlap with everything
-    // (parse_file_types returns vec![All] when for: [all] has no exclusions)
-    if loc_a.for_types.contains("all") || loc_b.for_types.contains("all") {
-        return true;
-    }
-
-    // Check intersection of specific file types
-    !loc_a.for_types.is_disjoint(&loc_b.for_types)
+    has_filetype_overlap_case(&loc_a.for_types, &loc_b.for_types)
 }
 
 fn has_same_count_density_filters(loc_a: &PatternLocation, loc_b: &PatternLocation) -> bool {
@@ -1542,29 +1525,20 @@ pub(crate) fn check_regex_or_overlapping_exact(
         id.split_once("::").map_or(id, |(dir, _)| dir)
     }
 
-    // First pass: collect all regex patterns with | (OR operators)
+    // Collect all regex patterns with | (OR operators), and all
+    // exact/word/substr patterns, from one extraction of each trait.
     let mut regex_patterns: Vec<(String, PatternLocation)> = Vec::new();
-
-    for trait_def in trait_definitions {
-        let patterns = extract_patterns(trait_def);
-        for (_, location) in patterns {
-            if location.match_type == "regex" && location.original_value.contains('|') {
-                regex_patterns.push((location.original_value.clone(), location));
-            }
-        }
-    }
-
-    // Second pass: collect all exact/word/substr patterns
     let mut literal_patterns: HashMap<String, Vec<PatternLocation>> = HashMap::new();
 
     for trait_def in trait_definitions {
-        let patterns = extract_patterns(trait_def);
-        for (normalized, location) in patterns {
+        for (normalized, location) in extract_patterns(trait_def) {
             if location.match_type != "regex" {
                 literal_patterns
                     .entry(normalized)
                     .or_default()
                     .push(location);
+            } else if location.original_value.contains('|') {
+                regex_patterns.push((location.original_value.clone(), location));
             }
         }
     }
@@ -1641,6 +1615,8 @@ pub(crate) fn check_overlapping_regex_patterns(
     trait_definitions: &[TraitDefinition],
     warnings: &mut Vec<String>,
 ) {
+    use rayon::prelude::*;
+
     let start = std::time::Instant::now();
     let initial_warning_count = warnings.len();
 
@@ -1666,39 +1642,44 @@ pub(crate) fn check_overlapping_regex_patterns(
         Some(canonical_regex_form(branch).unwrap_or(normalized))
     };
 
-    let mut regex_patterns: Vec<RegexWithAlternatives> = Vec::new();
-    for trait_def in trait_definitions {
-        let patterns = extract_patterns(trait_def);
-        for (_, location) in patterns {
-            if location.match_type == "regex" {
-                // Pre-compute canonical keys for each meaningful alternative.
-                let alts: FxHashSet<String> = split_top_level_alternation(&location.original_value)
-                    .into_iter()
-                    .filter_map(&alternative_key)
-                    .collect();
+    // Parsing every regex is most of this check, and each one parses on its
+    // own, so they are done in parallel; `collect` keeps them in trait order.
+    let regex_patterns: Vec<RegexWithAlternatives> = trait_definitions
+        .par_iter()
+        .flat_map_iter(|trait_def| {
+            extract_patterns(trait_def)
+                .into_iter()
+                .filter(|(_, location)| location.match_type == "regex")
+                .map(|(_, location)| {
+                    // Pre-compute canonical keys for each meaningful alternative.
+                    let alts: FxHashSet<String> =
+                        split_top_level_alternation(&location.original_value)
+                            .into_iter()
+                            .filter_map(&alternative_key)
+                            .collect();
 
-                // If no alternatives, key on the whole pattern instead.
-                let alternatives = if alts.is_empty() {
-                    let mut set = FxHashSet::default();
-                    if let Some(key) = alternative_key(&location.original_value) {
-                        set.insert(key);
+                    // If no alternatives, key on the whole pattern instead.
+                    let alternatives = if alts.is_empty() {
+                        let mut set = FxHashSet::default();
+                        if let Some(key) = alternative_key(&location.original_value) {
+                            set.insert(key);
+                        }
+                        set
+                    } else {
+                        alts
+                    };
+
+                    let canonical = canonical_regex_form(location.original_value.trim());
+                    let has_alternation = location.original_value.contains('|');
+                    RegexWithAlternatives {
+                        location,
+                        alternatives,
+                        canonical,
+                        has_alternation,
                     }
-                    set
-                } else {
-                    alts
-                };
-
-                let canonical = canonical_regex_form(location.original_value.trim());
-                let has_alternation = location.original_value.contains('|');
-                regex_patterns.push(RegexWithAlternatives {
-                    location,
-                    alternatives,
-                    canonical,
-                    has_alternation,
-                });
-            }
-        }
-    }
+                })
+        })
+        .collect();
 
     // Build inverted index: alternative -> list of pattern indices
     // This allows us to only compare patterns that share at least one alternative
@@ -3117,19 +3098,17 @@ fn collect_case_insensitive_overlap_issues(
 }
 
 /// Helper to check file type overlap for case patterns
+/// Whether two `for:` sets can see the same file: either one is unrestricted
+/// (empty, or `all` -- `parse_file_types` returns `[All]` for `for: [all]`
+/// with no exclusions), or they share a type. It is asked of every candidate
+/// pair, and the sets hold a handful of types, so comparing them directly is
+/// much cheaper than hashing each probe.
 fn has_filetype_overlap_case(types_a: &HashSet<String>, types_b: &HashSet<String>) -> bool {
-    // No restrictions -> overlap
-    if types_a.is_empty() || types_b.is_empty() {
-        return true;
-    }
-
-    // If either contains "all", they overlap
-    if types_a.contains("all") || types_b.contains("all") {
-        return true;
-    }
-
-    // Check intersection
-    types_a.intersection(types_b).next().is_some()
+    let unrestricted =
+        |types: &HashSet<String>| types.is_empty() || types.iter().any(|t| t == "all");
+    unrestricted(types_a)
+        || unrestricted(types_b)
+        || types_a.iter().any(|a| types_b.iter().any(|b| a == b))
 }
 
 /// Helper to create tier note for warnings

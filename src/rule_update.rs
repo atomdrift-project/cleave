@@ -310,7 +310,7 @@ fn fetch_manifest(connect: Option<Duration>) -> Result<(Manifest, Channel), Stri
         && err.unauthorized()
     {
         tracing::warn!(
-            "isotope13 subscription key was not accepted ({}); using public rules. Check https://dash.isotope13.ai",
+            "isotope13 subscription key was not accepted ({}); using public rules. Check https://dash.isotope13.io",
             err.status_text()
         );
         channel = Channel::Public;

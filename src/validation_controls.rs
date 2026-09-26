@@ -432,6 +432,13 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         fix: "Reference the one member trait you meant instead of the directory, so the exclusion stops matching every file that emits the metric.",
     },
     ValidatorSpec {
+        id: "leg-suppression",
+        category: ValidatorCategory::Policy,
+        display_id: "unless-covers-leg",
+        description: "A file-scoped composite's unless:/downgrade: covers one of its own required legs, so every match suppresses (or downgrades) it.",
+        fix: "Reference the specific benign-context trait you meant instead of a directory that also holds the leg; if the leg itself is the exclusion, the rule is dead and should be removed.",
+    },
+    ValidatorSpec {
         id: "archive-filetype-mix",
         category: ValidatorCategory::Policy,
         display_id: "ft-archive-mix",

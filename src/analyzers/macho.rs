@@ -1161,7 +1161,25 @@ fn describe_entitlement(key: &str) -> String {
 
 /// Categorize an entitlement key into a subdirectory for the ML pipeline.
 /// The full finding ID becomes `metadata/entitlement/<category>::<key>`.
-fn entitlement_category(key: &str) -> &'static str {
+/// Every value [`entitlement_category`] returns: the `<category>` segment of
+/// `metadata/entitlement/<category>::<key>`.
+pub(crate) const ENTITLEMENT_CATEGORIES: &[&str] = &[
+    "device",
+    "privacy",
+    "security",
+    "network",
+    "filesystem",
+    "keychain",
+    "ipc",
+    "cloud",
+    "identity",
+    "private-api",
+    "virtualization",
+    "automation",
+    "other",
+];
+
+pub(crate) fn entitlement_category(key: &str) -> &'static str {
     // Device hardware access
     if key.contains("device.") {
         return "device";

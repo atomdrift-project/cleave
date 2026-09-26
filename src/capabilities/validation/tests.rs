@@ -5790,6 +5790,118 @@ mod constraint_tests {
     }
 
     #[test]
+    fn test_composite_suppressed_by_own_leg_detected() {
+        use crate::capabilities::validation::composite::find_leg_suppressing_composites;
+        use crate::composite_rules::traits::{DowngradeConditions, Scope};
+
+        fn refs(ids: &[&str]) -> Vec<Condition> {
+            ids.iter()
+                .map(|id| Condition::Trait {
+                    id: (*id).to_string(),
+                })
+                .collect()
+        }
+        fn rule(id: &str, all: &[&str], any: &[&str], unless: &[&str]) -> CompositeTrait {
+            let mut r = create_composite_any(id, any);
+            r.all = (!all.is_empty()).then(|| refs(all));
+            r.any = (!any.is_empty()).then(|| refs(any));
+            r.unless = (!unless.is_empty()).then(|| refs(unless));
+            r
+        }
+
+        // The shape that killed pkginfo-minimal-shell-package: the unless
+        // directory contains a required all: leg.
+        let dir_covers_all = rule(
+            "x/y::shell",
+            &["meta/versioning/scheme::lowest", "meta/eco::core"],
+            &[],
+            &["meta/versioning/"],
+        );
+        // Every any: leg covered (by different suppressors).
+        let covers_every_any = rule(
+            "x/y::every-any",
+            &["a/b::base"],
+            &["c/d::one", "e/f::two"],
+            &["c/d/", "e/f::two"],
+        );
+        // One any: leg survives, so the rule can still fire.
+        let one_any_survives = rule(
+            "x/y::survives",
+            &["a/b::base"],
+            &["c/d::one", "e/f::two"],
+            &["c/d/"],
+        );
+        // A directory leg inside the unless directory.
+        let dir_leg_in_dir = rule("x/y::dir-leg", &["m/n/o/"], &[], &["m/n"]);
+        // Archive scope: the leg can come from another member, not provable.
+        let mut archive = rule("x/y::archive", &["m/n::leg"], &[], &["m/n/"]);
+        archive.scope = Some(Scope::Archive);
+        // builtin-* hook carriers are meant never to fire.
+        let builtin = rule(
+            "p/q::builtin-some-finding",
+            &["p/q::ctx"],
+            &[],
+            &["p/q::ctx"],
+        );
+        // A downgrade whose only entry is a required leg pins the tier.
+        let mut pinned = rule("x/y::pinned", &["s/t::leg", "u/v::other"], &[], &[]);
+        pinned.downgrade = Some(DowngradeConditions {
+            any: Some(refs(&["s/t/"])),
+            all: None,
+            none: None,
+            needs: None,
+            scope: None,
+        });
+        // A downgrade that also needs something outside the legs is fine.
+        let mut conditional = rule("x/y::conditional", &["s/t::leg"], &[], &[]);
+        conditional.downgrade = Some(DowngradeConditions {
+            any: None,
+            all: Some(refs(&["s/t::leg", "w/z::context"])),
+            none: None,
+            needs: None,
+            scope: None,
+        });
+        // Prefix of a sibling directory name is not containment.
+        let sibling_prefix = rule(
+            "x/y::sibling",
+            &["meta/versioning-extra::leg"],
+            &[],
+            &["meta/versioning"],
+        );
+
+        let rules = [
+            dir_covers_all,
+            covers_every_any,
+            one_any_survives,
+            dir_leg_in_dir,
+            archive,
+            builtin,
+            pinned,
+            conditional,
+            sibling_prefix,
+        ];
+        let found = find_leg_suppressing_composites(&rules);
+        let got: Vec<(&str, &str, &str, &str)> = found
+            .iter()
+            .map(|(r, s, l, c)| (r.id.as_str(), s.as_str(), l.as_str(), *c))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                (
+                    "x/y::shell",
+                    "meta/versioning/",
+                    "meta/versioning/scheme::lowest",
+                    "unless"
+                ),
+                ("x/y::every-any", "c/d/", "c/d::one", "unless"),
+                ("x/y::dir-leg", "m/n", "m/n/o/", "unless"),
+                ("x/y::pinned", "s/t/", "s/t::leg", "downgrade"),
+            ]
+        );
+    }
+
+    #[test]
     fn test_composite_directory_self_reference_detected() {
         let rule = create_composite_any("foo/bar::alias", &["foo/bar"]);
         let rules = [rule];

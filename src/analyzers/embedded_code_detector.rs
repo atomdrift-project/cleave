@@ -778,7 +778,33 @@ fn calculate_entropy(data: &[u8]) -> f64 {
 }
 
 /// Convert FileType to language name string
-fn lang_name(file_type: &FileType) -> &'static str {
+/// Every value [`lang_name`] returns: the leaf of `metadata/lang/embedded::<lang>`.
+pub(crate) const EMBEDDED_LANG_NAMES: &[&str] =
+    &["python", "javascript", "shell", "php", "unknown"];
+
+/// Every encoding-chain step the analyzers produce, i.e. the `<encoding>` of
+/// `metadata/lang/encoded/<encoding>`: stng's decoder methods
+/// (`generic.rs`), the compression and nested layers peeled by
+/// `extractors::encoded_payload::decompress_and_nest`, and the script and
+/// variation-selector layers decoded here. Reference validation checks YAML
+/// refs against this list; adding a producer means adding its name here.
+pub(crate) const ENCODED_LAYER_NAMES: &[&str] = &[
+    "xor",
+    "base64",
+    "base64-obf",
+    "base64-utf16le",
+    "hex",
+    "url",
+    "unicode-escape",
+    "unicode-variation-selector",
+    "base32",
+    "base85",
+    "script",
+    "gzip",
+    "zlib",
+];
+
+pub(crate) fn lang_name(file_type: &FileType) -> &'static str {
     match file_type {
         FileType::Python => "python",
         FileType::JavaScript => "javascript",
@@ -824,29 +850,39 @@ fn generate_embedded_language_trait(detected_lang: &FileType, offset: u64, value
 fn generate_encoded_layer_traits(encoding_chain: &[String], offset: u64) -> Vec<Finding> {
     encoding_chain
         .iter()
-        .map(|encoding| Finding {
-            precomputed_spans: None,
-            src: None,
-            id: format!("metadata/lang/encoded/{encoding}").into(),
-            kind: crate::types::FindingKind::Capability,
-            desc: format!("Code recovered from {encoding}-encoded layer").into(),
-            conf: 1.0,
-            crit: Criticality::Baseline,
-            mbc: None,
-            attack: None,
-            trait_refs: vec![],
-            evidence: vec![Evidence {
-                method: "embedded-code-detection".to_string(),
-                source: "encoded-layer".to_string(),
-                value: format!("Decoded layer at offset {:#x}", offset),
-                location: Some(format!("{:#x}", offset)),
-                ..Default::default()
-            }],
-            match_count: 0,
-            source_file: None,
-            downgraded: false,
+        .map(|encoding| {
+            debug_assert!(
+                ENCODED_LAYER_NAMES.contains(&encoding.as_str()),
+                "encoding `{encoding}` missing from ENCODED_LAYER_NAMES"
+            );
+            encoded_layer_finding(encoding, offset)
         })
         .collect()
+}
+
+fn encoded_layer_finding(encoding: &str, offset: u64) -> Finding {
+    Finding {
+        precomputed_spans: None,
+        src: None,
+        id: format!("metadata/lang/encoded/{encoding}").into(),
+        kind: crate::types::FindingKind::Capability,
+        desc: format!("Code recovered from {encoding}-encoded layer").into(),
+        conf: 1.0,
+        crit: Criticality::Baseline,
+        mbc: None,
+        attack: None,
+        trait_refs: vec![],
+        evidence: vec![Evidence {
+            method: "embedded-code-detection".to_string(),
+            source: "encoded-layer".to_string(),
+            value: format!("Decoded layer at offset {:#x}", offset),
+            location: Some(format!("{:#x}", offset)),
+            ..Default::default()
+        }],
+        match_count: 0,
+        source_file: None,
+        downgraded: false,
+    }
 }
 
 /// Result of analyzing an embedded string

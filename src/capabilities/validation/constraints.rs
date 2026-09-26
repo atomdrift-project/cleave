@@ -3544,29 +3544,11 @@ pub(crate) fn find_convictions_without_content(
 /// stay in sync with it.
 ///
 /// Returns `(rule id, clause, dangling reference)`.
-/// IDs synthesized per-file rather than loaded from YAML. Import findings use
-/// the target/local-name format emitted by `mapper/imports.rs`. Directory
-/// references under a source ecosystem match all bindings in that namespace.
+/// Whether `ref_id` is an id (or directory) the analyzers can synthesize per
+/// file. Checked against what each emitter can actually produce -- see
+/// [`super::emitted::check_emitted_ref`] -- not waved through by prefix.
 pub(crate) fn is_runtime_synthesized_namespace(ref_id: &str) -> bool {
-    if ref_id.starts_with("metadata/import/") {
-        return crate::capabilities::mapper::imports::is_dynamic_import_ref(ref_id);
-    }
-
-    const DYNAMIC_PREFIXES: &[&str] = &[
-        "metadata/dylib::",
-        "metadata/dylib/",
-        "metadata/signed/",
-        "metadata/entitlement/",
-        "metadata/lang/embedded::",
-        "metadata/lang/encoded/",
-        "metadata/binary/linking::macho-install-name",
-        "metadata/binary/linking::macho-dylib",
-        "metadata/binary/linking::macho-rpath",
-        "metadata/build/debug::elf-debuglink",
-    ];
-    DYNAMIC_PREFIXES
-        .iter()
-        .any(|prefix| ref_id.starts_with(prefix))
+    matches!(super::emitted::check_emitted_ref(ref_id), Some(Ok(())))
 }
 
 pub(crate) fn find_dangling_directory_refs(

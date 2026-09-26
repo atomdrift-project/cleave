@@ -1464,14 +1464,26 @@ impl StringMatchIndex {
 /// Builds per-file-type RegexSets to avoid running irrelevant patterns.
 #[derive(Clone, Default, Debug)]
 pub(crate) struct RawContentRegexIndex {
-    /// Per-file-type regex sets for targeted matching
-    by_file_type: FxHashMap<RuleFileType, FileTypeRegexSet>,
+    /// Per-file-type regex sets for targeted matching, each built on first
+    /// use (see [`Self::set`])
+    by_file_type: FxHashMap<RuleFileType, LazyRegexSet>,
     /// Universal patterns that apply to all file types
     universal: Option<FileTypeRegexSet>,
     /// Set of all trait indices that have content regex patterns (for quick lookup)
     indexed_traits: FxHashSet<usize>,
-    /// Total number of traits with raw content regex patterns
-    pub(crate) total_patterns: usize,
+}
+
+/// One file type's patterns, and the set built from them on first use.
+/// Building every type's set up front -- ~131 of them, mostly Aho-Corasick
+/// DFAs -- cost ~0.6 CPU-s and ~0.1 s of wall in every process that
+/// evaluated a trait, though a file only ever needs its own type's set and
+/// its archive family's.
+#[derive(Clone, Debug)]
+struct LazyRegexSet {
+    patterns: Vec<(String, usize)>,
+    words: Vec<WordPattern>,
+    substr: Vec<WordPattern>,
+    set: OnceLock<Option<FileTypeRegexSet>>,
 }
 
 /// Presence set plus reusable atom-hit offsets from one raw-content gate pass.
@@ -2530,6 +2542,7 @@ fn compile_engine_mirrored(pattern: &str) -> Result<regex::bytes::Regex, regex::
 }
 
 /// A word pattern: the literal word and whether it's case-insensitive
+#[derive(Clone, Debug)]
 struct WordPattern {
     word: String,
     case_insensitive: bool,
@@ -2582,6 +2595,10 @@ impl RawContentRegexIndex {
                     } else {
                         regex_str.clone()
                     };
+                    // Derived now although the per-type sets that use it are
+                    // built lazily: `MatchIndexes::build` saves new derivations
+                    // when it finishes, and one first derived later is never saved.
+                    let _ = super::derivation_memo::prefix_literal(&pattern);
                     if trait_def.r#for.contains(&RuleFileType::All) {
                         universal_patterns.push((pattern, trait_idx));
                     } else {
@@ -2693,128 +2710,86 @@ impl RawContentRegexIndex {
             }
         }
 
-        // Verifier regexes are no longer pre-compiled here — each
-        // `FileTypeRegexSet` slot compiles lazily on its first atom hit (see
-        // `verify_literal_candidates`), so a scan pays only for the patterns
-        // its content actually triggers.
-        let t_fts = std::time::Instant::now();
-
-        // Build regex sets for each file type in parallel
-        // Collect all file types that need building
-        let all_file_types: FxHashSet<RuleFileType> = by_file_type_patterns
+        // Only the universal set is built here; each file type's is built on
+        // first use (see `LazyRegexSet`). The indexed traits are exactly those
+        // given a pattern, word or atom below, since a set keeps every one.
+        let indexed_traits = by_file_type_patterns
+            .values()
+            .flatten()
+            .chain(&universal_patterns)
+            .map(|(_, trait_idx)| *trait_idx)
+            .chain(
+                by_file_type_words
+                    .values()
+                    .chain(by_file_type_substr.values())
+                    .flatten()
+                    .chain(&universal_words)
+                    .chain(&universal_substr)
+                    .map(|wp| wp.trait_idx),
+            )
+            .collect();
+        let file_types: FxHashSet<RuleFileType> = by_file_type_patterns
             .keys()
             .chain(by_file_type_words.keys())
             .chain(by_file_type_substr.keys())
             .copied()
             .collect();
-        let ft_data: Vec<_> = all_file_types
+        let by_file_type: FxHashMap<RuleFileType, LazyRegexSet> = file_types
             .into_iter()
             .map(|ft| {
-                let patterns = by_file_type_patterns.remove(&ft).unwrap_or_default();
-                let words = by_file_type_words.remove(&ft).unwrap_or_default();
-                let substr = by_file_type_substr.remove(&ft).unwrap_or_default();
-                (ft, patterns, words, substr)
+                let lazy = LazyRegexSet {
+                    patterns: by_file_type_patterns.remove(&ft).unwrap_or_default(),
+                    words: by_file_type_words.remove(&ft).unwrap_or_default(),
+                    substr: by_file_type_substr.remove(&ft).unwrap_or_default(),
+                    set: OnceLock::new(),
+                };
+                (ft, lazy)
             })
             .collect();
-        let results: Vec<_> = ft_data
-            .into_par_iter()
-            .map(|(ft, patterns, words, substr)| {
-                (ft, Self::build_regex_set(&patterns, &words, &substr))
-            })
-            .collect();
-
-        let mut by_file_type = FxHashMap::default();
-        for (ft, result) in results {
-            if let Some(set) = result {
-                by_file_type.insert(ft, set);
-            }
-        }
-        let fts_ms = t_fts.elapsed().as_millis() as u64;
         let t_universal = std::time::Instant::now();
-
-        // Build universal patterns (can run in parallel with file-type-specific building
-        // but kept separate for clarity)
         let universal =
             Self::build_regex_set(&universal_patterns, &universal_words, &universal_substr);
         tracing::debug!(
-            fts_ms,
             universal_ms = t_universal.elapsed().as_millis() as u64,
             file_types = by_file_type.len(),
             "raw-content regex index built"
         );
 
-        // Track only traits/patterns that were successfully indexed for pre-filtering.
-        let mut indexed_traits = FxHashSet::default();
-        let mut total_patterns = 0usize;
-
-        for ft_set in by_file_type.values() {
-            total_patterns += ft_set.pattern_to_traits.len();
-            for trait_indices in &ft_set.pattern_to_traits {
-                for &trait_idx in trait_indices {
-                    indexed_traits.insert(trait_idx);
-                }
-            }
-            // Count word patterns
-            for trait_indices in &ft_set.cs_word_to_traits {
-                total_patterns += 1;
-                for &trait_idx in trait_indices {
-                    indexed_traits.insert(trait_idx);
-                }
-            }
-            for trait_indices in &ft_set.ci_word_to_traits {
-                total_patterns += 1;
-                for &trait_idx in trait_indices {
-                    indexed_traits.insert(trait_idx);
-                }
-            }
-            for trait_indices in ft_set
-                .cs_substr_to_traits
-                .iter()
-                .chain(&ft_set.ci_substr_to_traits)
-            {
-                total_patterns += 1;
-                for &trait_idx in trait_indices {
-                    indexed_traits.insert(trait_idx);
-                }
-            }
-        }
-        if let Some(ref universal_set) = universal {
-            total_patterns += universal_set.pattern_to_traits.len();
-            for trait_indices in &universal_set.pattern_to_traits {
-                for &trait_idx in trait_indices {
-                    indexed_traits.insert(trait_idx);
-                }
-            }
-            for trait_indices in &universal_set.cs_word_to_traits {
-                total_patterns += 1;
-                for &trait_idx in trait_indices {
-                    indexed_traits.insert(trait_idx);
-                }
-            }
-            for trait_indices in &universal_set.ci_word_to_traits {
-                total_patterns += 1;
-                for &trait_idx in trait_indices {
-                    indexed_traits.insert(trait_idx);
-                }
-            }
-            for trait_indices in universal_set
-                .cs_substr_to_traits
-                .iter()
-                .chain(&universal_set.ci_substr_to_traits)
-            {
-                total_patterns += 1;
-                for &trait_idx in trait_indices {
-                    indexed_traits.insert(trait_idx);
-                }
-            }
-        }
-
         Self {
             by_file_type,
             universal,
             indexed_traits,
-            total_patterns,
         }
+    }
+
+    /// `file_type`'s set, built by its first caller. Race-don't-block, as in
+    /// [`compile_once`]: concurrent first callers each build one and the first
+    /// kept wins, so no thread waits on another's build.
+    fn set(&self, file_type: &RuleFileType) -> Option<&FileTypeRegexSet> {
+        let lazy = self.by_file_type.get(file_type)?;
+        compile_once(&lazy.set, || {
+            let t = std::time::Instant::now();
+            let set = Self::build_regex_set(&lazy.patterns, &lazy.words, &lazy.substr);
+            tracing::debug!(
+                ?file_type,
+                patterns = lazy.patterns.len(),
+                words = lazy.words.len(),
+                atoms = lazy.substr.len(),
+                elapsed_ms = t.elapsed().as_millis() as u64,
+                "raw-content regex set built"
+            );
+            set
+        })
+    }
+
+    /// Build every file type's set now, in parallel. For callers about to fan
+    /// a scan out across the pool (see `CapabilityMapper::warm_indexes`): left
+    /// lazy, every worker that meets a type before its set is kept builds its
+    /// own copy, and after a trait edit `validate`'s fixtures did exactly that.
+    pub(crate) fn warm(&self) {
+        self.by_file_type.par_iter().for_each(|(file_type, _)| {
+            let _ = self.set(file_type);
+        });
     }
 
     fn build_regex_set(
@@ -3092,7 +3067,7 @@ impl RawContentRegexIndex {
     }
 
     pub(crate) fn has_patterns(&self) -> bool {
-        self.total_patterns > 0
+        !self.indexed_traits.is_empty()
     }
 
     /// Check if any of the provided trait indices are indexed in the raw content regex index.
@@ -3133,8 +3108,10 @@ impl RawContentRegexIndex {
         if let Some(u) = &self.universal {
             check("universal".to_string(), u);
         }
-        for (ft, s) in &self.by_file_type {
-            check(format!("{ft:?}"), s);
+        for ft in self.by_file_type.keys() {
+            if let Some(s) = self.set(ft) {
+                check(format!("{ft:?}"), s);
+            }
         }
         out.join(",")
     }
@@ -3167,11 +3144,11 @@ impl RawContentRegexIndex {
         let sets: Vec<&FileTypeRegexSet> = self
             .universal
             .iter()
-            .chain(self.by_file_type.get(file_type))
+            .chain(self.set(file_type))
             .chain(
                 archive_family_types(file_type)
                     .iter()
-                    .filter_map(|ft| self.by_file_type.get(ft)),
+                    .filter_map(|ft| self.set(ft)),
             )
             .collect();
 
@@ -3226,11 +3203,11 @@ impl RawContentRegexIndex {
         let sets: Vec<&FileTypeRegexSet> = self
             .universal
             .iter()
-            .chain(self.by_file_type.get(file_type))
+            .chain(self.set(file_type))
             .chain(
                 archive_family_types(file_type)
                     .iter()
-                    .filter_map(|ft| self.by_file_type.get(ft)),
+                    .filter_map(|ft| self.set(ft)),
             )
             .collect();
         let mut rec = OffsetRecorder::new();
@@ -3259,16 +3236,11 @@ impl RawContentRegexIndex {
         file_type: &RuleFileType,
     ) -> FxHashSet<usize> {
         let mut out = FxHashSet::default();
-        for set in self
-            .universal
-            .iter()
-            .chain(self.by_file_type.get(file_type))
-            .chain(
-                archive_family_types(file_type)
-                    .iter()
-                    .filter_map(|ft| self.by_file_type.get(ft)),
-            )
-        {
+        for set in self.universal.iter().chain(self.set(file_type)).chain(
+            archive_family_types(file_type)
+                .iter()
+                .filter_map(|ft| self.set(ft)),
+        ) {
             out.extend(set.find_candidates(content));
         }
         out
@@ -3507,7 +3479,6 @@ mod tests {
         let index = RawContentRegexIndex::build(&[]);
 
         assert!(!index.has_patterns());
-        assert_eq!(index.total_patterns, 0);
     }
 
     #[test]
@@ -3642,8 +3613,8 @@ mod tests {
         // Verifier regexes are lazy: slots start empty and compile on first
         // atom hit (formerly they were eagerly compiled and Arc-shared across
         // buckets — the eager pass cost ~300 ms of every process start).
-        let js_set = index.by_file_type.get(&RuleFileType::JavaScript).unwrap();
-        let py_set = index.by_file_type.get(&RuleFileType::Python).unwrap();
+        let js_set = index.set(&RuleFileType::JavaScript).unwrap();
+        let py_set = index.set(&RuleFileType::Python).unwrap();
         assert!(js_set.individual_regexes[0].get().is_none());
         assert!(py_set.individual_regexes[0].get().is_none());
 

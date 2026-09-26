@@ -1004,6 +1004,8 @@ pub(crate) fn mapper_cache_key_for(traits_dir: &Path) -> Result<String> {
     let dir_tag = traits_dir_tag(traits_dir);
     let build = digest_bytes(crate::traits_fingerprint::binary_identity().as_bytes());
 
+    // v12: JSON lines, one rule per line, so a hit parses in parallel; and
+    // stored after unreferenced exceptions are dropped.
     // v11: keyed on trait-file contents and the build-id instead of path, size
     // and mtime, which a same-length edit under a restored mtime (every `git
     // archive` of two same-second commits) could not tell apart.
@@ -1022,7 +1024,7 @@ pub(crate) fn mapper_cache_key_for(traits_dir: &Path) -> Result<String> {
     // The build-id now covers that case; bump this prefix when the key's
     // meaning changes.
     Ok(format!(
-        "capability-mapper-v11-{version}-{dir_tag}-{fingerprint:016x}-{build:016x}.bin"
+        "capability-mapper-v12-{version}-{dir_tag}-{fingerprint:016x}-{build:016x}.bin"
     ))
 }
 

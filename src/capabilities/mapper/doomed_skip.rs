@@ -22,7 +22,7 @@ use crate::composite_rules::{
     CompositeTrait, Condition, FileType, Platform, RawQuery, Scope, TextQuery, TraitDefinition,
     platforms_intersect,
 };
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::MatchIndexes;
 use super::evaluate_traits::TraitEvalCache;
@@ -54,18 +54,16 @@ impl DoomedSkipIndex {
             leaf_hits.entry(trait_leaf(&def.id)).or_default().push(idx);
         }
         let ids = IdIndex::new(traits, &leaf_hits);
-        let short_unique: FxHashMap<&str, usize> = leaf_hits
-            .iter()
-            .filter_map(|(leaf, idxs)| {
-                if idxs.len() == 1 {
-                    Some((*leaf, idxs[0]))
-                } else {
-                    None
-                }
-            })
-            .collect();
 
+        // Rules name the same refs over and over, many of them whole
+        // directories, and marking is idempotent: each distinct ref is
+        // resolved once. Resolving every occurrence walked ~5M trait slots.
+        let mut marked: FxHashSet<String> = FxHashSet::default();
         let mut mark_never = |raw: &str| {
+            if marked.contains(raw) {
+                return;
+            }
+            marked.insert(raw.to_owned());
             for idx in ids.resolve_all(raw, trait_id_map) {
                 if idx < n {
                     never_skip[idx] = true;
@@ -128,7 +126,7 @@ impl DoomedSkipIndex {
             if let Some(conds) = &rule.all {
                 for cond in conds {
                     if let Condition::Trait { id } = cond
-                        && let Some(idx) = resolve_unique(id, trait_id_map, &short_unique)
+                        && let Some(idx) = resolve_unique(id, trait_id_map, &leaf_hits)
                     {
                         required.push(idx);
                     }
@@ -139,7 +137,7 @@ impl DoomedSkipIndex {
                 if required_from_any >= conds.len() {
                     for cond in conds {
                         if let Condition::Trait { id } = cond
-                            && let Some(idx) = resolve_unique(id, trait_id_map, &short_unique)
+                            && let Some(idx) = resolve_unique(id, trait_id_map, &leaf_hits)
                         {
                             required.push(idx);
                         }
@@ -250,10 +248,12 @@ fn trait_leaf(id: &str) -> &str {
         .unwrap_or(id)
 }
 
+/// The one trait `id` names, if it names exactly one: an exact `ns::leaf`
+/// id, or a bare short name that is a single trait's leaf.
 fn resolve_unique(
     id: &str,
     exact: &std::collections::HashMap<String, usize>,
-    short_unique: &FxHashMap<&str, usize>,
+    leaf_hits: &FxHashMap<&str, Vec<usize>>,
 ) -> Option<usize> {
     let id = id.trim_end_matches('/');
     if id.contains("::") {
@@ -262,7 +262,10 @@ fn resolve_unique(
     if id.contains('/') {
         return None;
     }
-    short_unique.get(id).copied()
+    match leaf_hits.get(id)?.as_slice() {
+        &[idx] => Some(idx),
+        _ => None,
+    }
 }
 
 /// Sorted trait ids for directory-prefix lookups, plus the leaf map for bare

@@ -821,14 +821,20 @@ fn normalize_regex(pattern: &str) -> String {
 /// Returns `None` for fragments that do not parse as a standalone regex (e.g. a
 /// single branch carved out of a larger group), letting callers fall back to
 /// textual normalization.
+///
+/// The form depends on the pattern alone, so a full validation keeps it across
+/// runs (see `facts_cache`): parsing every regex and branch again cost ~0.7
+/// CPU-s of each warm run.
 fn canonical_regex_form(pattern: &str) -> Option<String> {
-    let hir = regex_syntax::ParserBuilder::new()
-        .unicode(false)
-        .utf8(false)
-        .build()
-        .parse(pattern)
-        .ok()?;
-    Some(hir.to_string())
+    super::facts_cache::fact("regex-canonical", pattern, || {
+        let hir = regex_syntax::ParserBuilder::new()
+            .unicode(false)
+            .utf8(false)
+            .build()
+            .parse(pattern)
+            .ok()?;
+        Some(hir.to_string())
+    })
 }
 
 /// If `pattern` is a regex that contains no actual regex metacharacters

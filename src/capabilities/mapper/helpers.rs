@@ -64,15 +64,21 @@ pub(super) fn validate_conditions(
 pub(super) fn check_yaml_patterns(content: &str, path: &Path) -> Vec<String> {
     let mut warnings = Vec::new();
 
+    // An indented `key: null` line, as the regex `^\s+key:\s*null\s*$` would
+    // match it. Plain string tests: a regex run over every line of every
+    // trait file cost ~0.15 CPU-s a load.
+    let null_value = |line: &str, key: &str| {
+        let rest = line.trim_start();
+        rest.len() < line.len()
+            && rest
+                .strip_prefix(key)
+                .and_then(|value| value.strip_prefix(':'))
+                .is_some_and(|value| value.trim() == "null")
+    };
+
     // Check for explicit 'offset: null' which is meaningless (same as not specifying)
-    // Use regex to match the pattern with proper YAML indentation context
-    fn offset_null_re() -> Option<&'static regex::Regex> {
-        static RE: std::sync::OnceLock<Option<regex::Regex>> = std::sync::OnceLock::new();
-        RE.get_or_init(|| regex::Regex::new(r"^\s+offset:\s*null\s*$").ok())
-            .as_ref()
-    }
     for (line_num, line) in content.lines().enumerate() {
-        if offset_null_re().is_some_and(|regex| regex.is_match(line)) {
+        if null_value(line, "offset") {
             warnings.push(format!(
                 "{} line {}: 'offset: null' is meaningless (same as not specifying offset) - remove this line",
                 path.display(),
@@ -82,13 +88,8 @@ pub(super) fn check_yaml_patterns(content: &str, path: &Path) -> Vec<String> {
     }
 
     // Check for explicit 'section: null' which is also meaningless
-    fn section_null_re() -> Option<&'static regex::Regex> {
-        static RE: std::sync::OnceLock<Option<regex::Regex>> = std::sync::OnceLock::new();
-        RE.get_or_init(|| regex::Regex::new(r"^\s+section:\s*null\s*$").ok())
-            .as_ref()
-    }
     for (line_num, line) in content.lines().enumerate() {
-        if section_null_re().is_some_and(|regex| regex.is_match(line)) {
+        if null_value(line, "section") {
             warnings.push(format!(
                 "{} line {}: 'section: null' is meaningless (same as not specifying section) - remove this line",
                 path.display(),
@@ -170,4 +171,39 @@ pub(super) fn suggest_metric_field(valid_fields: &FxHashSet<String>, typo: &str)
     }
 
     best_match.map(|(field, _)| field)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::check_yaml_patterns;
+
+    /// The string tests flag exactly the lines the regexes they replaced did.
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn null_value_lines_match_the_regexes_they_replaced() {
+        let lines = [
+            "  offset: null",
+            "\toffset:null  ",
+            "    section:   null\t",
+            "\u{a0}offset: null",
+            "offset: null",
+            "  offset: nul",
+            "  offset: null # why",
+            "  offsets: null",
+            "  section: ~",
+            "  - section: null",
+            "  section: nullable",
+        ];
+        let content = lines.join("\n");
+        let flagged = check_yaml_patterns(&content, std::path::Path::new("t.yaml"));
+        for key in ["offset", "section"] {
+            let re = regex::Regex::new(&format!(r"^\s+{key}:\s*null\s*$")).expect("regex");
+            for (n, line) in lines.iter().enumerate() {
+                let reported = flagged
+                    .iter()
+                    .any(|w| w.starts_with(&format!("t.yaml line {}: '{key}: null'", n + 1)));
+                assert_eq!(reported, re.is_match(line), "{key} on {line:?}");
+            }
+        }
+    }
 }

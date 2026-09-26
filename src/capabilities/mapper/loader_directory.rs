@@ -76,10 +76,17 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
-/// Serializable cache data for the capability mapper.
-/// Contains only the data that round-trips through serde.
-/// Indexes (TraitIndex, StringMatchIndex, RawContentRegexIndex) are rebuilt after load.
-#[derive(Serialize, Deserialize)]
+/// Cache data for the capability mapper: only the data that round-trips
+/// through serde. Indexes (TraitIndex, StringMatchIndex, RawContentRegexIndex)
+/// are rebuilt after load.
+///
+/// Stored as JSON lines: a [`MapperCacheHeader`], then one line per trait and
+/// one per composite rule. As a single document, deserializing its ~118k rules
+/// took ~0.4 s on one thread in every process before its first analysis; one
+/// document per rule lets [`Self::parse`] spread that across the pool. Compact
+/// JSON escapes every newline inside a string, so each line is exactly one
+/// value, and the header's counts make a file cut short at a line boundary
+/// fail to load rather than load short.
 struct MapperCacheData {
     trait_definitions: Vec<TraitDefinition>,
     composite_rules: Vec<CompositeTrait>,
@@ -90,10 +97,80 @@ struct MapperCacheData {
     /// from `trait_definitions` — and stay missing on every cache hit. Without
     /// this the warning is printed exactly once, on the run that happens to
     /// rebuild the cache, and detection is quietly degraded from then on with
-    /// nothing on stderr to say so. Defaults to empty so caches written before
-    /// this field still load.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// nothing on stderr to say so.
     parse_errors: Vec<String>,
+}
+
+/// The first line of a mapper cache file.
+#[derive(Serialize, Deserialize)]
+struct MapperCacheHeader {
+    traits: usize,
+    composites: usize,
+    parse_errors: Vec<String>,
+}
+
+impl MapperCacheData {
+    fn to_json_lines(
+        traits: &[TraitDefinition],
+        composites: &[CompositeTrait],
+        parse_errors: &[String],
+    ) -> serde_json::Result<Vec<u8>> {
+        let header = MapperCacheHeader {
+            traits: traits.len(),
+            composites: composites.len(),
+            parse_errors: parse_errors.to_vec(),
+        };
+        let rules: Vec<Vec<u8>> = traits
+            .par_iter()
+            .map(serde_json::to_vec)
+            .chain(composites.par_iter().map(serde_json::to_vec))
+            .collect::<serde_json::Result<_>>()?;
+        let mut out = serde_json::to_vec(&header)?;
+        for rule in rules {
+            out.push(b'\n');
+            out.extend_from_slice(&rule);
+        }
+        Ok(out)
+    }
+
+    fn parse(bytes: &mut [u8]) -> Result<Self> {
+        fn parse_lines<T: serde::de::DeserializeOwned + Send>(
+            lines: &mut [&mut [u8]],
+        ) -> simd_json::Result<Vec<T>> {
+            lines
+                .par_iter_mut()
+                .map_init(simd_json::Buffers::default, |buffers, line| {
+                    simd_json::serde::from_slice_with_buffers(line, buffers)
+                })
+                .collect()
+        }
+
+        // Split with memchr: a byte-at-a-time `split_mut` over the ~70 MB
+        // file was the slowest serial step left.
+        let mut lines: Vec<&mut [u8]> = Vec::new();
+        let mut rest = bytes;
+        while let Some(at) = memchr::memchr(b'\n', rest) {
+            let (line, tail) = std::mem::take(&mut rest).split_at_mut(at);
+            lines.push(line);
+            rest = &mut tail[1..];
+        }
+        lines.push(rest);
+        let (header, rules) = lines.split_first_mut().context("empty mapper cache")?;
+        let header: MapperCacheHeader = simd_json::serde::from_slice(header)?;
+        anyhow::ensure!(
+            rules.len() == header.traits + header.composites,
+            "mapper cache holds {} rules; its header says {} traits and {} composites",
+            rules.len(),
+            header.traits,
+            header.composites
+        );
+        let (traits, composites) = rules.split_at_mut(header.traits);
+        Ok(Self {
+            trait_definitions: parse_lines(traits)?,
+            composite_rules: parse_lines(composites)?,
+            parse_errors: header.parse_errors,
+        })
+    }
 }
 
 /// Print the analysis-time warning for trait files this build could not parse.
@@ -515,7 +592,7 @@ impl super::CapabilityMapper {
                 tracing::trace!("Attempting to load mapper from cache: {:?}", cache_path);
                 match fs::read(&cache_path) {
                     Ok(mut bytes) => {
-                        match simd_json::from_slice::<MapperCacheData>(&mut bytes) {
+                        match MapperCacheData::parse(&mut bytes) {
                             Ok(mut cache_data) => {
                                 tracing::info!(
                                     "Loaded mapper from cache ({} traits, {} composites)",
@@ -557,10 +634,10 @@ impl super::CapabilityMapper {
                                     cache_data.composite_rules.len(),
                                 );
 
-                                super::drop_unreferenced_support_rules(
-                                    &mut cache_data.trait_definitions,
-                                    &cache_data.composite_rules,
-                                );
+                                // No `drop_unreferenced_support_rules`: the
+                                // snapshot was stored after it, and it runs to a
+                                // fixpoint, so it would drop nothing more.
+
                                 // Populate trait_id_map from cached data
                                 let mut trait_id_map = std::collections::HashMap::with_capacity(
                                     cache_data.trait_definitions.len(),
@@ -5720,17 +5797,19 @@ impl super::CapabilityMapper {
             mark.set_if_unchanged(dir_path);
         }
 
+        // Pruned before the snapshot is saved, so a cache hit need not prune.
+        super::drop_unreferenced_support_rules(&mut trait_definitions, &composite_rules);
+
         // Save to cache for future runs (only if not in validation mode)
         if !enable_full_validation
             && !skip_cache
             && let Ok(cache_path) = crate::cache::mapper_cache_path_for(dir_path)
         {
-            let cache_data = MapperCacheData {
-                trait_definitions: trait_definitions.clone(),
-                composite_rules: composite_rules.clone(),
-                parse_errors: parse_errors.clone(),
-            };
-            match serde_json::to_vec(&cache_data) {
+            match MapperCacheData::to_json_lines(
+                &trait_definitions,
+                &composite_rules,
+                &parse_errors,
+            ) {
                 Ok(bytes) => {
                     // Atomic write: a reader on another thread or process (a
                     // concurrently running `cleave`, or nextest's isolated
@@ -5762,8 +5841,6 @@ impl super::CapabilityMapper {
                 }
             }
         }
-
-        super::drop_unreferenced_support_rules(&mut trait_definitions, &composite_rules);
 
         // Populate trait_id_map
         let mut trait_id_map = std::collections::HashMap::with_capacity(trait_definitions.len());

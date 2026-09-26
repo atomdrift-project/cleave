@@ -249,6 +249,19 @@ pub(crate) fn active() -> Option<Arc<FactsCache>> {
     ACTIVE.read().ok()?.clone()
 }
 
+/// `compute`'s value for `input`: kept under `kind` during a full validation,
+/// so an earlier run's stands; computed every time outside one.
+pub(crate) fn fact<T: Serialize + DeserializeOwned>(
+    kind: &str,
+    input: &str,
+    compute: impl FnOnce() -> T,
+) -> T {
+    match active() {
+        Some(facts) => facts.get_or_compute(key(kind, &[input.as_bytes()]), compute),
+        None => compute(),
+    }
+}
+
 /// An open validation's facts; saved when it drops, whether the validation
 /// finished or stopped at an error -- a fact is true of its inputs either way.
 pub(crate) struct Session {

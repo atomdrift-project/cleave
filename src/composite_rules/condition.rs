@@ -872,15 +872,20 @@ struct TraitShorthandInner {
 
 /// Intermediate type for deserializing conditions with shorthand support.
 /// Converts `{ id: my-trait }` to `Condition::Trait { id: "my-trait" }`.
+///
+/// The two variants never both accept a map -- one requires `type`, the
+/// other allows nothing but `id` -- so their order changes only which one
+/// serde tries, and fails, first. Tagged comes first: the mapper cache stores
+/// every condition tagged (`into = "ConditionTagged"`), and trying the
+/// shorthand first built and discarded an error for each one on every load.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
 enum ConditionDeser {
-    /// Shorthand for trait reference - just `id` field, no `type` needed
-    /// Must be listed first so serde tries it before the tagged variants
-    TraitShorthand(TraitShorthandInner),
-
     /// All other condition types require explicit `type` field
     Tagged(Box<ConditionTagged>),
+
+    /// Shorthand for trait reference - just `id` field, no `type` needed
+    TraitShorthand(TraitShorthandInner),
 }
 
 /// High-fidelity validation checks for string matches.
@@ -3124,8 +3129,9 @@ impl Condition {
                             .chain(origin.literal.iter())
                             .chain(origin.through.iter().map(|m| &m.call))
                         {
-                            regex::Regex::new(pattern)
-                                .map_err(|e| anyhow::anyhow!("invalid provenance regex: {e}"))?;
+                            if let Some(e) = regex_compile_error(pattern) {
+                                anyhow::bail!("invalid provenance regex: {e}");
+                            }
                         }
                         for model in &origin.through {
                             if model.call.trim().is_empty()
@@ -3143,11 +3149,22 @@ impl Condition {
             }
             Condition::Yara { source, .. } => {
                 // Only validate syntax - add_source catches parse errors
-                // Don't call build() here as it triggers expensive JIT compilation
-                let mut compiler = yara_x::Compiler::new();
-                compiler
-                    .add_source(source.as_bytes())
-                    .map_err(|e| anyhow::anyhow!("invalid YARA rule: {}", e))?;
+                // Don't call build() here as it triggers expensive JIT compilation.
+                // The verdict depends on the source alone, so a full validation
+                // keeps it across runs (see `facts_cache`).
+                let parse_error = || {
+                    yara_x::Compiler::new()
+                        .add_source(source.as_bytes())
+                        .err()
+                        .map(|e| e.to_string())
+                };
+                if let Some(e) = crate::capabilities::validation::facts_cache::fact(
+                    "yara-parse",
+                    source,
+                    parse_error,
+                ) {
+                    anyhow::bail!("invalid YARA rule: {e}");
+                }
                 Ok(())
             }
             Condition::TreeSitter(TreeSitterQuery {
@@ -3221,9 +3238,8 @@ impl Condition {
                 }
 
                 // Validate regex compiles
-                if let Some(re) = regex {
-                    regex::Regex::new(re)
-                        .map_err(|e| anyhow::anyhow!("invalid regex in value condition: {}", e))?;
+                if let Some(e) = regex.as_deref().and_then(regex_compile_error) {
+                    anyhow::bail!("invalid regex in value condition: {e}");
                 }
 
                 Ok(())
@@ -3906,19 +3922,14 @@ impl Condition {
 }
 
 /// Why `pattern` does not compile, in `regex::Regex::new`'s words, or `None`
-/// when it does. Precompilation compiles only to validate, and during a full
+/// when it does. Loading compiles only to validate -- `validate` and
+/// `precompile_regexes` both ask, of the same patterns -- so during a full
 /// validation the verdict is kept across runs (see `facts_cache`): an
-/// unchanged pattern is not recompiled.
+/// unchanged pattern is not recompiled, by either.
 fn regex_compile_error(pattern: &str) -> Option<String> {
-    use crate::capabilities::validation::facts_cache;
-    let compile = || regex::Regex::new(pattern).err().map(|e| e.to_string());
-    match facts_cache::active() {
-        Some(facts) => facts.get_or_compute(
-            facts_cache::key("regex-compile", &[pattern.as_bytes()]),
-            compile,
-        ),
-        None => compile(),
-    }
+    crate::capabilities::validation::facts_cache::fact("regex-compile", pattern, || {
+        regex::Regex::new(pattern).err().map(|e| e.to_string())
+    })
 }
 
 /// Remove the legacy literal `()` call marker from a symbol predicate.

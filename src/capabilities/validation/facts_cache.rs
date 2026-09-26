@@ -16,12 +16,17 @@
 //! truncated or foreign file reads as empty. Entries a run did not use are
 //! dropped when it saves, so the file holds the current tree's working set
 //! rather than every tree it has seen.
+//!
+//! The file is read on its own thread while the trait files are found and
+//! parsed; the first fact looked up waits for it.
 
-use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
+use std::thread::JoinHandle;
+
+use rustc_hash::FxHashMap;
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -59,22 +64,52 @@ struct Stored {
 /// the checks that derive them in parallel do not queue on one lock.
 const FRESH_SHARDS: usize = 64;
 
+/// Facts read back from the last run. Keys are already uniform hashes, so
+/// the map needs no keyed hasher.
+type StoredFacts = FxHashMap<FactKey, Stored>;
+
 /// The facts of one validation run: those read back from the last run, and
 /// those derived by this one.
 pub(crate) struct FactsCache {
     path: PathBuf,
     identity: Vec<u8>,
-    stored: HashMap<FactKey, Stored>,
-    fresh: Vec<Mutex<HashMap<FactKey, Vec<u8>>>>,
+    stored: OnceLock<StoredFacts>,
+    /// The read of the last run's file, until the first lookup waits for it.
+    loading: Mutex<Option<JoinHandle<StoredFacts>>>,
+    fresh: Vec<Mutex<FxHashMap<FactKey, Vec<u8>>>>,
     /// The validation ran to its end, so what it did not use is not part of
     /// the tree's working set. A run that stopped at an error keeps everything.
     completed: AtomicBool,
 }
 
 impl FactsCache {
+    fn new(path: PathBuf, identity: Vec<u8>, completed: bool) -> Self {
+        Self {
+            path,
+            identity,
+            stored: OnceLock::new(),
+            loading: Mutex::new(None),
+            fresh: (0..FRESH_SHARDS)
+                .map(|_| Mutex::new(FxHashMap::default()))
+                .collect(),
+            completed: AtomicBool::new(completed),
+        }
+    }
+
+    /// The last run's facts, waiting for their read if it is still going. A
+    /// read that failed or panicked is an empty store, like a missing file.
+    fn stored(&self) -> &StoredFacts {
+        self.stored.get_or_init(|| {
+            let loading = self.loading.lock().ok().and_then(|mut slot| slot.take());
+            loading
+                .and_then(|handle| handle.join().ok())
+                .unwrap_or_default()
+        })
+    }
+
     /// The fact stored under `key`, if an earlier run derived it.
     pub(crate) fn get<T: DeserializeOwned>(&self, key: &FactKey) -> Option<T> {
-        let stored = self.stored.get(key)?;
+        let stored = self.stored().get(key)?;
         let (value, _) =
             bincode::serde::decode_from_slice(&stored.value, bincode::config::standard()).ok()?;
         stored.used.store(true, Ordering::Relaxed);
@@ -125,16 +160,15 @@ impl FactsCache {
             .flatten()
             .collect();
         let prune = self.completed.load(Ordering::Relaxed);
+        let stored = self.stored();
         let unused = prune
-            && self
-                .stored
+            && stored
                 .values()
                 .any(|stored| !stored.used.load(Ordering::Relaxed));
         if fresh.is_empty() && !unused {
             return;
         }
-        let mut entries: Vec<(FactKey, Vec<u8>)> = self
-            .stored
+        let mut entries: Vec<(FactKey, Vec<u8>)> = stored
             .iter()
             .filter(|(_, stored)| !prune || stored.used.load(Ordering::Relaxed))
             .map(|(key, stored)| (*key, stored.value.clone()))
@@ -174,7 +208,7 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 }
 
 /// The stored facts in `path`, if it holds an intact file written by this build.
-fn read_stored(path: &Path, identity: &[u8]) -> Option<HashMap<FactKey, Stored>> {
+fn read_stored(path: &Path, identity: &[u8]) -> Option<StoredFacts> {
     if fs::metadata(path).ok()?.len() > MAX_FILE_BYTES {
         return None;
     }
@@ -235,30 +269,56 @@ pub(crate) fn completed() {
     }
 }
 
-/// Open the facts for a full validation run. `CLEAVE_VALIDATE_FACTS=0` runs
-/// without them.
+/// Whether the facts are switched off: `CLEAVE_VALIDATE_FACTS=0`, or
+/// `CLEAVE_SKIP_CACHE=1`, which asks for fresh results from every cache.
+fn facts_disabled() -> bool {
+    facts_disabled_by(
+        std::env::var("CLEAVE_VALIDATE_FACTS").ok().as_deref(),
+        std::env::var("CLEAVE_SKIP_CACHE").ok().as_deref(),
+    )
+}
+
+/// [`facts_disabled`] for given values of `CLEAVE_VALIDATE_FACTS` and
+/// `CLEAVE_SKIP_CACHE`.
+fn facts_disabled_by(validate_facts: Option<&str>, skip_cache: Option<&str>) -> bool {
+    validate_facts == Some("0")
+        || skip_cache.is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+}
+
+/// Open the facts for a full validation run and start reading the last run's
+/// file in the background. Switched off by `CLEAVE_VALIDATE_FACTS=0` or
+/// `CLEAVE_SKIP_CACHE=1`.
 pub(crate) fn begin() -> Option<Session> {
-    if std::env::var("CLEAVE_VALIDATE_FACTS").is_ok_and(|v| v == "0") {
+    if facts_disabled() {
         return None;
     }
     let dir = crate::cache::cache_dir().ok()?;
     let identity = build_identity();
     let path = dir.join(FILE_NAME);
-    let stored = read_stored(&path, &identity).unwrap_or_default();
-    tracing::debug!(
-        "validate facts: {} entries from {}",
-        stored.len(),
-        path.display()
-    );
-    let cache = FactsCache {
-        path,
-        identity,
-        stored,
-        fresh: (0..FRESH_SHARDS)
-            .map(|_| Mutex::new(HashMap::new()))
-            .collect(),
-        completed: AtomicBool::new(false),
+    let cache = FactsCache::new(path.clone(), identity.clone(), false);
+    let read = move || {
+        let stored = read_stored(&path, &identity).unwrap_or_default();
+        tracing::debug!(
+            "validate facts: {} entries from {}",
+            stored.len(),
+            path.display()
+        );
+        stored
     };
+    match std::thread::Builder::new()
+        .name("validate-facts".into())
+        .spawn(read.clone())
+    {
+        Ok(handle) => {
+            if let Ok(mut slot) = cache.loading.lock() {
+                *slot = Some(handle);
+            }
+        }
+        // No thread to spare: read it here instead.
+        Err(_) => {
+            let _ = cache.stored.set(read());
+        }
+    }
     *ACTIVE.write().ok()? = Some(Arc::new(cache));
     Some(Session(()))
 }
@@ -272,15 +332,9 @@ pub(crate) static TEST_SLOT: Mutex<()> = Mutex::new(());
 #[cfg(test)]
 pub(crate) fn begin_at(path: &Path) -> Session {
     let identity = build_identity();
-    let cache = FactsCache {
-        path: path.to_path_buf(),
-        stored: read_stored(path, &identity).unwrap_or_default(),
-        identity,
-        fresh: (0..FRESH_SHARDS)
-            .map(|_| Mutex::new(HashMap::new()))
-            .collect(),
-        completed: AtomicBool::new(true),
-    };
+    let stored = read_stored(path, &identity).unwrap_or_default();
+    let cache = FactsCache::new(path.to_path_buf(), identity, true);
+    let _ = cache.stored.set(stored);
     if let Ok(mut active) = ACTIVE.write() {
         *active = Some(Arc::new(cache));
     }
@@ -305,19 +359,68 @@ pub(crate) fn build_identity() -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
     use super::*;
 
     fn cache_at(path: &Path, identity: &[u8]) -> FactsCache {
-        FactsCache {
-            path: path.to_path_buf(),
-            identity: identity.to_vec(),
-            stored: read_stored(path, identity).unwrap_or_default(),
-            fresh: (0..FRESH_SHARDS)
-                .map(|_| Mutex::new(HashMap::new()))
-                .collect(),
-            completed: AtomicBool::new(true),
+        let cache = FactsCache::new(path.to_path_buf(), identity.to_vec(), true);
+        let _ = cache
+            .stored
+            .set(read_stored(path, identity).unwrap_or_default());
+        cache
+    }
+
+    /// A store whose file is still being read answers only once the read is
+    /// done, with what the file holds.
+    #[test]
+    fn a_lookup_waits_for_the_background_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(FILE_NAME);
+        let fact = key("t", &[b"read in the background"]);
+        let first = cache_at(&path, b"build-a");
+        first.put(fact, &42u32);
+        first.save();
+
+        let cache = FactsCache::new(path.clone(), b"build-a".to_vec(), true);
+        let (read_path, identity) = (path.clone(), b"build-a".to_vec());
+        let handle = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            read_stored(&read_path, &identity).unwrap_or_default()
+        });
+        *cache.loading.lock().unwrap() = Some(handle);
+        assert_eq!(cache.get::<u32>(&fact), Some(42));
+    }
+
+    /// A read that panicked leaves an empty store rather than a failed run.
+    #[test]
+    fn a_failed_background_read_is_an_empty_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = FactsCache::new(dir.path().join(FILE_NAME), b"build-a".to_vec(), true);
+        let handle = std::thread::spawn(|| -> StoredFacts { panic!("read failed") });
+        *cache.loading.lock().unwrap() = Some(handle);
+        assert_eq!(cache.get::<u32>(&key("t", &[b"x"])), None);
+    }
+
+    /// `CLEAVE_SKIP_CACHE=1` turns the facts off like every other cache, and
+    /// `CLEAVE_VALIDATE_FACTS=0` still does on its own.
+    #[test]
+    fn skip_cache_switches_the_facts_off() {
+        for (skip_cache, off) in [
+            (Some("1"), true),
+            (Some("true"), true),
+            (Some("TRUE"), true),
+            (Some("0"), false),
+            (Some(""), false),
+            (None, false),
+        ] {
+            assert_eq!(
+                facts_disabled_by(None, skip_cache),
+                off,
+                "CLEAVE_SKIP_CACHE={skip_cache:?}"
+            );
         }
+        assert!(facts_disabled_by(Some("0"), None));
+        assert!(!facts_disabled_by(Some("1"), None));
     }
 
     /// A key names its inputs exactly: one byte of a pattern, a flag, or

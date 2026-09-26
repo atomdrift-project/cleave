@@ -6931,6 +6931,28 @@ mod orphan_tests {
             orphan_ids
         );
     }
+
+    /// A directory reference covers the components under that directory and
+    /// its subdirectories, and nothing in a sibling that merely shares its
+    /// name as a prefix.
+    #[test]
+    fn a_directory_reference_covers_only_its_own_components() {
+        let trait_defs: Vec<TraitDefinition> = ["a/a::w", "a/b::x", "a/b/c::y", "a/bc::z"]
+            .into_iter()
+            .map(make_component_trait)
+            .collect();
+        let composites = vec![make_composite(
+            "test::uses-dir",
+            vec![Condition::Trait {
+                id: "a/b/".to_string(),
+            }],
+            None,
+        )];
+
+        let orphans = find_orphaned_components(&trait_defs, &composites, &HashMap::new());
+        let orphan_ids: Vec<&str> = orphans.iter().map(|(id, _)| id.as_str()).collect();
+        assert_eq!(orphan_ids, ["a/a::w", "a/bc::z"]);
+    }
 }
 
 #[cfg(test)]
@@ -10378,6 +10400,27 @@ mod leg_role_tests {
         assert_eq!(found.len(), 1, "the suppressor leg must be reported");
         assert_eq!(found[0].role, LegRole::Suppressor);
         assert_eq!(found[0].leg, "t::cargo");
+    }
+
+    /// A directory leg stands for the union of the definitions under it --
+    /// subdirectories included, a sibling that shares its name as a prefix
+    /// not -- so it is outside `for:` only when all of those are. The union
+    /// is reported in id order, so the message is the same on every run.
+    #[test]
+    fn a_directory_leg_is_the_union_of_its_own_definitions() {
+        let traits = vec![
+            leg("t/dir::a", vec![FileType::Tar]),
+            leg("t/dir/sub::b", vec![FileType::Crate]),
+            leg("t/dirx::c", vec![FileType::PackageJson]),
+        ];
+        let mut rule = comp(vec![FileType::PackageJson]);
+        rule.all = Some(refs(&["t/dir"]));
+
+        let found = find_legs_outside_for(&traits, &[rule]);
+        assert_eq!(found.len(), 1, "the directory leg must be reported");
+        assert_eq!(found[0].role, LegRole::Required);
+        // `t/dir/sub::b` sorts before `t/dir::a`.
+        assert_eq!(found[0].leg_types, [FileType::Crate, FileType::Tar]);
     }
 
     /// One reachable `any:` branch is enough, so a partially-excluded `any:`

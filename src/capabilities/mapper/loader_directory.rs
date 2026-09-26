@@ -468,6 +468,22 @@ impl super::CapabilityMapper {
             Some("1") | Some("true") => true,   // Env var explicitly enables
             _ => enable_full_validation,        // Use CLI flag
         };
+        // A tree this build already validated clean skips the checks. The mark
+        // is keyed on the tree's content, so an edited tree validates in full;
+        // see `traits_fingerprint::CleanMark`.
+        let clean_mark = enable_full_validation
+            .then(|| {
+                crate::traits_fingerprint::CleanMark::for_traits(
+                    dir_path,
+                    enable_precision_scoring
+                        .then_some((min_hostile_precision, min_suspicious_precision)),
+                )
+            })
+            .flatten();
+        let validated_clean = clean_mark
+            .as_ref()
+            .is_some_and(crate::traits_fingerprint::CleanMark::is_set);
+        let enable_full_validation = enable_full_validation && !validated_clean;
 
         tracing::info!("Loading trait definitions from {}", dir_path.display());
         if enable_full_validation {
@@ -483,7 +499,7 @@ impl super::CapabilityMapper {
         let skip_cache = crate::cache::skip_mapper_cache();
         if !enable_full_validation
             && !skip_cache
-            && let Ok(cache_path) = crate::cache::mapper_cache_path()
+            && let Ok(cache_path) = crate::cache::mapper_cache_path_for(dir_path)
         {
             if cache_path.exists() {
                 tracing::trace!("Attempting to load mapper from cache: {:?}", cache_path);
@@ -569,8 +585,9 @@ impl super::CapabilityMapper {
                                     platforms: vec![Platform::All],
                                     slow_rule_ms: Self::DEFAULT_SLOW_RULE_MS,
                                     // Pinned at load; see the fresh-load arm.
-                                    traits_revision: crate::cache::traits_revision_fingerprint()
-                                        .unwrap_or_default(),
+                                    traits_revision: crate::cache::traits_revision_fingerprint_for(
+                                        dir_path,
+                                    ),
                                 });
                             }
                             Err(e) => {
@@ -5692,11 +5709,18 @@ impl super::CapabilityMapper {
                 details.join("\n")
             );
         }
+        if enable_full_validation
+            && warnings.is_empty()
+            && parse_errors.is_empty()
+            && let Some(mark) = &clean_mark
+        {
+            mark.set_if_unchanged(dir_path);
+        }
 
         // Save to cache for future runs (only if not in validation mode)
         if !enable_full_validation
             && !skip_cache
-            && let Ok(cache_path) = crate::cache::mapper_cache_path()
+            && let Ok(cache_path) = crate::cache::mapper_cache_path_for(dir_path)
         {
             let cache_data = MapperCacheData {
                 trait_definitions: trait_definitions.clone(),
@@ -5770,7 +5794,7 @@ impl super::CapabilityMapper {
             // Pinned at load: every result this mapper produces is stored
             // under this revision, even if a concurrent reload has already
             // replaced the process-global traits scan.
-            traits_revision: crate::cache::traits_revision_fingerprint().unwrap_or_default(),
+            traits_revision: crate::cache::traits_revision_fingerprint_for(dir_path),
         })
     }
 }

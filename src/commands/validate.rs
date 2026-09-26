@@ -127,9 +127,10 @@ fn run_inner(
     validation_controls::set_soft_validation_mode(soft);
     let (targets, expectations) = collect_targets()?;
 
-    // Skip the analysis cache so every run reflects the current trait set,
-    // and route validation-issue rendering through the chosen output format.
-    cleave::cache::set_skip_cache_override(Some(true));
+    // The analysis cache stays on: its entries are keyed on each fixture's
+    // SHA-256 and on the content of the trait set and the build, so a hit is
+    // exactly what analyzing again would produce. Route validation-issue
+    // rendering through the chosen output format.
     cleave::validation_controls::set_validation_output_format(Some(match format {
         OutputFormat::Tiny => cleave::validation_controls::ValidationOutputFormat::Tiny,
         OutputFormat::Json | OutputFormat::Jsonl => {

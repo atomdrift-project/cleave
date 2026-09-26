@@ -533,11 +533,17 @@ pub(crate) fn find_incompatible_regex_features(
     traits: &[TraitDefinition],
     errors: &mut Vec<String>,
 ) {
+    // Each distinct pattern is judged once: acceptance is a property of the
+    // pattern alone, and the same regex recurs across many traits.
+    let mut accepted: HashMap<&str, bool> = HashMap::new();
     for trait_def in traits {
         let Some(pattern) = substr_regex_fields(&trait_def.r#if).and_then(|(_, r, _)| r) else {
             continue;
         };
-        if regex_engine_accepts(pattern) {
+        if *accepted
+            .entry(pattern)
+            .or_insert_with(|| regex_engine_accepts(pattern))
+        {
             continue;
         }
         let source_file = trait_def
@@ -655,6 +661,7 @@ fn regex_ascii_compatible(pattern: &str) -> bool {
 }
 
 /// How a rule regex spends engine memory at evaluation time.
+#[derive(serde::Serialize, serde::Deserialize)]
 enum RegexMemoryIssue {
     /// The resident engine compiles but its NFA exceeds the budget.
     OverBudget(usize),
@@ -863,20 +870,48 @@ pub(crate) fn find_memory_hungry_regex_patterns(
         }
     }
 
-    let issues: Vec<Option<RegexMemoryIssue>> = regexes
-        .par_iter()
+    // Measured once per distinct pattern: the same regex recurs across many
+    // rules, and each measurement compiles NFAs.
+    let mut slot_of: HashMap<(&str, bool), usize> = HashMap::new();
+    let mut distinct: Vec<(&str, bool)> = Vec::new();
+    let slots: Vec<usize> = regexes
+        .iter()
         .map(|(_, _, _, pattern, case_insensitive)| {
+            *slot_of
+                .entry((pattern.as_str(), *case_insensitive))
+                .or_insert_with(|| {
+                    distinct.push((pattern.as_str(), *case_insensitive));
+                    distinct.len() - 1
+                })
+        })
+        .collect();
+    let facts = super::facts_cache::active();
+    let issues: Vec<Option<RegexMemoryIssue>> = distinct
+        .par_iter()
+        .map(|&(pattern, case_insensitive)| {
             // Measure what evaluation compiles: `lazy_regex` prepends `(?i)`.
-            if *case_insensitive {
-                regex_memory_issue(&format!("(?i){pattern}"))
-            } else {
-                regex_memory_issue(pattern)
+            let measure = || {
+                if case_insensitive {
+                    regex_memory_issue(&format!("(?i){pattern}"))
+                } else {
+                    regex_memory_issue(pattern)
+                }
+            };
+            match &facts {
+                Some(facts) => facts.get_or_compute(
+                    super::facts_cache::key(
+                        "regex-memory",
+                        &[pattern.as_bytes(), &[u8::from(case_insensitive)]],
+                    ),
+                    measure,
+                ),
+                None => measure(),
             }
         })
         .collect();
 
-    for ((kind, id, defined_in, pattern, _), issue) in regexes.iter().zip(issues) {
-        let Some(issue) = issue else {
+    for ((kind, id, defined_in, pattern, _), slot) in regexes.iter().zip(slots) {
+        let Some(issue) = &issues[slot] else {
             continue;
         };
         let source_file = defined_in.to_str().unwrap_or("unknown");
@@ -887,7 +922,7 @@ pub(crate) fn find_memory_hungry_regex_patterns(
         let split_hint = "replace the counted run with a loop plus length_min \
                           (e.g. `[A-Za-z0-9]+` + `length_min: 4000`), or split the wide gap \
                           into atomic traits joined by a near_lines/near_bytes composite";
-        warnings.push(match issue {
+        warnings.push(match *issue {
             RegexMemoryIssue::OverBudget(bytes) => format!(
                 "Regex memory: {kind} '{id}' in {location} compiles '{pattern}' to a {} KB NFA \
                  (budget {} KB) — {split_hint}",
@@ -1501,6 +1536,10 @@ pub(crate) fn find_uncompilable_ast_queries(
     composites: &[CompositeTrait],
     warnings: &mut Vec<String>,
 ) {
+    // A query compiles or fails the same way wherever it appears, and many
+    // rules share queries, so each grammar-and-query pair is compiled once.
+    let mut compiled: HashMap<(String, String), Result<(), String>> = HashMap::new();
+    let facts = super::facts_cache::active();
     let mut check = |kind: &str,
                      id: &str,
                      defined_in: &std::path::Path,
@@ -1528,7 +1567,23 @@ pub(crate) fn find_uncompilable_ast_queries(
 
         let mut failures = Vec::new();
         for lang in &languages {
-            match filefacts::validate_source_query(lang, query) {
+            let outcome = compiled
+                .entry(((*lang).to_string(), query.to_string()))
+                .or_insert_with(|| {
+                    let compile =
+                        || filefacts::validate_source_query(lang, query).map_err(|e| e.to_string());
+                    match &facts {
+                        Some(facts) => facts.get_or_compute(
+                            super::facts_cache::key(
+                                "ast-query",
+                                &[lang.as_bytes(), query.as_bytes()],
+                            ),
+                            compile,
+                        ),
+                        None => compile(),
+                    }
+                });
+            match outcome {
                 Ok(()) if !all_required => return,
                 Ok(()) => {}
                 Err(error) => failures.push(format!("{lang}: {error}")),

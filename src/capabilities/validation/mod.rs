@@ -33,6 +33,7 @@ mod composite;
 mod constraints;
 mod directory_whitelist;
 mod duplicates;
+pub(crate) mod facts_cache;
 mod helpers;
 mod patterns;
 mod precision;

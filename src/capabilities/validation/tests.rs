@@ -1061,6 +1061,76 @@ mod duplicate_tests {
         assert!(warnings[0].contains("consolidate"));
     }
 
+    /// Literal coverage served from stored facts reports exactly what a run
+    /// without them does, and a one-byte edit to either side -- a regex, its
+    /// flag, or the literal -- is recomputed rather than served stale.
+    #[test]
+    fn test_literal_coverage_with_stored_facts_matches_a_cold_run() {
+        use crate::capabilities::validation::facts_cache;
+        let _slot = facts_cache::TEST_SLOT
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = dir.path().join("facts.bin");
+        let tree = |literal: &str, patterns: &[&str]| {
+            let mut defs = vec![create_text_word(
+                "micro-behaviors/os/module/load::get-proc-address-reference",
+                literal,
+                vec![FileType::Pe],
+                "micro-behaviors/os/module/load/windows-loader.yaml",
+            )];
+            for (i, pat) in patterns.iter().enumerate() {
+                defs.push(create_text_regex_trait(
+                    &format!("objectives/evasion/dynamic::resolver-{i}"),
+                    pat,
+                    vec![FileType::Pe],
+                    "objectives/evasion/dynamic/traits.yaml",
+                ));
+            }
+            defs
+        };
+        let run = |defs: &[TraitDefinition], with_facts: bool| {
+            let _session = with_facts.then(|| facts_cache::begin_at(&store));
+            let mut warnings = Vec::new();
+            find_literals_covered_by_regexes(defs, &mut warnings);
+            warnings
+        };
+        let patterns = [
+            r"(?m)^GetProcAddress$",
+            r"(?i)getprocaddress",
+            r"\bGetProcAddress\b",
+            r"Get(Proc|Module)Address",
+        ];
+
+        let base = tree("GetProcAddress", &patterns);
+        let cold = run(&base, false);
+        assert_eq!(cold.len(), 1, "{cold:?}");
+        assert_eq!(run(&base, true), cold);
+        assert!(facts_cache::stored_entries(&store) > 0);
+        assert_eq!(run(&base, true), cold);
+
+        for edited in [
+            // One byte of one regex: it stops covering the literal.
+            tree(
+                "GetProcAddress",
+                &[patterns[0], patterns[1], r"\bGetProcAddresz\b", patterns[3]],
+            ),
+            // A flag: without (?i) the lowercase regex no longer matches.
+            tree(
+                "GetProcAddress",
+                &[patterns[0], "getprocaddress", patterns[2], patterns[3]],
+            ),
+            // The literal side: no regex covers the new phrase.
+            tree("GetProcAddresz", &patterns),
+        ] {
+            let expected = run(&edited, false);
+            assert!(expected.is_empty(), "{expected:?}");
+            assert_eq!(run(&edited, true), expected);
+        }
+        // The original tree is still served correctly after the edits.
+        assert_eq!(run(&base, true), cold);
+    }
+
     /// Three is under the threshold: a couple of rules sharing a token is
     /// ordinary, and reporting it would bury the real cases.
     #[test]
@@ -1525,6 +1595,75 @@ mod duplicate_tests {
 
         // No warning - regex doesn't match literal
         assert_eq!(warnings.len(), 0);
+    }
+
+    #[test]
+    fn test_regex_contains_literal_after_leading_metacharacters() {
+        let exact = create_string_exact(
+            "test::exact",
+            ".exe",
+            false,
+            vec![FileType::All],
+            "file1.yaml",
+        );
+        let regex = create_string_regex(
+            "test::regex",
+            r".*\.exe",
+            false,
+            vec![FileType::All],
+            "file2.yaml",
+        );
+
+        let mut warnings = Vec::new();
+        check_regex_contains_literal(&[exact, regex], &mut warnings);
+
+        assert_eq!(warnings.len(), 1);
+    }
+
+    /// Every pair the regex-vs-literal check can report must be among the
+    /// candidates its index proposes, or the report silently loses it.
+    #[test]
+    fn test_regex_literal_candidates_cover_every_reportable_pair() {
+        use std::collections::HashMap;
+
+        let regexes = [
+            "foo.*", ".*foo", "^foo$", r".*\.exe", r"7z\.exe", "foo", "a.b", r"\.\*", ".*", "",
+            "x+foo?", "foo.*bar", r"\\", "^.*", "fo.o", "foo.*foo", "..foo..",
+        ];
+        let literals = [
+            "foo", ".exe", "exe", "7z.exe", "", "a.b", ".*", r"\", "bar", "FOO", "fo.o",
+            "foo.*bar", "..", "o",
+        ];
+        let normalized: Vec<String> = literals
+            .iter()
+            .map(|literal| normalize_pattern_for_comparison(literal, false))
+            .collect();
+        let mut by_normalized: HashMap<&str, Vec<usize>> = HashMap::new();
+        let mut by_escaped: HashMap<String, Vec<usize>> = HashMap::new();
+        for (idx, literal) in literals.iter().enumerate() {
+            by_normalized
+                .entry(normalized[idx].as_str())
+                .or_default()
+                .push(idx);
+            by_escaped
+                .entry(regex::escape(literal))
+                .or_default()
+                .push(idx);
+        }
+
+        for pattern in regexes {
+            let pattern_normalized = normalize_pattern_for_comparison(pattern, true);
+            let candidates =
+                regex_literal_candidates(pattern, &pattern_normalized, &by_normalized, &by_escaped);
+            for (idx, literal) in literals.iter().enumerate() {
+                let reportable = pattern_normalized == normalized[idx]
+                    || trivially_extends(pattern, &regex::escape(literal));
+                assert!(
+                    !reportable || candidates.contains(&idx),
+                    "{pattern:?} vs {literal:?} is reportable but not a candidate"
+                );
+            }
+        }
     }
 
     // ========================================================================
@@ -10689,6 +10828,53 @@ mod convictions_without_content_tests {
                 ("t::names".to_string(), names.clone()),
                 ("t::names-again".to_string(), names.clone()),
                 ("t::outer".to_string(), names),
+            ]
+        );
+    }
+
+    /// A leg is settled by its first content-reading trait or inline condition
+    /// however deep it sits, cycles between composites terminate, and a
+    /// reported rule still lists every terminal it rests on -- including
+    /// through a directory reference.
+    #[test]
+    fn legs_settle_at_content_and_reported_rules_list_every_terminal() {
+        let traits = vec![
+            name("t::a", "a.exe"),
+            name("t::b", "b.exe"),
+            text("t::c", "payload"),
+            name("d/x::n1", "n1.exe"),
+            name("d/x::n2", "n2.exe"),
+        ];
+        let mut inline = rule("t::inline-inner", Criticality::Notable, &["t::a"]);
+        if let Some(all) = inline.all.as_mut() {
+            all.push(Condition::Text(TextQuery {
+                exact: Some("x".to_string()),
+                ..Default::default()
+            }));
+        }
+        let rules = vec![
+            rule("t::mixed", Criticality::Notable, &["t::a", "t::c"]),
+            rule("t::cyc1", Criticality::Notable, &["t::cyc2", "t::a"]),
+            rule("t::cyc2", Criticality::Notable, &["t::cyc1", "t::b"]),
+            inline,
+            rule("t::via-mixed", Criticality::Hostile, &["t::b", "t::mixed"]),
+            rule("t::cycle", Criticality::Hostile, &["t::cyc1"]),
+            rule("t::dir", Criticality::Hostile, &["d/x"]),
+            rule("t::via-inline", Criticality::Hostile, &["t::inline-inner"]),
+            rule("t::empty", Criticality::Hostile, &["t::nowhere"]),
+        ];
+        let found = find_convictions_without_content(&traits, &rules);
+        assert_eq!(
+            found,
+            vec![
+                (
+                    "t::cycle".to_string(),
+                    vec!["t::a".to_string(), "t::b".to_string()]
+                ),
+                (
+                    "t::dir".to_string(),
+                    vec!["d/x::n1".to_string(), "d/x::n2".to_string()]
+                ),
             ]
         );
     }

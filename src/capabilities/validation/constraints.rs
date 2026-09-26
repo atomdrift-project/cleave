@@ -3,6 +3,7 @@
 //! This module validates logical constraints in rules, detecting impossible
 //! or contradictory configurations that would make rules unsatisfiable.
 
+use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 
 use crate::capabilities::models::{RawCompositeRule, RawTraitDefinition, TraitDefaults};
@@ -3161,11 +3162,11 @@ pub(crate) fn find_one_fact_convictions(
     let index = ReferenceIndex::new(all_ids);
 
     let mut cache: HashMap<String, Vec<&str>> = HashMap::new();
-    // Every pair of legs is compared three ways, and the same patterns recur
-    // across pairs and rules, so each is determinized once per run rather than
-    // up to six times per pair.
-    let mut dfas: HashMap<String, Option<ValueSetDfa>> = HashMap::new();
-    let mut found = Vec::new();
+    // Pairs that pass the cheap tests, in report order, each carrying the two
+    // value patterns still to be compared.
+    let mut pairs: Vec<((String, String, String, String), usize, usize)> = Vec::new();
+    let mut pattern_slot: HashMap<String, usize> = HashMap::new();
+    let mut patterns: Vec<String> = Vec::new();
     for rule in composite_rules {
         // Scoped to convictions. Two spellings of one fact in a notable rule
         // are untidy; in a suspicious or hostile one they are the difference
@@ -3221,40 +3222,88 @@ pub(crate) fn find_one_fact_convictions(
                 else {
                     continue;
                 };
-                // The same evidence, either because the two matchers can
-                // match one span or because one leg's values are all already
-                // accepted by the other.
-                for pattern in [&pattern_a, &pattern_b] {
-                    if !dfas.contains_key(pattern) {
-                        dfas.insert(pattern.clone(), value_set_dfa(pattern));
-                    }
-                }
-                let (Some(Some(dfa_a)), Some(Some(dfa_b))) =
-                    (dfas.get(&pattern_a), dfas.get(&pattern_b))
-                else {
-                    continue;
+                let mut slot = |pattern: String| {
+                    *pattern_slot.entry(pattern).or_insert_with_key(|pattern| {
+                        patterns.push(pattern.clone());
+                        patterns.len() - 1
+                    })
                 };
-                let same_evidence = same_span_satisfies_both(dfa_a, dfa_b) == Some(true)
-                    || value_set_contains(dfa_a, dfa_b) == Some(true)
-                    || value_set_contains(dfa_b, dfa_a) == Some(true);
-                if !same_evidence {
-                    continue;
-                }
+                let (slot_a, slot_b) = (slot(pattern_a), slot(pattern_b));
                 let fact = if key_a.1.is_empty() {
                     "the file name".to_string()
                 } else {
                     key_a.1.to_string()
                 };
-                found.push((
-                    rule.id.clone(),
-                    legs[i].to_string(),
-                    legs[j].to_string(),
-                    fact,
+                pairs.push((
+                    (
+                        rule.id.clone(),
+                        legs[i].to_string(),
+                        legs[j].to_string(),
+                        fact,
+                    ),
+                    slot_a,
+                    slot_b,
                 ));
             }
         }
     }
-    found
+
+    // Determinizing is nearly all of this check's cost, and every pattern and
+    // every pair is independent: each pattern is built once, then the pairs
+    // are judged in parallel and kept in report order. A verdict depends only
+    // on the two patterns, so an earlier run's stands and only the patterns of
+    // pairs without one are determinized.
+    let facts = super::facts_cache::active();
+    let verdict_key = |slot_a: usize, slot_b: usize| {
+        super::facts_cache::key(
+            "one-fact",
+            &[patterns[slot_a].as_bytes(), patterns[slot_b].as_bytes()],
+        )
+    };
+    let known: Vec<Option<bool>> = pairs
+        .iter()
+        .map(|&(_, slot_a, slot_b)| {
+            facts
+                .as_ref()
+                .and_then(|facts| facts.get::<bool>(&verdict_key(slot_a, slot_b)))
+        })
+        .collect();
+    let mut needed = vec![false; patterns.len()];
+    for (&(_, slot_a, slot_b), known) in pairs.iter().zip(&known) {
+        if known.is_none() {
+            needed[slot_a] = true;
+            needed[slot_b] = true;
+        }
+    }
+    let dfas: Vec<Option<ValueSetDfa>> = patterns
+        .par_iter()
+        .zip(needed)
+        .map(|(pattern, needed)| if needed { value_set_dfa(pattern) } else { None })
+        .collect();
+    pairs
+        .into_par_iter()
+        .zip(known)
+        .filter_map(|((finding, slot_a, slot_b), known)| {
+            let same_evidence = known.unwrap_or_else(|| {
+                // The same evidence, either because the two matchers can match
+                // one span or because one leg's values are all already
+                // accepted by the other.
+                let same_evidence = match (&dfas[slot_a], &dfas[slot_b]) {
+                    (Some(dfa_a), Some(dfa_b)) => {
+                        same_span_satisfies_both(dfa_a, dfa_b) == Some(true)
+                            || value_set_contains(dfa_a, dfa_b) == Some(true)
+                            || value_set_contains(dfa_b, dfa_a) == Some(true)
+                    }
+                    _ => false,
+                };
+                if let Some(facts) = &facts {
+                    facts.put(verdict_key(slot_a, slot_b), &same_evidence);
+                }
+                same_evidence
+            });
+            same_evidence.then_some(finding)
+        })
+        .collect()
 }
 
 /// Cache for [`ReferenceIndex::resolve`]. These checks resolve the same
@@ -3297,12 +3346,104 @@ const NAME_IS_THE_TECHNIQUE: &[&str] = &[
     "metadata/file/extension/",
 ];
 
+/// What one leg of a conviction can reach, reduced to what the verdict needs.
+#[derive(Clone, Copy)]
+struct LegEvidence {
+    /// Something on the way reads the file's contents: an inline condition on
+    /// a composite, or a terminal trait that is not a name or shape.
+    reads_content: bool,
+    /// The leg reaches at least one terminal trait.
+    reaches_terminal: bool,
+}
+
+/// Walk one leg far enough to decide it: stop at the first thing that reads
+/// content, since one is enough to clear the rule.
+fn leg_evidence<'a>(
+    reference: &str,
+    index: &ReferenceIndex<'a>,
+    by_id: &HashMap<&str, &TraitDefinition>,
+    composite_by_id: &HashMap<&str, &'a CompositeTrait>,
+    cache: &mut HashMap<String, Vec<&'a str>>,
+) -> LegEvidence {
+    let mut evidence = LegEvidence {
+        reads_content: false,
+        reaches_terminal: false,
+    };
+    let mut stack = resolve_cached(reference, index, cache);
+    let mut seen: HashSet<&str> = HashSet::new();
+    while let Some(next) = stack.pop() {
+        if !seen.insert(next) {
+            continue;
+        }
+        let Some(sub) = composite_by_id.get(next) else {
+            evidence.reaches_terminal = true;
+            if !by_id
+                .get(next)
+                .is_some_and(|d| is_name_or_shape_only(&d.r#if))
+            {
+                evidence.reads_content = true;
+                return evidence;
+            }
+            continue;
+        };
+        for c in sub.all.iter().flatten().chain(sub.any.iter().flatten()) {
+            match c {
+                Condition::Trait { id: child } => {
+                    stack.extend(resolve_cached(child, index, cache));
+                }
+                other => {
+                    if !is_name_or_shape_only(other) {
+                        evidence.reads_content = true;
+                        return evidence;
+                    }
+                }
+            }
+        }
+    }
+    evidence
+}
+
+/// Every terminal trait a leg reaches, required or alternative.
+fn leg_terminals<'a>(
+    reference: &str,
+    index: &ReferenceIndex<'a>,
+    composite_by_id: &HashMap<&str, &'a CompositeTrait>,
+    cache: &mut HashMap<String, Vec<&'a str>>,
+    terminals: &mut HashSet<&'a str>,
+) {
+    let mut stack = resolve_cached(reference, index, cache);
+    let mut seen: HashSet<&str> = HashSet::new();
+    while let Some(next) = stack.pop() {
+        if !seen.insert(next) {
+            continue;
+        }
+        match composite_by_id.get(next) {
+            Some(sub) => {
+                for c in sub.all.iter().flatten().chain(sub.any.iter().flatten()) {
+                    if let Condition::Trait { id: child } = c {
+                        stack.extend(resolve_cached(child, index, cache));
+                    }
+                }
+            }
+            None => {
+                terminals.insert(next);
+            }
+        }
+    }
+}
+
 /// Convictions assembled entirely from name, size and metric facts.
 ///
 /// `digininja-postinstall` was the clearest: an exact `.tgz` basename, a file
 /// size pinned to 1917 bytes, and `strings.count` of exactly 13 -- a file hash
 /// wearing behavioural clothing, which matches one artifact and not the next
 /// build of the same malware. Names and shapes corroborate; they do not convict.
+///
+/// A rule is reported when no positive leg reads content -- neither an inline
+/// condition anywhere on the way nor a terminal trait -- and some leg reaches a
+/// terminal. Deciding that needs only two facts per leg, and most legs settle
+/// at their first content-reading trait, so the full terminal list is walked
+/// only for the rules that are reported.
 ///
 /// Returns `(composite id, the terminal ids it rests on)`.
 pub(crate) fn find_convictions_without_content(
@@ -3322,10 +3463,9 @@ pub(crate) fn find_convictions_without_content(
     let index = ReferenceIndex::new(all_ids);
 
     let mut cache: HashMap<String, Vec<&str>> = HashMap::new();
-    // What a leg reaches depends only on its reference, and the same legs
-    // recur across thousands of rules, so each is walked once: its terminals,
-    // and whether any condition on the way reads content.
-    let mut legs: HashMap<&str, (Vec<&str>, bool)> = HashMap::new();
+    // A leg's evidence depends only on its reference, and the same legs recur
+    // across thousands of rules, so each is walked once.
+    let mut legs: HashMap<&str, LegEvidence> = HashMap::new();
     let mut found = Vec::new();
     for rule in composite_rules {
         if rule.crit < Criticality::Suspicious {
@@ -3344,9 +3484,10 @@ pub(crate) fn find_convictions_without_content(
         }
         // Every positive leg counts here, `any:` included: one content-derived
         // alternative is enough to say the rule rests on more than a filename.
-        let mut terminals: HashSet<&str> = HashSet::new();
-        let mut saw_inline_content = false;
-        for cond in rule.all.iter().flatten().chain(rule.any.iter().flatten()) {
+        let positive = || rule.all.iter().flatten().chain(rule.any.iter().flatten());
+        let mut reads_content = false;
+        let mut reaches_terminal = false;
+        for cond in positive() {
             match cond {
                 Condition::Trait { id } => {
                     // A reference into a runtime-synthesized namespace resolves
@@ -3356,70 +3497,34 @@ pub(crate) fn find_convictions_without_content(
                     // "no content" reported rules like `setup-py-ctypes-imports`
                     // as resting on their filename alone.
                     if is_runtime_synthesized_namespace(id) {
-                        saw_inline_content = true;
-                        break;
-                    }
-                    // Every id this leg can reach, required or alternative: one
-                    // content-derived possibility is enough to clear the rule.
-                    let (reached, reads_content) = legs.entry(id.as_str()).or_insert_with(|| {
-                        let mut reached = Vec::new();
-                        let mut reads_content = false;
-                        let mut stack = resolve_cached(id, &index, &mut cache);
-                        let mut seen: HashSet<&str> = HashSet::new();
-                        while let Some(next) = stack.pop() {
-                            if !seen.insert(next) {
-                                continue;
-                            }
-                            match composite_by_id.get(next) {
-                                Some(sub) => {
-                                    for c in
-                                        sub.all.iter().flatten().chain(sub.any.iter().flatten())
-                                    {
-                                        match c {
-                                            Condition::Trait { id: child } => {
-                                                stack.extend(resolve_cached(
-                                                    child, &index, &mut cache,
-                                                ));
-                                            }
-                                            other => {
-                                                if !is_name_or_shape_only(other) {
-                                                    reads_content = true;
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                None => reached.push(next),
-                            }
-                        }
-                        (reached, reads_content)
-                    });
-                    terminals.extend(reached.iter().copied());
-                    saw_inline_content |= *reads_content;
-                }
-                other => {
-                    if !is_name_or_shape_only(other) {
-                        saw_inline_content = true;
+                        reads_content = true;
+                    } else {
+                        let leg = *legs.entry(id.as_str()).or_insert_with(|| {
+                            leg_evidence(id, &index, &by_id, &composite_by_id, &mut cache)
+                        });
+                        reads_content |= leg.reads_content;
+                        reaches_terminal |= leg.reaches_terminal;
                     }
                 }
+                other => reads_content |= !is_name_or_shape_only(other),
             }
             // One content-reading leg clears the rule; the rest cannot change that.
-            if saw_inline_content {
+            if reads_content {
                 break;
             }
         }
-        if saw_inline_content || terminals.is_empty() {
+        if reads_content || !reaches_terminal {
             continue;
         }
-        let resting_on: Vec<String> = terminals.iter().map(|t| (*t).to_string()).collect();
-        let all_name_or_shape = terminals
-            .iter()
-            .all(|t| by_id.get(t).is_some_and(|d| is_name_or_shape_only(&d.r#if)));
-        if all_name_or_shape {
-            let mut ids = resting_on;
-            ids.sort();
-            found.push((rule.id.clone(), ids));
+        let mut terminals: HashSet<&str> = HashSet::new();
+        for cond in positive() {
+            if let Condition::Trait { id } = cond {
+                leg_terminals(id, &index, &composite_by_id, &mut cache, &mut terminals);
+            }
         }
+        let mut ids: Vec<String> = terminals.iter().map(|t| (*t).to_string()).collect();
+        ids.sort();
+        found.push((rule.id.clone(), ids));
     }
     found
 }

@@ -31,6 +31,7 @@ use crate::composite_rules::{Condition, RawQuery, TextQuery, TraitDefinition};
 use rayon::prelude::*;
 use regex_automata::hybrid::dfa::DFA;
 use regex_automata::{Anchored, Input, MatchErrorKind};
+use std::collections::HashMap;
 use std::sync::OnceLock;
 use std::time::Instant;
 
@@ -593,7 +594,7 @@ fn haystack() -> &'static [u8] {
 // ---------------------------------------------------------------- probe
 
 /// What the production lazy DFA did on the haystack.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Explosion {
     /// The engine hit its give-up thresholds (production falls back to the
     /// PikeVM for the rest of the search).
@@ -733,15 +734,54 @@ pub(crate) fn find_pathological_regex_patterns(
     let started = Instant::now();
     let hay = haystack();
     let cands = candidates(traits);
-    let mut hits: Vec<(usize, Explosion)> = cands
+    // Probed once per distinct pattern: the probe is a pure function of the
+    // pattern and its flag, and the same regex recurs across many traits.
+    let mut slot_of: HashMap<(&str, bool), usize> = HashMap::new();
+    let mut distinct: Vec<(&str, bool)> = Vec::new();
+    let slots: Vec<usize> = cands
+        .iter()
+        .map(|c| {
+            *slot_of
+                .entry((c.pattern, c.case_insensitive))
+                .or_insert_with(|| {
+                    distinct.push((c.pattern, c.case_insensitive));
+                    distinct.len() - 1
+                })
+        })
+        .collect();
+    // The probe is a function of the pattern, its flag, the haystack and the
+    // cache size, so an earlier run's result stands for any pattern unchanged.
+    let facts = super::facts_cache::active();
+    let cache_bytes = crate::composite_rules::evaluators::regex_dfa_cache_bytes() as u64;
+    let probes: Vec<Option<Explosion>> = distinct
         .par_iter()
+        .map(|&(pattern, case_insensitive)| {
+            let run = || probe(pattern, case_insensitive, hay);
+            match &facts {
+                Some(facts) => facts.get_or_compute(
+                    super::facts_cache::key(
+                        "regex-explosion",
+                        &[
+                            pattern.as_bytes(),
+                            &[u8::from(case_insensitive)],
+                            &cache_bytes.to_le_bytes(),
+                            &(HAYSTACK_BYTES as u64).to_le_bytes(),
+                        ],
+                    ),
+                    run,
+                ),
+                None => run(),
+            }
+        })
+        .collect();
+    let hits: Vec<(usize, Explosion)> = slots
+        .iter()
         .enumerate()
-        .filter_map(|(i, c)| {
-            let e = probe(c.pattern, c.case_insensitive, hay)?;
+        .filter_map(|(i, &slot)| {
+            let e = probes[slot]?;
             e.is_pathological().then_some((i, e))
         })
         .collect();
-    hits.sort_by_key(|&(i, _)| i);
     for (i, e) in &hits {
         let c = &cands[*i];
         let t = &traits[c.trait_idx];

@@ -7,11 +7,11 @@ use crate::cli::OutputFormat;
 use crate::commands::validate_testdata;
 use anyhow::{Context, Result};
 use cleave::{AnalysisReport, CapabilityMapper, Criticality, FileAnalysis, validation_controls};
-use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock};
 
 /// A single file to analyze during validation and how to judge its score.
 enum Target {
@@ -170,10 +170,33 @@ fn run_inner(
         mapper.warm_indexes();
     }
 
-    let results: Vec<(Target, Result<AnalysisReport>)> = targets
-        .into_par_iter()
-        .map(|t| {
+    // One lane per pool thread, each pulling the next fixture, so that every
+    // fixture analysis begins on an idle worker stack. As `into_par_iter`
+    // jobs, fixtures were also taken up by threads waiting inside another
+    // analysis's rayon join, on top of the half that analysis was waiting
+    // for. A member of such a fixture that then waited on a busy single-flight
+    // could be waiting on the very owner blocked in that join, and nothing
+    // moved until the flight's 180 s deadline (one validate in twenty,
+    // 2026-09-26). A worker takes its broadcast job before it steals
+    // anything, so no lane starts on top of another analysis's work.
+    let next = AtomicUsize::new(0);
+    let reports: Vec<OnceLock<Result<AnalysisReport>>> =
+        targets.iter().map(|_| OnceLock::new()).collect();
+    rayon::broadcast(|_| {
+        loop {
+            let i = next.fetch_add(1, Ordering::Relaxed);
+            let Some(t) = targets.get(i) else { break };
             let report = cleave::analyze_file_with_mapper(t.path(), &options, &mapper);
+            let _ = reports[i].set(report);
+        }
+    });
+    let results: Vec<(Target, Result<AnalysisReport>)> = targets
+        .into_iter()
+        .zip(reports)
+        .map(|(t, report)| {
+            let report = report
+                .into_inner()
+                .unwrap_or_else(|| Err(anyhow::anyhow!("fixture was not analyzed")));
             (t, report)
         })
         .collect();

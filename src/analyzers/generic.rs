@@ -591,8 +591,10 @@ mod tests {
             let name = stng_method_encoding(method).unwrap();
             assert!(ENCODED_LAYER_NAMES.contains(&name), "{method:?} -> {name}");
         }
-        // Methods that only locate a string add no encoding step.
+        // Methods that only locate a string add no encoding step. A recovered
+        // repeating XOR key is the key itself, not content decoded with it.
         assert_eq!(stng_method_encoding(M::WideString), None);
+        assert_eq!(stng_method_encoding(M::XorRepeatingKey), None);
     }
 
     #[test]

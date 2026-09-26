@@ -191,7 +191,7 @@ pub(crate) fn attach_member(
 /// [`analyzer_for_file_type_arc`] (binaries, source code, Office,
 /// PDF). Returns `None` for types with no analyzer at all
 /// (`FileType::Unknown`, certain meta-types).
-fn pick_analyzer(
+pub(crate) fn pick_analyzer(
     file_type: FileType,
     mapper: &Arc<CapabilityMapper>,
 ) -> Option<Box<dyn crate::analyzers::Analyzer>> {

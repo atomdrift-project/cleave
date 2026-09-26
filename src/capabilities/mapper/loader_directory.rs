@@ -226,6 +226,8 @@ fn push_parsing_warning(
 ) {
     if warning.starts_with("Unknown file type") {
         warnings.push_id("unknown-file-type", format!("{path_str}: {warning}"));
+    } else if warning.starts_with(crate::capabilities::parsing::EMPTY_RESOLVED_FOR) {
+        warnings.push_id("empty-file-type", format!("{path_str}: {warning}"));
     } else if warning.contains("for: [all] is not allowed") {
         warnings.push_id("for-all", format!("{path_str}: {warning}"));
     } else if warning.starts_with("Invalid file type") {
@@ -529,7 +531,39 @@ impl super::CapabilityMapper {
     }
 
     /// Load capability mappings from a directory of YAML files with explicit load options.
+    ///
+    /// `CLEAVE_VALIDATE` overrides `enable_full_validation` in either direction.
     pub(crate) fn from_directory_with_options<P: AsRef<Path>>(
+        dir_path: P,
+        min_hostile_precision: f32,
+        min_suspicious_precision: f32,
+        enable_full_validation: bool,
+        enable_precision_scoring: bool,
+    ) -> Result<Self> {
+        // Check for CLEAVE_VALIDATE env var - it can override the CLI flag in either direction
+        let enable_full_validation = match std::env::var("CLEAVE_VALIDATE").ok().as_deref() {
+            Some("0") | Some("false") => false, // Env var explicitly disables
+            Some("1") | Some("true") => true,   // Env var explicitly enables
+            _ => enable_full_validation,        // Use CLI flag
+        };
+        Self::from_directory_exact(
+            dir_path,
+            min_hostile_precision,
+            min_suspicious_precision,
+            enable_full_validation,
+            enable_precision_scoring,
+        )
+    }
+
+    /// [`Self::from_directory_with_options`] with `enable_full_validation`
+    /// taken exactly as given: `CLEAVE_VALIDATE` is not consulted.
+    ///
+    /// Tests that need validation on or off call this rather than setting the
+    /// env var. The environment is process-wide, so a test that set
+    /// `CLEAVE_VALIDATE=1` turned full validation on for every mapper any other
+    /// test thread loaded meanwhile -- `test_for_all_is_soft_and_does_not_fail_load`
+    /// then failed on the very soft issue it asserts is not fatal.
+    pub(crate) fn from_directory_exact<P: AsRef<Path>>(
         dir_path: P,
         min_hostile_precision: f32,
         min_suspicious_precision: f32,
@@ -540,12 +574,6 @@ impl super::CapabilityMapper {
         let dir_path = dir_path.as_ref();
         let _t_start = std::time::Instant::now();
 
-        // Check for CLEAVE_VALIDATE env var - it can override the CLI flag in either direction
-        let enable_full_validation = match std::env::var("CLEAVE_VALIDATE").ok().as_deref() {
-            Some("0") | Some("false") => false, // Env var explicitly disables
-            Some("1") | Some("true") => true,   // Env var explicitly enables
-            _ => enable_full_validation,        // Use CLI flag
-        };
         // A tree this build already validated clean skips the checks. The mark
         // is keyed on the tree's content, so an edited tree validates in full;
         // see `traits_fingerprint::CleanMark`.
@@ -5884,6 +5912,78 @@ mod tests {
     use super::{find_non_leaf_yaml_files, is_open_filefacts_metric_path, matches_metric_family};
     use std::path::{Path, PathBuf};
 
+    /// Issues `prepare_trait_file` + `push_parsing_warning` raise for one file.
+    #[allow(clippy::expect_used)]
+    fn file_type_issues(yaml: &str) -> Vec<(&'static str, String)> {
+        let mappings: crate::capabilities::models::TraitMappings =
+            serde_yaml::from_str(yaml).expect("valid trait YAML");
+        let dir = Path::new("traits");
+        let path = dir.join("x/y.yaml");
+        let file = super::prepare_trait_file(&path, mappings, Vec::new(), dir, false, false);
+        let mut issues = crate::validation_controls::ValidationIssues::new();
+        for w in file
+            .trait_parsing_warnings
+            .into_iter()
+            .chain(file.rule_parsing_warnings)
+        {
+            super::push_parsing_warning(&mut issues, "traits/x/y.yaml", w);
+        }
+        issues
+            .iter()
+            .filter(|i| i.validator_id.ends_with("file-type"))
+            .map(|i| (i.validator_id, i.message.clone()))
+            .collect()
+    }
+
+    /// A banned name in `defaults: for:` is reported once for the file, under
+    /// the same validator as a rule's own `for:`, even when every rule
+    /// overrides `for:` and nothing inherits the default.
+    #[test]
+    fn unknown_default_for_is_reported_once_per_file() {
+        let issues = file_type_issues(
+            "defaults:\n  for: [archives, zip]\n  platforms: [linux]\n\
+             traits:\n\
+             - {id: a, desc: first trait here, for: [zip], if: {type: text, substr: aaaa}}\n\
+             - {id: b, desc: second trait here, for: [zip], if: {type: text, substr: bbbb}}\n",
+        );
+        assert_eq!(issues.len(), 1, "{issues:?}");
+        let (id, message) = &issues[0];
+        assert_eq!(*id, "unknown-file-type");
+        assert!(message.contains("'archives'"), "{message}");
+        assert!(message.contains("defaults: for:"), "{message}");
+        assert!(message.contains("traits/x/y.yaml"), "{message}");
+    }
+
+    /// Inheriting the bad default does not repeat the unknown-type issue per
+    /// rule; a rule left with no file type at all is its own hard issue.
+    #[test]
+    fn default_for_resolving_to_nothing_is_empty_file_type() {
+        let issues = file_type_issues(
+            "defaults:\n  for: [archives]\n  platforms: [linux]\n\
+             traits:\n\
+             - {id: a, desc: first trait here, if: {type: text, substr: aaaa}}\n\
+             - {id: b, desc: second trait here, if: {type: text, substr: bbbb}}\n\
+             composite_rules:\n\
+             - {id: c, desc: composite rule here, all: [{id: a}, {id: b}]}\n",
+        );
+        let unknown = issues
+            .iter()
+            .filter(|(id, _)| *id == "unknown-file-type")
+            .count();
+        assert_eq!(unknown, 1, "{issues:?}");
+        let empty: Vec<&String> = issues
+            .iter()
+            .filter(|(id, _)| *id == "empty-file-type")
+            .map(|(_, m)| m)
+            .collect();
+        assert_eq!(empty.len(), 3, "{issues:?}");
+        assert!(empty.iter().any(|m| m.contains("composite rule 'c'")));
+        assert_eq!(
+            crate::validation_controls::validator_severity("empty-file-type"),
+            crate::validation_controls::Severity::Hard
+        );
+    }
+
     /// A file is non-leaf when YAML lives anywhere below its directory, by
     /// path component: `c-d/` shares a string prefix with `c/` but is a
     /// sibling, not a child.
@@ -6089,6 +6189,14 @@ fn prepare_trait_file(
             ));
         }
     }
+
+    // Unknown names in `defaults: for:` are reported once for the file, even
+    // when no rule inherits the default.
+    file.trait_parsing_warnings
+        .extend(crate::capabilities::parsing::default_file_type_warnings(
+            &mappings.defaults,
+            path,
+        ));
 
     for raw_trait in mappings.traits {
         // Convert raw trait to final trait, applying file-level defaults

@@ -7,6 +7,7 @@
 
 use crate::capabilities::CapabilityMapper;
 use crate::yara_engine::YaraEngine;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicI8, Ordering};
 use std::sync::{Arc, OnceLock};
 
@@ -178,9 +179,11 @@ pub(crate) fn kv_sibling_basename_referenced(basename: &str) -> bool {
     })
 }
 
+/// A slot holding a lazily built, hot-reloadable CapabilityMapper.
+type MapperSlot = parking_lot::RwLock<Option<Arc<CapabilityMapper>>>;
+
 /// Global CapabilityMapper behind a RwLock for hot-reload support.
-static CAPABILITY_MAPPER: parking_lot::RwLock<Option<Arc<CapabilityMapper>>> =
-    parking_lot::RwLock::new(None);
+static CAPABILITY_MAPPER: MapperSlot = parking_lot::RwLock::new(None);
 
 /// Drop the cached global CapabilityMapper so the next request rebuilds it.
 ///
@@ -248,9 +251,19 @@ pub(crate) fn capability_mapper_stats() -> Option<(usize, usize)> {
 
 /// Get or initialize the global CapabilityMapper
 pub(crate) fn capability_mapper() -> anyhow::Result<Arc<CapabilityMapper>> {
+    get_or_build_mapper(&CAPABILITY_MAPPER, CapabilityMapper::try_new)
+}
+
+/// [`capability_mapper`] over an explicit slot and builder, so the
+/// first-writer-wins logic can be tested on a private slot instead of the
+/// process-wide one every concurrently running analysis reads.
+fn get_or_build_mapper(
+    slot: &MapperSlot,
+    build: impl FnOnce() -> anyhow::Result<CapabilityMapper>,
+) -> anyhow::Result<Arc<CapabilityMapper>> {
     // Fast path: already initialized.
     {
-        let guard = CAPABILITY_MAPPER.read();
+        let guard = slot.read();
         if let Some(ref mapper) = *guard {
             return Ok(mapper.clone());
         }
@@ -271,9 +284,9 @@ pub(crate) fn capability_mapper() -> anyhow::Result<Arc<CapabilityMapper>> {
         on_rayon_thread = rayon::current_thread_index().is_some(),
         "CapabilityMapper not yet initialized; building (no lock held)"
     );
-    let mapper = Arc::new(CapabilityMapper::try_new()?);
+    let mapper = Arc::new(build()?);
 
-    let mut guard = CAPABILITY_MAPPER.write();
+    let mut guard = slot.write();
     if let Some(ref existing) = *guard {
         // Another thread finished first; use their mapper.
         return Ok(existing.clone());
@@ -297,16 +310,25 @@ pub fn reload_capability_mapper() -> Result<(usize, usize), String> {
     // every previously scanned file keeps its pre-update verdict.
     crate::cache::invalidate_traits_scan();
 
-    if skip_traits_requested() {
-        let mapper = CapabilityMapper::empty();
-        let mut guard = CAPABILITY_MAPPER.write();
-        *guard = Some(Arc::new(mapper));
-        drop(guard);
-        return Ok((0, 0));
-    }
+    let source = if skip_traits_requested() {
+        None
+    } else {
+        Some(cleave::traits_repo::try_resolve()?)
+    };
+    reload_mapper_into(&CAPABILITY_MAPPER, source.as_deref())
+}
 
-    let resolved = cleave::traits_repo::try_resolve()?;
-    let path = resolved.as_path();
+/// Load a mapper from `source` (`None`: the empty, skip-traits mapper) and
+/// install it in `slot` only if the load succeeds; on failure `slot` keeps
+/// its previous mapper. The body of [`reload_capability_mapper`], over an
+/// explicit slot so tests never swap the process-wide mapper out from under
+/// analyses running on other test threads.
+fn reload_mapper_into(slot: &MapperSlot, source: Option<&Path>) -> Result<(usize, usize), String> {
+    let Some(resolved) = source else {
+        *slot.write() = Some(Arc::new(CapabilityMapper::empty()));
+        return Ok((0, 0));
+    };
+    let path = resolved;
 
     let mapper = if path.is_dir() {
         CapabilityMapper::from_directory_with_options(
@@ -343,7 +365,7 @@ pub fn reload_capability_mapper() -> Result<(usize, usize), String> {
     // race deadlock-free; warming here keeps it from happening at all.
     mapper.warm_indexes();
 
-    let mut guard = CAPABILITY_MAPPER.write();
+    let mut guard = slot.write();
     *guard = Some(Arc::new(mapper));
     drop(guard);
 
@@ -413,134 +435,20 @@ pub(crate) fn yara_engine(enable_third_party: bool) -> Arc<YaraEngine> {
 #[cfg(test)]
 #[allow(clippy::expect_used)]
 mod tests {
+    //! Every test here works on a private [`MapperSlot`] and passes its traits
+    //! source explicitly. They used to reload the process-wide mapper under
+    //! `CLEAVE_SKIP_TRAITS` / `CLEAVE_TRAITS_DIR` env overrides, and a restore
+    //! guard only puts things back *afterwards*: for the length of the test
+    //! every other test in the `cargo test --lib` process that analyzed with
+    //! default options read a one-trait or empty stub mapper (or failed to
+    //! resolve a traits dir that had just been deleted). That was the
+    //! intermittent `analyze_bytes_shared_matches_owned` failure -- its two
+    //! analyses straddled the swap and disagreed on the finding count.
     use super::*;
-    use std::sync::{Mutex, OnceLock};
 
-    fn test_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-    }
-
-    /// Restores whatever `CAPABILITY_MAPPER` held when created, on drop
-    /// (including on panic).
-    ///
-    /// `reload_capability_mapper()` installs its result as the process-wide
-    /// singleton — there is no per-test slot. A test that reloads it (to a
-    /// `CLEAVE_SKIP_TRAITS=1` empty mapper, or a temp dir with a single
-    /// synthetic trait) and does not undo that leaves every later caller in
-    /// this process — any other test analyzing with default options, on any
-    /// thread, including ones `test_lock()` does not serialize against —
-    /// permanently reading that stub instead of the real trait set. Observed:
-    /// `analyze_bytes_shared_matches_owned` intermittently saw 0 findings
-    /// against a mapper holding exactly the one trait
-    /// `test_reload_rollback_on_bad_traits` seeds, because that test had run
-    /// somewhere else in the same `cargo test --lib` process and never put
-    /// the original mapper back.
-    struct MapperRestoreGuard {
-        previous: Option<Arc<CapabilityMapper>>,
-    }
-
-    impl MapperRestoreGuard {
-        fn capture() -> Self {
-            Self {
-                previous: CAPABILITY_MAPPER.read().clone(),
-            }
-        }
-    }
-
-    impl Drop for MapperRestoreGuard {
-        fn drop(&mut self) {
-            *CAPABILITY_MAPPER.write() = self.previous.take();
-        }
-    }
-
-    #[test]
-    fn test_capability_mapper_singleton() {
-        let _guard = test_lock()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let _restore_guard = MapperRestoreGuard::capture();
-        let _skip_guard = EnvVarGuard::set("CLEAVE_SKIP_TRAITS", "1");
-        reload_capability_mapper().expect("reload empty mapper");
-        let m1 = capability_mapper().expect("mapper should load");
-        let m2 = capability_mapper().expect("mapper should load");
-        // Same Arc instance
-        assert!(Arc::ptr_eq(&m1, &m2));
-    }
-
-    /// RAII guard to restore an env var on drop (including panics).
-    ///
-    /// The env var, not `traits_repo::set_override_dir`: the API setter
-    /// invalidates the global mapper, and `test_reload_rollback_on_bad_traits`
-    /// exists to prove the previously loaded mapper *survives* a failed
-    /// reload. Only the env var changes the traits source without disturbing
-    /// the installed mapper.
-    ///
-    /// SAFETY NOTE: `set_var` is unsound if another thread reads the
-    /// environment concurrently, and `test_lock` cannot promise that — it
-    /// serializes this module, while any other test in the binary may be
-    /// resolving traits on another thread. These tests therefore require a
-    /// process to themselves: `make test` runs the lib suite under nextest
-    /// (one process per test), and its no-nextest fallback uses
-    /// `--test-threads=1`. A bare multi-threaded `cargo test --lib` can race
-    /// them, and a sibling analysis that resolves traits mid-window fails with
-    /// "traits dir override ... does not exist".
-    struct EnvVarGuard {
-        key: &'static str,
-        original: Option<String>,
-    }
-
-    impl EnvVarGuard {
-        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
-            let original = std::env::var(key).ok();
-            // SAFETY: see the type-level note; requires a test process with no
-            // concurrent environment readers.
-            unsafe {
-                std::env::set_var(key, value);
-            }
-            Self { key, original }
-        }
-
-        fn unset(key: &'static str) -> Self {
-            let original = std::env::var(key).ok();
-            // SAFETY: see `set`.
-            unsafe {
-                std::env::remove_var(key);
-            }
-            Self { key, original }
-        }
-    }
-
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            // SAFETY: see `set`.
-            unsafe {
-                match &self.original {
-                    Some(v) => std::env::set_var(self.key, v),
-                    None => std::env::remove_var(self.key),
-                }
-            }
-        }
-    }
-
-    /// Verify that a failed reload preserves the previous mapper.
-    ///
-    /// Points `CLEAVE_TRAITS_DIR` at a path that does not exist, which is the
-    /// only way to make the reload return `Err`: a directory of unparseable
-    /// YAML does *not* fail it — the loader deliberately skips files it cannot
-    /// parse (one bad trait file must not kill a scan) and returns a mapper
-    /// missing those rules. The previous global mapper must stay installed.
-    #[test]
-    fn test_reload_rollback_on_bad_traits() {
-        let _guard = test_lock()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let _restore_guard = MapperRestoreGuard::capture();
-        let _skip_guard = EnvVarGuard::unset("CLEAVE_SKIP_TRAITS");
-
-        let good = tempfile::tempdir().expect("create tempdir");
+    fn write_good_traits(dir: &Path) {
         std::fs::write(
-            good.path().join("good.yaml"),
+            dir.join("good.yaml"),
             r#"
 defaults:
   for: [binaries, scripts, source, manifests, documents, media, data, archives]
@@ -555,27 +463,52 @@ traits:
 "#,
         )
         .expect("write good yaml");
+    }
 
-        // Seed the global mapper from a known-good temp traits dir so this test
-        // does not depend on any developer-local traits checkout.
-        let good_guard = EnvVarGuard::set("CLEAVE_TRAITS_DIR", good.path());
-        reload_capability_mapper().expect("load good traits");
+    #[test]
+    #[allow(clippy::panic)]
+    fn test_capability_mapper_singleton() {
+        let slot: MapperSlot = parking_lot::RwLock::new(None);
+        let m1 = get_or_build_mapper(&slot, || Ok(CapabilityMapper::empty()))
+            .expect("mapper should load");
+        // The second call must be served from the slot, never rebuilt.
+        let m2 = get_or_build_mapper(&slot, || panic!("rebuilt an initialized mapper"))
+            .expect("mapper should load");
+        assert!(Arc::ptr_eq(&m1, &m2));
+    }
 
-        let before = capability_mapper().expect("mapper before bad reload");
+    #[test]
+    fn test_reload_skip_traits_installs_empty_mapper() {
+        let slot: MapperSlot = parking_lot::RwLock::new(None);
+        assert_eq!(reload_mapper_into(&slot, None), Ok((0, 0)));
+        let mapper = slot.read().clone().expect("empty mapper installed");
+        assert_eq!(mapper.trait_definitions_count(), 0);
+    }
+
+    /// Verify that a failed reload preserves the previous mapper.
+    ///
+    /// Reloading from a path that does not exist is the way to make the reload
+    /// return `Err`: a directory of unparseable YAML does *not* fail it -- the
+    /// loader deliberately skips files it cannot parse (one bad trait file must
+    /// not kill a scan) and returns a mapper missing those rules. The previous
+    /// mapper must stay installed.
+    #[test]
+    fn test_reload_rollback_on_bad_traits() {
+        let slot: MapperSlot = parking_lot::RwLock::new(None);
+        let good = tempfile::tempdir().expect("create tempdir");
+        write_good_traits(good.path());
+
+        reload_mapper_into(&slot, Some(good.path())).expect("load good traits");
+        let before = slot.read().clone().expect("mapper before bad reload");
         let before_traits = before.trait_definitions_count();
 
-        // Point CLEAVE_TRAITS_DIR at a nonexistent directory and attempt reload.
-        // EnvVarGuard restores the original value on drop (including panics).
-        let bad_path = good.path().join("missing-traits-dir");
-        let _guard = EnvVarGuard::set("CLEAVE_TRAITS_DIR", &bad_path);
+        let result = reload_mapper_into(&slot, Some(&good.path().join("missing-traits-dir")));
+        assert!(
+            result.is_err(),
+            "Expected reload to fail with a missing dir"
+        );
 
-        let result = reload_capability_mapper();
-
-        // Reload should have failed
-        assert!(result.is_err(), "Expected reload to fail with bad YAML");
-
-        // The global mapper should still be the same instance with the same trait count
-        let after = capability_mapper().expect("mapper after bad reload");
+        let after = slot.read().clone().expect("mapper after bad reload");
         assert_eq!(
             after.trait_definitions_count(),
             before_traits,
@@ -583,16 +516,7 @@ traits:
         );
         assert!(
             Arc::ptr_eq(&before, &after),
-            "Global mapper should be the same Arc after failed reload"
+            "The slot should hold the same Arc after a failed reload"
         );
-
-        // Uninstall the override BEFORE `good` is dropped. Relying on drop
-        // order left a window in which the process-global traits dir named a
-        // directory that had just been deleted, and any test analyzing on
-        // another thread in that window died with "traits dir override ...
-        // does not exist" rather than merely seeing the wrong rules.
-        drop(_guard);
-        drop(good_guard);
-        drop(good);
     }
 }

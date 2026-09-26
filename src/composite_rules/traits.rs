@@ -1098,17 +1098,11 @@ impl TraitDefinition {
             return None;
         }
 
-        // Check file type match.
-        // Container-level evaluation may collapse archive parents to FileType::All.
-        // In that case, allow only archive-family rules to match rather than treating
-        // All as a universal wildcard for every script/source/binary rule.
-        let wants_archive_family = self.r#for.iter().any(super::types::FileType::is_archive);
-        let file_type_match = self.r#for.contains(&FileType::All)
-            || self.r#for.contains(&ctx.file_type)
-            || ((ctx.file_type == FileType::All || ctx.file_type.is_archive())
-                && wants_archive_family);
-
-        if !file_type_match {
+        // Check file type match: the node's own type, or the generic
+        // container it is built on (a JAR admits `for: [zip]`, not
+        // `for: [android_apk]`). A container collapsed to FileType::All
+        // admits only archive-typed rules, not every script/binary rule.
+        if !FileType::rule_applies_to(&self.r#for, ctx.file_type) {
             ctx.record_skip(|| SkipReason::FileTypeMismatch {
                 rule: self.r#for.clone(),
                 context: ctx.file_type,
@@ -2526,13 +2520,17 @@ impl CompositeTrait {
     /// ties a vsix manifest to its bundled script says
     /// `for: [vsix, javascript, json]`; one that says only `for: [vsix]`
     /// pools nothing, because no member of a vsix is itself a vsix.
+    ///
+    /// Same admission as the node gate (`FileType::rule_applies_to`): a
+    /// `for: [zip]` rule also takes evidence from a nested JAR, which is a zip.
     pub(crate) fn for_mask(&self) -> TypeMask {
         *self.for_mask_cache.get_or_init(|| {
             if self.r#for.contains(&FileType::All) || self.r#for.is_empty() {
                 TypeMask::ALL
             } else {
-                self.r#for
-                    .iter()
+                FileType::all_concrete_variants()
+                    .into_iter()
+                    .filter(|ft| FileType::rule_applies_to(&self.r#for, *ft))
                     .fold(TypeMask::EMPTY, |acc, ft| acc | ft.type_bit())
             }
         })
@@ -2796,10 +2794,11 @@ impl CompositeTrait {
             // `vscode-activated-curl-shell` (`for: [vsix]`) scored hostile on
             // the Rust crate agentdiff-0.1.26, tying a VS Code extension marker
             // in one member to a `curl | sh` README line in another.
-            let file_type_match =
-                self.r#for.contains(&FileType::All) || self.r#for.contains(&ctx.file_type);
-
-            if !file_type_match {
+            //
+            // A node still admits the generic container it is built on: a JAR
+            // is a zip, so a `for: [zip]` composite runs on it, exactly as a
+            // `for: [zip]` atomic trait does (`FileType::rule_applies_to`).
+            if !FileType::rule_applies_to(&self.r#for, ctx.file_type) {
                 ctx.record_skip(|| SkipReason::FileTypeMismatch {
                     rule: self.r#for.clone(),
                     context: ctx.file_type,

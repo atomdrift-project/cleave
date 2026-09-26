@@ -2885,26 +2885,18 @@ traits:
     )
     .unwrap();
 
-    // Analysis load uses the mapper cache, which is a process-wide file of
-    // whatever traits were compiled last — not this temp directory.
-    let prev = std::env::var("CLEAVE_SKIP_MAPPER_CACHE").ok();
-    // SAFETY: this test is the only writer of this env var for its duration.
-    unsafe {
-        std::env::set_var("CLEAVE_SKIP_MAPPER_CACHE", "1");
-    }
-
-    let result = CapabilityMapper::from_directory_with_options(
+    // Validation explicitly off, and no env vars touched: `CLEAVE_VALIDATE=1`
+    // (ambient, or set by a sibling test) would otherwise turn full
+    // validation on and fail the load on exactly the soft issue under test.
+    // The mapper cache needs no bypass: its key is the traits dir's content
+    // tag, so this temp tree can only ever hit its own snapshot.
+    let result = CapabilityMapper::from_directory_exact(
         temp_dir.path(),
         CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION,
         CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION,
         false,
         false,
     );
-
-    match prev {
-        Some(v) => unsafe { std::env::set_var("CLEAVE_SKIP_MAPPER_CACHE", v) },
-        None => unsafe { std::env::remove_var("CLEAVE_SKIP_MAPPER_CACHE") },
-    }
 
     let mapper =
         result.expect("for: [all] is a Soft authoring issue and must not fail analysis load");
@@ -4041,22 +4033,17 @@ composite_rules:
     )
     .unwrap();
 
-    let saved: Vec<(&str, Option<String>)> = ["CLEAVE_VALIDATE", "CLEAVE_SKIP_MAPPER_CACHE"]
-        .iter()
-        .map(|k| (*k, std::env::var(k).ok()))
-        .collect();
-    // SAFETY: this test is the only writer of these env vars for its duration.
-    unsafe {
-        std::env::set_var("CLEAVE_VALIDATE", "1");
-        std::env::set_var("CLEAVE_SKIP_MAPPER_CACHE", "1");
-    }
-    let result = CapabilityMapper::from_directory(temp_dir.path());
-    for (key, value) in saved {
-        match value {
-            Some(v) => unsafe { std::env::set_var(key, v) },
-            None => unsafe { std::env::remove_var(key) },
-        }
-    }
+    // Full validation requested as a load option, not via `CLEAVE_VALIDATE`:
+    // setting that env var turned validation on for every mapper any other
+    // test thread loaded while this one ran. A validating load never reads or
+    // writes the mapper cache, so that needs no env override either.
+    let result = CapabilityMapper::from_directory_exact(
+        temp_dir.path(),
+        CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION,
+        CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION,
+        true,
+        false,
+    );
 
     let err = format!(
         "{:#}",

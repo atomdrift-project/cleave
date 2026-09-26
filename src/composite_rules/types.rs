@@ -1063,6 +1063,79 @@ impl FileType {
             .collect()
     }
 
+    /// The generic container format(s) this specialised archive type is built
+    /// on -- a JAR, APK or wheel *is* a ZIP; an npm tarball or crate *is* a
+    /// tar. A rule declaring `for: [zip]` is about ZIP-format containers, so it
+    /// also applies to every ZIP-based package; the reverse does not hold.
+    ///
+    /// Mirrors `filefacts::FileType::archive_format` for the `#[archive]`
+    /// variants, with two widenings where one routing bucket spans both
+    /// containers: `PythonSdist` (legacy `.zip` sdists) and `Conda` (`.conda`
+    /// is a zip, the legacy package a `.tar.bz2`). `Pkg` folds macOS `xar`
+    /// packages in with the tar-based Arch/FreeBSD ones and keeps tar.
+    ///
+    /// Deb (`ar`), RPM (its own header over a cpio payload), CHM, CAB, ISO,
+    /// DMG and ASAR have no base among the rule types; the bases themselves
+    /// (`zip`, `tar`, `rar`, `7z`, `cpio`) have none either.
+    #[must_use]
+    pub(crate) const fn container_bases(self) -> &'static [FileType] {
+        match self {
+            FileType::AndroidApk
+            | FileType::Jar
+            | FileType::Whl
+            | FileType::Nupkg
+            | FileType::Crx
+            | FileType::Xpi
+            | FileType::VsixArchive
+            | FileType::Egg
+            | FileType::Ipa => &[FileType::Zip],
+            FileType::AlpineApk
+            | FileType::Npm
+            | FileType::Crate
+            | FileType::Gem
+            | FileType::Pkg
+            | FileType::OciImage
+            | FileType::Xbps
+            | FileType::GentooBinpkg => &[FileType::Tar],
+            FileType::PythonSdist | FileType::Conda => &[FileType::Zip, FileType::Tar],
+            _ => &[],
+        }
+    }
+
+    /// The `for:` types -- besides the node's own type and `all` -- whose
+    /// rules apply to a node of this type. Drives both the gate
+    /// ([`Self::rule_applies_to`]) and the per-type trait indexes, which must
+    /// agree on it.
+    ///
+    /// For a concrete archive this is only its [`Self::container_bases`]: a
+    /// JAR admits `for: [zip]` rules, not `for: [android_apk]` or
+    /// `for: [deb]` ones. A container that collapsed to [`FileType::All`] (no
+    /// type of its own) admits every archive-typed rule, since which archive
+    /// it is cannot be known.
+    #[must_use]
+    pub(crate) const fn admitted_rule_types(self) -> &'static [FileType] {
+        match self {
+            FileType::All => Self::archive_family_types(),
+            _ => self.container_bases(),
+        }
+    }
+
+    /// Whether an atomic trait declaring `rule_for` applies to a node of type
+    /// `node`: the single statement of that `for:` gate.
+    ///
+    /// It used to admit any archive-typed rule on any archive node (the
+    /// "archive family"), so `for: [android_apk]` fired on JARs and zips,
+    /// `for: [deb]` on wheels, and `for: [jar]` on bare zips.
+    #[must_use]
+    pub(crate) fn rule_applies_to(rule_for: &[FileType], node: FileType) -> bool {
+        rule_for.contains(&FileType::All)
+            || rule_for.contains(&node)
+            || node
+                .admitted_rule_types()
+                .iter()
+                .any(|admitted| rule_for.contains(admitted))
+    }
+
     /// This type's bit in a [`TypeMask`].
     #[must_use]
     pub(crate) const fn type_bit(self) -> TypeMask {
@@ -1808,6 +1881,73 @@ mod tests {
         assert!(FileType::Dmg.is_archive());
         assert!(!FileType::Gz.is_archive());
         assert!(!FileType::StaticLib.is_archive());
+    }
+
+    #[test]
+    #[allow(clippy::panic)]
+    fn container_bases_mirror_filefacts_archive_format() {
+        use filefacts::{ArchiveFormat, FileType as Ff};
+        // Every base is itself a base-less archive type, and every type that
+        // has one is an archive: the relation is one level deep.
+        for ft in FileType::all_variants() {
+            for base in ft.container_bases() {
+                assert!(ft.is_archive(), "{ft:?} has a base but is no archive");
+                assert!(base.is_archive() && base.container_bases().is_empty());
+            }
+        }
+        // filefacts owns the container decomposition; the rule buckets that
+        // map 1:1 onto a filefacts type must agree with it.
+        for ff in [
+            Ff::ApkAndroid,
+            Ff::Jar,
+            Ff::Whl,
+            Ff::Nupkg,
+            Ff::Crx,
+            Ff::Xpi,
+            Ff::Vsix,
+            Ff::Egg,
+            Ff::Ipa,
+            Ff::Conda,
+            Ff::ApkAlpine,
+            Ff::Npm,
+            Ff::Crate,
+            Ff::Gem,
+            Ff::PythonSdist,
+            Ff::OciImage,
+            Ff::Xbps,
+            Ff::GentooBinpkg,
+            Ff::PkgArch,
+        ] {
+            let base = match ff.archive_format() {
+                Some(ArchiveFormat::Zip) => FileType::Zip,
+                Some(ArchiveFormat::Tar) => FileType::Tar,
+                other => panic!("{ff:?} decomposes to {other:?}"),
+            };
+            let bucket = FileType::from(ff);
+            assert!(
+                bucket.container_bases().contains(&base),
+                "{bucket:?} ({ff:?}) is a {base:?} per filefacts"
+            );
+        }
+        // Not subtypes of anything a rule can name.
+        for ft in [FileType::Deb, FileType::Rpm, FileType::Zip, FileType::Tar] {
+            assert!(ft.container_bases().is_empty(), "{ft:?}");
+        }
+    }
+
+    #[test]
+    fn rule_applies_to_is_not_an_archive_family_union() {
+        use FileType as T;
+        assert!(!T::rule_applies_to(&[T::AndroidApk], T::Jar));
+        assert!(!T::rule_applies_to(&[T::AndroidApk], T::Zip));
+        assert!(!T::rule_applies_to(&[T::Jar], T::Zip));
+        assert!(!T::rule_applies_to(&[T::Deb], T::Whl));
+        assert!(T::rule_applies_to(&[T::Zip], T::Jar));
+        assert!(T::rule_applies_to(&[T::Zip, T::AndroidApk], T::AndroidApk));
+        assert!(T::rule_applies_to(&[T::Tar], T::Npm));
+        assert!(T::rule_applies_to(&[T::All], T::Elf));
+        assert!(T::rule_applies_to(&[T::Deb], T::All));
+        assert!(!T::rule_applies_to(&[T::Python], T::All));
     }
 
     #[test]

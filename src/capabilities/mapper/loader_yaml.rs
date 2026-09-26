@@ -59,7 +59,10 @@ impl super::CapabilityMapper {
             serde_yaml::from_str(&content).context("Failed to parse capabilities YAML")?;
 
         // Convert raw traits to final traits with defaults applied
-        let mut warnings: Vec<String> = Vec::new();
+        let mut warnings: Vec<String> = crate::capabilities::parsing::default_file_type_warnings(
+            &mappings.defaults,
+            path.as_ref(),
+        );
         let mut trait_definitions: Vec<_> = mappings
             .traits
             .into_iter()

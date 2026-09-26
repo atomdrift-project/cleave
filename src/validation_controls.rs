@@ -60,6 +60,9 @@ const HARD_VALIDATOR_IDS: &[&str] = &[
     "duplicate-trait-id",
     // `for:` names a structurally invalid file type — the rule can never match.
     "invalid-file-type",
+    // The resolved `for:` list is empty (every name unknown, or all excluded /
+    // platform-filtered away), so the rule applies to no file and never fires.
+    "empty-file-type",
     // Fixture score regressed past its cap: a measured detection regression.
     "score-caps",
     // A trait or composite that references itself never fires.
@@ -1026,6 +1029,13 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         display_id: "for-unknown",
         description: "Trait uses a file type unknown to this binary.",
         fix: "Upgrade cleave or update the trait to a supported file type.",
+    },
+    ValidatorSpec {
+        id: "empty-file-type",
+        category: ValidatorCategory::Quality,
+        display_id: "for-empty",
+        description: "Rule's resolved for: targets no file type, so it can never fire.",
+        fix: "Name at least one supported file type or group that survives exclusions and platforms.",
     },
     ValidatorSpec {
         id: "excessive-suppression",

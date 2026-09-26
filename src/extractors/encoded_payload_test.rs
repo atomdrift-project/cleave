@@ -635,3 +635,32 @@ fn decompression_layers_are_known_encoded_layer_names() {
         assert!(ENCODED_LAYER_NAMES.contains(&name.as_str()), "{name}");
     }
 }
+
+/// A file identified as a PE under a repeating XOR key yields one decoded PE
+/// payload; the plaintext image and opaque noise yield none.
+#[test]
+fn xor_encoded_pe_is_a_decoded_payload() {
+    use crate::analyzers::FileType;
+    use filefacts::FileId;
+    use std::path::Path;
+    let pe = include_bytes!("../../tests/fixtures/test.exe");
+    let key = [0x55, 0x64, 0xee, 0x58, 0x6f, 0x83, 0xb8, 0x02];
+    let enc: Vec<u8> = pe
+        .iter()
+        .zip(key.iter().cycle())
+        .map(|(b, k)| b ^ k)
+        .collect();
+
+    let id = |bytes: &[u8]| FileId::from_path_and_bytes(Path::new("hvnc.enc"), bytes);
+    let payload = super::xor_encoded_pe(&id(&enc), &enc).unwrap();
+    assert_eq!(payload.data, pe);
+    assert_eq!(payload.encoding_chain, ["xor"]);
+    assert_eq!(payload.detected_type, FileType::Pe);
+    assert_eq!(payload.original_offset, 0);
+
+    assert!(super::xor_encoded_pe(&id(pe), pe).is_none());
+    let noise: Vec<u8> = (0..4096u32)
+        .map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8)
+        .collect();
+    assert!(super::xor_encoded_pe(&id(&noise), &noise).is_none());
+}

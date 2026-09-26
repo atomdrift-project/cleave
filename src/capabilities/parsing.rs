@@ -34,12 +34,12 @@ fn for_list_contains_all(types: &[String]) -> bool {
 
 const FOR_ALL_REJECTED: &str = "for: [all] is not allowed — use concrete types \
      (elf, python, ...) or named groups (binaries, scripts, source, manifests, \
-     documents, media, data, archives). Combine groups explicitly \
+     documents, media, data). Combine groups explicitly \
      (e.g. for: [binaries, scripts]) instead of for: [all].";
 
 const FOR_ALL_REJECTED_DEFAULTS: &str = "for: [all] is not allowed in file default \
      'for:' — use concrete types or named groups (binaries, scripts, source, manifests, \
-     documents, media, data, archives). Combine groups explicitly instead of for: [all].";
+     documents, media, data). Combine groups explicitly instead of for: [all].";
 
 /// Apply default for Option<String> fields, supporting "none" to unset
 /// - If raw is Some("none"), return None (explicit unset)
@@ -71,6 +71,78 @@ pub(crate) fn apply_vec_default(
             Some(v) if v.iter().any(|s| s.eq_ignore_ascii_case("none")) => None,
             _ => default.clone(),
         },
+    }
+}
+
+/// Prefix of the warning for a rule whose resolved `for:` targets no file type.
+/// The directory loader routes it to the `empty-file-type` validator.
+pub(crate) const EMPTY_RESOLVED_FOR: &str = "Empty resolved 'for:'";
+
+/// Resolve a rule's `for:` against the file default: the rule's own list
+/// (unless `none`), else `defaults: for:`, else `[All]`.
+///
+/// Unknown names in an inherited default are not reported here -- they are
+/// the file's problem, reported once by [`default_file_type_warnings`], not
+/// once per rule that inherits them.
+fn resolve_rule_file_types(
+    raw_for: Option<Vec<String>>,
+    defaults: &TraitDefaults,
+    warnings: &mut Vec<String>,
+) -> ParsedFileTypes {
+    let inherited = raw_for.is_none();
+    match apply_vec_default(raw_for, &defaults.r#for) {
+        Some(types) if inherited => parse_file_types(&types, &mut Vec::new()),
+        Some(types) => parse_file_types(&types, warnings),
+        None => ParsedFileTypes {
+            types: vec![RuleFileType::All],
+            from_groups: false,
+        },
+    }
+}
+
+/// Unknown or banned names in a file's `defaults: for:`, one warning each.
+///
+/// Checked once per file whether or not any rule inherits the default: a bad
+/// name there would otherwise surface only through inheriting rules (so not at
+/// all when every rule overrides `for:`), and once per rule when many do.
+/// `none`/`unknown`/`[]`/`all` in the default are invalid-file-type problems
+/// reported by [`apply_trait_defaults`], so they are skipped here.
+pub(crate) fn default_file_type_warnings(
+    defaults: &TraitDefaults,
+    path: &std::path::Path,
+) -> Vec<String> {
+    let Some(types) = defaults.r#for.as_deref() else {
+        return Vec::new();
+    };
+    let names: Vec<String> = types
+        .iter()
+        .flat_map(|entry| entry.split(','))
+        .map(str::trim)
+        .filter(|name| {
+            let bare = name.trim_start_matches(['!', '-']);
+            !bare.eq_ignore_ascii_case("none") && !bare.eq_ignore_ascii_case("unknown")
+        })
+        .map(str::to_string)
+        .collect();
+    let mut warnings = Vec::new();
+    parse_file_types(&names, &mut warnings);
+    for w in &mut warnings {
+        *w = format!("{w} (file-level 'defaults: for:' in {})", path.display());
+    }
+    warnings
+}
+
+/// Warn when a rule's final `for:` is empty. Such a rule is dead: the file-type
+/// gate (`FileType::rule_applies_to`) and the per-type trait index both admit
+/// nothing, so it never evaluates standalone, as a composite leg, or on a
+/// container. Callers skip it when an `Invalid file type` warning (`for: []`)
+/// already covers the rule.
+fn check_empty_resolved_for(file_types: &[RuleFileType], warnings: &mut Vec<String>) {
+    if file_types.is_empty() {
+        warnings.push(format!(
+            "{EMPTY_RESOLVED_FOR}: targets no file type after defaults, unknown names, \
+             exclusions and platform filtering, so the rule can never fire"
+        ));
     }
 }
 
@@ -155,14 +227,12 @@ pub(crate) fn apply_trait_defaults(
     } else if defaults.r#for.as_deref().is_some_and(for_list_contains_all) {
         warnings.push(FOR_ALL_REJECTED_DEFAULTS.to_string());
     }
-    let parsed_ft = apply_vec_default(raw.file_types, &defaults.r#for)
-        .map(|types| parse_file_types(&types, warnings))
-        .unwrap_or_else(|| ParsedFileTypes {
-            types: vec![RuleFileType::All],
-            from_groups: false,
-        });
+    let parsed_ft = resolve_rule_file_types(raw.file_types, defaults, warnings);
     let mut file_types = parsed_ft.types;
     let from_groups = parsed_ft.from_groups;
+    let for_invalid = warnings[warn_start..]
+        .iter()
+        .any(|w| w.starts_with("Invalid file type"));
     for w in &mut warnings[warn_start..] {
         *w = format!("{} (trait '{}' in {})", w, raw.id, path.display());
     }
@@ -200,6 +270,9 @@ pub(crate) fn apply_trait_defaults(
         from_groups,
         warnings,
     );
+    if !for_invalid {
+        check_empty_resolved_for(&file_types, warnings);
+    }
     for w in &mut warnings[warn_start..] {
         *w = format!("{} (trait '{}' in {})", w, raw.id, path.display());
     }
@@ -1147,14 +1220,12 @@ pub(crate) fn apply_composite_defaults(
     } else if defaults.r#for.as_deref().is_some_and(for_list_contains_all) {
         warnings.push(FOR_ALL_REJECTED_DEFAULTS.to_string());
     }
-    let parsed_ft = apply_vec_default(raw.file_types, &defaults.r#for)
-        .map(|types| parse_file_types(&types, warnings))
-        .unwrap_or_else(|| ParsedFileTypes {
-            types: vec![RuleFileType::All],
-            from_groups: false,
-        });
+    let parsed_ft = resolve_rule_file_types(raw.file_types, defaults, warnings);
     let mut file_types = parsed_ft.types;
     let from_groups = parsed_ft.from_groups;
+    let for_invalid = warnings[warn_start..]
+        .iter()
+        .any(|w| w.starts_with("Invalid file type"));
     for w in &mut warnings[warn_start..] {
         *w = format!("{} (composite rule '{}' in {})", w, raw.id, path.display());
     }
@@ -1192,6 +1263,9 @@ pub(crate) fn apply_composite_defaults(
         from_groups,
         warnings,
     );
+    if !for_invalid {
+        check_empty_resolved_for(&file_types, warnings);
+    }
     for w in &mut warnings[warn_start..] {
         *w = format!("{} (composite rule '{}' in {})", w, raw.id, path.display());
     }
@@ -2326,6 +2400,136 @@ mod tests {
         assert!(result.types.contains(&RuleFileType::SevenZ));
         assert!(result.types.contains(&RuleFileType::Cpio));
         assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+    }
+
+    fn defaults_for(types: &[&str]) -> super::super::models::TraitDefaults {
+        super::super::models::TraitDefaults {
+            r#for: Some(types.iter().map(|t| (*t).to_string()).collect()),
+            platforms: Some(vec!["linux".to_string()]),
+            ..super::super::models::TraitDefaults::default()
+        }
+    }
+
+    fn trait_warnings(
+        defaults: &super::super::models::TraitDefaults,
+        file_types: Option<Vec<String>>,
+    ) -> (Vec<RuleFileType>, Vec<String>) {
+        let mut warnings = Vec::new();
+        let t = super::apply_trait_defaults(
+            make_raw_trait("t", file_types),
+            defaults,
+            &mut warnings,
+            std::path::Path::new("x.yaml"),
+            false,
+        );
+        (t.r#for, warnings)
+    }
+
+    #[test]
+    fn default_file_type_warnings_names_unknown_default_entries() {
+        let path = std::path::Path::new("dir/x.yaml");
+        let w = super::default_file_type_warnings(&defaults_for(&["archives", "zip"]), path);
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(w[0].starts_with("Unknown file type: 'archives'"), "{w:?}");
+        assert!(w[0].contains("'defaults: for:' in dir/x.yaml"), "{w:?}");
+
+        // Exclusions and comma-joined entries are checked too.
+        let w = super::default_file_type_warnings(&defaults_for(&["zip,-archivez"]), path);
+        assert_eq!(w.len(), 1, "{w:?}");
+
+        // Valid, absent, or invalid-file-type-owned values raise nothing here.
+        for ok in [
+            &["zip", "scripts"][..],
+            &["none"],
+            &["unknown"],
+            &["-python"],
+        ] {
+            let w = super::default_file_type_warnings(&defaults_for(ok), path);
+            assert!(w.is_empty(), "{ok:?}: {w:?}");
+        }
+        let none = super::super::models::TraitDefaults::default();
+        assert!(super::default_file_type_warnings(&none, path).is_empty());
+    }
+
+    #[test]
+    fn inherited_unknown_default_is_not_repeated_per_rule() {
+        let defaults = defaults_for(&["archives", "zip"]);
+        let (types, w) = trait_warnings(&defaults, None);
+        assert_eq!(types, vec![RuleFileType::Zip]);
+        assert!(w.is_empty(), "{w:?}");
+
+        // A rule's own unknown name is still reported against the rule.
+        let (_, w) = trait_warnings(&defaults, Some(vec!["archives".into(), "zip".into()]));
+        assert!(
+            w.iter()
+                .any(|w| w.starts_with("Unknown file type: 'archives'") && w.contains("trait 't'")),
+            "{w:?}"
+        );
+    }
+
+    #[test]
+    fn empty_resolved_for_is_reported() {
+        // Inherited default that resolves to nothing.
+        let (types, w) = trait_warnings(&defaults_for(&["archives"]), None);
+        assert!(types.is_empty());
+        assert!(
+            w.iter()
+                .any(|w| w.starts_with(super::EMPTY_RESOLVED_FOR) && w.contains("trait 't'")),
+            "{w:?}"
+        );
+
+        // The rule's own list, including one excluded away to nothing.
+        for own in [vec!["archives"], vec!["python", "-python"]] {
+            let own = own.into_iter().map(String::from).collect();
+            let (types, w) = trait_warnings(&defaults_for(&["zip"]), Some(own));
+            assert!(types.is_empty());
+            assert!(
+                w.iter().any(|w| w.starts_with(super::EMPTY_RESOLVED_FOR)),
+                "{w:?}"
+            );
+        }
+
+        // `for: []` is already an invalid-file-type error; no second report.
+        let (_, w) = trait_warnings(&defaults_for(&["zip"]), Some(Vec::new()));
+        assert!(
+            w.iter().any(|w| w.starts_with("Invalid file type")),
+            "{w:?}"
+        );
+        assert!(
+            !w.iter().any(|w| w.starts_with(super::EMPTY_RESOLVED_FOR)),
+            "{w:?}"
+        );
+
+        // A non-empty resolution raises nothing.
+        let (_, w) = trait_warnings(&defaults_for(&["zip"]), None);
+        assert!(w.is_empty(), "{w:?}");
+    }
+
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn empty_resolved_for_is_reported_for_composites() {
+        let raw: super::super::models::RawCompositeRule =
+            serde_yaml::from_str("{id: c, desc: composite rule here, all: [{id: a}]}")
+                .expect("composite yaml");
+        let mut warnings = Vec::new();
+        let rule = super::apply_composite_defaults(
+            raw,
+            &defaults_for(&["archives"]),
+            &mut warnings,
+            std::path::Path::new("x.yaml"),
+        );
+        assert!(rule.r#for.is_empty());
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.starts_with(super::EMPTY_RESOLVED_FOR)
+                    && w.contains("composite rule 'c'")),
+            "{warnings:?}"
+        );
+        assert!(
+            !warnings.iter().any(|w| w.starts_with("Unknown file type")),
+            "{warnings:?}"
+        );
     }
 
     #[test]

@@ -639,21 +639,13 @@ impl super::CapabilityMapper {
         );
         // Pre-apply `evaluate_with_gates`' file-type gate: of ~70k traits only
         // the container-capable ones (`for: all`, the container's own type, or
-        // any archive-family type) can match, and paying the evaluate
-        // prelude for the rest cost ~0.5 s of the calling thread per archive.
-        let container_is_archive =
-            rule_file_type == crate::composite_rules::FileType::All || rule_file_type.is_archive();
+        // the generic container it is built on) can match, and paying the
+        // evaluate prelude for the rest cost ~0.5 s of the calling thread per
+        // archive.
         let mut container_findings: Vec<Finding> = self
             .trait_definitions
             .iter()
-            .filter(|t| {
-                t.r#for.contains(&crate::composite_rules::FileType::All)
-                    || t.r#for.contains(&rule_file_type)
-                    || (container_is_archive
-                        && t.r#for
-                            .iter()
-                            .any(crate::composite_rules::FileType::is_archive))
-            })
+            .filter(|t| crate::composite_rules::FileType::rule_applies_to(&t.r#for, rule_file_type))
             .filter_map(|trait_def| trait_def.evaluate(&parent_trait_ctx))
             .filter(|f| !seen_ids.contains(f.id.as_str()))
             .collect();
@@ -956,6 +948,121 @@ mod tests {
         let mut file = tempfile::NamedTempFile::new().expect("create temp yaml");
         file.write_all(yaml.as_bytes()).expect("write temp yaml");
         file
+    }
+
+    /// The per-file composite work list is the gate a scan actually applies
+    /// (`evaluate_pregated` skips its own `for:` check), so it must admit
+    /// exactly what `CompositeTrait::evaluate` admits. It had drifted back to
+    /// the any-archive-for-any-archive carve-out: a `for: [android_apk]`
+    /// composite ran on JARs and a `for: [jar]` one on CRXs during a scan,
+    /// while `test-rules` (which runs the strict gate) said they could not.
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn composite_worklist_admits_only_the_declared_container() {
+        let yaml = r#"
+traits:
+  - id: "test/leg::leg"
+    desc: "leg"
+    crit: baseline
+    for: [all]
+    if:
+      type: basename
+      exact: "x"
+composite_rules:
+  - id: "test/c::jar-rule"
+    desc: "jar"
+    crit: notable
+    for: [jar]
+    scope: archive
+    all:
+      - id: "test/leg::leg"
+  - id: "test/c::apk-rule"
+    desc: "apk"
+    crit: notable
+    for: [android_apk]
+    all:
+      - id: "test/leg::leg"
+  - id: "test/c::zip-rule"
+    desc: "zip"
+    crit: notable
+    for: [zip]
+    scope: archive
+    all:
+      - id: "test/leg::leg"
+  - id: "test/c::js-pool-rule"
+    desc: "js pooled"
+    crit: notable
+    for: [javascript]
+    scope: archive
+    all:
+      - id: "test/leg::leg"
+"#;
+        let file = write_test_traits(yaml);
+        let mapper = super::super::CapabilityMapper::from_yaml(file.path()).expect("load mapper");
+        let ids = |ft: RuleFileType| -> Vec<String> {
+            let lists = mapper.composite_worklists(ft);
+            let mut v: Vec<String> = lists
+                .positive
+                .iter()
+                .chain(lists.negative.iter())
+                .map(|&i| {
+                    mapper.composite_rules[i as usize]
+                        .id
+                        .rsplit("::")
+                        .next()
+                        .unwrap_or_default()
+                        .to_string()
+                })
+                .collect();
+            v.sort();
+            v
+        };
+        assert_eq!(ids(RuleFileType::Jar), vec!["jar-rule", "zip-rule"]);
+        assert_eq!(ids(RuleFileType::AndroidApk), vec!["apk-rule", "zip-rule"]);
+        assert_eq!(ids(RuleFileType::Zip), vec!["zip-rule"]);
+        assert_eq!(ids(RuleFileType::Crx), vec!["zip-rule"]);
+        assert!(ids(RuleFileType::Npm).is_empty());
+        assert_eq!(ids(RuleFileType::JavaScript), vec!["js-pool-rule"]);
+        // A container with no type of its own admits archive-typed rules only.
+        assert_eq!(
+            ids(RuleFileType::All),
+            vec!["apk-rule", "jar-rule", "zip-rule"]
+        );
+
+        // The work list and the evaluate-time gate agree rule by rule.
+        let (report, data) = (make_test_report(), Vec::<u8>::new());
+        for ft in [
+            RuleFileType::Jar,
+            RuleFileType::Zip,
+            RuleFileType::AndroidApk,
+        ] {
+            let listed = ids(ft);
+            for rule in &mapper.composite_rules {
+                use crate::composite_rules::debug::{EvaluationDebug, RuleType, SkipReason};
+                let collector =
+                    std::sync::RwLock::new(EvaluationDebug::new(&rule.id, RuleType::Composite));
+                let mut ctx = crate::composite_rules::EvaluationContext::new(
+                    &report,
+                    &data,
+                    ft,
+                    &[crate::composite_rules::Platform::All],
+                    None,
+                    None,
+                );
+                ctx.debug_collector = Some(&collector);
+                let _ = rule.evaluate(&ctx);
+                let gated_out = matches!(
+                    collector.read().expect("debug lock").skip_reason,
+                    Some(SkipReason::FileTypeMismatch { .. })
+                );
+                let short = rule.id.rsplit("::").next().unwrap_or_default();
+                assert_eq!(
+                    listed.iter().any(|l| l == short),
+                    !gated_out,
+                    "{short} on {ft:?}: work list and evaluate() disagree"
+                );
+            }
+        }
     }
 
     #[allow(clippy::expect_used)]

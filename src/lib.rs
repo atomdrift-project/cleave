@@ -2646,11 +2646,14 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     };
 
     // Check for encoded payloads (hex, base64, etc.) using stng results
-    let encoded_payloads = if stng_strings.is_empty() {
+    let mut encoded_payloads = if stng_strings.is_empty() {
         Vec::new()
     } else {
         extractors::encoded_payload::extract_encoded_payloads(&stng_strings)
     };
+    encoded_payloads.extend(file_ctx.as_ref().and_then(|ctx| {
+        extractors::encoded_payload::xor_encoded_pe(ctx.parsed.fileid(), file_data)
+    }));
 
     // Create unified analysis input - all analyzers receive the same pre-extracted data
     let mut input = analyzers::AnalysisInput::with_payloads(
@@ -3119,30 +3122,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     // dropping it would erase the composite's cross-file provenance. Nor is one
     // that outranks every leg it fired on: that wrapper *is* the verdict, not a
     // restatement of it — see `drops_as_low_value`.
-    let mut crit_by_id: rustc_hash::FxHashMap<crate::types::Istr, crate::types::Criticality> =
-        rustc_hash::FxHashMap::default();
-    let mut composite_referenced: rustc_hash::FxHashSet<crate::types::Istr> =
-        rustc_hash::FxHashSet::default();
-    for f in report
-        .findings
-        .iter()
-        .chain(report.files.iter().flat_map(|f| f.findings.iter()))
-    {
-        // A member and its container can carry the same id at different tiers;
-        // the strongest is what a wrapper has to beat to be an escalation.
-        crit_by_id
-            .entry(f.id.clone())
-            .and_modify(|c| *c = (*c).max(f.crit))
-            .or_insert(f.crit);
-        composite_referenced.extend(f.trait_refs.iter().cloned());
-    }
-    let removed = report.filter_findings(|f| {
-        !capability_mapper.drops_as_low_value(
-            f,
-            |id| crit_by_id.get(id).copied(),
-            |id| composite_referenced.contains(id),
-        )
-    });
+    let removed = capability_mapper.filter_low_value(&mut report);
     if removed > 0 {
         tracing::debug!("Filtered {} low-value composite 'any' rules", removed);
     }

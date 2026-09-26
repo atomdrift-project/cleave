@@ -17,6 +17,24 @@ const MAX_EMBEDDED_EXECUTABLE_SIZE: u64 = 50 * 1024 * 1024;
 /// Minimum credible PE/ELF size — anything smaller is a stub or a false MZ.
 const MIN_EMBEDDED_EXECUTABLE_SIZE: u64 = 1024;
 
+/// Maximum attachments extracted per Outlook message.
+const MAX_MSG_ATTACHMENTS: usize = 32;
+
+/// Maximum attachment payload extracted for sub-analysis — the same ceiling
+/// as embedded executables. Larger attachments stay listed in the filefacts
+/// `office.msg.attachments` values but are not analyzed.
+const MAX_MSG_ATTACHMENT_SIZE: u64 = MAX_EMBEDDED_EXECUTABLE_SIZE;
+
+/// Maximum entries copied when rebuilding an attached message / OLE object
+/// storage into a standalone compound file.
+const MAX_REBUILT_STORAGE_ENTRIES: usize = 4096;
+
+/// Longest attachment filename kept for a member path, in characters.
+const MAX_ATTACHMENT_NAME_CHARS: usize = 255;
+
+/// Storage-name prefix of an Outlook attachment object (MS-OXMSG §2.2.2).
+const MSG_ATTACH_STORAGE_PREFIX: &str = "__attach_version1.0_#";
+
 /// Kind of embedded executable detected by header sniffing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum EmbeddedExecKind {
@@ -29,6 +47,33 @@ pub(crate) enum EmbeddedExecKind {
 pub(crate) struct EmbeddedExecutable {
     pub stream_path: String,
     pub kind: EmbeddedExecKind,
+    pub data: Vec<u8>,
+}
+
+/// How an Outlook attachment's payload is stored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MsgAttachmentKind {
+    /// `PidTagAttachDataBinary` stream: the attached file's bytes as-is.
+    File,
+    /// `PidTagAttachDataObject` storage — an attached message or OLE
+    /// object — rebuilt into a standalone compound file.
+    Storage,
+}
+
+/// An Outlook `.msg` attachment extracted for sub-analysis.
+#[derive(Debug, Clone)]
+pub(crate) struct MsgAttachment {
+    /// Attachment storage path (`/__attach_version1.0_#00000000`).
+    pub storage_path: String,
+    /// Path of the stream or storage the payload was read from.
+    pub payload_path: String,
+    /// Filename safe to use as a member path component (see
+    /// [`sanitize_attachment_filename`]).
+    pub filename: String,
+    /// `PidTagAttachMimeTag`, when present.
+    #[allow(dead_code)] // Surfaced to rules by filefacts (office.msg.attachments)
+    pub mime: Option<String>,
+    pub kind: MsgAttachmentKind,
     pub data: Vec<u8>,
 }
 
@@ -48,6 +93,10 @@ pub(crate) struct Ole2Document {
     pub embedded_executables: Vec<EmbeddedExecutable>,
     /// OLE10Native embedded objects (filename, size)
     pub ole10_native_objects: Vec<Ole10NativeInfo>,
+    /// Outlook message attachments (empty unless `doc_subtype` is `Msg`).
+    /// An attachment whose data stream is already in `embedded_executables`
+    /// is left out so it is analyzed once.
+    pub msg_attachments: Vec<MsgAttachment>,
     /// Known dangerous CLSIDs found on storages
     pub dangerous_clsids: Vec<ClsidMatch>,
     /// Document metadata (author, title, etc.)
@@ -203,6 +252,16 @@ pub(crate) fn parse_ole2(data: &[u8]) -> Result<Ole2Document> {
     // Check for OLE10Native embedded objects
     let ole10_native_objects = find_ole10_native(&mut comp, &entries);
 
+    let msg_attachments = if doc_subtype == Ole2Subtype::Msg {
+        let already_extracted: Vec<&str> = embedded_executables
+            .iter()
+            .map(|e| e.stream_path.as_str())
+            .collect();
+        find_msg_attachments(&mut comp, &entries, &already_extracted)
+    } else {
+        Vec::new()
+    };
+
     // Extract metadata
     let metadata = extract_metadata(&mut comp);
 
@@ -217,6 +276,7 @@ pub(crate) fn parse_ole2(data: &[u8]) -> Result<Ole2Document> {
         stream_names,
         embedded_executables,
         ole10_native_objects,
+        msg_attachments,
         dangerous_clsids,
         metadata,
         compobj,
@@ -425,6 +485,234 @@ fn find_embedded_executables(
     }
 
     found
+}
+
+/// Extract the attachments of an Outlook `.msg` (MS-OXMSG).
+///
+/// Each top-level `__attach_version1.0_#XXXXXXXX` storage holds one
+/// attachment. A file attachment's bytes are the `PidTagAttachDataBinary`
+/// stream (`__substg1.0_37010102`); an attached message or OLE object is a
+/// `PidTagAttachDataObject` storage (`__substg1.0_3701000D`), which is
+/// rebuilt into a standalone compound file so the office analyzer can
+/// recurse into it (recursion depth is bounded by the caller). Attachments
+/// of an attached message live under that storage and are reached through
+/// that recursion, not here.
+///
+/// `already_extracted` lists payload streams the PE/ELF pass took, so an
+/// executable attachment is analyzed once. Bounds: at most
+/// [`MAX_MSG_ATTACHMENTS`] attachments of at most
+/// [`MAX_MSG_ATTACHMENT_SIZE`] bytes each.
+fn find_msg_attachments(
+    comp: &mut cfb::CompoundFile<Cursor<&[u8]>>,
+    entries: &[(String, u64, bool)],
+    already_extracted: &[&str],
+) -> Vec<MsgAttachment> {
+    let storages: Vec<&str> = entries
+        .iter()
+        .filter(|(path, _, is_stream)| {
+            !*is_stream
+                && path.strip_prefix('/').is_some_and(|name| {
+                    name.starts_with(MSG_ATTACH_STORAGE_PREFIX) && !name.contains('/')
+                })
+        })
+        .map(|(path, _, _)| path.as_str())
+        .collect();
+
+    let mut found: Vec<MsgAttachment> = Vec::new();
+    for storage in storages {
+        if found.len() >= MAX_MSG_ATTACHMENTS {
+            break;
+        }
+        let binary_path = format!("{storage}/__substg1.0_37010102");
+        let object_path = format!("{storage}/__substg1.0_3701000D");
+        let (kind, payload_path, data) = if comp.is_stream(&binary_path) {
+            if already_extracted.contains(&binary_path.as_str()) {
+                continue;
+            }
+            let Some(data) = read_bounded_stream(comp, &binary_path, MAX_MSG_ATTACHMENT_SIZE)
+            else {
+                continue;
+            };
+            (MsgAttachmentKind::File, binary_path, data)
+        } else if comp.is_storage(&object_path) {
+            let Some(data) = rebuild_storage(comp, &object_path, MAX_MSG_ATTACHMENT_SIZE) else {
+                continue;
+            };
+            (MsgAttachmentKind::Storage, object_path, data)
+        } else {
+            // By-reference attachments carry a path, not bytes.
+            continue;
+        };
+        if data.is_empty() {
+            continue;
+        }
+
+        let index = storage
+            .rsplit('#')
+            .next()
+            .and_then(|hex| u32::from_str_radix(hex, 16).ok())
+            .unwrap_or(found.len() as u32);
+        let raw_name = ["3707", "3704", "3001"]
+            .iter()
+            .find_map(|id| read_msg_string(comp, storage, id));
+        let mut filename = sanitize_attachment_filename(raw_name.as_deref(), index);
+        if kind == MsgAttachmentKind::Storage
+            && std::path::Path::new(&filename).extension().is_none()
+        {
+            // An attached message is usually named by its subject only.
+            filename.push_str(if data_is_msg(&data) { ".msg" } else { ".ole" });
+        }
+        if found.iter().any(|a| a.filename == filename) {
+            filename = format!("attachment-{index}-{filename}");
+        }
+
+        found.push(MsgAttachment {
+            storage_path: storage.to_string(),
+            payload_path,
+            filename,
+            mime: read_msg_string(comp, storage, "370E"),
+            kind,
+            data,
+        });
+    }
+    found
+}
+
+/// Read a whole stream, refusing one longer than `max` bytes.
+fn read_bounded_stream(
+    comp: &mut cfb::CompoundFile<Cursor<&[u8]>>,
+    path: &str,
+    max: u64,
+) -> Option<Vec<u8>> {
+    let stream = comp.open_stream(path).ok()?;
+    if stream.len() > max {
+        return None;
+    }
+    let mut data = Vec::with_capacity(stream.len() as usize);
+    stream.take(max).read_to_end(&mut data).ok()?;
+    Some(data)
+}
+
+/// True when a rebuilt attachment storage is itself a message rather than
+/// an OLE object: it carries `__substg1.0_` property streams.
+fn data_is_msg(data: &[u8]) -> bool {
+    cfb::CompoundFile::open(Cursor::new(data))
+        .is_ok_and(|comp| comp.walk().any(|e| e.name().starts_with("__substg1.0_")))
+}
+
+/// Copy the storage at `storage` and everything beneath it into a new
+/// in-memory compound file whose root is that storage. Returns `None` when
+/// the subtree holds more than [`MAX_REBUILT_STORAGE_ENTRIES`] entries or
+/// more than `max_bytes` of stream data, or when any copy fails.
+fn rebuild_storage(
+    comp: &mut cfb::CompoundFile<Cursor<&[u8]>>,
+    storage: &str,
+    max_bytes: u64,
+) -> Option<Vec<u8>> {
+    use std::io::Write;
+
+    let subtree: Vec<(String, bool)> = comp
+        .walk_storage(storage)
+        .ok()?
+        .take(MAX_REBUILT_STORAGE_ENTRIES + 1)
+        .map(|e| (e.path().to_string_lossy().into_owned(), e.is_stream()))
+        .collect();
+    if subtree.len() > MAX_REBUILT_STORAGE_ENTRIES {
+        return None;
+    }
+    let total: u64 = comp
+        .walk_storage(storage)
+        .ok()?
+        .filter(cfb::Entry::is_stream)
+        .map(|e| e.len())
+        .sum();
+    if total > max_bytes {
+        return None;
+    }
+
+    let mut out = cfb::CompoundFile::create(Cursor::new(Vec::new())).ok()?;
+    for (path, is_stream) in subtree {
+        let Some(rel) = path
+            .strip_prefix(storage)
+            .filter(|r| !r.is_empty() && *r != "/")
+        else {
+            continue;
+        };
+        if is_stream {
+            let mut data = Vec::new();
+            comp.open_stream(&path).ok()?.read_to_end(&mut data).ok()?;
+            out.create_stream(rel).ok()?.write_all(&data).ok()?;
+        } else {
+            out.create_storage(rel).ok()?;
+        }
+    }
+    out.flush().ok()?;
+    Some(out.into_inner().into_inner())
+}
+
+/// Read an MSG string property `__substg1.0_<id>001F` (UTF-16LE), falling
+/// back to the 8-bit `001E` spelling. NULs are stripped and surrounding
+/// whitespace trimmed; an empty value reads as absent.
+fn read_msg_string(
+    comp: &mut cfb::CompoundFile<Cursor<&[u8]>>,
+    storage: &str,
+    prop_id: &str,
+) -> Option<String> {
+    const MAX_BYTES: u64 = 4096;
+    for (prop_type, wide) in [("001F", true), ("001E", false)] {
+        let Ok(stream) = comp.open_stream(format!("{storage}/__substg1.0_{prop_id}{prop_type}"))
+        else {
+            continue;
+        };
+        let mut data = Vec::new();
+        if stream.take(MAX_BYTES).read_to_end(&mut data).is_err() {
+            continue;
+        }
+        let text = if wide {
+            let units: Vec<u16> = data
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|c| u16::from_le_bytes(*c))
+                .collect();
+            String::from_utf16_lossy(&units)
+        } else {
+            String::from_utf8_lossy(&data).into_owned()
+        };
+        let text: String = text.chars().filter(|c| *c != '\0').collect();
+        let text = text.trim();
+        if !text.is_empty() {
+            return Some(text.to_string());
+        }
+    }
+    None
+}
+
+/// Turn an attacker-chosen attachment filename into a single safe member
+/// path component: keep only the final `/`- or `\`-separated segment,
+/// drop control characters, break up the `!!` nesting delimiter, and cap
+/// the length. Names that reduce to nothing, `.` or `..` become
+/// `attachment-<index>`.
+pub(crate) fn sanitize_attachment_filename(raw: Option<&str>, index: u32) -> String {
+    let base = raw
+        .unwrap_or_default()
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or_default();
+    let mut name: String = base
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(MAX_ATTACHMENT_NAME_CHARS)
+        .collect();
+    while name.contains("!!") {
+        name = name.replace("!!", "!_");
+    }
+    let name = name.trim();
+    if name.is_empty() || name == "." || name == ".." {
+        format!("attachment-{index}")
+    } else {
+        name.to_string()
+    }
 }
 
 /// Find OLE10Native embedded objects and extract their metadata.
@@ -792,7 +1080,7 @@ fn read_property_string(section: &[u8], offset: usize) -> Option<String> {
 
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::unwrap_used)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// Helper: build a CompObj stream payload with the given strings.
@@ -1063,6 +1351,190 @@ mod tests {
 
         let msi_streams = vec!["/Binary.123".to_string(), "/_Tables".to_string()];
         assert_eq!(detect_subtype(&msi_streams), Ole2Subtype::Msi);
+    }
+
+    /// Build an in-memory compound file from `(path, body)` streams,
+    /// creating parent storages on demand.
+    pub(crate) fn build_cfb(streams: &[(&str, &[u8])]) -> Vec<u8> {
+        use std::io::Write;
+        let mut comp = cfb::CompoundFile::create(Cursor::new(Vec::new())).unwrap();
+        for (path, body) in streams {
+            let parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+            let mut accum = String::new();
+            for part in &parts[..parts.len() - 1] {
+                accum.push('/');
+                accum.push_str(part);
+                if !comp.exists(&accum) {
+                    comp.create_storage(&accum).unwrap();
+                }
+            }
+            comp.create_stream(path).unwrap().write_all(body).unwrap();
+        }
+        comp.flush().unwrap();
+        comp.into_inner().into_inner()
+    }
+
+    pub(crate) fn utf16(s: &str) -> Vec<u8> {
+        s.encode_utf16()
+            .chain(std::iter::once(0))
+            .flat_map(u16::to_le_bytes)
+            .collect()
+    }
+
+    const A0: &str = "/__attach_version1.0_#00000000";
+    const A1: &str = "/__attach_version1.0_#00000001";
+
+    #[test]
+    fn msg_attachments_are_extracted_with_filename_and_mime() {
+        let svg = b"<svg xmlns='http://www.w3.org/2000/svg'><script>x()</script></svg>";
+        let cfb = build_cfb(&[
+            ("/__substg1.0_0037001F", &utf16("subject")),
+            (&format!("{A0}/__substg1.0_37010102"), svg),
+            (&format!("{A0}/__substg1.0_3707001F"), &utf16("lure.xhtml")),
+            (&format!("{A0}/__substg1.0_3704001F"), &utf16("LURE~1.XHT")),
+            (&format!("{A0}/__substg1.0_370E001F"), &utf16("text/html")),
+            (&format!("{A1}/__substg1.0_37010102"), b"\x89PNG\r\n\x1a\n"),
+            // No long filename: falls back to the 8.3 name.
+            (
+                &format!("{A1}/__substg1.0_3704001F"),
+                &utf16("image001.png"),
+            ),
+        ]);
+        let doc = parse_ole2(&cfb).expect("parses");
+        assert_eq!(doc.doc_subtype, Ole2Subtype::Msg);
+        assert_eq!(doc.msg_attachments.len(), 2);
+
+        let lure = &doc.msg_attachments[0];
+        assert_eq!(lure.filename, "lure.xhtml");
+        assert_eq!(lure.mime.as_deref(), Some("text/html"));
+        assert_eq!(lure.kind, MsgAttachmentKind::File);
+        assert_eq!(lure.data, svg);
+        assert_eq!(lure.storage_path, A0);
+
+        assert_eq!(doc.msg_attachments[1].filename, "image001.png");
+    }
+
+    #[test]
+    fn non_msg_documents_have_no_attachments() {
+        // An attachment-shaped storage in a Word document is not an
+        // Outlook attachment.
+        let cfb = build_cfb(&[
+            ("/WordDocument", b"body"),
+            (&format!("{A0}/__substg1.0_37010102"), b"payload"),
+        ]);
+        let doc = parse_ole2(&cfb).expect("parses");
+        assert_eq!(doc.doc_subtype, Ole2Subtype::Word);
+        assert!(doc.msg_attachments.is_empty());
+    }
+
+    #[test]
+    fn executable_attachment_is_left_to_the_pe_path() {
+        let mut pe = vec![0u8; 2048];
+        pe[..2].copy_from_slice(b"MZ");
+        let cfb = build_cfb(&[
+            ("/__substg1.0_0037001F", &utf16("subject")),
+            (&format!("{A0}/__substg1.0_37010102"), &pe),
+            (&format!("{A0}/__substg1.0_3707001F"), &utf16("invoice.exe")),
+            (&format!("{A1}/__substg1.0_37010102"), b"<html></html>"),
+            (&format!("{A1}/__substg1.0_3707001F"), &utf16("a.html")),
+        ]);
+        let doc = parse_ole2(&cfb).expect("parses");
+        assert_eq!(doc.embedded_executables.len(), 1);
+        let names: Vec<&str> = doc
+            .msg_attachments
+            .iter()
+            .map(|a| a.filename.as_str())
+            .collect();
+        assert_eq!(names, ["a.html"]);
+    }
+
+    #[test]
+    fn embedded_message_is_rebuilt_as_standalone_msg() {
+        let inner = format!("{A0}/__substg1.0_3701000D");
+        let cfb = build_cfb(&[
+            ("/__substg1.0_0037001F", &utf16("outer")),
+            (
+                &format!("{A0}/__substg1.0_3001001F"),
+                &utf16("Fwd: invoice"),
+            ),
+            (&format!("{inner}/__substg1.0_0037001F"), &utf16("inner")),
+            (
+                &format!("{inner}/__attach_version1.0_#00000000/__substg1.0_37010102"),
+                b"<html>inner payload</html>",
+            ),
+            (
+                &format!("{inner}/__attach_version1.0_#00000000/__substg1.0_3707001F"),
+                &utf16("inner.html"),
+            ),
+        ]);
+        let doc = parse_ole2(&cfb).expect("parses");
+        // Only the top-level attachment; the inner one is reached by
+        // recursing into the rebuilt message.
+        assert_eq!(doc.msg_attachments.len(), 1);
+        let att = &doc.msg_attachments[0];
+        assert_eq!(att.kind, MsgAttachmentKind::Storage);
+        assert_eq!(att.filename, "Fwd: invoice.msg");
+
+        let rebuilt = parse_ole2(&att.data).expect("rebuilt message parses");
+        assert_eq!(rebuilt.doc_subtype, Ole2Subtype::Msg);
+        assert_eq!(rebuilt.msg_attachments.len(), 1);
+        assert_eq!(rebuilt.msg_attachments[0].filename, "inner.html");
+        assert_eq!(
+            rebuilt.msg_attachments[0].data,
+            b"<html>inner payload</html>"
+        );
+    }
+
+    #[test]
+    fn duplicate_attachment_names_get_distinct_members() {
+        let cfb = build_cfb(&[
+            ("/__substg1.0_0037001F", &utf16("subject")),
+            (&format!("{A0}/__substg1.0_37010102"), b"one"),
+            (&format!("{A0}/__substg1.0_3707001F"), &utf16("doc.txt")),
+            (&format!("{A1}/__substg1.0_37010102"), b"two"),
+            (&format!("{A1}/__substg1.0_3707001F"), &utf16("doc.txt")),
+        ]);
+        let doc = parse_ole2(&cfb).expect("parses");
+        let names: Vec<&str> = doc
+            .msg_attachments
+            .iter()
+            .map(|a| a.filename.as_str())
+            .collect();
+        assert_eq!(names, ["doc.txt", "attachment-1-doc.txt"]);
+    }
+
+    #[test]
+    fn attachment_filenames_are_sanitized() {
+        assert_eq!(sanitize_attachment_filename(Some("a.pdf"), 0), "a.pdf");
+        assert_eq!(
+            sanitize_attachment_filename(Some("../../etc/passwd"), 0),
+            "passwd"
+        );
+        assert_eq!(
+            sanitize_attachment_filename(Some("C:\\Users\\x\\run.lnk"), 0),
+            "run.lnk"
+        );
+        assert_eq!(sanitize_attachment_filename(Some(".."), 3), "attachment-3");
+        assert_eq!(
+            sanitize_attachment_filename(Some("dir/"), 4),
+            "attachment-4"
+        );
+        assert_eq!(sanitize_attachment_filename(None, 5), "attachment-5");
+        assert_eq!(
+            sanitize_attachment_filename(Some("a!!b!!!c.js"), 0),
+            "a!_b!_!c.js"
+        );
+        assert_eq!(
+            // Control characters go; format characters such as RLO stay,
+            // as they do in archive member paths, so rules can see them.
+            sanitize_attachment_filename(Some("inv\u{202e}fdp.exe\n"), 0),
+            "inv\u{202e}fdp.exe"
+        );
+        let long = "x".repeat(1000);
+        assert_eq!(
+            sanitize_attachment_filename(Some(&long), 0).chars().count(),
+            MAX_ATTACHMENT_NAME_CHARS
+        );
     }
 
     #[test]

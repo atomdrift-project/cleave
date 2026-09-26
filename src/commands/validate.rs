@@ -156,6 +156,20 @@ fn run_inner(
         false,
     )?);
 
+    // When the cache holds nothing for these traits, as after an edit, every
+    // fixture is about to miss: build the match indexes once, here, before
+    // fanning out. Left lazy, every worker that reaches trait matching before
+    // the first build finishes builds its own copy and all but one are thrown
+    // away, which held the whole pool for ~7 s and doubled peak memory. When
+    // the cache does hold them, fixtures hit and never need the indexes. This
+    // is a performance heuristic only: if it skips the warm-up and a fixture
+    // misses anyway, the lazy build still runs and the output is identical.
+    if cleave::analysis_cache::has_reports_for_current_traits() {
+        tracing::debug!("analysis cache holds these traits; match indexes stay lazy");
+    } else {
+        mapper.warm_indexes();
+    }
+
     let results: Vec<(Target, Result<AnalysisReport>)> = targets
         .into_par_iter()
         .map(|t| {

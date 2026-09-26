@@ -720,7 +720,7 @@ mod duplicate_tests {
         let trait2 = create_string_exact("test::b", "'", false, vec![FileType::All], "file2.yaml");
 
         let mut warnings = Vec::new();
-        find_string_pattern_duplicates(&[trait1, trait2], &mut warnings);
+        find_string_pattern_duplicates(&ExtractedPatterns::of(&[trait1, trait2]), &mut warnings);
 
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("Duplicate"));
@@ -747,7 +747,7 @@ mod duplicate_tests {
         );
 
         let mut warnings = Vec::new();
-        find_string_pattern_duplicates(&[trait1, trait2], &mut warnings);
+        find_string_pattern_duplicates(&ExtractedPatterns::of(&[trait1, trait2]), &mut warnings);
 
         // Should detect as duplicate - \x27 normalizes to '
         assert_eq!(warnings.len(), 1);
@@ -776,7 +776,7 @@ mod duplicate_tests {
         );
 
         let mut warnings = Vec::new();
-        check_exact_contained_by_substr(&[exact, substr], &mut warnings);
+        check_exact_contained_by_substr(&ExtractedPatterns::of(&[exact, substr]), &mut warnings);
 
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("Exact pattern"));
@@ -802,7 +802,7 @@ mod duplicate_tests {
         );
 
         let mut warnings = Vec::new();
-        check_exact_contained_by_substr(&[exact, substr], &mut warnings);
+        check_exact_contained_by_substr(&ExtractedPatterns::of(&[exact, substr]), &mut warnings);
 
         assert_eq!(warnings.len(), 0);
     }
@@ -825,7 +825,7 @@ mod duplicate_tests {
         );
 
         let mut warnings = Vec::new();
-        check_exact_contained_by_substr(&[exact, substr], &mut warnings);
+        check_exact_contained_by_substr(&ExtractedPatterns::of(&[exact, substr]), &mut warnings);
 
         assert_eq!(warnings.len(), 0);
     }
@@ -848,7 +848,7 @@ mod duplicate_tests {
         );
 
         let mut warnings = Vec::new();
-        check_exact_contained_by_substr(&[exact, substr], &mut warnings);
+        check_exact_contained_by_substr(&ExtractedPatterns::of(&[exact, substr]), &mut warnings);
 
         assert_eq!(warnings.len(), 1);
     }
@@ -871,7 +871,7 @@ mod duplicate_tests {
         );
 
         let mut warnings = Vec::new();
-        check_exact_contained_by_substr(&[exact, substr], &mut warnings);
+        check_exact_contained_by_substr(&ExtractedPatterns::of(&[exact, substr]), &mut warnings);
 
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("atob"));
@@ -895,7 +895,7 @@ mod duplicate_tests {
         );
 
         let mut warnings = Vec::new();
-        check_exact_contained_by_substr(&[exact, substr], &mut warnings);
+        check_exact_contained_by_substr(&ExtractedPatterns::of(&[exact, substr]), &mut warnings);
 
         assert_eq!(warnings.len(), 0);
     }
@@ -917,7 +917,7 @@ mod duplicate_tests {
         );
 
         let mut warnings = Vec::new();
-        check_exact_contained_by_substr(&[exact, encoded], &mut warnings);
+        check_exact_contained_by_substr(&ExtractedPatterns::of(&[exact, encoded]), &mut warnings);
 
         assert_eq!(warnings.len(), 0);
     }
@@ -940,7 +940,7 @@ mod duplicate_tests {
         );
 
         let mut warnings = Vec::new();
-        check_same_string_different_types(&[text, literal], &mut warnings);
+        check_same_string_different_types(&ExtractedPatterns::of(&[text, literal]), &mut warnings);
 
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("I want to play a game"));
@@ -968,7 +968,7 @@ mod duplicate_tests {
         );
 
         let mut warnings = Vec::new();
-        check_same_string_different_types(&[symbol, text], &mut warnings);
+        check_same_string_different_types(&ExtractedPatterns::of(&[symbol, text]), &mut warnings);
 
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("file_put_contents"));
@@ -995,7 +995,7 @@ mod duplicate_tests {
         );
 
         let mut warnings = Vec::new();
-        check_same_string_different_types(&[symbol, text], &mut warnings);
+        check_same_string_different_types(&ExtractedPatterns::of(&[symbol, text]), &mut warnings);
 
         assert_eq!(warnings.len(), 1);
     }
@@ -1021,7 +1021,7 @@ mod duplicate_tests {
         );
 
         let mut warnings = Vec::new();
-        check_same_string_different_types(&[export, text], &mut warnings);
+        check_same_string_different_types(&ExtractedPatterns::of(&[export, text]), &mut warnings);
 
         assert_eq!(warnings.len(), 0);
     }
@@ -1054,7 +1054,7 @@ mod duplicate_tests {
         }
 
         let mut warnings = Vec::new();
-        find_literals_covered_by_regexes(&defs, &mut warnings);
+        find_literals_covered_by_regexes(&ExtractedPatterns::of(&defs), &mut warnings);
 
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert!(warnings[0].contains("GetProcAddress"));
@@ -1067,9 +1067,6 @@ mod duplicate_tests {
     #[test]
     fn test_literal_coverage_with_stored_facts_matches_a_cold_run() {
         use crate::capabilities::validation::facts_cache;
-        let _slot = facts_cache::TEST_SLOT
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = tempfile::tempdir().expect("tempdir");
         let store = dir.path().join("facts.bin");
         let tree = |literal: &str, patterns: &[&str]| {
@@ -1092,7 +1089,7 @@ mod duplicate_tests {
         let run = |defs: &[TraitDefinition], with_facts: bool| {
             let _session = with_facts.then(|| facts_cache::begin_at(&store));
             let mut warnings = Vec::new();
-            find_literals_covered_by_regexes(defs, &mut warnings);
+            find_literals_covered_by_regexes(&ExtractedPatterns::of(defs), &mut warnings);
             warnings
         };
         let patterns = [
@@ -1158,7 +1155,7 @@ mod duplicate_tests {
         }
 
         let mut warnings = Vec::new();
-        find_literals_covered_by_regexes(&defs, &mut warnings);
+        find_literals_covered_by_regexes(&ExtractedPatterns::of(&defs), &mut warnings);
 
         assert!(warnings.is_empty(), "{warnings:?}");
     }
@@ -1192,7 +1189,7 @@ mod duplicate_tests {
         }
 
         let mut warnings = Vec::new();
-        find_literals_covered_by_regexes(&defs, &mut warnings);
+        find_literals_covered_by_regexes(&ExtractedPatterns::of(&defs), &mut warnings);
 
         assert!(warnings.is_empty(), "{warnings:?}");
     }
@@ -1216,7 +1213,7 @@ mod duplicate_tests {
         );
 
         let mut warnings = Vec::new();
-        check_same_string_different_types(&[text, literal], &mut warnings);
+        check_same_string_different_types(&ExtractedPatterns::of(&[text, literal]), &mut warnings);
 
         assert_eq!(warnings.len(), 0);
     }
@@ -1244,7 +1241,7 @@ mod duplicate_tests {
         }]);
 
         let mut warnings = Vec::new();
-        check_same_string_different_types(&[symbol, text], &mut warnings);
+        check_same_string_different_types(&ExtractedPatterns::of(&[symbol, text]), &mut warnings);
 
         assert_eq!(warnings.len(), 0);
     }
@@ -1269,7 +1266,7 @@ mod duplicate_tests {
         );
 
         let mut warnings = Vec::new();
-        check_same_string_different_types(&[symbol, text], &mut warnings);
+        check_same_string_different_types(&ExtractedPatterns::of(&[symbol, text]), &mut warnings);
 
         assert_eq!(warnings.len(), 0);
     }
@@ -1295,7 +1292,7 @@ mod duplicate_tests {
         );
 
         let mut warnings = Vec::new();
-        check_same_string_different_types(&[symbol, text], &mut warnings);
+        check_same_string_different_types(&ExtractedPatterns::of(&[symbol, text]), &mut warnings);
 
         assert_eq!(warnings.len(), 0);
     }
@@ -1320,7 +1317,7 @@ mod duplicate_tests {
         );
 
         let mut warnings = Vec::new();
-        check_same_string_different_types(&[symbol, raw], &mut warnings);
+        check_same_string_different_types(&ExtractedPatterns::of(&[symbol, raw]), &mut warnings);
 
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("CreateFileMappingW"));
@@ -1345,7 +1342,7 @@ mod duplicate_tests {
         );
 
         let mut warnings = Vec::new();
-        check_same_string_different_types(&[symbol, raw], &mut warnings);
+        check_same_string_different_types(&ExtractedPatterns::of(&[symbol, raw]), &mut warnings);
 
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("CreateFileMappingW"));
@@ -1370,7 +1367,7 @@ mod duplicate_tests {
         );
 
         let mut warnings = Vec::new();
-        check_same_string_different_types(&[symbol, raw], &mut warnings);
+        check_same_string_different_types(&ExtractedPatterns::of(&[symbol, raw]), &mut warnings);
 
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("InternetOpen"));
@@ -1393,7 +1390,7 @@ mod duplicate_tests {
         );
 
         let mut warnings = Vec::new();
-        check_same_string_different_types(&[raw, encoded], &mut warnings);
+        check_same_string_different_types(&ExtractedPatterns::of(&[raw, encoded]), &mut warnings);
 
         assert_eq!(warnings.len(), 0);
     }
@@ -1416,7 +1413,7 @@ mod duplicate_tests {
         );
 
         let mut warnings = Vec::new();
-        check_exact_contained_by_substr(&[exact, substr], &mut warnings);
+        check_exact_contained_by_substr(&ExtractedPatterns::of(&[exact, substr]), &mut warnings);
 
         // No redundancy because strings differ (trailing space)
         assert_eq!(warnings.len(), 0);
@@ -1718,6 +1715,34 @@ mod duplicate_tests {
         assert!(warnings[0].contains("REGEX CASE SUBSUMPTION"));
     }
 
+    #[test]
+    fn test_regex_alternative_subsets_pair_only_shared_alternatives() {
+        let regex = |id: &str, pattern: &str, case_insensitive: bool, file: &str| {
+            create_string_regex(id, pattern, case_insensitive, vec![FileType::All], file)
+        };
+        let traits = [
+            regex("a::subset", "read|write", false, "a.yaml"),
+            regex("b::unrelated", "alpha|beta", false, "b.yaml"),
+            regex("c::superset", "read|write|exec", false, "c.yaml"),
+            regex("d::upper", "READ|WRITE", true, "d.yaml"),
+            // The same alternatives in a group are a different shape.
+            regex("e::grouped", "x(read|write|exec)", false, "e.yaml"),
+            regex("f::grouped-upper", "X(READ|WRITE|EXEC)", true, "f.yaml"),
+        ];
+
+        let mut warnings = Vec::new();
+        check_regex_alternative_subsets(&traits, &mut warnings);
+
+        // In pair order: a ⊂ c, a's case variant d, e's case variant f.
+        assert_eq!(warnings.len(), 3, "{warnings:#?}");
+        assert!(warnings[0].starts_with("REGEX ALTERNATIVE SUBSET"));
+        assert!(warnings[0].contains("a::subset") && warnings[0].contains("c::superset"));
+        assert!(warnings[1].starts_with("REGEX CASE SUBSUMPTION"));
+        assert!(warnings[1].contains("d::upper") && warnings[1].contains("a::subset"));
+        assert!(warnings[2].starts_with("REGEX CASE SUBSUMPTION"));
+        assert!(warnings[2].contains("f::grouped-upper") && warnings[2].contains("e::grouped"));
+    }
+
     // ========================================================================
     // Phase 6: Tier Violation Tests
     // ========================================================================
@@ -1738,7 +1763,7 @@ mod duplicate_tests {
         );
 
         let mut warnings = Vec::new();
-        find_string_pattern_duplicates(&[micro, objective], &mut warnings);
+        find_string_pattern_duplicates(&ExtractedPatterns::of(&[micro, objective]), &mut warnings);
 
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("Duplicate reusable atom"));
@@ -1761,7 +1786,7 @@ mod duplicate_tests {
         );
 
         let mut warnings = Vec::new();
-        find_string_pattern_duplicates(&[trait1, trait2], &mut warnings);
+        find_string_pattern_duplicates(&ExtractedPatterns::of(&[trait1, trait2]), &mut warnings);
 
         assert_eq!(warnings.len(), 1);
         // Should NOT contain TIER VIOLATION (both in micro-behaviors)
@@ -1780,7 +1805,7 @@ mod duplicate_tests {
             create_string_exact("test::b", "test", false, vec![FileType::Elf], "file2.yaml");
 
         let mut warnings = Vec::new();
-        find_string_pattern_duplicates(&[trait1, trait2], &mut warnings);
+        find_string_pattern_duplicates(&ExtractedPatterns::of(&[trait1, trait2]), &mut warnings);
 
         // Should detect overlap (All overlaps with everything)
         assert_eq!(warnings.len(), 1);
@@ -1794,7 +1819,7 @@ mod duplicate_tests {
             create_string_exact("test::b", "test", false, vec![FileType::Pe], "file2.yaml");
 
         let mut warnings = Vec::new();
-        find_string_pattern_duplicates(&[trait1, trait2], &mut warnings);
+        find_string_pattern_duplicates(&ExtractedPatterns::of(&[trait1, trait2]), &mut warnings);
 
         // No overlap - disjoint file types
         assert_eq!(warnings.len(), 0);
@@ -1816,7 +1841,7 @@ mod duplicate_tests {
         );
 
         let mut warnings = Vec::new();
-        find_string_pattern_duplicates(&[trait1, trait2], &mut warnings);
+        find_string_pattern_duplicates(&ExtractedPatterns::of(&[trait1, trait2]), &mut warnings);
 
         assert_eq!(warnings.len(), 0);
     }
@@ -1839,7 +1864,7 @@ mod duplicate_tests {
         );
 
         let mut warnings = Vec::new();
-        find_string_pattern_duplicates(&[unscoped, scoped], &mut warnings);
+        find_string_pattern_duplicates(&ExtractedPatterns::of(&[unscoped, scoped]), &mut warnings);
 
         assert_eq!(warnings.len(), 0);
     }
@@ -1909,7 +1934,7 @@ mod duplicate_tests {
         );
 
         let mut warnings = Vec::new();
-        find_string_pattern_duplicates(&[trait1, trait2], &mut warnings);
+        find_string_pattern_duplicates(&ExtractedPatterns::of(&[trait1, trait2]), &mut warnings);
 
         // Should warn - exact duplicate, carveout doesn't apply (len diff = 0)
         assert_eq!(warnings.len(), 1);
@@ -1968,7 +1993,7 @@ mod duplicate_tests {
         );
 
         let mut warnings = Vec::new();
-        find_string_pattern_duplicates(&[trait1, trait2], &mut warnings);
+        find_string_pattern_duplicates(&ExtractedPatterns::of(&[trait1, trait2]), &mut warnings);
 
         // Should warn - normalizes to same pattern, carveout doesn't apply (same conf/crit)
         assert_eq!(warnings.len(), 1);
@@ -2027,7 +2052,7 @@ mod duplicate_tests {
         );
 
         let mut warnings = Vec::new();
-        find_string_pattern_duplicates(&[trait1, trait2], &mut warnings);
+        find_string_pattern_duplicates(&ExtractedPatterns::of(&[trait1, trait2]), &mut warnings);
 
         // Should NOT warn - carveout applies (same normalized "test", but original differs by >2 and conf differs)
         assert_eq!(warnings.len(), 0);
@@ -2085,7 +2110,7 @@ mod duplicate_tests {
         );
 
         let mut warnings = Vec::new();
-        find_string_pattern_duplicates(&[trait1, trait2], &mut warnings);
+        find_string_pattern_duplicates(&ExtractedPatterns::of(&[trait1, trait2]), &mut warnings);
 
         // Should NOT warn - carveout applies
         assert_eq!(warnings.len(), 0);
@@ -2144,7 +2169,7 @@ mod duplicate_tests {
         );
 
         let mut warnings = Vec::new();
-        find_string_pattern_duplicates(&[trait1, trait2], &mut warnings);
+        find_string_pattern_duplicates(&ExtractedPatterns::of(&[trait1, trait2]), &mut warnings);
 
         // Should WARN - carveout does NOT apply (pattern diff = 0, not >2)
         assert_eq!(warnings.len(), 1);
@@ -2203,7 +2228,7 @@ mod duplicate_tests {
         );
 
         let mut warnings = Vec::new();
-        find_string_pattern_duplicates(&[trait1, trait2], &mut warnings);
+        find_string_pattern_duplicates(&ExtractedPatterns::of(&[trait1, trait2]), &mut warnings);
 
         // Should WARN - carveout does NOT apply (conf diff <0.2 AND crit same)
         assert_eq!(warnings.len(), 1);
@@ -2286,7 +2311,10 @@ mod duplicate_tests {
         );
 
         let mut warnings = Vec::new();
-        find_string_pattern_duplicates(&[trait1, trait2, trait3], &mut warnings);
+        find_string_pattern_duplicates(
+            &ExtractedPatterns::of(&[trait1, trait2, trait3]),
+            &mut warnings,
+        );
 
         // Should NOT warn - all pairs meet carveout criteria
         assert_eq!(warnings.len(), 0);
@@ -2368,7 +2396,10 @@ mod duplicate_tests {
         );
 
         let mut warnings = Vec::new();
-        find_string_pattern_duplicates(&[trait1, trait2, trait3], &mut warnings);
+        find_string_pattern_duplicates(
+            &ExtractedPatterns::of(&[trait1, trait2, trait3]),
+            &mut warnings,
+        );
 
         // Should WARN - trait1 and trait2 don't meet carveout criteria (conf diff <0.2 and same crit)
         assert_eq!(warnings.len(), 1);
@@ -3056,7 +3087,7 @@ mod duplicate_tests {
         ];
 
         let mut warnings = Vec::new();
-        check_overlapping_regex_patterns(&traits, &mut warnings);
+        check_overlapping_regex_patterns(&ExtractedPatterns::of(&traits), &mut warnings);
 
         // Should be allowed due to length difference and no alternation
         assert_eq!(warnings.len(), 0);
@@ -3085,7 +3116,7 @@ mod duplicate_tests {
         ];
 
         let mut warnings = Vec::new();
-        check_overlapping_regex_patterns(&traits, &mut warnings);
+        check_overlapping_regex_patterns(&ExtractedPatterns::of(&traits), &mut warnings);
 
         // Should warn about shared alternative "firefox.exe"
         assert_eq!(warnings.len(), 1);
@@ -3115,7 +3146,7 @@ mod duplicate_tests {
         ];
 
         let mut warnings = Vec::new();
-        check_overlapping_regex_patterns(&traits, &mut warnings);
+        check_overlapping_regex_patterns(&ExtractedPatterns::of(&traits), &mut warnings);
 
         // Should be allowed: >33% diff and one has no alternation
         assert_eq!(warnings.len(), 0);
@@ -3147,7 +3178,7 @@ mod duplicate_tests {
         ];
 
         let mut warnings = Vec::new();
-        check_overlapping_regex_patterns(&traits, &mut warnings);
+        check_overlapping_regex_patterns(&ExtractedPatterns::of(&traits), &mut warnings);
 
         assert_eq!(warnings.len(), 1, "expected one duplicate: {warnings:?}");
         assert!(warnings[0].contains("Structurally identical regex patterns"));
@@ -3165,7 +3196,7 @@ mod duplicate_tests {
         ];
 
         let mut warnings = Vec::new();
-        check_overlapping_regex_patterns(&traits, &mut warnings);
+        check_overlapping_regex_patterns(&ExtractedPatterns::of(&traits), &mut warnings);
 
         assert_eq!(warnings.len(), 1, "expected one duplicate: {warnings:?}");
         assert!(warnings[0].contains("Structurally identical regex patterns"));
@@ -3184,7 +3215,7 @@ mod duplicate_tests {
         ];
 
         let mut warnings = Vec::new();
-        check_overlapping_regex_patterns(&traits, &mut warnings);
+        check_overlapping_regex_patterns(&ExtractedPatterns::of(&traits), &mut warnings);
 
         assert!(
             !warnings
@@ -8926,6 +8957,31 @@ mod exception_validation_tests {
         // exception are fine.
         assert_eq!(v.len(), 1, "{v:?}");
         assert_eq!(v[0].1, "objectives/dir::base");
+    }
+
+    #[test]
+    fn v4_directory_member_covers_its_subtree_and_nothing_beside_it() {
+        // Ids sort `objectives/dir-x` < `objectives/dir/sub` < `objectives/dir::…`
+        // < `objectives/dirx`, so the ids beneath the directory are two ranges
+        // with its neighbours on either side.
+        let traits = vec![
+            atom("objectives/dir-x::base", Criticality::Baseline),
+            atom("objectives/dir/sub::base", Criticality::Baseline),
+            atom("objectives/dir::base", Criticality::Baseline),
+            atom("objectives/dir::n", Criticality::Notable),
+            atom("objectives/dirx::base", Criticality::Baseline),
+        ];
+        let composites = vec![with_all(
+            comp("well-known/tool/foo::exc", Criticality::Exception),
+            &["objectives/dir"],
+        )];
+        let src = sources(&["well-known/tool/foo::exc"]);
+        let v = find_exception_non_notable_members(&traits, &composites, &src);
+        let members: Vec<&str> = v.iter().map(|(_, member, _, _)| member.as_str()).collect();
+        assert_eq!(
+            members,
+            ["objectives/dir/sub::base", "objectives/dir::base"]
+        );
     }
 
     // ---- V5: named traits only (no inline conditions) ----

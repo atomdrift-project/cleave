@@ -8,11 +8,12 @@ use crate::capabilities::error_formatting::enhance_yaml_error;
 use crate::capabilities::models::TraitMappings;
 use crate::capabilities::parsing::{apply_composite_defaults, apply_trait_defaults};
 use crate::capabilities::validation::{
-    BROAD_PLATFORM_ALLOWLIST, MAX_NOTABLE_DOWNGRADE_DIRECT, MAX_NOTABLE_DOWNGRADE_EXPANDED,
-    MAX_SUBDIRECTORIES_PER_DIRECTORY, MAX_TRAITS_PER_DIRECTORY, MISSING_CONDITIONS,
-    ObjectivesWellknownViolation, autoprefix_trait_refs, check_basename_pattern_duplicates,
-    check_exact_contained_by_substr, check_overlapping_regex_patterns,
-    check_regex_alternative_subsets, check_regex_or_overlapping_exact, check_regex_should_be_exact,
+    BROAD_PLATFORM_ALLOWLIST, ExtractedPatterns, MAX_NOTABLE_DOWNGRADE_DIRECT,
+    MAX_NOTABLE_DOWNGRADE_EXPANDED, MAX_SUBDIRECTORIES_PER_DIRECTORY, MAX_TRAITS_PER_DIRECTORY,
+    MISSING_CONDITIONS, ObjectivesWellknownViolation, autoprefix_trait_refs,
+    check_basename_pattern_duplicates, check_exact_contained_by_substr,
+    check_overlapping_regex_patterns, check_regex_alternative_subsets,
+    check_regex_or_overlapping_exact, check_regex_should_be_exact,
     check_same_string_different_types, collect_trait_refs_from_rule,
     collect_trait_refs_from_trait_def, find_alternation_merge_candidates,
     find_ast_function_call_should_use_symbol, find_atomic_logic_duplicates,
@@ -1162,25 +1163,26 @@ impl super::CapabilityMapper {
             valid_trait_ids.extend(rules.iter().map(|r| r.id.clone()));
             let all_trait_ids: &[String] = &valid_trait_ids.iter().cloned().collect::<Vec<_>>();
             let enabled = |id: &str| !crate::validation_controls::is_validator_disabled(id);
+            let patterns = &ExtractedPatterns::of(traits);
             rayon::scope(|scope| {
                 scope.spawn(|_| {
                     literal_coverage = collect_early("literal-covered-by-regexes", |w| {
-                        find_literals_covered_by_regexes(traits, w);
+                        find_literals_covered_by_regexes(patterns, w);
                     });
                 });
                 scope.spawn(|_| {
                     regex_or_literal = collect_early("regex-or-literal-overlap", |w| {
-                        check_regex_or_overlapping_exact(traits, w);
+                        check_regex_or_overlapping_exact(patterns, w);
                     });
                 });
                 scope.spawn(|_| {
                     overlapping_regex = collect_early("overlapping-regex-patterns", |w| {
-                        check_overlapping_regex_patterns(traits, w);
+                        check_overlapping_regex_patterns(patterns, w);
                     });
                 });
                 scope.spawn(|_| {
                     cross_type = collect_early("cross-type-canonicalization", |w| {
-                        check_same_string_different_types(traits, w);
+                        check_same_string_different_types(patterns, w);
                     });
                 });
                 scope.spawn(|_| {
@@ -1259,7 +1261,7 @@ impl super::CapabilityMapper {
                 });
                 scope.spawn(|_| {
                     duplicate_patterns = collect_early("duplicate-patterns", |w| {
-                        find_string_pattern_duplicates(traits, w);
+                        find_string_pattern_duplicates(patterns, w);
                     });
                 });
                 scope.spawn(|_| {
@@ -1269,7 +1271,7 @@ impl super::CapabilityMapper {
                 });
                 scope.spawn(|_| {
                     should_be_exact = collect_early("exact-regex-canonicalization", |w| {
-                        check_regex_should_be_exact(traits, w);
+                        check_regex_should_be_exact(patterns, w);
                     });
                 });
                 scope.spawn(|_| {
@@ -1302,7 +1304,7 @@ impl super::CapabilityMapper {
                 });
                 scope.spawn(|_| {
                     exact_in_substr = collect_early("redundant-patterns", |w| {
-                        check_exact_contained_by_substr(traits, w);
+                        check_exact_contained_by_substr(patterns, w);
                     });
                 });
                 scope.spawn(|_| {
@@ -1707,38 +1709,29 @@ impl super::CapabilityMapper {
         // Cross-directory references must match an existing directory prefix
         // Include both trait definition prefixes AND composite rule prefixes (rules can reference rules)
         tracing::trace!("Step 2/15: Building known prefixes");
-        let mut known_prefixes: std::collections::HashSet<String> = trait_definitions
+        // Composite rule prefixes count too (composite rules can reference
+        // other composite rules). The prefixes are borrowed from the ids.
+        let known_prefixes: std::collections::HashSet<&str> = trait_definitions
             .iter()
-            .filter_map(|t| {
+            .map(|t| t.id.as_str())
+            .chain(composite_rules.iter().map(|r| r.id.as_str()))
+            .filter_map(|id| {
                 // Extract the directory prefix from trait IDs
                 // New format: everything before '::' (e.g., "micro-behaviors/communications/http::curl" -> "micro-behaviors/communications/http")
                 // Legacy format: everything before last '/' (e.g., "micro-behaviors/communications/http/curl" -> "micro-behaviors/communications/http")
-                if let Some(idx) = t.id.find("::") {
-                    Some(t.id[..idx].to_string())
-                } else {
-                    t.id.rfind('/').map(|idx| t.id[..idx].to_string())
+                match id.find("::") {
+                    Some(idx) => Some(&id[..idx]),
+                    None => id.rfind('/').map(|idx| &id[..idx]),
                 }
             })
             .collect();
-
-        // Also add composite rule prefixes (composite rules can reference other composite rules)
-        for rule in &composite_rules {
-            if let Some(idx) = rule.id.find("::") {
-                known_prefixes.insert(rule.id[..idx].to_string());
-            } else if let Some(idx) = rule.id.rfind('/') {
-                known_prefixes.insert(rule.id[..idx].to_string());
-            }
-        }
 
         // Pre-compute all parent paths for O(1) prefix matching
         // This avoids O(n) iteration for every trait reference check
         let mut prefix_hierarchy = known_prefixes.clone();
         for prefix in &known_prefixes {
             // Add all parent paths: "micro-behaviors/fs/write" -> ["cap", "micro-behaviors/fs", "micro-behaviors/fs/write"]
-            let parts: Vec<&str> = prefix.split('/').collect();
-            for i in 1..parts.len() {
-                prefix_hierarchy.insert(parts[..i].join("/"));
-            }
+            prefix_hierarchy.extend(prefix.match_indices('/').map(|(i, _)| &prefix[..i]));
         }
         tracing::trace!(
             "Built prefix hierarchy with {} entries from {} base prefixes",
@@ -1747,7 +1740,7 @@ impl super::CapabilityMapper {
         );
 
         // Steps 3-7: Taxonomy and naming validation (skip when validation disabled)
-        let dir_list: Vec<String> = known_prefixes.iter().cloned().collect();
+        let dir_list: Vec<String> = known_prefixes.iter().map(|&p| p.to_owned()).collect();
         if enable_full_validation {
             // Check for unknown subdirectories in taxonomy tiers
             // According to TAXONOMY.md, only specific subdirectories are allowed
@@ -2437,49 +2430,41 @@ impl super::CapabilityMapper {
         } // End of enable_full_validation block for steps 3-7
 
         tracing::trace!("Step 8/15: Validating trait references in composite rules");
-        let mut invalid_refs = Vec::new();
-        for rule in &composite_rules {
-            let trait_refs = collect_trait_refs_from_rule(rule);
-            for (ref_id, rule_id) in trait_refs {
+        // Each rule is checked on its own, so the rules are checked in parallel.
+        let invalid_refs = composite_rules
+            .par_iter()
+            .flat_map_iter(collect_trait_refs_from_rule)
+            .filter(|(ref_id, _)| {
                 // Only validate cross-directory references (those with slashes or ::)
+                // Skip validation for metadata/ paths - these are dynamically generated
                 let is_cross_dir = ref_id.contains("::") || ref_id.contains('/');
-                if is_cross_dir {
-                    // Skip validation for metadata/ paths - these are dynamically generated
-                    if is_dynamic_metadata_ref(&ref_id) {
-                        continue;
-                    }
-
-                    // Extract the directory part for validation
-                    let dir_part = if let Some(idx) = ref_id.find("::") {
-                        &ref_id[..idx]
-                    } else if let Some(idx) = ref_id.rfind('/') {
-                        &ref_id[..idx]
-                    } else {
-                        &ref_id[..]
-                    };
-
-                    // Check if this matches any known prefix (O(1) lookup instead of O(n) iteration)
-                    // Check exact match or any parent path exists in hierarchy
-                    let matches_prefix = prefix_hierarchy.contains(dir_part)
-                        || dir_part.split('/').enumerate().skip(1).any(|(i, _)| {
-                            let parent = dir_part.split('/').take(i).collect::<Vec<_>>().join("/");
-                            prefix_hierarchy.contains(&parent)
-                        });
-                    if !matches_prefix {
-                        let source_file = rule_source_files
-                            .get(&rule_id)
-                            .map(std::string::String::as_str)
-                            .unwrap_or("unknown");
-                        invalid_refs.push((rule_id.clone(), ref_id, source_file.to_string()));
-                    }
+                if !is_cross_dir || is_dynamic_metadata_ref(ref_id) {
+                    return false;
                 }
-            }
-        }
 
-        if !invalid_refs.is_empty() {
+                // Extract the directory part for validation
+                let dir_part = if let Some(idx) = ref_id.find("::") {
+                    &ref_id[..idx]
+                } else if let Some(idx) = ref_id.rfind('/') {
+                    &ref_id[..idx]
+                } else {
+                    &ref_id[..]
+                };
+
+                // Check if this matches any known prefix (O(1) lookup instead of O(n) iteration)
+                // Check exact match or any parent path exists in hierarchy
+                let matches_prefix = prefix_hierarchy.contains(dir_part)
+                    || dir_part
+                        .match_indices('/')
+                        .any(|(i, _)| prefix_hierarchy.contains(&dir_part[..i]));
+                !matches_prefix
+            })
+            .count();
+
+        if invalid_refs > 0 {
             eprintln!(
                 "\n❌ ERROR: {} invalid trait references found in composite rules",
-                invalid_refs.len()
+                invalid_refs
             );
         }
 
@@ -2498,19 +2483,19 @@ impl super::CapabilityMapper {
             // need to gate on a specific symbol/function call should
             // use inline `type: symbol, exact: <name>` conditions.
             tracing::trace!("Step 11/15: Checking for retired internal/symbols references");
-            let mut internal_refs = Vec::new();
-            for rule in &composite_rules {
-                let trait_refs = collect_trait_refs_from_rule(rule);
-                for (ref_id, rule_id) in trait_refs {
-                    if ref_id.starts_with("metadata/internal/") {
-                        let source_file = rule_source_files
-                            .get(&rule_id)
-                            .map(std::string::String::as_str)
-                            .unwrap_or("unknown");
-                        internal_refs.push((rule_id.clone(), ref_id, source_file.to_string()));
-                    }
-                }
-            }
+            let internal_refs: Vec<_> = composite_rules
+                .par_iter()
+                .flat_map_iter(collect_trait_refs_from_rule)
+                .filter(|(ref_id, _)| ref_id.starts_with("metadata/internal/"))
+                .map(|(ref_id, rule_id)| {
+                    let source_file = rule_source_files
+                        .get(&rule_id)
+                        .map(std::string::String::as_str)
+                        .unwrap_or("unknown")
+                        .to_string();
+                    (rule_id, ref_id, source_file)
+                })
+                .collect();
 
             if !internal_refs.is_empty() {
                 eprintln!(
@@ -5269,7 +5254,7 @@ impl super::CapabilityMapper {
                 // matches any trait in that directory; parent refs like "micro-behaviors/fs/write/"
                 // match traits in subdirs.
                 let ref_without_slash = ref_id.trim_end_matches('/');
-                let is_directory_ref = prefix_hierarchy.contains(&ref_id)
+                let is_directory_ref = prefix_hierarchy.contains(ref_id.as_str())
                     || prefix_hierarchy.contains(ref_without_slash);
 
                 // Dynamically generated metadata/* references (imports, signatures,
@@ -5486,36 +5471,34 @@ impl super::CapabilityMapper {
             }
 
             // Validate single-rule composites with identical file types
-            // Build map of trait_id -> file_types for quick lookup
-            let mut trait_file_types: FxHashMap<String, Vec<RuleFileType>> = FxHashMap::default();
+            // Build map of trait_id -> file_types for quick lookup, borrowed
+            // from the definitions rather than copied out of them
+            let mut trait_file_types: FxHashMap<&str, &Vec<RuleFileType>> = FxHashMap::default();
             for trait_def in &trait_definitions {
-                trait_file_types.insert(trait_def.id.clone(), trait_def.r#for.clone());
+                trait_file_types.insert(&trait_def.id, &trait_def.r#for);
             }
             for rule in &composite_rules {
-                trait_file_types.insert(rule.id.clone(), rule.r#for.clone());
+                trait_file_types.insert(&rule.id, &rule.r#for);
             }
 
             // Build metadata lookup for traits and composites
             let mut trait_metadata: FxHashMap<
-                String,
-                (Criticality, f32, Option<String>, Option<String>),
+                &str,
+                (Criticality, f32, &Option<String>, &Option<String>),
             > = FxHashMap::default();
             for trait_def in &trait_definitions {
                 trait_metadata.insert(
-                    trait_def.id.clone(),
+                    &trait_def.id,
                     (
                         trait_def.crit,
                         trait_def.conf,
-                        trait_def.attack.clone(),
-                        trait_def.mbc.clone(),
+                        &trait_def.attack,
+                        &trait_def.mbc,
                     ),
                 );
             }
             for rule in &composite_rules {
-                trait_metadata.insert(
-                    rule.id.clone(),
-                    (rule.crit, rule.conf, rule.attack.clone(), rule.mbc.clone()),
-                );
+                trait_metadata.insert(&rule.id, (rule.crit, rule.conf, &rule.attack, &rule.mbc));
             }
 
             let mut redundant_composites = Vec::new();
@@ -5538,9 +5521,9 @@ impl super::CapabilityMapper {
                         let (ref_id, _) = &trait_refs[0];
 
                         // Look up the referenced trait's file types
-                        if let Some(ref_file_types) = trait_file_types.get(ref_id) {
+                        if let Some(ref_file_types) = trait_file_types.get(ref_id.as_str()) {
                             // Compare file types - warn if identical
-                            if rule.r#for == *ref_file_types {
+                            if rule.r#for == **ref_file_types {
                                 let source_file = rule_source_files
                                     .get(&rule.id)
                                     .map(std::string::String::as_str)
@@ -5555,12 +5538,12 @@ impl super::CapabilityMapper {
                                 // Check if metadata is being changed
                                 let metadata_changed =
                                     if let Some((ref_crit, ref_conf, ref_attack, ref_mbc)) =
-                                        trait_metadata.get(ref_id)
+                                        trait_metadata.get(ref_id.as_str())
                                     {
                                         rule.crit != *ref_crit
                                             || (rule.conf - ref_conf).abs() > 0.001
-                                            || rule.attack != *ref_attack
-                                            || rule.mbc != *ref_mbc
+                                            || rule.attack != **ref_attack
+                                            || rule.mbc != **ref_mbc
                                     } else {
                                         false
                                     };
@@ -5989,10 +5972,10 @@ fn prepare_trait_file(
         path: path.to_path_buf(),
         yaml_warnings,
         hoist: Vec::new(),
-        traits: Vec::new(),
+        traits: Vec::with_capacity(mappings.traits.len()),
         trait_failure: None,
         trait_parsing_warnings: Vec::new(),
-        rules: Vec::new(),
+        rules: Vec::with_capacity(mappings.composite_rules.len()),
         rule_parsing_warnings: Vec::new(),
     };
     // Calculate the prefix from the directory path relative to traits/

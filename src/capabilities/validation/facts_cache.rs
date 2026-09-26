@@ -251,7 +251,13 @@ pub(crate) fn active() -> Option<Arc<FactsCache>> {
 
 /// An open validation's facts; saved when it drops, whether the validation
 /// finished or stopped at an error -- a fact is true of its inputs either way.
-pub(crate) struct Session(());
+pub(crate) struct Session {
+    /// There is one process-wide slot, so tests that validate in parallel
+    /// take turns: otherwise one test's validation replaces another's open
+    /// facts, and each saves the other's.
+    #[cfg(test)]
+    _slot: std::sync::MutexGuard<'static, ()>,
+}
 
 impl Drop for Session {
     fn drop(&mut self) {
@@ -292,6 +298,8 @@ pub(crate) fn begin() -> Option<Session> {
     if facts_disabled() {
         return None;
     }
+    #[cfg(test)]
+    let slot = test_slot();
     let dir = crate::cache::cache_dir().ok()?;
     let identity = build_identity();
     let path = dir.join(FILE_NAME);
@@ -320,17 +328,24 @@ pub(crate) fn begin() -> Option<Session> {
         }
     }
     *ACTIVE.write().ok()? = Some(Arc::new(cache));
-    Some(Session(()))
+    Some(Session {
+        #[cfg(test)]
+        _slot: slot,
+    })
 }
 
-/// Serializes the tests that install a validation's facts: there is one
-/// process-wide slot.
+/// Wait for the process-wide slot (see [`Session`]).
 #[cfg(test)]
-pub(crate) static TEST_SLOT: Mutex<()> = Mutex::new(());
+fn test_slot() -> std::sync::MutexGuard<'static, ()> {
+    static SLOT: Mutex<()> = Mutex::new(());
+    SLOT.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
 
 /// Open facts stored at `path`, for tests.
 #[cfg(test)]
 pub(crate) fn begin_at(path: &Path) -> Session {
+    let slot = test_slot();
     let identity = build_identity();
     let stored = read_stored(path, &identity).unwrap_or_default();
     let cache = FactsCache::new(path.to_path_buf(), identity, true);
@@ -338,7 +353,7 @@ pub(crate) fn begin_at(path: &Path) -> Session {
     if let Ok(mut active) = ACTIVE.write() {
         *active = Some(Arc::new(cache));
     }
-    Session(())
+    Session { _slot: slot }
 }
 
 /// How many facts the file at `path` holds for this build, for tests.

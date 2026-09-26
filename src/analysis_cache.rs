@@ -1111,6 +1111,24 @@ pub(crate) fn report_cache_entry_count() -> Option<i64> {
     .flatten()
 }
 
+/// Whether the report cache holds any entry under the revision a lookup would
+/// use right now. False for a revision new to this cache (edited traits, or a
+/// new build) and when caching is unavailable: then every lookup will miss.
+pub(crate) fn has_reports_for_current_traits() -> bool {
+    with_conn(|conn| has_reports_conn(conn, ambient_traits_revision())).unwrap_or(false)
+}
+
+/// Whether `conn` holds any report under `traits_ts`. Without an index on the
+/// revision this scans the primary-key index: ~12 ms at the 100k-entry cap.
+fn has_reports_conn(conn: &Connection, traits_ts: i64) -> bool {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM toplevel_report_cache WHERE traits_timestamp = ?1)",
+        [traits_ts],
+        |row| row.get(0),
+    )
+    .unwrap_or(false)
+}
+
 /// Store a toplevel analysis report in the cache.
 ///
 /// Silently does nothing if caching is unavailable or any error occurs.
@@ -1525,6 +1543,16 @@ mod tests {
         assert_eq!(restored.files.len(), 1);
         assert_eq!(restored.files[0].sha256, "member-sha");
         assert_eq!(restored.archive_contents[0].path, "plugin/main.php");
+    }
+
+    #[test]
+    fn has_reports_is_per_revision() {
+        let conn = test_conn();
+        assert!(!has_reports_conn(&conn, 1));
+        let report = test_report("revision-presence");
+        report_cache_store_conn(&conn, &report.target.sha256, "opts", 1, &report);
+        assert!(has_reports_conn(&conn, 1));
+        assert!(!has_reports_conn(&conn, 2));
     }
 
     #[test]

@@ -33,6 +33,7 @@ mod composite;
 mod constraints;
 mod directory_whitelist;
 mod duplicates;
+pub(crate) mod emitted;
 pub(crate) mod facts_cache;
 mod helpers;
 mod patterns;
@@ -132,8 +133,8 @@ pub(crate) use duplicates::{
 // Composite rule validation
 pub(crate) use composite::{
     autoprefix_trait_refs, collect_trait_refs_from_rule, collect_trait_refs_from_trait_def,
-    find_bare_or_crit_escalations, find_many_directory_refs, find_overlapping_conditions,
-    find_pure_directory_alias_composites, find_redundant_any_refs,
+    find_bare_or_crit_escalations, find_leg_suppressing_composites, find_many_directory_refs,
+    find_overlapping_conditions, find_pure_directory_alias_composites, find_redundant_any_refs,
     find_self_referencing_composites, find_self_referencing_traits, find_self_suppressing_traits,
     find_single_item_clauses, validate_composite_trait_only,
 };

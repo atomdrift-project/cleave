@@ -5,7 +5,7 @@
 //! auto-prefixing trait references, and detecting redundant patterns.
 
 use crate::composite_rules::{
-    CompositeTrait, Condition, FileType as RuleFileType, Platform, TraitDefinition,
+    CompositeTrait, Condition, FileType as RuleFileType, Platform, Scope, TraitDefinition,
 };
 use crate::types::Criticality;
 use std::collections::{HashMap, HashSet};
@@ -138,6 +138,141 @@ pub(crate) fn find_self_referencing_composites(
     }
 
     violations
+}
+
+/// Whether every match of trait reference `leg` also satisfies trait reference
+/// `suppressor`: the same id, a directory that contains the trait, or a
+/// directory that contains the directory `leg` names.
+fn ref_covers(suppressor: &str, leg: &str) -> bool {
+    if suppressor == leg || directory_ref_includes_rule(suppressor, leg) {
+        return true;
+    }
+    if suppressor.contains("::") || leg.contains("::") {
+        return false;
+    }
+    let outer = suppressor.strip_suffix('/').unwrap_or(suppressor);
+    let inner = leg.strip_suffix('/').unwrap_or(leg);
+    inner
+        .strip_prefix(outer)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+}
+
+fn trait_ids(conditions: Option<&[Condition]>) -> impl Iterator<Item = &str> {
+    conditions
+        .into_iter()
+        .flatten()
+        .filter_map(|cond| match cond {
+            Condition::Trait { id } => Some(id.as_str()),
+            _ => None,
+        })
+}
+
+/// Evidence of a file-scoped rule lands in the file the rule fires on, which
+/// is where `unless:` and an unscoped `downgrade:` look. A wider scope may take
+/// a leg from another archive member, so its suppressor is not provably hit.
+fn scope_is_file_local(scope: Option<Scope>) -> bool {
+    matches!(scope, None | Some(Scope::File | Scope::Leaf))
+}
+
+/// The first `(suppressor, leg)` pair showing that every match of `rule`
+/// satisfies one of `suppressors`: a covered `all:` leg, or an `any:` clause
+/// whose every entry is a covered trait reference (an inline condition in
+/// `any:` can match without any trait, so it leaves the clause uncovered).
+fn covered_required_leg<'a>(
+    suppressors: &[&'a str],
+    rule: &'a CompositeTrait,
+) -> Option<(&'a str, &'a str)> {
+    let covering = |leg: &str| suppressors.iter().copied().find(|s| ref_covers(s, leg));
+    if let Some(hit) =
+        trait_ids(rule.all.as_deref()).find_map(|leg| covering(leg).map(|s| (s, leg)))
+    {
+        return Some(hit);
+    }
+    let any = rule.any.as_deref().filter(|any| !any.is_empty())?;
+    let mut first = None;
+    for cond in any {
+        let Condition::Trait { id } = cond else {
+            return None;
+        };
+        let suppressor = covering(id)?;
+        first.get_or_insert((suppressor, id.as_str()));
+    }
+    first
+}
+
+/// Find file-scoped composites whose own required legs satisfy their `unless:`
+/// (never fires) or their `downgrade:` (never reaches its declared tier).
+///
+/// [`find_self_referencing_composites`] catches a rule naming itself; this is
+/// the neighbouring shape, where the suppressor names a *leg*. A leg is
+/// required when it is in `all:`, and the `any:` clause is required as a whole,
+/// so a suppressor covering one `all:` leg, or every `any:` leg, is satisfied
+/// by every match. The usual cause is a directory reference that happens to
+/// contain a leg: `pkginfo-minimal-shell-package` required
+/// `versioning/scheme::pkginfo-lowest-version` and was `unless:
+/// metadata/package/versioning/`, so it never fired and nothing said so.
+///
+/// Returns `(rule, suppressor_ref, leg_ref, clause_name)` per violation.
+#[must_use]
+pub(crate) fn find_leg_suppressing_composites(
+    rules: &[CompositeTrait],
+) -> Vec<(&CompositeTrait, String, String, &'static str)> {
+    let mut violations = Vec::new();
+    for rule in rules {
+        // `builtin-*` rules are hook carriers: the engine applies their
+        // `unless:` to an analyzer-emitted finding of the same slug, and the
+        // rule itself is meant never to fire.
+        let leaf = rule.id.rsplit("::").next().unwrap_or(&rule.id);
+        if leaf.starts_with("builtin-") || !scope_is_file_local(rule.scope) {
+            continue;
+        }
+        let unless: Vec<&str> = trait_ids(rule.unless.as_deref()).collect();
+        if let Some((suppressor, leg)) = covered_required_leg(&unless, rule) {
+            violations.push((rule, suppressor.to_string(), leg.to_string(), "unless"));
+            continue;
+        }
+        if let Some((suppressor, leg)) = downgrade_always_applies(rule) {
+            violations.push((rule, suppressor.to_string(), leg.to_string(), "downgrade"));
+        }
+    }
+    violations
+}
+
+/// A downgrade applies to every match only when it needs nothing a match
+/// might lack: file-local, no `none:`, every `all:` entry and at least `needs`
+/// of its `any:` entries covering a required `all:` leg of the rule.
+fn downgrade_always_applies(rule: &CompositeTrait) -> Option<(&str, &str)> {
+    let downgrade = rule.downgrade.as_ref()?;
+    if !scope_is_file_local(downgrade.scope)
+        || downgrade.none.as_ref().is_some_and(|none| !none.is_empty())
+    {
+        return None;
+    }
+    fn covers_required<'a>(
+        cond: &'a Condition,
+        required: &[&'a str],
+    ) -> Option<(&'a str, &'a str)> {
+        let Condition::Trait { id } = cond else {
+            return None;
+        };
+        let leg = required.iter().copied().find(|leg| ref_covers(id, leg))?;
+        Some((id.as_str(), leg))
+    }
+    let required: Vec<&str> = trait_ids(rule.all.as_deref()).collect();
+    let all = downgrade.all.as_deref().unwrap_or_default();
+    let any = downgrade.any.as_deref().unwrap_or_default();
+    let all_hits = all
+        .iter()
+        .map(|cond| covers_required(cond, &required))
+        .collect::<Option<Vec<_>>>()?;
+    let any_hits: Vec<_> = any
+        .iter()
+        .filter_map(|cond| covers_required(cond, &required))
+        .collect();
+    if !any.is_empty() && any_hits.len() < downgrade.needs.unwrap_or(1) {
+        return None;
+    }
+    all_hits.into_iter().chain(any_hits).next()
 }
 
 /// Validate that a composite rule only contains trait references, not inline conditions.

@@ -289,6 +289,16 @@ fn dn_extract(dn: &str, attr: &str) -> Option<String> {
     None
 }
 
+/// The leaf of a `metadata/signed/unknown::` or `metadata/signed/leaf::` id:
+/// the signer name lowercased, spaces as `-`, commas and parentheses dropped.
+/// Reference validation checks YAML refs against this same function, so a
+/// ref spelled any other way is reported instead of silently matching nothing.
+pub(crate) fn normalize_signer_name(name: &str) -> String {
+    name.to_lowercase()
+        .replace(' ', "-")
+        .replace([',', '(', ')'], "")
+}
+
 fn dn_extract_cn(dn: &str) -> Option<String> {
     dn_extract(dn, "CN")
 }
@@ -1030,12 +1040,7 @@ impl PEAnalyzer {
                 let Some(cn) = dn_extract_cn(subject) else {
                     continue;
                 };
-                let normalized = cn
-                    .to_lowercase()
-                    .replace(' ', "-")
-                    .replace(',', "")
-                    .replace("(", "")
-                    .replace(")", "");
+                let normalized = normalize_signer_name(&cn);
                 report.findings.push(Finding {
                     precomputed_spans: None,
                     src: None,
@@ -1061,12 +1066,7 @@ impl PEAnalyzer {
                     // Prefer the O attribute when present (organisation
                     // signs more meaningfully than a person's CN).
                     let primary = dn_extract_o(subject).unwrap_or_else(|| cn.clone());
-                    let primary_norm = primary
-                        .to_lowercase()
-                        .replace(' ', "-")
-                        .replace(',', "")
-                        .replace("(", "")
-                        .replace(")", "");
+                    let primary_norm = normalize_signer_name(&primary);
                     report.findings.push(Finding {
                         precomputed_spans: None,
                         src: None,

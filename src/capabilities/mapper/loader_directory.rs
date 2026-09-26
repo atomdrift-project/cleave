@@ -34,8 +34,8 @@ use crate::capabilities::validation::{
     find_impossible_length_bounds, find_impossible_needs, find_impossible_size_constraints,
     find_incompatible_regex_features, find_inline_content_duplicates, find_invalid_hex_patterns,
     find_invalid_not_usage, find_invalid_trait_ids, find_kv_exists_with_matcher,
-    find_legs_outside_for, find_length_bounds_without_regex, find_line_number,
-    find_literal_regex_patterns, find_literals_covered_by_regexes,
+    find_leg_suppressing_composites, find_legs_outside_for, find_length_bounds_without_regex,
+    find_line_number, find_literal_regex_patterns, find_literals_covered_by_regexes,
     find_malware_subcategory_violations, find_many_directory_refs,
     find_memory_hungry_regex_patterns, find_meta_missing_section_filter,
     find_metadata_content_dirs, find_metadata_cross_tier_refs, find_missing_search_patterns,
@@ -2093,6 +2093,44 @@ impl super::CapabilityMapper {
                     format!(
                         "{} self-referencing composites (will never fire)",
                         composite_self_refs.len()
+                    ),
+                );
+            }
+
+            tracing::trace!("Step 7d/15: Checking for composites suppressed by their own legs");
+            let disable_leg_suppression =
+                crate::validation_controls::is_validator_disabled("leg-suppression");
+            let leg_suppress = find_leg_suppressing_composites(&composite_rules);
+            if !disable_leg_suppression && !leg_suppress.is_empty() {
+                eprintln!(
+                    "\n❌ ERROR: {} composites are suppressed or downgraded by their own legs",
+                    leg_suppress.len()
+                );
+                eprintln!(
+                    "   An `unless:` entry that covers a required leg -- the same id, or a\n   \
+                     directory containing it -- is satisfied by every match, so the rule\n   \
+                     never fires; in `downgrade:` it never reaches its declared tier. Name\n   \
+                     the specific context to defer to instead of the leg's directory.\n"
+                );
+                for (rule, suppressor, leg, clause) in &leg_suppress {
+                    let source_file = rule_source_files
+                        .get(&rule.id)
+                        .map(std::string::String::as_str)
+                        .unwrap_or("unknown");
+                    let location = find_line_number(source_file, &rule.id)
+                        .map(|line| format!("{source_file}:{line}"))
+                        .unwrap_or_else(|| source_file.to_string());
+                    eprintln!(
+                        "   {location}: Rule '{}' `{clause}:` '{suppressor}' covers its required leg '{leg}'",
+                        rule.id
+                    );
+                }
+                eprintln!();
+                warnings.push_id(
+                    "leg-suppression",
+                    format!(
+                        "{} composites are suppressed or downgraded by their own legs",
+                        leg_suppress.len()
                     ),
                 );
             }
@@ -5126,7 +5164,13 @@ impl super::CapabilityMapper {
                     .map(std::string::String::as_str)
                     .unwrap_or("unknown");
                 let line_hint = find_line_number(source_file, &ref_id);
-                let suggestion = build_filename_reference_suggestion(&ref_id, &file_stem_hints);
+                // An id in an engine namespace that its emitter can never
+                // produce: say why, since there is no YAML file to point at.
+                let suggestion =
+                    match crate::capabilities::validation::emitted::check_emitted_ref(&ref_id) {
+                        Some(Err(why)) => Some(why),
+                        _ => build_filename_reference_suggestion(&ref_id, &file_stem_hints),
+                    };
                 Some(BrokenTraitReference {
                     rule_id: owner_id.to_string(),
                     ref_id,

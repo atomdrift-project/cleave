@@ -469,20 +469,10 @@ fn push_stng_string(report: &mut AnalysisReport, es: &stng::ExtractedString) {
 
     // Preserve stng's decoded-string encoding so `type: encoded,
     // encoding: xor` rules can match XOR/base64/hex/etc. content.
-    let encoding_chain = match es.method {
-        stng::StringMethod::XorDecode | stng::StringMethod::XorStackPair => {
-            vec!["xor".to_string()]
-        }
-        stng::StringMethod::Base64Decode => vec!["base64".to_string()],
-        stng::StringMethod::Base64ObfuscatedDecode => vec!["base64-obf".to_string()],
-        stng::StringMethod::HexDecode => vec!["hex".to_string()],
-        stng::StringMethod::UrlDecode => vec!["url".to_string()],
-        stng::StringMethod::UnicodeEscapeDecode => vec!["unicode-escape".to_string()],
-        stng::StringMethod::Base32Decode => vec!["base32".to_string()],
-        stng::StringMethod::Base85Decode => vec!["base85".to_string()],
-        stng::StringMethod::ScriptDecode => vec!["script".to_string()],
-        _ => Vec::new(),
-    };
+    let encoding_chain: Vec<String> = stng_method_encoding(es.method)
+        .map(str::to_string)
+        .into_iter()
+        .collect();
 
     // stng reports the decoder that ran, which is one link. When its output is
     // *itself* encoded -- `base64 --decode | base64 --decode`, hex over base64,
@@ -514,6 +504,26 @@ fn push_stng_string(report: &mut AnalysisReport, es: &stng::ExtractedString) {
 /// payload grows a link. Non-UTF-8 output (a decompressed binary stage) keeps
 /// the original text -- the chain still records what was found, but the string
 /// corpus stays text.
+/// The encoding-chain step for a string stng recovered by decoding, or `None`
+/// when the method only located the string. Each name is also the `<encoding>`
+/// of a `metadata/lang/encoded/<encoding>` id, so it must be listed in
+/// `embedded_code_detector::ENCODED_LAYER_NAMES`.
+fn stng_method_encoding(method: stng::StringMethod) -> Option<&'static str> {
+    use stng::StringMethod as M;
+    Some(match method {
+        M::XorDecode | M::XorStackPair => "xor",
+        M::Base64Decode => "base64",
+        M::Base64ObfuscatedDecode => "base64-obf",
+        M::HexDecode => "hex",
+        M::UrlDecode => "url",
+        M::UnicodeEscapeDecode => "unicode-escape",
+        M::Base32Decode => "base32",
+        M::Base85Decode => "base85",
+        M::ScriptDecode => "script",
+        _ => return None,
+    })
+}
+
 pub(crate) fn peel_nested_encoding(value: &str, chain: Vec<String>) -> (String, Vec<String>) {
     if chain.is_empty() {
         return (value.to_string(), chain);
@@ -558,6 +568,32 @@ impl Analyzer for GenericAnalyzer {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    /// Every decoder stng reports maps to a name the reference validator
+    /// knows; a new mapping without a matching ENCODED_LAYER_NAMES entry would
+    /// make its `metadata/lang/encoded/<name>` id unreferenceable.
+    #[test]
+    fn stng_decoders_map_to_known_encoded_layer_names() {
+        use crate::analyzers::embedded_code_detector::ENCODED_LAYER_NAMES;
+        use stng::StringMethod as M;
+        for method in [
+            M::XorDecode,
+            M::XorStackPair,
+            M::Base64Decode,
+            M::Base64ObfuscatedDecode,
+            M::HexDecode,
+            M::UrlDecode,
+            M::UnicodeEscapeDecode,
+            M::Base32Decode,
+            M::Base85Decode,
+            M::ScriptDecode,
+        ] {
+            let name = stng_method_encoding(method).unwrap();
+            assert!(ENCODED_LAYER_NAMES.contains(&name), "{method:?} -> {name}");
+        }
+        // Methods that only locate a string add no encoding step.
+        assert_eq!(stng_method_encoding(M::WideString), None);
+    }
 
     #[test]
     fn test_generic_batch_analysis() {

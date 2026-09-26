@@ -5901,6 +5901,113 @@ mod constraint_tests {
         );
     }
 
+    /// The branches the first leg-suppression test does not reach: which
+    /// scopes count as file-local, which downgrade shapes can miss a match,
+    /// and which `any:` clauses can still fire without a covered trait.
+    #[test]
+    fn test_leg_suppression_scope_and_clause_boundaries() {
+        use crate::capabilities::validation::composite::find_leg_suppressing_composites;
+        use crate::composite_rules::traits::{DowngradeConditions, Scope};
+
+        fn refs(ids: &[&str]) -> Option<Vec<Condition>> {
+            (!ids.is_empty()).then(|| {
+                ids.iter()
+                    .map(|id| Condition::Trait {
+                        id: (*id).to_string(),
+                    })
+                    .collect()
+            })
+        }
+        fn rule(id: &str, all: &[&str], unless: &[&str], scope: Option<Scope>) -> CompositeTrait {
+            let mut r = create_composite_any(id, &[]);
+            r.all = refs(all);
+            r.any = None;
+            r.unless = refs(unless);
+            r.scope = scope;
+            r
+        }
+        fn dg(
+            any: &[&str],
+            all: &[&str],
+            none: &[&str],
+            needs: Option<usize>,
+            scope: Option<Scope>,
+        ) -> DowngradeConditions {
+            DowngradeConditions {
+                any: refs(any),
+                all: refs(all),
+                none: refs(none),
+                needs,
+                scope,
+            }
+        }
+
+        let leaf_scope = rule("r::leaf-scope", &["a/b::leg"], &["a/b"], Some(Scope::Leaf));
+        let package_scope = rule(
+            "r::package-scope",
+            &["a/b::leg"],
+            &["a/b/"],
+            Some(Scope::Package),
+        );
+        let outer_scope = rule(
+            "r::outer-scope",
+            &["a/b::leg"],
+            &["a/b/"],
+            Some(Scope::Outer),
+        );
+        // Leg is a directory; suppressor names the same directory, with and
+        // without the slash.
+        let same_dir = rule("r::same-dir", &["a/b/"], &["a/b"], None);
+
+        // `any:` with an inline condition can match without any trait, so
+        // covering every trait entry does not make the rule dead.
+        let mut inline_any = rule("r::inline-any", &[], &["c/d/"], None);
+        inline_any.any = Some(vec![
+            Condition::Trait {
+                id: "c/d::one".to_string(),
+            },
+            Condition::Syscall {
+                name: Some(vec!["socket".to_string()]),
+                number: None,
+                arch: None,
+                args: Vec::new(),
+            },
+        ]);
+
+        let mut dg_none = rule("r::dg-none", &["s/t::leg"], &[], None);
+        dg_none.downgrade = Some(dg(&["s/t/"], &[], &["x/y::ctx"], None, None));
+        let mut dg_scoped = rule("r::dg-scoped", &["s/t::leg"], &[], None);
+        dg_scoped.downgrade = Some(dg(&["s/t/"], &[], &[], None, Some(Scope::Archive)));
+        let mut dg_needs_short = rule("r::dg-needs-short", &["s/t::leg"], &[], None);
+        dg_needs_short.downgrade = Some(dg(&["s/t/", "x/y::ctx"], &[], &[], Some(2), None));
+        let mut dg_needs_met = rule("r::dg-needs-met", &["s/t::leg", "u/v::leg"], &[], None);
+        dg_needs_met.downgrade = Some(dg(&["s/t/", "u/v::leg"], &[], &[], Some(2), None));
+
+        let rules = [
+            leaf_scope,
+            package_scope,
+            outer_scope,
+            same_dir,
+            inline_any,
+            dg_none,
+            dg_scoped,
+            dg_needs_short,
+            dg_needs_met,
+        ];
+        let flagged: Vec<(&str, &str)> = find_leg_suppressing_composites(&rules)
+            .iter()
+            .map(|(r, _, _, clause)| (r.id.as_str(), *clause))
+            .collect();
+        assert_eq!(
+            flagged,
+            [
+                ("r::leaf-scope", "unless"),
+                ("r::same-dir", "unless"),
+                ("r::dg-needs-met", "downgrade"),
+            ]
+        );
+    }
+
     #[test]
     fn test_composite_directory_self_reference_detected() {
         let rule = create_composite_any("foo/bar::alias", &["foo/bar"]);
@@ -9902,6 +10009,10 @@ mod unbindable_package_scope_tests {
         assert!(
             crate::validation_controls::validator_spec("exhaustive-suppressor").is_some(),
             "exhaustive-suppressor must be in VALIDATOR_SPECS"
+        );
+        assert!(
+            crate::validation_controls::validator_spec("leg-suppression").is_some(),
+            "leg-suppression must be in VALIDATOR_SPECS"
         );
     }
 }

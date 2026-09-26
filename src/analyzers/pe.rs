@@ -1696,6 +1696,35 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
+    /// The signer-id leaf format that YAML refs are validated against; it
+    /// must stay byte-for-byte what the pre-refactor inline code produced.
+    #[test]
+    fn normalize_signer_name_matches_the_emitted_id_format() {
+        for (name, id) in [
+            ("Microsoft Corporation", "microsoft-corporation"),
+            (
+                "Tencent Technology(Shenzhen) Company Limited",
+                "tencent-technologyshenzhen-company-limited",
+            ),
+            (
+                "Open Source Developer, Martin Tofall",
+                "open-source-developer-martin-tofall",
+            ),
+            ("Valve Corp.", "valve-corp."),
+            (
+                "Sectigo RSA Time Stamping Signer #3",
+                "sectigo-rsa-time-stamping-signer-#3",
+            ),
+            ("ООО Яндекс", "ооо-яндекс"),
+            ("", ""),
+        ] {
+            assert_eq!(normalize_signer_name(name), id, "{name}");
+            // Idempotent: a normalized leaf is its own normal form, which is
+            // what reference validation relies on.
+            assert_eq!(normalize_signer_name(id), id);
+        }
+    }
+
     fn test_pe_path() -> PathBuf {
         PathBuf::from("tests/fixtures/test.exe")
     }

@@ -580,7 +580,6 @@ impl CapabilityMapper {
     /// gates stay dynamic in `CompositeTrait::evaluate`. Must mirror the
     /// gates at the top of `CompositeTrait::evaluate` exactly.
     pub(super) fn composite_worklists(&self, file_type: RuleFileType) -> Arc<CompositeTypeLists> {
-        use crate::composite_rules::Scope;
         if let Some(hit) = self.composite_worklists.read().get(&file_type) {
             return Arc::clone(hit);
         }
@@ -589,16 +588,12 @@ impl CapabilityMapper {
             if !crate::composite_rules::platforms_intersect(&rule.platforms, &self.platforms) {
                 continue;
             }
-            let wants_archive_family = rule.r#for.iter().any(RuleFileType::is_archive);
-            let pools_across_archive = matches!(
-                rule.scope,
-                Some(Scope::Outer | Scope::Archive | Scope::Package)
-            );
-            let file_type_match = rule.r#for.contains(&RuleFileType::All)
-                || rule.r#for.contains(&file_type)
-                || ((file_type == RuleFileType::All || file_type.is_archive())
-                    && (wants_archive_family || pools_across_archive));
-            if !file_type_match {
+            // Mirrors `CompositeTrait::evaluate_with_gates`: `for:` names the
+            // node the rule runs on (or the generic container that node is
+            // built on). A cross-archive `scope:` says which evidence may be
+            // pooled once the rule runs; it is not a licence to run on archive
+            // types the rule never declared -- see the note there.
+            if !RuleFileType::rule_applies_to(&rule.r#for, file_type) {
                 continue;
             }
             #[allow(clippy::cast_possible_truncation)]

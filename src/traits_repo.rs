@@ -61,10 +61,17 @@ pub fn override_dir() -> Option<PathBuf> {
 
 /// Returns the explicit traits dir from override-or-env, if either is set.
 fn explicit_traits_dir() -> Option<String> {
-    if let Some(p) = override_dir() {
-        return Some(p.to_string_lossy().into_owned());
-    }
-    std::env::var("CLEAVE_TRAITS_DIR").ok()
+    explicit_traits_dir_from(override_dir(), std::env::var("CLEAVE_TRAITS_DIR").ok())
+}
+
+/// The precedence rule behind [`explicit_traits_dir`], over given inputs: the
+/// API override beats `CLEAVE_TRAITS_DIR`. Separate so it can be tested without
+/// installing a process-wide override, which drops the global mapper and
+/// repoints every concurrently running analysis at the test's directory.
+fn explicit_traits_dir_from(override_dir: Option<PathBuf>, env: Option<String>) -> Option<String> {
+    override_dir
+        .map(|p| p.to_string_lossy().into_owned())
+        .or(env)
 }
 
 /// Resolve the traits directory, installing from the bundle if necessary.
@@ -256,7 +263,11 @@ fn git_head_commit(dir: &Path) -> Option<String> {
 
 /// Resolve the traits directory that is currently in use (without bootstrapping).
 fn resolve_current_traits_dir() -> PathBuf {
-    if let Some(explicit) = explicit_traits_dir() {
+    resolve_current_traits_dir_from(explicit_traits_dir())
+}
+
+fn resolve_current_traits_dir_from(explicit: Option<String>) -> PathBuf {
+    if let Some(explicit) = explicit {
         return PathBuf::from(explicit);
     }
     let local_dir = PathBuf::from("traits");
@@ -352,12 +363,24 @@ mod tests {
 
     #[test]
     fn test_resolve_current_prefers_override() {
-        // Process-wide override; restore on exit so other tests aren't affected.
-        let original = override_dir();
-        set_override_dir(Some(PathBuf::from("/tmp/test-traits")));
-        let result = resolve_current_traits_dir();
-        assert_eq!(result, PathBuf::from("/tmp/test-traits"));
-        set_override_dir(original);
+        // Exercised through the pure precedence helpers, not `set_override_dir`:
+        // that setter is process-wide and drops the global capability mapper,
+        // so while this test held it every analysis running on another test
+        // thread rebuilt its mapper from `/tmp/test-traits` (and failed with
+        // "traits dir override ... does not exist").
+        let explicit = explicit_traits_dir_from(
+            Some(PathBuf::from("/tmp/test-traits")),
+            Some("/tmp/env-traits".to_string()),
+        );
+        assert_eq!(explicit.as_deref(), Some("/tmp/test-traits"));
+        assert_eq!(
+            explicit_traits_dir_from(None, Some("/tmp/env-traits".to_string())).as_deref(),
+            Some("/tmp/env-traits")
+        );
+        assert_eq!(
+            resolve_current_traits_dir_from(explicit),
+            PathBuf::from("/tmp/test-traits")
+        );
     }
 
     #[test]

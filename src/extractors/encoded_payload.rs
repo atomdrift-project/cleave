@@ -269,6 +269,23 @@ pub fn extract_encoded_payloads(stng_strings: &[stng::ExtractedString]) -> Vec<E
     payloads
 }
 
+/// A whole file that is a PE under a repeating XOR key: a dropper's payload
+/// shipped as opaque bytes. filefacts recovered the key while identifying the
+/// file, so this only decodes, and the image joins the other decoded payloads.
+/// The image is binary, so the text nesting in [`decompress_and_nest`] has
+/// nothing to add.
+#[must_use]
+pub(crate) fn xor_encoded_pe(fileid: &filefacts::FileId, data: &[u8]) -> Option<ExtractedPayload> {
+    let image = fileid.xor_pe_key()?.decode(data);
+    Some(ExtractedPayload {
+        preview: generate_preview(&image),
+        data: image,
+        encoding_chain: vec!["xor".to_string()],
+        detected_type: FileType::Pe,
+        original_offset: 0,
+    })
+}
+
 /// Process a decoded string from stng and add to payloads
 fn process_decoded_string(
     decoded_str: &stng::ExtractedString,

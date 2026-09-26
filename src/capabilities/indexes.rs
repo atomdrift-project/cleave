@@ -34,12 +34,11 @@ use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::sync::{Arc, OnceLock, RwLock};
 
+/// The other `for:` buckets a node of `file_type` draws traits from -- its
+/// generic container (a JAR reads the `zip` bucket), never the whole archive
+/// family. Must agree with the gate in `RuleFileType::rule_applies_to`.
 fn archive_family_types(file_type: &RuleFileType) -> &'static [RuleFileType] {
-    if file_type == &RuleFileType::All || file_type.is_archive() {
-        RuleFileType::archive_family_types()
-    } else {
-        &[]
-    }
+    file_type.admitted_rule_types()
 }
 
 fn string_evidence_location(string_info: &StringInfo) -> Option<String> {
@@ -3260,6 +3259,34 @@ mod tests {
         let index = TraitIndex::new();
         assert!(index.universal.bits.is_empty());
         assert!(index.by_file_type.is_empty());
+    }
+
+    #[test]
+    fn trait_index_archive_buckets_follow_the_container_base() {
+        // A JAR draws the `zip` bucket (it is a zip) but not `android_apk`
+        // or `deb`: the index must agree with the evaluate-time gate, which
+        // used to be an any-archive-for-any-archive "family" union.
+        let def = |ft: RuleFileType| TraitDefinition {
+            platforms: vec![Platform::All],
+            r#for: vec![ft],
+            ..Default::default()
+        };
+        let traits = [
+            def(RuleFileType::Zip),
+            def(RuleFileType::AndroidApk),
+            def(RuleFileType::Deb),
+        ];
+        let index = TraitIndex::build_filtered(&traits, &[Platform::All]);
+        let applicable = |ft: RuleFileType| -> Vec<usize> {
+            index.get_applicable(&ft).into_indices_static().collect()
+        };
+        assert_eq!(applicable(RuleFileType::Jar), vec![0]);
+        assert_eq!(applicable(RuleFileType::AndroidApk), vec![0, 1]);
+        assert_eq!(applicable(RuleFileType::Zip), vec![0]);
+        assert_eq!(applicable(RuleFileType::Deb), vec![2]);
+        assert!(applicable(RuleFileType::Npm).is_empty());
+        // A container with no type of its own still sees every archive rule.
+        assert_eq!(applicable(RuleFileType::All), vec![0, 1, 2]);
     }
 
     #[test]

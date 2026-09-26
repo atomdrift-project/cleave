@@ -613,4 +613,69 @@ mod tests {
         assert_eq!(preserved.evidence.len(), original_finding.evidence.len());
         assert_eq!(preserved.source_file, original_finding.source_file);
     }
+
+    /// A report holding `findings` at the top level.
+    fn report_of(findings: Vec<Finding>) -> crate::types::AnalysisReport {
+        let mut report = crate::types::AnalysisReport::new(crate::types::TargetInfo {
+            path: "t".to_string(),
+            file_type: "pe".to_string(),
+            size_bytes: 0,
+            sha256: String::new(),
+            architectures: None,
+        });
+        report.findings = findings;
+        report
+    }
+
+    fn ids(report: &crate::types::AnalysisReport) -> Vec<&str> {
+        let mut ids: Vec<&str> = report.findings.iter().map(|f| f.id.as_str()).collect();
+        ids.sort_unstable();
+        ids
+    }
+
+    /// `outer` wraps `mid`, which wraps `leg`, all at one tier: the
+    /// `child-process-execution` -> `shell-execution-comp` -> `cmd-exe-c-*`
+    /// chain from the hvnc payload.
+    fn chain() -> (CapabilityMapper, Vec<Finding>) {
+        let mapper = create_test_mapper_with_rules(vec![
+            create_any_rule("outer", vec![trait_ref("mid")], None),
+            create_any_rule("mid", vec![trait_ref("leg")], None),
+        ]);
+        let findings = vec![
+            fired("outer", Criticality::Notable, &["mid"]),
+            fired("mid", Criticality::Notable, &["leg"]),
+            fired("leg", Criticality::Notable, &[]),
+        ];
+        (mapper, findings)
+    }
+
+    #[test]
+    fn filter_reaches_a_fixed_point() {
+        // One pass dropped `outer` but kept `mid`, cited only by `outer`.
+        let (mapper, findings) = chain();
+        let mut report = report_of(findings.clone());
+        assert_eq!(mapper.filter_low_value(&mut report), 2);
+        assert_eq!(ids(&report), ["leg"]);
+        // Context capture skips the same set the filter deletes.
+        let doomed = mapper.doomed_low_value_ids(&findings);
+        assert_eq!(doomed.len(), 2, "{doomed:?}");
+        // Filtering again removes nothing.
+        assert_eq!(mapper.filter_low_value(&mut report), 0);
+    }
+
+    /// A decoded payload's findings, already filtered by their own analysis,
+    /// come through the carrier's filter unchanged.
+    #[test]
+    fn merged_payload_findings_survive_the_carrier_filter() {
+        let (mapper, payload) = chain();
+        let mut standalone = report_of(payload);
+        mapper.filter_low_value(&mut standalone);
+
+        let mut carrier = report_of(vec![fired("carrier-own", Criticality::Notable, &[])]);
+        carrier.findings.extend(standalone.findings.iter().cloned());
+        mapper.filter_low_value(&mut carrier);
+        for id in ids(&standalone) {
+            assert!(ids(&carrier).contains(&id), "{id} lost in the merge");
+        }
+    }
 }

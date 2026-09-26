@@ -34,6 +34,13 @@ const FETCH_TIMEOUT: Duration = Duration::from_secs(3);
 /// an `update-rules` action from a passive notice check.
 fn manifest_url(name: &str, marker: bool) -> String {
     let base = std::env::var("CLEAVE_UPDATE_URL").unwrap_or_else(|_| DEFAULT_BASE_URL.to_owned());
+    manifest_url_from(&base, name, marker)
+}
+
+/// [`manifest_url`] over an explicit base, so the join can be tested without
+/// writing `CLEAVE_UPDATE_URL` into the (process-wide, multi-threaded) test
+/// environment.
+fn manifest_url_from(base: &str, name: &str, marker: bool) -> String {
     let sep = if base.ends_with('/') { "" } else { "/" };
     let query = if marker { "?update=1" } else { "" };
     format!("{base}{sep}{name}{query}")
@@ -198,23 +205,24 @@ mod tests {
 
     #[test]
     fn manifest_url_joins_and_marks() {
-        // SAFETY: the test binary is single-threaded at this point.
-        unsafe { std::env::set_var("CLEAVE_UPDATE_URL", "https://example.test/u/") };
+        // Through the explicit-base helper: the old test set
+        // `CLEAVE_UPDATE_URL` in a multi-threaded test binary, where other
+        // threads read the environment (the traits fingerprint hashes this
+        // very variable into cache keys).
+        let base = "https://example.test/u/";
         assert_eq!(
-            manifest_url("cleave.toml", false),
+            manifest_url_from(base, "cleave.toml", false),
             "https://example.test/u/cleave.toml"
         );
         assert_eq!(
-            manifest_url("cleave.toml", true),
+            manifest_url_from(base, "cleave.toml", true),
             "https://example.test/u/cleave.toml?update=1"
         );
 
         // A base without a trailing slash still joins correctly.
-        unsafe { std::env::set_var("CLEAVE_UPDATE_URL", "https://example.test/u") };
         assert_eq!(
-            manifest_url("cleave.toml", false),
+            manifest_url_from("https://example.test/u", "cleave.toml", false),
             "https://example.test/u/cleave.toml"
         );
-        unsafe { std::env::remove_var("CLEAVE_UPDATE_URL") };
     }
 }

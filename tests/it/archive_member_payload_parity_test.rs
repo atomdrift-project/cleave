@@ -150,3 +150,62 @@ fn archive_member_max_criticality_matches_standalone() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+/// Notable-and-above finding ids of a report: top-level plus every member.
+fn notable_ids(r: &AnalysisReport) -> std::collections::BTreeSet<String> {
+    r.findings
+        .iter()
+        .chain(r.files.iter().flat_map(|m| m.findings.iter()))
+        .filter(|f| f.crit >= cleave::Criticality::Notable)
+        .map(|f| f.id.to_string())
+        .collect()
+}
+
+/// A PE under a repeating XOR key (a dropper's `hvnc.enc`) is decoded through
+/// the standard payload pass, standalone and as an archive member alike: a
+/// `metadata/encoded-payload/xor` finding plus every notable-or-above finding
+/// the image earns on its own. The carrier re-filters the merged findings, so
+/// this also pins that the low-value filter is idempotent.
+#[test]
+fn xor_encoded_pe_detected_in_archive_member_same_as_standalone() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let pe = include_bytes!("../fixtures/test.exe");
+    let key = [0x55, 0x64, 0xee, 0x58, 0x6f, 0x83, 0xb8, 0x02];
+    let enc: Vec<u8> = pe
+        .iter()
+        .zip(key.iter().cycle())
+        .map(|(b, k)| b ^ k)
+        .collect();
+
+    let analyze = |name: &str, bytes: &[u8]| -> anyhow::Result<_> {
+        let path = dir.path().join(name);
+        std::fs::write(&path, bytes)?;
+        Ok(notable_ids(&analyze_file(&path, &opts())?))
+    };
+    // No extension: the carrier's payload is analyzed under a temporary name,
+    // so rules keyed on `.exe` would not fire there either.
+    let standalone_pe = analyze("plain", pe)?;
+    assert!(
+        !standalone_pe.is_empty(),
+        "fixture sanity: the PE earns findings"
+    );
+
+    let tgz_path = dir.path().join("app.tar.gz");
+    write_tar_gz(&tgz_path, "app/hvnc.enc", &enc)?;
+    let archive = notable_ids(&analyze_file(&tgz_path, &opts())?);
+    for (label, ids) in [
+        ("standalone", analyze("hvnc.enc", &enc)?),
+        ("member", archive),
+    ] {
+        assert!(
+            ids.contains("metadata/encoded-payload/xor"),
+            "{label}: no xor payload finding: {ids:?}"
+        );
+        let lost: Vec<&String> = standalone_pe.difference(&ids).collect();
+        assert!(
+            lost.is_empty(),
+            "{label}: decoded PE findings lost in the merge: {lost:?}"
+        );
+    }
+    Ok(())
+}

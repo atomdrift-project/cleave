@@ -132,6 +132,7 @@ impl OfficeAnalyzer {
         file_path: &Path,
         data: &[u8],
         file_type: &FileType,
+        depth: u32,
         cancellation: Option<&Arc<std::sync::atomic::AtomicBool>>,
     ) -> AnalysisReport {
         let mut hasher = Sha256::new();
@@ -158,6 +159,7 @@ impl OfficeAnalyzer {
             type_str,
             findings,
             embedded_execs,
+            msg_attachments,
             ole_metrics,
             ooxml_metrics,
             xlm_metrics,
@@ -165,16 +167,17 @@ impl OfficeAnalyzer {
             values_tree,
         ) = match file_type {
             FileType::OleDoc | FileType::Msi => {
-                let (t, f, e, om, cc, kv) = self.analyze_ole2(data, &vba_modules);
-                (t, f, e, Some(om), None, None, cc, kv)
+                let (t, f, e, a, om, cc, kv) = self.analyze_ole2(data, &vba_modules);
+                (t, f, e, a, Some(om), None, None, cc, kv)
             }
             FileType::Ooxml => {
                 let (t, f, om, xm, cc, kv) =
                     self.analyze_ooxml(data, file_path, &office_archive_entries, &vba_modules);
-                (t, f, Vec::new(), None, om, xm, cc, kv)
+                (t, f, Vec::new(), Vec::new(), None, om, xm, cc, kv)
             }
             _ => (
                 "unknown".to_string(),
+                Vec::new(),
                 Vec::new(),
                 Vec::new(),
                 None,
@@ -263,6 +266,18 @@ impl OfficeAnalyzer {
         // PE/ELF pipeline and merges findings upward, mirroring the VBA path.
         let embedded_count = embedded_execs.len() as u32;
         self.analyze_embedded_executables(&mut report, &embedded_execs, doc_name, cancellation);
+
+        // Outlook attachments -- the phishing payload of a .msg (HTML/SVG
+        // smuggling pages, archives, shortcuts, documents) -- go through the
+        // same type detection and analyzer dispatch as archive members, and
+        // attach as `<msg>!!<filename>` with their findings lifted here.
+        // An attached message recurses through this analyzer again.
+        for attachment in &msg_attachments {
+            if cancellation.is_some_and(|c| c.load(std::sync::atomic::Ordering::Acquire)) {
+                break;
+            }
+            self.analyze_msg_attachment(&mut report, attachment, doc_name, depth, cancellation);
+        }
 
         // Surface count on the cross-format binary metric so ML/scoring can use it.
         if embedded_count > 0 {
@@ -663,6 +678,93 @@ impl OfficeAnalyzer {
         }
     }
 
+    /// Analyze one Outlook attachment as a sub-file of the message.
+    ///
+    /// The type comes from the payload bytes plus the attachment filename --
+    /// the detection archive members get -- and the analyzer from the same
+    /// dispatch the sub-file pipeline uses, so an attached ZIP or ISO is
+    /// walked by the archive analyzer and an attached message by this one.
+    /// Payloads nothing can identify are skipped, as unidentified archive
+    /// members are. `depth` is the message's own nesting depth; recursion
+    /// stops at [`MAX_SUBFILE_DEPTH`](super::subfile::MAX_SUBFILE_DEPTH).
+    fn analyze_msg_attachment(
+        &self,
+        report: &mut AnalysisReport,
+        attachment: &ole2::MsgAttachment,
+        doc_name: &str,
+        depth: u32,
+        cancellation: Option<&Arc<std::sync::atomic::AtomicBool>>,
+    ) {
+        let child_depth = depth.saturating_add(1);
+        if child_depth > super::subfile::MAX_SUBFILE_DEPTH {
+            tracing::debug!(
+                attachment = %attachment.filename,
+                depth,
+                "MSG attachment recursion depth ceiling hit; skipping"
+            );
+            return;
+        }
+
+        let member_path = attachment.filename.as_str();
+        let virtual_path_str = format!("{doc_name}{ARCHIVE_DELIMITER}{member_path}");
+        let virtual_path = Path::new(&virtual_path_str);
+        let data = attachment.data.as_slice();
+
+        let fileid = filefacts::FileId::from_path_and_bytes(Path::new(member_path), data);
+        let file_type = crate::analyzers::detect_file_type_from_detected(
+            Path::new(member_path),
+            data,
+            Some(fileid.file_type()).filter(|ft| *ft != FileType::Unknown),
+        );
+        if file_type == FileType::Unknown {
+            tracing::debug!(
+                attachment = %attachment.filename,
+                stream = %attachment.payload_path,
+                "MSG attachment type not identified; skipping"
+            );
+            return;
+        }
+        let Some(analyzer) = super::subfile::pick_analyzer(file_type, &self.capability_mapper)
+        else {
+            return;
+        };
+
+        // Reuse the detection above rather than running it a second time.
+        let ctx =
+            crate::analysis_context::AnalysisContext::open_with_fileid(virtual_path, data, fileid)
+                .ok();
+        let strings: std::sync::Arc<[stng::ExtractedString]> = ctx
+            .as_ref()
+            .map(crate::analysis_context::AnalysisContext::text_rows)
+            .unwrap_or_default();
+        let mut input = AnalysisInput::with_strings(virtual_path, data, &strings, file_type);
+        if let Some(ctx) = ctx {
+            input = input.with_parsed_ctx(ctx);
+        }
+        input.cancellation = cancellation.cloned();
+        input.depth = child_depth;
+
+        match analyzer.analyze_input(&input) {
+            Ok(sub_report) => attach_member(
+                report,
+                sub_report,
+                data,
+                file_type,
+                member_path,
+                &virtual_path_str,
+            ),
+            Err(e) => {
+                tracing::warn!(
+                    attachment = %attachment.filename,
+                    storage = %attachment.storage_path,
+                    kind = ?attachment.kind,
+                    error = %e,
+                    "Failed to analyze MSG attachment as sub-file"
+                );
+            }
+        }
+    }
+
     fn analyze_ole2(
         &self,
         data: &[u8],
@@ -671,6 +773,7 @@ impl OfficeAnalyzer {
         String,
         Vec<Finding>,
         Vec<ole2::EmbeddedExecutable>,
+        Vec<ole2::MsgAttachment>,
         OleMetrics,
         OfficeCrossCounts,
         serde_json::Value,
@@ -687,6 +790,7 @@ impl OfficeAnalyzer {
                 "ole".to_string(),
                 findings,
                 Vec::new(),
+                Vec::new(),
                 OleMetrics::default(),
                 OfficeCrossCounts::default(),
                 serde_json::Value::Null,
@@ -700,6 +804,7 @@ impl OfficeAnalyzer {
                 return (
                     "ole".to_string(),
                     findings,
+                    Vec::new(),
                     Vec::new(),
                     OleMetrics::default(),
                     OfficeCrossCounts::default(),
@@ -923,6 +1028,7 @@ impl OfficeAnalyzer {
             type_str,
             findings,
             doc.embedded_executables,
+            doc.msg_attachments,
             ole_metrics,
             cross,
             kv,
@@ -1512,13 +1618,19 @@ impl Default for OfficeAnalyzer {
 impl Analyzer for OfficeAnalyzer {
     fn analyze_input(&self, input: &AnalysisInput<'_>) -> Result<AnalysisReport> {
         let cancellation = self.cancellation.as_ref().or(input.cancellation.as_ref());
-        Ok(self.analyze_office(input.path, input.data, &input.file_type, cancellation))
+        Ok(self.analyze_office(
+            input.path,
+            input.data,
+            &input.file_type,
+            input.depth,
+            cancellation,
+        ))
     }
 
     fn analyze(&self, file_path: &Path) -> Result<AnalysisReport> {
         let data = std::fs::read(file_path)?;
         let file_type = crate::analyzers::detect_file_type_from_data(file_path, &data);
-        Ok(self.analyze_office(file_path, &data, &file_type, self.cancellation.as_ref()))
+        Ok(self.analyze_office(file_path, &data, &file_type, 0, self.cancellation.as_ref()))
     }
 
     fn can_analyze(&self, file_path: &Path) -> bool {
@@ -1591,6 +1703,61 @@ fn add_metadata_findings(meta: &ole2::DocumentMetadata, findings: &mut Vec<Findi
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    /// An Outlook attachment is analyzed as a nested member named after its
+    /// filename, typed from its bytes plus that name, and an attached
+    /// message recurses one level down.
+    #[test]
+    fn msg_attachments_attach_as_named_members() {
+        use ole2::tests::{build_cfb, utf16};
+        let a0 = "/__attach_version1.0_#00000000";
+        let a1 = "/__attach_version1.0_#00000001";
+        let inner = format!("{a1}/__substg1.0_3701000D");
+        let msg = build_cfb(&[
+            ("/__substg1.0_0037001F", &utf16("subject")),
+            (
+                &format!("{a0}/__substg1.0_37010102"),
+                b"<html><body><script>document.write('x')</script></body></html>",
+            ),
+            (&format!("{a0}/__substg1.0_3707001F"), &utf16("lure.html")),
+            (&format!("{a1}/__substg1.0_3001001F"), &utf16("Fwd")),
+            (&format!("{inner}/__substg1.0_0037001F"), &utf16("inner")),
+            (
+                &format!("{inner}/__attach_version1.0_#00000000/__substg1.0_37010102"),
+                b"#!/bin/sh\necho hi\n",
+            ),
+            (
+                &format!("{inner}/__attach_version1.0_#00000000/__substg1.0_3707001F"),
+                &utf16("run.sh"),
+            ),
+        ]);
+
+        let report = OfficeAnalyzer::new().analyze_office(
+            Path::new("/samples/mail.msg"),
+            &msg,
+            &FileType::OleDoc,
+            0,
+            None,
+        );
+        assert_eq!(report.target.file_type, "msg");
+        let files: Vec<(&str, &str, u32)> = report
+            .files
+            .iter()
+            .map(|f| (f.path.as_str(), f.file_type.as_str(), f.depth))
+            .collect();
+        assert!(
+            files.contains(&("mail.msg!!lure.html", "html", 1)),
+            "html attachment missing: {files:?}"
+        );
+        assert!(
+            files.contains(&("mail.msg!!Fwd.msg", "msg", 1)),
+            "attached message missing: {files:?}"
+        );
+        assert!(
+            files.contains(&("mail.msg!!Fwd.msg!!run.sh", "shell", 2)),
+            "attached message's attachment missing: {files:?}"
+        );
+    }
 
     #[test]
     fn template_target_remoteness() {

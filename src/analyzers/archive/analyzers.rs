@@ -2076,11 +2076,14 @@ impl ArchiveAnalyzer {
                 .map(crate::analysis_context::AnalysisContext::text_rows)
                 .unwrap_or_default();
             crate::memory_tracker::clear_current_phase();
-            let payloads = if extract_payloads {
+            let mut payloads = if extract_payloads {
                 crate::extractors::encoded_payload::extract_encoded_payloads(&stng_strings)
             } else {
                 Vec::new()
             };
+            payloads.extend(member_ctx.as_ref().and_then(|ctx| {
+                crate::extractors::encoded_payload::xor_encoded_pe(ctx.parsed.fileid(), data)
+            }));
             let mut input = AnalysisInput::with_payloads(
                 logical_path,
                 data,
@@ -3174,6 +3177,13 @@ impl ArchiveAnalyzer {
                 })
                 .filter(|m| {
                     is_interesting_jar_resource(Path::new(&m.relative_path), Some(&m.file_type))
+                })
+                // Members the analysis would skip anyway must not spend the
+                // cap: a jar padded with a few hundred opaque `assets/*.db`
+                // blobs otherwise pushed its XOR-encoded payload past it.
+                .filter(|m| {
+                    self.archive_member_analysis_skip_reason(&m.file_type, &m.relative_path)
+                        .is_none()
                 })
                 .take(100),
         );

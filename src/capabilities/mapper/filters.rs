@@ -11,7 +11,7 @@
 //!
 //! [`CapabilityMapper::drops_as_low_value`]: super::CapabilityMapper::drops_as_low_value
 
-use crate::types::{Criticality, Finding, Istr};
+use crate::types::{AnalysisReport, Criticality, Finding, Istr};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 impl super::CapabilityMapper {
@@ -94,6 +94,46 @@ impl super::CapabilityMapper {
         !escalates
     }
 
+    /// Delete the low-value wrappers from `report`, top level and members,
+    /// and return how many went.
+    ///
+    /// Repeated until nothing changes: dropping a wrapper can orphan another
+    /// that only it cited. A single pass was not idempotent, so a decoded
+    /// payload's findings, already filtered by their own analysis, lost such
+    /// wrappers when the file that carried them was filtered again.
+    pub(crate) fn filter_low_value(&self, report: &mut AnalysisReport) -> usize {
+        let mut total = 0;
+        loop {
+            let mut crit_by_id: FxHashMap<Istr, Criticality> = FxHashMap::default();
+            let mut cited: FxHashSet<Istr> = FxHashSet::default();
+            for f in report
+                .findings
+                .iter()
+                .chain(report.files.iter().flat_map(|f| f.findings.iter()))
+            {
+                // A member and its container can carry the same id at
+                // different tiers; the strongest is what a wrapper has to
+                // beat to be an escalation.
+                crit_by_id
+                    .entry(f.id.clone())
+                    .and_modify(|c| *c = (*c).max(f.crit))
+                    .or_insert(f.crit);
+                cited.extend(f.trait_refs.iter().cloned());
+            }
+            let removed = report.filter_findings(|f| {
+                !self.drops_as_low_value(
+                    f,
+                    |id| crit_by_id.get(id).copied(),
+                    |id| cited.contains(id),
+                )
+            });
+            if removed == 0 {
+                return total;
+            }
+            total += removed;
+        }
+    }
+
     /// Ids in `findings` that [`Self::drops_as_low_value`] will delete.
     ///
     /// Context capture skips these. `dedup_notes` keeps only the strongest
@@ -104,28 +144,36 @@ impl super::CapabilityMapper {
     #[allow(dead_code)] // Used by library target, not visible to binary crate
     #[must_use]
     pub(crate) fn doomed_low_value_ids(&self, findings: &[Finding]) -> FxHashSet<Istr> {
-        let mut crit_by_id: FxHashMap<&str, Criticality> = FxHashMap::default();
-        for f in findings {
-            crit_by_id
-                .entry(f.id.as_str())
-                .and_modify(|c| *c = (*c).max(f.crit))
-                .or_insert(f.crit);
+        // The same fixed point the final filter reaches: a wrapper cited only
+        // by doomed findings is doomed too.
+        let mut doomed: FxHashSet<Istr> = FxHashSet::default();
+        loop {
+            let live = || findings.iter().filter(|f| !doomed.contains(&f.id));
+            let mut crit_by_id: FxHashMap<&str, Criticality> = FxHashMap::default();
+            for f in live() {
+                crit_by_id
+                    .entry(f.id.as_str())
+                    .and_modify(|c| *c = (*c).max(f.crit))
+                    .or_insert(f.crit);
+            }
+            let cited: FxHashSet<&str> = live()
+                .flat_map(|f| f.trait_refs.iter().map(Istr::as_str))
+                .collect();
+            let newly: Vec<Istr> = live()
+                .filter(|f| {
+                    self.drops_as_low_value(
+                        f,
+                        |id| crit_by_id.get(id).copied(),
+                        |id| cited.contains(id),
+                    )
+                })
+                .map(|f| f.id.clone())
+                .collect();
+            if newly.is_empty() {
+                return doomed;
+            }
+            doomed.extend(newly);
         }
-        let cited: FxHashSet<&str> = findings
-            .iter()
-            .flat_map(|f| f.trait_refs.iter().map(Istr::as_str))
-            .collect();
-        findings
-            .iter()
-            .filter(|f| {
-                self.drops_as_low_value(
-                    f,
-                    |id| crit_by_id.get(id).copied(),
-                    |id| cited.contains(id),
-                )
-            })
-            .map(|f| f.id.clone())
-            .collect()
     }
 
     /// Filter out low-value composite "any" rules from findings.

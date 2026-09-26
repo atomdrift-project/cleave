@@ -5051,6 +5051,148 @@ fn archive_scoped_composite_runs_on_its_declared_container_type() {
     );
 }
 
+// ==================== Atomic-trait archive `for:` gate ====================
+//
+// An atomic trait's `for:` used to admit any archive-typed rule on any archive
+// node. `metadata/package/files/mobile-package::apk-misplaced-executable-member`
+// (`for: [android_apk]`) therefore fired on a plain JAR. A node now admits its
+// own type plus the generic container it is built on: a JAR is a zip, so it
+// takes `for: [zip]` rules, but not `for: [android_apk]` ones.
+
+fn socket_trait_for(types: Vec<FileType>) -> TraitDefinition {
+    TraitDefinition {
+        id: "test/archive-gate::socket".to_string(),
+        desc: "Archive gate".to_string(),
+        conf: 0.9,
+        crit: Criticality::Notable,
+        platforms: vec![Platform::All],
+        arch: vec![Arch::All],
+        r#for: types,
+        r#if: Condition::Symbol(SymbolQuery {
+            exact: None,
+            substr: None,
+            regex: Some("socket".to_string()),
+            platforms: None,
+            is_check: None,
+            kind: None,
+            arg: None,
+            args: None,
+            alias: None,
+            not: None,
+        }),
+        defined_in: std::path::PathBuf::from("test.yaml"),
+        ..Default::default()
+    }
+}
+
+fn trait_fires_on(trait_def: &TraitDefinition, node: FileType) -> bool {
+    let (report, data) = create_test_context();
+    let ctx = EvaluationContext::new(&report, &data, node, &[Platform::All], None, None);
+    trait_def.evaluate(&ctx).is_some()
+}
+
+#[test]
+fn android_apk_trait_skips_other_archives() {
+    let apk_only = socket_trait_for(vec![FileType::AndroidApk]);
+    assert!(trait_fires_on(&apk_only, FileType::AndroidApk));
+    for node in [
+        FileType::Jar,
+        FileType::Zip,
+        FileType::Whl,
+        FileType::Nupkg,
+        FileType::Tar,
+        FileType::AlpineApk,
+    ] {
+        assert!(
+            !trait_fires_on(&apk_only, node),
+            "a `for: [android_apk]` trait must not evaluate on {node:?}"
+        );
+    }
+}
+
+#[test]
+fn specialised_archive_traits_do_not_widen_to_their_base_or_siblings() {
+    // jar -> zip, deb -> whl, crx -> xpi: none of these is a subtype.
+    let cases = [
+        (FileType::Jar, FileType::Zip),
+        (FileType::Deb, FileType::Whl),
+        (FileType::Crx, FileType::Xpi),
+        (FileType::VsixArchive, FileType::Nupkg),
+        (FileType::Npm, FileType::Tar),
+        (FileType::Rar, FileType::SevenZ),
+    ];
+    for (declared, node) in cases {
+        assert!(
+            !trait_fires_on(&socket_trait_for(vec![declared]), node),
+            "a `for: [{}]` trait must not evaluate on {node:?}",
+            declared.label()
+        );
+    }
+}
+
+#[test]
+fn generic_container_traits_reach_packages_built_on_them() {
+    let zip = socket_trait_for(vec![FileType::Zip]);
+    for node in [
+        FileType::Zip,
+        FileType::Jar,
+        FileType::AndroidApk,
+        FileType::Whl,
+        FileType::Nupkg,
+        FileType::Crx,
+        FileType::Xpi,
+        FileType::VsixArchive,
+        FileType::PythonSdist,
+    ] {
+        assert!(
+            trait_fires_on(&zip, node),
+            "`for: [zip]` must reach {node:?}"
+        );
+    }
+    for node in [FileType::Tar, FileType::Npm, FileType::Deb, FileType::Rpm] {
+        assert!(
+            !trait_fires_on(&zip, node),
+            "`for: [zip]` must skip {node:?}"
+        );
+    }
+
+    let tar = socket_trait_for(vec![FileType::Tar]);
+    for node in [
+        FileType::Npm,
+        FileType::Crate,
+        FileType::AlpineApk,
+        FileType::Gem,
+    ] {
+        assert!(
+            trait_fires_on(&tar, node),
+            "`for: [tar]` must reach {node:?}"
+        );
+    }
+    assert!(!trait_fires_on(&tar, FileType::Jar));
+}
+
+#[test]
+fn archive_traits_stay_off_non_archive_nodes() {
+    let zip = socket_trait_for(vec![FileType::Zip, FileType::AndroidApk]);
+    assert!(!trait_fires_on(&zip, FileType::Elf));
+    assert!(!trait_fires_on(&zip, FileType::Dex));
+}
+
+#[test]
+fn collapsed_container_still_admits_archive_typed_traits_only() {
+    // A container with no type of its own is evaluated as `All`; it cannot
+    // know which archive it is, so every archive-typed trait stays eligible,
+    // but a script/binary trait does not become universal.
+    assert!(trait_fires_on(
+        &socket_trait_for(vec![FileType::AndroidApk]),
+        FileType::All
+    ));
+    assert!(!trait_fires_on(
+        &socket_trait_for(vec![FileType::Elf]),
+        FileType::All
+    ));
+}
+
 #[test]
 fn archive_scoped_composite_for_all_still_runs_on_any_container() {
     let (report, data) = create_test_context();

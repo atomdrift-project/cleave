@@ -335,15 +335,8 @@ fn composite_applies(
     if !platforms_intersect(&rule.platforms, mapper_platforms) {
         return false;
     }
-    let wants_archive_family = rule.r#for.iter().any(FileType::is_archive);
-    let pools_across_archive = matches!(
-        rule.scope,
-        Some(Scope::Outer | Scope::Archive | Scope::Package)
-    );
-    rule.r#for.contains(&FileType::All)
-        || rule.r#for.contains(&file_type)
-        || ((file_type == FileType::All || file_type.is_archive())
-            && (wants_archive_family || pools_across_archive))
+    // Must mirror `CapabilityMapper::composite_worklists` exactly.
+    FileType::rule_applies_to(&rule.r#for, file_type)
 }
 
 fn trait_applies_to_file(
@@ -354,11 +347,8 @@ fn trait_applies_to_file(
     if !platforms_intersect(&def.platforms, mapper_platforms) {
         return false;
     }
-    let wants_archive_family = def.r#for.iter().any(FileType::is_archive);
-    let file_type_match = def.r#for.contains(&FileType::All)
-        || def.r#for.contains(&file_type)
-        || ((file_type == FileType::All || file_type.is_archive()) && wants_archive_family);
-    file_type_match && def.r#if.can_match_file_type(&file_type)
+    // Must mirror the atomic gate in `TraitDefinition::evaluate` exactly.
+    FileType::rule_applies_to(&def.r#for, file_type) && def.r#if.can_match_file_type(&file_type)
 }
 
 fn partner_cannot_match(

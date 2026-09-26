@@ -1311,52 +1311,23 @@ pub fn prewarm_yara_buckets_background(enable_third_party: bool) {
 /// subsequent rayon scan cannot win the first-init race and rebuild them. Safe
 /// to call multiple times; subsequent calls are cheap.
 pub fn prefetch_shared_resources(enable_third_party: bool) {
-    prefetch_shared_resources_with(enable_third_party, true);
-}
-
-/// [`prefetch_shared_resources`] with the regex prewarm optional.
-///
-/// The prewarm compiles every pattern in the warm memo — the whole trait
-/// corpus, ~58k programs across the str and bytes engines — and holds them
-/// for the life of the process. That buys first-file latency for a server or
-/// worker that will see every file type. A bulk directory scan does not need
-/// it: patterns compile lazily on first use, deduplicated across workers by
-/// the compile claim, and only the patterns the corpus's file types reach get
-/// built. Measured on a 12.5k-member C# module zip (2026-09-19): peak RSS
-/// 4.5-4.6 GB with the prewarm, 3.1 GB without, wall equal within noise
-/// (16.5-16.9 s vs 17.4-22.2 s); the retained programs were ~1.5 GB of
-/// binary-format patterns a source corpus never evaluates.
-pub fn prefetch_shared_resources_with(enable_third_party: bool, prewarm_regexes: bool) {
-    // First: compile the trait regexes this deployment needed last time on a
-    // few plain background threads (see `regex_warm`); they overlap the two
-    // blocking prefetches below and the embedder's own model load. Without
-    // this the first small file on a fresh process spends ~85 % of its
-    // analysis in first-use regex compiles (an 8.5 KB wheel: ~640 ms cold
-    // vs ~100 ms warm).
-    if prewarm_regexes {
-        prewarm_regexes_background();
-    }
     prefetch_yara_engine(enable_third_party);
     prefetch_capability_mapper();
 }
 
-/// Compile the regexes recorded in the warm memo on background threads
-/// (`CLEAVE_REGEX_PREWARM_THREADS`, 0 disables). Returns immediately.
-pub fn prewarm_regexes_background() {
-    let threads = std::env::var("CLEAVE_REGEX_PREWARM_THREADS")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or_else(|| {
-            std::thread::available_parallelism().map_or(2, |n| (n.get() / 4).clamp(2, 8))
-        });
-    composite_rules::regex_warm::warm_background(threads);
-}
-
-/// Flush the regex warm memo if new patterns compiled since the last flush.
-/// Cheap when nothing changed; a long-lived worker calls this from its
-/// periodic summary tick so the next startup can warm what this run learned.
-pub fn persist_regex_warm_memo() {
-    composite_rules::regex_warm::persist();
+/// [`prefetch_shared_resources`], kept for embedders that still pass the old
+/// regex-prewarm flag. The flag is ignored: trait regexes always compile
+/// lazily on first use.
+///
+/// The prewarm compiled every pattern in a persisted memo -- the union of all
+/// patterns any earlier scan had compiled, ~79k of them -- and held them for
+/// the life of the process. Measured 2026-09-25 it paid for itself nowhere: a
+/// one-shot scan of a 12-byte file went from 4.8 GiB and 44 s of CPU to
+/// 0.8 GiB and 6.4 s without it, and a long-lived server lost no first-request
+/// latency while its peak fell by 2.6 GiB. Recording the memo also cost every
+/// process a 4.5 MB parse on its first compile and a rewrite after each scan.
+pub fn prefetch_shared_resources_with(enable_third_party: bool, _prewarm_regexes: bool) {
+    prefetch_shared_resources(enable_third_party);
 }
 
 /// Log end-of-scan engine statistics at `info`: per-phase thread-time (and
@@ -1374,7 +1345,6 @@ pub fn log_scan_stats() {
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(40);
     crate::composite_rules::trait_timing::report(top);
-    composite_rules::regex_warm::persist();
 }
 
 /// Return `(retained_bytes, budget_bytes)` for the process-wide regex scratch

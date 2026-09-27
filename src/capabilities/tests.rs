@@ -2690,6 +2690,16 @@ fn test_parse_file_types_groups_and_exclusions() {
     assert!(binaries.types.contains(&RuleFileType::Dex));
     assert!(binaries.types.contains(&RuleFileType::StaticLib));
     assert!(!binaries.types.contains(&RuleFileType::Python));
+    // Raw code has no container for `binaries` rules to read; it is opt-in.
+    assert!(!binaries.types.contains(&RuleFileType::Shellcode));
+
+    let shellcode = parsing::parse_file_types(&["shellcode".to_string()], &mut warnings);
+    assert!(!shellcode.from_groups);
+    assert_eq!(shellcode.types, vec![RuleFileType::Shellcode]);
+    assert_eq!(
+        RuleFileType::from(filefacts::FileType::Shellcode),
+        RuleFileType::Shellcode
+    );
 
     let scripts = parsing::parse_file_types(&["scripts".to_string()], &mut warnings);
     assert!(scripts.from_groups);

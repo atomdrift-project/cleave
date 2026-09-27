@@ -664,6 +664,10 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 "yara" | "yar" => vec![RuleFileType::Yara],
                 "postscript" | "ps" | "eps" => vec![RuleFileType::PostScript],
                 "dos_com" | "dos-com" | "doscom" => vec![RuleFileType::DosCom],
+                // Headerless x86 / x86-64 code. Standalone, not in `binaries`:
+                // those rules assume a parsed container (imports, sections,
+                // headers) that raw code does not have.
+                "shellcode" => vec![RuleFileType::Shellcode],
                 "markdown" | "md" => vec![RuleFileType::Markdown],
                 "makefile" | "make" | "mk" | "mak" => vec![RuleFileType::Makefile],
                 "dockerfile" | "docker" | "containerfile" => vec![RuleFileType::Dockerfile],

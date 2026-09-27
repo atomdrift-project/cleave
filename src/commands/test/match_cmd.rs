@@ -218,6 +218,7 @@ pub fn run(
         FileType::Yara => composite_rules::FileType::Yara,
         FileType::PostScript => composite_rules::FileType::PostScript,
         FileType::DosCom => composite_rules::FileType::DosCom,
+        FileType::Shellcode => composite_rules::FileType::Shellcode,
         FileType::Mirc => composite_rules::FileType::Mirc,
         FileType::IrcII => composite_rules::FileType::IrcII,
         FileType::Markdown => composite_rules::FileType::Markdown,

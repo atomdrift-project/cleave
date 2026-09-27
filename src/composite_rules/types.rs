@@ -472,6 +472,8 @@ pub(crate) enum FileType {
     /// DOS COM executable
     #[serde(rename = "dos_com")]
     DosCom,
+    /// Headerless x86 / x86-64 shellcode (GetPC idiom at the head)
+    Shellcode,
     /// mIRC script
     Mirc,
     /// ircII or EPIC script
@@ -855,6 +857,7 @@ impl From<filefacts::FileType> for FileType {
             Ff::Yara => Self::Yara,
             Ff::PostScript => Self::PostScript,
             Ff::DosCom => Self::DosCom,
+            Ff::Shellcode => Self::Shellcode,
             Ff::Mirc => Self::Mirc,
             Ff::IrcII => Self::IrcII,
             Ff::Markdown => Self::Markdown,
@@ -1203,6 +1206,7 @@ impl FileType {
             Self::Yara => "yara",
             Self::PostScript => "postscript",
             Self::DosCom => "dos_com",
+            Self::Shellcode => "shellcode",
             Self::Mirc => "mirc",
             Self::IrcII => "ircii",
             Self::Markdown => "markdown",
@@ -1351,6 +1355,7 @@ impl FileType {
             "yara" | "yar" => FileType::Yara,
             "postscript" | "ps" | "eps" => FileType::PostScript,
             "dos_com" | "dos-com" | "doscom" => FileType::DosCom,
+            "shellcode" => FileType::Shellcode,
             "mirc" | "mrc" => FileType::Mirc,
             "ircii" => FileType::IrcII,
             "markdown" | "md" => FileType::Markdown,

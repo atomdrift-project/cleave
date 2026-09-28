@@ -957,11 +957,7 @@ impl super::CapabilityMapper {
 /// archive member can no longer silence a rule in an unrelated member unless
 /// the rule author asked for exactly that.
 fn downgrade_spans_container(downgrade: &crate::composite_rules::DowngradeConditions) -> bool {
-    use crate::composite_rules::traits::Scope;
-    matches!(
-        downgrade.scope.unwrap_or_default(),
-        Scope::Archive | Scope::Outer | Scope::Package
-    )
+    downgrade.scope.unwrap_or_default().pools_members()
 }
 
 #[cfg(test)]

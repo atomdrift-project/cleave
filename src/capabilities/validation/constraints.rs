@@ -3724,10 +3724,7 @@ fn find_impossible_composite_filetypes_inner(
         // this validator report a fresh violation for every member type the
         // `for:`-migration correctly added. `find_legs_outside_for` covers the
         // pooling case, from the other direction.
-        if matches!(
-            rule.effective_scope(),
-            Scope::Archive | Scope::Package | Scope::Outer
-        ) {
+        if rule.effective_scope().pools_members() {
             continue;
         }
         let Some(required) = rule.all.as_ref() else {
@@ -3789,10 +3786,7 @@ fn find_impossible_composite_filetypes_inner(
         // `#[archive]` marker. `Scope::Archive` also degrades to `Outer`
         // (pools the whole input) when the container isn't nested inside an
         // archive at all, so it is never narrower than the type check below.
-        let has_pooling_scope = matches!(
-            rule.scope,
-            Some(Scope::Outer | Scope::Archive | Scope::Package)
-        );
+        let has_pooling_scope = rule.scope.is_some_and(Scope::pools_members);
         let names_container = rule.r#for.iter().any(FileType::is_archive) || has_pooling_scope;
         if checkable > 0 && found.len() - before == checkable && !names_container {
             dead_rules.push(rule.id.clone());
@@ -3969,7 +3963,7 @@ pub(crate) fn find_pooling_scope_without_container(
     let mut found = Vec::new();
     for rule in composite_rules {
         let scope = rule.effective_scope();
-        if !matches!(scope, Scope::Archive | Scope::Package | Scope::Outer) {
+        if !scope.pools_members() {
             continue;
         }
         if rule.for_from_groups || rule.r#for.is_empty() || rule.r#for.contains(&FileType::All) {
@@ -4152,10 +4146,7 @@ fn legs_outside_for(
 
     let mut found = Vec::new();
     for rule in composite_rules {
-        if !matches!(
-            rule.effective_scope(),
-            Scope::Archive | Scope::Package | Scope::Outer
-        ) {
+        if !rule.effective_scope().pools_members() {
             continue;
         }
         if rule.for_from_groups || rule.r#for.is_empty() || rule.r#for.contains(&FileType::All) {

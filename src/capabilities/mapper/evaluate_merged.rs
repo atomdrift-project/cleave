@@ -603,6 +603,25 @@ impl super::CapabilityMapper {
         findings: &mut Vec<Finding>,
         sink: Option<&crate::types::SuppressionSink>,
     ) {
+        self.apply_retroactive_unless_suppression_with_targets(findings, sink, None);
+    }
+
+    /// Recheck findings produced at container scope without reinterpreting
+    /// member-local decisions against unrelated members' suppressors.
+    pub(crate) fn apply_retroactive_unless_suppression_to_selected_findings(
+        &self,
+        findings: &mut Vec<Finding>,
+        targets: &FxHashSet<String>,
+    ) {
+        self.apply_retroactive_unless_suppression_with_targets(findings, None, Some(targets));
+    }
+
+    fn apply_retroactive_unless_suppression_with_targets(
+        &self,
+        findings: &mut Vec<Finding>,
+        sink: Option<&crate::types::SuppressionSink>,
+        targets: Option<&FxHashSet<String>>,
+    ) {
         let index = self.unless_index();
         if index.is_empty() {
             return;
@@ -615,6 +634,7 @@ impl super::CapabilityMapper {
 
             let suppressed: FxHashSet<crate::types::Istr> = findings
                 .iter()
+                .filter(|finding| targets.is_none_or(|ids| ids.contains(finding.id.as_str())))
                 .filter_map(|finding| {
                     let source = (!index.by_hook_leaf.is_empty())
                         .then(|| Self::builtin_finding_hook_slug(&finding.id))
@@ -637,6 +657,7 @@ impl super::CapabilityMapper {
             }
 
             tracing::debug!(
+                ?suppressed,
                 "Retroactive unless-suppression: removing {} findings suppressed by post-eval conditions",
                 suppressed.len()
             );

@@ -1026,6 +1026,44 @@ mod duplicate_tests {
         assert_eq!(warnings.len(), 0);
     }
 
+    #[test]
+    fn test_cross_type_keeps_function_definition_distinct_from_call_and_text() {
+        let definition = create_symbol_exact_with_kind(
+            "micro-behaviors/data/source/function/names::curl-definition",
+            "curl",
+            SymbolKind::Function,
+            vec![FileType::Shell],
+            "definitions.yaml",
+        );
+        let call = create_symbol_exact_with_kind(
+            "micro-behaviors/communications/http/client::curl-call",
+            "curl",
+            SymbolKind::Call,
+            vec![FileType::Shell],
+            "calls.yaml",
+        );
+        let text = create_text_word(
+            "micro-behaviors/communications/http/client::curl-word",
+            "curl",
+            vec![FileType::Shell],
+            "words.yaml",
+        );
+        let mut warnings = Vec::new();
+        check_same_string_different_types(
+            &ExtractedPatterns::of(&[definition.clone(), text.clone()]),
+            &mut warnings,
+        );
+        assert!(warnings.is_empty());
+
+        check_same_string_different_types(
+            &ExtractedPatterns::of(&[definition, call, text]),
+            &mut warnings,
+        );
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("calls.yaml"));
+        assert!(!warnings[0].contains("definitions.yaml"));
+    }
+
     /// Four same-context, same-tier regexes matching one literal phrase is the
     /// shape this reports: the phrase is covered several times over.
     #[test]
@@ -1273,8 +1311,8 @@ mod duplicate_tests {
 
     /// An `arg:` filter changes which fact the token names: `require('fs')` is
     /// not `require('dns')`, and a text matcher for the bare token is neither
-    /// of them. Only `kind:` -- which narrows where the token was found, not
-    /// what it means -- may be dropped when comparing across surfaces.
+    /// of them. A call/reference kind may be dropped across surfaces, but
+    /// definitions and argument discriminators change the observed fact.
     #[test]
     fn test_cross_type_keeps_arg_discriminated_symbol_against_text() {
         let symbol = create_symbol_exact_with_arg(
@@ -4284,8 +4322,10 @@ mod pattern_tests {
 #[cfg(test)]
 mod taxonomy_tests {
     use crate::capabilities::validation::taxonomy::{
-        ObjectivesWellknownViolation, find_cap_obj_violations, find_cap_wellknown_violations,
+        MAX_TRAITS_PER_DIRECTORY, ObjectivesWellknownViolation, find_cap_obj_violations,
+        find_cap_wellknown_violations, find_deep_taxonomy_directories,
         find_metadata_cross_tier_refs, find_objectives_wellknown_violations,
+        find_oversized_trait_directories, find_sparse_sibling_cohorts,
         find_suppression_only_building_blocks,
     };
     use crate::composite_rules::traits::CompositeTrait;
@@ -4918,6 +4958,108 @@ mod taxonomy_tests {
         let v = find_suppression_only_building_blocks(&traits, &[], &HashMap::new());
         assert!(v.is_empty());
     }
+
+    #[test]
+    fn test_oversized_dir_has_one_combined_cap_without_exemptions() {
+        assert_eq!(MAX_TRAITS_PER_DIRECTORY, 100);
+        for dir in [
+            "objectives/evasion/x",
+            "objectives/command-and-control/reverse-shell/dup",
+        ] {
+            // Cover atom-only, composite-only, and mixed directories, including
+            // more than 75 atoms: there is no separate atomic cap.
+            for atoms in [0, 42, 76, 100] {
+                let traits: Vec<_> = (0..atoms)
+                    .map(|i| make_trait(&format!("{dir}::a{i}"), "other::t"))
+                    .collect();
+                let mut rules: Vec<_> = (0..100 - atoms)
+                    .map(|i| make_composite(&format!("{dir}::c{i}"), &["other::t"]))
+                    .collect();
+                assert!(find_oversized_trait_directories(&traits, &rules).is_empty());
+                // A different directory must not consume this directory's budget.
+                rules.push(make_composite("objectives/evasion/y::other", &["other::t"]));
+                assert!(find_oversized_trait_directories(&traits, &rules).is_empty());
+                rules.push(make_composite(&format!("{dir}::extra"), &["other::t"]));
+                assert_eq!(
+                    find_oversized_trait_directories(&traits, &rules),
+                    vec![(dir.to_string(), 101)]
+                );
+            }
+            let traits: Vec<_> = (0..101)
+                .map(|i| make_trait(&format!("{dir}::a{i}"), "other::t"))
+                .collect();
+            assert_eq!(
+                find_oversized_trait_directories(&traits, &[]),
+                vec![(dir.to_string(), 101)]
+            );
+        }
+    }
+
+    #[test]
+    fn test_depth_review_counts_below_tier_and_allows_five() {
+        for tier in ["micro-behaviors", "objectives", "metadata", "well-known"] {
+            let five = format!("{tier}/a/b/c/d/e");
+            let six = format!("{five}/f");
+            let seven = format!("{six}/g");
+            assert_eq!(
+                find_deep_taxonomy_directories(&[
+                    seven.clone(),
+                    five,
+                    tier.to_string(),
+                    six.clone(),
+                    six.clone(),
+                ]),
+                vec![(six, 6), (seven, 7)]
+            );
+        }
+        assert!(find_deep_taxonomy_directories(&["unrelated/a/b/c/d/e/f".to_string()]).is_empty());
+    }
+
+    #[test]
+    fn test_sparse_sibling_cohorts_use_35_rule_limit_and_skip_single_child() {
+        let rules = HashMap::from([
+            ("objectives/evasion/technique-small/a".to_string(), 17),
+            ("objectives/evasion/technique-small/b".to_string(), 17),
+            ("objectives/evasion/technique-limit/a".to_string(), 17),
+            ("objectives/evasion/technique-limit/b".to_string(), 18),
+            ("objectives/evasion/single-child/only".to_string(), 1),
+            ("well-known/tool/a".to_string(), 1),
+            ("well-known/tool/b".to_string(), 1),
+        ]);
+
+        assert_eq!(
+            find_sparse_sibling_cohorts(&rules),
+            vec![("objectives/evasion/technique-small".to_string(), 34, 2)]
+        );
+    }
+
+    /// Composite rules count toward the directory cap alongside atomic traits:
+    /// a directory of few atoms and many roll-ups is just as flat.
+    #[test]
+    fn test_oversized_dir_counts_atomic_and_composite() {
+        let dir = "objectives/evasion/x";
+        let atoms = MAX_TRAITS_PER_DIRECTORY / 2;
+        let traits: Vec<_> = (0..atoms)
+            .map(|i| make_trait(&format!("{dir}::a{i}"), "other::t"))
+            .collect();
+        let mut rules: Vec<_> = (0..MAX_TRAITS_PER_DIRECTORY - atoms)
+            .map(|i| make_composite(&format!("{dir}::c{i}"), &["other::t"]))
+            .collect();
+        assert!(
+            find_oversized_trait_directories(&traits, &rules).is_empty(),
+            "exactly at the cap must pass"
+        );
+
+        rules.push(make_composite(&format!("{dir}::extra"), &["other::t"]));
+        assert_eq!(
+            find_oversized_trait_directories(&traits, &rules),
+            vec![(dir.to_string(), MAX_TRAITS_PER_DIRECTORY + 1)]
+        );
+        assert!(
+            find_oversized_trait_directories(&traits, &[]).is_empty(),
+            "atoms alone are under the cap"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -5492,6 +5634,26 @@ mod constraint_tests {
     }
 
     #[test]
+    fn redundant_any_refs_preserve_nearly_complete_subsets() {
+        for (selected, total) in [(8, 10), (21, 23), (99, 100)] {
+            let ids: Vec<String> = (0..selected).map(|i| format!("foo/bar::t{i}")).collect();
+            let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+            let rule = create_composite_any("other/dir::rule", &refs);
+            assert!(
+                find_redundant_any_refs(&rule, &fully_covered("foo/bar", total)).is_empty(),
+                "{selected} of {total} must not be widened to the whole directory"
+            );
+        }
+    }
+
+    #[test]
+    fn redundant_any_refs_do_not_count_duplicate_refs_as_coverage() {
+        let rule = create_composite_any("other/dir::rule", &["foo/bar::a"; 8]);
+        assert!(find_redundant_any_refs(&rule, &fully_covered("foo/bar", 8)).is_empty());
+        assert!(find_redundant_any_refs(&rule, &fully_covered("foo/bar", 1)).is_empty());
+    }
+
+    #[test]
     fn test_redundant_any_refs_flags_metadata_directory() {
         let refs: Vec<String> = (0..8).map(|i| format!("metadata/foo::t{i}")).collect();
         let refs: Vec<&str> = refs.iter().map(String::as_str).collect();
@@ -5533,6 +5695,21 @@ mod constraint_tests {
         let rule = create_composite_any("other/dir::rule", &refs);
 
         assert!(find_redundant_any_refs(&rule, &std::collections::HashMap::new()).is_empty());
+    }
+
+    #[test]
+    fn full_directory_conjunction_is_not_an_any_of_alias() {
+        let ids = [
+            "foo/bar::a",
+            "foo/bar::b",
+            "foo/bar::c",
+            "foo/bar::d",
+            "foo/bar::e",
+        ];
+        let traits = dir_traits("foo/bar", &ids);
+        let mut rule = create_composite_any("other/dir::rule", &ids);
+        rule.all = rule.any.take();
+        assert!(find_many_directory_refs(&rule, &traits).is_empty());
     }
 
     #[test]
@@ -8259,6 +8436,19 @@ mod section_filter_validation_tests {
         let result = find_wellknown_missing_section_filter(&traits, &sources);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].0, "well-known/tool/test::binary");
+    }
+
+    #[test]
+    fn metadata_section_filter_reports_binary_vocabulary_for_review() {
+        // File-wide vocabulary still gets the recommendation; its absence of a
+        // section must not force a made-up location into the classification.
+        let traits = vec![text_trait(
+            "metadata/file/string/command::vocabulary",
+            vec![FileType::Pe],
+        )];
+        let result = find_meta_missing_section_filter(&traits, &HashMap::new());
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].0, "metadata/file/string/command::vocabulary");
     }
 
     #[test]
@@ -11199,5 +11389,50 @@ mod convictions_without_content_tests {
                 ),
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod platform_breadth_review_tests {
+    use crate::capabilities::validation::find_broad_platform_traits;
+    use crate::composite_rules::{Platform, TraitDefinition};
+    use std::collections::HashMap;
+
+    #[test]
+    fn platform_review_has_one_threshold_and_no_directory_exemptions() {
+        let mut traits = Vec::new();
+        let mut sources = HashMap::new();
+        for directory in [
+            "metadata/package/documentation/claims",
+            "metadata/registry/description",
+            "objectives/supply-chain/impersonation",
+            "micro-behaviors/process/create",
+            "well-known/tool/example",
+        ] {
+            for count in [3, 4] {
+                let id = format!("{directory}::scope-{count}");
+                sources.insert(id.clone(), format!("traits/{directory}/traits.yaml"));
+                traits.push(TraitDefinition {
+                    id,
+                    platforms: vec![
+                        Platform::Unix,
+                        Platform::Windows,
+                        Platform::Android,
+                        Platform::Ios,
+                    ][..count]
+                        .to_vec(),
+                    ..Default::default()
+                });
+            }
+        }
+        let reviews = find_broad_platform_traits(&traits, &sources);
+        assert_eq!(reviews.len(), 5);
+        assert!(
+            reviews
+                .iter()
+                .all(|(id, _, count)| id.ends_with("::scope-4") && *count == 4)
+        );
+        traits.reverse();
+        assert_eq!(reviews, find_broad_platform_traits(&traits, &sources));
     }
 }

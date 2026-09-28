@@ -95,6 +95,8 @@ const ALLOWED_COLLECTION: &[&str] = &[
     "activity",       // User activity tracking
     "app-data",       // Application-specific data (Notes, Stickies, macOS metadata)
     "archive",        // Archive collected data                           T1560
+    "audio",          // Local sound recording/collection                 T1123
+    "camera",         // Local camera imagery collection                  T1125
     "clipboard",      // Clipboard capture                                T1115
     "database",       // Database enumeration/access                      T1005
     "email-harvest",  // Email address harvesting                         T1114
@@ -103,8 +105,10 @@ const ALLOWED_COLLECTION: &[&str] = &[
     "keylog",         // Keystroke logging                                T1056.001
     "messaging",      // Messaging app data collection                    T1005
     "monitor",        // Monitoring/telemetry capture
+    "multi-source",   // Independently required acquired datasets
     "network",        // Network packet/traffic capture                   T1040
     "screenshot",     // Screen capture                                   T1113
+    "touch",          // Touch position/gesture collection
     "stealer",        // Multi-step stealer behavior composites           T1119
 ];
 
@@ -215,6 +219,7 @@ const ALLOWED_PERSISTENCE: &[&str] = &[
 /// Must not use objective names (no c2, persist, evasion, etc.).
 const ALLOWED_MICRO_BEHAVIORS: &[&str] = &[
     "browser-extension", // Browser-extension (WebExtension) platform APIs
+    "metaprogramming",   // AST, code-generation, and reflection techniques
     "communications",    // Network protocols and transport
     "crypto",            // Cryptographic operations
     "data",              // Data transformation and data-structure operations
@@ -222,6 +227,7 @@ const ALLOWED_MICRO_BEHAVIORS: &[&str] = &[
     "fs",                // Filesystem access
     "hardware",          // Hardware interaction
     "mem",               // Memory operations
+    "network",           // Local network resources, including interfaces
     "os",                // OS integration
     "process",           // Process control
     "revision-control",  // Revision control interactions
@@ -245,7 +251,8 @@ const ALLOWED_MB_BROWSER_EXTENSION: &[&str] = &[
 /// Allowed subdirectories in micro-behaviors/communications/
 const ALLOWED_MB_COMMUNICATIONS: &[&str] = &[
     "async-io",
-    "bacnet", // BACnet building/industrial automation      (UDP 47808)
+    "blockchain", // Blockchain-client operation composites
+    "bacnet",     // BACnet building/industrial automation      (UDP 47808)
     "benchmark",
     "capture",
     "dns",
@@ -268,27 +275,36 @@ const ALLOWED_MB_COMMUNICATIONS: &[&str] = &[
     "rpc", // Remote procedure-call protocols, independent of local IPC
     "s7",  // Siemens S7comm/ISO-TSAP                     (TCP 102)
     "socket",
+    "tls", // Transport security operations, independent of HTTP/socket APIs.
     "ssh",
     "url",
     "websocket",
 ];
+
+/// Allowed subdirectories in micro-behaviors/metaprogramming/
+const ALLOWED_MB_METAPROGRAMMING: &[&str] = &["ast", "generation", "reflection"];
 
 /// Allowed subdirectories in micro-behaviors/crypto/
 const ALLOWED_MB_CRYPTO: &[&str] = &[
     "asymmetric",
     "certificate",
     "hash",
+    "hybrid", // Symmetric payload encryption combined with asymmetric key wrapping
     "kdf",
     "library",
+    "mnemonic", // Mnemonic representations of cryptographic seed material
+    "native",   // Native crypto-provider APIs not narrowed to an algorithm
     "symmetric",
 ];
 
 /// Allowed subdirectories in micro-behaviors/data/
 const ALLOWED_MB_DATA: &[&str] = &[
+    "arithmetic", // Numeric and bitwise operations, independent of representation
     "app",
     "archive",
     "buffer",
     "cli-tool",
+    "collection",
     "compress",
     "config",
     "control-flow",
@@ -317,13 +333,16 @@ const ALLOWED_MB_DATA: &[&str] = &[
     "parsing",
     "path",
     "plugin",
+    "property", // Object member access, independent of language or representation
     "runtime",
     "security",
     "serialize",
+    "stream", // Stream recording/processing, independent of acquisition source
     "service",
     "source",
     "spoof",
     "string",
+    "transaction",
 ];
 
 /// Allowed subdirectories in micro-behaviors/dylib/
@@ -348,6 +367,7 @@ const ALLOWED_MB_FS: &[&str] = &[
     "log-rotation",
     "memory",
     "path",
+    "path-ops", // Pathname operations, distinct from path resource references
     "pipe",
     "proc",
     "quota",
@@ -392,9 +412,13 @@ const ALLOWED_MB_MEM: &[&str] = &[
     "sync",
 ];
 
+/// Allowed subdirectories in micro-behaviors/network/
+const ALLOWED_MB_NETWORK: &[&str] = &["interface"];
+
 /// Allowed subdirectories in micro-behaviors/os/
 const ALLOWED_MB_OS: &[&str] = &[
     "api-resolution",
+    "application",
     "autorun",
     "bpf",
     "callback",
@@ -1353,6 +1377,7 @@ pub(crate) fn validate_directory_structure(traits_path: &Path) -> Result<(), Vec
     // Check micro-behaviors/ subdirectory whitelists
     let mb_checks: &[(&str, &[&str])] = &[
         ("browser-extension", ALLOWED_MB_BROWSER_EXTENSION),
+        ("metaprogramming", ALLOWED_MB_METAPROGRAMMING),
         ("communications", ALLOWED_MB_COMMUNICATIONS),
         ("crypto", ALLOWED_MB_CRYPTO),
         ("data", ALLOWED_MB_DATA),
@@ -1360,6 +1385,7 @@ pub(crate) fn validate_directory_structure(traits_path: &Path) -> Result<(), Vec
         ("fs", ALLOWED_MB_FS),
         ("hardware", ALLOWED_MB_HARDWARE),
         ("mem", ALLOWED_MB_MEM),
+        ("network", ALLOWED_MB_NETWORK),
         ("os", ALLOWED_MB_OS),
         ("process", ALLOWED_MB_PROCESS),
         ("revision-control", ALLOWED_MB_REVISION_CONTROL),
@@ -1618,6 +1644,7 @@ mod tests {
 
         // Create micro-behaviors/ with valid and invalid subdirectories
         std::fs::create_dir_all(traits_path.join("micro-behaviors/communications")).unwrap();
+        std::fs::create_dir_all(traits_path.join("micro-behaviors/network/interface")).unwrap();
         std::fs::create_dir_all(traits_path.join("micro-behaviors/c2")).unwrap(); // Invalid!
         std::fs::create_dir_all(traits_path.join("micro-behaviors/persist")).unwrap(); // Invalid!
 
@@ -1635,6 +1662,11 @@ mod tests {
             "Should flag 'persist' as invalid: {:?}",
             errors
         );
+        assert!(
+            errors.iter().all(|e| !e.contains("'network'")),
+            "Should accept the network/interface taxonomy path: {:?}",
+            errors
+        );
     }
 
     #[test]
@@ -1648,6 +1680,7 @@ mod tests {
         std::fs::create_dir_all(traits_path.join("objectives/collection")).unwrap();
         std::fs::create_dir_all(traits_path.join("micro-behaviors/communications")).unwrap();
         std::fs::create_dir_all(traits_path.join("micro-behaviors/process")).unwrap();
+        std::fs::create_dir_all(traits_path.join("micro-behaviors/data/property/access")).unwrap();
         std::fs::create_dir_all(traits_path.join("well-known/malware")).unwrap();
         std::fs::create_dir_all(traits_path.join("metadata/binary")).unwrap();
         std::fs::create_dir_all(traits_path.join("metadata/vendor")).unwrap();

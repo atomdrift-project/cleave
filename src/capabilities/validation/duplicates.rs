@@ -15,8 +15,8 @@
 
 use super::shared::{MatchSignature, PatternLocation};
 use crate::composite_rules::{
-    CompositeTrait, Condition, DowngradeConditions, FileType as RuleFileType, KvQuery, Platform,
-    TraitDefinition, condition::EncodingSpec, evaluators::build_regex,
+    Arch, CompositeTrait, Condition, DowngradeConditions, FileType as RuleFileType, KvQuery,
+    Platform, TraitDefinition, condition::EncodingSpec, evaluators::build_regex,
 };
 use crate::composite_rules::{
     EncodedQuery, LiteralQuery, PathQuery, RawQuery, SectionQuery, SymbolQuery, TextQuery,
@@ -99,35 +99,16 @@ pub(crate) fn find_duplicate_atomic_traits(
         .map(|chunk| {
             let mut local_map: HashMap<u64, Vec<String>> = HashMap::with_capacity(chunk.len());
             for t in chunk {
-                // Serialize the trait's unique characteristics including filter fields
-                if let Ok(serialized) = bincode::serde::encode_to_vec(
-                    (
-                        &t.r#if,
-                        &t.platforms,
-                        &t.r#for,
-                        &t.not,
-                        &t.unless,
-                        &t.size_min,
-                        &t.size_max,
-                        &t.count_min,
-                        &t.count_max,
-                        &t.per_kb_min,
-                        &t.per_kb_max,
-                        &t.entropy_min,
-                        &t.entropy_max,
-                    ),
-                    bincode::config::standard(),
-                ) {
-                    // Hash the serialized data to get a u64 key (much faster HashMap operations)
-                    use std::collections::hash_map::DefaultHasher;
-                    use std::hash::{Hash, Hasher};
-
-                    let mut hasher = DefaultHasher::new();
-                    serialized.hash(&mut hasher);
-                    let hash_key = hasher.finish();
-
-                    local_map.entry(hash_key).or_default().push(t.id.clone());
-                }
+                // Share effective predicate normalization with scope-only checks.
+                let signature = atomic_predicate_signature(t, true);
+                use std::collections::hash_map::DefaultHasher;
+                use std::hash::{Hash, Hasher};
+                let mut hasher = DefaultHasher::new();
+                signature.hash(&mut hasher);
+                local_map
+                    .entry(hasher.finish())
+                    .or_default()
+                    .push(t.id.clone());
             }
             local_map
         })
@@ -946,6 +927,9 @@ fn discriminator_narrows_the_fact(discriminator: &str) -> bool {
         "#arg:",
         "#args:",
         "#alias:",
+        // Defining a function is not calling or merely mentioning its name.
+        // Shell shadowing guards rely on exactly this distinction.
+        "#kind:Function",
         "#kind:Export",
         "#kind:Forward",
     ]
@@ -1005,12 +989,11 @@ fn extract_patterns(trait_def: &TraitDefinition) -> Vec<(String, PatternLocation
         let is_regex = match_type == "regex";
         let keyed = format!("{value}{discriminator}");
         let normalized = normalize_pattern_for_comparison(&keyed, is_regex);
-        // Only `#kind:` may be dropped when asking whether two surfaces search
-        // the same string: it narrows *where* the token was found, which a text
-        // matcher does not distinguish. `#arg:`/`#args:`/`#alias:` narrow *which
-        // fact* the token names — `require('fs')` is not `require('dns')` — and
-        // no text matcher for the bare token means either, so those keep the
-        // full key and never pair across surfaces.
+        // Reference/call kinds may be dropped when comparing search surfaces.
+        // Definition/export kinds instead identify a provider, not a use.
+        // Arguments and aliases also change the fact: require('fs') is not
+        // require('dns'). Keep these discriminators when comparing with a
+        // bare token on another surface.
         let bare_normalized =
             if discriminator.is_empty() || discriminator_narrows_the_fact(discriminator) {
                 normalized.clone()
@@ -4208,20 +4191,10 @@ pub(crate) fn find_for_only_duplicates(
         // the same blind spot `overlapping-scope-duplicate` closed for
         // composites.
         let signature = format!(
-            "{:?}:{:?}:{:.2}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}",
-            t.r#if,
+            "{}:{:?}:{}",
+            atomic_predicate_signature(t, false),
             t.crit,
-            t.conf,
-            t.size_min,
-            t.size_max,
-            t.count_min,
-            t.count_max,
-            t.per_kb_min,
-            t.per_kb_max,
-            t.entropy_min,
-            t.entropy_max,
-            t.not,
-            t.unless,
+            t.conf.to_bits(),
         );
         groups.entry(signature).or_default().push((
             t.id.clone(),
@@ -4233,10 +4206,14 @@ pub(crate) fn find_for_only_duplicates(
     // Report a group when its members differ in `for:`, in `platforms:`, or both.
     for (sig, traits) in groups {
         if traits.len() > 1 {
-            let unique_fors: HashSet<String> =
-                traits.iter().map(|(_, f, _)| format!("{f:?}")).collect();
-            let unique_platforms: HashSet<String> =
-                traits.iter().map(|(_, _, p)| format!("{p:?}")).collect();
+            let unique_fors: HashSet<String> = traits
+                .iter()
+                .map(|(_, f, _)| format!("{:?}", normalized_scope(f)))
+                .collect();
+            let unique_platforms: HashSet<String> = traits
+                .iter()
+                .map(|(_, _, p)| format!("{:?}", normalized_scope(p)))
+                .collect();
             // A platform-only difference is only worth reporting when merging is
             // actually available: this tree separately caps a trait at four
             // platforms, so a union that would breach that cap is not a
@@ -4290,12 +4267,23 @@ fn is_existence_gate(cond: &Condition) -> bool {
     )
 }
 
-/// Whether two platform lists denote effectively the same set, honouring the `Unix`
-/// (and `Appliance`) meta-platforms via [`Platform::matches_filter`]. So
-/// `[Unix, Windows]` and `[Linux, MacOS, Windows]` are equivalent and not a difference.
+/// Whether platform declarations cover each other. Coverage is directional:
+/// Unix includes BSD, so Linux/macOS cannot stand in for the Unix umbrella.
+/// An empty declaration, like All, imposes no platform restriction.
 fn platforms_equivalent(a: &[Platform], b: &[Platform]) -> bool {
+    let a_all = a.is_empty() || a.contains(&Platform::All);
+    let b_all = b.is_empty() || b.contains(&Platform::All);
+    if a_all || b_all {
+        return a_all && b_all;
+    }
     let covered_by = |xs: &[Platform], ys: &[Platform]| {
-        xs.iter().all(|x| ys.iter().any(|y| x.matches_filter(y)))
+        xs.iter().all(|x| {
+            ys.iter().any(|y| {
+                x == y
+                    || (*y == Platform::Unix && x.is_unix_family())
+                    || (*y == Platform::Appliance && x.is_appliance_family())
+            })
+        })
     };
     covered_by(a, b) && covered_by(b, a)
 }
@@ -4349,15 +4337,57 @@ fn matcher_signature(cond: &Condition) -> String {
     }
 }
 
-/// Find traits with identical matching logic but different metadata.
+/// Scope lists are sets; their spelling order must not create another rule.
+fn normalized_scope<T: std::fmt::Debug>(scope: &[T]) -> Vec<String> {
+    let mut values: Vec<_> = scope.iter().map(|v| format!("{v:?}")).collect();
+    values.sort();
+    values.dedup();
+    values
+}
+
+fn normalized_count_min(value: Option<usize>) -> Option<usize> {
+    value.filter(|&n| n != 1)
+}
+
+/// Shared predicate representation for exact and scope-only duplicate passes.
+/// Inputs have already inherited defaults and expanded file-type groups.
+/// Preserve ordered query data and conditional verdicts; normalize only known
+/// equivalent spellings. Scope-only grouping omits file types and platforms,
+/// but keeps architectures so disjoint CPU-specific rules are never merged.
+fn atomic_predicate_signature(t: &TraitDefinition, include_scope: bool) -> String {
+    format!(
+        "{:?}",
+        (
+            matcher_signature(&t.r#if),
+            include_scope.then(|| (normalized_scope(&t.r#for), normalized_scope(&t.platforms))),
+            normalized_scope(&t.arch),
+            (
+                t.size_min,
+                t.size_max,
+                normalized_count_min(t.count_min),
+                t.count_max
+            ),
+            (t.per_kb_min, t.per_kb_max, t.entropy_min, t.entropy_max),
+            (&t.not, &t.unless, &t.downgrade),
+        )
+    )
+}
+
+fn architectures_overlap(a: &[Arch], b: &[Arch]) -> bool {
+    a.is_empty()
+        || b.is_empty()
+        || a.contains(&Arch::All)
+        || b.contains(&Arch::All)
+        || a.iter().any(|arch| b.contains(arch))
+}
+
+/// Find shared matchers with overlapping scopes and differing constraints or verdicts.
 ///
-/// The grouping signature is the **matcher only** (`if` + `not` + numeric/size
-/// filters). It deliberately ignores `crit`, `conf`, `platforms`, `unless`, and
-/// `downgrade`: two traits that match the same thing but differ in criticality or in
-/// their exceptions are not separate detections — they are one detection whose
-/// variation a single trait with a `downgrade:` can express. Such pairs are reported
-/// with that recommendation. Only flags pairs with overlapping file types (so they'd
-/// actually fire on the same files).
+/// Group by normalized `if`, independently of confidence. Then compare effective
+/// file/platform/architecture scopes, exclusions, quantitative bounds and verdicts.
+/// A shared matcher is a review candidate, not proof that a union of scopes or a
+/// downgrade preserves both predicates. Different quantitative observations are
+/// retained. Exact and scope-only checks share matcher/default normalization.
 ///
 /// One exception avoids a false positive: the metadata field-presence idiom, where a
 /// gate matcher is discriminated purely by `unless:` (e.g. `pkginfo-no-author` vs
@@ -4407,6 +4437,9 @@ pub(crate) fn find_atomic_logic_duplicates(
                 if !file_types_overlap(&a.r#for, &b.r#for) {
                     continue;
                 }
+                if !architectures_overlap(&a.arch, &b.arch) {
+                    continue;
+                }
                 if !platforms_overlap(&a.platforms, &b.platforms) {
                     continue;
                 }
@@ -4435,8 +4468,8 @@ pub(crate) fn find_atomic_logic_duplicates(
                 // compare metadata when the complete quantitative scope is identical.
                 // `count_min: 1` is the default and carries no additional precision,
                 // so normalize that spelling before comparing scopes.
-                let a_count_min = (a.count_min != Some(1)).then_some(a.count_min).flatten();
-                let b_count_min = (b.count_min != Some(1)).then_some(b.count_min).flatten();
+                let a_count_min = normalized_count_min(a.count_min);
+                let b_count_min = normalized_count_min(b.count_min);
                 let bands_differ = a.size_min != b.size_min
                     || a.size_max != b.size_max
                     || a_count_min != b_count_min
@@ -4458,7 +4491,9 @@ pub(crate) fn find_atomic_logic_duplicates(
                 if not_differs && crit_differs {
                     continue;
                 }
-                let conf_differs = (a.conf - b.conf).abs() >= 0.1;
+                let conf_differs = a.conf != b.conf;
+                let file_types_differ = normalized_scope(&a.r#for) != normalized_scope(&b.r#for);
+                let arch_differs = normalized_scope(&a.arch) != normalized_scope(&b.arch);
                 let platforms_differ = !platforms_equivalent(&a.platforms, &b.platforms);
                 let unless_differs = format!("{:?}", a.unless) != format!("{:?}", b.unless);
                 let downgrade_differs =
@@ -4466,6 +4501,8 @@ pub(crate) fn find_atomic_logic_duplicates(
                 if !crit_differs
                     && !not_differs
                     && !conf_differs
+                    && !file_types_differ
+                    && !arch_differs
                     && !platforms_differ
                     && !unless_differs
                     && !downgrade_differs
@@ -4491,6 +4528,8 @@ pub(crate) fn find_atomic_logic_duplicates(
                 let only_exceptions_differ = exceptions_differ
                     && !crit_differs
                     && !conf_differs
+                    && !file_types_differ
+                    && !arch_differs
                     && !platforms_differ
                     && !bands_differ;
                 let both_metadata = a.id.starts_with("metadata/") && b.id.starts_with("metadata/");
@@ -4512,7 +4551,13 @@ pub(crate) fn find_atomic_logic_duplicates(
                     diffs.push(format!("crit: {:?} vs {:?}", a.crit, b.crit));
                 }
                 if conf_differs {
-                    diffs.push(format!("conf: {:.2} vs {:.2}", a.conf, b.conf));
+                    diffs.push(format!("conf: {} vs {}", a.conf, b.conf));
+                }
+                if file_types_differ {
+                    diffs.push(format!("for: {:?} vs {:?}", a.r#for, b.r#for));
+                }
+                if arch_differs {
+                    diffs.push(format!("arch: {:?} vs {:?}", a.arch, b.arch));
                 }
                 if platforms_differ {
                     diffs.push(format!("platforms: {:?} vs {:?}", a.platforms, b.platforms));
@@ -4562,7 +4607,7 @@ pub(crate) fn find_atomic_logic_duplicates(
                 let mergeable_via_downgrade =
                     crit_differs || unless_differs || downgrade_differs || bands_differ;
                 let recommendation = if mergeable_via_downgrade {
-                    " — merge into one trait and express the difference as a downgrade:"
+                    " — review consolidation; preserve exclusions and conditional downgrade: behavior"
                 } else {
                     ""
                 };
@@ -4570,7 +4615,7 @@ pub(crate) fn find_atomic_logic_duplicates(
                 let for_a: Vec<_> = a.r#for.iter().map(|f| format!("{f:?}")).collect();
                 let for_b: Vec<_> = b.r#for.iter().map(|f| format!("{f:?}")).collect();
                 let desc = format!(
-                    "Same matching logic, overlapping types ({}∩{}), but: {}{}",
+                    "Same normalized matcher, overlapping types ({}∩{}), but: {}{}",
                     for_a.join(","),
                     for_b.join(","),
                     diffs.join(", "),
@@ -5592,5 +5637,169 @@ mod literal_regex_tests {
             normalize_pattern_for_comparison("\\.aws/credentials", false),
             "\\.aws/credentials"
         );
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod canonical_atomic_duplicate_tests {
+    use super::*;
+
+    #[test]
+    fn platform_equivalence_does_not_confuse_overlap_with_coverage() {
+        let unix = [Platform::Unix, Platform::Windows];
+        let desktop = [Platform::Linux, Platform::MacOS, Platform::Windows];
+        assert!(!platforms_equivalent(&unix, &desktop));
+        assert!(!platforms_equivalent(&desktop, &unix));
+        assert!(platforms_overlap(&unix, &[Platform::FreeBsd]));
+        assert!(!platforms_overlap(&desktop, &[Platform::FreeBsd]));
+        assert!(!platforms_equivalent(
+            &[Platform::Appliance],
+            &[Platform::RouterOs]
+        ));
+        assert!(platforms_equivalent(
+            &[Platform::Appliance, Platform::RouterOs],
+            &[Platform::Appliance],
+        ));
+        assert!(platforms_equivalent(&[], &[Platform::All]));
+        assert!(!platforms_equivalent(&[], &[Platform::Unix]));
+        assert!(platforms_equivalent(
+            &[Platform::Windows, Platform::Unix, Platform::FreeBsd],
+            &unix,
+        ));
+    }
+
+    #[test]
+    fn platform_only_difference_is_reported_for_shared_matcher() {
+        let (mut a, _) = dos_pair();
+        a.platforms = vec![Platform::Unix, Platform::Windows];
+        let mut b = a.clone();
+        b.id = "desktop-only".into();
+        b.platforms = vec![Platform::Linux, Platform::MacOS, Platform::Windows];
+        let issues = find_atomic_logic_duplicates(&[a, b]);
+        assert_eq!(issues.len(), 1);
+        assert!(issues[0].2.contains("platforms:"));
+    }
+
+    fn dos_pair() -> (TraitDefinition, TraitDefinition) {
+        let a: TraitDefinition = serde_yaml::from_str(
+            "id: dos-list-of-lists-call\n\
+             desc: DOS list-of-lists interrupt\n\
+             crit: notable\n\
+             conf: 0.88\n\
+             platforms: [windows, unix]\n\
+             for: [dos_com, staticlib]\n\
+             size_max: 65536\n\
+             if: {type: hex, pattern: 'B4 52 E8'}\n",
+        )
+        .unwrap();
+        let mut b = a.clone();
+        b.id = "dos-get-list-of-lists-near".into();
+        b.conf = 0.80;
+        b.r#for.push(RuleFileType::Data);
+        (a, b)
+    }
+
+    #[test]
+    fn overlapping_scope_and_small_confidence_difference_is_reported() {
+        let (a, b) = dos_pair();
+        let issues = find_atomic_logic_duplicates(&[a, b]);
+        assert_eq!(issues.len(), 1);
+        assert!(issues[0].2.contains("for:"));
+        assert!(issues[0].2.contains("conf: 0.88 vs 0.8"));
+    }
+
+    #[test]
+    fn confidence_is_not_rounded_away() {
+        let (a, mut b) = dos_pair();
+        b.conf = 0.881;
+        // Scope-only cannot assume these verdict confidences are identical.
+        assert!(find_for_only_duplicates(&[a.clone(), b.clone()]).is_empty());
+        assert_eq!(find_atomic_logic_duplicates(&[a, b]).len(), 1);
+    }
+
+    #[test]
+    fn disjoint_scopes_are_not_overlapping_logic_duplicates() {
+        let (a, b) = dos_pair();
+        let mut disjoint_file = b.clone();
+        disjoint_file.r#for = vec![RuleFileType::Shell];
+        assert!(find_atomic_logic_duplicates(&[a.clone(), disjoint_file]).is_empty());
+        let mut linux = a.clone();
+        linux.platforms = vec![Platform::Linux];
+        let mut windows = b.clone();
+        windows.platforms = vec![Platform::Windows];
+        assert!(find_atomic_logic_duplicates(&[linux, windows]).is_empty());
+        let mut x86 = a;
+        x86.arch = vec![Arch::X86];
+        let mut arm = b;
+        arm.arch = vec![Arch::Arm];
+        assert!(find_atomic_logic_duplicates(&[x86.clone(), arm.clone()]).is_empty());
+        arm.conf = x86.conf;
+        assert!(find_for_only_duplicates(&[x86.clone(), arm.clone()]).is_empty());
+        arm.r#for = x86.r#for.clone();
+        let mut exact = Vec::new();
+        find_duplicate_atomic_traits(&[x86, arm], &mut exact);
+        assert!(exact.is_empty());
+    }
+
+    #[test]
+    fn exact_check_shares_default_and_scope_order_normalization() {
+        let (a, mut b) = dos_pair();
+        b.r#for = a.r#for.iter().rev().cloned().collect();
+        b.platforms.reverse();
+        b.count_min = Some(1);
+        let mut exact = Vec::new();
+        find_duplicate_atomic_traits(&[a, b], &mut exact);
+        assert_eq!(exact.len(), 1);
+    }
+
+    #[test]
+    fn explicit_exists_true_uses_the_same_exact_matcher() {
+        let mut a: TraitDefinition = serde_yaml::from_str(
+            "id: field-present\ndesc: Field present\nif: {type: value, path: name}\n",
+        )
+        .unwrap();
+        let mut b = a.clone();
+        a.id = "a".into();
+        b.id = "b".into();
+        if let Condition::Kv(query) = &mut b.r#if {
+            query.exists = Some(true);
+        } else {
+            panic!("expected a value query");
+        }
+        let mut exact = Vec::new();
+        find_duplicate_atomic_traits(&[a, b], &mut exact);
+        assert_eq!(exact.len(), 1);
+    }
+
+    #[test]
+    fn different_thresholds_keep_distinct_observations() {
+        let (a, mut b) = dos_pair();
+        b.count_min = Some(6);
+        let mut exact = Vec::new();
+        find_duplicate_atomic_traits(&[a.clone(), b.clone()], &mut exact);
+        assert!(exact.is_empty());
+        assert!(find_for_only_duplicates(&[a.clone(), b.clone()]).is_empty());
+        assert!(find_atomic_logic_duplicates(&[a, b]).is_empty());
+    }
+
+    #[test]
+    fn conditional_verdicts_are_not_identical_predicates() {
+        let (a, mut b) = dos_pair();
+        b.r#for = a.r#for.clone();
+        b.conf = a.conf;
+        b.downgrade = Some(
+            serde_yaml::from_str(
+                "any:\n  - id: metadata/package/testing/presence/harness::test-directory-path\n",
+            )
+            .unwrap(),
+        );
+        let mut exact = Vec::new();
+        find_duplicate_atomic_traits(&[a.clone(), b.clone()], &mut exact);
+        assert!(exact.is_empty());
+        assert!(find_for_only_duplicates(&[a.clone(), b.clone()]).is_empty());
+        let issues = find_atomic_logic_duplicates(&[a, b]);
+        assert_eq!(issues.len(), 1);
+        assert!(issues[0].2.contains("downgrade: differs"));
     }
 }

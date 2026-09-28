@@ -24,6 +24,7 @@
 pub(crate) mod applescript;
 pub(crate) mod archive;
 pub(crate) mod ast_walker;
+pub(crate) mod cfml;
 pub(crate) mod chm;
 
 // Unified analysis input type
@@ -218,13 +219,9 @@ pub fn analyzer_for_file_type(
         | FileType::Dockerfile
         | FileType::Wasm
         | FileType::Dex
-        // Compressed package images we identify but do not yet unpack. The
-        // generic analyzer still runs strings, entropy and encoded-payload
-        // detection over the container; before they had a type they were
-        // `Unknown` and skipped outright.
-        | FileType::Snap
+        // Flatpak bundles remain opaque until their container format is
+        // supported by the archive extractor.
         | FileType::Flatpak
-        | FileType::SquashFs
         | FileType::Data => Some(Box::new(
             generic::GenericAnalyzer::new(*file_type).with_capability_mapper(mapper_or_empty),
         )),
@@ -698,6 +695,7 @@ impl FileTypeExt for FileType {
             FileType::MachO => vec!["macho", "dylib", "kext"],
             FileType::Elf => vec!["elf", "so", "ko"],
             FileType::Pe => vec!["pe", "exe", "dll", "bat", "ps1"],
+            FileType::Ne => vec!["ne", "exe", "windows"],
             FileType::Shell => {
                 vec!["sh", "bash", "zsh", "application/x-sh", "application/x-zsh"]
             }

@@ -2823,9 +2823,9 @@ impl ArchiveAnalyzer {
         use super::guards::ExtractedMemberMetadata;
         use super::tar::tar_entry_type_label;
 
-        // The disk walk is `WalkDir::new(temp).min_depth(1).max_depth(10)`:
-        // a member more than ten components deep is never analyzed there.
-        const MAX_WALK_DEPTH: usize = 10;
+        // Keep the in-memory reader aligned with archive paths walked from a
+        // temporary extraction tree, while scanning through nested package
+        // layouts that the former ten-level cap silently omitted.
         let fake_root = Path::new("/__cleave_archive__");
         let mut archive = ::tar::Archive::new(reader);
 
@@ -3000,15 +3000,10 @@ impl ArchiveAnalyzer {
                 }
 
                 let depth = rel_path.split('/').count();
-                if depth > MAX_WALK_DEPTH {
-                    // Skipping silently is an invitation: bury the payload
-                    // under `public/a/b/c/.../z/` and it is never scanned, as
-                    // the npm package `osinthell` does with 26 single-letter
-                    // directories. The depth limit stays -- the walk it mirrors
-                    // has one -- but the gap is recorded so the archive at
-                    // least reports that it was not read in full.
+                if depth > super::guards::MAX_ARCHIVE_MEMBER_DEPTH {
                     guard.add_extraction_note(format!(
-                        "member {depth} levels deep, beyond the {MAX_WALK_DEPTH}-level analysis limit: {rel_path}"
+                        "member {depth} levels deep, beyond the {}-level analysis limit: {rel_path}",
+                        super::guards::MAX_ARCHIVE_MEMBER_DEPTH
                     ));
                     continue;
                 }
@@ -3774,7 +3769,7 @@ impl ArchiveAnalyzer {
         // Collect all files
         let all_files: Vec<_> = walkdir::WalkDir::new(temp_dir)
             .min_depth(1)
-            .max_depth(10)
+            .max_depth(super::guards::MAX_ARCHIVE_MEMBER_DEPTH)
             .into_iter()
             .filter_map(std::result::Result::ok)
             .filter(|e| e.file_type().is_file())
@@ -4257,7 +4252,7 @@ impl ArchiveAnalyzer {
         // Collect all files to analyze
         let all_entries: Vec<_> = walkdir::WalkDir::new(temp_dir)
             .min_depth(1)
-            .max_depth(10)
+            .max_depth(super::guards::MAX_ARCHIVE_MEMBER_DEPTH)
             .into_iter()
             .filter_map(std::result::Result::ok)
             .collect();

@@ -666,9 +666,12 @@ impl super::CapabilityMapper {
         // This enables cross-file patterns like "npm package with .dll" and
         // parent-byte patterns like encrypted ZIP/APK members.
 
-        // Iterative evaluation to handle chained dependencies
-        const MAX_ITERATIONS: usize = 5;
-        for _ in 0..MAX_ITERATIONS {
+        // Reach a fixed point before finishing the negative-condition pass.
+        // A fixed five-round budget can be consumed entirely by positive
+        // dependencies, starving every rule with `unless:`. Each productive
+        // round inserts at least one previously unseen composite ID, so the
+        // rule count bounds productive rounds; one final round proves stability.
+        for _ in 0..=self.composite_rules.len() {
             let mut ctx = EvaluationContext::new(
                 container_report,
                 &container_bytes,
@@ -686,6 +689,7 @@ impl super::CapabilityMapper {
             let candidates: Vec<&crate::composite_rules::CompositeTrait> = self
                 .composite_rules
                 .iter()
+                .filter(|rule| !seen_ids.contains(rule.id.as_str()))
                 // Only cross-file scopes may pool here. Nested findings arrive
                 // without per-member evidence locations, so `Scope::key` maps
                 // them all to the empty key: a `scope: file` (the default) or
@@ -723,8 +727,17 @@ impl super::CapabilityMapper {
                     )
                 })
                 .collect();
+            let positive_candidates: Vec<_> = candidates
+                .iter()
+                .copied()
+                .filter(|rule| !rule.has_negative_conditions())
+                .collect();
+            let negative_candidates: Vec<_> = candidates
+                .into_iter()
+                .filter(|rule| rule.has_negative_conditions())
+                .collect();
             let mut new_findings: Vec<Finding> = Vec::new();
-            for rule in candidates {
+            for rule in positive_candidates {
                 ctx.for_mask = rule.for_mask();
                 if let Some(finding) = rule.evaluate(&ctx)
                     && !seen_ids.contains(finding.id.as_str())
@@ -734,11 +747,37 @@ impl super::CapabilityMapper {
             }
             ctx.for_mask = TypeMask::ALL;
 
-            if new_findings.is_empty() {
+            if !new_findings.is_empty() {
+                drop(ctx);
+                for finding in new_findings {
+                    seen_ids.insert(finding.id.clone().to_string());
+                    combined_findings.push(finding.clone());
+                    container_findings.push(finding);
+                }
+                continue;
+            }
+
+            // The positive set is stable, so `unless:` composites can now
+            // observe any matching exception composites before they emit host
+            // findings. Keep them in their own pass just as the ordinary
+            // per-file evaluator does.
+            let mut negative_findings: Vec<Finding> = Vec::new();
+            for rule in negative_candidates {
+                ctx.for_mask = rule.for_mask();
+                if let Some(finding) = rule.evaluate(&ctx)
+                    && !seen_ids.contains(finding.id.as_str())
+                {
+                    negative_findings.push(finding);
+                }
+            }
+            ctx.for_mask = TypeMask::ALL;
+            drop(ctx);
+
+            if negative_findings.is_empty() {
                 break;
             }
 
-            for finding in new_findings {
+            for finding in negative_findings {
                 seen_ids.insert(finding.id.clone().to_string());
                 combined_findings.push(finding.clone());
                 container_findings.push(finding);
@@ -796,6 +835,11 @@ impl super::CapabilityMapper {
             seen_ids.insert(finding.id.clone().to_string());
             container_findings.push(finding);
         }
+
+        tracing::debug!(
+            findings = ?container_findings.iter().map(|finding| finding.id.as_str()).collect::<Vec<_>>(),
+            "Container composites evaluated"
+        );
 
         // Mark container-level findings with source context
         for finding in &mut container_findings {
@@ -1172,6 +1216,100 @@ composite_rules:
                 .any(|f| f.id.as_str() == "test/container::self-pair"),
             "legs from two nested members must not satisfy a file-scoped composite"
         );
+    }
+
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn container_positive_chain_does_not_starve_negative_rules() {
+        let mut yaml = String::from(
+            "defaults:\n  for: [zip]\n  platforms: [windows, unix]\ntraits:\n  - id: test/chain::seed\n    desc: Seed\n    crit: baseline\n    if: {type: basename, exact: zz-never-seed}\n  - id: test/chain::absent\n    desc: Absent\n    crit: baseline\n    if: {type: basename, exact: zz-never-absent}\ncomposite_rules:\n",
+        );
+        let mut previous = String::from("seed");
+        for i in 0..7 {
+            yaml.push_str(&format!(
+                "  - id: test/chain::step-{i}\n    desc: Chain step\n    crit: notable\n    scope: archive\n    all: [{{id: test/chain::{previous}}}]\n",
+            ));
+            previous = format!("step-{i}");
+        }
+        for (name, suppressor) in [
+            ("unguarded-result", "absent"),
+            ("late-suppressed", "step-6"),
+        ] {
+            yaml.push_str(&format!(
+                "  - id: test/chain::{name}\n    desc: Guarded result\n    crit: suspicious\n    scope: archive\n    all: [{{id: test/chain::seed}}]\n    unless: [{{id: test/chain::{suppressor}}}]\n",
+            ));
+        }
+        let file = write_test_traits(&yaml);
+        let mapper =
+            super::super::CapabilityMapper::from_yaml(file.path()).expect("load chain mapper");
+        let report = make_test_report();
+        let nested = vec![make_test_finding("test/chain::seed", Criticality::Baseline)];
+        let found = mapper.evaluate_container_composites(&report, &nested, "zip", None);
+        let ids: Vec<_> = found.iter().map(|f| f.id.as_str()).collect();
+        assert!(
+            ids.contains(&"test/chain::step-6"),
+            "positive chain truncated: {ids:?}"
+        );
+        assert!(
+            ids.contains(&"test/chain::unguarded-result"),
+            "negative pass starved: {ids:?}"
+        );
+        assert!(
+            !ids.contains(&"test/chain::late-suppressed"),
+            "late suppressor ignored: {ids:?}"
+        );
+    }
+
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn container_suppression_preserves_member_local_evidence() {
+        let yaml = r#"
+defaults:
+  for: [zip]
+  platforms: [windows, unix]
+traits:
+  - id: test/scope::payload
+    desc: Member payload
+    crit: notable
+    if: {type: basename, exact: zz-never-payload}
+    unless: [{id: test/scope::build-marker}]
+  - id: test/scope::build-marker
+    desc: Sibling build marker
+    crit: notable
+    if: {type: basename, exact: zz-never-build}
+composite_rules:
+  - id: test/scope::payload-package
+    desc: Package with payload
+    crit: hostile
+    scope: archive
+    all: [{id: test/scope::payload}]
+  - id: test/scope::guarded-package
+    desc: Guarded package
+    crit: suspicious
+    scope: archive
+    all: [{id: test/scope::payload}]
+    unless: [{id: test/scope::build-marker}]
+"#;
+        let file = write_test_traits(yaml);
+        let mapper = super::super::CapabilityMapper::from_yaml(file.path())
+            .expect("load suppression mapper");
+        let mut dependent = make_test_finding("test/scope::payload-package", Criticality::Hostile);
+        dependent.trait_refs.push("test/scope::payload".into());
+        let mut findings = vec![
+            make_test_finding("test/scope::payload", Criticality::Notable),
+            make_test_finding("test/scope::build-marker", Criticality::Notable),
+            dependent,
+            make_test_finding("test/scope::guarded-package", Criticality::Suspicious),
+        ];
+        let targets = ["test/scope::payload-package", "test/scope::guarded-package"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        mapper.apply_retroactive_unless_suppression_to_selected_findings(&mut findings, &targets);
+        let ids: Vec<_> = findings.iter().map(|f| f.id.as_str()).collect();
+        assert!(ids.contains(&"test/scope::payload"));
+        assert!(ids.contains(&"test/scope::payload-package"));
+        assert!(!ids.contains(&"test/scope::guarded-package"));
     }
 
     #[test]

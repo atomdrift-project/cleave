@@ -100,10 +100,7 @@ impl DoomedSkipIndex {
                 }
             }
 
-            let pools_across_members = matches!(
-                rule.scope,
-                Some(Scope::Outer | Scope::Archive | Scope::Package)
-            );
+            let pools_across_members = rule.scope.is_some_and(Scope::pools_members);
             if pools_across_members {
                 for id in all_trait_ids_in_all_any(rule) {
                     mark_never(&id);

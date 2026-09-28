@@ -6,7 +6,7 @@
 //! finding contributes up to [`ATOMIC_MAX_MATCHES`] byte-addressed windows sized
 //! by its criticality ([`Criticality::hex_context`]); overlapping windows merge
 //! into one chunk. Two traits matching the same span are redundant, so the
-//! weaker (`conf × crit`) is dropped — only the strongest annotation shows. A
+//! weaker ([`Strength`]) is dropped — only the strongest annotation shows. A
 //! textual file additionally carries a `LineIndex`, which labels each chunk with
 //! the 1-based source line/column of its first byte; binaries carry neither.
 //! Rendering those bytes as numbered text lines or a hex dump is solely an
@@ -413,16 +413,103 @@ fn referring_crit<'a>(shown: &[&'a Finding]) -> FxHashMap<&'a str, Criticality> 
     m
 }
 
-/// A finding's rank for overlap resolution: confidence weighted by criticality.
-/// Matches [`note_score`] so the placement pass and the per-chunk dedup agree on
+/// A match's rank for overlap resolution, in order:
+/// 1. criticality — a trait's own, raised to that of the strongest composite
+///    drawing on it (see [`referring_crit`]);
+/// 2. the trait's own criticality, so a composite still outranks the legs it
+///    lent its criticality to;
+/// 3. an invocation over a reference (see [`is_invocation`]): of two equally
+///    graded notes on one span, "Shell invokes the curl command" tells a
+///    reader what the line does, "References curl file-output option" only
+///    what it mentions;
+/// 4. confidence.
+///
+/// The placement pass and the per-chunk dedup share it, so they agree on
 /// which match is "stronger."
-fn finding_score(finding: &Finding) -> f32 {
-    finding.conf * f32::from(finding.crit.rank())
+///
+/// Composite support counts because the weaker note is dropped outright: a
+/// notable leg behind a suspicious conclusion (a paste-site URL a tunnel
+/// publishes its address to) used to lose its span to a more confident but
+/// generic notable (a short-domain URL heuristic), and the evidence the
+/// conclusion rests on never owned a line.
+#[derive(Clone, Copy, Debug)]
+struct Strength {
+    rank: u8,
+    own: u8,
+    invocation: bool,
+    conf: f32,
+}
+
+impl Strength {
+    fn total_cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.rank
+            .cmp(&other.rank)
+            .then(self.own.cmp(&other.own))
+            .then(self.invocation.cmp(&other.invocation))
+            .then(self.conf.total_cmp(&other.conf))
+    }
+}
+
+/// What [`Strength`] needs to know about a file's findings beyond a note.
+struct Ranker<'a> {
+    /// Strongest composite criticality referencing each leg.
+    leg_crit: FxHashMap<&'a str, Criticality>,
+    /// Findings that describe an invocation.
+    invocations: FxHashSet<&'a str>,
+}
+
+impl<'a> Ranker<'a> {
+    fn new(shown: &[&'a Finding]) -> Self {
+        Self {
+            leg_crit: referring_crit(shown),
+            invocations: shown
+                .iter()
+                .filter(|f| is_invocation(f))
+                .map(|f| f.id.as_str())
+                .collect(),
+        }
+    }
+
+    fn strength(&self, id: &str, crit: Criticality, conf: f32) -> Strength {
+        Strength {
+            rank: self.leg_crit.get(id).map_or(crit, |&c| c.max(crit)).rank(),
+            own: crit.rank(),
+            invocation: self.invocations.contains(id),
+            conf,
+        }
+    }
+}
+
+/// Whether a finding describes an invocation rather than a reference.
+///
+/// The structural signal is a call-site symbol match (`symbol` evidence from
+/// the `call` source: the matcher saw `curl` invoked, not mentioned). Text
+/// and regex matchers carry no such signal, so their wording decides: a leaf
+/// id naming a call (`-call`, `-command`, `invoke`, `exec`) or a description
+/// using an action verb ("Source invokes systemctl enable action").
+fn is_invocation(finding: &Finding) -> bool {
+    const ID_MARKERS: [&str; 4] = ["-call", "-command", "invoke", "exec"];
+    const VERBS: [&str; 5] = ["invokes", "calls", "runs", "executes", "spawns"];
+    let id = finding.id.as_str();
+    let leaf = id.rsplit_once("::").map_or(id, |(_, leaf)| leaf);
+    finding
+        .evidence
+        .iter()
+        .any(|e| e.method == "symbol" && e.source == "call")
+        || ID_MARKERS.iter().any(|m| leaf.contains(m))
+        || finding
+            .desc
+            .as_str()
+            .split_whitespace()
+            .any(|w| VERBS.iter().any(|v| w.eq_ignore_ascii_case(v)))
 }
 
 // ========================================================================
 // Byte-addressed context windows
 // ========================================================================
+
+/// Text files at or under this size render in full rather than as windows.
+const SMALL_TEXT_WHOLE_BYTES: u64 = 2048;
 
 fn capture_byte_slices(
     shown: &[&Finding],
@@ -438,7 +525,15 @@ fn capture_byte_slices(
     // the match), plus the match anchor `at`. The strongest matches reserve the
     // widest window; overlapping windows merge into one segment, which
     // `render_byte_segment` emits as a single raw-byte chunk.
+    //
+    // A small text file is shown whole: its header comment or docstring is often
+    // the one place that says what the code is for, and a window cut to the
+    // matches alone trims it away for no real saving.
+    let whole = line_index.is_some() && total <= SMALL_TEXT_WHOLE_BYTES;
     let bounds = |crit: Criticality, off: u64, len: u32| {
+        if whole {
+            return (0, total, off);
+        }
         let (before, after) = crit.hex_context();
         let lo = off.saturating_sub(before);
         let hi = (off + u64::from(len) + after).min(total);
@@ -447,19 +542,21 @@ fn capture_byte_slices(
 
     // An atomic leg a stronger composite drew on reserves that composite's wider
     // window, so the evidence is sized for the conclusion it supports.
-    let leg_crit = referring_crit(shown);
+    let ranker = Ranker::new(shown);
 
     let mut windows: Vec<Window> = Vec::new();
     // Match span `[start, end)` of every placed note, with its strength. A later
     // composite is placed only where no *stronger* match already sits.
-    let mut placed: Vec<(u64, u64, f32)> = Vec::new();
+    let mut placed: Vec<(u64, u64, Strength)> = Vec::new();
     let span = |off: u64, len: u32| (off, off + u64::from(len.max(1)));
 
     // Atomic findings anchor at their own offsets (the fixed scaffolding). A leg a
     // stronger composite drew on is sized by that composite's severity.
+    let strength = |f: &Finding| ranker.strength(f.id.as_str(), f.crit, f.conf);
     for finding in shown.iter().filter(|f| f.trait_refs.is_empty()) {
-        let score = finding_score(finding);
-        let crit = leg_crit
+        let score = strength(finding);
+        let crit = ranker
+            .leg_crit
             .get(finding.id.as_str())
             .map_or(finding.crit, |&c| c.max(finding.crit));
         for (off, len) in finding_anchors(finding, by_id, file_path) {
@@ -485,19 +582,19 @@ fn capture_byte_slices(
     let mut composites: Vec<&&Finding> =
         shown.iter().filter(|f| !f.trait_refs.is_empty()).collect();
     composites.sort_by(|a, b| {
-        finding_score(b)
-            .total_cmp(&finding_score(a))
+        strength(b)
+            .total_cmp(&strength(a))
             .then_with(|| a.id.cmp(&b.id))
     });
     for finding in composites {
-        let score = finding_score(finding);
+        let score = strength(finding);
         let leg = composite_legs(finding, by_id, file_path)
             .into_iter()
             .find(|&(off, len, _)| {
                 let (s, e) = span(off, len);
                 !placed
                     .iter()
-                    .any(|&(ps, pe, pscore)| pscore >= score && ps < e && s < pe)
+                    .any(|&(ps, pe, pscore)| pscore.total_cmp(&score).is_ge() && ps < e && s < pe)
             });
         if let Some((off, len, _)) = leg {
             let (lo, hi, at) = bounds(finding.crit, off, len);
@@ -512,7 +609,9 @@ fn capture_byte_slices(
         }
     }
 
-    merge(windows, |seg| render_byte_segment(data, seg, line_index))
+    merge(windows, |seg| {
+        render_byte_segment(data, seg, line_index, &ranker)
+    })
 }
 
 /// Emit a merged byte segment as one raw-byte unit: the contiguous slice
@@ -523,6 +622,7 @@ fn render_byte_segment(
     data: &[u8],
     seg: &Segment,
     line_index: Option<&LineIndex>,
+    ranker: &Ranker<'_>,
 ) -> Vec<ContextLine> {
     let total = data.len() as u64;
     let lo = seg.lo.min(total);
@@ -538,7 +638,7 @@ fn render_byte_segment(
         None => (None, None),
     };
     let mut notes: Vec<Note> = seg.notes.iter().map(|(_, note)| note.clone()).collect();
-    dedup_notes(&mut notes);
+    dedup_notes(&mut notes, ranker);
     vec![ContextLine {
         loc: lo,
         line,
@@ -560,12 +660,21 @@ struct Segment {
     notes: Vec<(u64, Note)>,
 }
 
+/// Path depth below the namespace at which two notes count as the same kind
+/// of evidence: `supply-chain/impersonation` and `malware/supply-chain` differ.
+const NOTE_FAMILY_DEPTH: usize = 2;
+
 /// Reduce a chunk's notes to the set worth showing:
 /// 1. dedup by finding id (keep highest crit);
-/// 2. dedup overlapping byte spans — two traits matching the same location are
-///    redundant, so keep the strongest (`conf × crit`), greedily;
+/// 2. dedup overlapping byte spans, strongest first ([`Strength`]), greedily.
+///    Two traits of one family on the same bytes say the same thing, so the
+///    weaker goes. An equally graded suspicious-or-worse trait from another
+///    family says something different (a campaign attribution and an
+///    impersonation finding on one `require` line), so one such second note
+///    per span is kept. Notable lines stay single: there, a second note is
+///    usually a generic restatement (a short domain beside a paste-site URL);
 /// 3. order by severity desc, id asc — stable, deterministic output.
-fn dedup_notes(notes: &mut Vec<Note>) {
+fn dedup_notes(notes: &mut Vec<Note>, ranker: &Ranker<'_>) {
     notes.sort_unstable_by(|a, b| a.id.cmp(&b.id).then_with(|| b.crit.cmp(&a.crit)));
     notes.dedup_by(|a, b| a.id == b.id);
 
@@ -573,29 +682,35 @@ fn dedup_notes(notes: &mut Vec<Note>) {
     // The id tie-break makes the winner among equal-score overlapping notes
     // deterministic — without it, the displayed annotation flips with trait
     // evaluation order (which shifts across builds).
+    let strength = |n: &Note| ranker.strength(n.id.as_str(), n.crit, n.conf);
     notes.sort_unstable_by(|a, b| {
-        note_score(b)
-            .total_cmp(&note_score(a))
+        strength(b)
+            .total_cmp(&strength(a))
             .then_with(|| a.id.cmp(&b.id))
     });
     let mut kept: Vec<Note> = Vec::with_capacity(notes.len());
     for note in notes.drain(..) {
-        let overlaps = kept.iter().any(|kept| {
+        let note_end = note.off + u64::from(note.len.max(1));
+        let mut overlapping = kept.iter().filter(|kept| {
             let kept_end = kept.off + u64::from(kept.len.max(1));
-            let note_end = note.off + u64::from(note.len.max(1));
             kept.off < note_end && note.off < kept_end
         });
-        if !overlaps {
+        let keep = match (overlapping.next(), overlapping.next()) {
+            (None, _) => true,
+            (Some(only), None) => {
+                note.crit >= Criticality::Suspicious
+                    && note.crit == only.crit
+                    && crate::output::trait_family(only.id.as_str(), NOTE_FAMILY_DEPTH)
+                        != crate::output::trait_family(note.id.as_str(), NOTE_FAMILY_DEPTH)
+            }
+            (Some(_), Some(_)) => false,
+        };
+        if keep {
             kept.push(note);
         }
     }
     kept.sort_unstable_by(|a, b| b.crit.cmp(&a.crit).then_with(|| a.id.cmp(&b.id)));
     *notes = kept;
-}
-
-/// Rank for overlap resolution: confidence weighted by criticality level.
-fn note_score(n: &Note) -> f32 {
-    n.conf * f32::from(n.crit.rank())
 }
 
 /// Sort windows by start, merge overlapping/adjacent ones into [`Segment`]s, and
@@ -791,7 +906,8 @@ mod tests {
 
     #[test]
     fn textual_chunk_keeps_multiline_start_position() {
-        let mut data = vec![b'x'; 900];
+        // Past `SMALL_TEXT_WHOLE_BYTES`, so the file is windowed, not shown whole.
+        let mut data = vec![b'x'; 3_000];
         data[99] = b'\n';
         data[199] = b'\n';
         data[500] = b'M';
@@ -943,7 +1059,8 @@ mod tests {
 
     #[test]
     fn textual_atomic_leg_reserves_stronger_composites_window() {
-        let data = vec![b'x'; 2_048];
+        // Past `SMALL_TEXT_WHOLE_BYTES`, so the file is windowed, not shown whole.
+        let data = vec![b'x'; 3_000];
         let near = finding("cap/near", Criticality::Notable, &[800]);
         let mut far = finding("cap/far", Criticality::Notable, &[100]);
         far.conf = 0.95; // the composite's most-confident leg — it anchors here
@@ -959,6 +1076,80 @@ mod tests {
         assert_eq!(near.loc, 800 - 128);
         assert_eq!(near.line, Some(1));
         assert_eq!(near.col, Some(800 - 128 + 1));
+    }
+
+    #[test]
+    fn a_small_text_file_is_captured_whole() {
+        let data = "\"\"\"Opt-in helper: the token comes from the user's own profile.\"\"\"\n\
+                    import subprocess\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\
+                    subprocess.run(cmd, shell=True)\n";
+        let at = data.find("subprocess.run").expect("fixture") as u64;
+        let mut r = report(vec![finding(
+            "process/create::shell-true",
+            Criticality::Notable,
+            &[at],
+        )]);
+        capture(
+            &mut r,
+            data.as_bytes(),
+            FileType::Python,
+            &FxHashSet::default(),
+        );
+        let shown: String = r
+            .context
+            .iter()
+            .map(|c| String::from_utf8_lossy(&c.data).into_owned())
+            .collect();
+        assert!(shown.contains("Opt-in helper"), "docstring kept: {shown}");
+        assert!(shown.contains("shell=True"), "match kept: {shown}");
+    }
+
+    #[test]
+    fn a_different_family_note_on_the_same_span_is_kept_once() {
+        let note = |id: &str, crit: Criticality, conf: f32| Note {
+            crit,
+            id: id.to_string().into(),
+            desc: id.to_string().into(),
+            off: 10,
+            len: 12,
+            conf,
+        };
+        let mut notes = vec![
+            note(
+                "well-known/malware/supply-chain/x::campaign-host",
+                Criticality::Suspicious,
+                0.98,
+            ),
+            note(
+                "objectives/supply-chain/impersonation/typosquat::lookalike-host",
+                Criticality::Suspicious,
+                0.9,
+            ),
+            note(
+                "objectives/supply-chain/impersonation/typosquat::lookalike-host-import",
+                Criticality::Notable,
+                0.9,
+            ),
+            note(
+                "objectives/supply-chain/impersonation/other::third-family",
+                Criticality::Notable,
+                0.8,
+            ),
+        ];
+        let ranker = Ranker {
+            leg_crit: FxHashMap::default(),
+            invocations: FxHashSet::default(),
+        };
+        dedup_notes(&mut notes, &ranker);
+        let ids: Vec<&str> = notes.iter().map(|n| n.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            [
+                "objectives/supply-chain/impersonation/typosquat::lookalike-host",
+                "well-known/malware/supply-chain/x::campaign-host",
+            ],
+            "the attribution and one impersonation note, no more: {ids:?}"
+        );
     }
 
     #[test]
@@ -982,6 +1173,105 @@ mod tests {
             "weaker overlapping trait dropped: {:?}",
             r.context
         );
+    }
+
+    #[test]
+    fn overlapping_leg_of_a_stronger_composite_outranks_a_more_confident_peer() {
+        // A notable leg behind a suspicious composite keeps its span against a
+        // more confident notable heuristic matching the same bytes, so the
+        // evidence the conclusion rests on owns a line (a paste-site URL used
+        // to lose to a generic short-domain pattern). The composite itself
+        // anchors on its other leg.
+        let data = format!("{}post('https://shz.al/', f)\n", "x = 1\n".repeat(200));
+        let at = data.find("shz.al").expect("fixture") as u64;
+        let mut leg = finding("c2/paste::shz-al", Criticality::Notable, &[at]);
+        leg.conf = 0.7;
+        let mut peer = finding("c2/domain::short-domain-url", Criticality::Notable, &[at]);
+        peer.conf = 0.8;
+        let mut other = finding("c2/tunnel::quick-service", Criticality::Notable, &[0]);
+        other.conf = 0.95;
+        let mut composite = finding("c2/paste::rendezvous", Criticality::Suspicious, &[]);
+        composite.trait_refs = vec![
+            "c2/tunnel::quick-service".to_string().into(),
+            "c2/paste::shz-al".to_string().into(),
+        ];
+        let mut r = report(vec![leg, peer, other, composite]);
+        capture(
+            &mut r,
+            data.as_bytes(),
+            FileType::Python,
+            &FxHashSet::default(),
+        );
+        let ids: Vec<&str> = r
+            .context
+            .iter()
+            .flat_map(|c| &c.notes)
+            .map(|n| n.id.as_str())
+            .collect();
+        assert!(
+            ids.contains(&"c2/paste::shz-al"),
+            "leg kept: {:?}",
+            r.context
+        );
+        assert!(
+            !ids.contains(&"c2/domain::short-domain-url"),
+            "peer dropped: {:?}",
+            r.context
+        );
+    }
+
+    #[test]
+    fn equally_graded_overlap_prefers_an_invocation_over_a_reference() {
+        // Same tier, same span: the call-site match describes what the line
+        // does and wins over a more confident mention, but a stronger tier
+        // still beats an invocation.
+        let data = b"curl --output \"$2\" \"$1\"\n";
+        let mut call = finding("cli::curl-command-call", Criticality::Notable, &[]);
+        call.conf = 0.6;
+        call.desc = "Shell invokes the curl command".to_string().into();
+        call.evidence = vec![Evidence::new("symbol", "call", "curl").with_offset(0)];
+        let mut mention = finding("curl::curl-output-file", Criticality::Notable, &[0]);
+        mention.conf = 0.9;
+        mention.desc = "References curl file-output option".to_string().into();
+        let mut r = report(vec![call, mention]);
+        capture(&mut r, data, FileType::Shell, &FxHashSet::default());
+        let ids: Vec<&str> = r
+            .context
+            .iter()
+            .flat_map(|c| &c.notes)
+            .map(|n| n.id.as_str())
+            .collect();
+        assert_eq!(ids, ["cli::curl-command-call"], "{:?}", r.context);
+
+        let call = finding("cli::curl-command-call", Criticality::Notable, &[0]);
+        let mention = finding("curl::curl-output-file", Criticality::Suspicious, &[0]);
+        let mut r = report(vec![call, mention]);
+        capture(&mut r, data, FileType::Shell, &FxHashSet::default());
+        let ids: Vec<&str> = r
+            .context
+            .iter()
+            .flat_map(|c| &c.notes)
+            .map(|n| n.id.as_str())
+            .collect();
+        assert_eq!(ids, ["curl::curl-output-file"], "{:?}", r.context);
+    }
+
+    #[test]
+    fn is_invocation_reads_call_evidence_then_wording() {
+        let mut call = finding("t::curl", Criticality::Notable, &[]);
+        call.evidence = vec![Evidence::new("symbol", "call", "curl").with_offset(0)];
+        assert!(is_invocation(&call));
+        assert!(is_invocation(&finding(
+            "t::python-setsid-call",
+            Criticality::Notable,
+            &[0]
+        )));
+        let mut verb = finding("t::systemctl-enable-action", Criticality::Notable, &[0]);
+        verb.desc = "Source invokes systemctl enable action".to_string().into();
+        assert!(is_invocation(&verb));
+        let mut mention = finding("t::curl-output-file", Criticality::Notable, &[0]);
+        mention.desc = "References curl file-output option".to_string().into();
+        assert!(!is_invocation(&mention));
     }
 
     #[test]
@@ -1070,7 +1360,7 @@ mod tests {
     #[test]
     fn binary_overlapping_traits_keep_strongest() {
         // Two traits matching the same bytes collapse to the strongest
-        // (`conf × crit`) — the same overlap dedup as the text path, in hex mode.
+        // — the same overlap dedup as the text path, in hex mode.
         let data = vec![0u8; 512];
         let strong = finding("mal/exec", Criticality::Hostile, &[100]);
         let weak = finding("cap/str", Criticality::Notable, &[100]);

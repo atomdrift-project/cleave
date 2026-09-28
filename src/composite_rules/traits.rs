@@ -2044,6 +2044,9 @@ impl TraitDefinition {
 ///             (falls back to File when no such ancestor exists)
 /// Archive  →  nearest enclosing archive of any kind, always innermost
 ///             (falls back to File when no such ancestor exists)
+/// Nest     →  a JVM class and its `$`-named inner, anonymous and
+///             lambda classes (`Foo.class` + `Foo$Bar.class`); the JVM's
+///             nest. Not archive nesting. Any other file: same as File
 /// File     →  same leaf-file (the deepest file-shaped unit, e.g. a
 ///             PE inside a zip; ignores decoded payload layers below)
 ///             (default)
@@ -2074,6 +2077,17 @@ pub(crate) enum Scope {
     /// When no enclosing archive exists, behaves exactly like
     /// [`Scope::File`] -- never widens to pool globally as a fallback.
     Archive,
+    /// A JVM class together with its nestmates: the inner, anonymous and
+    /// lambda classes compiled beside it as `Outer$Inner.class`. Source that
+    /// is one unit to its author -- a TLS client and the TrustManager it
+    /// defines inline -- lands in several class files, and `file` sees only
+    /// one of them while `archive` pools every class in the JAR. For a
+    /// location that is not a `.class` member, behaves exactly like
+    /// [`Scope::File`].
+    ///
+    /// "Nest" is the JVM's term (JEP 181 `NestHost`/`NestMembers`); it has
+    /// nothing to do with archives nested inside archives.
+    Nest,
     /// Same leaf-file. The deepest file-shaped unit (e.g. a PE
     /// extracted from a zip). Decoded payload layers below the
     /// file are pooled together at the file level. Default.
@@ -2109,6 +2123,10 @@ impl Scope {
             // File: strip any decoded-payload suffix; what remains is
             // the leaf-file identifier.
             (Scope::File, Some(loc)) => strip_byte_offset_location(strip_decode_suffix(loc)),
+            // Nest: the file key cut back to its nest host's name.
+            (Scope::Nest, Some(loc)) => {
+                nest_host(strip_byte_offset_location(strip_decode_suffix(loc)))
+            }
             // Archive: nearest enclosing archive entry path, falling back to
             // file-scope (never a global pool) when nothing encloses it.
             (Scope::Archive, Some(loc)) => {
@@ -2130,6 +2148,46 @@ impl Scope {
                 }
             }
         }
+    }
+}
+
+impl Scope {
+    /// Whether this scope can join evidence from different files, which is
+    /// what makes a composite run in the container pass and what obliges it
+    /// to name a container type in `for:`.
+    pub(crate) fn pools_members(self) -> bool {
+        matches!(
+            self,
+            Scope::Outer | Scope::Package | Scope::Archive | Scope::Nest
+        )
+    }
+}
+
+/// The nest-host key for a file-scope key: `…/Foo$Bar$1.class` and
+/// `…/Foo.class` both become `…/Foo`. A key that is not a `.class` member is
+/// returned unchanged, so [`Scope::Nest`] degrades to [`Scope::File`].
+///
+/// The `.class` may be followed by a `:`-joined inner location that
+/// `strip_byte_offset_location` kept (`…/Foo.class:12:5`); the class name
+/// ends at that `.class`. A `$` in the first character of the simple name
+/// (`$Proxy1`) is part of the name, not a nest separator.
+fn nest_host(key: &str) -> &str {
+    let Some(end) = key
+        .rmatch_indices(".class")
+        .map(|(i, _)| i)
+        .find(|&i| matches!(key.as_bytes().get(i + ".class".len()), None | Some(b':')))
+    else {
+        return key;
+    };
+    let class = &key[..end];
+    let name = class.rfind(['/', '!', ':']).map_or(0, |i| i + 1);
+    match class[name..]
+        .char_indices()
+        .skip(1)
+        .find(|&(_, c)| c == '$')
+    {
+        Some((i, _)) => &class[..name + i],
+        None => class,
     }
 }
 
@@ -5117,6 +5175,67 @@ mod scope_tests {
             Scope::Archive.key(Some("archive:bar.so"), &[], ""),
             "archive:"
         );
+    }
+
+    #[test]
+    fn nest_joins_a_class_with_its_nestmates() {
+        let host = Scope::Nest.key(Some("archive:com/github/Tls.class"), &[], "");
+        assert_eq!(host, "archive:com/github/Tls");
+        for member in [
+            "archive:com/github/Tls$Trust.class",
+            "archive:com/github/Tls$1.class",
+            "archive:com/github/Tls$Trust$Inner.class",
+            "archive:com/github/Tls$Trust.class:0x40",
+            "archive:com/github/Tls$Trust.class:12:5",
+        ] {
+            assert_eq!(Scope::Nest.key(Some(member), &[], ""), host, "{member}");
+        }
+    }
+
+    #[test]
+    fn nest_keeps_unrelated_classes_apart() {
+        let key = |loc| Scope::Nest.key(Some(loc), &[], "");
+        // Same package, different class: not nestmates.
+        assert_ne!(
+            key("archive:com/github/Tls.class"),
+            key("archive:com/github/Loader.class")
+        );
+        // A name that merely extends another's is a different class.
+        assert_ne!(key("archive:a/Tls.class"), key("archive:a/TlsX.class"));
+        // The same class name in two JARs is two nests.
+        assert_ne!(
+            key("archive:x.jar!a/Tls.class"),
+            key("archive:y.jar!a/Tls.class")
+        );
+        // A leading `$` is part of the simple name.
+        assert_eq!(key("archive:a/$Proxy1.class"), "archive:a/$Proxy1");
+    }
+
+    #[test]
+    fn nest_falls_back_to_file_scope_for_non_class_locations() {
+        for loc in [
+            "archive:lib/foo.so",
+            "archive:a/classes.txt",
+            "0x1234",
+            "encoding_chain:base64",
+        ] {
+            assert_eq!(
+                Scope::Nest.key(Some(loc), &[], ""),
+                Scope::File.key(Some(loc), &[], ""),
+                "{loc}"
+            );
+        }
+        assert_eq!(Scope::Nest.key(None, &[], ""), "");
+    }
+
+    #[test]
+    fn pools_members_is_every_scope_wider_than_a_file() {
+        for s in [Scope::Outer, Scope::Package, Scope::Archive, Scope::Nest] {
+            assert!(s.pools_members(), "{s:?}");
+        }
+        for s in [Scope::File, Scope::Leaf] {
+            assert!(!s.pools_members(), "{s:?}");
+        }
     }
 
     #[test]

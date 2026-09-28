@@ -456,26 +456,14 @@ pub(crate) fn collect_trait_refs_from_trait_def(t: &TraitDefinition) -> Vec<(Str
 /// rule should name the directory instead of listing its members.
 const MIN_EXTERNAL_DIR_REFS: usize = 8;
 
-/// How much of a directory the enumerated refs must cover before "name the
-/// directory instead" is sound advice, in percent.
+/// Find large `any:` clauses that enumerate an entire external directory.
 ///
-/// A raw count does not justify it. `id: <dir>` in a positive `any:` means
-/// *any* member of that directory, so collapsing to it **widens** the rule by
-/// every member the author did not list. `generic-bundle-id-pattern`
-/// enumerates 8 of the ~303 ids under `metadata/signed/id`; taking the advice
-/// there would match every signed application, `com.apple.*` included — the
-/// enumeration *was* the precision. Only once the refs already cover nearly
-/// the whole directory is the collapse equivalent rather than a widening.
-const MIN_DIR_COVERAGE_PCT: usize = 80;
-
-/// Find `any:` clauses that enumerate most of an external directory.
+/// A partial list is intentional precision, even at 99% coverage: replacing it
+/// with a directory reference admits omitted members. Require at least
+/// [`MIN_EXTERNAL_DIR_REFS`] distinct references and exact full coverage.
 ///
-/// Both conditions must hold: at least [`MIN_EXTERNAL_DIR_REFS`] references,
-/// **and** at least [`MIN_DIR_COVERAGE_PCT`] of that directory's definitions.
-/// The count alone is not enough — see [`MIN_DIR_COVERAGE_PCT`].
-///
-/// `dir_sizes` maps a directory prefix to how many definitions live under it.
-/// A directory absent from the map is treated as unknown and never flagged.
+/// `dir_sizes` maps a directory prefix to its definition count. Unknown
+/// directories are never flagged. Reference validity is checked separately.
 ///
 /// Returns a list of `(rule_id, directory, trait_count, trait_ids)` for violations.
 #[must_use]
@@ -531,7 +519,10 @@ pub(crate) fn find_redundant_any_refs(
         let Some(&dir_size) = dir_sizes.get(&dir) else {
             continue;
         };
-        if dir_size > 0 && trait_ids.len() * 100 >= dir_size * MIN_DIR_COVERAGE_PCT {
+        let mut trait_ids = trait_ids;
+        trait_ids.sort();
+        trait_ids.dedup();
+        if trait_ids.len() >= MIN_EXTERNAL_DIR_REFS && trait_ids.len() == dir_size {
             violations.push((rule.id.clone(), dir, trait_ids.len(), trait_ids));
         }
     }
@@ -539,7 +530,7 @@ pub(crate) fn find_redundant_any_refs(
     violations
 }
 
-/// Find `any:` or `all:` clauses that explicitly list every atomic trait in a directory.
+/// Find `any:` clauses that explicitly list every rule in a directory.
 ///
 /// For `any:`, directory references already mean "any rule in this directory", so a composite like:
 ///
@@ -551,12 +542,11 @@ pub(crate) fn find_redundant_any_refs(
 ///
 /// is needlessly hand-maintained when `foo/bar` contains only `a` and `b`.
 ///
-/// For `all:`, directory syntax is not equivalent because directory references are any-of
-/// prefix matches at runtime. Still, listing every trait in a directory is usually a taxonomy
-/// smell: the directory has become the rule definition instead of a reusable technique bucket.
+/// `all:` is intentionally excluded: requiring every member is not equivalent
+/// to a directory's any-of semantics. A count alone cannot establish bad taxonomy.
 ///
 /// This catches both local and external directories, and complements `find_redundant_any_refs`,
-/// which catches large same-directory groups even when they do not cover the whole directory.
+/// which catches large external groups and also counts composite definitions.
 ///
 /// Returns `(rule_id, clause, directory, trait_count, trait_ids)` for violations.
 #[must_use]
@@ -582,7 +572,7 @@ pub(crate) fn find_many_directory_refs(
         dir_refs
     }
 
-    for (clause, conditions) in [("any", rule.any.as_deref()), ("all", rule.all.as_deref())] {
+    for (clause, conditions) in [("any", rule.any.as_deref())] {
         let Some(conditions) = conditions else {
             continue;
         };

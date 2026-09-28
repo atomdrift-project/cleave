@@ -292,17 +292,12 @@ const BANNED_SEGMENT_EXCEPTIONS: &[(&str, &str)] = &[
     ),
 ];
 
-/// Maximum number of traits allowed in a single directory.
-/// Directories exceeding this should be split into subdirectories.
-pub(crate) const MAX_TRAITS_PER_DIRECTORY: usize = 75;
-
-/// Directories explicitly allowed to exceed `MAX_TRAITS_PER_DIRECTORY`.
-/// Use sparingly — splitting by sub-technique is preferred. Listed here
-/// when the trait set is per-implementation (one set per supported
-/// language) and splitting by language would violate the
-/// platform/language directory ban.
-pub(crate) const OVERSIZED_DIRECTORY_EXCEPTIONS: &[&str] =
-    &["objectives/command-and-control/reverse-shell/dup"];
+/// Maximum number of rules (atomic traits plus composite rules) allowed in a
+/// single directory. Composites count because a directory holding 40 atoms and
+/// 90 roll-ups is just as flat to an author and to the ML directory feature as
+/// one holding 130 atoms. Directories exceeding this should be split into
+/// subdirectories.
+pub(crate) const MAX_TRAITS_PER_DIRECTORY: usize = 100;
 
 /// Maximum number of immediate subdirectories allowed in one directory.
 /// Past this, a level has stopped being a taxonomy and become a flat list:
@@ -1532,39 +1527,87 @@ pub(crate) fn find_duplicate_second_level_directories(
     violations
 }
 
-/// Check if YAML file paths in micro-behaviors/ or objectives/ are at the correct depth.
-///
-/// Valid depths are 3 or 4 subdirectories: micro-behaviors/a/b/c/x.yaml or micro-behaviors/a/b/c/d/x.yaml
-///
-/// Returns `(path, depth, "shallow" or "deep")` for violations.
+/// Directory depth above this value warrants review, but never rejects rules.
+/// Count directories below the tier; filenames and local rule IDs do not count.
+pub(crate) const TAXONOMY_DEPTH_REVIEW_THRESHOLD: usize = 5;
+
+/// Find taxonomy directories deeper than the advisory threshold in any tier.
 #[must_use]
-pub(crate) fn find_depth_violations(yaml_files: &[String]) -> Vec<(String, usize, &'static str)> {
-    let mut violations = Vec::new();
-
-    for path in yaml_files {
-        // Only check micro-behaviors/ and objectives/ paths
-        if !path.starts_with("micro-behaviors/") && !path.starts_with("objectives/") {
+pub(crate) fn find_deep_taxonomy_directories(trait_dirs: &[String]) -> Vec<(String, usize)> {
+    let mut candidates = Vec::new();
+    for directory in trait_dirs {
+        let mut parts = directory.split('/');
+        if !matches!(
+            parts.next(),
+            Some("micro-behaviors" | "objectives" | "metadata" | "well-known")
+        ) {
             continue;
         }
+        let depth = parts.count();
+        if depth > TAXONOMY_DEPTH_REVIEW_THRESHOLD {
+            candidates.push((directory.clone(), depth));
+        }
+    }
+    candidates.sort();
+    candidates.dedup();
+    candidates
+}
 
-        // Count directory components (excluding the root micro-behaviors/ or objectives/ and the filename)
-        // e.g., "micro-behaviors/communications/http/client/shell.yaml" -> ["cap", "comm", "http", "client", "shell.yaml"]
-        let parts: Vec<&str> = path.split('/').collect();
-        if parts.len() < 2 {
+/// Find sparse sibling cohorts that may be over-fragmented in the taxonomy.
+///
+/// A cohort is advisory when a parent has at least two rule-bearing child
+/// branches and their combined subtree contains fewer than 35 rules.
+/// This does not prove the branches should be flattened: the child
+/// techniques may be genuinely distinct. It identifies places where cap pressure
+/// does not explain the extra branching and a human should check whether breadth
+/// could preserve precision with a simpler visible path.
+#[must_use]
+pub(crate) fn find_sparse_sibling_cohorts(
+    direct_rule_counts: &HashMap<String, usize>,
+) -> Vec<(String, usize, usize)> {
+    const SPARSE_SIBLING_RULE_THRESHOLD: usize = 35;
+    let mut subtree_counts: HashMap<String, usize> = HashMap::new();
+
+    for (directory, count) in direct_rule_counts {
+        if !directory.starts_with("micro-behaviors/") && !directory.starts_with("objectives/") {
             continue;
         }
-
-        // Subdirectory count = total parts - 1 (root) - 1 (filename)
-        let subdir_count = parts.len() - 2;
-
-        if subdir_count < 2 {
-            violations.push((path.clone(), subdir_count, "shallow"));
-        } else if subdir_count > 4 {
-            violations.push((path.clone(), subdir_count, "deep"));
+        let parts: Vec<&str> = directory.split('/').collect();
+        if parts.len() < 3 {
+            continue;
+        }
+        for end in 1..=parts.len() {
+            *subtree_counts.entry(parts[..end].join("/")).or_default() += count;
         }
     }
 
-    violations
+    let mut children_by_parent: HashMap<String, Vec<usize>> = HashMap::new();
+    for (directory, count) in &subtree_counts {
+        if let Some((parent, _)) = directory.rsplit_once('/') {
+            children_by_parent
+                .entry(parent.to_string())
+                .or_default()
+                .push(*count);
+        }
+    }
+
+    let mut candidates = Vec::new();
+    for (parent, children) in children_by_parent {
+        // Ignore the tier and first category layer; they are too broad to be
+        // useful as local organization advice.
+        if parent.split('/').count() < 3 {
+            continue;
+        }
+        if children.len() < 2 {
+            continue;
+        }
+        let sibling_rules: usize = children.iter().sum();
+        if sibling_rules < SPARSE_SIBLING_RULE_THRESHOLD {
+            candidates.push((parent, sibling_rules, children.len()));
+        }
+    }
+    candidates.sort_by(|a, b| (a.1, &a.0).cmp(&(b.1, &b.0)));
+    candidates
 }
 
 /// Find trait and composite rule IDs whose local identifier contains invalid
@@ -1820,24 +1863,27 @@ pub(crate) fn find_sibling_name_restatement(
     out
 }
 
-/// Find directories with too many traits (suggests need for subdirectories).
+/// Find directories with too many rules (suggests need for subdirectories).
+/// Atomic traits and composite rules are counted together.
 ///
-/// Returns: `Vec<(directory_path, trait_count)>`
+/// Returns: `Vec<(directory_path, rule_count)>`
 #[must_use]
 pub(crate) fn find_oversized_trait_directories(
     trait_definitions: &[TraitDefinition],
+    composite_rules: &[CompositeTrait],
 ) -> Vec<(String, usize)> {
-    // Count traits per directory (extract directory from trait ID)
-    let mut dir_counts: HashMap<String, usize> = HashMap::new();
+    // Count rules per directory (extract directory from the rule ID)
+    let mut dir_counts: HashMap<&str, usize> = HashMap::new();
 
-    for t in trait_definitions {
-        // Extract directory from trait ID (everything before ::)
-        let dir = if let Some(idx) = t.id.find("::") {
-            t.id[..idx].to_string()
-        } else if let Some(idx) = t.id.rfind('/') {
-            t.id[..idx].to_string()
-        } else {
-            continue; // No directory prefix
+    let ids = trait_definitions
+        .iter()
+        .map(|t| t.id.as_str())
+        .chain(composite_rules.iter().map(|r| r.id.as_str()));
+    for id in ids {
+        // Everything before `::`, else before the last `/`
+        let dir = match id.find("::").or_else(|| id.rfind('/')) {
+            Some(idx) => &id[..idx],
+            None => continue, // No directory prefix
         };
 
         *dir_counts.entry(dir).or_insert(0) += 1;
@@ -1845,10 +1891,8 @@ pub(crate) fn find_oversized_trait_directories(
 
     let mut violations: Vec<_> = dir_counts
         .into_iter()
-        .filter(|(dir, count)| {
-            *count > MAX_TRAITS_PER_DIRECTORY
-                && !OVERSIZED_DIRECTORY_EXCEPTIONS.contains(&dir.as_str())
-        })
+        .filter(|(_, count)| *count > MAX_TRAITS_PER_DIRECTORY)
+        .map(|(dir, count)| (dir.to_string(), count))
         .collect();
 
     violations.sort_by_key(|v| std::cmp::Reverse(v.1)); // Sort by count descending
@@ -2348,14 +2392,10 @@ const CONCRETE_PLATFORM_COUNT: usize = 25;
 /// Effective filetype count used when `for: [all]` is set — larger than any threshold.
 const ALL_FILETYPES_COUNT: usize = usize::MAX;
 
-/// Threshold for flagging a trait as having too many effective platforms.
-///
-/// A trait must declare only the platforms and file types it actually needs to
-/// fire — and no more. This is a **performance** constraint as much as a
-/// correctness one: every declared platform/type widens the set of files the
-/// trait is evaluated against, so an over-broad `platforms:`/`for:` makes the
-/// engine scan the matcher across inputs it can never legitimately match,
-/// wasting CPU on every analysis. Constrain to the minimum necessary to execute.
+/// Four or more platform declarations warrant review, not rejection.
+/// Platform count alone cannot distinguish an overbroad API rule from a
+/// format-defined fact that legitimately holds on every supported OS. Never
+/// force duplicate matchers or taxonomy relocation to satisfy this heuristic.
 const BROAD_PLATFORM_THRESHOLD: usize = 4;
 
 /// Maximum effective file types a trait may target, **by matcher (query)
@@ -2463,16 +2503,6 @@ fn broad_filetype_category(cond: &Condition) -> &'static str {
     }
 }
 
-/// Trait path prefixes where 4+ effective platforms are permitted.
-pub(crate) const BROAD_PLATFORM_ALLOWLIST: &[&str] = &[
-    "objectives/supply-chain/",
-    // Package-registry record facts (ecosystem, age, adoption, deprecation,
-    // listing description) describe a release independent of OS — a package is
-    // published once and installed everywhere — so they are inherently
-    // all-platform. Narrowing `platforms:` would silently drop coverage.
-    "metadata/registry/",
-];
-
 /// Trait path prefixes where broad file type coverage is permitted.
 ///
 /// These directories contain patterns (network indicators, encoding schemes, etc.)
@@ -2484,6 +2514,14 @@ pub(crate) const BROAD_PLATFORM_ALLOWLIST: &[&str] = &[
 /// `text` matcher in an allowlisted `text:` directory passes; the same directory
 /// does **not** license a broad `value`/`symbol`/etc. matcher.
 pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
+    // Browser SQL schemas are shared by source and compiled carriers. These
+    // bounded query matchers require specific columns and tables in any format.
+    "text:micro-behaviors/data/db/access/chromium-queries.yaml",
+    // Referenced application/product names can occur in source, binaries,
+    // manifests and embedded markup. Preserve that coverage when name markers
+    // move out of artifact/library or objective-keyword categories. This only
+    // affects text matcher scope, never the combined per-directory rule cap.
+    "text:micro-behaviors/os/application/target/",
     // `media.*` is one fact namespace shared by every passive container that
     // can carry a payload — font, png, jpeg, wav, aiff, mp3, mp4, ico, gif,
     // bmp, webp. The namespace exists precisely so a carrier rule is written
@@ -2668,32 +2706,18 @@ fn effective_filetype_count(t: &TraitDefinition) -> usize {
     }
 }
 
-/// Find atomic traits with 4+ effective platforms outside the broad-platform allowlist.
+/// Find atomic traits whose platform breadth deserves a non-blocking review.
 ///
-/// `Platform::All` counts as all known platform variants. Traits must be in an allowlisted
-/// directory to use 4+ platforms; otherwise they should target a narrower platform set.
-///
-/// Returns `Vec<(trait_id, source_file, platform_count)>` for violations.
+/// Applies uniformly across tiers; a directory name cannot justify a scope.
+/// A reviewer must compare the actual matcher with its declared platforms.
 #[must_use]
 pub(crate) fn find_broad_platform_traits(
     trait_definitions: &[TraitDefinition],
     rule_source_files: &HashMap<String, String>,
 ) -> Vec<(String, String, usize)> {
-    trait_definitions
+    let mut candidates: Vec<_> = trait_definitions
         .iter()
-        .filter(|t| {
-            let count = effective_platform_count(&t.platforms);
-            if count < BROAD_PLATFORM_THRESHOLD {
-                return false;
-            }
-            let source = rule_source_files
-                .get(&t.id)
-                .map(String::as_str)
-                .unwrap_or("");
-            !BROAD_PLATFORM_ALLOWLIST
-                .iter()
-                .any(|prefix| source.contains(prefix))
-        })
+        .filter(|t| effective_platform_count(&t.platforms) >= BROAD_PLATFORM_THRESHOLD)
         .map(|t| {
             let source = rule_source_files
                 .get(&t.id)
@@ -2701,7 +2725,9 @@ pub(crate) fn find_broad_platform_traits(
                 .unwrap_or_else(|| "unknown".to_string());
             (t.id.clone(), source, effective_platform_count(&t.platforms))
         })
-        .collect()
+        .collect();
+    candidates.sort();
+    candidates
 }
 
 /// Find atomic traits that list `unix` alongside `linux` or `macos`, which is redundant.

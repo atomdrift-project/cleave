@@ -66,7 +66,16 @@ impl GenericAnalyzer {
     fn analyze_source(&self, file_path: &Path, content: &str) -> AnalysisReport {
         let ctx =
             crate::analysis_context::AnalysisContext::open(file_path, content.as_bytes()).ok();
-        self.analyze_source_internal(file_path, content, None, None, None, ctx.as_ref(), None)
+        self.analyze_source_internal(
+            file_path,
+            content,
+            None,
+            None,
+            None,
+            None,
+            ctx.as_ref(),
+            None,
+        )
     }
 
     #[allow(clippy::too_many_arguments)] // Existing input projections plus cancellation.
@@ -76,6 +85,7 @@ impl GenericAnalyzer {
         content: &str,
         stng_strings: Option<&[stng::ExtractedString]>,
         original_bytes: Option<&[u8]>,
+        analysis_bytes: Option<&[u8]>,
         precomputed_sha256: Option<String>,
         source_ctx: Option<&crate::analysis_context::AnalysisContext<'_>>,
         cancellation: Option<&Arc<std::sync::atomic::AtomicBool>>,
@@ -115,7 +125,9 @@ impl GenericAnalyzer {
         tracing::debug!("GenericAnalyzer: Target created in {:?}", start.elapsed());
 
         let mut report = AnalysisReport::new(target);
-        let eval_bytes = original_bytes.unwrap_or(content.as_bytes());
+        let eval_bytes = analysis_bytes
+            .or(original_bytes)
+            .unwrap_or(content.as_bytes());
         // `source_ctx` is resolved by the caller — either the context lib.rs
         // opened once and threaded in, or one the caller opened on `eval_bytes`.
         let source_ast = source_ctx.and_then(crate::analysis_context::AnalysisContext::source_ast);
@@ -261,7 +273,8 @@ impl GenericAnalyzer {
 
         // Evaluate all rules (atomic + composite) and merge into report.
         //
-        // Use the original binary bytes (`original_bytes`) rather than
+        // Use byte-accurate analysis bytes when available, otherwise the
+        // original binary bytes (`original_bytes`) rather than
         // `content.as_bytes()` — the latter is the UTF-8-lossy view, which
         // for binary inputs (LNK / pyc / RPM / etc. routed through this
         // analyzer) replaces every non-UTF-8 byte with U+FFFD (3 bytes
@@ -282,6 +295,41 @@ impl GenericAnalyzer {
             "GenericAnalyzer: Rule evaluation completed in {:?}",
             t_eval.elapsed()
         );
+
+        // Decode a small set of statically identifiable DOS COM XOR stubs
+        // before stopping at the encrypted wrapper. filefacts owns the stub
+        // layouts and bounds; the recovered body is then analyzed through the
+        // normal DOS COM sub-file path so existing DOS rules see its behavior.
+        // A virtual-path marker prevents a decoded child from recursively
+        // selecting itself again, while still allowing independent archive or
+        // embedded-file traversal inside that child.
+        let decoded_path = file_path.display().to_string();
+        if matches!(self.file_type, FileType::DosCom | FileType::Data)
+            && !decoded_path.contains("##dos-xor@")
+            && let Some(bytes) = original_bytes
+            && let Some(decoded) = filefacts::decode_dos_com_xor_payload(bytes)
+        {
+            let virtual_path = format!("{decoded_path}##dos-xor@{:#x}", decoded.source_offset);
+            let location_prefix = format!("decoded-xor@{:#x}", decoded.source_offset);
+            // Preserve the original COM image layout: its absolute memory
+            // operands and data tables are relative to the 0x100 load base,
+            // not to the start of the encrypted body.
+            let mut decoded_image = bytes.to_vec();
+            let decoded_end = decoded.source_offset + decoded.bytes.len();
+            decoded_image[decoded.source_offset..decoded_end].copy_from_slice(&decoded.bytes);
+            let mut entries = crate::analyzers::subfile::analyze_subfile_bytes(
+                &decoded_image,
+                &virtual_path,
+                FileType::DosCom,
+                &location_prefix,
+                0,
+                &self.capability_mapper,
+            );
+            for entry in &mut entries {
+                entry.encoding = Some(vec![format!("dos-com-xor-0x{:02x}", decoded.xor_key)]);
+            }
+            report.files.extend(entries);
+        }
 
         report.metadata.analysis_duration_ms = start.elapsed().as_millis() as u64;
         report.metadata.tools_used = vec![parser_name];
@@ -456,6 +504,7 @@ fn is_decoded_stng_method(method: stng::StringMethod) -> bool {
             | stng::StringMethod::Base32Decode
             | stng::StringMethod::Base85Decode
             | stng::StringMethod::ScriptDecode
+            | stng::StringMethod::CfmlDecode
     )
 }
 
@@ -541,6 +590,39 @@ pub(crate) fn peel_nested_encoding(value: &str, chain: Vec<String>) -> (String, 
 
 impl Analyzer for GenericAnalyzer {
     fn analyze_input(&self, input: &AnalysisInput<'_>) -> Result<AnalysisReport> {
+        if self.file_type == FileType::Cfml
+            && let Some(decoded) = crate::analyzers::cfml::decrypt_template(input.data)
+        {
+            let content = String::from_utf8_lossy(&decoded);
+            let source_ctx = crate::analysis_context::AnalysisContext::open_as(
+                input.path,
+                &decoded,
+                filefacts::FileType::Cfml,
+            )
+            .ok();
+            let decoded_strings = source_ctx
+                .as_ref()
+                .map(crate::analysis_context::AnalysisContext::text_rows);
+            let mut report = self.analyze_source_internal(
+                input.path,
+                &content,
+                decoded_strings.as_deref(),
+                Some(input.data),
+                Some(&decoded),
+                input.sha256.clone(),
+                source_ctx.as_ref(),
+                input.cancellation.as_ref(),
+            );
+            report
+                .structure
+                .push(crate::analyzers::utils::create_language_feature(
+                    "cfml",
+                    "allaire-des-template-decoder",
+                    "Allaire encrypted ColdFusion template (statically decoded)",
+                ));
+            return Ok(report);
+        }
+
         // Use data and strings from input (no file read, no string extraction).
         // Reuse the threaded context, else open one on the same `input.data`.
         let content = String::from_utf8_lossy(input.data);
@@ -551,6 +633,7 @@ impl Analyzer for GenericAnalyzer {
             &content,
             Some(input.strings),
             Some(input.data),
+            None,
             input.sha256.clone(),
             source_ctx,
             input.cancellation.as_ref(),

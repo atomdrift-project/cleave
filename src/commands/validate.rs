@@ -912,6 +912,12 @@ struct TraitExpectations {
     required_prefixes: Vec<String>,
     #[serde(default)]
     forbidden_prefixes: Vec<String>,
+    /// Exact trait/composite IDs, when a fixture needs to distinguish rules
+    /// within the same leaf. Prefixes intentionally remain hierarchy-only.
+    #[serde(default)]
+    required_traits: Vec<String>,
+    #[serde(default)]
+    forbidden_traits: Vec<String>,
 }
 
 fn prefix_matches(prefix: &str, id: &str) -> bool {
@@ -940,14 +946,55 @@ fn trait_expectation_errors(expected: &TraitExpectations, ids: &HashSet<&str>) -
             ));
         }
     }
+    for id in expected
+        .required_traits
+        .iter()
+        .chain(&expected.forbidden_traits)
+    {
+        let Some((directory, leaf)) = id.split_once("::") else {
+            errors.push(format!(
+                "invalid exact trait ID {id:?}: expected directory::id"
+            ));
+            continue;
+        };
+        if directory.is_empty()
+            || leaf.is_empty()
+            || leaf.contains("::")
+            || directory.starts_with('/')
+            || directory.split('/').any(|part| part == ".." || part == ".")
+        {
+            errors.push(format!(
+                "invalid exact trait ID {id:?}: expected directory::id"
+            ));
+        }
+    }
     for prefix in &expected.required_prefixes {
         if !ids.iter().any(|id| prefix_matches(prefix, id)) {
             errors.push(format!("missing required trait hierarchy {prefix}"));
         }
     }
     for prefix in &expected.forbidden_prefixes {
-        if ids.iter().any(|id| prefix_matches(prefix, id)) {
-            errors.push(format!("unexpected forbidden trait hierarchy {prefix}"));
+        let mut matched: Vec<_> = ids
+            .iter()
+            .copied()
+            .filter(|id| prefix_matches(prefix, id))
+            .collect();
+        matched.sort_unstable();
+        if !matched.is_empty() {
+            errors.push(format!(
+                "unexpected forbidden trait hierarchy {prefix}: {}",
+                matched.join(", ")
+            ));
+        }
+    }
+    for id in &expected.required_traits {
+        if !ids.contains(id.as_str()) {
+            errors.push(format!("missing required trait {id}"));
+        }
+    }
+    for id in &expected.forbidden_traits {
+        if ids.contains(id.as_str()) {
+            errors.push(format!("unexpected forbidden trait {id}"));
         }
     }
     errors
@@ -1029,6 +1076,47 @@ mod trait_expectation_tests {
             trait_expectation_errors(&expected, &HashSet::from(["a/b::leaf"]))
                 .iter()
                 .any(|error| error.contains("invalid hierarchy"))
+        );
+    }
+
+    #[test]
+    fn exact_trait_expectations_distinguish_rules_in_one_leaf() {
+        let expected: TraitExpectations = toml::from_str(
+            "required_traits=['a/b::expected']\nforbidden_traits=['a/b::unexpected']",
+        )
+        .unwrap();
+        assert!(
+            trait_expectation_errors(
+                &expected,
+                &HashSet::from(["a/b::expected", "a/b::another-rule"])
+            )
+            .is_empty()
+        );
+        assert!(
+            trait_expectation_errors(
+                &expected,
+                &HashSet::from(["a/b::expected", "a/b::unexpected"])
+            )
+            .iter()
+            .any(|error| error == "unexpected forbidden trait a/b::unexpected")
+        );
+        assert!(
+            trait_expectation_errors(&expected, &HashSet::new())
+                .iter()
+                .any(|error| error == "missing required trait a/b::expected")
+        );
+    }
+
+    #[test]
+    fn exact_trait_expectations_require_a_well_formed_id() {
+        let expected: TraitExpectations =
+            toml::from_str("required_traits=['a/b::']\nforbidden_traits=['a/../b::leaf']").unwrap();
+        assert_eq!(
+            trait_expectation_errors(&expected, &HashSet::new())
+                .iter()
+                .filter(|error| error.starts_with("invalid exact trait ID"))
+                .count(),
+            2
         );
     }
 }

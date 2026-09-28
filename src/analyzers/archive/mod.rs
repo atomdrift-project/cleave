@@ -8,6 +8,7 @@ mod guards;
 mod guards_test;
 mod iso;
 mod source_context;
+mod squashfs;
 mod system_packages;
 mod tar;
 pub(crate) mod utils;
@@ -82,7 +83,7 @@ fn is_zip_container(file_type: FileType) -> bool {
 fn contains_java_members(temp_dir: &Path) -> bool {
     walkdir::WalkDir::new(temp_dir)
         .min_depth(1)
-        .max_depth(10)
+        .max_depth(guards::MAX_ARCHIVE_MEMBER_DEPTH)
         .into_iter()
         .filter_map(std::result::Result::ok)
         .filter(|e| e.file_type().is_file())
@@ -2529,6 +2530,11 @@ impl ArchiveAnalyzer {
             &report.target.file_type,
             Some(&finding_origins),
         );
+        let container_suppression_targets: rustc_hash::FxHashSet<String> = archive_atomic_findings
+            .iter()
+            .chain(container_findings.iter())
+            .map(|finding| finding.id.to_string())
+            .collect();
         report.findings.extend(container_findings);
 
         // Cross-scope downgrade pass: per-file findings (in report.files[*])
@@ -2593,6 +2599,17 @@ impl ArchiveAnalyzer {
             files.iter_mut().for_each(reeval_file);
         }
         report.files = files;
+        // Container composites are assembled after the ordinary per-file
+        // pipeline. Re-check their `unless:` legs now that every archive-level
+        // finding is available; otherwise an exception composite discovered
+        // in the same archive can arrive after its dependent finding and leave
+        // that finding stale in the final report.
+        // Aggregated member findings have already been suppressed in their
+        // own scope. A sibling's build/test marker must not erase them here.
+        mapper.apply_retroactive_unless_suppression_to_selected_findings(
+            &mut report.findings,
+            &container_suppression_targets,
+        );
         if has_builtin_anti_analysis_finding(&report.findings) {
             mapper.apply_retroactive_unless_suppression_to_findings(&mut report.findings, None);
             let fixture_file_ids: Vec<u32> = report
@@ -2740,6 +2757,9 @@ impl ArchiveAnalyzer {
             }
             FileType::SevenZ => {
                 system_packages::extract_7z_from_data(data, dest_dir, guard, &self.zip_passwords)
+            }
+            FileType::Snap | FileType::SquashFs => {
+                squashfs::extract_from_data(data, dest_dir, guard)
             }
             // Optical-disc image. Members are uncompressed sector runs, so
             // extraction copies the extents filefacts already located while
@@ -4734,6 +4754,44 @@ traits:
                 .iter()
                 .any(|e| e.path == "install.sh"),
             "Should have install.sh entry"
+        );
+    }
+
+    #[test]
+    fn tar_member_at_26_directory_depth_is_analyzed() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let tar_path = temp_dir.path().join("deep-member.tar");
+        let file = File::create(&tar_path).unwrap();
+        let mut tar = tar::Builder::new(file);
+
+        // The pnpm archive has real source files below 11- and 12-level
+        // node_modules paths. Keep coverage beyond that layout, including the
+        // 26-single-letter-directory pattern that the old cap skipped.
+        let member_path = format!("{}/payload.js", vec!["a"; 26].join("/"));
+        let payload = b"const marker = 'archive-depth-regression-sentinel';\n";
+        let mut header = tar::Header::new_gnu();
+        header.set_path(&member_path).unwrap();
+        header.set_size(payload.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        tar.append(&header, &payload[..]).unwrap();
+        tar.finish().unwrap();
+
+        let report = ArchiveAnalyzer::new()
+            .analyze(&tar_path)
+            .expect("analyze deep-member TAR");
+
+        let member = report
+            .files
+            .iter()
+            .find(|file| file.path.ends_with(&member_path))
+            .expect("26-directory-deep member should be analyzed");
+        assert_eq!(member.file_type, "javascript");
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|finding| finding.id == "anti-analysis/malformed/archive-incomplete")
         );
     }
 

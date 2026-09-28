@@ -304,6 +304,41 @@ fn regex_performance_issues(facts: &RegexFacts<'_>) -> Vec<String> {
     issues
 }
 
+/// A literal prefix/suffix on an explicitly selected value field examines a
+/// fixed position in that field, rather than searching arbitrary file bytes.
+fn is_positioned_value_literal(condition: &Condition) -> bool {
+    use regex_syntax::hir::{Hir, HirKind, Look};
+    let Condition::Kv(kv) = condition else {
+        return false;
+    };
+    if kv.path.is_empty() || kv.path == "*" || kv.path.contains("..") {
+        return false;
+    }
+    let Some(pattern) = &kv.regex else {
+        return false;
+    };
+    let Ok(hir) = regex_syntax::parse(pattern) else {
+        return false;
+    };
+    let HirKind::Concat(parts) = hir.kind() else {
+        return false;
+    };
+    let anchored = matches!(
+        parts.first().map(Hir::kind),
+        Some(HirKind::Look(Look::Start))
+    ) || matches!(parts.last().map(Hir::kind), Some(HirKind::Look(Look::End)));
+    anchored
+        && parts
+            .iter()
+            .any(|h| matches!(h.kind(), HirKind::Literal(l) if !l.0.is_empty()))
+        && parts.iter().all(|h| {
+            matches!(
+                h.kind(),
+                HirKind::Literal(_) | HirKind::Look(Look::Start | Look::End)
+            )
+        })
+}
+
 /// Find traits with short patterns that are likely to produce too many false positives.
 ///
 /// Short patterns (3 chars or less for substr/regex, 2 bytes or less for hex) are flagged
@@ -400,6 +435,7 @@ pub(crate) fn find_short_pattern_warnings(
         if has_meaningful_count
             || has_specific_file_types
             || has_location_constraints(&trait_def.r#if)
+            || is_positioned_value_literal(&trait_def.r#if)
         {
             continue;
         }
@@ -1752,10 +1788,55 @@ mod tests {
         REGEX_NFA_BUDGET_BYTES, RegexFacts, RegexMemoryIssue, find_memory_hungry_regex_patterns,
         regex_memory_issue, regex_performance_issues,
     };
+    use super::{find_short_pattern_warnings, is_positioned_value_literal};
+    use crate::composite_rules::KvQuery;
     use crate::composite_rules::condition::{NotException, NotExceptionStructured};
     use crate::composite_rules::{
         CompositeTrait, Condition, FileType, RawQuery, TextQuery, TraitDefinition, TreeSitterQuery,
     };
+    use std::collections::HashMap;
+
+    #[test]
+    fn positioned_value_literals_are_bounded_but_raw_and_recursive_queries_are_not() {
+        let value = |path: &str, pattern: &str| {
+            Condition::Kv(KvQuery {
+                path: path.into(),
+                regex: Some(pattern.into()),
+                ..Default::default()
+            })
+        };
+        for pattern in ["^/", r"^\\", "x$", "^xy$"] {
+            let condition = value("archive.members[*].path", pattern);
+            assert!(is_positioned_value_literal(&condition), "{pattern}");
+            let t = TraitDefinition {
+                id: "positioned-value".into(),
+                r#for: vec![FileType::Zip, FileType::Tar, FileType::Jar, FileType::Npm],
+                r#if: condition,
+                ..Default::default()
+            };
+            assert!(find_short_pattern_warnings(&[t], &HashMap::new()).is_empty());
+        }
+        for pattern in ["/", "^a.*", "^a|b", "(?m)^/", "^$"] {
+            assert!(!is_positioned_value_literal(&value(
+                "archive.members[*].path",
+                pattern
+            )));
+        }
+        assert!(!is_positioned_value_literal(&value("$..strings[*]", "^/")));
+        let raw = TraitDefinition {
+            id: "raw-prefix".into(),
+            r#for: vec![FileType::Zip, FileType::Tar, FileType::Jar, FileType::Npm],
+            r#if: Condition::Raw(RawQuery {
+                regex: Some("^/".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            find_short_pattern_warnings(&[raw], &HashMap::new()).len(),
+            1
+        );
+    }
 
     fn ast_query(query: &str, language: Option<&str>) -> Condition {
         Condition::TreeSitter(TreeSitterQuery {

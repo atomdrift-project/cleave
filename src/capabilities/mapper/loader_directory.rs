@@ -8,9 +8,9 @@ use crate::capabilities::error_formatting::enhance_yaml_error;
 use crate::capabilities::models::TraitMappings;
 use crate::capabilities::parsing::{apply_composite_defaults, apply_trait_defaults};
 use crate::capabilities::validation::{
-    BROAD_PLATFORM_ALLOWLIST, ExtractedPatterns, MAX_NOTABLE_DOWNGRADE_DIRECT,
-    MAX_NOTABLE_DOWNGRADE_EXPANDED, MAX_SUBDIRECTORIES_PER_DIRECTORY, MAX_TRAITS_PER_DIRECTORY,
-    MISSING_CONDITIONS, ObjectivesWellknownViolation, autoprefix_trait_refs,
+    ExtractedPatterns, MAX_NOTABLE_DOWNGRADE_DIRECT, MAX_NOTABLE_DOWNGRADE_EXPANDED,
+    MAX_SUBDIRECTORIES_PER_DIRECTORY, MAX_TRAITS_PER_DIRECTORY, MISSING_CONDITIONS,
+    ObjectivesWellknownViolation, TAXONOMY_DEPTH_REVIEW_THRESHOLD, autoprefix_trait_refs,
     check_basename_pattern_duplicates, check_exact_contained_by_substr,
     check_overlapping_regex_patterns, check_regex_alternative_subsets,
     check_regex_or_overlapping_exact, check_regex_should_be_exact,
@@ -23,7 +23,7 @@ use crate::capabilities::validation::{
     find_case_insensitive_overlap_issues, find_composite_only_wellknown_files,
     find_container_name_convictions, find_convictions_without_content,
     find_dangling_directory_refs, find_dead_composites, find_dead_downgrades,
-    find_depth_violations, find_directory_shadowed_refs, find_duplicate_atomic_traits,
+    find_deep_taxonomy_directories, find_directory_shadowed_refs, find_duplicate_atomic_traits,
     find_duplicate_composite_rules, find_duplicate_inline_exclusions,
     find_duplicate_second_level_directories, find_empty_condition_clauses,
     find_exception_atomic_traits, find_exception_inline_conditions,
@@ -51,9 +51,10 @@ use crate::capabilities::validation::{
     find_regex_literal_overlap_issues, find_scope_without_valid_container,
     find_self_referencing_composites, find_self_referencing_traits, find_self_suppressing_traits,
     find_short_pattern_warnings, find_should_use_defaults, find_sibling_name_restatement,
-    find_single_item_clauses, find_slow_regex_patterns, find_stale_filetype_allowlist_entries,
-    find_string_content_collisions, find_string_literal_should_use_text,
-    find_string_pattern_duplicates, find_structural_regex_duplicates, find_subsumed_required_legs,
+    find_single_item_clauses, find_slow_regex_patterns, find_sparse_sibling_cohorts,
+    find_stale_filetype_allowlist_entries, find_string_content_collisions,
+    find_string_literal_should_use_text, find_string_pattern_duplicates,
+    find_structural_regex_duplicates, find_subsumed_required_legs,
     find_suppression_only_building_blocks, find_too_short_patterns,
     find_unanchored_wellknown_composites, find_uncallable_symbol_matchers,
     find_uncompilable_ast_queries, find_unreferenced_exceptions,
@@ -1547,7 +1548,7 @@ impl super::CapabilityMapper {
                 scope.spawn(|_| {
                     short_pattern_warnings = find_short_pattern_warnings(traits, trait_sources)
                 });
-                scope.spawn(|_| oversized_dirs = find_oversized_trait_directories(traits));
+                scope.spawn(|_| oversized_dirs = find_oversized_trait_directories(traits, rules));
                 scope.spawn(|_| {
                     file_stem_hints = build_file_stem_reference_hints(dir_path, traits, rules);
                 });
@@ -2050,32 +2051,24 @@ impl super::CapabilityMapper {
                 ));
             }
 
-            // Two sibling names built from one stem are that name said twice:
-            // the level asks one question and both claim to answer it.
+            // Shared spelling suggests review, not semantic equivalence:
+            // account/accounting can describe distinct subjects. Like sparse
+            // cohorts, this heuristic must not enter the fatal warning set.
             let restated = find_sibling_name_restatement(&dir_list);
             if !restated.is_empty() {
                 eprintln!(
-                    "\n⚠️  WARNING: {} sibling directory pairs restate one name",
+                    "\n⚠️ TAXONOMY REVIEW: {} sibling directory pairs share a name stem",
                     restated.len()
                 );
                 eprintln!(
-                    "   Siblings answer one question. A name that spells another and then\n   \
-                     qualifies it is a child of it, not its peer; two word-forms of one noun\n   \
-                     are the same name twice. Nest the refinement, or merge the pair.\n   \
-                     Reported as a warning: this is a standing backlog, not a regression gate.\n"
+                    "   Review admission criteria: merge synonyms or nest genuine refinements.\n   \
+                     Shared spelling alone does not prove identical meaning; retain distinct\n   \
+                     subjects with documented boundaries. This advisory does not block validation.\n"
                 );
                 for (parent, short, long) in &restated {
                     eprintln!("   {parent}/  {short}  vs  {long}");
                 }
                 eprintln!();
-                warnings.push_count(
-                    "sibling-restate",
-                    restated.len(),
-                    format!(
-                        "{} sibling directory pairs restate one name",
-                        restated.len()
-                    ),
-                );
             }
 
             // Forbid content/ directories under metadata/ (content describes
@@ -2123,55 +2116,49 @@ impl super::CapabilityMapper {
                 ));
             }
 
-            // Check for depth violations: micro-behaviors/ and objectives/ files must be 3-4 subdirectories deep
-            tracing::trace!("Step 6/15: Checking for depth violations");
-            let relative_paths: Vec<String> = yaml_files
-                .iter()
-                .filter_map(|p| {
-                    p.strip_prefix(dir_path)
-                        .ok()
-                        .map(|rel| rel.to_string_lossy().replace('\\', "/"))
-                })
-                .collect();
-            let depth_violations = find_depth_violations(&relative_paths);
-            if !depth_violations.is_empty() {
-                let shallow: Vec<_> = depth_violations
-                    .iter()
-                    .filter(|(_, _, kind)| *kind == "shallow")
-                    .collect();
-                let deep: Vec<_> = depth_violations
-                    .iter()
-                    .filter(|(_, _, kind)| *kind == "deep")
-                    .collect();
+            // Depth and sparse branching are advisory precision signals. Do not
+            // add them to `warnings`, which collects blocking validation issues.
+            let deep_dirs = find_deep_taxonomy_directories(&dir_list);
+            if !deep_dirs.is_empty() {
+                eprintln!(
+                    "\n⚠️ TAXONOMY REVIEW: {} directories exceed depth {} below the tier",
+                    deep_dirs.len(),
+                    TAXONOMY_DEPTH_REVIEW_THRESHOLD
+                );
+                eprintln!(
+                    "   Count directory levels only, excluding the tier and filename. This is a non-blocking warning."
+                );
+                eprintln!(
+                    "   Prefer breadth when precision is unchanged; retain deeper subtechniques when justified."
+                );
+                for (directory, depth) in &deep_dirs {
+                    eprintln!("   {directory} (depth {depth})");
+                }
+            }
 
-                if !shallow.is_empty() {
-                    eprintln!(
-                        "\n❌ ERROR: {} files are too shallow (need 2-4 subdirectories in micro-behaviors/obj)",
-                        shallow.len()
-                    );
-                    eprintln!(
-                        "   Add technique-bearing directories, not filler names; filenames can carry language/platform."
-                    );
-                    for (path, depth, _) in &shallow {
-                        eprintln!("   {} ({} subdirs, need 2-4)", path, depth);
-                    }
+            // A small combined sibling cohort has little cap
+            // pressure to justify extra branching, but only a human can decide
+            // whether flattening would merge distinct techniques.
+            tracing::trace!("Step 6/15: Checking sparse taxonomy sibling cohorts");
+            let mut direct_rule_counts: HashMap<String, usize> = HashMap::new();
+            for id in rule_source_files.keys() {
+                let Some((directory, _)) = id.split_once("::") else {
+                    continue;
+                };
+                *direct_rule_counts.entry(directory.to_string()).or_default() += 1;
+            }
+            let sparse_cohorts = find_sparse_sibling_cohorts(&direct_rule_counts);
+            if !sparse_cohorts.is_empty() {
+                eprintln!(
+                    "\n⚠️ TAXONOMY REVIEW: {} sibling groups contain fewer than 35 combined rules",
+                    sparse_cohorts.len()
+                );
+                eprintln!(
+                    "   Consider whether broader sibling placement would preserve precision; this is advisory, not a depth violation."
+                );
+                for (parent, rules, children) in &sparse_cohorts {
+                    eprintln!("   {parent} ({children} sibling branches, {rules} rules)");
                 }
-                if !deep.is_empty() {
-                    eprintln!(
-                        "\n❌ ERROR: {} files are too deep (max 4 subdirectories in micro-behaviors/obj)",
-                        deep.len()
-                    );
-                    eprintln!(
-                        "   Collapse language/platform or filler levels into filenames; keep paths focused on technique."
-                    );
-                    for (path, depth, _) in &deep {
-                        eprintln!("   {} ({} subdirs, max 4)", path, depth);
-                    }
-                }
-                warnings.push(format!(
-                    "{} files at wrong depth (need 2-4 subdirectories in micro-behaviors/obj)",
-                    depth_violations.len()
-                ));
             }
 
             // Check for invalid characters in trait/rule IDs
@@ -3299,37 +3286,31 @@ impl super::CapabilityMapper {
                 ));
             }
 
-            // Validate: traits with 4+ effective platforms must be in an allowlisted directory
-            tracing::trace!("Checking for over-broad platform scope (4+ effective platforms)");
+            // Platform breadth is a review heuristic, not proof of invalid
+            // placement. Do not add it to the blocking validation issues.
+            tracing::trace!("Reviewing platform scope (4+ effective platforms)");
             if !crate::validation_controls::is_validator_disabled("broad-platform-scope")
                 && !broad_plat.is_empty()
             {
                 eprintln!(
-                    "\n❌ ERROR: {} traits target {} or more platforms",
-                    broad_plat.len(),
-                    4
-                );
-                eprintln!("   Narrow the platform scope or move to an allowlisted directory:");
-                for prefix in BROAD_PLATFORM_ALLOWLIST {
-                    eprintln!("     {prefix}");
-                }
-                eprintln!();
-                for (trait_id, source_file, count) in &broad_plat {
-                    let line_hint = find_line_number(source_file, "platforms:");
-                    if let Some(line) = line_hint {
-                        eprintln!(
-                            "   {}:{}: '{}' ({} platforms)",
-                            source_file, line, trait_id, count
-                        );
-                    } else {
-                        eprintln!("   {}: '{}' ({} platforms)", source_file, trait_id, count);
-                    }
-                }
-                eprintln!();
-                warnings.push(format!(
-                    "{} traits target 4+ platforms (narrow scope or move to allowlisted directory)",
+                    "\n⚠️ SCOPE REVIEW: {} atomic traits declare four or more platforms",
                     broad_plat.len()
-                ));
+                );
+                eprintln!(
+                    "   Check each matcher supports its scope. Platform count alone is not an error."
+                );
+                eprintln!(
+                    "   Preserve justified coverage; do not duplicate rules or move them to satisfy a count."
+                );
+                for (trait_id, source_file, count) in broad_plat.iter().take(20) {
+                    eprintln!("   {source_file}: '{trait_id}' ({count} platforms)");
+                }
+                if broad_plat.len() > 20 {
+                    eprintln!(
+                        "   ... and {} more review candidates",
+                        broad_plat.len() - 20
+                    );
+                }
             }
 
             // Validate: traits listing unix alongside linux or macos (redundant — unix is the superset)
@@ -3801,23 +3782,17 @@ impl super::CapabilityMapper {
             tracing::trace!("Checking metadata/ binary traits for missing section filters");
             if !disable_binary_section_filter_validation && !meta_no_section.is_empty() {
                 eprintln!(
-                    "\n❌ ERROR: {} metadata/ binary traits lack a section filter",
+                    "\n⚠️  REVIEW: {} metadata/ binary traits lack a section filter",
                     meta_no_section.len()
                 );
+                eprintln!("   Add a section filter when location is part of the metadata claim.");
                 eprintln!(
-                    "   Binary-targeting traits in metadata/ should scope string/raw/hex matches to a section:"
-                );
-                eprintln!(
-                    "   Use 'section: .text' or 'section: .data' on the condition, or use 'type: section'.\n"
+                    "   File-wide vocabulary or properties may legitimately match across sections; this is advisory.\n"
                 );
                 for (trait_id, source_file) in &meta_no_section {
                     eprintln!("   {}: Trait '{}'", source_file, trait_id);
                 }
                 eprintln!();
-                warnings.push(format!(
-                    "{} metadata/ binary traits lack section filters (add section: field to condition)",
-                    meta_no_section.len()
-                ));
             }
 
             // Validate that all hex conditions targeting binary file types specify a section
@@ -3852,7 +3827,7 @@ impl super::CapabilityMapper {
             tracing::trace!("Step 14/15: Checking for redundant any refs");
             // How many definitions live under each directory prefix. Collapsing
             // an enumerated `any:` to `id: <dir>` preserves the rule's meaning
-            // only when the enumeration already covers nearly all of them;
+            // only when the enumeration already covers all of them;
             // short of that the advice widens the rule, so the check needs the
             // directory's size as well as the reference count.
             let mut dir_sizes: std::collections::HashMap<String, usize> =
@@ -3887,7 +3862,7 @@ impl super::CapabilityMapper {
                     redundant_any_refs.len()
                 );
                 eprintln!(
-                    "   Rules with 8+ trait references from the same directory should use directory notation:\n"
+                    "   Rules with 8+ distinct references covering a whole directory should use directory notation:\n"
                 );
                 for (rule_id, dir, count, trait_ids, source_file) in &redundant_any_refs {
                     let line_hint = find_line_number(source_file, rule_id);
@@ -3914,8 +3889,7 @@ impl super::CapabilityMapper {
                 ));
             }
 
-            // Validate that any:/all: clauses don't hand-maintain many refs to one directory.
-            // `any:` should use directory notation; `all:` should be split only for clear sub-techniques.
+            // Validate exhaustive any: lists. all: conjunctions are not directory aliases.
             tracing::trace!("Checking for many directory references in composite clauses");
             let mut dir_traits: HashMap<String, HashSet<String>> = HashMap::new();
             let disable_many_directory_references =
@@ -3923,12 +3897,18 @@ impl super::CapabilityMapper {
             let disable_dir_alias_composite =
                 crate::validation_controls::is_validator_disabled("directory-alias-composite");
             if !disable_many_directory_references || !disable_dir_alias_composite {
-                for trait_def in &trait_definitions {
-                    if let Some(idx) = trait_def.id.find("::") {
+                // A positive directory reference includes composites too. An
+                // atomic-only inventory can recommend a widening replacement.
+                for id in trait_definitions
+                    .iter()
+                    .map(|t| &t.id)
+                    .chain(composite_rules.iter().map(|c| &c.id))
+                {
+                    if let Some(idx) = id.find("::") {
                         dir_traits
-                            .entry(trait_def.id[..idx].to_string())
+                            .entry(id[..idx].to_string())
                             .or_default()
-                            .insert(trait_def.id.clone());
+                            .insert(id.clone());
                     }
                 }
             }
@@ -3960,7 +3940,7 @@ impl super::CapabilityMapper {
                     many_dir_ref_clauses.len()
                 );
                 eprintln!(
-                    "   A composite should not hand-maintain long lists of atomic traits from one directory:\n"
+                    "   An exhaustive any: list can use its directory without adding alternatives:\n"
                 );
                 for (rule_id, clause, dir, count, trait_ids, source_file) in &many_dir_ref_clauses {
                     let line_hint = find_line_number(source_file, rule_id);
@@ -4280,14 +4260,14 @@ impl super::CapabilityMapper {
                 );
             }
 
-            // Validate: traits with identical matching logic but different metadata
+            // Shared matcher bodies require review of the effective predicates.
             if !logic_duplicates.is_empty() {
                 eprintln!(
-                    "\n⚠️  WARNING: {} trait pairs have identical matching logic but different metadata",
+                    "\n⚠️  WARNING: {} shared-matcher pairs need scope/verdict review",
                     logic_duplicates.len()
                 );
                 eprintln!(
-                    "   Same detection with inconsistent criticality/confidence/platforms:\n"
+                    "   Compare effective scopes, exclusions and verdicts before merging; scope unions can broaden detection:\n"
                 );
                 for (id_a, id_b, desc) in &logic_duplicates {
                     let source_a = rule_source_files
@@ -4318,7 +4298,7 @@ impl super::CapabilityMapper {
                     eprintln!("      {}\n", desc);
                 }
                 warnings.push(format!(
-                    "{} trait pairs have identical matching but different metadata",
+                    "{} shared-matcher pairs need scope/verdict review",
                     logic_duplicates.len()
                 ));
             }
@@ -5309,7 +5289,7 @@ impl super::CapabilityMapper {
                 && !crate::validation_controls::is_validator_disabled("oversized-dir")
             {
                 eprintln!(
-                    "\n❌ ERROR: {} directories have more than {} traits",
+                    "\n❌ ERROR: {} directories have more than {} rules (atomic + composite)",
                     oversized_dirs.len(),
                     MAX_TRAITS_PER_DIRECTORY
                 );
@@ -5323,16 +5303,16 @@ impl super::CapabilityMapper {
                     "   Then reorganize the remaining traits into meaningful subdirectories only when each child adds precision under TAXONOMY.md."
                 );
                 eprintln!(
-                    "   Merely moving the same broad set to another location is not a fix; keep splits technique-based, platform-neutral where possible, and within depth/leaf caps.\n"
+                    "   Merely moving the same broad set to another location is not a fix; keep splits technique-based and platform-neutral where possible, and within the 100-rule cap.\n"
                 );
                 for (dir_path, count) in &oversized_dirs {
-                    eprintln!("   {}: {} traits", dir_path, count);
+                    eprintln!("   {}: {} rules", dir_path, count);
                 }
                 eprintln!();
                 warnings.push_id(
                     "oversized-dir",
                     format!(
-                        "{} directories exceed {} traits (audit duplicates, then reorganize only into TAXONOMY.md-precise subdirectories; relocation alone is not a fix)",
+                        "{} directories exceed {} rules (audit duplicates, then reorganize only into TAXONOMY.md-precise subdirectories; relocation alone is not a fix)",
                         oversized_dirs.len(),
                         MAX_TRAITS_PER_DIRECTORY
                     ),

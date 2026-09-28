@@ -640,6 +640,7 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 "elf" | "so" => vec![RuleFileType::Elf],
                 "macho" | "dylib" => vec![RuleFileType::Macho],
                 "pe" | "dll" => vec![RuleFileType::Pe],
+                "ne" => vec![RuleFileType::Ne],
                 "static-lib" | "staticlib" | "a" => vec![RuleFileType::StaticLib],
                 // Scripting languages (fullname + extension)
                 "shell" | "sh" => vec![RuleFileType::Shell],

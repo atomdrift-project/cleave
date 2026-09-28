@@ -381,6 +381,13 @@ pub(crate) enum FileType {
     /// cpio archive
     #[archive]
     Cpio,
+    /// Snap package (SquashFS filesystem image)
+    #[archive]
+    Snap,
+    /// Standalone SquashFS filesystem image
+    #[archive]
+    #[serde(rename = "squashfs")]
+    SquashFs,
     /// Analyzer could not classify the file beyond opaque/unknown content
     Unknown,
     /// ELF binary (Linux/Unix executable or shared library)
@@ -389,6 +396,8 @@ pub(crate) enum FileType {
     Macho,
     /// PE binary (Windows executable)
     Pe,
+    /// Windows New Executable (16-bit NE) binary
+    Ne,
     /// Java bytecode class file
     Class,
     /// Python compiled bytecode (.pyc)
@@ -761,6 +770,7 @@ impl From<filefacts::FileType> for FileType {
             Ff::MachO => Self::Macho,
             Ff::Elf => Self::Elf,
             Ff::Pe => Self::Pe,
+            Ff::Ne => Self::Ne,
             Ff::JavaClass => Self::Class,
             Ff::PythonBytecode => Self::Pyc,
             Ff::Beam => Self::Beam,
@@ -873,6 +883,8 @@ impl From<filefacts::FileType> for FileType {
             Ff::Zst => Self::Zst,
             Ff::SevenZ => Self::SevenZ,
             Ff::Rar => Self::Rar,
+            Ff::Snap => Self::Snap,
+            Ff::SquashFs => Self::SquashFs,
             Ff::Cpio => Self::Cpio,
             Ff::Iso => Self::Iso,
             Ff::Deb => Self::Deb,
@@ -1162,10 +1174,13 @@ impl FileType {
             Self::Rar => "rar",
             Self::SevenZ => "7z",
             Self::Cpio => "cpio",
+            Self::Snap => "snap",
+            Self::SquashFs => "squashfs",
             Self::Unknown => "unknown",
             Self::Elf => "elf",
             Self::Macho => "macho",
             Self::Pe => "pe",
+            Self::Ne => "ne",
             Self::Class => "class",
             Self::Pyc => "pyc",
             Self::Beam => "beam",
@@ -1318,6 +1333,7 @@ impl FileType {
             "elf" | "so" => FileType::Elf,
             "macho" | "dylib" => FileType::Macho,
             "pe" | "exe" | "dll" => FileType::Pe,
+            "ne" => FileType::Ne,
             "static-lib" | "staticlib" | "a" => FileType::StaticLib,
             "shell" | "shellscript" | "shell_script" => FileType::Shell,
             "batch" | "bat" | "cmd" => FileType::Batch,
@@ -1499,6 +1515,8 @@ mod tests {
             (Ff::Dockerfile, FileType::Dockerfile),
             (Ff::Plist, FileType::Plist),
             (Ff::Nib, FileType::Nib),
+            (Ff::Snap, FileType::Snap),
+            (Ff::SquashFs, FileType::SquashFs),
         ] {
             assert_eq!(
                 FileType::from(ff),
@@ -1863,9 +1881,13 @@ mod tests {
         assert_eq!(FileType::from_str("rar"), FileType::Rar);
         assert_eq!(FileType::from_str("7z"), FileType::SevenZ);
         assert_eq!(FileType::from_str("cpio"), FileType::Cpio);
+        assert_eq!(FileType::from_str("snap"), FileType::Snap);
+        assert_eq!(FileType::from_str("squashfs"), FileType::SquashFs);
         assert!(FileType::Rar.is_archive());
         assert!(FileType::SevenZ.is_archive());
         assert!(FileType::Cpio.is_archive());
+        assert!(FileType::Snap.is_archive());
+        assert!(FileType::SquashFs.is_archive());
         assert_ne!(FileType::from_str("archive"), FileType::Rar);
         assert_ne!(FileType::from_str("archive"), FileType::SevenZ);
         assert_ne!(FileType::from_str("archive"), FileType::Cpio);
@@ -1878,6 +1900,8 @@ mod tests {
         assert!(family.contains(&FileType::Rar));
         assert!(family.contains(&FileType::SevenZ));
         assert!(family.contains(&FileType::Cpio));
+        assert!(family.contains(&FileType::Snap));
+        assert!(family.contains(&FileType::SquashFs));
         assert!(family.contains(&FileType::Dmg));
         assert!(family.contains(&FileType::Asar));
         assert!(family.contains(&FileType::OciImage));
@@ -1964,15 +1988,22 @@ mod tests {
             file_types: Vec<FileType>,
         }
 
-        let parsed: RuleTarget = serde_yaml::from_str("for: [apk_android, apk_alpine, cab]")
-            .expect("valid YAML rule target");
+        let parsed: RuleTarget =
+            serde_yaml::from_str("for: [apk_android, apk_alpine, cab, snap, squashfs]")
+                .expect("valid YAML rule target");
 
         // apk_android and apk_alpine are unrelated ecosystems (Android app
         // sideloading vs. a musl-libc Linux package manager) and must not
         // collapse onto the same FileType.
         assert_eq!(
             parsed.file_types,
-            vec![FileType::AndroidApk, FileType::AlpineApk, FileType::Cab]
+            vec![
+                FileType::AndroidApk,
+                FileType::AlpineApk,
+                FileType::Cab,
+                FileType::Snap,
+                FileType::SquashFs,
+            ]
         );
     }
 

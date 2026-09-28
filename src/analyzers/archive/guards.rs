@@ -27,6 +27,11 @@ pub(crate) const MAX_TOTAL_SIZE: u64 = 20 * 1024 * 1024 * 1024;
 /// retain the anti-abuse guard with enough headroom for normal distributions.
 pub(crate) const MAX_FILE_COUNT: usize = 350_000;
 
+/// Maximum path depth analyzed inside an archive. Twelve-level package
+/// layouts are common in nested `node_modules`; 32 also covers known
+/// 26-directory concealment layouts while keeping a bound on hostile paths.
+pub(crate) const MAX_ARCHIVE_MEMBER_DEPTH: usize = 32;
+
 /// Maximum ZIP central directory entries. The zip crate allocates per-entry
 /// during `ZipArchive::new()`, so a crafted ZIP claiming billions of entries
 /// can OOM-abort the process before any guard runs. This cap is checked

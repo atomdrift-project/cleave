@@ -187,6 +187,24 @@ pub(crate) fn generate_preview(data: &[u8]) -> String {
     preview.replace('\n', " ").replace('\r', "")
 }
 
+/// Alphabet compatibility alone does not establish another encoding layer:
+/// hashes and identifiers also decode as base64/hex, usually into opaque bytes.
+/// Keep the already decoded text unless the candidate has readable content or
+/// a recognized binary header. Header detection is bounded and uses no filename
+/// or heuristic classification. Successful decompression is checked separately.
+fn supports_nested_encoding(data: &[u8]) -> bool {
+    if data.is_empty() {
+        return false;
+    }
+    if std::str::from_utf8(data).is_ok_and(|text| {
+        text.chars()
+            .all(|c| !c.is_control() || matches!(c, '\n' | '\r' | '\t'))
+    }) {
+        return true;
+    }
+    filefacts::fileid::detect_content(&data[..data.len().min(4096)]).is_some()
+}
+
 /// Recursively decompress and check for nested encodings
 /// This handles compression + nested base64/hex that stng doesn't process
 pub(crate) fn decompress_and_nest(
@@ -213,6 +231,7 @@ pub(crate) fn decompress_and_nest(
         // enforces the MIN_PAYLOAD_LENGTH floor.
         if is_base64_candidate(text)
             && let Some((decoded, compression)) = decode_base64(text)
+            && (compression.is_some() || supports_nested_encoding(&decoded))
         {
             chain.push("base64".to_string());
             if let Some(comp_type) = compression {
@@ -225,6 +244,7 @@ pub(crate) fn decompress_and_nest(
         // the 48-char floor.
         if is_hex_string(text)
             && let Some(decoded) = decode_hex_string(text)
+            && supports_nested_encoding(&decoded)
         {
             chain.push("hex".to_string());
             return decompress_and_nest(&decoded, chain, depth + 1);
@@ -284,6 +304,58 @@ pub(crate) fn xor_encoded_pe(fileid: &filefacts::FileId, data: &[u8]) -> Option<
         detected_type: FileType::Pe,
         original_offset: 0,
     })
+}
+
+/// Reuse stng's located single-byte keys to recover whole universal Mach-O
+/// images. No second section scan or key search; exact extents and slice
+/// validation stay in stng. Bound both candidate work and retained bytes.
+pub(crate) fn xor_encoded_machos(
+    data: &[u8],
+    strings: &[stng::ExtractedString],
+) -> Vec<ExtractedPayload> {
+    let mut out = Vec::new();
+    let mut total = 0usize;
+    for candidate in strings
+        .iter()
+        .filter(|s| {
+            s.kind == Some(stng::StringKind::XorKey)
+                && s.method == stng::StringMethod::XorDecode
+                && s.value.len() == 4
+                && s.value.starts_with("0x")
+        })
+        .take(8)
+    {
+        let Ok(offset) = usize::try_from(candidate.data_offset) else {
+            continue;
+        };
+        if out
+            .iter()
+            .any(|p: &ExtractedPayload| p.original_offset == offset)
+        {
+            continue;
+        }
+        let Ok(key) = u8::from_str_radix(&candidate.value[2..], 16) else {
+            continue;
+        };
+        let Some(tail) = data.get(offset..) else {
+            continue;
+        };
+        let Some(image) = stng::decode_xor_fat_macho(tail, key) else {
+            continue;
+        };
+        total += image.len();
+        if total > 32 * 1024 * 1024 {
+            break;
+        }
+        out.push(ExtractedPayload {
+            preview: "Universal Mach-O image".to_string(),
+            data: image,
+            encoding_chain: vec!["xor".to_string()],
+            detected_type: FileType::MachO,
+            original_offset: offset,
+        });
+    }
+    out
 }
 
 /// Process a decoded string from stng and add to payloads

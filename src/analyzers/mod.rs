@@ -928,7 +928,7 @@ mod tests {
 
         assert_eq!(
             detect_file_type_from_data(Path::new("BOUT.inp"), b"MZ = 8    # Z size\n"),
-            FileType::Unknown
+            FileType::Text
         );
     }
 
@@ -1130,7 +1130,7 @@ mod tests {
         );
         assert_eq!(
             detect_file_type_from_data(Path::new("config.toml"), b"[package]\nname='x'\n"),
-            FileType::Unknown
+            FileType::Text
         );
     }
 

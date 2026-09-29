@@ -1359,6 +1359,7 @@ pub(crate) fn eval_symbol_fact<'a>(
     exact: Option<&String>,
     substr: Option<&String>,
     regex: Option<&String>,
+    arg: Option<&crate::composite_rules::condition::ArgFilter>,
     ctx: &EvaluationContext<'a>,
 ) -> ConditionResult {
     use crate::composite_rules::condition::SymbolKind;
@@ -1376,7 +1377,34 @@ pub(crate) fn eval_symbol_fact<'a>(
             (SymbolKind::Member, filefacts::Symbol::Member { path, offset, .. }) => {
                 (path.as_str(), "member", *offset)
             }
-            (SymbolKind::Bind, filefacts::Symbol::Bind { target, offset, .. }) => {
+            (
+                SymbolKind::Bind,
+                filefacts::Symbol::Bind {
+                    target,
+                    offset,
+                    shape,
+                },
+            ) => {
+                if let Some(wanted) = arg.and_then(|a| a.kind.as_deref()) {
+                    use filefacts::ArgShape;
+                    let actual = match shape {
+                        ArgShape::String => "string",
+                        ArgShape::Number => "number",
+                        ArgShape::Bool => "bool",
+                        ArgShape::Null => "null",
+                        ArgShape::Identifier => "identifier",
+                        ArgShape::Object => "object",
+                        ArgShape::Array => "array",
+                        ArgShape::Function => "function",
+                        ArgShape::Template => "template",
+                        ArgShape::Call => "call",
+                        ArgShape::Expression => "expression",
+                        _ => "unknown",
+                    };
+                    if wanted != actual {
+                        continue;
+                    }
+                }
                 (target.as_str(), "bind", Some(*offset))
             }
             (SymbolKind::Identifier, filefacts::Symbol::Identifier { name, offset, .. }) => {
@@ -1438,6 +1466,21 @@ fn all_filters_match_distinct_with(
     filters: &[crate::composite_rules::condition::ArgFilter],
     extra: impl Fn(usize, &crate::composite_rules::condition::ArgFilter) -> bool,
 ) -> bool {
+    // Explicitly selected, distinct named fields are distinct logical
+    // arguments even when the producer stores them in one keyword object.
+    // Keep the positional matcher unchanged for unspecified/mixed selectors.
+    let named: Option<Vec<_>> = filters
+        .iter()
+        .map(|f| Some((f.index?, f.from.as_ref()?.field.as_ref()?, f)))
+        .collect();
+    if let Some(named) = named.filter(|n| !n.is_empty()) {
+        let mut seen = std::collections::BTreeSet::new();
+        return named.into_iter().all(|(index, field, filter)| {
+            seen.insert((index, field))
+                && args.get(index).is_some_and(|a| arg_matches(a, filter))
+                && extra(index, filter)
+        });
+    }
     if filters.len() > args.len() {
         return false;
     }
@@ -1544,7 +1587,20 @@ fn origin_matches(
         .value
         .as_ref()
         .and_then(|p| crate::composite_rules::condition::cached_regex(p));
-    if source_pattern.is_none() && value_pattern.is_none() {
+    let member_pattern = origin
+        .member
+        .as_ref()
+        .and_then(|p| crate::composite_rules::condition::cached_regex(p));
+    let whole_pattern = origin
+        .whole_value
+        .as_ref()
+        .and_then(|p| crate::composite_rules::condition::cached_regex(p));
+    if source_pattern.is_none()
+        && value_pattern.is_none()
+        && member_pattern.is_none()
+        && whole_pattern.is_none()
+        && !origin.field_exists
+    {
         return false;
     }
     let Some(flow) = flow(ctx) else { return false };
@@ -1556,6 +1612,36 @@ fn origin_matches(
         gaps.record(AnalysisGap::FlowCallUnavailable);
         return false;
     };
+    if origin.field_exists {
+        let Some(field) = origin.field.as_deref() else {
+            return false;
+        };
+        if let Some(object) = flow
+            .values
+            .get(value)
+            .filter(|v| matches!(v.kind.as_str(), "object" | "keyword"))
+        {
+            return object.fields.contains_key(field);
+        }
+        let found = flow.field_origins(value, field, &[], 10_000);
+        // The projected value itself is evidence of presence even when its
+        // contents are opaque. A missing projection is not evidence of absence.
+        if found.values.is_empty() && found.incomplete {
+            gaps.record(AnalysisGap::FlowFieldUnavailable);
+        }
+        return !found.values.is_empty();
+    }
+    if let Some(pattern) = whole_pattern {
+        let values = flow.complete_values(value, origin.field.as_deref(), 10_000);
+        if values.incomplete {
+            gaps.record(AnalysisGap::FlowQueryIncomplete);
+        }
+        return values.values.iter().any(|v| {
+            matches!(flow.values[v.value].literal.as_ref(),
+                Some(filefacts::Arg::String { value })
+                    if pattern.is_match(value))
+        });
+    }
     let mut models = Vec::new();
     for model in &origin.through {
         let Some(pattern) = crate::composite_rules::condition::cached_regex(&model.call) else {
@@ -1603,6 +1689,10 @@ fn origin_matches(
     }
     found.values.iter().any(|observation| {
         let Some(value) = flow.values.get(observation.value) else { return false };
+        if let Some(pattern) = &member_pattern {
+            return value.kind == "member"
+                && value.target.as_ref().is_some_and(|path| pattern.is_match(path));
+        }
         if let Some(pattern) = &value_pattern {
             return value.literal.as_ref().is_some_and(|a| matches!(a,
                 filefacts::Arg::String { value } | filefacts::Arg::Template { value } if pattern.is_match(value)));
@@ -1668,7 +1758,9 @@ fn arg_matches(
     if (filter.value.is_some() || filter.radix.is_some()) && !matches!(arg, Arg::Number { .. }) {
         return false;
     }
-    if filter.name.is_some() && !matches!(arg, Arg::Identifier { .. }) {
+    if (filter.name.is_some() || filter.name_regex.is_some())
+        && !matches!(arg, Arg::Identifier { .. })
+    {
         return false;
     }
     match arg {
@@ -1703,6 +1795,12 @@ fn arg_matches(
             }
         }
         Arg::Identifier { name } => {
+            if let Some(pattern) = &filter.name_regex
+                && !crate::composite_rules::condition::cached_regex(pattern)
+                    .is_some_and(|r| r.is_match(name))
+            {
+                return false;
+            }
             if let Some(want_name) = filter.name.as_deref()
                 && name != want_name
             {
@@ -2846,6 +2944,8 @@ mod multi_arg_tests {
             ("value: 7", vec![3]),
             ("radix: 10", vec![3]),
             ("name: needle", vec![2]),
+            ("name_regex: '^needle$'", vec![2]),
+            ("name_regex: '^other$'", vec![]),
         ] {
             let filter: ArgFilter = serde_yaml::from_str(yaml).unwrap();
             for (index, value) in values.iter().enumerate() {
@@ -3248,5 +3348,412 @@ mod validator_wiring_tests {
         ));
         // No validator declared means no opinion.
         assert!(validate_match("anything at all", None));
+    }
+    #[test]
+    fn cfml_member_origin_matches_values_not_spelling_or_adjacent_attributes() {
+        use crate::composite_rules::condition::ArgFilter;
+        use crate::composite_rules::{Condition, context::EvaluationContext, types::FileType};
+        use crate::types::{AnalysisReport, FilefactsView, TargetInfo};
+        let filter: ArgFilter =
+            serde_yaml::from_str("index: 0\nfrom:\n  field: name\n  member: '^form\\.job$'\n")
+                .unwrap();
+        for (source, expected) in [
+            ("<cfexecute name='#FORM.job#'>", true),
+            (
+                "<cfset a=form.job><cfset renamed=a><cfexecute name='#renamed#'>",
+                true,
+            ),
+            (
+                "<cfset a=form.job><cfset a='fixed'><cfexecute name='#a#'>",
+                false,
+            ),
+            ("<cfexecute name='form.job'>", false),
+            ("<cfexecute name='##form.job##'>", false),
+            ("<cfexecute name='fixed' arguments='#form.job#'>", false),
+            ("<cfexecute name='#url.job#'>", false),
+            (
+                "<cfif x><cfset a=form.job><cfelse><cfset a='fixed'></cfif><cfexecute name='#a#'>",
+                true,
+            ),
+            (
+                "<cfif x><cfset a=form.job><cfelse><cfexecute name='#a#'></cfif>",
+                false,
+            ),
+        ] {
+            let parsed = filefacts::open_as(
+                std::path::Path::new("a.cfm"),
+                source.as_bytes(),
+                filefacts::FileType::Cfml,
+            )
+            .unwrap();
+            let mut report = AnalysisReport::new(TargetInfo {
+                path: "a.cfm".into(),
+                file_type: "cfml".into(),
+                size_bytes: source.len() as u64,
+                sha256: String::new(),
+                architectures: None,
+            });
+            report.filefacts = Some(FilefactsView {
+                flow: parsed.flow().cloned(),
+                symbols: parsed.symbols().iter().cloned().collect(),
+                ..Default::default()
+            });
+            let ctx =
+                EvaluationContext::new(&report, source.as_bytes(), FileType::Cfml, &[], None, None);
+            let result = super::eval_call(
+                Some(&"cfexecute".into()),
+                None,
+                None,
+                Some(&filter),
+                None,
+                &ctx,
+            );
+            assert_eq!(result.matched, expected, "{source}");
+        }
+        for (selection, valid) in [
+            ("{member: '^form\\.job$'}", true),
+            ("{member: ''}", false),
+            ("{member: '['}", false),
+            ("{member: x, call: f}", false),
+            ("{member: x, value: x}", false),
+            ("{member: x, literal: x}", false),
+            ("{member: x, argument: 1}", false),
+        ] {
+            let condition: Condition = serde_yaml::from_str(&format!(
+                "type: symbol\nkind: call\nexact: cfexecute\narg:\n  from: {selection}\n"
+            ))
+            .unwrap();
+            assert_eq!(condition.validate().is_ok(), valid, "{selection}");
+        }
+    }
+
+    #[test]
+    fn cfml_named_origins_join_on_one_call_and_distinct_fields() {
+        use crate::composite_rules::{
+            condition::ArgFilter, context::EvaluationContext, types::FileType,
+        };
+        use crate::types::{AnalysisReport, FilefactsView, TargetInfo};
+        let filters: Vec<ArgFilter> = serde_yaml::from_str("- index: 0\n  from: {field: name, value: '^cmd[.]exe$'}\n- index: 0\n  from: {field: arguments, member: '^form[.]job$'}\n").unwrap();
+        for (source, expected) in [
+            ("<cfexecute name='cmd.exe' arguments='#form.job#'>", true),
+            ("<cfexecute arguments='#form.job#' name='cmd.exe'>", true),
+            ("<cfexecute name='grep' arguments='#form.job#'>", false),
+            (
+                "<cfexecute name='cmd.exe' arguments='fixed'><cfexecute name='grep' arguments='#form.job#'>",
+                false,
+            ),
+            ("<cfexecute name='cmd.exe' outputfile='#form.job#'>", false),
+        ] {
+            let parsed = filefacts::open_as(
+                std::path::Path::new("a.cfm"),
+                source.as_bytes(),
+                filefacts::FileType::Cfml,
+            )
+            .unwrap();
+            let mut report = AnalysisReport::new(TargetInfo {
+                path: "a.cfm".into(),
+                file_type: "cfml".into(),
+                size_bytes: source.len() as u64,
+                sha256: String::new(),
+                architectures: None,
+            });
+            report.filefacts = Some(FilefactsView {
+                flow: parsed.flow().cloned(),
+                symbols: parsed.symbols().iter().cloned().collect(),
+                ..Default::default()
+            });
+            let ctx =
+                EvaluationContext::new(&report, source.as_bytes(), FileType::Cfml, &[], None, None);
+            assert_eq!(
+                super::eval_call(
+                    Some(&"cfexecute".into()),
+                    None,
+                    None,
+                    None,
+                    Some(&filters),
+                    &ctx
+                )
+                .matched,
+                expected,
+                "{source}"
+            );
+            let duplicate = vec![filters[0].clone(), filters[0].clone()];
+            assert!(
+                !super::eval_call(
+                    Some(&"cfexecute".into()),
+                    None,
+                    None,
+                    None,
+                    Some(&duplicate),
+                    &ctx
+                )
+                .matched
+            );
+        }
+    }
+
+    #[test]
+    fn cfml_whole_literal_values_do_not_match_fragments() {
+        use crate::composite_rules::{
+            Condition, condition::ArgFilter, context::EvaluationContext, types::FileType,
+        };
+        use crate::types::{AnalysisReport, FilefactsView, TargetInfo};
+        let filter: ArgFilter =
+            serde_yaml::from_str("index: 0\nfrom: {field: action, whole_value: '^read$'}\n")
+                .unwrap();
+        for (source, expected) in [
+            (r#"<cffile action='read'>"#, true),
+            (r##"<cffile action="#'re' & 'ad'#">"##, true),
+            (r##"<cffile action="re#'ad'#">"##, true),
+            (r##"<cffile action="#'read' & 'Bogus'#">"##, false),
+            (r##"<cffile action="#'read'#Bogus">"##, false),
+            (r##"<cffile action="#'read' & url.suffix#">"##, false),
+            (r##"<cffile action="#opaque('read')#">"##, false),
+            (r##"<cfset a='read'><cffile action="#a#">"##, true),
+            (
+                r##"<cfset a='read'><cfset a='write'><cffile action="#a#">"##,
+                false,
+            ),
+            (
+                r##"<cfif x><cfset a='read'><cfelse><cfset a='write'></cfif><cffile action="#a#">"##,
+                true,
+            ),
+            (r#"<cffile action='write' file='read'>"#, false),
+        ] {
+            let parsed = filefacts::open_as(
+                std::path::Path::new("a.cfm"),
+                source.as_bytes(),
+                filefacts::FileType::Cfml,
+            )
+            .unwrap();
+            let mut report = AnalysisReport::new(TargetInfo {
+                path: "a.cfm".into(),
+                file_type: "cfml".into(),
+                size_bytes: source.len() as u64,
+                sha256: String::new(),
+                architectures: None,
+            });
+            report.filefacts = Some(FilefactsView {
+                flow: parsed.flow().cloned(),
+                symbols: parsed.symbols().iter().cloned().collect(),
+                ..Default::default()
+            });
+            let ctx =
+                EvaluationContext::new(&report, source.as_bytes(), FileType::Cfml, &[], None, None);
+            assert_eq!(
+                super::eval_call(
+                    Some(&"cffile".into()),
+                    None,
+                    None,
+                    Some(&filter),
+                    None,
+                    &ctx
+                )
+                .matched,
+                expected,
+                "{source}"
+            );
+        }
+        for (selection, valid) in [
+            ("{whole_value: '^read$'}", true),
+            ("{whole_value: '['}", false),
+            ("{whole_value: x, value: x}", false),
+            ("{whole_value: x, member: x}", false),
+            ("{whole_value: x, call: f}", false),
+            ("{whole_value: x, literal: x}", false),
+            (
+                "{whole_value: x, through: [{call: f, arguments: [0]}]}",
+                false,
+            ),
+        ] {
+            let condition: Condition = serde_yaml::from_str(&format!(
+                "type: symbol\nkind: call\nexact: cffile\narg:\n  from: {selection}\n"
+            ))
+            .unwrap();
+            assert_eq!(condition.validate().is_ok(), valid, "{selection}");
+        }
+    }
+
+    #[test]
+    fn named_field_presence_requires_a_real_projected_field() {
+        use crate::composite_rules::{
+            Condition, condition::ArgFilter, context::EvaluationContext, types::FileType,
+        };
+        use crate::types::{AnalysisReport, FilefactsView, TargetInfo};
+        let filter: ArgFilter =
+            serde_yaml::from_str("index: 0\nfrom: {field: outputfile, field_exists: true}\n")
+                .unwrap();
+        for (source, expected) in [
+            (r#"<cfexecute name='reporter' outputfile='/srv/out'>"#, true),
+            (r#"<cfexecute OUTPUTFILE='' name='reporter'>"#, true),
+            (
+                r##"<cfexecute name='reporter' outputfile="#form.path#">"##,
+                true,
+            ),
+            (
+                r##"<cfexecute name='reporter' outputfile="#opaque()#">"##,
+                true,
+            ),
+            (
+                r##"<cfexecute name='reporter' outputfile="#GetTempDirectory()#tmp#counter#.txt">"##,
+                true,
+            ),
+            (r#"<cfexecute name='reporter'>"#, false),
+            (
+                r#"<cfexecute name='reporter' arguments='outputfile=/srv/out'>"#,
+                false,
+            ),
+            (
+                r#"<cfexecute name='reporter' outputfileName='/srv/out'>"#,
+                false,
+            ),
+            (r#"<cfhttp outputfile='/srv/out'>"#, false),
+            (
+                r#"<!--- <cfexecute name='reporter' outputfile='/srv/out'> --->"#,
+                false,
+            ),
+            (
+                r#"<cfset text="<cfexecute name='reporter' outputfile='/srv/out'>">"#,
+                false,
+            ),
+            (
+                r#"<cfexecute name='reporter' outputfile='a' OUTPUTFILE='b'>"#,
+                false,
+            ),
+            (r#"<cfexecute name='reporter' outputfile="#, false),
+        ] {
+            let parsed = filefacts::open_as(
+                std::path::Path::new("a.cfm"),
+                source.as_bytes(),
+                filefacts::FileType::Cfml,
+            )
+            .unwrap();
+            let mut report = AnalysisReport::new(TargetInfo {
+                path: "a.cfm".into(),
+                file_type: "cfml".into(),
+                size_bytes: source.len() as u64,
+                sha256: String::new(),
+                architectures: None,
+            });
+            report.filefacts = Some(FilefactsView {
+                flow: parsed.flow().cloned(),
+                symbols: parsed.symbols().iter().cloned().collect(),
+                ..Default::default()
+            });
+            let ctx =
+                EvaluationContext::new(&report, source.as_bytes(), FileType::Cfml, &[], None, None);
+            assert_eq!(
+                super::eval_call(
+                    Some(&"cfexecute".into()),
+                    None,
+                    None,
+                    Some(&filter),
+                    None,
+                    &ctx
+                )
+                .matched,
+                expected,
+                "{source}"
+            );
+        }
+        for (selection, valid) in [
+            ("{field: outputfile, field_exists: true}", true),
+            ("{field_exists: true}", false),
+            ("{field: '', field_exists: true}", false),
+            ("{field: outputfile, field_exists: false}", false),
+            ("{field: outputfile, field_exists: true, value: x}", false),
+            (
+                "{field: outputfile, field_exists: true, whole_value: x}",
+                false,
+            ),
+            ("{field: outputfile, field_exists: true, member: x}", false),
+            ("{field: outputfile, field_exists: true, call: f}", false),
+            ("{field: outputfile, field_exists: true, literal: x}", false),
+            (
+                "{field: outputfile, field_exists: true, through: [{call: f, arguments: [0]}]}",
+                false,
+            ),
+        ] {
+            let condition: Condition = serde_yaml::from_str(&format!(
+                "type: symbol\nkind: call\nexact: cfexecute\narg:\n  from: {selection}\n"
+            ))
+            .unwrap();
+            assert_eq!(condition.validate().is_ok(), valid, "{selection}");
+        }
+    }
+
+    #[test]
+    fn field_presence_handles_alternatives_and_opaque_objects() {
+        use crate::composite_rules::{
+            condition::ArgFilter, context::EvaluationContext, types::FileType,
+        };
+        use crate::types::{AnalysisReport, FilefactsView, TargetInfo};
+        let source = b"<cfexecute name='reporter' outputfile='/srv/out'>";
+        let filter: ArgFilter =
+            serde_yaml::from_str("index: 0\nfrom: {field: outputfile, field_exists: true}\n")
+                .unwrap();
+        for (mode, expected) in [
+            ("mixed", true),
+            ("missing", false),
+            ("unknown", false),
+            ("cycle", false),
+            ("invalid", false),
+        ] {
+            let parsed = filefacts::open_as(
+                std::path::Path::new("a.cfm"),
+                source,
+                filefacts::FileType::Cfml,
+            )
+            .unwrap();
+            let mut flow = parsed.flow().unwrap().clone();
+            let call = flow
+                .values
+                .iter()
+                .position(|v| v.target.as_deref() == Some("cfexecute"))
+                .unwrap();
+            let present = flow.values[call].inputs[0];
+            let mut absent = flow.values[present].clone();
+            absent.fields.remove("outputfile");
+            let missing = flow.values.len();
+            flow.values.push(absent);
+            let mut alternative = flow.values[0].clone();
+            alternative.kind = "alternative".into();
+            let id = flow.values.len();
+            alternative.inputs = match mode {
+                "mixed" => vec![present, missing],
+                "missing" => vec![missing],
+                "unknown" => vec![0],
+                "cycle" => vec![id],
+                _ => vec![usize::MAX],
+            };
+            flow.values.push(alternative);
+            flow.values[call].inputs[0] = id;
+            let mut report = AnalysisReport::new(TargetInfo {
+                path: "a.cfm".into(),
+                file_type: "cfml".into(),
+                size_bytes: source.len() as u64,
+                sha256: String::new(),
+                architectures: None,
+            });
+            report.filefacts = Some(FilefactsView {
+                flow: Some(flow),
+                symbols: parsed.symbols().iter().cloned().collect(),
+                ..Default::default()
+            });
+            let ctx = EvaluationContext::new(&report, source, FileType::Cfml, &[], None, None);
+            assert_eq!(
+                super::eval_call(
+                    Some(&"cfexecute".into()),
+                    None,
+                    None,
+                    Some(&filter),
+                    None,
+                    &ctx
+                )
+                .matched,
+                expected,
+                "{mode}"
+            );
+        }
     }
 }

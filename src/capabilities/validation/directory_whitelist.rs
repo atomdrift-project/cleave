@@ -275,7 +275,8 @@ const ALLOWED_MB_COMMUNICATIONS: &[&str] = &[
     "rpc", // Remote procedure-call protocols, independent of local IPC
     "s7",  // Siemens S7comm/ISO-TSAP                     (TCP 102)
     "socket",
-    "tls", // Transport security operations, independent of HTTP/socket APIs.
+    "transfer", // Protocol-neutral data transfer operations and evidence
+    "tls",      // Transport security operations, independent of HTTP/socket APIs.
     "ssh",
     "url",
     "websocket",
@@ -288,6 +289,7 @@ const ALLOWED_MB_METAPROGRAMMING: &[&str] = &["ast", "generation", "reflection"]
 const ALLOWED_MB_CRYPTO: &[&str] = &[
     "asymmetric",
     "certificate",
+    "cipher", // Generic cipher API names without a supported algorithm family
     "hash",
     "hybrid", // Symmetric payload encryption combined with asymmetric key wrapping
     "kdf",
@@ -1644,6 +1646,8 @@ mod tests {
 
         // Create micro-behaviors/ with valid and invalid subdirectories
         std::fs::create_dir_all(traits_path.join("micro-behaviors/communications")).unwrap();
+        std::fs::create_dir_all(traits_path.join("micro-behaviors/communications/transfer"))
+            .unwrap();
         std::fs::create_dir_all(traits_path.join("micro-behaviors/network/interface")).unwrap();
         std::fs::create_dir_all(traits_path.join("micro-behaviors/c2")).unwrap(); // Invalid!
         std::fs::create_dir_all(traits_path.join("micro-behaviors/persist")).unwrap(); // Invalid!

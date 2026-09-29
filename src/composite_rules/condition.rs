@@ -1021,6 +1021,9 @@ pub(crate) struct ArgFilter {
     /// Identifier name exact match (kind=identifier).
     #[serde(default)]
     pub name: Option<String>,
+    /// Regex over an identifier argument's syntactic name, not its value.
+    #[serde(default)]
+    pub name_regex: Option<String>,
 }
 
 /// Source-call selection and explicit, policy-owned library transfers.
@@ -1037,6 +1040,17 @@ pub(crate) struct FlowOriginFilter {
     /// Mutually exclusive with `call` and its argument/literal constraints.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value: Option<String>,
+    /// Regex over a proven complete literal, not contributing fragments.
+    /// Unknown expressions and unmodeled return values remain opaque.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub whole_value: Option<String>,
+    /// Observe an explicitly present named field, even if its value is opaque.
+    #[serde(default)]
+    pub field_exists: bool,
+    /// Alternatively, select an actual member-read origin by canonical path.
+    /// A string or identifier merely spelling this path is not a member read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub member: Option<String>,
     /// Position of the source call's literal argument to match (default zero).
     #[serde(default)]
     pub argument: usize,
@@ -3103,7 +3117,50 @@ impl Condition {
     pub(crate) fn validate(&self) -> Result<()> {
         match self {
             Condition::Symbol(query) => {
+                if matches!(query.kind, Some(SymbolKind::Bind)) {
+                    if query.args.is_some() {
+                        anyhow::bail!("bind accepts only one arg.kind shape filter");
+                    }
+                    if let Some(arg) = &query.arg
+                        && (!matches!(
+                            arg.kind.as_deref(),
+                            Some(
+                                "string"
+                                    | "number"
+                                    | "bool"
+                                    | "null"
+                                    | "identifier"
+                                    | "object"
+                                    | "array"
+                                    | "function"
+                                    | "template"
+                                    | "call"
+                                    | "expression"
+                            )
+                        ) || arg.index.is_some()
+                            || arg.from.is_some()
+                            || arg.value.is_some()
+                            || arg.radix.is_some()
+                            || arg.substr.is_some()
+                            || arg.exact.is_some()
+                            || arg.regex.is_some()
+                            || arg.name.is_some()
+                            || arg.name_regex.is_some())
+                    {
+                        anyhow::bail!(
+                            "bind accepts only arg.kind to select the assigned expression shape"
+                        );
+                    }
+                }
                 for arg in query.arg.iter().chain(query.args.iter().flatten()) {
+                    if let Some(pattern) = &arg.name_regex {
+                        if !matches!(query.kind, Some(SymbolKind::Call)) {
+                            anyhow::bail!("identifier-name argument regex requires kind: call");
+                        }
+                        if let Some(error) = regex_compile_error(pattern) {
+                            anyhow::bail!("invalid identifier-name regex: {error}");
+                        }
+                    }
                     if (arg.index.is_some() || arg.from.is_some())
                         && !matches!(query.kind, Some(SymbolKind::Call))
                     {
@@ -3113,10 +3170,29 @@ impl Condition {
                     }
                     if let Some(origin) = &arg.from {
                         let has_call = !origin.call.trim().is_empty();
-                        if has_call == origin.value.is_some() || origin.through.len() > 32 {
+                        if usize::from(has_call)
+                            + usize::from(origin.value.is_some())
+                            + usize::from(origin.member.is_some())
+                            + usize::from(origin.whole_value.is_some())
+                            + usize::from(origin.field_exists)
+                            != 1
+                            || origin.member.as_ref().is_some_and(|p| p.trim().is_empty())
+                            || origin.through.len() > 32
+                        {
                             return Err(anyhow::anyhow!(
-                                "provenance requires exactly one of call/value and at most 32 transfer models"
+                                "provenance requires exactly one of call/value/member/whole_value/field_exists and at most 32 transfer models"
                             ));
+                        }
+                        if origin.field_exists
+                            && (origin.field.as_ref().is_none_or(|s| s.trim().is_empty())
+                                || !origin.through.is_empty())
+                        {
+                            anyhow::bail!(
+                                "field_exists requires a nonempty field and no transfer models"
+                            );
+                        }
+                        if origin.whole_value.is_some() && !origin.through.is_empty() {
+                            anyhow::bail!("whole_value does not accept provenance transfer models");
                         }
                         if !has_call && (origin.literal.is_some() || origin.argument != 0) {
                             return Err(anyhow::anyhow!(
@@ -3126,6 +3202,8 @@ impl Condition {
                         for pattern in std::iter::once(&origin.call)
                             .filter(|s| !s.is_empty())
                             .chain(origin.value.iter())
+                            .chain(origin.whole_value.iter())
+                            .chain(origin.member.iter())
                             .chain(origin.literal.iter())
                             .chain(origin.through.iter().map(|m| &m.call))
                         {

@@ -664,3 +664,6 @@ fn xor_encoded_pe_is_a_decoded_payload() {
         .collect();
     assert!(super::xor_encoded_pe(&id(&noise), &noise).is_none());
 }
+
+#[path = "encoded_payload_xor_test.rs"]
+mod xor_regressions;

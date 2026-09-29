@@ -2654,6 +2654,10 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     encoded_payloads.extend(file_ctx.as_ref().and_then(|ctx| {
         extractors::encoded_payload::xor_encoded_pe(ctx.parsed.fileid(), file_data)
     }));
+    encoded_payloads.extend(extractors::encoded_payload::xor_encoded_machos(
+        file_data,
+        &stng_strings,
+    ));
 
     // Create unified analysis input - all analyzers receive the same pre-extracted data
     let mut input = analyzers::AnalysisInput::with_payloads(

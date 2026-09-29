@@ -1090,11 +1090,30 @@ fn eval_text_encoded<'a, 'b>(
             // shorter decoded length (see `encoded_source_len`). An offset-less
             // entry still anchors via `string_info_location` (section start, else
             // `0x0`), so the match never reaches `fallback_anchor` locationless.
+            //
+            // Proximity (`near_bytes`/`near_lines`) reads `offsets`, not the
+            // anchor: without them every hit in one decoded layer tags as the
+            // layer's start, so two matches thousands of bytes apart inside a
+            // single layer (e.g. an `unicode-escape` layer spanning a whole
+            // minified file) look adjacent. Record where the match sits within
+            // the layer — exact to the base64 quad for base64, decoded bytes
+            // otherwise — clamped to the file so it stays a real offset.
+            let offsets = string_info.offset.map_or_else(Vec::new, |anchor| {
+                let within = (match_value.as_ptr() as usize)
+                    .saturating_sub(string_info.value.as_ptr() as usize);
+                let within = match string_info.encoding_chain.as_slice() {
+                    [layer] if layer == "base64" => within / 3 * 4,
+                    _ => within,
+                } as u64;
+                let last = (ctx.binary_data.len() as u64).saturating_sub(1);
+                vec![anchor.saturating_add(within).min(last.max(anchor))]
+            });
             evidence.push(Evidence {
                 method: "text".to_string(),
                 source: "string_extractor".to_string(),
                 value: truncate_evidence_value(match_value),
                 location: Some(string_info_location(ctx.report, string_info)),
+                offsets,
                 match_len: encoded_source_len(string_info.value.len(), &string_info.encoding_chain),
                 ..Default::default()
             });

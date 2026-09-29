@@ -649,10 +649,16 @@ fn evaluate(
                     //      false positive.
                     // These fixtures exist precisely to keep both classes
                     // regression-free.
+                    let allowed: &[String] = does_nothing_override(&file.path, &dir, does_nothing)
+                        .map_or(&[], |o| o.allowed_prefixes.as_slice());
                     let disallowed: Vec<String> = file
                         .findings
                         .iter()
                         .filter(|f| {
+                            // A finding this sample was reviewed to carry.
+                            if allowed.iter().any(|p| f.id.starts_with(p.as_str())) {
+                                return false;
+                            }
                             // Intent and malware-family findings are never
                             // acceptable on a do-nothing fixture, at any crit.
                             if f.id.starts_with("objectives/") || f.id.starts_with("well-known/") {
@@ -676,6 +682,16 @@ fn evaluate(
                             // program identity as notable, so this is not a
                             // false-positive capability finding.
                             if f.id.starts_with("metadata/lang/compiler/")
+                                && f.crit == Criticality::Notable
+                            {
+                                return false;
+                            }
+                            // Package-format and build/CI metadata identity
+                            // are inherent file facts in the same sense: a
+                            // no-op .deb is still a Debian package, and a
+                            // no-op workflow still pins actions by tag.
+                            if (f.id.starts_with("metadata/package/files/")
+                                || f.id.starts_with("metadata/build/"))
                                 && f.crit == Criticality::Notable
                             {
                                 return false;
@@ -1149,21 +1165,32 @@ struct DoesNothing {
 struct DoesNothingCap {
     path: String,
     cap: u32,
+    /// Finding-id prefixes this sample genuinely carries and is allowed to
+    /// show despite the no-intent/no-notable invariant: a sample that really
+    /// writes to syslog, or a unit file that really enables itself at boot.
+    /// Each entry is an explicit, reviewed acknowledgement for one file.
+    #[serde(default)]
+    allowed_prefixes: Vec<String>,
 }
 
-/// Look up the cap for a file whose `path` may be either absolute (root file)
-/// or include an archive suffix (e.g. `"...sample.ipa!!Payload/..."`).
-fn does_nothing_cap(file_path: &str, dir: &Path, does_nothing: &DoesNothing) -> u32 {
+/// The override entry for a file whose `path` may be either absolute (root
+/// file) or include an archive suffix (e.g. `"...sample.ipa!!Payload/..."`).
+fn does_nothing_override<'a>(
+    file_path: &str,
+    dir: &Path,
+    does_nothing: &'a DoesNothing,
+) -> Option<&'a DoesNothingCap> {
     let dir_str = dir.to_string_lossy();
     let rel = file_path
         .strip_prefix(dir_str.as_ref())
         .and_then(|s| s.strip_prefix('/'))
         .unwrap_or(file_path);
-    does_nothing
-        .overrides
-        .iter()
-        .find_map(|o| (o.path == rel).then_some(o.cap))
-        .unwrap_or(does_nothing.default_cap)
+    does_nothing.overrides.iter().find(|o| o.path == rel)
+}
+
+/// The score cap for a does-nothing file: its override, else the default.
+fn does_nothing_cap(file_path: &str, dir: &Path, does_nothing: &DoesNothing) -> u32 {
+    does_nothing_override(file_path, dir, does_nothing).map_or(does_nothing.default_cap, |o| o.cap)
 }
 
 /// Substring that no path-derived value of a staged fixture may contain.
@@ -1653,5 +1680,41 @@ mod neutral_stage_tests {
         assert_eq!(report.files[0].path, "/fix/a.js");
         assert_eq!(report.files[1].path, "/fix/a.js##base64@4");
         assert_eq!(report.files[2].path, "/t/h/a.jsx");
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used)]
+mod does_nothing_override_tests {
+    use super::{DoesNothing, does_nothing_cap, does_nothing_override};
+    use std::path::Path;
+
+    #[test]
+    fn overrides_carry_caps_and_reviewed_findings() {
+        let dn: DoesNothing = toml::from_str(
+            r#"
+            default_cap = 1
+            [[overrides]]
+            path = "artifacts/sample.c"
+            cap = 2
+            allowed_prefixes = ["micro-behaviors/os/telemetry/logging/syslog::"]
+            [[overrides]]
+            path = "artifacts/sample.js"
+            cap = 2
+            "#,
+        )
+        .expect("parse");
+        let dir = Path::new("/corpus/does-nothing");
+        let c = does_nothing_override("/corpus/does-nothing/artifacts/sample.c", dir, &dn)
+            .expect("sample.c override");
+        assert_eq!(c.cap, 2);
+        assert_eq!(c.allowed_prefixes.len(), 1);
+        let js = does_nothing_override("/corpus/does-nothing/artifacts/sample.js", dir, &dn)
+            .expect("sample.js override");
+        assert!(js.allowed_prefixes.is_empty(), "the field is optional");
+        assert_eq!(
+            does_nothing_cap("/corpus/does-nothing/artifacts/other.c", dir, &dn),
+            1
+        );
     }
 }

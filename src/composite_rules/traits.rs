@@ -3930,8 +3930,15 @@ impl CompositeTrait {
             return Some((evidence, tagged_locations));
         }
 
+        // In the container pass a member's findings arrive twice: once with
+        // an `archive:<member>` location and once bare (`value:…`, `0x…`,
+        // none). Bare evidence keys to "", which spans every member. For
+        // `nest` that bucket would join a class with any other class in the
+        // JAR -- exactly the pooling the scope exists to prevent -- so an
+        // unlocated key never wins a nest.
         let winning_key = unique_keys
             .into_iter()
+            .filter(|k| !(matches!(scope, Scope::Nest) && k.is_empty()))
             .find(|k| {
                 let conds: std::collections::BTreeSet<usize> = tagged_locations
                     .iter()
@@ -5360,6 +5367,48 @@ mod scope_tests {
         ];
 
         assert!(rule.apply_scope_filter(evidence, tags, &[], "").is_none());
+    }
+
+    /// The container pass hands `nest` each member's evidence twice: prefixed
+    /// with its `archive:` member path, and bare. The bare copies all key to
+    /// "", which spans every class; it must not satisfy a nest on its own.
+    #[test]
+    fn nest_scope_ignores_unlocated_evidence_from_unrelated_classes() {
+        let rule = composite_with(2, Some(Scope::Nest));
+        let evidence = vec![
+            ev("archive:com/x/Tls.class:0x30"),
+            ev("0x30"),
+            ev("archive:com/x/Other$T.class:value:class.strings[*]"),
+            ev("value:class.strings[*]"),
+        ];
+        let tags = vec![
+            tag(0, "archive:com/x/Tls.class:0x30"),
+            tag(0, "0x30"),
+            tag(1, "archive:com/x/Other$T.class:value:class.strings[*]"),
+            tag(1, "value:class.strings[*]"),
+        ];
+        assert!(rule.apply_scope_filter(evidence, tags, &[], "").is_none());
+    }
+
+    #[test]
+    fn nest_scope_pools_a_class_with_its_inner_class() {
+        let rule = composite_with(2, Some(Scope::Nest));
+        let evidence = vec![
+            ev("archive:com/x/Tls.class:0x30"),
+            ev("0x30"),
+            ev("archive:com/x/Tls$T.class:value:class.strings[*]"),
+            ev("value:class.strings[*]"),
+        ];
+        let tags = vec![
+            tag(0, "archive:com/x/Tls.class:0x30"),
+            tag(0, "0x30"),
+            tag(1, "archive:com/x/Tls$T.class:value:class.strings[*]"),
+            tag(1, "value:class.strings[*]"),
+        ];
+        let (kept, _) = rule
+            .apply_scope_filter(evidence, tags, &[], "")
+            .expect("nestmates pool");
+        assert_eq!(kept.len(), 2, "only the located nest evidence is kept");
     }
 
     #[test]

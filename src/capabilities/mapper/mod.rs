@@ -1240,4 +1240,123 @@ mod proximity_offset_tests {
             }
         }
     }
+
+    /// Evaluates `rev ∧ b85` under `near_bytes`/`near_lines` over a Python
+    /// `source`. With `whole_file_layer`, the report also carries a decoded
+    /// layer holding the whole file at offset 0 — what `unicode-escape`
+    /// extraction yields for a minified one-liner — so the text legs also
+    /// match inside that layer.
+    fn reverse_near_decode(
+        source: &str,
+        whole_file_layer: bool,
+        near_bytes: Option<usize>,
+        near_lines: Option<usize>,
+    ) -> bool {
+        let mut mapper = CapabilityMapper::empty();
+        for (id, query) in [
+            (
+                "test::rev",
+                TextQuery {
+                    regex: Some(r"\[::\s*-\s*1\]".into()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "test::b85",
+                TextQuery {
+                    substr: Some("b85decode".into()),
+                    ..Default::default()
+                },
+            ),
+        ] {
+            mapper.trait_definitions.push(TraitDefinition {
+                id: id.into(),
+                desc: id.into(),
+                r#if: Condition::Text(query),
+                ..Default::default()
+            });
+        }
+        mapper.composite_rules.push(CompositeTrait {
+            id: "test::rev-near-b85".into(),
+            all: Some(vec![
+                Condition::Trait {
+                    id: "test::rev".into(),
+                },
+                Condition::Trait {
+                    id: "test::b85".into(),
+                },
+            ]),
+            near_bytes,
+            near_lines,
+            ..Default::default()
+        });
+        let mut report = AnalysisReport::new(TargetInfo {
+            path: "x.py".into(),
+            file_type: "python".into(),
+            size_bytes: source.len() as u64,
+            sha256: String::new(),
+            architectures: None,
+        });
+        if whole_file_layer {
+            report.strings.push(crate::types::StringInfo {
+                value: source.into(),
+                offset: Some(0),
+                encoding: "utf8".into(),
+                string_type: None,
+                section: None,
+                encoding_chain: vec!["unicode-escape".into()],
+                fragments: None,
+            });
+        }
+        report.findings = mapper.evaluate_traits(&report, source.as_bytes());
+        let ctx = EvaluationContext::new(
+            &report,
+            source.as_bytes(),
+            RuleFileType::Python,
+            &[Platform::All],
+            None,
+            None,
+        );
+        mapper.composite_rules[0].evaluate(&ctx).is_some()
+    }
+
+    #[test]
+    fn near_bytes_measures_real_distance_on_one_long_line() {
+        let pad = "x".repeat(400);
+        let far = format!("import base64;a=base64.b85decode(s);{pad}b=s[::-1];print(a,b)\n");
+        let near = format!("import base64;{pad}a=base64.b85decode(s[::-1]);print(a)\n");
+        for layer in [false, true] {
+            assert!(
+                !reverse_near_decode(&far, layer, Some(16), None),
+                "far-apart legs on one line must not satisfy near_bytes (layer={layer})"
+            );
+            assert!(
+                reverse_near_decode(&near, layer, Some(16), None),
+                "adjacent legs on one line must satisfy near_bytes (layer={layer})"
+            );
+        }
+    }
+
+    #[test]
+    fn near_lines_measures_real_distance_across_lines() {
+        let far = format!(
+            "import base64\na=base64.b85decode(s)\n{}b=s[::-1]\n",
+            "y=1\n".repeat(50)
+        );
+        let near = format!("{}a=base64.b85decode(s)\nb=s[::-1]\n", "y=1\n".repeat(50));
+        for layer in [false, true] {
+            assert!(
+                !reverse_near_decode(&far, layer, None, Some(3)),
+                "legs 51 lines apart must not satisfy near_lines (layer={layer})"
+            );
+            assert!(
+                reverse_near_decode(&near, layer, None, Some(3)),
+                "legs on adjacent lines must satisfy near_lines (layer={layer})"
+            );
+            assert!(
+                !reverse_near_decode(&far, layer, Some(16), None),
+                "legs on distant lines must not satisfy near_bytes (layer={layer})"
+            );
+        }
+    }
 }

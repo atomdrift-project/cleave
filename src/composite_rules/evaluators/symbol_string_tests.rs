@@ -251,7 +251,7 @@ fn test_eval_symbol_fact_member_location_required_without_offset() {
     let ctx = create_test_context(&report, b"process.env.SECRET");
     let exact = "process.env".to_string();
 
-    let result = super::eval_symbol_fact(SymbolKind::Member, Some(&exact), None, None, &ctx);
+    let result = super::eval_symbol_fact(SymbolKind::Member, Some(&exact), None, None, None, &ctx);
 
     assert!(result.matched);
     assert_eq!(result.evidence[0].location.as_deref(), Some("0x4"));
@@ -3698,4 +3698,81 @@ fn test_eval_raw_foreign_offsets_do_not_window() {
         result.matched,
         "unless regex must full-scan when offsets belong to the if atom"
     );
+}
+
+#[test]
+fn bind_shape_filters_distinguish_syntax_and_preserve_offsets() {
+    use crate::composite_rules::condition::ArgFilter;
+    for (shape, expected) in [
+        (filefacts::ArgShape::String, true),
+        (filefacts::ArgShape::Template, false),
+        (filefacts::ArgShape::Identifier, false),
+        (filefacts::ArgShape::Call, false),
+        (filefacts::ArgShape::Expression, false),
+    ] {
+        let mut report = create_test_report();
+        report.filefacts = Some(crate::types::FilefactsView {
+            symbols: vec![filefacts::Symbol::Bind {
+                target: "pwd".into(),
+                shape,
+                offset: 7,
+            }],
+            ..Default::default()
+        });
+        let ctx = create_test_context(&report, b"<cfset pwd='example'>");
+        let filter = ArgFilter {
+            kind: Some("string".into()),
+            ..Default::default()
+        };
+        let exact = "pwd".to_string();
+        let result = super::eval_symbol_fact(
+            SymbolKind::Bind,
+            Some(&exact),
+            None,
+            None,
+            Some(&filter),
+            &ctx,
+        );
+        assert_eq!(result.matched, expected, "{shape:?}");
+        if expected {
+            assert_eq!(result.evidence[0].location.as_deref(), Some("0x7"));
+        }
+        assert!(
+            super::eval_symbol_fact(SymbolKind::Bind, Some(&exact), None, None, None, &ctx).matched
+        );
+        assert!(
+            !super::eval_symbol_fact(
+                SymbolKind::Bind,
+                Some(&"other".into()),
+                None,
+                None,
+                Some(&filter),
+                &ctx
+            )
+            .matched
+        );
+    }
+}
+
+#[test]
+fn binding_shape_and_identifier_regex_schema_reject_ignored_filters() {
+    use crate::composite_rules::condition::Condition;
+    for (suffix, expected) in [
+        ("kind: bind\narg: {kind: string}", true),
+        ("kind: bind\narg: {exact: secret}", false),
+        ("kind: bind\narg: {kind: typo}", false),
+        ("kind: member\narg: {name_regex: pwd}", false),
+        ("kind: bind\narg: {kind: string, index: 0}", false),
+        ("kind: bind\narg: {kind: string, name_regex: pwd}", false),
+        ("kind: bind\nargs: [{kind: string}]", false),
+        (
+            "kind: call\narg: {index: 0, name_regex: '^session\\.'}",
+            true,
+        ),
+        ("kind: call\narg: {name_regex: '['}", false),
+    ] {
+        let condition: Condition =
+            serde_yaml::from_str(&format!("type: symbol\nexact: pwd\n{suffix}\n")).unwrap();
+        assert_eq!(condition.validate().is_ok(), expected, "{suffix}");
+    }
 }

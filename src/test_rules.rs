@@ -1316,6 +1316,7 @@ impl<'a> RuleDebugger<'a> {
                     query.exact.as_ref(),
                     query.substr.as_ref(),
                     query.regex.as_ref(),
+                    query.arg.as_ref(),
                     ctx,
                 )
             }

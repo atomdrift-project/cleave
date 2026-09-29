@@ -1377,3 +1377,51 @@ fn archive_members_are_files_not_fragments() {
         "an archive member is a file and answers file-shaped questions"
     );
 }
+
+/// A trait-level `not:` (sibling of `if:`) must filter a `type: value` match.
+/// The value arm once passed the bare condition to the evaluator, so the
+/// exclusion was accepted by the loader and never applied.
+#[test]
+fn test_trait_level_not_filters_value_matches() {
+    let condition: Condition = serde_yaml::from_str(
+        r#"
+type: value
+path: scripts.*
+regex: '^node\s+\S+\.[a-z]+$'
+"#,
+    )
+    .unwrap();
+    let eval = |scripts: serde_json::Value, not: Option<Vec<NotException>>| {
+        let mut trait_def = create_test_trait("test/value::trait-level-not", condition.clone());
+        trait_def.not = not;
+        assert!(trait_def.precompile_regexes().is_ok());
+        let mut report = create_report_with_size(64);
+        report.values_tree = Some(Box::new(serde_json::json!({ "scripts": scripts })));
+        let ctx = create_test_context(report, vec![]);
+        trait_def.evaluate(&ctx).is_some()
+    };
+    let exclude_js = || {
+        Some(vec![NotException::Structured(NotExceptionStructured {
+            exact: None,
+            substr: None,
+            regex: Some(r"\.js$".to_string()),
+            lowered_substr: None,
+        })])
+    };
+
+    let plain = serde_json::json!({ "start": "node server.js" });
+    assert!(
+        eval(plain.clone(), None),
+        "control: the value matcher fires without not:"
+    );
+    assert!(
+        !eval(plain, exclude_js()),
+        "trait-level not: must filter the value match"
+    );
+
+    let disguised = serde_json::json!({ "start": "node fonts/fa-solid-300.llf" });
+    assert!(
+        eval(disguised, exclude_js()),
+        "not: must leave non-excluded values matching"
+    );
+}

@@ -2084,6 +2084,12 @@ impl ArchiveAnalyzer {
             payloads.extend(member_ctx.as_ref().and_then(|ctx| {
                 crate::extractors::encoded_payload::xor_encoded_pe(ctx.parsed.fileid(), data)
             }));
+            if extract_payloads {
+                payloads.extend(crate::extractors::encoded_payload::xor_encoded_machos(
+                    data,
+                    &stng_strings,
+                ));
+            }
             let mut input = AnalysisInput::with_payloads(
                 logical_path,
                 data,

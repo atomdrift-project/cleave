@@ -4,9 +4,9 @@
 //! (boolean combinations of conditions).
 
 use super::condition::{
-    CommentQuery, Condition, EncodedQuery, HexQuery, KvQuery, LiteralQuery, MetricsQuery,
-    NotException, NotExceptionStructured, PathQuery, RawQuery, SectionQuery, StringValidator,
-    SymbolKind, SymbolQuery, TextQuery, TreeSitterQuery,
+    CommentQuery, Condition, EncodedQuery, HexQuery, LiteralQuery, MetricsQuery, NotException,
+    NotExceptionStructured, PathQuery, RawQuery, SectionQuery, StringValidator, SymbolKind,
+    SymbolQuery, TextQuery, TreeSitterQuery,
 };
 use super::context::{ConditionResult, EvaluationContext, StringParams};
 use super::evaluators::{
@@ -1603,6 +1603,7 @@ impl TraitDefinition {
                                 exact.as_ref(),
                                 substr.as_ref(),
                                 regex.as_ref(),
+                                arg.as_ref(),
                                 ctx,
                             )
                         )
@@ -1988,9 +1989,23 @@ impl TraitDefinition {
                     ctx,
                 )
             ),
-            Condition::Kv(KvQuery { .. }) => {
+            Condition::Kv(query) => {
                 timed_eval!("value", {
-                    // Delegate to value evaluator with caching
+                    // Trait-level `not:` filters value matches exactly as it
+                    // does every other matcher's. This arm used to hand the
+                    // bare condition to the evaluator, so a `not:` written
+                    // beside `if:` on a value trait was parsed, validated and
+                    // then silently never applied.
+                    let merged;
+                    let condition = match self.not.as_ref() {
+                        Some(trait_level) if !trait_level.is_empty() => {
+                            let mut query = query.clone();
+                            query.not = merge_not_exceptions(query.not.as_ref(), Some(trait_level));
+                            merged = Condition::Kv(query);
+                            &merged
+                        }
+                        _ => condition,
+                    };
                     if let Some(evidence) = super::evaluators::evaluate_kv(condition, ctx) {
                         ConditionResult::matched_with(vec![evidence])
                     } else {
@@ -3369,6 +3384,7 @@ impl CompositeTrait {
                         exact.as_ref(),
                         substr.as_ref(),
                         regex.as_ref(),
+                        arg.as_ref(),
                         ctx,
                     ),
                     _ => self.eval_symbol(
@@ -3724,9 +3740,23 @@ impl CompositeTrait {
                     ctx,
                 )
             ),
-            Condition::Kv(KvQuery { .. }) => {
+            Condition::Kv(query) => {
                 timed_eval!("value", {
-                    // Delegate to value evaluator with caching
+                    // Trait-level `not:` filters value matches exactly as it
+                    // does every other matcher's. This arm used to hand the
+                    // bare condition to the evaluator, so a `not:` written
+                    // beside `if:` on a value trait was parsed, validated and
+                    // then silently never applied.
+                    let merged;
+                    let condition = match self.not.as_ref() {
+                        Some(trait_level) if !trait_level.is_empty() => {
+                            let mut query = query.clone();
+                            query.not = merge_not_exceptions(query.not.as_ref(), Some(trait_level));
+                            merged = Condition::Kv(query);
+                            &merged
+                        }
+                        _ => condition,
+                    };
                     if let Some(evidence) = super::evaluators::evaluate_kv(condition, ctx) {
                         ConditionResult::matched_with(vec![evidence])
                     } else {

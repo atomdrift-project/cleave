@@ -16,12 +16,10 @@ use crate::malecule_bridge;
 use crate::types::{
     AnalysisGap, AnalysisReport, ContextLine, Criticality, FileAnalysis, Finding, Note,
 };
-use anyhow::Result;
 use colored::Colorize;
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 /// Aggregated finding for a directory path
-#[allow(dead_code)] // Used by binary target
 #[derive(Clone)]
 struct AggregatedFinding {
     /// The directory path (e.g., "execution/command/subprocess")
@@ -35,7 +33,6 @@ struct AggregatedFinding {
 /// Aggregate findings by directory path, keeping highest criticality (then highest conf)
 /// Returns findings with IDs set to directory paths and trait_refs containing all matched trait IDs
 /// Internal findings (from code analyzers) are not aggregated - shown individually
-#[allow(dead_code)] // Used by binary target
 #[must_use]
 pub(crate) fn aggregate_findings_by_directory(findings: &[Finding]) -> Vec<Finding> {
     let mut aggregated: HashMap<String, AggregatedFinding> = HashMap::new();
@@ -121,7 +118,7 @@ pub(crate) fn aggregate_findings_by_directory(findings: &[Finding]) -> Vec<Findi
 }
 
 /// Get risk indicator based on criticality
-#[allow(dead_code)] // Used by binary target
+#[cfg(test)]
 fn risk_indicator(crit: &Criticality) -> colored::ColoredString {
     use crate::theme;
     match crit {
@@ -139,7 +136,7 @@ fn risk_indicator(crit: &Criticality) -> colored::ColoredString {
 /// e.g., "micro-behaviors/execution/command/subprocess" -> ("exec", "command/subprocess")
 /// e.g., "objectives/anti-analysis/debugger/detect" -> ("anti-analysis", "debugger/detect")
 /// e.g., "intel/discover/process/getuid" -> ("intel", "discover/process/getuid")
-#[allow(dead_code)] // Used by binary target
+#[cfg(test)]
 fn split_trait_id(id: &str) -> (String, String) {
     let parts: Vec<&str> = id.split('/').collect();
 
@@ -164,7 +161,7 @@ fn split_trait_id(id: &str) -> (String, String) {
 
 /// Namespace categories for grouping findings
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[allow(dead_code)] // Used by binary target
+#[cfg(test)]
 enum Namespace {
     WellKnown,
     Objectives,
@@ -173,6 +170,7 @@ enum Namespace {
     ThirdParty,
 }
 
+#[cfg(test)]
 impl Namespace {
     /// Parse namespace from trait ID prefix
     fn from_trait_id(id: &str) -> Option<Self> {
@@ -199,21 +197,8 @@ impl Namespace {
     }
 }
 
-/// Get sort order for namespace (fixed order: well-known, objectives, micro-behaviors, metadata, third-party)
-#[allow(dead_code)] // Used by binary target
-fn namespace_sort_order(ns: &str) -> u8 {
-    match ns {
-        "well-known" => 0,
-        "objectives" => 1,
-        "micro-behaviors" => 2,
-        "metadata" => 3,
-        "third-party" | "third_party" => 4,
-        _ => 5, // Unknown namespaces go last
-    }
-}
-
 /// Convert namespace to long name, capitalizing if no explicit mapping exists
-#[allow(dead_code)] // Used by binary target
+#[cfg(test)]
 fn namespace_long_name(ns: &str) -> String {
     let mapped = match ns {
         "c2" => Some("COMMAND & CONTROL"),
@@ -256,13 +241,7 @@ fn namespace_long_name(ns: &str) -> String {
     }
 }
 
-/// Format evidence string (minimal, deduplicated)
-/// Maximum width for evidence display (truncate if longer)
-#[allow(dead_code)] // Used by binary target
-const EVIDENCE_MAX_WIDTH: usize = 80;
-
 /// Make descriptions more terse by removing redundant explanatory parentheticals
-#[allow(dead_code)] // Used by binary target
 fn terse_description(desc: &str) -> String {
     // Remove common verbose patterns that are redundant given the context
     desc.replace(" (timing attacks or sandbox detection)", "")
@@ -286,7 +265,6 @@ fn terse_description(desc: &str) -> String {
 /// or a bare `id` when the description is empty. Plain (LLM/tiny) render paths
 /// only — the colored terminal views omit the id to keep the aligned comment
 /// gutter legible.
-#[allow(dead_code)] // Used by binary target
 fn annotate_desc(desc: &str, id: &str) -> String {
     if desc.is_empty() {
         id.to_string()
@@ -295,7 +273,7 @@ fn annotate_desc(desc: &str, id: &str) -> String {
     }
 }
 
-#[allow(dead_code)] // Used by binary target
+#[cfg(test)]
 fn format_evidence(finding: &Finding) -> String {
     // Dedupe values, drop blank/whitespace-only lines from each. If any
     // value spans multiple lines after cleaning, return the full set as a
@@ -335,37 +313,6 @@ fn format_evidence(finding: &Finding) -> String {
     }
 }
 
-// =============================================================================
-// JSONL (Newline-Delimited JSON) Output for Streaming
-// =============================================================================
-
-/// JSONL file entry - emitted for each file as it's analyzed
-#[allow(dead_code)] // Used by binary target
-#[derive(serde::Serialize)]
-struct JsonlFileEntry<'a> {
-    #[serde(rename = "type")]
-    entry_type: &'static str,
-    #[serde(flatten)]
-    file: &'a crate::types::FileAnalysis,
-}
-
-/// JSONL summary entry - emitted at the end of streaming output
-#[allow(dead_code)] // Used by binary target
-#[derive(serde::Serialize)]
-struct JsonlSummary {
-    #[serde(rename = "type")]
-    entry_type: &'static str,
-    files_analyzed: u32,
-    #[serde(rename = "x")]
-    score: u32,
-    hostile: u32,
-    suspicious: u32,
-    notable: u32,
-    duration_ms: u64,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    tools: Vec<String>,
-}
-
 /// Minimum confidence required for a finding to contribute to the formula.
 /// Higher than the display threshold (0.5) on purpose: the formula is a
 /// fingerprint, not an enumeration, so we want only findings the analyzer
@@ -385,86 +332,6 @@ pub(crate) fn filter_findings_for_formula(findings: &[Finding]) -> Vec<Finding> 
         .into_iter()
         .filter(|f| f.crit >= Criticality::Notable && f.conf >= FORMULA_MIN_CONF)
         .collect()
-}
-
-/// Format a single file analysis as a JSONL line
-#[allow(dead_code)] // Used by binary target
-pub(crate) fn format_jsonl_line(file: &crate::types::FileAnalysis) -> Result<String> {
-    // Inject the formula at serialize time when it isn't precomputed (e.g. an
-    // empty-formula benign member) rather than cloning the whole file just to
-    // set one field. The file's own `formula` is `None` here, so it's omitted
-    // by `skip_serializing_if` and this override is the only one emitted.
-    if file.formula.is_none() {
-        let filtered = filter_findings_for_formula(&file.findings);
-        let formula = malecule_bridge::formula_from_findings(&filtered);
-        let formula = if formula.is_empty() {
-            "∅".to_string()
-        } else {
-            formula
-        };
-        #[derive(serde::Serialize)]
-        struct JsonlFileEntryWithFormula<'a> {
-            #[serde(rename = "type")]
-            entry_type: &'static str,
-            #[serde(flatten)]
-            file: &'a crate::types::FileAnalysis,
-            formula: String,
-        }
-        let entry = JsonlFileEntryWithFormula {
-            entry_type: "file",
-            file,
-            formula,
-        };
-        return Ok(serde_json::to_string(&entry)?);
-    }
-
-    let entry = JsonlFileEntry {
-        entry_type: "file",
-        file,
-    };
-    Ok(serde_json::to_string(&entry)?)
-}
-
-/// Format the summary as a JSONL line (for end of streaming output)
-#[allow(dead_code)] // Used by binary target
-pub(crate) fn format_jsonl_summary(report: &AnalysisReport) -> Result<String> {
-    let summary = report.summary.as_ref();
-    let counts = summary.map(|s| &s.counts);
-
-    let entry = JsonlSummary {
-        entry_type: "summary",
-        files_analyzed: summary
-            .map(|s| s.files_analyzed)
-            .unwrap_or(report.files.len() as u32),
-        score: summary.map(|s| s.score).unwrap_or(0),
-        hostile: counts.map(|c| c.hostile).unwrap_or(0),
-        suspicious: counts.map(|c| c.suspicious).unwrap_or(0),
-        notable: counts.map(|c| c.notable).unwrap_or(0),
-        duration_ms: summary
-            .map(|s| s.duration_ms)
-            .unwrap_or(report.metadata.analysis_duration_ms),
-        tools: summary
-            .map(|s| s.tools.clone())
-            .unwrap_or_else(|| report.metadata.tools_used.clone()),
-    };
-    Ok(serde_json::to_string(&entry)?)
-}
-
-/// Format entire report as JSONL (for non-streaming output)
-#[allow(dead_code)] // Used by binary target
-pub(crate) fn format_jsonl(report: &AnalysisReport) -> Result<String> {
-    let mut lines = Vec::with_capacity(report.files.len() + 1);
-
-    // Emit each file as a line
-    for file in &report.files {
-        lines.push(format_jsonl_line(file)?);
-    }
-
-    // Emit summary at end
-    lines.push(format_jsonl_summary(report)?);
-
-    // Join with newlines and add trailing newline for proper JSONL streaming
-    Ok(format!("{}\n", lines.join("\n")))
 }
 
 /// Format the report as compact, context-centric text for small LLMs.
@@ -4171,119 +4038,6 @@ fn format_size(bytes: u64) -> String {
     }
 }
 
-/// Parse JSONL (newline-delimited JSON) back to AnalysisReport
-#[allow(dead_code)] // Used by binary target
-pub(crate) fn parse_jsonl(jsonl: &str) -> Result<AnalysisReport> {
-    let mut files = Vec::new();
-    let mut summary = None;
-    let mut version = "3".to_string();
-
-    // Parse each line as a JSON entry
-    for line in jsonl.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-
-        let value: serde_json::Value = serde_json::from_str(trimmed)?;
-        let entry_type = value.get("type").and_then(|v| v.as_str());
-
-        match entry_type {
-            Some("file") => {
-                let file: crate::types::FileAnalysis = serde_json::from_value(value)?;
-                files.push(file);
-            }
-            Some("summary") => {
-                if let Some(v) = value
-                    .get("version")
-                    .or_else(|| value.get("schema_version"))
-                    .and_then(|v| v.as_str())
-                {
-                    version = v.to_string();
-                }
-                let tools: Vec<String> = value
-                    .get("tools")
-                    .or_else(|| value.get("tools_used"))
-                    .and_then(|v| v.as_array())
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|v| v.as_str().map(str::to_string))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let errors: Vec<String> = value
-                    .get("errors")
-                    .and_then(|v| v.as_array())
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|v| v.as_str().map(str::to_string))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let duration_ms = value
-                    .get("duration_ms")
-                    .or_else(|| value.get("analysis_duration_ms"))
-                    .and_then(serde_json::Value::as_u64)
-                    .unwrap_or(0);
-
-                summary = Some(crate::types::ReportSummary {
-                    files_analyzed: value
-                        .get("files_analyzed")
-                        .and_then(serde_json::Value::as_u64)
-                        .unwrap_or(files.len() as u64) as u32,
-                    counts: crate::types::FindingCounts {
-                        hostile: value
-                            .get("hostile")
-                            .and_then(serde_json::Value::as_u64)
-                            .unwrap_or(0) as u32,
-                        suspicious: value
-                            .get("suspicious")
-                            .and_then(serde_json::Value::as_u64)
-                            .unwrap_or(0) as u32,
-                        notable: value
-                            .get("notable")
-                            .and_then(serde_json::Value::as_u64)
-                            .unwrap_or(0) as u32,
-                    },
-                    score: 0,
-                    duration_ms,
-                    tools,
-                    errors,
-                });
-            }
-            _ => {
-                // Unknown entry type, skip
-            }
-        }
-    }
-
-    // Create a minimal AnalysisReport with the parsed data
-    let target = if let Some(first_file) = files.first() {
-        crate::types::TargetInfo {
-            path: first_file.path.clone(),
-            file_type: first_file.file_type.clone(),
-            sha256: first_file.sha256.clone(),
-            size_bytes: first_file.size,
-            architectures: None,
-        }
-    } else {
-        crate::types::TargetInfo {
-            path: "unknown".to_string(),
-            file_type: "unknown".to_string(),
-            sha256: String::new(),
-            size_bytes: 0,
-            architectures: None,
-        }
-    };
-
-    let mut report = AnalysisReport::new(target);
-    report.version = version;
-    report.files = files;
-    report.summary = summary;
-
-    Ok(report)
-}
-
 /// Get terminal width, defaulting to 100 if unavailable. Public so litmus can
 /// size its card rules to the same width this module sizes rows to.
 #[must_use]
@@ -4294,7 +4048,6 @@ pub fn terminal_width() -> usize {
 }
 
 /// Truncate string to max width, using ellipsis (…) if needed
-#[allow(dead_code)] // Used by binary target
 fn truncate_with_ellipsis(s: &str, max_width: usize) -> String {
     if s.len() <= max_width {
         return s.to_string();
@@ -4316,7 +4069,7 @@ fn display_file_type(file_type: &str) -> String {
 
 /// Render a section label as a muted 256-color pill — bold white on dark bg.
 /// Hue encodes the namespace: red=well-known, magenta=objectives, blue=behaviors, gray=metadata.
-#[allow(dead_code)] // Used by binary target
+#[cfg(test)]
 fn section_pill(ns: &Namespace) -> colored::ColoredString {
     let (name, r, g, b) = match ns {
         Namespace::WellKnown => (ns.display_name(), 95, 0, 0), // dark red (256 idx 52)
@@ -4331,14 +4084,13 @@ fn section_pill(ns: &Namespace) -> colored::ColoredString {
 /// Full-width slate-blue rule used as a file-boundary marker. Routed
 /// through `theme::paint_rule` and `theme::RULE_CHAR` so analyze and
 /// diff share the exact same separator.
-#[allow(dead_code)] // Used by binary target
 fn file_rule(width: usize) -> colored::ColoredString {
     let rule: String = crate::theme::RULE_CHAR.to_string().repeat(width);
     crate::theme::paint_rule(rule)
 }
 
 /// Bullet indicator based on criticality: • notable, •• suspicious, ••• hostile
-#[allow(dead_code)] // Used by binary target
+#[cfg(test)]
 fn bullet_for_crit(crit: &Criticality) -> colored::ColoredString {
     use crate::theme;
     match crit {
@@ -4349,7 +4101,7 @@ fn bullet_for_crit(crit: &Criticality) -> colored::ColoredString {
 }
 
 /// Colorize text based on criticality.
-#[allow(dead_code)] // Used by binary target
+#[cfg(test)]
 fn colorize_by_crit(text: &str, crit: &Criticality) -> colored::ColoredString {
     use crate::theme;
     match crit {
@@ -4363,7 +4115,7 @@ fn colorize_by_crit(text: &str, crit: &Criticality) -> colored::ColoredString {
 /// e.g., "well-known/malware/BPFDoor" -> "BPFDoor"
 /// e.g., "objectives/c2/http/beacon" -> "c2/http/beacon"
 /// e.g., "micro-behaviors/fs/read/file" -> "fs/read/file"
-#[allow(dead_code)] // Used by binary target
+#[cfg(test)]
 fn short_trait_id(id: &str) -> String {
     let parts: Vec<&str> = id.split('/').collect();
     if parts.len() > 1 {
@@ -4384,7 +4136,7 @@ fn short_trait_id(id: &str) -> String {
 
 /// Format analysis report for terminal display
 /// Uses the v2 flat files array structure.
-#[allow(dead_code)] // Used by binary target
+#[cfg(test)]
 pub(crate) fn format_terminal(report: &AnalysisReport) -> String {
     let mut output = String::new();
     let term_width = terminal_width();

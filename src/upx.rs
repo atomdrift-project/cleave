@@ -16,13 +16,11 @@ use thiserror::Error;
 static UPX_DISABLED: AtomicUsize = AtomicUsize::new(0);
 
 /// Disable UPX decompression globally
-#[allow(dead_code)] // Used by the CLI binary target for process-wide disables
 pub(crate) fn disable_upx() {
     UPX_DISABLED.fetch_add(1, Ordering::SeqCst);
 }
 
 /// Guard that disables UPX support for the lifetime of the value.
-#[allow(dead_code)] // Used by the library target; the binary recompiles modules separately
 pub(crate) struct ScopedUpxDisable;
 
 impl Drop for ScopedUpxDisable {
@@ -32,7 +30,6 @@ impl Drop for ScopedUpxDisable {
 }
 
 /// Disable UPX support for the lifetime of the returned guard.
-#[allow(dead_code)] // Used by the library target; the binary recompiles modules separately
 pub(crate) fn scoped_disable_upx() -> ScopedUpxDisable {
     UPX_DISABLED.fetch_add(1, Ordering::SeqCst);
     ScopedUpxDisable

@@ -365,13 +365,6 @@ impl PackageJsonAnalyzer {
         }
     }
 
-    /// Create analyzer with pre-existing capability mapper (wraps in Arc)
-    #[must_use]
-    pub(crate) fn with_capability_mapper(mut self, mapper: CapabilityMapper) -> Self {
-        self.capability_mapper = Arc::new(mapper);
-        self
-    }
-
     /// Create analyzer with shared capability mapper (avoids cloning)
     #[must_use]
     pub(crate) fn with_capability_mapper_arc(mut self, mapper: Arc<CapabilityMapper>) -> Self {

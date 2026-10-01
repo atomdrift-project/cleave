@@ -7,6 +7,7 @@
 //!
 //! Rules are compiled once at startup for performance.
 
+#[cfg(test)]
 use crate::capabilities::CapabilityMapper;
 use crate::types::{
     Evidence, MAX_EVIDENCE_PER_TRAIT, MatchedString, YaraMatch, deduplicate_evidence,
@@ -72,6 +73,25 @@ fn skip_yara_active() -> bool {
         return v;
     }
     std::env::var("CLEAVE_SKIP_YARA").is_ok()
+}
+
+/// The process-wide YARA settings that change scan results outside
+/// `AnalysisOptions`: whether YARA is skipped entirely, and whether
+/// third-party rules are dropped. Analysis cache keys fold these in, so a
+/// report written under one setting is not served to a run under another.
+#[must_use]
+pub(crate) fn result_affecting_overrides() -> YaraOverrides {
+    YaraOverrides {
+        skip: skip_yara_active(),
+        builtin_only: builtin_yara_only_active(),
+    }
+}
+
+/// See [`result_affecting_overrides`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct YaraOverrides {
+    pub(crate) skip: bool,
+    pub(crate) builtin_only: bool,
 }
 use walkdir::WalkDir;
 #[cfg(test)]
@@ -1210,7 +1230,7 @@ impl YaraEngine {
 
     /// Create a new YARA engine with a pre-existing capability mapper (avoids duplicate loading)
     #[must_use]
-    #[allow(dead_code)] // Used by binary target (commands/analyze.rs) and tests
+    #[cfg(test)]
     pub(crate) fn new_with_mapper(_capability_mapper: CapabilityMapper) -> Self {
         Self::new()
     }

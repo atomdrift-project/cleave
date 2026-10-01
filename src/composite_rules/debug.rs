@@ -223,7 +223,6 @@ impl ConditionDebug {
 }
 
 /// Debug info for proximity constraint evaluation
-#[allow(dead_code)] // Used by binary target for rule debugging
 #[derive(Debug, Clone)]
 pub(crate) struct ProximityDebug {
     /// Type of constraint: "near_lines" or "near_bytes"
@@ -240,7 +239,6 @@ pub(crate) struct ProximityDebug {
 }
 
 /// Debug info for downgrade evaluation
-#[allow(dead_code)] // Used by binary target for rule debugging
 #[derive(Debug, Clone)]
 pub(crate) struct DowngradeDebug {
     /// Original criticality before downgrade
@@ -252,7 +250,6 @@ pub(crate) struct DowngradeDebug {
 }
 
 /// Type of rule being evaluated
-#[allow(dead_code)] // Used by binary target for rule debugging
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RuleType {
     /// Atomic trait definition
@@ -289,7 +286,6 @@ pub(crate) struct EvaluationDebug {
 
 impl EvaluationDebug {
     /// Create a new evaluation debug for a rule
-    #[allow(dead_code)] // Used by binary target for rule debugging
     pub(crate) fn new(_rule_id: impl Into<String>, _rule_type: RuleType) -> Self {
         Self {
             matched: false,

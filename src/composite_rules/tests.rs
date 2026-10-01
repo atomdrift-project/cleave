@@ -5374,3 +5374,39 @@ fn hex_not_applies_in_traits_and_composites() {
     assert!(trait_level.evaluate(&ctx).is_none());
     assert!(composite.evaluate(&ctx).is_none());
 }
+
+/// Shorthand `not:` is a case-insensitive substring wherever it is written.
+/// Only trait-level shorthands are pre-lowered at load, so an uppercase one at
+/// condition or composite level used to compare against a lowered value and
+/// never match.
+#[test]
+fn uppercase_shorthand_not_matches_at_every_level() {
+    assert!(NotException::Shorthand("EvilFoo".to_string()).matches("payload EVILFOO end"));
+
+    let (report, _) = create_test_context();
+    let data = b"payload evilfoo end".to_vec();
+    let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None);
+    let raw = |not: Option<Vec<NotException>>| {
+        Condition::Raw(RawQuery {
+            regex: Some(r"evil\w+".to_string()),
+            not,
+            ..Default::default()
+        })
+    };
+    let shorthand = || Some(vec![NotException::Shorthand("EvilFoo".to_string())]);
+
+    let condition_level = TraitDefinition {
+        id: "test/raw::evil-condition-not".to_string(),
+        r#if: raw(shorthand()),
+        ..Default::default()
+    };
+    let composite_level = CompositeTrait {
+        id: "test/raw::evil-composite-not".to_string(),
+        all: Some(vec![raw(None)]),
+        not: shorthand(),
+        ..Default::default()
+    };
+
+    assert!(condition_level.evaluate(&ctx).is_none());
+    assert!(composite_level.evaluate(&ctx).is_none());
+}

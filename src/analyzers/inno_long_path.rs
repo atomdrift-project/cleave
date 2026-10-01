@@ -8,8 +8,10 @@
 
 use std::ffi::OsStr;
 use std::io::{self, Read, Seek, SeekFrom};
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
+use std::sync::{Condvar, Mutex, PoisonError};
+use std::time::Duration;
 
 const TRACE_WORD_BYTES: usize = std::mem::size_of::<libc::c_long>();
 const MAX_PATH_BYTES: usize = 4096;
@@ -18,17 +20,27 @@ const MAX_PATH_BYTES: usize = 4096;
 /// components that exceed Linux's 255-byte filename limit.
 ///
 /// Returns the raw wait status, captured stderr, and number of rewritten paths.
+/// The extractor is killed if it runs past
+/// [`crate::subprocess::EXTRACT_TIMEOUT`].
 pub(crate) fn run(executable: &OsStr, args: &[&OsStr]) -> io::Result<(i32, Vec<u8>, usize)> {
+    run_with_timeout(executable, args, crate::subprocess::EXTRACT_TIMEOUT)
+}
+
+fn run_with_timeout(
+    executable: &OsStr,
+    args: &[&OsStr],
+    timeout: Duration,
+) -> io::Result<(i32, Vec<u8>, usize)> {
     let mut stderr_file = tempfile::tempfile()?;
     let stdout_null = std::fs::File::open("/dev/null")?;
     let executable = std::ffi::CString::new(executable.as_bytes())
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "NUL in executable path"))?;
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
     let mut owned_args = Vec::with_capacity(args.len() + 1);
     owned_args.push(executable.clone());
     for arg in args {
         owned_args.push(
             std::ffi::CString::new(arg.as_bytes())
-                .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "NUL in argument"))?,
+                .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?,
         );
     }
     let mut argv: Vec<*const libc::c_char> = owned_args.iter().map(|arg| arg.as_ptr()).collect();
@@ -62,6 +74,89 @@ pub(crate) fn run(executable: &OsStr, args: &[&OsStr]) -> io::Result<(i32, Vec<u
     }
 
     let pid = pid as libc::pid_t;
+    let (raw_status, rewritten) = trace_with_deadline(pid, timeout)?;
+
+    stderr_file.seek(SeekFrom::Start(0))?;
+    let mut stderr = Vec::new();
+    stderr_file.read_to_end(&mut stderr)?;
+    Ok((raw_status, stderr, rewritten))
+}
+
+/// [`trace`] the stopped child `pid`, killing it once `timeout` passes.
+///
+/// The tracer blocks in `waitpid`, so a tracee that never exits, or spins
+/// without making a syscall, would otherwise hold this thread forever. The
+/// kill goes through a pidfd, which names this process and no other: a plain
+/// `kill(pid)` racing the final reap could hit an unrelated process that
+/// reused the pid. Without pidfd support (Linux < 5.3) there is no deadline.
+fn trace_with_deadline(pid: libc::pid_t, timeout: Duration) -> io::Result<(i32, usize)> {
+    let pidfd = open_pidfd(pid);
+    let finished = (Mutex::new(false), Condvar::new());
+    std::thread::scope(|scope| {
+        if let Some(fd) = pidfd.as_ref().map(AsRawFd::as_raw_fd) {
+            let finished = &finished;
+            scope.spawn(move || kill_after(fd, finished, timeout));
+        }
+        let traced = trace(pid);
+        *finished.0.lock().unwrap_or_else(PoisonError::into_inner) = true;
+        finished.1.notify_all();
+        traced
+    })
+}
+
+fn open_pidfd(pid: libc::pid_t) -> Option<OwnedFd> {
+    // SAFETY: `pidfd_open` takes a pid and a flags word and returns a new
+    // descriptor or -1; it reads no memory of ours.
+    let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
+    let Ok(fd) = RawFd::try_from(fd) else {
+        return None;
+    };
+    if fd < 0 {
+        tracing::debug!(
+            error = %io::Error::last_os_error(),
+            "pidfd_open unavailable; innoextract tracing runs without a deadline"
+        );
+        return None;
+    }
+    // SAFETY: the syscall just returned this descriptor, and nothing else owns it.
+    Some(unsafe { OwnedFd::from_raw_fd(fd) })
+}
+
+/// SIGKILL the process behind `pidfd` unless `finished` is set within `timeout`.
+fn kill_after(pidfd: RawFd, finished: &(Mutex<bool>, Condvar), timeout: Duration) {
+    let (lock, done) = finished;
+    let (guard, _) = done
+        .wait_timeout_while(
+            lock.lock().unwrap_or_else(PoisonError::into_inner),
+            timeout,
+            |finished| !*finished,
+        )
+        .unwrap_or_else(PoisonError::into_inner);
+    let overran = !*guard;
+    drop(guard);
+    if overran {
+        tracing::warn!(
+            timeout_secs = timeout.as_secs(),
+            "innoextract tracee overran its deadline; killing it"
+        );
+        // SAFETY: `pidfd` stays open until this thread is joined (the caller's
+        // thread scope), and a pidfd names one process: if it was already
+        // reaped this fails with ESRCH instead of signalling another.
+        unsafe {
+            libc::syscall(
+                libc::SYS_pidfd_send_signal,
+                pidfd,
+                libc::SIGKILL,
+                std::ptr::null::<libc::siginfo_t>(),
+                0,
+            );
+        }
+    }
+}
+
+/// Follow the stopped child `pid` to exit, rewriting overlong output paths.
+/// Returns the raw wait status and the number of paths rewritten.
+fn trace(pid: libc::pid_t) -> io::Result<(i32, usize)> {
     let initial_status = wait_for(pid)?;
     if !libc::WIFSTOPPED(initial_status) {
         return Err(io::Error::other(
@@ -125,13 +220,13 @@ pub(crate) fn run(executable: &OsStr, args: &[&OsStr]) -> io::Result<(i32, Vec<u
             at_syscall_entry = !at_syscall_entry;
         }
 
-        let delivered_signal = if stop_signal == libc::SIGSTOP || stop_signal == libc::SIGTRAP {
-            0
-        } else if stop_signal == (libc::SIGTRAP | 0x80) {
-            0
-        } else {
-            stop_signal
-        };
+        // Stops caused by tracing itself are swallowed; genuine signals pass on.
+        let delivered_signal =
+            if [libc::SIGSTOP, libc::SIGTRAP, libc::SIGTRAP | 0x80].contains(&stop_signal) {
+                0
+            } else {
+                stop_signal
+            };
 
         // SAFETY: resume the stopped child and deliver only genuine signals.
         if unsafe {
@@ -147,11 +242,7 @@ pub(crate) fn run(executable: &OsStr, args: &[&OsStr]) -> io::Result<(i32, Vec<u
             return Err(io::Error::last_os_error());
         }
     };
-
-    stderr_file.seek(SeekFrom::Start(0))?;
-    let mut stderr = Vec::new();
-    stderr_file.read_to_end(&mut stderr)?;
-    Ok((raw_status, stderr, rewritten))
+    Ok((raw_status, rewritten))
 }
 
 fn wait_for(pid: libc::pid_t) -> io::Result<i32> {
@@ -285,8 +376,11 @@ fn shortened_output_path(path: &[u8]) -> Option<Vec<u8>> {
         return None;
     }
 
+    // Hash only the leaf: the directory part is kept, and it starts with a
+    // per-run temporary directory, which made the member's name (and so its
+    // reported path) differ on every run.
     let mut hash = 0xcbf29ce484222325u64;
-    for byte in path {
+    for byte in leaf {
         hash ^= u64::from(*byte);
         hash = hash.wrapping_mul(0x100000001b3);
     }
@@ -330,7 +424,28 @@ pub(crate) fn reports_overlong_output(stderr: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{reports_overlong_output, shortened_output_path};
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use super::{reports_overlong_output, run_with_timeout, shortened_output_path};
+    use std::ffi::OsStr;
+    use std::time::{Duration, Instant};
+
+    /// A tracee that never exits is killed at the deadline instead of holding
+    /// the tracer in `waitpid`. The loop makes no syscalls, so it never stops
+    /// for the tracer either: only the watchdog can end it.
+    #[test]
+    fn tracee_is_killed_at_the_deadline() {
+        let started = Instant::now();
+        let (status, _, rewritten) = run_with_timeout(
+            OsStr::new("/bin/sh"),
+            &[OsStr::new("-c"), OsStr::new("while :; do :; done")],
+            Duration::from_millis(300),
+        )
+        .expect("trace the shell");
+        assert!(libc::WIFSIGNALED(status), "status {status:#x}");
+        assert_eq!(libc::WTERMSIG(status), libc::SIGKILL);
+        assert_eq!(rewritten, 0);
+        assert!(started.elapsed() < Duration::from_secs(10));
+    }
 
     #[test]
     fn shortens_only_the_overlong_leaf_and_preserves_extension() {
@@ -340,6 +455,19 @@ mod tests {
         assert!(shortened.starts_with("app/__cleave_long_"));
         assert!(shortened.ends_with(".cmd"));
         assert!(shortened.len() < 64);
+    }
+
+    /// The shortened name depends on the leaf alone, not the per-run
+    /// extraction directory it is written under.
+    #[test]
+    fn shortened_name_is_stable_across_extraction_roots() {
+        let leaf = format!("{}file.cmd", "\u{205f}".repeat(175));
+        let short_name = |root: &str| {
+            let shortened = shortened_output_path(format!("{root}/app/{leaf}").as_bytes()).unwrap();
+            let shortened = String::from_utf8(shortened).unwrap();
+            shortened.rsplit('/').next().unwrap().to_string()
+        };
+        assert_eq!(short_name("/tmp/.tmpAbC123"), short_name("/tmp/.tmpXyZ789"));
     }
 
     #[test]

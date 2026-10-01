@@ -34,6 +34,50 @@ use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::sync::{Arc, OnceLock, RwLock};
 
+/// Build an index prefilter over `patterns`, or `None` when there are none.
+///
+/// A trait an index gates is evaluated only when the prefilter hits, so an
+/// automaton that fails to build silently disables every trait behind it. A
+/// kind forced by `CLEAVE_AC_NFA` that cannot hold the patterns falls back to
+/// aho-corasick's own choice, which picks a form that fits; a failure past
+/// that is logged as an error instead of being dropped.
+fn build_index_automaton<P: AsRef<[u8]>>(
+    patterns: &[P],
+    ascii_case_insensitive: bool,
+) -> Option<AhoCorasick> {
+    if patterns.is_empty() {
+        return None;
+    }
+    let build = |kind| {
+        AhoCorasick::builder()
+            .kind(kind)
+            .ascii_case_insensitive(ascii_case_insensitive)
+            .build(patterns)
+    };
+    let built = match build(ac_kind()) {
+        Err(err) if ac_kind().is_some() => {
+            tracing::warn!(
+                patterns = patterns.len(),
+                error = %err,
+                "forced index automaton kind cannot hold its patterns; letting aho-corasick choose"
+            );
+            build(None)
+        }
+        built => built,
+    };
+    match built {
+        Ok(automaton) => Some(automaton),
+        Err(err) => {
+            tracing::error!(
+                patterns = patterns.len(),
+                error = %err,
+                "index automaton failed to build; the traits it gates will not fire"
+            );
+            None
+        }
+    }
+}
+
 /// The other `for:` buckets a node of `file_type` draws traits from -- its
 /// generic container (a JAR reads the `zip` bucket), never the whole archive
 /// family. Must agree with the gate in `RuleFileType::rule_applies_to`.
@@ -443,23 +487,11 @@ impl SymbolMatchIndex {
         }
 
         let substr_automaton = (!substr_patterns.is_empty())
-            .then(|| {
-                AhoCorasick::builder()
-                    .kind(ac_kind())
-                    .ascii_case_insensitive(false)
-                    .build(&substr_patterns)
-                    .ok()
-            })
+            .then(|| build_index_automaton(&substr_patterns, false))
             .flatten();
 
         let regex_literal_automaton = (!regex_literals.is_empty())
-            .then(|| {
-                AhoCorasick::builder()
-                    .kind(ac_kind())
-                    .ascii_case_insensitive(false)
-                    .build(&regex_literals)
-                    .ok()
-            })
+            .then(|| build_index_automaton(&regex_literals, false))
             .flatten();
 
         let regex_fallback_regexes = regex_fallback_patterns
@@ -968,21 +1000,13 @@ impl StringMatchIndex {
         // pattern (e.g., "output") is embedded within a longer one
         // (e.g., "set volume output muted true").
         let substr_automaton = if !substr_patterns.is_empty() {
-            AhoCorasick::builder()
-                .kind(ac_kind())
-                .ascii_case_insensitive(false)
-                .build(&substr_patterns)
-                .ok()
+            build_index_automaton(&substr_patterns, false)
         } else {
             None
         };
 
         let ci_substr_automaton = if !ci_substr_patterns.is_empty() {
-            AhoCorasick::builder()
-                .kind(ac_kind())
-                .ascii_case_insensitive(true)
-                .build(&ci_substr_patterns)
-                .ok()
+            build_index_automaton(&ci_substr_patterns, true)
         } else {
             None
         };
@@ -993,11 +1017,7 @@ impl StringMatchIndex {
         // Source `type: text` regex is not skipped by this automaton (exact-only
         // raw-haystack prefilter); CI source regexes still run through eval_raw.
         let regex_literal_automaton = if !regex_literals.is_empty() {
-            AhoCorasick::builder()
-                .kind(ac_kind())
-                .ascii_case_insensitive(false)
-                .build(&regex_literals)
-                .ok()
+            build_index_automaton(&regex_literals, false)
         } else {
             None
         };
@@ -1032,11 +1052,7 @@ impl StringMatchIndex {
             let automaton = if patterns.is_empty() {
                 None
             } else {
-                AhoCorasick::builder()
-                    .kind(ac_kind())
-                    .ascii_case_insensitive(false)
-                    .build(&patterns)
-                    .ok()
+                build_index_automaton(&patterns, false)
             };
             (automaton, to_traits)
         };
@@ -1053,11 +1069,7 @@ impl StringMatchIndex {
             let automaton = if patterns.is_empty() {
                 None
             } else {
-                AhoCorasick::builder()
-                    .kind(ac_kind())
-                    .ascii_case_insensitive(true)
-                    .build(&patterns)
-                    .ok()
+                build_index_automaton(&patterns, true)
             };
             (automaton, to_traits)
         };
@@ -2860,22 +2872,14 @@ impl RawContentRegexIndex {
 
         // Build case-sensitive Aho-Corasick automaton
         let cs_literal_prefilter = if !cs_literal_prefixes.is_empty() {
-            AhoCorasick::builder()
-                .kind(ac_kind())
-                .ascii_case_insensitive(false)
-                .build(&cs_literal_prefixes)
-                .ok()
+            build_index_automaton(&cs_literal_prefixes, false)
         } else {
             None
         };
 
         // Build case-insensitive Aho-Corasick automaton
         let ci_literal_prefilter = if !ci_literal_prefixes.is_empty() {
-            AhoCorasick::builder()
-                .kind(ac_kind())
-                .ascii_case_insensitive(true)
-                .build(&ci_literal_prefixes)
-                .ok()
+            build_index_automaton(&ci_literal_prefixes, true)
         } else {
             None
         };
@@ -2937,21 +2941,13 @@ impl RawContentRegexIndex {
         }
 
         let cs_word_automaton = if !cs_words.is_empty() {
-            AhoCorasick::builder()
-                .kind(ac_kind())
-                .ascii_case_insensitive(false)
-                .build(&cs_words)
-                .ok()
+            build_index_automaton(&cs_words, false)
         } else {
             None
         };
 
         let ci_word_automaton = if !ci_words.is_empty() {
-            AhoCorasick::builder()
-                .kind(ac_kind())
-                .ascii_case_insensitive(true)
-                .build(&ci_words)
-                .ok()
+            build_index_automaton(&ci_words, true)
         } else {
             None
         };
@@ -2984,20 +2980,12 @@ impl RawContentRegexIndex {
             }
         }
         let cs_substr_automaton = if !cs_substr.is_empty() {
-            AhoCorasick::builder()
-                .kind(ac_kind())
-                .ascii_case_insensitive(false)
-                .build(&cs_substr)
-                .ok()
+            build_index_automaton(&cs_substr, false)
         } else {
             None
         };
         let ci_substr_automaton = if !ci_substr.is_empty() {
-            AhoCorasick::builder()
-                .kind(ac_kind())
-                .ascii_case_insensitive(true)
-                .build(&ci_substr)
-                .ok()
+            build_index_automaton(&ci_substr, true)
         } else {
             None
         };

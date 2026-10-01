@@ -1155,7 +1155,6 @@ pub(crate) fn utf8_view(binary_data: &[u8], range: (usize, usize)) -> std::borro
 /// Does NOT touch the process-global regex caches — those are shared across all
 /// threads and clearing them here would invalidate other workers' entries. Use
 /// `clear_regex_caches()` from a single thread when memory pressure demands it.
-#[allow(dead_code)] // Exported via lib.rs, false positive from lib/bin split
 pub fn clear_thread_local_caches() {
     crate::ip_validator::clear_current_file_id();
 }
@@ -1172,7 +1171,6 @@ pub fn clear_thread_local_caches() {
 ///
 /// Call this from a single thread under memory pressure — other workers will
 /// simply repopulate entries they still need on their next access.
-#[allow(dead_code)] // Exported via lib.rs, false positive from lib/bin split
 pub fn clear_regex_caches() {
     if let Some(cache) = REGEX_CACHE.get() {
         cache.write().clear();

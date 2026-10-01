@@ -3,6 +3,10 @@
 //! Handles .doc, .xls, .ppt, .msg and other legacy Microsoft Office documents
 //! that use the Compound File Binary Format (CFBF/OLE2).
 
+// Parses attacker-controlled bytes: index and offset arithmetic must be
+// checked, so a forged header is a parse error rather than a panic.
+#![warn(clippy::indexing_slicing, clippy::arithmetic_side_effects)]
+
 use anyhow::Result;
 use std::io::{Cursor, Read};
 
@@ -318,9 +322,9 @@ fn parse_compobj(data: &[u8]) -> Option<CompObjData> {
     let mut out = CompObjData::default();
 
     // 1) AnsiUserType
-    if let Some((s, advance)) = read_length_prefixed_ansi(&data[pos..]) {
+    if let Some((s, advance)) = data.get(pos..).and_then(read_length_prefixed_ansi) {
         out.user_type = s;
-        pos += advance;
+        pos = pos.checked_add(advance)?;
     } else {
         return Some(out);
     }
@@ -333,31 +337,33 @@ fn parse_compobj(data: &[u8]) -> Option<CompObjData> {
     //    length fits in the remaining buffer AND the bytes look like
     //    printable ASCII, accept as a string. Otherwise fall back to
     //    "registered ID, advance 4".
-    if data.len() < pos + 4 {
+    let Some(marker) = le_u32(data, pos) else {
         return Some(out);
-    }
-    let marker = u32::from_le_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
+    };
+    let str_start = pos.saturating_add(4);
     if marker == 0 {
-        pos += 4;
+        pos = str_start;
     } else {
         let len = marker as usize;
-        let str_start = pos + 4;
-        let fits = data.len() >= str_start + len && len > 0 && len <= 256;
-        let printable = fits
-            && data[str_start..str_start + len]
-                .iter()
-                .all(|b| b.is_ascii_graphic() || *b == b' ' || *b == 0);
-        if fits && printable {
-            out.clipboard_format = sanitize_ansi(&data[str_start..str_start + len]);
-            pos = str_start + len;
+        let format = data
+            .get(str_start..str_start.saturating_add(len))
+            .filter(|field| {
+                (1..=256).contains(&len)
+                    && field
+                        .iter()
+                        .all(|b| b.is_ascii_graphic() || *b == b' ' || *b == 0)
+            });
+        if let Some(format) = format {
+            out.clipboard_format = sanitize_ansi(format);
+            pos = str_start.saturating_add(len);
         } else {
             // Registered clipboard ID — no string follows.
-            pos += 4;
+            pos = str_start;
         }
     }
 
     // 3) Reserved3 — optional LengthPrefixedAnsiString carrying ProgID.
-    if let Some((s, _advance)) = read_length_prefixed_ansi(&data[pos..]) {
+    if let Some((s, _advance)) = data.get(pos..).and_then(read_length_prefixed_ansi) {
         out.app_version = s;
     }
 
@@ -369,17 +375,12 @@ fn parse_compobj(data: &[u8]) -> Option<CompObjData> {
 /// bytes consumed. Returns `None` when the buffer is too short or the
 /// length field exceeds remaining bytes.
 fn read_length_prefixed_ansi(buf: &[u8]) -> Option<(String, usize)> {
-    if buf.len() < 4 {
-        return None;
-    }
-    let len = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
+    let len = le_u32(buf, 0)? as usize;
     if len == 0 {
         return Some((String::new(), 4));
     }
-    if buf.len() < 4 + len {
-        return None;
-    }
-    Some((sanitize_ansi(&buf[4..4 + len]), 4 + len))
+    let end = len.checked_add(4)?;
+    Some((sanitize_ansi(buf.get(4..end)?), end))
 }
 
 fn sanitize_ansi(bytes: &[u8]) -> String {
@@ -741,19 +742,17 @@ fn find_ole10_native(
             let mut header = vec![0u8; (*size).min(512) as usize];
             if stream.read_exact(&mut header).is_ok() {
                 // OLE10Native format: u32 total_size, u16 version (==2)
-                if header.len() >= 6 {
-                    let total_size =
-                        u32::from_le_bytes([header[0], header[1], header[2], header[3]]);
-                    let version = u16::from_le_bytes([header[4], header[5]]);
-
-                    let embedded_filename = if version == 2 && header.len() > 6 {
+                if let (Some(total_size), Some(version)) = (le_u32(&header, 0), le_u16(&header, 4))
+                {
+                    let embedded_filename = if version == 2 {
                         // After version, there are null-terminated strings: label, filename, ...
-                        let bytes = &header[6..];
+                        let bytes = header.get(6..).unwrap_or_default();
                         bytes
                             .iter()
                             .position(|&byte| byte == 0)
                             .filter(|&end| end > 0)
-                            .map(|end| String::from_utf8_lossy(&bytes[..end]).into_owned())
+                            .and_then(|end| bytes.get(..end))
+                            .map(|label| String::from_utf8_lossy(label).into_owned())
                     } else {
                         None
                     };
@@ -834,63 +833,10 @@ fn extract_metadata(comp: &mut cfb::CompoundFile<Cursor<&[u8]>>) -> DocumentMeta
 /// - Section: size (4 bytes) + num_properties (4 bytes) + property entries
 /// - Property entry: property_id (4 bytes) + offset (4 bytes)
 fn parse_summary_info(data: &[u8], meta: &mut DocumentMetadata) {
-    if data.len() < 48 {
+    let Some(section) = locate_first_section(data) else {
         return;
-    }
-
-    // Check byte order mark
-    let bom = u16::from_le_bytes([data[0], data[1]]);
-    if bom != 0xFFFE {
-        return;
-    }
-
-    // Get section offset (first section)
-    let num_sections = u32::from_le_bytes([data[24], data[25], data[26], data[27]]) as usize;
-    if num_sections == 0 {
-        return;
-    }
-
-    // Section offset is at byte 44 (after header + fmtid)
-    if data.len() < 48 {
-        return;
-    }
-    let section_offset = u32::from_le_bytes([data[44], data[45], data[46], data[47]]) as usize;
-
-    if section_offset + 8 > data.len() {
-        return;
-    }
-
-    let section = &data[section_offset..];
-    if section.len() < 8 {
-        return;
-    }
-
-    let num_props = u32::from_le_bytes([section[4], section[5], section[6], section[7]]) as usize;
-
-    // Read property id/offset pairs
-    for i in 0..num_props {
-        let entry_offset = 8 + i * 8;
-        if entry_offset + 8 > section.len() {
-            break;
-        }
-
-        let prop_id = u32::from_le_bytes([
-            section[entry_offset],
-            section[entry_offset + 1],
-            section[entry_offset + 2],
-            section[entry_offset + 3],
-        ]);
-        let prop_offset = u32::from_le_bytes([
-            section[entry_offset + 4],
-            section[entry_offset + 5],
-            section[entry_offset + 6],
-            section[entry_offset + 7],
-        ]) as usize;
-
-        if prop_offset + 8 > section.len() {
-            continue;
-        }
-
+    };
+    for (prop_id, prop_offset) in property_entries(section) {
         // Property IDs for SummaryInformation (PIDSI_*):
         // 0x02 Title, 0x04 Author, 0x06 ApplicationName, 0x08 LastAuthor,
         // 0x09 RevNumber, 0x0A EditTime, 0x0E PageCount, 0x0F WordCount,
@@ -921,33 +867,7 @@ fn parse_doc_summary_info(data: &[u8], meta: &mut DocumentMetadata) {
     let Some(section) = locate_first_section(data) else {
         return;
     };
-    if section.len() < 8 {
-        return;
-    }
-    let num_props = u32::from_le_bytes([section[4], section[5], section[6], section[7]]) as usize;
-
-    for i in 0..num_props {
-        let entry_offset = 8 + i * 8;
-        if entry_offset + 8 > section.len() {
-            break;
-        }
-        let prop_id = u32::from_le_bytes([
-            section[entry_offset],
-            section[entry_offset + 1],
-            section[entry_offset + 2],
-            section[entry_offset + 3],
-        ]);
-        let prop_offset = u32::from_le_bytes([
-            section[entry_offset + 4],
-            section[entry_offset + 5],
-            section[entry_offset + 6],
-            section[entry_offset + 7],
-        ]) as usize;
-
-        if prop_offset + 8 > section.len() {
-            continue;
-        }
-
+    for (prop_id, prop_offset) in property_entries(section) {
         if prop_id == 0x13 {
             meta.security_flag = read_property_u32(section, prop_offset);
         }
@@ -956,47 +876,47 @@ fn parse_doc_summary_info(data: &[u8], meta: &mut DocumentMetadata) {
 
 /// Walk the MS-OLEPS outer structure and return a slice into the first
 /// property-set section (the `size + num_properties + entries` block).
+/// - 28 byte header (byte_order, version, os_version, clsid, num_sections)
+/// - Section header: fmtid (16 bytes) + offset (4 bytes) per section
 fn locate_first_section(data: &[u8]) -> Option<&[u8]> {
-    if data.len() < 48 {
+    if data.len() < 48 || le_u16(data, 0)? != 0xFFFE || le_u32(data, 24)? == 0 {
         return None;
     }
-    let bom = u16::from_le_bytes([data[0], data[1]]);
-    if bom != 0xFFFE {
+    let section_offset = le_u32(data, 44)? as usize;
+    if section_offset.checked_add(8)? > data.len() {
         return None;
     }
-    let num_sections = u32::from_le_bytes([data[24], data[25], data[26], data[27]]) as usize;
-    if num_sections == 0 {
-        return None;
-    }
-    let section_offset = u32::from_le_bytes([data[44], data[45], data[46], data[47]]) as usize;
-    if section_offset + 8 > data.len() {
-        return None;
-    }
-    Some(&data[section_offset..])
+    data.get(section_offset..)
+}
+
+/// The `(property_id, offset)` entries of a property-set section (each an
+/// 8-byte `id + offset` pair after the `size + num_properties` header), as
+/// far as both the declared count and the section's bytes go. Entries whose
+/// value would start past the section are skipped.
+fn property_entries(section: &[u8]) -> impl Iterator<Item = (u32, usize)> + '_ {
+    let count = le_u32(section, 4).map_or(0, |n| n as usize);
+    section
+        .get(8..)
+        .unwrap_or_default()
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .take(count)
+        .filter_map(|entry| {
+            let id = le_u32(entry, 0)?;
+            let offset = le_u32(entry, 4)? as usize;
+            (offset.checked_add(8)? <= section.len()).then_some((id, offset))
+        })
 }
 
 /// Read a VT_I4 (0x0003) property value as u32.  Negative values are
 /// clamped to zero — the four numeric SummaryInformation properties
 /// we care about are intrinsically non-negative.
 fn read_property_u32(section: &[u8], offset: usize) -> Option<u32> {
-    if offset + 8 > section.len() {
+    if le_u32(section, offset)? != 0x0003 {
         return None;
     }
-    let vt_type = u32::from_le_bytes([
-        section[offset],
-        section[offset + 1],
-        section[offset + 2],
-        section[offset + 3],
-    ]);
-    if vt_type != 0x0003 {
-        return None;
-    }
-    let value = i32::from_le_bytes([
-        section[offset + 4],
-        section[offset + 5],
-        section[offset + 6],
-        section[offset + 7],
-    ]);
+    let value = le_u32(section, offset.checked_add(4)?)? as i32;
     Some(value.max(0) as u32)
 }
 
@@ -1007,30 +927,12 @@ fn read_property_u32(section: &[u8], offset: usize) -> Option<u32> {
 /// so a literal-FILETIME-as-timestamp interpretation overflows; we
 /// always treat the value as a duration here.
 fn read_filetime_minutes(section: &[u8], offset: usize) -> Option<u64> {
-    if offset + 12 > section.len() {
+    if le_u32(section, offset)? != 0x0040 {
         return None;
     }
-    let vt_type = u32::from_le_bytes([
-        section[offset],
-        section[offset + 1],
-        section[offset + 2],
-        section[offset + 3],
-    ]);
-    if vt_type != 0x0040 {
-        return None;
-    }
-    let raw = u64::from_le_bytes([
-        section[offset + 4],
-        section[offset + 5],
-        section[offset + 6],
-        section[offset + 7],
-        section[offset + 8],
-        section[offset + 9],
-        section[offset + 10],
-        section[offset + 11],
-    ]);
-    // 100-ns units → minutes: divide by 600_000_000.
-    Some(raw / 600_000_000)
+    let raw = le_u64(section, offset.checked_add(4)?)?;
+    // 100-ns units → minutes.
+    raw.checked_div(600_000_000)
 }
 
 /// Parse the leading run of decimal digits as a u32 (ignoring trailing
@@ -1043,34 +945,16 @@ fn parse_leading_u32(s: &str) -> Option<u32> {
 
 /// Read a VT_LPSTR property value from the section.
 fn read_property_string(section: &[u8], offset: usize) -> Option<String> {
-    if offset + 8 > section.len() {
-        return None;
-    }
-
-    let vt_type = u32::from_le_bytes([
-        section[offset],
-        section[offset + 1],
-        section[offset + 2],
-        section[offset + 3],
-    ]);
-
     // VT_LPSTR = 0x001E
-    if vt_type != 0x001E {
+    if le_u32(section, offset)? != 0x001E {
         return None;
     }
-
-    let str_len = u32::from_le_bytes([
-        section[offset + 4],
-        section[offset + 5],
-        section[offset + 6],
-        section[offset + 7],
-    ]) as usize;
-
-    if str_len == 0 || offset + 8 + str_len > section.len() {
+    let str_len = le_u32(section, offset.checked_add(4)?)? as usize;
+    if str_len == 0 {
         return None;
     }
-
-    let bytes = &section[offset + 8..offset + 8 + str_len];
+    let start = offset.checked_add(8)?;
+    let bytes = section.get(start..start.checked_add(str_len)?)?;
     let s = String::from_utf8_lossy(bytes)
         .trim_end_matches('\0')
         .to_string();
@@ -1078,8 +962,31 @@ fn read_property_string(section: &[u8], offset: usize) -> Option<String> {
     if s.is_empty() { None } else { Some(s) }
 }
 
+fn le_u16(buf: &[u8], at: usize) -> Option<u16> {
+    Some(u16::from_le_bytes(
+        buf.get(at..at.checked_add(2)?)?.try_into().ok()?,
+    ))
+}
+
+fn le_u32(buf: &[u8], at: usize) -> Option<u32> {
+    Some(u32::from_le_bytes(
+        buf.get(at..at.checked_add(4)?)?.try_into().ok()?,
+    ))
+}
+
+fn le_u64(buf: &[u8], at: usize) -> Option<u64> {
+    Some(u64::from_le_bytes(
+        buf.get(at..at.checked_add(8)?)?.try_into().ok()?,
+    ))
+}
+
 #[cfg(test)]
-#[allow(clippy::expect_used, clippy::unwrap_used)]
+#[allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects
+)]
 pub(crate) mod tests {
     use super::*;
 

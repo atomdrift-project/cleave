@@ -20,7 +20,6 @@ use clap::{Parser, Subcommand};
 
 /// Parse comma-separated platforms string into a vector of Platform values
 /// Returns vec![Platform::All] if input is empty or "all"
-#[allow(dead_code)] // Used by binary target
 #[must_use]
 pub fn parse_platforms(s: &str) -> Vec<crate::composite_rules::Platform> {
     use crate::composite_rules::Platform;
@@ -85,7 +84,6 @@ pub const DEFAULT_ZIP_PASSWORDS: &[&str] = &[
 ];
 
 /// Tracks which components are disabled
-#[allow(dead_code)] // Used by binary target
 #[derive(Debug, Clone, Default)]
 pub struct DisabledComponents {
     /// Whether YARA scanning is disabled
@@ -100,7 +98,6 @@ pub struct DisabledComponents {
 
 impl DisabledComponents {
     /// Parse comma-separated list of components to disable
-    #[allow(dead_code)] // Used by binary target
     #[must_use]
     pub fn parse(s: &str) -> Self {
         let mut disabled = Self::default();
@@ -231,7 +228,6 @@ pub struct Args {
 
 impl Args {
     /// Get the disabled components based on --disable and --enable-all flags
-    #[allow(dead_code)] // Used by binary target
     #[must_use]
     pub fn disabled_components(&self) -> DisabledComponents {
         if self.enable_all {
@@ -243,7 +239,6 @@ impl Args {
 
     /// Get the output format based on --format flag, --json flag, or CLEAVE_FORMAT env var.
     /// Precedence: --format > --json > CLEAVE_FORMAT > Terminal (default)
-    #[allow(dead_code)] // Used by binary target
     #[must_use]
     pub fn format(&self) -> OutputFormat {
         // --format takes precedence over everything
@@ -269,7 +264,6 @@ impl Args {
     }
 
     /// Parse --platforms flag into a vector of Platform values
-    #[allow(dead_code)] // Used by binary target
     #[must_use]
     pub fn platforms(&self) -> Vec<crate::composite_rules::Platform> {
         parse_platforms(&self.platforms)

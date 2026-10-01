@@ -377,7 +377,6 @@ pub(crate) fn find_needs_without_any(composite_rules: &[CompositeTrait]) -> Vec<
 /// the `any:` clause meaningless. This is an authoring mistake.
 ///
 /// Returns: `Vec<rule_id>`
-#[allow(dead_code)] // Used by binary target
 #[must_use]
 pub(crate) fn find_needs_zero(composite_rules: &[CompositeTrait]) -> Vec<String> {
     composite_rules

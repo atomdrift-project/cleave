@@ -375,6 +375,7 @@ impl UnifiedSourceAnalyzer {
     }
 
     /// Create analyzer with pre-existing capability mapper (wraps in Arc)
+    #[cfg(test)]
     pub(crate) fn with_capability_mapper(mut self, capability_mapper: CapabilityMapper) -> Self {
         self.capability_mapper = Arc::new(capability_mapper);
         self

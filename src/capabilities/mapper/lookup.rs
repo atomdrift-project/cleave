@@ -37,14 +37,12 @@ impl super::CapabilityMapper {
     }
 
     /// Get a reference to the trait definitions (for debugging/testing)
-    #[allow(dead_code)] // Used by binary target
     #[must_use]
     pub(crate) fn trait_definitions(&self) -> &[TraitDefinition] {
         &self.trait_definitions
     }
 
     /// Find a trait definition by ID
-    #[allow(dead_code)] // Used by binary target
     #[must_use]
     pub(crate) fn find_trait(&self, id: &str) -> Option<&TraitDefinition> {
         self.trait_definitions.iter().find(|t| t.id == id)

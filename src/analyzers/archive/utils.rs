@@ -1,7 +1,7 @@
 //! Utility functions for archive analysis.
 
 use std::fs::File;
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 /// Calculate SHA256 hash of data
@@ -10,23 +10,6 @@ pub(crate) fn calculate_sha256(data: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(data);
     hex::encode(hasher.finalize())
-}
-
-/// Calculate SHA256 hash of a file
-#[allow(dead_code)] // Used by binary target
-pub(crate) fn calculate_file_sha256(path: &Path) -> std::io::Result<String> {
-    use sha2::{Digest, Sha256};
-    let mut file = File::open(path)?;
-    let mut hasher = Sha256::new();
-    let mut buf = [0_u8; 8192];
-    loop {
-        let n = file.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buf[..n]);
-    }
-    Ok(hex::encode(hasher.finalize()))
 }
 
 /// Extract main class from META-INF/MANIFEST.MF

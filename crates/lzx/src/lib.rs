@@ -370,7 +370,12 @@ impl Lzxd {
                 }
             };
 
-            assert_ne!(advance, 0);
+            // An uncompressed block whose bytes are cut off by the end of the
+            // chunk reads nothing: report the truncation instead of asserting
+            // (CHM hands this decoder attacker-controlled chunks).
+            if advance == 0 {
+                return Err(DecodeFailed::UnexpectedEof.into());
+            }
             decoded_len += advance;
             if let Some(value) = self.current_block.remaining.checked_sub(advance as u32) {
                 self.current_block.remaining = value;
@@ -429,6 +434,20 @@ mod tests {
         let mut lzxd = Lzxd::new(WindowSize::KB32); // size does not matter
         let res = lzxd.decompress_next(&data, 3);
         assert_eq!(res.unwrap(), [b'a', b'b', b'c']);
+    }
+
+    /// An uncompressed block header whose data is missing from the chunk is
+    /// a truncation error, not a panic.
+    #[test]
+    fn truncated_uncompressed_block_is_an_error() {
+        // `check_uncompressed`'s header and R0-R2, without the three data bytes.
+        let data = [
+            0x00, 0x30, 0x30, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00,
+            0x00, 0x00,
+        ];
+
+        let mut lzxd = Lzxd::new(WindowSize::KB32);
+        assert!(lzxd.decompress_next(&data, 3).is_err());
     }
 
     #[test]

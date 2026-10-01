@@ -1056,11 +1056,6 @@ pub(crate) fn mapper_cache_path_for(traits_dir: &Path) -> Result<PathBuf> {
     Ok(cache_dir()?.join(mapper_cache_key_for(traits_dir)?))
 }
 
-/// Rule stats stored in a tiny cache file for fast banner display.
-/// Layout: trait_count(8) + composite_count(8) + timestamp(8) = 24 bytes
-#[allow(dead_code)] // Used by binary
-const STATS_CACHE_SIZE: usize = 24;
-
 /// Get the path to the rule stats cache file
 pub(crate) fn rule_stats_cache_path() -> Result<PathBuf> {
     Ok(cache_dir()?.join("rule-stats.bin"))

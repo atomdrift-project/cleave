@@ -2427,6 +2427,7 @@ impl ArchiveAnalyzer {
         start: std::time::Instant,
         guard: &ExtractionGuard,
         indexed_entries: &[ArchiveEntry],
+        is_jar: bool,
     ) -> Result<bool> {
         if indexed_entries.is_empty() {
             return Ok(false);
@@ -2461,10 +2462,6 @@ impl ArchiveAnalyzer {
         // JAR main-class detection needs the full member list, so JARs keep the
         // all-resident path; everything else streams through a byte-windowed
         // accumulator that never holds more than one window of members resident.
-        let is_jar = matches!(
-            crate::analyzers::detect_file_type(archive_path),
-            Ok(FileType::Jar)
-        );
         // The scope hosts the window's pipelined consumer; every exit path
         // (including the mid-loop `return Ok(false)` fallbacks) drops the
         // window and its channel before the scope joins, so it cannot hang.
@@ -2634,6 +2631,7 @@ impl ArchiveAnalyzer {
         start: std::time::Instant,
         guard: &ExtractionGuard,
         indexed_entries: &[ArchiveEntry],
+        is_jar: bool,
     ) -> Result<()> {
         if self.analyze_zip_archive_from_filefacts_index(
             data,
@@ -2642,6 +2640,7 @@ impl ArchiveAnalyzer {
             start,
             guard,
             indexed_entries,
+            is_jar,
         )? {
             return Ok(());
         }
@@ -2663,10 +2662,6 @@ impl ArchiveAnalyzer {
         // the report transient stay bounded regardless of member count. JARs
         // need the full member list for main-class detection, so they keep the
         // all-resident path.
-        let is_jar = matches!(
-            crate::analyzers::detect_file_type(archive_path),
-            Ok(FileType::Jar)
-        );
         // Scope for the window's pipelined consumer; all exit paths drop the
         // window (and its sender) before the join.
         std::thread::scope(|scope| -> Result<()> {
@@ -3314,14 +3309,20 @@ impl ArchiveAnalyzer {
         start: std::time::Instant,
         guard: &ExtractionGuard,
     ) -> Result<()> {
-        let (raw_members, traversals) = crate::analyzers::chm::collect_members(data)?;
+        let contents = crate::analyzers::chm::collect_members(data)?;
 
-        for path in traversals {
+        if let Some(bomb) = contents.bomb {
+            guard.add_hostile_reason(HostileArchiveReason::ZipBomb {
+                compressed: bomb.compressed,
+                uncompressed: bomb.uncompressed,
+            });
+        }
+        for path in contents.path_traversals {
             guard.add_hostile_reason(HostileArchiveReason::PathTraversal(path));
         }
 
-        let mut members = Vec::with_capacity(raw_members.len());
-        for m in raw_members {
+        let mut members = Vec::with_capacity(contents.members.len());
+        for m in contents.members {
             if !guard.check_file_count() {
                 guard.add_extraction_note(format!(
                     "stopped after the {} member cap",
@@ -4576,6 +4577,7 @@ impl ArchiveAnalyzer {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::{
         ArchiveAnalyzer, archive_entry_json, archive_entry_metadata, is_interesting_jar_resource,
         jar_class_triage_score, keep_top_ranked, rebase_nested_archive_entry_path,

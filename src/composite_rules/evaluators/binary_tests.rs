@@ -299,6 +299,32 @@ fn test_eval_section_case_insensitive() {
 // eval_syscall tests
 // =============================================================================
 
+/// A syscall condition's `arch:` names an architecture, not a spelling: the
+/// rule-list conventions (`x86-64`, `amd64`) match the extractor's `x86_64`.
+#[test]
+fn syscall_arch_matches_by_architecture_not_spelling() {
+    let mut report = create_test_report();
+    report.syscalls.push(SyscallInfo {
+        name: "execve".to_string(),
+        number: 59,
+        address: 0x1000,
+        desc: "Execute program".to_string(),
+        arch: "x86_64".to_string(),
+        args: Vec::new(),
+    });
+    let data = vec![];
+    let ctx = create_test_context(&report, &data);
+    let matches =
+        |arch: &str| eval_syscall(None, None, Some(&[arch.to_string()]), &[], &ctx).matched;
+
+    for spelling in ["x86_64", "x86-64", "amd64", "AMD64", "all"] {
+        assert!(matches(spelling), "{spelling}");
+    }
+    for other in ["aarch64", "arm64", "x86", "x86_46"] {
+        assert!(!matches(other), "{other}");
+    }
+}
+
 #[test]
 fn test_eval_syscall_by_name() {
     let mut report = create_test_report();

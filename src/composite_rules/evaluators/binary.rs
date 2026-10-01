@@ -9,6 +9,7 @@
 use super::build_regex;
 use crate::composite_rules::condition::SyscallArg;
 use crate::composite_rules::context::{ConditionResult, EvaluationContext};
+use crate::composite_rules::types::Arch;
 use crate::types::{Evidence, MAX_EVIDENCE_PER_TRAIT};
 
 /// Parameters for a `type: section` condition evaluation.
@@ -319,13 +320,17 @@ pub(crate) fn eval_syscall<'a>(
     let mut evidence = Vec::new();
     let mut match_count = 0;
 
+    // Compare architectures, not spellings: a rule's `x86-64` / `amd64` and
+    // the extractor's `x86_64` name one arch. Unknown rule names match nothing.
+    let wanted_archs: Option<Vec<Arch>> =
+        arch.map(|archs| archs.iter().filter_map(|a| Arch::parse(a)).collect());
+
     for syscall in &ctx.report.syscalls {
         let name_match = name.is_none_or(|names| names.contains(&syscall.name));
         let number_match = number.is_none_or(|nums| nums.contains(&syscall.number));
-        // Arch labels are ASCII, so compare in place rather than lowercasing
-        // both sides into fresh Strings once per syscall per candidate arch.
-        let arch_match =
-            arch.is_none_or(|archs| archs.iter().any(|a| a.eq_ignore_ascii_case(&syscall.arch)));
+        let arch_match = wanted_archs.as_ref().is_none_or(|wanted| {
+            wanted.contains(&Arch::All) || wanted.contains(&Arch::from_report_str(&syscall.arch))
+        });
         // Every arg predicate must hold on the *same* syscall record.
         let arg_match = args.iter().all(|p| p.matches(&syscall.args));
 

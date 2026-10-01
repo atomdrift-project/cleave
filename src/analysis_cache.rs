@@ -760,6 +760,11 @@ fn evict_report_cache(conn: &Connection) {
 
 /// Compute a short deterministic hash of the result-affecting analysis options.
 fn options_hash(options: &AnalysisOptions) -> String {
+    options_hash_with(options, crate::yara_engine::result_affecting_overrides())
+}
+
+/// [`options_hash`] with the process-wide YARA overrides passed in.
+fn options_hash_with(options: &AnalysisOptions, yara: crate::yara_engine::YaraOverrides) -> String {
     use sha2::{Digest, Sha256};
 
     // Sort so the key is independent of the order platforms were supplied on the
@@ -814,11 +819,18 @@ fn options_hash(options: &AnalysisOptions) -> String {
     // v=18: RPM header scriptlets are independently analyzed declared sources.
     // v=19: compound assignment flow retains both the old value and RHS;
     // cached verdicts may omit or misattribute those source relationships.
+    // v=20: the key covers every input that changes a report: the YARA
+    // overrides outside `AnalysisOptions` (`CLEAVE_SKIP_YARA`, builtin-only)
+    // and the zip passwords, which decide whether encrypted members are read.
+    let zip_passwords = Sha256::digest(options.zip_passwords.join("\0").as_bytes());
     let key = format!(
-        "v=19,cm={},3p={},yara={},r2={},upx={},plat={},hp={},sp={},ps={},fv={},rizin={}",
+        "v=20,cm={},3p={},yara={},yskip={},ybuiltin={},zpw={},r2={},upx={},plat={},hp={},sp={},ps={},fv={},rizin={}",
         crate::shared_resources::compact_member_retention(),
         options.enable_third_party_yara,
         !options.disable_yara,
+        yara.skip,
+        yara.builtin_only,
+        hex::encode(&zip_passwords[..8]),
         !options.disable_radare2,
         !options.disable_upx,
         platforms_str,
@@ -1129,6 +1141,14 @@ fn has_reports_conn(conn: &Connection, traits_ts: i64) -> bool {
     .unwrap_or(false)
 }
 
+/// Whether YARA is scanning with less than its full rule set in this process
+/// (a tripped panic breaker, or rules that failed to compile). Reports from
+/// such a run lack findings an intact run would have; caching them would
+/// serve the degraded verdict to every later run.
+fn yara_degraded() -> bool {
+    crate::yara_engine::yara_degradation().is_some()
+}
+
 /// Store a toplevel analysis report in the cache.
 ///
 /// Silently does nothing if caching is unavailable or any error occurs.
@@ -1139,6 +1159,9 @@ pub(crate) fn report_cache_store(
     report: &AnalysisReport,
     traits_revision: i64,
 ) {
+    if yara_degraded() {
+        return;
+    }
     let opts_hash = typed_options_hash(options, file_type);
     if let Ok(bytes) = serde_json::to_vec(report) {
         memo::put(
@@ -1215,7 +1238,7 @@ pub(crate) fn file_analysis_cache_store(
     report: &AnalysisReport,
     traits_revision: i64,
 ) {
-    if archive_file_type(file_type) || !complete_leaf_report(report) {
+    if archive_file_type(file_type) || !complete_leaf_report(report) || yara_degraded() {
         return;
     }
     let opts_hash = typed_options_hash(options, file_type);
@@ -1331,6 +1354,32 @@ mod tests {
     use super::*;
     use crate::types::FileAnalysis;
     use crate::types::core::{AnalysisReport, TargetInfo};
+
+    /// Every input that changes a report is part of its cache key: the YARA
+    /// overrides outside `AnalysisOptions`, and the zip passwords.
+    #[test]
+    fn options_hash_covers_yara_overrides_and_zip_passwords() {
+        use crate::yara_engine::YaraOverrides;
+        let options = AnalysisOptions::default();
+        let base = options_hash_with(&options, YaraOverrides::default());
+        assert_eq!(base, options_hash_with(&options, YaraOverrides::default()));
+        let skip = YaraOverrides {
+            skip: true,
+            ..Default::default()
+        };
+        let builtin_only = YaraOverrides {
+            builtin_only: true,
+            ..Default::default()
+        };
+        assert_ne!(base, options_hash_with(&options, skip));
+        assert_ne!(base, options_hash_with(&options, builtin_only));
+        let mut with_password = options.clone();
+        with_password.zip_passwords.push("hunter2".to_string());
+        assert_ne!(
+            base,
+            options_hash_with(&with_password, YaraOverrides::default())
+        );
+    }
 
     fn test_report(sha256: &str) -> AnalysisReport {
         let target = TargetInfo {

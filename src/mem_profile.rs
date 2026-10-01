@@ -331,19 +331,27 @@ mod win_imp {
     unsafe impl GlobalAlloc for CountingAlloc {
         unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
             let _ = TL_ALLOC.try_with(|c| c.set(c.get() + layout.size() as u64));
+            // SAFETY: the caller upholds `GlobalAlloc`'s contract for this call,
+            // which is forwarded unchanged to `System`.
             unsafe { System.alloc(layout) }
         }
         unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
             let _ = TL_DEALLOC.try_with(|c| c.set(c.get() + layout.size() as u64));
+            // SAFETY: the caller upholds `GlobalAlloc`'s contract for this call,
+            // which is forwarded unchanged to `System`.
             unsafe { System.dealloc(ptr, layout) }
         }
         unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
             let _ = TL_ALLOC.try_with(|c| c.set(c.get() + new_size as u64));
             let _ = TL_DEALLOC.try_with(|c| c.set(c.get() + layout.size() as u64));
+            // SAFETY: the caller upholds `GlobalAlloc`'s contract for this call,
+            // which is forwarded unchanged to `System`.
             unsafe { System.realloc(ptr, layout, new_size) }
         }
         unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
             let _ = TL_ALLOC.try_with(|c| c.set(c.get() + layout.size() as u64));
+            // SAFETY: the caller upholds `GlobalAlloc`'s contract for this call,
+            // which is forwarded unchanged to `System`.
             unsafe { System.alloc_zeroed(layout) }
         }
     }

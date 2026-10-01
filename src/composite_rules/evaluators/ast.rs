@@ -86,12 +86,53 @@ const AST_QUERY_MATCH_LIMIT: u32 = 50_000;
 pub(super) const AST_QUERY_GROUP_STATE_LIMIT: u32 = 16384;
 const AST_QUERY_BYTE_LIMIT: usize = 10 * 1024 * 1024;
 pub(crate) const AST_QUERY_CAPTURE_LIMIT: usize = 100_000;
+const AST_QUERY_MULTI_WILDCARD_CPU_BUDGET: std::time::Duration =
+    std::time::Duration::from_millis(100);
 
 /// Every AST query has a CPU ceiling, including direct scans without an outer
 /// scan deadline. The deadline remains a separate wall-clock/cancellation
 /// mechanism; its absence must not disable the per-query safety bound.
-pub(super) fn ast_query_cpu_budget(_deadline: Option<Instant>) -> std::time::Duration {
-    AST_QUERY_CPU_BUDGET
+pub(super) fn ast_query_cpu_budget(query: &str, _deadline: Option<Instant>) -> std::time::Duration {
+    // Two unbounded wildcard siblings can enumerate combinatorial alignments
+    // inside a wide object. Keep the normal budget for ordinary queries, but
+    // cap this expensive shape before it stalls archive workers for 30s.
+    if count_unbounded_any_wildcards(query) >= 2 {
+        AST_QUERY_MULTI_WILDCARD_CPU_BUDGET
+    } else {
+        AST_QUERY_CPU_BUDGET
+    }
+}
+
+fn count_unbounded_any_wildcards(query: &str) -> usize {
+    let bytes = query.as_bytes();
+    let mut count = 0;
+    for i in 0..bytes.len() {
+        if bytes[i] != b'(' {
+            continue;
+        }
+        let mut j = i + 1;
+        while bytes.get(j).is_some_and(u8::is_ascii_whitespace) {
+            j += 1;
+        }
+        if bytes.get(j) != Some(&b'_') {
+            continue;
+        }
+        j += 1;
+        while bytes.get(j).is_some_and(u8::is_ascii_whitespace) {
+            j += 1;
+        }
+        if bytes.get(j) != Some(&b')') {
+            continue;
+        }
+        j += 1;
+        while bytes.get(j).is_some_and(u8::is_ascii_whitespace) {
+            j += 1;
+        }
+        if bytes.get(j) == Some(&b'*') {
+            count += 1;
+        }
+    }
+    count
 }
 
 /// Clear the shared AST query cache.
@@ -392,7 +433,11 @@ fn walk_ast_for_pattern_multi<'a>(
 /// Evaluate full tree-sitter query condition
 #[must_use]
 pub(crate) fn eval_ast_query<'a>(query_str: &str, ctx: &EvaluationContext<'a>) -> ConditionResult {
-    eval_ast_query_with_budget(query_str, ctx, ast_query_cpu_budget(ctx.deadline))
+    eval_ast_query_with_budget(
+        query_str,
+        ctx,
+        ast_query_cpu_budget(query_str, ctx.deadline),
+    )
 }
 
 pub(super) fn eval_ast_query_with_budget<'a>(
@@ -703,7 +748,11 @@ pub(crate) fn batch_ast_queries(
 
     let cancelled = || cancellation.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed));
     // Use the same per-query CPU ceiling when there is no outer scan deadline.
-    let cpu_budget = ast_query_cpu_budget(deadline);
+    let cpu_budget = compiling
+        .iter()
+        .map(|(query, _)| ast_query_cpu_budget(query, deadline))
+        .min()
+        .unwrap_or(AST_QUERY_CPU_BUDGET);
     let cpu_start = thread_cpu_time();
     let timed_out = Cell::new(false);
     let mut progress_cb = |_state: &tree_sitter::QueryCursorState| -> ControlFlow<()> {

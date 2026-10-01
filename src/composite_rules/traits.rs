@@ -1837,28 +1837,32 @@ impl TraitDefinition {
             ),
             Condition::Hex(HexQuery {
                 pattern,
-                not: _,
+                not,
                 offset,
                 offset_range,
                 section,
                 section_offset,
                 section_offset_range,
-            }) => timed_eval!(
-                "hex",
-                eval_hex(
-                    pattern,
-                    &ContentLocationParams {
-                        section: section.clone(),
-                        offset: *offset,
-                        offset_range: *offset_range,
-                        section_offset: *section_offset,
-                        section_offset_range: *section_offset_range,
-                        arch_clamp,
-                    },
-                    ctx,
-                    Some(self.id.as_str()),
+            }) => {
+                let merged_not = merge_not_exceptions(not.as_ref(), self.not.as_ref());
+                timed_eval!(
+                    "hex",
+                    eval_hex(
+                        pattern,
+                        merged_not.as_ref(),
+                        &ContentLocationParams {
+                            section: section.clone(),
+                            offset: *offset,
+                            offset_range: *offset_range,
+                            section_offset: *section_offset,
+                            section_offset_range: *section_offset_range,
+                            arch_clamp,
+                        },
+                        ctx,
+                        Some(self.id.as_str()),
+                    )
                 )
-            ),
+            }
             Condition::Raw(RawQuery {
                 exact,
                 substr,
@@ -3685,28 +3689,32 @@ impl CompositeTrait {
             ),
             Condition::Hex(HexQuery {
                 pattern,
-                not: _,
+                not,
                 offset,
                 offset_range,
                 section,
                 section_offset,
                 section_offset_range,
-            }) => timed_eval!(
-                "hex",
-                eval_hex(
-                    pattern,
-                    &ContentLocationParams {
-                        section: section.clone(),
-                        offset: *offset,
-                        offset_range: *offset_range,
-                        section_offset: *section_offset,
-                        section_offset_range: *section_offset_range,
-                        arch_clamp,
-                    },
-                    ctx,
-                    Some(self.id.as_str()),
+            }) => {
+                let merged_not = merge_not_exceptions(not.as_ref(), self.not.as_ref());
+                timed_eval!(
+                    "hex",
+                    eval_hex(
+                        pattern,
+                        merged_not.as_ref(),
+                        &ContentLocationParams {
+                            section: section.clone(),
+                            offset: *offset,
+                            offset_range: *offset_range,
+                            section_offset: *section_offset,
+                            section_offset_range: *section_offset_range,
+                            arch_clamp,
+                        },
+                        ctx,
+                        Some(self.id.as_str()),
+                    )
                 )
-            ),
+            }
             Condition::Raw(RawQuery {
                 exact,
                 substr,

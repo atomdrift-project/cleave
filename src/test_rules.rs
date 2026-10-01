@@ -817,14 +817,15 @@ impl<'a> RuleDebugger<'a> {
             ),
             Condition::Hex(HexQuery {
                 pattern,
+                not,
                 offset,
                 offset_range,
                 section,
                 section_offset,
                 section_offset_range,
-                ..
             }) => self.debug_hex_condition(
                 pattern,
+                not.as_ref(),
                 *offset,
                 *offset_range,
                 section.as_deref(),
@@ -1930,6 +1931,7 @@ impl<'a> RuleDebugger<'a> {
     fn debug_hex_condition(
         &self,
         pattern: &str,
+        not: Option<&Vec<crate::composite_rules::condition::NotException>>,
         offset: Option<i64>,
         offset_range: Option<(i64, Option<i64>)>,
         section: Option<&str>,
@@ -1995,6 +1997,7 @@ impl<'a> RuleDebugger<'a> {
 
         let eval_result = eval_hex(
             pattern,
+            not,
             &ContentLocationParams {
                 section: section.map(std::borrow::ToOwned::to_owned),
                 offset,

@@ -147,13 +147,19 @@ impl OoxmlEntryReader for ZipArchiveReader<'_> {
     }
 
     fn read_entry(&mut self, name: &str) -> Option<Vec<u8>> {
-        let mut entry = self.archive.by_name(name).ok()?;
+        let entry = self.archive.by_name(name).ok()?;
         if entry.size() > OOXML_ENTRY_READ_LIMIT {
             return None;
         }
-        let mut data = Vec::with_capacity(entry.size() as usize);
-        entry.read_to_end(&mut data).ok()?;
-        Some(data)
+        // `size()` is the size the entry *declares*; the read itself is capped
+        // too, so an entry that inflates past its claim is dropped at the limit
+        // instead of growing without bound.
+        let mut data = Vec::with_capacity(usize::try_from(entry.size()).ok()?);
+        entry
+            .take(OOXML_ENTRY_READ_LIMIT.saturating_add(1))
+            .read_to_end(&mut data)
+            .ok()?;
+        (data.len() as u64 <= OOXML_ENTRY_READ_LIMIT).then_some(data)
     }
 }
 

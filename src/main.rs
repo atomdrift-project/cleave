@@ -84,9 +84,20 @@ use cli_bootstrap::{
 use cli_dispatch::{build_dispatch_context, dispatch_command, write_output};
 
 fn main() -> Result<()> {
-    // Block SIGUSR1 process-wide before spawning any threads so they all inherit
-    // the blocked mask; the dedicated sigusr1 thread below consumes it via sigwait.
+    // Self-debugging hooks are opt-in with `CLEAVE_DEBUG_BACKTRACE=1`: they let
+    // any same-user process ptrace this one and make SIGUSR1 run lldb/gdb from
+    // `PATH`. A tool that reads hostile files should not weaken its own process
+    // isolation by default.
     #[cfg(unix)]
+    let debug_backtraces = std::env::var_os("CLEAVE_DEBUG_BACKTRACE").is_some_and(|v| v == "1");
+
+    // Block SIGUSR1 process-wide before spawning any threads so they all inherit
+    // the blocked mask. With backtraces enabled the sigusr1 thread below consumes
+    // it via sigwait; without, a stray SIGUSR1 stays pending instead of taking
+    // its default action, which is to terminate the process.
+    #[cfg(unix)]
+    // SAFETY: `sigset_t` is plain data, so a zeroed value is valid and
+    // `sigemptyset` initializes it; every pointer is to this local or null.
     unsafe {
         let mut mask: libc::sigset_t = std::mem::zeroed();
         libc::sigemptyset(&mut mask);
@@ -95,8 +106,11 @@ fn main() -> Result<()> {
     }
     // Allow a forked debugger to ptrace us under yama.ptrace_scope=1.
     #[cfg(target_os = "linux")]
-    unsafe {
-        libc::prctl(libc::PR_SET_PTRACER, libc::PR_SET_PTRACER_ANY, 0, 0, 0);
+    if debug_backtraces {
+        // SAFETY: `prctl(PR_SET_PTRACER, ...)` takes integers and touches no memory of ours.
+        unsafe {
+            libc::prctl(libc::PR_SET_PTRACER, libc::PR_SET_PTRACER_ANY, 0, 0, 0);
+        }
     }
 
     let args = cli::Args::parse();
@@ -115,63 +129,68 @@ fn main() -> Result<()> {
     // Dump all thread backtraces on SIGUSR1 (Linux equivalent of BSD SIGINFO / Ctrl-T).
     // Attaches lldb/gdb to ourselves so every thread is reported with symbols.
     #[cfg(unix)]
-    std::thread::Builder::new()
-        .name("sigusr1".into())
-        .spawn(|| {
-            use std::io::Write;
-            use std::process::{Command, Stdio};
-            let mut mask: libc::sigset_t = unsafe { std::mem::zeroed() };
-            unsafe {
-                libc::sigemptyset(&mut mask);
-                libc::sigaddset(&mut mask, libc::SIGUSR1);
-            }
-            loop {
-                let mut sig: libc::c_int = 0;
-                if unsafe { libc::sigwait(&mask, &mut sig) } != 0 {
-                    continue;
+    if debug_backtraces {
+        std::thread::Builder::new()
+            .name("sigusr1".into())
+            .spawn(|| {
+                use std::io::Write;
+                use std::process::{Command, Stdio};
+                // SAFETY: `sigset_t` is plain data, so a zeroed value is valid.
+                let mut mask: libc::sigset_t = unsafe { std::mem::zeroed() };
+                // SAFETY: both calls write only to the local `mask`.
+                unsafe {
+                    libc::sigemptyset(&mut mask);
+                    libc::sigaddset(&mut mask, libc::SIGUSR1);
                 }
-                let pid = std::process::id().to_string();
-                let _ = writeln!(
-                    std::io::stderr(),
-                    "\n--- SIGUSR1 all-thread backtrace (pid {pid}) ---"
-                );
-                let lldb = Command::new("lldb")
-                    .args([
-                        "--batch",
-                        "-p",
-                        &pid,
-                        "-o",
-                        "thread backtrace all",
-                        "-o",
-                        "detach",
-                        "-o",
-                        "quit",
-                    ])
-                    .stdout(Stdio::inherit())
-                    .stderr(Stdio::inherit())
-                    .status();
-                if !matches!(lldb, Ok(s) if s.success()) {
-                    let _ = Command::new("gdb")
+                loop {
+                    let mut sig: libc::c_int = 0;
+                    // SAFETY: `sigwait` reads the local `mask` and writes the local `sig`.
+                    if unsafe { libc::sigwait(&mask, &mut sig) } != 0 {
+                        continue;
+                    }
+                    let pid = std::process::id().to_string();
+                    let _ = writeln!(
+                        std::io::stderr(),
+                        "\n--- SIGUSR1 all-thread backtrace (pid {pid}) ---"
+                    );
+                    let lldb = Command::new("lldb")
                         .args([
-                            "-batch",
-                            "-nx",
+                            "--batch",
                             "-p",
                             &pid,
-                            "-ex",
-                            "thread apply all bt",
-                            "-ex",
+                            "-o",
+                            "thread backtrace all",
+                            "-o",
                             "detach",
-                            "-ex",
+                            "-o",
                             "quit",
                         ])
                         .stdout(Stdio::inherit())
                         .stderr(Stdio::inherit())
                         .status();
+                    if !matches!(lldb, Ok(s) if s.success()) {
+                        let _ = Command::new("gdb")
+                            .args([
+                                "-batch",
+                                "-nx",
+                                "-p",
+                                &pid,
+                                "-ex",
+                                "thread apply all bt",
+                                "-ex",
+                                "detach",
+                                "-ex",
+                                "quit",
+                            ])
+                            .stdout(Stdio::inherit())
+                            .stderr(Stdio::inherit())
+                            .status();
+                    }
+                    let _ = writeln!(std::io::stderr(), "--- end backtrace ---\n");
                 }
-                let _ = writeln!(std::io::stderr(), "--- end backtrace ---\n");
-            }
-        })
-        .context("failed to spawn SIGUSR1 thread")?;
+            })
+            .context("failed to spawn SIGUSR1 thread")?;
+    }
 
     let format = args.format();
     // Only create a default log file in server mode — CLI runs at warn level

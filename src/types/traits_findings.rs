@@ -165,15 +165,23 @@ mod crit_ordinal {
         s.serialize_u8(ordinal)
     }
 
+    /// An unknown ordinal is an error, not `Baseline`: silently demoting a
+    /// note from a newer or corrupt producer would hide what it marked. A cache
+    /// entry that fails here is a miss and gets re-analyzed.
     pub(super) fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Criticality, D::Error> {
         Ok(match u8::deserialize(d)? {
             0 => Criticality::Filtered,
             1 => Criticality::Component,
+            2 => Criticality::Baseline,
             3 => Criticality::Notable,
             4 => Criticality::Suspicious,
             5 => Criticality::Hostile,
             6 => Criticality::Exception,
-            _ => Criticality::Baseline,
+            other => {
+                return Err(serde::de::Error::custom(format!(
+                    "unknown criticality ordinal {other}"
+                )));
+            }
         })
     }
 }
@@ -731,6 +739,25 @@ pub(crate) fn deduplicate_evidence(evidence: Vec<Evidence>) -> Vec<Evidence> {
 #[cfg(test)]
 #[allow(clippy::expect_used)]
 mod tests {
+
+    /// Every criticality round-trips through its wire ordinal, and an unknown
+    /// ordinal is rejected instead of read as `Baseline`.
+    #[test]
+    fn note_crit_ordinals_round_trip_and_reject_unknowns() {
+        use super::Note;
+        let mut seen = std::collections::HashSet::new();
+        for ordinal in 0..=6 {
+            let wire = format!(r#"{{"c":{ordinal},"i":"test/id","o":0}}"#);
+            let note: Note = serde_json::from_str(&wire).expect("decode note");
+            assert!(
+                seen.insert(format!("{:?}", note.crit)),
+                "ordinal {ordinal} reused"
+            );
+            let encoded = serde_json::to_string(&note).expect("encode note");
+            assert!(encoded.contains(&format!(r#""c":{ordinal}"#)), "{encoded}");
+        }
+        assert!(serde_json::from_str::<Note>(r#"{"c":9,"i":"test/id","o":0}"#).is_err());
+    }
 
     /// Fold-time bounding must be idempotent with serialization: the bounded
     /// form re-bounds to itself, so a member bounded at fold serializes

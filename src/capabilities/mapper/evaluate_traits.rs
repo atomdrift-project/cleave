@@ -712,8 +712,8 @@ impl super::CapabilityMapper {
 
     /// Evaluate trait definitions against an analysis report (without cached AST)
     /// Wrapper for evaluate_traits_with_ast
-    #[allow(dead_code)] // Used by binary target
     #[must_use]
+    #[cfg(test)]
     pub(crate) fn evaluate_traits(
         &self,
         report: &AnalysisReport,
@@ -729,7 +729,7 @@ impl super::CapabilityMapper {
     /// This enables proper ordering: independent traits are evaluated first, then
     /// dependent traits can see their results via `report.findings`.
     #[must_use]
-    #[allow(dead_code)] // May be used by tests or binary
+    #[cfg(test)]
     pub(crate) fn evaluate_traits_filtered(
         &self,
         report: &AnalysisReport,

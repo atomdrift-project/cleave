@@ -78,7 +78,6 @@ fn explicit_traits_dir_from(override_dir: Option<PathBuf>, env: Option<String>) 
 ///
 /// Returns the path to a usable traits directory, or an error if traits cannot
 /// be obtained.
-#[allow(dead_code)] // Used by binary target
 pub fn resolve_and_ensure() -> Result<PathBuf, String> {
     // 1. Explicit override via API setter or CLEAVE_TRAITS_DIR env var
     if let Some(explicit) = explicit_traits_dir() {
@@ -145,7 +144,6 @@ pub fn try_resolve() -> Result<PathBuf, String> {
 /// Directory the updater should install into: explicit override, a workspace
 /// `traits/` checkout if present, else the platform data dir. Unlike
 /// `resolve_current_traits_dir` it's public and doesn't require the dir to exist.
-#[allow(dead_code)] // Used by binary target (update-rules)
 #[must_use]
 pub fn install_target() -> PathBuf {
     if let Some(explicit) = explicit_traits_dir() {
@@ -191,7 +189,6 @@ fn has_traits(path: &Path) -> bool {
 /// re-posts every verdict, forever. Returning `None` here is therefore expensive
 /// and invisible, which is the worst combination; prefer any true answer.
 #[must_use]
-#[allow(dead_code)] // Used by binary target
 pub fn version() -> Option<String> {
     let traits_dir = resolve_current_traits_dir();
     crate::rule_update::installed(&traits_dir)

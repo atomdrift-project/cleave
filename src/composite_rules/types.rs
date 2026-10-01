@@ -29,10 +29,17 @@ pub(crate) fn default_architectures() -> Vec<Arch> {
 }
 
 impl Arch {
-    /// Parse an architecture string from YAML trait definitions (kebab-case).
+    /// Names [`Self::parse`] accepts, for error messages.
+    pub(crate) const RULE_NAMES: &'static str =
+        "all, x86, x86-64, aarch64, arm, riscv, mips, powerpc, powerpc64, sparc, m68k, superh";
+
+    /// Parse an architecture name from a YAML trait definition (kebab-case).
+    /// `None` for a name it does not know: callers report it rather than read
+    /// it as `all`, which would silently widen the rule.
     #[must_use]
-    pub(crate) fn from_str(arch: &str) -> Arch {
-        match arch.to_lowercase().as_str() {
+    pub(crate) fn parse(arch: &str) -> Option<Arch> {
+        Some(match arch.to_lowercase().as_str() {
+            "all" => Arch::All,
             "x86" | "i386" | "i686" => Arch::X86,
             "x86-64" | "x86_64" | "amd64" => Arch::X86_64,
             "aarch64" | "arm64" => Arch::Aarch64,
@@ -44,8 +51,8 @@ impl Arch {
             "sparc" | "sparc64" => Arch::Sparc,
             "m68k" => Arch::M68k,
             "superh" | "sh" => Arch::Superh,
-            _ => Arch::All,
-        }
+            _ => return None,
+        })
     }
 
     /// Parse an architecture string from analyzer report output.

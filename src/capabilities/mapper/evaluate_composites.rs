@@ -1254,6 +1254,7 @@ fn downgrade_spans_container(downgrade: &crate::composite_rules::DowngradeCondit
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
     use crate::capabilities::mapper::RuleFileType;
     use crate::composite_rules::TypeMask;
     use crate::types::{AnalysisReport, Criticality, Finding, TargetInfo};

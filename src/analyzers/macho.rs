@@ -5,6 +5,10 @@
 //! (segments, dylibs, code signature, header bits) is read from
 //! `filefacts`'s typed views rather than re-walked with goblin. The
 //! analyzer no longer carries its own goblin parse path.
+// Parses attacker-controlled bytes: index and offset arithmetic must be
+// checked, so a forged header is a parse error rather than a panic.
+#![warn(clippy::indexing_slicing, clippy::arithmetic_side_effects)]
+
 use crate::analyzers::{AnalysisInput, Analyzer};
 use crate::capabilities::CapabilityMapper;
 use crate::entropy::EntropyLevel;
@@ -107,7 +111,6 @@ impl MachOAnalyzer {
 
     /// Set pre-extracted strings (avoids redundant stng/radare2 extraction)
     #[must_use]
-    #[allow(dead_code)] // Used by binary target, not visible to library
     pub(crate) fn with_preextracted_strings(mut self, strings: Vec<StringInfo>) -> Self {
         self.preextracted_strings = Some(strings);
         self
@@ -627,6 +630,9 @@ fn verify_code_directory_hashes(data: &[u8], sig_offset: usize) -> CodeDirectory
     const EMBEDDED_SIGNATURE: u32 = 0xfade_0cc0;
     const DETACHED_SIGNATURE: u32 = 0xfade_0cc1;
     const CODE_DIRECTORY: u32 = 0xfade_0c02;
+    /// Slots a CodeDirectory may occupy: the primary (`CSSLOT_CODEDIRECTORY`)
+    /// and the five alternates (`CSSLOT_ALTERNATE_CODEDIRECTORIES`).
+    const CODE_DIRECTORY_SLOTS: [u32; 6] = [0, 0x1000, 0x1001, 0x1002, 0x1003, 0x1004];
 
     let Some(magic) = read_be_u32(data, sig_offset) else {
         return CodeDirectoryIntegrity::Malformed;
@@ -634,7 +640,10 @@ fn verify_code_directory_hashes(data: &[u8], sig_offset: usize) -> CodeDirectory
     if !matches!(magic, EMBEDDED_SIGNATURE | DETACHED_SIGNATURE) {
         return CodeDirectoryIntegrity::Malformed;
     }
-    let Some(total_len) = read_be_u32(data, sig_offset + 4).map(|v| v as usize) else {
+    // A big-endian u32 at `base + rel`, or `None` past the end (or on overflow).
+    let field =
+        |base: usize, rel: usize| base.checked_add(rel).and_then(|at| read_be_u32(data, at));
+    let Some(total_len) = field(sig_offset, 4).map(|v| v as usize) else {
         return CodeDirectoryIntegrity::Malformed;
     };
     let Some(sig_end) = sig_offset.checked_add(total_len) else {
@@ -643,7 +652,7 @@ fn verify_code_directory_hashes(data: &[u8], sig_offset: usize) -> CodeDirectory
     if total_len < 12 || sig_end > data.len() {
         return CodeDirectoryIntegrity::Malformed;
     }
-    let Some(count) = read_be_u32(data, sig_offset + 8).map(|v| v as usize) else {
+    let Some(count) = field(sig_offset, 8).map(|v| v as usize) else {
         return CodeDirectoryIntegrity::Malformed;
     };
     let Some(index_end) = count.checked_mul(8).and_then(|n| n.checked_add(12)) else {
@@ -652,13 +661,28 @@ fn verify_code_directory_hashes(data: &[u8], sig_offset: usize) -> CodeDirectory
     if index_end > total_len {
         return CodeDirectoryIntegrity::Malformed;
     }
+    let Some(index) = sig_offset
+        .checked_add(12)
+        .zip(sig_offset.checked_add(index_end))
+        .and_then(|(start, end)| data.get(start..end))
+    else {
+        return CodeDirectoryIntegrity::Malformed;
+    };
 
     let mut checked = 0usize;
     let mut mismatched = 0usize;
     let mut saw_supported = false;
-    for i in 0..count {
-        let index = sig_offset + 12 + i * 8;
-        let Some(blob_rel) = read_be_u32(data, index + 4).map(|v| v as usize) else {
+    // Each CodeDirectory slot, and each blob, is hashed at most once. A page
+    // hash covers up to the whole file, so an index naming one CodeDirectory
+    // thousands of times (or CodeDirectories in arbitrary slots) made this
+    // quadratic in the signature size; now it is at most six passes.
+    let mut verified_slots: Vec<u32> = Vec::new();
+    let mut verified_blobs: Vec<usize> = Vec::new();
+    for entry in index.as_chunks::<8>().0 {
+        let (Some(slot_type), Some(blob_rel)) = (
+            read_be_u32(entry, 0),
+            read_be_u32(entry, 4).map(|v| v as usize),
+        ) else {
             return CodeDirectoryIntegrity::Malformed;
         };
         if blob_rel.checked_add(8).is_none_or(|end| end > total_len) {
@@ -667,10 +691,16 @@ fn verify_code_directory_hashes(data: &[u8], sig_offset: usize) -> CodeDirectory
         let Some(blob_start) = sig_offset.checked_add(blob_rel) else {
             return CodeDirectoryIntegrity::Malformed;
         };
-        if read_be_u32(data, blob_start) != Some(CODE_DIRECTORY) {
+        if read_be_u32(data, blob_start) != Some(CODE_DIRECTORY)
+            || !CODE_DIRECTORY_SLOTS.contains(&slot_type)
+            || verified_slots.contains(&slot_type)
+            || verified_blobs.contains(&blob_rel)
+        {
             continue;
         }
-        let Some(blob_len) = read_be_u32(data, blob_start + 4).map(|v| v as usize) else {
+        verified_slots.push(slot_type);
+        verified_blobs.push(blob_rel);
+        let Some(blob_len) = field(blob_start, 4).map(|v| v as usize) else {
             return CodeDirectoryIntegrity::Malformed;
         };
         let Some(blob_end) = blob_start.checked_add(blob_len) else {
@@ -679,14 +709,19 @@ fn verify_code_directory_hashes(data: &[u8], sig_offset: usize) -> CodeDirectory
         if blob_len < 44 || blob_end > sig_end {
             return CodeDirectoryIntegrity::Malformed;
         }
-        let blob = &data[blob_start..blob_end];
+        let Some(blob) = data.get(blob_start..blob_end) else {
+            return CodeDirectoryIntegrity::Malformed;
+        };
         let version = read_be_u32(blob, 8).unwrap_or(0);
         let hash_offset = read_be_u32(blob, 16).unwrap_or(0) as usize;
         let slots = read_be_u32(blob, 28).unwrap_or(0) as usize;
         let mut code_limit = read_be_u32(blob, 32).unwrap_or(0) as usize;
-        let hash_size = blob[36] as usize;
-        let hash_type = blob[37];
-        let page_log2 = blob[39];
+        let (Some(&hash_size), Some(&hash_type), Some(&page_log2)) =
+            (blob.get(36), blob.get(37), blob.get(39))
+        else {
+            return CodeDirectoryIntegrity::Malformed;
+        };
+        let hash_size = usize::from(hash_size);
 
         // Scatter-vector CodeDirectories describe non-contiguous ranges and
         // require a different slot-to-file mapping.
@@ -707,10 +742,11 @@ fn verify_code_directory_hashes(data: &[u8], sig_offset: usize) -> CodeDirectory
         }
         let page_size = if page_log2 == 0 {
             code_limit.max(1)
-        } else if page_log2 < usize::BITS as u8 {
-            1usize << page_log2
         } else {
-            return CodeDirectoryIntegrity::Malformed;
+            match 1usize.checked_shl(u32::from(page_log2)) {
+                Some(size) => size,
+                None => return CodeDirectoryIntegrity::Malformed,
+            }
         };
         let expected_slots = code_limit.div_ceil(page_size);
         if slots != expected_slots {
@@ -735,18 +771,23 @@ fn verify_code_directory_hashes(data: &[u8], sig_offset: usize) -> CodeDirectory
         }
         saw_supported = true;
         for slot in 0..slots {
-            let start = slot * page_size;
+            let start = slot.saturating_mul(page_size);
             let end = start.saturating_add(page_size).min(code_limit);
-            let actual = match hash_type {
-                2 | 3 => Sha256::digest(&data[start..end]).to_vec(),
-                4 => Sha384::digest(&data[start..end]).to_vec(),
+            let stored = slot
+                .checked_mul(hash_size)
+                .and_then(|rel| hash_offset.checked_add(rel))
+                .and_then(|at| blob.get(at..at.checked_add(hash_size)?));
+            let (Some(stored), Some(page)) = (stored, data.get(start..end)) else {
+                return CodeDirectoryIntegrity::Malformed;
+            };
+            let matches = match hash_type {
+                2 | 3 => Sha256::digest(page).get(..hash_size) == Some(stored),
+                4 => Sha384::digest(page).get(..hash_size) == Some(stored),
                 _ => return CodeDirectoryIntegrity::Unsupported,
             };
-            let stored_start = hash_offset + slot * hash_size;
-            let stored = &blob[stored_start..stored_start + hash_size];
-            checked += 1;
-            if stored != &actual[..hash_size] {
-                mismatched += 1;
+            checked = checked.saturating_add(1);
+            if !matches {
+                mismatched = mismatched.saturating_add(1);
             }
         }
     }
@@ -1330,7 +1371,7 @@ impl MachOAnalyzer {
                 .and_then(serde_json::Value::as_u64)
                 .unwrap_or(0) as usize;
             if size > 0 && off.saturating_add(size) <= data.len() {
-                return off..off + size;
+                return off..off.saturating_add(size);
             }
         }
         0..data.len()
@@ -1393,7 +1434,6 @@ impl MachOAnalyzer {
     /// Returns per-architecture byte ranges for fat/universal Mach-O binaries.
     /// Each entry maps an `Arch` to its byte range within the file.
     /// For thin binaries, returns a single entry with the detected architecture.
-    #[allow(dead_code)] // Used by lib.rs pipeline, not visible to binary target
     pub(crate) fn labeled_arch_ranges(
         &self,
         data: &[u8],
@@ -1419,7 +1459,7 @@ impl MachOAnalyzer {
                         let size = s.get("file_size").and_then(serde_json::Value::as_u64)? as usize;
                         let name = s.get("cpu_type").and_then(|v| v.as_str())?;
                         if size > 0 && off.saturating_add(size) <= data.len() {
-                            Some((Arch::from_report_str(name), off..off + size))
+                            Some((Arch::from_report_str(name), off..off.saturating_add(size)))
                         } else {
                             None
                         }
@@ -1455,7 +1495,7 @@ impl MachOAnalyzer {
                             s.get("file_offset").and_then(serde_json::Value::as_u64)? as usize;
                         let size = s.get("file_size").and_then(serde_json::Value::as_u64)? as usize;
                         if size > 0 && off.saturating_add(size) <= data.len() {
-                            Some(off..off + size)
+                            Some(off..off.saturating_add(size))
                         } else {
                             None
                         }
@@ -1505,7 +1545,7 @@ impl MachOAnalyzer {
             report.exports.iter().map(|e| e.symbol.clone()).collect();
         let baseline_imports = report.imports.len();
         let baseline_exports = report.exports.len();
-        let mut arches_parsed = 0;
+        let mut arches_parsed = 0usize;
 
         // Use the same `macho.slices[]` view the public range helpers
         // already consume, then open a fresh ctx per slice.
@@ -1532,16 +1572,18 @@ impl MachOAnalyzer {
             if offset == preferred_offset {
                 continue;
             }
-            if offset.saturating_add(size) > data.len() || size == 0 {
+            if size == 0 {
                 continue;
             }
-            let slice_bytes = &data[offset..offset + size];
+            let Some(slice_bytes) = data.get(offset..offset.saturating_add(size)) else {
+                continue;
+            };
             let Ok(slice_ctx) =
                 crate::analysis_context::AnalysisContext::open(dummy_path, slice_bytes)
             else {
                 continue;
             };
-            arches_parsed += 1;
+            arches_parsed = arches_parsed.saturating_add(1);
 
             for mut imp in slice_ctx.imports_from_filefacts() {
                 let key = (imp.symbol.clone(), imp.library.clone());
@@ -1564,8 +1606,8 @@ impl MachOAnalyzer {
             }
         }
 
-        let extra_imports = report.imports.len() - baseline_imports;
-        let extra_exports = report.exports.len() - baseline_exports;
+        let extra_imports = report.imports.len().saturating_sub(baseline_imports);
+        let extra_exports = report.exports.len().saturating_sub(baseline_exports);
         if arches_parsed > 0 && (extra_imports > 0 || extra_exports > 0) {
             tracing::debug!(
                 arches_parsed,
@@ -1694,7 +1736,8 @@ impl Analyzer for MachOAnalyzer {
         let preferred_range = self.preferred_arch_range(input.data);
         let preferred_is_full_file =
             preferred_range.start == 0 && preferred_range.end == input.data.len();
-        let preferred_data = &input.data[preferred_range];
+        // `preferred_arch_range` returns an in-bounds slice range or the whole file.
+        let preferred_data = input.data.get(preferred_range).unwrap_or(input.data);
         let strings = if input.strings.is_empty() {
             None
         } else {
@@ -1850,7 +1893,12 @@ impl Analyzer for MachOAnalyzer {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects
+)]
 mod tests {
     use super::*;
     use std::path::PathBuf;
@@ -1866,12 +1914,18 @@ mod tests {
     /// Minimal two-page SHA-256 CodeDirectory wrapped in an embedded-signature
     /// SuperBlob. The signed bytes precede the signature, as in a real Mach-O.
     fn code_directory_fixture(tampered: bool) -> (Vec<u8>, usize) {
+        code_directory_fixture_with_slots(tampered, &[0])
+    }
+
+    /// As [`code_directory_fixture`], with one index entry per slot type in
+    /// `slots`, every one pointing at the same CodeDirectory.
+    fn code_directory_fixture_with_slots(tampered: bool, slots: &[u32]) -> (Vec<u8>, usize) {
         const PAGE: usize = 4096;
         const CODE_LEN: usize = PAGE * 2;
         const CD_HEADER: usize = 44;
         const HASH_SIZE: usize = 32;
         const CD_LEN: usize = CD_HEADER + HASH_SIZE * 2;
-        const SUPER_HEADER: usize = 20;
+        let super_header = 12 + 8 * slots.len();
 
         let mut data = vec![b'A'; CODE_LEN];
         let mut cd = vec![0u8; CD_LEN];
@@ -1890,12 +1944,14 @@ mod tests {
             cd[hash_start..hash_start + HASH_SIZE].copy_from_slice(&digest);
         }
 
-        let mut superblob = vec![0u8; SUPER_HEADER];
+        let mut superblob = vec![0u8; super_header];
         put_be_u32(&mut superblob, 0, 0xfade_0cc0);
-        put_be_u32(&mut superblob, 4, (SUPER_HEADER + CD_LEN) as u32);
-        put_be_u32(&mut superblob, 8, 1);
-        put_be_u32(&mut superblob, 12, 0); // CodeDirectory slot
-        put_be_u32(&mut superblob, 16, SUPER_HEADER as u32);
+        put_be_u32(&mut superblob, 4, (super_header + CD_LEN) as u32);
+        put_be_u32(&mut superblob, 8, slots.len() as u32);
+        for (i, slot) in slots.iter().enumerate() {
+            put_be_u32(&mut superblob, 12 + i * 8, *slot);
+            put_be_u32(&mut superblob, 16 + i * 8, super_header as u32);
+        }
         superblob.extend_from_slice(&cd);
         let sig_offset = data.len();
         data.extend_from_slice(&superblob);
@@ -1908,6 +1964,20 @@ mod tests {
     #[test]
     fn code_directory_page_hashes_validate() {
         let (data, sig_offset) = code_directory_fixture(false);
+        assert_eq!(
+            verify_code_directory_hashes(&data, sig_offset),
+            CodeDirectoryIntegrity::Valid { checked: 2 }
+        );
+    }
+
+    /// Each page is hashed once however many index entries name the
+    /// CodeDirectory, and entries outside the CodeDirectory slots are ignored.
+    /// Otherwise a forged index makes verification quadratic in its size.
+    #[test]
+    fn code_directory_is_verified_once_per_blob() {
+        let mut slots = vec![0u32; 1000];
+        slots.extend([0x1000, 0x1001, 2, 0x10000]);
+        let (data, sig_offset) = code_directory_fixture_with_slots(false, &slots);
         assert_eq!(
             verify_code_directory_hashes(&data, sig_offset),
             CodeDirectoryIntegrity::Valid { checked: 2 }

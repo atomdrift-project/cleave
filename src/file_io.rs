@@ -225,6 +225,12 @@ pub fn read_file_smart(path: &Path) -> Result<FileData> {
     if file_size > MMAP_THRESHOLD {
         // Large file: use memory-mapping (zero-copy)
         let file = File::open(path)?;
+        // SAFETY: `Mmap::map` requires that the file not change while the map
+        // is borrowed. Cleave cannot enforce that on a scan target: a
+        // concurrent write changes bytes under a shared slice, and a
+        // truncation raises SIGBUS, which no `catch_unwind` stops. Accepted
+        // because targets are files at rest and copying every large file
+        // costs more than the risk; scan only files nothing else is writing.
         let mmap = unsafe { Mmap::map(&file)? };
         tracing::debug!(
             "Memory-mapped large file ({:.2} MB): {}",

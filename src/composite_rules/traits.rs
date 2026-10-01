@@ -5,8 +5,8 @@
 
 use super::condition::{
     CommentQuery, Condition, EncodedQuery, HexQuery, LiteralQuery, MetricsQuery, NotException,
-    NotExceptionStructured, PathQuery, RawQuery, SectionQuery, StringValidator, SymbolKind,
-    SymbolQuery, TextQuery, TreeSitterQuery,
+    NotExceptionStructured, PathQuery, RawQuery, SectionQuery, SymbolQuery, TextQuery,
+    TreeSitterQuery,
 };
 use super::context::{ConditionResult, EvaluationContext, StringParams};
 use super::evaluators::{
@@ -119,6 +119,500 @@ fn merge_not_exceptions(
             merged.extend_from_slice(c);
             merged.extend_from_slice(t);
             Some(merged)
+        }
+    }
+}
+
+/// What [`eval_condition`] needs from the rule holding a condition: its id (for
+/// diagnostics), its rule-level `not:` exceptions (merged with each
+/// condition's own) and its architectures (to clamp byte searches).
+#[derive(Clone, Copy)]
+struct ConditionRule<'r> {
+    id: &'r str,
+    not: Option<&'r Vec<NotException>>,
+    arch: &'r [Arch],
+}
+
+/// Evaluate one condition of a trait's `if:` or a composite's clauses.
+///
+/// Traits and composites share this one dispatcher: two hand-kept copies
+/// drifted apart (`kind: number` and condition-level `not:` once worked in
+/// only one of them).
+fn eval_condition(
+    rule: ConditionRule<'_>,
+    condition: &Condition,
+    ctx: &EvaluationContext<'_>,
+) -> ConditionResult {
+    let arch_clamp = ctx.arch_clamp_range(rule.arch);
+
+    match condition {
+        Condition::Symbol(SymbolQuery {
+            exact,
+            substr,
+            regex,
+            platforms,
+            is_check,
+            kind,
+            arg,
+            args,
+            alias,
+            not,
+        }) => {
+            let merged_not = merge_not_exceptions(not.as_ref(), rule.not);
+            // Source-AST projection kinds (call/member/bind/identifier)
+            // dispatch to the filefacts-fact evaluators — pre-extracted
+            // records matched without re-walking the AST per rule. All
+            // other kinds (Import/Export/Function/Forward/None) go through
+            // the legacy declared-symbol path.
+            use crate::composite_rules::condition::SymbolKind;
+            match kind {
+                Some(SymbolKind::Call) => timed_eval!(
+                    "symbol",
+                    crate::composite_rules::evaluators::symbol_string::eval_call(
+                        exact.as_ref(),
+                        substr.as_ref(),
+                        regex.as_ref(),
+                        arg.as_ref(),
+                        args.as_deref(),
+                        ctx,
+                    )
+                ),
+                Some(
+                    fact_kind @ (SymbolKind::Member | SymbolKind::Bind | SymbolKind::Identifier),
+                ) => {
+                    timed_eval!(
+                        "symbol",
+                        crate::composite_rules::evaluators::symbol_string::eval_symbol_fact(
+                            *fact_kind,
+                            exact.as_ref(),
+                            substr.as_ref(),
+                            regex.as_ref(),
+                            arg.as_ref(),
+                            ctx,
+                        )
+                    )
+                }
+                _ => timed_eval!(
+                    "symbol",
+                    eval_symbol(
+                        exact.as_ref(),
+                        substr.as_ref(),
+                        regex.as_ref(),
+                        platforms.as_ref(),
+                        *is_check,
+                        *kind,
+                        merged_not.as_ref(),
+                        alias.as_ref(),
+                        ctx,
+                    )
+                ),
+            }
+        }
+        Condition::Text(TextQuery {
+            encoding,
+            exact,
+            substr,
+            regex,
+            word,
+            case_insensitive,
+            length_min,
+            length_max,
+            exclude_html_comments,
+            is_check,
+            not,
+            platforms: _,
+            section,
+            offset,
+            offset_range,
+            section_offset,
+            section_offset_range,
+        }) => {
+            let params = StringParams {
+                encoding: *encoding,
+                exact: exact.as_ref(),
+                substr: substr.as_ref(),
+                regex: regex.as_ref(),
+                word: word.as_ref(),
+                case_insensitive: *case_insensitive,
+                length_min: *length_min,
+                length_max: *length_max,
+                exclude_html_comments: *exclude_html_comments,
+                is_check: *is_check,
+                section: section.as_ref(),
+                offset: *offset,
+                offset_range: *offset_range,
+                section_offset: *section_offset,
+                section_offset_range: *section_offset_range,
+                arch_clamp,
+            };
+            // Honor both condition-level (`if: ... not:`) and trait-level
+            // `not:` exception lists; condition-level was previously dropped.
+            let merged_not = merge_not_exceptions(not.as_ref(), rule.not);
+            timed_eval!(
+                "text",
+                eval_text(&params, merged_not.as_ref(), ctx, Some(rule.id))
+            )
+        }
+        Condition::Comment(CommentQuery {
+            exact,
+            substr,
+            regex,
+            word,
+            case_insensitive,
+            is_check,
+            not,
+            platforms: _,
+        }) => {
+            let params = StringParams {
+                encoding: None,
+                exact: exact.as_ref(),
+                substr: substr.as_ref(),
+                regex: regex.as_ref(),
+                word: word.as_ref(),
+                case_insensitive: *case_insensitive,
+                length_min: None,
+                length_max: None,
+                exclude_html_comments: false,
+                is_check: *is_check,
+                section: None,
+                offset: None,
+                offset_range: None,
+                section_offset: None,
+                section_offset_range: None,
+                arch_clamp,
+            };
+            let merged_not = merge_not_exceptions(not.as_ref(), rule.not);
+            timed_eval!(
+                "comment",
+                crate::composite_rules::evaluators::symbol_string::eval_comment(
+                    &params,
+                    merged_not.as_ref(),
+                    ctx,
+                )
+            )
+        }
+        Condition::Literal(LiteralQuery {
+            kind,
+            exact,
+            substr,
+            regex,
+            word,
+            value,
+            radix,
+            case_insensitive,
+            exclude_docstrings,
+            is_check,
+            not,
+            platforms: _,
+            section,
+            offset,
+            offset_range,
+            section_offset,
+            section_offset_range,
+        }) => {
+            // kind=number dispatches to numeric matching against
+            // literals extracted into report.strings with
+            // section="ast-number" (where value is the decimal
+            // integer text and encoding is the source radix). kind
+            // omitted or "string" uses the standard string-literal
+            // path — backward-compatible with the prior
+            // `type: string_literal`.
+            if kind.as_deref() == Some("number") {
+                timed_eval!(
+                    "literal",
+                    crate::composite_rules::evaluators::symbol_string::eval_numeric_literal(
+                        *value, *radix, ctx,
+                    )
+                )
+            } else {
+                let params = StringParams {
+                    encoding: None,
+                    exact: exact.as_ref(),
+                    substr: substr.as_ref(),
+                    regex: regex.as_ref(),
+                    word: word.as_ref(),
+                    case_insensitive: *case_insensitive,
+                    length_min: None,
+                    length_max: None,
+                    exclude_html_comments: false,
+                    is_check: *is_check,
+                    section: section.as_ref(),
+                    offset: *offset,
+                    offset_range: *offset_range,
+                    section_offset: *section_offset,
+                    section_offset_range: *section_offset_range,
+                    arch_clamp,
+                };
+                let merged_not = merge_not_exceptions(not.as_ref(), rule.not);
+                timed_eval!(
+                    "literal",
+                    crate::composite_rules::evaluators::symbol_string::eval_string_literal_with_options(
+                        &params,
+                        merged_not.as_ref(),
+                        ctx,
+                        *exclude_docstrings,
+                    )
+                )
+            }
+        }
+        Condition::Trait { id } => timed_eval!("trait", eval_trait(id, ctx)),
+        Condition::TreeSitter(TreeSitterQuery {
+            kind,
+            node,
+            exact,
+            substr,
+            regex,
+            query,
+            case_insensitive,
+            ..
+        }) => timed_eval!(
+            "ast",
+            eval_ast(
+                kind.as_deref(),
+                node.as_deref(),
+                exact.as_deref(),
+                substr.as_deref(),
+                regex.as_deref(),
+                query.as_deref(),
+                *case_insensitive,
+                ctx,
+            )
+        ),
+        Condition::Yara {
+            source,
+            namespace,
+            compiled,
+        } => {
+            timed_eval!(
+                "yara",
+                eval_yara_inline(source, namespace.as_deref(), compiled.as_ref(), ctx)
+            )
+        }
+        Condition::Syscall {
+            name,
+            number,
+            arch,
+            args,
+        } => {
+            timed_eval!(
+                "syscall",
+                eval_syscall(
+                    name.as_deref(),
+                    number.as_deref(),
+                    arch.as_deref(),
+                    args,
+                    ctx
+                )
+            )
+        }
+        Condition::Metrics(MetricsQuery {
+            field,
+            min,
+            max,
+            min_size,
+            max_size,
+        }) => timed_eval!(
+            "metrics",
+            eval_metrics(field, *min, *max, *min_size, *max_size, ctx)
+        ),
+        Condition::Hex(HexQuery {
+            pattern,
+            not,
+            offset,
+            offset_range,
+            section,
+            section_offset,
+            section_offset_range,
+        }) => {
+            let merged_not = merge_not_exceptions(not.as_ref(), rule.not);
+            timed_eval!(
+                "hex",
+                eval_hex(
+                    pattern,
+                    merged_not.as_ref(),
+                    &ContentLocationParams {
+                        section: section.clone(),
+                        offset: *offset,
+                        offset_range: *offset_range,
+                        section_offset: *section_offset,
+                        section_offset_range: *section_offset_range,
+                        arch_clamp,
+                    },
+                    ctx,
+                    Some(rule.id),
+                )
+            )
+        }
+        Condition::Raw(RawQuery {
+            exact,
+            substr,
+            regex,
+            word,
+            case_insensitive,
+            length_min,
+            length_max,
+            is_check,
+            not,
+            section,
+            offset,
+            offset_range,
+            section_offset,
+            section_offset_range,
+        }) => {
+            use super::evaluators::ContentLocationParams;
+            let location = ContentLocationParams {
+                section: section.clone(),
+                offset: *offset,
+                offset_range: *offset_range,
+                section_offset: *section_offset,
+                section_offset_range: *section_offset_range,
+                arch_clamp,
+            };
+            let merged_not = merge_not_exceptions(not.as_ref(), rule.not);
+            timed_eval!(
+                "raw",
+                eval_raw(
+                    exact.as_ref(),
+                    substr.as_ref(),
+                    regex.as_ref(),
+                    word.as_ref(),
+                    *case_insensitive,
+                    (*length_min, *length_max),
+                    *is_check,
+                    merged_not.as_ref(),
+                    &location,
+                    ctx,
+                    Some(rule.id),
+                )
+            )
+        }
+        Condition::Section(SectionQuery {
+            exact,
+            substr,
+            regex,
+            word,
+            case_insensitive,
+            length_min,
+            length_max,
+            entropy_min,
+            entropy_max,
+            readable,
+            writable,
+            executable,
+            compare_to,
+            size_ratio_min,
+            size_ratio_max,
+            entropy_ratio_min,
+            entropy_ratio_max,
+        }) => timed_eval!(
+            "section",
+            eval_section(
+                &SectionParams {
+                    exact: exact.as_ref(),
+                    substr: substr.as_ref(),
+                    regex: regex.as_ref(),
+                    word: word.as_ref(),
+                    case_insensitive: *case_insensitive,
+                    length_min: *length_min,
+                    length_max: *length_max,
+                    entropy_min: *entropy_min,
+                    entropy_max: *entropy_max,
+                    readable: *readable,
+                    writable: *writable,
+                    executable: *executable,
+                    compare_to: compare_to.as_ref(),
+                    size_ratio_min: *size_ratio_min,
+                    size_ratio_max: *size_ratio_max,
+                    entropy_ratio_min: *entropy_ratio_min,
+                    entropy_ratio_max: *entropy_ratio_max,
+                },
+                ctx,
+            )
+        ),
+        Condition::Encoded(EncodedQuery {
+            encoding,
+            exact,
+            substr,
+            regex,
+            word,
+            case_insensitive,
+            is_check,
+            not,
+            section,
+            offset,
+            offset_range,
+            section_offset,
+            section_offset_range,
+        }) => {
+            use super::evaluators::ContentLocationParams;
+            let location = ContentLocationParams {
+                section: section.clone(),
+                offset: *offset,
+                offset_range: *offset_range,
+                section_offset: *section_offset,
+                section_offset_range: *section_offset_range,
+                arch_clamp,
+            };
+            timed_eval!(
+                "encoded",
+                eval_encoded(
+                    encoding.as_ref(),
+                    exact.as_ref(),
+                    substr.as_ref(),
+                    regex.as_ref(),
+                    word.as_ref(),
+                    *case_insensitive,
+                    &location,
+                    *is_check,
+                    not.as_ref(),
+                    ctx,
+                )
+            )
+        }
+        Condition::Path(PathQuery {
+            exact,
+            substr,
+            regex,
+            case_insensitive,
+            is_check,
+            basename,
+            dirname,
+        }) => timed_eval!(
+            "path",
+            eval_path(
+                exact.as_ref(),
+                substr.as_ref(),
+                regex.as_ref(),
+                *case_insensitive,
+                *is_check,
+                *basename,
+                *dirname,
+                ctx,
+            )
+        ),
+        Condition::Kv(query) => {
+            timed_eval!("value", {
+                // Trait-level `not:` filters value matches exactly as it
+                // does every other matcher's. This arm used to hand the
+                // bare condition to the evaluator, so a `not:` written
+                // beside `if:` on a value trait was parsed, validated and
+                // then silently never applied.
+                let merged;
+                let condition = match rule.not {
+                    Some(trait_level) if !trait_level.is_empty() => {
+                        let mut query = query.clone();
+                        query.not = merge_not_exceptions(query.not.as_ref(), Some(trait_level));
+                        merged = Condition::Kv(query);
+                        &merged
+                    }
+                    _ => condition,
+                };
+                if let Some(evidence) = super::evaluators::evaluate_kv(condition, ctx) {
+                    ConditionResult::matched_with(vec![evidence])
+                } else {
+                    ConditionResult::no_match()
+                }
+            })
         }
     }
 }
@@ -1562,479 +2056,15 @@ impl TraitDefinition {
         condition: &Condition,
         ctx: &EvaluationContext<'a>,
     ) -> ConditionResult {
-        let arch_clamp = ctx.arch_clamp_range(&self.arch);
-
-        match condition {
-            Condition::Symbol(SymbolQuery {
-                exact,
-                substr,
-                regex,
-                platforms,
-                is_check,
-                kind,
-                arg,
-                args,
-                alias,
-                not,
-            }) => {
-                let merged_not = merge_not_exceptions(not.as_ref(), self.not.as_ref());
-                // Source-AST projection kinds (call/member/bind/identifier)
-                // dispatch to the filefacts-fact evaluators — pre-extracted
-                // records matched without re-walking the AST per rule. All
-                // other kinds (Import/Export/Function/Forward/None) go through
-                // the legacy declared-symbol path.
-                use crate::composite_rules::condition::SymbolKind;
-                match kind {
-                    Some(SymbolKind::Call) => timed_eval!(
-                        "symbol",
-                        crate::composite_rules::evaluators::symbol_string::eval_call(
-                            exact.as_ref(),
-                            substr.as_ref(),
-                            regex.as_ref(),
-                            arg.as_ref(),
-                            args.as_deref(),
-                            ctx,
-                        )
-                    ),
-                    Some(
-                        fact_kind
-                        @ (SymbolKind::Member | SymbolKind::Bind | SymbolKind::Identifier),
-                    ) => {
-                        timed_eval!(
-                            "symbol",
-                            crate::composite_rules::evaluators::symbol_string::eval_symbol_fact(
-                                *fact_kind,
-                                exact.as_ref(),
-                                substr.as_ref(),
-                                regex.as_ref(),
-                                arg.as_ref(),
-                                ctx,
-                            )
-                        )
-                    }
-                    _ => timed_eval!(
-                        "symbol",
-                        eval_symbol(
-                            exact.as_ref(),
-                            substr.as_ref(),
-                            regex.as_ref(),
-                            platforms.as_ref(),
-                            *is_check,
-                            *kind,
-                            merged_not.as_ref(),
-                            alias.as_ref(),
-                            ctx,
-                        )
-                    ),
-                }
-            }
-            Condition::Text(TextQuery {
-                encoding,
-                exact,
-                substr,
-                regex,
-                word,
-                case_insensitive,
-                length_min,
-                length_max,
-                exclude_html_comments,
-                is_check,
-                not,
-                platforms: _,
-                section,
-                offset,
-                offset_range,
-                section_offset,
-                section_offset_range,
-            }) => {
-                let params = StringParams {
-                    encoding: *encoding,
-                    exact: exact.as_ref(),
-                    substr: substr.as_ref(),
-                    regex: regex.as_ref(),
-                    word: word.as_ref(),
-                    case_insensitive: *case_insensitive,
-                    length_min: *length_min,
-                    length_max: *length_max,
-                    exclude_html_comments: *exclude_html_comments,
-                    is_check: *is_check,
-                    section: section.as_ref(),
-                    offset: *offset,
-                    offset_range: *offset_range,
-                    section_offset: *section_offset,
-                    section_offset_range: *section_offset_range,
-                    arch_clamp,
-                };
-                // Honor both condition-level (`if: ... not:`) and trait-level
-                // `not:` exception lists; condition-level was previously dropped.
-                let merged_not = merge_not_exceptions(not.as_ref(), self.not.as_ref());
-                timed_eval!(
-                    "text",
-                    eval_text(&params, merged_not.as_ref(), ctx, Some(self.id.as_str()))
-                )
-            }
-            Condition::Comment(CommentQuery {
-                exact,
-                substr,
-                regex,
-                word,
-                case_insensitive,
-                is_check,
-                not,
-                platforms: _,
-            }) => {
-                let params = StringParams {
-                    encoding: None,
-                    exact: exact.as_ref(),
-                    substr: substr.as_ref(),
-                    regex: regex.as_ref(),
-                    word: word.as_ref(),
-                    case_insensitive: *case_insensitive,
-                    length_min: None,
-                    length_max: None,
-                    exclude_html_comments: false,
-                    is_check: *is_check,
-                    section: None,
-                    offset: None,
-                    offset_range: None,
-                    section_offset: None,
-                    section_offset_range: None,
-                    arch_clamp,
-                };
-                let merged_not = merge_not_exceptions(not.as_ref(), self.not.as_ref());
-                timed_eval!(
-                    "comment",
-                    crate::composite_rules::evaluators::symbol_string::eval_comment(
-                        &params,
-                        merged_not.as_ref(),
-                        ctx,
-                    )
-                )
-            }
-            Condition::Literal(LiteralQuery {
-                kind,
-                exact,
-                substr,
-                regex,
-                word,
-                value,
-                radix,
-                case_insensitive,
-                exclude_docstrings,
-                is_check,
-                not,
-                platforms: _,
-                section,
-                offset,
-                offset_range,
-                section_offset,
-                section_offset_range,
-            }) => {
-                // kind=number dispatches to numeric matching against
-                // literals extracted into report.strings with
-                // section="ast-number" (where value is the decimal
-                // integer text and encoding is the source radix). kind
-                // omitted or "string" uses the standard string-literal
-                // path — backward-compatible with the prior
-                // `type: string_literal`.
-                if kind.as_deref() == Some("number") {
-                    timed_eval!(
-                        "literal",
-                        crate::composite_rules::evaluators::symbol_string::eval_numeric_literal(
-                            *value, *radix, ctx,
-                        )
-                    )
-                } else {
-                    let params = StringParams {
-                        encoding: None,
-                        exact: exact.as_ref(),
-                        substr: substr.as_ref(),
-                        regex: regex.as_ref(),
-                        word: word.as_ref(),
-                        case_insensitive: *case_insensitive,
-                        length_min: None,
-                        length_max: None,
-                        exclude_html_comments: false,
-                        is_check: *is_check,
-                        section: section.as_ref(),
-                        offset: *offset,
-                        offset_range: *offset_range,
-                        section_offset: *section_offset,
-                        section_offset_range: *section_offset_range,
-                        arch_clamp,
-                    };
-                    let merged_not = merge_not_exceptions(not.as_ref(), self.not.as_ref());
-                    timed_eval!(
-                        "literal",
-                        crate::composite_rules::evaluators::symbol_string::eval_string_literal_with_options(
-                            &params,
-                            merged_not.as_ref(),
-                            ctx,
-                            *exclude_docstrings,
-                        )
-                    )
-                }
-            }
-            Condition::Trait { id } => timed_eval!("trait", eval_trait(id, ctx)),
-            Condition::TreeSitter(TreeSitterQuery {
-                kind,
-                node,
-                exact,
-                substr,
-                regex,
-                query,
-                case_insensitive,
-                ..
-            }) => timed_eval!(
-                "ast",
-                eval_ast(
-                    kind.as_deref(),
-                    node.as_deref(),
-                    exact.as_deref(),
-                    substr.as_deref(),
-                    regex.as_deref(),
-                    query.as_deref(),
-                    *case_insensitive,
-                    ctx,
-                )
-            ),
-            Condition::Yara {
-                source,
-                namespace,
-                compiled,
-            } => {
-                timed_eval!(
-                    "yara",
-                    eval_yara_inline(source, namespace.as_deref(), compiled.as_ref(), ctx)
-                )
-            }
-            Condition::Syscall {
-                name,
-                number,
-                arch,
-                args,
-            } => {
-                timed_eval!(
-                    "syscall",
-                    eval_syscall(
-                        name.as_deref(),
-                        number.as_deref(),
-                        arch.as_deref(),
-                        args,
-                        ctx
-                    )
-                )
-            }
-            Condition::Metrics(MetricsQuery {
-                field,
-                min,
-                max,
-                min_size,
-                max_size,
-            }) => timed_eval!(
-                "metrics",
-                eval_metrics(field, *min, *max, *min_size, *max_size, ctx)
-            ),
-            Condition::Hex(HexQuery {
-                pattern,
-                not,
-                offset,
-                offset_range,
-                section,
-                section_offset,
-                section_offset_range,
-            }) => {
-                let merged_not = merge_not_exceptions(not.as_ref(), self.not.as_ref());
-                timed_eval!(
-                    "hex",
-                    eval_hex(
-                        pattern,
-                        merged_not.as_ref(),
-                        &ContentLocationParams {
-                            section: section.clone(),
-                            offset: *offset,
-                            offset_range: *offset_range,
-                            section_offset: *section_offset,
-                            section_offset_range: *section_offset_range,
-                            arch_clamp,
-                        },
-                        ctx,
-                        Some(self.id.as_str()),
-                    )
-                )
-            }
-            Condition::Raw(RawQuery {
-                exact,
-                substr,
-                regex,
-                word,
-                case_insensitive,
-                length_min,
-                length_max,
-                is_check,
-                not,
-                section,
-                offset,
-                offset_range,
-                section_offset,
-                section_offset_range,
-            }) => {
-                use super::evaluators::ContentLocationParams;
-                let location = ContentLocationParams {
-                    section: section.clone(),
-                    offset: *offset,
-                    offset_range: *offset_range,
-                    section_offset: *section_offset,
-                    section_offset_range: *section_offset_range,
-                    arch_clamp,
-                };
-                let merged_not = merge_not_exceptions(not.as_ref(), self.not.as_ref());
-                timed_eval!(
-                    "raw",
-                    eval_raw(
-                        exact.as_ref(),
-                        substr.as_ref(),
-                        regex.as_ref(),
-                        word.as_ref(),
-                        *case_insensitive,
-                        (*length_min, *length_max),
-                        *is_check,
-                        merged_not.as_ref(),
-                        &location,
-                        ctx,
-                        Some(self.id.as_str()),
-                    )
-                )
-            }
-            Condition::Section(SectionQuery {
-                exact,
-                substr,
-                regex,
-                word,
-                case_insensitive,
-                length_min,
-                length_max,
-                entropy_min,
-                entropy_max,
-                readable,
-                writable,
-                executable,
-                compare_to,
-                size_ratio_min,
-                size_ratio_max,
-                entropy_ratio_min,
-                entropy_ratio_max,
-            }) => timed_eval!(
-                "section",
-                eval_section(
-                    &SectionParams {
-                        exact: exact.as_ref(),
-                        substr: substr.as_ref(),
-                        regex: regex.as_ref(),
-                        word: word.as_ref(),
-                        case_insensitive: *case_insensitive,
-                        length_min: *length_min,
-                        length_max: *length_max,
-                        entropy_min: *entropy_min,
-                        entropy_max: *entropy_max,
-                        readable: *readable,
-                        writable: *writable,
-                        executable: *executable,
-                        compare_to: compare_to.as_ref(),
-                        size_ratio_min: *size_ratio_min,
-                        size_ratio_max: *size_ratio_max,
-                        entropy_ratio_min: *entropy_ratio_min,
-                        entropy_ratio_max: *entropy_ratio_max,
-                    },
-                    ctx,
-                )
-            ),
-            Condition::Encoded(EncodedQuery {
-                encoding,
-                exact,
-                substr,
-                regex,
-                word,
-                case_insensitive,
-                is_check,
-                not,
-                section,
-                offset,
-                offset_range,
-                section_offset,
-                section_offset_range,
-            }) => {
-                use super::evaluators::ContentLocationParams;
-                let location = ContentLocationParams {
-                    section: section.clone(),
-                    offset: *offset,
-                    offset_range: *offset_range,
-                    section_offset: *section_offset,
-                    section_offset_range: *section_offset_range,
-                    arch_clamp,
-                };
-                timed_eval!(
-                    "encoded",
-                    eval_encoded(
-                        encoding.as_ref(),
-                        exact.as_ref(),
-                        substr.as_ref(),
-                        regex.as_ref(),
-                        word.as_ref(),
-                        *case_insensitive,
-                        &location,
-                        *is_check,
-                        not.as_ref(),
-                        ctx,
-                    )
-                )
-            }
-            Condition::Path(PathQuery {
-                exact,
-                substr,
-                regex,
-                case_insensitive,
-                is_check,
-                basename,
-                dirname,
-            }) => timed_eval!(
-                "path",
-                eval_path(
-                    exact.as_ref(),
-                    substr.as_ref(),
-                    regex.as_ref(),
-                    *case_insensitive,
-                    *is_check,
-                    *basename,
-                    *dirname,
-                    ctx,
-                )
-            ),
-            Condition::Kv(query) => {
-                timed_eval!("value", {
-                    // Trait-level `not:` filters value matches exactly as it
-                    // does every other matcher's. This arm used to hand the
-                    // bare condition to the evaluator, so a `not:` written
-                    // beside `if:` on a value trait was parsed, validated and
-                    // then silently never applied.
-                    let merged;
-                    let condition = match self.not.as_ref() {
-                        Some(trait_level) if !trait_level.is_empty() => {
-                            let mut query = query.clone();
-                            query.not = merge_not_exceptions(query.not.as_ref(), Some(trait_level));
-                            merged = Condition::Kv(query);
-                            &merged
-                        }
-                        _ => condition,
-                    };
-                    if let Some(evidence) = super::evaluators::evaluate_kv(condition, ctx) {
-                        ConditionResult::matched_with(vec![evidence])
-                    } else {
-                        ConditionResult::no_match()
-                    }
-                })
-            }
-        }
+        eval_condition(
+            ConditionRule {
+                id: &self.id,
+                not: self.not.as_ref(),
+                arch: &self.arch,
+            },
+            condition,
+            ctx,
+        )
     }
 }
 
@@ -2152,17 +2182,15 @@ impl Scope {
             // Leaf: exact location match required.
             (Scope::Leaf, Some(loc)) => strip_byte_offset_location(loc),
             // File: strip any decoded-payload suffix; what remains is
-            // the leaf-file identifier.
-            (Scope::File, Some(loc)) => strip_byte_offset_location(strip_decode_suffix(loc)),
+            // the leaf-file identifier. Parent is meaningful only to the
+            // explicit downgrade pass; a composite cannot pool a parent's
+            // evidence through a location key, so it keys like File.
+            (Scope::File | Scope::Parent | Scope::FileOrParent, Some(loc)) => {
+                strip_byte_offset_location(strip_decode_suffix(loc))
+            }
             // Nest: the file key cut back to its nest host's name.
             (Scope::Nest, Some(loc)) => {
                 nest_host(strip_byte_offset_location(strip_decode_suffix(loc)))
-            }
-            // Parent is meaningful only to the explicit downgrade pass; a
-            // composite cannot pool a parent's evidence through a location key.
-            (Scope::Parent, Some(loc)) => strip_byte_offset_location(strip_decode_suffix(loc)),
-            (Scope::FileOrParent, Some(loc)) => {
-                strip_byte_offset_location(strip_decode_suffix(loc))
             }
             // Archive: nearest enclosing archive entry path, falling back to
             // file-scope (never a global pool) when nothing encloses it.
@@ -3445,476 +3473,14 @@ impl CompositeTrait {
         condition: &Condition,
         ctx: &EvaluationContext<'a>,
     ) -> ConditionResult {
-        let arch_clamp = ctx.arch_clamp_range(&self.arch);
-
-        match condition {
-            Condition::Symbol(SymbolQuery {
-                exact,
-                substr,
-                regex,
-                platforms,
-                is_check,
-                kind,
-                arg,
-                args,
-                alias,
-                not,
-            }) => {
-                let merged_not = merge_not_exceptions(not.as_ref(), self.not.as_ref());
-                use crate::composite_rules::condition::SymbolKind;
-                match kind {
-                    Some(SymbolKind::Call) => {
-                        crate::composite_rules::evaluators::symbol_string::eval_call(
-                            exact.as_ref(),
-                            substr.as_ref(),
-                            regex.as_ref(),
-                            arg.as_ref(),
-                            args.as_deref(),
-                            ctx,
-                        )
-                    }
-                    Some(
-                        fact_kind
-                        @ (SymbolKind::Member | SymbolKind::Bind | SymbolKind::Identifier),
-                    ) => crate::composite_rules::evaluators::symbol_string::eval_symbol_fact(
-                        *fact_kind,
-                        exact.as_ref(),
-                        substr.as_ref(),
-                        regex.as_ref(),
-                        arg.as_ref(),
-                        ctx,
-                    ),
-                    _ => self.eval_symbol(
-                        exact.as_ref(),
-                        substr.as_ref(),
-                        regex.as_ref(),
-                        platforms.as_ref(),
-                        *is_check,
-                        *kind,
-                        merged_not.as_ref(),
-                        alias.as_ref(),
-                        ctx,
-                    ),
-                }
-            }
-            Condition::Text(TextQuery {
-                encoding,
-                exact,
-                substr,
-                regex,
-                word,
-                case_insensitive,
-                length_min,
-                length_max,
-                exclude_html_comments,
-                is_check,
-                not,
-                platforms: _,
-                section,
-                offset,
-                offset_range,
-                section_offset,
-                section_offset_range,
-            }) => {
-                let params = StringParams {
-                    encoding: *encoding,
-                    exact: exact.as_ref(),
-                    substr: substr.as_ref(),
-                    regex: regex.as_ref(),
-                    word: word.as_ref(),
-                    case_insensitive: *case_insensitive,
-                    length_min: *length_min,
-                    length_max: *length_max,
-                    exclude_html_comments: *exclude_html_comments,
-                    is_check: *is_check,
-                    section: section.as_ref(),
-                    offset: *offset,
-                    offset_range: *offset_range,
-                    section_offset: *section_offset,
-                    section_offset_range: *section_offset_range,
-                    arch_clamp,
-                };
-                // Honor both condition-level (`if: ... not:`) and trait-level
-                // `not:` exception lists; condition-level was previously dropped.
-                let merged_not = merge_not_exceptions(not.as_ref(), self.not.as_ref());
-                eval_text(&params, merged_not.as_ref(), ctx, Some(self.id.as_str()))
-            }
-            Condition::Comment(CommentQuery {
-                exact,
-                substr,
-                regex,
-                word,
-                case_insensitive,
-                is_check,
-                not,
-                platforms: _,
-            }) => {
-                let params = StringParams {
-                    encoding: None,
-                    exact: exact.as_ref(),
-                    substr: substr.as_ref(),
-                    regex: regex.as_ref(),
-                    word: word.as_ref(),
-                    case_insensitive: *case_insensitive,
-                    length_min: None,
-                    length_max: None,
-                    exclude_html_comments: false,
-                    is_check: *is_check,
-                    section: None,
-                    offset: None,
-                    offset_range: None,
-                    section_offset: None,
-                    section_offset_range: None,
-                    arch_clamp,
-                };
-                let merged_not = merge_not_exceptions(not.as_ref(), self.not.as_ref());
-                crate::composite_rules::evaluators::symbol_string::eval_comment(
-                    &params,
-                    merged_not.as_ref(),
-                    ctx,
-                )
-            }
-            Condition::Literal(LiteralQuery {
-                kind,
-                exact,
-                substr,
-                regex,
-                word,
-                value,
-                radix,
-                case_insensitive,
-                exclude_docstrings,
-                is_check,
-                not,
-                platforms: _,
-                section,
-                offset,
-                offset_range,
-                section_offset,
-                section_offset_range,
-            }) => {
-                // Same dispatch as `TraitDefinition::eval_condition`:
-                // kind=number matches numeric AST literals, not strings.
-                if kind.as_deref() == Some("number") {
-                    crate::composite_rules::evaluators::symbol_string::eval_numeric_literal(
-                        *value, *radix, ctx,
-                    )
-                } else {
-                    let params = StringParams {
-                        encoding: None,
-                        exact: exact.as_ref(),
-                        substr: substr.as_ref(),
-                        regex: regex.as_ref(),
-                        word: word.as_ref(),
-                        case_insensitive: *case_insensitive,
-                        length_min: None,
-                        length_max: None,
-                        exclude_html_comments: false,
-                        is_check: *is_check,
-                        section: section.as_ref(),
-                        offset: *offset,
-                        offset_range: *offset_range,
-                        section_offset: *section_offset,
-                        section_offset_range: *section_offset_range,
-                        arch_clamp,
-                    };
-                    let merged_not = merge_not_exceptions(not.as_ref(), self.not.as_ref());
-                    crate::composite_rules::evaluators::symbol_string::eval_string_literal_with_options(
-                        &params,
-                        merged_not.as_ref(),
-                        ctx,
-                        *exclude_docstrings,
-                    )
-                }
-            }
-            Condition::Trait { id } => eval_trait(id, ctx),
-            Condition::TreeSitter(TreeSitterQuery {
-                kind,
-                node,
-                exact,
-                substr,
-                regex,
-                query,
-                case_insensitive,
-                ..
-            }) => timed_eval!(
-                "ast",
-                eval_ast(
-                    kind.as_deref(),
-                    node.as_deref(),
-                    exact.as_deref(),
-                    substr.as_deref(),
-                    regex.as_deref(),
-                    query.as_deref(),
-                    *case_insensitive,
-                    ctx,
-                )
-            ),
-            Condition::Yara {
-                source,
-                namespace,
-                compiled,
-            } => {
-                timed_eval!(
-                    "yara",
-                    eval_yara_inline(source, namespace.as_deref(), compiled.as_ref(), ctx)
-                )
-            }
-            Condition::Syscall {
-                name,
-                number,
-                arch,
-                args,
-            } => {
-                timed_eval!(
-                    "syscall",
-                    eval_syscall(
-                        name.as_deref(),
-                        number.as_deref(),
-                        arch.as_deref(),
-                        args,
-                        ctx
-                    )
-                )
-            }
-            Condition::Metrics(MetricsQuery {
-                field,
-                min,
-                max,
-                min_size,
-                max_size,
-            }) => timed_eval!(
-                "metrics",
-                eval_metrics(field, *min, *max, *min_size, *max_size, ctx)
-            ),
-            Condition::Hex(HexQuery {
-                pattern,
-                not,
-                offset,
-                offset_range,
-                section,
-                section_offset,
-                section_offset_range,
-            }) => {
-                let merged_not = merge_not_exceptions(not.as_ref(), self.not.as_ref());
-                timed_eval!(
-                    "hex",
-                    eval_hex(
-                        pattern,
-                        merged_not.as_ref(),
-                        &ContentLocationParams {
-                            section: section.clone(),
-                            offset: *offset,
-                            offset_range: *offset_range,
-                            section_offset: *section_offset,
-                            section_offset_range: *section_offset_range,
-                            arch_clamp,
-                        },
-                        ctx,
-                        Some(self.id.as_str()),
-                    )
-                )
-            }
-            Condition::Raw(RawQuery {
-                exact,
-                substr,
-                regex,
-                word,
-                case_insensitive,
-                length_min,
-                length_max,
-                is_check,
-                not,
-                section,
-                offset,
-                offset_range,
-                section_offset,
-                section_offset_range,
-            }) => {
-                use super::evaluators::ContentLocationParams;
-                let location = ContentLocationParams {
-                    section: section.clone(),
-                    offset: *offset,
-                    offset_range: *offset_range,
-                    section_offset: *section_offset,
-                    section_offset_range: *section_offset_range,
-                    arch_clamp,
-                };
-                let merged_not = merge_not_exceptions(not.as_ref(), self.not.as_ref());
-                timed_eval!(
-                    "raw",
-                    eval_raw(
-                        exact.as_ref(),
-                        substr.as_ref(),
-                        regex.as_ref(),
-                        word.as_ref(),
-                        *case_insensitive,
-                        (*length_min, *length_max),
-                        *is_check,
-                        merged_not.as_ref(),
-                        &location,
-                        ctx,
-                        Some(self.id.as_str()),
-                    )
-                )
-            }
-            Condition::Section(SectionQuery {
-                exact,
-                substr,
-                regex,
-                word,
-                case_insensitive,
-                length_min,
-                length_max,
-                entropy_min,
-                entropy_max,
-                readable,
-                writable,
-                executable,
-                compare_to,
-                size_ratio_min,
-                size_ratio_max,
-                entropy_ratio_min,
-                entropy_ratio_max,
-            }) => timed_eval!(
-                "section",
-                eval_section(
-                    &SectionParams {
-                        exact: exact.as_ref(),
-                        substr: substr.as_ref(),
-                        regex: regex.as_ref(),
-                        word: word.as_ref(),
-                        case_insensitive: *case_insensitive,
-                        length_min: *length_min,
-                        length_max: *length_max,
-                        entropy_min: *entropy_min,
-                        entropy_max: *entropy_max,
-                        readable: *readable,
-                        writable: *writable,
-                        executable: *executable,
-                        compare_to: compare_to.as_ref(),
-                        size_ratio_min: *size_ratio_min,
-                        size_ratio_max: *size_ratio_max,
-                        entropy_ratio_min: *entropy_ratio_min,
-                        entropy_ratio_max: *entropy_ratio_max,
-                    },
-                    ctx,
-                )
-            ),
-            Condition::Encoded(EncodedQuery {
-                encoding,
-                exact,
-                substr,
-                regex,
-                word,
-                case_insensitive,
-                is_check,
-                not,
-                section,
-                offset,
-                offset_range,
-                section_offset,
-                section_offset_range,
-            }) => {
-                use super::evaluators::ContentLocationParams;
-                let location = ContentLocationParams {
-                    section: section.clone(),
-                    offset: *offset,
-                    offset_range: *offset_range,
-                    section_offset: *section_offset,
-                    section_offset_range: *section_offset_range,
-                    arch_clamp,
-                };
-                timed_eval!(
-                    "encoded",
-                    eval_encoded(
-                        encoding.as_ref(),
-                        exact.as_ref(),
-                        substr.as_ref(),
-                        regex.as_ref(),
-                        word.as_ref(),
-                        *case_insensitive,
-                        &location,
-                        *is_check,
-                        not.as_ref(),
-                        ctx,
-                    )
-                )
-            }
-            Condition::Path(PathQuery {
-                exact,
-                substr,
-                regex,
-                case_insensitive,
-                is_check,
-                basename,
-                dirname,
-            }) => timed_eval!(
-                "path",
-                eval_path(
-                    exact.as_ref(),
-                    substr.as_ref(),
-                    regex.as_ref(),
-                    *case_insensitive,
-                    *is_check,
-                    *basename,
-                    *dirname,
-                    ctx,
-                )
-            ),
-            Condition::Kv(query) => {
-                timed_eval!("value", {
-                    // Trait-level `not:` filters value matches exactly as it
-                    // does every other matcher's. This arm used to hand the
-                    // bare condition to the evaluator, so a `not:` written
-                    // beside `if:` on a value trait was parsed, validated and
-                    // then silently never applied.
-                    let merged;
-                    let condition = match self.not.as_ref() {
-                        Some(trait_level) if !trait_level.is_empty() => {
-                            let mut query = query.clone();
-                            query.not = merge_not_exceptions(query.not.as_ref(), Some(trait_level));
-                            merged = Condition::Kv(query);
-                            &merged
-                        }
-                        _ => condition,
-                    };
-                    if let Some(evidence) = super::evaluators::evaluate_kv(condition, ctx) {
-                        ConditionResult::matched_with(vec![evidence])
-                    } else {
-                        ConditionResult::no_match()
-                    }
-                })
-            }
-        }
-    }
-
-    /// Evaluate symbol condition
-    #[allow(clippy::too_many_arguments)]
-    fn eval_symbol<'a>(
-        &self,
-        exact: Option<&String>,
-        substr: Option<&String>,
-        pattern: Option<&String>,
-        platforms: Option<&Vec<Platform>>,
-        is_check: Option<StringValidator>,
-        kind: Option<SymbolKind>,
-        not: Option<&Vec<NotException>>,
-        alias: Option<&crate::composite_rules::condition::AliasFilter>,
-        ctx: &EvaluationContext<'a>,
-    ) -> ConditionResult {
-        // Check platform constraint
-        // Match if: trait allows All platforms, OR context includes All (no --platforms filter),
-        // OR trait's platforms intersect with context's platforms
-        if let Some(plats) = platforms {
-            let platform_match = super::types::platforms_intersect(plats, ctx.platforms);
-            if !platform_match {
-                return ConditionResult::no_match();
-            }
-        }
-
-        eval_symbol(
-            exact, substr, pattern, None, is_check, kind, not, alias, ctx,
+        eval_condition(
+            ConditionRule {
+                id: &self.id,
+                not: self.not.as_ref(),
+                arch: &self.arch,
+            },
+            condition,
+            ctx,
         )
     }
 

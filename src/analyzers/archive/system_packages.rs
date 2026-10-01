@@ -188,17 +188,26 @@ pub(crate) fn list_7z_entries_from_file(path: &Path) -> Result<Vec<ArchiveEntry>
     // which would block forever. Detach stdin and pass `-y`/empty `-p` so the
     // tool fails fast instead of waiting for interactive input.
     let run = |bin: &str| {
-        std::process::Command::new(bin)
+        let mut command = std::process::Command::new(bin);
+        command
             .arg("l")
             .arg("-y")
             .arg("-p")
             .arg(path)
             .stdin(std::process::Stdio::null())
-            .output()
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        crate::subprocess::output_with_timeout(&mut command, crate::subprocess::LIST_TIMEOUT)
     };
     let output = run("7z")
         .or_else(|_| run("7zz"))
         .context("Failed to run 7z listing")?;
+    let Some(output) = output else {
+        anyhow::bail!(
+            "7z listing killed after {}s",
+            crate::subprocess::LIST_TIMEOUT.as_secs()
+        );
+    };
     if !output.status.success() {
         anyhow::bail!("7z listing failed with status {}", output.status);
     }

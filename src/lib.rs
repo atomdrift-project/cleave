@@ -37,6 +37,7 @@ pub mod memory_tracker;
 pub mod rule_update;
 mod shared_resources;
 pub mod strings;
+mod subprocess;
 pub mod test_rules;
 #[cfg(test)]
 /// Test module for rule filters.
@@ -1950,43 +1951,87 @@ pub(crate) fn report_from_file_analysis(
     path: String,
 ) -> types::AnalysisReport {
     use types::TargetInfo;
+    // Exhaustive on purpose: a new `FileAnalysis` field is a compile error
+    // here until someone decides whether a cache replay restores it.
+    let types::FileAnalysis {
+        file_type,
+        size,
+        sha256,
+        arch,
+        traits,
+        findings,
+        suppressions,
+        context,
+        structure,
+        strings,
+        imports,
+        exports,
+        functions,
+        sections,
+        syscalls,
+        yara_matches,
+        filefacts,
+        analysis_gaps,
+        filefacts_metrics,
+        identity,
+        paths,
+        directories,
+        env_vars,
+        kv,
+        // Placement and derived output, recomputed when the report is folded
+        // back into a file entry.
+        id: _,
+        path: _,
+        parent_id: _,
+        depth: _,
+        rel: _,
+        via: _,
+        role: _,
+        score: _,
+        counts: _,
+        encoding: _,
+        extracted_path: _,
+        formula: _,
+        composite_sources: _,
+        precompact_facts: _,
+    } = fa;
     let target = TargetInfo {
         path,
-        file_type: fa.file_type.clone(),
-        size_bytes: fa.size,
-        sha256: fa.sha256.clone(),
-        architectures: fa.arch.as_ref().map(|a| vec![a.clone()]),
+        file_type,
+        size_bytes: size,
+        sha256,
+        architectures: arch.map(|a| vec![a]),
     };
     let mut report = types::AnalysisReport::new(target);
     // Every caller synthesizes from a file-analysis cache entry, so the report
     // is a replay rather than a fresh pass.
     report.cache_hit = true;
-    report.traits = fa.traits;
-    report.findings = fa.findings;
-    report.suppressions = fa.suppressions;
-    report.context = fa.context;
-    report.structure = fa.structure;
-    report.strings = fa.strings;
-    report.imports = fa.imports;
-    report.exports = fa.exports;
-    report.functions = fa.functions;
-    report.sections = fa.sections;
-    report.syscalls = fa.syscalls;
-    report.yara_matches = fa.yara_matches;
-    report.filefacts = fa.filefacts;
-    report.analysis_gaps = fa.analysis_gaps;
-    report.filefacts_metrics = fa.filefacts_metrics;
-    report.identity = fa.identity;
-    report.paths = fa.paths;
-    report.directories = fa.directories;
-    report.env_vars = fa.env_vars;
+    report.traits = traits;
+    report.findings = findings;
+    report.suppressions = suppressions;
+    report.context = context;
+    report.structure = structure;
+    report.strings = strings;
+    report.imports = imports;
+    report.exports = exports;
+    report.functions = functions;
+    report.sections = sections;
+    report.syscalls = syscalls;
+    report.yara_matches = yara_matches;
+    report.filefacts = filefacts;
+    report.analysis_gaps = analysis_gaps;
+    report.filefacts_metrics = filefacts_metrics;
+    report.identity = identity;
+    report.paths = paths;
+    report.directories = directories;
+    report.env_vars = env_vars;
     // The compact member cache stores kv already flattened (no `values_tree`).
     // Carry it through so `into_file_analysis` restores it verbatim rather than
     // yielding empty kv — the diff reads both `identity` and `kv`, and dropping
     // them made an unchanged cached member read as changed. See
     // `AnalysisReport::cached_member_kv`.
-    if !fa.kv.is_empty() {
-        report.cached_member_kv = Some(fa.kv);
+    if !kv.is_empty() {
+        report.cached_member_kv = Some(kv);
     }
     let actual_path = report.target.path.clone();
     restamp_path_derived_values(&mut report, Path::new(&actual_path));
@@ -3063,10 +3108,11 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     // Rule files are classified as PHP/Python/Kotlin/shell-like source, so they
     // reach this arm as ordinary programs. Mirrors
     // `archive_member_yara_skip_reason`, which does the same for members.
-    let is_yara_rule_source = AsRef::<Path>::as_ref(&path)
-        .extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| e.eq_ignore_ascii_case("yar") || e.eq_ignore_ascii_case("yara"));
+    let is_yara_rule_source = file_type == FileType::Yara
+        || AsRef::<Path>::as_ref(&path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("yar") || e.eq_ignore_ascii_case("yara"));
     if !handled_yara_internally
         && !is_yara_rule_source
         && let Some(engine) = yara_engine

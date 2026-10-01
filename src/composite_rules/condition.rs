@@ -813,8 +813,16 @@ impl NotException {
     pub(crate) fn matches(&self, value: &str) -> bool {
         match self {
             NotException::Shorthand(pattern) => {
-                // Pattern is pre-lowered during precompile(); only lowercase value
-                value.to_lowercase().contains(pattern.as_str())
+                // Case-insensitive substring. `precompile` pre-lowers trait-level
+                // shorthands, but condition- and composite-level ones never pass
+                // through it, and an uppercase pattern can never occur in a
+                // lowered value — so lower it here unless it already is.
+                let value = value.to_lowercase();
+                if pattern.chars().all(|c| c.to_lowercase().eq([c])) {
+                    value.contains(pattern.as_str())
+                } else {
+                    value.contains(&pattern.to_lowercase())
+                }
             }
             NotException::Structured(s) => {
                 if let Some(exact_str) = &s.exact {
@@ -1140,265 +1148,60 @@ impl SyscallArg {
     }
 }
 
+/// Payload of the legacy `type: import` / `export` / `function` conditions: a
+/// `type: symbol` with its `kind` implied by the type name.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct SymbolAliasQuery {
+    #[serde(default)]
+    exact: Option<String>,
+    #[serde(default)]
+    substr: Option<String>,
+    #[serde(default)]
+    regex: Option<String>,
+    #[serde(default)]
+    platforms: Option<Vec<Platform>>,
+    #[serde(rename = "is", default)]
+    is_check: Option<StringValidator>,
+    #[serde(default)]
+    not: Option<Vec<NotException>>,
+}
+
+/// Payload of the legacy `type: basename` condition: a `type: path` scoped to
+/// the file name.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct BasenameQuery {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    exact: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    substr: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    regex: Option<String>,
+    #[serde(default)]
+    case_insensitive: bool,
+    #[serde(rename = "is", default)]
+    is_check: Option<StringValidator>,
+}
+
 /// Internal tagged enum for serializing/deserializing conditions with explicit `type` field
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 #[allow(clippy::large_enum_variant)]
 enum ConditionTagged {
-    Symbol {
-        #[serde(default)]
-        exact: Option<String>,
-        #[serde(default)]
-        substr: Option<String>,
-        #[serde(default)]
-        regex: Option<String>,
-        #[serde(default)]
-        platforms: Option<Vec<Platform>>,
-        /// High-fidelity validator (e.g., is: external_ip)
-        #[serde(rename = "is", default)]
-        is_check: Option<StringValidator>,
-        /// Restrict match to a specific symbol category (imports, exports,
-        /// forwarded exports, internal functions, or call sites).
-        /// When absent, match across imports/exports/functions —
-        /// preserving the pre-`kind` semantic.
-        #[serde(default)]
-        kind: Option<SymbolKind>,
-        /// Per-argument filter (kind=call only). Narrows matches to
-        /// calls whose argument list contains at least one arg matching
-        /// the filter's shape + value constraints. Example: match
-        /// `chmod(_, 0o777)` via `kind: call, name: chmod, arg: {
-        /// kind: number, value: 511, radix: 8 }`.
-        #[serde(default)]
-        arg: Option<ArgFilter>,
-        /// Multi-argument filter (kind=call only). Every filter must be
-        /// satisfied by a **distinct** arg of the call — for matching a
-        /// specific multi-positional shape like `File.rename("a.png",
-        /// "b.exe")` via `args: [{kind: string, regex: '\.png$'}, {kind:
-        /// string, regex: '\.exe$'}]`. Combined (AND) with `arg` if both set.
-        #[serde(default)]
-        args: Option<Vec<ArgFilter>>,
-        /// Import-alias filter (kind=import only). Matches the local alias of
-        /// an aliased import (`import subprocess as sp`). Present → only
-        /// aliased imports match.
-        #[serde(default)]
-        alias: Option<AliasFilter>,
-        /// Exclude individual matches where the symbol name (or surrounding
-        /// trait-level evidence) matches any of these patterns.
-        #[serde(default)]
-        not: Option<Vec<NotException>>,
-    },
-    Import {
-        #[serde(default)]
-        exact: Option<String>,
-        #[serde(default)]
-        substr: Option<String>,
-        #[serde(default)]
-        regex: Option<String>,
-        #[serde(default)]
-        platforms: Option<Vec<Platform>>,
-        #[serde(rename = "is", default)]
-        is_check: Option<StringValidator>,
-        #[serde(default)]
-        not: Option<Vec<NotException>>,
-    },
-    Export {
-        #[serde(default)]
-        exact: Option<String>,
-        #[serde(default)]
-        substr: Option<String>,
-        #[serde(default)]
-        regex: Option<String>,
-        #[serde(default)]
-        platforms: Option<Vec<Platform>>,
-        #[serde(rename = "is", default)]
-        is_check: Option<StringValidator>,
-        #[serde(default)]
-        not: Option<Vec<NotException>>,
-    },
-    Function {
-        #[serde(default)]
-        exact: Option<String>,
-        #[serde(default)]
-        substr: Option<String>,
-        #[serde(default)]
-        regex: Option<String>,
-        #[serde(default)]
-        platforms: Option<Vec<Platform>>,
-        #[serde(rename = "is", default)]
-        is_check: Option<StringValidator>,
-        #[serde(default)]
-        not: Option<Vec<NotException>>,
-    },
-    Text {
-        /// Restrict which text layers may match; see [`TextEncodingScope`].
-        #[serde(default)]
-        encoding: Option<TextEncodingScope>,
-        #[serde(default)]
-        exact: Option<String>,
-        #[serde(default)]
-        substr: Option<String>,
-        #[serde(default)]
-        regex: Option<String>,
-        #[serde(default)]
-        word: Option<String>,
-        #[serde(default)]
-        case_insensitive: bool,
-        /// Byte-length bounds on the regex match span; requires `regex:`.
-        #[serde(default)]
-        length_min: Option<usize>,
-        #[serde(default)]
-        length_max: Option<usize>,
-        /// Ignore HTML and ASP.NET server-side comments in raw source scans.
-        #[serde(default)]
-        exclude_html_comments: bool,
-        #[serde(rename = "is", default)]
-        is_check: Option<StringValidator>,
-        #[serde(default)]
-        not: Option<Vec<NotException>>,
-        #[serde(default)]
-        platforms: Option<Vec<Platform>>,
-        #[serde(default)]
-        section: Option<String>,
-        #[serde(default)]
-        offset: Option<i64>,
-        #[serde(
-            default,
-            deserialize_with = "offset_range_serde::deserialize",
-            serialize_with = "offset_range_serde::serialize"
-        )]
-        offset_range: Option<(i64, Option<i64>)>,
-        #[serde(default)]
-        section_offset: Option<i64>,
-        #[serde(
-            default,
-            deserialize_with = "offset_range_serde::deserialize",
-            serialize_with = "offset_range_serde::serialize"
-        )]
-        section_offset_range: Option<(i64, Option<i64>)>,
-    },
-    /// Match against source-code comment bodies only (the dedicated
-    /// `report.comments` corpus). Lowest false positives for "keyword
-    /// mentioned in a comment" rules — never fires on the same keyword
-    /// in code or a string literal. Replaces tree-sitter
-    /// `kind: comment` queries.
-    Comment {
-        #[serde(default)]
-        exact: Option<String>,
-        #[serde(default)]
-        substr: Option<String>,
-        #[serde(default)]
-        regex: Option<String>,
-        #[serde(default)]
-        word: Option<String>,
-        #[serde(default)]
-        case_insensitive: bool,
-        #[serde(rename = "is", default)]
-        is_check: Option<StringValidator>,
-        #[serde(default)]
-        not: Option<Vec<NotException>>,
-        #[serde(default)]
-        platforms: Option<Vec<Platform>>,
-    },
+    Symbol(SymbolQuery),
+    Import(SymbolAliasQuery),
+    Export(SymbolAliasQuery),
+    Function(SymbolAliasQuery),
+    Text(TextQuery),
+    Comment(CommentQuery),
     #[serde(alias = "string_literal")]
-    Literal {
-        /// Literal kind to match: `string` (default) or `number`.
-        /// Numeric matching is wired through `value` / `radix` fields;
-        /// string matching uses the standard exact / substr / regex /
-        /// word predicates against the literal's text.
-        #[serde(default)]
-        kind: Option<String>,
-        #[serde(default)]
-        exact: Option<String>,
-        #[serde(default)]
-        substr: Option<String>,
-        #[serde(default)]
-        regex: Option<String>,
-        #[serde(default)]
-        word: Option<String>,
-        /// Numeric value (kind=number only). Matches a literal whose
-        /// parsed integer value equals this.
-        #[serde(default)]
-        value: Option<i64>,
-        /// How a numeric literal was written in source: 2, 8, 10, 16.
-        /// When set together with `value`, both must match — lets
-        /// authors distinguish "the source said `0o777`" from "the
-        /// source said `511`" even though they represent the same
-        /// integer.
-        #[serde(default)]
-        radix: Option<u32>,
-        #[serde(default)]
-        case_insensitive: bool,
-        /// Exclude Python docstring literals from source-string matches.
-        /// Defaults to false to preserve existing matching behavior.
-        #[serde(default)]
-        exclude_docstrings: bool,
-        #[serde(rename = "is", default)]
-        is_check: Option<StringValidator>,
-        #[serde(default)]
-        not: Option<Vec<NotException>>,
-        #[serde(default)]
-        platforms: Option<Vec<Platform>>,
-        #[serde(default)]
-        section: Option<String>,
-        #[serde(default)]
-        offset: Option<i64>,
-        #[serde(
-            default,
-            deserialize_with = "offset_range_serde::deserialize",
-            serialize_with = "offset_range_serde::serialize"
-        )]
-        offset_range: Option<(i64, Option<i64>)>,
-        #[serde(default)]
-        section_offset: Option<i64>,
-        #[serde(
-            default,
-            deserialize_with = "offset_range_serde::deserialize",
-            serialize_with = "offset_range_serde::serialize"
-        )]
-        section_offset_range: Option<(i64, Option<i64>)>,
-    },
+    Literal(LiteralQuery),
     Trait {
         id: String,
     },
-    /// Live tree-sitter query — escape hatch for structural patterns
-    /// the precomputed `Symbol::Call/Member/Bind` projections can't
-    /// express. Most rules should reach for `type: call` / `member` /
-    /// `bind` / `literal` instead, which match against the
-    /// already-walked symbol view without re-parsing.
-    ///
-    /// Simple mode: kind + exact/substr/regex (or node + exact/substr/regex for raw node types)
-    /// Advanced mode: query (tree-sitter S-expression)
-    ///
-    /// Renamed from the old `type: ast` spelling for honesty: this
-    /// evaluator spins up tree-sitter and runs queries live.
     #[serde(rename = "tree-sitter")]
-    TreeSitter {
-        /// Abstract node category (e.g., "call", "function", "class")
-        /// Maps to language-specific tree-sitter node types automatically
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        kind: Option<String>,
-        /// Raw tree-sitter node type (escape hatch, bypasses kind mapping)
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        node: Option<String>,
-        /// Full match (entire node text must equal this)
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        exact: Option<String>,
-        /// Substring match (appears anywhere in node text)
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        substr: Option<String>,
-        /// Regex match in node text
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        regex: Option<String>,
-        /// Tree-sitter S-expression query (advanced mode)
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        query: Option<String>,
-        /// Language hint for query validation
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        language: Option<String>,
-        /// Case-insensitive matching (default: false)
-        #[serde(default)]
-        case_insensitive: bool,
-    },
+    TreeSitter(TreeSitterQuery),
     Yara {
         source: String,
     },
@@ -1412,326 +1215,15 @@ enum ConditionTagged {
         #[serde(default)]
         args: Vec<SyscallArg>,
     },
-    Metrics {
-        field: String,
-        #[serde(default)]
-        min: Option<f64>,
-        #[serde(default)]
-        max: Option<f64>,
-        #[serde(default)]
-        min_size: Option<u64>,
-        #[serde(default)]
-        max_size: Option<u64>,
-    },
-    Hex {
-        pattern: String,
-        /// Exclude individual matches where evidence matches any of these patterns
-        #[serde(default)]
-        not: Option<Vec<NotException>>,
-        /// Absolute file offset (negative = from end of file)
-        #[serde(default)]
-        offset: Option<i64>,
-        /// Absolute offset range: [start, end) (negative values resolved from file end, null = open-ended)
-        #[serde(
-            default,
-            deserialize_with = "offset_range_serde::deserialize",
-            serialize_with = "offset_range_serde::serialize"
-        )]
-        offset_range: Option<(i64, Option<i64>)>,
-        /// Section constraint: only match in this section (supports fuzzy names like "text")
-        #[serde(default)]
-        section: Option<String>,
-        /// Section-relative offset: only match at this offset within the section
-        #[serde(default)]
-        section_offset: Option<i64>,
-        /// Section-relative offset range: [start, end) within section bounds
-        #[serde(
-            default,
-            deserialize_with = "offset_range_serde::deserialize",
-            serialize_with = "offset_range_serde::serialize"
-        )]
-        section_offset_range: Option<(i64, Option<i64>)>,
-    },
-
-    /// Search raw file content (for source files or when you need to match
-    /// across string boundaries in binaries). Unlike `type: text` which only
-    /// searches properly extracted/bounded strings, this searches the raw bytes.
-    Raw {
-        /// Full match (entire content must equal this - rarely useful)
-        #[serde(default)]
-        exact: Option<String>,
-        /// Substring match (appears anywhere in content)
-        #[serde(default)]
-        substr: Option<String>,
-        #[serde(default)]
-        regex: Option<String>,
-        #[serde(default)]
-        word: Option<String>,
-        #[serde(default)]
-        case_insensitive: bool,
-        /// Byte-length bounds on the regex match span; requires `regex:`.
-        #[serde(default)]
-        length_min: Option<usize>,
-        #[serde(default)]
-        length_max: Option<usize>,
-        /// Optional high-fidelity validation check
-        #[serde(rename = "is", default)]
-        is_check: Option<StringValidator>,
-        /// Exclude individual matches where evidence matches any of these patterns.
-        /// Only valid when `regex` is set — rejected by validation otherwise.
-        #[serde(default)]
-        not: Option<Vec<NotException>>,
-        /// Section constraint: only match in this section (supports fuzzy names like "text")
-        #[serde(default)]
-        section: Option<String>,
-        /// Absolute file offset: only match at this exact byte position (negative = from end)
-        #[serde(default)]
-        offset: Option<i64>,
-        /// Absolute offset range: [start, end) (negative values resolved from file end)
-        #[serde(
-            default,
-            deserialize_with = "offset_range_serde::deserialize",
-            serialize_with = "offset_range_serde::serialize"
-        )]
-        offset_range: Option<(i64, Option<i64>)>,
-        /// Section-relative offset: only match at this offset within the section
-        #[serde(default)]
-        section_offset: Option<i64>,
-        /// Section-relative offset range: [start, end) within section bounds
-        #[serde(
-            default,
-            deserialize_with = "offset_range_serde::deserialize",
-            serialize_with = "offset_range_serde::serialize"
-        )]
-        section_offset_range: Option<(i64, Option<i64>)>,
-    },
-
-    /// Match section names in binary files (PE, ELF, Mach-O)
-    /// Replaces YARA patterns like: `for any section in pe.sections : (section.name matches /^UPX/)`
-    /// Example: { type: section, regex: "^UPX" }
-    /// Example: { type: section, substr: "upx", case_insensitive: true }
-    Section {
-        /// Full section name match (entire name must equal this)
-        #[serde(skip_serializing_if = "Option::is_none")]
-        exact: Option<String>,
-        /// Substring match (appears anywhere in section name)
-        #[serde(skip_serializing_if = "Option::is_none")]
-        substr: Option<String>,
-        /// Regex pattern to match
-        #[serde(skip_serializing_if = "Option::is_none")]
-        regex: Option<String>,
-        /// Word boundary match (equivalent to regex "\bword\b")
-        #[serde(skip_serializing_if = "Option::is_none")]
-        word: Option<String>,
-        /// Case insensitive matching (default: false)
-        #[serde(default)]
-        case_insensitive: bool,
-        /// Minimum section length in bytes
-        #[serde(skip_serializing_if = "Option::is_none")]
-        length_min: Option<u64>,
-        /// Maximum section length in bytes
-        #[serde(skip_serializing_if = "Option::is_none")]
-        length_max: Option<u64>,
-        /// Minimum section entropy (0.0-8.0)
-        #[serde(skip_serializing_if = "Option::is_none")]
-        entropy_min: Option<f64>,
-        /// Maximum section entropy (0.0-8.0)
-        #[serde(skip_serializing_if = "Option::is_none")]
-        entropy_max: Option<f64>,
-        /// Require section to have read permission (works across PE/ELF/Mach-O)
-        #[serde(skip_serializing_if = "Option::is_none")]
-        readable: Option<bool>,
-        /// Require section to have write permission (works across PE/ELF/Mach-O)
-        #[serde(skip_serializing_if = "Option::is_none")]
-        writable: Option<bool>,
-        /// Require section to have execute permission (works across PE/ELF/Mach-O)
-        #[serde(skip_serializing_if = "Option::is_none")]
-        executable: Option<bool>,
-        /// Reference section (or `"total"` for file size) used as the denominator
-        /// for both `size_ratio_*` and `entropy_ratio_*` checks. Defaults to
-        /// `"total"` when a size ratio is requested and no pattern is given.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        compare_to: Option<String>,
-        /// Minimum ratio of matched-section size to denominator size.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        size_ratio_min: Option<f64>,
-        /// Maximum ratio of matched-section size to denominator size.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        size_ratio_max: Option<f64>,
-        /// Minimum ratio of matched-section entropy to denominator entropy.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        entropy_ratio_min: Option<f64>,
-        /// Maximum ratio of matched-section entropy to denominator entropy.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        entropy_ratio_max: Option<f64>,
-    },
-
-    /// Match patterns in encoded/decoded strings (unified replacement for base64/xor)
-    /// Example: { type: encoded, encoding: base64, regex: "https?://" }
-    /// Example: { type: encoded, encoding: [xor, hex], substr: "eval(" }
-    /// Example: { type: encoded, word: "password" } - searches ALL encoded strings
-    Encoded {
-        /// Optional encoding filter - single, multiple, or omit for all
-        /// Examples: "base64", ["xor", "hex"], "xor+base64" (chain)
-        #[serde(default)]
-        encoding: Option<EncodingSpec>,
-        /// Full match (entire decoded string must equal this)
-        #[serde(default)]
-        exact: Option<String>,
-        /// Substring match (appears anywhere in decoded string)
-        #[serde(default)]
-        substr: Option<String>,
-        /// Regex pattern to match
-        #[serde(default)]
-        regex: Option<String>,
-        /// Word boundary match (equivalent to regex "\bword\b")
-        #[serde(default)]
-        word: Option<String>,
-        /// Case insensitive matching
-        #[serde(default)]
-        case_insensitive: bool,
-        /// Optional high-fidelity validation check
-        #[serde(rename = "is", default)]
-        is_check: Option<StringValidator>,
-        /// Exclude individual matches where evidence matches any of these patterns.
-        /// Only valid when `regex` is set — rejected by validation otherwise.
-        #[serde(default)]
-        not: Option<Vec<NotException>>,
-        /// Section constraint: only match in this section (supports fuzzy names like "text")
-        #[serde(default)]
-        section: Option<String>,
-        /// Absolute file offset: only match at this exact byte position (negative = from end)
-        #[serde(default)]
-        offset: Option<i64>,
-        /// Absolute offset range: [start, end) (negative values resolved from file end)
-        #[serde(
-            default,
-            deserialize_with = "offset_range_serde::deserialize",
-            serialize_with = "offset_range_serde::serialize"
-        )]
-        offset_range: Option<(i64, Option<i64>)>,
-        /// Section-relative offset: only match at this offset within the section
-        #[serde(default)]
-        section_offset: Option<i64>,
-        /// Section-relative offset range: [start, end) within section bounds
-        #[serde(
-            default,
-            deserialize_with = "offset_range_serde::deserialize",
-            serialize_with = "offset_range_serde::serialize"
-        )]
-        section_offset_range: Option<(i64, Option<i64>)>,
-    },
-
-    /// Match the file path (full path by default; `basename`/`dirname` scope it).
-    Path {
-        #[serde(default)]
-        exact: Option<String>,
-        #[serde(default)]
-        substr: Option<String>,
-        #[serde(default)]
-        regex: Option<String>,
-        #[serde(default)]
-        case_insensitive: bool,
-        #[serde(rename = "is", default)]
-        is_check: Option<StringValidator>,
-        #[serde(default)]
-        basename: bool,
-        #[serde(default)]
-        dirname: bool,
-    },
-
-    /// Match the basename (final path component, not the full path)
-    /// Example: { type: basename, exact: "__init__.py" }
-    /// Example: { type: basename, regex: "^setup\\." }
-    Basename {
-        /// Full basename match (entire basename must equal this)
-        #[serde(skip_serializing_if = "Option::is_none")]
-        exact: Option<String>,
-        /// Substring match (appears anywhere in basename)
-        #[serde(skip_serializing_if = "Option::is_none")]
-        substr: Option<String>,
-        /// Regex pattern to match
-        #[serde(skip_serializing_if = "Option::is_none")]
-        regex: Option<String>,
-        /// Case insensitive matching (default: false)
-        #[serde(default)]
-        case_insensitive: bool,
-        /// Optional high-fidelity validation check
-        #[serde(rename = "is", default)]
-        is_check: Option<StringValidator>,
-    },
-
-    /// Query structural values using path expressions.
-    /// Supports dot notation for nested access and [*] for array iteration.
-    /// Example: { type: value, path: "permissions", is: "debugger" }
-    /// Example: { type: value, path: "scripts.postinstall", substr: "curl" }
-    /// Example: { type: value, path: "content_scripts[*].matches", is: "<all_urls>" }
-    /// Example: { type: value, path: "maintainers", length_min: 1, length_max: 1 }
+    Metrics(MetricsQuery),
+    Hex(HexQuery),
+    Raw(RawQuery),
+    Section(SectionQuery),
+    Encoded(EncodedQuery),
+    Path(PathQuery),
+    Basename(BasenameQuery),
     #[serde(rename = "value")]
-    Kv {
-        /// Path to navigate using dot notation, [n] for indices, [*] for wildcards
-        path: String,
-        /// Value/element equals exactly.
-        ///
-        /// `is` used to be an alias for this. It now carries the validator,
-        /// matching every other condition type -- no rule in the corpus used
-        /// the alias, and a stale `is: <literal>` fails to parse as a
-        /// `StringValidator`, so the change surfaces as a load error rather
-        /// than as a silently different match.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        exact: Option<String>,
-        /// Value/element contains substring
-        #[serde(skip_serializing_if = "Option::is_none")]
-        substr: Option<String>,
-        /// Value/element matches regex pattern
-        #[serde(skip_serializing_if = "Option::is_none")]
-        regex: Option<String>,
-        /// Right-hand-side value path for cross-fact equality comparison.
-        /// When set, the value at `path` must equal the value at `eq`.
-        /// Comparison is always case-insensitive and whitespace-trimmed —
-        /// if you need strict matching, use `exact:` against a literal.
-        /// Path syntax accepts an optional `<filename>::` prefix to
-        /// reference a sibling file within the same archive scope.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        eq: Option<String>,
-        /// Right-hand-side value path for cross-fact inequality comparison.
-        /// Mirrors `eq` with reversed sense; same normalization applies.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        ne: Option<String>,
-        /// Quantifier for `eq`/`ne` when a side resolves to multiple values:
-        /// `any` (default) or `all`. Disambiguates `ne: arr[*]`.
-        #[serde(
-            rename = "match",
-            default,
-            skip_serializing_if = "ArrayQuantifier::is_default"
-        )]
-        match_mode: ArrayQuantifier,
-        /// Case insensitive matching (default: false)
-        #[serde(default)]
-        case_insensitive: bool,
-        /// Explicit existence check (true = must exist, false = must not exist)
-        #[serde(skip_serializing_if = "Option::is_none")]
-        exists: Option<bool>,
-        /// Values to exclude after a match, exactly as for the text
-        /// conditions. Without this a `not:` on a value matcher parsed
-        /// cleanly and was then dropped, so the exception silently did
-        /// nothing.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        not: Option<Vec<NotException>>,
-        /// Minimum len() of the value: string bytes, array elements, or
-        /// object keys. `size_min` is the deprecated spelling.
-        #[serde(alias = "size_min", skip_serializing_if = "Option::is_none")]
-        length_min: Option<usize>,
-        /// Maximum len() of the value (see `length_min`). `size_max` is the
-        /// deprecated spelling.
-        #[serde(alias = "size_max", skip_serializing_if = "Option::is_none")]
-        length_max: Option<usize>,
-        /// Optional high-fidelity validation check applied to the resolved
-        /// value. Same `is:` spelling and same validators as the text
-        /// conditions.
-        #[serde(rename = "is", default)]
-        is_check: Option<StringValidator>,
-    },
+    Kv(KvQuery),
 }
 
 impl From<ConditionDeser> for Condition {
@@ -1739,199 +1231,37 @@ impl From<ConditionDeser> for Condition {
         let mut condition = match deser {
             ConditionDeser::TraitShorthand(inner) => Condition::Trait { id: inner.id },
             ConditionDeser::Tagged(tagged) => match *tagged {
-                ConditionTagged::Symbol {
+                ConditionTagged::Symbol(query) => Condition::Symbol(query),
+                ConditionTagged::Text(query) => Condition::Text(query),
+                ConditionTagged::Comment(query) => Condition::Comment(query),
+                ConditionTagged::Literal(query) => Condition::Literal(query),
+                ConditionTagged::TreeSitter(query) => Condition::TreeSitter(query),
+                ConditionTagged::Metrics(query) => Condition::Metrics(query),
+                ConditionTagged::Hex(query) => Condition::Hex(query),
+                ConditionTagged::Raw(query) => Condition::Raw(query),
+                ConditionTagged::Section(query) => Condition::Section(query),
+                ConditionTagged::Encoded(query) => Condition::Encoded(query),
+                ConditionTagged::Path(query) => Condition::Path(query),
+                ConditionTagged::Kv(query) => Condition::Kv(query),
+                ConditionTagged::Import(query) => query.into_symbol(SymbolKind::Import),
+                ConditionTagged::Export(query) => query.into_symbol(SymbolKind::Export),
+                ConditionTagged::Function(query) => query.into_symbol(SymbolKind::Function),
+                ConditionTagged::Basename(BasenameQuery {
                     exact,
                     substr,
                     regex,
-                    platforms,
-                    is_check,
-                    kind,
-                    arg,
-                    args,
-                    alias,
-                    not,
-                } => Condition::Symbol(SymbolQuery {
-                    exact,
-                    substr,
-                    regex,
-                    platforms,
-                    is_check,
-                    kind,
-                    arg,
-                    args,
-                    alias,
-                    not,
-                }),
-                ConditionTagged::Import {
-                    exact,
-                    substr,
-                    regex,
-                    platforms,
-                    is_check,
-                    not,
-                } => Condition::Symbol(SymbolQuery {
-                    exact,
-                    substr,
-                    regex,
-                    platforms,
-                    is_check,
-                    kind: Some(SymbolKind::Import),
-                    arg: None,
-                    args: None,
-                    alias: None,
-                    not,
-                }),
-                ConditionTagged::Export {
-                    exact,
-                    substr,
-                    regex,
-                    platforms,
-                    is_check,
-                    not,
-                } => Condition::Symbol(SymbolQuery {
-                    exact,
-                    substr,
-                    regex,
-                    platforms,
-                    is_check,
-                    kind: Some(SymbolKind::Export),
-                    arg: None,
-                    args: None,
-                    alias: None,
-                    not,
-                }),
-                ConditionTagged::Function {
-                    exact,
-                    substr,
-                    regex,
-                    platforms,
-                    is_check,
-                    not,
-                } => Condition::Symbol(SymbolQuery {
-                    exact,
-                    substr,
-                    regex,
-                    platforms,
-                    is_check,
-                    kind: Some(SymbolKind::Function),
-                    arg: None,
-                    args: None,
-                    alias: None,
-                    not,
-                }),
-                ConditionTagged::Text {
-                    encoding,
-                    exact,
-                    substr,
-                    regex,
-                    word,
-                    case_insensitive,
-                    length_min,
-                    length_max,
-                    exclude_html_comments,
-                    is_check,
-                    not,
-                    platforms,
-                    section,
-                    offset,
-                    offset_range,
-                    section_offset,
-                    section_offset_range,
-                } => Condition::Text(TextQuery {
-                    encoding,
-                    exact,
-                    substr,
-                    regex,
-                    word,
-                    case_insensitive,
-                    length_min,
-                    length_max,
-                    exclude_html_comments,
-                    is_check,
-                    not,
-                    platforms,
-                    section,
-                    offset,
-                    offset_range,
-                    section_offset,
-                    section_offset_range,
-                }),
-                ConditionTagged::Comment {
-                    exact,
-                    substr,
-                    regex,
-                    word,
                     case_insensitive,
                     is_check,
-                    not,
-                    platforms,
-                } => Condition::Comment(CommentQuery {
+                }) => Condition::Path(PathQuery {
                     exact,
                     substr,
                     regex,
-                    word,
                     case_insensitive,
                     is_check,
-                    not,
-                    platforms,
-                }),
-                ConditionTagged::Literal {
-                    kind,
-                    exact,
-                    substr,
-                    regex,
-                    word,
-                    value,
-                    radix,
-                    case_insensitive,
-                    exclude_docstrings,
-                    is_check,
-                    not,
-                    platforms,
-                    section,
-                    offset,
-                    offset_range,
-                    section_offset,
-                    section_offset_range,
-                } => Condition::Literal(LiteralQuery {
-                    kind,
-                    exact,
-                    substr,
-                    regex,
-                    word,
-                    value,
-                    radix,
-                    case_insensitive,
-                    exclude_docstrings,
-                    is_check,
-                    not,
-                    platforms,
-                    section,
-                    offset,
-                    offset_range,
-                    section_offset,
-                    section_offset_range,
+                    basename: true,
+                    dirname: false,
                 }),
                 ConditionTagged::Trait { id } => Condition::Trait { id },
-                ConditionTagged::TreeSitter {
-                    kind,
-                    node,
-                    exact,
-                    substr,
-                    regex,
-                    query,
-                    language,
-                    case_insensitive,
-                } => Condition::TreeSitter(TreeSitterQuery {
-                    kind,
-                    node,
-                    exact,
-                    substr,
-                    regex,
-                    query,
-                    language,
-                    case_insensitive,
-                }),
                 ConditionTagged::Yara { source } => Condition::Yara {
                     source,
                     compiled: None,
@@ -1948,195 +1278,6 @@ impl From<ConditionDeser> for Condition {
                     arch,
                     args,
                 },
-                ConditionTagged::Metrics {
-                    field,
-                    min,
-                    max,
-                    min_size,
-                    max_size,
-                } => Condition::Metrics(MetricsQuery {
-                    field,
-                    min,
-                    max,
-                    min_size,
-                    max_size,
-                }),
-                ConditionTagged::Hex {
-                    pattern,
-                    not,
-                    offset,
-                    offset_range,
-                    section,
-                    section_offset,
-                    section_offset_range,
-                } => Condition::Hex(HexQuery {
-                    pattern,
-                    not,
-                    offset,
-                    offset_range,
-                    section,
-                    section_offset,
-                    section_offset_range,
-                }),
-                ConditionTagged::Raw {
-                    exact,
-                    substr,
-                    regex,
-                    word,
-                    case_insensitive,
-                    length_min,
-                    length_max,
-                    is_check,
-                    not,
-                    section,
-                    offset,
-                    offset_range,
-                    section_offset,
-                    section_offset_range,
-                } => Condition::Raw(RawQuery {
-                    exact,
-                    substr,
-                    regex,
-                    word,
-                    case_insensitive,
-                    length_min,
-                    length_max,
-                    is_check,
-                    not,
-                    section,
-                    offset,
-                    offset_range,
-                    section_offset,
-                    section_offset_range,
-                }),
-                ConditionTagged::Section {
-                    exact,
-                    substr,
-                    regex,
-                    word,
-                    case_insensitive,
-                    length_min,
-                    length_max,
-                    entropy_min,
-                    entropy_max,
-                    readable,
-                    writable,
-                    executable,
-                    compare_to,
-                    size_ratio_min,
-                    size_ratio_max,
-                    entropy_ratio_min,
-                    entropy_ratio_max,
-                } => Condition::Section(SectionQuery {
-                    exact,
-                    substr,
-                    regex,
-                    word,
-                    case_insensitive,
-                    length_min,
-                    length_max,
-                    entropy_min,
-                    entropy_max,
-                    readable,
-                    writable,
-                    executable,
-                    compare_to,
-                    size_ratio_min,
-                    size_ratio_max,
-                    entropy_ratio_min,
-                    entropy_ratio_max,
-                }),
-                ConditionTagged::Encoded {
-                    encoding,
-                    exact,
-                    substr,
-                    regex,
-                    word,
-                    case_insensitive,
-                    is_check,
-                    not,
-                    section,
-                    offset,
-                    offset_range,
-                    section_offset,
-                    section_offset_range,
-                } => Condition::Encoded(EncodedQuery {
-                    encoding,
-                    exact,
-                    substr,
-                    regex,
-                    word,
-                    case_insensitive,
-                    is_check,
-                    not,
-                    section,
-                    offset,
-                    offset_range,
-                    section_offset,
-                    section_offset_range,
-                }),
-                // `type: basename` is sugar for a filename-scoped path matcher.
-                ConditionTagged::Basename {
-                    exact,
-                    substr,
-                    regex,
-                    case_insensitive,
-                    is_check,
-                } => Condition::Path(PathQuery {
-                    exact,
-                    substr,
-                    regex,
-                    case_insensitive,
-                    is_check,
-                    basename: true,
-                    dirname: false,
-                }),
-                ConditionTagged::Path {
-                    exact,
-                    substr,
-                    regex,
-                    case_insensitive,
-                    is_check,
-                    basename,
-                    dirname,
-                } => Condition::Path(PathQuery {
-                    exact,
-                    substr,
-                    regex,
-                    case_insensitive,
-                    is_check,
-                    basename,
-                    dirname,
-                }),
-                ConditionTagged::Kv {
-                    path,
-                    exact,
-                    substr,
-                    regex,
-                    eq,
-                    ne,
-                    match_mode,
-                    case_insensitive,
-                    exists,
-                    not,
-                    length_min,
-                    length_max,
-                    is_check,
-                } => Condition::Kv(KvQuery {
-                    path,
-                    exact,
-                    substr,
-                    regex,
-                    eq,
-                    ne,
-                    match_mode,
-                    case_insensitive,
-                    exists,
-                    not,
-                    length_min,
-                    length_max,
-                    is_check,
-                }),
             },
         };
         condition.normalize_legacy_call_targets();
@@ -2144,145 +1285,47 @@ impl From<ConditionDeser> for Condition {
     }
 }
 
+impl SymbolAliasQuery {
+    fn into_symbol(self, kind: SymbolKind) -> Condition {
+        let Self {
+            exact,
+            substr,
+            regex,
+            platforms,
+            is_check,
+            not,
+        } = self;
+        Condition::Symbol(SymbolQuery {
+            exact,
+            substr,
+            regex,
+            platforms,
+            is_check,
+            kind: Some(kind),
+            arg: None,
+            args: None,
+            alias: None,
+            not,
+        })
+    }
+}
+
 impl From<Condition> for ConditionTagged {
     fn from(cond: Condition) -> Self {
         match cond {
-            Condition::Symbol(SymbolQuery {
-                exact,
-                substr,
-                regex,
-                platforms,
-                is_check,
-                kind,
-                arg,
-                args,
-                alias,
-                not,
-            }) => ConditionTagged::Symbol {
-                exact,
-                substr,
-                regex,
-                platforms,
-                is_check,
-                kind,
-                arg,
-                args,
-                alias,
-                not,
-            },
-            Condition::Text(TextQuery {
-                encoding,
-                exact,
-                substr,
-                regex,
-                word,
-                case_insensitive,
-                length_min,
-                length_max,
-                exclude_html_comments,
-                is_check,
-                not,
-                platforms,
-                section,
-                offset,
-                offset_range,
-                section_offset,
-                section_offset_range,
-            }) => ConditionTagged::Text {
-                encoding,
-                exact,
-                substr,
-                regex,
-                word,
-                case_insensitive,
-                length_min,
-                length_max,
-                exclude_html_comments,
-                is_check,
-                not,
-                platforms,
-                section,
-                offset,
-                offset_range,
-                section_offset,
-                section_offset_range,
-            },
-            Condition::Comment(CommentQuery {
-                exact,
-                substr,
-                regex,
-                word,
-                case_insensitive,
-                is_check,
-                not,
-                platforms,
-            }) => ConditionTagged::Comment {
-                exact,
-                substr,
-                regex,
-                word,
-                case_insensitive,
-                is_check,
-                not,
-                platforms,
-            },
-            Condition::Literal(LiteralQuery {
-                kind,
-                exact,
-                substr,
-                regex,
-                word,
-                value,
-                radix,
-                case_insensitive,
-                exclude_docstrings,
-                is_check,
-                not,
-                platforms,
-                section,
-                offset,
-                offset_range,
-                section_offset,
-                section_offset_range,
-            }) => ConditionTagged::Literal {
-                kind,
-                exact,
-                substr,
-                regex,
-                word,
-                value,
-                radix,
-                case_insensitive,
-                exclude_docstrings,
-                is_check,
-                not,
-                platforms,
-                section,
-                offset,
-                offset_range,
-                section_offset,
-                section_offset_range,
-            },
+            Condition::Symbol(query) => ConditionTagged::Symbol(query),
+            Condition::Text(query) => ConditionTagged::Text(query),
+            Condition::Comment(query) => ConditionTagged::Comment(query),
+            Condition::Literal(query) => ConditionTagged::Literal(query),
+            Condition::TreeSitter(query) => ConditionTagged::TreeSitter(query),
+            Condition::Metrics(query) => ConditionTagged::Metrics(query),
+            Condition::Hex(query) => ConditionTagged::Hex(query),
+            Condition::Raw(query) => ConditionTagged::Raw(query),
+            Condition::Section(query) => ConditionTagged::Section(query),
+            Condition::Encoded(query) => ConditionTagged::Encoded(query),
+            Condition::Path(query) => ConditionTagged::Path(query),
+            Condition::Kv(query) => ConditionTagged::Kv(query),
             Condition::Trait { id } => ConditionTagged::Trait { id },
-            Condition::TreeSitter(TreeSitterQuery {
-                kind,
-                node,
-                exact,
-                substr,
-                regex,
-                query,
-                language,
-                case_insensitive,
-            }) => ConditionTagged::TreeSitter {
-                kind,
-                node,
-                exact,
-                substr,
-                regex,
-                query,
-                language,
-                case_insensitive,
-            },
             Condition::Yara {
                 source,
                 compiled: _,
@@ -2298,179 +1341,6 @@ impl From<Condition> for ConditionTagged {
                 number,
                 arch,
                 args,
-            },
-            Condition::Metrics(MetricsQuery {
-                field,
-                min,
-                max,
-                min_size,
-                max_size,
-            }) => ConditionTagged::Metrics {
-                field,
-                min,
-                max,
-                min_size,
-                max_size,
-            },
-            Condition::Hex(HexQuery {
-                pattern,
-                not,
-                offset,
-                offset_range,
-                section,
-                section_offset,
-                section_offset_range,
-            }) => ConditionTagged::Hex {
-                pattern,
-                not,
-                offset,
-                offset_range,
-                section,
-                section_offset,
-                section_offset_range,
-            },
-            Condition::Raw(RawQuery {
-                exact,
-                substr,
-                regex,
-                word,
-                case_insensitive,
-                length_min,
-                length_max,
-                is_check,
-                not,
-                section,
-                offset,
-                offset_range,
-                section_offset,
-                section_offset_range,
-            }) => ConditionTagged::Raw {
-                exact,
-                substr,
-                regex,
-                word,
-                case_insensitive,
-                length_min,
-                length_max,
-                is_check,
-                not,
-                section,
-                offset,
-                offset_range,
-                section_offset,
-                section_offset_range,
-            },
-            Condition::Section(SectionQuery {
-                exact,
-                substr,
-                regex,
-                word,
-                case_insensitive,
-                length_min,
-                length_max,
-                entropy_min,
-                entropy_max,
-                readable,
-                writable,
-                executable,
-                compare_to,
-                size_ratio_min,
-                size_ratio_max,
-                entropy_ratio_min,
-                entropy_ratio_max,
-            }) => ConditionTagged::Section {
-                exact,
-                substr,
-                regex,
-                word,
-                case_insensitive,
-                length_min,
-                length_max,
-                entropy_min,
-                entropy_max,
-                readable,
-                writable,
-                executable,
-                compare_to,
-                size_ratio_min,
-                size_ratio_max,
-                entropy_ratio_min,
-                entropy_ratio_max,
-            },
-            Condition::Encoded(EncodedQuery {
-                encoding,
-                exact,
-                substr,
-                regex,
-                word,
-                case_insensitive,
-                is_check,
-                not,
-                section,
-                offset,
-                offset_range,
-                section_offset,
-                section_offset_range,
-            }) => ConditionTagged::Encoded {
-                encoding,
-                exact,
-                substr,
-                regex,
-                word,
-                case_insensitive,
-                is_check,
-                not,
-                section,
-                offset,
-                offset_range,
-                section_offset,
-                section_offset_range,
-            },
-            Condition::Path(PathQuery {
-                exact,
-                substr,
-                regex,
-                case_insensitive,
-                is_check,
-                basename,
-                dirname,
-            }) => ConditionTagged::Path {
-                exact,
-                substr,
-                regex,
-                case_insensitive,
-                is_check,
-                basename,
-                dirname,
-            },
-            Condition::Kv(KvQuery {
-                path,
-                exact,
-                substr,
-                regex,
-                eq,
-                ne,
-                match_mode,
-                case_insensitive,
-                exists,
-                not,
-                length_min,
-                length_max,
-                is_check,
-            }) => ConditionTagged::Kv {
-                path,
-                exact,
-                substr,
-                regex,
-                eq,
-                ne,
-                match_mode,
-                case_insensitive,
-                exists,
-                not,
-                length_min,
-                length_max,
-                is_check,
             },
         }
     }
@@ -2632,36 +1502,53 @@ pub(crate) enum Condition {
 /// field touches only the sites that set it. The wire format lives in
 /// `ConditionTagged::Kv`; this is the internal representation, so it carries no
 /// serde attributes.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct KvQuery {
     /// Path to navigate using dot notation, `[n]` for indices, `[*]` for
     /// wildcards. Accepts an optional `<filename>::` prefix to reference a
     /// sibling file's values within the same archive scope.
     pub path: String,
     /// Value/element equals exactly.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub exact: Option<String>,
     /// Value/element contains substring.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub substr: Option<String>,
     /// Value/element matches regex pattern.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub regex: Option<String>,
     /// Right-hand-side value path for cross-fact equality (case-insensitive,
     /// whitespace-trimmed). Accepts a `<filename>::` sibling prefix.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub eq: Option<String>,
     /// Right-hand-side value path for cross-fact inequality.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub ne: Option<String>,
     /// Quantifier when `eq`/`ne` resolves to multiple values (`any`/`all`).
+    #[serde(
+        rename = "match",
+        default,
+        skip_serializing_if = "ArrayQuantifier::is_default"
+    )]
     pub match_mode: ArrayQuantifier,
     /// Case insensitive matching (default: false).
+    #[serde(default)]
     pub case_insensitive: bool,
     /// Explicit existence check (true = must exist, false = must not exist).
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub exists: Option<bool>,
     /// Values to exclude after a match, as for the text conditions.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub not: Option<Vec<NotException>>,
     /// Minimum len() of the value: string bytes, array elements, or object keys.
+    #[serde(alias = "size_min", skip_serializing_if = "Option::is_none")]
     pub length_min: Option<usize>,
     /// Maximum len() of the value (see `length_min`).
+    #[serde(alias = "size_max", skip_serializing_if = "Option::is_none")]
     pub length_max: Option<usize>,
     /// Optional high-fidelity validation check applied to the resolved value.
+    #[serde(rename = "is", default)]
     pub is_check: Option<StringValidator>,
 }
 
@@ -2767,14 +1654,21 @@ impl Condition {
 }
 
 /// Payload for `type: text` — byte-scan over extracted strings / raw source text.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct TextQuery {
     /// Restrict which text layers may match; see [`TextEncodingScope`].
+    #[serde(default)]
     pub encoding: Option<TextEncodingScope>,
+    #[serde(default)]
     pub exact: Option<String>,
+    #[serde(default)]
     pub substr: Option<String>,
+    #[serde(default)]
     pub regex: Option<String>,
+    #[serde(default)]
     pub word: Option<String>,
+    #[serde(default)]
     pub case_insensitive: bool,
     /// Byte-length bounds on the regex match span; requires `regex:`.
     /// The cheap way to say "a run of at least N": pair a greedy loop with
@@ -2782,169 +1676,329 @@ pub(crate) struct TextQuery {
     /// unrolls into one NFA state per rep. Keep a small counted floor for
     /// selectivity (`[A-Za-z0-9]{64,}` + `length_min: 4000`) so the scan
     /// isn't spent visiting every short run on match-dense content.
+    #[serde(default)]
     pub length_min: Option<usize>,
+    #[serde(default)]
     pub length_max: Option<usize>,
     /// Ignore HTML (`<!-- -->`) and ASP.NET (`<%-- --%>`) comments when
     /// scanning raw source text. Encoded strings are not markup.
+    #[serde(default)]
     pub exclude_html_comments: bool,
+    #[serde(rename = "is", default)]
     pub is_check: Option<StringValidator>,
+    #[serde(default)]
     pub not: Option<Vec<NotException>>,
+    #[serde(default)]
     pub platforms: Option<Vec<Platform>>,
+    #[serde(default)]
     pub section: Option<String>,
+    #[serde(default)]
     pub offset: Option<i64>,
+    #[serde(
+        default,
+        deserialize_with = "offset_range_serde::deserialize",
+        serialize_with = "offset_range_serde::serialize"
+    )]
     pub offset_range: Option<(i64, Option<i64>)>,
+    #[serde(default)]
     pub section_offset: Option<i64>,
+    #[serde(
+        default,
+        deserialize_with = "offset_range_serde::deserialize",
+        serialize_with = "offset_range_serde::serialize"
+    )]
     pub section_offset_range: Option<(i64, Option<i64>)>,
 }
 
 /// Payload for `type: raw` — substring/regex over the full raw file bytes.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct RawQuery {
+    #[serde(default)]
     pub exact: Option<String>,
+    #[serde(default)]
     pub substr: Option<String>,
+    #[serde(default)]
     pub regex: Option<String>,
+    #[serde(default)]
     pub word: Option<String>,
+    #[serde(default)]
     pub case_insensitive: bool,
     /// Byte-length bounds on the regex match span; requires `regex:` (see
     /// [`TextQuery::length_min`]).
+    #[serde(default)]
     pub length_min: Option<usize>,
+    #[serde(default)]
     pub length_max: Option<usize>,
+    #[serde(rename = "is", default)]
     pub is_check: Option<StringValidator>,
+    #[serde(default)]
     pub not: Option<Vec<NotException>>,
+    #[serde(default)]
     pub section: Option<String>,
+    #[serde(default)]
     pub offset: Option<i64>,
+    #[serde(
+        default,
+        deserialize_with = "offset_range_serde::deserialize",
+        serialize_with = "offset_range_serde::serialize"
+    )]
     pub offset_range: Option<(i64, Option<i64>)>,
+    #[serde(default)]
     pub section_offset: Option<i64>,
+    #[serde(
+        default,
+        deserialize_with = "offset_range_serde::deserialize",
+        serialize_with = "offset_range_serde::serialize"
+    )]
     pub section_offset_range: Option<(i64, Option<i64>)>,
 }
 
 /// Payload for `type: encoded` — matches across decoded-string layers.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct EncodedQuery {
+    #[serde(default)]
     pub encoding: Option<EncodingSpec>,
+    #[serde(default)]
     pub exact: Option<String>,
+    #[serde(default)]
     pub substr: Option<String>,
+    #[serde(default)]
     pub regex: Option<String>,
+    #[serde(default)]
     pub word: Option<String>,
+    #[serde(default)]
     pub case_insensitive: bool,
+    #[serde(rename = "is", default)]
     pub is_check: Option<StringValidator>,
+    #[serde(default)]
     pub not: Option<Vec<NotException>>,
+    #[serde(default)]
     pub section: Option<String>,
+    #[serde(default)]
     pub offset: Option<i64>,
+    #[serde(
+        default,
+        deserialize_with = "offset_range_serde::deserialize",
+        serialize_with = "offset_range_serde::serialize"
+    )]
     pub offset_range: Option<(i64, Option<i64>)>,
+    #[serde(default)]
     pub section_offset: Option<i64>,
+    #[serde(
+        default,
+        deserialize_with = "offset_range_serde::deserialize",
+        serialize_with = "offset_range_serde::serialize"
+    )]
     pub section_offset_range: Option<(i64, Option<i64>)>,
 }
 
 /// Payload for `type: section` — binary section name/size/entropy/permission match.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct SectionQuery {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub exact: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub substr: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub regex: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub word: Option<String>,
+    #[serde(default)]
     pub case_insensitive: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub length_min: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub length_max: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub entropy_min: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub entropy_max: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub readable: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub writable: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub executable: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub compare_to: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub size_ratio_min: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub size_ratio_max: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub entropy_ratio_min: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub entropy_ratio_max: Option<f64>,
 }
 
 /// Payload for `type: symbol` — imports/exports/functions/calls.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct SymbolQuery {
+    #[serde(default)]
     pub exact: Option<String>,
+    #[serde(default)]
     pub substr: Option<String>,
+    #[serde(default)]
     pub regex: Option<String>,
+    #[serde(default)]
     pub platforms: Option<Vec<Platform>>,
+    #[serde(rename = "is", default)]
     pub is_check: Option<StringValidator>,
+    #[serde(default)]
     pub kind: Option<SymbolKind>,
+    #[serde(default)]
     pub arg: Option<ArgFilter>,
+    #[serde(default)]
     pub args: Option<Vec<ArgFilter>>,
+    #[serde(default)]
     pub alias: Option<AliasFilter>,
+    #[serde(default)]
     pub not: Option<Vec<NotException>>,
 }
 
 /// Payload for `type: comment` — source comment-body matches.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct CommentQuery {
+    #[serde(default)]
     pub exact: Option<String>,
+    #[serde(default)]
     pub substr: Option<String>,
+    #[serde(default)]
     pub regex: Option<String>,
+    #[serde(default)]
     pub word: Option<String>,
+    #[serde(default)]
     pub case_insensitive: bool,
+    #[serde(rename = "is", default)]
     pub is_check: Option<StringValidator>,
+    #[serde(default)]
     pub not: Option<Vec<NotException>>,
+    #[serde(default)]
     pub platforms: Option<Vec<Platform>>,
 }
 
 /// Payload for `type: literal` — parser-extracted string/number literals.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct LiteralQuery {
+    #[serde(default)]
     pub kind: Option<String>,
+    #[serde(default)]
     pub exact: Option<String>,
+    #[serde(default)]
     pub substr: Option<String>,
+    #[serde(default)]
     pub regex: Option<String>,
+    #[serde(default)]
     pub word: Option<String>,
+    #[serde(default)]
     pub value: Option<i64>,
+    #[serde(default)]
     pub radix: Option<u32>,
+    #[serde(default)]
     pub case_insensitive: bool,
     /// Skip Python module/class/function docstrings while matching source
     /// string literals. Useful for capabilities where a documented URL or
     /// command is not evidence that the program uses it.
+    #[serde(default)]
     pub exclude_docstrings: bool,
+    #[serde(rename = "is", default)]
     pub is_check: Option<StringValidator>,
+    #[serde(default)]
     pub not: Option<Vec<NotException>>,
+    #[serde(default)]
     pub platforms: Option<Vec<Platform>>,
+    #[serde(default)]
     pub section: Option<String>,
+    #[serde(default)]
     pub offset: Option<i64>,
+    #[serde(
+        default,
+        deserialize_with = "offset_range_serde::deserialize",
+        serialize_with = "offset_range_serde::serialize"
+    )]
     pub offset_range: Option<(i64, Option<i64>)>,
+    #[serde(default)]
     pub section_offset: Option<i64>,
+    #[serde(
+        default,
+        deserialize_with = "offset_range_serde::deserialize",
+        serialize_with = "offset_range_serde::serialize"
+    )]
     pub section_offset_range: Option<(i64, Option<i64>)>,
 }
 
 /// Payload for `type: tree-sitter` — live tree-sitter query escape hatch.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct TreeSitterQuery {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub node: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exact: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub substr: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub regex: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub query: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
+    #[serde(default)]
     pub case_insensitive: bool,
 }
 
 /// Payload for `type: hex` — byte-pattern match with wildcards/gaps.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct HexQuery {
     pub pattern: String,
+    #[serde(default)]
     pub not: Option<Vec<NotException>>,
+    #[serde(default)]
     pub offset: Option<i64>,
+    #[serde(
+        default,
+        deserialize_with = "offset_range_serde::deserialize",
+        serialize_with = "offset_range_serde::serialize"
+    )]
     pub offset_range: Option<(i64, Option<i64>)>,
+    #[serde(default)]
     pub section: Option<String>,
+    #[serde(default)]
     pub section_offset: Option<i64>,
+    #[serde(
+        default,
+        deserialize_with = "offset_range_serde::deserialize",
+        serialize_with = "offset_range_serde::serialize"
+    )]
     pub section_offset_range: Option<(i64, Option<i64>)>,
 }
 
 /// Payload for `type: path` — file path / basename / dirname match.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct PathQuery {
+    #[serde(default)]
     pub exact: Option<String>,
+    #[serde(default)]
     pub substr: Option<String>,
+    #[serde(default)]
     pub regex: Option<String>,
+    #[serde(default)]
     pub case_insensitive: bool,
+    #[serde(rename = "is", default)]
     pub is_check: Option<StringValidator>,
+    #[serde(default)]
     pub basename: bool,
+    #[serde(default)]
     pub dirname: bool,
 }
 
@@ -3027,12 +2081,17 @@ impl PathInput {
 }
 
 /// Payload for `type: metrics` — computed metric threshold check.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct MetricsQuery {
     pub field: String,
+    #[serde(default)]
     pub min: Option<f64>,
+    #[serde(default)]
     pub max: Option<f64>,
+    #[serde(default)]
     pub min_size: Option<u64>,
+    #[serde(default)]
     pub max_size: Option<u64>,
 }
 

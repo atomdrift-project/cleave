@@ -115,7 +115,6 @@ pub(crate) struct StringExtractor {
     pub retained_count: std::sync::atomic::AtomicUsize,
 }
 
-#[allow(dead_code)] // Public API used by main.rs binary
 impl StringExtractor {
     pub(crate) fn new() -> Self {
         Self {
@@ -268,7 +267,6 @@ impl StringExtractor {
     /// `StringInfo`, applying symbol-map classification, the per-file
     /// retention caps, and the base64 decoded-sidecar. This is the cleave-side
     /// string layer; extraction itself is owned by filefacts.
-    #[allow(dead_code)] // Used by binary target, not visible to library
     pub(crate) fn convert_stng_strings(&self, stng_strings: &[ExtractedString]) -> Vec<StringInfo> {
         self.convert_stng_iter(stng_strings.iter(), stng_strings.len())
     }

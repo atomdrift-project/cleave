@@ -22,7 +22,6 @@ impl super::CapabilityMapper {
     /// just match if ANY ONE of their conditions is true.
     ///
     /// Returns true if the finding should be filtered out (is low-value).
-    #[allow(dead_code)] // Used by library target (lib.rs), not visible to binary crate
     #[must_use]
     pub fn is_low_value_any_rule(&self, finding_id: &str) -> bool {
         // O(1) id lookup: this runs per finding inside the end-of-analysis
@@ -75,7 +74,6 @@ impl super::CapabilityMapper {
     /// and `cited` reports whether some composite references this finding.
     /// An unresolved leg counts as an escalation: nothing proves the wrapper
     /// is a pass-through, and keeping a finding errs the right way.
-    #[allow(dead_code)] // Used by library target (lib.rs), not visible to binary crate
     pub(crate) fn drops_as_low_value(
         &self,
         finding: &Finding,
@@ -141,7 +139,6 @@ impl super::CapabilityMapper {
     /// annotations it outranked down with it and the location renders bare.
     /// The standalone path filters before it captures; the archive-member and
     /// embedded-payload paths capture first, so they resolve the set here.
-    #[allow(dead_code)] // Used by library target, not visible to binary crate
     #[must_use]
     pub(crate) fn doomed_low_value_ids(&self, findings: &[Finding]) -> FxHashSet<Istr> {
         // The same fixed point the final filter reaches: a wrapper cited only

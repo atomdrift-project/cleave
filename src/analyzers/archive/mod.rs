@@ -14,15 +14,19 @@ mod tar;
 pub(crate) mod utils;
 pub(crate) mod zip;
 
-pub(crate) use guards::HostileArchiveReason;
 pub(crate) use guards::MAX_ZIP_ENTRIES;
+pub(crate) use guards::{
+    HostileArchiveReason, MAX_COMPRESSION_RATIO, MIN_ZIP_BOMB_UNCOMPRESSED_SIZE,
+};
 
 use crate::analyzers::{AnalysisInput, Analyzer, FileType, FileTypeExt};
 use crate::capabilities::CapabilityMapper;
 use crate::types::{
-    AnalysisReport, ArchiveEntry, Criticality, Evidence, FileAnalysis, Finding, FindingCounts,
-    FindingKind, ReportSummary, SampleExtractionConfig, StructuralFeature, TargetInfo,
+    AnalysisReport, ArchiveEntry, Criticality, Evidence, Finding, FindingKind,
+    SampleExtractionConfig, StructuralFeature, TargetInfo,
 };
+#[cfg(test)]
+use crate::types::{FileAnalysis, FindingCounts, ReportSummary};
 use crate::yara_engine::YaraEngine;
 use anyhow::{Context, Result};
 use std::fs::File;
@@ -1205,6 +1209,19 @@ fn is_benign_archive_symlink_escape(path: &str) -> bool {
 /// a container image layer's root filesystem. Decided by content, never by the
 /// file name, which whoever built the archive chooses.
 fn carries_system_symlinks(archive_type: FileType, contents: &[ArchiveEntry]) -> bool {
+    match archive_type {
+        FileType::PkgArch => is_system_package(archive_type, contents),
+        // Detected from content only: an OCI layout or a `docker save` manifest.
+        FileType::OciImage => true,
+        _ => false,
+    }
+}
+
+/// Whether this archive is an OS package by content: it carries the metadata
+/// members its format is detected by. filefacts also types an archive as a
+/// package from a `.pkg` / `.pkg.tar.*` *name* when that metadata is absent,
+/// and the name is the archive author's choice.
+fn is_system_package(archive_type: FileType, contents: &[ArchiveEntry]) -> bool {
     let has_member = |name: &str| {
         contents.iter().any(|entry| {
             let leaf = entry.path.rsplit('!').next().unwrap_or(&entry.path);
@@ -1212,14 +1229,10 @@ fn carries_system_symlinks(archive_type: FileType, contents: &[ArchiveEntry]) ->
         })
     };
     match archive_type {
-        // filefacts also types a `.pkg.tar.*` *name* as an Arch package when the
-        // body lacks package metadata, so require the metadata it otherwise
-        // detects the format by.
         FileType::PkgArch => {
             has_member(".PKGINFO") && (has_member(".MTREE") || has_member(".BUILDINFO"))
         }
-        // Detected from content only: an OCI layout or a `docker save` manifest.
-        FileType::OciImage => true,
+        FileType::PkgFreebsd => has_member("+COMPACT_MANIFEST") || has_member("+MANIFEST"),
         _ => false,
     }
 }
@@ -1235,11 +1248,8 @@ fn drop_system_container_symlink_escapes(report: &mut AnalysisReport) {
     }
 }
 
-fn is_zip_path_edge_case_corpus(file_path: &Path) -> bool {
-    let Ok(file) = File::open(file_path) else {
-        return false;
-    };
-    let Ok(mut archive) = ZipArchive::new(file) else {
+fn is_zip_path_edge_case_corpus(data: &[u8]) -> bool {
+    let Ok(mut archive) = ZipArchive::new(std::io::Cursor::new(data)) else {
         return false;
     };
     if archive.len() > guards::MAX_ZIP_ENTRIES {
@@ -1260,7 +1270,7 @@ fn is_zip_path_edge_case_corpus(file_path: &Path) -> bool {
         total_entries += 1;
         let name = entry.name();
         let size = entry.size();
-        total_size += size;
+        total_size = total_size.saturating_add(size);
         max_size = max_size.max(size);
 
         if sanitize_entry_path(name, Path::new("/tmp/cleave-archive-inspect")).is_none() {
@@ -1278,8 +1288,15 @@ fn is_zip_path_edge_case_corpus(file_path: &Path) -> bool {
         && total_size <= MAX_PATH_CORPUS_TOTAL_SIZE
 }
 
+/// Whether this archive's path-traversal (zip-slip) findings are expected: an
+/// OS package (FreeBSD packages name members by absolute path), or a ZIP that
+/// is a corpus of path edge cases. Judged from the archive's bytes, detected
+/// type and member list, never from its path, which for a nested archive is a
+/// member name rather than a file on disk.
 fn should_suppress_path_traversal_findings(
-    file_path: &Path,
+    data: &[u8],
+    archive_type: FileType,
+    contents: &[ArchiveEntry],
     hostile_reasons: &[HostileArchiveReason],
 ) -> bool {
     if !hostile_reasons
@@ -1288,24 +1305,9 @@ fn should_suppress_path_traversal_findings(
     {
         return false;
     }
-
-    let file_type = crate::analyzers::detect_file_type(file_path).unwrap_or(FileType::Unknown);
-    let filename = file_path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    let is_system_package = matches!(file_type, FileType::PkgArch | FileType::PkgFreebsd)
-        || filename.ends_with(".pkg")
-        || filename.ends_with(".pkg.tar.zst")
-        || filename.ends_with(".pkg.tar.xz")
-        || filename.ends_with(".pkg.tar.gz");
-
-    if is_system_package {
-        return true;
-    }
-
-    matches!(file_type, FileType::Zip | FileType::Jar) && is_zip_path_edge_case_corpus(file_path)
+    is_system_package(archive_type, contents)
+        || (matches!(archive_type, FileType::Zip | FileType::Jar)
+            && is_zip_path_edge_case_corpus(data))
 }
 
 /// Analyzes archive files (zip, tar, 7z, etc.) by extracting and analyzing each member
@@ -1653,18 +1655,10 @@ impl ArchiveAnalyzer {
 
     /// Set the maximum file size to keep in memory during extraction.
     /// Files larger than this are written to temp files.
-    #[allow(dead_code)] // Used by binary target
     #[must_use]
     pub(crate) fn with_max_memory_file_size(mut self, size_bytes: u64) -> Self {
         self.max_memory_file_size = size_bytes;
         self
-    }
-
-    /// Get the maximum memory file size setting.
-    #[allow(dead_code)] // Used by binary target
-    #[must_use]
-    pub(crate) fn max_memory_file_size(&self) -> u64 {
-        self.max_memory_file_size
     }
 
     /// Set the current nesting depth (used for recursive archive extraction)
@@ -1682,7 +1676,6 @@ impl ArchiveAnalyzer {
     }
 
     /// Create analyzer with pre-existing capability mapper (wraps in Arc)
-    #[allow(dead_code)] // Used by the library target; the binary recompiles modules separately
     #[must_use]
     pub(crate) fn with_capability_mapper(mut self, mapper: CapabilityMapper) -> Self {
         self.capability_mapper = Some(Arc::new(mapper));
@@ -1693,14 +1686,6 @@ impl ArchiveAnalyzer {
     #[must_use]
     pub(crate) fn with_capability_mapper_arc(mut self, mapper: Arc<CapabilityMapper>) -> Self {
         self.capability_mapper = Some(mapper);
-        self
-    }
-
-    /// Set a YARA engine for scanning extracted files
-    #[allow(dead_code)] // Used by library target (lib.rs), not binary
-    #[must_use]
-    pub(crate) fn with_yara(mut self, engine: YaraEngine) -> Self {
-        self.yara_engine = Some(Arc::new(engine));
         self
     }
 
@@ -1727,7 +1712,6 @@ impl ArchiveAnalyzer {
     }
 
     /// Set sample extraction configuration for extracting analyzed files to disk
-    #[allow(dead_code)] // Used by binary target
     #[must_use]
     pub(crate) fn with_sample_extraction(mut self, config: SampleExtractionConfig) -> Self {
         self.sample_extraction = Some(config);
@@ -1778,7 +1762,6 @@ impl ArchiveAnalyzer {
 
     /// Create a copy of this analyzer with the sample_extraction config updated
     /// to use the given archive SHA256 for extraction directory grouping.
-    #[allow(dead_code)] // Used by binary target
     #[must_use]
     pub(crate) fn with_extraction_archive_sha256(&self, archive_sha256: &str) -> Self {
         Self {
@@ -1830,7 +1813,7 @@ impl ArchiveAnalyzer {
     ///
     /// # Returns
     /// The full `AnalysisReport` with aggregated results
-    #[allow(dead_code)] // Used by binary target
+    #[cfg(test)]
     pub(crate) fn analyze_streaming<F>(
         &self,
         file_path: &Path,
@@ -2072,8 +2055,12 @@ impl ArchiveAnalyzer {
             self.analyze_chm_archive_in_memory(data, archive_path, &mut report, start, &guard)?;
             drain_extraction_notes(&mut report, &guard);
             let hostile_reasons = guard.take_reasons();
-            let suppress_path_traversal =
-                should_suppress_path_traversal_findings(archive_path, &hostile_reasons);
+            let suppress_path_traversal = should_suppress_path_traversal_findings(
+                data,
+                file_type,
+                &report.archive_contents,
+                &hostile_reasons,
+            );
             push_archive_hostile_findings(
                 &mut report,
                 hostile_reasons,
@@ -2109,8 +2096,12 @@ impl ArchiveAnalyzer {
             }
             drain_extraction_notes(&mut report, &guard);
             let hostile_reasons = guard.take_reasons();
-            let suppress_path_traversal =
-                should_suppress_path_traversal_findings(archive_path, &hostile_reasons);
+            let suppress_path_traversal = should_suppress_path_traversal_findings(
+                data,
+                file_type,
+                &report.archive_contents,
+                &hostile_reasons,
+            );
             push_archive_hostile_findings(
                 &mut report,
                 hostile_reasons,
@@ -2212,6 +2203,7 @@ impl ArchiveAnalyzer {
                     start,
                     &guard,
                     &[],
+                    false,
                 )?;
             } else {
                 self.analyze_zip_archive_in_memory(
@@ -2221,6 +2213,7 @@ impl ArchiveAnalyzer {
                     start,
                     &guard,
                     &filefacts_archive_entries,
+                    file_type == FileType::Jar,
                 )?;
             }
             let member_metadata = guard.take_member_metadata();
@@ -2229,8 +2222,12 @@ impl ArchiveAnalyzer {
             }
             drain_extraction_notes(&mut report, &guard);
             let hostile_reasons = guard.take_reasons();
-            let suppress_path_traversal =
-                should_suppress_path_traversal_findings(archive_path, &hostile_reasons);
+            let suppress_path_traversal = should_suppress_path_traversal_findings(
+                data,
+                file_type,
+                &report.archive_contents,
+                &hostile_reasons,
+            );
             push_archive_hostile_findings(
                 &mut report,
                 hostile_reasons,
@@ -2358,8 +2355,12 @@ impl ArchiveAnalyzer {
                     || preserved_rar_metadata
                 {
                     drain_extraction_notes(&mut report, &guard);
-                    let suppress_path_traversal =
-                        should_suppress_path_traversal_findings(archive_path, &hostile_reasons);
+                    let suppress_path_traversal = should_suppress_path_traversal_findings(
+                        data,
+                        file_type,
+                        &report.archive_contents,
+                        &hostile_reasons,
+                    );
                     push_archive_hostile_findings(
                         &mut report,
                         hostile_reasons,
@@ -2392,8 +2393,12 @@ impl ArchiveAnalyzer {
 
         drain_extraction_notes(&mut report, &guard);
 
-        let suppress_path_traversal =
-            should_suppress_path_traversal_findings(archive_path, &hostile_reasons);
+        let suppress_path_traversal = should_suppress_path_traversal_findings(
+            data,
+            file_type,
+            &report.archive_contents,
+            &hostile_reasons,
+        );
         push_archive_hostile_findings(
             &mut report,
             hostile_reasons,
@@ -4772,7 +4777,7 @@ composite_rules:
 
         zip.finish().unwrap();
 
-        assert!(is_zip_path_edge_case_corpus(&zip_path));
+        assert!(is_zip_path_edge_case_corpus(&fs::read(&zip_path).unwrap()));
 
         let analyzer = ArchiveAnalyzer::new();
         let report = analyzer.analyze(&zip_path).unwrap();

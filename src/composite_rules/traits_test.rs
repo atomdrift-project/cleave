@@ -912,14 +912,16 @@ fn test_arch_from_report_str_parsing() {
 
 #[test]
 fn test_arch_from_str_yaml_parsing() {
-    assert_eq!(Arch::from_str("x86"), Arch::X86);
-    assert_eq!(Arch::from_str("x86-64"), Arch::X86_64);
-    assert_eq!(Arch::from_str("aarch64"), Arch::Aarch64);
-    assert_eq!(Arch::from_str("arm"), Arch::Arm);
-    assert_eq!(Arch::from_str("arm64"), Arch::Aarch64);
-    assert_eq!(Arch::from_str("amd64"), Arch::X86_64);
-    assert_eq!(Arch::from_str("ppc"), Arch::Powerpc);
-    assert_eq!(Arch::from_str("sh"), Arch::Superh);
+    assert_eq!(Arch::parse("x86"), Some(Arch::X86));
+    assert_eq!(Arch::parse("x86-64"), Some(Arch::X86_64));
+    assert_eq!(Arch::parse("aarch64"), Some(Arch::Aarch64));
+    assert_eq!(Arch::parse("arm"), Some(Arch::Arm));
+    assert_eq!(Arch::parse("arm64"), Some(Arch::Aarch64));
+    assert_eq!(Arch::parse("amd64"), Some(Arch::X86_64));
+    assert_eq!(Arch::parse("ppc"), Some(Arch::Powerpc));
+    assert_eq!(Arch::parse("sh"), Some(Arch::Superh));
+    assert_eq!(Arch::parse("all"), Some(Arch::All));
+    assert_eq!(Arch::parse("x86_46"), None);
 }
 
 #[test]

@@ -6,6 +6,10 @@
 //! `filefacts`'s typed views rather than re-walked with goblin. The
 //! analyzer no longer carries its own goblin parse path.
 
+// Parses attacker-controlled bytes: index and offset arithmetic must be
+// checked, so a forged header is a parse error rather than a panic.
+#![warn(clippy::indexing_slicing, clippy::arithmetic_side_effects)]
+
 use crate::analyzers::{AnalysisInput, Analyzer};
 use crate::capabilities::CapabilityMapper;
 use crate::entropy::EntropyLevel;
@@ -89,10 +93,11 @@ fn raw_elf_machine(data: &[u8]) -> Option<u16> {
     if data.get(0..4) != Some(b"\x7fELF") {
         return None;
     }
+    let machine: [u8; 2] = data.get(18..20)?.try_into().ok()?;
     Some(if data.get(5) == Some(&2) {
-        u16::from_be_bytes([data[18], data[19]])
+        u16::from_be_bytes(machine)
     } else {
-        u16::from_le_bytes([data[18], data[19]])
+        u16::from_le_bytes(machine)
     })
 }
 
@@ -126,7 +131,7 @@ impl ElfAnalyzer {
         if nul == 0 {
             return None;
         }
-        std::str::from_utf8(&section_data[..nul])
+        std::str::from_utf8(section_data.get(..nul)?)
             .ok()
             .map(ToString::to_string)
     }
@@ -309,8 +314,9 @@ impl ElfAnalyzer {
                         .unwrap_or(0)
                 })
                 .unwrap_or(0);
-            if image_end > 0 && data.len() > image_end {
-                let overlay = &data[image_end..];
+            if image_end > 0
+                && let Some(overlay) = data.get(image_end..).filter(|rest| !rest.is_empty())
+            {
                 const SQUASHFS_LE: &[u8] = &[0x73, 0x71, 0x73, 0x68];
                 const SQUASHFS_BE: &[u8] = &[0x68, 0x73, 0x71, 0x73];
                 if overlay.starts_with(SQUASHFS_LE) || overlay.starts_with(SQUASHFS_BE) {
@@ -403,12 +409,12 @@ impl ElfAnalyzer {
 
             // Architecture salvage from raw header bytes — `e_machine` at
             // offset 18 (2 bytes); endianness via EI_DATA at offset 5.
-            if data.len() >= 20 {
+            if let Some(machine) = data.get(18..20).and_then(|b| <[u8; 2]>::try_from(b).ok()) {
                 let is_big_endian = data.get(5) == Some(&2);
                 let e_machine = if is_big_endian {
-                    u16::from_be_bytes([data[18], data[19]])
+                    u16::from_be_bytes(machine)
                 } else {
-                    u16::from_le_bytes([data[18], data[19]])
+                    u16::from_le_bytes(machine)
                 };
                 let arch = arch_name_from_machine(e_machine);
                 report.structure.push(StructuralFeature {
@@ -500,27 +506,38 @@ impl ElfAnalyzer {
                 // malformed (Kong-ingress-controller 2024).
                 let decoded_storage: Vec<u8>;
                 let embedded_bytes: &[u8] = if binary.encoding == Some("base64") {
-                    let run_end = binary.offset
-                        + data[binary.offset..]
+                    // The base64 run starting at the offset, trimmed to whole
+                    // 4-character quads.
+                    let Some(encoded) = data.get(binary.offset..).and_then(|rest| {
+                        let run = rest
                             .iter()
                             .take_while(|&&b| {
                                 b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'='
                             })
                             .count();
-                    let trimmed_end = run_end - (run_end - binary.offset) % 4;
+                        rest.get(..run & !3)
+                    }) else {
+                        continue;
+                    };
                     match base64::Engine::decode(
                         &base64::engine::general_purpose::STANDARD,
-                        &data[binary.offset..trimmed_end],
+                        encoded,
                     ) {
                         Ok(b) => {
                             decoded_storage = b;
-                            &decoded_storage[..]
+                            decoded_storage.as_slice()
                         }
                         Err(_) => continue,
                     }
                 } else {
-                    let slice_end = (binary.offset + binary.estimated_size).min(data.len());
-                    &data[binary.offset..slice_end]
+                    let slice_end = binary
+                        .offset
+                        .saturating_add(binary.estimated_size)
+                        .min(data.len());
+                    match data.get(binary.offset..slice_end) {
+                        Some(bytes) => bytes,
+                        None => continue,
+                    }
                 };
                 let kind_str = binary.kind.as_str();
                 let display_kind = binary.display_kind();
@@ -613,7 +630,7 @@ impl ElfAnalyzer {
                 flat.set_f("binary.embedded_binaries", f64::from(embedded_binary_count));
                 flat.set_f(
                     "binary.embedded_files",
-                    f64::from(embedded_binary_count + embedded_archive_count),
+                    f64::from(embedded_binary_count.saturating_add(embedded_archive_count)),
                 );
             }
             if embedded_archive_count > 0 {
@@ -719,10 +736,10 @@ impl ElfAnalyzer {
             }
             let offset = section.file_offset as usize;
             let end = offset.saturating_add(section.file_size as usize);
-            if end > data.len() {
+            let Some(section_data) = data.get(offset..end) else {
                 continue;
-            }
-            if let Some(debuglink) = Self::gnu_debuglink_name(&data[offset..end]) {
+            };
+            if let Some(debuglink) = Self::gnu_debuglink_name(section_data) {
                 Self::push_metadata_finding_at(
                     report,
                     "metadata/build/debug::elf-debuglink",
@@ -1216,7 +1233,12 @@ fn malformed_header_finding(path: &str, data: &[u8], err_msg: &str) -> Finding {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects
+)]
 mod tests {
     use super::*;
     use std::path::PathBuf;

@@ -57,7 +57,6 @@ impl super::CapabilityMapper {
     /// Set the slow rule warning threshold in milliseconds.
     /// Rules that take longer than this to evaluate emit a warning.
     #[must_use]
-    #[allow(dead_code)] // used by shared_resources.rs (library only, not binary)
     pub fn with_slow_rule_ms(mut self, ms: u64) -> Self {
         self.slow_rule_ms = ms;
         self

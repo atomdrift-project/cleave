@@ -30,12 +30,6 @@ impl PickleAnalyzer {
     }
 
     #[must_use]
-    pub(crate) fn with_capability_mapper(mut self, mapper: CapabilityMapper) -> Self {
-        self.capability_mapper = Arc::new(mapper);
-        self
-    }
-
-    #[must_use]
     pub(crate) fn with_capability_mapper_arc(mut self, mapper: Arc<CapabilityMapper>) -> Self {
         self.capability_mapper = mapper;
         self

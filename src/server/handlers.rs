@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tempfile::Builder as TempBuilder;
 use tracing::{Instrument, Span, error, info, info_span, warn};
 
@@ -29,20 +29,77 @@ struct InFlightGuard {
 }
 
 impl InFlightGuard {
-    fn register(
+    /// Claim one of `max_concurrent_tasks` slots, or `None` when all are taken.
+    ///
+    /// The check and the claim are one atomic step. A separate load and
+    /// increment let any number of concurrent requests pass the check before
+    /// one of them claimed a slot.
+    fn try_register(
         state: &Arc<super::AppState>,
         request_id: u64,
         req: super::InFlightRequest,
-    ) -> Self {
+    ) -> Option<Self> {
+        let max = state.max_concurrent_tasks;
         state
             .active_tasks
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            .fetch_update(
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Acquire,
+                |active| (active < max).then_some(active + 1),
+            )
+            .ok()?;
         state.in_flight.insert(request_id, req);
-        Self {
+        Some(Self {
             state: Arc::clone(state),
             request_id,
-        }
+        })
     }
+}
+
+/// Longest an analysis may run before its request is answered with an error
+/// and the analysis cancelled. Generous: large archives legitimately take
+/// many minutes, and this only bounds one that never finishes.
+const ANALYSIS_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+
+/// Sets the analysis's cancellation flag when dropped. The handler future
+/// holding it is dropped when the client disconnects, and also when the
+/// analysis times out, so either way the blocking analysis stops at its next
+/// cancellation check instead of running on for nobody.
+struct CancelOnDrop(Arc<std::sync::atomic::AtomicBool>);
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        self.0.store(true, std::sync::atomic::Ordering::Release);
+    }
+}
+
+fn overloaded_response() -> Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(serde_json::json!({"error": "Server overloaded (too many active analyses)"})),
+    )
+        .into_response()
+}
+
+fn timed_out_response() -> Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(serde_json::json!({
+            "error": format!("analysis timed out after {}s", ANALYSIS_TIMEOUT.as_secs())
+        })),
+    )
+        .into_response()
+}
+
+/// [`check_memory_pressure`] on the blocking pool: it reads RSS from procfs
+/// and may clear every thread-local cache, which must not stall a runtime
+/// worker. A failed check (a panic) admits the request.
+async fn memory_pressure_response(state: &Arc<AppState>) -> Option<Response> {
+    let state = Arc::clone(state);
+    tokio::task::spawn_blocking(move || check_memory_pressure(&state))
+        .await
+        .ok()
+        .flatten()
 }
 
 impl Drop for InFlightGuard {
@@ -254,7 +311,7 @@ async fn analyze_inner(
 ) -> Response {
     info!("--> POST /analyze");
 
-    if let Some(response) = check_memory_pressure(&state) {
+    if let Some(response) = memory_pressure_response(&state).await {
         return response;
     }
 
@@ -379,24 +436,10 @@ async fn analyze_inner(
 
     info!(size = file_size, filename = %filename, "Starting analysis");
 
-    // Hard gate: reject if too many analysis tasks are running.
-    let active = state
-        .active_tasks
-        .load(std::sync::atomic::Ordering::Relaxed);
-    if active >= state.max_concurrent_tasks {
-        warn!(
-            active_tasks = active,
-            max = state.max_concurrent_tasks,
-            "Rejecting request: too many active analysis tasks"
-        );
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({"error": "Server overloaded (too many active analyses)"})),
-        )
-            .into_response();
-    }
-
-    let _in_flight = InFlightGuard::register(
+    // Hard gate: reject if too many analysis tasks are running. The slot is
+    // released when the analysis ends (the guard moves into its task), not
+    // when this response is sent.
+    let Some(in_flight) = InFlightGuard::try_register(
         &state,
         request_id,
         super::InFlightRequest {
@@ -404,7 +447,13 @@ async fn analyze_inner(
             size_bytes: file_size as u64,
             started_at: Instant::now(),
         },
-    );
+    ) else {
+        warn!(
+            max = state.max_concurrent_tasks,
+            "Rejecting request: too many active analysis tasks"
+        );
+        return overloaded_response();
+    };
     let task_span = Span::current();
 
     let should_clear_caches = state
@@ -414,6 +463,10 @@ async fn analyze_inner(
     let cancellation = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let cancellation_for_task = cancellation.clone();
     let handle = tokio::task::spawn_blocking(move || {
+        let _in_flight = in_flight;
+        // The uploaded file lives here; keep it until the analysis is done,
+        // even if the request has already been answered.
+        let _temp_dir = temp_dir;
         let _enter = task_span.enter();
         let opts = AnalysisOptions {
             cancellation: Some(cancellation_for_task),
@@ -433,8 +486,11 @@ async fn analyze_inner(
         }
     });
 
-    let result = handle.await;
-    drop(temp_dir);
+    let _cancel_on_drop = CancelOnDrop(cancellation);
+    let Ok(result) = tokio::time::timeout(ANALYSIS_TIMEOUT, handle).await else {
+        warn!(filename = %filename, "Analysis timed out; cancelling");
+        return timed_out_response();
+    };
     let elapsed_ms = request_start.elapsed().as_millis();
 
     match result {
@@ -615,7 +671,7 @@ async fn analyze_path_inner(
 ) -> Response {
     info!("--> POST /analyze-path");
 
-    if let Some(response) = check_memory_pressure(&state) {
+    if let Some(response) = memory_pressure_response(&state).await {
         return response;
     }
 
@@ -642,7 +698,7 @@ async fn analyze_path_inner(
     }
 
     // Canonicalize the path to resolve symlinks and ..
-    let Ok(canonical_path) = path.canonicalize() else {
+    let Ok(canonical_path) = tokio::fs::canonicalize(path).await else {
         warn!(path = %request.path, "File not found or not accessible");
         return (
             StatusCode::NOT_FOUND,
@@ -677,34 +733,13 @@ async fn analyze_path_inner(
 
     info!(path = %path_str, "Starting analysis");
 
-    // Hard gate: reject if too many analysis tasks are running.
-    let active = state
-        .active_tasks
-        .load(std::sync::atomic::Ordering::Relaxed);
-    if active >= state.max_concurrent_tasks {
-        warn!(
-            active_tasks = active,
-            max = state.max_concurrent_tasks,
-            "Rejecting request: too many active analysis tasks"
-        );
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({"error": "Server overloaded (too many active analyses)"})),
-        )
-            .into_response();
-    }
-
-    let path_owned = path.to_owned();
-    let task_span = Span::current();
-
-    // Run analysis in blocking thread with timeout.
-    // Periodically clear thread-local caches to prevent unbounded memory growth.
-    let should_clear_caches = state
-        .next_request_id
-        .load(std::sync::atomic::Ordering::Relaxed)
-        .is_multiple_of(50);
-    let size_bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-    let _in_flight = InFlightGuard::register(
+    // Hard gate: reject if too many analysis tasks are running. The slot is
+    // released when the analysis ends (the guard moves into its task).
+    let size_bytes = tokio::fs::metadata(&path)
+        .await
+        .map(|m| m.len())
+        .unwrap_or(0);
+    let Some(in_flight) = InFlightGuard::try_register(
         &state,
         request_id,
         super::InFlightRequest {
@@ -712,11 +747,28 @@ async fn analyze_path_inner(
             size_bytes,
             started_at: Instant::now(),
         },
-    );
+    ) else {
+        warn!(
+            max = state.max_concurrent_tasks,
+            "Rejecting request: too many active analysis tasks"
+        );
+        return overloaded_response();
+    };
+
+    let path_owned = path.to_owned();
+    let task_span = Span::current();
+
+    // Run analysis in a blocking thread, bounded by `ANALYSIS_TIMEOUT`.
+    // Periodically clear thread-local caches to prevent unbounded memory growth.
+    let should_clear_caches = state
+        .next_request_id
+        .load(std::sync::atomic::Ordering::Relaxed)
+        .is_multiple_of(50);
     let cancellation = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let extract_dir_for_response = extract_dir.clone();
     let cancellation_for_task = cancellation.clone();
     let handle = tokio::task::spawn_blocking(move || {
+        let _in_flight = in_flight;
         let _enter = task_span.enter();
         let mut opts = AnalysisOptions::default();
         if let Some(dir) = extract_dir {
@@ -739,7 +791,11 @@ async fn analyze_path_inner(
         }
     });
 
-    let result = handle.await;
+    let _cancel_on_drop = CancelOnDrop(cancellation);
+    let Ok(result) = tokio::time::timeout(ANALYSIS_TIMEOUT, handle).await else {
+        warn!(path = %path_str, "Analysis timed out; cancelling");
+        return timed_out_response();
+    };
 
     let elapsed_ms = request_start.elapsed().as_millis();
 
@@ -897,6 +953,54 @@ mod tests {
     use super::classify_analysis_error;
     use axum::http::StatusCode;
 
+    /// However many requests race for slots, at most `max_concurrent_tasks`
+    /// hold one at a time, and dropping a guard frees its slot.
+    #[test]
+    fn in_flight_slots_are_capped_and_released() {
+        use super::super::{AppState, InFlightRequest};
+        use super::InFlightGuard;
+        use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize};
+        use std::sync::{Arc, Barrier};
+
+        let state = Arc::new(AppState {
+            rate_limiter: super::super::ratelimit::RateLimiter::new(1),
+            max_body_size: 0,
+            max_rss_bytes: 0,
+            allowed_local_paths: Vec::new(),
+            extract_dir: None,
+            next_request_id: AtomicU64::new(1),
+            active_tasks: AtomicUsize::new(0),
+            max_concurrent_tasks: 4,
+            overloaded_since: parking_lot::Mutex::new(None),
+            in_flight: dashmap::DashMap::new(),
+            reload_in_progress: AtomicBool::new(false),
+        });
+        let request = || InFlightRequest {
+            name: "sample".to_string(),
+            size_bytes: 0,
+            started_at: std::time::Instant::now(),
+        };
+
+        let barrier = Arc::new(Barrier::new(64));
+        let guards: Vec<_> = (0..64u64)
+            .map(|id| {
+                let (state, barrier) = (Arc::clone(&state), Arc::clone(&barrier));
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    InFlightGuard::try_register(&state, id, request())
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .filter_map(|thread| thread.join().ok().flatten())
+            .collect();
+        assert_eq!(guards.len(), 4, "exactly the cap may hold a slot");
+        assert!(InFlightGuard::try_register(&state, 100, request()).is_none());
+
+        drop(guards);
+        assert!(InFlightGuard::try_register(&state, 101, request()).is_some());
+    }
+
     #[test]
     fn classify_unsupported_file_type_as_415() {
         let (status, message) = classify_analysis_error("Unsupported file type: Unknown");
@@ -1045,6 +1149,7 @@ fn read_thread_info_linux() -> serde_json::Value {
 fn read_thread_info_freebsd() -> serde_json::Value {
     use std::mem;
 
+    // SAFETY: `getpid` takes no arguments and cannot fail.
     let pid = unsafe { libc::getpid() };
 
     // MIB: kern.proc.pid.<pid> with KERN_PROC_INC_THREAD to include all threads.
@@ -1057,6 +1162,8 @@ fn read_thread_info_freebsd() -> serde_json::Value {
 
     // First call: get required buffer size.
     let mut len: libc::size_t = 0;
+    // SAFETY: `mib` holds the 4 names passed; a null output buffer asks only
+    // for the size, written to the local `len`.
     let ret = unsafe {
         libc::sysctl(
             mib.as_ptr(),
@@ -1074,9 +1181,14 @@ fn read_thread_info_freebsd() -> serde_json::Value {
     // Add 25% slack — threads can be created between the two sysctl calls.
     len += len / 4;
     let count = len / mem::size_of::<libc::kinfo_proc>();
+    // SAFETY: `kinfo_proc` is plain C data, so a zeroed value is valid.
     let mut procs: Vec<libc::kinfo_proc> = (0..count).map(|_| unsafe { mem::zeroed() }).collect();
-    let mut actual_len = len;
+    // The buffer's size in bytes, not `len`: `count` rounds down, and telling
+    // the kernel `len` would let it write past the end of `procs`.
+    let mut actual_len = count * mem::size_of::<libc::kinfo_proc>();
 
+    // SAFETY: `procs` owns `actual_len` bytes of `kinfo_proc` records; the
+    // kernel writes at most that many and stores the length used.
     let ret = unsafe {
         libc::sysctl(
             mib.as_ptr(),

@@ -874,6 +874,7 @@ fn mask_markup_comments(source: &[u8]) -> Option<Vec<u8>> {
 
 #[cfg(test)]
 mod markup_comment_tests {
+    #![allow(clippy::unwrap_used)]
     use super::mask_markup_comments;
 
     #[test]

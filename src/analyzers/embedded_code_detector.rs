@@ -2216,6 +2216,7 @@ pub(crate) fn process_all_strings_with_host(
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
 
     /// Script-deobfuscation layers name themselves from a closed set; each

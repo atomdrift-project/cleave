@@ -5,6 +5,10 @@
 //! (sections, imports, exports, characteristics) is read from
 //! `filefacts`'s typed views rather than re-walked with goblin. The
 //! analyzer no longer carries its own goblin parse path.
+// Parses attacker-controlled bytes: index and offset arithmetic must be
+// checked, so a forged header is a parse error rather than a panic.
+#![warn(clippy::indexing_slicing, clippy::arithmetic_side_effects)]
+
 use crate::analyzers::{AnalysisInput, Analyzer};
 use crate::capabilities::CapabilityMapper;
 use crate::strings::StringExtractor;
@@ -72,10 +76,11 @@ fn section_name_reserved_for(name: &str) -> Option<&'static str> {
 /// ~0.80 letters, while compiled code and structured tables sit below 0.67,
 /// 0.02 and 0.46 respectively. Thresholds are set in the empty middle.
 fn section_is_prose(bytes: &[u8]) -> bool {
-    let trimmed = {
-        let end = bytes.iter().rposition(|&b| b != 0).map_or(0, |i| i + 1);
-        &bytes[..end]
-    };
+    let trimmed: &[u8] = bytes
+        .iter()
+        .rposition(|&b| b != 0)
+        .and_then(|last| bytes.get(..=last))
+        .unwrap_or_default();
     // Below this a run of ASCII is as likely to be a string table fragment
     // as a document, and the ratios get noisy.
     if trimmed.len() < 256 {
@@ -87,13 +92,13 @@ fn section_is_prose(bytes: &[u8]) -> bool {
     let mut letters = 0u64;
     for &b in trimmed {
         if (0x20..0x7f).contains(&b) || b == b'\t' || b == b'\n' || b == b'\r' {
-            printable += 1;
+            printable = printable.saturating_add(1);
         }
         if b == b' ' {
-            spaces += 1;
+            spaces = spaces.saturating_add(1);
         }
         if b.is_ascii_alphabetic() {
-            letters += 1;
+            letters = letters.saturating_add(1);
         }
     }
     printable as f64 / len >= 0.95 && spaces as f64 / len >= 0.08 && letters as f64 / len >= 0.60
@@ -161,15 +166,18 @@ fn layout_metrics(ctx: &Ctx<'_>, pe_data: &[u8], report: &mut AnalysisReport) {
     for section in ctx.parsed.sections() {
         let start = usize::try_from(section.file_offset).unwrap_or(usize::MAX);
         let len = usize::try_from(section.file_size).unwrap_or(0);
-        let Some(end) = start.checked_add(len).filter(|e| *e <= pe_data.len()) else {
+        let Some(section_bytes) = start
+            .checked_add(len)
+            .and_then(|end| pe_data.get(start..end))
+        else {
             continue;
         };
-        if !section_is_prose(&pe_data[start..end]) {
+        if !section_is_prose(section_bytes) {
             continue;
         }
-        prose += 1;
+        prose = prose.saturating_add(1);
         if section.flags.iter().any(|f| f == "executable") {
-            prose_exec += 1;
+            prose_exec = prose_exec.saturating_add(1);
         }
     }
 
@@ -201,12 +209,31 @@ fn pe_certificate_range_from_ctx(ctx: &Ctx<'_>, data: &[u8]) -> Option<(usize, u
         }
         let offset = node.get("rva")?.as_u64()? as usize;
         let size = node.get("size")?.as_u64()? as usize;
-        if offset == 0 || size == 0 || offset.checked_add(size)? > data.len() {
+        let end = offset.checked_add(size)?;
+        if offset == 0 || size == 0 || end > data.len() {
             return None;
         }
-        return Some((offset, offset + size));
+        return Some((offset, end));
     }
     None
+}
+
+fn le_u16(data: &[u8], at: usize) -> Option<u16> {
+    Some(u16::from_le_bytes(
+        data.get(at..at.checked_add(2)?)?.try_into().ok()?,
+    ))
+}
+
+fn le_u32(data: &[u8], at: usize) -> Option<u32> {
+    Some(u32::from_le_bytes(
+        data.get(at..at.checked_add(4)?)?.try_into().ok()?,
+    ))
+}
+
+/// The 4 bytes at `e_lfanew`, where a PE signature belongs.
+fn pe_signature_at_lfanew(data: &[u8]) -> Option<(usize, &[u8])> {
+    let offset = le_u32(data, 0x3c)? as usize;
+    Some((offset, data.get(offset..offset.checked_add(4)?)?))
 }
 
 fn looks_like_dos_executable(data: &[u8]) -> bool {
@@ -214,25 +241,33 @@ fn looks_like_dos_executable(data: &[u8]) -> bool {
         return false;
     }
 
-    let pe_offset = u32::from_le_bytes([data[0x3c], data[0x3d], data[0x3e], data[0x3f]]) as usize;
-    if pe_offset + 4 <= data.len() && &data[pe_offset..pe_offset + 4] == b"PE\x00\x00" {
+    if pe_signature_at_lfanew(data).is_some_and(|(_, sig)| sig == b"PE\x00\x00") {
         return false;
     }
 
-    let last_page_bytes = u16::from_le_bytes([data[2], data[3]]) as usize;
-    let page_count = u16::from_le_bytes([data[4], data[5]]) as usize;
-    let header_paragraphs = u16::from_le_bytes([data[8], data[9]]) as usize;
+    let (Some(last_page_bytes), Some(page_count), Some(header_paragraphs)) =
+        (le_u16(data, 2), le_u16(data, 4), le_u16(data, 8))
+    else {
+        return false;
+    };
+    let (last_page_bytes, page_count, header_paragraphs) = (
+        usize::from(last_page_bytes),
+        usize::from(page_count),
+        usize::from(header_paragraphs),
+    );
     if page_count == 0 || header_paragraphs == 0 {
         return false;
     }
 
-    let declared_size = (page_count.saturating_sub(1) * 512)
-        + if last_page_bytes == 0 {
+    let declared_size = page_count
+        .saturating_sub(1)
+        .saturating_mul(512)
+        .saturating_add(if last_page_bytes == 0 {
             512
         } else {
             last_page_bytes
-        };
-    let header_size = header_paragraphs * 16;
+        });
+    let header_size = header_paragraphs.saturating_mul(16);
     declared_size >= header_size
         && declared_size <= data.len().saturating_add(512)
         && header_size < data.len()
@@ -259,7 +294,11 @@ fn dn_split(dn: &str) -> Vec<String> {
                         && chars.peek().is_some_and(char::is_ascii_hexdigit) =>
                 {
                     let lo = chars.next().unwrap_or('0');
-                    let byte = hi.to_digit(16).unwrap_or(0) * 16 + lo.to_digit(16).unwrap_or(0);
+                    let byte = hi
+                        .to_digit(16)
+                        .unwrap_or(0)
+                        .saturating_mul(16)
+                        .saturating_add(lo.to_digit(16).unwrap_or(0));
                     current.push(char::from_u32(byte).unwrap_or('?'));
                 }
                 // `\<char>`: the character stands for itself.
@@ -456,7 +495,6 @@ impl PEAnalyzer {
     }
 
     /// Create analyzer with shared YARA engine
-    #[allow(dead_code)] // Used by binary target
     #[must_use]
     pub(crate) fn with_yara_arc(mut self, yara_engine: Arc<YaraEngine>) -> Self {
         self.yara_engine = Some(yara_engine);
@@ -1110,68 +1148,65 @@ impl PEAnalyzer {
         // / pe.overlay_end) — no cleave-side metric mirror needed now.
 
         // Overlay archive analysis
-        if let Some((overlay_start, overlay_end)) = overlay_bounds {
-            let overlay_data = &pe_data[overlay_start..overlay_end];
-            if let Ok(Some(overlay_analysis)) = crate::analyzers::overlay::analyze_overlay(
+        if let Some((overlay_start, overlay_end)) = overlay_bounds
+            && let Some(overlay_data) = pe_data.get(overlay_start..overlay_end)
+            && let Ok(Some(overlay_analysis)) = crate::analyzers::overlay::analyze_overlay(
                 overlay_data,
                 &report.target.path,
                 Some(self.capability_mapper.clone()),
                 self.yara_engine.clone(),
                 Some(&self.archive_config),
-            ) {
-                embedded_archive_count = embedded_archive_count.saturating_add(1);
-                let pe_filename = std::path::Path::new(&report.target.path)
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("binary.exe");
+            )
+        {
+            embedded_archive_count = embedded_archive_count.saturating_add(1);
+            let pe_filename = std::path::Path::new(&report.target.path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("binary.exe");
 
-                report.findings.push(overlay_analysis.sfx_finding);
+            report.findings.push(overlay_analysis.sfx_finding);
 
-                for mut finding in overlay_analysis.archive_report.findings {
-                    for evidence in &mut finding.evidence {
-                        if let Some(ref loc) = evidence.location {
-                            if let Some(rest) = loc.strip_prefix("archive:") {
-                                evidence.location = Some(format!(
-                                    "archive:{}{}{}",
-                                    pe_filename,
-                                    crate::types::file_analysis::ARCHIVE_DELIMITER,
-                                    rest
-                                ));
-                            } else if !loc.contains(crate::types::file_analysis::ARCHIVE_DELIMITER)
-                            {
-                                evidence.location = Some(format!(
-                                    "archive:{}{}{}",
-                                    pe_filename,
-                                    crate::types::file_analysis::ARCHIVE_DELIMITER,
-                                    loc
-                                ));
-                            }
+            for mut finding in overlay_analysis.archive_report.findings {
+                for evidence in &mut finding.evidence {
+                    if let Some(ref loc) = evidence.location {
+                        if let Some(rest) = loc.strip_prefix("archive:") {
+                            evidence.location = Some(format!(
+                                "archive:{}{}{}",
+                                pe_filename,
+                                crate::types::file_analysis::ARCHIVE_DELIMITER,
+                                rest
+                            ));
+                        } else if !loc.contains(crate::types::file_analysis::ARCHIVE_DELIMITER) {
+                            evidence.location = Some(format!(
+                                "archive:{}{}{}",
+                                pe_filename,
+                                crate::types::file_analysis::ARCHIVE_DELIMITER,
+                                loc
+                            ));
                         }
                     }
-                    report.findings.push(finding);
                 }
+                report.findings.push(finding);
+            }
 
-                for mut entry in overlay_analysis.archive_report.archive_contents {
-                    if !entry
-                        .path
-                        .contains(crate::types::file_analysis::ARCHIVE_DELIMITER)
-                    {
-                        entry.path = crate::types::file_analysis::encode_archive_path(
-                            pe_filename,
-                            &entry.path,
-                        );
-                    }
-                    report.archive_contents.push(entry);
+            for mut entry in overlay_analysis.archive_report.archive_contents {
+                if !entry
+                    .path
+                    .contains(crate::types::file_analysis::ARCHIVE_DELIMITER)
+                {
+                    entry.path =
+                        crate::types::file_analysis::encode_archive_path(pe_filename, &entry.path);
                 }
+                report.archive_contents.push(entry);
+            }
 
-                report.files.extend(overlay_analysis.archive_report.files);
-                report
-                    .strings
-                    .extend(overlay_analysis.archive_report.strings);
-                for tool in overlay_analysis.archive_report.metadata.tools_used {
-                    if !tools_used.contains(&tool) {
-                        tools_used.push(tool);
-                    }
+            report.files.extend(overlay_analysis.archive_report.files);
+            report
+                .strings
+                .extend(overlay_analysis.archive_report.strings);
+            for tool in overlay_analysis.archive_report.metadata.tools_used {
+                if !tools_used.contains(&tool) {
+                    tools_used.push(tool);
                 }
             }
         }
@@ -1266,7 +1301,7 @@ impl PEAnalyzer {
                 ctx.parsed.sections().iter().find_map(|s| {
                     (s.name == ".rsrc").then(|| {
                         let start = s.file_offset as usize;
-                        (start, start + s.file_size as usize)
+                        (start, start.saturating_add(s.file_size as usize))
                     })
                 })
             } else {
@@ -1324,21 +1359,27 @@ impl PEAnalyzer {
                 // and reports the dropper as a malformed binary.
                 let decoded_storage: Vec<u8>;
                 let embedded_bytes: &[u8] = if binary.encoding == Some("base64") {
-                    let run_end = binary.offset
-                        + pe_data[binary.offset..]
-                            .iter()
-                            .take_while(|&&b| {
-                                b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'='
-                            })
-                            .count();
-                    let trimmed_end = run_end - (run_end - binary.offset) % 4;
+                    // The base64 run starting at the offset, trimmed to whole
+                    // 4-character quads.
+                    let encoded = pe_data
+                        .get(binary.offset..)
+                        .and_then(|rest| {
+                            let run = rest
+                                .iter()
+                                .take_while(|&&b| {
+                                    b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'='
+                                })
+                                .count();
+                            rest.get(..run & !3)
+                        })
+                        .unwrap_or_default();
                     match base64::Engine::decode(
                         &base64::engine::general_purpose::STANDARD,
-                        &pe_data[binary.offset..trimmed_end],
+                        encoded,
                     ) {
                         Ok(b) => {
                             decoded_storage = b;
-                            &decoded_storage[..]
+                            decoded_storage.as_slice()
                         }
                         Err(_) => {
                             report.findings.push(finding);
@@ -1346,8 +1387,11 @@ impl PEAnalyzer {
                         }
                     }
                 } else {
-                    let slice_end = (binary.offset + binary.estimated_size).min(pe_data.len());
-                    &pe_data[binary.offset..slice_end]
+                    let slice_end = binary
+                        .offset
+                        .saturating_add(binary.estimated_size)
+                        .min(pe_data.len());
+                    pe_data.get(binary.offset..slice_end).unwrap_or_default()
                 };
                 let kind_str = binary.kind.as_str();
                 let display_kind = binary.display_kind();
@@ -1399,7 +1443,7 @@ impl PEAnalyzer {
                 flat.set_f("binary.embedded_binaries", f64::from(embedded_binary_count));
                 flat.set_f(
                     "binary.embedded_files",
-                    f64::from(embedded_binary_count + embedded_archive_count),
+                    f64::from(embedded_binary_count.saturating_add(embedded_archive_count)),
                 );
             }
             if embedded_archive_count > 0 {
@@ -1444,13 +1488,14 @@ impl PEAnalyzer {
 
         if let Some(offset) = mz_offset {
             // Found MZ at non-zero offset - junk prefix detected
-            let prefix = &data[..offset];
+            // `find_mz_offset` returns an offset inside `data`.
+            let prefix = data.get(..offset).unwrap_or_default();
             let prefix_display = if prefix.len() <= 32 {
                 String::from_utf8_lossy(prefix).to_string()
             } else {
                 format!(
                     "{}... ({} bytes)",
-                    String::from_utf8_lossy(&prefix[..32]),
+                    String::from_utf8_lossy(prefix.get(..32).unwrap_or(prefix)),
                     prefix.len()
                 )
             };
@@ -1485,7 +1530,7 @@ impl PEAnalyzer {
             });
 
             // Check for additional tampering in the actual PE data
-            let pe_data = &data[offset..];
+            let pe_data = data.get(offset..).unwrap_or(data);
             self.detect_header_tampering(pe_data, offset, &mut findings);
 
             return (pe_data, findings);
@@ -1539,16 +1584,19 @@ impl PEAnalyzer {
         }
 
         // Check for systematic byte injection (e.g., 0x20 padding)
-        let header_area = &data[..data.len().min(512)];
+        let header_area = data.get(..512).unwrap_or(data);
         let mut byte_counts = [0u32; 256];
         for &b in header_area {
-            byte_counts[b as usize] += 1;
+            if let Some(count) = byte_counts.get_mut(usize::from(b)) {
+                *count = count.saturating_add(1);
+            }
         }
 
         let header_len = header_area.len() as u32;
         for (byte_val, &count) in byte_counts.iter().enumerate() {
-            // Skip 0x00 (common in headers) and check if any byte is >40% of header
-            if byte_val != 0 && count > header_len * 2 / 5 {
+            // Skip 0x00 (common in headers) and check if any byte is >40% of
+            // header (`5·count > 2·len` is `count > 2·len/5` without truncation).
+            if byte_val != 0 && count.saturating_mul(5) > header_len.saturating_mul(2) {
                 findings.push(Finding {
                     precomputed_spans: None,
                     src: None,
@@ -1573,7 +1621,11 @@ impl PEAnalyzer {
                         method: "frequency-analysis".to_string(),
                         source: "cleave".to_string(),
                         value: format!("byte 0x{:02X} appears {} times in header", byte_val, count),
-                        location: Some(format!("{:#x}-{:#x}", base_offset, base_offset + 512)),
+                        location: Some(format!(
+                            "{:#x}-{:#x}",
+                            base_offset,
+                            base_offset.saturating_add(512)
+                        )),
                         ..Default::default()
                     }],
                     match_count: 1,
@@ -1586,36 +1638,41 @@ impl PEAnalyzer {
 
         // Check the actual PE signature location from the DOS header, not the first
         // incidental `PE` byte sequence anywhere in the file.
-        let pe_sig_offset =
-            u32::from_le_bytes([data[0x3c], data[0x3d], data[0x3e], data[0x3f]]) as usize;
-        if pe_sig_offset + 4 <= data.len() {
-            let sig = &data[pe_sig_offset..pe_sig_offset + 4];
-            if sig != b"PE\x00\x00" && !looks_like_dos_executable(data) {
-                findings.push(Finding { src: None,
-                    precomputed_spans: None,
-                    id: "objectives/anti-analysis/pe-tampering/pe-signature-corrupted".to_string().into(),
-                    kind: FindingKind::Structural,
-                    desc: format!(
-                        "PE signature corrupted: expected PE\\x00\\x00, got {:02X} {:02X} {:02X} {:02X}",
-                        sig[0], sig[1], sig[2], sig[3]
-                    ).into(),
-                    conf: 0.85,
-                    crit: Criticality::Suspicious,
-                    mbc: Some("B0001".into()),
-                    attack: Some("T1027".into()),
-                    trait_refs: vec![],
-                    evidence: vec![Evidence {
-                        method: "signature".to_string(),
-                        source: "cleave".to_string(),
-                        value: format!("PE signature at {:#x}: {:?}", pe_sig_offset, sig),
-                        location: Some(format!("{:#x}", base_offset + pe_sig_offset)),
-                        ..Default::default()
-                    }],
-                    match_count: 1,
-                    source_file: None,
-                    downgraded: false,
-                });
-            }
+        if let Some((pe_sig_offset, sig)) = pe_signature_at_lfanew(data)
+            && sig != b"PE\x00\x00"
+            && !looks_like_dos_executable(data)
+        {
+            findings.push(Finding {
+                src: None,
+                precomputed_spans: None,
+                id: "objectives/anti-analysis/pe-tampering/pe-signature-corrupted"
+                    .to_string()
+                    .into(),
+                kind: FindingKind::Structural,
+                desc: format!(
+                    "PE signature corrupted: expected PE\\x00\\x00, got {}",
+                    sig.iter()
+                        .map(|b| format!("{b:02X}"))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                )
+                .into(),
+                conf: 0.85,
+                crit: Criticality::Suspicious,
+                mbc: Some("B0001".into()),
+                attack: Some("T1027".into()),
+                trait_refs: vec![],
+                evidence: vec![Evidence {
+                    method: "signature".to_string(),
+                    source: "cleave".to_string(),
+                    value: format!("PE signature at {:#x}: {:?}", pe_sig_offset, sig),
+                    location: Some(format!("{:#x}", base_offset.saturating_add(pe_sig_offset))),
+                    ..Default::default()
+                }],
+                match_count: 1,
+                source_file: None,
+                downgraded: false,
+            });
         }
 
         // .NET BSJB CLR metadata signature is detected by the YAML trait
@@ -1623,15 +1680,11 @@ impl PEAnalyzer {
     }
 
     /// Find MZ header within first max_offset bytes
-    #[allow(clippy::manual_find)]
     fn find_mz_offset(&self, data: &[u8], max_offset: usize) -> Option<usize> {
-        let limit = data.len().min(max_offset);
-        for i in 0..limit.saturating_sub(1) {
-            if data[i] == b'M' && data.get(i + 1) == Some(&b'Z') {
-                return Some(i);
-            }
-        }
-        None
+        data.get(..max_offset)
+            .unwrap_or(data)
+            .windows(2)
+            .position(|pair| pair == b"MZ")
     }
 }
 
@@ -1700,7 +1753,12 @@ impl Analyzer for PEAnalyzer {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects
+)]
 mod tests {
     use super::*;
     use std::path::PathBuf;

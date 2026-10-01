@@ -109,147 +109,9 @@ pub fn analyzer_for_file_type(
     file_type: &FileType,
     mapper: Option<CapabilityMapper>,
 ) -> Option<Box<dyn Analyzer>> {
-    let mapper_or_empty = mapper.unwrap_or_else(CapabilityMapper::empty);
-
-    match file_type {
-        // Binary formats - need dedicated analyzers
-        FileType::MachO => Some(Box::new(
-            macho::MachOAnalyzer::new().with_capability_mapper(mapper_or_empty),
-        )),
-        FileType::Elf => Some(Box::new(
-            elf::ElfAnalyzer::new().with_capability_mapper(mapper_or_empty),
-        )),
-        FileType::Pe => Some(Box::new(
-            pe::PEAnalyzer::new().with_capability_mapper(mapper_or_empty),
-        )),
-
-        // Java bytecode - not source code
-        FileType::JavaClass | FileType::Jar => Some(Box::new(
-            java_class::JavaClassAnalyzer::new().with_capability_mapper(mapper_or_empty),
-        )),
-
-        // Compiled AppleScript - binary format
-        FileType::AppleScript => Some(Box::new(
-            applescript::AppleScriptAnalyzer::new().with_capability_mapper(mapper_or_empty),
-        )),
-
-        // RTF documents - parse for embedded OLE objects
-        FileType::Rtf => Some(Box::new(
-            rtf::RtfAnalyzer::new().with_capability_mapper(mapper_or_empty),
-        )),
-
-        // Microsoft Office documents (OLE2 and OOXML)
-        FileType::OleDoc | FileType::Msi | FileType::Ooxml => Some(Box::new(
-            office::OfficeAnalyzer::new().with_capability_mapper(mapper_or_empty),
-        )),
-
-        // PDF documents — lenient byte-scan extractor for action /
-        // info / embedded-file / filter-chain surfacing.
-        FileType::Pdf => Some(Box::new(
-            pdf::PdfAnalyzer::new().with_capability_mapper(mapper_or_empty),
-        )),
-
-        // Image analyzers - steganography detection
-        FileType::Jpeg => Some(Box::new(
-            jpeg::JpegAnalyzer::new().with_capability_mapper(mapper_or_empty),
-        )),
-        FileType::Png => Some(Box::new(
-            png::PngAnalyzer::new().with_capability_mapper(mapper_or_empty),
-        )),
-
-        // Fonts — structural validation and stowaway detection.
-        FileType::Font => Some(Box::new(
-            font::FontAnalyzer::new().with_capability_mapper(mapper_or_empty),
-        )),
-        // One analyzer for every non-font, non-raster container: they all
-        // defer to filefacts and read the same shared `media.*` facts.
-        FileType::Wav
-        | FileType::Aiff
-        | FileType::Mp3
-        | FileType::Mp4
-        | FileType::Ico
-        | FileType::Gif
-        | FileType::Bmp
-        | FileType::Webp => Some(Box::new(
-            media::MediaAnalyzer::new().with_capability_mapper(mapper_or_empty),
-        )),
-
-        // Pickle - deserialization attack detection
-        FileType::Pickle => Some(Box::new(
-            pickle::PickleAnalyzer::new().with_capability_mapper(mapper_or_empty),
-        )),
-
-        // Package manifests - structured data parsers
-        FileType::VsixManifest => Some(Box::new(
-            vsix_manifest::VsixManifestAnalyzer::new().with_capability_mapper(mapper_or_empty),
-        )),
-        FileType::PackageJson => Some(Box::new(
-            package_json::PackageJsonAnalyzer::new().with_capability_mapper(mapper_or_empty),
-        )),
-        FileType::ChromeManifest => Some(Box::new(
-            chrome_manifest::ChromeManifestAnalyzer::new().with_capability_mapper(mapper_or_empty),
-        )),
-
-        // Text-based formats without tree-sitter - use generic analyzer
-        FileType::PkgInfo
-        | FileType::CargoToml
-        | FileType::GoMod
-        | FileType::PyProjectToml
-        | FileType::PackageLockJson
-        | FileType::Json
-        | FileType::Plist
-        | FileType::Nib
-        | FileType::Pbxproj
-        | FileType::Cmake
-        | FileType::SystemdService
-        | FileType::DesktopEntry
-        | FileType::Xml
-        | FileType::Yaml
-        | FileType::PgpSignature
-        | FileType::Svg
-        | FileType::Html
-        | FileType::Jsp
-        | FileType::Asp
-        | FileType::Cfml
-        | FileType::Tex
-        | FileType::Yara
-        | FileType::PostScript
-        | FileType::Mirc
-        | FileType::IrcII
-        | FileType::Markdown
-        | FileType::Text
-        | FileType::Dockerfile
-        | FileType::Wasm
-        | FileType::Dex
-        // Flatpak bundles remain opaque until their container format is
-        // supported by the archive extractor.
-        | FileType::Flatpak
-        | FileType::Data => Some(Box::new(
-            generic::GenericAnalyzer::new(*file_type).with_capability_mapper(mapper_or_empty),
-        )),
-
-        // Archives need special handling (depth limits, nested analysis)
-        ft if ft.is_archive() => None,
-
-        // All source code languages - use unified analyzer
-        _ => {
-            if let Some(analyzer) = unified::UnifiedSourceAnalyzer::for_file_type(file_type) {
-                Some(Box::new(analyzer.with_capability_mapper(mapper_or_empty)))
-            } else {
-                // Fallback to generic for types without tree-sitter (e.g. Batch).
-                // Unknown file types are skipped — analysing unrecognised data
-                // produces noise and wastes resources.
-                if *file_type == FileType::Unknown {
-                    None
-                } else {
-                    Some(Box::new(
-                        generic::GenericAnalyzer::new(*file_type)
-                            .with_capability_mapper(mapper_or_empty),
-                    ))
-                }
-            }
-        }
-    }
+    // One table, so the two entry points cannot drift: they once disagreed on
+    // YAML, PGP signatures and Flatpak bundles.
+    analyzer_for_file_type_arc(file_type, mapper.map(Arc::new))
 }
 
 /// Create an analyzer for the given file type with a shared capability mapper.
@@ -353,6 +215,8 @@ pub(crate) fn analyzer_for_file_type_arc(
         | FileType::SystemdService
         | FileType::DesktopEntry
         | FileType::Xml
+        | FileType::Yaml
+        | FileType::PgpSignature
         | FileType::Svg
         | FileType::Html
         | FileType::Jsp
@@ -368,6 +232,9 @@ pub(crate) fn analyzer_for_file_type_arc(
         | FileType::Dockerfile
         | FileType::Wasm
         | FileType::Dex
+        // Flatpak bundles remain opaque until their container format is
+        // supported by the archive extractor.
+        | FileType::Flatpak
         | FileType::Data => Some(Box::new(
             generic::GenericAnalyzer::new(*file_type).with_capability_mapper_arc(mapper_or_empty),
         )),
@@ -406,7 +273,6 @@ pub(crate) fn analyzer_for_file_type_arc(
 ///
 /// Implementors must provide `analyze_input()`; `analyze()` has a default that
 /// reads the file and delegates to it.
-#[allow(dead_code)] // Used by tests and archive_utils, false positive from lib/bin split
 pub trait Analyzer {
     /// Analyze with pre-extracted input (preferred method).
     ///
@@ -850,6 +716,23 @@ impl FileTypeExt for FileType {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// Archive members and Office macros take the `Arc` factory, top-level
+    /// files the plain one. They are one table now; the `Arc` copy used to lack
+    /// Flatpak, which it then treated as an archive and left unanalyzed.
+    #[test]
+    fn both_factories_cover_the_same_types() {
+        for file_type in [FileType::Flatpak, FileType::Yaml, FileType::PgpSignature] {
+            assert!(
+                analyzer_for_file_type(&file_type, None).is_some(),
+                "{file_type:?}"
+            );
+            assert!(
+                analyzer_for_file_type_arc(&file_type, None).is_some(),
+                "{file_type:?}"
+            );
+        }
+    }
 
     #[test]
     fn bridge_path_detection() {

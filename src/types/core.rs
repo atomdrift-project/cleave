@@ -2006,50 +2006,81 @@ impl AnalysisReport {
     /// to convert per-file reports into the flat files array structure.
     #[must_use]
     pub fn to_file_analysis(&self, id: u32) -> FileAnalysis {
-        let mut file = FileAnalysis::new(
+        // Exhaustive on purpose: a new report field is a compile error here
+        // until someone decides whether it belongs on the per-file entry. A
+        // hand-kept copy of this list once dropped `suppressions`.
+        let Self {
+            target,
+            traits,
+            findings,
+            suppressions,
+            analysis_gaps,
+            context,
+            filefacts,
+            identity,
+            filefacts_metrics,
+            structure,
+            functions,
+            strings,
+            imports,
+            exports,
+            sections,
+            yara_matches,
+            syscalls,
+            paths,
+            directories,
+            env_vars,
+            values_tree,
+            // Report-level only: not part of a per-file entry.
+            version: _,
+            analysis_timestamp: _,
+            comments: _,
+            cache_hit: _,
+            cached_member_kv: _,
+            filefacts_metric_spans: _,
+            archive_contents: _,
+            scanned_path: _,
+            files: _,
+            summary: _,
+            metadata: _,
+            diff: _,
+        } = self;
+        let mut file = FileAnalysis::from_report_parts(
             id,
-            self.target.path.clone(),
-            self.target.file_type.clone(),
-            self.target.sha256.clone(),
-            self.target.size_bytes,
+            ReportFileParts {
+                target: target.clone(),
+                traits: traits.clone(),
+                findings: findings.clone(),
+                suppressions: suppressions.clone(),
+                analysis_gaps: analysis_gaps.clone(),
+                context: context.clone(),
+                filefacts: filefacts.clone(),
+                identity: identity.clone(),
+                filefacts_metrics: filefacts_metrics.clone(),
+                structure: structure.clone(),
+                functions: functions.clone(),
+                strings: strings.clone(),
+                imports: imports.clone(),
+                exports: exports.clone(),
+                sections: sections.clone(),
+                yara_matches: yara_matches.clone(),
+                syscalls: syscalls.clone(),
+                paths: paths.clone(),
+                directories: directories.clone(),
+                env_vars: env_vars.clone(),
+            },
         );
 
-        file.arch = self
-            .target
-            .architectures
-            .as_ref()
-            .and_then(|a| a.first().cloned());
-        file.traits = self.traits.clone();
-        file.findings = self.findings.clone();
-        file.suppressions = self.suppressions.clone();
-        file.analysis_gaps = self.analysis_gaps.clone();
-        file.context = self.context.clone();
-        file.filefacts = self.filefacts.clone();
-        file.identity = self.identity.clone();
-        file.filefacts_metrics = self.filefacts_metrics.clone();
-        file.structure = self.structure.clone();
-        file.functions = self.functions.clone();
-        file.strings = self.strings.clone();
-        file.imports = self.imports.clone();
-        file.exports = self.exports.clone();
-        file.sections = self.sections.clone();
-        file.yara_matches = self.yara_matches.clone();
-        file.syscalls = self.syscalls.clone();
-        file.paths = self.paths.clone();
-        file.directories = self.directories.clone();
-        file.env_vars = self.env_vars.clone();
-
-        file.populate_file_metrics();
         // Flatten the values tree into `kv` (the serialized form). The nested
         // tree itself is NOT retained on the file: `kv` is the single output
         // representation, and the only structural reader (`type: value` sibling
         // lookups, diff) now reads `kv`. In compact-member mode the flatten is
         // skipped entirely for files no rule can reach — see `retain_folded_kv`.
-        if let Some(tree) = self.values_tree.as_deref()
+        if let Some(tree) = values_tree.as_deref()
             && retain_folded_kv(&file.path)
         {
             flatten_kv_for_output(tree, &mut file.kv);
-        } else if let Some(tree) = self.values_tree.as_deref() {
+        } else if let Some(tree) = values_tree.as_deref() {
             retain_cargo_context_values(&file.path, tree, &mut file.kv);
         }
         drop_unread_folded_fields(&mut file);
@@ -2063,60 +2094,84 @@ impl AnalysisReport {
     /// This avoids the temporary doubling of memory from cloning large reports.
     #[must_use]
     pub fn into_file_analysis(
-        mut self,
+        self,
         id: u32,
     ) -> (FileAnalysis, Vec<FileAnalysis>, Vec<ArchiveEntry>) {
-        let nested_files = std::mem::take(&mut self.files);
-        let archive_contents = std::mem::take(&mut self.archive_contents);
-        let arch = self
-            .target
-            .architectures
-            .as_ref()
-            .and_then(|a| a.first().cloned());
-
-        let mut file = FileAnalysis::new(
+        let Self {
+            target,
+            traits,
+            findings,
+            suppressions,
+            analysis_gaps,
+            context,
+            filefacts,
+            identity,
+            filefacts_metrics,
+            structure,
+            functions,
+            strings,
+            imports,
+            exports,
+            sections,
+            yara_matches,
+            syscalls,
+            paths,
+            directories,
+            env_vars,
+            values_tree,
+            cached_member_kv,
+            files: nested_files,
+            archive_contents,
+            // Report-level only: not part of a per-file entry.
+            version: _,
+            analysis_timestamp: _,
+            comments: _,
+            cache_hit: _,
+            filefacts_metric_spans: _,
+            scanned_path: _,
+            summary: _,
+            metadata: _,
+            diff: _,
+        } = self;
+        let mut file = FileAnalysis::from_report_parts(
             id,
-            self.target.path,
-            self.target.file_type,
-            self.target.sha256,
-            self.target.size_bytes,
+            ReportFileParts {
+                target,
+                traits,
+                findings,
+                suppressions,
+                analysis_gaps,
+                context,
+                filefacts,
+                identity,
+                filefacts_metrics,
+                structure,
+                functions,
+                strings,
+                imports,
+                exports,
+                sections,
+                yara_matches,
+                syscalls,
+                paths,
+                directories,
+                env_vars,
+            },
         );
 
-        file.arch = arch;
-        file.traits = self.traits;
-        file.findings = self.findings;
-        file.suppressions = self.suppressions;
-        file.analysis_gaps = self.analysis_gaps;
-        file.context = self.context;
-        file.filefacts = self.filefacts;
-        file.identity = self.identity;
-        file.filefacts_metrics = self.filefacts_metrics;
-        file.structure = self.structure;
-        file.functions = self.functions;
-        file.strings = self.strings;
-        file.imports = self.imports;
-        file.exports = self.exports;
-        file.sections = self.sections;
-        file.yara_matches = self.yara_matches;
-        file.syscalls = self.syscalls;
-        file.paths = self.paths;
-        file.directories = self.directories;
-        file.env_vars = self.env_vars;
-
-        file.populate_file_metrics();
         // `kv` is the single retained representation — see `to_file_analysis`.
         // A freshly-analyzed report carries the nested `values_tree` and flattens
         // it here; a member restored from the compact cache has no tree, only its
         // already-flattened `kv` (stashed on `cached_member_kv`), so use that
         // directly. Both paths land the same map, so the two sides of a diff
         // agree on an unchanged member instead of reporting phantom kv deltas.
-        if let Some(tree) = self.values_tree.as_deref()
+        if let Some(tree) = values_tree.as_deref()
             && retain_folded_kv(&file.path)
         {
             flatten_kv_for_output(tree, &mut file.kv);
-        } else if let Some(kv) = self.cached_member_kv.take() {
+        } else if let Some(kv) = cached_member_kv {
             file.kv = kv;
-        } else if let Some(tree) = self.values_tree.as_deref() {
+        } else if let Some(tree) = values_tree.as_deref() {
             retain_cargo_context_values(&file.path, tree, &mut file.kv);
         }
         drop_unread_folded_fields(&mut file);
@@ -2124,6 +2179,110 @@ impl AnalysisReport {
         early_strip_member_findings(&mut file);
         shrink_member_capacity(&mut file);
         (file, nested_files, archive_contents)
+    }
+}
+
+/// The per-file fields a report carries into its `FileAnalysis` entry. Filled
+/// by both conversions from an exhaustive destructure of the report.
+struct ReportFileParts {
+    target: TargetInfo,
+    traits: Vec<Trait>,
+    findings: Vec<Finding>,
+    suppressions: Vec<Suppression>,
+    analysis_gaps: super::AnalysisGaps,
+    context: Vec<ContextLine>,
+    filefacts: Option<FilefactsView>,
+    identity: Option<filefacts::Identity>,
+    filefacts_metrics: Option<std::collections::BTreeMap<String, f64>>,
+    structure: Vec<StructuralFeature>,
+    functions: Vec<Function>,
+    strings: Vec<StringInfo>,
+    imports: Vec<Import>,
+    exports: Vec<Export>,
+    sections: Vec<Section>,
+    yara_matches: Vec<YaraMatch>,
+    syscalls: Vec<SyscallInfo>,
+    paths: Vec<PathInfo>,
+    directories: Vec<DirectoryAccess>,
+    env_vars: Vec<EnvVarInfo>,
+}
+
+impl FileAnalysis {
+    /// A file entry from a report's per-file fields, with metrics populated.
+    /// Every `FileAnalysis` field is named, so a new one is a compile error
+    /// here until someone decides how a report fills it.
+    fn from_report_parts(id: u32, parts: ReportFileParts) -> Self {
+        let ReportFileParts {
+            target,
+            traits,
+            findings,
+            suppressions,
+            analysis_gaps,
+            context,
+            filefacts,
+            identity,
+            filefacts_metrics,
+            structure,
+            functions,
+            strings,
+            imports,
+            exports,
+            sections,
+            yara_matches,
+            syscalls,
+            paths,
+            directories,
+            env_vars,
+        } = parts;
+        let TargetInfo {
+            path,
+            file_type,
+            size_bytes,
+            sha256,
+            architectures,
+        } = target;
+        let mut file = Self {
+            analysis_gaps,
+            id,
+            path,
+            parent_id: None,
+            depth: 0,
+            rel: super::Rel::Member,
+            via: None,
+            role: super::Role::Content,
+            file_type,
+            arch: architectures.and_then(|archs| archs.into_iter().next()),
+            sha256,
+            size: size_bytes,
+            score: 0,
+            counts: None,
+            encoding: None,
+            findings,
+            suppressions,
+            context,
+            traits,
+            structure,
+            functions,
+            strings,
+            sections,
+            imports,
+            exports,
+            yara_matches,
+            syscalls,
+            filefacts,
+            identity,
+            filefacts_metrics,
+            paths,
+            directories,
+            env_vars,
+            extracted_path: None,
+            formula: None,
+            composite_sources: std::collections::BTreeMap::new(),
+            kv: std::collections::BTreeMap::new(),
+            precompact_facts: None,
+        };
+        file.populate_file_metrics();
+        file
     }
 }
 

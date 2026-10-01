@@ -17,7 +17,6 @@ fn criticality_to_severity(crit: Criticality) -> Severity {
 }
 
 /// Generate a malecule formula string from findings.
-#[allow(dead_code)] // Used by binary target
 #[must_use]
 pub fn formula_from_findings(findings: &[Finding]) -> String {
     let inputs: Vec<FindingInput> = findings

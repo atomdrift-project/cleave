@@ -1,6 +1,6 @@
 [package]
 name = "cleave"
-version = "2.12.0-beta.2"
+version = "2.12.0-beta.3"
 edition = "2024"
 # support current + two older releases
 rust-version = "1.94"
@@ -68,6 +68,7 @@ map_err_ignore = "warn"                 # .map_err(|_| ...) silently discards er
 wildcard_imports = "warn"               # explicit imports make it clear where names come from
 significant_drop_in_scrutinee = "warn" # lock guard held through entire match scrutinee
 significant_drop_tightening = "warn"   # suggests releasing locks earlier than current code does
+undocumented_unsafe_blocks = "warn"   # every `unsafe` block states the invariant it relies on (`// SAFETY:`)
 
 # Allow pragmatic exceptions
 # These are too noisy or conflict with readability

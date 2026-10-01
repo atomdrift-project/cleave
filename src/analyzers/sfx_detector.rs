@@ -123,8 +123,9 @@ impl InnoExtractDiagnosticKind {
             Self::UnexpectedLoaderRevision | Self::LoaderChecksumMismatch => {
                 Criticality::Suspicious
             }
-            Self::LongMemberPathRemapped => Criticality::Notable,
-            Self::SetupDataVersionUndetermined | Self::GenericFailure => Criticality::Notable,
+            Self::LongMemberPathRemapped
+            | Self::SetupDataVersionUndetermined
+            | Self::GenericFailure => Criticality::Notable,
         }
     }
 
@@ -442,13 +443,14 @@ fn tool_available(name: &str) -> bool {
     let Some(path) = filefacts::tools::resolve(name) else {
         return false;
     };
-    std::process::Command::new(path)
+    let mut command = std::process::Command::new(path);
+    command
         .arg("--version")
+        .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+        .stderr(std::process::Stdio::null());
+    crate::subprocess::output_with_timeout(&mut command, crate::subprocess::PROBE_TIMEOUT)
+        .is_ok_and(|output| output.is_some_and(|o| o.status.success()))
 }
 
 fn sevenzip_cmd() -> Option<std::path::PathBuf> {
@@ -459,13 +461,19 @@ fn sevenzip_cmd() -> Option<std::path::PathBuf> {
                 let Some(path) = filefacts::tools::resolve(name) else {
                     continue;
                 };
-                if std::process::Command::new(&path)
+                let mut probe = std::process::Command::new(&path);
+                probe
                     .arg("i")
+                    .stdin(std::process::Stdio::null())
                     .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
-                    .status()
-                    .is_ok()
-                {
+                    .stderr(std::process::Stdio::null());
+                if matches!(
+                    crate::subprocess::output_with_timeout(
+                        &mut probe,
+                        crate::subprocess::PROBE_TIMEOUT
+                    ),
+                    Ok(Some(_))
+                ) {
                     return Some(path);
                 }
             }
@@ -478,14 +486,17 @@ pub(crate) fn run_7z(src: &Path, out: &Path) -> bool {
     let Some(command) = sevenzip_cmd() else {
         return false;
     };
-    std::process::Command::new(command)
+    let mut command = std::process::Command::new(command);
+    command
         .args(["x", "-y", &format!("-o{}", out.display()), "--"])
         .arg(src)
+        // No stdin: an encrypted archive would otherwise wait at a password
+        // prompt until the timeout.
+        .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+        .stderr(std::process::Stdio::null());
+    crate::subprocess::output_with_timeout(&mut command, crate::subprocess::EXTRACT_TIMEOUT)
+        .is_ok_and(|output| output.is_some_and(|o| o.status.success()))
 }
 
 struct InnoExtractResult {
@@ -509,13 +520,24 @@ fn run_innoextract(src: &Path, out: &Path) -> InnoExtractResult {
         out.as_os_str(),
         src.as_os_str(),
     ];
-    match std::process::Command::new(&command)
+    let mut extract = std::process::Command::new(&command);
+    extract
         .args(args)
+        .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
-        .output()
-    {
-        Ok(output) => {
+        .stderr(std::process::Stdio::piped());
+    match crate::subprocess::output_with_timeout(&mut extract, crate::subprocess::EXTRACT_TIMEOUT) {
+        Ok(None) => InnoExtractResult {
+            extracted: false,
+            diagnostics: vec![InnoExtractDiagnostic {
+                kind: InnoExtractDiagnosticKind::GenericFailure,
+                message: format!(
+                    "innoextract killed after {}s",
+                    crate::subprocess::EXTRACT_TIMEOUT.as_secs()
+                ),
+            }],
+        },
+        Ok(Some(output)) => {
             #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
             if !output.status.success()
                 && crate::analyzers::inno_long_path::reports_overlong_output(&output.stderr)

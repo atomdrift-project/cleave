@@ -278,9 +278,13 @@ pub(crate) fn apply_trait_defaults(
     }
 
     // Parse arch: use trait-specific if present (unless "none"), else defaults, else [All]
+    let arch_warn_start = warnings.len();
     let arch = apply_vec_default(raw.arch, &defaults.arch)
-        .map(|archs| parse_arch(&archs))
+        .map(|archs| parse_arch(&archs, warnings))
         .unwrap_or_else(|| vec![Arch::All]);
+    for w in &mut warnings[arch_warn_start..] {
+        *w = format!("{} (trait '{}' in {})", w, raw.id, path.display());
+    }
 
     // Parse criticality: "none" means baseline
     let mut criticality = match &raw.crit {
@@ -1139,8 +1143,24 @@ pub(crate) fn parse_platforms(platforms: &[String], warnings: &mut Vec<String>) 
 }
 
 /// Parse architecture strings into Arch enum
-pub(crate) fn parse_arch(archs: &[String]) -> Vec<Arch> {
-    archs.iter().map(|a| Arch::from_str(a)).collect()
+/// Parse a rule's `arch:` list. An unknown name is reported and dropped, never
+/// read as `all`: a misspelled entry used to widen the rule to every
+/// architecture. With nothing recognized the list is empty and the rule runs
+/// only on files that carry no architecture.
+pub(crate) fn parse_arch(archs: &[String], warnings: &mut Vec<String>) -> Vec<Arch> {
+    archs
+        .iter()
+        .filter_map(|name| {
+            let arch = Arch::parse(name);
+            if arch.is_none() {
+                warnings.push(format!(
+                    "Unknown arch '{name}'. Valid values: {}",
+                    Arch::RULE_NAMES
+                ));
+            }
+            arch
+        })
+        .collect()
 }
 
 /// Parse criticality string into Criticality enum
@@ -1276,9 +1296,13 @@ pub(crate) fn apply_composite_defaults(
     }
 
     // Parse arch: use rule-specific if present (unless "none"), else defaults, else [All]
+    let arch_warn_start = warnings.len();
     let arch = apply_vec_default(raw.arch, &defaults.arch)
-        .map(|archs| parse_arch(&archs))
+        .map(|archs| parse_arch(&archs, warnings))
         .unwrap_or_else(|| vec![Arch::All]);
+    for w in &mut warnings[arch_warn_start..] {
+        *w = format!("{} (composite rule '{}' in {})", w, raw.id, path.display());
+    }
 
     // Parse criticality: "none" means baseline
     let criticality = match &raw.crit {
@@ -1695,6 +1719,20 @@ fn regex_length_warning(trait_id: &str, pattern: &str) -> String {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// A misspelled `arch:` entry is reported and dropped. It used to parse as
+    /// `all`, silently widening the rule to every architecture.
+    #[test]
+    fn unknown_rule_arch_is_reported_not_widened() {
+        let mut warnings = Vec::new();
+        let archs = parse_arch(&["x86".to_string(), "x86_46".to_string()], &mut warnings);
+        assert_eq!(archs, vec![Arch::X86]);
+        assert_eq!(warnings.len(), 1);
+        assert!(
+            warnings[0].contains("Unknown arch 'x86_46'"),
+            "{warnings:?}"
+        );
+    }
 
     // ==================== apply_string_default Tests ====================
 

@@ -13,6 +13,7 @@ use crate::composite_rules::types::FileType;
 use crate::types::{Evidence, MAX_EVIDENCE_PER_TRAIT};
 use parking_lot::RwLock;
 use rustc_hash::FxHashMap;
+use std::cell::Cell;
 use std::ops::ControlFlow;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, LazyLock};
@@ -78,11 +79,20 @@ const AST_QUERY_MATCH_LIMIT: u32 = 50_000;
 /// every alignment against a node with thousands of children, and tree-sitter's
 /// per-step state dedup is quadratic in that count: a Tcl file parsed as bash
 /// held 50k states for one pattern and burned 30+ CPU-seconds per query with no
-/// interruptible step. 256 keeps the pathological case under 0.2 s per query
-/// and changes no match on the JS/Python corpus files it was tested against.
-const AST_QUERY_GROUP_STATE_LIMIT: u32 = 256;
+/// interruptible step. 16384 gives wide but ordinary objects more headroom
+/// while keeping pathological wildcard expansion tightly bounded. A 8192-state
+/// cap still truncated ordinary samples with several independent sibling
+/// wildcards, so this doubles that headroom while preserving a firm ceiling.
+pub(super) const AST_QUERY_GROUP_STATE_LIMIT: u32 = 16384;
 const AST_QUERY_BYTE_LIMIT: usize = 10 * 1024 * 1024;
 pub(crate) const AST_QUERY_CAPTURE_LIMIT: usize = 100_000;
+
+/// Every AST query has a CPU ceiling, including direct scans without an outer
+/// scan deadline. The deadline remains a separate wall-clock/cancellation
+/// mechanism; its absence must not disable the per-query safety bound.
+pub(super) fn ast_query_cpu_budget(_deadline: Option<Instant>) -> std::time::Duration {
+    AST_QUERY_CPU_BUDGET
+}
 
 /// Clear the shared AST query cache.
 #[allow(dead_code)] // Called via clear_thread_local_caches
@@ -382,6 +392,14 @@ fn walk_ast_for_pattern_multi<'a>(
 /// Evaluate full tree-sitter query condition
 #[must_use]
 pub(crate) fn eval_ast_query<'a>(query_str: &str, ctx: &EvaluationContext<'a>) -> ConditionResult {
+    eval_ast_query_with_budget(query_str, ctx, ast_query_cpu_budget(ctx.deadline))
+}
+
+pub(super) fn eval_ast_query_with_budget<'a>(
+    query_str: &str,
+    ctx: &EvaluationContext<'a>,
+    cpu_budget: std::time::Duration,
+) -> ConditionResult {
     if let Some(cache) = ctx.ast_query_cache
         && let Some(cached) = cache.get(query_str)
     {
@@ -439,10 +457,9 @@ pub(crate) fn eval_ast_query<'a>(query_str: &str, ctx: &EvaluationContext<'a>) -
     // wall-clock bound, a thread descheduled under oversubscription gets cut off
     // spuriously and silently drops detections. CPU time avoids both.
     let mut match_count: usize = 0;
-    let cpu_budget = ctx.deadline.map(|_| AST_QUERY_CPU_BUDGET);
     let cpu_start = thread_cpu_time();
     let deadline = ctx.deadline;
-    let mut timed_out = false;
+    let timed_out = Cell::new(false);
     let mut capture_limited = false;
     // Break out of a runaway query on any of three signals: the per-rule CPU
     // budget, the wall-clock deadline, or cooperative cancellation (SIGTERM).
@@ -458,9 +475,8 @@ pub(crate) fn eval_ast_query<'a>(query_str: &str, ctx: &EvaluationContext<'a>) -
         {
             return ControlFlow::Break(());
         }
-        if let Some(budget) = cpu_budget
-            && thread_cpu_time().saturating_sub(cpu_start) > budget
-        {
+        if thread_cpu_time().saturating_sub(cpu_start) > cpu_budget {
+            timed_out.set(true);
             return ControlFlow::Break(());
         }
         ControlFlow::Continue(())
@@ -477,10 +493,8 @@ pub(crate) fn eval_ast_query<'a>(query_str: &str, ctx: &EvaluationContext<'a>) -
         if ctx.is_cancelled() || deadline.is_some_and(|dl| Instant::now() > dl) {
             break;
         }
-        if let Some(budget) = cpu_budget
-            && thread_cpu_time().saturating_sub(cpu_start) > budget
-        {
-            timed_out = true;
+        if thread_cpu_time().saturating_sub(cpu_start) > cpu_budget {
+            timed_out.set(true);
             break;
         }
         // Check text predicates (e.g., #eq?, #match?) using tree-sitter's built-in method
@@ -513,12 +527,19 @@ pub(crate) fn eval_ast_query<'a>(query_str: &str, ctx: &EvaluationContext<'a>) -
                 }
             }
         }
+        // Queries without count or proximity consumers only need to prove one
+        // match. Some sibling-wildcard patterns have combinatorial result sets;
+        // continuing to enumerate every valid alignment can burn the whole
+        // per-query CPU budget after the trait has already matched.
+        if !super::symbol_string::match_count_needed() {
+            break 'matches;
+        }
     }
     let mut warnings = Vec::new();
     if has_parse_errors {
         warnings.push(AnalysisWarning::AstParseError);
     }
-    if timed_out {
+    if timed_out.get() {
         warnings.push(AnalysisWarning::AstTooDeep { max_depth: 0 });
     }
     if query_cursor.did_exceed_match_limit() || capture_limited {
@@ -681,9 +702,10 @@ pub(crate) fn batch_ast_queries(
     query_cursor.set_byte_range(0..source.len().min(AST_QUERY_BYTE_LIMIT));
 
     let cancelled = || cancellation.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed));
-    let cpu_budget = deadline.map(|_| AST_QUERY_CPU_BUDGET);
+    // Use the same per-query CPU ceiling when there is no outer scan deadline.
+    let cpu_budget = ast_query_cpu_budget(deadline);
     let cpu_start = thread_cpu_time();
-    let mut timed_out = false;
+    let timed_out = Cell::new(false);
     let mut progress_cb = |_state: &tree_sitter::QueryCursorState| -> ControlFlow<()> {
         if cancelled() {
             return ControlFlow::Break(());
@@ -693,9 +715,8 @@ pub(crate) fn batch_ast_queries(
         {
             return ControlFlow::Break(());
         }
-        if let Some(budget) = cpu_budget
-            && thread_cpu_time().saturating_sub(cpu_start) > budget
-        {
+        if thread_cpu_time().saturating_sub(cpu_start) > cpu_budget {
+            timed_out.set(true);
             return ControlFlow::Break(());
         }
         ControlFlow::Continue(())
@@ -713,10 +734,8 @@ pub(crate) fn batch_ast_queries(
         if cancelled() || deadline.is_some_and(|dl| Instant::now() > dl) {
             return None;
         }
-        if let Some(budget) = cpu_budget
-            && thread_cpu_time().saturating_sub(cpu_start) > budget
-        {
-            timed_out = true;
+        if thread_cpu_time().saturating_sub(cpu_start) > cpu_budget {
+            timed_out.set(true);
             break;
         }
         let Some(&qi) = combined.pattern_to_query.get(m.pattern_index) else {
@@ -764,7 +783,7 @@ pub(crate) fn batch_ast_queries(
             }
         }
     }
-    if timed_out || cancelled() {
+    if cancelled() || deadline.is_some_and(|dl| Instant::now() > dl) {
         return None;
     }
     // A pattern whose states were abandoned (the per-group state cap or the
@@ -784,13 +803,21 @@ pub(crate) fn batch_ast_queries(
     let has_parse_errors = tree.root_node().has_error();
     let mut out = FxHashMap::default();
     for (i, (qstr, _)) in compiling.iter().enumerate() {
-        if exceeded[i] {
+        if exceeded[i] && !timed_out.get() {
             continue;
         }
         let bucket = &mut buckets[i];
         let mut warnings = Vec::new();
         if has_parse_errors {
             warnings.push(AnalysisWarning::AstParseError);
+        }
+        if timed_out.get() {
+            warnings.push(AnalysisWarning::AstTooDeep { max_depth: 0 });
+        }
+        if exceeded[i] {
+            warnings.push(AnalysisWarning::AstQueryLimited {
+                limit: AST_QUERY_GROUP_STATE_LIMIT as usize,
+            });
         }
         if bucket.capture_limited || bucket.match_limited {
             warnings.push(AnalysisWarning::AstQueryLimited {

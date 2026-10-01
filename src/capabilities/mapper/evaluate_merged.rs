@@ -622,6 +622,72 @@ impl super::CapabilityMapper {
         sink: Option<&crate::types::SuppressionSink>,
         targets: Option<&FxHashSet<String>>,
     ) {
+        // Archive assembly normally rechecks only findings produced at the
+        // container level; a sibling's marker must not erase a member-local
+        // decision. A rule that explicitly declares a parent-aware downgrade
+        // opts into that parent context, though. Its inherited container copy
+        // must also be eligible for the same parent `unless:` after member
+        // downgrades have been applied, or the stale hostile copy survives on
+        // the package while its source member is already downgraded.
+        let parent_scoped_unless = if targets.is_some() {
+            let has_parent_scope =
+                |downgrade: Option<&crate::composite_rules::DowngradeConditions>| {
+                    downgrade.is_some_and(|downgrade| {
+                        matches!(
+                            downgrade.scope,
+                            Some(
+                                crate::composite_rules::Scope::Parent
+                                    | crate::composite_rules::Scope::FileOrParent
+                            )
+                        )
+                    })
+                };
+            self.trait_definitions
+                .iter()
+                .filter(|rule| rule.unless.is_some() && has_parent_scope(rule.downgrade.as_ref()))
+                .map(|rule| rule.id.as_str())
+                .chain(
+                    self.composite_rules
+                        .iter()
+                        .filter(|rule| {
+                            rule.unless.is_some() && has_parent_scope(rule.downgrade.as_ref())
+                        })
+                        .map(|rule| rule.id.as_str()),
+                )
+                .collect::<FxHashSet<_>>()
+        } else {
+            FxHashSet::default()
+        };
+
+        // Third-party YARA findings are emitted by the scanner before the YAML
+        // trait pass, so they cannot carry a normal `unless:` condition. Their
+        // per-rule config may name a YAML context finding; apply that guard now,
+        // once all same-file traits and composites are available.
+        let finding_ids: Vec<String> = findings.iter().map(|f| f.id.to_string()).collect();
+        let finding_id_refs: Vec<&str> = finding_ids.iter().map(String::as_str).collect();
+        let mut suppressed_third_party = FxHashSet::default();
+        for finding in findings.iter() {
+            if !finding.id.as_str().starts_with("third_party/")
+                || targets.is_some_and(|selected| !selected.contains(finding.id.as_str()))
+            {
+                continue;
+            }
+            if let Some(context_id) = crate::third_party_config::third_party_unless_match(
+                finding.id.as_str(),
+                &finding_id_refs,
+            ) {
+                tracing::debug!(
+                    trait_id = %finding.id,
+                    context_id,
+                    "suppressed third-party YARA finding by configured unless context"
+                );
+                suppressed_third_party.insert(finding.id.to_string());
+            }
+        }
+        if !suppressed_third_party.is_empty() {
+            findings.retain(|finding| !suppressed_third_party.contains(finding.id.as_str()));
+        }
+
         let index = self.unless_index();
         if index.is_empty() {
             return;
@@ -634,7 +700,12 @@ impl super::CapabilityMapper {
 
             let suppressed: FxHashSet<crate::types::Istr> = findings
                 .iter()
-                .filter(|finding| targets.is_none_or(|ids| ids.contains(finding.id.as_str())))
+                .filter(|finding| {
+                    targets.is_none_or(|ids| {
+                        ids.contains(finding.id.as_str())
+                            || parent_scoped_unless.contains(finding.id.as_str())
+                    })
+                })
                 .filter_map(|finding| {
                     let source = (!index.by_hook_leaf.is_empty())
                         .then(|| Self::builtin_finding_hook_slug(&finding.id))
@@ -680,7 +751,7 @@ impl super::CapabilityMapper {
                 }
             }
 
-            Self::remove_findings_and_orphaned_dependents(findings, suppressed);
+            self.remove_findings_and_orphaned_dependents(findings, suppressed);
         }
     }
 
@@ -739,6 +810,7 @@ impl super::CapabilityMapper {
     /// the definition holds, not the flat `trait_refs` list. Keeping it errs
     /// toward reporting, which is the right way to err for a detector.
     fn remove_findings_and_orphaned_dependents(
+        &self,
         findings: &mut Vec<Finding>,
         removed: FxHashSet<crate::types::Istr>,
     ) {
@@ -746,6 +818,8 @@ impl super::CapabilityMapper {
         while !removed.is_empty() {
             findings.retain(|f| !removed.contains(f.id.as_str()));
 
+            let owned_ids: Vec<String> = findings.iter().map(|f| f.id.to_string()).collect();
+            let current_ids: FxHashSet<&str> = owned_ids.iter().map(String::as_str).collect();
             let mut orphaned: FxHashSet<crate::types::Istr> = FxHashSet::default();
             for finding in findings.iter_mut() {
                 if finding.trait_refs.is_empty() {
@@ -753,7 +827,12 @@ impl super::CapabilityMapper {
                 }
                 let before = finding.trait_refs.len();
                 finding.trait_refs.retain(|r| !removed.contains(r.as_str()));
-                if finding.trait_refs.is_empty() && before > 0 {
+                let composite_invalidated = self
+                    .composite_rules
+                    .iter()
+                    .find(|rule| rule.id == finding.id.as_str())
+                    .is_some_and(|rule| !self.composite_trait_legs_still_match(rule, &current_ids));
+                if composite_invalidated || (finding.trait_refs.is_empty() && before > 0) {
                     orphaned.insert(finding.id.clone());
                 }
             }
@@ -765,6 +844,58 @@ impl super::CapabilityMapper {
             }
             removed = orphaned;
         }
+    }
+
+    /// Check the trait-reference parts of a previously matched composite after
+    /// retroactive `unless:` suppression removed findings. This catches a
+    /// composite that still has its `all:` legs but lost the only `any:` leg
+    /// that made it match. Conditions that inspect bytes or other context are
+    /// unchanged by this pass; a mixed `any:` group is therefore left alone.
+    fn composite_trait_legs_still_match(
+        &self,
+        rule: &crate::composite_rules::CompositeTrait,
+        current_ids: &FxHashSet<&str>,
+    ) -> bool {
+        let matches = |id: &str| {
+            // Reuse the same exact, suffix, and directory-prefix rules as an
+            // ordinary trait reference.
+            current_ids
+                .iter()
+                .any(|candidate| self.trait_reference_matches(id, candidate))
+        };
+
+        if let Some(all) = &rule.all {
+            for condition in all {
+                if let crate::composite_rules::Condition::Trait { id } = condition
+                    && !matches(id)
+                {
+                    return false;
+                }
+            }
+        }
+
+        if let Some(any) = &rule.any
+            && any.iter().all(|condition| {
+                matches!(condition, crate::composite_rules::Condition::Trait { .. })
+            })
+        {
+            let mut matched = 0;
+            for condition in any {
+                let crate::composite_rules::Condition::Trait { id } = condition else {
+                    continue;
+                };
+                let count = current_ids
+                    .iter()
+                    .filter(|candidate| self.trait_reference_matches(id, candidate))
+                    .count();
+                matched += count.max(usize::from(matches(id)));
+            }
+            if matched < rule.needs.unwrap_or(1) {
+                return false;
+            }
+        }
+
+        true
     }
 
     /// The retroactive-suppression tables, built on first use (see
@@ -836,11 +967,19 @@ impl super::CapabilityMapper {
     /// Mirrors the ID-matching logic used in `eval_trait` so that retroactive suppression
     /// behaves identically to runtime evaluation.
     fn unless_trait_id_matches(&self, id: &str, all_ids: &FxHashSet<&str>) -> bool {
+        all_ids
+            .iter()
+            .any(|finding_id| self.trait_reference_matches(id, finding_id))
+    }
+
+    /// Check whether one finding id satisfies a trait reference, including
+    /// exact, same-directory suffix, and directory-prefix references.
+    fn trait_reference_matches(&self, id: &str, finding_id: &str) -> bool {
         let id = id.trim_end_matches('/');
 
         // Specific reference (contains `::`): exact match only.
         if id.contains("::") {
-            return all_ids.contains(id);
+            return finding_id == id;
         }
 
         // No slashes: suffix match (short name, same-directory style).
@@ -848,18 +987,16 @@ impl super::CapabilityMapper {
         if !id.contains('/') {
             let suffix_new = format!("::{id}");
             let suffix_legacy = format!("/{id}");
-            return all_ids
-                .iter()
-                .any(|fid| fid.ends_with(&suffix_new) || fid.ends_with(&suffix_legacy));
+            return finding_id.ends_with(&suffix_new) || finding_id.ends_with(&suffix_legacy);
         }
 
         // Has slashes but no `::`: directory-prefix match.
         // e.g. "micro-behaviors/fs" matches any finding under that path.
         let prefix_new = format!("{id}::");
         let prefix_legacy = format!("{id}/");
-        all_ids.iter().any(|fid| {
-            *fid == id || fid.starts_with(&prefix_new) || fid.starts_with(&prefix_legacy)
-        })
+        finding_id == id
+            || finding_id.starts_with(&prefix_new)
+            || finding_id.starts_with(&prefix_legacy)
     }
 }
 

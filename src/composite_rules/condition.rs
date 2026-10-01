@@ -1248,6 +1248,9 @@ enum ConditionTagged {
         length_min: Option<usize>,
         #[serde(default)]
         length_max: Option<usize>,
+        /// Ignore HTML and ASP.NET server-side comments in raw source scans.
+        #[serde(default)]
+        exclude_html_comments: bool,
         #[serde(rename = "is", default)]
         is_check: Option<StringValidator>,
         #[serde(default)]
@@ -1325,6 +1328,10 @@ enum ConditionTagged {
         radix: Option<u32>,
         #[serde(default)]
         case_insensitive: bool,
+        /// Exclude Python docstring literals from source-string matches.
+        /// Defaults to false to preserve existing matching behavior.
+        #[serde(default)]
+        exclude_docstrings: bool,
         #[serde(rename = "is", default)]
         is_check: Option<StringValidator>,
         #[serde(default)]
@@ -1821,6 +1828,7 @@ impl From<ConditionDeser> for Condition {
                     case_insensitive,
                     length_min,
                     length_max,
+                    exclude_html_comments,
                     is_check,
                     not,
                     platforms,
@@ -1838,6 +1846,7 @@ impl From<ConditionDeser> for Condition {
                     case_insensitive,
                     length_min,
                     length_max,
+                    exclude_html_comments,
                     is_check,
                     not,
                     platforms,
@@ -1875,6 +1884,7 @@ impl From<ConditionDeser> for Condition {
                     value,
                     radix,
                     case_insensitive,
+                    exclude_docstrings,
                     is_check,
                     not,
                     platforms,
@@ -1892,6 +1902,7 @@ impl From<ConditionDeser> for Condition {
                     value,
                     radix,
                     case_insensitive,
+                    exclude_docstrings,
                     is_check,
                     not,
                     platforms,
@@ -2168,6 +2179,7 @@ impl From<Condition> for ConditionTagged {
                 case_insensitive,
                 length_min,
                 length_max,
+                exclude_html_comments,
                 is_check,
                 not,
                 platforms,
@@ -2185,6 +2197,7 @@ impl From<Condition> for ConditionTagged {
                 case_insensitive,
                 length_min,
                 length_max,
+                exclude_html_comments,
                 is_check,
                 not,
                 platforms,
@@ -2222,6 +2235,7 @@ impl From<Condition> for ConditionTagged {
                 value,
                 radix,
                 case_insensitive,
+                exclude_docstrings,
                 is_check,
                 not,
                 platforms,
@@ -2239,6 +2253,7 @@ impl From<Condition> for ConditionTagged {
                 value,
                 radix,
                 case_insensitive,
+                exclude_docstrings,
                 is_check,
                 not,
                 platforms,
@@ -2769,6 +2784,9 @@ pub(crate) struct TextQuery {
     /// isn't spent visiting every short run on match-dense content.
     pub length_min: Option<usize>,
     pub length_max: Option<usize>,
+    /// Ignore HTML (`<!-- -->`) and ASP.NET (`<%-- --%>`) comments when
+    /// scanning raw source text. Encoded strings are not markup.
+    pub exclude_html_comments: bool,
     pub is_check: Option<StringValidator>,
     pub not: Option<Vec<NotException>>,
     pub platforms: Option<Vec<Platform>>,
@@ -2879,6 +2897,10 @@ pub(crate) struct LiteralQuery {
     pub value: Option<i64>,
     pub radix: Option<u32>,
     pub case_insensitive: bool,
+    /// Skip Python module/class/function docstrings while matching source
+    /// string literals. Useful for capabilities where a documented URL or
+    /// command is not evidence that the program uses it.
+    pub exclude_docstrings: bool,
     pub is_check: Option<StringValidator>,
     pub not: Option<Vec<NotException>>,
     pub platforms: Option<Vec<Platform>>,
@@ -4351,6 +4373,7 @@ mod location_constraint_tests {
             encoding: None,
             length_min: None,
             length_max: None,
+            exclude_html_comments: false,
             exact: Some("test".to_string()),
             substr: None,
             regex: None,
@@ -4430,6 +4453,21 @@ mod location_constraint_tests {
             Condition::Text(TextQuery {
                 length_min: Some(4000),
                 length_max: None,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn text_yaml_parses_html_comment_exclusion() {
+        let cond: Condition = serde_yaml::from_str(
+            "type: text\nregex: 'Server\\.MapPath'\nexclude_html_comments: true",
+        )
+        .expect("parse text comment option");
+        assert!(matches!(
+            cond,
+            Condition::Text(TextQuery {
+                exclude_html_comments: true,
                 ..
             })
         ));
@@ -4980,6 +5018,17 @@ is: curl
     }
 
     #[test]
+    fn literal_yaml_parses_docstring_exclusion() {
+        let cond: Condition =
+            serde_yaml::from_str("type: literal\nregex: 'https?://'\nexclude_docstrings: true")
+                .expect("parse source literal options");
+        let Condition::Literal(query) = cond else {
+            panic!("expected a literal condition");
+        };
+        assert!(query.exclude_docstrings);
+    }
+
+    #[test]
     fn greedy_pattern_lint_skips_string_literal_regex() {
         let cond = Condition::Literal(LiteralQuery {
             kind: None,
@@ -4990,6 +5039,7 @@ is: curl
             value: None,
             radix: None,
             case_insensitive: false,
+            exclude_docstrings: false,
             is_check: None,
             not: None,
             platforms: None,

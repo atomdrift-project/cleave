@@ -35,6 +35,10 @@ struct RuleOverride {
     crit: Option<String>,
     #[serde(default)]
     disable: bool,
+    /// Named finding IDs that suppress this result in the same file, checked
+    /// after ordinary YAML traits and composites have been evaluated.
+    #[serde(default)]
+    unless: Vec<String>,
     #[serde(default)]
     #[allow(dead_code)]
     reason: Option<String>,
@@ -120,6 +124,15 @@ impl Config {
         // 3. Global default
         Some(self.default_crit.clone())
     }
+
+    fn suppressed_by_unless(&self, trait_id: &str, finding_ids: &[&str]) -> Option<String> {
+        self.overrides.get(trait_id)?.unless.iter().find_map(|id| {
+            finding_ids
+                .iter()
+                .any(|present| *present == id)
+                .then(|| id.clone())
+        })
+    }
 }
 
 static CONFIG: OnceLock<Config> = OnceLock::new();
@@ -145,6 +158,13 @@ fn extract_vendor(namespace: &str) -> &str {
 pub fn third_party_criticality(namespace: &str, trait_id: Option<&str>) -> Option<String> {
     let vendor = extract_vendor(namespace);
     config().criticality_for(vendor, trait_id)
+}
+
+/// Return the matched `unless` finding for a third-party YARA trait, if any.
+/// These guards are checked after YAML traits and composites for the same file.
+#[must_use]
+pub fn third_party_unless_match(trait_id: &str, finding_ids: &[&str]) -> Option<String> {
+    config().suppressed_by_unless(trait_id, finding_ids)
 }
 
 /// Get all disabled rule IDs from the config.
@@ -200,6 +220,48 @@ overrides:
             Some(&"suspicious".to_string())
         );
         assert_eq!(config.overrides.len(), 1);
+    }
+
+    #[test]
+    fn test_third_party_unless_requires_named_context_finding() {
+        let config = Config::from_yaml(
+            r#"
+default_crit: "hostile"
+overrides:
+  - id: third_party/SigBase/webshell
+    unless:
+      - well-known/tool/offensive/payload-corpus::payloadsallthethings-release-member
+"#,
+        )
+        .unwrap();
+        let release_member =
+            "well-known/tool/offensive/payload-corpus::payloadsallthethings-release-member";
+        assert_eq!(
+            config.suppressed_by_unless("third_party/SigBase/webshell", &[release_member]),
+            Some(release_member.to_string())
+        );
+        assert_eq!(
+            config.suppressed_by_unless("third_party/SigBase/webshell", &["metadata/file/foo"]),
+            None
+        );
+        assert_eq!(
+            config.suppressed_by_unless("third_party/SigBase/other", &[release_member]),
+            None
+        );
+    }
+
+    #[test]
+    fn test_workspace_third_party_unless_configuration_loads() {
+        let config = Config::load();
+        let release_member =
+            "well-known/tool/offensive/payload-corpus::payloadsallthethings-release-member";
+        assert_eq!(
+            config.suppressed_by_unless(
+                "third_party/SigBase/WEBSHELL/PHP/Generic/Eval",
+                &[release_member],
+            ),
+            Some(release_member.to_string())
+        );
     }
 
     #[test]

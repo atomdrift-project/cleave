@@ -572,7 +572,7 @@ impl PEAnalyzer {
                 "Binary contains a UPX packing marker".to_string(),
                 1.0,
             )
-            .with_criticality(Criticality::Suspicious),
+            .with_criticality(Criticality::Notable),
         );
 
         if !UPXDecompressor::is_available() {
@@ -1181,7 +1181,19 @@ impl PEAnalyzer {
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("binary.exe");
-        let detected_sfx_kind = crate::analyzers::sfx_detector::detect_sfx(pe_data);
+        // Discover embedded images once and use their validated spans when
+        // identifying SFX markers. A nested Inno installer must be analyzed
+        // as the embedded child; its marker must not make the host itself look
+        // like an Inno setup or trigger extraction of the wrong byte range.
+        let embedded = if self.skip_embedded_scan {
+            Vec::new()
+        } else {
+            crate::analyzers::embedded_binary_detector::scan_for_embedded_binaries(
+                pe_data,
+                self.cancellation.as_deref(),
+            )
+        };
+        let detected_sfx_kind = crate::analyzers::sfx_detector::detect_sfx(pe_data, &embedded);
         if let Some(sfx_kind) = detected_sfx_kind {
             let sfx_result = crate::analyzers::sfx_detector::analyze_sfx(
                 analysis_path,
@@ -1190,6 +1202,7 @@ impl PEAnalyzer {
                 Some(self.capability_mapper.clone()),
                 self.yara_engine.clone(),
                 Some(&self.archive_config),
+                &embedded,
             );
             report.findings.push(sfx_result.sfx_finding);
             report.findings.extend(sfx_result.extraction_findings);
@@ -1239,10 +1252,6 @@ impl PEAnalyzer {
                 .unwrap_or("binary.exe")
                 .to_string();
             let cert_range = pe_certificate_range_from_ctx(ctx, pe_data);
-            let embedded = crate::analyzers::embedded_binary_detector::scan_for_embedded_binaries(
-                pe_data,
-                self.cancellation.as_deref(),
-            );
             // Invariant across every embedded candidate — compute once, not per
             // binary. `is_dotnet` scans the whole PE buffer; the platform-signed
             // check rescans findings (the embedded-binary findings pushed in this
@@ -2218,8 +2227,8 @@ mod tests {
         assert!(upx_finding.is_some(), "Should have UPX finding");
         let finding = upx_finding.unwrap();
 
-        // UPX materially changes static visibility even when otherwise legitimate.
-        assert_eq!(finding.crit, Criticality::Suspicious);
+        // A stock UPX marker records packing; it does not establish evasion intent.
+        assert_eq!(finding.crit, Criticality::Notable);
         assert_eq!(finding.conf, 1.0);
         assert_eq!(finding.desc, "Binary contains a UPX packing marker");
     }

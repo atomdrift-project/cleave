@@ -1004,6 +1004,8 @@ pub(crate) fn mapper_cache_key_for(traits_dir: &Path) -> Result<String> {
     let dir_tag = traits_dir_tag(traits_dir);
     let build = digest_bytes(crate::traits_fingerprint::binary_identity().as_bytes());
 
+    // v14: each rule line is `[defined_in, rule]`, so a hit restores the
+    // source path that evaluation filters on (tiny DOS `.com` allowlists).
     // v13: new `shellcode` file type. Like v10, an older parser stored the
     // unknown `for:` token as a parse error.
     // v12: JSON lines, one rule per line, so a hit parses in parallel; and
@@ -1026,7 +1028,7 @@ pub(crate) fn mapper_cache_key_for(traits_dir: &Path) -> Result<String> {
     // The build-id now covers that case; bump this prefix when the key's
     // meaning changes.
     Ok(format!(
-        "capability-mapper-v13-{version}-{dir_tag}-{fingerprint:016x}-{build:016x}.bin"
+        "capability-mapper-v14-{version}-{dir_tag}-{fingerprint:016x}-{build:016x}.bin"
     ))
 }
 

@@ -1202,6 +1202,7 @@ fn powershell_case_trait() -> TraitDefinition {
         encoding: None,
         length_min: None,
         length_max: None,
+        exclude_html_comments: false,
         exact: None,
         substr: None,
         regex: Some("[Pp][Oo][Ww][Ee][Rr][Ss][Hh][Ee][Ll][Ll]".to_string()),

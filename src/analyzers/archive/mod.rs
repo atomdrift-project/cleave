@@ -50,6 +50,65 @@ const MIN_PATH_CORPUS_EDGE_CASE_ENTRIES: usize = 24;
 const MAX_PATH_CORPUS_FILE_SIZE: u64 = 512;
 const MAX_PATH_CORPUS_TOTAL_SIZE: u64 = 128 * 1024;
 
+/// Give container-owned findings an explicit archive-root location. An
+/// absent/value/offset-only location otherwise becomes the empty scope key,
+/// which can let `scope: archive` join it to evidence from unrelated members.
+fn locate_archive_root_findings(findings: &mut [Finding]) {
+    for finding in findings {
+        for evidence in &mut finding.evidence {
+            match evidence.location.as_deref() {
+                Some(location) if location.starts_with("archive:") => {}
+                Some(location) => evidence.location = Some(format!("archive:{location}")),
+                None => evidence.location = Some("archive:".to_string()),
+            }
+        }
+    }
+}
+
+/// Return a member path relative to this archive, using the single `!`
+/// separator expected by `Evidence.location` and archive-scope bucketing.
+fn archive_member_relative_path(container_path: &str, member_path: &str) -> String {
+    let prefix = format!("{container_path}!!");
+    let relative = member_path
+        .strip_prefix(&prefix)
+        .or_else(|| {
+            member_path
+                .strip_prefix(container_path)
+                .map(|p| p.trim_start_matches('!'))
+        })
+        .unwrap_or(member_path);
+    relative.replace("!!", "!")
+}
+
+/// Attribute evidence from an analyzed member to its containing archive path.
+/// This preserves byte/value detail while making the nearest archive visible
+/// to `scope: archive` composites.
+fn locate_archive_member_finding(finding: &mut Finding, relative_path: &str) {
+    for evidence in &mut finding.evidence {
+        let location = match evidence.location.as_deref() {
+            Some(location) if location.starts_with("archive:") => {
+                let expected = format!("archive:{relative_path}");
+                if location == expected
+                    || location.starts_with(&format!("{expected}:"))
+                    || location.starts_with(&format!("{expected}!"))
+                {
+                    continue;
+                }
+                let owner = relative_path
+                    .rsplit_once('!')
+                    .map_or(relative_path, |(archive, _)| archive);
+                format!(
+                    "archive:{owner}!{}",
+                    location.trim_start_matches("archive:")
+                )
+            }
+            Some(location) => format!("archive:{relative_path}:{location}"),
+            None => format!("archive:{relative_path}"),
+        };
+        evidence.location = Some(location);
+    }
+}
+
 fn is_zip_container(file_type: FileType) -> bool {
     matches!(
         file_type,
@@ -989,7 +1048,7 @@ fn push_archive_hostile_findings(
                 ));
             }
             HostileArchiveReason::SymlinkEscape(path) => {
-                if !is_benign_archive_symlink_escape(source, &path) {
+                if !is_benign_archive_symlink_escape(archive_path, &path) {
                     report.findings.push(archive_finding(
                         "anti-analysis/archive/symlink-escape",
                         "Archive contains symlink that may escape extraction directory".to_string(),
@@ -1094,8 +1153,12 @@ fn path_looks_synthetic_edge_case(name: &str) -> bool {
     )
 }
 
-fn is_benign_archive_symlink_escape(source: &str, path: &str) -> bool {
-    let source = source.trim();
+/// Whether a symlink escape (`path` is `link -> target`) inside the archive at
+/// `archive_path` is a known-benign shape: system-package or container-image
+/// layouts, or an archive that itself sits in a test-fixture directory.
+fn is_benign_archive_symlink_escape(archive_path: &Path, path: &str) -> bool {
+    let archive_path = archive_path.to_string_lossy();
+    let archive_path = archive_path.trim();
     let path = path.trim();
 
     if (path.contains("/node_gyp_bins/python3") || path.contains("/node_gyp_bins/python"))
@@ -1130,19 +1193,19 @@ fn is_benign_archive_symlink_escape(source: &str, path: &str) -> bool {
         }
     }
 
-    let source_lc = source.to_ascii_lowercase();
-    let system_package_or_container = source_lc.ends_with(".pkg.tar.zst")
-        || source_lc.ends_with(".pkg.tar.xz")
-        || source_lc.ends_with(".pkg.tar.gz")
-        || source_lc.contains("docker.io_")
-        || source_lc.contains("ghcr.io_")
-        || source_lc.contains("quay.io_")
-        || source_lc.contains("registry.k8s.io_");
+    let archive_lc = archive_path.to_ascii_lowercase();
+    let system_package_or_container = archive_lc.ends_with(".pkg.tar.zst")
+        || archive_lc.ends_with(".pkg.tar.xz")
+        || archive_lc.ends_with(".pkg.tar.gz")
+        || archive_lc.contains("docker.io_")
+        || archive_lc.contains("ghcr.io_")
+        || archive_lc.contains("quay.io_")
+        || archive_lc.contains("registry.k8s.io_");
     if system_package_or_container && path.contains(" -> ") {
         return true;
     }
 
-    source
+    archive_path
         .split(['/', '\\', '!'])
         .chain(path.split("->").next().unwrap_or("").split(['/', '\\']))
         .any(|component| matches!(component, "testdata" | "fixture" | "fixtures"))
@@ -2464,8 +2527,9 @@ impl ArchiveAnalyzer {
         let Some(mapper) = &self.capability_mapper else {
             return;
         };
-        let archive_atomic_findings =
+        let mut archive_atomic_findings =
             mapper.evaluate_traits_with_ast(report, archive_data, None, None);
+        locate_archive_root_findings(&mut archive_atomic_findings);
         report
             .findings
             .extend(archive_atomic_findings.iter().cloned());
@@ -2501,15 +2565,36 @@ impl ArchiveAnalyzer {
             *finding_origins.entry(finding.id.to_string()).or_default() |= container_bit;
         }
 
-        let mut ranked: Vec<&Finding> = report
+        let mut ranked: Vec<(&Finding, Option<&str>)> = report
             .files
             .iter()
-            .flat_map(|f| f.findings.iter())
-            .chain(archive_atomic_findings.iter())
+            .flat_map(|file| {
+                file.findings
+                    .iter()
+                    .map(move |finding| (finding, Some(file.path.as_str())))
+            })
+            .chain(
+                archive_atomic_findings
+                    .iter()
+                    .map(|finding| (finding, None)),
+            )
             .collect();
-        ranked.sort_unstable_by(|a, b| b.crit.cmp(&a.crit).then_with(|| b.conf.total_cmp(&a.conf)));
+        ranked.sort_unstable_by(|(a, _), (b, _)| {
+            b.crit.cmp(&a.crit).then_with(|| b.conf.total_cmp(&a.conf))
+        });
         ranked.truncate(MAX_NESTED_FINDINGS);
-        let mut nested_findings: Vec<Finding> = ranked.into_iter().cloned().collect();
+        let mut nested_findings: Vec<Finding> = ranked
+            .into_iter()
+            .map(|(finding, member_path)| {
+                let mut finding = finding.clone();
+                if let Some(member_path) = member_path {
+                    let relative_path =
+                        archive_member_relative_path(&report.target.path, member_path);
+                    locate_archive_member_finding(&mut finding, &relative_path);
+                }
+                finding
+            })
+            .collect();
 
         let entry_names: Vec<String> = report
             .archive_contents
@@ -2517,7 +2602,8 @@ impl ArchiveAnalyzer {
             .map(|e| e.path.clone())
             .collect();
         if !entry_names.is_empty() {
-            let basename_findings = mapper.evaluate_basename_traits_for_entries(&entry_names);
+            let mut basename_findings = mapper.evaluate_basename_traits_for_entries(&entry_names);
+            locate_archive_root_findings(&mut basename_findings);
             for finding in &basename_findings {
                 *finding_origins.entry(finding.id.to_string()).or_default() |= container_bit;
             }
@@ -2573,6 +2659,23 @@ impl ArchiveAnalyzer {
         // 13k-member archive the serial loop was a single-threaded tail that
         // ran after all member analysis had finished.
         let reeval_file = |file: &mut crate::types::FileAnalysis| {
+            if file.path.contains("##") {
+                let path_findings =
+                    mapper.evaluate_path_traits_for_file(&file.path, &file.file_type);
+                if !path_findings.is_empty() {
+                    for finding in path_findings {
+                        if !file
+                            .findings
+                            .iter()
+                            .any(|existing| existing.id == finding.id)
+                        {
+                            file.findings.push(finding);
+                        }
+                    }
+                    mapper
+                        .apply_retroactive_unless_suppression_to_findings(&mut file.findings, None);
+                }
+            }
             mapper.reeval_downgrades_cross_scope(
                 &mut file.findings,
                 &container_snapshot,
@@ -2964,6 +3067,42 @@ mod tests {
     use ::tar;
     use ::zip;
 
+    /// The package/container allowance keys on the archive's own path. The
+    /// call site used to pass the evidence label `"archive_analyzer"` in that
+    /// slot, so the allowance could never fire.
+    #[test]
+    fn symlink_escape_allowance_reads_the_archive_path() {
+        let link = "usr/lib/libfoo.so -> /opt/foo/lib/libfoo.so";
+        assert!(is_benign_archive_symlink_escape(
+            Path::new("/cache/foo-1.0-1-x86_64.pkg.tar.zst"),
+            link
+        ));
+        assert!(is_benign_archive_symlink_escape(
+            Path::new("/images/docker.io_library_alpine.tar"),
+            link
+        ));
+        assert!(!is_benign_archive_symlink_escape(
+            Path::new("/downloads/update.tar"),
+            link
+        ));
+
+        let mut report = AnalysisReport::new(TargetInfo::default());
+        push_archive_hostile_findings(
+            &mut report,
+            vec![HostileArchiveReason::SymlinkEscape(link.to_string())],
+            Path::new("/cache/foo-1.0-1-x86_64.pkg.tar.zst"),
+            "archive_analyzer",
+            false,
+        );
+        assert!(
+            report
+                .findings
+                .iter()
+                .all(|f| &*f.id != "anti-analysis/archive/symlink-escape"),
+            "a system package's symlinks are not an escape finding"
+        );
+    }
+
     /// Builds a tar the way `tar -cf x.tar .` does -- a leading `./` entry for
     /// the directory itself -- and asserts it is not reported as zip-slip,
     /// while a sibling tar carrying a real `../` escape still is.
@@ -3295,6 +3434,142 @@ mod tests {
         let mut file = tempfile::NamedTempFile::new().expect("create temp yaml");
         file.write_all(yaml.as_bytes()).expect("write temp yaml");
         file
+    }
+
+    fn archive_scope_test_finding(id: &str, location: Option<&str>) -> Finding {
+        Finding {
+            id: id.into(),
+            evidence: vec![Evidence {
+                location: location.map(str::to_string),
+                ..Evidence::default()
+            }],
+            ..Finding::default()
+        }
+    }
+
+    #[test]
+    fn archive_member_locations_preserve_offsets_and_locate_unpositioned_evidence() {
+        let mut offset_finding = archive_scope_test_finding("offset", Some("0x10"));
+        locate_archive_member_finding(&mut offset_finding, "a.js");
+        assert_eq!(
+            offset_finding.evidence[0].location.as_deref(),
+            Some("archive:a.js:0x10")
+        );
+
+        let mut unlocated_finding = archive_scope_test_finding("unlocated", None);
+        locate_archive_member_finding(&mut unlocated_finding, "b.js");
+        assert_eq!(
+            unlocated_finding.evidence[0].location.as_deref(),
+            Some("archive:b.js")
+        );
+
+        let mut root_finding = archive_scope_test_finding("root", None);
+        locate_archive_root_findings(std::slice::from_mut(&mut root_finding));
+        assert_eq!(
+            root_finding.evidence[0].location.as_deref(),
+            Some("archive:")
+        );
+    }
+
+    #[test]
+    fn container_composites_attribute_member_evidence_to_archive_paths() {
+        let yaml = r#"
+defaults:
+  for: [zip, javascript]
+  platforms: [unix, windows, macos]
+traits:
+  - id: "test/archive::member-a"
+    desc: "member A marker"
+    crit: baseline
+    if:
+      type: string_literal
+      exact: "a"
+  - id: "test/archive::member-b"
+    desc: "member B marker"
+    crit: baseline
+    if:
+      type: string_literal
+      exact: "b"
+  - id: "test/archive::nested-c"
+    desc: "nested C marker"
+    crit: baseline
+    if:
+      type: string_literal
+      exact: "c"
+composite_rules:
+  - id: "test/archive::same-archive-members"
+    desc: "two direct members of one archive"
+    crit: suspicious
+    scope: archive
+    all:
+      - id: "test/archive::member-a"
+      - id: "test/archive::member-b"
+  - id: "test/archive::no-cross-nested-archive"
+    desc: "direct and nested archive members"
+    crit: suspicious
+    scope: archive
+    all:
+      - id: "test/archive::member-a"
+      - id: "test/archive::nested-c"
+"#;
+        let traits_file = write_test_traits(yaml);
+        let mapper = CapabilityMapper::from_yaml(traits_file.path()).expect("load test mapper");
+        let archive = tempfile::NamedTempFile::new().expect("create archive path");
+        let archive_path = archive.path().to_string_lossy().into_owned();
+        let mut report = AnalysisReport::new(TargetInfo {
+            path: archive_path.clone(),
+            file_type: "zip".to_string(),
+            size_bytes: 4,
+            ..TargetInfo::default()
+        });
+
+        for (id, path, location) in [
+            ("test/archive::member-a", "a.js", Some("0x10")),
+            ("test/archive::member-b", "b.js", None),
+            ("test/archive::nested-c", "inner.zip!!c.js", Some("0x20")),
+        ] {
+            let mut member = FileAnalysis::new(
+                0,
+                format!("{archive_path}!!{path}"),
+                "javascript".to_string(),
+                String::new(),
+                0,
+            );
+            member
+                .findings
+                .push(archive_scope_test_finding(id, location));
+            report.files.push(member);
+        }
+
+        ArchiveAnalyzer::new()
+            .with_capability_mapper(mapper)
+            .evaluate_container_findings(&mut report, b"ROOT");
+
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|finding| finding.id.as_ref() == "test/archive::same-archive-members"),
+            "separate direct members should join at their containing archive scope"
+        );
+        let same_archive = report
+            .findings
+            .iter()
+            .find(|finding| finding.id.as_ref() == "test/archive::same-archive-members")
+            .expect("same archive composite");
+        let locations: Vec<_> = same_archive
+            .evidence
+            .iter()
+            .filter_map(|evidence| evidence.location.as_deref())
+            .collect();
+        assert!(locations.contains(&"archive:a.js:0x10"));
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|finding| finding.id.as_ref() == "test/archive::no-cross-nested-archive"),
+            "direct and nested members must not join across the nested archive boundary"
+        );
     }
 
     fn make_archive_test_mapper() -> crate::capabilities::CapabilityMapper {
@@ -5527,6 +5802,12 @@ traits:
         assert!(
             paths.iter().any(|p| p.contains("alpha.txt")),
             "members ahead of the cut should be analyzed, got: {paths:?}"
+        );
+        // The member the cut lands in keeps the bytes read before it: droppers
+        // ship their payload last, and a truncated copy is still evidence.
+        assert!(
+            paths.iter().any(|p| p.contains("beta.txt")),
+            "the member cut mid-stream should be analyzed from its prefix, got: {paths:?}"
         );
     }
 

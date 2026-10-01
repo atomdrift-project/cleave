@@ -658,6 +658,15 @@ fn xor_encoded_pe_is_a_decoded_payload() {
     assert_eq!(payload.detected_type, FileType::Pe);
     assert_eq!(payload.original_offset, 0);
 
+    let mut prefixed_plain = vec![0x90; 8];
+    prefixed_plain.extend_from_slice(pe);
+    let prefixed_enc: Vec<u8> = prefixed_plain.iter().map(|b| b ^ 0x23).collect();
+    let prefixed_id = FileId::from_path_and_bytes(Path::new("payload"), &prefixed_enc);
+    let prefixed_payload = super::xor_encoded_pe(&prefixed_id, &prefixed_enc)
+        .expect("recover PE after short XORed prefix");
+    assert_eq!(prefixed_payload.data, pe);
+    assert_eq!(prefixed_payload.original_offset, 8);
+
     assert!(super::xor_encoded_pe(&id(pe), pe).is_none());
     let noise: Vec<u8> = (0..4096u32)
         .map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8)

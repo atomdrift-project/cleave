@@ -11,9 +11,23 @@
 //! - Real-world scenarios (package.json, manifest.json, pyproject.toml)
 
 use super::kv::*;
-use crate::composite_rules::{Condition, KvQuery};
+use crate::composite_rules::{Condition, EvaluationContext, FileType, KvQuery};
+use crate::types::{AnalysisReport, Evidence, TargetInfo};
 use serde_json::json;
 use std::path::Path;
+
+/// Evaluate `condition` against `content` as if it were the file at `path`.
+fn evaluate_kv_at(condition: &Condition, content: &[u8], path: &Path) -> Option<Evidence> {
+    let report = AnalysisReport::new(TargetInfo {
+        path: path.display().to_string(),
+        file_type: "test".to_string(),
+        size_bytes: content.len() as u64,
+        sha256: "test".to_string(),
+        architectures: None,
+    });
+    let ctx = EvaluationContext::test_only_new(&report, content, FileType::All);
+    evaluate_kv(condition, &ctx)
+}
 
 // ==================== Format Detection Tests ====================
 
@@ -115,10 +129,7 @@ fn test_parse_path_wildcard() {
     let segments = parse_path("items[*]").unwrap();
     assert_eq!(
         segments,
-        vec![
-            PathSegment::Key("items".to_string()),
-            PathSegment::Wildcard,
-        ]
+        vec![PathSegment::Key("items".to_string()), PathSegment::Wildcard,]
     );
 }
 
@@ -252,7 +263,11 @@ fn test_navigate_index_on_non_array() {
     let value = json!({"items": "not an array"});
     let segments = parse_path("items[0]").unwrap();
     let results = navigate(&value, &segments);
-    assert_eq!(results.len(), 0, "Should return empty when indexing non-array");
+    assert_eq!(
+        results.len(),
+        0,
+        "Should return empty when indexing non-array"
+    );
 }
 
 #[test]
@@ -260,21 +275,41 @@ fn test_navigate_key_on_non_object() {
     let value = json!({"items": [1, 2, 3]});
     let segments = parse_path("items.name").unwrap();
     let results = navigate(&value, &segments);
-    assert_eq!(results.len(), 0, "Should return empty when accessing key on array");
+    assert_eq!(
+        results.len(),
+        0,
+        "Should return empty when accessing key on array"
+    );
 }
 
 // ==================== Matcher Tests ====================
 
 #[test]
 fn test_matcher_exact_match() {
-    let matcher = KvMatcher::new(Some(&"test".to_string()), None, None, false);
+    let matcher = KvMatcher::new(
+        Some(&"test".to_string()),
+        None,
+        None,
+        false,
+        None,
+        None,
+        None,
+    );
     assert!(matcher.matches(&json!("test")));
     assert!(!matcher.matches(&json!("other")));
 }
 
 #[test]
 fn test_matcher_exact_case_insensitive() {
-    let matcher = KvMatcher::new(Some(&"TEST".to_string()), None, None, true);
+    let matcher = KvMatcher::new(
+        Some(&"TEST".to_string()),
+        None,
+        None,
+        true,
+        None,
+        None,
+        None,
+    );
     assert!(matcher.matches(&json!("test")));
     assert!(matcher.matches(&json!("TEST")));
     assert!(matcher.matches(&json!("TeSt")));
@@ -282,7 +317,15 @@ fn test_matcher_exact_case_insensitive() {
 
 #[test]
 fn test_matcher_substr_match() {
-    let matcher = KvMatcher::new(None, Some(&"curl".to_string()), None, false);
+    let matcher = KvMatcher::new(
+        None,
+        Some(&"curl".to_string()),
+        None,
+        false,
+        None,
+        None,
+        None,
+    );
     assert!(matcher.matches(&json!("curl https://evil.com")));
     assert!(matcher.matches(&json!("use curl to download")));
     assert!(!matcher.matches(&json!("wget only")));
@@ -290,15 +333,23 @@ fn test_matcher_substr_match() {
 
 #[test]
 fn test_matcher_substr_case_insensitive() {
-    let matcher = KvMatcher::new(None, Some(&"CURL".to_string()), None, true);
+    let matcher = KvMatcher::new(
+        None,
+        Some(&"CURL".to_string()),
+        None,
+        true,
+        None,
+        None,
+        None,
+    );
     assert!(matcher.matches(&json!("curl https://evil.com")));
     assert!(matcher.matches(&json!("CURL -O file")));
 }
 
 #[test]
 fn test_matcher_regex() {
-    let regex = regex::Regex::new(r"https?://.*\.com").unwrap();
-    let matcher = KvMatcher::new(None, None, Some(&regex), false);
+    let regex = crate::composite_rules::condition::cached_regex(r"https?://.*\.com").unwrap();
+    let matcher = KvMatcher::new(None, None, Some(&regex), false, None, None, None);
     assert!(matcher.matches(&json!("http://example.com")));
     assert!(matcher.matches(&json!("https://evil.com")));
     assert!(!matcher.matches(&json!("ftp://example.com")));
@@ -306,21 +357,40 @@ fn test_matcher_regex() {
 
 #[test]
 fn test_matcher_array_any_match() {
-    let matcher = KvMatcher::new(Some(&"admin".to_string()), None, None, false);
+    let matcher = KvMatcher::new(
+        Some(&"admin".to_string()),
+        None,
+        None,
+        false,
+        None,
+        None,
+        None,
+    );
     let array = json!(["user", "admin", "guest"]);
-    assert!(matcher.matches(&array), "Should match if any element matches");
+    assert!(
+        matcher.matches(&array),
+        "Should match if any element matches"
+    );
 }
 
 #[test]
 fn test_matcher_array_no_match() {
-    let matcher = KvMatcher::new(Some(&"superuser".to_string()), None, None, false);
+    let matcher = KvMatcher::new(
+        Some(&"superuser".to_string()),
+        None,
+        None,
+        false,
+        None,
+        None,
+        None,
+    );
     let array = json!(["user", "admin", "guest"]);
     assert!(!matcher.matches(&array));
 }
 
 #[test]
 fn test_matcher_existence_check() {
-    let matcher = KvMatcher::new(None, None, None, false);
+    let matcher = KvMatcher::new(None, None, None, false, None, None, None);
     assert!(matcher.matches(&json!("anything")));
     assert!(matcher.matches(&json!(123)));
     assert!(matcher.matches(&json!(true)));
@@ -329,14 +399,22 @@ fn test_matcher_existence_check() {
 
 #[test]
 fn test_matcher_number_conversion() {
-    let matcher = KvMatcher::new(Some(&"42".to_string()), None, None, false);
+    let matcher = KvMatcher::new(Some(&"42".to_string()), None, None, false, None, None, None);
     assert!(matcher.matches(&json!(42)));
     assert!(matcher.matches(&json!("42")));
 }
 
 #[test]
 fn test_matcher_boolean_conversion() {
-    let matcher = KvMatcher::new(Some(&"true".to_string()), None, None, false);
+    let matcher = KvMatcher::new(
+        Some(&"true".to_string()),
+        None,
+        None,
+        false,
+        None,
+        None,
+        None,
+    );
     assert!(matcher.matches(&json!(true)));
     assert!(matcher.matches(&json!("true")));
 }
@@ -353,15 +431,16 @@ fn test_evaluate_kv_package_json_permissions() {
     let path = Path::new("package.json");
 
     let condition = Condition::Kv(KvQuery {
-            match_mode: Default::default(),
+        match_mode: Default::default(),
         path: "permissions".to_string(),
         exact: Some("debugger".to_string()),
         substr: None,
         regex: None,
         case_insensitive: false,
+        ..Default::default()
     });
 
-    let result = evaluate_kv(&condition, content, path);
+    let result = evaluate_kv_at(&condition, content, path);
     assert!(result.is_some(), "Should detect debugger permission");
     let evidence = result.unwrap();
     assert_eq!(evidence.method, "value");
@@ -382,15 +461,16 @@ fn test_evaluate_kv_manifest_all_urls() {
     let path = Path::new("manifest.json");
 
     let condition = Condition::Kv(KvQuery {
-            match_mode: Default::default(),
+        match_mode: Default::default(),
         path: "content_scripts[*].matches".to_string(),
         exact: Some("<all_urls>".to_string()),
         substr: None,
         regex: None,
         case_insensitive: false,
+        ..Default::default()
     });
 
-    let result = evaluate_kv(&condition, content, path);
+    let result = evaluate_kv_at(&condition, content, path);
     assert!(result.is_some(), "Should detect <all_urls> access");
 }
 
@@ -405,15 +485,16 @@ fn test_evaluate_kv_package_json_postinstall() {
     let path = Path::new("package.json");
 
     let condition = Condition::Kv(KvQuery {
-            match_mode: Default::default(),
+        match_mode: Default::default(),
         path: "scripts.postinstall".to_string(),
         exact: None,
         substr: Some("curl".to_string()),
         regex: None,
         case_insensitive: false,
+        ..Default::default()
     });
 
-    let result = evaluate_kv(&condition, content, path);
+    let result = evaluate_kv_at(&condition, content, path);
     assert!(result.is_some(), "Should detect curl in postinstall");
 }
 
@@ -423,16 +504,20 @@ fn test_evaluate_kv_yaml_format() {
     let path = Path::new(".github/workflows/test.yaml");
 
     let condition = Condition::Kv(KvQuery {
-            match_mode: Default::default(),
+        match_mode: Default::default(),
         path: "jobs.build.runs-on".to_string(),
         exact: Some("self-hosted".to_string()),
         substr: None,
         regex: None,
         case_insensitive: false,
+        ..Default::default()
     });
 
-    let result = evaluate_kv(&condition, content, path);
-    assert!(result.is_some(), "Should parse YAML and detect self-hosted runner");
+    let result = evaluate_kv_at(&condition, content, path);
+    assert!(
+        result.is_some(),
+        "Should parse YAML and detect self-hosted runner"
+    );
 }
 
 #[test]
@@ -441,16 +526,20 @@ fn test_evaluate_kv_toml_format() {
     let path = Path::new("Cargo.toml");
 
     let condition = Condition::Kv(KvQuery {
-            match_mode: Default::default(),
+        match_mode: Default::default(),
         path: "dependencies.evil-package".to_string(),
         exact: None,
         substr: None,
         regex: None,
         case_insensitive: false,
+        ..Default::default()
     });
 
-    let result = evaluate_kv(&condition, content, path);
-    assert!(result.is_some(), "Should parse TOML and detect evil-package");
+    let result = evaluate_kv_at(&condition, content, path);
+    assert!(
+        result.is_some(),
+        "Should parse TOML and detect evil-package"
+    );
 }
 
 #[test]
@@ -459,15 +548,16 @@ fn test_evaluate_kv_nonexistent_path() {
     let path = Path::new("package.json");
 
     let condition = Condition::Kv(KvQuery {
-            match_mode: Default::default(),
+        match_mode: Default::default(),
         path: "nonexistent.path".to_string(),
         exact: Some("value".to_string()),
         substr: None,
         regex: None,
         case_insensitive: false,
+        ..Default::default()
     });
 
-    let result = evaluate_kv(&condition, content, path);
+    let result = evaluate_kv_at(&condition, content, path);
     assert!(result.is_none(), "Should return None for nonexistent path");
 }
 
@@ -477,15 +567,16 @@ fn test_evaluate_kv_invalid_json() {
     let path = Path::new("package.json");
 
     let condition = Condition::Kv(KvQuery {
-            match_mode: Default::default(),
+        match_mode: Default::default(),
         path: "name".to_string(),
         exact: Some("test".to_string()),
         substr: None,
         regex: None,
         case_insensitive: false,
+        ..Default::default()
     });
 
-    let result = evaluate_kv(&condition, content, path);
+    let result = evaluate_kv_at(&condition, content, path);
     assert!(result.is_none(), "Should return None for invalid JSON");
 }
 
@@ -498,18 +589,17 @@ fn test_evaluate_kv_regex_pattern() {
     }"#;
     let path = Path::new("package.json");
 
-    let regex = regex::Regex::new(r"eval\s*\(").unwrap();
     let condition = Condition::Kv(KvQuery {
-            match_mode: Default::default(),
+        match_mode: Default::default(),
         path: "scripts.test".to_string(),
         exact: None,
         substr: None,
         regex: Some(r"eval\s*\(".to_string()),
-        compiled_regex: Some(regex),
         case_insensitive: false,
+        ..Default::default()
     });
 
-    let result = evaluate_kv(&condition, content, path);
+    let result = evaluate_kv_at(&condition, content, path);
     assert!(result.is_some(), "Should detect eval pattern");
 }
 
@@ -519,15 +609,16 @@ fn test_evaluate_kv_case_insensitive() {
     let path = Path::new("package.json");
 
     let condition = Condition::Kv(KvQuery {
-            match_mode: Default::default(),
+        match_mode: Default::default(),
         path: "name".to_string(),
         exact: None,
         substr: Some("test".to_string()),
         regex: None,
         case_insensitive: true,
+        ..Default::default()
     });
 
-    let result = evaluate_kv(&condition, content, path);
+    let result = evaluate_kv_at(&condition, content, path);
     assert!(result.is_some(), "Should match case-insensitively");
 }
 
@@ -543,14 +634,18 @@ fn test_evaluate_kv_multiple_wildcards() {
     let path = Path::new("manifest.json");
 
     let condition = Condition::Kv(KvQuery {
-            match_mode: Default::default(),
+        match_mode: Default::default(),
         path: "features[*].permissions[*]".to_string(),
         exact: Some("root".to_string()),
         substr: None,
         regex: None,
         case_insensitive: false,
+        ..Default::default()
     });
 
-    let result = evaluate_kv(&condition, content, path);
-    assert!(result.is_some(), "Should navigate through multiple wildcards");
+    let result = evaluate_kv_at(&condition, content, path);
+    assert!(
+        result.is_some(),
+        "Should navigate through multiple wildcards"
+    );
 }

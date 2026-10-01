@@ -55,6 +55,8 @@ pub(crate) mod chrome_manifest;
 pub(crate) mod elf;
 pub(crate) mod embedded_binary_detector;
 pub(crate) mod font;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub(crate) mod inno_long_path;
 pub(crate) mod java_class;
 pub(crate) mod jpeg;
 pub(crate) mod macho;
@@ -402,20 +404,19 @@ pub(crate) fn analyzer_for_file_type_arc(
 /// - `analyze_input()` - receives pre-extracted data (preferred, no redundant I/O)
 /// - `analyze()` - reads file from path (legacy, for backwards compatibility)
 ///
-/// The default implementations call each other, so implementors only need one.
-/// New analyzers should implement `analyze_input()`.
+/// Implementors must provide `analyze_input()`; `analyze()` has a default that
+/// reads the file and delegates to it.
 #[allow(dead_code)] // Used by tests and archive_utils, false positive from lib/bin split
 pub trait Analyzer {
     /// Analyze with pre-extracted input (preferred method).
     ///
-    /// Default implementation calls legacy `analyze()` method.
-    /// Analyzers should override this to use `input.data` and `input.strings`
-    /// instead of reading files and extracting strings internally.
-    fn analyze_input(&self, input: &AnalysisInput<'_>) -> Result<AnalysisReport> {
-        // Default: delegate to legacy analyze() method
-        // This allows incremental migration - analyzers can be updated one by one
-        self.analyze(input.path)
-    }
+    /// Analyzers use `input.data` and `input.strings` instead of reading files
+    /// and extracting strings internally.
+    ///
+    /// Required: the default [`Self::analyze`] delegates here, so a default for
+    /// this method too would let an implementation that overrides neither
+    /// compile and recurse until the stack overflows.
+    fn analyze_input(&self, input: &AnalysisInput<'_>) -> Result<AnalysisReport>;
 
     /// Analyze from file path (legacy method).
     ///

@@ -610,6 +610,7 @@ const ALLOWED_EXECUTION: &[&str] = &[
     "automation",  // Compiled automation (AppleScript)             E1059
     "compile",     // Compile after delivery
     "condition",   // Conditional execution / guardrails            B0025
+    "database",    // Database-hosted code execution (CLR, xp_cmdshell, OLE)
     "exploit",     // Exploitation for client execution             E1203
     "interpreter", // Script/code interpreters                      E1059
     "lnk",         // LNK-based execution                           E1204

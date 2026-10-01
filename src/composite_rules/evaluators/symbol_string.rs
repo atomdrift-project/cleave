@@ -152,7 +152,7 @@ impl Drop for MatchLocationsGuard {
 }
 
 /// Read the per-thread "needs exact match_count" flag.
-fn match_count_needed() -> bool {
+pub(crate) fn match_count_needed() -> bool {
     NEEDS_MATCH_COUNT.with(std::cell::Cell::get) || NEEDS_MATCH_LOCATIONS.with(std::cell::Cell::get)
 }
 
@@ -791,6 +791,16 @@ pub(crate) fn eval_text<'a, 'b>(
 ) -> ConditionResult {
     let _mp = crate::mem_profile::phase(crate::mem_profile::Phase::EvalText);
     if ctx.file_type.uses_raw_text_search_for(ctx.binary_data) {
+        let comment_free_context = if params.exclude_html_comments {
+            ctx.html_comment_free_source().map(|source| {
+                let mut masked = ctx.clone();
+                masked.binary_data = source;
+                masked
+            })
+        } else {
+            None
+        };
+        let raw_context = comment_free_context.as_ref().unwrap_or(ctx);
         let location = ContentLocationParams {
             section: params.section.cloned(),
             offset: params.offset,
@@ -809,7 +819,7 @@ pub(crate) fn eval_text<'a, 'b>(
             params.is_check,
             trait_not,
             &location,
-            ctx,
+            raw_context,
             trait_id,
         );
         // Second pass over decoded string layers (base64/xor/…). The raw pass
@@ -1162,6 +1172,18 @@ pub(crate) fn eval_string_literal<'a, 'b>(
     trait_not: Option<&Vec<NotException>>,
     ctx: &EvaluationContext<'b>,
 ) -> ConditionResult {
+    eval_string_literal_with_options(params, trait_not, ctx, false)
+}
+
+/// Evaluate source and format literals, optionally excluding Python
+/// docstrings where a documented value is not evidence of program behavior.
+#[must_use]
+pub(crate) fn eval_string_literal_with_options<'a, 'b>(
+    params: &StringParams<'a>,
+    trait_not: Option<&Vec<NotException>>,
+    ctx: &EvaluationContext<'b>,
+    exclude_docstrings: bool,
+) -> ConditionResult {
     let effective_range = resolve_string_effective_range(params, ctx);
     let matcher = StringMatcher::resolve(params);
 
@@ -1173,7 +1195,11 @@ pub(crate) fn eval_string_literal<'a, 'b>(
     let mut seen_match_spans: FxHashSet<(u64, usize)> = FxHashSet::default();
 
     for string_info in &ctx.report.strings {
-        if !matches!(string_info.section.as_deref(), Some("ast" | "literal")) {
+        if !matches!(
+            string_info.section.as_deref(),
+            Some("ast" | "literal" | "ast-docstring")
+        ) || (exclude_docstrings && string_info.section.as_deref() == Some("ast-docstring"))
+        {
             continue;
         }
         if !offset_in_range(string_info.offset, effective_range) {
@@ -1851,6 +1877,45 @@ fn arg_shape(arg: &filefacts::Arg) -> &'static str {
         Arg::Call => "call",
         Arg::Expression => "expression",
         _ => "",
+    }
+}
+
+/// Maps byte offsets found in a case-folded search copy back to the text it
+/// was folded from.
+///
+/// Case-insensitive Unicode search runs over `text.to_lowercase()`, and
+/// lowercasing can change a char's UTF-8 length (`İ`, 2 bytes, lowers to the
+/// 3-byte `i̇`), so an offset in the copy is not an offset in `text`: slicing
+/// `text` with it can split a char (a panic) or select the wrong bytes.
+/// Queries must be non-decreasing; each resumes where the last stopped, so
+/// mapping every hit of one scan costs a single pass over `text`. Without case
+/// folding the copy is `text` itself and offsets pass through unchanged.
+struct LoweredOffsets<'a> {
+    chars: Option<std::str::CharIndices<'a>>,
+    lowered: usize,
+    original: usize,
+}
+
+impl<'a> LoweredOffsets<'a> {
+    fn new(text: &'a str, case_folded: bool) -> Self {
+        Self {
+            chars: case_folded.then(|| text.char_indices()),
+            lowered: 0,
+            original: 0,
+        }
+    }
+
+    /// The char boundary in `text` at or after the image of `lowered_offset`.
+    fn original(&mut self, lowered_offset: usize) -> usize {
+        let Some(chars) = self.chars.as_mut() else {
+            return lowered_offset;
+        };
+        while self.lowered < lowered_offset {
+            let Some((at, c)) = chars.next() else { break };
+            self.lowered += c.to_lowercase().map(char::len_utf8).sum::<usize>();
+            self.original = at + c.len_utf8();
+        }
+        self.original
     }
 }
 
@@ -2543,13 +2608,20 @@ pub(crate) fn eval_raw<'a>(
                 } else {
                     std::borrow::Cow::Borrowed(substr_str)
                 };
+                // Hits are found in `search_content` but windows and offsets
+                // must be in `content`'s coordinates (see `LoweredOffsets`).
+                let mut starts = LoweredOffsets::new(&content, case_insensitive);
+                let mut ends = LoweredOffsets::new(&content, case_insensitive);
                 let mut first_match_offset = None;
                 let mut start = 0;
                 while let Some(pos) = search_content[start..].find(search_pattern.as_ref()) {
                     let abs_pos = start + pos;
+                    let match_start = starts.original(abs_pos);
+                    let match_end = ends.original(abs_pos + search_pattern.len());
                     // Get some context around the match to check for validator
-                    let context_start = abs_pos.saturating_sub(50);
-                    let context_end = (abs_pos + search_pattern.len() + 50).min(content.len());
+                    let context_start = content.floor_char_boundary(match_start.saturating_sub(50));
+                    let context_end =
+                        content.ceil_char_boundary((match_end + 50).min(content.len()));
                     let context = &content[context_start..context_end];
                     if validate_match(context, is_check) {
                         let excluded_by_not = not
@@ -2557,7 +2629,7 @@ pub(crate) fn eval_raw<'a>(
                             .unwrap_or(false);
                         if !excluded_by_not {
                             if first_match_offset.is_none() {
-                                first_match_offset = Some((search_start + abs_pos) as u64);
+                                first_match_offset = Some((search_start + match_start) as u64);
                             }
                             match_count += 1;
                         }
@@ -2592,18 +2664,21 @@ pub(crate) fn eval_raw<'a>(
                 } else {
                     std::borrow::Cow::Borrowed(substr_str)
                 };
+                let mut starts = LoweredOffsets::new(&content, case_insensitive);
+                let mut ends = LoweredOffsets::new(&content, case_insensitive);
                 let mut first_match_offset = None;
                 let mut start = 0;
                 while let Some(pos) = search_content[start..].find(search_pattern.as_ref()) {
                     let abs_pos = start + pos;
-                    let match_context =
-                        match_window(&content, abs_pos, abs_pos + search_pattern.len(), 50);
+                    let match_start = starts.original(abs_pos);
+                    let match_end = ends.original(abs_pos + search_pattern.len());
+                    let match_context = match_window(&content, match_start, match_end, 50);
                     let excluded = not
                         .map(|excs| excs.iter().any(|e| e.matches(&match_context)))
                         .unwrap_or(false);
                     if !excluded {
                         if first_match_offset.is_none() {
-                            first_match_offset = Some((search_start + abs_pos) as u64);
+                            first_match_offset = Some((search_start + match_start) as u64);
                         }
                         match_count += 1;
                     }
@@ -2637,9 +2712,10 @@ pub(crate) fn eval_raw<'a>(
                 } else {
                     std::borrow::Cow::Borrowed(substr_str)
                 };
-                let first_offset = search_content
-                    .find(search_pattern.as_ref())
-                    .map(|o| (search_start + o) as u64);
+                let first_offset = search_content.find(search_pattern.as_ref()).map(|o| {
+                    let o = LoweredOffsets::new(&content, case_insensitive).original(o);
+                    (search_start + o) as u64
+                });
                 match_count = search_content.matches(search_pattern.as_ref()).count();
                 if match_count > 0 && evidence.len() < MAX_EVIDENCE_PER_TRAIT {
                     evidence.push(Evidence {

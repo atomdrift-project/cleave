@@ -14,6 +14,7 @@ use anyhow::{Context, Result};
 use regex::Regex;
 use rustc_hash::FxHashSet;
 use std::fs;
+use std::io::Read;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -800,6 +801,8 @@ pub(crate) const ENCODED_LAYER_NAMES: &[&str] = &[
     "base32",
     "base85",
     "script",
+    "batch-expansion",
+    "wide",
     "gzip",
     "zlib",
 ];
@@ -1157,6 +1160,103 @@ fn magic_type(data: &[u8]) -> Option<&'static str> {
     })
 }
 
+/// Recognize the small Firefox profile bootstrap archive used by browser
+/// integration tests. The content check is intentionally structural: an XZ
+/// stream must contain only Firefox `profiles.ini`/`installs.ini` metadata and
+/// a profile `times.json`. A similarly named test file carrying another
+/// compressed payload still gets reported.
+fn is_firefox_profile_bootstrap_fixture(data: &[u8]) -> bool {
+    const MAX_EXPANDED_SIZE: u64 = 32 * 1024;
+    const MAX_MEMBERS: usize = 8;
+
+    let decoder = xz2::read::XzDecoder::new(std::io::Cursor::new(data)).take(MAX_EXPANDED_SIZE + 1);
+    let mut archive = tar::Archive::new(decoder);
+    let Ok(entries) = archive.entries() else {
+        return false;
+    };
+
+    let mut profiles_ini = None;
+    let mut installs_ini = None;
+    let mut times_json = None;
+    let mut member_count = 0;
+    let mut total_size = 0u64;
+    for entry in entries {
+        let Ok(entry) = entry else {
+            return false;
+        };
+        member_count += 1;
+        if member_count > MAX_MEMBERS {
+            return false;
+        }
+        total_size = total_size.saturating_add(entry.header().size().unwrap_or(0));
+        if total_size > MAX_EXPANDED_SIZE {
+            return false;
+        }
+        if entry.header().entry_type().is_dir() {
+            continue;
+        }
+
+        let Ok(path) = entry.path() else {
+            return false;
+        };
+        let path = path.to_string_lossy();
+        let slot = if path == "profiles.ini" {
+            &mut profiles_ini
+        } else if path == "installs.ini" {
+            &mut installs_ini
+        } else if path.ends_with("/times.json") {
+            &mut times_json
+        } else {
+            return false;
+        };
+        if slot.is_some() {
+            return false;
+        }
+        let mut content = String::new();
+        if entry.take(4097).read_to_string(&mut content).is_err() || content.len() > 4096 {
+            return false;
+        }
+        *slot = Some(content);
+    }
+
+    let (Some(profiles_ini), Some(installs_ini), Some(times_json)) =
+        (profiles_ini, installs_ini, times_json)
+    else {
+        return false;
+    };
+
+    let mut in_default_release_profile = false;
+    let mut default_release_path = None;
+    for line in profiles_ini.lines() {
+        if line.starts_with('[') {
+            in_default_release_profile = false;
+        } else if line == "Name=default-release" {
+            in_default_release_profile = true;
+        } else if in_default_release_profile && let Some(path) = line.strip_prefix("Path=") {
+            default_release_path = Some(path);
+            break;
+        }
+    }
+    let Some(default_release_path) = default_release_path else {
+        return false;
+    };
+
+    default_release_path.ends_with(".default-release")
+        && profiles_ini.contains("[Profile")
+        && profiles_ini.contains("IsRelative=1")
+        && installs_ini.contains(&format!("Default={default_release_path}"))
+        && times_json.contains("\"created\"")
+        && times_json.contains("\"firstUse\"")
+}
+
+fn is_test_source_path(path: &str) -> bool {
+    path.split(['/', '\\', '!']).any(|component| {
+        matches!(component, "test" | "tests" | "testing")
+            || component.starts_with("test_")
+            || component.ends_with("_test.py")
+    })
+}
+
 /// Try to decode `string_info` as base64 containing a binary payload (PE, ELF, or archive).
 /// Only runs at depth 0 to prevent compounding recursion.
 ///
@@ -1220,6 +1320,16 @@ fn detect_base64_binary(
                 || component.ends_with(".test.js")
                 || component.ends_with(".spec.js")
         })
+    {
+        return Vec::new();
+    }
+    // Browser-cookie3's integration test embeds a tiny, non-secret Firefox
+    // profile bootstrap tar.xz. Confirm both its test-source context and its
+    // profile metadata before suppressing this generic compressed-payload
+    // signal; path names alone must not hide embedded archives.
+    if inner_type == "xz"
+        && is_test_source_path(parent_path)
+        && is_firefox_profile_bootstrap_fixture(&decoded)
     {
         return Vec::new();
     }
@@ -1674,6 +1784,39 @@ pub(crate) fn analyze_script_deobfuscation_layers(
     layers
 }
 
+/// Replay cmd's `set`/`%var%` expansion over a batch script and analyze the
+/// result as its own batch layer.
+///
+/// Set-fragment obfuscation (`set ;{=ove /y` then `m%;{%`) leaves no command
+/// word in the file as written; the expanded layer is where `move`, `format`
+/// and `deltree` become visible to text rules. The layer is not re-expanded.
+pub(crate) fn analyze_batch_expansion_layer(
+    parent_path: &str,
+    content: &str,
+    capability_mapper: &Arc<CapabilityMapper>,
+) -> Option<FileAnalysis> {
+    const ENCODING: &str = "batch-expansion";
+    if parent_path.contains(ENCODING) {
+        return None;
+    }
+    let result = stng::script::expand_batch_variables(content.as_bytes())?;
+    let encoding_chain = vec![ENCODING.to_string()];
+    let virtual_path = encode_decoded_path(parent_path, &encoding_chain, result.offset);
+    let analyzer = super::generic::GenericAnalyzer::new(FileType::Batch)
+        .with_capability_mapper_arc(capability_mapper.clone());
+    let mut report = analyzer.analyze_source(Path::new(&virtual_path), &result.decoded);
+    report.findings.extend(generate_encoded_layer_traits(
+        &encoding_chain,
+        result.offset as u64,
+    ));
+    let (mut entry, _, _) = report.into_file_analysis(0);
+    entry.path = virtual_path;
+    entry.depth = 1;
+    entry.encoding = Some(encoding_chain);
+    entry.compute_summary();
+    Some(entry)
+}
+
 /// Detect and decode a PowerShell -EncodedCommand blob in `value`.
 ///
 /// Fallback for binary/generic hosts that never ran source-tier script
@@ -2099,6 +2242,14 @@ mod tests {
             }
         }
         assert!(ENCODED_LAYER_NAMES.contains(&"unicode-variation-selector"));
+    }
+
+    #[test]
+    fn wide_encoded_layer_emits_registered_metadata() {
+        let findings = generate_encoded_layer_traits(&["wide".to_string()], 0x40);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].id.as_ref(), "metadata/lang/encoded/wide");
+        assert_eq!(findings[0].evidence[0].location.as_deref(), Some("0x40"));
     }
 
     fn make_string_info(value: &str) -> StringInfo {
@@ -2559,6 +2710,87 @@ mod tests {
         let encoded = base64::engine::general_purpose::STANDARD.encode(&random_bytes);
         let info = make_string_info(&encoded);
         assert!(detect_base64_binary("test.sh", &info, 0, &test_mapper()).is_empty());
+    }
+
+    fn append_tar_test_file(archive: &mut tar::Builder<Vec<u8>>, path: &str, data: &[u8]) {
+        let mut header = tar::Header::new_gnu();
+        header.set_size(data.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        archive.append_data(&mut header, path, data).unwrap();
+    }
+
+    fn make_firefox_profile_tar_xz(include_extra_payload: bool) -> Vec<u8> {
+        use std::io::Write;
+
+        let mut archive = tar::Builder::new(Vec::new());
+        append_tar_test_file(
+            &mut archive,
+            "profiles.ini",
+            b"[Profile0]\nName=default-release\nIsRelative=1\nPath=4xutesqi.default-release\n",
+        );
+        append_tar_test_file(
+            &mut archive,
+            "installs.ini",
+            b"[Install123]\nDefault=4xutesqi.default-release\nLocked=1\n",
+        );
+        append_tar_test_file(
+            &mut archive,
+            "nqpbh019.default/times.json",
+            b"{\"created\":1684401674176,\"firstUse\":null}\n",
+        );
+        if include_extra_payload {
+            append_tar_test_file(&mut archive, "payload.exe", b"MZ\0\0embedded payload");
+        }
+        archive.finish().unwrap();
+        let tar_bytes = archive.into_inner().unwrap();
+
+        let mut encoder = xz2::write::XzEncoder::new(Vec::new(), 6);
+        encoder.write_all(&tar_bytes).unwrap();
+        encoder.finish().unwrap()
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn test_detect_base64_binary_skips_firefox_profile_test_fixture_by_content() {
+        use base64::Engine;
+
+        let payload = make_firefox_profile_tar_xz(false);
+        assert!(payload.len() >= MIN_BASE64_COMPRESSED_SIZE);
+        let encoded = base64::engine::general_purpose::STANDARD.encode(payload);
+        let info = make_string_info(&encoded);
+
+        assert!(
+            detect_base64_binary(
+                "browser_cookie3-0.20.0.tar.gz!!tests/test_browsers.py",
+                &info,
+                0,
+                &test_mapper(),
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn test_detect_base64_binary_does_not_skip_other_payloads_by_test_path() {
+        use base64::Engine;
+
+        let payload = make_firefox_profile_tar_xz(false);
+        let encoded = base64::engine::general_purpose::STANDARD.encode(payload);
+        let info = make_string_info(&encoded);
+        assert!(
+            !detect_base64_binary("package/src/payload.py", &info, 0, &test_mapper()).is_empty(),
+            "profile metadata outside a test harness remains suspicious"
+        );
+
+        let payload = make_firefox_profile_tar_xz(true);
+        let encoded = base64::engine::general_purpose::STANDARD.encode(payload);
+        let info = make_string_info(&encoded);
+        assert!(
+            !detect_base64_binary("tests/test_browsers.py", &info, 0, &test_mapper()).is_empty(),
+            "additional payload members prevent the fixture exemption"
+        );
     }
 
     #[test]

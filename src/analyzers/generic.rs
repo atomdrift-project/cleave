@@ -63,7 +63,7 @@ impl GenericAnalyzer {
     }
 
     #[allow(dead_code)] // Used by embedded_code_detector
-    fn analyze_source(&self, file_path: &Path, content: &str) -> AnalysisReport {
+    pub(crate) fn analyze_source(&self, file_path: &Path, content: &str) -> AnalysisReport {
         let ctx =
             crate::analysis_context::AnalysisContext::open(file_path, content.as_bytes()).ok();
         self.analyze_source_internal(
@@ -234,6 +234,17 @@ impl GenericAnalyzer {
                 );
             report.files.extend(encoded_layers);
             report.findings.extend(plain_findings);
+            // cmd builds its commands from `set` fragments at run time, so the
+            // command words only exist after expansion; replay it as a layer.
+            if self.file_type == FileType::Batch {
+                report.files.extend(
+                    crate::analyzers::embedded_code_detector::analyze_batch_expansion_layer(
+                        &file_path.display().to_string(),
+                        content,
+                        &self.capability_mapper,
+                    ),
+                );
+            }
             tracing::debug!(
                 "GenericAnalyzer: Embedded code analysis completed in {:?}",
                 t_embedded.elapsed()
@@ -295,41 +306,6 @@ impl GenericAnalyzer {
             "GenericAnalyzer: Rule evaluation completed in {:?}",
             t_eval.elapsed()
         );
-
-        // Decode a small set of statically identifiable DOS COM XOR stubs
-        // before stopping at the encrypted wrapper. filefacts owns the stub
-        // layouts and bounds; the recovered body is then analyzed through the
-        // normal DOS COM sub-file path so existing DOS rules see its behavior.
-        // A virtual-path marker prevents a decoded child from recursively
-        // selecting itself again, while still allowing independent archive or
-        // embedded-file traversal inside that child.
-        let decoded_path = file_path.display().to_string();
-        if matches!(self.file_type, FileType::DosCom | FileType::Data)
-            && !decoded_path.contains("##dos-xor@")
-            && let Some(bytes) = original_bytes
-            && let Some(decoded) = filefacts::decode_dos_com_xor_payload(bytes)
-        {
-            let virtual_path = format!("{decoded_path}##dos-xor@{:#x}", decoded.source_offset);
-            let location_prefix = format!("decoded-xor@{:#x}", decoded.source_offset);
-            // Preserve the original COM image layout: its absolute memory
-            // operands and data tables are relative to the 0x100 load base,
-            // not to the start of the encrypted body.
-            let mut decoded_image = bytes.to_vec();
-            let decoded_end = decoded.source_offset + decoded.bytes.len();
-            decoded_image[decoded.source_offset..decoded_end].copy_from_slice(&decoded.bytes);
-            let mut entries = crate::analyzers::subfile::analyze_subfile_bytes(
-                &decoded_image,
-                &virtual_path,
-                FileType::DosCom,
-                &location_prefix,
-                0,
-                &self.capability_mapper,
-            );
-            for entry in &mut entries {
-                entry.encoding = Some(vec![format!("dos-com-xor-0x{:02x}", decoded.xor_key)]);
-            }
-            report.files.extend(entries);
-        }
 
         report.metadata.analysis_duration_ms = start.elapsed().as_millis() as u64;
         report.metadata.tools_used = vec![parser_name];
@@ -700,6 +676,48 @@ start payload.exe
                 .filefacts_metrics
                 .as_ref()
                 .is_some_and(|m| m.keys().any(|k| k.starts_with("text.")))
+        );
+    }
+
+    #[test]
+    fn batch_set_expansion_is_analyzed_once_as_a_layer() {
+        let analyzer = GenericAnalyzer::new(FileType::Batch);
+        let path = PathBuf::from("obfuscated.cmd");
+        let code = "set a=move /y\nset b=source\nset c=target\n%a% %b% %c%\n";
+        let report = analyzer.analyze_source(&path, code);
+
+        let layers: Vec<_> = report
+            .files
+            .iter()
+            .filter(|file| file.encoding.as_deref() == Some(&["batch-expansion".to_string()][..]))
+            .collect();
+        assert_eq!(layers.len(), 1, "expected exactly one expanded layer");
+        let layer = layers[0];
+        assert_eq!(layer.depth, 1);
+        assert_eq!(layer.file_type, "batch");
+        assert!(layer.path.contains("##batch-expansion@0"), "{}", layer.path);
+        assert!(
+            layer
+                .findings
+                .iter()
+                .any(|f| f.id == "metadata/lang/encoded/batch-expansion"),
+            "expanded layer is missing its encoding finding: {:?}",
+            layer.findings.iter().map(|f| &f.id).collect::<Vec<_>>(),
+        );
+    }
+
+    #[test]
+    fn ordinary_batch_variables_do_not_create_an_expansion_layer() {
+        let analyzer = GenericAnalyzer::new(FileType::Batch);
+        let path = PathBuf::from("ordinary.bat");
+        let report =
+            analyzer.analyze_source(&path, "@echo off\nset NAME=world\necho hello %NAME%\n");
+        assert!(
+            report
+                .files
+                .iter()
+                .all(|file| file.encoding.as_deref() != Some(&["batch-expansion".to_string()][..])),
+            "ordinary variable use should not produce a decoded layer",
         );
     }
 

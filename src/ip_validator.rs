@@ -10,6 +10,7 @@
 
 use lru::LruCache;
 use std::cell::Cell;
+use std::hash::{BuildHasher, RandomState};
 use std::net::Ipv4Addr;
 use std::num::NonZeroUsize;
 use std::sync::OnceLock;
@@ -21,11 +22,7 @@ thread_local! {
     /// analyzing different files concurrently each call `set_current_file_id`
     /// for their own file, and a global counter would let one thread's write
     /// clobber another's, making `IP_CACHE`'s staleness check compare against
-    /// the wrong file. Since the cache key is `(pointer, length)` rather than
-    /// content, a false "still current" reading (the racing write happens to
-    /// leave the right-looking value behind) can serve a stale cached result
-    /// for an unrelated string the allocator later reuses that same address
-    /// and length for.
+    /// the wrong file and serve one file's verdicts to another.
     static CURRENT_FILE_ID: Cell<u64> = const { Cell::new(0) };
 }
 
@@ -40,12 +37,18 @@ pub(crate) fn clear_current_file_id() {
     CURRENT_FILE_ID.with(|cell| cell.set(0));
 }
 
-/// Cache for IP validation results.
-/// Key is (file_id, pointer_address, length) for fast identity checks.
-/// Value is the boolean result of contains_external_ip.
+/// Cache for IP validation results, keyed by the string's content.
+///
+/// The key is a keyed hash of the bytes plus their length, never the string's
+/// address: callers pass temporaries (a `from_utf8_lossy` window, a rendered
+/// kv scalar) that are freed straight after the check, and the allocator hands
+/// the same address to the next same-sized string, so an address key served
+/// the previous string's verdict. The hasher is seeded per thread, so file
+/// content cannot steer two different strings onto one key.
 struct IpCache {
     file_id: u64,
-    cache: LruCache<(usize, usize), bool>,
+    hasher: RandomState,
+    cache: LruCache<(u64, usize), bool>,
 }
 
 const IP_CACHE_CAPACITY: NonZeroUsize = match NonZeroUsize::new(1024) {
@@ -56,6 +59,7 @@ const IP_CACHE_CAPACITY: NonZeroUsize = match NonZeroUsize::new(1024) {
 thread_local! {
     static IP_CACHE: std::cell::RefCell<IpCache> = std::cell::RefCell::new(IpCache {
         file_id: 0,
+        hasher: RandomState::new(),
         cache: LruCache::new(IP_CACHE_CAPACITY),
     });
 }
@@ -361,9 +365,9 @@ pub(crate) fn contains_valid_ip(text: &str) -> bool {
     false
 }
 
-/// Optimized check for external IPs in text, with identity-based caching.
+/// Optimized check for external IPs in text, with content-keyed caching.
 ///
-/// Uses a thread-local LRU cache keyed by the input string's identity (pointer and length)
+/// Uses a thread-local LRU cache keyed by the string's content (see [`IpCache`])
 /// to avoid re-scanning the same strings across different traits within the same file.
 #[must_use]
 pub(crate) fn contains_external_ip_cached(s: &str) -> bool {
@@ -371,10 +375,6 @@ pub(crate) fn contains_external_ip_cached(s: &str) -> bool {
     if file_id == 0 {
         return contains_external_ip(s);
     }
-
-    let ptr = s.as_ptr() as usize;
-    let len = s.len();
-    let key = (ptr, len);
 
     IP_CACHE.with(|cache_cell| {
         let mut cache = cache_cell.borrow_mut();
@@ -385,6 +385,7 @@ pub(crate) fn contains_external_ip_cached(s: &str) -> bool {
             cache.file_id = file_id;
         }
 
+        let key = (cache.hasher.hash_one(s), s.len());
         if let Some(&res) = cache.cache.get(&key) {
             return res;
         }
@@ -430,6 +431,23 @@ pub(crate) fn contains_external_ip(text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The cache must key on content. Callers pass short-lived strings, and
+    /// the allocator reuses a freed block for the next same-sized one, so an
+    /// address key returned the previous string's verdict.
+    #[test]
+    fn cached_check_keys_on_content_not_address() {
+        set_current_file_id(0x1f_ace);
+        for _ in 0..8 {
+            let external = String::from("host 45.33.32.156");
+            assert!(contains_external_ip_cached(&external));
+            drop(external);
+            let private = String::from("host 192.168.10.1");
+            assert_eq!(private.len(), "host 45.33.32.156".len());
+            assert!(!contains_external_ip_cached(&private));
+        }
+        clear_current_file_id();
+    }
 
     #[test]
     fn test_external_ip_public() {

@@ -258,6 +258,18 @@ impl ElfAnalyzer {
             self.fill_dynamic_symbols_from_ctx(ctx, &mut report);
             self.fill_sections_from_ctx(ctx, &mut report);
             self.fill_syscalls_from_ctx(ctx, &mut report);
+            // filefacts parsed the segment view only because the section
+            // header table lies past end of file; the anomaly stays visible.
+            if parsed_metrics
+                .get("elf.section_headers_truncated")
+                .is_some()
+            {
+                report.findings.push(malformed_header_finding(
+                    &report.target.path,
+                    data,
+                    "section header table extends past end of file",
+                ));
+            }
             let struct_ms = struct_start.elapsed().as_millis();
             tracing::info!(
                 path = %analysis_path.display(),
@@ -383,58 +395,11 @@ impl ElfAnalyzer {
                 .find(|e| e.contains("elf-parse"))
                 .cloned()
                 .unwrap_or_default();
-            let mut crit = Criticality::Suspicious;
-            if report.target.path.contains("!!embedded") {
-                crit = Criticality::Notable;
-            } else {
-                let has_go_cli_markers = data
-                    .windows(b"-trimpath=true".len())
-                    .any(|w| w == b"-trimpath=true")
-                    && data.windows(b"go.mod".len()).any(|w| w == b"go.mod");
-                let has_linuxbrew_marker = data
-                    .windows(b"/home/linuxbrew/.linuxbrew/Cellar/".len())
-                    .any(|w| w == b"/home/linuxbrew/.linuxbrew/Cellar/");
-                let has_android_gif_drawable_marker =
-                    report.target.path.contains("libpl_droidsonroids_gif.so")
-                        || data
-                            .windows(b"android-gif-drawable".len())
-                            .any(|w| w == b"android-gif-drawable");
-                let is_snappy_s390x_native = report.target.path.contains("libsnappyjava.so")
-                    && raw_elf_machine(data) == Some(22);
-                if (data.len() >= 50 * 1024 * 1024 && (has_go_cli_markers || has_linuxbrew_marker))
-                    || has_android_gif_drawable_marker
-                    || is_jvm_bundled_native_path(&report.target.path)
-                    || is_snappy_s390x_native
-                    || is_test_fixture_path(&report.target.path)
-                {
-                    // Very large Linuxbrew/Go CLI builds and some legacy
-                    // Android native libraries can carry metadata layouts
-                    // filefacts's parser rejects even though the executable is
-                    // otherwise legitimate. JVM native-dependency jars also
-                    // ship cross-platform shared libraries that may not parse
-                    // cleanly on the host, including snappy-java's s390x
-                    // native library after archive extraction loses the
-                    // enclosing jar path. Keep the structural anomaly visible,
-                    // but below suspicious for these known-benign contexts.
-                    crit = Criticality::Notable;
-                }
-            }
-            report.findings.push(Finding {
-                precomputed_spans: None,
-                src: None,
-                kind: FindingKind::Structural,
-                id: "anti-analysis/malformed/elf-header".to_string().into(),
-                desc: format!("Malformed ELF header or section headers: {err_msg}").into(),
-                conf: 1.0,
-                crit,
-                mbc: Some("B0001".into()),
-                attack: Some("T1027".into()),
-                evidence: vec![],
-                match_count: 0,
-                trait_refs: vec![],
-                source_file: None,
-                downgraded: false,
-            });
+            report.findings.push(malformed_header_finding(
+                &report.target.path,
+                data,
+                &err_msg,
+            ));
 
             // Architecture salvage from raw header bytes — `e_machine` at
             // offset 18 (2 bytes); endianness via EI_DATA at offset 5.
@@ -981,7 +946,7 @@ impl ElfAnalyzer {
                 "Binary contains a UPX packing marker".to_string(),
                 1.0,
             )
-            .with_criticality(Criticality::Suspicious),
+            .with_criticality(Criticality::Notable),
         );
 
         if !UPXDecompressor::is_available() {
@@ -1188,6 +1153,65 @@ impl Analyzer for ElfAnalyzer {
         use std::io::Read;
         let mut magic = [0u8; 4];
         file.read_exact(&mut magic).is_ok() && magic == [0x7f, b'E', b'L', b'F']
+    }
+}
+
+/// The structural finding for an ELF header whose section metadata is
+/// unusable: goblin rejected it outright, or its section header table lies
+/// past end of file. IoT bots corrupt `e_shoff` to break analysis tools;
+/// truncated downloads lose the table the same way. Suspicious, except in the
+/// known-benign layouts below.
+fn malformed_header_finding(path: &str, data: &[u8], err_msg: &str) -> Finding {
+    let mut crit = Criticality::Suspicious;
+    if path.contains("!!embedded") {
+        crit = Criticality::Notable;
+    } else {
+        let has_go_cli_markers = data
+            .windows(b"-trimpath=true".len())
+            .any(|w| w == b"-trimpath=true")
+            && data.windows(b"go.mod".len()).any(|w| w == b"go.mod");
+        let has_linuxbrew_marker = data
+            .windows(b"/home/linuxbrew/.linuxbrew/Cellar/".len())
+            .any(|w| w == b"/home/linuxbrew/.linuxbrew/Cellar/");
+        let has_android_gif_drawable_marker = path.contains("libpl_droidsonroids_gif.so")
+            || data
+                .windows(b"android-gif-drawable".len())
+                .any(|w| w == b"android-gif-drawable");
+        let is_snappy_s390x_native =
+            path.contains("libsnappyjava.so") && raw_elf_machine(data) == Some(22);
+        if (data.len() >= 50 * 1024 * 1024 && (has_go_cli_markers || has_linuxbrew_marker))
+            || has_android_gif_drawable_marker
+            || is_jvm_bundled_native_path(path)
+            || is_snappy_s390x_native
+            || is_test_fixture_path(path)
+        {
+            // Very large Linuxbrew/Go CLI builds and some legacy
+            // Android native libraries can carry metadata layouts
+            // filefacts's parser rejects even though the executable is
+            // otherwise legitimate. JVM native-dependency jars also
+            // ship cross-platform shared libraries that may not parse
+            // cleanly on the host, including snappy-java's s390x
+            // native library after archive extraction loses the
+            // enclosing jar path. Keep the structural anomaly visible,
+            // but below suspicious for these known-benign contexts.
+            crit = Criticality::Notable;
+        }
+    }
+    Finding {
+        precomputed_spans: None,
+        src: None,
+        kind: FindingKind::Structural,
+        id: "anti-analysis/malformed/elf-header".to_string().into(),
+        desc: format!("Malformed ELF header or section headers: {err_msg}").into(),
+        conf: 1.0,
+        crit,
+        mbc: Some("B0001".into()),
+        attack: Some("T1027".into()),
+        evidence: vec![],
+        match_count: 0,
+        trait_refs: vec![],
+        source_file: None,
+        downgraded: false,
     }
 }
 
@@ -1652,8 +1676,8 @@ mod tests {
         assert!(upx_finding.is_some(), "Should have UPX finding");
         let finding = upx_finding.unwrap();
 
-        // UPX materially changes static visibility even when otherwise legitimate.
-        assert_eq!(finding.crit, Criticality::Suspicious);
+        // A stock UPX marker records packing; it does not establish evasion intent.
+        assert_eq!(finding.crit, Criticality::Notable);
         assert_eq!(finding.conf, 1.0);
         assert_eq!(finding.desc, "Binary contains a UPX packing marker");
     }

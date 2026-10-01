@@ -148,7 +148,7 @@ thread_local! {
     static WAIT_WORK_DEPTH: Cell<usize> = const { Cell::new(0) };
 }
 
-pub(crate) struct WaitWorkGuard(());
+struct WaitWorkGuard(());
 
 impl Drop for WaitWorkGuard {
     fn drop(&mut self) {
@@ -161,18 +161,26 @@ impl Drop for WaitWorkGuard {
     }
 }
 
-/// Install `hook` as the wait-time work source until the guard drops.
+/// Run `body` with `hook` installed as the wait-time work source.
 ///
 /// `hook` returns `true` when it ran a job (the caller re-checks its wait
 /// condition) and `false` when the queue is exhausted.
-pub(crate) fn install_wait_work(hook: &(dyn Fn() -> bool + Sync)) -> WaitWorkGuard {
-    // SAFETY: the guard clears the slot and drains every in-progress call
-    // before it drops, and the caller keeps `hook` alive until then.
+///
+/// Scoped as a closure rather than handing back a guard: a returned guard
+/// carries no borrow of `hook`, so safe code could drop `hook` first or
+/// `mem::forget` the guard and leave a dangling `&'static` in the global slot.
+pub(crate) fn with_wait_work<R>(hook: &(dyn Fn() -> bool + Sync), body: impl FnOnce() -> R) -> R {
+    // SAFETY: the extended reference lives only in `WAIT_WORK`. `_guard` never
+    // leaves this frame, so it cannot be leaked, and it drops before this
+    // function returns or unwinds: it clears the slot and waits out every call
+    // already in flight. `hook` is borrowed for this whole call, so it
+    // outlives every use of the extended reference.
     let hook: &'static (dyn Fn() -> bool + Sync) = unsafe { std::mem::transmute(hook) };
     *WAIT_WORK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(hook);
-    WaitWorkGuard(())
+    let _guard = WaitWorkGuard(());
+    body()
 }
 
 /// Run one queued scan path on this thread, if any is installed and this
@@ -728,15 +736,15 @@ mod tests {
             }
             true
         };
-        let guard = install_wait_work(&hook);
-        let before = wait_work_runs();
-        assert!(run_wait_work());
-        assert!(run_wait_work());
-        assert!(run_wait_work());
-        assert!(!run_wait_work(), "queue exhausted");
-        assert_eq!(wait_work_runs() - before, 3);
-        assert_eq!(nested_ran.load(Ordering::Relaxed), 0);
-        drop(guard);
+        with_wait_work(&hook, || {
+            let before = wait_work_runs();
+            assert!(run_wait_work());
+            assert!(run_wait_work());
+            assert!(run_wait_work());
+            assert!(!run_wait_work(), "queue exhausted");
+            assert_eq!(wait_work_runs() - before, 3);
+            assert_eq!(nested_ran.load(Ordering::Relaxed), 0);
+        });
         assert!(!run_wait_work(), "uninstalled");
     }
 }

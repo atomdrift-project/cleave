@@ -834,12 +834,19 @@ impl PackageJsonAnalyzer {
 
             // Hidden file references are suspicious in install/publish lifecycle hooks,
             // but common in benign helper scripts such as docs/build tooling.
+            // Installing an OpenCode command under the standard user config
+            // directory references `.config` as a parent directory; the files
+            // copied there have ordinary names and are not hidden payloads.
+            let installs_opencode_command = script.contains("/opencode/command")
+                && script.contains("commands/*.md")
+                && script.contains("cp ");
             if is_publish_or_install_lifecycle_script(name) && script.contains("/.") {
                 // Extract the hidden file path, excluding standard paths like node_modules/.bin/
                 let hidden_files: Vec<&str> = script
                     .split_whitespace()
                     .filter(|s| {
                         s.contains("/.")
+                            && !(installs_opencode_command && s.contains("/opencode/command"))
                             && !s.contains("node_modules/.bin/")
                             && !s.contains("/.husky")
                             && !s.contains("/.git/hooks")
@@ -1742,6 +1749,58 @@ mod tests {
             "version": "1.0.0",
             "scripts": {
                 "postinstall": "sh ./.hidden/dropper.sh"
+            }
+        }"#;
+
+        let analyzer = PackageJsonAnalyzer::new();
+        let report = analyzer
+            .analyze_package(Path::new("package.json"), content)
+            .unwrap();
+
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.id == "evasion/hidden-file")
+        );
+    }
+
+    #[test]
+    fn test_opencode_command_install_is_not_hidden_file_evasion() {
+        let content = r#"{
+            "name": "md-annotator-opencode",
+            "version": "0.11.1",
+            "scripts": {
+                "postinstall": "mkdir -p ${XDG_CONFIG_HOME:-$HOME/.config}/opencode/command && cp ./commands/*.md ${XDG_CONFIG_HOME:-$HOME/.config}/opencode/command/ 2>/dev/null || true"
+            }
+        }"#;
+
+        let analyzer = PackageJsonAnalyzer::new();
+        let report = analyzer
+            .analyze_package(Path::new("package.json"), content)
+            .unwrap();
+
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|f| f.id == "evasion/hidden-file")
+        );
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.id.contains("install-hook") || f.id.contains("postinstall"))
+        );
+    }
+
+    #[test]
+    fn test_opencode_command_install_does_not_hide_other_hidden_paths() {
+        let content = r#"{
+            "name": "md-annotator-opencode",
+            "version": "0.11.1",
+            "scripts": {
+                "postinstall": "mkdir -p ${XDG_CONFIG_HOME:-$HOME/.config}/opencode/command && cp ./commands/*.md ${XDG_CONFIG_HOME:-$HOME/.config}/opencode/command/ && cp ./payload.sh ./.hidden/dropper.sh"
             }
         }"#;
 

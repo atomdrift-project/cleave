@@ -1024,12 +1024,21 @@ pub(crate) fn extract_cab_from_reader<R: Read + Seek>(
         // CAB entries are always files.
         let out_path = guard.claim_output_path(out_path);
 
-        let mut reader = cabinet
-            .read_file(name)
-            .with_context(|| format!("Failed to read CAB entry: {name}"))?;
+        let mut reader = match cabinet.read_file(name) {
+            Ok(reader) => reader,
+            Err(error) => {
+                guard.add_extraction_note(format!("CAB entry {name} could not be opened: {error}"));
+                continue;
+            }
+        };
 
         // Read into a size-limited buffer; check cancellation every 64 KiB.
+        // A corrupt CFDATA checksum may be reported only after earlier blocks
+        // have already yielded useful bytes. Keep that prefix for child
+        // analysis and report the damaged tail instead of discarding the file.
         let mut buf = Vec::new();
+        let mut read_error: Option<std::io::Error> = None;
+        let limited_hit;
         {
             let mut limited = LimitedReader::new(&mut reader, MAX_FILE_SIZE);
             let mut chunk = [0u8; 65536];
@@ -1037,19 +1046,27 @@ pub(crate) fn extract_cab_from_reader<R: Read + Seek>(
                 if guard.is_cancelled() {
                     anyhow::bail!("cancelled");
                 }
-                let n = limited
-                    .read(&mut chunk)
-                    .with_context(|| format!("Failed to decompress CAB entry: {name}"))?;
-                if n == 0 {
-                    break;
+                match limited.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                    Err(error) => {
+                        read_error = Some(error);
+                        break;
+                    }
                 }
-                buf.extend_from_slice(&chunk[..n]);
             }
-            if limited.is_limited() {
-                guard.add_hostile_reason(HostileArchiveReason::ExcessiveFileSize {
-                    file: name.clone(),
-                    size: MAX_FILE_SIZE,
-                });
+            limited_hit = limited.is_limited();
+        }
+        if limited_hit {
+            guard.add_hostile_reason(HostileArchiveReason::ExcessiveFileSize {
+                file: name.clone(),
+                size: MAX_FILE_SIZE,
+            });
+            continue;
+        }
+        if let Some(error) = read_error {
+            guard.add_extraction_note(format!("CAB entry {name} is partial: {error}"));
+            if buf.is_empty() {
                 continue;
             }
         }
@@ -1068,6 +1085,31 @@ pub(crate) fn extract_cab_from_reader<R: Read + Seek>(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod cab_partial_member_tests {
+    use super::*;
+
+    #[test]
+    fn checksum_error_keeps_decompressed_member_prefix_for_analysis() {
+        const SAMPLE: &[u8] = include_bytes!("../../../testdata/cab/corrupt-inner-mszip.cab");
+        let dir = tempfile::tempdir().unwrap();
+        let guard = ExtractionGuard::new();
+
+        extract_cab_from_reader(Cursor::new(SAMPLE), dir.path(), &guard).unwrap();
+
+        let partial = fs::read(dir.path().join("PO_UB7635_Specifications_Details.cmd")).unwrap();
+        assert!(
+            partial
+                .windows(b"extrac32 /y".len())
+                .any(|window| window == b"extrac32 /y")
+        );
+        assert!(guard.take_extraction_notes().iter().any(|note| {
+            note.contains("PO_UB7635_Specifications_Details.cmd") && note.contains("partial")
+        }));
+    }
 }
 
 #[cfg(test)]

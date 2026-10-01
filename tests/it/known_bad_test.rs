@@ -140,15 +140,19 @@ fn normalize_file_result(v: &mut Value) {
     });
 }
 
+/// Needs machine-local inputs: `tests/verify` snapshots from
+/// `make regenerate-testdata` and the samples they name. It used to return
+/// early (a pass) when those were missing, so it is ignored instead and run
+/// with `cargo test --test it -- --ignored test_known_bad_integrity`, where
+/// missing inputs fail loudly.
 #[test]
+#[ignore = "needs tests/verify snapshots from `make regenerate-testdata`"]
 fn test_known_bad_integrity() {
     let verify_dir = Path::new("tests/verify");
-    if !verify_dir.exists() {
-        eprintln!(
-            "Warning: tests/verify directory not found. Run 'make regenerate-testdata' first."
-        );
-        return;
-    }
+    assert!(
+        verify_dir.exists(),
+        "tests/verify not found; run `make regenerate-testdata` first"
+    );
 
     let mut test_files = Vec::new();
     for entry in WalkDir::new(verify_dir).into_iter().filter_map(Result::ok) {
@@ -157,10 +161,10 @@ fn test_known_bad_integrity() {
         }
     }
 
-    if test_files.is_empty() {
-        eprintln!("No test data files found in tests/verify/");
-        return;
-    }
+    assert!(
+        !test_files.is_empty(),
+        "no snapshot files found in tests/verify/"
+    );
 
     test_files.sort();
 
@@ -186,8 +190,8 @@ fn test_known_bad_integrity() {
             continue;
         }
 
-        // Run cleave on the binary
-        let output = std::process::Command::new("./target/release/cleave")
+        // Run the cleave built from this source, not a possibly stale release binary.
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_cleave"))
             .arg("--format")
             .arg("jsonl")
             .arg(&binary_path)
@@ -239,6 +243,11 @@ fn test_known_bad_integrity() {
             mismatches.push((binary_path.to_string(), diff));
         }
     }
+
+    assert!(
+        !stats.is_empty(),
+        "none of the samples named in tests/verify exist on this machine"
+    );
 
     // Print summary statistics
     if !stats.is_empty() {

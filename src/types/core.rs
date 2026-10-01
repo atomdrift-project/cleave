@@ -1836,7 +1836,10 @@ impl AnalysisReport {
                     if file.path.contains(super::file_analysis::ARCHIVE_DELIMITER) {
                         !file.path.starts_with(&archive_root_prefix)
                     } else {
-                        !file.path.contains("##") && !file.path.starts_with(&root_path)
+                        // Local decoded paths still need the root/member chain.
+                        // Only skip rebasing when the decoder already received
+                        // the full path of the analyzed root as its parent.
+                        !file.path.starts_with(&root_path)
                     };
                 if needs_root_prefix {
                     file.path = super::file_analysis::encode_archive_path(&root_path, &file.path);
@@ -2095,6 +2098,7 @@ impl AnalysisReport {
         file.arch = arch;
         file.traits = self.traits;
         file.findings = self.findings;
+        file.suppressions = self.suppressions;
         file.analysis_gaps = self.analysis_gaps;
         file.context = self.context;
         file.filefacts = self.filefacts;
@@ -2789,6 +2793,28 @@ mod tests {
         }
     }
 
+    /// Both report→file conversions must carry `suppressions`: the consuming
+    /// one serves every archive member, subfile and payload, and dropping the
+    /// field there silently erased the record of what the engine withheld.
+    #[test]
+    fn file_analysis_conversions_keep_suppressions() {
+        let mut report = AnalysisReport::new(test_target());
+        report.suppressions.push(Suppression {
+            id: "objectives/execution/shell".into(),
+            crit: Criticality::Suspicious,
+            kind: crate::types::SuppressionKind::Unless,
+            by: vec![],
+        });
+
+        let borrowed = report.to_file_analysis(0);
+        let (consumed, _, _) = report.into_file_analysis(0);
+        assert_eq!(borrowed.suppressions.len(), 1);
+        assert_eq!(consumed.suppressions, borrowed.suppressions);
+
+        let replayed = crate::report_from_file_analysis(consumed, "/test/sample.bin".into());
+        assert_eq!(replayed.suppressions, borrowed.suppressions);
+    }
+
     #[test]
     fn scanner_catalog_self_hits_drop_only_that_files_signatures() {
         let mut report = AnalysisReport::new(test_target());
@@ -2895,6 +2921,46 @@ mod tests {
             report.files[1].path,
             "/samples/bundle.zip!!setup.exe!!app/bin/payload.dll"
         );
+    }
+
+    #[test]
+    fn finalize_rebases_decoded_archive_children_and_links_their_parent() {
+        let mut report = AnalysisReport::new(TargetInfo {
+            path: "/samples/reference.tar.gz".to_string(),
+            file_type: "tar.gz".to_string(),
+            size_bytes: 100,
+            sha256: "archive-sha".to_string(),
+            architectures: None,
+        });
+        let mut member = FileAnalysis::new(
+            0,
+            "PayloadsAllTheThings-4.2/.github/hopla_config.json".to_string(),
+            "json".to_string(),
+            "member-sha".to_string(),
+            42,
+        );
+        member.depth = 1;
+        let mut decoded = FileAnalysis::new(
+            1,
+            "PayloadsAllTheThings-4.2/.github/hopla_config.json##base64@12728".to_string(),
+            "php".to_string(),
+            "decoded-sha".to_string(),
+            50,
+        );
+        decoded.depth = 2;
+        report.files.extend([member, decoded]);
+
+        report.finalize();
+
+        assert_eq!(
+            report.files[1].path,
+            "/samples/reference.tar.gz!!PayloadsAllTheThings-4.2/.github/hopla_config.json"
+        );
+        assert_eq!(
+            report.files[2].path,
+            "/samples/reference.tar.gz!!PayloadsAllTheThings-4.2/.github/hopla_config.json##base64@12728"
+        );
+        assert_eq!(report.files[2].parent_id, Some(1));
     }
 
     fn local_ref(path: &str) -> filefacts::Reference {

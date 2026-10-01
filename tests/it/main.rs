@@ -27,6 +27,8 @@ mod compact_trait_graph_test;
 mod context_note_orphan_test;
 mod diff_test;
 mod directory_scan_test;
+mod dos_boot_sector_test;
+mod dos_com_overwriter_test;
 mod embedded_code_detection_test;
 mod embedded_sfx_test;
 mod format_emission_test;

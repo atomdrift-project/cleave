@@ -121,10 +121,17 @@ impl MapperCacheData {
             composites: composites.len(),
             parse_errors: parse_errors.to_vec(),
         };
+        // Each line is `[defined_in, rule]`: `defined_in` is `#[serde(skip)]`
+        // on the rule types (it is load provenance, not YAML), yet evaluation
+        // reads it (the tiny DOS `.com` allowlists), so a hit must restore it.
         let rules: Vec<Vec<u8>> = traits
             .par_iter()
-            .map(serde_json::to_vec)
-            .chain(composites.par_iter().map(serde_json::to_vec))
+            .map(|t| serde_json::to_vec(&(&t.defined_in, t)))
+            .chain(
+                composites
+                    .par_iter()
+                    .map(|c| serde_json::to_vec(&(&c.defined_in, c))),
+            )
             .collect::<serde_json::Result<_>>()?;
         let mut out = serde_json::to_vec(&header)?;
         for rule in rules {
@@ -137,11 +144,15 @@ impl MapperCacheData {
     fn parse(bytes: &mut [u8]) -> Result<Self> {
         fn parse_lines<T: serde::de::DeserializeOwned + Send>(
             lines: &mut [&mut [u8]],
+            set_defined_in: fn(&mut T, std::path::PathBuf),
         ) -> simd_json::Result<Vec<T>> {
             lines
                 .par_iter_mut()
                 .map_init(simd_json::Buffers::default, |buffers, line| {
-                    simd_json::serde::from_slice_with_buffers(line, buffers)
+                    let (defined_in, mut rule): (std::path::PathBuf, T) =
+                        simd_json::serde::from_slice_with_buffers(line, buffers)?;
+                    set_defined_in(&mut rule, defined_in);
+                    Ok(rule)
                 })
                 .collect()
         }
@@ -167,8 +178,10 @@ impl MapperCacheData {
         );
         let (traits, composites) = rules.split_at_mut(header.traits);
         Ok(Self {
-            trait_definitions: parse_lines(traits)?,
-            composite_rules: parse_lines(composites)?,
+            trait_definitions: parse_lines(traits, |t: &mut TraitDefinition, p| t.defined_in = p)?,
+            composite_rules: parse_lines(composites, |c: &mut CompositeTrait, p| {
+                c.defined_in = p;
+            })?,
             parse_errors: header.parse_errors,
         })
     }
@@ -5913,6 +5926,32 @@ mod tests {
             .filter(|i| i.validator_id.ends_with("file-type"))
             .map(|i| (i.validator_id, i.message.clone()))
             .collect()
+    }
+
+    /// A mapper-cache hit must restore each rule's `defined_in`: the field is
+    /// `#[serde(skip)]` on the rule types, yet evaluation filters on it, so a
+    /// warm run would otherwise drop rules a cold run keeps.
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn mapper_cache_round_trip_keeps_defined_in() {
+        let trait_path = Path::new("/traits/metadata/binary/layout/msdos.yaml");
+        let rule_path = Path::new("/traits/objectives/impact/infect/virus/msdos-binary.yaml");
+        let t = super::TraitDefinition {
+            id: "metadata/binary/layout::msdos".into(),
+            defined_in: trait_path.to_path_buf(),
+            ..Default::default()
+        };
+        let c = super::CompositeTrait {
+            id: "objectives/impact/infect/virus::msdos".into(),
+            defined_in: rule_path.to_path_buf(),
+            ..Default::default()
+        };
+
+        let mut bytes =
+            super::MapperCacheData::to_json_lines(&[t], &[c], &[]).expect("encode cache");
+        let data = super::MapperCacheData::parse(&mut bytes).expect("decode cache");
+        assert_eq!(data.trait_definitions[0].defined_in, trait_path);
+        assert_eq!(data.composite_rules[0].defined_in, rule_path);
     }
 
     /// A banned name in `defaults: for:` is reported once for the file, under

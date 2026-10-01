@@ -217,7 +217,7 @@ encoding_rs = "0.8"  # Character encoding detection and conversion
 # API, and Cargo treats `git = URL` and `git = URL, rev = R` as different
 # sources even at the same commit — two copies of the crate, whose types do not
 # unify. Bump this rev together with filefacts'.
-stng = { git = "https://github.com/atomdrift-project/stng.git", rev = "98c580eaf8d6899b23d21f557dcfe27d03664514" }
+stng = { git = "https://github.com/atomdrift-project/stng.git", rev = "3c2f434ef9b97c0c144ba3d0add8f7ccb2ef7188" }
 
 # Logging (tracing is the modern standard, more powerful than log+env_logger)
 tracing = "0.1"

@@ -5928,36 +5928,6 @@ mod tests {
             .collect()
     }
 
-    /// TEMPORARY: dumps every loaded rule (wire form) and every non-YARA trait
-    /// condition (internal form), for comparing a refactor's corpus load.
-    #[test]
-    #[ignore = "temporary corpus dump"]
-    #[allow(clippy::expect_used, clippy::unwrap_used)]
-    fn tmp_dump_corpus_conditions() {
-        use std::fmt::Write as _;
-        let dir = std::env::var("DUMP_TRAITS_DIR").expect("DUMP_TRAITS_DIR");
-        let out = std::env::var("DUMP_OUT").expect("DUMP_OUT");
-        let mapper = crate::capabilities::CapabilityMapper::from_directory_with_options(
-            dir,
-            crate::capabilities::CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION,
-            crate::capabilities::CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION,
-            false,
-            false,
-        )
-        .expect("load corpus");
-        let mut text = String::new();
-        for t in mapper.trait_definitions() {
-            writeln!(text, "T {}", serde_json::to_string(t).unwrap()).unwrap();
-            if !matches!(t.r#if, crate::composite_rules::Condition::Yara { .. }) {
-                writeln!(text, "D {} {:?}", t.id, t.r#if).unwrap();
-            }
-        }
-        for c in mapper.composite_rules() {
-            writeln!(text, "C {}", serde_json::to_string(c).unwrap()).unwrap();
-        }
-        std::fs::write(out, text).unwrap();
-    }
-
     /// A mapper-cache hit must restore each rule's `defined_in`: the field is
     /// `#[serde(skip)]` on the rule types, yet evaluation filters on it, so a
     /// warm run would otherwise drop rules a cold run keeps.

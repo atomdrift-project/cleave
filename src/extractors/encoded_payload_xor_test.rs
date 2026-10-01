@@ -22,7 +22,6 @@ fn specimen_pipeline_recovers_complete_binary_and_provenance() {
         "30c99015f9c432604d8a8206ce8dcb4fba7866b062e5bd1a8f0adb88fba8807c"
     );
     let opts = stng::ExtractOptions {
-        use_cache: false,
         caller_provides_symbols: true,
         filter_garbage: true,
         ..Default::default()

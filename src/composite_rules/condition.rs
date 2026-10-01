@@ -3805,6 +3805,75 @@ exact: main
         ));
     }
 
+    /// The wire enum hands each variant's map to the query struct, so the
+    /// struct's own `deny_unknown_fields` is what rejects typos. Cover a plain
+    /// variant, both legacy-alias payloads, and a renamed type. (The untagged
+    /// `ConditionDeser` reports every failure as "did not match any variant",
+    /// so each case checks that the input loads without the extra field.)
+    #[test]
+    fn wire_format_rejects_unknown_fields() {
+        for (valid, extra) in [
+            ("type: symbol\nexact: main\n", "excat: x\n"),
+            ("type: import\nexact: main\n", "kind: export\n"),
+            ("type: basename\nexact: a.txt\n", "basename: false\n"),
+            ("type: value\npath: a.b\nexact: x\n", "match_mode: any\n"),
+            ("type: tree-sitter\nquery: \"(x)\"\n", "qeury: y\n"),
+        ] {
+            assert!(
+                serde_yaml::from_str::<Condition>(valid).is_ok(),
+                "rejected {valid:?}"
+            );
+            let typo = format!("{valid}{extra}");
+            assert!(
+                serde_yaml::from_str::<Condition>(&typo).is_err(),
+                "accepted {typo:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn wire_format_aliases_load_and_serialize_canonically() {
+        let literal: Condition = serde_yaml::from_str("type: string_literal\nexact: x\n").unwrap();
+        assert!(matches!(literal, Condition::Literal(_)));
+        assert_eq!(
+            serde_yaml::to_value(&literal).unwrap()["type"],
+            serde_yaml::Value::from("literal")
+        );
+
+        let kv: Condition =
+            serde_yaml::from_str("type: value\npath: a\nsize_min: 2\nmatch: all\n").unwrap();
+        let Condition::Kv(ref query) = kv else {
+            panic!("expected kv, got {kv:?}");
+        };
+        assert_eq!(query.length_min, Some(2));
+        assert_eq!(
+            serde_yaml::to_value(&kv).unwrap()["length_min"],
+            serde_yaml::Value::from(2)
+        );
+
+        // Legacy alias types load as their canonical condition and serialize
+        // as it, so a cached rule never reproduces the alias.
+        let basename: Condition = serde_yaml::from_str("type: basename\nexact: a.txt\n").unwrap();
+        assert!(matches!(
+            basename,
+            Condition::Path(PathQuery {
+                basename: true,
+                dirname: false,
+                ..
+            })
+        ));
+        let import: Condition = serde_yaml::from_str("type: import\nexact: f\n").unwrap();
+        let reloaded: Condition =
+            serde_yaml::from_str(&serde_yaml::to_string(&import).unwrap()).unwrap();
+        assert!(matches!(
+            reloaded,
+            Condition::Symbol(SymbolQuery {
+                kind: Some(SymbolKind::Import),
+                ..
+            })
+        ));
+    }
+
     #[test]
     fn legacy_call_target_spellings_are_normalized_when_loaded() {
         let cond: Condition = serde_yaml::from_str(

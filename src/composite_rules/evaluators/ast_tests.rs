@@ -156,7 +156,11 @@ fn ast_query_group_state_headroom_preserves_wide_credential_object_match() {
     // The corresponding production trait has no count filter, so its normal
     // evaluator may stop after the first valid credential-object match.
     let _match_count_guard = super::symbol_string::MatchCountGuard::set(false);
-    let result = super::ast::eval_ast_query(query, &ctx);
+    // This test is about query-state headroom, not CPU time: the 100ms
+    // multi-wildcard budget (covered by the pathological test below) is
+    // tight enough for a debug build on a loaded SMT core to exceed it.
+    let result =
+        super::ast::eval_ast_query_with_budget(query, &ctx, std::time::Duration::from_secs(30));
     assert!(
         result.matched,
         "the production AST evaluator preserves the match; warnings={:?}, match_count={}",

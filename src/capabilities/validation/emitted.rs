@@ -155,6 +155,7 @@ mod tests {
             "metadata/entitlement/security",
             "metadata/lang/embedded::shell",
             "metadata/lang/encoded/base64",
+            "metadata/lang/encoded/wide",
             "metadata/binary/linking::macho-rpath",
         ] {
             assert_eq!(check_emitted_ref(id), Some(Ok(())), "{id}");
@@ -181,7 +182,7 @@ mod tests {
             "metadata/signed/trust-level::unsigned",
             "metadata/signed/certificate/identity::pe-signature-verified",
             "metadata/lang/encoded/unicode-escape::electron-js2c-marker",
-            "metadata/lang/encoded/wide",
+            "metadata/lang/encoded/wide::shell-interpreter-powershell",
             "metadata/dylib::mscoree/dll.",
             "metadata/entitlement/bogus::com.apple.x",
         ] {

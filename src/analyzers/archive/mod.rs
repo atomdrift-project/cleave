@@ -1048,7 +1048,7 @@ fn push_archive_hostile_findings(
                 ));
             }
             HostileArchiveReason::SymlinkEscape(path) => {
-                if !is_benign_archive_symlink_escape(archive_path, &path) {
+                if !is_benign_archive_symlink_escape(&path) {
                     report.findings.push(archive_finding(
                         "anti-analysis/archive/symlink-escape",
                         "Archive contains symlink that may escape extraction directory".to_string(),
@@ -1153,12 +1153,16 @@ fn path_looks_synthetic_edge_case(name: &str) -> bool {
     )
 }
 
-/// Whether a symlink escape (`path` is `link -> target`) inside the archive at
-/// `archive_path` is a known-benign shape: system-package or container-image
-/// layouts, or an archive that itself sits in a test-fixture directory.
-fn is_benign_archive_symlink_escape(archive_path: &Path, path: &str) -> bool {
-    let archive_path = archive_path.to_string_lossy();
-    let archive_path = archive_path.trim();
+/// Whether a symlink escape (`path` is `link -> target`) has a known-benign
+/// shape: a node-gyp Python shim, or a system location linking to a system
+/// target.
+///
+/// Judged on the link alone. Where the archive or member sits (a `testdata/`
+/// directory, a `.pkg.tar.zst` or `docker.io_` file name) is chosen by whoever
+/// built the archive, so it must not excuse an escape; whole-container
+/// allowances key on the content-detected type instead, see
+/// [`carries_system_symlinks`].
+fn is_benign_archive_symlink_escape(path: &str) -> bool {
     let path = path.trim();
 
     if (path.contains("/node_gyp_bins/python3") || path.contains("/node_gyp_bins/python"))
@@ -1193,27 +1197,42 @@ fn is_benign_archive_symlink_escape(archive_path: &Path, path: &str) -> bool {
         }
     }
 
-    let archive_lc = archive_path.to_ascii_lowercase();
-    let system_package_or_container = archive_lc.ends_with(".pkg.tar.zst")
-        || archive_lc.ends_with(".pkg.tar.xz")
-        || archive_lc.ends_with(".pkg.tar.gz")
-        || archive_lc.contains("docker.io_")
-        || archive_lc.contains("ghcr.io_")
-        || archive_lc.contains("quay.io_")
-        || archive_lc.contains("registry.k8s.io_");
-    if system_package_or_container && path.contains(" -> ") {
-        return true;
-    }
-
-    archive_path
-        .split(['/', '\\', '!'])
-        .chain(path.split("->").next().unwrap_or("").split(['/', '\\']))
-        .any(|component| matches!(component, "testdata" | "fixture" | "fixtures"))
+    false
 }
 
-fn path_is_fixture_context(path: &str) -> bool {
-    path.split(['/', '\\', '!'])
-        .any(|component| matches!(component, "testdata" | "fixture" | "fixtures"))
+/// Whether this archive is a kind whose contents routinely link out of the
+/// extraction root: an OS package's `usr/lib/libfoo.so -> /usr/lib/libfoo.so.1`,
+/// a container image layer's root filesystem. Decided by content, never by the
+/// file name, which whoever built the archive chooses.
+fn carries_system_symlinks(archive_type: FileType, contents: &[ArchiveEntry]) -> bool {
+    let has_member = |name: &str| {
+        contents.iter().any(|entry| {
+            let leaf = entry.path.rsplit('!').next().unwrap_or(&entry.path);
+            leaf.trim_start_matches("./") == name
+        })
+    };
+    match archive_type {
+        // filefacts also types a `.pkg.tar.*` *name* as an Arch package when the
+        // body lacks package metadata, so require the metadata it otherwise
+        // detects the format by.
+        FileType::PkgArch => {
+            has_member(".PKGINFO") && (has_member(".MTREE") || has_member(".BUILDINFO"))
+        }
+        // Detected from content only: an OCI layout or a `docker save` manifest.
+        FileType::OciImage => true,
+        _ => false,
+    }
+}
+
+/// Drop symlink-escape findings from a container that [`carries_system_symlinks`]:
+/// its own, and those of every member folded into it (a container image's
+/// layer tarballs are separate nested archives that report their own).
+fn drop_system_container_symlink_escapes(report: &mut AnalysisReport) {
+    let is_escape = |finding: &Finding| finding.id == "anti-analysis/archive/symlink-escape";
+    report.findings.retain(|finding| !is_escape(finding));
+    for file in &mut report.files {
+        file.findings.retain(|finding| !is_escape(finding));
+    }
 }
 
 fn is_zip_path_edge_case_corpus(file_path: &Path) -> bool {
@@ -2078,7 +2097,7 @@ impl ArchiveAnalyzer {
                 }],
             });
             report.seal_archive_metadata_kv();
-            self.evaluate_container_findings(&mut report, data);
+            self.evaluate_container_findings(&mut report, data, file_type);
             return Ok(report);
         }
 
@@ -2115,7 +2134,7 @@ impl ArchiveAnalyzer {
                 }],
             });
             report.seal_archive_metadata_kv();
-            self.evaluate_container_findings(&mut report, data);
+            self.evaluate_container_findings(&mut report, data, file_type);
             return Ok(report);
         }
 
@@ -2240,7 +2259,7 @@ impl ArchiveAnalyzer {
             // or composites like `python-package-with-dll` will never
             // see member basenames.
             report.seal_archive_metadata_kv();
-            self.evaluate_container_findings(&mut report, data);
+            self.evaluate_container_findings(&mut report, data, file_type);
             return Ok(report);
         }
 
@@ -2364,7 +2383,7 @@ impl ArchiveAnalyzer {
                         }],
                     });
                     report.seal_archive_metadata_kv();
-                    self.evaluate_container_findings(&mut report, data);
+                    self.evaluate_container_findings(&mut report, data, file_type);
                     return Ok(report);
                 }
                 return Err(e);
@@ -2435,7 +2454,7 @@ impl ArchiveAnalyzer {
         }
 
         report.seal_archive_metadata_kv();
-        self.evaluate_container_findings(&mut report, data);
+        self.evaluate_container_findings(&mut report, data, file_type);
 
         Ok(report)
     }
@@ -2444,7 +2463,16 @@ impl ArchiveAnalyzer {
     /// the results into `report.findings`. Shared between the in-memory
     /// and temp_dir analysis paths so both produce the same composites
     /// (e.g. `python-package-with-dll`).
-    fn evaluate_container_findings(&self, report: &mut AnalysisReport, archive_data: &[u8]) {
+    fn evaluate_container_findings(
+        &self,
+        report: &mut AnalysisReport,
+        archive_data: &[u8],
+        archive_type: FileType,
+    ) {
+        if carries_system_symlinks(archive_type, &report.archive_contents) {
+            drop_system_container_symlink_escapes(report);
+        }
+
         // Cross-member npm consistency: a runtime dependency declared in
         // package.json that no shipped module imports is a phantom dependency
         // — the install-time-payload shape of a hijacked-publisher release
@@ -2689,10 +2717,6 @@ impl ArchiveAnalyzer {
                 // finding pool. Each member recorded its own suppressions when
                 // it was analyzed.
                 mapper.apply_retroactive_unless_suppression_to_findings(&mut file.findings, None);
-                if path_is_fixture_context(&file.path) {
-                    file.findings
-                        .retain(|finding| finding.id != "anti-analysis/archive/symlink-escape");
-                }
             }
         };
         if crate::rayon_nest::inner_work_parallel() {
@@ -2715,18 +2739,6 @@ impl ArchiveAnalyzer {
         );
         if has_builtin_anti_analysis_finding(&report.findings) {
             mapper.apply_retroactive_unless_suppression_to_findings(&mut report.findings, None);
-            let fixture_file_ids: Vec<u32> = report
-                .files
-                .iter()
-                .enumerate()
-                .filter_map(|(idx, file)| path_is_fixture_context(&file.path).then_some(idx as u32))
-                .collect();
-            report.findings.retain(|finding| {
-                finding.id != "anti-analysis/archive/symlink-escape"
-                    || !finding
-                        .src
-                        .is_some_and(|src| fixture_file_ids.contains(&src))
-            });
         }
     }
 
@@ -3067,39 +3079,92 @@ mod tests {
     use ::tar;
     use ::zip;
 
-    /// The package/container allowance keys on the archive's own path. The
-    /// call site used to pass the evidence label `"archive_analyzer"` in that
-    /// slot, so the allowance could never fire.
+    /// A symlink escape is excused by what the link is, or by the archive's
+    /// content-detected type, never by a name whoever built the archive chose:
+    /// a `testdata/` directory, a `.pkg.tar.zst` or a `docker.io_` file name.
     #[test]
-    fn symlink_escape_allowance_reads_the_archive_path() {
-        let link = "usr/lib/libfoo.so -> /opt/foo/lib/libfoo.so";
-        assert!(is_benign_archive_symlink_escape(
-            Path::new("/cache/foo-1.0-1-x86_64.pkg.tar.zst"),
-            link
-        ));
-        assert!(is_benign_archive_symlink_escape(
-            Path::new("/images/docker.io_library_alpine.tar"),
-            link
-        ));
-        assert!(!is_benign_archive_symlink_escape(
-            Path::new("/downloads/update.tar"),
-            link
-        ));
-
-        let mut report = AnalysisReport::new(TargetInfo::default());
-        push_archive_hostile_findings(
-            &mut report,
-            vec![HostileArchiveReason::SymlinkEscape(link.to_string())],
-            Path::new("/cache/foo-1.0-1-x86_64.pkg.tar.zst"),
-            "archive_analyzer",
-            false,
-        );
-        assert!(
-            report
+    fn symlink_escape_is_not_excused_by_names() {
+        fn escape_findings(file_name: &str, link: &str, members: &[(&str, &[u8])]) -> usize {
+            let mut archive = tar::Builder::new(Vec::new());
+            for (name, body) in members {
+                let mut header = tar::Header::new_gnu();
+                header.set_size(body.len() as u64);
+                header.set_mode(0o644);
+                archive.append_data(&mut header, name, *body).unwrap();
+            }
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(tar::EntryType::Symlink);
+            header.set_size(0);
+            header.set_mode(0o777);
+            archive
+                .append_link(&mut header, link, "/etc/passwd")
+                .unwrap();
+            let tar_bytes = archive.into_inner().unwrap();
+            let bytes = if file_name.ends_with(".zst") {
+                zstd::encode_all(&tar_bytes[..], 0).unwrap()
+            } else {
+                tar_bytes
+            };
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join(file_name);
+            std::fs::write(&path, bytes).unwrap();
+            ArchiveAnalyzer::new()
+                .with_capability_mapper(CapabilityMapper::empty())
+                .analyze(&path)
+                .unwrap()
                 .findings
                 .iter()
-                .all(|f| &*f.id != "anti-analysis/archive/symlink-escape"),
-            "a system package's symlinks are not an escape finding"
+                .filter(|f| f.id.as_ref() == "anti-analysis/archive/symlink-escape")
+                .count()
+        }
+
+        assert_eq!(
+            escape_findings("update.tar", "data/evil", &[]),
+            1,
+            "control"
+        );
+        assert_eq!(
+            escape_findings("update.tar", "testdata/evil", &[]),
+            1,
+            "a testdata/ directory in the archive"
+        );
+        assert_eq!(
+            escape_findings("foo-1.0-1-x86_64.pkg.tar.zst", "data/evil", &[]),
+            1,
+            "an Arch package file name without an Arch package inside"
+        );
+        assert_eq!(
+            escape_findings("docker.io_library_alpine.tar", "data/evil", &[]),
+            1,
+            "a container-registry file name without an image inside"
+        );
+
+        assert_eq!(
+            escape_findings(
+                "foo-1.0-1-x86_64.pkg.tar.zst",
+                "usr/lib/libfoo.so",
+                &[
+                    (".PKGINFO", b"pkgname = foo\npkgver = 1.0-1\n"),
+                    (".MTREE", b""),
+                ]
+            ),
+            0,
+            "a real Arch package may link out of the extraction root"
+        );
+        assert_eq!(
+            escape_findings(
+                "alpine.tar",
+                "usr/lib/libfoo.so",
+                &[
+                    (
+                        "manifest.json",
+                        br#"[{"Config":"c.json","RepoTags":["alpine:3"],"Layers":[]}]"#
+                    ),
+                    ("repositories", br#"{"alpine":{"3":"c"}}"#),
+                ]
+            ),
+            0,
+            "a `docker save` image may link out of the extraction root"
         );
     }
 
@@ -3543,7 +3608,7 @@ composite_rules:
 
         ArchiveAnalyzer::new()
             .with_capability_mapper(mapper)
-            .evaluate_container_findings(&mut report, b"ROOT");
+            .evaluate_container_findings(&mut report, b"ROOT", FileType::Zip);
 
         assert!(
             report

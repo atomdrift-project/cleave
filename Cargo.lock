@@ -239,6 +239,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "arraydeque"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d902e3d592a523def97af8f317b08ce16b7ab854c1985a0c671e6f15cebc236"
+
+[[package]]
 name = "ascii_tree"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1395,8 +1401,8 @@ dependencies = [
 
 [[package]]
 name = "cu-bincode"
-version = "2.1.0"
-source = "git+https://github.com/copper-project/cu-bincode#91a829cfba0dadfcf8b1982d31b6b155f7f78584"
+version = "2.2.0-beta"
+source = "git+https://github.com/copper-project/cu-bincode#97a6ab79889e64b71345e5f520234eac69136524"
 dependencies = [
  "cu-bincode-derive",
  "serde",
@@ -1405,8 +1411,8 @@ dependencies = [
 
 [[package]]
 name = "cu-bincode-derive"
-version = "2.1.0"
-source = "git+https://github.com/copper-project/cu-bincode#91a829cfba0dadfcf8b1982d31b6b155f7f78584"
+version = "2.2.0-beta"
+source = "git+https://github.com/copper-project/cu-bincode#97a6ab79889e64b71345e5f520234eac69136524"
 dependencies = [
  "virtue 0.0.19",
 ]
@@ -1780,6 +1786,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "encoding_rs_io"
+version = "0.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fba3fe847045ecff794b9c138293a80db914678c453ad63fbf0c6a9eb6e00b22"
+dependencies = [
+ "encoding_rs",
+]
+
+[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1835,7 +1850,7 @@ dependencies = [
 [[package]]
 name = "filefacts"
 version = "1.7.0"
-source = "git+https://github.com/atomdrift-project/filefacts.git#7e743ab9ce37598c6ab26c746a0899b069cd1dcd"
+source = "git+https://github.com/atomdrift-project/filefacts.git#32c470533de6e4ff318b0416b29d6067668e6084"
 dependencies = [
  "aho-corasick",
  "cab",
@@ -1860,8 +1875,8 @@ dependencies = [
  "roxmltree",
  "rsa",
  "serde",
+ "serde-saphyr",
  "serde_json",
- "serde_yaml",
  "sevenz-rust",
  "sha1 0.10.7",
  "sha2 0.10.9",
@@ -2152,6 +2167,16 @@ dependencies = [
  "log",
  "plain",
  "scroll 0.13.0",
+]
+
+[[package]]
+name = "granit-parser"
+version = "1.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e20f99e46474f56bd905c56e817ebddcf377a611f94c53ac4649e4d3fa3c0cd0"
+dependencies = [
+ "arraydeque",
+ "smallvec",
 ]
 
 [[package]]
@@ -4478,6 +4503,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde-saphyr"
+version = "1.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b8050abb251097357e24aff63ba2c52a6309ecb7d23a5474023df960a02694d8"
+dependencies = [
+ "annotate-snippets",
+ "encoding_rs_io",
+ "granit-parser",
+ "num-traits",
+ "serde_core",
+ "smallvec",
+]
+
+[[package]]
 name = "serde-xml-rs"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4798,8 +4837,8 @@ dependencies = [
 
 [[package]]
 name = "stng"
-version = "1.12.0"
-source = "git+https://github.com/atomdrift-project/stng.git?rev=98c580eaf8d6899b23d21f557dcfe27d03664514#98c580eaf8d6899b23d21f557dcfe27d03664514"
+version = "2.0.0"
+source = "git+https://github.com/atomdrift-project/stng.git?rev=3c2f434ef9b97c0c144ba3d0add8f7ccb2ef7188#3c2f434ef9b97c0c144ba3d0add8f7ccb2ef7188"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -5468,7 +5507,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-clojure"
 version = "0.1.0"
-source = "git+https://github.com/atomdrift-project/filefacts.git#7e743ab9ce37598c6ab26c746a0899b069cd1dcd"
+source = "git+https://github.com/atomdrift-project/filefacts.git#32c470533de6e4ff318b0416b29d6067668e6084"
 dependencies = [
  "cc",
  "tree-sitter",

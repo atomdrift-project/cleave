@@ -7,6 +7,7 @@
 //! - Atom extraction for efficient pattern searching
 
 use super::{get_or_create_scanner, truncate_evidence};
+use crate::composite_rules::condition::NotException;
 use crate::composite_rules::context::{AnalysisWarning, ConditionResult, EvaluationContext};
 use crate::types::{Evidence, MAX_EVIDENCE_PER_TRAIT};
 use std::sync::Arc;
@@ -562,15 +563,35 @@ fn is_hex_alternation(token: &str) -> bool {
             .all(|b| b.len() == 2 && b.chars().all(|c| c.is_ascii_hexdigit() || c == '?'))
 }
 
+/// The value a hex match is shown and tested as: the bytes its wildcards,
+/// alternations and gaps matched, as lowercase space-separated hex (`"e8 00"`),
+/// or the pattern itself when it has none. `not:` exceptions test this same
+/// value, so a match is excluded by what its evidence shows.
+fn hex_match_value(data: &[u8], pos: usize, segments: &[HexSegment], pattern: &str) -> String {
+    let extracted = extract_wildcard_bytes(data, pos, segments);
+    if extracted.is_empty() {
+        pattern.to_string()
+    } else {
+        extracted
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+}
+
 /// Evaluate hex pattern condition
 ///
 /// Uses YARA-style atom extraction for efficient searching:
 /// 1. Extract longest fixed byte sequence from pattern
 /// 2. Use fast memmem search to find atom candidates
 /// 3. Verify full pattern only at candidate positions
+///
+/// A match whose [`hex_match_value`] a `not:` exception names is not counted.
 #[must_use]
 pub(crate) fn eval_hex<'a>(
     pattern: &str,
+    not: Option<&Vec<NotException>>,
     location: &super::ContentLocationParams,
     ctx: &EvaluationContext<'a>,
     trait_id: Option<&str>,
@@ -625,6 +646,13 @@ pub(crate) fn eval_hex<'a>(
         return ConditionResult::no_match();
     }
 
+    let accepts = |pos: usize| {
+        not.is_none_or(|exceptions| {
+            let value = hex_match_value(data, pos, &segments, pattern);
+            !exceptions.iter().any(|exception| exception.matches(&value))
+        })
+    };
+
     let mut matches: Vec<usize> = Vec::new();
     let mut total_count: usize = 0;
 
@@ -648,7 +676,7 @@ pub(crate) fn eval_hex<'a>(
 
     // Handle single-byte offset constraint (optimization)
     if location.offset.is_some() && location.offset_range.is_none() {
-        if match_pattern_at(data, search_start, &segments) {
+        if match_pattern_at(data, search_start, &segments) && accepts(search_start) {
             matches.push(search_start);
             total_count = 1;
         }
@@ -659,9 +687,13 @@ pub(crate) fn eval_hex<'a>(
         if let HexSegment::Bytes(bytes) = &segments[0] {
             let finder = memchr::memmem::Finder::new(bytes);
             for pos in finder.find_iter(&data[search_start..search_end]) {
+                let pos = search_start + pos;
+                if !accepts(pos) {
+                    continue;
+                }
                 total_count += 1;
                 if matches.len() < MAX_STORED_MATCHES {
-                    matches.push(search_start + pos);
+                    matches.push(pos);
                 }
                 if total_count >= MAX_COUNT_MATCHES {
                     break;
@@ -706,7 +738,7 @@ pub(crate) fn eval_hex<'a>(
                     if seen_positions.contains(&pattern_start) {
                         continue;
                     }
-                    if match_pattern_at(data, pattern_start, &segments) {
+                    if match_pattern_at(data, pattern_start, &segments) && accepts(pattern_start) {
                         seen_positions.insert(pattern_start);
                         total_count += 1;
                         if matches.len() < MAX_STORED_MATCHES {
@@ -724,7 +756,7 @@ pub(crate) fn eval_hex<'a>(
         } else {
             // No good atom found - fall back to linear scan in range
             for pos in search_start..search_end {
-                if match_pattern_at(data, pos, &segments) {
+                if match_pattern_at(data, pos, &segments) && accepts(pos) {
                     total_count += 1;
                     if matches.len() < MAX_STORED_MATCHES {
                         matches.push(pos);
@@ -787,20 +819,10 @@ pub(crate) fn eval_hex<'a>(
                 .take(MAX_EVIDENCE_PER_TRAIT)
                 .map(|pos| {
                     // Always extract wildcard bytes (consistent with regex behavior)
-                    let extracted = extract_wildcard_bytes(data, *pos, &segments);
-                    let value = if extracted.is_empty() {
-                        pattern.to_string()
-                    } else {
-                        // Format extracted bytes as hex string
-                        let hex_str: Vec<String> =
-                            extracted.iter().map(|b| format!("{:02x}", b)).collect();
-                        hex_str.join(" ")
-                    };
-
                     Evidence {
                         method: "hex".to_string(),
                         source: "binary".to_string(),
-                        value,
+                        value: hex_match_value(data, *pos, &segments, pattern),
                         location: Some(format!("0x{:x}", pos)),
                         ..Default::default()
                     }

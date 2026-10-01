@@ -5324,3 +5324,53 @@ fn condition_level_not_applies_to_raw_in_traits_and_composites() {
         "the composite must honor the condition-level not: too"
     );
 }
+
+/// Hex conditions honor `not:` in both dispatchers, at condition and trait level.
+#[test]
+fn hex_not_applies_in_traits_and_composites() {
+    let report = AnalysisReport::new(TargetInfo::default());
+    let data = vec![0x4D, 0x5A, 0x90, 0x00, 0x03, 0x00];
+    let ctx = EvaluationContext::new(&report, &data, FileType::All, &[Platform::All], None, None);
+    let not_9000 = || {
+        Some(vec![NotException::Structured(NotExceptionStructured {
+            exact: Some("90 00".to_string()),
+            substr: None,
+            regex: None,
+            lowered_substr: None,
+        })])
+    };
+    let hex = |not| {
+        Condition::Hex(HexQuery {
+            pattern: "4D 5A ?? ?? 03".to_string(),
+            not,
+            ..Default::default()
+        })
+    };
+
+    let condition_level = TraitDefinition {
+        id: "test/hex::mz-condition-not".to_string(),
+        r#if: hex(not_9000()),
+        ..Default::default()
+    };
+    let trait_level = TraitDefinition {
+        id: "test/hex::mz-trait-not".to_string(),
+        r#if: hex(None),
+        not: not_9000(),
+        ..Default::default()
+    };
+    let composite = CompositeTrait {
+        id: "test/hex::mz-composite".to_string(),
+        all: Some(vec![hex(not_9000())]),
+        ..Default::default()
+    };
+    let unfiltered = TraitDefinition {
+        id: "test/hex::mz".to_string(),
+        r#if: hex(None),
+        ..Default::default()
+    };
+
+    assert!(unfiltered.evaluate(&ctx).is_some(), "control");
+    assert!(condition_level.evaluate(&ctx).is_none());
+    assert!(trait_level.evaluate(&ctx).is_none());
+    assert!(composite.evaluate(&ctx).is_none());
+}

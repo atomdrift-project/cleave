@@ -1236,6 +1236,7 @@ pub fn run(
             // Evaluate hex pattern with resolved location constraints
             let result = eval_hex(
                 pattern,
+                None,
                 &composite_rules::evaluators::ContentLocationParams {
                     section: section.map(std::string::ToString::to_string),
                     offset,

@@ -73,9 +73,28 @@ fn run_query_count(
 #[test]
 fn ast_query_cpu_budget_applies_without_outer_deadline() {
     assert_eq!(
-        super::ast::ast_query_cpu_budget(None),
+        super::ast::ast_query_cpu_budget("(identifier) @id", None),
         crate::analyzers::ast_walker::AST_QUERY_CPU_BUDGET,
         "direct scans still need the per-query CPU ceiling"
+    );
+}
+
+#[test]
+fn ast_query_caps_multiple_unbounded_sibling_wildcards() {
+    let query = "((object (pair) (_)* (pair) (_)* (pair)))";
+    assert_eq!(
+        super::ast::ast_query_cpu_budget(query, None),
+        std::time::Duration::from_millis(100)
+    );
+    assert_eq!(
+        super::ast::ast_query_cpu_budget("((object (pair) (_) * (pair) (_) * (pair)))", None),
+        std::time::Duration::from_millis(100),
+        "whitespace in the query must not bypass the expensive-pattern cap"
+    );
+    assert_eq!(
+        super::ast::ast_query_cpu_budget("((object (pair) (_)* (pair)))", None),
+        crate::analyzers::ast_walker::AST_QUERY_CPU_BUDGET,
+        "a single sibling wildcard keeps the normal budget"
     );
 }
 

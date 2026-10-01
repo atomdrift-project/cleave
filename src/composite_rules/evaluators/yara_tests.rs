@@ -62,7 +62,7 @@ fn test_eval_hex_short_unpinned_pattern_warns() {
     let ctx = create_test_context(report, binary_data);
     let location = ContentLocationParams::default();
 
-    let result = eval_hex("48 8B", &location, &ctx, None);
+    let result = eval_hex("48 8B", None, &location, &ctx, None);
     assert!(
         !result.matched,
         "Two concrete bytes must not match unpinned"
@@ -85,7 +85,7 @@ fn test_eval_hex_alternation_counts_as_concrete() {
     let location = ContentLocationParams::default();
 
     // Two literals + one alternation = 3 constrained bytes: clears the floor.
-    let result = eval_hex("48 (8B|FF) A3", &location, &ctx, None);
+    let result = eval_hex("48 (8B|FF) A3", None, &location, &ctx, None);
     assert!(
         result.matched,
         "Alternation should count as a concrete byte"
@@ -93,7 +93,7 @@ fn test_eval_hex_alternation_counts_as_concrete() {
     assert_eq!(result.match_count, 2, "Both alternation branches match");
 
     // One literal + one alternation = 2: below the floor, warns.
-    let result = eval_hex("48 (8B|FF)", &location, &ctx, None);
+    let result = eval_hex("48 (8B|FF)", None, &location, &ctx, None);
     assert!(!result.matched);
     assert!(!result.warnings.is_empty());
 }
@@ -108,7 +108,7 @@ fn test_eval_hex_short_pattern_allowed_when_pinned() {
         offset: Some(1),
         ..ContentLocationParams::default()
     };
-    let result = eval_hex("48 8B", &pinned, &ctx, None);
+    let result = eval_hex("48 8B", None, &pinned, &ctx, None);
     assert!(result.matched, "A pinned two-byte pattern is allowed");
     assert!(result.warnings.is_empty());
 }
@@ -120,7 +120,7 @@ fn test_eval_hex_simple_match() {
     let ctx = create_test_context(report, binary_data);
 
     let location = full_scan_location();
-    let result = eval_hex("4D 5A 90 00", &location, &ctx, None);
+    let result = eval_hex("4D 5A 90 00", None, &location, &ctx, None);
 
     assert!(result.matched, "Should match PE/MZ magic");
     assert!(!result.evidence.is_empty());
@@ -133,7 +133,7 @@ fn test_eval_hex_wildcard_match() {
     let ctx = create_test_context(report, binary_data);
 
     let location = full_scan_location();
-    let result = eval_hex("48 8B ?? ?? FF", &location, &ctx, None);
+    let result = eval_hex("48 8B ?? ?? FF", None, &location, &ctx, None);
 
     assert!(result.matched, "Should match with wildcards");
 }
@@ -145,7 +145,7 @@ fn test_eval_hex_gap_match() {
     let ctx = create_test_context(report, binary_data);
 
     let location = full_scan_location();
-    let result = eval_hex("48 8B [3] FF", &location, &ctx, None);
+    let result = eval_hex("48 8B [3] FF", None, &location, &ctx, None);
 
     assert!(result.matched, "Should match with fixed gap");
 }
@@ -157,7 +157,7 @@ fn test_eval_hex_variable_gap_match() {
     let ctx = create_test_context(report, binary_data);
 
     let location = full_scan_location();
-    let result = eval_hex("48 8B [2-8] FF", &location, &ctx, None);
+    let result = eval_hex("48 8B [2-8] FF", None, &location, &ctx, None);
 
     assert!(result.matched, "Should match with variable gap");
 }
@@ -177,7 +177,7 @@ fn test_eval_hex_variable_gap_before_long_atom() {
     let ctx = create_test_context(report, binary_data);
 
     let location = full_scan_location();
-    let result = eval_hex("48 8B [0-8] DE AD BE EF", &location, &ctx, None);
+    let result = eval_hex("48 8B [0-8] DE AD BE EF", None, &location, &ctx, None);
 
     assert!(
         result.matched,
@@ -200,7 +200,13 @@ fn test_eval_hex_variable_gap_x64_rwx_alloc_shape() {
     let ctx = create_test_context(report, binary_data);
 
     let location = full_scan_location();
-    let result = eval_hex("44 8D 49 40 [0-8] 41 B8 00 10 00 00", &location, &ctx, None);
+    let result = eval_hex(
+        "44 8D 49 40 [0-8] 41 B8 00 10 00 00",
+        None,
+        &location,
+        &ctx,
+        None,
+    );
 
     assert!(result.matched, "x64 RWX-commit shape should match");
     assert_eq!(result.match_count, 1);
@@ -214,7 +220,14 @@ fn test_eval_hex_variable_gap_before_atom_boundaries() {
     // gap == min (0 bytes between 8B and the atom)
     let ctx0 = create_test_context(create_test_report(), vec![0x8B, 0xDE, 0xAD, 0xBE, 0xEF]);
     assert!(
-        eval_hex("8B [0-8] DE AD BE EF", &full_scan_location(), &ctx0, None).matched,
+        eval_hex(
+            "8B [0-8] DE AD BE EF",
+            None,
+            &full_scan_location(),
+            &ctx0,
+            None
+        )
+        .matched,
         "Should match at gap minimum (0)"
     );
 
@@ -224,7 +237,14 @@ fn test_eval_hex_variable_gap_before_atom_boundaries() {
     data_max.extend_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]);
     let ctx8 = create_test_context(report, data_max);
     assert!(
-        eval_hex("8B [0-8] DE AD BE EF", &full_scan_location(), &ctx8, None).matched,
+        eval_hex(
+            "8B [0-8] DE AD BE EF",
+            None,
+            &full_scan_location(),
+            &ctx8,
+            None
+        )
+        .matched,
         "Should match at gap maximum (8)"
     );
 }
@@ -239,7 +259,13 @@ fn test_eval_hex_variable_gap_before_atom_exceeds_max() {
     let report = create_test_report();
     let ctx = create_test_context(report, data);
 
-    let result = eval_hex("8B [0-8] DE AD BE EF", &full_scan_location(), &ctx, None);
+    let result = eval_hex(
+        "8B [0-8] DE AD BE EF",
+        None,
+        &full_scan_location(),
+        &ctx,
+        None,
+    );
     assert!(
         !result.matched,
         "Gap exceeding the declared maximum must not match"
@@ -254,7 +280,7 @@ fn test_eval_hex_wildcard_prefix_before_atom() {
     // Two leading ?? wildcards, then the longest atom.
     let binary_data = vec![0x11, 0x22, 0xDE, 0xAD, 0xBE, 0xEF];
     let ctx = create_test_context(create_test_report(), binary_data);
-    let result = eval_hex("?? ?? DE AD BE EF", &full_scan_location(), &ctx, None);
+    let result = eval_hex("?? ?? DE AD BE EF", None, &full_scan_location(), &ctx, None);
     assert!(
         result.matched,
         "Leading wildcards before the atom should align"
@@ -267,7 +293,7 @@ fn test_eval_hex_nibble_prefix_before_atom() {
     // 4? matches 0x40..0x4F; atom DE AD BE EF follows.
     let binary_data = vec![0x4C, 0xDE, 0xAD, 0xBE, 0xEF];
     let ctx = create_test_context(create_test_report(), binary_data);
-    let result = eval_hex("4? DE AD BE EF", &full_scan_location(), &ctx, None);
+    let result = eval_hex("4? DE AD BE EF", None, &full_scan_location(), &ctx, None);
     assert!(
         result.matched,
         "Nibble-mask prefix before the atom should align"
@@ -278,7 +304,13 @@ fn test_eval_hex_nibble_prefix_before_atom() {
 fn test_eval_hex_byteset_prefix_before_atom() {
     let binary_data = vec![0x49, 0xDE, 0xAD, 0xBE, 0xEF];
     let ctx = create_test_context(create_test_report(), binary_data);
-    let result = eval_hex("(48|49) DE AD BE EF", &full_scan_location(), &ctx, None);
+    let result = eval_hex(
+        "(48|49) DE AD BE EF",
+        None,
+        &full_scan_location(),
+        &ctx,
+        None,
+    );
     assert!(
         result.matched,
         "Byte-set prefix before the atom should align"
@@ -296,6 +328,7 @@ fn test_eval_hex_duplicate_atom_run() {
     let ctx = create_test_context(create_test_report(), binary_data);
     let result = eval_hex(
         "DE AD BE EF [2] DE AD BE EF",
+        None,
         &full_scan_location(),
         &ctx,
         None,
@@ -314,6 +347,7 @@ fn test_eval_hex_multiple_gaps() {
     let ctx = create_test_context(create_test_report(), binary_data);
     let result = eval_hex(
         "48 [2] DE AD BE EF [0-3] FF",
+        None,
         &full_scan_location(),
         &ctx,
         None,
@@ -336,13 +370,13 @@ fn test_eval_hex_short_pattern_unbounded_rejected() {
 
     let unbounded = ContentLocationParams::default();
     assert!(
-        !eval_hex("48 8B", &unbounded, &ctx, None).matched,
+        !eval_hex("48 8B", None, &unbounded, &ctx, None).matched,
         "Short (<3 concrete bytes) pattern with no pinpoint must be rejected"
     );
 
     // The same short pattern is allowed once the search is bounded.
     assert!(
-        eval_hex("48 8B", &full_scan_location(), &ctx, None).matched,
+        eval_hex("48 8B", None, &full_scan_location(), &ctx, None).matched,
         "Short pattern with an offset_range pinpoint should be allowed"
     );
 }
@@ -355,7 +389,7 @@ fn test_eval_hex_no_atom_linear_fallback() {
     // 4? 4? 4? matches three consecutive bytes in 0x40..=0x4F.
     let binary_data = vec![0x00, 0x41, 0x4C, 0x4F, 0x00];
     let ctx = create_test_context(create_test_report(), binary_data);
-    let result = eval_hex("4? 4? 4?", &full_scan_location(), &ctx, None);
+    let result = eval_hex("4? 4? 4?", None, &full_scan_location(), &ctx, None);
     assert!(
         result.matched,
         "All-nibble-mask pattern should match via linear fallback"
@@ -363,7 +397,7 @@ fn test_eval_hex_no_atom_linear_fallback() {
 
     let ctx2 = create_test_context(create_test_report(), vec![0x41, 0x52, 0x43]);
     assert!(
-        !eval_hex("4? 4? 4?", &full_scan_location(), &ctx2, None).matched,
+        !eval_hex("4? 4? 4?", None, &full_scan_location(), &ctx2, None).matched,
         "Linear fallback should reject when a byte falls outside the nibble mask"
     );
 }
@@ -402,7 +436,7 @@ fn test_eval_hex_section_constraint_scopes_search() {
         section: Some(".text".to_string()),
         ..Default::default()
     };
-    let result = eval_hex("DE AD BE EF", &location, &ctx, None);
+    let result = eval_hex("DE AD BE EF", None, &location, &ctx, None);
     assert!(result.matched, "Should match inside the named section");
     assert_eq!(
         result.match_count, 1,
@@ -426,7 +460,7 @@ fn test_eval_hex_section_offset_range_window() {
         section_offset_range: Some((6, Some(10))),
         ..Default::default()
     };
-    let result = eval_hex("DE AD BE EF", &location, &ctx, None);
+    let result = eval_hex("DE AD BE EF", None, &location, &ctx, None);
     assert!(result.matched, "Should match inside the section sub-range");
     assert_eq!(
         result.match_count, 1,
@@ -446,7 +480,7 @@ fn test_eval_hex_unknown_section_no_match() {
         ..Default::default()
     };
     assert!(
-        !eval_hex("DE AD BE EF", &location, &ctx, None).matched,
+        !eval_hex("DE AD BE EF", None, &location, &ctx, None).matched,
         "Unknown section must yield no match"
     );
 }
@@ -460,7 +494,7 @@ fn test_eval_hex_count_capped_at_max() {
         data.extend_from_slice(&[0xAA, 0xBB, 0xCC]);
     }
     let ctx = create_test_context(create_test_report(), data);
-    let result = eval_hex("AA BB CC", &full_scan_location(), &ctx, None);
+    let result = eval_hex("AA BB CC", None, &full_scan_location(), &ctx, None);
     assert!(result.matched);
     assert_eq!(
         result.match_count, 16_384,
@@ -475,7 +509,7 @@ fn test_eval_hex_no_match() {
     let ctx = create_test_context(report, binary_data);
 
     let location = full_scan_location();
-    let result = eval_hex("FF FF FF FF", &location, &ctx, None);
+    let result = eval_hex("FF FF FF FF", None, &location, &ctx, None);
 
     assert!(!result.matched, "Should not match non-existent pattern");
 }
@@ -491,7 +525,7 @@ fn test_eval_hex_multiple_matches() {
     let ctx = create_test_context(report, binary_data);
 
     let location = full_scan_location();
-    let result = eval_hex("48 8B FF", &location, &ctx, None);
+    let result = eval_hex("48 8B FF", None, &location, &ctx, None);
 
     assert!(result.matched);
     // Should collect multiple matches
@@ -508,7 +542,7 @@ fn test_eval_hex_offset_constraint() {
         offset: Some(2),
         ..Default::default()
     };
-    let result = eval_hex("4D 5A", &location, &ctx, None);
+    let result = eval_hex("4D 5A", None, &location, &ctx, None);
 
     assert!(result.matched, "Should match at specific offset");
 }
@@ -523,7 +557,7 @@ fn test_eval_hex_offset_no_match() {
         offset: Some(2), // Wrong offset
         ..Default::default()
     };
-    let result = eval_hex("4D 5A", &location, &ctx, None);
+    let result = eval_hex("4D 5A", None, &location, &ctx, None);
 
     assert!(!result.matched, "Should not match at wrong offset");
 }
@@ -538,7 +572,7 @@ fn test_eval_hex_range_constraint() {
         offset_range: Some((0, Some(4))), // Search in first 4 bytes
         ..Default::default()
     };
-    let result = eval_hex("4D 5A", &location, &ctx, None);
+    let result = eval_hex("4D 5A", None, &location, &ctx, None);
 
     assert!(result.matched, "Should match within range");
 }
@@ -551,7 +585,7 @@ fn test_eval_hex_shellcode_pattern() {
     let ctx = create_test_context(report, binary_data);
 
     let location = full_scan_location();
-    let result = eval_hex("31 C0 50", &location, &ctx, None);
+    let result = eval_hex("31 C0 50", None, &location, &ctx, None);
 
     assert!(result.matched, "Should detect shellcode pattern");
 }
@@ -563,7 +597,7 @@ fn test_eval_hex_elf_magic() {
     let ctx = create_test_context(report, binary_data);
 
     let location = full_scan_location();
-    let result = eval_hex("7F 45 4C 46", &location, &ctx, None);
+    let result = eval_hex("7F 45 4C 46", None, &location, &ctx, None);
 
     assert!(result.matched, "Should detect ELF magic");
 }
@@ -575,7 +609,7 @@ fn test_eval_hex_mz_magic() {
     let ctx = create_test_context(report, binary_data);
 
     let location = full_scan_location();
-    let result = eval_hex("4D 5A", &location, &ctx, None);
+    let result = eval_hex("4D 5A", None, &location, &ctx, None);
 
     assert!(result.matched, "Should detect MZ/PE magic");
 }
@@ -587,7 +621,7 @@ fn test_eval_hex_invalid_pattern() {
     let ctx = create_test_context(report, binary_data);
 
     let location = full_scan_location();
-    let result = eval_hex("INVALID", &location, &ctx, None);
+    let result = eval_hex("INVALID", None, &location, &ctx, None);
 
     assert!(!result.matched, "Should not match invalid pattern");
     assert!(!result.evidence.is_empty(), "Should have error evidence");
@@ -601,7 +635,7 @@ fn test_eval_hex_empty_pattern() {
     let ctx = create_test_context(report, binary_data);
 
     let location = full_scan_location();
-    let result = eval_hex("", &location, &ctx, None);
+    let result = eval_hex("", None, &location, &ctx, None);
 
     assert!(!result.matched, "Empty pattern should not match");
 }
@@ -613,7 +647,7 @@ fn test_eval_hex_wildcards_at_edges() {
     let ctx = create_test_context(report, binary_data);
 
     let location = full_scan_location();
-    let result = eval_hex("?? 48 8B ??", &location, &ctx, None);
+    let result = eval_hex("?? 48 8B ??", None, &location, &ctx, None);
 
     assert!(
         result.matched,
@@ -629,7 +663,7 @@ fn test_eval_hex_complex_pattern() {
     let ctx = create_test_context(report, binary_data);
 
     let location = full_scan_location();
-    let result = eval_hex("48 8B ?? [3] FF D0", &location, &ctx, None);
+    let result = eval_hex("48 8B ?? [3] FF D0", None, &location, &ctx, None);
 
     assert!(result.matched, "Should match complex pattern");
 }
@@ -748,7 +782,7 @@ fn test_eval_hex_match_count_tracks_all_matches() {
     let ctx = create_test_context(report, binary_data);
 
     let location = full_scan_location();
-    let result = eval_hex("AA BB", &location, &ctx, None);
+    let result = eval_hex("AA BB", None, &location, &ctx, None);
 
     assert!(result.matched, "Should match repeated pattern");
     // Evidence should be capped at 16, but match_count should track all 50
@@ -771,7 +805,7 @@ fn test_eval_hex_match_count_equals_evidence_when_few_matches() {
     let ctx = create_test_context(report, binary_data);
 
     let location = full_scan_location();
-    let result = eval_hex("48 8B FF", &location, &ctx, None);
+    let result = eval_hex("48 8B FF", None, &location, &ctx, None);
 
     assert!(result.matched);
     assert_eq!(result.evidence.len(), 2, "Should have 2 evidence items");
@@ -788,7 +822,7 @@ fn test_eval_hex_no_match_count_zero() {
     let ctx = create_test_context(report, binary_data);
 
     let location = full_scan_location();
-    let result = eval_hex("FF FF FF", &location, &ctx, None);
+    let result = eval_hex("FF FF FF", None, &location, &ctx, None);
 
     assert!(!result.matched);
     assert!(result.evidence.is_empty());
@@ -809,7 +843,7 @@ fn test_eval_hex_match_count_with_wildcards() {
     let ctx = create_test_context(report, binary_data);
 
     let location = full_scan_location();
-    let result = eval_hex("48 ?? FF", &location, &ctx, None);
+    let result = eval_hex("48 ?? FF", None, &location, &ctx, None);
 
     assert!(result.matched);
     assert!(result.evidence.len() <= 16, "Evidence should be capped");
@@ -830,7 +864,7 @@ fn test_eval_hex_match_count_with_gap() {
     let ctx = create_test_context(report, binary_data);
 
     let location = full_scan_location();
-    let result = eval_hex("48 [2] FF", &location, &ctx, None);
+    let result = eval_hex("48 [2] FF", None, &location, &ctx, None);
 
     assert!(result.matched);
     assert!(result.evidence.len() <= 16, "Evidence should be capped");
@@ -850,7 +884,7 @@ fn test_eval_hex_nibble_wildcard_high() {
     let ctx = create_test_context(report, binary_data);
 
     let location = full_scan_location();
-    let result = eval_hex("4? 5A", &location, &ctx, None);
+    let result = eval_hex("4? 5A", None, &location, &ctx, None);
     assert!(result.matched, "4? should match 0x4D");
 }
 
@@ -862,7 +896,7 @@ fn test_eval_hex_nibble_wildcard_low() {
     let ctx = create_test_context(report, binary_data);
 
     let location = full_scan_location();
-    let result = eval_hex("?A FF", &location, &ctx, None);
+    let result = eval_hex("?A FF", None, &location, &ctx, None);
     assert!(result.matched, "?A should match 0x3A");
 }
 
@@ -874,7 +908,7 @@ fn test_eval_hex_nibble_wildcard_no_match() {
     let ctx = create_test_context(report, binary_data);
 
     let location = full_scan_location();
-    let result = eval_hex("4? 5A", &location, &ctx, None);
+    let result = eval_hex("4? 5A", None, &location, &ctx, None);
     assert!(!result.matched, "4? should not match 0x5D");
 }
 
@@ -892,7 +926,7 @@ fn test_eval_hex_nibble_mixed_pattern() {
     let ctx = create_test_context(report, binary_data);
 
     let location = full_scan_location();
-    let result = eval_hex("31 ?? 88 ?? 4? 83 ?? ?? 7?", &location, &ctx, None);
+    let result = eval_hex("31 ?? 88 ?? 4? 83 ?? ?? 7?", None, &location, &ctx, None);
     assert!(result.matched, "Mozi XOR pattern should match");
 }
 
@@ -906,7 +940,7 @@ fn test_eval_hex_alternation() {
     let ctx = create_test_context(report, binary_data);
 
     let location = full_scan_location();
-    let result = eval_hex("(4D|5A) 90", &location, &ctx, None);
+    let result = eval_hex("(4D|5A) 90", None, &location, &ctx, None);
     assert!(result.matched, "(4D|5A) should match 0x5A");
 }
 
@@ -918,7 +952,7 @@ fn test_eval_hex_alternation_no_match() {
     let ctx = create_test_context(report, binary_data);
 
     let location = full_scan_location();
-    let result = eval_hex("(4D|5A) 90", &location, &ctx, None);
+    let result = eval_hex("(4D|5A) 90", None, &location, &ctx, None);
     assert!(!result.matched, "(4D|5A) should not match 0xFF");
 }
 
@@ -930,7 +964,7 @@ fn test_eval_hex_alternation_multi() {
     let ctx = create_test_context(report, binary_data);
 
     let location = full_scan_location();
-    let result = eval_hex("(01|02|03|04|05) BB", &location, &ctx, None);
+    let result = eval_hex("(01|02|03|04|05) BB", None, &location, &ctx, None);
     assert!(result.matched, "Multi-alternative should match 0x03");
 }
 
@@ -950,9 +984,57 @@ fn test_eval_hex_lzma_pattern() {
     let ctx = create_test_context(report, binary_data);
 
     let location = full_scan_location();
-    let result = eval_hex("5D 00 00 (00|80) 00 (10|20) [7] ??", &location, &ctx, None);
+    let result = eval_hex(
+        "5D 00 00 (00|80) 00 (10|20) [7] ??",
+        None,
+        &location,
+        &ctx,
+        None,
+    );
     assert!(
         result.matched,
         "LZMA pattern with alternation and gaps should match"
     );
+}
+
+/// `not:` on a hex condition tests each match's evidence value (the bytes its
+/// wildcards matched, lowercase hex) and drops matches an exception names,
+/// from the count as well as the evidence.
+#[test]
+fn test_eval_hex_not_excludes_matches_by_evidence_value() {
+    use crate::composite_rules::condition::{NotException, NotExceptionStructured};
+
+    // `call rel32` twice: a zero displacement and a real one.
+    let binary_data = vec![
+        0x90, 0xE8, 0x00, 0x00, 0x00, 0x00, 0x90, 0xE8, 0x11, 0x22, 0x33, 0x44,
+    ];
+    let ctx = create_test_context(create_test_report(), binary_data);
+    let location = full_scan_location();
+    let exact = |value: &str| {
+        NotException::Structured(NotExceptionStructured {
+            exact: Some(value.to_string()),
+            substr: None,
+            regex: None,
+            lowered_substr: None,
+        })
+    };
+
+    let all = eval_hex("90 E8 ?? ?? ?? ??", None, &location, &ctx, None);
+    assert_eq!(all.match_count, 2);
+
+    let not_zero = vec![exact("00 00 00 00")];
+    let result = eval_hex("90 E8 ?? ?? ?? ??", Some(&not_zero), &location, &ctx, None);
+    assert_eq!(result.match_count, 1, "the zero displacement is excluded");
+    let values: Vec<&str> = result.evidence.iter().map(|e| e.value.as_str()).collect();
+    assert_eq!(values, ["11 22 33 44"]);
+
+    let not_either = vec![exact("00 00 00 00"), exact("11 22 33 44")];
+    let result = eval_hex(
+        "90 E8 ?? ?? ?? ??",
+        Some(&not_either),
+        &location,
+        &ctx,
+        None,
+    );
+    assert!(!result.matched, "every match is excluded");
 }

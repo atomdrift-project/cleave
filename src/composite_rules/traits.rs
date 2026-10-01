@@ -11,8 +11,8 @@ use super::condition::{
 use super::context::{ConditionResult, EvaluationContext, StringParams};
 use super::evaluators::{
     ContentLocationParams, MatchCountGuard, MatchLocationsGuard, SectionParams, eval_ast,
-    eval_encoded, eval_hex, eval_metrics, eval_path, eval_raw, eval_section, eval_string_literal,
-    eval_symbol, eval_syscall, eval_text, eval_trait, eval_yara_inline,
+    eval_encoded, eval_hex, eval_metrics, eval_path, eval_raw, eval_section, eval_symbol,
+    eval_syscall, eval_text, eval_trait, eval_yara_inline,
 };
 use super::types::{
     Arch, FileType, Platform, TypeMask, default_architectures, default_file_types,
@@ -221,7 +221,9 @@ pub(crate) struct DowngradeConditions {
     ///
     /// `scope: archive` opts back in, for the cases that genuinely want
     /// container context — a signed installer whose signature legitimately
-    /// covers the members it carries, for instance.
+    /// covers the members it carries, for instance. `scope: parent` admits
+    /// only the immediate analyzed parent; `scope: file-or-parent` admits the
+    /// matched file plus that parent.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub scope: Option<Scope>,
 }
@@ -1397,7 +1399,9 @@ impl TraitDefinition {
             let mut final_crit = self.crit;
 
             // Check downgrade conditions
-            if let Some(downgrade_conds) = &self.downgrade {
+            if let Some(downgrade_conds) = &self.downgrade
+                && downgrade_conds.scope != Some(Scope::Parent)
+            {
                 let triggered = self.eval_downgrade_conditions(downgrade_conds, ctx);
                 if triggered {
                     final_crit = downgrade_crit(self.crit);
@@ -1633,6 +1637,7 @@ impl TraitDefinition {
                 case_insensitive,
                 length_min,
                 length_max,
+                exclude_html_comments,
                 is_check,
                 not,
                 platforms: _,
@@ -1651,6 +1656,7 @@ impl TraitDefinition {
                     case_insensitive: *case_insensitive,
                     length_min: *length_min,
                     length_max: *length_max,
+                    exclude_html_comments: *exclude_html_comments,
                     is_check: *is_check,
                     section: section.as_ref(),
                     offset: *offset,
@@ -1674,7 +1680,7 @@ impl TraitDefinition {
                 word,
                 case_insensitive,
                 is_check,
-                not: _,
+                not,
                 platforms: _,
             }) => {
                 let params = StringParams {
@@ -1686,6 +1692,7 @@ impl TraitDefinition {
                     case_insensitive: *case_insensitive,
                     length_min: None,
                     length_max: None,
+                    exclude_html_comments: false,
                     is_check: *is_check,
                     section: None,
                     offset: None,
@@ -1694,11 +1701,12 @@ impl TraitDefinition {
                     section_offset_range: None,
                     arch_clamp,
                 };
+                let merged_not = merge_not_exceptions(not.as_ref(), self.not.as_ref());
                 timed_eval!(
                     "comment",
                     crate::composite_rules::evaluators::symbol_string::eval_comment(
                         &params,
-                        self.not.as_ref(),
+                        merged_not.as_ref(),
                         ctx,
                     )
                 )
@@ -1712,8 +1720,9 @@ impl TraitDefinition {
                 value,
                 radix,
                 case_insensitive,
+                exclude_docstrings,
                 is_check,
-                not: _,
+                not,
                 platforms: _,
                 section,
                 offset,
@@ -1745,6 +1754,7 @@ impl TraitDefinition {
                         case_insensitive: *case_insensitive,
                         length_min: None,
                         length_max: None,
+                        exclude_html_comments: false,
                         is_check: *is_check,
                         section: section.as_ref(),
                         offset: *offset,
@@ -1753,9 +1763,15 @@ impl TraitDefinition {
                         section_offset_range: *section_offset_range,
                         arch_clamp,
                     };
+                    let merged_not = merge_not_exceptions(not.as_ref(), self.not.as_ref());
                     timed_eval!(
                         "literal",
-                        eval_string_literal(&params, self.not.as_ref(), ctx)
+                        crate::composite_rules::evaluators::symbol_string::eval_string_literal_with_options(
+                            &params,
+                            merged_not.as_ref(),
+                            ctx,
+                            *exclude_docstrings,
+                        )
                     )
                 }
             }
@@ -1852,7 +1868,7 @@ impl TraitDefinition {
                 length_min,
                 length_max,
                 is_check,
-                not: _,
+                not,
                 section,
                 offset,
                 offset_range,
@@ -1868,6 +1884,7 @@ impl TraitDefinition {
                     section_offset_range: *section_offset_range,
                     arch_clamp,
                 };
+                let merged_not = merge_not_exceptions(not.as_ref(), self.not.as_ref());
                 timed_eval!(
                     "raw",
                     eval_raw(
@@ -1878,7 +1895,7 @@ impl TraitDefinition {
                         *case_insensitive,
                         (*length_min, *length_max),
                         *is_check,
-                        self.not.as_ref(),
+                        merged_not.as_ref(),
                         &location,
                         ctx,
                         Some(self.id.as_str()),
@@ -2017,13 +2034,13 @@ impl TraitDefinition {
     }
 }
 
-/// Scope of evidence co-occurrence for a composite rule.
+/// Scope of evidence for a composite rule or downgrade condition.
 ///
 /// A composite's conditions can match in different parts of the analysis
-/// tree. `Scope` controls how tightly evidence from distinct conditions
-/// must share an analysis-tree ancestor before the composite is allowed
-/// to fire. Lower variants are more permissive; higher variants are more
-/// strict.
+/// tree. Its scope controls how tightly evidence from distinct conditions
+/// must share an analysis-tree ancestor before the composite is allowed to
+/// fire. Downgrade conditions may also name the immediate parent relationship
+/// to use root identity when interpreting an embedded child.
 ///
 /// The default (omitted from YAML) is [`Scope::File`]: evidence must
 /// share the same leaf-file (the deepest file-shaped unit, e.g. a PE
@@ -2051,11 +2068,14 @@ impl TraitDefinition {
 ///             PE inside a zip; ignores decoded payload layers below)
 ///             (default)
 /// Leaf     →  same exact analyzed unit, including decoded payload layers
+/// Parent   →  immediate parent findings only (downgrade conditions only)
+/// FileOrParent → matched file and immediate parent (downgrade only)
 /// ```
 ///
-/// Two pieces of evidence share scope iff their scope keys are equal,
-/// where the key is computed by [`Scope::key`] from each evidence's
-/// `Evidence.location`.
+/// For location scopes, two pieces of evidence share scope iff their keys are
+/// equal, where the key is computed by [`Scope::key`] from each
+/// `Evidence.location`. Parent scopes are evaluated from the report tree and
+/// do not use location keys.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum Scope {
@@ -2088,6 +2108,13 @@ pub(crate) enum Scope {
     /// "Nest" is the JVM's term (JEP 181 `NestHost`/`NestMembers`); it has
     /// nothing to do with archives nested inside archives.
     Nest,
+    /// The immediate analyzed parent file. This scope is only meaningful for
+    /// downgrade gates and is evaluated by the parent/child analysis pass.
+    Parent,
+    /// The matched file or its immediate analyzed parent. This is useful
+    /// when an existing file-local downgrade also needs a parent identity gate.
+    #[serde(rename = "file-or-parent")]
+    FileOrParent,
     /// Same leaf-file. The deepest file-shaped unit (e.g. a PE
     /// extracted from a zip). Decoded payload layers below the
     /// file are pooled together at the file level. Default.
@@ -2126,6 +2153,12 @@ impl Scope {
             // Nest: the file key cut back to its nest host's name.
             (Scope::Nest, Some(loc)) => {
                 nest_host(strip_byte_offset_location(strip_decode_suffix(loc)))
+            }
+            // Parent is meaningful only to the explicit downgrade pass; a
+            // composite cannot pool a parent's evidence through a location key.
+            (Scope::Parent, Some(loc)) => strip_byte_offset_location(strip_decode_suffix(loc)),
+            (Scope::FileOrParent, Some(loc)) => {
+                strip_byte_offset_location(strip_decode_suffix(loc))
             }
             // Archive: nearest enclosing archive entry path, falling back to
             // file-scope (never a global pool) when nothing encloses it.
@@ -3070,7 +3103,9 @@ impl CompositeTrait {
             let mut final_crit = self.crit;
 
             // Check downgrade conditions
-            if let Some(downgrade_conds) = &self.downgrade {
+            if let Some(downgrade_conds) = &self.downgrade
+                && downgrade_conds.scope != Some(Scope::Parent)
+            {
                 let triggered = self.eval_downgrade_conditions(downgrade_conds, ctx);
                 if triggered {
                     final_crit = downgrade_crit(self.crit);
@@ -3467,6 +3502,7 @@ impl CompositeTrait {
                 case_insensitive,
                 length_min,
                 length_max,
+                exclude_html_comments,
                 is_check,
                 not,
                 platforms: _,
@@ -3485,6 +3521,7 @@ impl CompositeTrait {
                     case_insensitive: *case_insensitive,
                     length_min: *length_min,
                     length_max: *length_max,
+                    exclude_html_comments: *exclude_html_comments,
                     is_check: *is_check,
                     section: section.as_ref(),
                     offset: *offset,
@@ -3505,7 +3542,7 @@ impl CompositeTrait {
                 word,
                 case_insensitive,
                 is_check,
-                not: _,
+                not,
                 platforms: _,
             }) => {
                 let params = StringParams {
@@ -3517,6 +3554,7 @@ impl CompositeTrait {
                     case_insensitive: *case_insensitive,
                     length_min: None,
                     length_max: None,
+                    exclude_html_comments: false,
                     is_check: *is_check,
                     section: None,
                     offset: None,
@@ -3525,23 +3563,25 @@ impl CompositeTrait {
                     section_offset_range: None,
                     arch_clamp,
                 };
+                let merged_not = merge_not_exceptions(not.as_ref(), self.not.as_ref());
                 crate::composite_rules::evaluators::symbol_string::eval_comment(
                     &params,
-                    self.not.as_ref(),
+                    merged_not.as_ref(),
                     ctx,
                 )
             }
             Condition::Literal(LiteralQuery {
-                kind: _,
+                kind,
                 exact,
                 substr,
                 regex,
                 word,
-                value: _,
-                radix: _,
+                value,
+                radix,
                 case_insensitive,
+                exclude_docstrings,
                 is_check,
-                not: _,
+                not,
                 platforms: _,
                 section,
                 offset,
@@ -3549,24 +3589,39 @@ impl CompositeTrait {
                 section_offset,
                 section_offset_range,
             }) => {
-                let params = StringParams {
-                    encoding: None,
-                    exact: exact.as_ref(),
-                    substr: substr.as_ref(),
-                    regex: regex.as_ref(),
-                    word: word.as_ref(),
-                    case_insensitive: *case_insensitive,
-                    length_min: None,
-                    length_max: None,
-                    is_check: *is_check,
-                    section: section.as_ref(),
-                    offset: *offset,
-                    offset_range: *offset_range,
-                    section_offset: *section_offset,
-                    section_offset_range: *section_offset_range,
-                    arch_clamp,
-                };
-                eval_string_literal(&params, self.not.as_ref(), ctx)
+                // Same dispatch as `TraitDefinition::eval_condition`:
+                // kind=number matches numeric AST literals, not strings.
+                if kind.as_deref() == Some("number") {
+                    crate::composite_rules::evaluators::symbol_string::eval_numeric_literal(
+                        *value, *radix, ctx,
+                    )
+                } else {
+                    let params = StringParams {
+                        encoding: None,
+                        exact: exact.as_ref(),
+                        substr: substr.as_ref(),
+                        regex: regex.as_ref(),
+                        word: word.as_ref(),
+                        case_insensitive: *case_insensitive,
+                        length_min: None,
+                        length_max: None,
+                        exclude_html_comments: false,
+                        is_check: *is_check,
+                        section: section.as_ref(),
+                        offset: *offset,
+                        offset_range: *offset_range,
+                        section_offset: *section_offset,
+                        section_offset_range: *section_offset_range,
+                        arch_clamp,
+                    };
+                    let merged_not = merge_not_exceptions(not.as_ref(), self.not.as_ref());
+                    crate::composite_rules::evaluators::symbol_string::eval_string_literal_with_options(
+                        &params,
+                        merged_not.as_ref(),
+                        ctx,
+                        *exclude_docstrings,
+                    )
+                }
             }
             Condition::Trait { id } => eval_trait(id, ctx),
             Condition::TreeSitter(TreeSitterQuery {
@@ -3661,7 +3716,7 @@ impl CompositeTrait {
                 length_min,
                 length_max,
                 is_check,
-                not: _,
+                not,
                 section,
                 offset,
                 offset_range,
@@ -3677,6 +3732,7 @@ impl CompositeTrait {
                     section_offset_range: *section_offset_range,
                     arch_clamp,
                 };
+                let merged_not = merge_not_exceptions(not.as_ref(), self.not.as_ref());
                 timed_eval!(
                     "raw",
                     eval_raw(
@@ -3687,7 +3743,7 @@ impl CompositeTrait {
                         *case_insensitive,
                         (*length_min, *length_max),
                         *is_check,
-                        self.not.as_ref(),
+                        merged_not.as_ref(),
                         &location,
                         ctx,
                         Some(self.id.as_str()),
@@ -3874,6 +3930,30 @@ impl CompositeTrait {
         all_count + any_required
     }
 
+    /// A scope bucket must contain every required `all:` condition as well as
+    /// enough distinct `any:` conditions. A single distinct-count threshold
+    /// is insufficient: with two `all:` legs and two `any:` legs, a bucket
+    /// containing one `all:` leg plus both `any:` legs reaches the numeric
+    /// threshold while still missing a mandatory condition.
+    fn scope_bucket_satisfies(
+        &self,
+        condition_indices: &std::collections::BTreeSet<usize>,
+    ) -> bool {
+        let all_count = self.all.as_ref().map_or(0, Vec::len);
+        if !(0..all_count).all(|index| condition_indices.contains(&index)) {
+            return false;
+        }
+
+        let any_required = self
+            .any
+            .as_ref()
+            .map_or(0, |any| self.needs.unwrap_or(1).min(any.len()));
+        condition_indices
+            .range(all_count..all_count + self.any.as_ref().map_or(0, Vec::len))
+            .count()
+            >= any_required
+    }
+
     /// Restrict evidence to a single scope bucket, per the rule's
     /// `scope:` field.
     ///
@@ -3920,7 +4000,6 @@ impl CompositeTrait {
             .iter()
             .map(|t| scope.key(t.location.as_deref(), archive_contents, top_level_file_type))
             .collect();
-
         if unique_keys.iter().all(|k| k.is_empty()) {
             // No location info to bucket on — every tag's scope key is
             // empty (e.g. evidence from metric-derived findings, or
@@ -3948,9 +4027,9 @@ impl CompositeTrait {
                     })
                     .map(|t| t.condition_index)
                     .collect();
-                conds.len() >= min_distinct
-            })?
-            .to_string();
+                self.scope_bucket_satisfies(&conds)
+            });
+        let winning_key = winning_key?.to_string();
 
         let filtered_tags: Vec<TaggedLocation> = tagged_locations
             .into_iter()
@@ -5240,7 +5319,7 @@ mod scope_tests {
         for s in [Scope::Outer, Scope::Package, Scope::Archive, Scope::Nest] {
             assert!(s.pools_members(), "{s:?}");
         }
-        for s in [Scope::File, Scope::Leaf] {
+        for s in [Scope::File, Scope::Leaf, Scope::Parent, Scope::FileOrParent] {
             assert!(!s.pools_members(), "{s:?}");
         }
     }
@@ -5477,5 +5556,31 @@ mod scope_tests {
             .apply_scope_filter(evidence, tags, &[], "")
             .expect("single condition is trivially in-scope");
         assert_eq!(filtered_ev.len(), 1);
+    }
+
+    #[test]
+    fn file_scope_requires_every_all_condition_in_the_same_file() {
+        // The first required leg is on the parent; the second required leg
+        // and both optional alternatives are on one extracted child. The old
+        // aggregate threshold (all_count + any_required) let the child's
+        // second `all:` leg plus both `any:` legs stand in for the missing
+        // first `all:` leg.
+        let mut rule = composite_with(2, Some(Scope::File));
+        rule.any = Some(rule.all.as_ref().expect("two all conditions").clone());
+        rule.needs = Some(1);
+        let evidence = vec![
+            ev("parent.exe"),
+            ev("parent.exe!!child.dll"),
+            ev("parent.exe!!child.dll"),
+            ev("parent.exe!!child.dll"),
+        ];
+        let tags = vec![
+            tag(0, "parent.exe"),
+            tag(1, "parent.exe!!child.dll"),
+            tag(2, "parent.exe!!child.dll"),
+            tag(3, "parent.exe!!child.dll"),
+        ];
+
+        assert!(rule.apply_scope_filter(evidence, tags, &[], "").is_none());
     }
 }

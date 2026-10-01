@@ -119,6 +119,7 @@ pub(crate) struct FileEvalCaches {
     string_exact_index: Arc<OnceLock<FxHashMap<String, Vec<u32>>>>,
     string_exact_index_ci: Arc<OnceLock<FxHashMap<String, Vec<u32>>>>,
     encoded_string_indices: Arc<OnceLock<Vec<u32>>>,
+    html_comment_free_source: Arc<OnceLock<Option<Vec<u8>>>>,
 }
 
 /// Context for evaluating composite rules
@@ -179,6 +180,9 @@ pub(crate) struct EvaluationContext<'a> {
     /// without the raw pass ever seeing it. Built once per file; empty (the
     /// common case) makes the encoded pass a single is-empty check.
     pub encoded_string_indices: Arc<OnceLock<Vec<u32>>>,
+    /// Lazily masked copy used only by `type: text` rules that explicitly
+    /// ignore markup comments. `None` means the file had no such comments.
+    pub cached_html_comment_free_source: Arc<OnceLock<Option<Vec<u8>>>>,
     /// Hard deadline for rule evaluation.
     pub deadline: Option<Instant>,
     /// Cooperative cancellation flag (set by litmus timeout).
@@ -292,6 +296,7 @@ impl<'a> EvaluationContext<'a> {
             string_exact_index: Arc::new(OnceLock::new()),
             string_exact_index_ci: Arc::new(OnceLock::new()),
             encoded_string_indices: Arc::new(OnceLock::new()),
+            cached_html_comment_free_source: Arc::new(OnceLock::new()),
             deadline: None,
             cancellation: None,
             arch_ranges: None,
@@ -319,7 +324,16 @@ impl<'a> EvaluationContext<'a> {
         self.string_exact_index = Arc::clone(&caches.string_exact_index);
         self.string_exact_index_ci = Arc::clone(&caches.string_exact_index_ci);
         self.encoded_string_indices = Arc::clone(&caches.encoded_string_indices);
+        self.cached_html_comment_free_source = Arc::clone(&caches.html_comment_free_source);
         self
+    }
+
+    /// Raw bytes with HTML / ASP.NET comments masked, computed once per file
+    /// and only when an opted-in text condition asks for them.
+    pub(crate) fn html_comment_free_source(&self) -> Option<&[u8]> {
+        self.cached_html_comment_free_source
+            .get_or_init(|| mask_markup_comments(self.binary_data))
+            .as_deref()
     }
 
     /// Set the slow rule threshold
@@ -609,6 +623,7 @@ impl<'a> EvaluationContext<'a> {
             string_exact_index: Arc::new(OnceLock::new()),
             string_exact_index_ci: Arc::new(OnceLock::new()),
             encoded_string_indices: Arc::new(OnceLock::new()),
+            cached_html_comment_free_source: Arc::new(OnceLock::new()),
             deadline: None,
             cancellation: None,
             arch_ranges: None,
@@ -728,6 +743,7 @@ pub(crate) struct StringParams<'a> {
     /// Byte-length bounds on the matched span; requires `regex:`.
     pub length_min: Option<usize>,
     pub length_max: Option<usize>,
+    pub exclude_html_comments: bool,
     /// For CI conditions this finder was built from the lowercased pattern.
     pub is_check: Option<StringValidator>,
     pub section: Option<&'a String>,
@@ -736,4 +752,174 @@ pub(crate) struct StringParams<'a> {
     pub section_offset: Option<i64>,
     pub section_offset_range: Option<(i64, Option<i64>)>,
     pub arch_clamp: Option<(usize, usize)>,
+}
+
+/// Return a same-length copy with HTML and ASP.NET server-side comments
+/// replaced by spaces, preserving line endings and all source offsets. Files
+/// without either opener return `None` and allocate nothing.
+fn mask_markup_comments(source: &[u8]) -> Option<Vec<u8>> {
+    fn tag_end(source: &[u8], mut at: usize) -> Option<usize> {
+        let mut quote = None;
+        while at < source.len() {
+            let byte = source[at];
+            match (quote, byte) {
+                (Some(q), b) if q == b => quote = None,
+                (None, b'\'' | b'"') => quote = Some(byte),
+                (None, b'>') => return Some(at + 1),
+                _ => {}
+            }
+            at += 1;
+        }
+        None
+    }
+
+    fn parse_tag(source: &[u8], at: usize) -> Option<(&[u8], usize, bool)> {
+        if source.get(at) != Some(&b'<') {
+            return None;
+        }
+        let mut pos = at + 1;
+        let closing = source.get(pos) == Some(&b'/');
+        if closing {
+            pos += 1;
+        }
+        let start = pos;
+        while source
+            .get(pos)
+            .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'-' || *b == b':')
+        {
+            pos += 1;
+        }
+        if pos == start {
+            return None;
+        }
+        let end = tag_end(source, pos)?;
+        Some((&source[start..pos], end, closing))
+    }
+
+    fn raw_text_close(source: &[u8], mut at: usize, name: &[u8]) -> Option<usize> {
+        while let Some(rel) = memchr::memchr(b'<', source.get(at..)?) {
+            let start = at + rel;
+            let name_start = start.checked_add(2)?;
+            if source.get(start..name_start) == Some(b"</")
+                && source
+                    .get(name_start..name_start + name.len())
+                    .is_some_and(|candidate| candidate.eq_ignore_ascii_case(name))
+                && source
+                    .get(name_start + name.len())
+                    .is_some_and(|b| b.is_ascii_whitespace() || matches!(*b, b'>' | b'/'))
+            {
+                return tag_end(source, name_start + name.len());
+            }
+            at = start + 1;
+        }
+        None
+    }
+
+    let mut source_pos = 0usize;
+    let mut output: Option<Vec<u8>> = None;
+    while source_pos < source.len() {
+        if source[source_pos..].starts_with(b"<!--") {
+            let body_start = source_pos + 4;
+            let body_end = memchr::memmem::find(&source[body_start..], b"-->")
+                .map_or(source.len(), |i| body_start + i + 3);
+            let bytes = output.get_or_insert_with(|| source.to_vec());
+            for byte in &mut bytes[source_pos..body_end] {
+                if !matches!(*byte, b'\r' | b'\n') {
+                    *byte = b' ';
+                }
+            }
+            source_pos = body_end;
+            continue;
+        }
+        if source[source_pos..].starts_with(b"<%--") {
+            let body_start = source_pos + 4;
+            let body_end = memchr::memmem::find(&source[body_start..], b"--%>")
+                .map_or(source.len(), |i| body_start + i + 4);
+            let bytes = output.get_or_insert_with(|| source.to_vec());
+            for byte in &mut bytes[source_pos..body_end] {
+                if !matches!(*byte, b'\r' | b'\n') {
+                    *byte = b' ';
+                }
+            }
+            source_pos = body_end;
+            continue;
+        }
+        if source[source_pos] == b'<'
+            && let Some((name, end, false)) = parse_tag(source, source_pos)
+            && [
+                b"script".as_slice(),
+                b"style",
+                b"textarea",
+                b"title",
+                b"xmp",
+                b"iframe",
+                b"noembed",
+                b"noframes",
+                b"plaintext",
+            ]
+            .iter()
+            .any(|raw| name.eq_ignore_ascii_case(raw))
+        {
+            source_pos = if name.eq_ignore_ascii_case(b"plaintext") {
+                source.len()
+            } else {
+                raw_text_close(source, end, name).unwrap_or(source.len())
+            };
+            continue;
+        }
+        source_pos += 1;
+    }
+    output
+}
+
+#[cfg(test)]
+mod markup_comment_tests {
+    use super::mask_markup_comments;
+
+    #[test]
+    fn leaves_sources_without_comments_unallocated() {
+        assert_eq!(mask_markup_comments(b"<p>live</p>"), None);
+    }
+
+    #[test]
+    fn masks_html_and_aspnet_comments_without_shifting_offsets() {
+        let source = b"<p>live</p>\n<!-- hidden\ncode -->\n<%-- server hidden --%>\n<textarea>tail</textarea>";
+        let masked = mask_markup_comments(source).unwrap();
+        assert_eq!(masked.len(), source.len());
+        assert_eq!(masked.iter().filter(|b| **b == b'\n').count(), 4);
+        assert!(masked.windows(4).any(|w| w == b"live"));
+        assert!(!masked.windows(6).any(|w| w == b"hidden"));
+        assert!(masked.windows(4).any(|w| w == b"tail"));
+    }
+
+    #[test]
+    fn does_not_treat_raw_text_element_contents_as_html_comments() {
+        let source = b"<textarea><!-- submitted source --></textarea><script><!-- js source --></script><!-- page note -->";
+        let masked = mask_markup_comments(source).unwrap();
+        assert!(
+            masked
+                .windows(b"<!-- submitted source -->".len())
+                .any(|w| w == b"<!-- submitted source -->")
+        );
+        assert!(
+            masked
+                .windows(b"<!-- js source -->".len())
+                .any(|w| w == b"<!-- js source -->")
+        );
+        assert!(
+            !masked
+                .windows(b"page note".len())
+                .any(|w| w == b"page note")
+        );
+    }
+
+    #[test]
+    fn unterminated_comments_mask_to_eof_but_keep_line_breaks() {
+        let source = b"live\n<!-- hidden\nmore";
+        let masked = mask_markup_comments(source).unwrap();
+        assert_eq!(masked.len(), source.len());
+        assert_eq!(masked.iter().filter(|b| **b == b'\n').count(), 2);
+        assert!(masked.starts_with(b"live\n"));
+        assert!(!masked.windows(6).any(|w| w == b"hidden"));
+    }
 }

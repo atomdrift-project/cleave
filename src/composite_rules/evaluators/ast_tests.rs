@@ -70,6 +70,124 @@ fn run_query_count(
     Some(count)
 }
 
+#[test]
+fn ast_query_cpu_budget_applies_without_outer_deadline() {
+    assert_eq!(
+        super::ast::ast_query_cpu_budget(None),
+        crate::analyzers::ast_walker::AST_QUERY_CPU_BUDGET,
+        "direct scans still need the per-query CPU ceiling"
+    );
+}
+
+#[test]
+fn ast_query_cpu_timeout_returns_partial_result_with_limit_warning() {
+    let mut source = String::from("const config = {");
+    for i in 0..512 {
+        source.push_str(&format!(" option_{i}: \"value\","));
+    }
+    source.push_str("};");
+    let report = create_test_report("large-config.js");
+    let parsed = parsed_for_test("large-config.js", source.as_bytes());
+    let ctx =
+        create_test_context_with_ast(&report, &parsed, source.as_bytes(), FileType::JavaScript);
+    let query = "((object (pair)*) @object)";
+
+    let result = super::ast::eval_ast_query_with_budget(query, &ctx, std::time::Duration::ZERO);
+
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|warning| matches!(warning, AnalysisWarning::AstTooDeep { max_depth: 0 })),
+        "a timed-out partial query must be reported to callers"
+    );
+}
+
+#[test]
+fn ast_query_group_state_headroom_preserves_wide_credential_object_match() {
+    // This is ordinary configuration data, but the production credential
+    // query has two unanchored sibling wildcards. Many unrelated settings
+    // between the credential fields increase the active query states.
+    let mut source = String::from("const config = { host: \"api.example\",");
+    for i in 0..8 {
+        source.push_str(&format!(" option_before_user_{i}: \"value\","));
+    }
+    source.push_str(" username: \"service-account\",");
+    for i in 0..8 {
+        source.push_str(&format!(" option_before_password_{i}: \"value\","));
+    }
+    source.push_str(" password: \"ordinary-config-secret\" };");
+
+    let parsed = parsed_for_test("large-config.js", source.as_bytes());
+    let query = r#"((object
+      (pair key: (property_identifier) @host_key value: (string) @host_value)
+      (_)*
+      (pair key: (property_identifier) @username_key value: (string) @username_value)
+      (_)*
+      (pair key: (property_identifier) @password_key value: (string) @password_value))
+      (#match? @host_key "(?i)^(host|hostname|server)$")
+      (#match? @username_key "(?i)^(user|username|account)$")
+      (#match? @password_key "(?i)^(pass|passwd|password)$")
+      )"#;
+
+    assert_eq!(super::ast::AST_QUERY_GROUP_STATE_LIMIT, 16384);
+    let report = create_test_report("large-config.js");
+    let ctx =
+        create_test_context_with_ast(&report, &parsed, source.as_bytes(), FileType::JavaScript);
+    // The corresponding production trait has no count filter, so its normal
+    // evaluator may stop after the first valid credential-object match.
+    let _match_count_guard = super::symbol_string::MatchCountGuard::set(false);
+    let result = super::ast::eval_ast_query(query, &ctx);
+    assert!(
+        result.matched,
+        "the production AST evaluator preserves the match; warnings={:?}, match_count={}",
+        result.warnings, result.match_count
+    );
+    assert!(
+        !result
+            .warnings
+            .iter()
+            .any(|warning| matches!(warning, AnalysisWarning::AstQueryLimited { limit: 16384 })),
+        "the normal configuration query does not surface a state-limit warning"
+    );
+}
+
+#[test]
+fn ast_query_pathological_wildcard_expansion_obeys_cpu_budget() {
+    let mut source = String::from("const config = { host: \"api.example\",");
+    for i in 0..96 {
+        source.push_str(&format!(" option_before_user_{i}: \"value\","));
+    }
+    source.push_str(" username: \"service-account\",");
+    for i in 0..96 {
+        source.push_str(&format!(" option_before_password_{i}: \"value\","));
+    }
+    source.push_str(" password: \"ordinary-config-secret\" };");
+
+    let report = create_test_report("large-config.js");
+    let parsed = parsed_for_test("large-config.js", source.as_bytes());
+    let ctx =
+        create_test_context_with_ast(&report, &parsed, source.as_bytes(), FileType::JavaScript);
+    let query = r#"((object
+      (pair key: (property_identifier) @host_key value: (string) @host_value)
+      (_)*
+      (pair key: (property_identifier) @username_key value: (string) @username_value)
+      (_)*
+      (pair key: (property_identifier) @password_key value: (string) @password_value))
+      (#match? @host_key "(?i)^(host|hostname|server)$")
+      (#match? @username_key "(?i)^(user|username|account)$")
+      (#match? @password_key "(?i)^(pass|passwd|password)$")
+      )"#;
+    let result = super::ast::eval_ast_query_with_budget(query, &ctx, std::time::Duration::ZERO);
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|warning| matches!(warning, AnalysisWarning::AstTooDeep { max_depth: 0 })),
+        "pathological wildcard expansion remains interruptible under the CPU budget"
+    );
+}
+
 /// Establishes a baseline: `tree_sitter::Query::new` compiled-and-run from many
 /// threads, each with its own query and tree, is deterministic. This PASSES —
 /// which RULES OUT bare concurrent compilation as the cause of the parallel

@@ -45,6 +45,12 @@ pub const MIN_LEN: usize = 6;
 /// scores -1.82.
 pub const RANDOM_THRESHOLD: f64 = -2.0;
 
+/// Established technical identifiers that are too domain-specific for the
+/// English bigram model. Keep this list narrow: a recognized non-random stem
+/// should not become a random-name finding merely because it is uncommon in
+/// English prose.
+const KNOWN_TECHNICAL_TERMS: &[&str] = &["xmlrpc"];
+
 /// log10 P(col | row) over `ALPHA` symbols, add-one smoothed.
 ///
 /// Generated data, not hand-written constants: `approx_constant` fires
@@ -209,6 +215,13 @@ pub fn random_score(s: &str) -> Option<f64> {
 /// Conservative by construction: too short to judge is not random.
 #[must_use]
 pub fn is_random_like(s: &str) -> bool {
+    let token = longest_token(s);
+    if KNOWN_TECHNICAL_TERMS
+        .iter()
+        .any(|term| token.eq_ignore_ascii_case(term))
+    {
+        return false;
+    }
     random_score(s).is_some_and(|v| v < RANDOM_THRESHOLD)
 }
 
@@ -315,6 +328,7 @@ mod tests {
         "chrome",
         "firefox",
         "notepad",
+        "xmlrpc",
     ];
 
     #[test]
@@ -328,6 +342,13 @@ mod tests {
     fn clears_legitimate_names_and_words() {
         let missed: Vec<_> = LEGITIMATE.iter().filter(|s| is_random_like(s)).collect();
         assert!(missed.is_empty(), "false positives: {missed:?}");
+    }
+
+    #[test]
+    fn recognizes_common_technical_identifier_as_non_random() {
+        assert!(!is_random_like("xmlrpc"));
+        assert!(!is_random_like("xmlrpc.py"));
+        assert!(is_random_like("kqjxwvbnmz"));
     }
 
     /// Not all of them: several are three to five letters, which the length

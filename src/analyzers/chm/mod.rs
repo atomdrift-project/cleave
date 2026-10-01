@@ -92,7 +92,11 @@ impl<'a> Chm<'a> {
 
     /// Read raw bytes for an entry from the Uncompressed section (section 0).
     fn read_uncompressed(&self, entry: &ChmEntry) -> Option<&'a [u8]> {
-        slice_at(self.data, self.data_offset + entry.offset, entry.length)
+        slice_at(
+            self.data,
+            self.data_offset.checked_add(entry.offset)?,
+            entry.length,
+        )
     }
 
     /// Decompress the entire `::DataSpace/Storage/MSCompressed/Content`
@@ -224,6 +228,12 @@ impl ResetTable {
     }
 }
 
+/// Largest ResetTable `block_len` accepted (real CHMs use 0x8000).
+const MAX_BLOCK_LEN: usize = 1 << 20;
+
+/// Upper bound on the output buffer reserved before decoding starts.
+const MAX_UPFRONT_RESERVE: usize = 64 << 20;
+
 /// Decompress an LZX-encoded MSCompressed/Content stream into a flat
 /// byte buffer using the reset points provided by `rt`.
 ///
@@ -253,14 +263,21 @@ fn decompress_lzx(content: &[u8], cd: &ControlData, rt: &ResetTable) -> Result<V
     if rt.uncompressed_size == 0 {
         return Ok(Vec::new());
     }
-    let block_len = rt.block_len as usize;
-    let total_uncompressed = rt.uncompressed_size as usize;
     // Sanity guard against a malformed table with a runaway block_len.
-    if block_len == 0 || block_len > 1 << 20 {
-        bail!("CHM ResetTable block_len {block_len} out of range");
-    }
+    let Ok(block_len @ 1..=MAX_BLOCK_LEN) = usize::try_from(rt.block_len) else {
+        bail!("CHM ResetTable block_len {} out of range", rt.block_len);
+    };
+    let total_uncompressed = usize::try_from(rt.uncompressed_size).unwrap_or(usize::MAX);
 
-    let mut out = Vec::with_capacity(total_uncompressed);
+    // `uncompressed_size` is a header field the file controls. Reserving it
+    // outright let a forged value request an allocation that aborts the
+    // process, which no `catch_unwind` upstream can stop. Reserve at most what
+    // the blocks can emit, and no more than a typical CHM; `out` grows past
+    // that only as real output arrives.
+    let reserve = total_uncompressed
+        .min(rt.reset_offsets.len().saturating_mul(block_len))
+        .min(MAX_UPFRONT_RESERVE);
+    let mut out = Vec::with_capacity(reserve);
     // Stock `Lzxd::new` matches chmlib's per-reset-interval header read:
     // the first bit of each reset interval is the intel-translation flag
     // (CHM never sets it, so it's a free 0 bit, but we MUST consume it
@@ -347,12 +364,11 @@ fn parse_entry(buf: &[u8]) -> Option<(ChmEntry, usize)> {
     let mut pos = 0;
     let (name_len, n) = read_encint(&buf[pos..])?;
     pos += n;
-    let name_len = name_len as usize;
-    if pos + name_len > buf.len() {
-        return None;
-    }
-    let name = String::from_utf8_lossy(&buf[pos..pos + name_len]).into_owned();
-    pos += name_len;
+    // An ENCINT spans up to 70 bits, so the length can be near `u64::MAX`;
+    // `pos + name_len` would wrap and slip past a plain bounds check.
+    let name_end = pos.checked_add(usize::try_from(name_len).ok()?)?;
+    let name = String::from_utf8_lossy(buf.get(pos..name_end)?).into_owned();
+    pos = name_end;
     let (section, n) = read_encint(&buf[pos..])?;
     pos += n;
     let (offset, n) = read_encint(&buf[pos..])?;
@@ -472,11 +488,10 @@ pub(crate) fn collect_members(data: &[u8]) -> Result<(Vec<ChmMember>, Vec<String
 
         let bytes: Option<Vec<u8>> = match entry.section {
             0 => chm.read_uncompressed(entry).map(<[u8]>::to_vec),
-            1 => content_blob.as_deref().and_then(|c| {
-                let start = entry.offset as usize;
-                let end = start.checked_add(entry.length as usize)?;
-                c.get(start..end).map(<[u8]>::to_vec)
-            }),
+            1 => content_blob
+                .as_deref()
+                .and_then(|c| slice_at(c, entry.offset, entry.length))
+                .map(<[u8]>::to_vec),
             _ => None,
         };
         let Some(bytes) = bytes else {
@@ -538,5 +553,31 @@ mod tests {
     #[test]
     fn parse_rejects_short() {
         assert!(Chm::parse(b"ITSF").is_err());
+    }
+
+    /// A 10-byte ENCINT name length near `u64::MAX` made `pos + name_len`
+    /// overflow; the entry must be rejected, not panic.
+    #[test]
+    fn parse_entry_rejects_overflowing_name_len() {
+        let mut buf = vec![0xFF; 9];
+        buf.extend_from_slice(&[0x7F, b'a', 0x00, 0x00, 0x00]);
+        assert!(parse_entry(&buf).is_none());
+    }
+
+    /// A forged `uncompressed_size` must not be reserved up front: `u64::MAX`
+    /// used to request an allocation that panics or aborts.
+    #[test]
+    fn decompress_does_not_reserve_forged_uncompressed_size() {
+        let cd = ControlData {
+            reset_interval_chunks: 1,
+            window: WindowSize::KB32,
+        };
+        let rt = ResetTable {
+            uncompressed_size: u64::MAX,
+            block_len: 0x8000,
+            reset_offsets: vec![0],
+        };
+        // Not a valid LZX stream: decoding fails, but cleanly.
+        let _ = decompress_lzx(&[0u8; 16], &cd, &rt);
     }
 }

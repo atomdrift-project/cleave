@@ -42,6 +42,8 @@ mod ast_tests;
 #[cfg(test)]
 mod binary_tests;
 #[cfg(test)]
+mod kv_tests;
+#[cfg(test)]
 mod metrics_tests;
 #[cfg(test)]
 mod misc_tests;

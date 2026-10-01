@@ -289,6 +289,16 @@ pub(crate) fn validate_composite_trait_only(
 ) -> Vec<String> {
     let mut errors = Vec::new();
 
+    if matches!(
+        rule.scope,
+        Some(crate::composite_rules::Scope::Parent | crate::composite_rules::Scope::FileOrParent)
+    ) {
+        errors.push(format!(
+            "{}: Composite rule '{}' uses a parent downgrade scope, which is valid only for downgrade conditions.",
+            source_file, rule.id
+        ));
+    }
+
     fn check_conditions(
         conditions: &[Condition],
         rule_id: &str,

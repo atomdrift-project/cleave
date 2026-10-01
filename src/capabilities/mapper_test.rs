@@ -1115,6 +1115,90 @@ composite_rules:
     }
 }
 
+/// A composite with surviving `all:` evidence still becomes invalid when its
+/// only matched `any:` leg is retroactively suppressed.
+#[test]
+fn test_retroactive_unless_suppression_rechecks_composite_any_quorum() {
+    let yaml = r#"
+defaults:
+  platforms: [linux, windows, macos]
+  for: [binaries]
+
+traits:
+  - id: "test/late-unless::base"
+    desc: "Required base signal"
+    crit: baseline
+    if:
+      type: text
+      substr: "BASE_SIGNAL"
+
+  - id: "test/late-unless::delayed-signal"
+    desc: "Signal suppressed by a later composite"
+    crit: baseline
+    if:
+      type: text
+      substr: "DELAYED_SIGNAL"
+    unless:
+      - id: test/late-unless::suppressor
+
+  - id: "test/late-unless::pack-a"
+    desc: "Suppressor part A"
+    crit: baseline
+    if:
+      type: text
+      substr: "PACK_A"
+
+  - id: "test/late-unless::pack-b"
+    desc: "Suppressor part B"
+    crit: baseline
+    if:
+      type: text
+      substr: "PACK_B"
+
+composite_rules:
+  - id: "test/late-unless::profile"
+    desc: "Base evidence plus one auxiliary signal"
+    crit: suspicious
+    all:
+      - id: test/late-unless::base
+    any:
+      - id: test/late-unless::delayed-signal
+
+  - id: "test/late-unless::suppressor"
+    desc: "Suppressor assembled after atomic evaluation"
+    crit: notable
+    all:
+      - id: test/late-unless::pack-a
+      - id: test/late-unless::pack-b
+"#;
+    let (_dir, path) = create_test_yaml(yaml);
+    let mapper = CapabilityMapper::from_yaml(&path).unwrap();
+
+    let binary_data = b"BASE_SIGNAL DELAYED_SIGNAL PACK_A PACK_B";
+    let mut report = create_test_report_with_size(binary_data.len() as u64);
+    for value in ["BASE_SIGNAL", "DELAYED_SIGNAL", "PACK_A", "PACK_B"] {
+        report.strings.push(crate::types::StringInfo {
+            value: value.to_string().into(),
+            offset: Some(0),
+            encoding: "ascii".to_string(),
+            string_type: None,
+            section: None,
+            encoding_chain: Vec::new(),
+            fragments: None,
+        });
+    }
+
+    mapper.evaluate_and_merge_findings(&mut report, binary_data, None, None);
+
+    let fired = |id: &str| report.findings.iter().any(|f| f.id == id);
+    assert!(fired("test/late-unless::suppressor"));
+    assert!(!fired("test/late-unless::delayed-signal"));
+    assert!(
+        !fired("test/late-unless::profile"),
+        "the profile must be removed when retroactive suppression leaves its `any:` quorum unsatisfied"
+    );
+}
+
 /// A composite that keeps some of its cited evidence survives the cascade — the
 /// suppression removes the dead reference, not the finding.
 #[test]

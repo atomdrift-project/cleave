@@ -296,13 +296,15 @@ pub fn extract_encoded_payloads(stng_strings: &[stng::ExtractedString]) -> Vec<E
 /// nothing to add.
 #[must_use]
 pub(crate) fn xor_encoded_pe(fileid: &filefacts::FileId, data: &[u8]) -> Option<ExtractedPayload> {
-    let image = fileid.xor_pe_key()?.decode(data);
+    let key = fileid.xor_pe_key()?;
+    let image_offset = key.pe_offset();
+    let image = key.decode(data).get(image_offset..)?.to_vec();
     Some(ExtractedPayload {
         preview: generate_preview(&image),
         data: image,
         encoding_chain: vec!["xor".to_string()],
         detected_type: FileType::Pe,
-        original_offset: 0,
+        original_offset: image_offset,
     })
 }
 

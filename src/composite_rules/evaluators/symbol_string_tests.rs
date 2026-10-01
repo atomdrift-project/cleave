@@ -694,6 +694,7 @@ fn test_eval_string_exact_match() {
         encoding: None,
         length_min: None,
         length_max: None,
+        exclude_html_comments: false,
         exact: Some(&"/bin/sh".to_string()),
         substr: None,
         regex: None,
@@ -736,6 +737,7 @@ fn test_eval_string_exact_duplicate_offsets() {
         encoding: None,
         length_min: None,
         length_max: None,
+        exclude_html_comments: false,
         exact: Some(&needle),
         substr: None,
         regex: None,
@@ -779,6 +781,7 @@ fn test_eval_text_regex_length_bounds() {
         encoding: None,
         length_min: Some(50),
         length_max: None,
+        exclude_html_comments: false,
         exact: None,
         substr: None,
         regex: Some(&regex),
@@ -826,6 +829,7 @@ fn test_eval_text_length_bounds_scan_past_short_match() {
         encoding: None,
         length_min: Some(50),
         length_max: None,
+        exclude_html_comments: false,
         exact: None,
         substr: None,
         regex: Some(&regex),
@@ -905,6 +909,7 @@ fn test_eval_string_substr_match() {
         encoding: None,
         length_min: None,
         length_max: None,
+        exclude_html_comments: false,
         exact: None,
         substr: Some(&"evil.com".to_string()),
         regex: None,
@@ -950,6 +955,7 @@ fn test_eval_text_offsetless_string_still_anchors() {
         encoding: None,
         length_min: None,
         length_max: None,
+        exclude_html_comments: false,
         exact: None,
         substr: Some(&"EnumSystemLocales".to_string()),
         regex: None,
@@ -999,6 +1005,7 @@ fn test_eval_string_regex_match() {
         encoding: None,
         length_min: None,
         length_max: None,
+        exclude_html_comments: false,
         exact: None,
         substr: None,
         regex: Some(&pattern),
@@ -1037,6 +1044,7 @@ fn test_eval_string_case_insensitive() {
         encoding: None,
         length_min: None,
         length_max: None,
+        exclude_html_comments: false,
         exact: Some(&"createremotethread".to_string()),
         substr: None,
         regex: None,
@@ -1076,6 +1084,7 @@ fn test_eval_string_not_exception() {
         encoding: None,
         length_min: None,
         length_max: None,
+        exclude_html_comments: false,
         exact: Some(&"/bin/sh".to_string()),
         substr: None,
         regex: None,
@@ -1106,6 +1115,7 @@ fn test_eval_text_uses_raw_search_for_source_files() {
         encoding: None,
         length_min: None,
         length_max: None,
+        exclude_html_comments: false,
         exact: None,
         substr: Some(&pattern),
         regex: None,
@@ -1154,6 +1164,7 @@ fn test_eval_string_literal_matches_only_ast_strings() {
         encoding: None,
         length_min: None,
         length_max: None,
+        exclude_html_comments: false,
         exact: Some(&pattern),
         substr: None,
         regex: None,
@@ -1177,6 +1188,64 @@ fn test_eval_string_literal_matches_only_ast_strings() {
 }
 
 #[test]
+fn literal_query_can_exclude_python_docstrings_without_hiding_runtime_constants() {
+    let mut report = create_test_report();
+    for (value, offset, section) in [
+        ("https://docs.example.org/calendar", 10, "ast-docstring"),
+        ("https://c2.example.net/payload", 80, "ast"),
+    ] {
+        report.strings.push(StringInfo {
+            value: value.to_string().into(),
+            offset: Some(offset),
+            encoding: "utf8".into(),
+            string_type: None,
+            section: Some(section.into()),
+            encoding_chain: Vec::new(),
+            fragments: None,
+        });
+    }
+    let pattern = "https://".to_string();
+    let params = StringParams {
+        encoding: None,
+        exact: None,
+        substr: None,
+        regex: Some(&pattern),
+        word: None,
+        case_insensitive: false,
+        length_min: None,
+        length_max: None,
+        exclude_html_comments: false,
+        is_check: None,
+        section: None,
+        offset: None,
+        offset_range: None,
+        section_offset: None,
+        section_offset_range: None,
+        arch_clamp: None,
+    };
+    let ctx = EvaluationContext::test_only_new(&report, &[], FileType::Python);
+
+    let all_literals = eval_string_literal_with_options(&params, None, &ctx, false);
+    assert!(all_literals.matched);
+    assert_eq!(all_literals.match_count, 2);
+
+    let runtime_only = eval_string_literal_with_options(&params, None, &ctx, true);
+    assert!(runtime_only.matched);
+    assert_eq!(runtime_only.match_count, 1);
+    assert_eq!(runtime_only.evidence[0].value, "https://");
+    assert_eq!(runtime_only.evidence[0].location.as_deref(), Some("0x50"));
+
+    let doc_url = "https://docs.example.org/calendar".to_string();
+    let docs_only = StringParams {
+        exact: Some(&doc_url),
+        regex: None,
+        ..params
+    };
+    assert!(eval_string_literal_with_options(&docs_only, None, &ctx, false).matched);
+    assert!(!eval_string_literal_with_options(&docs_only, None, &ctx, true).matched);
+}
+
+#[test]
 fn compiled_literals_match_without_ast_and_keep_their_source_anchor() {
     let mut report = create_test_report();
     for section in [None, Some("literal")] {
@@ -1195,6 +1264,7 @@ fn compiled_literals_match_without_ast_and_keep_their_source_anchor() {
         encoding: None,
         length_min: None,
         length_max: None,
+        exclude_html_comments: false,
         exact: None,
         substr: Some(&pattern),
         regex: None,
@@ -1259,6 +1329,7 @@ fn test_base64_validator_filters_complete_literal_candidates_before_counting() {
         encoding: None,
         length_min: None,
         length_max: None,
+        exclude_html_comments: false,
         exact: None,
         substr: None,
         regex: Some(&pattern),
@@ -1302,6 +1373,7 @@ fn test_eval_string_literal_counts_nested_ast_projection_once() {
         encoding: None,
         length_min: None,
         length_max: None,
+        exclude_html_comments: false,
         exact: None,
         substr: None,
         regex: Some(&pattern),
@@ -2224,6 +2296,7 @@ fn test_eval_string_match_count_exceeds_evidence_cap() {
         encoding: None,
         length_min: None,
         length_max: None,
+        exclude_html_comments: false,
         exact: None,
         substr: Some(&substr_val),
         regex: None,
@@ -2458,6 +2531,7 @@ fn test_eval_string_external_ip_filters_private() {
         encoding: None,
         length_min: None,
         length_max: None,
+        exclude_html_comments: false,
         exact: None,
         substr: Some(&substr),
         regex: None,
@@ -2585,6 +2659,7 @@ fn test_eval_string_word_boundary() {
         encoding: None,
         length_min: None,
         length_max: None,
+        exclude_html_comments: false,
         exact: None,
         substr: None,
         regex: None,
@@ -2795,6 +2870,7 @@ fn test_eval_string_section_offset_with_section_map() {
         encoding: None,
         length_min: None,
         length_max: None,
+        exclude_html_comments: false,
         exact: None,
         substr: Some(&substr),
         regex: None,
@@ -2821,6 +2897,7 @@ fn test_eval_string_section_offset_with_section_map() {
         encoding: None,
         length_min: None,
         length_max: None,
+        exclude_html_comments: false,
         exact: None,
         substr: Some(&substr2),
         regex: None,
@@ -2845,6 +2922,7 @@ fn test_eval_string_section_offset_with_section_map() {
         encoding: None,
         length_min: None,
         length_max: None,
+        exclude_html_comments: false,
         exact: None,
         substr: Some(&substr2),
         regex: None,
@@ -2981,6 +3059,7 @@ fn test_eval_string_offset_range_filters() {
         encoding: None,
         length_min: None,
         length_max: None,
+        exclude_html_comments: false,
         exact: None,
         substr: Some(&substr),
         regex: None,
@@ -3006,6 +3085,7 @@ fn test_eval_string_offset_range_filters() {
         encoding: None,
         length_min: None,
         length_max: None,
+        exclude_html_comments: false,
         exact: None,
         substr: Some(&substr),
         regex: None,
@@ -3775,4 +3855,41 @@ fn binding_shape_and_identifier_regex_schema_reject_ignored_filters() {
             serde_yaml::from_str(&format!("type: symbol\nexact: pwd\n{suffix}\n")).unwrap();
         assert_eq!(condition.validate().is_ok(), expected, "{suffix}");
     }
+}
+
+/// A case-insensitive Unicode `substr` with a validator finds its hit in a
+/// lowercased copy whose byte offsets drift from the file's wherever
+/// lowercasing changes a char's length (`İ` is 2 bytes, its lowercase 3). The
+/// hit must be mapped back before the context window is cut from the
+/// original: the drifted offset split an `İ` and panicked.
+#[test]
+fn raw_unicode_substr_validator_window_uses_original_offsets() {
+    let report = create_test_report();
+    let content = format!("{} DÉJÀ 45.33.32.156", "İ".repeat(30));
+    let ctx = create_test_context(&report, content.as_bytes());
+    let pattern = "déjà".to_string();
+    let result = eval_raw(
+        None,
+        Some(&pattern),
+        None,
+        None,
+        true,
+        true,
+        None,
+        None,
+        &ContentLocationParams::default(),
+        &ctx,
+        None,
+    );
+    assert!(
+        result.matched,
+        "the external IP sits inside the match window"
+    );
+    let offsets: Vec<u64> = result
+        .evidence
+        .iter()
+        .flat_map(|evidence| evidence.offsets.iter().copied())
+        .collect();
+    let want = content.find("DÉJÀ").map(|o| o as u64);
+    assert_eq!(offsets, want.into_iter().collect::<Vec<_>>());
 }

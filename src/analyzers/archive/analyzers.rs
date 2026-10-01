@@ -33,8 +33,8 @@ use crate::analyzers::{
     AnalysisInput, FileType, FileTypeExt, detect_file_type, detect_file_type_from_path,
 };
 use crate::types::{
-    ARCHIVE_DELIMITER, AnalysisReport, ArchiveEntry, FileAnalysis, Finding, TargetInfo, YaraMatch,
-    encode_archive_path,
+    ARCHIVE_DELIMITER, AnalysisReport, ArchiveEntry, ENCODING_DELIMITER, FileAnalysis, Finding,
+    TargetInfo, YaraMatch, encode_archive_path,
 };
 use anyhow::{Context, Result};
 use rayon::prelude::*;
@@ -892,6 +892,19 @@ fn rebase_nested_file_path(parent: &str, child: &str) -> String {
     let complete_prefix = format!("{parent}{ARCHIVE_DELIMITER}");
     if child.starts_with(&complete_prefix) {
         return child;
+    }
+
+    // A member analyzer may return decoded layers with a local path such as
+    // `setup.exe##base64@123`. That path names the already selected member;
+    // append the decoder suffix to the archive-qualified parent instead of
+    // treating it as a nested archive member (`setup.exe!!setup.exe##...`).
+    let parent_member = parent.rsplit(ARCHIVE_DELIMITER).next().unwrap_or(&parent);
+    if let Some((child_source, decoder_suffix)) = child.split_once(ENCODING_DELIMITER)
+        && (parent_member == child_source
+            || parent_member.ends_with(&format!("/{child_source}"))
+            || parent_member.ends_with(&format!("\\{child_source}")))
+    {
+        return format!("{parent}{ENCODING_DELIMITER}{decoder_suffix}");
     }
 
     let local_child = child
@@ -1954,7 +1967,7 @@ impl ArchiveAnalyzer {
                 // a top-level archive) still spawn a dedicated std::thread so
                 // they get the 8 MB stack that the original fix was added
                 // for.
-                if rayon::current_thread_index().is_some() {
+                let nested_result = if rayon::current_thread_index().is_some() {
                     tracing::debug!(
                         relative_path,
                         nested_depth,
@@ -2001,6 +2014,51 @@ impl ArchiveAnalyzer {
                             anyhow::anyhow!("Nested archive thread panicked: {msg}")
                         })?
                         .map(Some)
+                };
+
+                match nested_result {
+                    Ok(report) => Ok(report),
+                    Err(archive_error) => {
+                        // A valid format signature can sit in front of a
+                        // script (or other recognized file) whose archive
+                        // header is malformed. Do not let the failed nested
+                        // parser hide the member's behavior: retry using its
+                        // path-derived type, while keeping the parse failure
+                        // visible in the fallback report.
+                        let fallback_type = crate::analyzers::detect_file_type_from_path(file_path);
+                        if fallback_type == FileType::Unknown
+                            || fallback_type == *file_type
+                            || fallback_type.is_archive()
+                        {
+                            Err(archive_error)
+                        } else {
+                            tracing::debug!(
+                                relative_path,
+                                archive_type = %file_type.report_file_type(),
+                                fallback_type = %fallback_type.report_file_type(),
+                                error = %archive_error,
+                                "Retrying malformed archive member using its path-derived type"
+                            );
+                            self.analyze_extracted_member_uncached(
+                                file_path,
+                                relative_path,
+                                data,
+                                &fallback_type,
+                                sha256,
+                            )
+                            .map(|report| {
+                                if let Some(mut report) = report {
+                                    report.metadata.errors.push(format!(
+                                        "Nested archive parsing failed; analyzed using {}: {archive_error}",
+                                        fallback_type.report_file_type()
+                                    ));
+                                    Some(report)
+                                } else {
+                                    None
+                                }
+                            })
+                        }
+                    }
                 }
             }
         } else if let Some(analyzer) = {
@@ -2249,6 +2307,16 @@ impl ArchiveAnalyzer {
                                     .into_iter()
                                     .filter(|f| !existing.contains(f.id.as_str())),
                             );
+                            // Archive members receive YARA findings after their
+                            // regular trait analysis. Re-run unless suppression
+                            // now so configured third-party guards can use the
+                            // same-file YAML context carried by the member.
+                            if let Some(mapper) = self.capability_mapper.as_ref() {
+                                mapper.apply_retroactive_unless_suppression_to_findings(
+                                    &mut report.findings,
+                                    None,
+                                );
+                            }
                             if !report.metadata.tools_used.iter().any(|t| t == "yara-x") {
                                 report.metadata.tools_used.push("yara-x".to_string());
                             }
@@ -2989,9 +3057,18 @@ impl ArchiveAnalyzer {
                     file_data.extend_from_slice(&buf[..n]);
                     written += n as u64;
                 }
+                // A stream cut inside this member (truncated download, damaged
+                // gzip) ends the walk, but the bytes read before the cut are
+                // genuine: the last member is often the payload a dropper
+                // ships, so analyze the prefix rather than discard it.
                 if let Some(e) = read_err {
                     stop_reason = Some(e);
-                    break;
+                    if file_data.is_empty() {
+                        break;
+                    }
+                    guard.add_extraction_note(format!(
+                        "{rel_path}: member truncated after {written} of {size} bytes"
+                    ));
                 }
                 if limited.is_limited() {
                     guard.add_hostile_reason(HostileArchiveReason::ExcessiveFileSize {
@@ -3011,6 +3088,9 @@ impl ArchiveAnalyzer {
                         "member {depth} levels deep, beyond the {}-level analysis limit: {rel_path}",
                         super::guards::MAX_ARCHIVE_MEMBER_DEPTH
                     ));
+                    if stop_reason.is_some() {
+                        break;
+                    }
                     continue;
                 }
 
@@ -3026,6 +3106,9 @@ impl ArchiveAnalyzer {
                     container_kind: None,
                 });
                 pushed += 1;
+                if stop_reason.is_some() {
+                    break;
+                }
             }
             if let Some(e) = stop_reason {
                 if pushed == 0 {
@@ -4635,6 +4718,33 @@ mod tests {
     }
 
     #[test]
+    fn malformed_nested_cab_falls_back_to_script_extension_analysis() {
+        const SAMPLE: &[u8] = include_bytes!("../../../testdata/cab/corrupt-inner-mszip.cab");
+        let dir = tempfile::tempdir().expect("temp dir");
+        let guard = super::super::guards::ExtractionGuard::new();
+        super::super::system_packages::extract_cab_from_reader(
+            std::io::Cursor::new(SAMPLE),
+            dir.path(),
+            &guard,
+        )
+        .expect("outer CAB extraction");
+
+        let member = dir.path().join("PO_UB7635_Specifications_Details.cmd");
+        let report = ArchiveAnalyzer::new()
+            .analyze_extracted_file(&member)
+            .expect("malformed nested CAB should still receive script analysis");
+
+        assert!(
+            report.metadata.errors.iter().any(|error| {
+                error.contains("Nested archive parsing failed; analyzed using batch:")
+                    && error.contains("Failed to parse CAB archive")
+            }),
+            "unexpected fallback report errors: {:?}",
+            report.metadata.errors
+        );
+    }
+
+    #[test]
     fn jar_resource_selector_keeps_nested_archives_under_meta_inf() {
         let nested = std::path::Path::new("META-INF/jars/loader.jar");
         assert!(is_interesting_jar_resource(nested, Some(&FileType::Jar)));
@@ -4666,6 +4776,17 @@ mod tests {
         assert_eq!(
             rebase_nested_file_path("bundle.zip!!setup.exe", "payload.dll"),
             "bundle.zip!!setup.exe!!payload.dll"
+        );
+        assert_eq!(
+            rebase_nested_file_path("bundle.zip!!setup.exe", "setup.exe##base64@123"),
+            "bundle.zip!!setup.exe##base64@123"
+        );
+        assert_eq!(
+            rebase_nested_file_path(
+                "bundle.zip!!src/setup.exe",
+                "src/setup.exe##unicode-escape@16"
+            ),
+            "bundle.zip!!src/setup.exe##unicode-escape@16"
         );
         assert_eq!(
             rebase_nested_file_path("bundle.zip!setup.exe", "setup.exe!!payload.dll"),

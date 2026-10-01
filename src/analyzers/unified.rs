@@ -62,6 +62,7 @@ fn seen_string_key(info: &StringInfo) -> SeenStringKey {
             Some("ast") => 1,
             Some("decoded") => 2,
             Some("ast-number") => 3,
+            Some("ast-docstring") => 4,
             _ => 0,
         },
         chain_hash.finish(),
@@ -1032,7 +1033,13 @@ impl UnifiedSourceAnalyzer {
             }
 
             if self.config.string_node_types.contains(&kind) || kind.contains("string") {
-                self.collect_string_node(&node, source, report, seen_strings);
+                self.collect_string_node(
+                    &node,
+                    source,
+                    report,
+                    seen_strings,
+                    self.config.name == "python" && is_python_docstring_literal(&node),
+                );
             } else if is_numeric_node_kind(kind) {
                 if let Ok(text) = node.utf8_text(source)
                     && let Some((value, radix)) = parse_numeric_literal(text)
@@ -1087,6 +1094,7 @@ impl UnifiedSourceAnalyzer {
         source: &[u8],
         report: &mut AnalysisReport,
         seen_strings: &mut SeenStrings,
+        is_docstring: bool,
     ) {
         let Ok(text) = node.utf8_text(source) else {
             return;
@@ -1120,7 +1128,7 @@ impl UnifiedSourceAnalyzer {
             offset: Some(offset),
             string_type: None,
             encoding: "utf-8".to_string(),
-            section: Some("ast".to_string()),
+            section: Some(if is_docstring { "ast-docstring" } else { "ast" }.to_string()),
             encoding_chain: Vec::new(),
             fragments: None,
         };
@@ -1147,7 +1155,7 @@ impl UnifiedSourceAnalyzer {
                 offset: Some(offset),
                 string_type: None,
                 encoding: "utf-8".to_string(),
-                section: Some("ast".to_string()),
+                section: Some(if is_docstring { "ast-docstring" } else { "ast" }.to_string()),
                 // Deliberately no encoding chain. This is the same datum as the
                 // source literal, normalised — not a concealment layer wrapped
                 // around it. Recording it as encoded would make every ordinary
@@ -1244,6 +1252,44 @@ impl UnifiedSourceAnalyzer {
         }
         None
     }
+}
+
+/// Return whether a Python string node belongs to the module, class, or
+/// function docstring: a standalone string expression in the first statement
+/// slot of that scope. Nested literals in a call in that slot are not docs.
+fn is_python_docstring_literal(node: &tree_sitter::Node<'_>) -> bool {
+    let mut expression = *node;
+    while expression.kind() != "expression_statement" {
+        let Some(parent) = expression.parent() else {
+            return false;
+        };
+        expression = parent;
+    }
+
+    let Some(expr_value) = expression.named_child(0) else {
+        return false;
+    };
+    if !matches!(expr_value.kind(), "string" | "concatenated_string") {
+        return false;
+    }
+    let Some(scope_body) = expression.parent() else {
+        return false;
+    };
+    let scope_body_kind = scope_body.kind();
+    if scope_body_kind != "module"
+        && !(scope_body_kind == "block"
+            && scope_body.parent().is_some_and(|parent| {
+                matches!(parent.kind(), "function_definition" | "class_definition")
+            }))
+    {
+        return false;
+    }
+
+    scope_body.named_child(0).is_some_and(|first| {
+        first.kind() == "expression_statement"
+            && first.start_byte() == expression.start_byte()
+            && first.end_byte() == expression.end_byte()
+    })
 }
 
 /// Resolve a declarator to the identifier it declares.
@@ -1704,6 +1750,50 @@ if __name__ == "__main__":
             "offset {off} + len {} spans {:?}, expected b\"gzip\"",
             s.value.len(),
             String::from_utf8_lossy(span),
+        );
+    }
+
+    #[test]
+    fn python_docstrings_are_separated_from_executable_literals() {
+        let analyzer = UnifiedSourceAnalyzer::for_file_type(&FileType::Python).unwrap();
+        let path = PathBuf::from("docstrings.py");
+        let code = r##"
+"""References https://example.org/documentation."""
+
+def fetch():
+    """References http://example.net/calendar-source."""
+    return "http://runtime.example/payload"
+
+class Calendar:
+    """References http://example.edu/calendar-source."""
+
+def call_first():
+    print("http://runtime.example/first-call")
+"##;
+        let report = analyzer.analyze_source(&path, code);
+
+        let doc_urls: Vec<_> = report
+            .strings
+            .iter()
+            .filter(|s| s.value.contains("http") && s.section.as_deref() == Some("ast-docstring"))
+            .map(|s| &*s.value)
+            .collect();
+        assert_eq!(
+            doc_urls.len(),
+            3,
+            "module, function, and class docstrings: {doc_urls:?}"
+        );
+        assert!(
+            report
+                .strings
+                .iter()
+                .any(|s| s.value == "http://runtime.example/payload"
+                    && s.section.as_deref() == Some("ast"))
+                && report.strings.iter().any(|s| {
+                    s.value == "http://runtime.example/first-call"
+                        && s.section.as_deref() == Some("ast")
+                }),
+            "assigned and call-argument URLs remain ordinary AST literals"
         );
     }
 

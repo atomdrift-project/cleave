@@ -250,6 +250,7 @@ fn test_string_exact_condition() {
             encoding: None,
             length_min: None,
             length_max: None,
+            exclude_html_comments: false,
             exact: Some("/bin/sh".to_string()),
             substr: None,
             regex: None,
@@ -466,6 +467,7 @@ fn test_not_directive_shorthand() {
             encoding: None,
             length_min: None,
             length_max: None,
+            exclude_html_comments: false,
             exact: None,
             substr: None,
             regex: Some(r"[a-z]+\.com".to_string()),
@@ -545,6 +547,7 @@ fn test_not_directive_exact() {
             encoding: None,
             length_min: None,
             length_max: None,
+            exclude_html_comments: false,
             exact: None,
             substr: None,
             regex: Some(r"[a-z]+\.com".to_string()),
@@ -629,6 +632,7 @@ fn test_not_directive_regex() {
             encoding: None,
             length_min: None,
             length_max: None,
+            exclude_html_comments: false,
             exact: None,
             substr: None,
             regex: Some(r"\d+\.\d+\.\d+\.\d+".to_string()),
@@ -836,6 +840,7 @@ fn test_downgrade_to_notable() {
             encoding: None,
             length_min: None,
             length_max: None,
+            exclude_html_comments: false,
             exact: Some("/bin/sh".to_string()),
             substr: None,
             regex: None,
@@ -1162,6 +1167,7 @@ fn test_all_three_directives_combined() {
             encoding: None,
             length_min: None,
             length_max: None,
+            exclude_html_comments: false,
             exact: None,
             substr: None,
             regex: Some(r"[a-z]+\.com".to_string()),
@@ -1255,6 +1261,7 @@ fn test_string_exact_match_requires_full_equality() {
             encoding: None,
             length_min: None,
             length_max: None,
+            exclude_html_comments: false,
             exact: Some("hello".to_string()),
             substr: None,
             regex: None,
@@ -1335,6 +1342,7 @@ fn test_string_substr_matches_substrings() {
             encoding: None,
             length_min: None,
             length_max: None,
+            exclude_html_comments: false,
             exact: None,
             substr: Some("hello".to_string()),
             regex: None,
@@ -1516,6 +1524,7 @@ fn test_string_case_insensitive_exact() {
             encoding: None,
             length_min: None,
             length_max: None,
+            exclude_html_comments: false,
             exact: Some("hello".to_string()),
             substr: None,
             regex: None,
@@ -1591,6 +1600,7 @@ fn test_string_word_boundary_match() {
             encoding: None,
             length_min: None,
             length_max: None,
+            exclude_html_comments: false,
             exact: None,
             substr: None,
             regex: None,
@@ -1679,6 +1689,7 @@ fn test_string_regex_match() {
             encoding: None,
             length_min: None,
             length_max: None,
+            exclude_html_comments: false,
             exact: None,
             substr: None,
             regex: Some(r"\d+\.\d+\.\d+\.\d+".to_string()),
@@ -2260,6 +2271,7 @@ fn test_composite_unless_multiple_conditions_any_matches() {
                 encoding: None,
                 length_min: None,
                 length_max: None,
+                exclude_html_comments: false,
                 exact: None,
                 substr: Some("X.Org Foundation".to_string()),
                 regex: None,
@@ -3936,6 +3948,7 @@ fn test_downgrade_combined_all_and_none_blocked_by_none() {
             encoding: None,
             length_min: None,
             length_max: None,
+            exclude_html_comments: false,
             exact: Some("suspicious_call".to_string()),
             substr: None,
             regex: None,
@@ -3966,6 +3979,7 @@ fn test_downgrade_combined_all_and_none_blocked_by_none() {
                 encoding: None,
                 length_min: None,
                 length_max: None,
+                exclude_html_comments: false,
                 exact: Some("/bin/sh".to_string()),
                 substr: None,
                 regex: None,
@@ -4035,6 +4049,7 @@ fn test_downgrade_combined_all_and_none_pass() {
             encoding: None,
             length_min: None,
             length_max: None,
+            exclude_html_comments: false,
             exact: Some("suspicious_call".to_string()),
             substr: None,
             regex: None,
@@ -4064,6 +4079,7 @@ fn test_downgrade_combined_all_and_none_pass() {
                 encoding: None,
                 length_min: None,
                 length_max: None,
+                exclude_html_comments: false,
                 exact: Some("/bin/sh".to_string()),
                 substr: None,
                 regex: None,
@@ -4138,6 +4154,7 @@ fn test_downgrade_needs_threshold_not_met() {
             encoding: None,
             length_min: None,
             length_max: None,
+            exclude_html_comments: false,
             exact: Some("/bin/sh".to_string()),
             substr: None,
             regex: None,
@@ -4249,6 +4266,7 @@ fn test_downgrade_needs_threshold_met() {
             encoding: None,
             length_min: None,
             length_max: None,
+            exclude_html_comments: false,
             exact: Some("/bin/sh".to_string()),
             substr: None,
             regex: None,
@@ -5210,5 +5228,99 @@ fn archive_scoped_composite_for_all_still_runs_on_any_container() {
     assert!(
         rule.evaluate(&ctx).is_some(),
         "`for: [all]` is the way to declare a container-type-agnostic rule"
+    );
+}
+
+/// Report carrying one AST-extracted numeric literal: `0o777` (511, radix 8).
+fn report_with_octal_777() -> AnalysisReport {
+    let mut report = AnalysisReport::new(TargetInfo::default());
+    report.strings.push(StringInfo {
+        value: "511".to_string().into(),
+        offset: Some(0x40),
+        string_type: None,
+        encoding: "8".to_string(),
+        section: Some("ast-number".to_string()),
+        encoding_chain: Vec::new(),
+        fragments: None,
+    });
+    report
+}
+
+fn octal_777_literal() -> Condition {
+    Condition::Literal(LiteralQuery {
+        kind: Some("number".to_string()),
+        value: Some(511),
+        radix: Some(8),
+        ..Default::default()
+    })
+}
+
+/// `kind: number` must dispatch to numeric matching in a composite's
+/// `all:`/`any:` exactly as it does in a trait's `if:` — the composite copy
+/// of the dispatcher used to drop `kind`, falling through to string matching.
+#[test]
+fn numeric_literal_dispatches_the_same_in_traits_and_composites() {
+    let report = report_with_octal_777();
+    let ctx = EvaluationContext::new(&report, b"", FileType::Python, &[Platform::All], None, None);
+
+    let trait_def = TraitDefinition {
+        id: "test/numeric::octal-777".to_string(),
+        r#if: octal_777_literal(),
+        ..Default::default()
+    };
+    let composite = CompositeTrait {
+        id: "test/numeric::octal-777-composite".to_string(),
+        all: Some(vec![octal_777_literal()]),
+        ..Default::default()
+    };
+
+    assert!(
+        trait_def.evaluate(&ctx).is_some(),
+        "trait if: should match 0o777"
+    );
+    assert!(
+        composite.evaluate(&ctx).is_some(),
+        "composite all: should match 0o777 like the trait does"
+    );
+}
+
+/// A condition-level `not:` on `type: raw` (validation accepts it beside a
+/// regex) must exclude matches in both dispatchers, not only trait-level `not:`.
+#[test]
+fn condition_level_not_applies_to_raw_in_traits_and_composites() {
+    let (report, _) = create_test_context();
+    let data = b"payload evilfoo end".to_vec();
+    let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None);
+
+    let raw_excluding_evilfoo = || {
+        Condition::Raw(RawQuery {
+            regex: Some(r"evil\w+".to_string()),
+            not: Some(vec![NotException::Structured(NotExceptionStructured {
+                exact: Some("evilfoo".to_string()),
+                substr: None,
+                regex: None,
+                lowered_substr: None,
+            })]),
+            ..Default::default()
+        })
+    };
+    let trait_def = TraitDefinition {
+        id: "test/raw::evil".to_string(),
+        r#if: raw_excluding_evilfoo(),
+        ..Default::default()
+    };
+    let composite = CompositeTrait {
+        id: "test/raw::evil-composite".to_string(),
+        all: Some(vec![raw_excluding_evilfoo()]),
+        ..Default::default()
+    };
+
+    assert!(
+        trait_def.evaluate(&ctx).is_none(),
+        "the only match is excluded by the condition-level not:"
+    );
+    assert!(
+        composite.evaluate(&ctx).is_none(),
+        "the composite must honor the condition-level not: too"
     );
 }

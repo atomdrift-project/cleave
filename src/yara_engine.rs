@@ -17,8 +17,8 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicI8, AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
 
 /// Process-wide override for "load built-in YARA rules only" (skip third-party).
 ///
@@ -208,19 +208,62 @@ pub fn yara_precompiled_misses() -> u64 {
     YARA_PRECOMPILED_REJECTED.load(Ordering::Relaxed)
 }
 
-// Thread-local LRU cache for YARA scanners keyed by `Rules` pointer address.
+// Thread-local LRU cache for YARA scanners keyed by `Rules` allocation address.
 // Avoids expensive `Scanner::new()` on every file (wasmtime VM instantiation).
 // Each rayon worker thread caches its own scanners (one per filetype bucket it
-// touches). The `Rules` behind each key live for the whole process (OnceLock
-// statics), so cached scanners never go stale; the LRU bound is the only thing
+// touches). Every entry co-owns its `Rules` (see `CachedScanner`), so a cached
+// scanner never outlives its rules and no other rules can be allocated at a
+// key's address while that key is cached. The LRU bound is the only thing
 // keeping this from growing without limit, so the cache is never cleared.
 thread_local! {
-    static ENGINE_SCANNER_CACHE: RefCell<lru::LruCache<usize, yara_x::Scanner<'static>>> = {
+    static ENGINE_SCANNER_CACHE: RefCell<lru::LruCache<usize, cached_scanner::CachedScanner>> = {
         use std::num::NonZeroUsize;
         let cache_size =
             NonZeroUsize::new(engine_scanner_cache_size()).unwrap_or(NonZeroUsize::MIN);
         RefCell::new(lru::LruCache::new(cache_size))
     };
+}
+
+mod cached_scanner {
+    use std::sync::Arc;
+
+    /// A cached `yara_x::Scanner` together with the `Rules` it borrows.
+    ///
+    /// The thread-local scanner cache outlives any one engine (rayon workers
+    /// keep it across scans, and tests and `test-rules` drop their engines),
+    /// so each entry co-owns its rules instead of assuming they live forever.
+    /// The scanner is reachable only through [`Self::with`], whose callback
+    /// cannot name the borrow's lifetime: it can neither move the scanner out
+    /// nor swap in another entry's.
+    pub(super) struct CachedScanner {
+        // Declared before `_rules` so it drops first: fields drop in
+        // declaration order, so the borrow ends before the rules can be freed.
+        scanner: yara_x::Scanner<'static>,
+        _rules: Arc<yara_x::Rules>,
+    }
+
+    impl CachedScanner {
+        pub(super) fn new(rules: Arc<yara_x::Rules>) -> Self {
+            // SAFETY: the reference points into `rules`' heap allocation, which
+            // an `Arc` never moves or mutates. `_rules` keeps that allocation
+            // alive for as long as `scanner` exists (see the field order), and
+            // `with` never lets the `'static` borrow escape.
+            let borrowed: &'static yara_x::Rules = unsafe { &*Arc::as_ptr(&rules) };
+            Self {
+                scanner: yara_x::Scanner::new(borrowed),
+                _rules: rules,
+            }
+        }
+
+        /// Run `f` on the scanner. `f` is generic over the borrow's lifetime,
+        /// so nothing it returns can hold the scanner or its borrow.
+        pub(super) fn with<R>(
+            &mut self,
+            f: impl for<'r> FnOnce(&mut yara_x::Scanner<'r>) -> R,
+        ) -> R {
+            f(&mut self.scanner)
+        }
+    }
 }
 
 fn rule_context_key(namespace: &str, rule_name: &str) -> String {
@@ -434,7 +477,7 @@ pub(crate) struct YaraEngine {
     /// pre-keyed from [`Self::populated_tiers`] at load. Each cell is built on
     /// first access via [`YaraEngine::tier_rules`] from [`Self::source`]. `None`
     /// = bucket has no rules.
-    tiers: HashMap<String, OnceLock<Option<yara_x::Rules>>>,
+    tiers: HashMap<String, OnceLock<Option<Arc<yara_x::Rules>>>>,
     /// Backing source for lazy bucket construction.
     source: TierSource,
     /// Buckets that actually carry rules — lets scans skip empty buckets and
@@ -527,7 +570,7 @@ impl YaraEngine {
     /// populated set discovered at load.
     fn tier_cells<'a>(
         keys: impl IntoIterator<Item = &'a str>,
-    ) -> HashMap<String, OnceLock<Option<yara_x::Rules>>> {
+    ) -> HashMap<String, OnceLock<Option<Arc<yara_x::Rules>>>> {
         keys.into_iter()
             .map(|k| (k.to_string(), OnceLock::new()))
             .collect()
@@ -537,10 +580,10 @@ impl YaraEngine {
     /// [`Self::source`] on first access. Thread-safe: concurrent first-touch
     /// callers block on the cell until the winner finishes. Returns `None` for
     /// a bucket that was never populated.
-    fn tier_rules(&self, bucket: &str) -> Option<&yara_x::Rules> {
+    fn tier_rules(&self, bucket: &str) -> Option<&Arc<yara_x::Rules>> {
         self.tiers
             .get(bucket)?
-            .get_or_init(|| self.build_tier(bucket))
+            .get_or_init(|| self.build_tier(bucket).map(Arc::new))
             .as_ref()
     }
 
@@ -1672,57 +1715,55 @@ impl YaraEngine {
     /// Run a YARA scanner against data and collect raw match results.
     ///
     /// Scanners are cached per-thread to avoid expensive `Scanner::new()` calls.
-    /// The cache is keyed by the `Rules` pointer address. This is safe because
-    /// `Rules` live in `Arc<YaraEngine>` behind `OnceLock` statics for the
-    /// program's duration.
-    fn run_scanner(rules: &yara_x::Rules, data: &[u8]) -> Result<Vec<RawRule>> {
+    /// The cache is keyed by the address of the `Rules` allocation; each entry
+    /// holds a clone of `rules`, so that address cannot be reused by other
+    /// rules while it is cached.
+    fn run_scanner(rules: &Arc<yara_x::Rules>, data: &[u8]) -> Result<Vec<RawRule>> {
         use std::time::Duration;
 
-        let key = rules as *const yara_x::Rules as usize;
+        let key = Arc::as_ptr(rules) as usize;
 
         // Scan and collect results inside the thread-local borrow so ScanResults
         // (which borrows the Scanner) is consumed before the RefCell is released.
         ENGINE_SCANNER_CACHE.with(|cache| {
             let mut cache = cache.borrow_mut();
             if cache.get(&key).is_none() {
-                // SAFETY: Rules are stored in Arc<YaraEngine> behind OnceLock statics
-                // and live for the program's duration. Extending the borrow to 'static
-                // is sound under this invariant.
-                let rules_static: &'static yara_x::Rules =
-                    unsafe { &*(rules as *const yara_x::Rules) };
-                let mut s = yara_x::Scanner::new(rules_static);
-                s.set_timeout(Duration::from_secs(1200));
-                // Cap per-pattern matches at the same limit cleave collects.
-                // yara-x's default is 1,000,000 — a pathological high-match
-                // pattern would otherwise store that many `Match` structs in
-                // native heap per scanner (GBs in-flight on dense inputs).
-                // cleave only ever reads the first `MAX_PATTERN_MATCHES` ranges,
-                // so storing more is pure waste. This also caps the count seen by
-                // third-party rule conditions (`#a`); conditions relying on
-                // counts >= MAX_PATTERN_MATCHES are not used in this deployment.
-                s.max_matches_per_pattern(MAX_PATTERN_MATCHES);
+                let mut entry = cached_scanner::CachedScanner::new(Arc::clone(rules));
+                entry.with(|s| {
+                    s.set_timeout(Duration::from_secs(1200));
+                    // Cap per-pattern matches at the same limit cleave collects.
+                    // yara-x's default is 1,000,000 — a pathological high-match
+                    // pattern would otherwise store that many `Match` structs in
+                    // native heap per scanner (GBs in-flight on dense inputs).
+                    // cleave only ever reads the first `MAX_PATTERN_MATCHES` ranges,
+                    // so storing more is pure waste. This also caps the count seen by
+                    // third-party rule conditions (`#a`); conditions relying on
+                    // counts >= MAX_PATTERN_MATCHES are not used in this deployment.
+                    s.max_matches_per_pattern(MAX_PATTERN_MATCHES);
+                });
                 tracing::debug!("Created new YARA scanner for tier (ptr={:#x})", key);
-                cache.put(key, s);
+                cache.put(key, entry);
             }
-            let Some(scanner) = cache.get_mut(&key) else {
+            let Some(entry) = cache.get_mut(&key) else {
                 anyhow::bail!("scanner cache entry missing after insertion");
             };
 
-            let scan_start = std::time::Instant::now();
+            let (raw_rules_result, scan_elapsed) = entry.with(|scanner| {
+                let scan_start = std::time::Instant::now();
 
-            // Wrap the scan + result collection in catch_unwind so a panic
-            // inside yara-x (e.g. deserialization bugs) becomes an Err
-            // instead of poisoning the rayon thread pool.
-            let raw_rules_result: Result<Vec<RawRule>> =
-                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    let scan_result = scanner.scan(data);
-                    match scan_result {
-                        Err(e) => Err(anyhow::anyhow!("YARA scan failed: {:?}", e)),
-                        Ok(scan_results) => {
-                            let raw_rules: Vec<RawRule> = scan_results
-                                .matching_rules()
-                                .map(|rule| {
-                                    let patterns: Vec<_> = rule
+                // Wrap the scan + result collection in catch_unwind so a panic
+                // inside yara-x (e.g. deserialization bugs) becomes an Err
+                // instead of poisoning the rayon thread pool.
+                let raw_rules_result: Result<Vec<RawRule>> =
+                    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        let scan_result = scanner.scan(data);
+                        match scan_result {
+                            Err(e) => Err(anyhow::anyhow!("YARA scan failed: {:?}", e)),
+                            Ok(scan_results) => {
+                                let raw_rules: Vec<RawRule> = scan_results
+                                    .matching_rules()
+                                    .map(|rule| {
+                                        let patterns: Vec<_> = rule
                                         .patterns()
                                         .map(|pat| {
                                             let total_matches = pat.matches().count();
@@ -1747,66 +1788,71 @@ impl YaraEngine {
                                             (pat.identifier().to_string(), ranges)
                                         })
                                         .collect();
-                                    RawRule {
-                                        name: rule.identifier().to_string(),
-                                        namespace: rule.namespace().to_string(),
-                                        tags: rule
-                                            .tags()
-                                            .map(|t| t.identifier().to_string())
-                                            .collect(),
-                                        metadata: rule
-                                            .metadata()
-                                            .map(|(k, v)| (k.to_string(), format!("{:?}", v)))
-                                            .collect(),
-                                        patterns,
-                                    }
-                                })
-                                .collect();
-                            Ok(raw_rules)
+                                        RawRule {
+                                            name: rule.identifier().to_string(),
+                                            namespace: rule.namespace().to_string(),
+                                            tags: rule
+                                                .tags()
+                                                .map(|t| t.identifier().to_string())
+                                                .collect(),
+                                            metadata: rule
+                                                .metadata()
+                                                .map(|(k, v)| (k.to_string(), format!("{:?}", v)))
+                                                .collect(),
+                                            patterns,
+                                        }
+                                    })
+                                    .collect();
+                                Ok(raw_rules)
+                            }
+                        }
+                    })) {
+                        Ok(result) => result,
+                        Err(panic_payload) => {
+                            let msg = if let Some(s) = panic_payload.downcast_ref::<String>() {
+                                s.clone()
+                            } else if let Some(s) = panic_payload.downcast_ref::<&str>() {
+                                (*s).to_string()
+                            } else {
+                                "unknown panic".to_string()
+                            };
+                            YARA_SCANS_DISABLED_AFTER_PANIC.store(true, Ordering::Relaxed);
+                            tracing::error!(error = %msg, "YARA scan panicked");
+                            Err(anyhow::anyhow!("YARA scan panicked: {}", msg))
+                        }
+                    };
+                let scan_elapsed = scan_start.elapsed();
+
+                // Log any rule that exceeded 1s using yara-x built-in profiling
+                // (rules-profiling feature is always enabled in Cargo.toml).
+                if raw_rules_result.is_ok() {
+                    for pd in scanner.slowest_rules(20) {
+                        let condition_ms = pd.condition_exec_time.as_millis() as u64;
+                        let pattern_ms = pd.pattern_matching_time.as_millis() as u64;
+                        if condition_ms + pattern_ms >= 1_000 {
+                            let trait_id = crate::third_party_yara::derive_trait_id(
+                                pd.namespace,
+                                pd.rule,
+                                None,
+                            );
+                            let disable_snippet = format!(
+                                "- id: {trait_id}\n  disable: true\n  reason: \"Slow rule ({}ms)\"",
+                                condition_ms + pattern_ms
+                            );
+                            tracing::warn!(
+                                rule = pd.rule,
+                                namespace = pd.namespace,
+                                condition_ms,
+                                pattern_ms,
+                                disable_snippet,
+                                "Slow YARA rule",
+                            );
                         }
                     }
-                })) {
-                    Ok(result) => result,
-                    Err(panic_payload) => {
-                        let msg = if let Some(s) = panic_payload.downcast_ref::<String>() {
-                            s.clone()
-                        } else if let Some(s) = panic_payload.downcast_ref::<&str>() {
-                            (*s).to_string()
-                        } else {
-                            "unknown panic".to_string()
-                        };
-                        YARA_SCANS_DISABLED_AFTER_PANIC.store(true, Ordering::Relaxed);
-                        tracing::error!(error = %msg, "YARA scan panicked");
-                        Err(anyhow::anyhow!("YARA scan panicked: {}", msg))
-                    }
-                };
-            let scan_elapsed = scan_start.elapsed();
-
-            // Log any rule that exceeded 1s using yara-x built-in profiling
-            // (rules-profiling feature is always enabled in Cargo.toml).
-            if raw_rules_result.is_ok() {
-                for pd in scanner.slowest_rules(20) {
-                    let condition_ms = pd.condition_exec_time.as_millis() as u64;
-                    let pattern_ms = pd.pattern_matching_time.as_millis() as u64;
-                    if condition_ms + pattern_ms >= 1_000 {
-                        let trait_id =
-                            crate::third_party_yara::derive_trait_id(pd.namespace, pd.rule, None);
-                        let disable_snippet = format!(
-                            "- id: {trait_id}\n  disable: true\n  reason: \"Slow rule ({}ms)\"",
-                            condition_ms + pattern_ms
-                        );
-                        tracing::warn!(
-                            rule = pd.rule,
-                            namespace = pd.namespace,
-                            condition_ms,
-                            pattern_ms,
-                            disable_snippet,
-                            "Slow YARA rule",
-                        );
-                    }
+                    scanner.clear_profiling_data();
                 }
-                scanner.clear_profiling_data();
-            }
+                (raw_rules_result, scan_elapsed)
+            });
 
             // Scanner/ScanResults borrow is now released. Evict the cached
             // scanner if the scan failed or took unreasonably long — yara-x may
@@ -3060,7 +3106,7 @@ impl YaraEngine {
         let rules = compiler.build();
         let count = rules.iter().count();
         let cell = self.tiers.entry(FALLBACK_BUCKET.to_string()).or_default();
-        let _ = cell.set(Some(rules));
+        let _ = cell.set(Some(Arc::new(rules)));
         self.populated_tiers.insert(FALLBACK_BUCKET.to_string());
         // Source stays `Empty`: the pre-set cell above is returned directly, so
         // `build_tier` is never consulted for this bucket.

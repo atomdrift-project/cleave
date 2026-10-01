@@ -81,6 +81,7 @@ enum InnoExtractDiagnosticKind {
     UnexpectedLoaderRevision,
     LoaderChecksumMismatch,
     SetupDataVersionUndetermined,
+    LongMemberPathRemapped,
     GenericFailure,
 }
 
@@ -93,6 +94,9 @@ impl InnoExtractDiagnosticKind {
             Self::LoaderChecksumMismatch => {
                 "file/sfx/inno-setup/extraction/loader-checksum-mismatch"
             }
+            Self::LongMemberPathRemapped => {
+                "file/sfx/inno-setup/extraction/long-member-path-remapped"
+            }
             Self::SetupDataVersionUndetermined => {
                 "file/sfx/inno-setup/extraction/setup-data-version-undetermined"
             }
@@ -104,6 +108,9 @@ impl InnoExtractDiagnosticKind {
         match self {
             Self::UnexpectedLoaderRevision => "Innoextract found unexpected setup loader revision",
             Self::LoaderChecksumMismatch => "Innoextract found setup loader checksum mismatch",
+            Self::LongMemberPathRemapped => {
+                "Inno Setup member path exceeded the filesystem limit and was shortened for analysis"
+            }
             Self::SetupDataVersionUndetermined => {
                 "Innoextract could not determine setup data version"
             }
@@ -116,14 +123,23 @@ impl InnoExtractDiagnosticKind {
             Self::UnexpectedLoaderRevision | Self::LoaderChecksumMismatch => {
                 Criticality::Suspicious
             }
+            Self::LongMemberPathRemapped => Criticality::Notable,
             Self::SetupDataVersionUndetermined | Self::GenericFailure => Criticality::Notable,
         }
     }
 
     fn conf(self) -> f32 {
         match self {
+            Self::LongMemberPathRemapped => 0.99,
             Self::GenericFailure => 0.86,
             _ => 0.95,
+        }
+    }
+
+    fn attack(self) -> Option<&'static str> {
+        match self {
+            Self::LongMemberPathRemapped => None,
+            _ => Some("T1027.009"),
         }
     }
 }
@@ -134,36 +150,52 @@ struct InnoExtractDiagnostic {
     message: String,
 }
 
-/// Detect NSIS or Inno Setup SFX markers in raw PE data.
-///
-/// Returns `None` if neither marker is found.
+/// Detect SFX markers in the host bytes, excluding markers inside validated
+/// embedded binaries that are analyzed separately.
 #[must_use]
-pub(crate) fn detect_sfx(data: &[u8]) -> Option<SfxKind> {
-    if memmem::find(data, INNO_MARKER).is_some() {
+pub(crate) fn detect_sfx(
+    data: &[u8],
+    embedded_binaries: &[crate::analyzers::embedded_binary_detector::EmbeddedBinary],
+) -> Option<SfxKind> {
+    if marker_outside_embedded_binary(data, INNO_MARKER, embedded_binaries).is_some() {
         return Some(SfxKind::InnoSetup);
     }
-    if has_strong_nsis_markers(data) {
+    if has_strong_nsis_markers(data, embedded_binaries) {
         return Some(SfxKind::Nsis);
     }
-    if memmem::rfind(data, PYINST_MAGIC).is_some() {
+    if marker_outside_embedded_binary(data, PYINST_MAGIC, embedded_binaries).is_some() {
         return Some(SfxKind::PyInstaller);
     }
     None
 }
 
-fn has_strong_nsis_markers(data: &[u8]) -> bool {
-    if memmem::find(data, NSIS_DEADBEEF).is_none() {
-        return false;
-    }
+fn marker_outside_embedded_binary(
+    data: &[u8],
+    marker: &[u8],
+    embedded_binaries: &[crate::analyzers::embedded_binary_detector::EmbeddedBinary],
+) -> Option<usize> {
+    memmem::find_iter(data, marker).find(|&offset| {
+        !embedded_binaries.iter().any(|binary| {
+            binary.encoding.is_none()
+                && offset >= binary.offset
+                && offset < binary.offset.saturating_add(binary.estimated_size)
+        })
+    })
+}
 
-    [
-        NSIS_VERSION_BANNER,
-        NSIS_ERROR_TITLE,
-        NSIS_ERROR_URL,
-        NSIS_NCRC_SWITCH,
-    ]
-    .iter()
-    .any(|marker| memmem::find(data, marker).is_some())
+fn has_strong_nsis_markers(
+    data: &[u8],
+    embedded_binaries: &[crate::analyzers::embedded_binary_detector::EmbeddedBinary],
+) -> bool {
+    marker_outside_embedded_binary(data, NSIS_DEADBEEF, embedded_binaries).is_some()
+        && [
+            NSIS_VERSION_BANNER,
+            NSIS_ERROR_TITLE,
+            NSIS_ERROR_URL,
+            NSIS_NCRC_SWITCH,
+        ]
+        .iter()
+        .any(|marker| marker_outside_embedded_binary(data, marker, embedded_binaries).is_some())
 }
 
 /// Attempt to extract a detected SFX installer and analyze its contents.
@@ -178,13 +210,14 @@ pub(crate) fn analyze_sfx(
     capability_mapper: Option<Arc<CapabilityMapper>>,
     yara_engine: Option<Arc<YaraEngine>>,
     archive_config: Option<&ArchiveAnalyzerConfig>,
+    embedded_binaries: &[crate::analyzers::embedded_binary_detector::EmbeddedBinary],
 ) -> SfxResult {
     let marker = match kind {
         SfxKind::Nsis => NSIS_DEADBEEF,
         SfxKind::InnoSetup => INNO_MARKER,
         SfxKind::PyInstaller => PYINST_MAGIC,
     };
-    let marker_offset = memmem::find(data, marker);
+    let marker_offset = marker_outside_embedded_binary(data, marker, embedded_binaries);
 
     let extraction = try_extract(
         file_path,
@@ -253,7 +286,7 @@ fn build_innoextract_finding(diagnostic: &InnoExtractDiagnostic) -> Finding {
         conf: diagnostic.kind.conf(),
         crit: diagnostic.kind.crit(),
         mbc: None,
-        attack: Some("T1027.009".into()),
+        attack: diagnostic.kind.attack().map(Into::into),
         evidence: vec![Evidence {
             method: "innoextract".to_string(),
             source: "sfx_detector".to_string(),
@@ -470,15 +503,44 @@ fn run_innoextract(src: &Path, out: &Path) -> InnoExtractResult {
             }],
         };
     };
-    match std::process::Command::new(command)
-        .args(["--extract", "--output-dir"])
-        .arg(out)
-        .arg(src)
+    let args = [
+        std::ffi::OsStr::new("--extract"),
+        std::ffi::OsStr::new("--output-dir"),
+        out.as_os_str(),
+        src.as_os_str(),
+    ];
+    match std::process::Command::new(&command)
+        .args(args)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
         .output()
     {
         Ok(output) => {
+            #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+            if !output.status.success()
+                && crate::analyzers::inno_long_path::reports_overlong_output(&output.stderr)
+                && clear_extraction_directory(out).is_ok()
+            {
+                match crate::analyzers::inno_long_path::run(command.as_os_str(), &args) {
+                    Ok((status, _stderr, remapped))
+                        if libc::WIFEXITED(status)
+                            && libc::WEXITSTATUS(status) == 0
+                            && remapped > 0 =>
+                    {
+                        return InnoExtractResult {
+                            extracted: true,
+                            diagnostics: vec![InnoExtractDiagnostic {
+                                kind: InnoExtractDiagnosticKind::LongMemberPathRemapped,
+                                message: format!(
+                                    "shortened {remapped} overlong Inno Setup output path(s) for analysis"
+                                ),
+                            }],
+                        };
+                    }
+                    _ => {}
+                }
+            }
+
             let stderr = String::from_utf8_lossy(&output.stderr);
             InnoExtractResult {
                 extracted: output.status.success(),
@@ -493,6 +555,19 @@ fn run_innoextract(src: &Path, out: &Path) -> InnoExtractResult {
             }],
         },
     }
+}
+
+fn clear_extraction_directory(path: &Path) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(path)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            std::fs::remove_dir_all(entry.path())?;
+        } else {
+            std::fs::remove_file(entry.path())?;
+        }
+    }
+    Ok(())
 }
 
 fn classify_innoextract_diagnostics(output: &str) -> Vec<InnoExtractDiagnostic> {
@@ -589,11 +664,29 @@ mod tests {
         buf
     }
 
+    fn make_synthetic_pe(buf: &mut Vec<u8>, offset: usize) {
+        while buf.len() < offset + 4096 {
+            buf.push(0);
+        }
+        buf[offset..offset + 2].copy_from_slice(b"MZ");
+        buf[offset + 0x3C..offset + 0x40].copy_from_slice(&0x80u32.to_le_bytes());
+        let pe = offset + 0x80;
+        buf[pe..pe + 4].copy_from_slice(b"PE\0\0");
+        buf[pe + 4..pe + 6].copy_from_slice(&0x014Cu16.to_le_bytes());
+        buf[pe + 6..pe + 8].copy_from_slice(&1u16.to_le_bytes());
+        buf[pe + 20..pe + 22].copy_from_slice(&0x00E0u16.to_le_bytes());
+        buf[pe + 24..pe + 26].copy_from_slice(&0x010Bu16.to_le_bytes());
+        buf[pe + 80..pe + 84].copy_from_slice(&4096u32.to_le_bytes());
+        let section = pe + 24 + 0xE0;
+        buf[section + 16..section + 20].copy_from_slice(&512u32.to_le_bytes());
+        buf[section + 20..section + 24].copy_from_slice(&512u32.to_le_bytes());
+    }
+
     #[test]
     fn test_detect_nsis_deadbeef() {
         let mut data = pe_stub();
         data.extend_from_slice(NSIS_DEADBEEF);
-        assert_eq!(detect_sfx(&data), None);
+        assert_eq!(detect_sfx(&data, &[]), None);
     }
 
     #[test]
@@ -601,14 +694,98 @@ mod tests {
         let mut data = pe_stub();
         data.extend_from_slice(NSIS_DEADBEEF);
         data.extend_from_slice(NSIS_ERROR_TITLE);
-        assert_eq!(detect_sfx(&data), Some(SfxKind::Nsis));
+        assert_eq!(detect_sfx(&data, &[]), Some(SfxKind::Nsis));
     }
 
     #[test]
     fn test_detect_inno_marker() {
         let mut data = pe_stub();
         data.extend_from_slice(INNO_MARKER);
-        assert_eq!(detect_sfx(&data), Some(SfxKind::InnoSetup));
+        assert_eq!(detect_sfx(&data, &[]), Some(SfxKind::InnoSetup));
+    }
+
+    #[test]
+    fn ignores_inno_marker_inside_validated_embedded_pe() {
+        use crate::analyzers::embedded_binary_detector::{EmbeddedBinary, EmbeddedKind};
+
+        let mut data = vec![0u8; 1024];
+        data[..2].copy_from_slice(b"MZ");
+        let offset = 512;
+        data[offset..offset + 2].copy_from_slice(b"MZ");
+        data[offset + 64..offset + 64 + INNO_MARKER.len()].copy_from_slice(INNO_MARKER);
+        let embedded = [EmbeddedBinary {
+            offset,
+            kind: EmbeddedKind::Pe32,
+            estimated_size: 512,
+            encoding: None,
+            format_hint: Some("inno"),
+        }];
+
+        assert_eq!(detect_sfx(&data, &embedded), None);
+    }
+
+    #[test]
+    fn embedded_scanner_span_prevents_nested_inno_host_classification() {
+        let mut data = vec![0u8; 8192];
+        data[..2].copy_from_slice(b"MZ");
+        let offset = 512;
+        make_synthetic_pe(&mut data, offset);
+        data[offset + 1024..offset + 1024 + INNO_MARKER.len()].copy_from_slice(INNO_MARKER);
+
+        let embedded =
+            crate::analyzers::embedded_binary_detector::scan_for_embedded_binaries(&data, None);
+        assert!(
+            embedded
+                .iter()
+                .any(|binary| { binary.offset == offset && binary.format_hint == Some("inno") })
+        );
+        assert_eq!(detect_sfx(&data, &embedded), None);
+    }
+
+    #[test]
+    fn root_inno_marker_still_detected_alongside_nested_inno() {
+        use crate::analyzers::embedded_binary_detector::{EmbeddedBinary, EmbeddedKind};
+
+        let mut data = vec![0u8; 1024];
+        data[..2].copy_from_slice(b"MZ");
+        data[256..256 + INNO_MARKER.len()].copy_from_slice(INNO_MARKER);
+        let offset = 512;
+        data[offset..offset + 2].copy_from_slice(b"MZ");
+        data[offset + 64..offset + 64 + INNO_MARKER.len()].copy_from_slice(INNO_MARKER);
+        let embedded = [EmbeddedBinary {
+            offset,
+            kind: EmbeddedKind::Pe32,
+            estimated_size: 512,
+            encoding: None,
+            format_hint: Some("inno"),
+        }];
+
+        assert_eq!(detect_sfx(&data, &embedded), Some(SfxKind::InnoSetup));
+        assert_eq!(
+            marker_outside_embedded_binary(&data, INNO_MARKER, &embedded),
+            Some(256)
+        );
+    }
+
+    #[test]
+    fn ignores_nsis_markers_inside_validated_embedded_pe() {
+        use crate::analyzers::embedded_binary_detector::{EmbeddedBinary, EmbeddedKind};
+
+        let mut data = vec![0u8; 1024];
+        data[..2].copy_from_slice(b"MZ");
+        let offset = 512;
+        data[offset..offset + 2].copy_from_slice(b"MZ");
+        data[offset + 64..offset + 64 + NSIS_DEADBEEF.len()].copy_from_slice(NSIS_DEADBEEF);
+        data[offset + 96..offset + 96 + NSIS_ERROR_TITLE.len()].copy_from_slice(NSIS_ERROR_TITLE);
+        let embedded = [EmbeddedBinary {
+            offset,
+            kind: EmbeddedKind::Pe32,
+            estimated_size: 512,
+            encoding: None,
+            format_hint: Some("nsis"),
+        }];
+
+        assert_eq!(detect_sfx(&data, &embedded), None);
     }
 
     #[test]
@@ -616,18 +793,18 @@ mod tests {
         let mut data = pe_stub();
         data.extend_from_slice(INNO_MARKER);
         data.extend_from_slice(NSIS_DEADBEEF);
-        assert_eq!(detect_sfx(&data), Some(SfxKind::InnoSetup));
+        assert_eq!(detect_sfx(&data, &[]), Some(SfxKind::InnoSetup));
     }
 
     #[test]
     fn test_detect_none_on_benign_data() {
         let data = b"This is a normal binary without any installer markers.".to_vec();
-        assert_eq!(detect_sfx(&data), None);
+        assert_eq!(detect_sfx(&data, &[]), None);
     }
 
     #[test]
     fn test_detect_none_on_empty() {
-        assert_eq!(detect_sfx(&[]), None);
+        assert_eq!(detect_sfx(&[], &[]), None);
     }
 
     #[test]
@@ -728,5 +905,20 @@ mod tests {
         );
         assert_eq!(finding.crit, Criticality::Suspicious);
         assert_eq!(finding.evidence[0].value, "setup loader checksum mismatch");
+    }
+
+    #[test]
+    fn test_build_inno_long_member_path_finding_is_not_malware_attribution() {
+        let finding = build_innoextract_finding(&InnoExtractDiagnostic {
+            kind: InnoExtractDiagnosticKind::LongMemberPathRemapped,
+            message: "shortened 1 overlong Inno Setup output path(s) for analysis".to_string(),
+        });
+
+        assert_eq!(
+            finding.id,
+            "file/sfx/inno-setup/extraction/long-member-path-remapped"
+        );
+        assert_eq!(finding.crit, Criticality::Notable);
+        assert_eq!(finding.attack, None);
     }
 }

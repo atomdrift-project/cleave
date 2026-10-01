@@ -1963,6 +1963,7 @@ pub(crate) fn report_from_file_analysis(
     report.cache_hit = true;
     report.traits = fa.traits;
     report.findings = fa.findings;
+    report.suppressions = fa.suppressions;
     report.context = fa.context;
     report.structure = fa.structure;
     report.strings = fa.strings;
@@ -3089,6 +3090,12 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
                         report.findings.push(finding);
                     }
                 }
+                // This YARA pass runs after the analyzer's normal trait pass
+                // for source and script files. Re-apply `unless:` handling now
+                // that configured third-party YARA findings and their same-file
+                // YAML context findings are both present.
+                capability_mapper
+                    .apply_retroactive_unless_suppression_to_findings(&mut report.findings, None);
                 if !report.metadata.tools_used.iter().any(|t| t == "yara-x") {
                     report.metadata.tools_used.push("yara-x".to_string());
                 }
@@ -3126,6 +3133,15 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     // dropping it would erase the composite's cross-file provenance. Nor is one
     // that outranks every leg it fired on: that wrapper *is* the verdict, not a
     // restatement of it — see `drops_as_low_value`.
+    // Parent-scoped downgrades use each child's exact immediate parent. This
+    // also covers nested decoded/container files without admitting siblings or
+    // more distant ancestors as context.
+    capability_mapper.reeval_parent_scope_in_file_tree(
+        &mut report,
+        file_data,
+        crate::composite_rules::FileType::from(file_type),
+    );
+
     let removed = capability_mapper.filter_low_value(&mut report);
     if removed > 0 {
         tracing::debug!("Filtered {} low-value composite 'any' rules", removed);
@@ -3430,25 +3446,25 @@ where
     // thread (seven archives carrying one 10 MB bundle start in the same
     // wave) pulls the next path from this queue instead of idling until the
     // owner finishes — see `ReportFlight::wait_yielding`.
-    let wait_work = crate::rayon_nest::install_wait_work(&pull);
-    let started = AtomicUsize::new(0);
-    (0..lanes).into_par_iter().for_each(|_| {
-        started.fetch_add(1, Ordering::AcqRel);
-        loop {
-            // Once every lane runs (no lane job is left in any queue to be
-            // stolen and nested), finish inner work already in flight — a
-            // whale's member and trait chunks — before admitting another
-            // path. A 45 CPU-second bundle otherwise runs on its lane alone
-            // while sixteen lanes stay busy with paths that could wait.
-            if started.load(Ordering::Acquire) >= lanes {
-                while rayon::yield_now() == Some(rayon::Yield::Executed) {}
+    crate::rayon_nest::with_wait_work(&pull, || {
+        let started = AtomicUsize::new(0);
+        (0..lanes).into_par_iter().for_each(|_| {
+            started.fetch_add(1, Ordering::AcqRel);
+            loop {
+                // Once every lane runs (no lane job is left in any queue to be
+                // stolen and nested), finish inner work already in flight — a
+                // whale's member and trait chunks — before admitting another
+                // path. A 45 CPU-second bundle otherwise runs on its lane alone
+                // while sixteen lanes stay busy with paths that could wait.
+                if started.load(Ordering::Acquire) >= lanes {
+                    while rayon::yield_now() == Some(rayon::Yield::Executed) {}
+                }
+                if !pull() {
+                    break;
+                }
             }
-            if !pull() {
-                break;
-            }
-        }
+        });
     });
-    drop(wait_work);
     crate::rayon_nest::set_toplevel_pending(usize::MAX);
 }
 

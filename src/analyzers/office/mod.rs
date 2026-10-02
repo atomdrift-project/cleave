@@ -12,7 +12,6 @@ pub(crate) mod vba_symbols;
 
 use super::subfile::attach_member;
 use super::{AnalysisInput, Analyzer, FileType, analyzer_for_file_type_arc};
-use crate::capabilities::CapabilityMapper;
 use crate::types::file_analysis::ARCHIVE_DELIMITER;
 use crate::types::office_metrics::{OleMetrics, OoxmlMetrics, XlmMetrics};
 use crate::types::{AnalysisReport, ArchiveEntry, Criticality, Finding, FindingKind, TargetInfo};
@@ -93,7 +92,7 @@ fn target_is_remote(target: &str) -> bool {
 /// injection, DDE links, and embedded executables.
 #[derive(Debug)]
 pub(crate) struct OfficeAnalyzer {
-    capability_mapper: Arc<CapabilityMapper>,
+    engine: crate::Engine,
     cancellation: Option<Arc<std::sync::atomic::AtomicBool>>,
 }
 
@@ -101,14 +100,14 @@ impl OfficeAnalyzer {
     #[must_use]
     pub(crate) fn new() -> Self {
         Self {
-            capability_mapper: Arc::new(CapabilityMapper::empty()),
+            engine: crate::Engine::empty(),
             cancellation: None,
         }
     }
 
     #[must_use]
-    pub(crate) fn with_capability_mapper_arc(mut self, mapper: Arc<CapabilityMapper>) -> Self {
-        self.capability_mapper = mapper;
+    pub(crate) fn with_engine(mut self, engine: crate::Engine) -> Self {
+        self.engine = engine;
         self
     }
 
@@ -133,7 +132,9 @@ impl OfficeAnalyzer {
         hasher.update(data);
         let sha256 = hex::encode(hasher.finalize());
 
-        let office_ctx = crate::analysis_context::AnalysisContext::open(file_path, data).ok();
+        let office_ctx = Some(crate::analysis_context::AnalysisContext::open(
+            file_path, data,
+        ));
         let office_archive_entries = if matches!(file_type, FileType::Ooxml) {
             office_ctx
                 .as_ref()
@@ -284,7 +285,8 @@ impl OfficeAnalyzer {
 
         // Delegate pattern detection to capability mapper (YAML traits + YARA),
         // reusing the filefacts parse already opened for VBA symbols.
-        self.capability_mapper
+        self.engine
+            .rules()
             .evaluate_and_merge_findings_with_precomputed(
                 &mut report,
                 data,
@@ -299,7 +301,7 @@ impl OfficeAnalyzer {
         // (e.g., composites requiring both OOXML metadata markers AND VBA behavioral traits)
         let nested_findings: Vec<_> = report.findings[findings_before_subfiles..].to_vec();
         if !nested_findings.is_empty() {
-            let container_findings = self.capability_mapper.evaluate_container_composites(
+            let container_findings = self.engine.rules().evaluate_container_composites(
                 &report,
                 &nested_findings,
                 &report.target.file_type,
@@ -323,7 +325,8 @@ impl OfficeAnalyzer {
         // complete. Scoped to the office report on purpose: the same pass over
         // a whole archive would resolve `unless:` legs across members that the
         // scope rules keep apart.
-        self.capability_mapper
+        self.engine
+            .rules()
             .apply_retroactive_unless_suppression_to_findings(&mut report.findings, None);
 
         report
@@ -439,7 +442,7 @@ impl OfficeAnalyzer {
             agg.trigger_handler_count = counter("office.vba.trigger_handler_count");
             agg.distinct_trigger_count = counter("office.vba.distinct_trigger_count");
             agg.mean_identifier_length =
-                m.get("office.vba.mean_identifier_length").unwrap_or(0.0) as f32;
+                m.get("office.vba.avg_identifier_length").unwrap_or(0.0) as f32;
             agg.identifier_entropy = m.get("office.vba.identifier_entropy").unwrap_or(0.0) as f32;
         }
 
@@ -547,9 +550,7 @@ impl OfficeAnalyzer {
         doc_name: &str,
         cancellation: Option<&Arc<std::sync::atomic::AtomicBool>>,
     ) {
-        let Some(analyzer) =
-            analyzer_for_file_type_arc(&FileType::Vbs, Some(self.capability_mapper.clone()))
-        else {
+        let Some(analyzer) = analyzer_for_file_type_arc(&FileType::Vbs, &self.engine) else {
             return;
         };
 
@@ -565,8 +566,10 @@ impl OfficeAnalyzer {
 
             // filefacts is the string-extraction authority and source parser:
             // open the VBA module once and thread it into the sub-file analyzer.
-            let vba_ctx =
-                crate::analysis_context::AnalysisContext::open(virtual_path, vba_bytes).ok();
+            let vba_ctx = Some(crate::analysis_context::AnalysisContext::open(
+                virtual_path,
+                vba_bytes,
+            ));
             let strings: std::sync::Arc<[stng::ExtractedString]> = vba_ctx
                 .as_ref()
                 .map(crate::analysis_context::AnalysisContext::text_rows)
@@ -586,6 +589,7 @@ impl OfficeAnalyzer {
                     FileType::Vbs,
                     &member_path,
                     &virtual_path_str,
+                    &self.engine,
                 ),
                 Err(e) => {
                     tracing::warn!(
@@ -622,9 +626,7 @@ impl OfficeAnalyzer {
                 ole2::EmbeddedExecKind::Elf => (FileType::Elf, "elf"),
             };
 
-            let Some(analyzer) =
-                analyzer_for_file_type_arc(&file_type, Some(self.capability_mapper.clone()))
-            else {
+            let Some(analyzer) = analyzer_for_file_type_arc(&file_type, &self.engine) else {
                 continue;
             };
 
@@ -637,8 +639,11 @@ impl OfficeAnalyzer {
 
             // filefacts is the string-extraction authority: open the embedded
             // payload once and thread it into the sub-file analyzer.
-            let exec_ctx =
-                crate::analysis_context::AnalysisContext::open(virtual_path, &exec.data).ok();
+            let exec_ctx = Some(crate::analysis_context::AnalysisContext::open_with(
+                self.engine.filefacts_options(),
+                virtual_path,
+                &exec.data,
+            ));
             let strings: std::sync::Arc<[stng::ExtractedString]> = exec_ctx
                 .as_ref()
                 .map(crate::analysis_context::AnalysisContext::text_rows)
@@ -659,6 +664,7 @@ impl OfficeAnalyzer {
                     file_type,
                     &member_path,
                     &virtual_path_str,
+                    &self.engine,
                 ),
                 Err(e) => {
                     tracing::warn!(
@@ -718,15 +724,16 @@ impl OfficeAnalyzer {
             );
             return;
         }
-        let Some(analyzer) = super::subfile::pick_analyzer(file_type, &self.capability_mapper)
-        else {
+        let Some(analyzer) = super::subfile::pick_analyzer(file_type, &self.engine) else {
             return;
         };
 
         // Reuse the detection above rather than running it a second time.
-        let ctx =
-            crate::analysis_context::AnalysisContext::open_with_fileid(virtual_path, data, fileid)
-                .ok();
+        let ctx = Some(crate::analysis_context::AnalysisContext::open_with(
+            filefacts::OpenOptions::new().fileid(fileid),
+            virtual_path,
+            data,
+        ));
         let strings: std::sync::Arc<[stng::ExtractedString]> = ctx
             .as_ref()
             .map(crate::analysis_context::AnalysisContext::text_rows)
@@ -746,6 +753,7 @@ impl OfficeAnalyzer {
                 file_type,
                 member_path,
                 &virtual_path_str,
+                &self.engine,
             ),
             Err(e) => {
                 tracing::warn!(

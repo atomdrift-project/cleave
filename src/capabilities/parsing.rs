@@ -10,7 +10,9 @@ use crate::composite_rules::{
     CommentQuery, EncodedQuery, LiteralQuery, PathQuery, RawQuery, SectionQuery, SymbolQuery,
     TextQuery, TreeSitterQuery,
 };
-use crate::composite_rules::{CompositeTrait, FileType as RuleFileType, Platform, TraitDefinition};
+use crate::composite_rules::{
+    CompositeTrait, Condition, FileType as RuleFileType, Platform, TraitDefinition,
+};
 use crate::types::Criticality;
 use std::collections::HashSet;
 
@@ -445,7 +447,7 @@ pub(crate) fn apply_trait_defaults(
     };
 
     if enable_precision_scoring {
-        trait_def.precision = Some(super::validation::calculate_trait_precision(&trait_def));
+        trait_def.precision = Some(super::precision::calculate_trait_precision(&trait_def));
     }
 
     trait_def
@@ -577,6 +579,7 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                     RuleFileType::PkgInfo,
                     RuleFileType::SrcInfo,
                     RuleFileType::Registry,
+                    RuleFileType::Reg,
                     RuleFileType::Plist,
                     RuleFileType::Nib,
                     RuleFileType::Lnk,
@@ -1713,6 +1716,44 @@ fn regex_length_warning(trait_id: &str, pattern: &str) -> String {
         pattern.len(),
         pattern
     )
+}
+
+/// Auto-prefix trait references in composite rule conditions.
+///
+/// If a trait reference doesn't contain '::' or '/', prepend the given prefix with ::.
+/// This allows local trait references within a file to be automatically namespaced.
+pub(crate) fn autoprefix_trait_refs(rule: &mut CompositeTrait, prefix: &str) {
+    fn prefix_conditions(conditions: &mut [Condition], prefix: &str) {
+        for cond in conditions {
+            if let Condition::Trait { id } = cond {
+                // Only prefix if ID doesn't already contain '::' or '/' (i.e., it's local to this file)
+                if !id.contains("::") && !id.contains('/') {
+                    *id = format!("{}::{}", prefix, id);
+                }
+            }
+        }
+    }
+
+    if let Some(ref mut conditions) = rule.all {
+        prefix_conditions(conditions, prefix);
+    }
+    if let Some(ref mut conditions) = rule.any {
+        prefix_conditions(conditions, prefix);
+    }
+    if let Some(ref mut conditions) = rule.unless {
+        prefix_conditions(conditions, prefix);
+    }
+    if let Some(ref mut downgrade) = rule.downgrade {
+        if let Some(ref mut conditions) = downgrade.all {
+            prefix_conditions(conditions, prefix);
+        }
+        if let Some(ref mut conditions) = downgrade.any {
+            prefix_conditions(conditions, prefix);
+        }
+        if let Some(ref mut conditions) = downgrade.none {
+            prefix_conditions(conditions, prefix);
+        }
+    }
 }
 
 #[cfg(test)]

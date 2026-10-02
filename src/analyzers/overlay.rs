@@ -5,7 +5,6 @@
 
 use crate::analyzers::Analyzer;
 use crate::analyzers::archive::{ArchiveAnalyzer, ArchiveAnalyzerConfig};
-use crate::capabilities::CapabilityMapper;
 use crate::types::{AnalysisReport, Criticality, Evidence, Finding, FindingKind, TargetInfo};
 use crate::yara_engine::YaraEngine;
 use anyhow::{Context, Result};
@@ -74,7 +73,7 @@ pub(crate) fn detect_archive_from_bytes(data: &[u8]) -> Option<&'static str> {
 /// # Arguments
 /// * `overlay_data` - The raw overlay bytes (data after binary image ends)
 /// * `binary_path` - Original binary path (for error messages)
-/// * `capability_mapper` - Shared capability mapper (optional)
+/// * `engine` - The engine the host binary is analyzed under
 /// * `yara_engine` - Shared YARA engine (optional)
 ///
 /// # Returns
@@ -83,7 +82,7 @@ pub(crate) fn detect_archive_from_bytes(data: &[u8]) -> Option<&'static str> {
 pub(crate) fn analyze_overlay(
     overlay_data: &[u8],
     binary_path: &str,
-    capability_mapper: Option<Arc<CapabilityMapper>>,
+    engine: &crate::Engine,
     yara_engine: Option<Arc<YaraEngine>>,
     archive_config: Option<&ArchiveAnalyzerConfig>,
 ) -> Result<Option<OverlayAnalysis>> {
@@ -114,9 +113,7 @@ pub(crate) fn analyze_overlay(
         analyzer = config.apply(analyzer);
     }
 
-    if let Some(mapper) = capability_mapper {
-        analyzer = analyzer.with_capability_mapper_arc(mapper);
-    }
+    analyzer = analyzer.with_engine(engine.clone());
 
     if let Some(engine) = yara_engine {
         analyzer = analyzer.with_yara_arc(engine);

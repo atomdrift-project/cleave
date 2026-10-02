@@ -551,7 +551,8 @@ fn archive_entry_json(entry: &ArchiveEntry) -> serde_json::Value {
 ///   via `finding_spans`.
 /// - context lines (note_location + emission), precompacted facts, folded kv,
 ///   filefacts references (link_flagged_references), identity/scalars.
-fn rebuild_slim_member(mut file: FileAnalysis) -> FileAnalysis {
+fn rebuild_slim_member(mut file: FileAnalysis, engine: &crate::Engine) -> FileAnalysis {
+    let container_refs = engine.rules().container_ref_index();
     for finding in &mut file.findings {
         // A finding some loaded rule references stays full: container-scope
         // composite evaluation runs AFTER the fold over the folded member
@@ -563,7 +564,7 @@ fn rebuild_slim_member(mut file: FileAnalysis) -> FileAnalysis {
         // the TraitRefIndex restricted to container-scope-capable rules — the
         // full index exempted most member findings and gave back the entire
         // memory win (member components exist largely to feed composites).
-        if crate::shared_resources::trait_referenced_at_container_scope(&finding.id) {
+        if container_refs.possibly_referenced(&finding.id) {
             continue;
         }
         if finding.precomputed_spans.is_none() {
@@ -613,7 +614,7 @@ impl MemberAccumulator {
     /// Fold one member's result into the aggregate, consuming and dropping it.
     /// Member order is preserved because callers fold windows sequentially and
     /// each window's `par_iter` collect is index-ordered.
-    fn fold(&mut self, result: MemberAnalysisResult) {
+    fn fold(&mut self, result: MemberAnalysisResult, engine: &crate::Engine) {
         if let Some(source) = result.go_source {
             if source.is_empty() {
                 self.go_incomplete = true;
@@ -649,7 +650,8 @@ impl MemberAccumulator {
             }
         }
 
-        let (mut file_entry, nested_files, archive_contents) = file_report.into_file_analysis(0);
+        let (mut file_entry, nested_files, archive_contents) =
+            file_report.into_file_analysis(0, engine);
         file_entry.path = result.entry_path.clone();
         file_entry.depth = 1;
         file_entry.compute_summary();
@@ -700,8 +702,8 @@ impl MemberAccumulator {
         // pre-rewrite spans (measured: 223 findings lost spans on the
         // 54k-member manifest). Wrappers are rare, so keeping them costs
         // little.
-        if crate::shared_resources::compact_member_retention() && nested_files.is_empty() {
-            file_entry = rebuild_slim_member(file_entry);
+        if engine.compact_members() && nested_files.is_empty() {
+            file_entry = rebuild_slim_member(file_entry, engine);
         }
         self.collected_files.push(file_entry);
         self.collected_archive_entries
@@ -715,7 +717,7 @@ impl MemberAccumulator {
             nested_file.depth += 1;
             nested.push(nested_file);
         }
-        if crate::shared_resources::compact_member_retention() {
+        if engine.compact_members() {
             // A record stays full when finalize still re-reads its evidence:
             // - wrappers (another path extends this one at a `!` or `##`
             //   boundary): aggregate attribution rewrites their evidence, and
@@ -743,7 +745,7 @@ impl MemberAccumulator {
             for (i, is_exempt) in exempt.into_iter().enumerate() {
                 if !is_exempt {
                     let f = std::mem::take(&mut nested[i]);
-                    nested[i] = rebuild_slim_member(f);
+                    nested[i] = rebuild_slim_member(f, engine);
                 }
             }
         }
@@ -1160,7 +1162,7 @@ impl<'a: 'scope, 'scope> MemberWindow<'a, 'scope> {
                     parallel,
                     |member| member_is_heavy(member.data.len()),
                     |member| analyzer.analyze_one_member(member, slow_log_label),
-                    |result| acc.fold(result),
+                    |result| acc.fold(result, &analyzer.engine),
                 );
             }
             acc
@@ -1209,7 +1211,7 @@ impl<'a: 'scope, 'scope> MemberWindow<'a, 'scope> {
             parallel,
             |member| member_is_heavy(member.data.len()),
             |member| analyzer.analyze_one_member(member, label),
-            |result| acc.fold(result),
+            |result| acc.fold(result, &analyzer.engine),
         );
         self.window.clear();
         self.window_bytes = 0;
@@ -1484,9 +1486,7 @@ impl ArchiveAnalyzer {
             .with_depth(self.current_depth + 1)
             .with_archive_prefix(nested_prefix);
 
-        if let Some(ref mapper) = self.capability_mapper {
-            nested = nested.with_capability_mapper_arc(mapper.clone());
-        }
+        nested = nested.with_engine(self.engine.clone());
         if let Some(ref engine) = self.yara_engine {
             nested = nested.with_yara_arc(engine.clone());
         }
@@ -1614,6 +1614,18 @@ impl ArchiveAnalyzer {
         }
         let is_archive = file_type.is_archive();
         let file_type_key = file_type.label();
+        // The settings this member is analyzed under: the engine's, with rizin
+        // off for a member whose disassembly is skipped. They key the cache
+        // and the in-process sharing below, so a skipped member's report (no
+        // rizin facts) is never served to an analysis that runs rizin.
+        let member_settings = match Self::archive_member_rizin_skip_reason(relative_path, file_type)
+        {
+            Some(_) if self.engine.radare2() => crate::engine::Settings {
+                radare2: false,
+                ..self.engine.settings().clone()
+            },
+            _ => self.engine.settings().clone(),
+        };
         let report_type_key = crate::analysis_cache::report_type_key(
             file_type_key,
             std::path::Path::new(relative_path),
@@ -1630,7 +1642,9 @@ impl ArchiveAnalyzer {
                 sha256,
                 &report_type_key,
                 options,
+                &member_settings,
                 relative_path,
+                Some(self.engine.rules().as_ref()),
             ) {
                 report.analysis_timestamp = Some(chrono::Utc::now());
                 tracing::debug!(
@@ -1645,7 +1659,9 @@ impl ArchiveAnalyzer {
                 sha256,
                 file_type_key,
                 options,
+                &member_settings,
                 relative_path,
+                Some(self.engine.rules().as_ref()),
             ) {
                 let mut report = crate::report_from_file_analysis(fa, relative_path.to_string());
                 crate::restamp_path_derived_values(&mut report, Path::new(relative_path));
@@ -1654,7 +1670,12 @@ impl ArchiveAnalyzer {
             }
         }
 
-        let flight = crate::analysis_cache::acquire_member_flight(sha256, file_type_key, options);
+        let flight = crate::analysis_cache::acquire_member_flight(
+            sha256,
+            file_type_key,
+            options,
+            &member_settings,
+        );
         flight.set_label(relative_path);
         if !flight.is_owner() {
             let on_pool = rayon::current_thread_index().is_some();
@@ -1793,7 +1814,11 @@ impl ArchiveAnalyzer {
                 // path it was evaluated for. Sharing it across paths let
                 // `testing/harness` basename findings from one archive
                 // surface on another's container record.
-                if !crate::shared_resources::adopt_report_under(&mut report, relative_path) {
+                if !crate::shared_resources::adopt_report_under(
+                    &mut report,
+                    relative_path,
+                    self.engine.rules(),
+                ) {
                     // Refused, so the report still carries its owner's path.
                     let owner_path = report.target.path.as_str();
                     tracing::debug!(
@@ -1801,7 +1826,7 @@ impl ArchiveAnalyzer {
                         relative_path,
                         owner_path,
                         children = report.files.len() + report.archive_contents.len(),
-                        differing = ?crate::shared_resources::paths_inequivalent_inputs(owner_path, relative_path),
+                        differing = ?self.engine.rules().paths_inequivalent_inputs(owner_path, relative_path),
                         "Archive member single-flight hit is path-bound; analyzing independently"
                     );
                     return self.analyze_extracted_member_uncached(
@@ -1844,21 +1869,18 @@ impl ArchiveAnalyzer {
                     // The revision the member was actually evaluated under, so
                     // a traits reload landing mid-archive cannot file this
                     // member's verdict under the new rules' fingerprint.
-                    let traits_revision =
-                        self.capability_mapper.as_ref().map_or_else(
-                            crate::analysis_cache::store_revision_without_mapper,
-                            |m| m.traits_revision(),
-                        );
+                    let traits_revision = self.engine.rules().traits_revision();
                     if !report.files.is_empty() || !report.archive_contents.is_empty() {
                         crate::analysis_cache::report_cache_store(
                             sha256,
                             &report_type_key,
                             options,
+                            &member_settings,
                             report,
                             traits_revision,
                         );
                     }
-                    let mut fa = report.to_file_analysis(0);
+                    let mut fa = report.to_file_analysis(0, &self.engine);
                     // Negative path matches are path-dependent too. Keep the
                     // origin so the cache can check equivalence on every hit.
                     fa.path = relative_path.to_string();
@@ -1870,6 +1892,7 @@ impl ArchiveAnalyzer {
                         sha256,
                         file_type_key,
                         options,
+                        &member_settings,
                         &fa,
                         report,
                         traits_revision,
@@ -2069,9 +2092,7 @@ impl ArchiveAnalyzer {
             // and cancellation for its own payloads.
             if *file_type == FileType::Pe {
                 let mut pe = crate::analyzers::pe::PEAnalyzer::new()
-                    .with_capability_mapper_arc(self.capability_mapper.clone().unwrap_or_else(
-                        || std::sync::Arc::new(crate::capabilities::CapabilityMapper::empty()),
-                    ))
+                    .with_engine(self.engine.clone())
                     .with_cancellation(self.cancelled.clone())
                     .with_archive_config(self.child_archive_config());
                 if let Some(yara) = self.yara_engine.clone() {
@@ -2079,10 +2100,7 @@ impl ArchiveAnalyzer {
                 }
                 Some(Box::new(pe) as Box<dyn crate::analyzers::Analyzer>)
             } else {
-                crate::analyzers::analyzer_for_file_type_arc(
-                    file_type,
-                    self.capability_mapper.clone(),
-                )
+                crate::analyzers::analyzer_for_file_type_arc(file_type, &self.engine)
             }
         } {
             let extract_payloads = Self::should_extract_archive_payloads(file_type);
@@ -2115,20 +2133,21 @@ impl ArchiveAnalyzer {
             // filefacts is the string authority and the parser: open the
             // member once and thread it into the analyzer (below) so it is
             // parsed a single time, regardless of member type.
-            // Thread-local, and scoped to the parse itself. This skip is a
-            // per-member decision, but `scoped_disable` mutes rizin for the
-            // whole PROCESS — and members fan out across rayon, so muting it
-            // here stripped symbols and metrics from whatever binary another
-            // thread happened to be parsing at that instant (measured: an ARM
-            // ELF silently lost `binary.leaf_func_count`, dropping a trait and
-            // moving its ML score). Worker mode analyses several samples
-            // concurrently in one process, so the blast radius reached
-            // unrelated jobs.
-            let member_ctx = {
-                let _rizin_disable =
-                    skip_rizin_reason.map(|_| filefacts::rizin::scoped_disable_current_thread());
-                crate::analysis_context::AnalysisContext::open(logical_path, data).ok()
-            };
+            // The rizin skip is per member, so it is a setting of this member's
+            // parse, not a mute: members fan out across rayon, and the old
+            // process-wide mute stripped symbols and metrics from whatever
+            // binary another thread was parsing (measured: an ARM ELF lost
+            // `binary.leaf_function_count`). The analyzer reuses this
+            // parse (`with_parsed_ctx`) rather than opening the member again.
+            let member_rizin = skip_rizin_reason.is_none() && self.engine.radare2();
+            let member_ctx = Some(crate::analysis_context::AnalysisContext::open_with(
+                crate::engine::filefacts_options(&crate::engine::Settings {
+                    radare2: member_rizin,
+                    ..self.engine.settings().clone()
+                }),
+                logical_path,
+                data,
+            ));
             let stng_strings: std::sync::Arc<[stng::ExtractedString]> = member_ctx
                 .as_ref()
                 .map(crate::analysis_context::AnalysisContext::text_rows)
@@ -2156,7 +2175,7 @@ impl ArchiveAnalyzer {
                 *file_type,
             )
             .with_backing_path(file_path)
-            .with_skip_rizin_if(skip_rizin_reason.is_some())
+            .with_skip_rizin_if(!member_rizin)
             .with_sha256(sha256.to_string())
             .at_depth((self.current_depth + 1) as u32);
             if let Some(ctx) = member_ctx {
@@ -2217,15 +2236,12 @@ impl ArchiveAnalyzer {
             // archive member (npm tarball, zip, jar) silently lost its
             // encoded-payload finding and every trait derived from the decoded
             // content — detection that the same file gets when scanned
-            // standalone. Guarded on the mapper + options the recursion needs;
+            // standalone. Guarded on the options the recursion needs;
             // `payloads` was extracted above (empty when extract_payloads=false,
             // making this a no-op). `payloads` is moved — `input` (which
             // borrowed it) is no longer used after `analyze_input` above.
             if !payloads.is_empty()
-                && let (Some(mapper), Some(opts)) = (
-                    self.capability_mapper.as_ref(),
-                    self.analysis_options.as_ref(),
-                )
+                && let Some(opts) = self.analysis_options.as_ref()
             {
                 crate::process_encoded_payloads(
                     payloads,
@@ -2235,8 +2251,7 @@ impl ArchiveAnalyzer {
                     *file_type,
                     (self.current_depth + 1) as u32,
                     opts,
-                    mapper,
-                    self.yara_engine.as_ref(),
+                    &self.engine,
                 );
             }
 
@@ -2311,12 +2326,12 @@ impl ArchiveAnalyzer {
                             // regular trait analysis. Re-run unless suppression
                             // now so configured third-party guards can use the
                             // same-file YAML context carried by the member.
-                            if let Some(mapper) = self.capability_mapper.as_ref() {
-                                mapper.apply_retroactive_unless_suppression_to_findings(
+                            self.engine
+                                .rules()
+                                .apply_retroactive_unless_suppression_to_findings(
                                     &mut report.findings,
                                     None,
                                 );
-                            }
                             if !report.metadata.tools_used.iter().any(|t| t == "yara-x") {
                                 report.metadata.tools_used.push("yara-x".to_string());
                             }
@@ -2339,11 +2354,7 @@ impl ArchiveAnalyzer {
             report.dedupe_findings();
             // The container's end-of-analysis low-value filter has not run yet,
             // so resolve what it will delete and keep those out of the windows.
-            let doomed = self
-                .capability_mapper
-                .as_ref()
-                .map(|m| m.doomed_low_value_ids(&report.findings))
-                .unwrap_or_default();
+            let doomed = self.engine.rules().doomed_low_value_ids(&report.findings);
             crate::context::capture(&mut report, data, *file_type, &doomed);
             Ok(Some(report))
         } else if self
@@ -2372,7 +2383,11 @@ impl ArchiveAnalyzer {
             };
             let mut report = AnalysisReport::new(target);
             let logical_path = Path::new(relative_path);
-            let ctx = crate::analysis_context::AnalysisContext::open(logical_path, data).ok();
+            let ctx = Some(crate::analysis_context::AnalysisContext::open_with(
+                self.engine.filefacts_options(),
+                logical_path,
+                data,
+            ));
             if let Some(ctx) = ctx.as_ref() {
                 report.strings = crate::strings::StringExtractor::default()
                     .convert_stng_strings(&ctx.text_rows());
@@ -2383,8 +2398,9 @@ impl ArchiveAnalyzer {
                 report.identity = ctx.identity();
                 crate::capabilities::merge_filefacts_context(&mut report, ctx);
             }
-            if let Some(mapper) = self.capability_mapper.as_ref() {
-                mapper.evaluate_and_merge_findings_with_precomputed(
+            self.engine
+                .rules()
+                .evaluate_and_merge_findings_with_precomputed(
                     &mut report,
                     data,
                     crate::capabilities::AnalysisBorrow::with_filefacts(None, ctx.as_ref()),
@@ -2393,13 +2409,8 @@ impl ArchiveAnalyzer {
                     None,
                     self.cancelled.as_deref(),
                 );
-            }
             report.dedupe_findings();
-            let doomed = self
-                .capability_mapper
-                .as_ref()
-                .map(|m| m.doomed_low_value_ids(&report.findings))
-                .unwrap_or_default();
+            let doomed = self.engine.rules().doomed_low_value_ids(&report.findings);
             crate::context::capture(&mut report, data, effective_type, &doomed);
             Ok(Some(report))
         } else {
@@ -3528,7 +3539,7 @@ impl ArchiveAnalyzer {
             self.members_run_parallel(members.len()),
             |member| member_is_heavy(member.data.len()),
             |member| self.analyze_one_member(member, slow_log_label),
-            |result| acc.fold(result),
+            |result| acc.fold(result, &self.engine),
         );
         acc.finalize(report, start, archive_label, tools_used, total_files);
     }
@@ -3557,7 +3568,7 @@ impl ArchiveAnalyzer {
             self.members_run_parallel(members.len()),
             |member| member_is_heavy(member.data.len()),
             |member| self.analyze_one_member(member, slow_log_label),
-            |result| acc.fold(result),
+            |result| acc.fold(result, &self.engine),
         );
         acc.finalize(report, start, archive_label, tools_used, total_files);
     }
@@ -4120,7 +4131,7 @@ impl ArchiveAnalyzer {
                     report,
                 })
             },
-            |result| acc.fold(result),
+            |result| acc.fold(result, &self.engine),
         );
 
         // Phase 3: Analyze non-class files (scripts, configs, etc.)
@@ -4285,7 +4296,7 @@ impl ArchiveAnalyzer {
                     report,
                 })
             },
-            |result| acc.fold(result),
+            |result| acc.fold(result, &self.engine),
         );
 
         // Merge JAR collected results into the report
@@ -4504,7 +4515,7 @@ impl ArchiveAnalyzer {
             },
             |result| {
                 let _aggregate = crate::mem_profile::phase(crate::mem_profile::Phase::Aggregate);
-                acc.fold(result);
+                acc.fold(result, &self.engine);
             },
         );
 

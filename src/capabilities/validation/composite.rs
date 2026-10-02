@@ -332,44 +332,6 @@ pub(crate) fn validate_composite_trait_only(
     errors
 }
 
-/// Auto-prefix trait references in composite rule conditions.
-///
-/// If a trait reference doesn't contain '::' or '/', prepend the given prefix with ::.
-/// This allows local trait references within a file to be automatically namespaced.
-pub(crate) fn autoprefix_trait_refs(rule: &mut CompositeTrait, prefix: &str) {
-    fn prefix_conditions(conditions: &mut [Condition], prefix: &str) {
-        for cond in conditions {
-            if let Condition::Trait { id } = cond {
-                // Only prefix if ID doesn't already contain '::' or '/' (i.e., it's local to this file)
-                if !id.contains("::") && !id.contains('/') {
-                    *id = format!("{}::{}", prefix, id);
-                }
-            }
-        }
-    }
-
-    if let Some(ref mut conditions) = rule.all {
-        prefix_conditions(conditions, prefix);
-    }
-    if let Some(ref mut conditions) = rule.any {
-        prefix_conditions(conditions, prefix);
-    }
-    if let Some(ref mut conditions) = rule.unless {
-        prefix_conditions(conditions, prefix);
-    }
-    if let Some(ref mut downgrade) = rule.downgrade {
-        if let Some(ref mut conditions) = downgrade.all {
-            prefix_conditions(conditions, prefix);
-        }
-        if let Some(ref mut conditions) = downgrade.any {
-            prefix_conditions(conditions, prefix);
-        }
-        if let Some(ref mut conditions) = downgrade.none {
-            prefix_conditions(conditions, prefix);
-        }
-    }
-}
-
 /// Collect all trait reference IDs from a composite rule's conditions.
 ///
 /// Returns a vector of `(trait_id, rule_id)` tuples for all trait references

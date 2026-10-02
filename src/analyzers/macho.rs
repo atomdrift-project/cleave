@@ -34,7 +34,7 @@ type Ctx<'a> = crate::analysis_context::AnalysisContext<'a>;
 /// filefacts's typed Mach-O imports cover what cleave needed previously.
 #[derive(Debug)]
 pub(crate) struct MachOAnalyzer {
-    capability_mapper: Arc<CapabilityMapper>,
+    engine: crate::Engine,
     string_extractor: StringExtractor,
     /// Pre-extracted strings from stng (avoids redundant extraction)
     preextracted_strings: Option<Vec<StringInfo>>,
@@ -85,7 +85,7 @@ impl MachOAnalyzer {
     #[must_use]
     pub(crate) fn new() -> Self {
         Self {
-            capability_mapper: Arc::new(CapabilityMapper::empty()),
+            engine: crate::Engine::empty(),
             string_extractor: StringExtractor::new(),
             preextracted_strings: None,
             cancellation: None,
@@ -95,17 +95,14 @@ impl MachOAnalyzer {
     /// Create analyzer with pre-existing capability mapper (wraps in Arc)
     #[must_use]
     pub(crate) fn with_capability_mapper(mut self, capability_mapper: CapabilityMapper) -> Self {
-        self.capability_mapper = Arc::new(capability_mapper);
+        self.engine = crate::Engine::from_rules(Arc::new(capability_mapper));
         self
     }
 
-    /// Create analyzer with shared capability mapper (avoids cloning)
+    /// Analyze under `engine`: its rules and settings.
     #[must_use]
-    pub(crate) fn with_capability_mapper_arc(
-        mut self,
-        capability_mapper: Arc<CapabilityMapper>,
-    ) -> Self {
-        self.capability_mapper = capability_mapper;
+    pub(crate) fn with_engine(mut self, engine: crate::Engine) -> Self {
+        self.engine = engine;
         self
     }
 
@@ -141,23 +138,12 @@ impl MachOAnalyzer {
         data: &[u8],
         precomputed_sha256: Option<String>,
     ) -> AnalysisReport {
-        match crate::analysis_context::AnalysisContext::open(file_path, data) {
-            Ok(ctx) => self.analyze_structural_with_ctx(file_path, data, precomputed_sha256, &ctx),
-            Err(e) => {
-                let sha256 = precomputed_sha256
-                    .unwrap_or_else(|| crate::analyzers::utils::calculate_sha256(data));
-                self.analyze_macho_fallback(
-                    file_path,
-                    file_path,
-                    data,
-                    sha256,
-                    Some(format!("filefacts open failed: {e}")),
-                    true,
-                    None,
-                    std::time::Instant::now(),
-                )
-            }
-        }
+        let ctx = crate::analysis_context::AnalysisContext::open_with(
+            self.engine.filefacts_options(),
+            file_path,
+            data,
+        );
+        self.analyze_structural_with_ctx(file_path, data, precomputed_sha256, &ctx)
     }
 
     /// Same as [`Self::analyze_structural`] but accepts an
@@ -178,7 +164,6 @@ impl MachOAnalyzer {
             file_path,
             data,
             None,
-            true,
             precomputed_sha256,
             ctx,
         )
@@ -197,7 +182,6 @@ impl MachOAnalyzer {
         analysis_path: &Path,
         data: &'a [u8],
         stng_strings: Option<&[stng::ExtractedString]>,
-        allow_rizin: bool,
         precomputed_sha256: Option<String>,
         ctx: &Ctx<'a>,
     ) -> AnalysisReport {
@@ -229,7 +213,6 @@ impl MachOAnalyzer {
                 data,
                 sha256,
                 parse_msg,
-                allow_rizin,
                 precomputed_sha256,
                 start,
             );
@@ -298,7 +281,7 @@ impl MachOAnalyzer {
             .filter_map(crate::analysis_context::project_filefacts_function)
             .collect();
         let r2_strings: Option<Vec<stng::ExtractedString>> = None;
-        let _ = (allow_rizin, precomputed_sha256);
+        let _ = precomputed_sha256;
 
         let r2_total_ms = _t_r2.elapsed().as_millis();
 
@@ -356,7 +339,7 @@ impl MachOAnalyzer {
             crate::analyzers::embedded_code_detector::process_all_strings(
                 &logical_path.display().to_string(),
                 &report.strings,
-                &self.capability_mapper,
+                &self.engine,
                 0,
                 Some(&crate::FileType::MachO),
                 self.cancellation.as_deref(),
@@ -937,6 +920,65 @@ fn lc_present(ctx: &Ctx<'_>, name: &str) -> bool {
 /// forms) return false, so callers can skip the slice-table parse for the
 /// common thin case. Callers already know the bytes are Mach-O, so the
 /// `0xCAFEBABE` overlap with Java `.class` magic is not ambiguous here.
+/// A fat Mach-O's slice table: filefacts' `macho.slices` entries, with their
+/// extent in the fat file. Empty for a thin binary.
+#[derive(Debug, Default)]
+pub(crate) struct FatSlices(Vec<FatSlice>);
+
+#[derive(Debug)]
+struct FatSlice {
+    offset: usize,
+    size: usize,
+    cpu_type: Option<String>,
+}
+
+impl FatSlices {
+    /// The slice table of `data`, read from `whole` (a parse of exactly
+    /// `data`) when the caller has one, else from a parse opened here under
+    /// `options`. Reading a fat binary's values runs its whole extraction —
+    /// rizin on every slice — so each helper reopening it, as they once did,
+    /// repeated that up to four more times per file. Thin binaries have no
+    /// table and skip the parse.
+    pub(crate) fn of(
+        data: &[u8],
+        whole: Option<&crate::analysis_context::AnalysisContext<'_>>,
+        options: &filefacts::OpenOptions<'_>,
+    ) -> Self {
+        if !is_fat_macho(data) {
+            return Self::default();
+        }
+        match whole {
+            Some(ctx) => Self::from_parsed(&ctx.parsed),
+            None => Self::from_parsed(&options.open(data)),
+        }
+    }
+
+    fn from_parsed(parsed: &filefacts::ParsedFile<'_>) -> Self {
+        let Some(entries) = parsed
+            .values()
+            .get("macho.slices")
+            .and_then(|v| v.as_array())
+        else {
+            return Self::default();
+        };
+        Self(
+            entries
+                .iter()
+                .filter_map(|s| {
+                    Some(FatSlice {
+                        offset: s.get("file_offset")?.as_u64()? as usize,
+                        size: s.get("file_size")?.as_u64()? as usize,
+                        cpu_type: s
+                            .get("cpu_type")
+                            .and_then(|c| c.as_str())
+                            .map(str::to_string),
+                    })
+                })
+                .collect(),
+        )
+    }
+}
+
 fn is_fat_macho(data: &[u8]) -> bool {
     matches!(
         data.get(0..4),
@@ -1339,40 +1381,21 @@ impl MachOAnalyzer {
     /// Reads slice extents from filefacts's `macho.slices[]` instead of
     /// re-parsing the fat wrapper through goblin. Prefers arm64; falls
     /// back to the first slice when arm64 isn't present.
-    pub(crate) fn preferred_arch_range(&self, data: &[u8]) -> std::ops::Range<usize> {
-        // Thin (non-fat) binaries have no slice table, so the answer is the
-        // whole file. Detect that from the magic up front and skip the full
-        // filefacts parse this otherwise does just to discover there are no
-        // slices — the common case for Mach-O.
-        if !is_fat_macho(data) {
-            return 0..data.len();
-        }
-        let Ok(parsed) = filefacts::open(data) else {
-            return 0..data.len();
-        };
-        let Some(slices) = parsed
-            .values()
-            .get("macho.slices")
-            .and_then(|v| v.as_array())
-        else {
-            return 0..data.len();
-        };
+    pub(crate) fn preferred_arch_range(
+        &self,
+        data: &[u8],
+        slices: &FatSlices,
+    ) -> std::ops::Range<usize> {
         let pick = slices
+            .0
             .iter()
-            .find(|s| s.get("cpu_type").and_then(|c| c.as_str()) == Some("arm64"))
-            .or_else(|| slices.first());
-        if let Some(slice) = pick {
-            let off = slice
-                .get("file_offset")
-                .and_then(serde_json::Value::as_u64)
-                .unwrap_or(0) as usize;
-            let size = slice
-                .get("file_size")
-                .and_then(serde_json::Value::as_u64)
-                .unwrap_or(0) as usize;
-            if size > 0 && off.saturating_add(size) <= data.len() {
-                return off..off.saturating_add(size);
-            }
+            .find(|s| s.cpu_type.as_deref() == Some("arm64"))
+            .or_else(|| slices.0.first());
+        if let Some(slice) = pick
+            && slice.size > 0
+            && slice.offset.saturating_add(slice.size) <= data.len()
+        {
+            return slice.offset..slice.offset.saturating_add(slice.size);
         }
         0..data.len()
     }
@@ -1437,36 +1460,22 @@ impl MachOAnalyzer {
     pub(crate) fn labeled_arch_ranges(
         &self,
         data: &[u8],
+        slices: &FatSlices,
     ) -> Vec<(crate::composite_rules::Arch, std::ops::Range<usize>)> {
         use crate::composite_rules::Arch;
-        // Thin binaries are a single full-file arch; skip the parse (see
-        // `preferred_arch_range`).
-        if !is_fat_macho(data) {
-            return vec![(Arch::All, 0..data.len())];
-        }
-        let Ok(parsed) = filefacts::open(data) else {
-            return vec![(Arch::All, 0..data.len())];
-        };
-        let ranges = parsed
-            .values()
-            .get("macho.slices")
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|s| {
-                        let off =
-                            s.get("file_offset").and_then(serde_json::Value::as_u64)? as usize;
-                        let size = s.get("file_size").and_then(serde_json::Value::as_u64)? as usize;
-                        let name = s.get("cpu_type").and_then(|v| v.as_str())?;
-                        if size > 0 && off.saturating_add(size) <= data.len() {
-                            Some((Arch::from_report_str(name), off..off.saturating_add(size)))
-                        } else {
-                            None
-                        }
-                    })
-                    .collect::<Vec<_>>()
+        let ranges: Vec<_> = slices
+            .0
+            .iter()
+            .filter_map(|s| {
+                let name = s.cpu_type.as_deref()?;
+                (s.size > 0 && s.offset.saturating_add(s.size) <= data.len()).then(|| {
+                    (
+                        Arch::from_report_str(name),
+                        s.offset..s.offset.saturating_add(s.size),
+                    )
+                })
             })
-            .unwrap_or_default();
+            .collect();
         if !ranges.is_empty() {
             return ranges;
         }
@@ -1474,35 +1483,17 @@ impl MachOAnalyzer {
     }
 
     #[allow(clippy::single_range_in_vec_init)] // Intentional: returns single range for thin binaries
-    pub(crate) fn all_arch_ranges(&self, data: &[u8]) -> Vec<std::ops::Range<usize>> {
-        // Thin Mach-O is overwhelmingly the common case. Do not reopen
-        // filefacts merely to prove that a fat-slice table is absent: that
-        // duplicate open can include another five-minute Rizin recovery.
-        if !is_fat_macho(data) {
-            return vec![0..data.len()];
-        }
-        let Ok(parsed) = filefacts::open(data) else {
-            return vec![0..data.len()];
-        };
-        let ranges = parsed
-            .values()
-            .get("macho.slices")
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|s| {
-                        let off =
-                            s.get("file_offset").and_then(serde_json::Value::as_u64)? as usize;
-                        let size = s.get("file_size").and_then(serde_json::Value::as_u64)? as usize;
-                        if size > 0 && off.saturating_add(size) <= data.len() {
-                            Some(off..off.saturating_add(size))
-                        } else {
-                            None
-                        }
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
+    pub(crate) fn all_arch_ranges(
+        &self,
+        data: &[u8],
+        slices: &FatSlices,
+    ) -> Vec<std::ops::Range<usize>> {
+        let ranges: Vec<_> = slices
+            .0
+            .iter()
+            .filter(|s| s.size > 0 && s.offset.saturating_add(s.size) <= data.len())
+            .map(|s| s.offset..s.offset.saturating_add(s.size))
+            .collect();
         if !ranges.is_empty() {
             return ranges;
         }
@@ -1532,6 +1523,7 @@ impl MachOAnalyzer {
         report: &mut AnalysisReport,
         data: &[u8],
         preferred_offset: usize,
+        slices: &FatSlices,
     ) {
         use std::collections::HashSet;
 
@@ -1547,28 +1539,10 @@ impl MachOAnalyzer {
         let baseline_exports = report.exports.len();
         let mut arches_parsed = 0usize;
 
-        // Use the same `macho.slices[]` view the public range helpers
-        // already consume, then open a fresh ctx per slice.
-        let Ok(parsed) = filefacts::open(data) else {
-            return;
-        };
-        let Some(slices) = parsed
-            .values()
-            .get("macho.slices")
-            .and_then(|v| v.as_array())
-        else {
-            return;
-        };
+        // The same slice table the range helpers read; each non-preferred
+        // slice is parsed on its own, under this analyzer's engine.
         let dummy_path = Path::new("");
-        for slice in slices {
-            let Some(offset) = slice.get("file_offset").and_then(serde_json::Value::as_u64) else {
-                continue;
-            };
-            let Some(size) = slice.get("file_size").and_then(serde_json::Value::as_u64) else {
-                continue;
-            };
-            let offset = offset as usize;
-            let size = size as usize;
+        for &FatSlice { offset, size, .. } in &slices.0 {
             if offset == preferred_offset {
                 continue;
             }
@@ -1578,11 +1552,11 @@ impl MachOAnalyzer {
             let Some(slice_bytes) = data.get(offset..offset.saturating_add(size)) else {
                 continue;
             };
-            let Ok(slice_ctx) =
-                crate::analysis_context::AnalysisContext::open(dummy_path, slice_bytes)
-            else {
-                continue;
-            };
+            let slice_ctx = crate::analysis_context::AnalysisContext::open_with(
+                self.engine.filefacts_options(),
+                dummy_path,
+                slice_bytes,
+            );
             arches_parsed = arches_parsed.saturating_add(1);
 
             for mut imp in slice_ctx.imports_from_filefacts() {
@@ -1624,9 +1598,12 @@ impl MachOAnalyzer {
     /// (`"x86_64"` / `"arm64"` / etc). If filefacts can't open the bytes
     /// the fat marker is silently dropped; this is rare enough on
     /// real fat Mach-Os that a finding here would only add noise.
-    pub(crate) fn apply_fat_metadata(&self, report: &mut AnalysisReport, data: &[u8]) {
-        // As with the range helpers, avoid a full filefacts reopen for the
-        // ordinary thin case.
+    pub(crate) fn apply_fat_metadata(
+        &self,
+        report: &mut AnalysisReport,
+        data: &[u8],
+        slices: &FatSlices,
+    ) {
         if !is_fat_macho(data) {
             return;
         }
@@ -1638,29 +1615,10 @@ impl MachOAnalyzer {
         // single-file and archive-member paths come through here with the
         // full-file bytes.
         report.target.size_bytes = data.len() as u64;
-        let arch_names: Vec<String> = filefacts::open_with_path(report.target.path.as_ref(), data)
-            .ok()
-            .and_then(|parsed| {
-                parsed
-                    .values()
-                    .get("macho.slices")
-                    .and_then(|v| v.as_array())
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|entry| {
-                                entry
-                                    .get("cpu_type")
-                                    .and_then(|c| c.as_str())
-                                    .map(str::to_string)
-                            })
-                            .collect()
-                    })
-            })
-            .unwrap_or_default();
-        if arch_names.is_empty() {
-            return;
+        let arch_names: Vec<String> = slices.0.iter().filter_map(|s| s.cpu_type.clone()).collect();
+        if !arch_names.is_empty() {
+            report.target.architectures = Some(arch_names);
         }
-        report.target.architectures = Some(arch_names);
     }
 
     /// Build a minimal Mach-O analysis report when filefacts couldn't
@@ -1681,7 +1639,6 @@ impl MachOAnalyzer {
         data: &[u8],
         sha256: String,
         parse_failure: Option<String>,
-        allow_rizin: bool,
         precomputed_sha256: Option<String>,
         _start: std::time::Instant,
     ) -> AnalysisReport {
@@ -1722,18 +1679,27 @@ impl MachOAnalyzer {
         // Wave B drops the cleave-side `extract_batched` spawn; if
         // a future caller needs to opt into rizin from this branch
         // it should pass an `AnalysisContext` instead of bytes.
-        let _ = (analysis_path, allow_rizin, precomputed_sha256);
+        let _ = (analysis_path, precomputed_sha256);
         report
     }
 }
 
 impl Analyzer for MachOAnalyzer {
     fn analyze_input(&self, input: &AnalysisInput<'_>) -> Result<AnalysisReport> {
+        // A fat binary needs one parse of the whole file: its slice table,
+        // and the full-file evaluation below. Reuse the caller's when it
+        // threaded one in; open it once otherwise.
+        let opened_full_ctx = (is_fat_macho(input.data) && input.parsed_ctx.is_none())
+            .then(|| input.open_ctx_with(self.engine.filefacts_options()));
+        let full_ctx = input.parsed_ctx.as_ref().or(opened_full_ctx.as_ref());
+        let slices = FatSlices::of(input.data, full_ctx, &self.engine.filefacts_options());
+
         // Get all architecture slices (for FAT binaries) or the single slice (for thin binaries)
-        let arch_ranges = self.all_arch_ranges(input.data);
+        let arch_ranges = self.all_arch_ranges(input.data, &slices);
 
         // Use preferred arch for structural analysis (imports, exports, strings, etc.)
-        let preferred_range = self.preferred_arch_range(input.data);
+        let preferred_range = self.preferred_arch_range(input.data, &slices);
+        let preferred_range_start = preferred_range.start;
         let preferred_is_full_file =
             preferred_range.start == 0 && preferred_range.end == input.data.len();
         // `preferred_arch_range` returns an in-bounds slice range or the whole file.
@@ -1757,7 +1723,17 @@ impl Analyzer for MachOAnalyzer {
         let opened_preferred_ctx = if preferred_is_full_file && input.parsed_ctx.is_some() {
             None
         } else {
-            crate::analysis_context::AnalysisContext::open(input.path, preferred_data).ok()
+            let options = self.engine.filefacts_options();
+            let options = if input.skip_rizin {
+                options.rizin(false)
+            } else {
+                options
+            };
+            Some(crate::analysis_context::AnalysisContext::open_with(
+                options,
+                input.path,
+                preferred_data,
+            ))
         };
         let preferred_ctx = if preferred_is_full_file {
             input.parsed_ctx.as_ref().or(opened_preferred_ctx.as_ref())
@@ -1770,7 +1746,6 @@ impl Analyzer for MachOAnalyzer {
                 input.backing_path(),
                 preferred_data,
                 strings,
-                !input.skip_rizin,
                 input.sha256.clone(),
                 ctx,
             )
@@ -1785,25 +1760,24 @@ impl Analyzer for MachOAnalyzer {
                 preferred_data,
                 sha256,
                 Some("filefacts open failed".to_string()),
-                !input.skip_rizin,
                 input.sha256.clone(),
                 std::time::Instant::now(),
             )
         };
-        self.apply_fat_metadata(&mut report, input.data);
+        self.apply_fat_metadata(&mut report, input.data, &slices);
 
         // For FAT binaries, strings should already be file-relative from input.strings
         // (extracted from the full file by the entry point)
         let is_fat = arch_ranges.len() > 1;
 
         if is_fat {
-            let preferred_offset = self.preferred_arch_range(input.data).start;
+            let preferred_offset = preferred_range_start;
             // The preferred slice was parsed at base 0; rebase its
             // structural offsets into full-file coordinates so symbol
             // annotations and section/proximity searches line up with the
             // full-file strings, raw matches, and hex view.
             Self::rebase_slice_offsets(&mut report, preferred_offset as u64);
-            self.union_supplementary_arches(&mut report, input.data, preferred_offset);
+            self.union_supplementary_arches(&mut report, input.data, preferred_offset, &slices);
         }
 
         // Evaluate traits against binary data.
@@ -1811,14 +1785,9 @@ impl Analyzer for MachOAnalyzer {
         // For thin binaries, evaluate against the single slice (same as full file).
         if is_fat {
             // Full file evaluation - strings and offsets are file-relative.
-            // Use a full-file context so the mapper does not reopen filefacts.
-            let opened_full_ctx = if input.parsed_ctx.is_some() {
-                None
-            } else {
-                crate::analysis_context::AnalysisContext::open(input.path, input.data).ok()
-            };
-            let full_ctx = input.parsed_ctx.as_ref().or(opened_full_ctx.as_ref());
-            self.capability_mapper
+            // The full-file parse opened above, so the mapper does not reopen filefacts.
+            self.engine
+                .rules()
                 .evaluate_and_merge_findings_with_precomputed(
                     &mut report,
                     input.data,
@@ -1830,7 +1799,8 @@ impl Analyzer for MachOAnalyzer {
                 );
         } else {
             // Thin binary - single slice is the whole file.
-            self.capability_mapper
+            self.engine
+                .rules()
                 .evaluate_and_merge_findings_with_precomputed(
                     &mut report,
                     preferred_data,
@@ -1849,7 +1819,11 @@ impl Analyzer for MachOAnalyzer {
         let data = fs::read(file_path).context("Failed to read file")?;
         // filefacts is the string-extraction authority. Harvest its full-file
         // `text()` view and thread the same context into the structural pass.
-        let parsed_ctx = crate::analysis_context::AnalysisContext::open(file_path, &data).ok();
+        let parsed_ctx = Some(crate::analysis_context::AnalysisContext::open_with(
+            self.engine.filefacts_options(),
+            file_path,
+            &data,
+        ));
         let strings: std::sync::Arc<[stng::ExtractedString]> = parsed_ctx
             .as_ref()
             .map(crate::analysis_context::AnalysisContext::text_rows)
@@ -1902,6 +1876,39 @@ impl Analyzer for MachOAnalyzer {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    /// A fat binary's slice table comes from the parse the caller already
+    /// holds. Each range helper used to reopen the file, and reading a fat
+    /// binary's values runs its whole extraction (rizin on every slice).
+    #[test]
+    fn fat_slices_come_from_the_callers_parse() {
+        let data = std::fs::read("testdata/xor/gapi-update.macho").unwrap();
+        let ctx = crate::analysis_context::AnalysisContext::open_with(
+            filefacts::OpenOptions::new().rizin(false),
+            Path::new("gapi-update.macho"),
+            &data,
+        );
+        let slices = FatSlices::of(&data, Some(&ctx), &filefacts::OpenOptions::new());
+        assert!(
+            slices.0.len() > 1,
+            "fat fixture has several slices: {slices:?}"
+        );
+        assert_eq!(ctx.parsed.parse_count(), 1, "one extraction, shared");
+
+        let analyzer = MachOAnalyzer::new();
+        assert_eq!(
+            analyzer.all_arch_ranges(&data, &slices).len(),
+            slices.0.len()
+        );
+        let preferred = analyzer.preferred_arch_range(&data, &slices);
+        assert!(preferred.start > 0 && preferred.end <= data.len());
+
+        // A thin binary has no table and never needs a parse.
+        let thin = std::fs::read(test_macho_path()).unwrap();
+        let none = FatSlices::of(&thin, None, &filefacts::OpenOptions::new());
+        assert!(none.0.is_empty());
+        assert_eq!(analyzer.all_arch_ranges(&thin, &none), vec![0..thin.len()]);
+    }
 
     fn test_macho_path() -> PathBuf {
         PathBuf::from("tests/fixtures/test.macho")

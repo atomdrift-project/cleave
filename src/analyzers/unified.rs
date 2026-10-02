@@ -13,7 +13,6 @@
 
 use crate::analyzers::symbol_extraction;
 use crate::analyzers::{AnalysisInput, Analyzer, FileType, FileTypeExt};
-use crate::capabilities::CapabilityMapper;
 use crate::capabilities::record_ast_kind_node;
 use crate::types::{AnalysisReport, Evidence, Function, StringInfo, TargetInfo};
 use anyhow::Result;
@@ -335,7 +334,7 @@ pub(crate) fn config_for_file_type(
 pub(crate) struct UnifiedSourceAnalyzer {
     config: LanguageConfig,
     file_type: crate::analyzers::FileType,
-    capability_mapper: Arc<CapabilityMapper>,
+    engine: crate::Engine,
     /// When true, skip embedded payload detection to prevent recursion.
     /// Set for analyzers created for inner analysis (e.g. decoded PowerShell).
     skip_embedded_detection: bool,
@@ -350,7 +349,7 @@ impl std::fmt::Debug for UnifiedSourceAnalyzer {
         f.debug_struct("UnifiedSourceAnalyzer")
             .field("config", &self.config)
             .field("file_type", &self.file_type)
-            .field("capability_mapper", &self.capability_mapper)
+            .field("engine", &self.engine)
             .finish()
     }
 }
@@ -361,7 +360,7 @@ impl UnifiedSourceAnalyzer {
         Self {
             config,
             file_type,
-            capability_mapper: Arc::new(CapabilityMapper::empty()),
+            engine: crate::Engine::empty(),
             skip_embedded_detection: false,
             cancellation: None,
             encoded_context: None,
@@ -376,17 +375,17 @@ impl UnifiedSourceAnalyzer {
 
     /// Create analyzer with pre-existing capability mapper (wraps in Arc)
     #[cfg(test)]
-    pub(crate) fn with_capability_mapper(mut self, capability_mapper: CapabilityMapper) -> Self {
-        self.capability_mapper = Arc::new(capability_mapper);
+    pub(crate) fn with_capability_mapper(
+        mut self,
+        capability_mapper: crate::capabilities::CapabilityMapper,
+    ) -> Self {
+        self.engine = crate::Engine::from_rules(std::sync::Arc::new(capability_mapper));
         self
     }
 
-    /// Create analyzer with shared capability mapper (avoids cloning)
-    pub(crate) fn with_capability_mapper_arc(
-        mut self,
-        capability_mapper: Arc<CapabilityMapper>,
-    ) -> Self {
-        self.capability_mapper = capability_mapper;
+    /// Analyze under `engine`: its rules and settings.
+    pub(crate) fn with_engine(mut self, engine: crate::Engine) -> Self {
+        self.engine = engine;
         self
     }
 
@@ -428,12 +427,11 @@ impl UnifiedSourceAnalyzer {
         file_path: &Path,
         content: &str,
     ) -> AnalysisReport {
-        let ctx = crate::analysis_context::AnalysisContext::open_as(
+        let ctx = Some(crate::analysis_context::AnalysisContext::open_with(
+            filefacts::OpenOptions::new().file_type(self.file_type),
             file_path,
             content.as_bytes(),
-            self.file_type,
-        )
-        .ok();
+        ));
         self.analyze_source_impl(
             file_path,
             content,
@@ -446,8 +444,10 @@ impl UnifiedSourceAnalyzer {
     }
 
     pub(crate) fn analyze_source(&self, file_path: &Path, content: &str) -> AnalysisReport {
-        let ctx =
-            crate::analysis_context::AnalysisContext::open(file_path, content.as_bytes()).ok();
+        let ctx = Some(crate::analysis_context::AnalysisContext::open(
+            file_path,
+            content.as_bytes(),
+        ));
         self.analyze_source_impl(
             file_path,
             content,
@@ -544,7 +544,7 @@ impl UnifiedSourceAnalyzer {
             // reported `Call.target: None` for a method on a call result.
             // filefacts now returns `s.replace().replace` for that shape, so
             // the reason no longer holds.
-            let mapper = Arc::clone(&self.capability_mapper);
+            let mapper = Arc::clone(self.engine.rules());
             let rule_ft = mapper.detect_file_type(self.config.file_type);
             let (required, call_types) = mapper.ast_kind_cache_plan(rule_ft);
             let mut cache = FxHashMap::default();
@@ -689,7 +689,7 @@ impl UnifiedSourceAnalyzer {
                 FileType::Python => {
                     UnifiedSourceAnalyzer::for_file_type(&FileType::Python).map(|analyzer| {
                         analyzer
-                            .with_capability_mapper_arc(self.capability_mapper.clone())
+                            .with_engine(self.engine.clone())
                             .with_cancellation(cancellation.cloned())
                             .analyze_source(
                                 Path::new(&virtual_path),
@@ -700,7 +700,7 @@ impl UnifiedSourceAnalyzer {
                 FileType::Shell => {
                     UnifiedSourceAnalyzer::for_file_type(&FileType::Shell).map(|analyzer| {
                         analyzer
-                            .with_capability_mapper_arc(self.capability_mapper.clone())
+                            .with_engine(self.engine.clone())
                             .with_cancellation(cancellation.cloned())
                             .analyze_source(
                                 Path::new(&virtual_path),
@@ -714,7 +714,7 @@ impl UnifiedSourceAnalyzer {
             // Process payload report - convert to FileAnalysis for v2 flat files array
             if let Some(pr) = payload_report {
                 // Prefix findings with extracted payload location (same as archive: prefix)
-                let (mut file_entry, _, _) = pr.into_file_analysis(0);
+                let (mut file_entry, _, _) = pr.into_file_analysis(0, &self.engine);
                 file_entry.path = virtual_path.clone();
                 file_entry.depth = 1; // Decoded content is one level deep
                 file_entry.encoding = Some(vec!["base64".to_string()]);
@@ -776,7 +776,7 @@ impl UnifiedSourceAnalyzer {
                         UnifiedSourceAnalyzer::for_file_type(&payload.detected_type).map(
                             |analyzer| {
                                 analyzer
-                                    .with_capability_mapper_arc(self.capability_mapper.clone())
+                                    .with_engine(self.engine.clone())
                                     .with_cancellation(cancellation.cloned())
                                     .analyze_source(
                                         Path::new(&virtual_path),
@@ -788,7 +788,7 @@ impl UnifiedSourceAnalyzer {
                     FileType::Python => UnifiedSourceAnalyzer::for_file_type(&FileType::Python)
                         .map(|analyzer| {
                             analyzer
-                                .with_capability_mapper_arc(self.capability_mapper.clone())
+                                .with_engine(self.engine.clone())
                                 .with_cancellation(cancellation.cloned())
                                 .analyze_source(
                                     Path::new(&virtual_path),
@@ -798,7 +798,7 @@ impl UnifiedSourceAnalyzer {
                     FileType::Shell => {
                         UnifiedSourceAnalyzer::for_file_type(&FileType::Shell).map(|analyzer| {
                             analyzer
-                                .with_capability_mapper_arc(self.capability_mapper.clone())
+                                .with_engine(self.engine.clone())
                                 .with_cancellation(cancellation.cloned())
                                 .analyze_source(
                                     Path::new(&virtual_path),
@@ -824,7 +824,7 @@ impl UnifiedSourceAnalyzer {
 
                 // Process payload report
                 if let Some(pr) = payload_report {
-                    let (mut file_entry, _, _) = pr.into_file_analysis(0);
+                    let (mut file_entry, _, _) = pr.into_file_analysis(0, &self.engine);
                     file_entry.path = virtual_path.clone();
                     file_entry.depth = 1;
                     file_entry.encoding = Some(payload.encoding_chain.clone());
@@ -891,7 +891,7 @@ impl UnifiedSourceAnalyzer {
                 crate::analyzers::embedded_code_detector::analyze_script_deobfuscation_layers(
                     &parent,
                     content,
-                    &self.capability_mapper,
+                    &self.engine,
                     0,
                     self.cancellation.as_deref(),
                 ),
@@ -902,7 +902,7 @@ impl UnifiedSourceAnalyzer {
                 crate::analyzers::embedded_code_detector::process_all_strings_with_host(
                     &parent,
                     &report.strings,
-                    &self.capability_mapper,
+                    &self.engine,
                     0,
                     Some(&self.file_type),
                     self.cancellation.as_deref(),
@@ -928,7 +928,8 @@ impl UnifiedSourceAnalyzer {
 
         // Evaluate all rules (atomic + composite) and merge into report,
         // borrowing the same filefacts context used for source AST extraction.
-        self.capability_mapper
+        self.engine
+            .rules()
             .evaluate_and_merge_findings_with_precomputed(
                 &mut report,
                 content.as_bytes(),
@@ -1592,9 +1593,10 @@ impl Analyzer for UnifiedSourceAnalyzer {
                 Some(ctx),
             )),
             _ => {
-                let owned_ctx =
-                    crate::analysis_context::AnalysisContext::open(input.path, content.as_bytes())
-                        .ok();
+                let owned_ctx = Some(crate::analysis_context::AnalysisContext::open(
+                    input.path,
+                    content.as_bytes(),
+                ));
                 Ok(self.analyze_source_impl(
                     input.path,
                     &content,

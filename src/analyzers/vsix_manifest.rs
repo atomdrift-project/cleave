@@ -7,29 +7,27 @@
 //! kv subtree into `report.values_tree` before trait evaluation runs.
 
 use crate::analyzers::{AnalysisInput, Analyzer};
-use crate::capabilities::CapabilityMapper;
 use crate::types::{AnalysisReport, TargetInfo};
 use anyhow::{Context, Result};
 use std::fs;
 use std::path::Path;
-use std::sync::Arc;
 
 #[derive(Debug)]
 pub(crate) struct VsixManifestAnalyzer {
-    capability_mapper: Arc<CapabilityMapper>,
+    engine: crate::Engine,
 }
 
 impl VsixManifestAnalyzer {
     #[must_use]
     pub(crate) fn new() -> Self {
         Self {
-            capability_mapper: Arc::new(CapabilityMapper::empty()),
+            engine: crate::Engine::empty(),
         }
     }
 
     #[must_use]
-    pub(crate) fn with_capability_mapper_arc(mut self, mapper: Arc<CapabilityMapper>) -> Self {
-        self.capability_mapper = mapper;
+    pub(crate) fn with_engine(mut self, engine: crate::Engine) -> Self {
+        self.engine = engine;
         self
     }
 
@@ -46,8 +44,11 @@ impl VsixManifestAnalyzer {
             .metadata
             .tools_used
             .push("filefacts-vsix".to_string());
-        let filefacts_ctx = crate::analysis_context::AnalysisContext::open(file_path, data).ok();
-        self.capability_mapper
+        let filefacts_ctx = Some(crate::analysis_context::AnalysisContext::open(
+            file_path, data,
+        ));
+        self.engine
+            .rules()
             .evaluate_and_merge_findings_with_precomputed(
                 &mut report,
                 data,

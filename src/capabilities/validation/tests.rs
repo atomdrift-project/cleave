@@ -7,7 +7,7 @@
 
 #[cfg(test)]
 mod precision_tests {
-    use crate::capabilities::validation::precision::calculate_trait_precision;
+    use crate::capabilities::precision::calculate_trait_precision;
     use crate::composite_rules::{Arch, Condition, FileType, Platform, RawQuery, TraitDefinition};
     use std::path::PathBuf;
 
@@ -6675,8 +6675,9 @@ mod constraint_tests {
 #[cfg(test)]
 mod autoprefix_tests {
     use super::super::composite::{
-        autoprefix_trait_refs, collect_trait_refs_from_rule, collect_trait_refs_from_trait_def,
+        collect_trait_refs_from_rule, collect_trait_refs_from_trait_def,
     };
+    use crate::capabilities::parsing::autoprefix_trait_refs;
     use crate::composite_rules::condition::{Condition, RawQuery};
     use crate::composite_rules::traits::{CompositeTrait, DowngradeConditions, TraitDefinition};
     use crate::composite_rules::types::{Arch, FileType, Platform};

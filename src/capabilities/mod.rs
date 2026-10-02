@@ -30,6 +30,8 @@ pub(crate) mod indexes;
 mod mapper;
 mod models;
 mod parsing;
+pub(crate) mod precision;
+#[cfg(feature = "lint")]
 pub(crate) mod validation;
 
 // Re-export public API (allow unreachable_pub: accessible via lib crate)
@@ -43,7 +45,8 @@ pub(crate) use mapper::evaluate_traits::record_ast_kind_node;
 pub(crate) use mapper::imports::is_dynamic_import_ref;
 
 // Test module needs access to internal types
-#[cfg(test)]
+// It tests the linter's checks alongside loading.
+#[cfg(all(test, feature = "lint"))]
 mod tests;
 
 #[cfg(test)]

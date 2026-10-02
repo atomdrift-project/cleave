@@ -34,7 +34,6 @@ traits:
     )
     .unwrap();
     cleave::traits_repo::set_override_dir(Some(traits));
-    filefacts::cache::set_caching_enabled(false);
     let opts = AnalysisOptions {
         disable_yara: true,
         disable_radare2: true,

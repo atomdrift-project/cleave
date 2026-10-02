@@ -64,8 +64,11 @@ pub mod extract;
 pub mod inspect;
 pub mod iter_files;
 pub mod shared;
+#[cfg(feature = "lint")]
 pub mod test;
+#[cfg(feature = "lint")]
 pub mod validate;
+#[cfg(feature = "lint")]
 pub mod validate_testdata;
 
 // Re-export shared utilities needed by main.rs
@@ -86,6 +89,9 @@ pub use extract::{
 };
 pub use inspect::run as inspect_command;
 pub use iter_files::{IterFilesConfig, run as iter_files_command};
+#[cfg(feature = "lint")]
 pub use test::{test_match, test_rules};
+#[cfg(feature = "lint")]
 pub use validate::run as validate_command;
+#[cfg(feature = "lint")]
 pub use validate_testdata::check_testdata_overlaps;

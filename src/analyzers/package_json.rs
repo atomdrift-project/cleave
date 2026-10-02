@@ -1,26 +1,23 @@
 //! package.json analyzer for npm packages.
 use crate::analyzers::unified::UnifiedSourceAnalyzer;
 use crate::analyzers::{AnalysisInput, Analyzer, FileType};
-use crate::capabilities::CapabilityMapper;
 use crate::types::{
     AnalysisReport, Criticality, Evidence, Finding, Import, StringInfo, StringType,
     StructuralFeature, TargetInfo,
 };
 use anyhow::{Context, Result};
 use serde::{Deserialize, Deserializer};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 
 /// npm package.json analyzer for detecting supply chain attacks
 #[derive(Debug)]
 pub(crate) struct PackageJsonAnalyzer {
-    capability_mapper: Arc<CapabilityMapper>,
+    engine: crate::Engine,
 }
 
-/// Deserialize a JSON value as `HashMap<String, String>`, returning an empty map
-/// if the value is not an object (e.g. old npm packages use `"dependencies": []`).
 /// Deserialize a boolean that might be encoded as a string (e.g. `"true"` instead of `true`).
 fn deserialize_bool_tolerant<'de, D>(deserializer: D) -> Result<bool, D::Error>
 where
@@ -49,14 +46,17 @@ where
     }
 }
 
-fn deserialize_map_tolerant<'de, D>(deserializer: D) -> Result<HashMap<String, String>, D::Error>
+/// Deserialize a JSON value as `BTreeMap<String, String>`, returning an empty map
+/// if the value is not an object (e.g. old npm packages use `"dependencies": []`).
+/// Ordered, so the dependencies and scripts it feeds come out the same on every run.
+fn deserialize_map_tolerant<'de, D>(deserializer: D) -> Result<BTreeMap<String, String>, D::Error>
 where
     D: Deserializer<'de>,
 {
     let value = serde_json::Value::deserialize(deserializer)?;
     match value {
         serde_json::Value::Object(map) => {
-            let mut result = HashMap::with_capacity(map.len());
+            let mut result = BTreeMap::new();
             for (k, v) in map {
                 // Coerce non-string values (numbers, objects) to their JSON text
                 let s = match v {
@@ -67,7 +67,7 @@ where
             }
             Ok(result)
         }
-        _ => Ok(HashMap::new()),
+        _ => Ok(BTreeMap::new()),
     }
 }
 
@@ -86,27 +86,27 @@ struct PackageJson {
     #[allow(dead_code)] // Deserialized from JSON
     main: Option<serde_json::Value>,
     #[serde(default, deserialize_with = "deserialize_map_tolerant")]
-    scripts: HashMap<String, String>,
+    scripts: BTreeMap<String, String>,
     #[serde(default, deserialize_with = "deserialize_map_tolerant")]
-    dependencies: HashMap<String, String>,
+    dependencies: BTreeMap<String, String>,
     #[serde(
         rename = "devDependencies",
         default,
         deserialize_with = "deserialize_map_tolerant"
     )]
-    dev_dependencies: HashMap<String, String>,
+    dev_dependencies: BTreeMap<String, String>,
     #[serde(
         rename = "peerDependencies",
         default,
         deserialize_with = "deserialize_map_tolerant"
     )]
-    peer_dependencies: HashMap<String, String>,
+    peer_dependencies: BTreeMap<String, String>,
     #[serde(
         rename = "optionalDependencies",
         default,
         deserialize_with = "deserialize_map_tolerant"
     )]
-    optional_dependencies: HashMap<String, String>,
+    optional_dependencies: BTreeMap<String, String>,
     #[allow(dead_code)] // Deserialized from JSON
     repository: Option<serde_json::Value>,
     author: Option<serde_json::Value>,
@@ -211,8 +211,8 @@ fn extract_package_fallback(content: &str) -> Option<PackageJson> {
         Some(&rest[..end])
     }
 
-    fn extract_map(content: &str, key: &str) -> HashMap<String, String> {
-        let mut map = HashMap::new();
+    fn extract_map(content: &str, key: &str) -> BTreeMap<String, String> {
+        let mut map = BTreeMap::new();
         // Find "key" : { ... }
         let pattern = format!("\"{}\"\\s*:\\s*\\{{", key);
         let Some(re) = regex::Regex::new(&pattern).ok() else {
@@ -361,14 +361,14 @@ impl PackageJsonAnalyzer {
     #[must_use]
     pub(crate) fn new() -> Self {
         Self {
-            capability_mapper: Arc::new(CapabilityMapper::empty()),
+            engine: crate::Engine::empty(),
         }
     }
 
-    /// Create analyzer with shared capability mapper (avoids cloning)
+    /// Analyze under `engine`: its rules and settings.
     #[must_use]
-    pub(crate) fn with_capability_mapper_arc(mut self, mapper: Arc<CapabilityMapper>) -> Self {
-        self.capability_mapper = mapper;
+    pub(crate) fn with_engine(mut self, engine: crate::Engine) -> Self {
+        self.engine = engine;
         self
     }
 
@@ -475,9 +475,12 @@ impl PackageJsonAnalyzer {
 
         // Evaluate all rules (atomic + composite) and merge into report
         // This catches patterns like curl, wget, perl execution, etc.
-        let filefacts_ctx =
-            crate::analysis_context::AnalysisContext::open(file_path, content.as_bytes()).ok();
-        self.capability_mapper
+        let filefacts_ctx = Some(crate::analysis_context::AnalysisContext::open(
+            file_path,
+            content.as_bytes(),
+        ));
+        self.engine
+            .rules()
             .evaluate_and_merge_findings_with_precomputed(
                 &mut report,
                 content.as_bytes(),
@@ -673,10 +676,10 @@ impl PackageJsonAnalyzer {
             let virtual_path = format!("{}##trailing@{:#x}", file_path.display(), json_end_offset);
             if let Some(analyzer) = UnifiedSourceAnalyzer::for_file_type(&FileType::JavaScript) {
                 let js_analyzer = analyzer
-                    .with_capability_mapper_arc(self.capability_mapper.clone())
+                    .with_engine(self.engine.clone())
                     .without_embedded_detection();
                 let js_report = js_analyzer.analyze_source(Path::new(&virtual_path), trailing);
-                let (mut layer, _, _) = js_report.into_file_analysis(0);
+                let (mut layer, _, _) = js_report.into_file_analysis(0, &self.engine);
                 layer.path = virtual_path;
                 layer.depth = 1;
                 layer.compute_summary();
@@ -689,7 +692,7 @@ impl PackageJsonAnalyzer {
         &self,
         file_path: &Path,
         pkg: &PackageJson,
-        scripts: &HashMap<String, String>,
+        scripts: &BTreeMap<String, String>,
         content: &str,
         report: &mut AnalysisReport,
     ) {
@@ -1141,7 +1144,7 @@ impl PackageJsonAnalyzer {
 
     fn check_install_hooks(
         &self,
-        scripts: &HashMap<String, String>,
+        scripts: &BTreeMap<String, String>,
         content: &str,
         report: &mut AnalysisReport,
     ) {
@@ -1183,7 +1186,7 @@ impl PackageJsonAnalyzer {
 
     fn extract_script_strings(
         &self,
-        scripts: &HashMap<String, String>,
+        scripts: &BTreeMap<String, String>,
         content: &str,
         report: &mut AnalysisReport,
     ) {

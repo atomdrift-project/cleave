@@ -8,30 +8,28 @@
 //! exposes them for trait rule matching.
 
 use super::{AnalysisInput, Analyzer};
-use crate::capabilities::CapabilityMapper;
 use crate::types::{AnalysisReport, TargetInfo};
 use anyhow::Result;
 use sha2::{Digest, Sha256};
 use std::path::Path;
-use std::sync::Arc;
 
 /// Pickle analyzer for deserialization attack detection
 #[derive(Debug)]
 pub(crate) struct PickleAnalyzer {
-    capability_mapper: Arc<CapabilityMapper>,
+    engine: crate::Engine,
 }
 
 impl PickleAnalyzer {
     #[must_use]
     pub(crate) fn new() -> Self {
         Self {
-            capability_mapper: Arc::new(CapabilityMapper::empty()),
+            engine: crate::Engine::empty(),
         }
     }
 
     #[must_use]
-    pub(crate) fn with_capability_mapper_arc(mut self, mapper: Arc<CapabilityMapper>) -> Self {
-        self.capability_mapper = mapper;
+    pub(crate) fn with_engine(mut self, engine: crate::Engine) -> Self {
+        self.engine = engine;
         self
     }
 
@@ -57,7 +55,9 @@ impl PickleAnalyzer {
         // Open the filefacts parse once: it resolves the `module.attr`
         // callable references (`pickle.globals`) and the `pickle.*` opcode
         // facts, and is reused for trait evaluation below.
-        let filefacts_ctx = crate::analysis_context::AnalysisContext::open(file_path, data).ok();
+        let filefacts_ctx = Some(crate::analysis_context::AnalysisContext::open(
+            file_path, data,
+        ));
 
         // Project filefacts' resolved `module.attr` globals (the RCE targets)
         // as import symbols for trait matching.
@@ -87,7 +87,8 @@ impl PickleAnalyzer {
         // capability mapper — no synthesis needed here.
 
         // Evaluate trait rules
-        self.capability_mapper
+        self.engine
+            .rules()
             .evaluate_and_merge_findings_with_precomputed(
                 &mut report,
                 data,

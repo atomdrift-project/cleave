@@ -556,6 +556,9 @@ pub(crate) enum FileType {
     SrcInfo,
     /// Normalized package-registry metadata
     Registry,
+    /// Windows registry export (`.reg`: `REGEDIT4` / `Windows Registry Editor
+    /// Version 5.00`), a text file of keys and values to import
+    Reg,
     /// Apple Property List (.plist)
     Plist,
     /// Compiled Interface Builder archive (.nib) in Xcode's `NIBArchive`
@@ -839,6 +842,7 @@ impl From<filefacts::FileType> for FileType {
             Ff::PkgInfo => Self::PkgInfo,
             Ff::SrcInfo => Self::SrcInfo,
             Ff::Registry => Self::Registry,
+            Ff::Reg => Self::Reg,
             Ff::GoMod => Self::GoMod,
             Ff::GoSum => Self::GoSum,
             // Documents / media
@@ -1058,6 +1062,7 @@ impl FileType {
                     | FileType::PkgInfo
                     | FileType::SrcInfo
                     | FileType::Registry
+                    | FileType::Reg
                     | FileType::Plist
                     | FileType::Nib
                     | FileType::Text
@@ -1262,6 +1267,7 @@ impl FileType {
             Self::PkgInfo => "pkginfo",
             Self::SrcInfo => "src_info",
             Self::Registry => "registry",
+            Self::Reg => "reg",
             Self::Plist => "plist",
             Self::Nib => "nib",
             Self::Pbxproj => "pbxproj",

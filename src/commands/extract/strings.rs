@@ -131,7 +131,8 @@ fn run_direct(target: &str, min_length: usize, format: &cli::OutputFormat) -> Re
                 // functions come from its typed views regardless of
                 // whether the binary parsed cleanly with goblin or fell
                 // back through the rizin recovery path.
-                if let Ok(parsed) = filefacts::open(&data) {
+                {
+                    let parsed = filefacts::open(&data);
                     // Realize the parse so the typed views are populated.
                     let _ = parsed.values();
                     populate_symbols_from_filefacts(
@@ -156,8 +157,7 @@ fn run_direct(target: &str, min_length: usize, format: &cli::OutputFormat) -> Re
 
     // Strings come from filefacts' `text()` view (the string-extraction
     // authority); the configured extractor classifies them.
-    let rows: Vec<stng::ExtractedString> = filefacts::open(&data)
-        .ok()
+    let rows: Vec<stng::ExtractedString> = Some(filefacts::open(&data))
         .map(|p| p.text().iter().cloned().collect())
         .unwrap_or_default();
     let strings = extractor.convert_stng_strings(&rows);

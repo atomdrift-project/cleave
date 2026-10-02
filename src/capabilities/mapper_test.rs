@@ -2352,7 +2352,7 @@ fn doomed_skip_rescues_branch_when_file_has_no_notable() {
         ids.iter().any(|id| id.ends_with("::branch")),
         "rescue path must still evaluate doomed branch: {ids:?}"
     );
-    let (file, _, _) = report.into_file_analysis(0);
+    let (file, _, _) = report.into_file_analysis(0, &crate::Engine::empty());
     let mut wrapped = create_test_source_report("probe.js", "javascript", source.len() as u64);
     wrapped.files = vec![file];
     wrapped.strip_unmatched_traits();
@@ -2505,8 +2505,8 @@ fn doomed_skip_does_not_create_sibling_rescued_copy() {
         doomed_ids(&report_b)
     );
 
-    let (file_a, _, _) = report_a.into_file_analysis(0);
-    let (mut file_b, _, _) = report_b.into_file_analysis(1);
+    let (file_a, _, _) = report_a.into_file_analysis(0, &crate::Engine::empty());
+    let (mut file_b, _, _) = report_b.into_file_analysis(1, &crate::Engine::empty());
     file_b.parent_id = Some(0);
     let mut wrapped = create_test_source_report("bundle.js", "javascript", 0);
     wrapped.files = vec![file_a, file_b];

@@ -846,6 +846,7 @@ impl super::CapabilityMapper {
         let use_string_prefilters =
             !file_type.uses_raw_text_search_for(binary_data) || cache.source_text_prefiltered;
 
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(180);
         let mut ctx = EvaluationContext::new(
             report,
             binary_data,
@@ -857,7 +858,7 @@ impl super::CapabilityMapper {
         .with_suppressions(suppressions)
         .with_section_map(cache.section_map)
         .with_cached_evidence(Some(cache.cached_evidence))
-        .with_deadline(std::time::Instant::now() + std::time::Duration::from_secs(180))
+        .with_deadline(deadline)
         .with_slow_rule_ms(self.slow_rule_ms);
 
         if let Some(flag) = cancellation {
@@ -1139,11 +1140,21 @@ impl super::CapabilityMapper {
                 b.crit.cmp(&a.crit).then_with(|| {
                     let conf_a = (a.conf * 100.0) as i32;
                     let conf_b = (b.conf * 100.0) as i32;
-                    conf_b.cmp(&conf_a)
+                    // The id breaks ties, so which findings survive the cap
+                    // does not depend on the order they were evaluated in.
+                    conf_b.cmp(&conf_a).then_with(|| a.id.cmp(&b.id))
                 })
             });
             unique_findings.truncate(MAX_FINDINGS_PER_FILE);
             unique_findings.shrink_to_fit();
+        }
+
+        // Conditions the deadline cut short reported no match. Say so, so the
+        // result is neither read as complete nor cached as if it were.
+        if std::time::Instant::now() > deadline {
+            report
+                .analysis_gaps
+                .record(crate::types::AnalysisGap::EvaluationDeadline);
         }
 
         unique_findings

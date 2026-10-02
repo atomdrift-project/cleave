@@ -33,7 +33,7 @@ type Ctx<'a> = crate::analysis_context::AnalysisContext<'a>;
 /// spawning rizin itself.
 #[derive(Debug)]
 pub struct PEAnalyzer {
-    capability_mapper: Arc<CapabilityMapper>,
+    engine: crate::Engine,
     string_extractor: StringExtractor,
     yara_engine: Option<Arc<YaraEngine>>,
     archive_config: crate::analyzers::archive::ArchiveAnalyzerConfig,
@@ -452,7 +452,7 @@ impl PEAnalyzer {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            capability_mapper: Arc::new(CapabilityMapper::empty()),
+            engine: crate::Engine::empty(),
             string_extractor: StringExtractor::new(),
             yara_engine: None,
             archive_config: crate::analyzers::archive::ArchiveAnalyzerConfig::default(),
@@ -504,17 +504,14 @@ impl PEAnalyzer {
     /// Create analyzer with pre-existing capability mapper (wraps in Arc)
     #[must_use]
     pub(crate) fn with_capability_mapper(mut self, capability_mapper: CapabilityMapper) -> Self {
-        self.capability_mapper = Arc::new(capability_mapper);
+        self.engine = crate::Engine::from_rules(Arc::new(capability_mapper));
         self
     }
 
-    /// Create analyzer with shared capability mapper (avoids cloning)
+    /// Analyze under `engine`: its rules and settings.
     #[must_use]
-    pub(crate) fn with_capability_mapper_arc(
-        mut self,
-        capability_mapper: Arc<CapabilityMapper>,
-    ) -> Self {
-        self.capability_mapper = capability_mapper;
+    pub(crate) fn with_engine(mut self, engine: crate::Engine) -> Self {
+        self.engine = engine;
         self
     }
 
@@ -536,31 +533,14 @@ impl PEAnalyzer {
         &self,
         file_path: &Path,
         data: &[u8],
-        precomputed_sha256: Option<String>,
+        precomputed_sha256: Option<&str>,
     ) -> AnalysisReport {
-        match crate::analysis_context::AnalysisContext::open(file_path, data) {
-            Ok(ctx) => self.analyze_structural_with_ctx(
-                file_path,
-                data,
-                precomputed_sha256.as_deref(),
-                &ctx,
-            ),
-            Err(e) => {
-                let mut report = AnalysisReport::new(TargetInfo {
-                    path: file_path.display().to_string(),
-                    file_type: "pe".to_string(),
-                    size_bytes: data.len() as u64,
-                    sha256: precomputed_sha256
-                        .unwrap_or_else(|| crate::analyzers::utils::calculate_sha256(data)),
-                    architectures: None,
-                });
-                report
-                    .metadata
-                    .errors
-                    .push(format!("filefacts open failed: {e}"));
-                report
-            }
-        }
+        let ctx = crate::analysis_context::AnalysisContext::open_with(
+            self.engine.filefacts_options(),
+            file_path,
+            data,
+        );
+        self.analyze_structural_with_ctx(file_path, data, precomputed_sha256, &ctx)
     }
 
     /// Structural analysis driven entirely by an
@@ -588,7 +568,6 @@ impl PEAnalyzer {
                 file_path,
                 file_path,
                 data,
-                true,
                 precomputed_sha256,
                 ctx,
             );
@@ -599,7 +578,6 @@ impl PEAnalyzer {
             file_path,
             file_path,
             data,
-            true,
             precomputed_sha256,
             ctx,
         );
@@ -613,7 +591,9 @@ impl PEAnalyzer {
             .with_criticality(Criticality::Notable),
         );
 
-        if !UPXDecompressor::is_available() {
+        // A UPX-disabled engine reports the same as a missing tool: the
+        // unpacked image was not analyzed.
+        if !self.engine.upx() || !UPXDecompressor::is_available() {
             report.findings.push(
                 Finding::structural(
                     "anti-static/packer/upx/tool-missing".to_string(),
@@ -639,17 +619,15 @@ impl PEAnalyzer {
                     // decompressed payload so the downstream
                     // helpers see a self-consistent view — including
                     // its filefacts-extracted strings.
-                    let Ok(unpacked_ctx) = crate::analysis_context::AnalysisContext::open(
+                    let unpacked_ctx = crate::analysis_context::AnalysisContext::open_with(
+                        self.engine.filefacts_options(),
                         temp_file.path(),
                         &unpacked_data,
-                    ) else {
-                        return report;
-                    };
+                    );
                     let mut unpacked_report = self.analyze_structural_with_strings(
                         temp_file.path(),
                         temp_file.path(),
                         &unpacked_data,
-                        true,
                         None, // Hash will change after decompression
                         &unpacked_ctx,
                     );
@@ -681,7 +659,8 @@ impl PEAnalyzer {
                     }
                     // Evaluate composites against the unpacked layer so that
                     // objective-level findings (infostealers, etc.) appear in the child.
-                    self.capability_mapper
+                    self.engine
+                        .rules()
                         .evaluate_and_merge_findings_with_precomputed(
                             &mut unpacked_report,
                             &unpacked_data,
@@ -700,7 +679,7 @@ impl PEAnalyzer {
                     let virtual_path = encode_upx_path(&file_path.display().to_string());
 
                     let (mut unpacked_file, unpacked_nested, _) =
-                        unpacked_report.into_file_analysis(0);
+                        unpacked_report.into_file_analysis(0, &self.engine);
                     unpacked_file.path = virtual_path;
                     unpacked_file.sha256 = unpacked_sha256;
                     unpacked_file.size = unpacked_data.len() as u64;
@@ -760,7 +739,6 @@ impl PEAnalyzer {
         logical_path: &Path,
         analysis_path: &Path,
         data: &'a [u8],
-        allow_rizin: bool,
         precomputed_sha256: Option<&str>,
         ctx: &Ctx<'a>,
     ) -> AnalysisReport {
@@ -781,7 +759,6 @@ impl PEAnalyzer {
             pe_data,
             tamper_findings,
             start,
-            allow_rizin,
             precomputed_sha256,
             ctx,
         )
@@ -809,7 +786,6 @@ impl PEAnalyzer {
         pe_data: &'a [u8],
         mut tamper_findings: Vec<Finding>,
         start: std::time::Instant,
-        allow_rizin: bool,
         precomputed_sha256: Option<&str>,
         ctx: &Ctx<'a>,
     ) -> AnalysisReport {
@@ -867,7 +843,7 @@ impl PEAnalyzer {
 
         // Add any tampering findings detected during preprocessing
         report.findings.append(&mut tamper_findings);
-        let _ = (analysis_path, code_size_from_ctx, file_size, allow_rizin);
+        let _ = (analysis_path, code_size_from_ctx, file_size);
 
         // Project structural views from filefacts's typed accessors. The
         // rizin recovery (for stripped / packed PEs) already ran
@@ -1044,7 +1020,7 @@ impl PEAnalyzer {
             crate::analyzers::embedded_code_detector::process_all_strings(
                 &logical_path.display().to_string(),
                 &report.strings,
-                &self.capability_mapper,
+                &self.engine,
                 0,
                 Some(&crate::FileType::Pe),
                 self.cancellation.as_deref(),
@@ -1153,7 +1129,7 @@ impl PEAnalyzer {
             && let Ok(Some(overlay_analysis)) = crate::analyzers::overlay::analyze_overlay(
                 overlay_data,
                 &report.target.path,
-                Some(self.capability_mapper.clone()),
+                &self.engine,
                 self.yara_engine.clone(),
                 Some(&self.archive_config),
             )
@@ -1234,7 +1210,7 @@ impl PEAnalyzer {
                 analysis_path,
                 sfx_kind,
                 pe_data,
-                Some(self.capability_mapper.clone()),
+                &self.engine,
                 self.yara_engine.clone(),
                 Some(&self.archive_config),
                 &embedded,
@@ -1401,7 +1377,7 @@ impl PEAnalyzer {
                     kind_str,
                     &display_kind,
                     binary.offset,
-                    self.capability_mapper.clone(),
+                    self.engine.clone(),
                     self.yara_engine.clone(),
                     &raw_stng_strings,
                 ) {
@@ -1696,26 +1672,34 @@ impl Default for PEAnalyzer {
 
 impl Analyzer for PEAnalyzer {
     fn analyze_input(&self, input: &AnalysisInput<'_>) -> Result<AnalysisReport> {
-        // Open filefacts-side parse so structural helpers (sections,
-        // imports, exports, signature verification) and strings all
-        // source from filefacts's typed view.
-        let ctx = crate::analysis_context::AnalysisContext::open(input.path, input.data)
-            .map_err(|e| anyhow::anyhow!("filefacts open failed for PE: {e}"))?;
+        // Structural helpers (sections, imports, exports, signature
+        // verification) and strings all source from filefacts's typed view.
+        // Reuse the parse a caller threaded in (an archive member's, extracted
+        // under its rizin setting): opening again repeats the whole
+        // extraction, rizin included.
+        let opened;
+        let ctx = match &input.parsed_ctx {
+            Some(ctx) => ctx,
+            None => {
+                opened = input.open_ctx_with(self.engine.filefacts_options());
+                &opened
+            }
+        };
         let mut report = self.analyze_structural_with_strings(
             input.path,
             input.backing_path(),
             input.data,
-            !input.skip_rizin,
             input.sha256.as_deref(),
-            &ctx,
+            ctx,
         );
 
         // Post-processing
-        self.capability_mapper
+        self.engine
+            .rules()
             .evaluate_and_merge_findings_with_precomputed(
                 &mut report,
                 input.data,
-                crate::capabilities::AnalysisBorrow::with_filefacts(None, Some(&ctx)),
+                crate::capabilities::AnalysisBorrow::with_filefacts(None, Some(ctx)),
                 None,
                 None,
                 None,
@@ -1930,7 +1914,7 @@ mod tests {
             return;
         }
         let bytes = std::fs::read(&test_file).unwrap();
-        let ctx = crate::analysis_context::AnalysisContext::open(&test_file, &bytes).unwrap();
+        let ctx = crate::analysis_context::AnalysisContext::open(&test_file, &bytes);
         // test.exe is x86_64; filefacts surfaces it via `pe.machine`.
         assert_eq!(analyzer.arch_name(&ctx), "x86_64");
     }
@@ -1972,7 +1956,7 @@ mod tests {
             return;
         }
         let bytes = std::fs::read(&test_file).unwrap();
-        let ctx = crate::analysis_context::AnalysisContext::open(&test_file, &bytes).unwrap();
+        let ctx = crate::analysis_context::AnalysisContext::open(&test_file, &bytes);
         let report = analyzer.analyze_structural_with_ctx(&test_file, &bytes, None, &ctx);
 
         assert!(!report.imports.is_empty());
@@ -2179,12 +2163,16 @@ mod tests {
 
     #[test]
     fn test_pe_upx_tool_missing_creates_finding() {
-        use crate::upx::{UPXDecompressor, disable_upx};
+        use crate::upx::UPXDecompressor;
 
-        // Temporarily disable UPX to simulate tool not available
-        disable_upx();
-
-        let analyzer = PEAnalyzer::new();
+        // An engine with UPX off reports the unpacked image as not analyzed,
+        // exactly as when the tool is missing.
+        let analyzer = PEAnalyzer::new().with_engine(crate::Engine::empty().with_settings(
+            crate::engine::Settings {
+                upx: false,
+                ..Default::default()
+            },
+        ));
 
         // Create minimal UPX-packed PE-like data
         let mut upx_data = vec![0u8; 512];
@@ -2319,8 +2307,7 @@ mod tests {
         pe_data[0x306..0x308].copy_from_slice(&0x0002u16.to_le_bytes());
 
         let path = std::path::Path::new("synthetic.exe");
-        let ctx = crate::analysis_context::AnalysisContext::open(path, &pe_data)
-            .expect("filefacts opens synthetic PE");
+        let ctx = crate::analysis_context::AnalysisContext::open(path, &pe_data);
         assert_eq!(
             super::pe_certificate_range_from_ctx(&ctx, &pe_data),
             Some((0x300, 0x420)),

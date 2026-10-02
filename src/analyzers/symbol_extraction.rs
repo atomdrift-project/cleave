@@ -364,8 +364,9 @@ mod tests {
             FileType::CSharp => "test.cs",
             other => panic!("parse_for_test: unsupported language {other:?}"),
         };
-        let parsed = filefacts::open_with_path(std::path::Path::new(hint), code.as_bytes())
-            .expect("filefacts open");
+        let parsed = filefacts::OpenOptions::new()
+            .path(std::path::Path::new(hint))
+            .open(code.as_bytes());
         let _ = parsed.values();
         parsed
     }

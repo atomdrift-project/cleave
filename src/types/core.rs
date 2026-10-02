@@ -276,7 +276,13 @@ pub struct AnalysisReport {
     /// part of any cache key.
     #[serde(skip)]
     pub(crate) cached_member_kv: Option<std::collections::BTreeMap<String, serde_json::Value>>,
-    /// Filefacts's flat metric map (`{ "lnk.args_max_whitespace_run":
+    /// The engine this report was analyzed under, so [`Self::finalize`] folds
+    /// the root file under the same rules and settings as its members.
+    /// Transient: never serialized, and absent on a report read back from the
+    /// cache by an entry point that never built an engine.
+    #[serde(skip)]
+    pub(crate) engine: Option<crate::Engine>,
+    /// Filefacts's flat metric map (`{ "lnk.arguments_max_whitespace_run":
     /// 100.0, "pdf.action_count": 4.0, … }`) attached verbatim so
     /// trait-rule resolution for `type: metrics, field: …` reads
     /// filefacts-emitted values directly. This is the sole numeric
@@ -498,6 +504,7 @@ impl AnalysisReport {
             values_tree: None,
             cache_hit: false,
             cached_member_kv: None,
+            engine: None,
             filefacts_metrics: None,
             filefacts_metric_spans: None,
             paths: Vec::new(),
@@ -1810,8 +1817,12 @@ impl AnalysisReport {
     ///
     /// After this call, `files[]` is the single source of truth and `version` is "3".
     pub fn finalize(&mut self) {
+        let engine = self
+            .engine
+            .clone()
+            .unwrap_or_else(crate::shared_resources::fallback_engine);
         // Create the root file entry
-        let mut root_file = self.to_file_analysis(0);
+        let mut root_file = self.to_file_analysis(0, &engine);
         root_file.path = self.target.path.clone();
         root_file.depth = 0;
         root_file.parent_id = None;
@@ -1962,6 +1973,7 @@ impl AnalysisReport {
             file.strip_source_fields();
             Self::refresh_formula(file);
             file.compute_summary();
+            sort_for_output(file);
         }
 
         // Compute report summary and merge metadata into it
@@ -2004,8 +2016,10 @@ impl AnalysisReport {
     ///
     /// This is used internally by finalize() and by archive analyzers
     /// to convert per-file reports into the flat files array structure.
+    /// `engine` is the one the report was analyzed under: its rules and
+    /// settings decide which folded fields are kept.
     #[must_use]
-    pub fn to_file_analysis(&self, id: u32) -> FileAnalysis {
+    pub fn to_file_analysis(&self, id: u32, engine: &crate::Engine) -> FileAnalysis {
         // Exhaustive on purpose: a new report field is a compile error here
         // until someone decides whether it belongs on the per-file entry. A
         // hand-kept copy of this list once dropped `suppressions`.
@@ -2037,6 +2051,7 @@ impl AnalysisReport {
             comments: _,
             cache_hit: _,
             cached_member_kv: _,
+            engine: _,
             filefacts_metric_spans: _,
             archive_contents: _,
             scanned_path: _,
@@ -2077,13 +2092,13 @@ impl AnalysisReport {
         // lookups, diff) now reads `kv`. In compact-member mode the flatten is
         // skipped entirely for files no rule can reach — see `retain_folded_kv`.
         if let Some(tree) = values_tree.as_deref()
-            && retain_folded_kv(&file.path)
+            && retain_folded_kv(&file.path, engine)
         {
             flatten_kv_for_output(tree, &mut file.kv);
         } else if let Some(tree) = values_tree.as_deref() {
             retain_cargo_context_values(&file.path, tree, &mut file.kv);
         }
-        drop_unread_folded_fields(&mut file);
+        drop_unread_folded_fields(&mut file, engine);
         file
     }
 
@@ -2096,6 +2111,7 @@ impl AnalysisReport {
     pub fn into_file_analysis(
         self,
         id: u32,
+        engine: &crate::Engine,
     ) -> (FileAnalysis, Vec<FileAnalysis>, Vec<ArchiveEntry>) {
         let Self {
             target,
@@ -2120,6 +2136,7 @@ impl AnalysisReport {
             env_vars,
             values_tree,
             cached_member_kv,
+            engine: _,
             files: nested_files,
             archive_contents,
             // Report-level only: not part of a per-file entry.
@@ -2166,7 +2183,7 @@ impl AnalysisReport {
         // directly. Both paths land the same map, so the two sides of a diff
         // agree on an unchanged member instead of reporting phantom kv deltas.
         if let Some(tree) = values_tree.as_deref()
-            && retain_folded_kv(&file.path)
+            && retain_folded_kv(&file.path, engine)
         {
             flatten_kv_for_output(tree, &mut file.kv);
         } else if let Some(kv) = cached_member_kv {
@@ -2174,12 +2191,26 @@ impl AnalysisReport {
         } else if let Some(tree) = values_tree.as_deref() {
             retain_cargo_context_values(&file.path, tree, &mut file.kv);
         }
-        drop_unread_folded_fields(&mut file);
-        precompact_member_facts(&mut file);
-        early_strip_member_findings(&mut file);
-        shrink_member_capacity(&mut file);
+        drop_unread_folded_fields(&mut file, engine);
+        precompact_member_facts(&mut file, engine);
+        early_strip_member_findings(&mut file, engine);
+        shrink_member_capacity(&mut file, engine);
         (file, nested_files, archive_contents)
     }
+}
+
+/// Put a finished file's findings and suppressions in their output order:
+/// most severe first, then by id. Analysis appends them as its producers
+/// finish (parallel passes, member folds), so without a fixed order two runs
+/// over the same file list them differently, and every index into the list
+/// (the compact `uses`) shifts with it.
+fn sort_for_output(file: &mut FileAnalysis) {
+    file.findings
+        .sort_by(|a, b| b.crit.cmp(&a.crit).then_with(|| a.id.cmp(&b.id)));
+    for suppression in &mut file.suppressions {
+        suppression.by.sort_by(|a, b| a.id.cmp(&b.id));
+    }
+    file.suppressions.sort_by(|a, b| a.id.cmp(&b.id));
 }
 
 /// The per-file fields a report carries into its `FileAnalysis` entry. Filled
@@ -2306,11 +2337,12 @@ impl FileAnalysis {
 ///   notable findings) selects the same set.
 ///
 /// The end-strip still runs and removes whatever this kept conservatively.
-fn early_strip_member_findings(file: &mut FileAnalysis) {
-    if !crate::shared_resources::compact_member_retention() {
+fn early_strip_member_findings(file: &mut FileAnalysis, engine: &crate::Engine) {
+    if !engine.compact_members() {
         return;
     }
-    early_strip_impl(file, crate::shared_resources::trait_possibly_referenced);
+    let refs = engine.rules().trait_ref_index();
+    early_strip_impl(file, |id| refs.possibly_referenced(id));
 }
 
 /// The pure strip behind [`early_strip_member_findings`], parameterized on
@@ -2370,8 +2402,8 @@ fn early_strip_impl(file: &mut FileAnalysis, possibly_referenced: impl Fn(&str) 
 /// (~0.3 GB) through the whole archive ramp. Shrinking reallocates into
 /// right-sized blocks, so the abandoned pages become purgeable instead of
 /// pinned by live tails.
-fn shrink_member_capacity(file: &mut FileAnalysis) {
-    if !crate::shared_resources::compact_member_retention() {
+fn shrink_member_capacity(file: &mut FileAnalysis, engine: &crate::Engine) {
+    if !engine.compact_members() {
         return;
     }
     file.findings.shrink_to_fit();
@@ -2396,8 +2428,8 @@ fn shrink_member_capacity(file: &mut FileAnalysis) {
 /// `tgt`/`mbr` sets by the same projection; `references` are kept for
 /// `link_flagged_references`. Root files never come through this path (they
 /// fold via `to_file_analysis`), so full-fidelity output is unaffected.
-fn precompact_member_facts(file: &mut FileAnalysis) {
-    if !crate::shared_resources::compact_member_retention() {
+fn precompact_member_facts(file: &mut FileAnalysis, engine: &crate::Engine) {
+    if !engine.compact_members() {
         return;
     }
     // Metrics stay flat: precompacting them was measured a regression — the
@@ -2421,8 +2453,8 @@ fn precompact_member_facts(file: &mut FileAnalysis) {
 /// by fold time. Compact output reads `symbols` and `references` from the
 /// view, never `values`, so in compact mode the tree is ballast. No-op in
 /// full-retention mode: the v3 schema serializes it.
-fn drop_unread_folded_fields(file: &mut FileAnalysis) {
-    if !crate::shared_resources::compact_member_retention() {
+fn drop_unread_folded_fields(file: &mut FileAnalysis, engine: &crate::Engine) {
+    if !engine.compact_members() {
         return;
     }
     if let Some(view) = file.filefacts.as_mut() {
@@ -2516,8 +2548,8 @@ mod cargo_compact_retention_tests {
 /// folds into its container. Always true in full-retention mode (the v3
 /// schema serializes `kv`); in compact mode, true only when a loaded rule
 /// reaches this file by basename via a `<filename>::` sibling kv path.
-fn retain_folded_kv(path: &str) -> bool {
-    if !crate::shared_resources::compact_member_retention() {
+fn retain_folded_kv(path: &str, engine: &crate::Engine) -> bool {
+    if !engine.compact_members() {
         return true;
     }
     // Mirror `sibling_path_matches`: the final `/`, `\`, or `!` component.
@@ -2543,7 +2575,11 @@ fn retain_folded_kv(path: &str) -> bool {
     {
         return true;
     }
-    crate::shared_resources::kv_sibling_basename_referenced(basename)
+    engine
+        .rules()
+        .kv_sibling_basenames()
+        .iter()
+        .any(|n| n.eq_ignore_ascii_case(basename))
 }
 
 /// Flatten a JSON kv tree into the per-file output map. Nested
@@ -2947,8 +2983,8 @@ mod tests {
             by: vec![],
         });
 
-        let borrowed = report.to_file_analysis(0);
-        let (consumed, _, _) = report.into_file_analysis(0);
+        let borrowed = report.to_file_analysis(0, &crate::Engine::empty());
+        let (consumed, _, _) = report.into_file_analysis(0, &crate::Engine::empty());
         assert_eq!(borrowed.suppressions.len(), 1);
         assert_eq!(consumed.suppressions, borrowed.suppressions);
 
@@ -3035,6 +3071,36 @@ mod tests {
             1,
             "nested matched traits remain"
         );
+    }
+
+    /// Analysis appends findings as its producers finish; the output order must
+    /// not depend on that (the compact `uses` indexes into it).
+    #[test]
+    fn finalize_orders_findings_by_severity_then_id() {
+        let mut report = AnalysisReport::new(TargetInfo {
+            path: "/samples/a.bin".to_string(),
+            file_type: "elf".to_string(),
+            size_bytes: 1,
+            sha256: String::new(),
+            architectures: None,
+        });
+        for (id, crit) in [
+            ("m/b::two", Criticality::Notable),
+            ("m/a::one", Criticality::Notable),
+            ("m/z::bad", Criticality::Hostile),
+        ] {
+            let mut finding =
+                Finding::new(id.to_string(), FindingKind::Capability, id.to_string(), 0.9);
+            finding.crit = crit;
+            report.findings.push(finding);
+        }
+        report.finalize();
+        let ids: Vec<&str> = report.files[0]
+            .findings
+            .iter()
+            .map(|f| f.id.as_str())
+            .collect();
+        assert_eq!(ids, ["m/z::bad", "m/a::one", "m/b::two"]);
     }
 
     #[test]

@@ -37,7 +37,6 @@ pub(crate) mod emitted;
 pub(crate) mod facts_cache;
 mod helpers;
 mod patterns;
-mod precision;
 pub(crate) mod regex_cost;
 mod taxonomy;
 
@@ -107,9 +106,15 @@ pub(super) mod shared {
 
 // Re-export public API (pub(crate) - accessible to capabilities module)
 
+// Rule loading, re-exported for the checks and their tests.
+#[allow(unused_imports)]
+pub(crate) use super::parsing::autoprefix_trait_refs;
+
 // Precision calculation
+// Precision scoring lives outside the linter (every load applies the
+// thresholds); re-exported for the checks that report on it.
 #[allow(unused_imports)] // calculate_composite_precision is used by test_rules in binary
-pub(crate) use precision::{
+pub(crate) use super::precision::{
     atomic_calibrated_max, build_reference_index, calculate_composite_precision,
     calculate_trait_precision, composite_calibrated_max, composite_inflation_warning_threshold,
     file_type_precision_penalty, platform_precision_penalty, precalculate_all_composite_precisions,
@@ -132,9 +137,9 @@ pub(crate) use duplicates::{
 
 // Composite rule validation
 pub(crate) use composite::{
-    autoprefix_trait_refs, collect_trait_refs_from_rule, collect_trait_refs_from_trait_def,
-    find_bare_or_crit_escalations, find_leg_suppressing_composites, find_many_directory_refs,
-    find_overlapping_conditions, find_pure_directory_alias_composites, find_redundant_any_refs,
+    collect_trait_refs_from_rule, collect_trait_refs_from_trait_def, find_bare_or_crit_escalations,
+    find_leg_suppressing_composites, find_many_directory_refs, find_overlapping_conditions,
+    find_pure_directory_alias_composites, find_redundant_any_refs,
     find_self_referencing_composites, find_self_referencing_traits, find_self_suppressing_traits,
     find_single_item_clauses, validate_composite_trait_only,
 };

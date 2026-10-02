@@ -1322,7 +1322,7 @@ pub(crate) struct ArchiveAnalyzer {
     lane_thread: std::sync::atomic::AtomicUsize,
     /// Path prefix for nested archives (e.g., "inner.tar.gz" becomes "outer.zip!inner.tar.gz")
     archive_path_prefix: Option<String>,
-    capability_mapper: Option<Arc<CapabilityMapper>>,
+    engine: crate::Engine,
     yara_engine: Option<Arc<YaraEngine>>,
     /// Passwords to try for encrypted zip files
     zip_passwords: Arc<[String]>,
@@ -1636,7 +1636,7 @@ impl ArchiveAnalyzer {
             current_depth: 0,
             lane_thread: std::sync::atomic::AtomicUsize::new(usize::MAX),
             archive_path_prefix: None,
-            capability_mapper: None,
+            engine: crate::Engine::empty(),
             yara_engine: None,
             zip_passwords: Arc::from([]),
             sample_extraction: None,
@@ -1678,14 +1678,14 @@ impl ArchiveAnalyzer {
     /// Create analyzer with pre-existing capability mapper (wraps in Arc)
     #[must_use]
     pub(crate) fn with_capability_mapper(mut self, mapper: CapabilityMapper) -> Self {
-        self.capability_mapper = Some(Arc::new(mapper));
+        self.engine = crate::Engine::from_rules(Arc::new(mapper));
         self
     }
 
-    /// Create analyzer with shared capability mapper (avoids cloning)
+    /// Analyze under `engine`: its rules and settings.
     #[must_use]
-    pub(crate) fn with_capability_mapper_arc(mut self, mapper: Arc<CapabilityMapper>) -> Self {
-        self.capability_mapper = Some(mapper);
+    pub(crate) fn with_engine(mut self, engine: crate::Engine) -> Self {
+        self.engine = engine;
         self
     }
 
@@ -1769,7 +1769,7 @@ impl ArchiveAnalyzer {
             current_depth: self.current_depth,
             lane_thread: std::sync::atomic::AtomicUsize::new(usize::MAX),
             archive_path_prefix: self.archive_path_prefix.clone(),
-            capability_mapper: self.capability_mapper.clone(),
+            engine: self.engine.clone(),
             yara_engine: self.yara_engine.clone(),
             zip_passwords: self.zip_passwords.clone(),
             sample_extraction: self
@@ -1983,7 +1983,7 @@ impl ArchiveAnalyzer {
         };
 
         let mut report = AnalysisReport::new(target);
-        let mut filefacts_archive_entries: Vec<ArchiveEntry> = Vec::new();
+        let filefacts_archive_entries: Vec<ArchiveEntry>;
 
         // Open filefacts once on the host archive bytes and merge its
         // typed values/metrics into the report. The capability
@@ -1994,9 +1994,12 @@ impl ArchiveAnalyzer {
         // makes `chm.itsf.*` / `rpm.*` / `crx.*` etc. reachable via
         // both `report.values_tree` (host-level kv) and
         // `report.filefacts_metrics` (host-level metrics).
-        if let Ok(ctx) =
-            crate::analysis_context::AnalysisContext::open_with_fileid(archive_path, data, fileid)
         {
+            let ctx = crate::analysis_context::AnalysisContext::open_with(
+                self.engine.filefacts_options().fileid(fileid),
+                archive_path,
+                data,
+            );
             report.filefacts = Some(crate::types::FilefactsView::from_ctx(&ctx));
             report.identity = ctx.identity();
             filefacts_archive_entries = ctx.archive_entries();
@@ -2004,10 +2007,10 @@ impl ArchiveAnalyzer {
             if matches!(file_type, FileType::Rpm) {
                 // Header-declared scripts are independent of payload decoding.
                 // Reuse the existing bounded source adapter, never execute RPM.
-                if let Some(mapper) = &self.capability_mapper {
+                {
                     super::declared_sources::append(
                         &ctx.parsed,
-                        mapper,
+                        &self.engine,
                         &mut report,
                         self.cancelled.as_ref(),
                     );
@@ -2557,9 +2560,7 @@ impl ArchiveAnalyzer {
         // Context is input to atomic value traits as well as composites.
         // Attach it before either pass (library callers need not re-evaluate).
         source_context::attach(report);
-        let Some(mapper) = &self.capability_mapper else {
-            return;
-        };
+        let mapper = self.engine.rules();
         let mut archive_atomic_findings =
             mapper.evaluate_traits_with_ast(report, archive_data, None, None);
         locate_archive_root_findings(&mut archive_atomic_findings);
@@ -3334,7 +3335,6 @@ mod tests {
             .expect("manifest member");
         let expected =
             crate::analysis_context::AnalysisContext::open(Path::new("package.json"), manifest)
-                .unwrap()
                 .identity()
                 .expect("standalone manifest identity");
         assert_eq!(expected.name.as_ref().unwrap().value, "example-package");

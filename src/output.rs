@@ -6592,6 +6592,7 @@ mod tests {
             cache_hit: false,
             values_tree: None,
             cached_member_kv: None,
+            engine: None,
             filefacts_metrics: None,
             filefacts_metric_spans: None,
             paths: vec![],

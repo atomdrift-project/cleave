@@ -5,39 +5,24 @@
 use std::io::Read;
 use std::path::Path;
 use std::process::Command;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use tempfile::NamedTempFile;
 use thiserror::Error;
 
-/// Global disable counter for UPX decompression.
-///
-/// A positive value means UPX support is disabled. This supports both permanent
-/// process-wide disables and scoped guards used by library calls.
-static UPX_DISABLED: AtomicUsize = AtomicUsize::new(0);
+/// Process-wide UPX switch behind [`crate::disable_upx`]. Only the
+/// `AnalysisOptions` entry points read it, when they build their engine; an
+/// analysis itself asks its engine ([`crate::Engine`]), so a per-call
+/// `disable_upx` never reaches analyses running alongside it.
+static UPX_DISABLED: AtomicBool = AtomicBool::new(false);
 
-/// Disable UPX decompression globally
+/// Disable UPX decompression for every later `AnalysisOptions` call.
 pub(crate) fn disable_upx() {
-    UPX_DISABLED.fetch_add(1, Ordering::SeqCst);
+    UPX_DISABLED.store(true, Ordering::Relaxed);
 }
 
-/// Guard that disables UPX support for the lifetime of the value.
-pub(crate) struct ScopedUpxDisable;
-
-impl Drop for ScopedUpxDisable {
-    fn drop(&mut self) {
-        UPX_DISABLED.fetch_sub(1, Ordering::SeqCst);
-    }
-}
-
-/// Disable UPX support for the lifetime of the returned guard.
-pub(crate) fn scoped_disable_upx() -> ScopedUpxDisable {
-    UPX_DISABLED.fetch_add(1, Ordering::SeqCst);
-    ScopedUpxDisable
-}
-
-/// Check if UPX is disabled
+/// Whether [`disable_upx`] was called.
 pub(crate) fn is_disabled() -> bool {
-    UPX_DISABLED.load(Ordering::SeqCst) > 0
+    UPX_DISABLED.load(Ordering::Relaxed)
 }
 
 #[derive(Debug, Error)]
@@ -137,11 +122,8 @@ impl UPXDecompressor {
         false
     }
 
-    /// Check if the upx binary is available (and not disabled).
+    /// Check if the upx binary is available.
     pub(crate) fn is_available() -> bool {
-        if is_disabled() {
-            return false;
-        }
         let Some(upx) = filefacts::tools::resolve("upx") else {
             return false;
         };
@@ -540,20 +522,5 @@ mod tests {
         // Just verify it returns a boolean without crashing
         let _available = UPXDecompressor::is_available();
         // We can't assert true/false since it depends on the system
-    }
-
-    #[test]
-    fn test_scoped_disable_restores_previous_state() {
-        let was_disabled = is_disabled();
-        let before = UPX_DISABLED.load(Ordering::SeqCst);
-
-        {
-            let _guard = scoped_disable_upx();
-            assert!(is_disabled());
-            assert_eq!(UPX_DISABLED.load(Ordering::SeqCst), before + 1);
-        }
-
-        assert_eq!(UPX_DISABLED.load(Ordering::SeqCst), before);
-        assert_eq!(is_disabled(), was_disabled);
     }
 }

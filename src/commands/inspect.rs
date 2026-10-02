@@ -67,8 +67,7 @@ fn inspect_one(target: &str, tree: Option<&cli::InspectTree>) -> Result<Value> {
         anyhow::bail!("File does not exist: {}", target);
     }
     let bytes = fs::read(path).with_context(|| format!("reading {}", target))?;
-    let parsed = filefacts::open_with_path(path, &bytes)
-        .map_err(|e| anyhow::anyhow!("filefacts failed to parse {}: {}", target, e))?;
+    let parsed = filefacts::OpenOptions::new().path(path).open(&bytes);
 
     use filefacts::SymbolKind;
     let kind_to_value = |k: SymbolKind| -> Result<Value> {

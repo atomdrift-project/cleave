@@ -2,7 +2,6 @@
 //! filefacts selects the bodies and languages; this adapter owns traversal and
 //! budgets. No extra YAML parser, interpreter process or security heuristic.
 use super::unified::UnifiedSourceAnalyzer;
-use crate::capabilities::CapabilityMapper;
 use crate::types::{AnalysisGap, AnalysisReport};
 use std::borrow::Cow;
 use std::path::Path;
@@ -15,7 +14,7 @@ const MAX_TOTAL_BYTES: usize = 10 * 1024 * 1024;
 
 pub(super) fn append(
     parsed: &filefacts::ParsedFile<'_>,
-    mapper: &Arc<CapabilityMapper>,
+    engine: &crate::Engine,
     report: &mut AnalysisReport,
     cancelled: Option<&Arc<AtomicBool>>,
 ) {
@@ -71,11 +70,11 @@ pub(super) fn append(
             .collect();
         let path = format!("{}!!{locator}", report.target.path);
         let child = analyzer
-            .with_capability_mapper_arc(Arc::clone(mapper))
+            .with_engine(engine.clone())
             .without_embedded_detection()
             .with_cancellation(cancelled.cloned())
             .analyze_source_as_configured(Path::new(&path), &source);
-        let (mut file, nested, _) = child.into_file_analysis(0);
+        let (mut file, nested, _) = child.into_file_analysis(0, engine);
         // Embedded detection is deliberately disabled here: one declared body
         // is one independent source scope, not an unbounded recursive container.
         debug_assert!(nested.is_empty());
@@ -214,7 +213,9 @@ mod tests {
         assert_eq!(clean.len(), raw.len());
         // Raw expressions are parse errors; the neutralised body is clean bash.
         let parse = |src: &str| {
-            let parsed = filefacts::open_with_path(Path::new("step.sh"), src.as_bytes()).unwrap();
+            let parsed = filefacts::OpenOptions::new()
+                .path(Path::new("step.sh"))
+                .open(src.as_bytes());
             parsed.source_ast().unwrap().tree.root_node().has_error()
         };
         assert!(parse(raw));

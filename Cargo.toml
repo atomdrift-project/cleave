@@ -261,7 +261,11 @@ path = "src/bin/yara-precompile.rs"
 test = false
 
 [features]
-default = ["jemalloc"]
+default = ["jemalloc", "lint"]
+# The trait-rule linter (`cleave validate`, `cleave test-rules`, full
+# validation on load). Scanning never runs it; library users that only analyze
+# files can drop it with `default-features = false`.
+lint = []
 # Skip YARA rule loading in tests for faster execution
 # Unit tests that don't need YARA scanning use this
 test_fast = []

@@ -7,7 +7,6 @@
 use crate::analyzers::FileType;
 use crate::analyzers::symbol_extraction;
 use crate::analyzers::{AnalysisInput, Analyzer};
-use crate::capabilities::CapabilityMapper;
 use crate::types::{AnalysisReport, StringInfo, TargetInfo};
 use anyhow::Result;
 use std::path::Path;
@@ -20,7 +19,7 @@ use std::sync::Arc;
 #[derive(Debug)]
 pub(crate) struct GenericAnalyzer {
     file_type: FileType,
-    capability_mapper: Arc<CapabilityMapper>,
+    engine: crate::Engine,
 }
 
 impl GenericAnalyzer {
@@ -29,14 +28,14 @@ impl GenericAnalyzer {
     pub(crate) fn new(file_type: FileType) -> Self {
         Self {
             file_type,
-            capability_mapper: Arc::new(CapabilityMapper::empty()),
+            engine: crate::Engine::empty(),
         }
     }
 
-    /// Create analyzer with shared capability mapper (avoids cloning)
+    /// Analyze under `engine`: its rules and settings.
     #[must_use]
-    pub(crate) fn with_capability_mapper_arc(mut self, mapper: Arc<CapabilityMapper>) -> Self {
-        self.capability_mapper = mapper;
+    pub(crate) fn with_engine(mut self, engine: crate::Engine) -> Self {
+        self.engine = engine;
         self
     }
 
@@ -57,8 +56,10 @@ impl GenericAnalyzer {
 
     #[allow(dead_code)] // Used by embedded_code_detector
     pub(crate) fn analyze_source(&self, file_path: &Path, content: &str) -> AnalysisReport {
-        let ctx =
-            crate::analysis_context::AnalysisContext::open(file_path, content.as_bytes()).ok();
+        let ctx = Some(crate::analysis_context::AnalysisContext::open(
+            file_path,
+            content.as_bytes(),
+        ));
         self.analyze_source_internal(
             file_path,
             content,
@@ -220,7 +221,7 @@ impl GenericAnalyzer {
                 crate::analyzers::embedded_code_detector::process_all_strings(
                     &file_path.display().to_string(),
                     &report.strings,
-                    &self.capability_mapper,
+                    &self.engine,
                     0,
                     Some(&self.file_type),
                     None,
@@ -234,7 +235,7 @@ impl GenericAnalyzer {
                     crate::analyzers::embedded_code_detector::analyze_batch_expansion_layer(
                         &file_path.display().to_string(),
                         content,
-                        &self.capability_mapper,
+                        &self.engine,
                     ),
                 );
             }
@@ -267,12 +268,7 @@ impl GenericAnalyzer {
                 report.filefacts = Some(view);
             }
             report.identity = ctx.identity();
-            super::declared_sources::append(
-                &ctx.parsed,
-                &self.capability_mapper,
-                &mut report,
-                cancellation,
-            );
+            super::declared_sources::append(&ctx.parsed, &self.engine, &mut report, cancellation);
         }
 
         // Evaluate all rules (atomic + composite) and merge into report.
@@ -285,7 +281,8 @@ impl GenericAnalyzer {
         // `EF BF BD`) and shifts every offset, corrupting filefacts's
         // header reads and any other byte-precise probe.
         let t_eval = std::time::Instant::now();
-        self.capability_mapper
+        self.engine
+            .rules()
             .evaluate_and_merge_findings_with_precomputed(
                 &mut report,
                 eval_bytes,
@@ -440,7 +437,8 @@ impl GenericAnalyzer {
             Some(ctx) => Self::pull_text_metrics(&ctx.parsed, report),
             None => {
                 let bytes = original_bytes.unwrap_or(content.as_bytes());
-                if let Ok(parsed) = filefacts::open(bytes) {
+                {
+                    let parsed = filefacts::open(bytes);
                     Self::pull_text_metrics(&parsed, report);
                 }
             }
@@ -563,12 +561,11 @@ impl Analyzer for GenericAnalyzer {
             && let Some(decoded) = crate::analyzers::cfml::decrypt_template(input.data)
         {
             let content = String::from_utf8_lossy(&decoded);
-            let source_ctx = crate::analysis_context::AnalysisContext::open_as(
+            let source_ctx = Some(crate::analysis_context::AnalysisContext::open_with(
+                filefacts::OpenOptions::new().file_type(filefacts::FileType::Cfml),
                 input.path,
                 &decoded,
-                filefacts::FileType::Cfml,
-            )
-            .ok();
+            ));
             let decoded_strings = source_ctx
                 .as_ref()
                 .map(crate::analysis_context::AnalysisContext::text_rows);

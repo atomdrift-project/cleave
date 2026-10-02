@@ -7,30 +7,28 @@
 //! into `report.values_tree` before trait evaluation runs.
 
 use super::{AnalysisInput, Analyzer};
-use crate::capabilities::CapabilityMapper;
 use crate::types::{AnalysisReport, TargetInfo};
 use anyhow::Result;
 use sha2::{Digest, Sha256};
 use std::path::Path;
-use std::sync::Arc;
 
 /// RTF document analyzer — dispatcher only.
 #[derive(Debug)]
 pub(crate) struct RtfAnalyzer {
-    capability_mapper: Arc<CapabilityMapper>,
+    engine: crate::Engine,
 }
 
 impl RtfAnalyzer {
     #[must_use]
     pub(crate) fn new() -> Self {
         Self {
-            capability_mapper: Arc::new(CapabilityMapper::empty()),
+            engine: crate::Engine::empty(),
         }
     }
 
     #[must_use]
-    pub(crate) fn with_capability_mapper_arc(mut self, mapper: Arc<CapabilityMapper>) -> Self {
-        self.capability_mapper = mapper;
+    pub(crate) fn with_engine(mut self, engine: crate::Engine) -> Self {
+        self.engine = engine;
         self
     }
 
@@ -52,8 +50,11 @@ impl RtfAnalyzer {
         // onto the report -- so `type: text` traits scoped to rtf evaluated
         // against an empty corpus and could never match.
         report.strings = crate::strings::strings_from_filefacts(file_path, data);
-        let filefacts_ctx = crate::analysis_context::AnalysisContext::open(file_path, data).ok();
-        self.capability_mapper
+        let filefacts_ctx = Some(crate::analysis_context::AnalysisContext::open(
+            file_path, data,
+        ));
+        self.engine
+            .rules()
             .evaluate_and_merge_findings_with_precomputed(
                 &mut report,
                 data,

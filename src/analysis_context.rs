@@ -1,6 +1,6 @@
 //! Single integration point with `filefacts`.
 //!
-//! `AnalysisContext` opens bytes once through `filefacts::open_with_path`
+//! `AnalysisContext` opens bytes once through `filefacts::OpenOptions`
 //! and lends the resulting `ParsedFile` to downstream consumers. Anything
 //! that needs filefacts-derived identity, values, metrics, strings, sections,
 //! symbols, archive indexes, or AST projections should pass this context
@@ -24,66 +24,30 @@ pub struct AnalysisContext<'a> {
 }
 
 impl<'a> AnalysisContext<'a> {
-    /// Open the file through filefacts, returning a context borrowing the
-    /// provided `path` and `content`.
-    pub fn open(path: &'a Path, content: &'a [u8]) -> Result<Self, filefacts::Error> {
-        let parsed = filefacts::open_with_path(path, content)?;
-        Ok(Self {
-            path,
-            content,
-            parsed,
-        })
-    }
-
-    /// Forward the request's cancellation flag to filefacts, so a long
-    /// tree-sitter parse is abandoned when the caller gives up rather than
-    /// running to its own wall budget. `None` leaves the context uncancellable,
-    /// which is the right default for callers with no request to cancel.
-    ///
-    /// Only the tree-sitter parse observes this; rizin is bounded by its own
-    /// timeout and process-group kill instead. See
-    /// [`filefacts::ParsedFile::with_cancellation`].
+    /// Open `content` through filefacts under `options`, identifying it from
+    /// `path` and the bytes unless `options` forces a type or a `FileId`.
+    /// Every filefacts setting (rizin, disk cache, cancellation) belongs to
+    /// the parse it is given to, so engines with different settings can parse
+    /// side by side; see [`crate::Engine`] for the options an analysis uses.
     #[must_use]
-    pub fn with_cancellation(mut self, flag: Option<&'a std::sync::atomic::AtomicBool>) -> Self {
-        if let Some(flag) = flag {
-            self.parsed = self.parsed.with_cancellation(flag);
+    pub fn open_with(
+        options: filefacts::OpenOptions<'a>,
+        path: &'a Path,
+        content: &'a [u8],
+    ) -> Self {
+        let parsed = options.path(path).open(content);
+        Self {
+            path,
+            content,
+            parsed,
         }
-        self
     }
 
-    /// Open with a [`filefacts::FileId`] the caller already computed, so the
-    /// (potentially expensive) detection pass runs once per file.
-    pub fn open_with_fileid(
-        path: &'a Path,
-        content: &'a [u8],
-        fileid: filefacts::FileId,
-    ) -> Result<Self, filefacts::Error> {
-        let parsed = filefacts::open_with_fileid(path, content, fileid)?;
-        Ok(Self {
-            path,
-            content,
-            parsed,
-        })
-    }
-
-    /// Open `content` forcing a caller-known `file_type`, bypassing
-    /// detection. For embedded code whose language is already known but
-    /// whose virtual path / extracted body carries no detectable shebang,
-    /// extension, or magic (e.g. the inner source of `python3 -c "<code>"`).
-    /// Without this, filefacts re-detects the type from the virtual path,
-    /// lands on `Unknown`, and produces no source AST — so the payload's
-    /// capabilities never surface.
-    pub fn open_as(
-        path: &'a Path,
-        content: &'a [u8],
-        file_type: filefacts::FileType,
-    ) -> Result<Self, filefacts::Error> {
-        let parsed = filefacts::open_as(path, content, file_type)?;
-        Ok(Self {
-            path,
-            content,
-            parsed,
-        })
+    /// Open with filefacts' defaults: rizin on, the disk cache as
+    /// `FILEFACTS_CACHE` says, no cancellation.
+    #[must_use]
+    pub fn open(path: &'a Path, content: &'a [u8]) -> Self {
+        Self::open_with(filefacts::OpenOptions::new(), path, content)
     }
 
     /// Format-native residual values tree as JSON.
@@ -404,7 +368,7 @@ mod tests {
             "/tests/fixtures/java/Suspicious.class"
         ));
         let bytes = std::fs::read(path).expect("read Java class fixture");
-        let ctx = AnalysisContext::open(path, &bytes).expect("parse Java class fixture");
+        let ctx = AnalysisContext::open(path, &bytes);
 
         let imports = ctx.imports_from_filefacts();
         let symbols: std::collections::BTreeSet<&str> =
@@ -448,7 +412,7 @@ mod tests {
             "/tests/fixtures/dotnet_utf16_clipboard.dll"
         ));
         let bytes = std::fs::read(path).expect("read PE fixture");
-        let ctx = AnalysisContext::open(path, &bytes).expect("parse PE fixture");
+        let ctx = AnalysisContext::open(path, &bytes);
         let identity = ctx.identity().expect("PE identity");
         let title = identity.title.expect("PE description title");
 

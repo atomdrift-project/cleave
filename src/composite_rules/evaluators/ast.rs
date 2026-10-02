@@ -663,6 +663,14 @@ pub(crate) fn batch_ast_queries(
     let lang = &*tree.language();
     let mut compiling: Vec<(&str, Arc<tree_sitter::Query>)> = Vec::new();
     for &q in query_strs {
+        // A batch runs under the tightest budget among its queries, and a
+        // multi-wildcard query's is 100ms. Batched, it capped every ordinary
+        // query beside it at that, so on a loaded machine the walk stopped
+        // early and their matches later in the file came and went with load.
+        // Left out of the map, it runs alone under its own budget.
+        if count_unbounded_any_wildcards(q) >= 2 {
+            continue;
+        }
         if let Some(compiled) = cached_ast_query(lang, file_type, q) {
             compiling.push((q, compiled));
         }

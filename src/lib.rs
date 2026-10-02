@@ -19,6 +19,9 @@
 //! # }
 //! ```
 
+// Without `lint`, the helpers loading shares with the rule linter look unused.
+#![cfg_attr(not(feature = "lint"), allow(dead_code))]
+
 extern crate self as cleave;
 
 mod analysis_cache;
@@ -28,6 +31,7 @@ pub mod cache;
 pub mod cancellation;
 pub(crate) mod context;
 pub mod decoders;
+mod engine;
 mod entropy;
 pub mod extractors;
 pub mod file_io;
@@ -38,8 +42,9 @@ pub mod rule_update;
 mod shared_resources;
 pub mod strings;
 mod subprocess;
+#[cfg(feature = "lint")]
 pub mod test_rules;
-#[cfg(test)]
+#[cfg(all(test, feature = "lint"))]
 /// Test module for rule filters.
 pub mod test_rules_filters_test;
 pub(crate) mod traits_fingerprint;
@@ -174,6 +179,7 @@ use analyzers::FileTypeExt;
 pub use analyzers::{AnalysisInput, Analyzer, FileType, detect_file_type};
 pub use capabilities::CapabilityMapper;
 pub use composite_rules::Platform;
+pub use engine::Engine;
 pub use rayon_nest::{mark_thread_background, set_parallel_owner_caps};
 pub use types::binary::StringInfo;
 pub use types::code_structure::{BinaryProperties, SourceCodeMetrics};
@@ -702,31 +708,6 @@ pub fn disable_upx() {
     upx::disable_upx();
 }
 
-/// Scoped disable guards applied for a single analysis operation.
-struct AnalysisDisableGuards {
-    _radare2: Option<filefacts::rizin::ScopedDisable>,
-    _upx: Option<upx::ScopedUpxDisable>,
-}
-
-impl AnalysisDisableGuards {
-    fn from_options(options: &AnalysisOptions) -> Self {
-        // filefacts' extraction cache is on by default; when cleave's own
-        // cache switch is off (`--no-cache`, `CLEAVE_SKIP_CACHE`) keep
-        // filefacts from writing to disk too. We only ever *disable* here —
-        // re-enabling is left to filefacts' own default / `FILEFACTS_CACHE`,
-        // so a test or ops env that disabled it isn't silently overridden.
-        if crate::cache::skip_cache() {
-            filefacts::cache::set_caching_enabled(false);
-        }
-        Self {
-            _radare2: options
-                .disable_radare2
-                .then(filefacts::rizin::scoped_disable),
-            _upx: options.disable_upx.then(upx::scoped_disable_upx),
-        }
-    }
-}
-
 /// Process YARA scan results and add them to the analysis report.
 ///
 /// Extracts YARA matches and inline evidence, converts matches to findings,
@@ -889,6 +870,11 @@ pub fn create_analysis_report(
 }
 
 /// Options for file analysis
+///
+/// The free functions ([`analyze_file`], [`analyze_bytes`], ...) read every
+/// field. An [`Engine`] is built from the engine-level fields (YARA, UPX,
+/// platforms, precision thresholds, validation) by [`Engine::for_options`];
+/// its `analyze_*` methods read only the per-call ones and ignore the rest.
 #[derive(Debug, Clone)]
 pub struct AnalysisOptions {
     /// Enable third-party YARA rules
@@ -1474,24 +1460,81 @@ fn extract_member_bytes(data: Vec<u8>, member: &str) -> Result<Option<Vec<u8>>> 
 ///
 /// An `AnalysisReport` containing all extracted features, findings, and metrics.
 pub fn analyze_file<P: AsRef<Path>>(path: P, options: &AnalysisOptions) -> Result<AnalysisReport> {
-    let path = path.as_ref();
+    analyze_path_under(path.as_ref(), options, &EngineFor::Options)
+}
 
+/// Where a single-file entry point gets its engine: one the caller holds, or
+/// the shared one its `AnalysisOptions` describe, built only on a cache miss
+/// (a hit needs no rules loaded, and loading them costs ~800ms cold).
+pub(crate) enum EngineFor<'a> {
+    Given(&'a Engine),
+    Options,
+}
+
+impl EngineFor<'_> {
+    /// The cache fast path: the report cached for these bytes, if any.
+    fn cached(
+        &self,
+        data: &[u8],
+        sha256: &str,
+        path: &Path,
+        label: &str,
+        options: &AnalysisOptions,
+    ) -> Option<AnalysisReport> {
+        let file_type = analyzers::detect_file_type_from_data(path, data);
+        let type_key = analysis_cache::report_type_key(file_type.label(), path);
+        let mut report = match self {
+            Self::Given(engine) => analysis_cache::report_cache_lookup(
+                sha256,
+                &type_key,
+                options,
+                engine.settings(),
+                label,
+                Some(engine.rules()),
+            ),
+            Self::Options => analysis_cache::report_cache_lookup(
+                sha256,
+                &type_key,
+                options,
+                &shared_resources::settings_for_options(options),
+                label,
+                shared_resources::loaded_capability_mapper().as_deref(),
+            ),
+        }?;
+        report.target.path = label.to_string();
+        report.analysis_timestamp = Some(chrono::Utc::now());
+        report.cache_hit = true;
+        if let Self::Given(engine) = self {
+            report.engine = Some((*engine).clone());
+        }
+        Some(report)
+    }
+
+    fn engine(&self, options: &AnalysisOptions) -> Result<Engine> {
+        match self {
+            Self::Given(engine) => Ok((*engine).clone()),
+            Self::Options => load_scan_resources(options),
+        }
+    }
+}
+
+/// Analyze the file at `path`: a cache lookup on its bytes first, then the
+/// full pipeline under the engine `source` provides.
+pub(crate) fn analyze_path_under(
+    path: &Path,
+    options: &AnalysisOptions,
+    source: &EngineFor<'_>,
+) -> Result<AnalysisReport> {
     // Fast path: check the analysis cache before loading expensive resources.
     // SHA256 of the file is cheap (~1ms); loading CapabilityMapper + YARA is not (~800ms).
     // Keep the pre-read data to pass through on cache miss, avoiding a second read.
     let (preloaded, precomputed_sha) = if path.is_file() {
         let file_data = file_io::read_file_smart(path)?;
         let sha256 = analyzers::utils::calculate_sha256(file_data.as_slice());
-        let file_type = analyzers::detect_file_type_from_data(path, file_data.as_slice());
-        if let Some(mut report) = analysis_cache::report_cache_lookup(
-            &sha256,
-            &analysis_cache::report_type_key(file_type.label(), path),
-            options,
-            &path.display().to_string(),
-        ) {
-            report.target.path = path.display().to_string();
-            report.analysis_timestamp = Some(chrono::Utc::now());
-            report.cache_hit = true;
+        let label = path.display().to_string();
+        if let Some(mut report) =
+            source.cached(file_data.as_slice(), &sha256, path, &label, options)
+        {
             restamp_path_derived_values(&mut report, path);
             tracing::debug!(%sha256, "analysis cache hit (fast path)");
             return Ok(report);
@@ -1500,17 +1543,26 @@ pub fn analyze_file<P: AsRef<Path>>(path: P, options: &AnalysisOptions) -> Resul
     } else {
         (None, None)
     };
+    let engine = source.engine(options)?;
+    analyze_file_with_engine(path, options, &engine, preloaded, precomputed_sha)
+}
 
-    // Cache miss: load mapper and YARA engine in parallel (~860ms + ~270ms → ~860ms)
-    let (mapper, yara_engine) = load_scan_resources(options)?;
-    analyze_file_with_resources_and_sha256(
-        path,
-        options,
-        &mapper,
-        yara_engine.as_ref(),
-        preloaded,
-        precomputed_sha,
-    )
+/// Analyze in-memory `data` labeled `filename` (used for extension-based type
+/// detection and reporting; it need not exist on disk).
+pub(crate) fn analyze_data_under(
+    data: file_io::FileData,
+    filename: &str,
+    options: &AnalysisOptions,
+    source: &EngineFor<'_>,
+) -> Result<AnalysisReport> {
+    let path = Path::new(filename);
+    let sha256 = analyzers::utils::calculate_sha256(data.as_slice());
+    if let Some(report) = source.cached(data.as_slice(), &sha256, path, filename, options) {
+        tracing::debug!(%sha256, "analysis cache hit (bytes fast path)");
+        return Ok(report);
+    }
+    let engine = source.engine(options)?;
+    analyze_file_with_engine(path, options, &engine, Some(data), Some(sha256))
 }
 
 /// Analyze in-memory file data without requiring a file on disk.
@@ -1550,34 +1602,11 @@ pub fn analyze_bytes_owned(
     filename: &str,
     options: &AnalysisOptions,
 ) -> Result<AnalysisReport> {
-    // Use a synthetic path for extension-based type detection and reporting.
-    let path = Path::new(filename);
-
-    let sha256 = analyzers::utils::calculate_sha256(&data);
-    let file_type = analyzers::detect_file_type_from_data(path, &data);
-    if let Some(mut report) = analysis_cache::report_cache_lookup(
-        &sha256,
-        &analysis_cache::report_type_key(file_type.label(), path),
-        options,
+    analyze_data_under(
+        file_io::FileData::Owned(data),
         filename,
-    ) {
-        report.target.path = filename.to_string();
-        report.analysis_timestamp = Some(chrono::Utc::now());
-        report.cache_hit = true;
-        tracing::debug!(%sha256, "analysis cache hit (bytes fast path)");
-        return Ok(report);
-    }
-
-    let preloaded = file_io::FileData::Owned(data);
-
-    let (mapper, yara_engine) = load_scan_resources(options)?;
-    analyze_file_with_resources_and_sha256(
-        path,
         options,
-        &mapper,
-        yara_engine.as_ref(),
-        Some(preloaded),
-        Some(sha256),
+        &EngineFor::Options,
     )
 }
 
@@ -1730,34 +1759,11 @@ pub fn analyze_bytes_shared(
     filename: &str,
     options: &AnalysisOptions,
 ) -> Result<AnalysisReport> {
-    // Use a synthetic path for extension-based type detection and reporting.
-    let path = Path::new(filename);
-
-    let sha256 = analyzers::utils::calculate_sha256(&data);
-    let file_type = analyzers::detect_file_type_from_data(path, &data);
-    if let Some(mut report) = analysis_cache::report_cache_lookup(
-        &sha256,
-        &analysis_cache::report_type_key(file_type.label(), path),
-        options,
+    analyze_data_under(
+        file_io::FileData::Shared(data),
         filename,
-    ) {
-        report.target.path = filename.to_string();
-        report.analysis_timestamp = Some(chrono::Utc::now());
-        report.cache_hit = true;
-        tracing::debug!(%sha256, "analysis cache hit (bytes fast path)");
-        return Ok(report);
-    }
-
-    let preloaded = file_io::FileData::Shared(data);
-
-    let (mapper, yara_engine) = load_scan_resources(options)?;
-    analyze_file_with_resources_and_sha256(
-        path,
         options,
-        &mapper,
-        yara_engine.as_ref(),
-        Some(preloaded),
-        Some(sha256),
+        &EngineFor::Options,
     )
 }
 
@@ -1770,60 +1776,16 @@ pub fn analyze_file_with_mapper<P: AsRef<Path>>(
     options: &AnalysisOptions,
     capability_mapper: &Arc<CapabilityMapper>,
 ) -> Result<AnalysisReport> {
-    // Use shared YARA engine (initialized on first use)
-    let yara_engine = if options.disable_yara {
-        None
-    } else {
-        Some(shared_resources::yara_engine(
-            options.enable_third_party_yara,
-        ))
-    };
-    analyze_file_with_resources(path, options, capability_mapper, yara_engine.as_ref(), None)
+    let engine = shared_resources::engine_with_rules(options, capability_mapper.clone());
+    analyze_file_with_engine(path, options, &engine, None, None)
 }
 
-/// Analyze a single file with full control over resources.
-///
-/// This is the core analysis function that accepts pre-loaded resources.
-/// Use this when you need maximum control and efficiency.
-///
-/// # Arguments
-///
-/// * `path` - Path to the file to analyze
-/// * `options` - Analysis options
-/// * `capability_mapper` - Pre-loaded capability mapper
-/// * `yara_engine` - Optional pre-loaded YARA engine (None disables YARA scanning)
-///
-/// # Returns
-///
-/// An `AnalysisReport` containing all extracted features, findings, and metrics.
 /// Maximum recursion depth for nested payload analysis.
 /// Each level adds a full analysis stack frame; 8 levels is generous for
 /// legitimate multi-layer encoding while preventing stack overflows from
 /// adversarial nesting (e.g., base64-in-hex-in-base64 ad infinitum).
 const MAX_ANALYSIS_DEPTH: u32 = 8;
 
-fn analyze_file_with_resources<P: AsRef<Path>>(
-    path: P,
-    options: &AnalysisOptions,
-    capability_mapper: &Arc<CapabilityMapper>,
-    yara_engine: Option<&Arc<yara_engine::YaraEngine>>,
-    preloaded: Option<file_io::FileData>,
-) -> Result<AnalysisReport> {
-    analyze_file_with_resources_and_sha256(
-        path,
-        options,
-        capability_mapper,
-        yara_engine,
-        preloaded,
-        None,
-    )
-}
-
-/// Same as [`analyze_file_with_resources`] but accepts a precomputed SHA256.
-///
-/// Callers that already hashed the file for a fast-path cache lookup pass it
-/// through so the internal pipeline does not recompute the digest on the same
-/// bytes — a non-trivial cost on large inputs.
 /// Extract a human-readable message from a panic payload (`String` or `&str`).
 ///
 /// `std::panic::catch_unwind` hands back the payload as `Box<dyn Any + Send>`;
@@ -1839,11 +1801,15 @@ pub(crate) fn panic_payload_message(payload: &Box<dyn std::any::Any + Send>) -> 
     }
 }
 
-fn analyze_file_with_resources_and_sha256<P: AsRef<Path>>(
+/// Analyze one file under `engine`: the core every single-file entry point
+/// converges on. `preloaded` and `precomputed_sha256` let a caller that
+/// already read and hashed the file for a cache lookup skip doing it twice,
+/// a non-trivial cost on large inputs. The report carries `engine`, so a
+/// later [`AnalysisReport::finalize`] folds it under the same rules.
+fn analyze_file_with_engine<P: AsRef<Path>>(
     path: P,
     options: &AnalysisOptions,
-    capability_mapper: &Arc<CapabilityMapper>,
-    yara_engine: Option<&Arc<yara_engine::YaraEngine>>,
+    engine: &Engine,
     preloaded: Option<file_io::FileData>,
     precomputed_sha256: Option<String>,
 ) -> Result<AnalysisReport> {
@@ -1856,7 +1822,6 @@ fn analyze_file_with_resources_and_sha256<P: AsRef<Path>>(
     // global Rayon pool. Besides severe head-of-line starvation, each Rayon
     // thread then retained regex scratch from many unrelated analyses.
     let _in_flight = crate::rayon_nest::enter_toplevel_analysis_on(options.dedicated_pool);
-    let _disable_guards = AnalysisDisableGuards::from_options(options);
 
     // Catch panics from any analyzer so a single malformed or adversarial file
     // (e.g. a header offset pointing past EOF that trips unchecked slice
@@ -1869,8 +1834,7 @@ fn analyze_file_with_resources_and_sha256<P: AsRef<Path>>(
         analyze_file_with_resources_at_depth(
             path,
             options,
-            capability_mapper,
-            yara_engine,
+            engine,
             preloaded,
             precomputed_sha256,
             0,
@@ -1878,7 +1842,10 @@ fn analyze_file_with_resources_and_sha256<P: AsRef<Path>>(
     }));
 
     match outcome {
-        Ok(result) => result,
+        Ok(result) => result.map(|mut report| {
+            report.engine = Some(engine.clone());
+            report
+        }),
         Err(payload) => {
             let message = panic_payload_message(&payload);
             tracing::error!(
@@ -2057,8 +2024,7 @@ pub(crate) fn process_encoded_payloads(
     file_type: FileType,
     analysis_depth: u32,
     options: &AnalysisOptions,
-    capability_mapper: &Arc<CapabilityMapper>,
-    yara_engine: Option<&Arc<yara_engine::YaraEngine>>,
+    engine: &Engine,
 ) {
     for payload in encoded_payloads {
         if options
@@ -2302,8 +2268,7 @@ pub(crate) fn process_encoded_payloads(
             if let Ok(payload_report) = analyze_file_with_resources_at_depth(
                 temp_file.path(),
                 options,
-                capability_mapper,
-                yara_engine,
+                engine,
                 None,
                 None,
                 analysis_depth + 1,
@@ -2336,12 +2301,19 @@ pub(crate) fn process_encoded_payloads(
 fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     path: P,
     options: &AnalysisOptions,
-    capability_mapper: &Arc<CapabilityMapper>,
-    yara_engine: Option<&Arc<yara_engine::YaraEngine>>,
+    engine: &Engine,
     preloaded: Option<file_io::FileData>,
     precomputed_sha256: Option<String>,
     analysis_depth: u32,
 ) -> Result<AnalysisReport> {
+    let capability_mapper = engine.rules();
+    let yara_engine = engine.yara();
+    // Every file this analysis parses goes through these: the engine's rizin
+    // and cache settings, and the request's cancellation flag.
+    let facts_options = match options.cancellation.as_deref() {
+        Some(flag) => engine.filefacts_options().cancellation(flag),
+        None => engine.filefacts_options(),
+    };
     struct ThreadLocalCacheClearGuard;
 
     impl Drop for ThreadLocalCacheClearGuard {
@@ -2451,7 +2423,9 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         &sha256_hex,
         &report_type_key,
         options,
+        engine.settings(),
         &path.display().to_string(),
+        Some(engine.rules().as_ref()),
     ) {
         cached_report.target.path = path.display().to_string();
         cached_report.analysis_timestamp = Some(chrono::Utc::now());
@@ -2471,7 +2445,9 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         &sha256_hex,
         file_type_key,
         options,
+        engine.settings(),
         &path.display().to_string(),
+        Some(engine.rules().as_ref()),
     ) {
         tracing::debug!("File cache hit (cross-context)");
         let report = report_from_file_analysis(fa, path.display().to_string());
@@ -2487,7 +2463,12 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     // the same SHA256 at the same time. The persistent cache cannot prevent
     // that first-wave race, so single-flight identical analyses in-process.
     let flight = loop {
-        let flight = analysis_cache::acquire_report_flight(&sha256_hex, &report_type_key, options);
+        let flight = analysis_cache::acquire_report_flight(
+            &sha256_hex,
+            &report_type_key,
+            options,
+            engine.settings(),
+        );
         if flight.is_owner() {
             break Some(flight);
         }
@@ -2496,7 +2477,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             // bound to the path it was evaluated under (same guard as the
             // archive-member flight); fall through to a fresh analysis.
             let path_string = path.display().to_string();
-            if !shared_resources::adopt_report_under(&mut report, &path_string) {
+            if !shared_resources::adopt_report_under(&mut report, &path_string, engine.rules()) {
                 tracing::debug!(
                     sha256 = %sha256_hex,
                     "Analysis single-flight hit is path-bound; analyzing independently"
@@ -2530,7 +2511,9 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         &sha256_hex,
         &report_type_key,
         options,
+        engine.settings(),
         &path.display().to_string(),
+        Some(engine.rules().as_ref()),
     ) {
         cached_report.target.path = path.display().to_string();
         cached_report.analysis_timestamp = Some(chrono::Utc::now());
@@ -2545,7 +2528,9 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         &sha256_hex,
         file_type_key,
         options,
+        engine.settings(),
         &path.display().to_string(),
+        Some(engine.rules().as_ref()),
     ) {
         let report = report_from_file_analysis(fa, path.display().to_string());
         if let Some(flight) = flight {
@@ -2589,7 +2574,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     // On production runs where radare2 is cached, YARA (~270ms) otherwise sits between
     // stng (~290ms) and structural (~50ms), adding to the critical path.  Running them in
     // parallel eliminates that 270ms from the wall-clock total.
-    let binary_yara_ftypes: Option<&[&str]> = if options.disable_yara {
+    let binary_yara_ftypes: Option<&[&str]> = if yara_engine.is_none() {
         None
     } else {
         match file_type {
@@ -2655,9 +2640,11 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     // analyzer (avoiding a second parse). Mirrors `stng_scan`'s `(_, elapsed)`.
     let open_ctx_strings = || {
         let t = std::time::Instant::now();
-        let ctx = crate::analysis_context::AnalysisContext::open(path, file_data)
-            .map(|c| c.with_cancellation(options.cancellation.as_deref()))
-            .ok();
+        let ctx = Some(crate::analysis_context::AnalysisContext::open_with(
+            facts_options.clone(),
+            path,
+            file_data,
+        ));
         let strings = ctx
             .as_ref()
             .map(crate::analysis_context::AnalysisContext::text_rows)
@@ -2713,7 +2700,8 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         &encoded_payloads,
         file_type,
     )
-    .with_sha256(sha256_hex.clone());
+    .with_sha256(sha256_hex.clone())
+    .with_skip_rizin_if(!engine.radare2());
     input.cancellation = options.cancellation.clone();
 
     // Hand the source/image analyzer the context we already opened so it
@@ -2733,9 +2721,6 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     } else {
         Vec::new()
     };
-
-    // Share mapper Arc — all analyzers share it via cheap ref-count bumps
-    let mapper_arc = Arc::clone(capability_mapper);
 
     // Bail early if already cancelled before starting expensive structural analysis
     if options
@@ -2764,11 +2749,15 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             // covered the full binary which is correct (YARA targets the outer container).
             let analyzer = analyzers::macho::MachOAnalyzer::new()
                 .with_cancellation(options.cancellation.clone())
-                .with_capability_mapper_arc(mapper_arc.clone())
+                .with_engine(engine.clone())
                 .with_preextracted_strings(preextracted_strings.clone());
-            let range = analyzer.preferred_arch_range(file_data);
+            // The slice table comes from the full-file parse already opened
+            // for strings, so no helper reparses the fat binary.
+            let slices =
+                analyzers::macho::FatSlices::of(file_data, file_ctx.as_ref(), &facts_options);
+            let range = analyzer.preferred_arch_range(file_data, &slices);
             let arch_data = &file_data[range.clone()];
-            let labeled_ranges = analyzer.labeled_arch_ranges(file_data);
+            let labeled_ranges = analyzer.labeled_arch_ranges(file_data, &slices);
             let is_fat = labeled_ranges.len() > 1;
             let eval_data = if is_fat { file_data } else { arch_data };
             let engine = yara_engine;
@@ -2779,7 +2768,11 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             // When filefacts can't open the bytes, fall back to the
             // analyzer's own bytes-only entry point so the malformed
             // signal is still surfaced.
-            let ctx = crate::analysis_context::AnalysisContext::open(path, arch_data).ok();
+            let ctx = Some(crate::analysis_context::AnalysisContext::open_with(
+                facts_options.clone(),
+                path,
+                arch_data,
+            ));
             let struct_result: Result<AnalysisReport, anyhow::Error> =
                 if let Some(ctx) = ctx.as_ref() {
                     Ok(analyzer.analyze_structural_with_ctx(
@@ -2798,7 +2791,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             report.identity = ctx
                 .as_ref()
                 .and_then(crate::analysis_context::AnalysisContext::identity);
-            analyzer.apply_fat_metadata(&mut report, file_data);
+            analyzer.apply_fat_metadata(&mut report, file_data, &slices);
 
             // The preferred slice was parsed at base 0, so its structural
             // offsets are slice-relative. Strings, raw matching, YARA, and
@@ -2820,7 +2813,12 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             // closes the remaining gap.
             if is_fat {
                 let preferred_offset = range.start;
-                analyzer.union_supplementary_arches(&mut report, file_data, preferred_offset);
+                analyzer.union_supplementary_arches(
+                    &mut report,
+                    file_data,
+                    preferred_offset,
+                    &slices,
+                );
             }
 
             // Process YARA results and evaluate with inline evidence
@@ -2858,7 +2856,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             );
             let mut analyzer = analyzers::elf::ElfAnalyzer::new()
                 .with_cancellation(options.cancellation.clone())
-                .with_capability_mapper_arc(mapper_arc.clone());
+                .with_engine(engine.clone());
             if let Some(engine) = yara_engine {
                 analyzer = analyzer.with_yara_arc(engine);
             }
@@ -2880,7 +2878,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
                     ctx,
                 ))
             } else {
-                Ok(analyzer.analyze_structural(path, file_data, input.sha256.clone()))
+                Ok(analyzer.analyze_structural(path, file_data, input.sha256.as_deref()))
             };
             let raw_regex =
                 capability_mapper.precompute_raw_regex_matches(file_data, &rule_file_type);
@@ -2923,7 +2921,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
                 .with_archive_config(
                     analyzers::archive::ArchiveAnalyzerConfig::from_analysis_options(options),
                 )
-                .with_capability_mapper_arc(mapper_arc.clone());
+                .with_engine(engine.clone());
             // PE analyzer needs YARA engine for overlay/embedded payload analysis
             if let Some(engine) = yara_engine {
                 analyzer = analyzer.with_yara_arc(engine.clone());
@@ -2972,18 +2970,18 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             Ok(report)
         }
         FileType::JavaClass => analyzers::java_class::JavaClassAnalyzer::new()
-            .with_capability_mapper_arc(mapper_arc.clone())
+            .with_engine(engine.clone())
             .analyze_input(&input),
         FileType::OleDoc | FileType::Msi | FileType::Ooxml => {
             analyzers::office::OfficeAnalyzer::new()
-                .with_capability_mapper_arc(mapper_arc.clone())
+                .with_engine(engine.clone())
                 .with_cancellation(options.cancellation.clone())
                 .analyze_input(&input)
         }
         ref ft if ft.is_archive() => {
             set_phase(&format!("archive:{}", ft.report_file_type()));
             let mut analyzer = analyzers::archive::ArchiveAnalyzer::new()
-                .with_capability_mapper_arc(mapper_arc.clone())
+                .with_engine(engine.clone())
                 .with_zip_passwords(options.zip_passwords.clone())
                 .with_max_memory_file_size(options.max_memory_file_size)
                 .with_analysis_options(Arc::new(options.clone()));
@@ -2999,19 +2997,17 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             analyzer.analyze_input(&input)
         }
         FileType::PackageJson => analyzers::package_json::PackageJsonAnalyzer::new()
-            .with_capability_mapper_arc(mapper_arc.clone())
+            .with_engine(engine.clone())
             .analyze_input(&input),
         FileType::PackageLockJson => analyzers::generic::GenericAnalyzer::new(file_type)
-            .with_capability_mapper_arc(mapper_arc.clone())
+            .with_engine(engine.clone())
             .analyze_input(&input),
         FileType::VsixManifest => analyzers::vsix_manifest::VsixManifestAnalyzer::new()
-            .with_capability_mapper_arc(mapper_arc.clone())
+            .with_engine(engine.clone())
             .analyze_input(&input),
         // All source code languages use the unified analyzer (or generic fallback)
         _ => {
-            if let Some(analyzer) =
-                analyzers::analyzer_for_file_type_arc(&file_type, Some(mapper_arc.clone()))
-            {
+            if let Some(analyzer) = analyzers::analyzer_for_file_type_arc(&file_type, engine) {
                 analyzer.analyze_input(&input)
             } else {
                 // No dedicated analyzer — return a minimal report with basic metadata.
@@ -3044,9 +3040,11 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         // an identity that is empty for stripped/unsigned files. Only open a
         // fresh context only for paths that never opened one (archives).
         let fresh = if file_ctx.is_none() && input.parsed_ctx.is_none() {
-            crate::analysis_context::AnalysisContext::open(path, file_data)
-                .map(|c| c.with_cancellation(options.cancellation.as_deref()))
-                .ok()
+            Some(crate::analysis_context::AnalysisContext::open_with(
+                facts_options.clone(),
+                path,
+                file_data,
+            ))
         } else {
             None
         };
@@ -3081,8 +3079,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         file_type,
         analysis_depth,
         options,
-        capability_mapper,
-        yara_engine,
+        engine,
     );
     let stage_payloads_ms = payloads_start.elapsed().as_millis() as u64;
 
@@ -3266,7 +3263,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
 
     // Store result in per-file cache (cross-context: shared with archive member analysis)
     {
-        let mut fa = report.to_file_analysis(0);
+        let mut fa = report.to_file_analysis(0, engine);
         // Keep the origin even when no path-dependent rule matched: negative
         // matches must also be checked before sharing with another path.
         fa.path = path.display().to_string();
@@ -3278,6 +3275,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             &sha256_hex,
             file_type_key,
             options,
+            engine.settings(),
             &fa,
             &report,
             capability_mapper.traits_revision(),
@@ -3292,6 +3290,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         &sha256_hex,
         &report_type_key,
         options,
+        engine.settings(),
         &report,
         capability_mapper.traits_revision(),
     );
@@ -3340,9 +3339,7 @@ pub struct ScanSummary {
 /// Both are wrapped in `Arc` so every rayon worker shares a single instance via
 /// cheap clones rather than reloading per file. The two loads run concurrently
 /// on the rayon pool. Shared by [`scan_directory`] and [`scan_files`].
-fn load_scan_resources(
-    options: &AnalysisOptions,
-) -> Result<(Arc<CapabilityMapper>, Option<Arc<yara_engine::YaraEngine>>)> {
+fn load_scan_resources(options: &AnalysisOptions) -> Result<Engine> {
     // Surface this pre-pipeline step in the phase tracker. It runs before
     // `analyze_file_with_resources_at_depth` reaches its first `set_phase`.
     if let Some(ref tracker) = options.phase {
@@ -3353,10 +3350,7 @@ fn load_scan_resources(
     // put the start of every analysis behind whatever the pool was busy with
     // — thirty-minute `cleave:resources` phases while one jar held every
     // worker. A cold load runs here, on the caller's own thread.
-    let mapper = shared_resources::capability_mapper_with_options(options)?;
-    let yara_engine = (!options.disable_yara)
-        .then(|| shared_resources::yara_engine(options.enable_third_party_yara));
-    Ok((mapper, yara_engine))
+    shared_resources::engine_for_options(options)
 }
 
 /// Above this file count the work-list is left in directory order and the
@@ -3568,8 +3562,7 @@ where
 fn analyze_one_path<F>(
     file_path: &Path,
     options: &AnalysisOptions,
-    mapper: &Arc<CapabilityMapper>,
-    yara_engine: Option<&Arc<yara_engine::YaraEngine>>,
+    engine: &Engine,
     all_files: bool,
     max_scan_size: u64,
     mem_gate: &scan_mem_gate::ScanMemGate,
@@ -3635,13 +3628,8 @@ fn analyze_one_path<F>(
                 skipped.fetch_add(1, Ordering::Relaxed);
                 return;
             }
-            let result = analyze_file_with_resources(
-                file_path,
-                options,
-                mapper,
-                yara_engine,
-                Some(file_data),
-            );
+            let result =
+                analyze_file_with_engine(file_path, options, engine, Some(file_data), None);
             match &result {
                 Ok(_) => {
                     analyzed.fetch_add(1, Ordering::Relaxed);
@@ -3661,7 +3649,7 @@ fn analyze_one_path<F>(
             return;
         }
 
-        let result = analyze_file_with_resources(file_path, options, mapper, yara_engine, None);
+        let result = analyze_file_with_engine(file_path, options, engine, None, None);
         match &result {
             Ok(_) => {
                 analyzed.fetch_add(1, Ordering::Relaxed);
@@ -3734,7 +3722,6 @@ where
     if !path.is_dir() {
         anyhow::bail!("path is not a directory: {}", path.display());
     }
-    let _disable_guards = AnalysisDisableGuards::from_options(options);
 
     // Maintain the filefacts disk cache (which now owns rizin recovery) in
     // the background: prune old schema versions, evict past the item cap,
@@ -3743,7 +3730,7 @@ where
     cache::maintain_filefacts_cache();
 
     // Load shared resources once; all rayon workers share them via cheap Arc clones.
-    let (mapper, yara_engine) = load_scan_resources(options)?;
+    let engine = load_scan_resources(options)?;
 
     let all_files_flag = options.all_files;
 
@@ -3817,8 +3804,7 @@ where
             analyze_one_path(
                 file_path,
                 options,
-                &mapper,
-                yara_engine.as_ref(),
+                &engine,
                 all_files_flag,
                 max_scan_size,
                 &mem_gate,
@@ -3891,14 +3877,12 @@ where
 {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    let _disable_guards = AnalysisDisableGuards::from_options(options);
-
     // Maintain the filefacts disk cache in the background, exactly as
     // scan_directory does — a caller routing its own walk through scan_paths
     // instead of scan_directory still expects the cache to be pruned.
     cache::maintain_filefacts_cache();
 
-    let (mapper, yara_engine) = load_scan_resources(options)?;
+    let engine = load_scan_resources(options)?;
 
     let total = paths.len();
     // Total is known upfront here (the caller already enumerated the paths), so
@@ -3919,8 +3903,7 @@ where
         analyze_one_path(
             file_path,
             options,
-            &mapper,
-            yara_engine.as_ref(),
+            &engine,
             all_files_flag,
             max_scan_size,
             &mem_gate,
@@ -3982,8 +3965,7 @@ where
     use rayon::prelude::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    let _disable_guards = AnalysisDisableGuards::from_options(options);
-    let (mapper, yara_engine) = load_scan_resources(options)?;
+    let engine = load_scan_resources(options)?;
 
     let analyzed = AtomicUsize::new(0);
     let skipped = AtomicUsize::new(0);
@@ -4015,13 +3997,7 @@ where
         // Catch panics so one malformed file can't poison the rayon pool and
         // kill the whole batch.
         let panic_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let result = analyze_file_with_resources(
-                file_path,
-                options,
-                &mapper,
-                yara_engine.as_ref(),
-                None,
-            );
+            let result = analyze_file_with_engine(file_path, options, &engine, None, None);
             match &result {
                 Ok(_) => {
                     analyzed.fetch_add(1, Ordering::Relaxed);
@@ -4159,6 +4135,7 @@ pub fn version_info() -> VersionInfo {
 ///
 /// Same haystack and give-up thresholds as the `regex-explosion` validator, so
 /// a pattern can be checked one at a time instead of by re-validating the tree.
+#[cfg(feature = "lint")]
 #[must_use]
 pub fn regex_explodes(pattern: &str, case_insensitive: bool) -> bool {
     crate::capabilities::validation::regex_cost::explosion(pattern, case_insensitive)
@@ -4269,7 +4246,7 @@ mod tests {
             ..Default::default()
         });
 
-        let cached = report.to_file_analysis(0);
+        let cached = report.to_file_analysis(0, &crate::Engine::empty());
         let restored = report_from_file_analysis(cached, "actual.js".to_string());
 
         assert_eq!(restored.target.path, "actual.js");
@@ -4349,7 +4326,7 @@ mod tests {
             disable_yara: true,
             ..AnalysisOptions::default()
         };
-        let mapper = shared_resources::capability_mapper_with_options(&options)
+        let engine = shared_resources::engine_for_options(&options)
             .expect("mapper should load for depth-limit test");
 
         // Analyze at exactly MAX_ANALYSIS_DEPTH — any encoded payloads found
@@ -4358,8 +4335,7 @@ mod tests {
         let report = analyze_file_with_resources_at_depth(
             path,
             &options,
-            &mapper,
-            None,
+            &engine,
             None,
             None,
             MAX_ANALYSIS_DEPTH,
@@ -4407,20 +4383,13 @@ mod tests {
             disable_yara: true,
             ..AnalysisOptions::default()
         };
-        let mapper = shared_resources::capability_mapper_with_options(&options)
+        let engine = shared_resources::engine_for_options(&options)
             .expect("mapper should load for depth-zero test");
 
         #[allow(clippy::expect_used)]
-        let report = analyze_file_with_resources_at_depth(
-            tmp.path(),
-            &options,
-            &mapper,
-            None,
-            None,
-            None,
-            0,
-        )
-        .expect("analysis should succeed");
+        let report =
+            analyze_file_with_resources_at_depth(tmp.path(), &options, &engine, None, None, 0)
+                .expect("analysis should succeed");
 
         assert!(
             !report

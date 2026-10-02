@@ -117,8 +117,10 @@ pub(crate) fn build_test_capability_mapper(
 pub(crate) fn prepare_test_target(file_type: &FileType, full_data: &[u8]) -> PreparedTestTarget {
     if *file_type == FileType::MachO {
         let analyzer = MachOAnalyzer::new();
-        let preferred_range = analyzer.preferred_arch_range(full_data);
-        let arch_count = analyzer.all_arch_ranges(full_data).len();
+        let slices =
+            crate::analyzers::macho::FatSlices::of(full_data, None, &filefacts::OpenOptions::new());
+        let preferred_range = analyzer.preferred_arch_range(full_data, &slices);
+        let arch_count = analyzer.all_arch_ranges(full_data, &slices).len();
 
         return PreparedTestTarget {
             preferred_binary_data: full_data[preferred_range].to_vec(),
@@ -190,8 +192,7 @@ pub(crate) fn prepare_test_analysis(
     // For FAT binaries, source full-file strings from filefacts (the
     // string-extraction authority) so offsets are file-relative.
     if prepared_target.is_fat_macho {
-        let rows: Vec<stng::ExtractedString> = filefacts::open(&full_data)
-            .ok()
+        let rows: Vec<stng::ExtractedString> = Some(filefacts::open(&full_data))
             .map(|p| p.text().iter().cloned().collect())
             .unwrap_or_default();
         report.strings = crate::strings::StringExtractor::default().convert_stng_strings(&rows);

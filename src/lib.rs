@@ -693,12 +693,15 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
-/// SIGKILL every currently-live rizin process group.
+/// SIGKILL every currently-live rizin process group and delete their temp
+/// inputs.
 ///
 /// Forwards to [`filefacts::rizin::kill_all_rizin_groups`]. Intended for
-/// host CLI signal handlers that need to reap rizin workers before a
-/// forced `process::exit`. Cheap and idempotent — safe to call from
-/// the `ctrlc` crate's dispatch thread. No-op on non-Unix platforms.
+/// host CLIs that need to reap rizin workers before a forced
+/// `process::exit`. Call it from a signal-handling thread (the `ctrlc`
+/// crate's dispatch thread, `signal-hook`'s iterator), never from an
+/// async-signal handler: it locks and deletes files. Cheap and idempotent.
+/// No-op on non-Unix platforms.
 pub fn kill_all_rizin_groups() {
     filefacts::rizin::kill_all_rizin_groups();
 }

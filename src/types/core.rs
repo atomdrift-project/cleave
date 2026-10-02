@@ -1689,7 +1689,7 @@ impl AnalysisReport {
             let own_path = f.path.clone();
             // Snapshot the locators, dropping the immutable `filefacts` borrow
             // before mutating `findings`.
-            let refs: Vec<(filefacts::RefLocator, u64)> = match &f.filefacts {
+            let refs: Vec<(filefacts::RefLocator, Option<u64>)> = match &f.filefacts {
                 Some(ff) => ff
                     .references
                     .iter()
@@ -1699,8 +1699,8 @@ impl AnalysisReport {
             };
 
             // Flagged targets, deduped, split by edge kind.
-            let mut ext: Vec<(u32, u64, String, Criticality)> = Vec::new();
-            let mut int: Vec<(u32, u64)> = Vec::new();
+            let mut ext: Vec<(u32, Option<u64>, String, Criticality)> = Vec::new();
+            let mut int: Vec<(u32, Option<u64>)> = Vec::new();
             for (locator, offset) in &refs {
                 let (target, external, label) = match locator {
                     filefacts::RefLocator::Purl(p) => match rg::package_name_from_purl(p) {
@@ -1713,7 +1713,8 @@ impl AnalysisReport {
                         });
                         (target, false, String::new())
                     }
-                    filefacts::RefLocator::Url(_) => continue,
+                    // URLs, and locator kinds newer than this build.
+                    _ => continue,
                 };
                 let Some(tid) = target else { continue };
                 if tid == own_id {
@@ -1746,7 +1747,7 @@ impl AnalysisReport {
                     .map(|(tid, off, ..)| CompositeSource {
                         file: *tid,
                         line: None,
-                        offset: Some(*off),
+                        offset: *off,
                     })
                     .collect();
                 Self::push_reference_finding(
@@ -1765,7 +1766,7 @@ impl AnalysisReport {
                     .map(|(tid, off)| CompositeSource {
                         file: *tid,
                         line: None,
-                        offset: Some(*off),
+                        offset: *off,
                     })
                     .collect();
                 Self::push_reference_finding(
@@ -3171,27 +3172,25 @@ mod tests {
     }
 
     fn local_ref(path: &str) -> filefacts::Reference {
-        filefacts::Reference {
-            locator: filefacts::RefLocator::Path(path.to_string()),
-            kind: filefacts::RefKind::Local,
-            source: "package.json:main".to_string(),
-            evidence: path.to_string(),
-            offset: 10,
-            pinned_hash: None,
-            content_sha256: None,
-        }
+        let mut reference = filefacts::Reference::new(
+            filefacts::RefLocator::Path(path.to_string()),
+            filefacts::RefKind::Local,
+            "package.json:main",
+            path,
+        );
+        reference.offset = Some(10);
+        reference
     }
 
     fn dep_ref(purl: &str) -> filefacts::Reference {
-        filefacts::Reference {
-            locator: filefacts::RefLocator::Purl(purl.to_string()),
-            kind: filefacts::RefKind::Dependency,
-            source: "package.json".to_string(),
-            evidence: purl.to_string(),
-            offset: 20,
-            pinned_hash: None,
-            content_sha256: None,
-        }
+        let mut reference = filefacts::Reference::new(
+            filefacts::RefLocator::Purl(purl.to_string()),
+            filefacts::RefKind::Dependency,
+            "package.json",
+            purl,
+        );
+        reference.offset = Some(20);
+        reference
     }
 
     fn file_with_refs(id: u32, path: &str, refs: Vec<filefacts::Reference>) -> FileAnalysis {
@@ -3204,14 +3203,13 @@ mod tests {
     }
 
     fn named_identity(name: &str) -> filefacts::Identity {
-        filefacts::Identity {
-            name: Some(filefacts::Claim {
-                value: name.to_string(),
-                source: "test".to_string(),
-                verified: false,
-            }),
-            ..Default::default()
-        }
+        let mut identity = filefacts::Identity::default();
+        identity.name = Some(filefacts::Claim {
+            value: name.to_string(),
+            source: "test".to_string(),
+            verified: false,
+        });
+        identity
     }
 
     #[test]

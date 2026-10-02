@@ -776,8 +776,15 @@ impl ElfAnalyzer {
                 offset: Some(section.file_offset),
                 size: section.file_size,
                 entropy,
-                permissions: Some(section.flags.join(",")),
-                flags: section.flags.clone(),
+                permissions: Some(
+                    section
+                        .flags
+                        .iter()
+                        .map(|f| f.as_str())
+                        .collect::<Vec<_>>()
+                        .join(","),
+                ),
+                flags: crate::analysis_context::section_flag_names(&section.flags),
             });
 
             let level = EntropyLevel::from_value(entropy);

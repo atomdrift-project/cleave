@@ -906,8 +906,7 @@ pub(super) async fn memory_stats(State(state): State<Arc<AppState>>) -> Json<ser
 
     let mapper_stats = crate::shared_resources::capability_mapper_stats();
 
-    let (rizin_total, rizin_ok, rizin_timeouts, rizin_failures, rizin_mem_exceeded) =
-        filefacts::rizin::stats();
+    let rizin = filefacts::rizin::stats();
 
     Json(serde_json::json!({
         "process": {
@@ -935,11 +934,12 @@ pub(super) async fn memory_stats(State(state): State<Arc<AppState>>) -> Json<ser
             "composites": composites,
         })),
         "rizin": {
-            "total": rizin_total,
-            "successes": rizin_ok,
-            "timeouts": rizin_timeouts,
-            "failures": rizin_failures,
-            "memory_exceeded": rizin_mem_exceeded,
+            "total": rizin.total,
+            "successes": rizin.successes,
+            "timeouts": rizin.timeouts,
+            "failures": rizin.failures,
+            // filefacts' output-cap kills; the key predates its rename.
+            "memory_exceeded": rizin.output_cap_exceeded,
         },
         "thread_pools": {
             "rayon_global_threads": rayon::current_num_threads(),

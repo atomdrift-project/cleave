@@ -2420,14 +2420,12 @@ mod tests {
     /// distinct identifier-string offset. Deterministic — no fixture needed.
     #[test]
     fn test_identity_finding_is_notable() {
-        let identity = filefacts::Identity {
-            identifier: Some(filefacts::Claim::verified(
-                "com.apple.ls",
-                "macho.code_signature.identifier",
-            )),
-            trust: filefacts::Trust::Platform,
-            ..Default::default()
-        };
+        let mut identity = filefacts::Identity::default();
+        identity.identifier = Some(filefacts::Claim::verified(
+            "com.apple.ls",
+            "macho.code_signature.identifier",
+        ));
+        identity.trust = filefacts::Trust::Platform;
         let mut report = AnalysisReport::new(crate::types::TargetInfo {
             path: "/bin/ls".to_string(),
             file_type: "macho".to_string(),
@@ -2467,22 +2465,20 @@ mod tests {
     /// signal an analyst reads first: who signed it, and what it was granted.
     #[test]
     fn test_developer_signed_and_entitlement_findings() {
-        let identity = filefacts::Identity {
-            trust: filefacts::Trust::DeveloperId,
-            team_id: Some(filefacts::Claim::verified(
-                "ABCDE12345",
-                "macho.code_signature",
-            )),
-            signer: Some(filefacts::Signer {
-                common_name: Some("Developer ID Application: Acme Inc. (ABCDE12345)".to_string()),
-                organization: Some("Acme Inc.".to_string()),
-                subject: None,
-                issuer: None,
-                signed_at: None,
-                source: "macho.code_signature".to_string(),
-            }),
-            ..Default::default()
-        };
+        let mut identity = filefacts::Identity::default();
+        identity.trust = filefacts::Trust::DeveloperId;
+        identity.team_id = Some(filefacts::Claim::verified(
+            "ABCDE12345",
+            "macho.code_signature",
+        ));
+        identity.signer = Some(filefacts::Signer {
+            common_name: Some("Developer ID Application: Acme Inc. (ABCDE12345)".to_string()),
+            organization: Some("Acme Inc.".to_string()),
+            subject: None,
+            issuer: None,
+            signed_at: None,
+            source: "macho.code_signature".to_string(),
+        });
         let mut entitlements = serde_json::Map::new();
         entitlements.insert(
             "com.apple.security.cs.debugger".to_string(),

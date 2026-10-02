@@ -1594,7 +1594,7 @@ fn flow_call<'a>(
 ) -> Option<&'a filefacts::FlowValue> {
     let mut candidates = flow.values.iter().filter(|v| {
         v.kind == filefacts::FlowKind::Call
-            && Some(v.offset as u64) == offset
+            && Some(v.offset) == offset
             && v.inputs.len() == argument_count
     });
     let first = candidates.next()?;
@@ -1701,10 +1701,8 @@ fn origin_matches(
             .filter_map(|v| v.target.as_ref())
             .filter(|t| pattern.is_match(t))
             .collect();
-        models.extend(targets.into_iter().map(|target| filefacts::FlowTransfer {
-            call: target.clone(),
-            arguments: model.arguments.clone(),
-            receiver: model.receiver,
+        models.extend(targets.into_iter().map(|target| {
+            filefacts::FlowTransfer::new(target.clone(), model.arguments.clone(), model.receiver)
         }));
     }
     // Selected sources are terminal evidence for this query. Their internal
@@ -1717,11 +1715,11 @@ fn origin_matches(
         .collect::<std::collections::BTreeSet<_>>()
     {
         if source_pattern.as_ref().is_some_and(|p| p.is_match(target)) {
-            models.push(filefacts::FlowTransfer {
-                call: target.clone(),
-                arguments: Vec::new(),
-                receiver: false,
-            });
+            models.push(filefacts::FlowTransfer::new(
+                target.clone(),
+                Vec::new(),
+                false,
+            ));
         }
     }
     let found = if let Some(field) = &origin.field {

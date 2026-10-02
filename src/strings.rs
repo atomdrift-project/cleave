@@ -41,12 +41,12 @@ pub(crate) fn scpt_literal_strings(
         .collect()
 }
 
-fn scpt_literal_string(literal: &filefacts::ExtractedString) -> StringInfo {
+fn scpt_literal_string(literal: &filefacts::Literal) -> StringInfo {
     // Only decoders cleave can name contribute a chain; anything else is a
     // literal the parser read verbatim.
     let encoding_chain = match literal
         .method
-        .as_deref()
+        .map(filefacts::LiteralMethod::as_str)
         .and_then(|m| m.strip_prefix("scpt-"))
     {
         Some("constant") => vec!["scpt".into()],
@@ -58,8 +58,11 @@ fn scpt_literal_string(literal: &filefacts::ExtractedString) -> StringInfo {
     };
     StringInfo {
         value: literal.text.clone().into(),
-        offset: Some(literal.offset as u64),
-        encoding: literal.encoding.clone().unwrap_or_else(|| "utf8".into()),
+        offset: Some(literal.offset),
+        encoding: match literal.encoding {
+            Some(filefacts::LiteralEncoding::Utf16be) => "utf16be".into(),
+            _ => "utf8".into(),
+        },
         string_type: None,
         section: Some("literal".into()),
         encoding_chain,
@@ -484,30 +487,28 @@ mod tests {
 
     #[test]
     fn scpt_literal_methods_preserve_provenance() {
-        for suffix in [
-            "base64",
-            "hex",
-            "url",
-            "unicode-escape",
-            "base32",
-            "base85",
-            "rot13-base64",
-            "base64-obf",
-            "constant",
-            "literal",
+        use filefacts::{LiteralEncoding, LiteralMethod as M};
+        for method in [
+            M::ScptBase64,
+            M::ScptHex,
+            M::ScptUrl,
+            M::ScptUnicodeEscape,
+            M::ScptBase32,
+            M::ScptBase85,
+            M::ScptRot13Base64,
+            M::ScptBase64Obf,
+            M::ScptConstant,
+            M::ScptLiteral,
         ] {
-            let mut literal = filefacts::ExtractedString::default();
-            literal.text = "decoded command".into();
-            literal.offset = 73;
-            literal.method = Some(format!("scpt-{suffix}"));
-            literal.encoding = Some(
-                if suffix == "literal" {
-                    "utf16be"
-                } else {
-                    "utf8"
-                }
-                .into(),
-            );
+            let suffix = method.as_str().trim_start_matches("scpt-");
+            let encoding = if method == M::ScptLiteral {
+                LiteralEncoding::Utf16be
+            } else {
+                LiteralEncoding::Utf8
+            };
+            let literal = filefacts::Literal::new("decoded command", 73)
+                .with_method(method)
+                .with_encoding(encoding);
             let row = scpt_literal_string(&literal);
             let expected = match suffix {
                 "literal" => vec![],
@@ -518,7 +519,11 @@ mod tests {
             assert_eq!(row.value, literal.text);
             assert_eq!(row.offset, Some(73));
             assert_eq!(row.section.as_deref(), Some("literal"));
-            assert_eq!(Some(row.encoding), literal.encoding);
+            let expected_encoding = match encoding {
+                LiteralEncoding::Utf16be => "utf16be",
+                _ => "utf8",
+            };
+            assert_eq!(row.encoding, expected_encoding);
         }
     }
 

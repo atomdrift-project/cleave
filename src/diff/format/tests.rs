@@ -85,12 +85,11 @@ fn renders_ledger_row_for_added_file() {
 }
 
 fn ident(name: &str, trust: filefacts::Trust, org: Option<&str>) -> filefacts::Identity {
-    filefacts::Identity {
-        name: Some(filefacts::Claim::claimed(name, "test")),
-        organization: org.map(|o| filefacts::Claim::claimed(o, "test")),
-        trust,
-        ..Default::default()
-    }
+    let mut identity = filefacts::Identity::default();
+    identity.name = Some(filefacts::Claim::claimed(name, "test"));
+    identity.organization = org.map(|o| filefacts::Claim::claimed(o, "test"));
+    identity.trust = trust;
+    identity
 }
 
 fn diff_with_identity(identity: crate::types::IdentityDiff) -> AnalysisReport {

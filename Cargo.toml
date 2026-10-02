@@ -90,7 +90,7 @@ cleave-macros = { path = "cleave-macros" }
 # tree-sitter, or the structured-format parsers directly — every parse
 # is materialised once via filefacts::open() and reused via the typed
 # views on `ParsedFile`.
-filefacts = { git = "https://github.com/atomdrift-project/filefacts.git" }
+filefacts = { git = "https://github.com/atomdrift-project/filefacts.git", default-features = false }
 
 cfb = "0.14"  # Microsoft OLE2/CFBF compound document parsing
 
@@ -217,7 +217,7 @@ encoding_rs = "0.8"  # Character encoding detection and conversion
 # API, and Cargo treats `git = URL` and `git = URL, rev = R` as different
 # sources even at the same commit — two copies of the crate, whose types do not
 # unify. Bump this rev together with filefacts'.
-stng = { git = "https://github.com/atomdrift-project/stng.git", rev = "3c2f434ef9b97c0c144ba3d0add8f7ccb2ef7188" }
+stng = { git = "https://github.com/atomdrift-project/stng.git", rev = "78f439bbb96b8c15686a63f2631edf6b62269391" }
 
 # Logging (tracing is the modern standard, more powerful than log+env_logger)
 tracing = "0.1"

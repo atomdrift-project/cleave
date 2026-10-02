@@ -312,7 +312,8 @@ pub struct CompactRef {
     pub locator: String,
     /// Coarse kind: `dependency`, `command`, `url_fetch`, `repository`, ….
     pub kind: String,
-    /// Byte offset of the reference in this file — the citation anchor.
+    /// Byte offset of the reference in this file — the citation anchor; `0`
+    /// when filefacts could not place it.
     #[serde(rename = "off")]
     pub offset: u64,
     /// When the reference resolves to another file in this bundle, that file's
@@ -972,17 +973,22 @@ fn convert_file(file: &super::file_analysis::FileAnalysis, id: u32) -> CompactFi
         .map(|ff| {
             ff.references
                 .iter()
-                .map(|r| CompactRef {
-                    locator: match &r.locator {
+                .filter_map(|r| {
+                    let locator = match &r.locator {
                         filefacts::RefLocator::Purl(s)
                         | filefacts::RefLocator::Url(s)
                         | filefacts::RefLocator::Path(s) => s.clone(),
-                    },
-                    kind: ref_kind_str(r.kind).to_string(),
-                    offset: r.offset,
-                    // External today; intra-bundle resolution (prism's job for
-                    // now) will fill this when it moves into cleave.
-                    target_file: None,
+                        // A locator kind newer than this build.
+                        _ => return None,
+                    };
+                    Some(CompactRef {
+                        locator,
+                        kind: ref_kind_str(r.kind).to_string(),
+                        offset: r.offset.unwrap_or(0),
+                        // External today; intra-bundle resolution (prism's job for
+                        // now) will fill this when it moves into cleave.
+                        target_file: None,
+                    })
                 })
                 .collect()
         })

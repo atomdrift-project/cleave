@@ -195,7 +195,7 @@ impl<'a> AnalysisContext<'a> {
                 size: s.file_size,
                 entropy: s.entropy.unwrap_or(0.0),
                 permissions: flags_to_permissions(&s.flags),
-                flags: s.flags.clone(),
+                flags: section_flag_names(&s.flags),
             })
             .collect()
     }
@@ -313,17 +313,23 @@ fn hex_offset(offset: u64) -> String {
     format!("0x{offset:x}")
 }
 
-fn flags_to_permissions(flags: &[String]) -> Option<String> {
+/// filefacts' section flags as cleave reports them: their serialized names.
+pub(crate) fn section_flag_names(flags: &[filefacts::SectionFlag]) -> Vec<String> {
+    flags.iter().map(|f| f.as_str().to_owned()).collect()
+}
+
+fn flags_to_permissions(flags: &[filefacts::SectionFlag]) -> Option<String> {
+    use filefacts::SectionFlag;
     if flags.is_empty() {
         return None;
     }
     let r = flags
         .iter()
-        .any(|f| f == "readable" || f == "read" || f == "alloc");
-    let w = flags.iter().any(|f| f == "writable" || f == "write");
+        .any(|f| matches!(f, SectionFlag::Readable | SectionFlag::Alloc));
+    let w = flags.contains(&SectionFlag::Writable);
     // `code` describes section contents (PE IMAGE_SCN_CNT_CODE), not loader
     // protection. Only explicit execute flags contribute the x permission.
-    let x = flags.iter().any(|f| f == "executable" || f == "execinstr");
+    let x = flags.contains(&SectionFlag::Executable);
     Some(format!(
         "{}{}{}",
         if r { 'r' } else { '-' },
@@ -340,23 +346,22 @@ mod tests {
 
     #[test]
     fn pe_code_flag_does_not_imply_execute_permission() {
-        let flags = vec![
-            "code".to_string(),
-            "readable".to_string(),
-            "writable".to_string(),
-        ];
-
-        assert_eq!(flags_to_permissions(&flags).as_deref(), Some("rw-"));
+        use filefacts::SectionFlag::{Code, Readable, Writable};
+        assert_eq!(
+            flags_to_permissions(&[Code, Readable, Writable]).as_deref(),
+            Some("rw-")
+        );
     }
 
     #[test]
     fn explicit_execute_flags_project_to_execute_permission() {
+        use filefacts::SectionFlag::{Alloc, Executable, Readable};
         assert_eq!(
-            flags_to_permissions(&["readable".to_string(), "executable".to_string()]).as_deref(),
+            flags_to_permissions(&[Readable, Executable]).as_deref(),
             Some("r-x")
         );
         assert_eq!(
-            flags_to_permissions(&["alloc".to_string(), "execinstr".to_string()]).as_deref(),
+            flags_to_permissions(&[Alloc, Executable]).as_deref(),
             Some("r-x")
         );
     }

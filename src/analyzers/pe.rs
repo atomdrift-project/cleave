@@ -175,7 +175,7 @@ fn layout_metrics(ctx: &Ctx<'_>, pe_data: &[u8], report: &mut AnalysisReport) {
             continue;
         }
         prose = prose.saturating_add(1);
-        if section.flags.iter().any(|f| f == "executable") {
+        if section.has_flag(filefacts::SectionFlag::Executable) {
             prose_exec = prose_exec.saturating_add(1);
         }
     }
@@ -803,7 +803,7 @@ impl PEAnalyzer {
             .parsed
             .sections()
             .iter()
-            .filter(|s| s.flags.iter().any(|f| f == "executable"))
+            .filter(|s| s.has_flag(filefacts::SectionFlag::Executable))
             .map(|s| {
                 let raw_end = s.file_offset.saturating_add(s.file_size);
                 if raw_end > file_size {

@@ -1802,7 +1802,8 @@ pub(crate) fn analyze_batch_expansion_layer(
     let virtual_path = encode_decoded_path(parent_path, &encoding_chain, result.offset);
     let analyzer =
         super::generic::GenericAnalyzer::new(FileType::Batch).with_engine(engine.clone());
-    let mut report = analyzer.analyze_source(Path::new(&virtual_path), &result.decoded);
+    let mut report =
+        analyzer.analyze_source_as_configured(Path::new(&virtual_path), &result.decoded);
     report.findings.extend(generate_encoded_layer_traits(
         &encoding_chain,
         result.offset as u64,

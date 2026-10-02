@@ -2164,8 +2164,9 @@ impl Scope {
     /// scope keys are equal.
     ///
     /// `archive_contents` and `top_level_file_type` come from the current
-    /// analysis's `AnalysisReport` and are only consulted for
-    /// [`Scope::Package`]; every other scope ignores them.
+    /// analysis's `AnalysisReport`. [`Scope::Package`] reads both;
+    /// [`Scope::Archive`] reads `archive_contents` to tell which `!`
+    /// ancestors are archives; every other scope ignores them.
     ///
     /// The key is a borrowed substring of `location` (or the empty
     /// string), so this is allocation-free.
@@ -2195,7 +2196,7 @@ impl Scope {
             // Archive: nearest enclosing archive entry path, falling back to
             // file-scope (never a global pool) when nothing encloses it.
             (Scope::Archive, Some(loc)) => {
-                let p = parent_archive(loc);
+                let p = parent_archive(loc, archive_contents);
                 if p.is_empty() {
                     strip_byte_offset_location(strip_decode_suffix(loc))
                 } else {
@@ -2362,16 +2363,19 @@ fn is_positional_only(location: &str) -> bool {
 }
 
 /// For an archive entry location, return the path of its nearest
-/// enclosing archive (i.e. the path with the trailing `!`-separated
-/// component stripped). For non-archive locations, return the empty
-/// string — `archive` scope degrades to `outer` in that case.
+/// enclosing archive (the path cut at the innermost `!` whose ancestor is
+/// an archive). For non-archive locations, return the empty string — the
+/// caller falls back to file scope in that case.
 ///
 /// Archive paths have the shape `archive:<path>` where `<path>` may
 /// contain `!` separators for nested archives:
 ///   archive:foo.so                    → "archive:"          (single-level)
 ///   archive:foo.zip!bar.so            → "archive:foo.zip"   (parent zip)
 ///   archive:outer.zip!inner.zip!x.so  → "archive:outer.zip!inner.zip"
-fn parent_archive(location: &str) -> &str {
+fn parent_archive<'a>(
+    location: &'a str,
+    archive_contents: &[crate::types::ArchiveEntry],
+) -> &'a str {
     let Some(after_prefix) = location.strip_prefix("archive:") else {
         return "";
     };
@@ -2380,13 +2384,31 @@ fn parent_archive(location: &str) -> &str {
         Some(idx) => &after_prefix[..idx],
         None => after_prefix,
     };
-    match entry_path.rfind('!') {
-        // Nested entry: keep `archive:<path-up-to-last-!>`.
-        Some(idx) => &location[.."archive:".len() + idx],
-        // Single-level entry: all peers in this archive share the bare
-        // prefix as their key.
-        None => "archive:",
+    // Walk the `!`-delimited ancestors from innermost to outermost. Not every
+    // `!` opens an archive: a script lifted out of a file's structure (a
+    // GitHub Actions `run:` step, `action.yml!/runs/steps/0/run`) is a child
+    // of that file, which encloses nothing. Such an ancestor is skipped, so
+    // the step keys to the archive that holds the file, as the file's own
+    // findings do. An ancestor the entry list does not name stays a boundary.
+    let mut end = entry_path.len();
+    while let Some(bang_idx) = entry_path[..end].rfind('!') {
+        let ancestor_path = &entry_path[..bang_idx];
+        let encloses = archive_contents
+            .iter()
+            .find(|m| m.path == ancestor_path)
+            .is_none_or(|m| {
+                let kind = FileType::from_str(&m.file_type);
+                kind.is_archive() || kind.is_package()
+            });
+        if encloses {
+            // Nested entry: keep `archive:<path-up-to-that-!>`.
+            return &location[.."archive:".len() + bang_idx];
+        }
+        end = bang_idx;
     }
+    // Single-level entry: all peers in this archive share the bare prefix as
+    // their key.
+    "archive:"
 }
 
 /// Is this filefacts `label()` string an ecosystem package -- a unit of
@@ -3544,7 +3566,8 @@ impl CompositeTrait {
     ///
     /// `archive_contents` and `top_level_file_type` come from the current
     /// `AnalysisReport` and are passed straight through to [`Scope::key`],
-    /// which is the only place that reads them (for [`Scope::Package`]).
+    /// which is the only place that reads them (for [`Scope::Package`] and
+    /// [`Scope::Archive`]).
     ///
     /// `Scope::Outer` is a no-op fast path: every key is the empty
     /// string, so all evidence is in one bucket.
@@ -4823,6 +4846,39 @@ mod scope_tests {
             Scope::Archive.key(Some("archive:outer.zip!bar.so"), &[], ""),
             "archive:outer.zip"
         );
+    }
+
+    #[test]
+    fn archive_skips_an_ancestor_that_is_not_an_archive() {
+        // A GitHub Actions `run:` step is lifted out of action.yml as a child
+        // (`action.yml!/runs/steps/0/run`), but action.yml encloses nothing:
+        // the step belongs to the archive that holds action.yml.
+        let contents = [archive_entry("pkg/action.yml", "github_actions")];
+        assert_eq!(
+            Scope::Archive.key(
+                Some("archive:pkg/action.yml!/runs/steps/0/run"),
+                &contents,
+                ""
+            ),
+            "archive:"
+        );
+        assert_eq!(
+            Scope::Archive.key(Some("archive:pkg/action.yml"), &contents, ""),
+            "archive:"
+        );
+    }
+
+    #[test]
+    fn archive_keeps_a_nested_archive_as_a_boundary() {
+        // A class in a jar inside the scanned zip stays apart from the zip's
+        // direct members, whether or not the entry list names the jar.
+        let contents = [archive_entry("lib/plugin.jar", "jar")];
+        for listed in [&contents[..], &[]] {
+            assert_eq!(
+                Scope::Archive.key(Some("archive:lib/plugin.jar!com/A.class"), listed, ""),
+                "archive:lib/plugin.jar"
+            );
+        }
     }
 
     #[test]

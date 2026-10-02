@@ -72,6 +72,32 @@ impl GenericAnalyzer {
         )
     }
 
+    /// Analyze `content` as this analyzer's file type, forcing it instead of
+    /// identifying from `file_path`. A decoded layer's virtual path
+    /// (`x.bat##batch-expansion@0`) names no real extension, so identifying
+    /// from it reports the layer's own content as mismatching its "extension".
+    pub(crate) fn analyze_source_as_configured(
+        &self,
+        file_path: &Path,
+        content: &str,
+    ) -> AnalysisReport {
+        let ctx = Some(crate::analysis_context::AnalysisContext::open_with(
+            filefacts::OpenOptions::new().file_type(self.file_type),
+            file_path,
+            content.as_bytes(),
+        ));
+        self.analyze_source_internal(
+            file_path,
+            content,
+            None,
+            None,
+            None,
+            None,
+            ctx.as_ref(),
+            None,
+        )
+    }
+
     #[allow(clippy::too_many_arguments)] // Existing input projections plus cancellation.
     fn analyze_source_internal(
         &self,
@@ -692,6 +718,48 @@ start payload.exe
                 .iter()
                 .any(|f| f.id == "metadata/lang/encoded/batch-expansion"),
             "expanded layer is missing its encoding finding: {:?}",
+            layer.findings.iter().map(|f| &f.id).collect::<Vec<_>>(),
+        );
+    }
+
+    #[test]
+    fn batch_expansion_layer_is_not_identified_from_its_virtual_path() {
+        // The layer is named `<parent>##batch-expansion@0`. Identified from
+        // that name, its batch content "mismatches" the made-up extension.
+        let dir = tempfile::tempdir().unwrap();
+        let traits = dir.path().join("traits.yaml");
+        std::fs::write(
+            &traits,
+            r#"
+traits:
+  - id: "test/layer::extension-mismatch"
+    desc: "Content mismatches the filename extension"
+    crit: notable
+    for: [batch]
+    if:
+      type: metrics
+      field: consistency.extension_content_mismatch
+      min: 1.0
+"#,
+        )
+        .unwrap();
+        let mapper = crate::capabilities::CapabilityMapper::from_yaml(&traits).unwrap();
+        let analyzer = GenericAnalyzer::new(FileType::Batch)
+            .with_engine(crate::Engine::from_rules(std::sync::Arc::new(mapper)));
+        let code = "set a=move /y\nset b=source\nset c=target\n%a% %b% %c%\n";
+        let report = analyzer.analyze_source(&PathBuf::from("obfuscated.bat"), code);
+
+        let layer = report
+            .files
+            .iter()
+            .find(|file| file.encoding.as_deref() == Some(&["batch-expansion".to_string()][..]))
+            .expect("expanded layer");
+        assert!(
+            !layer
+                .findings
+                .iter()
+                .any(|f| f.id == "test/layer::extension-mismatch"),
+            "decoded layer judged against its virtual path: {:?}",
             layer.findings.iter().map(|f| &f.id).collect::<Vec<_>>(),
         );
     }

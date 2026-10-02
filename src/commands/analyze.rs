@@ -357,9 +357,16 @@ fn format_report_output(
     }
 
     match format {
-        cli::OutputFormat::Json | cli::OutputFormat::Jsonl => {
+        cli::OutputFormat::Json => {
             let compact = types::compact_from_files(&report.files);
             Ok(serde_json::to_string(&compact)?)
+        }
+        // One record per line: a directory scan streams these back to back.
+        cli::OutputFormat::Jsonl => {
+            let compact = types::compact_from_files(&report.files);
+            let mut line = serde_json::to_string(&compact)?;
+            line.push('\n');
+            Ok(line)
         }
         cli::OutputFormat::Terminal => Ok(output::format_terminal_ctx(report)),
         cli::OutputFormat::Tiny => Ok(output::format_tiny(report)),
@@ -516,6 +523,51 @@ mod tests {
         });
         report.files = files;
         report
+    }
+
+    /// A directory scan concatenates one formatted record per file, so each
+    /// JSONL record must end its own line for the stream to parse line by line.
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn jsonl_records_are_newline_terminated() {
+        let mut out = String::new();
+        for path in ["/bin/a", "/bin/b"] {
+            let mut report = make_report(vec![make_file(
+                path,
+                vec![make_finding("x", Criticality::Notable)],
+            )]);
+            out.push_str(
+                &format_report_output(
+                    &mut report,
+                    &cli::OutputFormat::Jsonl,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .expect("format"),
+            );
+        }
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines.len(), 2, "{out}");
+        for line in lines {
+            serde_json::from_str::<serde_json::Value>(line).expect("each line is one JSON record");
+        }
+
+        let mut report = make_report(vec![make_file("/bin/a", vec![])]);
+        let json = format_report_output(
+            &mut report,
+            &cli::OutputFormat::Json,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("format");
+        assert!(
+            !json.ends_with('\n'),
+            "--format json stays a single bare object"
+        );
     }
 
     #[test]

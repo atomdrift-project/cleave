@@ -114,11 +114,14 @@ pub(crate) fn build_test_capability_mapper(
     }
 }
 
-pub(crate) fn prepare_test_target(file_type: &FileType, full_data: &[u8]) -> PreparedTestTarget {
+pub(crate) fn prepare_test_target(
+    file_type: &FileType,
+    full_data: &[u8],
+    options: &filefacts::OpenOptions<'_>,
+) -> PreparedTestTarget {
     if *file_type == FileType::MachO {
         let analyzer = MachOAnalyzer::new();
-        let slices =
-            crate::analyzers::macho::FatSlices::of(full_data, None, &filefacts::OpenOptions::new());
+        let slices = crate::analyzers::macho::FatSlices::of(full_data, None, options);
         let preferred_range = analyzer.preferred_arch_range(full_data, &slices);
         let arch_count = analyzer.all_arch_ranges(full_data, &slices).len();
 
@@ -151,7 +154,7 @@ pub(crate) fn evaluation_data<'a>(
 pub(crate) fn prepare_test_analysis(
     path: &Path,
     file_type: FileType,
-    capability_mapper: &crate::capabilities::CapabilityMapper,
+    engine: &crate::Engine,
 ) -> Result<PreparedTestAnalysis> {
     // Normalize text encoding (UTF-16 LE/BE BOM -> UTF-8) before building the
     // report and evaluating traits, mirroring the production analyze pipeline
@@ -164,7 +167,7 @@ pub(crate) fn prepare_test_analysis(
         std::borrow::Cow::Owned(decoded) => decoded,
         std::borrow::Cow::Borrowed(_) => raw_data,
     };
-    let prepared_target = prepare_test_target(&file_type, &full_data);
+    let prepared_target = prepare_test_target(&file_type, &full_data, &engine.filefacts_options());
     // An archive is analyzed through the archive pipeline, exactly as
     // `lib.rs::analyze_file_with_resources_at_depth` does for a production scan.
     //
@@ -178,23 +181,22 @@ pub(crate) fn prepare_test_analysis(
     let mut report = if file_type.is_archive() {
         use crate::analyzers::Analyzer as _;
         crate::analyzers::archive::ArchiveAnalyzer::new()
-            .with_capability_mapper(capability_mapper.clone())
+            .with_engine(engine.clone())
             .analyze(path)?
     } else {
         create_analysis_report(
             path,
             &file_type,
             &prepared_target.preferred_binary_data,
-            capability_mapper,
+            engine,
         )?
     };
 
     // For FAT binaries, source full-file strings from filefacts (the
     // string-extraction authority) so offsets are file-relative.
     if prepared_target.is_fat_macho {
-        let rows: Vec<stng::ExtractedString> = Some(filefacts::open(&full_data))
-            .map(|p| p.text().iter().cloned().collect())
-            .unwrap_or_default();
+        let parsed = engine.filefacts_options().path(path).open(&full_data);
+        let rows: Vec<stng::ExtractedString> = parsed.text().iter().cloned().collect();
         report.strings = crate::strings::StringExtractor::default().convert_stng_strings(&rows);
     }
 

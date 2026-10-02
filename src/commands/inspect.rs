@@ -26,19 +26,25 @@ pub fn run(
     targets: &[String],
     tree: Option<&cli::InspectTree>,
     _format: &cli::OutputFormat,
+    disabled: &cli::DisabledComponents,
 ) -> Result<String> {
     if targets.is_empty() {
         anyhow::bail!("cleave facts: at least one target file required");
     }
+    let options = crate::commands::shared::dev_engine(
+        crate::capabilities::CapabilityMapper::empty(),
+        disabled,
+    )
+    .filefacts_options();
 
     if targets.len() == 1 {
-        let value = inspect_one(&targets[0], tree)?;
+        let value = inspect_one(&targets[0], tree, &options)?;
         return Ok(serde_json::to_string_pretty(&value)?);
     }
 
     let mut out = String::new();
     for target in targets {
-        let line = match inspect_one(target, tree) {
+        let line = match inspect_one(target, tree, &options) {
             Ok(mut value) => {
                 if let Value::Object(map) = &mut value {
                     map.insert("path".into(), json!(target));
@@ -61,13 +67,17 @@ pub fn run(
     Ok(out)
 }
 
-fn inspect_one(target: &str, tree: Option<&cli::InspectTree>) -> Result<Value> {
+fn inspect_one(
+    target: &str,
+    tree: Option<&cli::InspectTree>,
+    options: &filefacts::OpenOptions<'_>,
+) -> Result<Value> {
     let path = Path::new(target);
     if !path.exists() {
         anyhow::bail!("File does not exist: {}", target);
     }
     let bytes = fs::read(path).with_context(|| format!("reading {}", target))?;
-    let parsed = filefacts::OpenOptions::new().path(path).open(&bytes);
+    let parsed = options.clone().path(path).open(&bytes);
 
     use filefacts::SymbolKind;
     let kind_to_value = |k: SymbolKind| -> Result<Value> {

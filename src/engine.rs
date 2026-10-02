@@ -35,6 +35,12 @@ pub(crate) struct Settings {
     /// Recover symbols and code metrics by disassembling native binaries with
     /// rizin (filefacts' per-file `OpenOptions::rizin`).
     pub(crate) radare2: bool,
+    /// filefacts' `OpenOptions::rizin_timeout`; `None` is its default.
+    pub(crate) rizin_timeout: Option<std::time::Duration>,
+    /// filefacts' `OpenOptions::rizin_max_bytes`; `None` is no cap.
+    pub(crate) rizin_max_bytes: Option<usize>,
+    /// filefacts' `OpenOptions::rizin_native_arch_only`.
+    pub(crate) rizin_native_arch_only: bool,
     /// Fold archive members into the compact projection: fields only the full
     /// v3 output reads (`kv` no rule reaches, `filefacts.values`, findings no
     /// rule references) are dropped as each member folds into its container.
@@ -56,6 +62,9 @@ impl Default for Settings {
         Self {
             upx: true,
             radare2: true,
+            rizin_timeout: None,
+            rizin_max_bytes: None,
+            rizin_native_arch_only: false,
             compact_members: false,
             yara: false,
             third_party_yara: false,
@@ -69,12 +78,20 @@ impl Default for Settings {
 }
 
 /// The filefacts options an engine with `settings` parses files with: its
-/// rizin setting, and filefacts' disk cache only when `FILEFACTS_CACHE` turns
+/// rizin settings, and filefacts' disk cache only when `FILEFACTS_CACHE` turns
 /// it on and cleave's own cache is in use.
 pub(crate) fn filefacts_options(settings: &Settings) -> filefacts::OpenOptions<'static> {
-    filefacts::OpenOptions::new()
+    let mut options = filefacts::OpenOptions::new()
         .rizin(settings.radare2)
-        .cache(!crate::cache::skip_cache() && filefacts::cache::env_override().unwrap_or(false))
+        .rizin_native_arch_only(settings.rizin_native_arch_only)
+        .cache(!crate::cache::skip_cache() && filefacts::cache::env_override().unwrap_or(false));
+    if let Some(timeout) = settings.rizin_timeout {
+        options = options.rizin_timeout(timeout);
+    }
+    if let Some(max_bytes) = settings.rizin_max_bytes {
+        options = options.rizin_max_bytes(max_bytes);
+    }
+    options
 }
 
 /// The engine with no rules, no YARA and default settings.
@@ -175,14 +192,14 @@ impl Engine {
 /// Building an engine and analyzing with it.
 ///
 /// Every `analyze_*` method takes the per-call inputs from `options`: zip
-/// passwords, cancellation, size limits, sample extraction, phase tracking
-/// and `disable_radare2`. What the engine was built with (rules, YARA, UPX,
-/// platforms, precision thresholds, member folding) comes from the engine,
-/// and the fields of `options` that describe it are not consulted.
+/// passwords, cancellation, size limits, sample extraction and phase
+/// tracking. What the engine was built with (rules, YARA, UPX, radare2 and its
+/// limits, platforms, precision thresholds, member folding) comes from the
+/// engine, and the fields of `options` that describe it are not consulted.
 impl Engine {
     /// The engine `options` describe: the process's shared rules and YARA
     /// engine for them (loaded on first use, then reused), with `options`'
-    /// YARA and UPX settings and full member retention. Build one at startup
+    /// YARA, UPX and radare2 settings and full member retention. Build one at startup
     /// and analyze every file with it.
     ///
     /// Only `options` count: unlike the `AnalysisOptions` free functions, the

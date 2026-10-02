@@ -9,6 +9,7 @@
 //!
 //! Each subcommand supports both JSONL and terminal output formats.
 
+use crate::Engine;
 use crate::analyzers::{
     Analyzer, FileType, detect_file_type, elf::ElfAnalyzer, macho::MachOAnalyzer, pe::PEAnalyzer,
 };
@@ -26,24 +27,26 @@ pub mod sections;
 pub mod strings;
 pub mod symbols;
 
-pub(crate) fn analyze_binary_report(path: &Path, file_type: &FileType) -> Result<AnalysisReport> {
-    let capability_mapper = crate::capabilities::CapabilityMapper::empty();
-
+pub(crate) fn analyze_binary_report(
+    path: &Path,
+    file_type: &FileType,
+    engine: &Engine,
+) -> Result<AnalysisReport> {
     match file_type {
-        FileType::Elf => ElfAnalyzer::new()
-            .with_capability_mapper(capability_mapper)
-            .analyze(path),
-        FileType::Pe => PEAnalyzer::new()
-            .with_capability_mapper(capability_mapper)
-            .analyze(path),
+        FileType::Elf => ElfAnalyzer::new().with_engine(engine.clone()).analyze(path),
+        FileType::Pe => PEAnalyzer::new().with_engine(engine.clone()).analyze(path),
         FileType::MachO => MachOAnalyzer::new()
-            .with_capability_mapper(capability_mapper)
+            .with_engine(engine.clone())
             .analyze(path),
         _ => anyhow::bail!("unsupported binary file type: {:?}", file_type),
     }
 }
 
-pub(crate) fn extract_layer_file_analysis(target: &str, layer: &str) -> Result<FileAnalysis> {
+pub(crate) fn extract_layer_file_analysis(
+    target: &str,
+    layer: &str,
+    engine: &Engine,
+) -> Result<FileAnalysis> {
     let path = Path::new(target);
     if !path.exists() {
         anyhow::bail!("File does not exist: {}", target);
@@ -52,16 +55,15 @@ pub(crate) fn extract_layer_file_analysis(target: &str, layer: &str) -> Result<F
     let data = fs::read(path)?;
     let file_type = detect_file_type(path)?;
 
-    let capability_mapper = crate::capabilities::CapabilityMapper::empty();
     let mut report = match file_type {
         FileType::Elf => ElfAnalyzer::new()
-            .with_capability_mapper(capability_mapper)
+            .with_engine(engine.clone())
             .analyze_structural(path, &data, None),
         FileType::Pe => PEAnalyzer::new()
-            .with_capability_mapper(capability_mapper)
+            .with_engine(engine.clone())
             .analyze_structural(path, &data, None),
         FileType::MachO => MachOAnalyzer::new()
-            .with_capability_mapper(capability_mapper)
+            .with_engine(engine.clone())
             .analyze_structural(path, &data, None),
         _ => anyhow::bail!("Layer filtering only supported for binary files (ELF, PE, Mach-O)"),
     };

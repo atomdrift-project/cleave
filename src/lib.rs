@@ -873,8 +873,9 @@ pub fn create_analysis_report(
 ///
 /// The free functions ([`analyze_file`], [`analyze_bytes`], ...) read every
 /// field. An [`Engine`] is built from the engine-level fields (YARA, UPX,
-/// platforms, precision thresholds, validation) by [`Engine::for_options`];
-/// its `analyze_*` methods read only the per-call ones and ignore the rest.
+/// radare2 and its limits, platforms, precision thresholds, validation) by
+/// [`Engine::for_options`]; its `analyze_*` methods read only the per-call
+/// ones and ignore the rest.
 #[derive(Debug, Clone)]
 pub struct AnalysisOptions {
     /// Enable third-party YARA rules
@@ -885,6 +886,17 @@ pub struct AnalysisOptions {
     pub disable_yara: bool,
     /// Disable radare2 analysis
     pub disable_radare2: bool,
+    /// Wall-clock budget for one rizin run on a native binary. A run past it
+    /// is killed and the binary keeps its static facts; the report then
+    /// records [`types::AnalysisGap::DisassemblyIncomplete`] and is not cached.
+    /// `None` uses filefacts' default ([`filefacts::rizin::DEFAULT_RIZIN_TIMEOUT_SECS`]).
+    pub rizin_timeout: Option<std::time::Duration>,
+    /// Skip rizin for native binaries larger than this many bytes, keeping
+    /// one huge binary from dominating a latency-sensitive scan. `None`: no cap.
+    pub rizin_max_bytes: Option<usize>,
+    /// Disassemble only the host-native slice of a fat Mach-O; the other
+    /// slices never run on this host and are most of the cost.
+    pub rizin_native_arch_only: bool,
     /// Disable UPX unpacking
     pub disable_upx: bool,
     /// Include all files in directory scans, even unknown types
@@ -1182,6 +1194,9 @@ impl Default for AnalysisOptions {
                 .collect(),
             disable_yara: false,
             disable_radare2: false,
+            rizin_timeout: None,
+            rizin_max_bytes: None,
+            rizin_native_arch_only: false,
             disable_upx: false,
             all_files: false,
             platforms: vec![composite_rules::Platform::All],

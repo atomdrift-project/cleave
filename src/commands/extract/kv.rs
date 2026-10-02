@@ -20,6 +20,7 @@
 use crate::analyzers;
 use crate::analyzers::FileType;
 use crate::cli;
+use crate::commands::shared::dev_engine;
 use crate::composite_rules::evaluators::kv::{navigate, parse_path, parse_structured_content};
 use anyhow::Result;
 use serde::Serialize;
@@ -46,19 +47,25 @@ struct KvEntry {
 /// 4. Source code analyzer — `source.*` / `metrics.*` are cleave-side.
 /// 5. Generic structured fallback — JSON / YAML / TOML / plist /
 ///    PKG-INFO / systemd / desktop / XML manifests.
-pub fn run(target: &str, path_filter: Option<&str>, format: &cli::OutputFormat) -> Result<String> {
+pub fn run(
+    target: &str,
+    path_filter: Option<&str>,
+    format: &cli::OutputFormat,
+    disabled: &cli::DisabledComponents,
+) -> Result<String> {
     let path = Path::new(target);
     if !path.exists() {
         anyhow::bail!("File does not exist: {}", target);
     }
 
     let content = fs::read(path)?;
+    let engine = dev_engine(crate::capabilities::CapabilityMapper::empty(), disabled);
 
-    let parsed = if let Some(value) = filefacts_values(path, &content) {
+    let parsed = if let Some(value) = filefacts_values(path, &content, &engine) {
         value
-    } else if let Some(binary_value) = extract_binary_kv_via_analyzer(path, &content) {
+    } else if let Some(binary_value) = extract_binary_kv_via_analyzer(path, &content, &engine) {
         binary_value
-    } else if let Some(source_value) = extract_source_kv_via_analyzer(path, &content) {
+    } else if let Some(source_value) = extract_source_kv_via_analyzer(path, &content, &engine) {
         source_value
     } else if let Some((_, structured_value)) = parse_structured_content(path, &content) {
         structured_value
@@ -156,8 +163,12 @@ fn format_output(entries: &[KvEntry], target: &str, format: &cli::OutputFormat) 
 /// every format filefacts owns (PE, ELF, Mach-O, LNK, PDF, RTF, JPEG,
 /// PNG, JAR, CHM, RPM, pyc, pickle, class, VSIX, source code, …)
 /// flows through this single helper.
-fn filefacts_values(path: &Path, content: &[u8]) -> Option<Value> {
-    let ctx = crate::analysis_context::AnalysisContext::open(path, content);
+fn filefacts_values(path: &Path, content: &[u8], engine: &crate::Engine) -> Option<Value> {
+    let ctx = crate::analysis_context::AnalysisContext::open_with(
+        engine.filefacts_options(),
+        path,
+        content,
+    );
     let mut value = ctx.values_tree();
     if value.get("pe").is_some()
         && let Some(resource_data) = ctx.parsed.sections().iter().find_map(|section| {
@@ -189,17 +200,25 @@ fn has_only_path_derived(value: &Value) -> bool {
     matches!(value, Value::Object(map) if map.keys().all(|k| k == "file"))
 }
 
-fn extract_binary_kv_via_analyzer(path: &Path, content: &[u8]) -> Option<Value> {
+fn extract_binary_kv_via_analyzer(
+    path: &Path,
+    content: &[u8],
+    engine: &crate::Engine,
+) -> Option<Value> {
     let detected = analyzers::detect_file_type_from_data(path, content);
     if !matches!(detected, FileType::Pe | FileType::Elf | FileType::MachO) {
         return None;
     }
-    let analyzer = analyzers::analyzer_for_file_type(&detected, None)?;
+    let analyzer = analyzers::analyzer_for_file_type_arc(&detected, engine)?;
     let mut report = analyzer.analyze(path).ok()?;
     // `pe.*` / `elf.*` / `macho.*` come exclusively from filefacts
     // (single source of truth). `binary_extractors` augments with
     // `.comment` / sanitizer detections.
-    let ctx = crate::analysis_context::AnalysisContext::open(path, content);
+    let ctx = crate::analysis_context::AnalysisContext::open_with(
+        engine.filefacts_options(),
+        path,
+        content,
+    );
     if let Value::Object(map) = ctx.values_tree() {
         for (namespace, subtree) in map {
             report.merge_kv_subtree(&namespace, subtree);
@@ -213,7 +232,11 @@ fn extract_binary_kv_via_analyzer(path: &Path, content: &[u8]) -> Option<Value> 
 /// language) and return the synthesized values tree from `report.values_tree`,
 /// which the analyzer populates via `source_kv::attach_to_report`.
 /// Returns `None` for non-source input or when the analyzer fails.
-fn extract_source_kv_via_analyzer(path: &Path, content: &[u8]) -> Option<Value> {
+fn extract_source_kv_via_analyzer(
+    path: &Path,
+    content: &[u8],
+    engine: &crate::Engine,
+) -> Option<Value> {
     let detected = analyzers::detect_file_type_from_data(path, content);
     // Skip file types already handled upstream — binaries, archives,
     // structured documents, and the unknown bucket.  Anything else
@@ -233,7 +256,7 @@ fn extract_source_kv_via_analyzer(path: &Path, content: &[u8]) -> Option<Value> 
     ) {
         return None;
     }
-    let analyzer = analyzers::analyzer_for_file_type(&detected, None)?;
+    let analyzer = analyzers::analyzer_for_file_type_arc(&detected, engine)?;
     let report = analyzer.analyze(path).ok()?;
     let value = report.values_tree.as_deref().cloned()?;
     if has_only_path_derived(&value) {

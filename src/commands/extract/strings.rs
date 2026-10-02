@@ -7,10 +7,11 @@
 //! - String classification (URLs, IPs, emails, paths, shell commands)
 //! - Layer filtering (e.g., --layer upx@0 for UPX-unpacked content)
 
+use crate::Engine;
 use crate::analyzers::{FileType, detect_file_type};
 use crate::cli;
 use crate::commands::extract::extract_layer_file_analysis;
-use crate::commands::shared::extract_strings_from_ast;
+use crate::commands::shared::{dev_engine, extract_strings_from_ast};
 use crate::strings;
 use anyhow::Result;
 use std::fs;
@@ -22,12 +23,14 @@ pub fn run(
     min_length: usize,
     layer: Option<&str>,
     format: &cli::OutputFormat,
+    disabled: &cli::DisabledComponents,
 ) -> Result<String> {
+    let engine = dev_engine(crate::capabilities::CapabilityMapper::empty(), disabled);
     // If a layer is specified, we need to run full analysis to get that layer's data
     if let Some(layer_name) = layer {
-        return run_with_layer(target, min_length, layer_name, format);
+        return run_with_layer(target, min_length, layer_name, format, &engine);
     }
-    run_direct(target, min_length, format)
+    run_direct(target, min_length, format, &engine)
 }
 
 /// Run string extraction with layer filtering (requires full analysis)
@@ -36,8 +39,9 @@ fn run_with_layer(
     min_length: usize,
     layer: &str,
     format: &cli::OutputFormat,
+    engine: &Engine,
 ) -> Result<String> {
-    let file_analysis = extract_layer_file_analysis(target, layer)?;
+    let file_analysis = extract_layer_file_analysis(target, layer, engine)?;
 
     // Filter strings by minimum length
     let strings: Vec<_> = file_analysis
@@ -51,7 +55,12 @@ fn run_with_layer(
 }
 
 /// Direct string extraction without layer filtering (fast path)
-fn run_direct(target: &str, min_length: usize, format: &cli::OutputFormat) -> Result<String> {
+fn run_direct(
+    target: &str,
+    min_length: usize,
+    format: &cli::OutputFormat,
+    engine: &Engine,
+) -> Result<String> {
     let path = Path::new(target);
     if !path.exists() {
         anyhow::bail!("File does not exist: {}", target);
@@ -86,6 +95,9 @@ fn run_direct(target: &str, min_length: usize, format: &cli::OutputFormat) -> Re
         return extract_strings_from_ast(path, &file_type, min_length, format);
     }
 
+    // One parse serves the symbols and the strings: for a native binary it
+    // runs rizin.
+    let parsed = engine.filefacts_options().path(path).open(&data);
     let mut imports = std::collections::HashSet::new();
     let mut import_libraries = std::collections::HashMap::new();
     let mut exports = std::collections::HashSet::new();
@@ -127,22 +139,19 @@ fn run_direct(target: &str, min_length: usize, format: &cli::OutputFormat) -> Re
                     }
                 }
 
-                // filefacts::open() owns rizin now — imports / exports /
-                // functions come from its typed views regardless of
-                // whether the binary parsed cleanly with goblin or fell
-                // back through the rizin recovery path.
-                {
-                    let parsed = filefacts::open(&data);
-                    // Realize the parse so the typed views are populated.
-                    let _ = parsed.values();
-                    populate_symbols_from_filefacts(
-                        &parsed,
-                        &mut imports,
-                        &mut import_libraries,
-                        &mut exports,
-                        &mut functions,
-                    );
-                }
+                // filefacts owns rizin — imports / exports / functions come
+                // from its typed views regardless of whether the binary
+                // parsed cleanly with goblin or fell back through the rizin
+                // recovery path.
+                // Realize the parse so the typed views are populated.
+                let _ = parsed.values();
+                populate_symbols_from_filefacts(
+                    &parsed,
+                    &mut imports,
+                    &mut import_libraries,
+                    &mut exports,
+                    &mut functions,
+                );
             }
             _ => {}
         }
@@ -157,9 +166,7 @@ fn run_direct(target: &str, min_length: usize, format: &cli::OutputFormat) -> Re
 
     // Strings come from filefacts' `text()` view (the string-extraction
     // authority); the configured extractor classifies them.
-    let rows: Vec<stng::ExtractedString> = Some(filefacts::open(&data))
-        .map(|p| p.text().iter().cloned().collect())
-        .unwrap_or_default();
+    let rows: Vec<stng::ExtractedString> = parsed.text().iter().cloned().collect();
     let strings = extractor.convert_stng_strings(&rows);
     format_strings_output(&strings, format)
 }
@@ -311,6 +318,7 @@ mod tests {
             4,
             None,
             &crate::cli::OutputFormat::Json,
+            &crate::cli::DisabledComponents::default(),
         )
         .unwrap();
         let rows: Vec<serde_json::Value> = serde_json::from_str(&output).unwrap();
@@ -342,6 +350,7 @@ mod tests {
             4096,
             None,
             &crate::cli::OutputFormat::Json,
+            &crate::cli::DisabledComponents::default(),
         )
         .unwrap();
         assert_eq!(

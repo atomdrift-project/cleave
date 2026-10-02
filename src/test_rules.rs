@@ -164,6 +164,29 @@ fn container_finding_origins(
 }
 
 impl<'a> RuleDebugger<'a> {
+    /// Create a new rule debugger, parsing `binary_data` with filefacts'
+    /// default options.
+    #[cfg(test)]
+    pub(crate) fn new(
+        mapper: &'a CapabilityMapper,
+        report: &'a AnalysisReport,
+        binary_data: &'a [u8],
+        platforms: Vec<Platform>,
+        inline_yara_results: Option<&'a HashMap<String, Vec<Evidence>>>,
+    ) -> Self {
+        let parsed = filefacts::OpenOptions::new()
+            .path(std::path::Path::new(&report.target.path))
+            .open(binary_data);
+        Self::with_parsed(
+            mapper,
+            report,
+            binary_data,
+            platforms,
+            inline_yara_results,
+            parsed,
+        )
+    }
+
     /// Create a new rule debugger.
     ///
     /// # Arguments
@@ -172,26 +195,22 @@ impl<'a> RuleDebugger<'a> {
     /// * `binary_data` - Raw file contents
     /// * `platforms` - Platform filter from CLI (use vec![Platform::All] to show all)
     /// * `inline_yara_results` - Pre-scanned inline YARA results (matches production path)
-    pub(crate) fn new(
+    /// * `parsed` - The filefacts parse of `binary_data`, so AST conditions
+    ///   have a real tree to walk
+    pub(crate) fn with_parsed(
         mapper: &'a CapabilityMapper,
         report: &'a AnalysisReport,
         binary_data: &'a [u8],
         platforms: Vec<Platform>,
         inline_yara_results: Option<&'a HashMap<String, Vec<Evidence>>>,
+        parsed: filefacts::ParsedFile<'a>,
     ) -> Self {
         let file_type = detect_file_type(&report.target.file_type);
         let section_map = SectionMap::from_binary(binary_data);
 
-        // Parse via filefacts so AST conditions have a real tree to walk.
         // `values()` primes the parse so `source_ast()` returns Some.
-        let parsed = Some(
-            filefacts::OpenOptions::new()
-                .path(std::path::Path::new(&report.target.path))
-                .open(binary_data),
-        );
-        if let Some(ref p) = parsed {
-            let _ = p.values();
-        }
+        let _ = parsed.values();
+        let parsed = Some(parsed);
 
         Self {
             mapper,

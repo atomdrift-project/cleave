@@ -6,9 +6,11 @@
 //! - Structural metrics (function counts, string statistics)
 //! - Supports layer filtering (e.g., --layer upx@0 for UPX-unpacked content)
 
+use crate::Engine;
 use crate::analyzers::{self, FileType, detect_file_type};
 use crate::cli;
 use crate::commands::extract::{analyze_binary_report, extract_layer_file_analysis};
+use crate::commands::shared::dev_engine;
 use anyhow::Result;
 use std::path::Path;
 
@@ -17,18 +19,24 @@ pub fn run(
     target: &str,
     layer: Option<&str>,
     format: &cli::OutputFormat,
-    _disabled: &cli::DisabledComponents,
+    disabled: &cli::DisabledComponents,
 ) -> Result<String> {
+    let engine = dev_engine(crate::capabilities::CapabilityMapper::empty(), disabled);
     // If a layer is specified, we need to run full analysis to get that layer's data
     if let Some(layer_name) = layer {
-        return run_with_layer(target, layer_name, format);
+        return run_with_layer(target, layer_name, format, &engine);
     }
-    run_direct(target, format)
+    run_direct(target, format, &engine)
 }
 
 /// Run metrics extraction with layer filtering (requires full analysis)
-fn run_with_layer(target: &str, layer: &str, format: &cli::OutputFormat) -> Result<String> {
-    let file_analysis = extract_layer_file_analysis(target, layer)?;
+fn run_with_layer(
+    target: &str,
+    layer: &str,
+    format: &cli::OutputFormat,
+    engine: &Engine,
+) -> Result<String> {
+    let file_analysis = extract_layer_file_analysis(target, layer, engine)?;
     let file_type = detect_file_type(Path::new(target))?;
 
     let metrics = file_analysis.filefacts_metrics.ok_or_else(|| {
@@ -42,7 +50,7 @@ fn run_with_layer(target: &str, layer: &str, format: &cli::OutputFormat) -> Resu
 }
 
 /// Direct metrics extraction without layer filtering (fast path)
-fn run_direct(target: &str, format: &cli::OutputFormat) -> Result<String> {
+fn run_direct(target: &str, format: &cli::OutputFormat, engine: &Engine) -> Result<String> {
     let path = Path::new(target);
     if !path.exists() {
         anyhow::bail!("File does not exist: {}", target);
@@ -53,13 +61,15 @@ fn run_direct(target: &str, format: &cli::OutputFormat) -> Result<String> {
 
     // Analyze the file to compute metrics
     // Note: For metrics extraction, we use the empty capability mapper and rely on the
-    // analyzers to compute metrics. Radare2 analysis can be slow, but it's controlled
-    // by the --disable flag (already in disabled)
+    // analyzers to compute metrics. Radare2 analysis can be slow; `--disable radare2`
+    // turns it off through the engine.
     let report = match file_type {
-        FileType::Elf | FileType::MachO | FileType::Pe => analyze_binary_report(path, &file_type)?,
+        FileType::Elf | FileType::MachO | FileType::Pe => {
+            analyze_binary_report(path, &file_type, engine)?
+        }
         _ => {
             // Use the generic analyzer for source code
-            if let Some(analyzer) = analyzers::analyzer_for_file_type(&file_type, None) {
+            if let Some(analyzer) = analyzers::analyzer_for_file_type_arc(&file_type, engine) {
                 analyzer.analyze(path)?
             } else {
                 anyhow::bail!(

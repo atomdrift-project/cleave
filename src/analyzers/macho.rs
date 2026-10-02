@@ -10,7 +10,6 @@
 #![warn(clippy::indexing_slicing, clippy::arithmetic_side_effects)]
 
 use crate::analyzers::{AnalysisInput, Analyzer};
-use crate::capabilities::CapabilityMapper;
 use crate::entropy::EntropyLevel;
 use crate::strings::StringExtractor;
 use crate::types::{
@@ -21,7 +20,6 @@ use anyhow::{Context, Result};
 use sha2::{Digest, Sha256, Sha384};
 use std::fs;
 use std::path::Path;
-use std::sync::Arc;
 
 type Ctx<'a> = crate::analysis_context::AnalysisContext<'a>;
 
@@ -90,13 +88,6 @@ impl MachOAnalyzer {
             preextracted_strings: None,
             cancellation: None,
         }
-    }
-
-    /// Create analyzer with pre-existing capability mapper (wraps in Arc)
-    #[must_use]
-    pub(crate) fn with_capability_mapper(mut self, capability_mapper: CapabilityMapper) -> Self {
-        self.engine = crate::Engine::from_rules(Arc::new(capability_mapper));
-        self
     }
 
     /// Analyze under `engine`: its rules and settings.

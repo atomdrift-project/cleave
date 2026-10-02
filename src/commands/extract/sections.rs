@@ -4,25 +4,37 @@
 //! Provides section names, addresses, sizes, entropy, and permissions.
 //! Supports layer filtering (e.g., --layer upx@0 for UPX-unpacked content).
 
+use crate::Engine;
 use crate::analyzers::{FileType, detect_file_type};
 use crate::cli;
 use crate::commands::extract::{analyze_binary_report, extract_layer_file_analysis};
-use crate::commands::shared::SectionInfo;
+use crate::commands::shared::{SectionInfo, dev_engine};
 use anyhow::Result;
 use std::path::Path;
 
 /// Extract section metadata from a target, optionally from a named analysis layer.
-pub fn run(target: &str, layer: Option<&str>, format: &cli::OutputFormat) -> Result<String> {
+pub fn run(
+    target: &str,
+    layer: Option<&str>,
+    format: &cli::OutputFormat,
+    disabled: &cli::DisabledComponents,
+) -> Result<String> {
+    let engine = dev_engine(crate::capabilities::CapabilityMapper::empty(), disabled);
     // If a layer is specified, we need to run full analysis to get that layer's data
     if let Some(layer_name) = layer {
-        return run_with_layer(target, layer_name, format);
+        return run_with_layer(target, layer_name, format, &engine);
     }
-    run_direct(target, format)
+    run_direct(target, format, &engine)
 }
 
 /// Run section extraction with layer filtering (requires full analysis)
-fn run_with_layer(target: &str, layer: &str, format: &cli::OutputFormat) -> Result<String> {
-    let file_analysis = extract_layer_file_analysis(target, layer)?;
+fn run_with_layer(
+    target: &str,
+    layer: &str,
+    format: &cli::OutputFormat,
+    engine: &Engine,
+) -> Result<String> {
+    let file_analysis = extract_layer_file_analysis(target, layer, engine)?;
 
     // Convert FileAnalysis sections to SectionInfo
     let sections: Vec<SectionInfo> = file_analysis
@@ -42,7 +54,7 @@ fn run_with_layer(target: &str, layer: &str, format: &cli::OutputFormat) -> Resu
 }
 
 /// Direct section extraction without layer filtering (fast path)
-fn run_direct(target: &str, format: &cli::OutputFormat) -> Result<String> {
+fn run_direct(target: &str, format: &cli::OutputFormat, engine: &Engine) -> Result<String> {
     let path = Path::new(target);
     if !path.exists() {
         anyhow::bail!("File does not exist: {}", target);
@@ -55,7 +67,7 @@ fn run_direct(target: &str, format: &cli::OutputFormat) -> Result<String> {
         match file_type {
             FileType::Elf | FileType::MachO | FileType::Pe => {
                 // Binary file - extract sections with addresses
-                let report = analyze_binary_report(path, &file_type)?;
+                let report = analyze_binary_report(path, &file_type, engine)?;
 
                 // Convert sections to output format
                 for section in report.sections {

@@ -11,7 +11,6 @@
 #![warn(clippy::indexing_slicing, clippy::arithmetic_side_effects)]
 
 use crate::analyzers::{AnalysisInput, Analyzer};
-use crate::capabilities::CapabilityMapper;
 use crate::entropy::EntropyLevel;
 use crate::strings::StringExtractor;
 use crate::types::{
@@ -178,13 +177,6 @@ impl ElfAnalyzer {
         yara_engine: &Arc<crate::yara_engine::YaraEngine>,
     ) -> Self {
         self.yara_engine = Some(yara_engine.clone());
-        self
-    }
-
-    /// Create analyzer with pre-existing capability mapper (wraps in Arc)
-    #[must_use]
-    pub(crate) fn with_capability_mapper(mut self, capability_mapper: CapabilityMapper) -> Self {
-        self.engine = crate::Engine::from_rules(Arc::new(capability_mapper));
         self
     }
 

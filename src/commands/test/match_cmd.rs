@@ -4,7 +4,7 @@
 //! search patterns, count constraints, and location filters with detailed diagnostics.
 
 use crate::analyzers::{FileType, detect_file_type};
-use crate::commands::shared::{cli_file_type_to_internal, create_analysis_report};
+use crate::commands::shared::{cli_file_type_to_internal, create_analysis_report, dev_engine};
 use crate::commands::test::{build_test_capability_mapper, evaluation_data, prepare_test_analysis};
 use crate::composite_rules::condition::StringValidator;
 use crate::composite_rules::context::StringParams;
@@ -48,7 +48,7 @@ use std::path::Path;
 /// * `value_max` - Maximum value (for metrics)
 /// * `min_size` - Minimum file size (for metrics)
 /// * `max_size` - Maximum file size (for metrics)
-/// * `_disabled` - Disabled components configuration
+/// * `disabled` - Components `--disable` turned off (UPX unpacking and radare2 apply here)
 /// * `platforms` - Platform filters for evaluation
 /// * `min_hostile_precision` - Minimum precision for hostile rules
 /// * `min_suspicious_precision` - Minimum precision for suspicious rules
@@ -87,7 +87,7 @@ pub fn run(
     value_max: Option<f64>,
     min_size: Option<u64>,
     max_size: Option<u64>,
-    _disabled: &cli::DisabledComponents,
+    disabled: &cli::DisabledComponents,
     platforms: &[composite_rules::Platform],
     min_hostile_precision: f32,
     min_suspicious_precision: f32,
@@ -153,13 +153,17 @@ pub fn run(
 
     // Load capability mapper with full validation (test-match is a developer command)
     // Allow skipping for faster tests with CLEAVE_SKIP_TRAITS
-    let capability_mapper = build_test_capability_mapper(
-        platforms.to_owned(),
-        min_hostile_precision,
-        min_suspicious_precision,
+    let engine = dev_engine(
+        build_test_capability_mapper(
+            platforms.to_owned(),
+            min_hostile_precision,
+            min_suspicious_precision,
+        ),
+        disabled,
     );
+    let capability_mapper = engine.rules();
 
-    let prepared = prepare_test_analysis(path, file_type, &capability_mapper)?;
+    let prepared = prepare_test_analysis(path, file_type, &engine)?;
     if prepared.is_fat_macho {
         eprintln!("Note: FAT binary detected, using full file for evaluation");
     }
@@ -173,12 +177,13 @@ pub fn run(
     // Create debugger to access search functions
     // Note: test-match doesn't use YARA results since it tests individual conditions
     // For FAT binaries, use full file so string offsets are file-relative
-    let debugger = RuleDebugger::new(
-        &capability_mapper,
+    let debugger = RuleDebugger::with_parsed(
+        capability_mapper,
         report,
         eval_data,
         platforms.to_owned(),
         None, // test-match evaluates conditions directly, not via full rule path
+        engine.filefacts_options().path(path).open(eval_data),
     );
     let context_info = debugger.context_info();
 
@@ -2165,14 +2170,15 @@ pub fn run(
             if alt_type != file_type {
                 // Try to create a report with alternative file type
                 if let Ok(alt_report) =
-                    create_analysis_report(path, &alt_type, binary_data, &capability_mapper)
+                    create_analysis_report(path, &alt_type, binary_data, &engine)
                 {
-                    let alt_debugger = RuleDebugger::new(
-                        &capability_mapper,
+                    let alt_debugger = RuleDebugger::with_parsed(
+                        capability_mapper,
                         &alt_report,
                         binary_data,
                         vec![composite_rules::Platform::All], // Check all platforms for alt file types
                         None, // test-match evaluates conditions directly
+                        engine.filefacts_options().path(path).open(binary_data),
                     );
                     let alt_context = alt_debugger.context_info();
 

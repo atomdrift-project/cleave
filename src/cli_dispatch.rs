@@ -376,21 +376,27 @@ pub(crate) fn dispatch_command(
             target,
             min_length,
             layer,
-        }) => extract_strings_command(&target, min_length, layer.as_deref(), ctx.format)?,
+        }) => extract_strings_command(
+            &target,
+            min_length,
+            layer.as_deref(),
+            ctx.format,
+            ctx.disabled,
+        )?,
         Some(cli::Command::Symbols { target, layer }) => {
-            extract_symbols_command(&target, layer.as_deref(), ctx.format)?
+            extract_symbols_command(&target, layer.as_deref(), ctx.format, ctx.disabled)?
         }
         Some(cli::Command::Imports { target, layer }) => {
-            extract_imports_command(&target, layer.as_deref(), ctx.format)?
+            extract_imports_command(&target, layer.as_deref(), ctx.format, ctx.disabled)?
         }
         Some(cli::Command::Exports { target, layer }) => {
-            extract_exports_command(&target, layer.as_deref(), ctx.format)?
+            extract_exports_command(&target, layer.as_deref(), ctx.format, ctx.disabled)?
         }
         Some(cli::Command::Functions { target, layer }) => {
-            extract_functions_command(&target, layer.as_deref(), ctx.format)?
+            extract_functions_command(&target, layer.as_deref(), ctx.format, ctx.disabled)?
         }
         Some(cli::Command::Sections { target, layer }) => {
-            extract_sections_command(&target, layer.as_deref(), ctx.format)?
+            extract_sections_command(&target, layer.as_deref(), ctx.format, ctx.disabled)?
         }
         Some(cli::Command::Metrics { target, layer }) => {
             extract_metrics_command(&target, layer.as_deref(), ctx.format, ctx.disabled)?
@@ -408,7 +414,7 @@ pub(crate) fn dispatch_command(
                      (e.g., `cleave facts <file>` or `cleave facts imports <file>`)"
                 );
             }
-            inspect_command(resolved, tree.as_ref(), ctx.format)?
+            inspect_command(resolved, tree.as_ref(), ctx.format, ctx.disabled)?
         }
         Some(cli::Command::Value {
             target,
@@ -416,7 +422,7 @@ pub(crate) fn dispatch_command(
             path_flag,
         }) => {
             let path = path.as_deref().or(path_flag.as_deref());
-            extract_kv_command(&target, path, ctx.format)?
+            extract_kv_command(&target, path, ctx.format, ctx.disabled)?
         }
         #[cfg(feature = "lint")]
         Some(cli::Command::TestRules { target, rules }) => {

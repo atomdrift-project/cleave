@@ -163,6 +163,21 @@ pub(crate) fn process_yara_result(
 // Report Creation
 // ============================================================================
 
+/// The engine a dev command analyzes under: `rules`, with the default settings
+/// less what `--disable` turned off.
+pub(crate) fn dev_engine(
+    rules: crate::capabilities::CapabilityMapper,
+    disabled: &crate::cli::DisabledComponents,
+) -> crate::Engine {
+    let engine = crate::Engine::from_rules(std::sync::Arc::new(rules));
+    let settings = crate::engine::Settings {
+        upx: !disabled.upx,
+        radare2: !disabled.radare2,
+        ..engine.settings().clone()
+    };
+    engine.with_settings(settings)
+}
+
 /// Create an analysis report for a file.
 ///
 /// Routes the file to the appropriate analyzer based on file type and
@@ -171,14 +186,12 @@ pub(crate) fn create_analysis_report(
     path: &Path,
     file_type: &FileType,
     binary_data: &[u8],
-    capability_mapper: &crate::capabilities::CapabilityMapper,
+    engine: &crate::Engine,
 ) -> Result<types::AnalysisReport> {
     use sha2::{Digest, Sha256};
 
     // Route to appropriate analyzer to get a full report
-    let report = if let Some(analyzer) =
-        analyzers::analyzer_for_file_type(file_type, Some(capability_mapper.clone()))
-    {
+    let report = if let Some(analyzer) = analyzers::analyzer_for_file_type_arc(file_type, engine) {
         analyzer.analyze(path)?
     } else {
         // Fallback: create minimal report for unsupported types

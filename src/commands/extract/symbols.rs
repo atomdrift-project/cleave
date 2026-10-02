@@ -4,10 +4,11 @@
 //! Supports ELF, PE, Mach-O binaries as well as various script languages.
 //! Supports layer filtering (e.g., --layer upx@0 for UPX-unpacked content).
 
+use crate::Engine;
 use crate::analyzers::{self, FileType, detect_file_type};
 use crate::cli;
 use crate::commands::extract::{analyze_binary_report, extract_layer_file_analysis};
-use crate::commands::shared::SymbolInfo;
+use crate::commands::shared::{SymbolInfo, dev_engine};
 use anyhow::Result;
 use std::path::Path;
 
@@ -31,8 +32,13 @@ impl SymbolFilter {
 }
 
 /// Extract symbols from a target, optionally from a named analysis layer.
-pub fn run(target: &str, layer: Option<&str>, format: &cli::OutputFormat) -> Result<String> {
-    run_filtered(target, layer, format, SymbolFilter::All)
+pub fn run(
+    target: &str,
+    layer: Option<&str>,
+    format: &cli::OutputFormat,
+    disabled: &cli::DisabledComponents,
+) -> Result<String> {
+    run_filtered(target, layer, format, disabled, SymbolFilter::All)
 }
 
 /// Extract imports from a target, optionally from a named analysis layer.
@@ -40,8 +46,9 @@ pub fn run_imports(
     target: &str,
     layer: Option<&str>,
     format: &cli::OutputFormat,
+    disabled: &cli::DisabledComponents,
 ) -> Result<String> {
-    run_filtered(target, layer, format, SymbolFilter::Imports)
+    run_filtered(target, layer, format, disabled, SymbolFilter::Imports)
 }
 
 /// Extract exports from a target, optionally from a named analysis layer.
@@ -49,8 +56,9 @@ pub fn run_exports(
     target: &str,
     layer: Option<&str>,
     format: &cli::OutputFormat,
+    disabled: &cli::DisabledComponents,
 ) -> Result<String> {
-    run_filtered(target, layer, format, SymbolFilter::Exports)
+    run_filtered(target, layer, format, disabled, SymbolFilter::Exports)
 }
 
 /// Extract functions from a target, optionally from a named analysis layer.
@@ -58,21 +66,24 @@ pub fn run_functions(
     target: &str,
     layer: Option<&str>,
     format: &cli::OutputFormat,
+    disabled: &cli::DisabledComponents,
 ) -> Result<String> {
-    run_filtered(target, layer, format, SymbolFilter::Functions)
+    run_filtered(target, layer, format, disabled, SymbolFilter::Functions)
 }
 
 fn run_filtered(
     target: &str,
     layer: Option<&str>,
     format: &cli::OutputFormat,
+    disabled: &cli::DisabledComponents,
     filter: SymbolFilter,
 ) -> Result<String> {
+    let engine = dev_engine(crate::capabilities::CapabilityMapper::empty(), disabled);
     // If a layer is specified, we need to run full analysis to get that layer's data
     if let Some(layer_name) = layer {
-        return run_with_layer(target, layer_name, format, filter);
+        return run_with_layer(target, layer_name, format, filter, &engine);
     }
-    run_direct(target, format, filter)
+    run_direct(target, format, filter, &engine)
 }
 
 /// Run symbol extraction with layer filtering (requires full analysis)
@@ -81,8 +92,9 @@ fn run_with_layer(
     layer: &str,
     format: &cli::OutputFormat,
     filter: SymbolFilter,
+    engine: &Engine,
 ) -> Result<String> {
-    let file_analysis = extract_layer_file_analysis(target, layer)?;
+    let file_analysis = extract_layer_file_analysis(target, layer, engine)?;
 
     // Convert FileAnalysis symbols to SymbolInfo
     let mut symbols: Vec<SymbolInfo> = Vec::new();
@@ -122,7 +134,12 @@ fn run_with_layer(
 }
 
 /// Direct symbol extraction without layer filtering (fast path)
-fn run_direct(target: &str, format: &cli::OutputFormat, filter: SymbolFilter) -> Result<String> {
+fn run_direct(
+    target: &str,
+    format: &cli::OutputFormat,
+    filter: SymbolFilter,
+    engine: &Engine,
+) -> Result<String> {
     let path = Path::new(target);
     if !path.exists() {
         anyhow::bail!("File does not exist: {}", target);
@@ -137,7 +154,7 @@ fn run_direct(target: &str, format: &cli::OutputFormat, filter: SymbolFilter) ->
                 // Binary file — filefacts's typed Imports/Exports/Functions
                 // views feed `analyze_binary_report`; fall back to rizin
                 // if the static parse found no exports (stripped binaries).
-                let report = analyze_binary_report(path, &file_type)?;
+                let report = analyze_binary_report(path, &file_type, engine)?;
 
                 for import in &report.imports {
                     symbols.push(SymbolInfo {
@@ -178,15 +195,16 @@ fn run_direct(target: &str, format: &cli::OutputFormat, filter: SymbolFilter) ->
             }
             _ => {
                 // Source file or script - analyze for symbols using unified analyzer
-                let report =
-                    if let Some(analyzer) = analyzers::analyzer_for_file_type(&file_type, None) {
-                        analyzer.analyze(path)?
-                    } else {
-                        anyhow::bail!(
-                            "Unsupported file type for symbol extraction: {:?}",
-                            file_type
-                        );
-                    };
+                let report = if let Some(analyzer) =
+                    analyzers::analyzer_for_file_type_arc(&file_type, engine)
+                {
+                    analyzer.analyze(path)?
+                } else {
+                    anyhow::bail!(
+                        "Unsupported file type for symbol extraction: {:?}",
+                        file_type
+                    );
+                };
 
                 // Add imports (function calls from source code)
                 for import in report.imports {

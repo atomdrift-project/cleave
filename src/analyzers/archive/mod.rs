@@ -20,7 +20,6 @@ pub(crate) use guards::{
 };
 
 use crate::analyzers::{AnalysisInput, Analyzer, FileType, FileTypeExt};
-use crate::capabilities::CapabilityMapper;
 use crate::types::{
     AnalysisReport, ArchiveEntry, Criticality, Evidence, Finding, FindingKind,
     SampleExtractionConfig, StructuralFeature, TargetInfo,
@@ -1676,8 +1675,12 @@ impl ArchiveAnalyzer {
     }
 
     /// Create analyzer with pre-existing capability mapper (wraps in Arc)
+    #[cfg(test)]
     #[must_use]
-    pub(crate) fn with_capability_mapper(mut self, mapper: CapabilityMapper) -> Self {
+    pub(crate) fn with_capability_mapper(
+        mut self,
+        mapper: crate::capabilities::CapabilityMapper,
+    ) -> Self {
         self.engine = crate::Engine::from_rules(Arc::new(mapper));
         self
     }
@@ -3077,6 +3080,7 @@ fn merge_archive_member_metadata(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    use crate::capabilities::CapabilityMapper;
     use guards::{ExtractionGuard, MAX_FILE_COUNT, sanitize_entry_path};
     use std::fs::File;
     use std::io::{Cursor, Write};

@@ -7,8 +7,11 @@
 //! followed by trait/composite evaluation with inline YARA results. The only
 //! difference is the addition of debug tracing via `DebugCollector`.
 
+use crate::analysis_context::AnalysisContext;
 use crate::analyzers::{FileType, detect_file_type};
-use crate::commands::shared::{find_rules_in_directory, find_similar_rules, process_yara_result};
+use crate::commands::shared::{
+    dev_engine, find_rules_in_directory, find_similar_rules, process_yara_result,
+};
 use crate::commands::test::{build_test_capability_mapper, evaluation_data, prepare_test_analysis};
 use crate::yara_engine::YaraEngine;
 use crate::{cli, composite_rules, test_rules};
@@ -25,7 +28,7 @@ use std::path::Path;
 ///
 /// * `target` - Path to the file to analyze
 /// * `rules` - Comma-separated list of rule IDs to test
-/// * `_disabled` - Disabled components configuration (unused)
+/// * `disabled` - Components `--disable` turned off (UPX unpacking and radare2 apply here)
 /// * `platforms` - Platform filters for rule evaluation
 /// * `min_hostile_precision` - Minimum precision for hostile rules
 /// * `min_suspicious_precision` - Minimum precision for suspicious rules
@@ -37,7 +40,7 @@ use std::path::Path;
 pub fn run(
     target: &str,
     rules: &str,
-    _disabled: &cli::DisabledComponents,
+    disabled: &cli::DisabledComponents,
     platforms: Vec<composite_rules::Platform>,
     min_hostile_precision: f32,
     min_suspicious_precision: f32,
@@ -62,18 +65,22 @@ pub fn run(
 
     // Load capability mapper with full validation (test-rules is a developer command).
     // Honor CLEAVE_SKIP_TRAITS the same way test-match does for faster focused runs.
-    let capability_mapper = build_test_capability_mapper(
-        platforms.clone(),
-        min_hostile_precision,
-        min_suspicious_precision,
+    let engine = dev_engine(
+        build_test_capability_mapper(
+            platforms.clone(),
+            min_hostile_precision,
+            min_suspicious_precision,
+        ),
+        disabled,
     );
+    let capability_mapper = engine.rules();
 
     // Load YARA engine to match production path exactly
     let mut yara_engine = YaraEngine::new();
     let (builtin_count, _third_party_count) = yara_engine.load_all_rules(false);
     let yara_loaded = builtin_count > 0 && yara_engine.is_loaded();
 
-    let mut prepared = prepare_test_analysis(path, file_type, &capability_mapper)?;
+    let mut prepared = prepare_test_analysis(path, file_type, &engine)?;
     if prepared.is_fat_macho {
         eprintln!(
             "Note: FAT binary with {} architectures, evaluating full file",
@@ -116,23 +123,29 @@ pub fn run(
         &prepared.preferred_binary_data,
         prepared.is_fat_macho,
     );
-    capability_mapper.evaluate_and_merge_findings(
+    // One parse of the evaluated bytes serves the evaluation and the debugger.
+    let ctx = AnalysisContext::open_with(engine.filefacts_options(), path, eval_data);
+    capability_mapper.evaluate_and_merge_findings_with_precomputed(
         &mut prepared.report,
         eval_data,
-        None,
+        crate::capabilities::AnalysisBorrow::with_filefacts(None, Some(&ctx)),
         inline_yara_ref,
+        None,
+        None,
+        None,
     );
 
     // Create debugger and debug each rule
     // Pass platforms from CLI for consistency with production evaluation
     // Pass inline_yara so debug evaluation uses the exact same context as production
     // For FAT binaries, use full file so string offsets are file-relative
-    let debugger = test_rules::RuleDebugger::new(
-        &capability_mapper,
+    let debugger = test_rules::RuleDebugger::with_parsed(
+        capability_mapper,
         &prepared.report,
         eval_data,
         platforms,
         inline_yara_ref,
+        ctx.parsed,
     );
 
     let mut results = Vec::new();
@@ -142,7 +155,7 @@ pub fn run(
             results.push(result);
         } else {
             // Check if this is a directory prefix - find all rules under it
-            let rules_in_dir = find_rules_in_directory(&capability_mapper, rule_id);
+            let rules_in_dir = find_rules_in_directory(capability_mapper, rule_id);
             if !rules_in_dir.is_empty() {
                 eprintln!(
                     "Warning: Rule '{}' not found, but found {} rules in directory:",
@@ -161,7 +174,7 @@ pub fn run(
             } else {
                 eprintln!("Warning: Rule '{}' not found", rule_id);
                 // Search for similar rules
-                let similar = find_similar_rules(&capability_mapper, rule_id);
+                let similar = find_similar_rules(capability_mapper, rule_id);
                 if !similar.is_empty() {
                     eprintln!("  Did you mean one of:");
                     for s in similar.iter().take(5) {

@@ -141,6 +141,9 @@ pub(crate) fn settings_from_options(options: &crate::AnalysisOptions) -> crate::
     crate::engine::Settings {
         upx: !options.disable_upx,
         radare2: !options.disable_radare2,
+        rizin_timeout: options.rizin_timeout,
+        rizin_max_bytes: options.rizin_max_bytes,
+        rizin_native_arch_only: options.rizin_native_arch_only,
         compact_members: false,
         yara: !options.disable_yara,
         third_party_yara: options.enable_third_party_yara,

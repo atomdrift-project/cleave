@@ -175,8 +175,7 @@ mod tests {
     fn filefacts_view_from_ctx_populates_symbols_for_source() {
         let path = std::path::Path::new("sample.js");
         let bytes = b"function main() { fetch(\"https://example.com\"); }";
-        let ctx = crate::analysis_context::AnalysisContext::open(path, bytes)
-            .expect("filefacts opens JS fixture");
+        let ctx = crate::analysis_context::AnalysisContext::open(path, bytes);
 
         let view = FilefactsView::from_ctx(&ctx);
         let call_target = view.symbols.iter().find_map(|s| match s {

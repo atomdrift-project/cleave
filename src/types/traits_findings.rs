@@ -739,6 +739,44 @@ pub(crate) fn deduplicate_evidence(evidence: Vec<Evidence>) -> Vec<Evidence> {
 #[cfg(test)]
 #[allow(clippy::expect_used)]
 mod tests {
+    /// Dependent-trait rounds and archive members record the same suppression
+    /// more than once, from parallel workers in whatever order they finish.
+    /// The drained result must not depend on that order.
+    #[test]
+    fn suppression_drain_is_independent_of_record_order() {
+        use super::{Criticality, Suppression, SuppressionKind, SuppressionLeg, SuppressionSink};
+        let record = |leg: &str, span: u64| Suppression {
+            id: "a/b::withheld".into(),
+            crit: Criticality::Notable,
+            kind: SuppressionKind::Unless,
+            by: vec![SuppressionLeg {
+                id: leg.into(),
+                spans: vec![[span, 4]],
+            }],
+        };
+        let drain = |records: Vec<Suppression>| {
+            let sink = SuppressionSink::default();
+            for r in records {
+                sink.push(r);
+            }
+            sink.drain()
+        };
+        let forward = drain(vec![
+            record("x/y::one", 8),
+            record("x/y::two", 4),
+            record("x/y::one", 2),
+        ]);
+        let backward = drain(vec![
+            record("x/y::one", 2),
+            record("x/y::two", 4),
+            record("x/y::one", 8),
+        ]);
+        assert_eq!(forward, backward);
+        assert_eq!(forward.len(), 1);
+        let legs: Vec<&str> = forward[0].by.iter().map(|l| l.id.as_str()).collect();
+        assert_eq!(legs, ["x/y::one", "x/y::two"]);
+        assert_eq!(forward[0].by[0].spans, [[2, 4], [8, 4]]);
+    }
 
     /// Every criticality round-trips through its wire ordinal, and an unknown
     /// ordinal is rejected instead of read as `Baseline`.
@@ -1185,15 +1223,49 @@ impl SuppressionSink {
         }
     }
 
-    /// Take everything recorded, deduplicated by trait id (a trait evaluated
-    /// per member or across dependent-trait rounds records the same suppression
-    /// more than once) and ordered strongest-first.
+    /// Take everything recorded, one suppression per trait and kind, ordered
+    /// strongest-first.
+    ///
+    /// A trait evaluated per member or across dependent-trait rounds records
+    /// the same suppression more than once, each time citing the legs that
+    /// held then: a first round may fire on `go-pe-symtab` before the import
+    /// trait that a later round also sees exists. The records arrive in the
+    /// order parallel evaluation finished them, so keeping one of them made
+    /// the cited legs differ from run to run. Every leg any of them saw held,
+    /// so the merged suppression cites all of them.
     pub(crate) fn drain(self) -> Vec<Suppression> {
         let Ok(mut out) = self.0.into_inner() else {
             return Vec::new();
         };
-        out.sort_unstable_by(|a, b| b.crit.cmp(&a.crit).then_with(|| a.id.cmp(&b.id)));
-        out.dedup_by(|a, b| a.id == b.id && a.kind == b.kind);
-        out
+        out.sort_by(|a, b| {
+            b.crit
+                .cmp(&a.crit)
+                .then_with(|| a.id.cmp(&b.id))
+                .then_with(|| a.kind.label().cmp(b.kind.label()))
+        });
+        let mut merged: Vec<Suppression> = Vec::with_capacity(out.len());
+        for suppression in out {
+            match merged.last_mut() {
+                Some(last) if last.id == suppression.id && last.kind == suppression.kind => {
+                    for leg in suppression.by {
+                        match last.by.iter_mut().find(|l| l.id == leg.id) {
+                            Some(existing) => existing.spans.extend(leg.spans),
+                            None => last.by.push(leg),
+                        }
+                    }
+                }
+                _ => merged.push(suppression),
+            }
+        }
+        for suppression in &mut merged {
+            suppression.by.sort_by(|a, b| a.id.cmp(&b.id));
+            suppression.by.truncate(MAX_EVIDENCE_PER_TRAIT);
+            for leg in &mut suppression.by {
+                leg.spans.sort_unstable();
+                leg.spans.dedup();
+                leg.spans.truncate(MAX_EV_LOCS);
+            }
+        }
+        merged
     }
 }

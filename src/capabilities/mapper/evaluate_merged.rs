@@ -304,9 +304,8 @@ impl super::CapabilityMapper {
             merge_filefacts_context(report, ctx);
         } else {
             let target_path = std::path::PathBuf::from(&report.target.path);
-            if let Ok(ctx) =
-                crate::analysis_context::AnalysisContext::open(&target_path, binary_data)
             {
+                let ctx = crate::analysis_context::AnalysisContext::open(&target_path, binary_data);
                 merge_filefacts_context(report, &ctx);
             }
         }
@@ -788,6 +787,10 @@ impl super::CapabilityMapper {
                 });
             }
         }
+        // By id, so which legs survive the cap does not depend on the order
+        // the findings were produced in.
+        legs.sort_by(|a, b| a.id.cmp(&b.id));
+        legs.dedup_by(|a, b| a.id == b.id);
         legs.truncate(crate::types::MAX_EVIDENCE_PER_TRAIT);
         legs
     }

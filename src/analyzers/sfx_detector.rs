@@ -10,7 +10,6 @@
 //! A detection finding is always emitted even if extraction fails or tooling is absent.
 
 use crate::analyzers::archive::{ArchiveAnalyzer, ArchiveAnalyzerConfig};
-use crate::capabilities::CapabilityMapper;
 use crate::types::{AnalysisReport, Criticality, Evidence, Finding, FindingKind};
 use crate::yara_engine::YaraEngine;
 use memchr::memmem;
@@ -208,7 +207,7 @@ pub(crate) fn analyze_sfx(
     file_path: &Path,
     kind: SfxKind,
     data: &[u8],
-    capability_mapper: Option<Arc<CapabilityMapper>>,
+    engine: &crate::Engine,
     yara_engine: Option<Arc<YaraEngine>>,
     archive_config: Option<&ArchiveAnalyzerConfig>,
     embedded_binaries: &[crate::analyzers::embedded_binary_detector::EmbeddedBinary],
@@ -220,14 +219,7 @@ pub(crate) fn analyze_sfx(
     };
     let marker_offset = marker_outside_embedded_binary(data, marker, embedded_binaries);
 
-    let extraction = try_extract(
-        file_path,
-        data,
-        kind,
-        capability_mapper,
-        yara_engine,
-        archive_config,
-    );
+    let extraction = try_extract(file_path, data, kind, engine, yara_engine, archive_config);
     let extracted = extraction.archive_report.is_some();
 
     let extraction_findings = extraction
@@ -306,7 +298,7 @@ fn try_extract(
     file_path: &Path,
     data: &[u8],
     kind: SfxKind,
-    capability_mapper: Option<Arc<CapabilityMapper>>,
+    engine: &crate::Engine,
     yara_engine: Option<Arc<YaraEngine>>,
     archive_config: Option<&ArchiveAnalyzerConfig>,
 ) -> SfxExtraction {
@@ -316,7 +308,7 @@ fn try_extract(
             archive_report: analyze_pyinstaller_in_memory(
                 data,
                 file_path,
-                capability_mapper,
+                engine,
                 yara_engine,
                 archive_config,
             ),
@@ -357,11 +349,16 @@ fn try_extract(
     let extracted = match kind {
         SfxKind::Nsis => run_7z(extraction_path, tmp.path()),
         SfxKind::InnoSetup => {
-            if tool_available("innoextract") {
-                let result = run_innoextract(extraction_path, tmp.path());
+            if let Some(innoextract) = innoextract_cmd() {
+                let result = run_innoextract(&innoextract, extraction_path, tmp.path());
                 inno_diagnostics = result.diagnostics;
                 result.extracted
             } else {
+                // Say why, rather than reporting a bare extraction failure.
+                inno_diagnostics.push(InnoExtractDiagnostic {
+                    kind: InnoExtractDiagnosticKind::GenericFailure,
+                    message: "innoextract is not available".to_string(),
+                });
                 false
             }
         }
@@ -382,13 +379,7 @@ fn try_extract(
     }
 
     SfxExtraction {
-        archive_report: analyze_dir(
-            tmp.path(),
-            file_path,
-            capability_mapper,
-            yara_engine,
-            archive_config,
-        ),
+        archive_report: analyze_dir(tmp.path(), file_path, engine, yara_engine, archive_config),
         inno_diagnostics,
     }
 }
@@ -415,7 +406,7 @@ fn materialize_extraction_input(
 fn analyze_pyinstaller_in_memory(
     data: &[u8],
     file_path: &Path,
-    capability_mapper: Option<Arc<CapabilityMapper>>,
+    engine: &crate::Engine,
     yara_engine: Option<Arc<YaraEngine>>,
     archive_config: Option<&ArchiveAnalyzerConfig>,
 ) -> Option<AnalysisReport> {
@@ -424,9 +415,7 @@ fn analyze_pyinstaller_in_memory(
         analyzer = config.apply(analyzer);
     }
     analyzer = analyzer.with_all_files_members();
-    if let Some(mapper) = capability_mapper {
-        analyzer = analyzer.with_capability_mapper_arc(mapper);
-    }
+    analyzer = analyzer.with_engine(engine.clone());
     if let Some(engine) = yara_engine {
         analyzer = analyzer.with_yara_arc(engine);
     }
@@ -439,47 +428,57 @@ fn analyze_pyinstaller_in_memory(
     }
 }
 
-fn tool_available(name: &str) -> bool {
-    let Some(path) = filefacts::tools::resolve(name) else {
-        return false;
-    };
-    let mut command = std::process::Command::new(path);
-    command
-        .arg("--version")
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
-    crate::subprocess::output_with_timeout(&mut command, crate::subprocess::PROBE_TIMEOUT)
-        .is_ok_and(|output| output.is_some_and(|o| o.status.success()))
+/// The path of the first of `names` that resolves and passes `probe_args`.
+///
+/// Only a success is remembered (in `cached`). A probe can fail for a moment:
+/// a spawn refused while the machine is short of processes or threads, a
+/// start slower than [`crate::subprocess::PROBE_TIMEOUT`] under load. Caching
+/// that failure turned the tool off for the rest of the process, so a
+/// long-running server silently stopped extracting every archive that needed
+/// it. A failed probe is logged and retried by the next caller instead.
+fn probed_tool(
+    cached: &'static OnceLock<std::path::PathBuf>,
+    names: &[&str],
+    probe_args: &[&str],
+) -> Option<std::path::PathBuf> {
+    if let Some(path) = cached.get() {
+        return Some(path.clone());
+    }
+    for name in names {
+        let Some(path) = filefacts::tools::resolve(name) else {
+            continue;
+        };
+        let mut probe = std::process::Command::new(&path);
+        probe
+            .args(probe_args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        match crate::subprocess::output_with_timeout(&mut probe, crate::subprocess::PROBE_TIMEOUT) {
+            Ok(Some(_)) => return Some(cached.get_or_init(|| path).clone()),
+            Ok(None) => tracing::warn!(
+                tool = %path.display(),
+                timeout_secs = crate::subprocess::PROBE_TIMEOUT.as_secs(),
+                "tool probe timed out; skipping it for this file"
+            ),
+            Err(error) => tracing::warn!(
+                tool = %path.display(),
+                %error,
+                "tool probe failed to run; skipping it for this file"
+            ),
+        }
+    }
+    None
+}
+
+fn innoextract_cmd() -> Option<std::path::PathBuf> {
+    static CHOICE: OnceLock<std::path::PathBuf> = OnceLock::new();
+    probed_tool(&CHOICE, &["innoextract"], &["--version"])
 }
 
 fn sevenzip_cmd() -> Option<std::path::PathBuf> {
-    static CHOICE: OnceLock<Option<std::path::PathBuf>> = OnceLock::new();
-    CHOICE
-        .get_or_init(|| {
-            for name in ["7zz", "7z", "7za", "7zr"] {
-                let Some(path) = filefacts::tools::resolve(name) else {
-                    continue;
-                };
-                let mut probe = std::process::Command::new(&path);
-                probe
-                    .arg("i")
-                    .stdin(std::process::Stdio::null())
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null());
-                if matches!(
-                    crate::subprocess::output_with_timeout(
-                        &mut probe,
-                        crate::subprocess::PROBE_TIMEOUT
-                    ),
-                    Ok(Some(_))
-                ) {
-                    return Some(path);
-                }
-            }
-            None
-        })
-        .clone()
+    static CHOICE: OnceLock<std::path::PathBuf> = OnceLock::new();
+    probed_tool(&CHOICE, &["7zz", "7z", "7za", "7zr"], &["i"])
 }
 
 pub(crate) fn run_7z(src: &Path, out: &Path) -> bool {
@@ -504,23 +503,14 @@ struct InnoExtractResult {
     diagnostics: Vec<InnoExtractDiagnostic>,
 }
 
-fn run_innoextract(src: &Path, out: &Path) -> InnoExtractResult {
-    let Some(command) = filefacts::tools::resolve("innoextract") else {
-        return InnoExtractResult {
-            extracted: false,
-            diagnostics: vec![InnoExtractDiagnostic {
-                kind: InnoExtractDiagnosticKind::GenericFailure,
-                message: "failed to run innoextract: executable not found".to_string(),
-            }],
-        };
-    };
+fn run_innoextract(command: &Path, src: &Path, out: &Path) -> InnoExtractResult {
     let args = [
         std::ffi::OsStr::new("--extract"),
         std::ffi::OsStr::new("--output-dir"),
         out.as_os_str(),
         src.as_os_str(),
     ];
-    let mut extract = std::process::Command::new(&command);
+    let mut extract = std::process::Command::new(command);
     extract
         .args(args)
         .stdin(std::process::Stdio::null())
@@ -651,7 +641,7 @@ fn truncate_diagnostic(message: &str) -> String {
 fn analyze_dir(
     dir: &Path,
     original_path: &Path,
-    capability_mapper: Option<Arc<CapabilityMapper>>,
+    engine: &crate::Engine,
     yara_engine: Option<Arc<YaraEngine>>,
     archive_config: Option<&ArchiveAnalyzerConfig>,
 ) -> Option<AnalysisReport> {
@@ -660,9 +650,7 @@ fn analyze_dir(
         analyzer = config.apply(analyzer);
     }
     analyzer = analyzer.with_all_files_members();
-    if let Some(mapper) = capability_mapper {
-        analyzer = analyzer.with_capability_mapper_arc(mapper);
-    }
+    analyzer = analyzer.with_engine(engine.clone());
     if let Some(engine) = yara_engine {
         analyzer = analyzer.with_yara_arc(engine);
     }

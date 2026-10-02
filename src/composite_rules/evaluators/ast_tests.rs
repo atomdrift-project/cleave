@@ -32,8 +32,9 @@ fn create_test_context<'a>(
 /// `EvaluationContext` the test then builds. The extension hint comes
 /// from `path`; pick a name that matches `file_type`.
 fn parsed_for_test<'a>(path: &str, source: &'a [u8]) -> filefacts::ParsedFile<'a> {
-    let parsed = filefacts::open_with_path(std::path::Path::new(path), source)
-        .expect("filefacts::open_with_path");
+    let parsed = filefacts::OpenOptions::new()
+        .path(std::path::Path::new(path))
+        .open(source);
     let _ = parsed.values(); // prime the parse so source_ast() returns Some
     parsed
 }
@@ -1130,6 +1131,30 @@ document.write("y");
     let cached = eval_ast(None, None, None, None, None, Some(q_eval), false, &ctx);
     assert_eq!(cached.match_count, sequential_eval.match_count);
     assert_eq!(cached.matched, sequential_eval.matched);
+}
+
+/// A batch shares one walk and one CPU budget, the tightest of its queries.
+/// A multi-wildcard query (100ms) stays out, so it cannot cap the ordinary
+/// queries beside it; the caller evaluates it alone.
+#[test]
+fn batch_ast_queries_leaves_out_multi_wildcard_queries() {
+    let source = "eval(\"x\");\ndocument.write(\"y\");\nconst c = { a: 1, b: 2 };\n";
+    let parsed = parsed_for_test("script.js", source.as_bytes());
+    let tree = parsed.source_ast().expect("ast").tree;
+    let q_eval = r#"(call_expression function: (identifier) @fn (#eq? @fn "eval")) @call"#;
+    let q_write = r#"(call_expression function: (member_expression) @m) @call"#;
+    let q_wide = r#"(object (pair) @a (_)* (pair) @b (_)* (pair) @c)"#;
+    let batch = batch_ast_queries(
+        tree,
+        source,
+        FileType::JavaScript,
+        &[q_eval, q_wide, q_write],
+        None,
+        None,
+    )
+    .expect("the two ordinary queries still batch");
+    assert!(batch.contains_key(q_eval) && batch.contains_key(q_write));
+    assert!(!batch.contains_key(q_wide));
 }
 
 #[test]

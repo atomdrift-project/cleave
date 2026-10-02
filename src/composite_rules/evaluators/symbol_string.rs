@@ -1593,7 +1593,9 @@ fn flow_call<'a>(
     argument_count: usize,
 ) -> Option<&'a filefacts::FlowValue> {
     let mut candidates = flow.values.iter().filter(|v| {
-        v.kind == "call" && Some(v.offset as u64) == offset && v.inputs.len() == argument_count
+        v.kind == filefacts::FlowKind::Call
+            && Some(v.offset as u64) == offset
+            && v.inputs.len() == argument_count
     });
     let first = candidates.next()?;
     if first.target.as_deref() == Some(target) {
@@ -1661,11 +1663,12 @@ fn origin_matches(
         let Some(field) = origin.field.as_deref() else {
             return false;
         };
-        if let Some(object) = flow
-            .values
-            .get(value)
-            .filter(|v| matches!(v.kind.as_str(), "object" | "keyword"))
-        {
+        if let Some(object) = flow.values.get(value).filter(|v| {
+            matches!(
+                v.kind,
+                filefacts::FlowKind::Object | filefacts::FlowKind::Keyword
+            )
+        }) {
             return object.fields.contains_key(field);
         }
         let found = flow.field_origins(value, field, &[], 10_000);
@@ -1735,14 +1738,14 @@ fn origin_matches(
     found.values.iter().any(|observation| {
         let Some(value) = flow.values.get(observation.value) else { return false };
         if let Some(pattern) = &member_pattern {
-            return value.kind == "member"
+            return value.kind == filefacts::FlowKind::Member
                 && value.target.as_ref().is_some_and(|path| pattern.is_match(path));
         }
         if let Some(pattern) = &value_pattern {
             return value.literal.as_ref().is_some_and(|a| matches!(a,
                 filefacts::Arg::String { value } | filefacts::Arg::Template { value } if pattern.is_match(value)));
         }
-        if value.kind != "call" || !value.target.as_ref().is_some_and(|t| source_pattern.as_ref().is_some_and(|p| p.is_match(t))) { return false; }
+        if value.kind != filefacts::FlowKind::Call || !value.target.as_ref().is_some_and(|t| source_pattern.as_ref().is_some_and(|p| p.is_match(t))) { return false; }
         let Some(literal_pattern) = &origin.literal else { return true };
         let Some(pattern) = crate::composite_rules::condition::cached_regex(literal_pattern) else { return false };
         let arguments = flow.argument_origins(observation, origin.argument, &models, 10_000);
@@ -3151,8 +3154,9 @@ mod multi_arg_tests {
                 false,
             ),
         ] {
-            let parsed =
-                filefacts::open_with_path(std::path::Path::new("a.js"), source.as_bytes()).unwrap();
+            let parsed = filefacts::OpenOptions::new()
+                .path(std::path::Path::new("a.js"))
+                .open(source.as_bytes());
             let mut report = AnalysisReport::new(TargetInfo {
                 path: "a.js".into(),
                 file_type: "javascript".into(),
@@ -3201,8 +3205,9 @@ mod multi_arg_tests {
             let source = format!(
                 "package p\nimport rt \"example.org/runtime\"\nfunc run(){{ {expression} }}"
             );
-            let parsed =
-                filefacts::open_with_path(std::path::Path::new("a.go"), source.as_bytes()).unwrap();
+            let parsed = filefacts::OpenOptions::new()
+                .path(std::path::Path::new("a.go"))
+                .open(source.as_bytes());
             let mut report = AnalysisReport::new(TargetInfo {
                 path: "a.go".into(),
                 file_type: "go".into(),
@@ -3235,8 +3240,9 @@ mod multi_arg_tests {
         use crate::composite_rules::types::FileType;
         use crate::types::{AnalysisReport, FilefactsView, TargetInfo};
         let source = "function run(){send(acquire(opaqueName()));}";
-        let parsed =
-            filefacts::open_with_path(std::path::Path::new("a.js"), source.as_bytes()).unwrap();
+        let parsed = filefacts::OpenOptions::new()
+            .path(std::path::Path::new("a.js"))
+            .open(source.as_bytes());
         let base = AnalysisReport::new(TargetInfo {
             path: "a.js".into(),
             file_type: "javascript".into(),
@@ -3287,12 +3293,12 @@ mod multi_arg_tests {
                 super::eval_call(Some(&"send".into()), None, None, Some(&filter), None, &ctx);
             assert!(!result.matched);
             assert!(report.analysis_gaps.iter().any(|g| g.label() == expected));
-            let (file, _, _) = report.into_file_analysis(0);
+            let (file, _, _) = report.into_file_analysis(0, &crate::Engine::empty());
             let encoded = serde_json::to_string(&file).unwrap();
             let file = serde_json::from_str(&encoded).unwrap();
             let restored = crate::report_from_file_analysis(file, "a.js".into());
             assert!(restored.analysis_gaps.iter().any(|g| g.label() == expected));
-            let (file, _, _) = restored.into_file_analysis(0);
+            let (file, _, _) = restored.into_file_analysis(0, &crate::Engine::empty());
             let compact = crate::types::compact_from_files(&[file.clone()]);
             assert!(
                 compact.files[0]
@@ -3329,8 +3335,9 @@ mod multi_arg_tests {
             ),
             ("function run(){write(opaque('needle'),'data')}", false),
         ] {
-            let parsed =
-                filefacts::open_with_path(std::path::Path::new("a.js"), source.as_bytes()).unwrap();
+            let parsed = filefacts::OpenOptions::new()
+                .path(std::path::Path::new("a.js"))
+                .open(source.as_bytes());
             let mut report = AnalysisReport::new(TargetInfo {
                 path: "a.js".into(),
                 file_type: "javascript".into(),
@@ -3475,12 +3482,10 @@ mod validator_wiring_tests {
                 false,
             ),
         ] {
-            let parsed = filefacts::open_as(
-                std::path::Path::new("a.cfm"),
-                source.as_bytes(),
-                filefacts::FileType::Cfml,
-            )
-            .unwrap();
+            let parsed = filefacts::OpenOptions::new()
+                .path(std::path::Path::new("a.cfm"))
+                .file_type(filefacts::FileType::Cfml)
+                .open(source.as_bytes());
             let mut report = AnalysisReport::new(TargetInfo {
                 path: "a.cfm".into(),
                 file_type: "cfml".into(),
@@ -3539,12 +3544,10 @@ mod validator_wiring_tests {
             ),
             ("<cfexecute name='cmd.exe' outputfile='#form.job#'>", false),
         ] {
-            let parsed = filefacts::open_as(
-                std::path::Path::new("a.cfm"),
-                source.as_bytes(),
-                filefacts::FileType::Cfml,
-            )
-            .unwrap();
+            let parsed = filefacts::OpenOptions::new()
+                .path(std::path::Path::new("a.cfm"))
+                .file_type(filefacts::FileType::Cfml)
+                .open(source.as_bytes());
             let mut report = AnalysisReport::new(TargetInfo {
                 path: "a.cfm".into(),
                 file_type: "cfml".into(),
@@ -3615,12 +3618,10 @@ mod validator_wiring_tests {
             ),
             (r#"<cffile action='write' file='read'>"#, false),
         ] {
-            let parsed = filefacts::open_as(
-                std::path::Path::new("a.cfm"),
-                source.as_bytes(),
-                filefacts::FileType::Cfml,
-            )
-            .unwrap();
+            let parsed = filefacts::OpenOptions::new()
+                .path(std::path::Path::new("a.cfm"))
+                .file_type(filefacts::FileType::Cfml)
+                .open(source.as_bytes());
             let mut report = AnalysisReport::new(TargetInfo {
                 path: "a.cfm".into(),
                 file_type: "cfml".into(),
@@ -3717,12 +3718,10 @@ mod validator_wiring_tests {
             ),
             (r#"<cfexecute name='reporter' outputfile="#, false),
         ] {
-            let parsed = filefacts::open_as(
-                std::path::Path::new("a.cfm"),
-                source.as_bytes(),
-                filefacts::FileType::Cfml,
-            )
-            .unwrap();
+            let parsed = filefacts::OpenOptions::new()
+                .path(std::path::Path::new("a.cfm"))
+                .file_type(filefacts::FileType::Cfml)
+                .open(source.as_bytes());
             let mut report = AnalysisReport::new(TargetInfo {
                 path: "a.cfm".into(),
                 file_type: "cfml".into(),
@@ -3794,12 +3793,10 @@ mod validator_wiring_tests {
             ("cycle", false),
             ("invalid", false),
         ] {
-            let parsed = filefacts::open_as(
-                std::path::Path::new("a.cfm"),
-                source,
-                filefacts::FileType::Cfml,
-            )
-            .unwrap();
+            let parsed = filefacts::OpenOptions::new()
+                .path(std::path::Path::new("a.cfm"))
+                .file_type(filefacts::FileType::Cfml)
+                .open(source);
             let mut flow = parsed.flow().unwrap().clone();
             let call = flow
                 .values
@@ -3812,7 +3809,7 @@ mod validator_wiring_tests {
             let missing = flow.values.len();
             flow.values.push(absent);
             let mut alternative = flow.values[0].clone();
-            alternative.kind = "alternative".into();
+            alternative.kind = filefacts::FlowKind::Alternative;
             let id = flow.values.len();
             alternative.inputs = match mode {
                 "mixed" => vec![present, missing],

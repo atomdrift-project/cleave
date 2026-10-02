@@ -12,7 +12,7 @@
 //! - Size constraints, downgrade evaluation, proximity constraints
 
 use crate::capabilities::CapabilityMapper;
-use crate::capabilities::validation::{
+use crate::capabilities::precision::{
     atomic_calibrated_max, calculate_composite_precision, composite_calibrated_max,
     composite_inflation_warning_threshold, file_type_precision_penalty, platform_precision_penalty,
 };
@@ -184,8 +184,11 @@ impl<'a> RuleDebugger<'a> {
 
         // Parse via filefacts so AST conditions have a real tree to walk.
         // `values()` primes the parse so `source_ast()` returns Some.
-        let parsed =
-            filefacts::open_with_path(std::path::Path::new(&report.target.path), binary_data).ok();
+        let parsed = Some(
+            filefacts::OpenOptions::new()
+                .path(std::path::Path::new(&report.target.path))
+                .open(binary_data),
+        );
         if let Some(ref p) = parsed {
             let _ = p.values();
         }
@@ -2821,9 +2824,9 @@ func upload() {{
 }}
 "#
             );
-            let parsed =
-                filefacts::open_with_path(std::path::Path::new("fixture.go"), source.as_bytes())
-                    .unwrap();
+            let parsed = filefacts::OpenOptions::new()
+                .path(std::path::Path::new("fixture.go"))
+                .open(source.as_bytes());
             let mut report = create_test_report_with_findings(vec![]);
             report.target.path = "fixture.go".into();
             report.target.file_type = "go".into();

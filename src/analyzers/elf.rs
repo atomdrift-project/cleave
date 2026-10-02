@@ -34,7 +34,7 @@ type Ctx<'a> = crate::analysis_context::AnalysisContext<'a>;
 /// `sections()`. The analyzer no longer spawns rizin itself.
 #[derive(Debug)]
 pub(crate) struct ElfAnalyzer {
-    capability_mapper: Arc<CapabilityMapper>,
+    engine: crate::Engine,
     string_extractor: StringExtractor,
     yara_engine: Option<Arc<YaraEngine>>,
     /// When true, skip scanning for embedded PE/ELF binaries (prevents recursion in sub-analysis).
@@ -140,7 +140,7 @@ impl ElfAnalyzer {
     #[must_use]
     pub(crate) fn new() -> Self {
         Self {
-            capability_mapper: Arc::new(CapabilityMapper::empty()),
+            engine: crate::Engine::empty(),
             string_extractor: StringExtractor::new(),
             yara_engine: None,
             skip_embedded_scan: false,
@@ -184,17 +184,14 @@ impl ElfAnalyzer {
     /// Create analyzer with pre-existing capability mapper (wraps in Arc)
     #[must_use]
     pub(crate) fn with_capability_mapper(mut self, capability_mapper: CapabilityMapper) -> Self {
-        self.capability_mapper = Arc::new(capability_mapper);
+        self.engine = crate::Engine::from_rules(Arc::new(capability_mapper));
         self
     }
 
-    /// Create analyzer with shared capability mapper (avoids cloning)
+    /// Analyze under `engine`: its rules and settings.
     #[must_use]
-    pub(crate) fn with_capability_mapper_arc(
-        mut self,
-        capability_mapper: Arc<CapabilityMapper>,
-    ) -> Self {
-        self.capability_mapper = capability_mapper;
+    pub(crate) fn with_engine(mut self, engine: crate::Engine) -> Self {
+        self.engine = engine;
         self
     }
 
@@ -206,7 +203,6 @@ impl ElfAnalyzer {
         logical_path: &Path,
         analysis_path: &Path,
         data: &'a [u8],
-        allow_rizin: bool,
         precomputed_sha256: Option<&str>,
         ctx: &Ctx<'a>,
     ) -> AnalysisReport {
@@ -279,7 +275,6 @@ impl ElfAnalyzer {
             tracing::info!(
                 path = %analysis_path.display(),
                 rayon_thread = ?rayon::current_thread_index(),
-                allow_rizin,
                 scope_struct_ms = struct_ms as u64,
                 "ELF structural phase timings",
             );
@@ -348,7 +343,7 @@ impl ElfAnalyzer {
                 } else if let Ok(Some(ov)) = crate::analyzers::overlay::analyze_overlay(
                     overlay,
                     &report.target.path,
-                    Some(self.capability_mapper.clone()),
+                    &self.engine,
                     None,
                     None,
                 ) {
@@ -453,7 +448,7 @@ impl ElfAnalyzer {
                 .iter_kind(filefacts::SymbolKind::Function)
                 .filter_map(crate::analysis_context::project_filefacts_function)
                 .collect();
-            let _ = (parse_failed, allow_rizin, precomputed_sha256);
+            let _ = (parse_failed, precomputed_sha256);
             (None, 0u64)
         };
 
@@ -547,7 +542,7 @@ impl ElfAnalyzer {
                     kind_str,
                     &display_kind,
                     binary.offset,
-                    self.capability_mapper.clone(),
+                    self.engine.clone(),
                     None, // YARA handled by child
                     &raw_stng_strings,
                 ) {
@@ -586,7 +581,7 @@ impl ElfAnalyzer {
             crate::analyzers::embedded_code_detector::process_all_strings(
                 &logical_path.display().to_string(),
                 &report.strings,
-                &self.capability_mapper,
+                &self.engine,
                 0,
                 Some(&crate::FileType::Elf),
                 self.cancellation.as_deref(),
@@ -895,31 +890,14 @@ impl ElfAnalyzer {
         &self,
         file_path: &Path,
         data: &[u8],
-        precomputed_sha256: Option<String>,
+        precomputed_sha256: Option<&str>,
     ) -> AnalysisReport {
-        match crate::analysis_context::AnalysisContext::open(file_path, data) {
-            Ok(ctx) => self.analyze_structural_with_ctx(
-                file_path,
-                data,
-                precomputed_sha256.as_deref(),
-                &ctx,
-            ),
-            Err(e) => {
-                let mut report = AnalysisReport::new(TargetInfo {
-                    path: file_path.display().to_string(),
-                    file_type: "elf".to_string(),
-                    size_bytes: data.len() as u64,
-                    sha256: precomputed_sha256
-                        .unwrap_or_else(|| crate::analyzers::utils::calculate_sha256(data)),
-                    architectures: None,
-                });
-                report
-                    .metadata
-                    .errors
-                    .push(format!("filefacts open failed: {e}"));
-                report
-            }
-        }
+        let ctx = crate::analysis_context::AnalysisContext::open_with(
+            self.engine.filefacts_options(),
+            file_path,
+            data,
+        );
+        self.analyze_structural_with_ctx(file_path, data, precomputed_sha256, &ctx)
     }
 
     /// Structural analysis driven entirely by an
@@ -943,19 +921,11 @@ impl ElfAnalyzer {
         use crate::upx::UPXDecompressor;
 
         if !UPXDecompressor::is_upx_packed(data) {
-            return self.analyze_elf_core(
-                file_path,
-                file_path,
-                data,
-                true,
-                precomputed_sha256,
-                ctx,
-            );
+            return self.analyze_elf_core(file_path, file_path, data, precomputed_sha256, ctx);
         }
 
         // UPX-packed: structural analysis of packed binary first
-        let mut report =
-            self.analyze_elf_core(file_path, file_path, data, true, precomputed_sha256, ctx);
+        let mut report = self.analyze_elf_core(file_path, file_path, data, precomputed_sha256, ctx);
 
         report.findings.push(
             Finding::structural(
@@ -966,7 +936,9 @@ impl ElfAnalyzer {
             .with_criticality(Criticality::Notable),
         );
 
-        if !UPXDecompressor::is_available() {
+        // A UPX-disabled engine reports the same as a missing tool: the
+        // unpacked image was not analyzed.
+        if !self.engine.upx() || !UPXDecompressor::is_available() {
             report.findings.push(
                 Finding::structural(
                     "anti-static/packer/upx/tool-missing".to_string(),
@@ -992,17 +964,15 @@ impl ElfAnalyzer {
                     // decompressed payload so the downstream
                     // helpers see a self-consistent view (and supply the
                     // unpacked strings via its `text()`).
-                    let Ok(unpacked_ctx) = crate::analysis_context::AnalysisContext::open(
+                    let unpacked_ctx = crate::analysis_context::AnalysisContext::open_with(
+                        self.engine.filefacts_options(),
                         temp_file.path(),
                         &unpacked_data,
-                    ) else {
-                        return report;
-                    };
+                    );
                     let unpacked_report = self.analyze_elf_core(
                         temp_file.path(),
                         temp_file.path(),
                         &unpacked_data,
-                        true,
                         None,
                         &unpacked_ctx,
                     );
@@ -1034,7 +1004,8 @@ impl ElfAnalyzer {
                                 .push(format!("yara(upx): {e:#}")),
                         }
                     }
-                    self.capability_mapper
+                    self.engine
+                        .rules()
                         .evaluate_and_merge_findings_with_precomputed(
                             &mut unpacked_report,
                             &unpacked_data,
@@ -1055,7 +1026,7 @@ impl ElfAnalyzer {
                     let virtual_path = encode_upx_path(&file_path.display().to_string());
 
                     let (mut unpacked_file, unpacked_nested, _) =
-                        unpacked_report.into_file_analysis(0);
+                        unpacked_report.into_file_analysis(0, &self.engine);
                     unpacked_file.path = virtual_path;
                     unpacked_file.sha256 = unpacked_sha256;
                     unpacked_file.size = unpacked_data.len() as u64;
@@ -1112,24 +1083,32 @@ impl Analyzer for ElfAnalyzer {
         // read structural data straight from filefacts — including its
         // byte-scan `text()`, the single string-extraction authority. When
         // filefacts can't open the bytes, we still produce a report so tamper
-        // findings and rizin disassembly surface for triage.
-        let ctx = crate::analysis_context::AnalysisContext::open(input.path, input.data)
-            .map_err(|e| anyhow::anyhow!("filefacts open failed for ELF: {e}"))?;
+        // findings and rizin disassembly surface for triage. Reuse the parse a
+        // caller threaded in (an archive member's, extracted under its rizin
+        // setting): opening again repeats the whole extraction.
+        let opened;
+        let ctx = match &input.parsed_ctx {
+            Some(ctx) => ctx,
+            None => {
+                opened = input.open_ctx_with(self.engine.filefacts_options());
+                &opened
+            }
+        };
         let mut report = self.analyze_elf_core(
             input.path,
             input.backing_path(),
             input.data,
-            !input.skip_rizin,
             input.sha256.as_deref(),
-            &ctx,
+            ctx,
         );
 
         // Post-processing
-        self.capability_mapper
+        self.engine
+            .rules()
             .evaluate_and_merge_findings_with_precomputed(
                 &mut report,
                 input.data,
-                crate::capabilities::AnalysisBorrow::with_filefacts(None, Some(&ctx)),
+                crate::capabilities::AnalysisBorrow::with_filefacts(None, Some(ctx)),
                 None,
                 None,
                 None,
@@ -1144,7 +1123,11 @@ impl Analyzer for ElfAnalyzer {
         let data = fs::read(file_path).context("Failed to read file")?;
         // filefacts is the string-extraction authority; open the context once
         // and thread it into the input so analyze_input reuses this parse.
-        let ctx = crate::analysis_context::AnalysisContext::open(file_path, &data).ok();
+        let ctx = Some(crate::analysis_context::AnalysisContext::open_with(
+            self.engine.filefacts_options(),
+            file_path,
+            &data,
+        ));
         let strings: std::sync::Arc<[stng::ExtractedString]> = ctx
             .as_ref()
             .map(crate::analysis_context::AnalysisContext::text_rows)
@@ -1547,12 +1530,16 @@ mod tests {
 
     #[test]
     fn test_upx_tool_missing_creates_finding() {
-        use crate::upx::{UPXDecompressor, disable_upx};
+        use crate::upx::UPXDecompressor;
 
-        // Temporarily disable UPX to simulate tool not available
-        disable_upx();
-
-        let analyzer = ElfAnalyzer::new();
+        // An engine with UPX off reports the unpacked image as not analyzed,
+        // exactly as when the tool is missing.
+        let analyzer = ElfAnalyzer::new().with_engine(crate::Engine::empty().with_settings(
+            crate::engine::Settings {
+                upx: false,
+                ..Default::default()
+            },
+        ));
 
         // Create minimal UPX-packed ELF-like data
         let mut upx_data = vec![0u8; 256];

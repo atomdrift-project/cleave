@@ -29,11 +29,9 @@
 
 use crate::analyzers::archive::ArchiveAnalyzer;
 use crate::analyzers::{AnalysisInput, FileType, analyzer_for_file_type_arc};
-use crate::capabilities::CapabilityMapper;
 use crate::types::{AnalysisReport, FileAnalysis, Finding};
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Arc;
 
 /// Hard cap on sub-file recursion. Each layer adds one — base64
 /// (1) → tar.gz (2) → tar member (3) → embedded base64 inside that
@@ -71,7 +69,7 @@ pub fn analyze_subfile_bytes(
     file_type: FileType,
     location_prefix: &str,
     parent_depth: u32,
-    mapper: &Arc<CapabilityMapper>,
+    engine: &crate::Engine,
 ) -> Vec<FileAnalysis> {
     let child_depth = parent_depth.saturating_add(1);
     if child_depth > MAX_SUBFILE_DEPTH {
@@ -83,7 +81,7 @@ pub fn analyze_subfile_bytes(
         return Vec::new();
     }
 
-    let Some(analyzer) = pick_analyzer(file_type, mapper) else {
+    let Some(analyzer) = pick_analyzer(file_type, engine) else {
         tracing::debug!(
             ?file_type,
             "no analyzer available for sub-file type; skipping",
@@ -103,7 +101,7 @@ pub fn analyze_subfile_bytes(
         }
     };
 
-    flatten_subreport(report, virtual_path, location_prefix, child_depth)
+    flatten_subreport(report, virtual_path, location_prefix, child_depth, engine)
 }
 
 /// Attach an analyzed format-embedded payload (an Office VBA module, an OLE2
@@ -134,11 +132,10 @@ pub(crate) fn attach_member(
     file_type: FileType,
     member_path: &str,
     virtual_path: &str,
+    engine: &crate::Engine,
 ) {
     member.dedupe_findings();
-    let doomed = crate::shared_resources::loaded_capability_mapper()
-        .map(|m| m.doomed_low_value_ids(&member.findings))
-        .unwrap_or_default();
+    let doomed = engine.rules().doomed_low_value_ids(&member.findings);
     crate::context::capture(&mut member, bytes, file_type, &doomed);
 
     let mut by_id: HashMap<crate::types::Istr, usize> = parent
@@ -174,7 +171,7 @@ pub(crate) fn attach_member(
         }
     }
 
-    let (mut file_entry, nested_files, _archive_contents) = member.into_file_analysis(0);
+    let (mut file_entry, nested_files, _archive_contents) = member.into_file_analysis(0, engine);
     file_entry.path = virtual_path.to_string();
     file_entry.depth = 1;
     file_entry.compute_summary();
@@ -193,18 +190,16 @@ pub(crate) fn attach_member(
 /// (`FileType::Unknown`, certain meta-types).
 pub(crate) fn pick_analyzer(
     file_type: FileType,
-    mapper: &Arc<CapabilityMapper>,
+    engine: &crate::Engine,
 ) -> Option<Box<dyn crate::analyzers::Analyzer>> {
     if file_type.is_archive() {
         // Cleave's archive analyzer handles tar / zip / tar.gz /
         // tar.xz / .gem / .crate / .apk / … with in-memory extraction
         // when the input path doesn't exist (which is always the
         // case for synthesized sub-paths).
-        Some(Box::new(
-            ArchiveAnalyzer::new().with_capability_mapper_arc(mapper.clone()),
-        ))
+        Some(Box::new(ArchiveAnalyzer::new().with_engine(engine.clone())))
     } else {
-        analyzer_for_file_type_arc(&file_type, Some(mapper.clone()))
+        analyzer_for_file_type_arc(&file_type, engine)
     }
 }
 
@@ -222,8 +217,9 @@ fn flatten_subreport(
     virtual_path: &str,
     location_prefix: &str,
     child_depth: u32,
+    engine: &crate::Engine,
 ) -> Vec<FileAnalysis> {
-    let (mut primary, nested, _archive) = report.into_file_analysis(0);
+    let (mut primary, nested, _archive) = report.into_file_analysis(0, engine);
     primary.path = virtual_path.to_string();
     primary.depth = child_depth;
     tag_findings(&mut primary, location_prefix);
@@ -266,14 +262,14 @@ mod tests {
     /// the bytes' contents.
     #[test]
     fn refuses_to_recurse_past_ceiling() {
-        let mapper = Arc::new(CapabilityMapper::empty());
+        let engine = crate::Engine::empty();
         let result = analyze_subfile_bytes(
             b"print('hi')\n",
             "deep.py",
             FileType::Python,
             "ceiling-test",
             MAX_SUBFILE_DEPTH, // parent already at ceiling → child > ceiling
-            &mapper,
+            &engine,
         );
         assert!(
             result.is_empty(),
@@ -286,14 +282,14 @@ mod tests {
     /// Caller stays intact.
     #[test]
     fn unknown_filetype_returns_empty() {
-        let mapper = Arc::new(CapabilityMapper::empty());
+        let engine = crate::Engine::empty();
         let result = analyze_subfile_bytes(
             b"\x00\x00\x00\x00",
             "x.bin",
             FileType::Unknown,
             "unknown-test",
             0,
-            &mapper,
+            &engine,
         );
         assert!(result.is_empty());
     }
@@ -303,14 +299,14 @@ mod tests {
     /// and comes back as a single `FileAnalysis` at child depth.
     #[test]
     fn source_language_returns_single_entry_at_child_depth() {
-        let mapper = Arc::new(CapabilityMapper::empty());
+        let engine = crate::Engine::empty();
         let result = analyze_subfile_bytes(
             b"import os\nprint(os.environ)\n",
             "parent.sh!!script.py",
             FileType::Python,
             "embedded-py",
             0,
-            &mapper,
+            &engine,
         );
         assert_eq!(result.len(), 1, "expected one entry, got {result:?}");
         assert_eq!(result[0].depth, 1);

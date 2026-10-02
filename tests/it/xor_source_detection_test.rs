@@ -1,20 +1,11 @@
-//! Regression guard for the source/script XOR-scan gate.
+//! Regression guard for XOR detection in source.
 //!
-//! filefacts skips stng's (expensive, FP-prone) XOR auto-detect scan on source
-//! files that show no XOR intent — no `^` operator and no `xor` keyword — and on
-//! archive containers (whose real payloads live in members, scanned separately).
-//! That gate cut a batch of speculative-decode false positives on benign source
-//! (plain comments / coordinate strings mis-decoded as "XOR payloads") while
-//! preserving real detection: a self-contained script wielding an XOR-encoded
-//! payload necessarily carries its decoder (`^` / `xor`) in the same file, so the
-//! gate lets the scan run there.
-//!
-//! These fixtures (`testdata/xor/`) each pair a real single-byte-XOR payload with
-//! a genuine `^`-based decoder, in C, JavaScript, Python (raw and XOR+base64),
-//! and bash. They must keep producing XOR detection — if the gate ever wrongly
-//! skips intent-bearing source, the scan-based findings (notably
-//! `metadata/encoded-payload/xor` for C/bash/python, which have no AST-level XOR
-//! trait to fall back on) disappear and these fail loudly.
+//! stng's XOR scanners are built for binaries and run only on binary input:
+//! they recovered nothing from real-world source, and only noise from benign
+//! source. XOR in source is detected by source-shaped signals instead — the
+//! AST-level XOR traits — which these fixtures (`testdata/xor/`) exercise in
+//! JavaScript and Python. Each pairs a single-byte-XOR payload with a genuine
+//! `^`-based decoder, and must keep producing an XOR finding.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::path::PathBuf;
@@ -50,35 +41,14 @@ fn analyze(name: &str) -> Vec<String> {
     all_finding_ids(&report)
 }
 
-/// Each fixture must surface at least one XOR-related finding. C, bash and the
-/// raw-byte Python fixture have no AST-level XOR trait, so their only signal is
-/// the scan-based `metadata/encoded-payload/xor` — asserting it proves the gate
-/// actually ran stng's XOR scan on intent-bearing source.
+/// Each fixture must surface at least one XOR-related finding.
 #[test]
 fn xor_source_fixtures_still_detect() {
-    let cases: &[(&str, &str)] = &[
-        // (fixture, a finding-id substring that MUST be present)
-        ("xor_dropper.c", "encoded-payload/xor"),
-        ("xor_drop.sh", "encoded-payload/xor"),
-        ("xor_raw_beacon.py", "encoded-payload/xor"),
-        ("xor_loader.js", "xor"),
-        ("xor_base64_stealer.py", "xor"),
-    ];
-
-    for (name, needle) in cases {
+    for name in ["xor_loader.js", "xor_base64_stealer.py"] {
         let ids = analyze(name);
-        let xor_hits: Vec<&String> = ids
-            .iter()
-            .filter(|id| id.to_lowercase().contains("xor"))
-            .collect();
         assert!(
-            !xor_hits.is_empty(),
+            ids.iter().any(|id| id.to_lowercase().contains("xor")),
             "{name}: expected XOR detection but found none. all findings: {ids:?}"
-        );
-        assert!(
-            ids.iter().any(|id| id.contains(needle)),
-            "{name}: expected a finding containing {needle:?} (the gate must run \
-             stng's XOR scan on this intent-bearing source). xor findings: {xor_hits:?}"
         );
     }
 }

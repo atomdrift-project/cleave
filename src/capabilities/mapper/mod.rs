@@ -1050,7 +1050,9 @@ mod flow_prefilter_tests {
     fn includes_canonical_targets_without_changing_raw_symbols() {
         use crate::types::{AnalysisReport, FilefactsView, TargetInfo};
         let source = b"package p\nimport client \"net/http\"\nfunc run(){client.Post(\"url\",\"text/plain\",nil)}";
-        let parsed = filefacts::open_with_path(std::path::Path::new("a.go"), source).unwrap();
+        let parsed = filefacts::OpenOptions::new()
+            .path(std::path::Path::new("a.go"))
+            .open(source);
         let mut report = AnalysisReport::new(TargetInfo {
             path: "a.go".into(),
             file_type: "go".into(),
@@ -1108,6 +1110,7 @@ pub(super) fn build_symbol_offset_map(
                 | filefacts::Symbol::Member { offset, .. }
                 | filefacts::Symbol::Identifier { offset, .. } => *offset,
                 filefacts::Symbol::Bind { offset, .. } => Some(*offset),
+                _ => None,
             };
             if let Some(offset) = offset {
                 map.entry(name).or_insert_with(|| format!("{:#x}", offset));

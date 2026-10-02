@@ -17,19 +17,17 @@
 //! needs its own subdirectory to stay individually visible and ML-keyed.
 
 use crate::analyzers::{AnalysisInput, Analyzer};
-use crate::capabilities::CapabilityMapper;
 use crate::types::{AnalysisReport, Criticality, Evidence, Finding, StructuralFeature, TargetInfo};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Deserializer};
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
-use std::sync::Arc;
 
 /// Chrome extension manifest.json analyzer
 #[derive(Debug)]
 pub(crate) struct ChromeManifestAnalyzer {
-    capability_mapper: Arc<CapabilityMapper>,
+    engine: crate::Engine,
 }
 
 /// Deserialize a boolean that might be encoded as a string (e.g. `"true"` instead of `true`).
@@ -161,14 +159,14 @@ impl ChromeManifestAnalyzer {
     #[must_use]
     pub(crate) fn new() -> Self {
         Self {
-            capability_mapper: Arc::new(CapabilityMapper::empty()),
+            engine: crate::Engine::empty(),
         }
     }
 
-    /// Create analyzer with shared capability mapper (avoids cloning)
+    /// Analyze under `engine`: its rules and settings.
     #[must_use]
-    pub(crate) fn with_capability_mapper_arc(mut self, mapper: Arc<CapabilityMapper>) -> Self {
-        self.capability_mapper = mapper;
+    pub(crate) fn with_engine(mut self, engine: crate::Engine) -> Self {
+        self.engine = engine;
         self
     }
 
@@ -237,9 +235,12 @@ impl ChromeManifestAnalyzer {
         self.check_update_url(&manifest, &mut report);
 
         // Evaluate YAML-based rules
-        let filefacts_ctx =
-            crate::analysis_context::AnalysisContext::open(file_path, content.as_bytes()).ok();
-        self.capability_mapper
+        let filefacts_ctx = Some(crate::analysis_context::AnalysisContext::open(
+            file_path,
+            content.as_bytes(),
+        ));
+        self.engine
+            .rules()
             .evaluate_and_merge_findings_with_precomputed(
                 &mut report,
                 content.as_bytes(),

@@ -2,11 +2,9 @@
 
 use crate::analysis_context::AnalysisContext;
 use crate::analyzers::{AnalysisInput, Analyzer};
-use crate::capabilities::CapabilityMapper;
 use crate::types::{AnalysisReport, Evidence, StructuralFeature, TargetInfo};
 use anyhow::{Result, bail};
 use std::path::Path;
-use std::sync::Arc;
 
 mod capabilities;
 mod helpers;
@@ -14,24 +12,21 @@ mod tests;
 
 #[derive(Debug)]
 pub(crate) struct JavaClassAnalyzer {
-    capability_mapper: Arc<CapabilityMapper>,
+    engine: crate::Engine,
 }
 
 impl JavaClassAnalyzer {
     #[must_use]
     pub(crate) fn new() -> Self {
         Self {
-            capability_mapper: Arc::new(CapabilityMapper::empty()),
+            engine: crate::Engine::empty(),
         }
     }
 
-    /// Create analyzer with shared capability mapper (avoids cloning)
+    /// Analyze under `engine`: its rules and settings.
     #[must_use]
-    pub(crate) fn with_capability_mapper_arc(
-        mut self,
-        capability_mapper: Arc<CapabilityMapper>,
-    ) -> Self {
-        self.capability_mapper = capability_mapper;
+    pub(crate) fn with_engine(mut self, engine: crate::Engine) -> Self {
+        self.engine = engine;
         self
     }
 
@@ -116,7 +111,8 @@ impl Analyzer for JavaClassAnalyzer {
         if let Some(ctx) = filefacts_ctx {
             report.imports.extend(ctx.imports_from_filefacts());
         }
-        self.capability_mapper
+        self.engine
+            .rules()
             .evaluate_and_merge_findings_with_precomputed(
                 &mut report,
                 input.data,
@@ -136,7 +132,7 @@ impl Analyzer for JavaClassAnalyzer {
     fn analyze(&self, file_path: &Path) -> Result<AnalysisReport> {
         let data = std::fs::read(file_path)?;
         let start = std::time::Instant::now();
-        let filefacts_ctx = AnalysisContext::open(file_path, &data).ok();
+        let filefacts_ctx = Some(AnalysisContext::open(file_path, &data));
         let mut report =
             self.analyze_structural_with_ctx(file_path, &data, None, filefacts_ctx.as_ref())?;
 
@@ -145,7 +141,8 @@ impl Analyzer for JavaClassAnalyzer {
                 crate::strings::StringExtractor::default().convert_stng_strings(&ctx.text_rows());
             report.imports.extend(ctx.imports_from_filefacts());
         }
-        self.capability_mapper
+        self.engine
+            .rules()
             .evaluate_and_merge_findings_with_precomputed(
                 &mut report,
                 &data,

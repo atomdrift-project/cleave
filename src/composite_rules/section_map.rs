@@ -95,9 +95,7 @@ impl SectionMap {
     /// produced.
     pub(crate) fn from_binary(binary_data: &[u8]) -> Self {
         let file_size = binary_data.len() as u64;
-        let Ok(parsed) = filefacts::open(binary_data) else {
-            return Self::empty(file_size);
-        };
+        let parsed = filefacts::open(binary_data);
         Self::from_filefacts(&parsed, file_size)
     }
 

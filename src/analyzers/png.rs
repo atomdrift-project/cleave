@@ -8,19 +8,17 @@
 //! `file.entropy` field that the trait rules consume.
 
 use super::{AnalysisInput, Analyzer};
-use crate::capabilities::CapabilityMapper;
 use crate::strings::StringExtractor;
 use crate::types::{AnalysisReport, TargetInfo};
 use anyhow::Result;
 use sha2::{Digest, Sha256};
 use std::path::Path;
-use std::sync::Arc;
 
 /// PNG analyzer — defers extraction to filefacts and runs trait
 /// evaluation against the merged metric set.
 #[derive(Debug)]
 pub(crate) struct PngAnalyzer {
-    capability_mapper: Arc<CapabilityMapper>,
+    engine: crate::Engine,
     string_extractor: StringExtractor,
 }
 
@@ -28,14 +26,14 @@ impl PngAnalyzer {
     #[must_use]
     pub(crate) fn new() -> Self {
         Self {
-            capability_mapper: Arc::new(CapabilityMapper::empty()),
+            engine: crate::Engine::empty(),
             string_extractor: StringExtractor::new(),
         }
     }
 
     #[must_use]
-    pub(crate) fn with_capability_mapper_arc(mut self, mapper: Arc<CapabilityMapper>) -> Self {
-        self.capability_mapper = mapper;
+    pub(crate) fn with_engine(mut self, engine: crate::Engine) -> Self {
+        self.engine = engine;
         self
     }
 
@@ -69,7 +67,8 @@ impl PngAnalyzer {
         // populates every `png.*` / `image.*` / `file.entropy`
         // metric onto `report.filefacts_metrics` for the trait engine.
         // `source_ctx` is resolved by the caller (threaded or freshly opened).
-        self.capability_mapper
+        self.engine
+            .rules()
             .evaluate_and_merge_findings_with_precomputed(
                 &mut report,
                 data,
@@ -100,7 +99,9 @@ impl Analyzer for PngAnalyzer {
 
     fn analyze(&self, file_path: &Path) -> Result<AnalysisReport> {
         let data = std::fs::read(file_path)?;
-        let ctx = crate::analysis_context::AnalysisContext::open(file_path, &data).ok();
+        let ctx = Some(crate::analysis_context::AnalysisContext::open(
+            file_path, &data,
+        ));
         Ok(self.analyze_png(file_path, &data, None, ctx.as_ref()))
     }
 

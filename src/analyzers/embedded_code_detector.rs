@@ -5,7 +5,6 @@
 //! AST parsing and capability detection.
 
 use crate::analyzers::{FileType, detect_file_type_from_path, unified::UnifiedSourceAnalyzer};
-use crate::capabilities::CapabilityMapper;
 use crate::types::Evidence;
 use crate::types::binary::StringInfo;
 use crate::types::file_analysis::{FileAnalysis, encode_decoded_path};
@@ -16,7 +15,6 @@ use rustc_hash::FxHashSet;
 use std::fs;
 use std::io::Read;
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Matches an interpreter inline-code invocation, capturing the interpreter
@@ -902,7 +900,7 @@ pub fn analyze_embedded_string(
     parent_path: &str,
     string_info: &StringInfo,
     _string_index: usize,
-    capability_mapper: &Arc<CapabilityMapper>,
+    engine: &crate::Engine,
     current_depth: usize,
     host_file_type: Option<&FileType>,
 ) -> Result<EmbeddedAnalysisResult> {
@@ -912,7 +910,7 @@ pub fn analyze_embedded_string(
         string_info.offset.unwrap_or(0),
         &string_info.encoding_chain,
         string_info.string_type,
-        capability_mapper,
+        engine,
         current_depth,
         host_file_type,
     )
@@ -924,7 +922,7 @@ fn analyze_embedded_haystack(
     offset: u64,
     encoding_chain: &[String],
     string_type: Option<crate::types::binary::StringType>,
-    capability_mapper: &Arc<CapabilityMapper>,
+    engine: &crate::Engine,
     current_depth: usize,
     host_file_type: Option<&FileType>,
 ) -> Result<EmbeddedAnalysisResult> {
@@ -982,7 +980,7 @@ fn analyze_embedded_haystack(
     // Create analyzer for detected language; disable embedded detection to prevent recursion.
     let mut analyzer = UnifiedSourceAnalyzer::for_file_type(&file_type)
         .context("Failed to create analyzer for language")?
-        .with_capability_mapper_arc(capability_mapper.clone())
+        .with_engine(engine.clone())
         .without_embedded_detection();
     if is_encoded {
         analyzer = analyzer.with_encoded_context(encoding_chain.to_vec());
@@ -1022,7 +1020,7 @@ fn analyze_embedded_haystack(
 
     if is_encoded {
         // Encoded code - create a separate layer
-        let (mut file_entry, _, _) = report.into_file_analysis(0);
+        let (mut file_entry, _, _) = report.into_file_analysis(0, engine);
         file_entry.path = virtual_path.clone();
         file_entry.depth = (current_depth + 1) as u32;
         file_entry.encoding = Some(encoding_chain.to_vec());
@@ -1267,7 +1265,7 @@ fn detect_base64_binary(
     parent_path: &str,
     string_info: &StringInfo,
     depth: u32,
-    capability_mapper: &Arc<CapabilityMapper>,
+    engine: &crate::Engine,
 ) -> Vec<FileAnalysis> {
     if depth > 0 {
         return Vec::new();
@@ -1393,7 +1391,7 @@ fn detect_base64_binary(
             inner_file_type,
             &format!("embedded@{:#x}", offset),
             depth + 1,
-            capability_mapper,
+            engine,
         );
         out.extend(sub_entries);
     }
@@ -1675,7 +1673,7 @@ fn analyze_decoded_script_layer(
     offset: u64,
     file_type: FileType,
     encoding_chain: Vec<String>,
-    capability_mapper: &Arc<CapabilityMapper>,
+    engine: &crate::Engine,
     current_depth: usize,
     emit_encoded_powershell: bool,
 ) -> Option<FileAnalysis> {
@@ -1692,7 +1690,7 @@ fn analyze_decoded_script_layer(
     };
 
     let analyzer = UnifiedSourceAnalyzer::for_file_type(&file_type)?
-        .with_capability_mapper_arc(capability_mapper.clone())
+        .with_engine(engine.clone())
         .without_embedded_detection()
         .with_encoded_context(encoding_chain.clone());
     // Language comes from stng's deobfuscator (or the EncodedCommand
@@ -1711,7 +1709,7 @@ fn analyze_decoded_script_layer(
             .extend(generate_encoded_layer_traits(&encoding_chain, offset));
     }
 
-    let (mut entry, _, _) = report.into_file_analysis(0);
+    let (mut entry, _, _) = report.into_file_analysis(0, engine);
     entry.path = virtual_path;
     entry.depth = (current_depth + 1) as u32;
     entry.encoding = Some(encoding_chain);
@@ -1728,7 +1726,7 @@ fn analyze_decoded_script_layer(
 pub(crate) fn analyze_script_deobfuscation_layers(
     parent_path: &str,
     content: &str,
-    capability_mapper: &Arc<CapabilityMapper>,
+    engine: &crate::Engine,
     current_depth: usize,
     cancelled: Option<&AtomicBool>,
 ) -> Vec<FileAnalysis> {
@@ -1753,7 +1751,7 @@ pub(crate) fn analyze_script_deobfuscation_layers(
             result.offset as u64,
             file_type,
             encoding_chain,
-            capability_mapper,
+            engine,
             current_depth,
             emit_encoded_powershell,
         ) {
@@ -1773,7 +1771,7 @@ pub(crate) fn analyze_script_deobfuscation_layers(
             offset as u64,
             FileType::JavaScript,
             vec!["unicode-variation-selector".to_string()],
-            capability_mapper,
+            engine,
             current_depth,
             false,
         )
@@ -1793,7 +1791,7 @@ pub(crate) fn analyze_script_deobfuscation_layers(
 pub(crate) fn analyze_batch_expansion_layer(
     parent_path: &str,
     content: &str,
-    capability_mapper: &Arc<CapabilityMapper>,
+    engine: &crate::Engine,
 ) -> Option<FileAnalysis> {
     const ENCODING: &str = "batch-expansion";
     if parent_path.contains(ENCODING) {
@@ -1802,14 +1800,14 @@ pub(crate) fn analyze_batch_expansion_layer(
     let result = stng::script::expand_batch_variables(content.as_bytes())?;
     let encoding_chain = vec![ENCODING.to_string()];
     let virtual_path = encode_decoded_path(parent_path, &encoding_chain, result.offset);
-    let analyzer = super::generic::GenericAnalyzer::new(FileType::Batch)
-        .with_capability_mapper_arc(capability_mapper.clone());
+    let analyzer =
+        super::generic::GenericAnalyzer::new(FileType::Batch).with_engine(engine.clone());
     let mut report = analyzer.analyze_source(Path::new(&virtual_path), &result.decoded);
     report.findings.extend(generate_encoded_layer_traits(
         &encoding_chain,
         result.offset as u64,
     ));
-    let (mut entry, _, _) = report.into_file_analysis(0);
+    let (mut entry, _, _) = report.into_file_analysis(0, engine);
     entry.path = virtual_path;
     entry.depth = 1;
     entry.encoding = Some(encoding_chain);
@@ -1826,7 +1824,7 @@ fn detect_powershell_encoded_command(
     parent_path: &str,
     value: &str,
     offset: u64,
-    capability_mapper: &Arc<CapabilityMapper>,
+    engine: &crate::Engine,
     current_depth: usize,
 ) -> Option<FileAnalysis> {
     let blob = extract_ps_encoded_arg(value)?;
@@ -1840,7 +1838,7 @@ fn detect_powershell_encoded_command(
         offset,
         FileType::PowerShell,
         vec!["base64-utf16le".to_string()],
-        capability_mapper,
+        engine,
         current_depth,
         true,
     )
@@ -1853,7 +1851,7 @@ fn detect_powershell_encoded_command(
 pub(crate) fn process_all_strings(
     parent_path: &str,
     strings: &[StringInfo],
-    capability_mapper: &Arc<CapabilityMapper>,
+    engine: &crate::Engine,
     current_depth: usize,
     host_file_type: Option<&FileType>,
     cancelled: Option<&AtomicBool>,
@@ -1861,7 +1859,7 @@ pub(crate) fn process_all_strings(
     process_all_strings_with_host(
         parent_path,
         strings,
-        capability_mapper,
+        engine,
         current_depth,
         host_file_type,
         cancelled,
@@ -1963,7 +1961,7 @@ impl<'a> EmbedCand<'a> {
 pub(crate) fn process_all_strings_with_host(
     parent_path: &str,
     strings: &[StringInfo],
-    capability_mapper: &Arc<CapabilityMapper>,
+    engine: &crate::Engine,
     current_depth: usize,
     host_file_type: Option<&FileType>,
     cancelled: Option<&AtomicBool>,
@@ -2110,13 +2108,8 @@ pub(crate) fn process_all_strings_with_host(
 
         // Check for PowerShell -EncodedCommand blobs first
         if !skip_powershell_encoded_command
-            && let Some(ps_layer) = detect_powershell_encoded_command(
-                parent_path,
-                value,
-                offset,
-                capability_mapper,
-                current_depth,
-            )
+            && let Some(ps_layer) =
+                detect_powershell_encoded_command(parent_path, value, offset, engine, current_depth)
         {
             detected_count += 1;
             total_bytes += value.len();
@@ -2133,7 +2126,7 @@ pub(crate) fn process_all_strings_with_host(
         // carry their final depth.
         let bin_entries = match cand.extracted() {
             Some((_, info)) => {
-                detect_base64_binary(parent_path, info, current_depth as u32, capability_mapper)
+                detect_base64_binary(parent_path, info, current_depth as u32, engine)
             }
             None => {
                 // Host haystack: only copy into a StringInfo if it actually
@@ -2148,7 +2141,7 @@ pub(crate) fn process_all_strings_with_host(
                         encoding_chain: Vec::new(),
                         fragments: None,
                     };
-                    detect_base64_binary(parent_path, &tmp, current_depth as u32, capability_mapper)
+                    detect_base64_binary(parent_path, &tmp, current_depth as u32, engine)
                 } else {
                     Vec::new()
                 }
@@ -2180,7 +2173,7 @@ pub(crate) fn process_all_strings_with_host(
             offset,
             cand.encoding_chain(),
             cand.string_type(),
-            capability_mapper,
+            engine,
             current_depth,
             host_file_type,
         ) {
@@ -2360,11 +2353,13 @@ mod tests {
             "ordinary HTML remains eligible for embedded-code analysis",
         );
 
-        let mapper = Arc::new(CapabilityMapper::default());
+        let engine = crate::Engine::from_rules(std::sync::Arc::new(
+            crate::capabilities::CapabilityMapper::default(),
+        ));
         let (encoded_layers, plain_findings) = process_all_strings(
             "Component.svelte",
             &[info],
-            &mapper,
+            &engine,
             0,
             Some(&FileType::JavaScript),
             None,
@@ -2388,7 +2383,7 @@ mod tests {
             "package/init.ts.map",
             &info,
             0,
-            &Arc::new(CapabilityMapper::empty()),
+            &crate::Engine::empty(),
             0,
             Some(&FileType::Data),
         );
@@ -2421,10 +2416,12 @@ mod tests {
             make_string_info_at_offset(&payload, 0x230),
             make_string_info_at_offset(&payload, 0x231),
         ];
-        let mapper = Arc::new(CapabilityMapper::default());
+        let engine = crate::Engine::from_rules(std::sync::Arc::new(
+            crate::capabilities::CapabilityMapper::default(),
+        ));
 
         let (encoded_layers, plain_findings) =
-            process_all_strings("sample.ts", &strings, &mapper, 0, None, None);
+            process_all_strings("sample.ts", &strings, &engine, 0, None, None);
 
         assert!(plain_findings.is_empty());
         // Dedup contract — two identical base64 strings produce one
@@ -2476,9 +2473,11 @@ mod tests {
             make_string_info_at_offset(chmod_snippet, parent_offset_b),
         ];
 
-        let mapper = Arc::new(CapabilityMapper::default());
+        let engine = crate::Engine::from_rules(std::sync::Arc::new(
+            crate::capabilities::CapabilityMapper::default(),
+        ));
         let (_encoded, plain_findings) =
-            process_all_strings("Dockerfile", &strings, &mapper, 0, None, None);
+            process_all_strings("Dockerfile", &strings, &engine, 0, None, None);
 
         let any_parent_relative = plain_findings
             .iter()
@@ -2671,8 +2670,8 @@ mod tests {
         assert!(!looks_like_base64(prose));
     }
 
-    fn test_mapper() -> Arc<CapabilityMapper> {
-        Arc::new(CapabilityMapper::empty())
+    fn test_mapper() -> crate::Engine {
+        crate::Engine::empty()
     }
 
     #[test]
@@ -2979,11 +2978,11 @@ IAAAAAAAsDyZDwU=";
         let b64 = base64::engine::general_purpose::STANDARD.encode(&utf16le);
         let ps = format!("powershell.exe -EncodedCommand {b64}\n");
         let info = make_string_info(&ps);
-        let mapper = test_mapper();
+        let engine = test_mapper();
         let (with_scan, _) = process_all_strings(
             "stager.ps1",
             std::slice::from_ref(&info),
-            &mapper,
+            &engine,
             0,
             None,
             None,
@@ -2991,7 +2990,7 @@ IAAAAAAAsDyZDwU=";
         let (skipped, _) = process_all_strings_with_host(
             "stager.ps1",
             &[info],
-            &mapper,
+            &engine,
             0,
             None,
             None,
@@ -3035,11 +3034,11 @@ IAAAAAAAsDyZDwU=";
             "#!/bin/sh\n",
             "python3 -c \"import os, sys; os.system('id'); print(sys.version)\"\n",
         );
-        let mapper = test_mapper();
+        let engine = test_mapper();
         let (_layers, findings) = process_all_strings_with_host(
             "wrapper.sh",
             &[],
-            &mapper,
+            &engine,
             0,
             Some(&FileType::Shell),
             None,

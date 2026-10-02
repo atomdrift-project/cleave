@@ -1,6 +1,6 @@
 //! Bounded per-file analysis diagnostics, separate from malware findings.
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU16, Ordering};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -23,9 +23,13 @@ pub enum AnalysisGap {
     ReportRetentionLimited,
     /// A declared script has an unsupported shell or exceeded analysis limits.
     EmbeddedSourceIncomplete,
+    /// Rule evaluation ran past its wall-clock deadline. Conditions checked
+    /// after it report no match, so findings may be missing, and how many
+    /// depends on how loaded the machine was: the report is not cached.
+    EvaluationDeadline,
 }
 
-const ALL: [AnalysisGap; 8] = [
+const ALL: [AnalysisGap; 9] = [
     AnalysisGap::FlowUnavailable,
     AnalysisGap::FlowSchemaUnsupported,
     AnalysisGap::FlowGraphLimited,
@@ -34,6 +38,7 @@ const ALL: [AnalysisGap; 8] = [
     AnalysisGap::FlowQueryIncomplete,
     AnalysisGap::ReportRetentionLimited,
     AnalysisGap::EmbeddedSourceIncomplete,
+    AnalysisGap::EvaluationDeadline,
 ];
 
 impl AnalysisGap {
@@ -49,6 +54,7 @@ impl AnalysisGap {
             Self::FlowQueryIncomplete => "flow-query-incomplete",
             Self::ReportRetentionLimited => "report-retention-limited",
             Self::EmbeddedSourceIncomplete => "embedded-source-incomplete",
+            Self::EvaluationDeadline => "evaluation-deadline",
         }
     }
 }
@@ -57,12 +63,16 @@ impl AnalysisGap {
 /// Clone takes a snapshot: subsequent scans cannot contaminate a cached copy.
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(from = "Vec<AnalysisGap>", into = "Vec<AnalysisGap>")]
-pub struct AnalysisGaps(AtomicU8);
+pub struct AnalysisGaps(AtomicU16);
 
 impl AnalysisGaps {
     /// Record a gap without allocating or duplicating diagnostics.
     pub fn record(&self, gap: AnalysisGap) {
-        self.0.fetch_or(1 << gap as u8, Ordering::Relaxed);
+        self.0.fetch_or(1 << gap as u16, Ordering::Relaxed);
+    }
+    /// Whether `gap` has been recorded.
+    pub fn contains(&self, gap: AnalysisGap) -> bool {
+        self.0.load(Ordering::Relaxed) & (1 << gap as u16) != 0
     }
     /// Whether no gaps have been recorded; this is not a safety verdict.
     pub fn is_empty(&self) -> bool {
@@ -72,12 +82,12 @@ impl AnalysisGaps {
     pub fn iter(&self) -> impl Iterator<Item = AnalysisGap> {
         let bits = self.0.load(Ordering::Relaxed);
         ALL.into_iter()
-            .filter(move |gap| bits & (1 << *gap as u8) != 0)
+            .filter(move |gap| bits & (1 << *gap as u16) != 0)
     }
 }
 impl Clone for AnalysisGaps {
     fn clone(&self) -> Self {
-        Self(AtomicU8::new(self.0.load(Ordering::Relaxed)))
+        Self(AtomicU16::new(self.0.load(Ordering::Relaxed)))
     }
 }
 impl From<Vec<AnalysisGap>> for AnalysisGaps {

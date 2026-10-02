@@ -111,65 +111,64 @@ pub fn analyzer_for_file_type(
 ) -> Option<Box<dyn Analyzer>> {
     // One table, so the two entry points cannot drift: they once disagreed on
     // YAML, PGP signatures and Flatpak bundles.
-    analyzer_for_file_type_arc(file_type, mapper.map(Arc::new))
+    let engine = mapper.map_or_else(crate::Engine::empty, |m| {
+        crate::Engine::from_rules(Arc::new(m))
+    });
+    analyzer_for_file_type_arc(file_type, &engine)
 }
 
-/// Create an analyzer for the given file type with a shared capability mapper.
-///
-/// Same as `analyzer_for_file_type` but accepts an Arc to avoid cloning.
+/// Create an analyzer for the given file type, analyzing under `engine`.
 #[must_use]
 pub(crate) fn analyzer_for_file_type_arc(
     file_type: &FileType,
-    mapper: Option<Arc<CapabilityMapper>>,
+    engine: &crate::Engine,
 ) -> Option<Box<dyn Analyzer>> {
-    let mapper_or_empty = mapper.unwrap_or_else(|| Arc::new(CapabilityMapper::empty()));
-
     match file_type {
         // Binary formats - need dedicated analyzers
         FileType::MachO => Some(Box::new(
-            macho::MachOAnalyzer::new().with_capability_mapper_arc(mapper_or_empty),
+            macho::MachOAnalyzer::new().with_engine(engine.clone()),
         )),
         FileType::Elf => Some(Box::new(
-            elf::ElfAnalyzer::new().with_capability_mapper_arc(mapper_or_empty),
+            elf::ElfAnalyzer::new().with_engine(engine.clone()),
         )),
         FileType::Pe => Some(Box::new(
-            pe::PEAnalyzer::new().with_capability_mapper_arc(mapper_or_empty),
+            pe::PEAnalyzer::new().with_engine(engine.clone()),
         )),
 
         // Java bytecode - not source code
         FileType::JavaClass | FileType::Jar => Some(Box::new(
-            java_class::JavaClassAnalyzer::new().with_capability_mapper_arc(mapper_or_empty),
+            java_class::JavaClassAnalyzer::new().with_engine(engine.clone()),
         )),
 
         // Compiled AppleScript - binary format
         FileType::AppleScript => Some(Box::new(
-            applescript::AppleScriptAnalyzer::new().with_capability_mapper_arc(mapper_or_empty),
+            applescript::AppleScriptAnalyzer::new().with_engine(engine.clone()),
         )),
 
         // RTF documents - parse for embedded OLE objects
         FileType::Rtf => Some(Box::new(
-            rtf::RtfAnalyzer::new().with_capability_mapper_arc(mapper_or_empty),
+            rtf::RtfAnalyzer::new().with_engine(engine.clone()),
         )),
 
         // Microsoft Office documents (OLE2 and OOXML)
         FileType::OleDoc | FileType::Msi | FileType::Ooxml => Some(Box::new(
-            office::OfficeAnalyzer::new().with_capability_mapper_arc(mapper_or_empty),
+            office::OfficeAnalyzer::new().with_engine(engine.clone()),
         )),
 
         // PDF documents — lenient byte-scan extractor.
         FileType::Pdf => Some(Box::new(
-            pdf::PdfAnalyzer::new().with_capability_mapper_arc(mapper_or_empty),
+            pdf::PdfAnalyzer::new().with_engine(engine.clone()),
         )),
 
         // Image analyzers - steganography detection
         FileType::Jpeg => Some(Box::new(
-            jpeg::JpegAnalyzer::new().with_capability_mapper_arc(mapper_or_empty),
+            jpeg::JpegAnalyzer::new().with_engine(engine.clone()),
         )),
         FileType::Png => Some(Box::new(
-            png::PngAnalyzer::new().with_capability_mapper_arc(mapper_or_empty),
+            png::PngAnalyzer::new().with_engine(engine.clone()),
         )),
         FileType::Font => Some(Box::new(
-            font::FontAnalyzer::new().with_capability_mapper_arc(mapper_or_empty),
+            font::FontAnalyzer::new().with_engine(engine.clone()),
         )),
         // One analyzer for every non-font, non-raster container: they all
         // defer to filefacts and read the same shared `media.*` facts.
@@ -181,24 +180,24 @@ pub(crate) fn analyzer_for_file_type_arc(
         | FileType::Gif
         | FileType::Bmp
         | FileType::Webp => Some(Box::new(
-            media::MediaAnalyzer::new().with_capability_mapper_arc(mapper_or_empty),
+            media::MediaAnalyzer::new().with_engine(engine.clone()),
         )),
 
         // Pickle - deserialization attack detection
         FileType::Pickle => Some(Box::new(
-            pickle::PickleAnalyzer::new().with_capability_mapper_arc(mapper_or_empty),
+            pickle::PickleAnalyzer::new().with_engine(engine.clone()),
         )),
 
         // Package manifests - structured data parsers
         FileType::VsixManifest => Some(Box::new(
-            vsix_manifest::VsixManifestAnalyzer::new().with_capability_mapper_arc(mapper_or_empty),
+            vsix_manifest::VsixManifestAnalyzer::new().with_engine(engine.clone()),
         )),
         FileType::PackageJson => Some(Box::new(
-            package_json::PackageJsonAnalyzer::new().with_capability_mapper_arc(mapper_or_empty),
+            package_json::PackageJsonAnalyzer::new().with_engine(engine.clone()),
         )),
         FileType::ChromeManifest => Some(Box::new(
             chrome_manifest::ChromeManifestAnalyzer::new()
-                .with_capability_mapper_arc(mapper_or_empty),
+                .with_engine(engine.clone()),
         )),
 
         // Text-based formats without tree-sitter - use generic analyzer
@@ -236,7 +235,7 @@ pub(crate) fn analyzer_for_file_type_arc(
         // supported by the archive extractor.
         | FileType::Flatpak
         | FileType::Data => Some(Box::new(
-            generic::GenericAnalyzer::new(*file_type).with_capability_mapper_arc(mapper_or_empty),
+            generic::GenericAnalyzer::new(*file_type).with_engine(engine.clone()),
         )),
 
         // Archives need special handling (depth limits, nested analysis)
@@ -246,7 +245,7 @@ pub(crate) fn analyzer_for_file_type_arc(
         _ => {
             if let Some(analyzer) = unified::UnifiedSourceAnalyzer::for_file_type(file_type) {
                 Some(Box::new(
-                    analyzer.with_capability_mapper_arc(mapper_or_empty),
+                    analyzer.with_engine(engine.clone()),
                 ))
             } else {
                 // Fallback to generic for types without tree-sitter (e.g. Batch).
@@ -257,7 +256,7 @@ pub(crate) fn analyzer_for_file_type_arc(
                 } else {
                     Some(Box::new(
                         generic::GenericAnalyzer::new(*file_type)
-                            .with_capability_mapper_arc(mapper_or_empty),
+                            .with_engine(engine.clone()),
                     ))
                 }
             }
@@ -295,7 +294,9 @@ pub trait Analyzer {
         // Strings come from filefacts' `text()` view — the single
         // string-extraction authority. Thread the context into the input so
         // an analyzer that reads it reuses this parse.
-        let ctx = crate::analysis_context::AnalysisContext::open(file_path, &data).ok();
+        let ctx = Some(crate::analysis_context::AnalysisContext::open(
+            file_path, &data,
+        ));
         let strings: std::sync::Arc<[stng::ExtractedString]> = ctx
             .as_ref()
             .map(crate::analysis_context::AnalysisContext::text_rows)
@@ -728,7 +729,7 @@ mod tests {
                 "{file_type:?}"
             );
             assert!(
-                analyzer_for_file_type_arc(&file_type, None).is_some(),
+                analyzer_for_file_type_arc(&file_type, &crate::Engine::empty()).is_some(),
                 "{file_type:?}"
             );
         }

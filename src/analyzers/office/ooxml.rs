@@ -612,7 +612,7 @@ mod tests {
     fn parses_ooxml_from_filefacts_zip_index() -> anyhow::Result<()> {
         let data = tiny_docx()?;
         let path = std::path::Path::new("sample.docx");
-        let ctx = crate::analysis_context::AnalysisContext::open(path, &data)?;
+        let ctx = crate::analysis_context::AnalysisContext::open(path, &data);
         let entries = ctx.archive_entries();
         assert!(
             !entries.is_empty(),
@@ -703,7 +703,7 @@ mod tests {
     fn vba_modules_decompressed_via_filefacts() -> anyhow::Result<()> {
         let data = tiny_docm()?;
         let path = std::path::Path::new("evil.docm");
-        let ctx = crate::analysis_context::AnalysisContext::open(path, &data)?;
+        let ctx = crate::analysis_context::AnalysisContext::open(path, &data);
         let modules = crate::analyzers::office::vba::modules_from_ctx(Some(&ctx));
         assert_eq!(modules.len(), 1, "one VBA module decompressed");
         assert_eq!(modules[0].name, "Module1");

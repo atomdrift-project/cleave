@@ -4,9 +4,10 @@ use cleave::commands::{
     AnalyzeConfig, IterFilesConfig, analyze_command, diff_command, expand_paths,
     extract_exports_command, extract_functions_command, extract_imports_command,
     extract_kv_command, extract_metrics_command, extract_sections_command, extract_strings_command,
-    extract_symbols_command, inspect_command, iter_files_command, test_match, test_rules,
-    validate_command,
+    extract_symbols_command, inspect_command, iter_files_command,
 };
+#[cfg(feature = "lint")]
+use cleave::commands::{test_match, test_rules, validate_command};
 use std::fs;
 
 struct AnalyzeDispatchContext<'a> {
@@ -34,6 +35,7 @@ pub(crate) struct DispatchContext<'a> {
     analyze: AnalyzeDispatchContext<'a>,
 }
 
+#[cfg(feature = "lint")]
 struct TestMatchRequest<'a> {
     target: &'a str,
     kind: cli::SearchType,
@@ -211,6 +213,7 @@ fn run_server(
     Ok(())
 }
 
+#[cfg(feature = "lint")]
 fn run_test_match_command(
     req: &TestMatchRequest<'_>,
     disabled: &cli::DisabledComponents,
@@ -253,6 +256,7 @@ fn run_test_match_command(
     )
 }
 
+#[cfg(feature = "lint")]
 fn run_test_rules_command(
     target: &str,
     rules: &str,
@@ -337,6 +341,7 @@ pub(crate) fn dispatch_command(
             run_version();
             return Ok(None);
         }
+        #[cfg(feature = "lint")]
         Some(cli::Command::RegexCost { case_insensitive }) => {
             use std::io::BufRead;
             let stdin = std::io::stdin();
@@ -353,6 +358,7 @@ pub(crate) fn dispatch_command(
             }
             return Ok(None);
         }
+        #[cfg(feature = "lint")]
         Some(cli::Command::Validate { exclude, soft }) => {
             if soft {
                 cleave::commands::validate::run_soft(ctx.format, exclude.as_deref(), args.verbose)?
@@ -412,9 +418,11 @@ pub(crate) fn dispatch_command(
             let path = path.as_deref().or(path_flag.as_deref());
             extract_kv_command(&target, path, ctx.format)?
         }
+        #[cfg(feature = "lint")]
         Some(cli::Command::TestRules { target, rules }) => {
             run_test_rules_command(&target, &rules, ctx.disabled, ctx.analyze.platforms)?
         }
+        #[cfg(feature = "lint")]
         Some(cli::Command::TestMatch {
             target,
             r#type,
@@ -480,6 +488,15 @@ pub(crate) fn dispatch_command(
             ctx.disabled,
             ctx.analyze.platforms,
         )?,
+        #[cfg(not(feature = "lint"))]
+        Some(
+            cli::Command::Validate { .. }
+            | cli::Command::TestRules { .. }
+            | cli::Command::TestMatch { .. }
+            | cli::Command::RegexCost { .. },
+        ) => anyhow::bail!(
+            "this cleave was built without the `lint` feature, which provides the rule linter"
+        ),
         Some(cli::Command::UpdateRules { force, check, pin }) => {
             run_update_rules(force, check, pin)?;
             return Ok(None);

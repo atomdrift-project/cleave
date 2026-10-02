@@ -3,17 +3,15 @@
 //! Analyzes AppleScript files for macOS-specific threats.
 
 use crate::analyzers::{AnalysisInput, Analyzer};
-use crate::capabilities::CapabilityMapper;
 use crate::strings::StringExtractor;
 use crate::types::{AnalysisReport, TargetInfo};
 use anyhow::Result;
 use std::fs;
 use std::path::Path;
-use std::sync::Arc;
 
 #[derive(Debug)]
 pub(crate) struct AppleScriptAnalyzer {
-    capability_mapper: Arc<CapabilityMapper>,
+    engine: crate::Engine,
     string_extractor: StringExtractor,
 }
 
@@ -21,18 +19,15 @@ impl AppleScriptAnalyzer {
     #[must_use]
     pub(crate) fn new() -> Self {
         Self {
-            capability_mapper: Arc::new(CapabilityMapper::empty()),
+            engine: crate::Engine::empty(),
             string_extractor: StringExtractor::new(),
         }
     }
 
-    /// Create analyzer with shared capability mapper (avoids cloning)
+    /// Analyze under `engine`: its rules and settings.
     #[must_use]
-    pub(crate) fn with_capability_mapper_arc(
-        mut self,
-        capability_mapper: Arc<CapabilityMapper>,
-    ) -> Self {
-        self.capability_mapper = capability_mapper;
+    pub(crate) fn with_engine(mut self, engine: crate::Engine) -> Self {
+        self.engine = engine;
         self
     }
 
@@ -93,7 +88,7 @@ impl Analyzer for AppleScriptAnalyzer {
             crate::analyzers::embedded_code_detector::process_all_strings(
                 &input.path.display().to_string(),
                 &report.strings,
-                &self.capability_mapper,
+                &self.engine,
                 0,
                 Some(&crate::FileType::AppleScript),
                 input.cancellation.as_deref(),
@@ -102,7 +97,8 @@ impl Analyzer for AppleScriptAnalyzer {
         report.findings.extend(plain_findings);
 
         // Evaluate all rules (atomic + composite) and merge into report
-        self.capability_mapper
+        self.engine
+            .rules()
             .evaluate_and_merge_findings_with_precomputed(
                 &mut report,
                 input.data,
@@ -145,8 +141,7 @@ mod tests {
     #[test]
     fn scpt_base64_facts_use_shared_literal_rows_once() {
         let bytes = include_bytes!("../../tests/fixtures/scpt-base64.scpt");
-        let ctx = crate::analysis_context::AnalysisContext::open(Path::new("base64.scpt"), bytes)
-            .unwrap();
+        let ctx = crate::analysis_context::AnalysisContext::open(Path::new("base64.scpt"), bytes);
         let mut report = AnalysisReport::new(TargetInfo {
             path: "base64.scpt".into(),
             file_type: "applescript".into(),
@@ -181,8 +176,7 @@ mod tests {
     fn compiled_facts_reach_rule_inputs() {
         let bytes = include_bytes!("../../crates/scpt/tests/fixtures/shell_script.scpt");
         let ctx =
-            crate::analysis_context::AnalysisContext::open(Path::new("shell_script.scpt"), bytes)
-                .unwrap();
+            crate::analysis_context::AnalysisContext::open(Path::new("shell_script.scpt"), bytes);
         let mut report = AnalysisReport::new(TargetInfo {
             path: "shell_script.scpt".into(),
             file_type: "applescript".into(),

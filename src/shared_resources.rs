@@ -77,24 +77,6 @@ pub(crate) fn compact_member_retention() -> bool {
     COMPACT_MEMBER_RETENTION.load(Ordering::Relaxed)
 }
 
-/// Whether any loaded rule's `type: trait` reference could match finding id
-/// `id` (conservative superset — see `TraitRefIndex`). False with no mapper:
-/// no rules, no references.
-pub(crate) fn trait_possibly_referenced(id: &str) -> bool {
-    let guard = CAPABILITY_MAPPER.read();
-    guard
-        .as_ref()
-        .is_some_and(|m| m.trait_ref_index().possibly_referenced(id))
-}
-
-/// Diagnostics for a refused share: which rule path inputs differ.
-pub(crate) fn paths_inequivalent_inputs(a: &str, b: &str) -> Vec<String> {
-    let guard = CAPABILITY_MAPPER.read();
-    guard
-        .as_ref()
-        .map_or_else(Vec::new, |m| m.paths_inequivalent_inputs(a, b))
-}
-
 /// Adopt `report`, evaluated under its own `target.path`, for `new_path`.
 /// Returns whether it was adopted; a refusal leaves the report untouched.
 ///
@@ -106,6 +88,7 @@ pub(crate) fn paths_inequivalent_inputs(a: &str, b: &str) -> Vec<String> {
 pub(crate) fn adopt_report_under(
     report: &mut crate::types::core::AnalysisReport,
     new_path: &str,
+    rules: &CapabilityMapper,
 ) -> bool {
     if report.target.path == new_path {
         return true;
@@ -117,22 +100,15 @@ pub(crate) fn adopt_report_under(
         p.strip_prefix(owner_path)
             .map(|rest| format!("{new_path}{rest}"))
     };
-    // Clone the Arc out and release the read lock before walking the report:
-    // the equivalence check is O(files + archive entries), and holding the
-    // mapper lock across it would block a concurrent trait reload for the
-    // whole walk.
-    let Some(mapper) = CAPABILITY_MAPPER.read().as_ref().cloned() else {
-        return false;
-    };
-    let equivalent = mapper.paths_equivalent(owner_path, new_path)
+    let equivalent = rules.paths_equivalent(owner_path, new_path)
         && report
             .files
             .iter()
-            .all(|f| rebase(&f.path).is_some_and(|np| mapper.paths_equivalent(&f.path, &np)))
+            .all(|f| rebase(&f.path).is_some_and(|np| rules.paths_equivalent(&f.path, &np)))
         && report
             .archive_contents
             .iter()
-            .all(|e| rebase(&e.path).is_some_and(|np| mapper.paths_equivalent(&e.path, &np)));
+            .all(|e| rebase(&e.path).is_some_and(|np| rules.paths_equivalent(&e.path, &np)));
     if !equivalent {
         return false;
     }
@@ -152,31 +128,92 @@ pub(crate) fn adopt_report_under(
 
 /// The global CapabilityMapper if one is already loaded, else `None`.
 ///
-/// Never initializes: callers on the analysis path (embedded-payload capture)
-/// only want the mapper if the run already built one, and paying a full trait
-/// load here would be a surprise.
+/// Never initializes. Only the paths that run before an engine exists use it:
+/// the `AnalysisOptions` cache fast path (to adopt a hit cached under another
+/// path) and [`fallback_engine`]. An analysis reads its own engine's rules.
 pub(crate) fn loaded_capability_mapper() -> Option<Arc<CapabilityMapper>> {
     CAPABILITY_MAPPER.read().clone()
 }
 
-/// Whether a container-scope rule could reference this finding. Conservative
-/// evidence-retention oracle for member folding, with eval_trait's match modes.
-pub(crate) fn trait_referenced_at_container_scope(id: &str) -> bool {
-    let guard = CAPABILITY_MAPPER.read();
-    guard
-        .as_ref()
-        .is_some_and(|m| m.container_ref_index().possibly_referenced(id))
+/// The engine-level settings `options` ask for, and nothing else: what
+/// [`crate::Engine::for_options`] builds with.
+pub(crate) fn settings_from_options(options: &crate::AnalysisOptions) -> crate::engine::Settings {
+    crate::engine::Settings {
+        upx: !options.disable_upx,
+        radare2: !options.disable_radare2,
+        compact_members: false,
+        yara: !options.disable_yara,
+        third_party_yara: options.enable_third_party_yara,
+        platforms: options.platforms.clone(),
+        min_hostile_precision: options.min_hostile_precision,
+        min_suspicious_precision: options.min_suspicious_precision,
+        precision_scoring: options.enable_precision_scoring,
+        full_validation: options.enable_full_validation,
+    }
 }
 
-/// Whether any loaded rule reads `<basename>::…` from a sibling file's
-/// flattened `kv`. False when no mapper is loaded: no rules, no readers.
-pub(crate) fn kv_sibling_basename_referenced(basename: &str) -> bool {
-    let guard = CAPABILITY_MAPPER.read();
-    guard.as_ref().is_some_and(|m| {
-        m.kv_sibling_basenames()
-            .iter()
-            .any(|n| n.eq_ignore_ascii_case(basename))
-    })
+/// The engine-level settings an `AnalysisOptions` free function analyzes
+/// under: [`settings_from_options`], plus the process-wide switches those
+/// entry points still honor ([`crate::disable_upx`],
+/// [`set_compact_member_retention`]).
+pub(crate) fn settings_for_options(options: &crate::AnalysisOptions) -> crate::engine::Settings {
+    let settings = settings_from_options(options);
+    crate::engine::Settings {
+        upx: settings.upx && !crate::upx::is_disabled(),
+        compact_members: compact_member_retention(),
+        ..settings
+    }
+}
+
+/// The engine the `AnalysisOptions` entry points analyze under: the shared
+/// rules and YARA engine for these options, with [`settings_for_options`].
+pub(crate) fn engine_for_options(
+    options: &crate::AnalysisOptions,
+) -> anyhow::Result<crate::Engine> {
+    let rules = capability_mapper_with_options(options)?;
+    Ok(engine_with_rules(options, rules))
+}
+
+/// The shared rules and YARA engine for `options`, under exactly the
+/// settings `options` describe: [`crate::Engine::for_options`].
+pub(crate) fn explicit_engine_for_options(
+    options: &crate::AnalysisOptions,
+) -> anyhow::Result<crate::Engine> {
+    let rules = capability_mapper_with_options(options)?;
+    let yara = (!options.disable_yara).then(|| yara_engine(options.enable_third_party_yara));
+    Ok(crate::Engine::new(
+        rules,
+        yara,
+        settings_from_options(options),
+    ))
+}
+
+/// [`engine_for_options`] over rules the caller already holds.
+pub(crate) fn engine_with_rules(
+    options: &crate::AnalysisOptions,
+    rules: Arc<CapabilityMapper>,
+) -> crate::Engine {
+    let yara = (!options.disable_yara).then(|| yara_engine(options.enable_third_party_yara));
+    crate::Engine::new(rules, yara, settings_for_options(options))
+}
+
+/// The engine for a report that carries none (one built by hand, or read
+/// back from the cache by an `AnalysisOptions` entry point): the loaded
+/// global rules, if any, under the process-wide settings. This is the one
+/// place a result still depends on what else the process loaded; reports
+/// from [`crate::Engine`]'s own entry points always carry their engine.
+pub(crate) fn fallback_engine() -> crate::Engine {
+    let rules =
+        loaded_capability_mapper().unwrap_or_else(|| crate::Engine::empty().rules().clone());
+    crate::Engine::new(
+        rules,
+        None,
+        crate::engine::Settings {
+            upx: !crate::upx::is_disabled(),
+            compact_members: compact_member_retention(),
+            ..crate::engine::Settings::default()
+        },
+    )
 }
 
 /// A slot holding a lazily built, hot-reloadable CapabilityMapper.

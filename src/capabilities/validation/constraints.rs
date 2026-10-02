@@ -2026,6 +2026,7 @@ const MANIFESTS: &[FileType] = &[
     FileType::Xml,
     FileType::ComposerJson,
     FileType::PkgInfo,
+    FileType::Reg,
     FileType::Plist,
     FileType::Nib,
     FileType::Lnk,

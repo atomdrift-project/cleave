@@ -5,10 +5,12 @@
 
 use crate::capabilities::models::TraitMappings;
 use crate::capabilities::parsing::{apply_composite_defaults, apply_trait_defaults};
-use crate::capabilities::validation::{
-    find_duplicate_traits_and_composites, precalculate_all_composite_precisions,
-    validate_hostile_composite_precision, validate_hostile_trait_precision,
+use crate::capabilities::precision::{
+    precalculate_all_composite_precisions, validate_hostile_composite_precision,
+    validate_hostile_trait_precision,
 };
+#[cfg(feature = "lint")]
+use crate::capabilities::validation::find_duplicate_traits_and_composites;
 use crate::composite_rules::Platform;
 use anyhow::{Context, Result};
 use std::fs;
@@ -153,6 +155,7 @@ impl super::CapabilityMapper {
         }
 
         // Detect duplicate traits and composites
+        #[cfg(feature = "lint")]
         find_duplicate_traits_and_composites(&trait_definitions, &composite_rules, &mut warnings);
 
         // Validate trait and composite conditions and warn about problematic patterns

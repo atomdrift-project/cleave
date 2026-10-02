@@ -167,8 +167,35 @@ impl<'a> AnalysisInput<'a> {
     pub fn open_ctx_fallback(&self) -> Option<crate::analysis_context::AnalysisContext<'a>> {
         match self.parsed_ctx {
             Some(_) => None,
-            None => crate::analysis_context::AnalysisContext::open(self.path, self.data).ok(),
+            None => Some(self.open_ctx()),
         }
+    }
+
+    /// Open a fresh context on `data` with filefacts' default settings,
+    /// honoring [`Self::skip_rizin`]. Analyzers holding an engine use
+    /// [`Self::open_ctx_with`] and its options instead.
+    #[must_use]
+    pub fn open_ctx(&self) -> crate::analysis_context::AnalysisContext<'a> {
+        self.open_ctx_with(crate::engine::filefacts_options(
+            &crate::engine::Settings::default(),
+        ))
+    }
+
+    /// Open a fresh context on `data` under `options` (an engine's, normally),
+    /// with rizin off when [`Self::skip_rizin`] says so. Prefer
+    /// [`Self::parsed_ctx`] when a caller threaded one in: a second open
+    /// repeats the whole extraction.
+    #[must_use]
+    pub fn open_ctx_with(
+        &self,
+        options: filefacts::OpenOptions<'a>,
+    ) -> crate::analysis_context::AnalysisContext<'a> {
+        let options = if self.skip_rizin {
+            options.rizin(false)
+        } else {
+            options
+        };
+        crate::analysis_context::AnalysisContext::open_with(options, self.path, self.data)
     }
 
     /// Disable deep radare2/rizin analysis for this input.

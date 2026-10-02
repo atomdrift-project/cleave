@@ -30,6 +30,8 @@
 
 use crate::AnalysisOptions;
 use crate::cache::cache_dir;
+use crate::capabilities::CapabilityMapper;
+use crate::engine::Settings;
 use crate::types::AnalysisReport;
 use crate::types::FileAnalysis;
 use rusqlite::Connection;
@@ -385,8 +387,9 @@ pub(crate) fn acquire_report_flight(
     sha256: &str,
     file_type: &str,
     options: &AnalysisOptions,
+    settings: &Settings,
 ) -> ReportFlight {
-    acquire_flight("report", sha256, file_type, options)
+    acquire_flight("report", sha256, file_type, options, settings)
 }
 
 /// Acquire a single-flight slot for an archive member. Identical bytes share
@@ -397,8 +400,9 @@ pub(crate) fn acquire_member_flight(
     sha256: &str,
     file_type: &str,
     options: &AnalysisOptions,
+    settings: &Settings,
 ) -> ReportFlight {
-    acquire_flight("member", sha256, file_type, options)
+    acquire_flight("member", sha256, file_type, options, settings)
 }
 
 thread_local! {
@@ -424,11 +428,12 @@ fn acquire_flight(
     sha256: &str,
     file_type: &str,
     options: &AnalysisOptions,
+    settings: &Settings,
 ) -> ReportFlight {
     let key = FlightKey {
         kind: kind.to_string(),
         sha256: sha256.to_string(),
-        options_hash: typed_options_hash(options, file_type),
+        options_hash: typed_options_hash(options, settings, file_type),
         traits_revision: ambient_traits_revision(),
     };
     let flights = IN_FLIGHT.get_or_init(|| Mutex::new(HashMap::new()));
@@ -759,18 +764,32 @@ fn evict_report_cache(conn: &Connection) {
 }
 
 /// Compute a short deterministic hash of the result-affecting analysis options.
-fn options_hash(options: &AnalysisOptions) -> String {
-    options_hash_with(options, crate::yara_engine::result_affecting_overrides())
+///
+/// Engine-level inputs come from `settings` (what the engine analyzing this
+/// call was built for); only per-call inputs come from `options`.
+fn options_hash(options: &AnalysisOptions, settings: &Settings) -> String {
+    options_hash_with(
+        options,
+        settings,
+        crate::yara_engine::result_affecting_overrides(),
+    )
 }
 
 /// [`options_hash`] with the process-wide YARA overrides passed in.
-fn options_hash_with(options: &AnalysisOptions, yara: crate::yara_engine::YaraOverrides) -> String {
+fn options_hash_with(
+    options: &AnalysisOptions,
+    settings: &Settings,
+    yara: crate::yara_engine::YaraOverrides,
+) -> String {
     use sha2::{Digest, Sha256};
 
     // Sort so the key is independent of the order platforms were supplied on the
     // command line: `--platforms linux,macos` and `macos,linux` share cache entries.
-    let mut platform_names: Vec<String> =
-        options.platforms.iter().map(|p| format!("{p:?}")).collect();
+    let mut platform_names: Vec<String> = settings
+        .platforms
+        .iter()
+        .map(|p| format!("{p:?}"))
+        .collect();
     platform_names.sort_unstable();
     let platforms_str = platform_names.join(",");
     // Cache version bumped v=5 → v=6 for the filefacts v6 schema cut
@@ -822,23 +841,27 @@ fn options_hash_with(options: &AnalysisOptions, yara: crate::yara_engine::YaraOv
     // v=20: the key covers every input that changes a report: the YARA
     // overrides outside `AnalysisOptions` (`CLEAVE_SKIP_YARA`, builtin-only)
     // and the zip passwords, which decide whether encrypted members are read.
+    // v=21: filefacts 2.0 renamed 75 fact keys (schema v9); older reports carry
+    // the old names, which no rule reads any more. `rizin=` is now the
+    // fingerprint of the options the analysis opened files with, so it also
+    // says whether rizin ran.
     let zip_passwords = Sha256::digest(options.zip_passwords.join("\0").as_bytes());
     let key = format!(
-        "v=20,cm={},3p={},yara={},yskip={},ybuiltin={},zpw={},r2={},upx={},plat={},hp={},sp={},ps={},fv={},rizin={}",
-        crate::shared_resources::compact_member_retention(),
-        options.enable_third_party_yara,
-        !options.disable_yara,
+        "v=21,cm={},3p={},yara={},yskip={},ybuiltin={},zpw={},r2={},upx={},plat={},hp={},sp={},ps={},fv={},rizin={}",
+        settings.compact_members,
+        settings.third_party_yara,
+        settings.yara,
         yara.skip,
         yara.builtin_only,
         hex::encode(&zip_passwords[..8]),
-        !options.disable_radare2,
-        !options.disable_upx,
+        settings.radare2,
+        settings.upx,
         platforms_str,
-        options.min_hostile_precision,
-        options.min_suspicious_precision,
-        options.enable_precision_scoring,
-        options.enable_full_validation,
-        filefacts::rizin::cache_fingerprint(),
+        settings.min_hostile_precision,
+        settings.min_suspicious_precision,
+        settings.precision_scoring,
+        settings.full_validation,
+        crate::engine::filefacts_options(settings).rizin_fingerprint(),
     );
     let hash = Sha256::digest(key.as_bytes());
     // First 16 hex chars is plenty for a small option space
@@ -848,10 +871,10 @@ fn options_hash_with(options: &AnalysisOptions, yara: crate::yara_engine::YaraOv
 /// Add the detected file type to the analysis key. Detection may depend on a
 /// member's logical path when content is ambiguous, so SHA equality alone does
 /// not guarantee that two paths have the same analysis semantics.
-fn typed_options_hash(options: &AnalysisOptions, file_type: &str) -> String {
+fn typed_options_hash(options: &AnalysisOptions, settings: &Settings, file_type: &str) -> String {
     use sha2::{Digest, Sha256};
 
-    let key = format!("{},type={file_type}", options_hash(options));
+    let key = format!("{},type={file_type}", options_hash(options, settings));
     let hash = Sha256::digest(key.as_bytes());
     hex::encode(hash)[..16].to_string()
 }
@@ -894,17 +917,6 @@ fn ambient_traits_revision() -> i64 {
         return 0;
     }
     crate::cache::traits_revision_fingerprint()
-}
-
-/// Store revision for the rare caller with no mapper handle in scope: the
-/// loaded global mapper's pinned revision, else the ambient one.
-///
-/// Prefer passing `mapper.traits_revision()` — that is the mapper the analysis
-/// actually ran under. This fallback is only as good as the assumption that
-/// the installed mapper is still the one that produced the report.
-pub(crate) fn store_revision_without_mapper() -> i64 {
-    crate::shared_resources::loaded_capability_mapper()
-        .map_or_else(ambient_traits_revision, |m| m.traits_revision())
 }
 
 /// Current time as Unix seconds.
@@ -1060,13 +1072,19 @@ fn memo_key(sha256: &str, opts_hash: &str, traits_revision: i64) -> String {
 /// Look up a cached toplevel analysis report for the given file hash and options.
 ///
 /// Returns `Some(report)` on cache hit, `None` on miss or if caching is unavailable.
+///
+/// `rules` decide whether a hit cached under another path can be adopted for
+/// `path` (see [`cached_report_under`]); pass the rules this caller analyzes
+/// under, or the loaded global ones if it has not built an engine yet.
 pub(crate) fn report_cache_lookup(
     sha256: &str,
     file_type: &str,
     options: &AnalysisOptions,
+    settings: &Settings,
     path: &str,
+    rules: Option<&CapabilityMapper>,
 ) -> Option<AnalysisReport> {
-    let opts_hash = typed_options_hash(options, file_type);
+    let opts_hash = typed_options_hash(options, settings, file_type);
     // A lookup keys on the ambient revision: it asks for a result computed
     // under the rules this caller is about to run.
     let traits_ts = ambient_traits_revision();
@@ -1074,7 +1092,7 @@ pub(crate) fn report_cache_lookup(
     if let Some(bytes) = memo::get(memo::Kind::Report, &key)
         && let Ok(report) = serde_json::from_slice::<AnalysisReport>(&bytes)
     {
-        return cached_report_under(report, path);
+        return cached_report_under(report, path, rules);
     }
     let hit =
         with_conn(|conn| report_cache_lookup_conn(conn, sha256, &opts_hash, traits_ts)).flatten();
@@ -1083,14 +1101,22 @@ pub(crate) fn report_cache_lookup(
     {
         memo::put(memo::Kind::Report, key, bytes);
     }
-    hit.and_then(|report| cached_report_under(report, path))
+    hit.and_then(|report| cached_report_under(report, path, rules))
 }
 
 /// A content hit is not a verdict hit until every path input agrees. Reuse
 /// the same check as single-flight sharing, including decoded child paths.
-fn cached_report_under(mut report: AnalysisReport, path: &str) -> Option<AnalysisReport> {
+/// Without `rules` there is no way to tell, so only a same-path hit is used.
+fn cached_report_under(
+    mut report: AnalysisReport,
+    path: &str,
+    rules: Option<&CapabilityMapper>,
+) -> Option<AnalysisReport> {
     if report.target.path.is_empty()
-        || !crate::shared_resources::adopt_report_under(&mut report, path)
+        || !(report.target.path == path
+            || rules.is_some_and(|rules| {
+                crate::shared_resources::adopt_report_under(&mut report, path, rules)
+            }))
     {
         return None;
     }
@@ -1098,13 +1124,16 @@ fn cached_report_under(mut report: AnalysisReport, path: &str) -> Option<Analysi
     Some(report)
 }
 
-fn cached_file_under(mut file: FileAnalysis, path: &str) -> Option<FileAnalysis> {
+fn cached_file_under(
+    mut file: FileAnalysis,
+    path: &str,
+    rules: Option<&CapabilityMapper>,
+) -> Option<FileAnalysis> {
     // No findings under one path does not prove independence from that path.
     // In particular, lib.rs cannot donate a negative build.rs-name result.
     if file.path.is_empty()
         || (file.path != path
-            && !crate::shared_resources::loaded_capability_mapper()
-                .is_some_and(|mapper| mapper.paths_equivalent(&file.path, path)))
+            && !rules.is_some_and(|rules| rules.paths_equivalent(&file.path, path)))
     {
         return None;
     }
@@ -1149,6 +1178,18 @@ fn yara_degraded() -> bool {
     crate::yara_engine::yara_degradation().is_some()
 }
 
+/// Whether rule evaluation ran out of time on `report` or any file in it.
+/// Such a report lacks findings a run on a quieter machine would have; caching
+/// it would serve that verdict to every later run.
+fn evaluation_incomplete(report: &AnalysisReport) -> bool {
+    use crate::types::AnalysisGap::EvaluationDeadline;
+    report.analysis_gaps.contains(EvaluationDeadline)
+        || report
+            .files
+            .iter()
+            .any(|f| f.analysis_gaps.contains(EvaluationDeadline))
+}
+
 /// Store a toplevel analysis report in the cache.
 ///
 /// Silently does nothing if caching is unavailable or any error occurs.
@@ -1156,13 +1197,14 @@ pub(crate) fn report_cache_store(
     sha256: &str,
     file_type: &str,
     options: &AnalysisOptions,
+    settings: &Settings,
     report: &AnalysisReport,
     traits_revision: i64,
 ) {
-    if yara_degraded() {
+    if yara_degraded() || evaluation_incomplete(report) {
         return;
     }
-    let opts_hash = typed_options_hash(options, file_type);
+    let opts_hash = typed_options_hash(options, settings, file_type);
     if let Ok(bytes) = serde_json::to_vec(report) {
         memo::put(
             memo::Kind::Report,
@@ -1188,21 +1230,23 @@ pub(crate) fn file_analysis_cache_lookup(
     sha256: &str,
     file_type: &str,
     options: &AnalysisOptions,
+    settings: &Settings,
     path: &str,
+    rules: Option<&CapabilityMapper>,
 ) -> Option<FileAnalysis> {
     // FileAnalysis has no child inventory. An archive must use a full report
     // cache hit or be analyzed again, never be reconstructed as a leaf.
     if archive_file_type(file_type) {
         return None;
     }
-    let opts_hash = typed_options_hash(options, file_type);
+    let opts_hash = typed_options_hash(options, settings, file_type);
     // See `report_cache_lookup`: ambient revision, not a pinned one.
     let traits_ts = ambient_traits_revision();
     let key = memo_key(sha256, &opts_hash, traits_ts);
     if let Some(bytes) = memo::get(memo::Kind::FileAnalysis, &key)
         && let Ok(fa) = serde_json::from_slice::<FileAnalysis>(&bytes)
     {
-        return cached_file_under(fa, path);
+        return cached_file_under(fa, path, rules);
     }
     let hit =
         with_conn(|conn| file_analysis_cache_lookup_conn(conn, sha256, &opts_hash, traits_ts))
@@ -1212,7 +1256,7 @@ pub(crate) fn file_analysis_cache_lookup(
     {
         memo::put(memo::Kind::FileAnalysis, key, bytes);
     }
-    hit.and_then(|fa| cached_file_under(fa, path))
+    hit.and_then(|fa| cached_file_under(fa, path, rules))
 }
 
 fn archive_file_type(file_type: &str) -> bool {
@@ -1234,14 +1278,19 @@ pub(crate) fn file_analysis_cache_store(
     sha256: &str,
     file_type: &str,
     options: &AnalysisOptions,
+    settings: &Settings,
     fa: &FileAnalysis,
     report: &AnalysisReport,
     traits_revision: i64,
 ) {
-    if archive_file_type(file_type) || !complete_leaf_report(report) || yara_degraded() {
+    if archive_file_type(file_type)
+        || !complete_leaf_report(report)
+        || yara_degraded()
+        || evaluation_incomplete(report)
+    {
         return;
     }
-    let opts_hash = typed_options_hash(options, file_type);
+    let opts_hash = typed_options_hash(options, settings, file_type);
     if let Ok(bytes) = serde_json::to_vec(fa) {
         memo::put(
             memo::Kind::FileAnalysis,
@@ -1351,6 +1400,43 @@ fn evict_file_analysis_cache(conn: &Connection) {
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
+    /// The settings an `AnalysisOptions` free function keys its cache entries with.
+    fn settings_of(options: &AnalysisOptions) -> Settings {
+        crate::shared_resources::settings_for_options(options)
+    }
+
+    /// An engine's entries are keyed on what the engine was built with: the
+    /// engine-level fields of a call's options cannot file a report under a
+    /// configuration that did not produce it, and member folding separates
+    /// entries because it changes what a report retains.
+    #[test]
+    fn key_follows_engine_settings_not_call_options() {
+        let settings = Settings::default();
+        let a = AnalysisOptions::default();
+        let b = AnalysisOptions {
+            enable_third_party_yara: !a.enable_third_party_yara,
+            disable_upx: !a.disable_upx,
+            platforms: vec![crate::composite_rules::Platform::Linux],
+            ..AnalysisOptions::default()
+        };
+        assert_eq!(options_hash(&a, &settings), options_hash(&b, &settings));
+
+        let compact = Settings {
+            compact_members: true,
+            ..Settings::default()
+        };
+        assert_ne!(options_hash(&a, &settings), options_hash(&a, &compact));
+        let no_upx = Settings {
+            upx: false,
+            ..Settings::default()
+        };
+        assert_ne!(options_hash(&a, &settings), options_hash(&a, &no_upx));
+        let no_rizin = Settings {
+            radare2: false,
+            ..Settings::default()
+        };
+        assert_ne!(options_hash(&a, &settings), options_hash(&a, &no_rizin));
+    }
     use super::*;
     use crate::types::FileAnalysis;
     use crate::types::core::{AnalysisReport, TargetInfo};
@@ -1361,8 +1447,11 @@ mod tests {
     fn options_hash_covers_yara_overrides_and_zip_passwords() {
         use crate::yara_engine::YaraOverrides;
         let options = AnalysisOptions::default();
-        let base = options_hash_with(&options, YaraOverrides::default());
-        assert_eq!(base, options_hash_with(&options, YaraOverrides::default()));
+        let base = options_hash_with(&options, &settings_of(&options), YaraOverrides::default());
+        assert_eq!(
+            base,
+            options_hash_with(&options, &settings_of(&options), YaraOverrides::default())
+        );
         let skip = YaraOverrides {
             skip: true,
             ..Default::default()
@@ -1371,13 +1460,23 @@ mod tests {
             builtin_only: true,
             ..Default::default()
         };
-        assert_ne!(base, options_hash_with(&options, skip));
-        assert_ne!(base, options_hash_with(&options, builtin_only));
+        assert_ne!(
+            base,
+            options_hash_with(&options, &settings_of(&options), skip)
+        );
+        assert_ne!(
+            base,
+            options_hash_with(&options, &settings_of(&options), builtin_only)
+        );
         let mut with_password = options.clone();
         with_password.zip_passwords.push("hunter2".to_string());
         assert_ne!(
             base,
-            options_hash_with(&with_password, YaraOverrides::default())
+            options_hash_with(
+                &with_password,
+                &settings_of(&with_password),
+                YaraOverrides::default()
+            )
         );
     }
 
@@ -1435,11 +1534,39 @@ mod tests {
         for_cmd.target.path = "/t/sample.cmd".into();
         let mut for_bat = test_report(sha);
         for_bat.target.path = "/t/sample.bat".into();
-        report_cache_store(sha, &key_cmd, &opts, &for_cmd, revision);
-        report_cache_store(sha, &key_bat, &opts, &for_bat, revision);
+        report_cache_store(
+            sha,
+            &key_cmd,
+            &opts,
+            &settings_of(&opts),
+            &for_cmd,
+            revision,
+        );
+        report_cache_store(
+            sha,
+            &key_bat,
+            &opts,
+            &settings_of(&opts),
+            &for_bat,
+            revision,
+        );
 
-        let got_cmd = report_cache_lookup(sha, &key_cmd, &opts, "/t/sample.cmd");
-        let got_bat = report_cache_lookup(sha, &key_bat, &opts, "/t/sample.bat");
+        let got_cmd = report_cache_lookup(
+            sha,
+            &key_cmd,
+            &opts,
+            &settings_of(&opts),
+            "/t/sample.cmd",
+            None,
+        );
+        let got_bat = report_cache_lookup(
+            sha,
+            &key_bat,
+            &opts,
+            &settings_of(&opts),
+            "/t/sample.bat",
+            None,
+        );
         assert_eq!(
             got_cmd.map(|r| r.target.path).as_deref(),
             Some("/t/sample.cmd")
@@ -1450,6 +1577,40 @@ mod tests {
         );
     }
 
+    /// A report whose rule evaluation ran out of time lacks findings a run on
+    /// a quieter machine would have, so it must not be served to later runs —
+    /// nor a container holding such a member.
+    #[test]
+    fn evaluation_deadline_reports_are_not_cached() {
+        use crate::types::AnalysisGap::EvaluationDeadline;
+        let opts = AnalysisOptions::default();
+        let settings = settings_of(&opts);
+        let revision = ambient_traits_revision();
+        let lookup = |sha: &str, report: &AnalysisReport| {
+            report_cache_lookup(sha, "elf", &opts, &settings, &report.target.path, None)
+        };
+
+        let sha = "6e1d00de00000000000000000000000000000000000000000000000000000001";
+        let cut_short = test_report(sha);
+        cut_short.analysis_gaps.record(EvaluationDeadline);
+        report_cache_store(sha, "elf", &opts, &settings, &cut_short, revision);
+        assert!(lookup(sha, &cut_short).is_none());
+
+        let sha = "6e1d00de00000000000000000000000000000000000000000000000000000002";
+        let mut container = test_report(sha);
+        let member = FileAnalysis::new(1, "a.zip!!x.js".into(), "javascript".into(), sha.into(), 1);
+        member.analysis_gaps.record(EvaluationDeadline);
+        container.files.push(member);
+        report_cache_store(sha, "elf", &opts, &settings, &container, revision);
+        assert!(lookup(sha, &container).is_none());
+
+        // Control: the same report without the gap is cached.
+        let sha = "6e1d00de00000000000000000000000000000000000000000000000000000003";
+        let complete = test_report(sha);
+        report_cache_store(sha, "elf", &opts, &settings, &complete, revision);
+        assert!(lookup(sha, &complete).is_some());
+    }
+
     #[test]
     fn store_keys_on_the_traits_the_analysis_ran_under() {
         let ambient = ambient_traits_revision();
@@ -1458,10 +1619,25 @@ mod tests {
 
         let sha = "5d7b1f0e00000000000000000000000000000000000000000000000000000000";
         let opts = AnalysisOptions::default();
-        report_cache_store(sha, "elf", &opts, &test_report(sha), ran_under);
+        report_cache_store(
+            sha,
+            "elf",
+            &opts,
+            &settings_of(&opts),
+            &test_report(sha),
+            ran_under,
+        );
 
         assert!(
-            report_cache_lookup(sha, "elf", &opts, "/test/sample.bin").is_none(),
+            report_cache_lookup(
+                sha,
+                "elf",
+                &opts,
+                &settings_of(&opts),
+                "/test/sample.bin",
+                None
+            )
+            .is_none(),
             "a report evaluated under the pre-reload traits was served to a \
              caller running the post-reload traits"
         );
@@ -1520,15 +1696,15 @@ mod tests {
     fn cached_negative_results_require_an_origin() {
         let mut file = test_file_analysis("path-origin", "rust");
         file.path.clear();
-        assert!(cached_file_under(file.clone(), "build.rs").is_none());
+        assert!(cached_file_under(file.clone(), "build.rs", None).is_none());
         file.path = "build.rs".to_string();
-        assert!(cached_file_under(file, "build.rs").is_some());
+        assert!(cached_file_under(file, "build.rs", None).is_some());
 
         let mut report = test_report("path-origin");
         report.target.path.clear();
-        assert!(cached_report_under(report.clone(), "build.rs").is_none());
+        assert!(cached_report_under(report.clone(), "build.rs", None).is_none());
         report.target.path = "build.rs".to_string();
-        assert!(cached_report_under(report, "build.rs").is_some());
+        assert!(cached_report_under(report, "build.rs", None).is_some());
     }
 
     #[test]
@@ -1545,7 +1721,9 @@ mod tests {
                     &report.target.sha256,
                     kind,
                     &options,
-                    &report.target.path
+                    &settings_of(&options),
+                    &report.target.path,
+                    None
                 )
                 .is_none()
             );
@@ -1559,7 +1737,7 @@ mod tests {
         report
             .files
             .push(test_file_analysis("decoded-child", "javascript"));
-        let projected = report.to_file_analysis(0);
+        let projected = report.to_file_analysis(0, &crate::Engine::empty());
         let restored = crate::report_from_file_analysis(projected, "loader.js".to_string());
         // This is the lossy representation the old secondary cache accepted.
         assert_eq!(report.files.len(), 1);
@@ -1608,10 +1786,10 @@ mod tests {
     fn report_flight_shares_one_completed_report() {
         let sha = "single-flight-regression-unique";
         let options = AnalysisOptions::default();
-        let owner = acquire_report_flight(sha, "python", &options);
+        let owner = acquire_report_flight(sha, "python", &options, &settings_of(&options));
         assert!(owner.is_owner());
 
-        let follower = acquire_report_flight(sha, "python", &options);
+        let follower = acquire_report_flight(sha, "python", &options, &settings_of(&options));
         assert!(!follower.is_owner());
 
         let report = test_report(sha);
@@ -1625,9 +1803,12 @@ mod tests {
     #[test]
     fn report_flights_deduplicate_members_without_merging_hashes() {
         let options = AnalysisOptions::default();
-        let first = acquire_member_flight("member-sha-a", "python", &options);
-        let second = acquire_member_flight("member-sha-b", "python", &options);
-        let archive_peer = acquire_member_flight("member-sha-a", "python", &options);
+        let first =
+            acquire_member_flight("member-sha-a", "python", &options, &settings_of(&options));
+        let second =
+            acquire_member_flight("member-sha-b", "python", &options, &settings_of(&options));
+        let archive_peer =
+            acquire_member_flight("member-sha-a", "python", &options, &settings_of(&options));
 
         assert!(first.is_owner(), "first member hash owns its analysis");
         assert!(
@@ -1650,8 +1831,14 @@ mod tests {
     #[test]
     fn member_flights_do_not_merge_different_detected_types() {
         let options = AnalysisOptions::default();
-        let html = acquire_member_flight("same-member-sha", "html", &options);
-        let unknown = acquire_member_flight("same-member-sha", "unknown", &options);
+        let html =
+            acquire_member_flight("same-member-sha", "html", &options, &settings_of(&options));
+        let unknown = acquire_member_flight(
+            "same-member-sha",
+            "unknown",
+            &options,
+            &settings_of(&options),
+        );
 
         assert!(html.is_owner());
         assert!(
@@ -1666,7 +1853,12 @@ mod tests {
         use std::thread;
 
         let options = AnalysisOptions::default();
-        let owner = acquire_member_flight("shared-member-sha", "python", &options);
+        let owner = acquire_member_flight(
+            "shared-member-sha",
+            "python",
+            &options,
+            &settings_of(&options),
+        );
         assert!(owner.is_owner());
 
         let barrier = Arc::new(Barrier::new(2));
@@ -1675,8 +1867,12 @@ mod tests {
             let barrier_for_archive = Arc::clone(&barrier);
             let options_for_archive = options.clone();
             scope.spawn(move || {
-                let archive_peer =
-                    acquire_member_flight("shared-member-sha", "python", &options_for_archive);
+                let archive_peer = acquire_member_flight(
+                    "shared-member-sha",
+                    "python",
+                    &options_for_archive,
+                    &settings_of(&options_for_archive),
+                );
                 assert!(!archive_peer.is_owner());
                 barrier_for_archive.wait();
                 tx.send(archive_peer.wait().map(|report| report.target.sha256))
@@ -1715,7 +1911,8 @@ mod tests {
         let avoided_wait = pool.install(|| {
             let ((), avoided_wait) = rayon::join(
                 || {
-                    let owner = acquire_member_flight(sha, "python", &options);
+                    let owner =
+                        acquire_member_flight(sha, "python", &options, &settings_of(&options));
                     assert!(owner.is_owner());
                     ready.wait();
 
@@ -1727,7 +1924,8 @@ mod tests {
                 },
                 || {
                     ready.wait();
-                    let follower = acquire_member_flight(sha, "python", &options);
+                    let follower =
+                        acquire_member_flight(sha, "python", &options, &settings_of(&options));
                     assert!(!follower.is_owner());
                     follower.wait().map(|report| report.target.sha256)
                 },
@@ -1983,8 +2181,8 @@ mod tests {
     #[test]
     fn test_options_hash_deterministic() {
         let opts = AnalysisOptions::default();
-        let h1 = options_hash(&opts);
-        let h2 = options_hash(&opts);
+        let h1 = options_hash(&opts, &settings_of(&opts));
+        let h2 = options_hash(&opts, &settings_of(&opts));
         assert_eq!(h1, h2);
         assert_eq!(h1.len(), 16);
     }
@@ -1993,12 +2191,12 @@ mod tests {
     fn typed_options_hash_separates_path_dependent_file_types() {
         let opts = AnalysisOptions::default();
         assert_ne!(
-            typed_options_hash(&opts, "html"),
-            typed_options_hash(&opts, "unknown")
+            typed_options_hash(&opts, &settings_of(&opts), "html"),
+            typed_options_hash(&opts, &settings_of(&opts), "unknown")
         );
         assert_eq!(
-            typed_options_hash(&opts, "php"),
-            typed_options_hash(&opts, "php")
+            typed_options_hash(&opts, &settings_of(&opts), "php"),
+            typed_options_hash(&opts, &settings_of(&opts), "php")
         );
     }
 
@@ -2010,7 +2208,10 @@ mod tests {
             ..AnalysisOptions::default()
         };
 
-        assert_ne!(options_hash(&opts1), options_hash(&opts2));
+        assert_ne!(
+            options_hash(&opts1, &settings_of(&opts1)),
+            options_hash(&opts2, &settings_of(&opts2))
+        );
     }
 
     #[test]
@@ -2170,6 +2371,9 @@ mod tests {
             ..AnalysisOptions::default()
         };
 
-        assert_eq!(options_hash(&opts_without), options_hash(&opts_with));
+        assert_eq!(
+            options_hash(&opts_without, &settings_of(&opts_without)),
+            options_hash(&opts_with, &settings_of(&opts_with))
+        );
     }
 }

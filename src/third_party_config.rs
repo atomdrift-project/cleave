@@ -80,9 +80,13 @@ impl Config {
     }
 
     fn load() -> Self {
-        let config_path = crate::cache::third_party_path().join("config.yaml");
+        Self::load_from(&crate::cache::third_party_path().join("config.yaml"))
+    }
 
-        match std::fs::read_to_string(&config_path) {
+    /// Read the config at `config_path`, falling back to the defaults (with a
+    /// warning) when it is missing or does not parse.
+    fn load_from(config_path: &std::path::Path) -> Self {
+        match std::fs::read_to_string(config_path) {
             Ok(yaml) => match Self::from_yaml(&yaml) {
                 Ok(config) => config,
                 Err(e) => {
@@ -250,17 +254,38 @@ overrides:
         );
     }
 
+    /// The on-disk config is read and its `unless:` lists load. A fixture, not
+    /// the installed traits' config: which rules carry which `unless:` is rule
+    /// data that changes with every traits release.
     #[test]
-    fn test_workspace_third_party_unless_configuration_loads() {
-        let config = Config::load();
-        let release_member =
-            "well-known/tool/offensive/payload-corpus::payloadsallthethings-release-member";
+    fn test_third_party_unless_configuration_loads_from_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.yaml");
+        std::fs::write(
+            &path,
+            r#"
+default_crit: "hostile"
+overrides:
+  - id: third_party/SigBase/WEBSHELL/PHP/Generic/Eval
+    crit: "suspicious"
+    unless:
+      - well-known/tool/offensive/payload-corpus::release-member
+"#,
+        )
+        .unwrap();
+        let config = Config::load_from(&path);
+        let member = "well-known/tool/offensive/payload-corpus::release-member";
         assert_eq!(
-            config.suppressed_by_unless(
-                "third_party/SigBase/WEBSHELL/PHP/Generic/Eval",
-                &[release_member],
-            ),
-            Some(release_member.to_string())
+            config.suppressed_by_unless("third_party/SigBase/WEBSHELL/PHP/Generic/Eval", &[member]),
+            Some(member.to_string())
+        );
+
+        // A missing file falls back to the defaults rather than failing.
+        let missing = Config::load_from(&dir.path().join("absent.yaml"));
+        assert_eq!(
+            missing
+                .suppressed_by_unless("third_party/SigBase/WEBSHELL/PHP/Generic/Eval", &[member]),
+            None
         );
     }
 

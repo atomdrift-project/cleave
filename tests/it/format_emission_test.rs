@@ -315,10 +315,10 @@ fn lnk_emits_argument_whitespace_metrics() {
     assert_eq!(f["type"].as_str(), Some("lnk"));
     let m = metrics(&f);
     for key in [
-        "lnk.args_leading_spaces",
-        "lnk.args_leading_tabs",
-        "lnk.args_whitespace_total",
-        "lnk.args_max_whitespace_run",
+        "lnk.arguments_leading_spaces",
+        "lnk.arguments_leading_tabs",
+        "lnk.arguments_whitespace_count",
+        "lnk.arguments_max_whitespace_run",
     ] {
         assert!(m.contains_key(key), "missing LNK metric {key}");
     }

@@ -157,7 +157,7 @@ fn format_output(entries: &[KvEntry], target: &str, format: &cli::OutputFormat) 
 /// PNG, JAR, CHM, RPM, pyc, pickle, class, VSIX, source code, …)
 /// flows through this single helper.
 fn filefacts_values(path: &Path, content: &[u8]) -> Option<Value> {
-    let ctx = crate::analysis_context::AnalysisContext::open(path, content).ok()?;
+    let ctx = crate::analysis_context::AnalysisContext::open(path, content);
     let mut value = ctx.values_tree();
     if value.get("pe").is_some()
         && let Some(resource_data) = ctx.parsed.sections().iter().find_map(|section| {
@@ -199,9 +199,8 @@ fn extract_binary_kv_via_analyzer(path: &Path, content: &[u8]) -> Option<Value> 
     // `pe.*` / `elf.*` / `macho.*` come exclusively from filefacts
     // (single source of truth). `binary_extractors` augments with
     // `.comment` / sanitizer detections.
-    if let Ok(ctx) = crate::analysis_context::AnalysisContext::open(path, content)
-        && let Value::Object(map) = ctx.values_tree()
-    {
+    let ctx = crate::analysis_context::AnalysisContext::open(path, content);
+    if let Value::Object(map) = ctx.values_tree() {
         for (namespace, subtree) in map {
             report.merge_kv_subtree(&namespace, subtree);
         }

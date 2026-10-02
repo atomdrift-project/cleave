@@ -18,9 +18,7 @@ use stng::{ExtractedString, StringMethod};
 ///
 /// [`AnalysisContext`]: crate::analysis_context::AnalysisContext
 pub(crate) fn strings_from_filefacts(path: &std::path::Path, data: &[u8]) -> Vec<StringInfo> {
-    let Ok(ctx) = crate::analysis_context::AnalysisContext::open(path, data) else {
-        return Vec::new();
-    };
+    let ctx = crate::analysis_context::AnalysisContext::open(path, data);
     // Convert straight from the context's `text()` view — no intermediate Vec.
     let text = ctx.parsed.text();
     let mut strings = StringExtractor::new().convert_stng_iter(text.iter(), text.len());
@@ -528,7 +526,7 @@ mod tests {
     fn scpt_base64_literals_preserve_parent_and_cached_text() {
         let bytes = include_bytes!("../tests/fixtures/scpt-base64.scpt");
         let path = std::path::Path::new("base64.scpt");
-        let ctx = crate::analysis_context::AnalysisContext::open(path, bytes).unwrap();
+        let ctx = crate::analysis_context::AnalysisContext::open(path, bytes);
         let cached = ctx.text_rows();
         let rows = scpt_literal_strings(&ctx);
         assert!(std::sync::Arc::ptr_eq(&cached, &ctx.text_rows()));

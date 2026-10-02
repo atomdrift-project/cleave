@@ -2317,11 +2317,7 @@ impl Condition {
                         .err()
                         .map(|e| e.to_string())
                 };
-                if let Some(e) = crate::capabilities::validation::facts_cache::fact(
-                    "yara-parse",
-                    source,
-                    parse_error,
-                ) {
+                if let Some(e) = cached_fact("yara-parse", source, parse_error) {
                     anyhow::bail!("invalid YARA rule: {e}");
                 }
                 Ok(())
@@ -3080,13 +3076,22 @@ impl Condition {
     }
 }
 
+/// A verdict a full validation keeps across runs (see `facts_cache`); without
+/// the linter there is no validation run to keep it for, so it is computed.
+#[cfg(feature = "lint")]
+use crate::capabilities::validation::facts_cache::fact as cached_fact;
+#[cfg(not(feature = "lint"))]
+fn cached_fact<T>(_kind: &str, _input: &str, compute: impl FnOnce() -> T) -> T {
+    compute()
+}
+
 /// Why `pattern` does not compile, in `regex::Regex::new`'s words, or `None`
 /// when it does. Loading compiles only to validate -- `validate` and
 /// `precompile_regexes` both ask, of the same patterns -- so during a full
 /// validation the verdict is kept across runs (see `facts_cache`): an
 /// unchanged pattern is not recompiled, by either.
 fn regex_compile_error(pattern: &str) -> Option<String> {
-    crate::capabilities::validation::facts_cache::fact("regex-compile", pattern, || {
+    cached_fact("regex-compile", pattern, || {
         regex::Regex::new(pattern).err().map(|e| e.to_string())
     })
 }

@@ -18,31 +18,29 @@
 //!    actual code rather than the bare metadata count.
 
 use super::{AnalysisInput, Analyzer, FileType, analyzer_for_file_type_arc};
-use crate::capabilities::CapabilityMapper;
 use crate::types::{AnalysisReport, TargetInfo};
 use anyhow::Result;
 use sha2::{Digest, Sha256};
 use std::path::Path;
-use std::sync::Arc;
 
 /// PDF analyzer — defers extraction to filefacts and runs trait
 /// evaluation against the merged metric set.
 #[derive(Debug)]
 pub(crate) struct PdfAnalyzer {
-    capability_mapper: Arc<CapabilityMapper>,
+    engine: crate::Engine,
 }
 
 impl PdfAnalyzer {
     #[must_use]
     pub(crate) fn new() -> Self {
         Self {
-            capability_mapper: Arc::new(CapabilityMapper::empty()),
+            engine: crate::Engine::empty(),
         }
     }
 
     #[must_use]
-    pub(crate) fn with_capability_mapper_arc(mut self, mapper: Arc<CapabilityMapper>) -> Self {
-        self.capability_mapper = mapper;
+    pub(crate) fn with_engine(mut self, engine: crate::Engine) -> Self {
+        self.engine = engine;
         self
     }
 
@@ -65,8 +63,11 @@ impl PdfAnalyzer {
         // populates every `pdf.*` metric onto `report.filefacts_metrics`
         // and merges the structured kv view onto `report.values_tree`
         // for the trait engine.
-        let filefacts_ctx = crate::analysis_context::AnalysisContext::open(file_path, data).ok();
-        self.capability_mapper
+        let filefacts_ctx = Some(crate::analysis_context::AnalysisContext::open(
+            file_path, data,
+        ));
+        self.engine
+            .rules()
             .evaluate_and_merge_findings_with_precomputed(
                 &mut report,
                 data,
@@ -94,7 +95,7 @@ impl PdfAnalyzer {
         // Matches the office analyzer's pattern.
         let nested_findings: Vec<_> = report.findings[findings_before_subfiles..].to_vec();
         if !nested_findings.is_empty() {
-            let container_findings = self.capability_mapper.evaluate_container_composites(
+            let container_findings = self.engine.rules().evaluate_container_composites(
                 &report,
                 &nested_findings,
                 &report.target.file_type,
@@ -129,9 +130,7 @@ impl PdfAnalyzer {
             return;
         }
 
-        let Some(analyzer) =
-            analyzer_for_file_type_arc(&FileType::JavaScript, Some(self.capability_mapper.clone()))
-        else {
+        let Some(analyzer) = analyzer_for_file_type_arc(&FileType::JavaScript, &self.engine) else {
             tracing::warn!("JavaScript analyzer unavailable; skipping PDF JS sub-files");
             return;
         };
@@ -154,8 +153,10 @@ impl PdfAnalyzer {
             // filefacts is the string-extraction authority and the source
             // parser: open the JS payload once and thread it into the sub-file
             // analyzer so it is parsed a single time.
-            let js_ctx =
-                crate::analysis_context::AnalysisContext::open(virtual_path, js_bytes).ok();
+            let js_ctx = Some(crate::analysis_context::AnalysisContext::open(
+                virtual_path,
+                js_bytes,
+            ));
             let strings: std::sync::Arc<[stng::ExtractedString]> = js_ctx
                 .as_ref()
                 .map(crate::analysis_context::AnalysisContext::text_rows)
@@ -174,6 +175,7 @@ impl PdfAnalyzer {
                     FileType::JavaScript,
                     &member_path,
                     &virtual_path_str,
+                    &self.engine,
                 ),
                 Err(e) => {
                     tracing::warn!(

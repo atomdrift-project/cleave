@@ -96,9 +96,6 @@ pub(crate) fn apply_runtime_overrides(
         cleave::traits_repo::set_override_dir(Some(std::path::PathBuf::from(traits_dir)));
     }
 
-    if disabled.radare2 {
-        filefacts::rizin::disable();
-    }
     if disabled.upx {
         cleave::disable_upx();
     }

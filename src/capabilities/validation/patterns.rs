@@ -1609,9 +1609,11 @@ pub(crate) fn find_uncompilable_ast_queries(
                     let compile =
                         || filefacts::validate_source_query(lang, query).map_err(|e| e.to_string());
                     match &facts {
+                        // `-v2`: filefacts 2 reworded these errors, and a
+                        // verdict cached by an older build carries the old text.
                         Some(facts) => facts.get_or_compute(
                             super::facts_cache::key(
-                                "ast-query",
+                                "ast-query-v2",
                                 &[lang.as_bytes(), query.as_bytes()],
                             ),
                             compile,

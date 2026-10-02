@@ -228,10 +228,15 @@ impl super::CapabilityMapper {
         }
         Some(index.find_matches_detailed(binary_data, file_type, record_offsets))
     }
-    /// Evaluate all rules (atomic traits + composite rules) and merge findings into the report.
-    /// This is the correct, foolproof way to evaluate traits that ensures evidence propagates
-    /// from atomic traits to composite rules. Analyzers should use this method instead of
-    /// calling evaluate_traits() and evaluate_composite_rules() separately.
+    /// Evaluate all rules (atomic traits + composite rules) against `binary_data`
+    /// and merge the findings into `report`, so evidence propagates from atomic
+    /// traits to the composite rules built on them.
+    ///
+    /// This is the standalone entry point for a mapper used without an
+    /// [`crate::Engine`]: it parses `binary_data` itself with filefacts'
+    /// default options, so a native binary is disassembled with rizin whatever
+    /// any engine's settings say. Analyses run through an engine pass the
+    /// engine's parse instead.
     ///
     /// Platform filtering is controlled by the `platform` field set via `with_platform()`.
     /// Default is `Platform::All` which matches all rules regardless of platform.
@@ -240,19 +245,8 @@ impl super::CapabilityMapper {
     /// * `report` - Mutable reference to the analysis report to merge findings into
     /// * `binary_data` - Raw file data for content-based matching
     /// * `cached_ast` - Optional cached tree-sitter AST for performance
-    ///
-    /// Evaluate all traits and composite rules and merge findings into the report.
-    ///
-    /// `inline_yara` supplies pre-scanned results from the combined YARA engine (keyed by
-    /// `"inline.{trait_id}"`). Pass `None` when YARA is disabled or when called outside
-    /// of a binary analysis context.
-    ///
-    /// # Example
-    /// ```ignore
-    /// // In an analyzer, after scanning:
-    /// let (yara_matches, inline_yara) = engine.scan_bytes_with_inline(data, filter)?;
-    /// self.capability_mapper.evaluate_and_merge_findings(&mut report, data, None, Some(&inline_yara));
-    /// ```
+    /// * `inline_yara` - Pre-scanned results from the combined YARA engine (keyed by
+    ///   `"inline.{trait_id}"`); `None` when YARA is disabled
     pub fn evaluate_and_merge_findings(
         &self,
         report: &mut AnalysisReport,

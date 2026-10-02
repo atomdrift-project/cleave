@@ -122,7 +122,7 @@ Byte-anchored file→target edges (consumed by prism's galaxy view):
 | ---- | ---- | ------- |
 | `to` | string | Locator: a PURL/URL for an external target, or the raw specifier (e.g. `./util`) for an internal one. |
 | `kind` | string | `dependency`, `command`, `url_fetch`, `repository`, … |
-| `off` | u64 | Byte offset of the reference — the citation anchor. |
+| `off` | u64 | Byte offset of the reference — the citation anchor. Absent when filefacts could not place the reference. |
 | `file` | u32 | When the reference resolves to another file in this bundle, that file's `id` (the intra-bundle file→file edge). Absent for external targets. |
 
 Local references resolve to sibling members via

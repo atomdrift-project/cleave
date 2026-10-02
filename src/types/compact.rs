@@ -312,10 +312,10 @@ pub struct CompactRef {
     pub locator: String,
     /// Coarse kind: `dependency`, `command`, `url_fetch`, `repository`, ….
     pub kind: String,
-    /// Byte offset of the reference in this file — the citation anchor; `0`
-    /// when filefacts could not place it.
-    #[serde(rename = "off")]
-    pub offset: u64,
+    /// Byte offset of the reference in this file — the citation anchor.
+    /// Absent when filefacts could not place it.
+    #[serde(rename = "off", default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<u64>,
     /// When the reference resolves to another file in this bundle, that file's
     /// `files[]` id — the intra-bundle (file→file) edge. Absent for external
     /// references.
@@ -984,7 +984,7 @@ fn convert_file(file: &super::file_analysis::FileAnalysis, id: u32) -> CompactFi
                     Some(CompactRef {
                         locator,
                         kind: ref_kind_str(r.kind).to_string(),
-                        offset: r.offset.unwrap_or(0),
+                        offset: r.offset,
                         // External today; intra-bundle resolution (prism's job for
                         // now) will fill this when it moves into cleave.
                         target_file: None,

@@ -2535,7 +2535,7 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     // infector body sits: a .COM, an untyped dump (`data`), a `.a`-named copy
     // (`static-lib`), or a batch/COM polyglot. Per-type twins of one hex
     // pattern are what the scope-twin check rejects, so the cap yields here.
-    "hex:objectives/impact/infect/binary/dos/com-bytes/interrupt/",
+    "hex:objectives/impact/infect/binary/dos/interrupt/",
     // IP addresses and port numbers are embedded in binaries, scripts, manifests, docs
     "text:micro-behaviors/communications/ip/",
     // URLs and URL fragments appear in any file type

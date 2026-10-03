@@ -58,10 +58,9 @@ use crate::capabilities::validation::{
     find_regex_literal_overlap_issues, find_scope_without_valid_container,
     find_self_referencing_composites, find_self_referencing_traits, find_self_suppressing_traits,
     find_short_pattern_warnings, find_should_use_defaults, find_sibling_name_restatement,
-    find_single_item_clauses, find_slow_regex_patterns, find_sparse_sibling_cohorts,
-    find_stale_filetype_allowlist_entries, find_string_content_collisions,
-    find_string_literal_should_use_text, find_string_pattern_duplicates,
-    find_structural_regex_duplicates, find_subsumed_required_legs,
+    find_single_item_clauses, find_slow_regex_patterns, find_stale_filetype_allowlist_entries,
+    find_string_content_collisions, find_string_literal_should_use_text,
+    find_string_pattern_duplicates, find_structural_regex_duplicates, find_subsumed_required_legs,
     find_suppression_only_building_blocks, find_too_short_patterns,
     find_unanchored_wellknown_composites, find_uncallable_symbol_matchers,
     find_uncompilable_ast_queries, find_unreferenced_exceptions,
@@ -2118,19 +2117,28 @@ impl super::CapabilityMapper {
                     ));
                 }
 
-                // Shared spelling suggests review, not semantic equivalence:
-                // account/accounting can describe distinct subjects. Like sparse
-                // cohorts, this heuristic must not enter the fatal warning set.
+                // Shared spelling is a soft warning, not proof of equivalence:
+                // account/accounting can describe distinct subjects.
                 let restated = find_sibling_name_restatement(&dir_list);
-                if !restated.is_empty() {
+                if !restated.is_empty()
+                    && !crate::validation_controls::is_validator_disabled("sibling-restate")
+                {
+                    warnings.push_count(
+                        "sibling-restate",
+                        restated.len(),
+                        format!(
+                            "{} sibling directory pairs share a name stem",
+                            restated.len()
+                        ),
+                    );
                     eprintln!(
-                        "\n⚠️ TAXONOMY REVIEW: {} sibling directory pairs share a name stem",
+                        "\n⚠️ SOFT WARNING: {} sibling directory pairs share a name stem",
                         restated.len()
                     );
                     eprintln!(
                         "   Review admission criteria: merge synonyms or nest genuine refinements.\n   \
                      Shared spelling alone does not prove identical meaning; retain distinct\n   \
-                     subjects with documented boundaries. This advisory does not block validation.\n"
+                     subjects with documented boundaries.\n"
                     );
                     for (parent, short, long) in &restated {
                         eprintln!("   {parent}/  {short}  vs  {long}");
@@ -2183,48 +2191,32 @@ impl super::CapabilityMapper {
                     ));
                 }
 
-                // Depth and sparse branching are advisory precision signals. Do not
-                // add them to `warnings`, which collects blocking validation issues.
+                // Depth is a soft warning only when a path grows beyond the
+                // known technique refinements in the current taxonomy.
                 let deep_dirs = find_deep_taxonomy_directories(&dir_list);
-                if !deep_dirs.is_empty() {
+                if !deep_dirs.is_empty()
+                    && !crate::validation_controls::is_validator_disabled("deep-taxonomy")
+                {
+                    warnings.push_count(
+                        "deep-taxonomy",
+                        deep_dirs.len(),
+                        format!(
+                            "{} directories exceed depth {} below the tier",
+                            deep_dirs.len(),
+                            TAXONOMY_DEPTH_REVIEW_THRESHOLD
+                        ),
+                    );
                     eprintln!(
-                        "\n⚠️ TAXONOMY REVIEW: {} directories exceed depth {} below the tier",
+                        "\n⚠️ SOFT WARNING: {} directories exceed depth {} below the tier",
                         deep_dirs.len(),
                         TAXONOMY_DEPTH_REVIEW_THRESHOLD
                     );
-                    eprintln!(
-                        "   Count directory levels only, excluding the tier and filename. This is a non-blocking warning."
-                    );
+                    eprintln!("   Count directory levels only, excluding the tier and filename.");
                     eprintln!(
                         "   Prefer breadth when precision is unchanged; retain deeper subtechniques when justified."
                     );
                     for (directory, depth) in &deep_dirs {
                         eprintln!("   {directory} (depth {depth})");
-                    }
-                }
-
-                // A small combined sibling cohort has little cap
-                // pressure to justify extra branching, but only a human can decide
-                // whether flattening would merge distinct techniques.
-                tracing::trace!("Step 6/15: Checking sparse taxonomy sibling cohorts");
-                let mut direct_rule_counts: HashMap<String, usize> = HashMap::new();
-                for id in rule_source_files.keys() {
-                    let Some((directory, _)) = id.split_once("::") else {
-                        continue;
-                    };
-                    *direct_rule_counts.entry(directory.to_string()).or_default() += 1;
-                }
-                let sparse_cohorts = find_sparse_sibling_cohorts(&direct_rule_counts);
-                if !sparse_cohorts.is_empty() {
-                    eprintln!(
-                        "\n⚠️ TAXONOMY REVIEW: {} sibling groups contain fewer than 35 combined rules",
-                        sparse_cohorts.len()
-                    );
-                    eprintln!(
-                        "   Consider whether broader sibling placement would preserve precision; this is advisory, not a depth violation."
-                    );
-                    for (parent, rules, children) in &sparse_cohorts {
-                        eprintln!("   {parent} ({children} sibling branches, {rules} rules)");
                     }
                 }
 
@@ -3356,14 +3348,21 @@ impl super::CapabilityMapper {
                 ));
                 }
 
-                // Platform breadth is a review heuristic, not proof of invalid
-                // placement. Do not add it to the blocking validation issues.
+                // Platform breadth is a soft warning, not proof of invalid placement.
                 tracing::trace!("Reviewing platform scope (4+ effective platforms)");
                 if !crate::validation_controls::is_validator_disabled("broad-platform-scope")
                     && !broad_plat.is_empty()
                 {
+                    warnings.push_count(
+                        "broad-platform-scope",
+                        broad_plat.len(),
+                        format!(
+                            "{} atomic traits declare four or more platforms",
+                            broad_plat.len()
+                        ),
+                    );
                     eprintln!(
-                        "\n⚠️ SCOPE REVIEW: {} atomic traits declare four or more platforms",
+                        "\n⚠️ SOFT WARNING: {} atomic traits declare four or more platforms",
                         broad_plat.len()
                     );
                     eprintln!(
@@ -3372,14 +3371,8 @@ impl super::CapabilityMapper {
                     eprintln!(
                         "   Preserve justified coverage; do not duplicate rules or move them to satisfy a count."
                     );
-                    for (trait_id, source_file, count) in broad_plat.iter().take(20) {
+                    for (trait_id, source_file, count) in &broad_plat {
                         eprintln!("   {source_file}: '{trait_id}' ({count} platforms)");
-                    }
-                    if broad_plat.len() > 20 {
-                        eprintln!(
-                            "   ... and {} more review candidates",
-                            broad_plat.len() - 20
-                        );
                     }
                 }
 
@@ -3605,14 +3598,23 @@ impl super::CapabilityMapper {
                     );
                 }
 
-                // Non-fatal: `any:` branches that `for:` makes unreachable while a
-                // sibling branch keeps the rule alive. Summarised by default (the
+                // Soft warning: `any:` branches that `for:` makes unreachable
+                // while a sibling branch keeps the rule alive. Summarised by default (the
                 // corpus has a backlog); `CLEAVE_WARN_DEAD_ANY=1` lists them.
                 if let Some(dead_any) = dead_any_alternatives
                     && !dead_any.is_empty()
                 {
                     let rules: std::collections::BTreeSet<&str> =
                         dead_any.iter().map(|l| l.id.as_str()).collect();
+                    warnings.push_count(
+                        "dead-any-alternative",
+                        dead_any.len(),
+                        format!(
+                            "{} any: alternatives in {} pooling composites are unreachable",
+                            dead_any.len(),
+                            rules.len()
+                        ),
+                    );
                     eprintln!(
                         "\n\u{26a0}\u{fe0f}  WARNING: {} any: alternatives in {} pooling composites come from file types the rule does not declare (that branch can never fire); CLEAVE_WARN_DEAD_ANY=1 lists them",
                         dead_any.len(),
@@ -3852,18 +3854,28 @@ impl super::CapabilityMapper {
                 ));
                 }
 
-                // Recommend section filters for metadata/ binary-targeting traits
+                // Soft warning for metadata/ binary-targeting traits without a section filter.
                 tracing::trace!("Checking metadata/ binary traits for missing section filters");
-                if !disable_binary_section_filter_validation && !meta_no_section.is_empty() {
+                if !crate::validation_controls::is_validator_disabled("metadata-binary-section")
+                    && !meta_no_section.is_empty()
+                {
+                    warnings.push_count(
+                        "metadata-binary-section",
+                        meta_no_section.len(),
+                        format!(
+                            "{} metadata/ binary traits lack a section filter",
+                            meta_no_section.len()
+                        ),
+                    );
                     eprintln!(
-                        "\n⚠️  REVIEW: {} metadata/ binary traits lack a section filter",
+                        "\n⚠️  SOFT WARNING: {} metadata/ binary traits lack a section filter",
                         meta_no_section.len()
                     );
                     eprintln!(
                         "   Add a section filter when location is part of the metadata claim."
                     );
                     eprintln!(
-                        "   File-wide vocabulary or properties may legitimately match across sections; this is advisory.\n"
+                        "   File-wide vocabulary or properties may legitimately match across sections.\n"
                     );
                     for (trait_id, source_file) in &meta_no_section {
                         eprintln!("   {}: Trait '{}'", source_file, trait_id);

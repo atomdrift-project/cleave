@@ -169,7 +169,7 @@ pub(crate) use taxonomy::{
     find_metadata_content_dirs, find_metadata_cross_tier_refs,
     find_objectives_wellknown_violations, find_oversized_trait_directories,
     find_parent_duplicate_segments, find_permuted_directory_paths, find_platform_named_directories,
-    find_redundant_unix_platforms, find_sibling_name_restatement, find_sparse_sibling_cohorts,
+    find_redundant_unix_platforms, find_sibling_name_restatement,
     find_stale_filetype_allowlist_entries, find_suppression_only_building_blocks,
     find_unanchored_wellknown_composites, find_unreferenced_exceptions,
     find_wellknown_category_violations, find_wellknown_missing_section_filter,

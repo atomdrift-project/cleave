@@ -147,49 +147,53 @@ pub(crate) fn crx_zip_offset(data: &[u8]) -> Result<usize> {
     Ok(zip_offset)
 }
 
-/// Read a ZIP member from filefacts central-directory offsets.
-pub(crate) fn read_indexed_zip_member(
+/// Read an archive member from the offsets filefacts indexed for it (a ZIP
+/// central directory, a phar manifest): the `[data_offset, +compressed_size)`
+/// slice, decompressed by its method and capped at `limit` bytes.
+pub(crate) fn read_indexed_member(
     data: &[u8],
     entry: &ArchiveEntry,
     limit: u64,
 ) -> Result<Vec<u8>> {
     let data_offset = entry
         .data_offset
-        .ok_or_else(|| anyhow::anyhow!("missing ZIP data offset"))?;
+        .ok_or_else(|| anyhow::anyhow!("missing member data offset"))?;
     let compressed_size = entry
         .compressed_size
-        .ok_or_else(|| anyhow::anyhow!("missing ZIP compressed size"))?;
-    let start =
-        usize::try_from(data_offset).map_err(|e| anyhow::anyhow!("ZIP offset too large: {e}"))?;
+        .ok_or_else(|| anyhow::anyhow!("missing member compressed size"))?;
+    let start = usize::try_from(data_offset)
+        .map_err(|e| anyhow::anyhow!("member offset too large: {e}"))?;
     let compressed_len = usize::try_from(compressed_size)
-        .map_err(|e| anyhow::anyhow!("ZIP compressed size too large: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("member compressed size too large: {e}"))?;
     let end = start
         .checked_add(compressed_len)
-        .ok_or_else(|| anyhow::anyhow!("ZIP member range overflow"))?;
+        .ok_or_else(|| anyhow::anyhow!("member range overflow"))?;
     if end > data.len() {
-        anyhow::bail!("ZIP member range exceeds archive size");
+        anyhow::bail!("member range exceeds archive size");
     }
 
     let compressed = &data[start..end];
+    let inflate = |decoder: &mut dyn Read| -> Result<Vec<u8>> {
+        let mut limited = LimitedReader::new(decoder, limit);
+        let mut out = Vec::with_capacity(entry.size_bytes.min(16 * 1024 * 1024) as usize);
+        limited.read_to_end(&mut out)?;
+        if limited.is_limited() {
+            anyhow::bail!("compressed member exceeds read limit");
+        }
+        Ok(out)
+    };
     match entry.compression_method.as_deref() {
         Some("stored") => {
             if compressed.len() as u64 > limit {
-                anyhow::bail!("ZIP stored member exceeds read limit");
+                anyhow::bail!("stored member exceeds read limit");
             }
             Ok(compressed.to_vec())
         }
-        Some("deflate") => {
-            let mut decoder = flate2::read::DeflateDecoder::new(compressed);
-            let mut limited = LimitedReader::new(&mut decoder, limit);
-            let mut out = Vec::with_capacity(entry.size_bytes.min(16 * 1024 * 1024) as usize);
-            limited.read_to_end(&mut out)?;
-            if limited.is_limited() {
-                anyhow::bail!("ZIP deflated member exceeds read limit");
-            }
-            Ok(out)
-        }
-        Some(method) => anyhow::bail!("unsupported indexed ZIP compression method: {method}"),
-        None => anyhow::bail!("missing ZIP compression method"),
+        // Raw deflate, no zlib header: ZIP and phar both store it this way.
+        Some("deflate") => inflate(&mut flate2::read::DeflateDecoder::new(compressed)),
+        Some("bzip2") => inflate(&mut bzip2::read::BzDecoder::new(compressed)),
+        Some(method) => anyhow::bail!("unsupported indexed compression method: {method}"),
+        None => anyhow::bail!("missing member compression method"),
     }
 }
 

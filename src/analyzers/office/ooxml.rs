@@ -211,7 +211,7 @@ impl OoxmlEntryReader for IndexedZipReader<'_> {
         if entry.size_bytes > OOXML_ENTRY_READ_LIMIT {
             return None;
         }
-        crate::analyzers::archive::zip::read_indexed_zip_member(
+        crate::analyzers::archive::zip::read_indexed_member(
             self.data,
             entry,
             OOXML_ENTRY_READ_LIMIT,

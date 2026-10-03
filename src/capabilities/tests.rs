@@ -1026,6 +1026,7 @@ fn test_iterative_eval_single_pass() {
         &SectionMap::default(),
         None,
         None,
+        &[],
     );
     assert!(findings.is_empty()); // Empty mapper returns no findings
 }
@@ -1045,6 +1046,7 @@ fn test_iterative_eval_max_iterations_protection() {
         &SectionMap::default(),
         None,
         None,
+        &[],
     );
     let elapsed = start.elapsed();
 
@@ -1100,6 +1102,7 @@ fn test_composite_referencing_atomic_trait() {
         &SectionMap::default(),
         None,
         None,
+        &[],
     );
     assert_eq!(findings.len(), 1);
     assert_eq!(findings[0].id, "test/composite");
@@ -1183,6 +1186,7 @@ fn test_composite_of_composites_two_levels() {
         &SectionMap::default(),
         None,
         None,
+        &[],
     );
 
     // Both composites should be found due to iterative evaluation
@@ -1246,6 +1250,7 @@ fn test_composite_three_level_chain() {
         &SectionMap::default(),
         None,
         None,
+        &[],
     );
 
     assert_eq!(findings.len(), 3);
@@ -1334,6 +1339,7 @@ fn test_composite_circular_dependency_handled() {
         &SectionMap::default(),
         None,
         None,
+        &[],
     );
     let elapsed = start.elapsed();
 
@@ -1388,6 +1394,7 @@ fn test_composite_prefix_matching_in_chain() {
         &SectionMap::default(),
         None,
         None,
+        &[],
     );
     assert_eq!(findings.len(), 1);
     assert_eq!(findings[0].id, "test/uses-discovery");
@@ -1445,6 +1452,7 @@ fn test_composite_requires_count_in_chain() {
         &SectionMap::default(),
         None,
         None,
+        &[],
     );
     assert_eq!(findings.len(), 1);
     assert_eq!(findings[0].id, "test/needs-two");

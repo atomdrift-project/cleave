@@ -407,6 +407,7 @@ fn test_evaluate_composite_rules_empty() {
         &SectionMap::default(),
         None,
         None,
+        &[],
     );
     assert_eq!(findings.len(), 0);
 }
@@ -1196,6 +1197,184 @@ composite_rules:
     assert!(
         !fired("test/late-unless::profile"),
         "the profile must be removed when retroactive suppression leaves its `any:` quorum unsatisfied"
+    );
+}
+
+/// An `any:` composite cites only the legs of the fixed-point round it first
+/// matched in. When that leg is suppressed, an alternative that matched a
+/// round later still satisfies it: the composite stays and cites that leg.
+#[test]
+fn test_retroactive_unless_suppression_keeps_composites_satisfied_by_a_later_leg() {
+    let yaml = r#"
+defaults:
+  for: [binaries, scripts, source, manifests, documents, media, data, archives]
+
+traits:
+  - id: "test/late::early-signal"
+    desc: "Signal present from the first round"
+    crit: notable
+    if:
+      type: text
+      substr: "EARLY_SIGNAL"
+    unless:
+      - id: test/late::suppressor
+
+  - id: "test/late::base"
+    desc: "Atom under a two-step composite chain"
+    crit: notable
+    if:
+      type: text
+      substr: "BASE_SIGNAL"
+
+  - id: "test/late::pack-a"
+    desc: "Suppressor part A"
+    crit: baseline
+    if:
+      type: text
+      substr: "PACK_A"
+
+  - id: "test/late::pack-b"
+    desc: "Suppressor part B"
+    crit: baseline
+    if:
+      type: text
+      substr: "PACK_B"
+
+composite_rules:
+  - id: "test/late::step-one"
+    desc: "First step, matches in round one"
+    crit: notable
+    all:
+      - id: test/late::base
+
+  - id: "test/late::step-two"
+    desc: "Second step, matches in round two"
+    crit: notable
+    all:
+      - id: test/late::step-one
+
+  - id: "test/late::aggregate"
+    desc: "Either signal"
+    crit: suspicious
+    any:
+      - id: test/late::early-signal
+      - id: test/late::step-two
+
+  - id: "test/late::suppressor"
+    desc: "Suppressor assembled after atomic evaluation"
+    crit: notable
+    all:
+      - id: test/late::pack-a
+      - id: test/late::pack-b
+"#;
+    let (_dir, path) = create_test_yaml(yaml);
+    let mapper = CapabilityMapper::from_yaml(&path).unwrap();
+
+    let binary_data = b"EARLY_SIGNAL BASE_SIGNAL PACK_A PACK_B";
+    let mut report = create_test_report_with_size(binary_data.len() as u64);
+    for value in ["EARLY_SIGNAL", "BASE_SIGNAL", "PACK_A", "PACK_B"] {
+        report.strings.push(crate::types::StringInfo {
+            value: value.to_string().into(),
+            offset: Some(0),
+            encoding: "ascii".to_string(),
+            string_type: None,
+            section: None,
+            encoding_chain: Vec::new(),
+            fragments: None,
+        });
+    }
+
+    mapper.evaluate_and_merge_findings(&mut report, binary_data, None, None);
+
+    let fired = |id: &str| report.findings.iter().any(|f| f.id == id);
+    assert!(
+        !fired("test/late::early-signal"),
+        "the early leg is suppressed"
+    );
+    assert!(fired("test/late::step-two"));
+    let aggregate = report
+        .findings
+        .iter()
+        .find(|f| f.id == "test/late::aggregate")
+        .expect("the later `any:` leg still satisfies the aggregate");
+    assert_eq!(
+        aggregate
+            .trait_refs
+            .iter()
+            .map(crate::types::Istr::as_str)
+            .collect::<Vec<_>>(),
+        ["test/late::step-two"],
+        "the aggregate cites the leg that now holds it"
+    );
+}
+
+/// A COM image has no header, so a short one can be left `unknown` by
+/// identification. A small `.com` like that is evaluated as `dos_com`, so the
+/// DOS rules -- keyed by `for:`, not by where their YAML lives -- read it.
+#[test]
+fn test_unidentified_small_com_is_evaluated_as_dos_com() {
+    use crate::composite_rules::FileType as RuleFileType;
+    use crate::types::TargetInfo;
+
+    let yaml = r#"
+traits:
+  - id: "test/dos::file-mask"
+    desc: "DOS COM file search mask"
+    crit: notable
+    for: [dos_com]
+    if:
+      type: text
+      substr: "*.COM"
+"#;
+    let (_dir, path) = create_test_yaml(yaml);
+    let mapper = CapabilityMapper::from_yaml(&path).unwrap();
+    let report_for = |path: &str, file_type: &str, size: usize| {
+        AnalysisReport::new(TargetInfo {
+            path: path.to_string(),
+            file_type: file_type.to_string(),
+            size_bytes: size as u64,
+            sha256: String::new(),
+            architectures: None,
+        })
+    };
+
+    let small = report_for("VIRUS.COM", "unknown", 64);
+    assert_eq!(
+        mapper.evaluation_file_type(&small, 64),
+        RuleFileType::DosCom
+    );
+    for (path, file_type, size) in [
+        ("virus.com", "unknown", 8192),
+        ("virus.exe", "unknown", 64),
+        ("virus.com", "text", 64),
+    ] {
+        let report = report_for(path, file_type, size);
+        assert_ne!(
+            mapper.evaluation_file_type(&report, size),
+            RuleFileType::DosCom,
+            "{path} {file_type} {size}"
+        );
+    }
+
+    let data = b"\xb4\x4e\xcd\x21*.COM\x00";
+    let mut report = report_for("virus.com", "unknown", data.len());
+    report.strings.push(crate::types::StringInfo {
+        value: "*.COM".to_string().into(),
+        offset: Some(4),
+        encoding: "ascii".to_string(),
+        string_type: None,
+        section: None,
+        encoding_chain: Vec::new(),
+        fragments: None,
+    });
+    mapper.evaluate_and_merge_findings(&mut report, data, None, None);
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|f| f.id == "test/dos::file-mask"),
+        "{:?}",
+        report.findings.iter().map(|f| &f.id).collect::<Vec<_>>()
     );
 }
 
@@ -2528,5 +2707,185 @@ fn doomed_skip_does_not_create_sibling_rescued_copy() {
     assert!(
         a_ids.iter().any(|id| id.ends_with("::both")),
         "file A composite must survive: {a_ids:?}"
+    );
+}
+
+// ==================== decoded-layer composites ====================
+
+/// A JS-only composite whose only leg is found in a decoded layer, and a
+/// composite the layer can fire itself.
+const LAYER_RULES: &str = r#"
+traits:
+  - id: "test/layer::fetch-call"
+    desc: "fetch() call"
+    crit: notable
+    for: [all]
+    if:
+      type: text
+      substr: "marker_never_in_the_parent"
+composite_rules:
+  - id: "test/layer::js-fetch"
+    desc: "JavaScript calls fetch()"
+    crit: notable
+    for: [javascript]
+    any:
+      - id: "test/layer::fetch-call"
+"#;
+
+fn layer_record(path: &str, ids: &[&str]) -> crate::types::FileAnalysis {
+    let mut layer =
+        crate::types::FileAnalysis::new(1, path.to_string(), "text".into(), "def456".into(), 64);
+    layer.findings = ids
+        .iter()
+        .map(|id| crate::types::Finding {
+            precomputed_spans: None,
+            src: None,
+            id: (*id).to_string().into(),
+            kind: crate::types::FindingKind::Capability,
+            desc: format!("layer finding {id}").into(),
+            conf: 0.9,
+            crit: Criticality::Notable,
+            mbc: None,
+            attack: None,
+            trait_refs: vec![],
+            evidence: vec![],
+            match_count: 0,
+            source_file: None,
+            downgraded: false,
+        })
+        .collect();
+    layer
+}
+
+fn evaluate_with_layer(layer: crate::types::FileAnalysis) -> Vec<String> {
+    let (_dir, path) = create_test_yaml(LAYER_RULES);
+    let mapper = CapabilityMapper::from_yaml(&path).unwrap();
+    let source = b"function boot() { return new Function(s)(); }";
+    let mut report = create_test_source_report("app.js", "javascript", source.len() as u64);
+    report.files.push(layer);
+    mapper.evaluate_and_merge_findings(&mut report, source, None, None);
+    report.findings.iter().map(|f| f.id.to_string()).collect()
+}
+
+/// A decoded layer is part of the file that carries it: a composite gated on
+/// the file's type fires from a leg found only in the layer, which analyzed on
+/// its own is not of that type. The leg itself stays the layer's finding.
+#[test]
+fn file_composites_take_legs_from_its_decoded_layers() {
+    let ids = evaluate_with_layer(layer_record(
+        "app.js##unicode-escape@62",
+        &["test/layer::fetch-call"],
+    ));
+    assert!(ids.iter().any(|id| id == "test/layer::js-fetch"), "{ids:?}");
+    assert!(
+        !ids.iter().any(|id| id == "test/layer::fetch-call"),
+        "the layer's own finding is not re-emitted on the parent: {ids:?}"
+    );
+}
+
+/// Only the file's own `##` records count: another file's layer, or a record
+/// that merely shares a name prefix, is not part of it.
+#[test]
+fn file_composites_ignore_other_files_layers() {
+    for path in [
+        "other.js##unicode-escape@62",
+        "app.json##base64@0",
+        "app.js!!inner.js",
+    ] {
+        let ids = evaluate_with_layer(layer_record(path, &["test/layer::fetch-call"]));
+        assert!(
+            !ids.iter().any(|id| id == "test/layer::js-fetch"),
+            "{path} leaked into app.js: {ids:?}"
+        );
+    }
+}
+
+/// A composite the layer already fired is not fired again on the parent:
+/// inheritance brings the layer's copy up in finalize.
+#[test]
+fn file_composites_do_not_repeat_a_layers_own() {
+    let ids = evaluate_with_layer(layer_record(
+        "app.js##unicode-escape@62",
+        &["test/layer::fetch-call", "test/layer::js-fetch"],
+    ));
+    assert!(
+        !ids.iter().any(|id| id == "test/layer::js-fetch"),
+        "{ids:?}"
+    );
+}
+
+/// Layer findings are context for the parent's composites, not the parent's
+/// own: a layer composite the parent's evidence would demote is not
+/// re-judged there, so the parent records no suppression of it.
+#[test]
+fn file_composites_do_not_rejudge_a_layers_downgrades() {
+    let yaml = r#"
+traits:
+  - id: "test/layer::harness"
+    desc: "Test harness marker"
+    crit: notable
+    for: [all]
+    if:
+      type: text
+      substr: "IS_TEST_FIXTURE"
+  - id: "test/layer::signal"
+    desc: "Signal"
+    crit: notable
+    for: [all]
+    if:
+      type: text
+      substr: "marker_never_in_the_parent"
+composite_rules:
+  - id: "test/layer::demotable"
+    desc: "Demotable composite"
+    crit: suspicious
+    for: [all]
+    any:
+      - id: "test/layer::signal"
+    downgrade:
+      any:
+        - id: "test/layer::harness"
+"#;
+    let (_dir, path) = create_test_yaml(yaml);
+    let mapper = CapabilityMapper::from_yaml(&path).unwrap();
+    let source = b"// IS_TEST_FIXTURE\nfunction boot() {}";
+    let mut report = create_test_source_report("app.js", "javascript", source.len() as u64);
+    report.strings.push(crate::types::StringInfo {
+        value: "IS_TEST_FIXTURE".to_string().into(),
+        offset: Some(3),
+        encoding: "ascii".to_string(),
+        string_type: None,
+        section: None,
+        encoding_chain: Vec::new(),
+        fragments: None,
+    });
+    let mut layer = layer_record(
+        "app.js##unicode-escape@62",
+        &["test/layer::signal", "test/layer::demotable"],
+    );
+    layer.findings[1].crit = Criticality::Suspicious;
+    report.files.push(layer);
+
+    mapper.evaluate_and_merge_findings(&mut report, source, None, None);
+
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|f| f.id == "test/layer::harness"),
+        "the parent's own evidence fired"
+    );
+    assert!(
+        !report
+            .suppressions
+            .iter()
+            .any(|s| s.id == "test/layer::demotable"),
+        "{:?}",
+        report.suppressions
+    );
+    assert_eq!(
+        report.files[0].findings[1].crit,
+        Criticality::Suspicious,
+        "the layer's own record is untouched"
     );
 }

@@ -14,6 +14,70 @@ use anyhow::Result;
 use colored::Colorize;
 use std::path::Path;
 
+/// One `test-match` invocation: what to search a file for, how, and where.
+#[derive(Debug, Clone, Copy)]
+pub struct MatchRequest<'a> {
+    /// Path to the file to test.
+    pub target: &'a str,
+    /// Type of search (text, string_literal, string_value, symbol, raw, kv, hex,
+    /// encoded, section, metrics).
+    pub kind: cli::SearchType,
+    /// Match method (exact, contains, regex, word).
+    pub method: cli::MatchMethod,
+    /// Pattern to search for.
+    pub pattern: Option<&'a str>,
+    /// Key-value path for structured data searches.
+    pub kv_path: Option<&'a str>,
+    /// For value searches: require the path to exist (or not).
+    pub exists: Option<bool>,
+    /// For value searches: the value's minimum size.
+    pub size_min: Option<usize>,
+    /// For value searches: the value's maximum size.
+    pub size_max: Option<usize>,
+    /// Override the detected file type.
+    pub file_type: Option<cli::DetectFileType>,
+    /// Minimum number of matches.
+    pub count_min: usize,
+    /// Maximum number of matches.
+    pub count_max: Option<usize>,
+    /// Minimum match density (matches per KB).
+    pub per_kb_min: Option<f64>,
+    /// Maximum match density (matches per KB).
+    pub per_kb_max: Option<f64>,
+    /// Match case-insensitively.
+    pub case_insensitive: bool,
+    /// Limit the search to one section.
+    pub section: Option<&'a str>,
+    /// Search at this file offset.
+    pub offset: Option<i64>,
+    /// Search within this file offset range.
+    pub offset_range: Option<(i64, Option<i64>)>,
+    /// Search at this offset relative to `section`.
+    pub section_offset: Option<i64>,
+    /// Search within this offset range relative to `section`.
+    pub section_offset_range: Option<(i64, Option<i64>)>,
+    /// A high-fidelity validator each match must pass.
+    pub is_check: Option<StringValidator>,
+    /// Encoding filter for encoded string searches.
+    pub encoding: Option<&'a str>,
+    /// Minimum section entropy.
+    pub entropy_min: Option<f64>,
+    /// Maximum section entropy.
+    pub entropy_max: Option<f64>,
+    /// Minimum section or string length.
+    pub length_min: Option<u64>,
+    /// Maximum section or string length.
+    pub length_max: Option<u64>,
+    /// Minimum metric value.
+    pub value_min: Option<f64>,
+    /// Maximum metric value.
+    pub value_max: Option<f64>,
+    /// Minimum file size (for metrics).
+    pub min_size: Option<u64>,
+    /// Maximum file size (for metrics).
+    pub max_size: Option<u64>,
+}
+
 /// Test pattern matching against a file with alternative suggestions.
 ///
 /// This function performs comprehensive pattern matching tests against a target file,
@@ -22,76 +86,49 @@ use std::path::Path;
 ///
 /// # Arguments
 ///
-/// * `target` - Path to the file to test
-/// * `search_type` - Type of search (text, string_literal, string_value, symbol, raw, kv, hex, encoded, section, metrics)
-/// * `method` - Match method (exact, contains, regex, word)
-/// * `pattern` - Pattern to search for
-/// * `kv_path` - Key-value path for structured data searches
-/// * `file_type_override` - Override detected file type
-/// * `count_min` - Minimum number of matches required
-/// * `count_max` - Maximum number of matches allowed
-/// * `per_kb_min` - Minimum match density (matches per KB)
-/// * `per_kb_max` - Maximum match density (matches per KB)
-/// * `case_insensitive` - Enable case-insensitive matching
-/// * `section` - Limit search to specific section
-/// * `offset` - Search at specific file offset
-/// * `offset_range` - Search within offset range
-/// * `section_offset` - Offset relative to section
-/// * `section_offset_range` - Range relative to section
-/// * `external_ip` - Filter for external IP addresses
-/// * `encoding` - Encoding filter for encoded string searches
-/// * `entropy_min` - Minimum entropy (for sections)
-/// * `entropy_max` - Maximum entropy (for sections)
-/// * `length_min` - Minimum length (for sections/strings)
-/// * `length_max` - Maximum length (for sections/strings)
-/// * `value_min` - Minimum value (for metrics)
-/// * `value_max` - Maximum value (for metrics)
-/// * `min_size` - Minimum file size (for metrics)
-/// * `max_size` - Maximum file size (for metrics)
+/// * `request` - What to search for, how, and where
 /// * `disabled` - Components `--disable` turned off (UPX unpacking and radare2 apply here)
 /// * `platforms` - Platform filters for evaluation
 /// * `min_hostile_precision` - Minimum precision for hostile rules
 /// * `min_suspicious_precision` - Minimum precision for suspicious rules
-///
-/// # Returns
-///
-/// A formatted string containing the test results with matches, diagnostics, and suggestions.
-#[allow(clippy::too_many_arguments)]
 pub fn run(
-    target: &str,
-    search_type: cli::SearchType,
-    method: cli::MatchMethod,
-    pattern: Option<&str>,
-    kv_path: Option<&str>,
-    kv_exists: Option<bool>,
-    kv_size_min: Option<usize>,
-    kv_size_max: Option<usize>,
-    file_type_override: Option<cli::DetectFileType>,
-    count_min: usize,
-    count_max: Option<usize>,
-    per_kb_min: Option<f64>,
-    per_kb_max: Option<f64>,
-    case_insensitive: bool,
-    section: Option<&str>,
-    offset: Option<i64>,
-    offset_range: Option<(i64, Option<i64>)>,
-    section_offset: Option<i64>,
-    section_offset_range: Option<(i64, Option<i64>)>,
-    is_check: Option<StringValidator>,
-    encoding: Option<&str>,
-    entropy_min: Option<f64>,
-    entropy_max: Option<f64>,
-    length_min: Option<u64>,
-    length_max: Option<u64>,
-    value_min: Option<f64>,
-    value_max: Option<f64>,
-    min_size: Option<u64>,
-    max_size: Option<u64>,
+    request: &MatchRequest<'_>,
     disabled: &cli::DisabledComponents,
     platforms: &[composite_rules::Platform],
     min_hostile_precision: f32,
     min_suspicious_precision: f32,
 ) -> Result<String> {
+    let MatchRequest {
+        target,
+        kind: search_type,
+        method,
+        pattern,
+        kv_path,
+        exists: kv_exists,
+        size_min: kv_size_min,
+        size_max: kv_size_max,
+        file_type: file_type_override,
+        count_min,
+        count_max,
+        per_kb_min,
+        per_kb_max,
+        case_insensitive,
+        section,
+        offset,
+        offset_range,
+        section_offset,
+        section_offset_range,
+        is_check,
+        encoding,
+        entropy_min,
+        entropy_max,
+        length_min,
+        length_max,
+        value_min,
+        value_max,
+        min_size,
+        max_size,
+    } = *request;
     // Validate arguments based on search type
     if search_type == cli::SearchType::Kv {
         if kv_path.is_none() {

@@ -1302,6 +1302,18 @@ pub(crate) fn match_window(
     out
 }
 
+/// What a content condition matches: its `exact`/`substr`/`regex`/`word`
+/// pattern as the rule wrote it, optionally case-insensitive. It borrows the
+/// rule's own strings, so building one per evaluation copies nothing.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct TextPattern<'a> {
+    pub exact: Option<&'a String>,
+    pub substr: Option<&'a String>,
+    pub regex: Option<&'a String>,
+    pub word: Option<&'a String>,
+    pub case_insensitive: bool,
+}
+
 /// Parameters for location-constrained content evaluation.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ContentLocationParams {

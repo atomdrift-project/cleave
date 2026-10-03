@@ -190,9 +190,18 @@ pub(crate) fn create_analysis_report(
 ) -> Result<types::AnalysisReport> {
     use sha2::{Digest, Sha256};
 
-    // Route to appropriate analyzer to get a full report
+    // Route to appropriate analyzer to get a full report. Analyze the bytes
+    // given, as `file_type`, the way the scan does: `Analyzer::analyze(path)`
+    // re-reads the file from disk and re-detects its type, so a caller that
+    // normalized the bytes (UTF-16 text -> UTF-8) or asked for another type
+    // got a report built from neither, and its findings disagreed with the
+    // ones evaluated beside it on the bytes it passed.
     let report = if let Some(analyzer) = analyzers::analyzer_for_file_type_arc(file_type, engine) {
-        analyzer.analyze(path)?
+        let ctx = crate::analysis_context::AnalysisContext::open(path, binary_data);
+        let strings = ctx.text_rows();
+        let input = analyzers::AnalysisInput::with_strings(path, binary_data, &strings, *file_type)
+            .with_parsed_ctx(ctx);
+        analyzer.analyze_input(&input)?
     } else {
         // Fallback: create minimal report for unsupported types
         let mut hasher = Sha256::new();
@@ -376,5 +385,53 @@ pub(crate) fn extract_strings_from_ast(
             }
             Ok(output)
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    /// The report is built from the bytes the caller passes, not re-read from
+    /// disk: `test-rules` passes UTF-16 text already normalized to UTF-8, and
+    /// a report built from the raw file carried findings the scan never makes.
+    #[test]
+    fn create_analysis_report_analyzes_the_given_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let traits = dir.path().join("traits.yaml");
+        std::fs::write(
+            &traits,
+            r#"
+defaults:
+  for: [python]
+traits:
+  - id: "test/report::on-disk"
+    desc: "Marker only in the file on disk"
+    crit: notable
+    if:
+      type: text
+      substr: "ON_DISK_MARKER"
+  - id: "test/report::given"
+    desc: "Marker only in the bytes passed in"
+    crit: notable
+    if:
+      type: text
+      substr: "GIVEN_MARKER"
+"#,
+        )
+        .unwrap();
+        let mapper = crate::capabilities::CapabilityMapper::from_yaml(&traits).unwrap();
+        let engine = crate::Engine::from_rules(std::sync::Arc::new(mapper));
+
+        let script = dir.path().join("sample.py");
+        std::fs::write(&script, "x = 'ON_DISK_MARKER'\n").unwrap();
+        let report =
+            create_analysis_report(&script, &FileType::Python, b"x = 'GIVEN_MARKER'\n", &engine)
+                .unwrap();
+
+        let ids: Vec<&str> = report.findings.iter().map(|f| f.id.as_str()).collect();
+        assert!(ids.contains(&"test/report::given"), "{ids:?}");
+        assert!(!ids.contains(&"test/report::on-disk"), "{ids:?}");
     }
 }

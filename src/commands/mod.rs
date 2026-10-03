@@ -90,7 +90,7 @@ pub use extract::{
 pub use inspect::run as inspect_command;
 pub use iter_files::{IterFilesConfig, run as iter_files_command};
 #[cfg(feature = "lint")]
-pub use test::{test_match, test_rules};
+pub use test::{MatchRequest, test_match, test_rules};
 #[cfg(feature = "lint")]
 pub use validate::run as validate_command;
 #[cfg(feature = "lint")]

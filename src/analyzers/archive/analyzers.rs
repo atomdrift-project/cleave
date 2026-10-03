@@ -721,13 +721,10 @@ impl MemberAccumulator {
             // A record stays full when finalize still re-reads its evidence:
             // - wrappers (another path extends this one at a `!` or `##`
             //   boundary): aggregate attribution rewrites their evidence, and
-            //   `merge_encoding_layers` merges layer findings into the parent
-            //   and RE-EVALUATES composites over the merged findings — `near`
-            //   offsets and `unless:` suppressions both read evidence there
-            //   (measured on a vsix: slimming the layer parent flipped crit-3
-            //   composites in both directions).
+            //   inheritance stamps the findings they receive by it.
             // - decoded-layer records themselves (`##` in the path): their
-            //   findings are what that merge copies into the parent.
+            //   findings, evidence included, are what inheritance copies into
+            //   the parent file.
             let exempt: Vec<bool> = (0..nested.len())
                 .map(|i| {
                     let path = &nested[i].path;
@@ -2526,7 +2523,7 @@ impl ArchiveAnalyzer {
                 }
 
                 if entry_type_label == "symlink" {
-                    let target = super::zip::read_indexed_zip_member(data, entry, 4096)
+                    let target = super::zip::read_indexed_member(data, entry, 4096)
                         .ok()
                         .and_then(|bytes| String::from_utf8(bytes).ok());
                     if let Some(target_str) = target.as_deref()
@@ -2582,7 +2579,7 @@ impl ArchiveAnalyzer {
                     continue;
                 }
 
-                let Ok(file_data) = super::zip::read_indexed_zip_member(data, entry, MAX_FILE_SIZE)
+                let Ok(file_data) = super::zip::read_indexed_member(data, entry, MAX_FILE_SIZE)
                 else {
                     return Ok(false);
                 };
@@ -3507,6 +3504,136 @@ impl ArchiveAnalyzer {
                 start,
                 "ASAR archive",
                 vec!["archive_analyzer".to_string(), "in_memory_asar".to_string()],
+            );
+            Ok(())
+        })
+    }
+
+    /// Analyze a native phar from the member index filefacts read out of its
+    /// manifest. Members are sliced from the loaded bytes and decompressed in
+    /// memory (stored, raw deflate, bzip2); nothing runs an external
+    /// extractor. The stub (`.phar/stub.php`) comes first and is analyzed like
+    /// any other member: it is the PHP that runs when the archive is executed
+    /// or included.
+    pub(super) fn analyze_phar_archive_in_memory(
+        &self,
+        data: &[u8],
+        report: &mut AnalysisReport,
+        start: std::time::Instant,
+        guard: &ExtractionGuard,
+        entries: &[ArchiveEntry],
+    ) -> Result<()> {
+        let fake_root = Path::new("/__cleave_archive__");
+        // Scope for the window's pipelined consumer; all exit paths drop the
+        // window (and its sender) before the join.
+        std::thread::scope(|scope| -> Result<()> {
+            let mut window = MemberWindow::new_in(scope, self, "memory phar");
+
+            for entry in entries {
+                if self.is_cancelled() {
+                    anyhow::bail!("Analysis cancelled during phar member read");
+                }
+                if entry.entry_type.as_deref() == Some("directory") {
+                    continue;
+                }
+                if !guard.check_file_count() {
+                    guard.add_extraction_note(format!(
+                        "stopped after the {} member cap",
+                        super::guards::MAX_FILE_COUNT
+                    ));
+                    break;
+                }
+                if entry.path.len() > MAX_PATH_COMPONENT_LEN {
+                    guard.add_hostile_reason(HostileArchiveReason::ExcessiveEntryName {
+                        len: entry.path.len(),
+                        preview: entry.path.chars().take(80).collect(),
+                    });
+                }
+
+                let Some(outpath) = sanitize_entry_path(&entry.path, fake_root) else {
+                    guard.add_hostile_reason(HostileArchiveReason::PathTraversal(
+                        entry.path.clone(),
+                    ));
+                    continue;
+                };
+                let relative_path = outpath
+                    .strip_prefix(fake_root)
+                    .unwrap_or(&outpath)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+
+                guard.record_member_metadata(super::guards::ExtractedMemberMetadata {
+                    archive_path: relative_path.clone(),
+                    compressed_size: entry.compressed_size,
+                    compression_method: entry.compression_method.clone(),
+                    mtime_unix: entry.mtime_unix,
+                    mode_octal: entry.mode_octal,
+                    uid: None,
+                    gid: None,
+                    uname: None,
+                    gname: None,
+                    entry_type: Some("regular".to_string()),
+                    linkname: None,
+                    host_os: None,
+                });
+
+                if !guard
+                    .check_compression_ratio(entry.compressed_size.unwrap_or(0), entry.size_bytes)
+                {
+                    continue;
+                }
+                if entry.size_bytes > MAX_FILE_SIZE {
+                    guard.add_hostile_reason(HostileArchiveReason::ExcessiveFileSize {
+                        file: entry.path.clone(),
+                        size: entry.size_bytes,
+                    });
+                    continue;
+                }
+                // The manifest declares each member's uncompressed size, so a
+                // member that inflates past it is malformed or hostile: the
+                // read stops one byte over and the member is skipped.
+                let limit = entry.size_bytes.saturating_add(1);
+                let file_data = match super::zip::read_indexed_member(data, entry, limit) {
+                    Ok(bytes) => bytes,
+                    Err(e) => {
+                        guard.add_extraction_note(format!("{relative_path}: {e:#}"));
+                        continue;
+                    }
+                };
+                if let Some(expected) = entry.crc32 {
+                    let mut crc = flate2::Crc::new();
+                    crc.update(&file_data);
+                    if crc.sum() != expected {
+                        guard.add_extraction_note(format!(
+                            "{relative_path}: CRC32 does not match the manifest"
+                        ));
+                    }
+                }
+                if !guard.check_bytes(file_data.len() as u64, &relative_path) {
+                    guard.add_extraction_note(
+                        "stopped at the total extraction size cap".to_string(),
+                    );
+                    break;
+                }
+
+                let logical_path = Path::new(&relative_path);
+                let file_type =
+                    crate::analyzers::detect_file_type_from_data(logical_path, &file_data);
+                let sha256 = calculate_sha256(&file_data);
+                window.push(MemoryArchiveMember {
+                    relative_path,
+                    data: file_data,
+                    file_type,
+                    sha256,
+                    container_kind: None,
+                });
+            }
+
+            window.finalize(
+                report,
+                start,
+                "phar archive",
+                vec!["archive_analyzer".to_string(), "in_memory_phar".to_string()],
             );
             Ok(())
         })

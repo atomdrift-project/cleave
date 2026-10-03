@@ -30,7 +30,6 @@ fn eval_symbol<'a>(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 fn eval_symbol_with_kind<'a>(
     exact: Option<&String>,
     substr: Option<&String>,
@@ -46,26 +45,18 @@ fn eval_symbol_with_kind<'a>(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
+/// `super::eval_raw` with no length bounds, and `external_ip` standing in
+/// for the validator.
 fn eval_raw<'a>(
-    exact: Option<&String>,
-    substr: Option<&String>,
-    regex: Option<&String>,
-    word: Option<&String>,
-    case_insensitive: bool,
+    pattern: TextPattern<'_>,
     external_ip: bool,
-    _compiled_regex: Option<&regex::Regex>,
     not: Option<&Vec<NotException>>,
     location: &ContentLocationParams,
     ctx: &EvaluationContext<'a>,
     trait_id: Option<&str>,
 ) -> ConditionResult {
     super::eval_raw(
-        exact,
-        substr,
-        regex,
-        word,
-        case_insensitive,
+        pattern,
         (None, None),
         external_ip.then_some(crate::composite_rules::condition::StringValidator::ExternalIp),
         not,
@@ -75,15 +66,10 @@ fn eval_raw<'a>(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
+/// `super::eval_encoded` with `external_ip` standing in for the validator.
 fn eval_encoded<'a>(
     encoding: Option<&crate::composite_rules::condition::EncodingSpec>,
-    exact: Option<&String>,
-    substr: Option<&String>,
-    regex: Option<&String>,
-    word: Option<&String>,
-    case_insensitive: bool,
-    _compiled_regex: Option<&regex::Regex>,
+    pattern: TextPattern<'_>,
     location: &ContentLocationParams,
     external_ip: bool,
     not: Option<&Vec<crate::composite_rules::condition::NotException>>,
@@ -91,11 +77,7 @@ fn eval_encoded<'a>(
 ) -> ConditionResult {
     super::eval_encoded(
         encoding,
-        exact,
-        substr,
-        regex,
-        word,
-        case_insensitive,
+        pattern,
         location,
         external_ip.then_some(crate::composite_rules::condition::StringValidator::ExternalIp),
         not,
@@ -125,13 +107,11 @@ fn raw_regex_retains_later_offsets_for_proximity() {
     let ctx = create_test_context(&report, data);
     let pattern = r"task\.run\(\)".to_string();
     let result = eval_raw(
-        None,
-        None,
-        Some(&pattern),
-        None,
+        TextPattern {
+            regex: Some(&pattern),
+            ..TextPattern::default()
+        },
         false,
-        false,
-        None,
         None,
         &ContentLocationParams::default(),
         &ctx,
@@ -160,13 +140,11 @@ fn raw_regex_proximity_guard_preserves_fast_path_and_nesting() {
     let _count = MatchCountGuard::set(false);
     let run = || {
         eval_raw(
-            None,
-            None,
-            Some(&pattern),
-            None,
+            TextPattern {
+                regex: Some(&pattern),
+                ..TextPattern::default()
+            },
             false,
-            false,
-            None,
             None,
             &ContentLocationParams::default(),
             &ctx,
@@ -202,13 +180,11 @@ fn raw_regex_locations_keep_each_matching_value_and_length() {
         let _count = MatchCountGuard::set(false);
         let _locations = MatchLocationsGuard::set(true);
         let result = eval_raw(
-            None,
-            None,
-            Some(&pattern.to_string()),
-            None,
+            TextPattern {
+                regex: Some(&pattern.to_string()),
+                ..TextPattern::default()
+            },
             false,
-            false,
-            None,
             None,
             &ContentLocationParams::default(),
             &ctx,
@@ -860,11 +836,10 @@ fn test_eval_raw_regex_length_bounds() {
     let regex = "A+".to_string();
 
     let result = super::eval_raw(
-        None,
-        None,
-        Some(&regex),
-        None,
-        false,
+        TextPattern {
+            regex: Some(&regex),
+            ..TextPattern::default()
+        },
         (Some(30), None),
         None,
         None,
@@ -875,11 +850,10 @@ fn test_eval_raw_regex_length_bounds() {
     assert!(result.matched, "40-byte run passes length_min: 30");
 
     let result = super::eval_raw(
-        None,
-        None,
-        Some(&regex),
-        None,
-        false,
+        TextPattern {
+            regex: Some(&regex),
+            ..TextPattern::default()
+        },
         (Some(50), None),
         None,
         None,
@@ -1412,13 +1386,11 @@ fn test_eval_raw_exact_match() {
 
     let location = ContentLocationParams::default();
     let result = eval_raw(
-        Some(&"EXACT_CONTENT".to_string()),
-        None,
-        None,
-        None,
+        TextPattern {
+            exact: Some(&"EXACT_CONTENT".to_string()),
+            ..TextPattern::default()
+        },
         false,
-        false,
-        None,
         None,
         &location,
         &ctx,
@@ -1436,13 +1408,11 @@ fn test_eval_raw_substr_count() {
 
     let location = ContentLocationParams::default();
     let result = eval_raw(
-        None,
-        Some(&"token".to_string()),
-        None,
-        None,
+        TextPattern {
+            substr: Some(&"token".to_string()),
+            ..TextPattern::default()
+        },
         false,
-        false,
-        None,
         None,
         &location,
         &ctx,
@@ -1465,13 +1435,12 @@ fn test_eval_raw_ci_substr_mixed_case_haystack() {
     let needle = "token".to_string();
 
     let ci = eval_raw(
-        None,
-        Some(&needle),
-        None,
-        None,
-        true,
+        TextPattern {
+            substr: Some(&needle),
+            case_insensitive: true,
+            ..TextPattern::default()
+        },
         false,
-        None,
         None,
         &location,
         &ctx,
@@ -1480,13 +1449,11 @@ fn test_eval_raw_ci_substr_mixed_case_haystack() {
     assert!(ci.matched, "ASCII-CI substr must see TOKEN as token");
 
     let cs = eval_raw(
-        None,
-        Some(&needle),
-        None,
-        None,
+        TextPattern {
+            substr: Some(&needle),
+            ..TextPattern::default()
+        },
         false,
-        false,
-        None,
         None,
         &location,
         &ctx,
@@ -1503,13 +1470,11 @@ fn test_eval_raw_substr_count_insufficient() {
 
     let location = ContentLocationParams::default();
     let result = eval_raw(
-        None,
-        Some(&"token".to_string()),
-        None,
-        None,
+        TextPattern {
+            substr: Some(&"token".to_string()),
+            ..TextPattern::default()
+        },
         false,
-        false,
-        None,
         None,
         &location,
         &ctx,
@@ -1528,17 +1493,14 @@ fn test_eval_raw_regex() {
     let ctx = create_test_context(&report, content.as_bytes());
 
     let pattern = r"[a-z]+@[a-z]+\.[a-z]+".to_string();
-    let re = regex::Regex::new(&pattern).unwrap();
 
     let location = ContentLocationParams::default();
     let result = eval_raw(
-        None,
-        None,
-        Some(&pattern),
-        None,
+        TextPattern {
+            regex: Some(&pattern),
+            ..TextPattern::default()
+        },
         false,
-        false,
-        Some(&re),
         None,
         &location,
         &ctx,
@@ -1564,17 +1526,14 @@ fn test_eval_raw_regex_caret_matches_line_start_ascii() {
     let ctx = create_test_context(&report, content.as_bytes());
 
     let pattern = r"^namespace ".to_string();
-    let re = regex::Regex::new(&format!("(?m){pattern}")).unwrap();
 
     let location = ContentLocationParams::default();
     let result = eval_raw(
-        None,
-        None,
-        Some(&pattern),
-        None,
+        TextPattern {
+            regex: Some(&pattern),
+            ..TextPattern::default()
+        },
         false,
-        false,
-        Some(&re),
         None,
         &location,
         &ctx,
@@ -1597,17 +1556,14 @@ fn test_eval_raw_regex_dollar_matches_line_end_ascii() {
     let ctx = create_test_context(&report, content.as_bytes());
 
     let pattern = r";$".to_string();
-    let re = regex::Regex::new(&format!("(?m){pattern}")).unwrap();
 
     let location = ContentLocationParams::default();
     let result = eval_raw(
-        None,
-        None,
-        Some(&pattern),
-        None,
+        TextPattern {
+            regex: Some(&pattern),
+            ..TextPattern::default()
+        },
         false,
-        false,
-        Some(&re),
         None,
         &location,
         &ctx,
@@ -1629,20 +1585,14 @@ fn test_eval_raw_regex_caret_unicode_path() {
     let ctx = create_test_context(&report, content.as_bytes());
 
     let pattern = r"^naïve_marker".to_string();
-    let re = regex::RegexBuilder::new(&pattern)
-        .multi_line(true)
-        .build()
-        .unwrap();
 
     let location = ContentLocationParams::default();
     let result = eval_raw(
-        None,
-        None,
-        Some(&pattern),
-        None,
+        TextPattern {
+            regex: Some(&pattern),
+            ..TextPattern::default()
+        },
         false,
-        false,
-        Some(&re),
         None,
         &location,
         &ctx,
@@ -1667,20 +1617,14 @@ fn test_eval_raw_regex_caret_not_at_line_start_does_not_match() {
     let ctx = create_test_context(&report, content.as_bytes());
 
     let pattern = r"^x".to_string();
-    let re = regex::RegexBuilder::new(&pattern)
-        .multi_line(true)
-        .build()
-        .unwrap();
 
     let location = ContentLocationParams::default();
     let result = eval_raw(
-        None,
-        None,
-        Some(&pattern),
-        None,
+        TextPattern {
+            regex: Some(&pattern),
+            ..TextPattern::default()
+        },
         false,
-        false,
-        Some(&re),
         None,
         &location,
         &ctx,
@@ -1702,17 +1646,14 @@ fn test_eval_raw_regex_unanchored_still_finds_substring() {
     let ctx = create_test_context(&report, content.as_bytes());
 
     let pattern = r"needle".to_string();
-    let re = regex::Regex::new(&pattern).unwrap();
 
     let location = ContentLocationParams::default();
     let result = eval_raw(
-        None,
-        None,
-        Some(&pattern),
-        None,
+        TextPattern {
+            regex: Some(&pattern),
+            ..TextPattern::default()
+        },
         false,
-        false,
-        Some(&re),
         None,
         &location,
         &ctx,
@@ -1730,13 +1671,12 @@ fn test_eval_raw_case_insensitive() {
 
     let location = ContentLocationParams::default();
     let result = eval_raw(
-        None,
-        Some(&"password".to_string()),
-        None,
-        None,
-        true,
+        TextPattern {
+            substr: Some(&"password".to_string()),
+            case_insensitive: true,
+            ..TextPattern::default()
+        },
         false,
-        None,
         None,
         &location,
         &ctx,
@@ -1754,13 +1694,11 @@ fn test_eval_raw_invalid_utf8() {
 
     let location = ContentLocationParams::default();
     let result = eval_raw(
-        None,
-        Some(&"test".to_string()),
-        None,
-        None,
+        TextPattern {
+            substr: Some(&"test".to_string()),
+            ..TextPattern::default()
+        },
         false,
-        false,
-        None,
         None,
         &location,
         &ctx,
@@ -1882,12 +1820,10 @@ fn test_eval_encoded_chain_spec_requires_consecutive_links() {
         let encoding = Some(EncodingSpec::Single(spec.to_string()));
         eval_encoded(
             encoding.as_ref(),
-            None,
-            Some(&"curl".to_string()),
-            None,
-            None,
-            false,
-            None,
+            TextPattern {
+                substr: Some(&"curl".to_string()),
+                ..TextPattern::default()
+            },
             &location,
             false,
             None,
@@ -1926,12 +1862,10 @@ fn test_eval_encoded_single_encoding_filter() {
     let encoding = Some(EncodingSpec::Single("base64".to_string()));
     let result = eval_encoded(
         encoding.as_ref(),
-        None,
-        Some(&"password".to_string()),
-        None,
-        None,
-        false,
-        None,
+        TextPattern {
+            substr: Some(&"password".to_string()),
+            ..TextPattern::default()
+        },
         &location,
         false,
         None,
@@ -1959,12 +1893,10 @@ fn test_eval_encoded_multiple_encoding_filter() {
     ]));
     let result = eval_encoded(
         encoding.as_ref(),
-        None,
-        None,
-        Some(&"secret|password".to_string()),
-        None,
-        false,
-        None,
+        TextPattern {
+            regex: Some(&"secret|password".to_string()),
+            ..TextPattern::default()
+        },
         &location,
         false,
         None,
@@ -1986,12 +1918,12 @@ fn test_eval_encoded_no_filter_all_encodings() {
     // Search ALL encoded strings (no encoding filter)
     let result = eval_encoded(
         None,
+        TextPattern {
+            substr: Some(&"e".to_string()),
+            regex: // Common letter
         None,
-        Some(&"e".to_string()), // Common letter
-        None,
-        None,
-        false,
-        None,
+            ..TextPattern::default()
+        },
         &location,
         false,
         None,
@@ -2015,12 +1947,10 @@ fn test_eval_encoded_exact_match() {
     let encoding = Some(EncodingSpec::Single("hex".to_string()));
     let result = eval_encoded(
         encoding.as_ref(),
-        Some(&"admin".to_string()),
-        None,
-        None,
-        None,
-        false,
-        None,
+        TextPattern {
+            exact: Some(&"admin".to_string()),
+            ..TextPattern::default()
+        },
         &location,
         false,
         None,
@@ -2043,12 +1973,10 @@ fn test_eval_encoded_substr_match() {
     let encoding = Some(EncodingSpec::Single("base64".to_string()));
     let result = eval_encoded(
         encoding.as_ref(),
-        None,
-        Some(&"evil.com".to_string()),
-        None,
-        None,
-        false,
-        None,
+        TextPattern {
+            substr: Some(&"evil.com".to_string()),
+            ..TextPattern::default()
+        },
         &location,
         false,
         None,
@@ -2071,12 +1999,10 @@ fn test_eval_encoded_regex_match() {
     let encoding = Some(EncodingSpec::Single("base64".to_string()));
     let result = eval_encoded(
         encoding.as_ref(),
-        None,
-        None,
-        Some(&r"https?://.*\.com".to_string()),
-        None,
-        false,
-        None,
+        TextPattern {
+            regex: Some(&r"https?://.*\.com".to_string()),
+            ..TextPattern::default()
+        },
         &location,
         false,
         None,
@@ -2099,12 +2025,10 @@ fn test_eval_encoded_word_match() {
     let encoding = Some(EncodingSpec::Single("hex".to_string()));
     let result = eval_encoded(
         encoding.as_ref(),
-        None,
-        None,
-        None,
-        Some(&"admin".to_string()),
-        false,
-        None,
+        TextPattern {
+            word: Some(&"admin".to_string()),
+            ..TextPattern::default()
+        },
         &location,
         false,
         None,
@@ -2117,12 +2041,10 @@ fn test_eval_encoded_word_match() {
     let encoding2 = Some(EncodingSpec::Single("url".to_string()));
     let result = eval_encoded(
         encoding2.as_ref(),
-        None,
-        None,
-        None,
-        Some(&"command".to_string()),
-        false,
-        None,
+        TextPattern {
+            word: Some(&"command".to_string()),
+            ..TextPattern::default()
+        },
         &location,
         false,
         None,
@@ -2143,12 +2065,11 @@ fn test_eval_encoded_case_insensitive() {
     let encoding = Some(EncodingSpec::Single("hex".to_string()));
     let result = eval_encoded(
         encoding.as_ref(),
-        None,
-        Some(&"ADMIN".to_string()),
-        None,
-        None,
-        true, // case insensitive
-        None,
+        TextPattern {
+            substr: Some(&"ADMIN".to_string()),
+            case_insensitive: true,
+            ..TextPattern::default()
+        },
         &location,
         false,
         None,
@@ -2168,12 +2089,10 @@ fn test_eval_encoded_count_constraints() {
     // Search all encoded strings for letter "a" (appears in many)
     let result = eval_encoded(
         None,
-        None,
-        Some(&"a".to_string()),
-        None,
-        None,
-        false,
-        None,
+        TextPattern {
+            substr: Some(&"a".to_string()),
+            ..TextPattern::default()
+        },
         &location,
         false,
         None,
@@ -2197,12 +2116,10 @@ fn test_eval_encoded_no_match_wrong_encoding() {
     let encoding = Some(EncodingSpec::Single("base64".to_string()));
     let result = eval_encoded(
         encoding.as_ref(),
-        Some(&"malware".to_string()),
-        None,
-        None,
-        None,
-        false,
-        None,
+        TextPattern {
+            exact: Some(&"malware".to_string()),
+            ..TextPattern::default()
+        },
         &location,
         false,
         None,
@@ -2222,12 +2139,10 @@ fn test_eval_encoded_excludes_plain_strings() {
     // Search for "plain" which only appears in non-encoded string
     let result = eval_encoded(
         None,
-        Some(&"plain_text".to_string()),
-        None,
-        None,
-        None,
-        false,
-        None,
+        TextPattern {
+            exact: Some(&"plain_text".to_string()),
+            ..TextPattern::default()
+        },
         &location,
         false,
         None,
@@ -2250,12 +2165,10 @@ fn test_eval_encoded_count_min_not_met() {
     let encoding = Some(EncodingSpec::Single("base64".to_string()));
     let result = eval_encoded(
         encoding.as_ref(),
-        None,
-        Some(&"password".to_string()),
-        None,
-        None,
-        false,
-        None,
+        TextPattern {
+            substr: Some(&"password".to_string()),
+            ..TextPattern::default()
+        },
         &location,
         false,
         None,
@@ -2356,12 +2269,10 @@ fn test_eval_encoded_not_filter() {
 
     let result = eval_encoded(
         encoding.as_ref(),
-        None,
-        Some(&"http".to_string()),
-        None,
-        None,
-        false,
-        None,
+        TextPattern {
+            substr: Some(&"http".to_string()),
+            ..TextPattern::default()
+        },
         &location,
         false,
         Some(&not_exceptions),
@@ -2408,14 +2319,13 @@ fn test_eval_encoded_external_ip_filter() {
 
     let result = eval_encoded(
         encoding.as_ref(),
-        None,
-        Some(&"connect".to_string()),
-        None,
-        None,
-        false,
-        None,
+        TextPattern {
+            substr: Some(&"connect".to_string()),
+            ..TextPattern::default()
+        },
         &location,
-        true, // external_ip: true
+        true,
+        // external_ip: true
         None,
         &ctx,
     );
@@ -2437,13 +2347,11 @@ fn test_eval_raw_not_excludes_by_context() {
     let not_exceptions = vec![NotException::Shorthand("safe.com".to_string())];
     let location = ContentLocationParams::default();
     let result = eval_raw(
-        None,
-        Some(&"http".to_string()),
-        None,
-        None,
+        TextPattern {
+            substr: Some(&"http".to_string()),
+            ..TextPattern::default()
+        },
         false,
-        false,
-        None,
         Some(&not_exceptions),
         &location,
         &ctx,
@@ -2469,19 +2377,15 @@ fn test_eval_raw_word_boundary() {
     let content = b"the cat sat on category mat";
     let ctx = create_test_context(&report, content.as_ref());
 
-    // word: "cat" is pre-compiled to \bcat\b before calling eval_raw
     let word_str = "cat".to_string();
-    let compiled = regex::Regex::new(r"\bcat\b").unwrap();
 
     let location = ContentLocationParams::default();
     let result = eval_raw(
-        None,
-        None,
-        None,
-        Some(&word_str),
+        TextPattern {
+            word: Some(&word_str),
+            ..TextPattern::default()
+        },
         false,
-        false,
-        Some(&compiled),
         None,
         &location,
         &ctx,
@@ -2570,13 +2474,11 @@ fn test_eval_raw_external_ip_filters_private() {
     let location = ContentLocationParams::default();
     // Search for "private" — its context contains only 192.168.1.1 (private IP)
     let result = eval_raw(
-        None,
-        Some(&"private".to_string()),
-        None,
-        None,
-        false,
-        true, // external_ip = true
-        None,
+        TextPattern {
+            substr: Some(&"private".to_string()),
+            ..TextPattern::default()
+        },
+        true,
         None,
         &location,
         &ctx,
@@ -2599,13 +2501,11 @@ fn test_eval_raw_external_ip_keeps_external() {
 
     let location = ContentLocationParams::default();
     let result = eval_raw(
-        None,
-        Some(&"connect".to_string()),
-        None,
-        None,
-        false,
-        true, // external_ip = true
-        None,
+        TextPattern {
+            substr: Some(&"connect".to_string()),
+            ..TextPattern::default()
+        },
+        true,
         None,
         &location,
         &ctx,
@@ -2708,13 +2608,11 @@ fn test_eval_raw_offset_range_filters() {
         ..Default::default()
     };
     let result = eval_raw(
-        None,
-        Some(&"MARKER".to_string()),
-        None,
-        None,
+        TextPattern {
+            substr: Some(&"MARKER".to_string()),
+            ..TextPattern::default()
+        },
         false,
-        false,
-        None,
         None,
         &location,
         &ctx,
@@ -2732,13 +2630,11 @@ fn test_eval_raw_offset_range_filters() {
         ..Default::default()
     };
     let result2 = eval_raw(
-        None,
-        Some(&"MARKER".to_string()),
-        None,
-        None,
+        TextPattern {
+            substr: Some(&"MARKER".to_string()),
+            ..TextPattern::default()
+        },
         false,
-        false,
-        None,
         None,
         &location2,
         &ctx,
@@ -2756,13 +2652,11 @@ fn test_eval_raw_offset_range_filters() {
         ..Default::default()
     };
     let result3 = eval_raw(
-        None,
-        Some(&"MARKER".to_string()),
-        None,
-        None,
+        TextPattern {
+            substr: Some(&"MARKER".to_string()),
+            ..TextPattern::default()
+        },
         false,
-        false,
-        None,
         None,
         &location3,
         &ctx,
@@ -2786,13 +2680,11 @@ fn test_eval_raw_offset_range_negative() {
         ..Default::default()
     };
     let result = eval_raw(
-        None,
-        Some(&"END".to_string()),
-        None,
-        None,
+        TextPattern {
+            substr: Some(&"END".to_string()),
+            ..TextPattern::default()
+        },
         false,
-        false,
-        None,
         None,
         &location,
         &ctx,
@@ -2809,13 +2701,11 @@ fn test_eval_raw_offset_range_negative() {
         ..Default::default()
     };
     let result2 = eval_raw(
-        None,
-        Some(&"END".to_string()),
-        None,
-        None,
+        TextPattern {
+            substr: Some(&"END".to_string()),
+            ..TextPattern::default()
+        },
         false,
-        false,
-        None,
         None,
         &location2,
         &ctx,
@@ -2966,13 +2856,11 @@ fn test_eval_raw_section_offset_range() {
         ..Default::default()
     };
     let result = eval_raw(
-        None,
-        Some(&"ALPHA".to_string()),
-        None,
-        None,
+        TextPattern {
+            substr: Some(&"ALPHA".to_string()),
+            ..TextPattern::default()
+        },
         false,
-        false,
-        None,
         None,
         &location,
         &ctx,
@@ -2984,13 +2872,11 @@ fn test_eval_raw_section_offset_range() {
     );
 
     let result2 = eval_raw(
-        None,
-        Some(&"BETA".to_string()),
-        None,
-        None,
+        TextPattern {
+            substr: Some(&"BETA".to_string()),
+            ..TextPattern::default()
+        },
         false,
-        false,
-        None,
         None,
         &location,
         &ctx,
@@ -3008,13 +2894,11 @@ fn test_eval_raw_section_offset_range() {
         ..Default::default()
     };
     let result3 = eval_raw(
-        None,
-        Some(&"BETA".to_string()),
-        None,
-        None,
+        TextPattern {
+            substr: Some(&"BETA".to_string()),
+            ..TextPattern::default()
+        },
         false,
-        false,
-        None,
         None,
         &location2,
         &ctx,
@@ -3373,13 +3257,11 @@ fn eval_raw_regex_on(
     let pattern = pattern.to_string();
     let location = ContentLocationParams::default();
     eval_raw(
-        None,
-        None,
-        Some(&pattern),
-        None,
+        TextPattern {
+            regex: Some(&pattern),
+            ..TextPattern::default()
+        },
         false,
-        false,
-        None,
         None,
         &location,
         &ctx,
@@ -3869,13 +3751,12 @@ fn raw_unicode_substr_validator_window_uses_original_offsets() {
     let ctx = create_test_context(&report, content.as_bytes());
     let pattern = "déjà".to_string();
     let result = eval_raw(
-        None,
-        Some(&pattern),
-        None,
-        None,
+        TextPattern {
+            substr: Some(&pattern),
+            case_insensitive: true,
+            ..TextPattern::default()
+        },
         true,
-        true,
-        None,
         None,
         &ContentLocationParams::default(),
         &ctx,

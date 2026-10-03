@@ -951,6 +951,16 @@ fn prefix_matches(prefix: &str, id: &str) -> bool {
             .is_some_and(|suffix| suffix.starts_with('/'))
 }
 
+/// Top-level directories of the YAML trait tree. Every trait loaded from
+/// them is named `directory::id`; ids outside them are emitted by the engine.
+const YAML_TRAIT_TIERS: &[&str] = &[
+    "metadata",
+    "micro-behaviors",
+    "objectives",
+    "well-known",
+    "third-party",
+];
+
 fn trait_expectation_errors(expected: &TraitExpectations, ids: &HashSet<&str>) -> Vec<String> {
     let mut errors = Vec::new();
     for prefix in expected
@@ -974,9 +984,22 @@ fn trait_expectation_errors(expected: &TraitExpectations, ids: &HashSet<&str>) -
         .chain(&expected.forbidden_traits)
     {
         let Some((directory, leaf)) = id.split_once("::") else {
-            errors.push(format!(
-                "invalid exact trait ID {id:?}: expected directory::id"
-            ));
+            // Engine-emitted structural findings (`anti-static/packer/upx`)
+            // carry a bare path id: they are exact ids, not hierarchy
+            // prefixes. Only inside the YAML trait tiers is a bare path a
+            // prefix written where a leaf id belongs.
+            let tier = id.split('/').next().unwrap_or_default();
+            if YAML_TRAIT_TIERS.contains(&tier)
+                || id.is_empty()
+                || id.starts_with('/')
+                || id
+                    .split('/')
+                    .any(|part| part.is_empty() || part == ".." || part == ".")
+            {
+                errors.push(format!(
+                    "invalid exact trait ID {id:?}: expected directory::id"
+                ));
+            }
             continue;
         };
         if directory.is_empty()
@@ -1088,6 +1111,32 @@ mod trait_expectation_tests {
             )
             .len(),
             2
+        );
+    }
+    #[test]
+    fn engine_emitted_ids_are_exact_trait_ids() {
+        // Structural findings the engine emits carry a bare path id; they
+        // are exact ids and must be usable in required_traits.
+        let expected: TraitExpectations =
+            toml::from_str("required_traits=['anti-static/packer/upx']").unwrap();
+        assert!(
+            trait_expectation_errors(&expected, &HashSet::from(["anti-static/packer/upx"]))
+                .is_empty()
+        );
+        assert_eq!(
+            trait_expectation_errors(&expected, &HashSet::from(["anti-static/packer/upx/x"])).len(),
+            1,
+            "still an exact id: a child does not satisfy it"
+        );
+        // Inside the YAML trait tiers a bare path is a prefix written where a
+        // leaf id belongs.
+        let expected: TraitExpectations =
+            toml::from_str("required_traits=['objectives/impact/wipe']").unwrap();
+        let errors =
+            trait_expectation_errors(&expected, &HashSet::from(["objectives/impact/wipe::x"]));
+        assert!(
+            errors.iter().any(|e| e.contains("expected directory::id")),
+            "{errors:?}"
         );
     }
     #[test]

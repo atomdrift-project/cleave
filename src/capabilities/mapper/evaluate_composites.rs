@@ -13,7 +13,6 @@ use crate::composite_rules::{
 };
 use crate::types::{AnalysisReport, Criticality, Evidence, Finding, FindingKind};
 use std::collections::HashMap;
-use std::path::Path;
 
 fn immediate_parent_path(path: &str) -> Option<&str> {
     match (path.rfind("!!"), path.rfind("##")) {
@@ -109,8 +108,17 @@ impl super::CapabilityMapper {
     /// Evaluate composite rules against an analysis report.
     /// `inline_yara` supplies pre-scanned results from the combined YARA engine.
     ///
+    /// `layer_findings` are the findings of the file's decoded layers (the
+    /// `##` records: an escaped or encoded blob the file carries, analyzed as
+    /// code). They are inputs only: a composite may take a leg from them, and
+    /// one a layer already fired is not fired again, but none of them is
+    /// returned. A decoded layer is part of its file, so a rule gated on the
+    /// file's type has to see what was decoded out of it; the layer, analyzed
+    /// on its own, is not of that type.
+    ///
     /// Platform filtering is controlled by the `platform` field set via `with_platform()`.
     #[must_use]
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn evaluate_composite_rules(
         &self,
         report: &AnalysisReport,
@@ -120,9 +128,10 @@ impl super::CapabilityMapper {
         section_map: &SectionMap,
         arch_ranges: Option<&[(Arch, std::ops::Range<usize>)]>,
         suppressions: Option<&crate::types::SuppressionSink>,
+        layer_findings: &[Finding],
     ) -> Vec<Finding> {
         // Determine file type from report (platform comes from self.platform)
-        let file_type = self.detect_file_type(&report.target.file_type);
+        let file_type = self.evaluation_file_type(report, binary_data.len());
 
         // A container report aggregates tens of thousands of members' strings,
         // kv, and evidence, and evaluating the rule set over that value pool is
@@ -165,13 +174,17 @@ impl super::CapabilityMapper {
             }
         };
 
-        // Pre-allocate capacity for findings to reduce reallocations
-        let mut all_findings: Vec<Finding> = Vec::with_capacity(100);
+        // The layer findings lead the accumulated set, so every context below
+        // sees them alongside the composites found so far; they are split off
+        // again before returning.
+        let layer_count = layer_findings.len();
+        let mut all_findings: Vec<Finding> = Vec::with_capacity(layer_count + 100);
+        all_findings.extend_from_slice(layer_findings);
         let mut seen_ids: rustc_hash::FxHashSet<String> = rustc_hash::FxHashSet::default();
 
         // Track which composite IDs have already matched (including original findings)
         let mut matched_bits = TraitBitSet::with_capacity(self.trait_definitions.len());
-        for finding in &report.findings {
+        for finding in report.findings.iter().chain(layer_findings) {
             seen_ids.insert(finding.id.clone().to_string());
             if let Some(&idx) = self.trait_id_map.get(finding.id.as_str()) {
                 matched_bits.insert(idx);
@@ -189,36 +202,16 @@ impl super::CapabilityMapper {
         // to pass. Skip-reason debug info is unaffected: contexts built here
         // never carry a debug collector.
         let worklists = self.composite_worklists(file_type);
-        let mut positive_rules: Vec<&crate::composite_rules::CompositeTrait> = worklists
+        let positive_rules: Vec<&crate::composite_rules::CompositeTrait> = worklists
             .positive
             .iter()
             .map(|&i| &self.composite_rules[i as usize])
             .collect();
-        let mut negative_rules: Vec<&crate::composite_rules::CompositeTrait> = worklists
+        let negative_rules: Vec<&crate::composite_rules::CompositeTrait> = worklists
             .negative
             .iter()
             .map(|&i| &self.composite_rules[i as usize])
             .collect();
-
-        let is_tiny_dos_com_candidate = file_type == RuleFileType::Unknown
-            && binary_data.len() <= 4096
-            && Path::new(&report.target.path)
-                .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("com"));
-
-        if is_tiny_dos_com_candidate {
-            let allow_rule = |rule: &&crate::composite_rules::CompositeTrait| {
-                let source = rule.defined_in.to_string_lossy();
-                source.ends_with("/metadata/binary/layout/msdos.yaml")
-                    || source.ends_with("/micro-behaviors/os/msdos/interrupt/file_management.yaml")
-                    || source.ends_with("/micro-behaviors/time/schedule/calendar/msdos.yaml")
-                    || source.ends_with("/objectives/evasion/self-delete/file/msdos.yaml")
-                    || source.ends_with("/objectives/impact/infect/virus/msdos-binary.yaml")
-                    || source.ends_with("/well-known/malware/virus/friday_the_13th/msdos.yaml")
-            };
-            positive_rules.retain(allow_rule);
-            negative_rules.retain(allow_rule);
-        }
 
         // Pass 1: Iterative evaluation of positive rules to reach a stable fixed-point
         const MAX_ITERATIONS: usize = 10;
@@ -349,6 +342,7 @@ impl super::CapabilityMapper {
         // wasn't available when it was first evaluated.
         self.reeval_downgrades(
             &mut all_findings,
+            layer_count,
             report,
             binary_data,
             cached_ast,
@@ -362,14 +356,18 @@ impl super::CapabilityMapper {
         // other scripts/source → line-length::excessive-line-length (suspicious).
         // Both carry the binary-blob / minified-bundle carve-outs as `unless:`.
 
-        all_findings
+        all_findings.split_off(layer_count)
     }
 
     /// Re-evaluate downgrade conditions for all findings using the complete finding set.
     /// This handles ordering issues where a composite's downgrade depends on another composite.
+    /// `findings[..first]` are context only (a file's decoded-layer findings):
+    /// they can satisfy a downgrade condition but are not themselves re-evaluated.
+    #[allow(clippy::too_many_arguments)]
     fn reeval_downgrades(
         &self,
         findings: &mut [Finding],
+        first: usize,
         report: &AnalysisReport,
         binary_data: &[u8],
         cached_ast: Option<&tree_sitter::Tree>,
@@ -400,6 +398,7 @@ impl super::CapabilityMapper {
             findings
                 .iter()
                 .enumerate()
+                .skip(first)
                 .filter_map(|(i, finding)| {
                     // Every downgrade, whatever its scope: this context holds
                     // only this file's findings, so a file-scoped downgrade
@@ -2092,6 +2091,7 @@ composite_rules:
         let reeval = |findings: &mut Vec<Finding>| {
             mapper.reeval_downgrades(
                 findings,
+                0,
                 &report,
                 &[],
                 None,
@@ -2152,6 +2152,7 @@ composite_rules:
         let reeval = |findings: &mut Vec<Finding>| {
             mapper.reeval_downgrades(
                 findings,
+                0,
                 &report,
                 &[],
                 None,
@@ -2435,6 +2436,7 @@ composite_rules:
         ];
         mapper.reeval_downgrades(
             &mut child_local_gate,
+            0,
             &report,
             &[],
             None,

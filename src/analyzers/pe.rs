@@ -725,7 +725,6 @@ impl PEAnalyzer {
     /// The caller provides an `AnalysisContext` borrowing `data`;
     /// every PE-internal helper reads from filefacts's typed views via
     /// that ctx (no goblin re-parse).
-    #[allow(clippy::too_many_arguments)]
     fn analyze_structural_with_strings<'a>(
         &self,
         logical_path: &Path,

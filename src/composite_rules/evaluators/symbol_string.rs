@@ -7,7 +7,7 @@
 //! - String count analysis
 
 use super::{
-    ContentLocationParams, build_regex, match_window, resolve_effective_range,
+    ContentLocationParams, TextPattern, build_regex, match_window, resolve_effective_range,
     resolve_effective_range_opt, symbol_matches, truncate_evidence,
 };
 use crate::composite_rules::condition::{
@@ -810,11 +810,13 @@ pub(crate) fn eval_text<'a, 'b>(
             arch_clamp: params.arch_clamp,
         };
         let raw = eval_raw(
-            params.exact,
-            params.substr,
-            params.regex,
-            params.word,
-            params.case_insensitive,
+            TextPattern {
+                exact: params.exact,
+                substr: params.substr,
+                regex: params.regex,
+                word: params.word,
+                case_insensitive: params.case_insensitive,
+            },
             (params.length_min, params.length_max),
             params.is_check,
             trait_not,
@@ -2028,14 +2030,9 @@ fn source_raw_windows(
 
 /// Used by `type: raw` conditions to search raw file content rather than extracted strings.
 /// Use for cross-boundary patterns or when string extraction is insufficient.
-#[allow(clippy::too_many_arguments)]
 #[must_use]
 pub(crate) fn eval_raw<'a>(
-    exact: Option<&String>,
-    substr: Option<&String>,
-    regex: Option<&String>,
-    word: Option<&String>,
-    case_insensitive: bool,
+    pattern: TextPattern<'_>,
     length_bounds: (Option<usize>, Option<usize>),
     is_check: Option<StringValidator>,
     not: Option<&Vec<NotException>>,
@@ -2043,6 +2040,13 @@ pub(crate) fn eval_raw<'a>(
     ctx: &EvaluationContext<'a>,
     trait_id: Option<&str>,
 ) -> ConditionResult {
+    let TextPattern {
+        exact,
+        substr,
+        regex,
+        word,
+        case_insensitive,
+    } = pattern;
     let _mp = crate::mem_profile::phase(crate::mem_profile::Phase::EvalRaw);
     // When the active trait has no count/density filter and no consumer reads the
     // exact `match_count` (set per-trait via `MatchCountGuard`; default true =
@@ -2795,20 +2799,22 @@ pub(crate) fn eval_raw<'a>(
 ///
 /// # Pattern Matching
 /// Supports exact, substr, regex, and word boundary matching
-#[allow(clippy::too_many_arguments)]
 #[must_use]
 pub(crate) fn eval_encoded<'a>(
     encoding: Option<&crate::composite_rules::condition::EncodingSpec>,
-    exact: Option<&String>,
-    substr: Option<&String>,
-    regex: Option<&String>,
-    word: Option<&String>,
-    case_insensitive: bool,
+    pattern: TextPattern<'_>,
     location: &ContentLocationParams,
     is_check: Option<StringValidator>,
     not: Option<&Vec<crate::composite_rules::condition::NotException>>,
     ctx: &EvaluationContext<'a>,
 ) -> ConditionResult {
+    let TextPattern {
+        exact,
+        substr,
+        regex,
+        word,
+        case_insensitive,
+    } = pattern;
     use crate::composite_rules::condition::EncodingSpec;
 
     // Resolve effective range for offset filtering

@@ -7036,6 +7036,34 @@ mod excessive_skip_tests {
         );
     }
 
+    // A suspicious/hostile detection named in `unless:` stands the rule down when a
+    // stronger verdict fired: one condition, not its 45 legs. A component aggregator
+    // with the same legs is still an exception list and still expands.
+    #[test]
+    fn detection_verdict_in_unless_counts_one() {
+        let leaves = leaf_ids("a", 45);
+        let leaf_refs: Vec<&str> = leaves.iter().map(String::as_str).collect();
+        let mut verdict = aggregator("stealer", &leaf_refs);
+        verdict.crit = Criticality::Hostile;
+        let composites = vec![
+            verdict,
+            aggregator("benign-group", &leaf_refs),
+            rule_unless("defers-to-verdict", refs(&["stealer"])),
+            rule_unless("uses-exception-list", refs(&["benign-group"])),
+        ];
+
+        let v = find_excessive_skip_conditions(&[], &composites);
+        assert!(
+            !v.iter().any(|e| e.id == "defers-to-verdict"),
+            "a verdict reference must count once"
+        );
+        let listed = v
+            .iter()
+            .find(|e| e.id == "uses-exception-list")
+            .expect("a 45-leg exception list is still over the cap");
+        assert_eq!((listed.own, listed.expanded), (1, 45));
+    }
+
     // Leaf and `dir/` references inside `unless:` each count as one — only aggregator
     // composites expand. Here 39 expanded + 1 dir + 1 leaf = 41 trips the limit.
     #[test]

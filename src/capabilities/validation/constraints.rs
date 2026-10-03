@@ -941,6 +941,31 @@ impl<'a> SuppressionExpander<'a> {
             };
         }
 
+        // A suspicious or hostile composite named in `unless:` is a verdict, not an
+        // exception list: the rule stands down because a stronger detection already
+        // fired on the file, which is one condition however many legs that
+        // detection has. Expanding it charged the referrer with every leg of the
+        // detection -- 73 for one wallet-stealer rule -- as if each were a benign
+        // carve-out. (Unmarked composites default to notable and are often benign
+        // groups, so only the stronger tiers are taken as verdicts.)
+        if let Some(c) = self.composite_map.get(key)
+            && c.crit >= crate::types::Criticality::Suspicious
+        {
+            return if self.seen_leaves.insert(key) {
+                SuppressionBranch {
+                    label: format!("{key} (detection verdict)"),
+                    count: 1,
+                    children: Vec::new(),
+                }
+            } else {
+                SuppressionBranch {
+                    label: format!("{key} (dup)"),
+                    count: 0,
+                    children: Vec::new(),
+                }
+            };
+        }
+
         // An aggregator composite expands into its legs; a leaf or directory reference
         // (no exact composite) counts as one.
         if self.composite_map.contains_key(key) {

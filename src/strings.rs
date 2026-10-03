@@ -57,7 +57,7 @@ fn scpt_literal_string(literal: &filefacts::Literal) -> StringInfo {
         _ => Vec::new(),
     };
     StringInfo {
-        value: literal.text.clone().into(),
+        value: literal.value.clone().into(),
         offset: Some(literal.offset),
         encoding: match literal.encoding {
             Some(filefacts::LiteralEncoding::Utf16be) => "utf16be".into(),
@@ -516,7 +516,7 @@ mod tests {
                 _ => vec!["scpt", suffix],
             };
             assert_eq!(row.encoding_chain, expected, "{suffix}");
-            assert_eq!(row.value, literal.text);
+            assert_eq!(row.value, literal.value);
             assert_eq!(row.offset, Some(73));
             assert_eq!(row.section.as_deref(), Some("literal"));
             let expected_encoding = match encoding {

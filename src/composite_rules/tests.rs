@@ -5,6 +5,7 @@
 
 use super::*;
 use crate::composite_rules::condition::{NotException, NotExceptionStructured};
+use crate::composite_rules::evaluators::TextPattern;
 use crate::composite_rules::traits::DowngradeConditions;
 use crate::composite_rules::{PathQuery, SymbolQuery, TextQuery};
 use crate::types::{
@@ -1745,11 +1746,10 @@ fn test_content_exact_vs_substr() {
     // exact: should match only if entire content equals the pattern (won't match)
     let location = super::evaluators::ContentLocationParams::default();
     let result = super::evaluators::eval_raw(
-        Some(&"hello".to_string()),
-        None,
-        None,
-        None,
-        false,
+        TextPattern {
+            exact: Some(&"hello".to_string()),
+            ..TextPattern::default()
+        },
         (None, None),
         None,
         None,
@@ -1762,11 +1762,10 @@ fn test_content_exact_vs_substr() {
 
     // substr: should match because "hello" appears in the content
     let result = super::evaluators::eval_raw(
-        None,
-        Some(&"hello".to_string()),
-        None,
-        None,
-        false,
+        TextPattern {
+            substr: Some(&"hello".to_string()),
+            ..TextPattern::default()
+        },
         (None, None),
         None,
         None,

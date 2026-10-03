@@ -12,6 +12,29 @@ impl super::CapabilityMapper {
     pub(crate) fn detect_file_type(&self, file_type: &str) -> RuleFileType {
         RuleFileType::from_str(file_type)
     }
+
+    /// The rule file type `report` is evaluated as: its detected type,
+    /// except that a small `.com` identification could not type is taken
+    /// as the DOS COM image its name says it is. A COM file has no header
+    /// to identify it by, so a short one can come back `unknown`; the
+    /// `dos_com` rules are the ones that can read it, wherever they live.
+    pub(crate) fn evaluation_file_type(
+        &self,
+        report: &crate::types::AnalysisReport,
+        data_len: usize,
+    ) -> RuleFileType {
+        let file_type = self.detect_file_type(&report.target.file_type);
+        let unidentified_small_com = file_type == RuleFileType::Unknown
+            && data_len <= 4096
+            && Path::new(&report.target.path)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("com"));
+        if unidentified_small_com {
+            RuleFileType::DosCom
+        } else {
+            file_type
+        }
+    }
 }
 
 /// Validate trait and composite conditions for problematic patterns.

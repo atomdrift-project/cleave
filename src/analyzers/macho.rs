@@ -166,7 +166,6 @@ impl MachOAnalyzer {
     /// via that ctx (no goblin re-parse).
     ///
     /// [`AnalysisContext`]: crate::analysis_context::AnalysisContext
-    #[allow(clippy::too_many_arguments)]
     fn analyze_structural_with_strings<'a>(
         &self,
         logical_path: &Path,
@@ -1622,7 +1621,6 @@ impl MachOAnalyzer {
     /// come back empty. Callers that already hold an
     /// `AnalysisContext` route through `analyze_structural_with_ctx`
     /// to surface those recovered functions / imports / sections.
-    #[allow(clippy::too_many_arguments)]
     fn analyze_macho_fallback(
         &self,
         logical_path: &Path,

@@ -462,7 +462,6 @@ impl UnifiedSourceAnalyzer {
     // Mirrors the fields of an `AnalysisInput` plus the decoded `content`; the
     // path-based entry has no `AnalysisInput` to pass, so the pieces are
     // threaded individually rather than bundled.
-    #[allow(clippy::too_many_arguments)]
     fn analyze_source_impl(
         &self,
         file_path: &Path,
@@ -947,7 +946,6 @@ impl UnifiedSourceAnalyzer {
         report
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn extract_ast_facts(
         &self,
         tree: &tree_sitter::Tree,
@@ -1628,6 +1626,59 @@ impl Analyzer for UnifiedSourceAnalyzer {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// An AST leg is located by `row:col`, a text leg by a byte offset.
+    /// Both are positions in one file, so a `scope: leaf` rule needing both
+    /// must fire -- each of the two once landed in a scope of its own.
+    #[test]
+    fn leaf_scope_joins_ast_and_text_legs_in_one_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let traits = dir.path().join("traits.yaml");
+        std::fs::write(
+            &traits,
+            r#"
+defaults:
+  for: [python]
+traits:
+  - id: "test/leaf::split-loop"
+    desc: "Loops over a split string"
+    crit: notable
+    if:
+      type: tree-sitter
+      query: |
+        (for_statement
+          right: (call function: (attribute attribute: (identifier) @split))
+          (#eq? @split "split"))
+  - id: "test/leaf::network-pack"
+    desc: "Packs network-order fields"
+    crit: notable
+    if:
+      type: text
+      regex: struct\.pack\(\s*'!H+'
+composite_rules:
+  - id: "test/leaf::leaf-rule"
+    desc: "Both legs in one unit"
+    crit: suspicious
+    scope: leaf
+    all:
+      - id: test/leaf::split-loop
+    any:
+      - id: test/leaf::network-pack
+"#,
+        )
+        .unwrap();
+        let mapper = crate::capabilities::CapabilityMapper::from_yaml(&traits).unwrap();
+        let analyzer = UnifiedSourceAnalyzer::for_file_type(&FileType::Python)
+            .unwrap()
+            .with_engine(crate::Engine::from_rules(std::sync::Arc::new(mapper)));
+        let code = "import struct\n\ndef encode_name(value):\n    wire = b''\n    for piece in value.split('.'):\n        wire += bytes([len(piece)]) + piece.encode('ascii')\n    return wire + b'\\x00'\n\npacket = struct.pack('!HHHHHH', 1, 256, 1, 0, 0, 0)\n";
+        let report = analyzer.analyze_source(Path::new("dns.py"), code);
+
+        let ids: Vec<&str> = report.findings.iter().map(|f| f.id.as_str()).collect();
+        assert!(ids.contains(&"test/leaf::split-loop"), "{ids:?}");
+        assert!(ids.contains(&"test/leaf::network-pack"), "{ids:?}");
+        assert!(ids.contains(&"test/leaf::leaf-rule"), "{ids:?}");
+    }
 
     #[test]
     fn source_retains_predecoded_base32_and_base85_evidence() {

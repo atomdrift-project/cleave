@@ -99,6 +99,23 @@ pub(crate) fn merge_filefacts_context(
     }
 }
 
+/// The findings of `report`'s own decoded layers: the `##` records filed
+/// under its path (an escaped or encoded blob it carries, analyzed as code),
+/// at any depth. Members of an archive report are not layers of it.
+fn decoded_layer_findings(report: &AnalysisReport) -> Vec<Finding> {
+    let prefix = format!(
+        "{}{}",
+        report.target.path,
+        crate::types::file_analysis::ENCODING_DELIMITER
+    );
+    report
+        .files
+        .iter()
+        .filter(|file| file.path.starts_with(&prefix))
+        .flat_map(|file| file.findings.iter().cloned())
+        .collect()
+}
+
 /// Full raw-content gate with offset recording (windowed `eval_raw`) for
 /// binaries. PE/ELF stay here: B1k measured AC + windows on 200–480 MiB
 /// installers as a loss.
@@ -280,7 +297,7 @@ impl super::CapabilityMapper {
         let cached_ast = analysis.cached_ast;
         let t_total = std::time::Instant::now();
         // Detect file type once
-        let file_type = self.detect_file_type(&report.target.file_type);
+        let file_type = self.evaluation_file_type(report, binary_data.len());
 
         // Build section map ONCE for location-constrained matching.
         // Skip parsing for files that don't have sections (saves ~100ms per file).
@@ -530,8 +547,12 @@ impl super::CapabilityMapper {
         }
         let _d_eval2 = t_eval2.elapsed();
 
-        // Step 4: Evaluate composite rules (which can now access atomic traits)
+        // Step 4: Evaluate composite rules (which can now access atomic traits),
+        // over this file's decoded layers too: an escaped or encoded blob the
+        // file carries was analyzed as its own `##` record, but it is part of
+        // this file, so this file's composites must see what it holds.
         let t_comp = std::time::Instant::now();
+        let layer_findings = decoded_layer_findings(report);
         let composite_findings = self.evaluate_composite_rules(
             report,
             binary_data,
@@ -540,6 +561,7 @@ impl super::CapabilityMapper {
             &section_map,
             arch_ranges,
             Some(&sink),
+            &layer_findings,
         );
 
         // Merge composite findings into report
@@ -811,6 +833,12 @@ impl super::CapabilityMapper {
     /// leg is no longer satisfied, but re-deciding that needs the leg semantics
     /// the definition holds, not the flat `trait_refs` list. Keeping it errs
     /// toward reporting, which is the right way to err for a detector.
+    ///
+    /// A composite that loses *every* cited leg is kept only when its
+    /// definition is satisfied again by legs still present, and it then cites
+    /// those. `trait_refs` records the legs of the fixed-point round the rule
+    /// first matched in, and a matched rule is not re-evaluated, so an `any:`
+    /// alternative that matched a round later was never cited.
     fn remove_findings_and_orphaned_dependents(
         &self,
         findings: &mut Vec<Finding>,
@@ -834,8 +862,20 @@ impl super::CapabilityMapper {
                     .iter()
                     .find(|rule| rule.id == finding.id.as_str())
                     .is_some_and(|rule| !self.composite_trait_legs_still_match(rule, &current_ids));
-                if composite_invalidated || (finding.trait_refs.is_empty() && before > 0) {
+                if composite_invalidated {
                     orphaned.insert(finding.id.clone());
+                } else if finding.trait_refs.is_empty() && before > 0 {
+                    match self
+                        .composite_rules
+                        .iter()
+                        .find(|rule| rule.id == finding.id.as_str())
+                        .and_then(|rule| self.trait_legs_resatisfying(rule, &current_ids))
+                    {
+                        Some(legs) => finding.trait_refs = legs,
+                        None => {
+                            orphaned.insert(finding.id.clone());
+                        }
+                    }
                 }
             }
             if !orphaned.is_empty() {
@@ -846,6 +886,65 @@ impl super::CapabilityMapper {
             }
             removed = orphaned;
         }
+    }
+
+    /// The findings that satisfy `rule` again by its trait legs alone, or
+    /// `None` when they do not. Every `all:` trait leg must still be present
+    /// and enough `any:` trait legs to meet `needs`; an `any:` alternative
+    /// that is not a trait reference cannot be re-checked here, so it does
+    /// not count. Conditions on the file's own content are unaffected by a
+    /// suppression and hold as they did.
+    fn trait_legs_resatisfying(
+        &self,
+        rule: &crate::composite_rules::CompositeTrait,
+        current_ids: &FxHashSet<&str>,
+    ) -> Option<Vec<crate::types::Istr>> {
+        let backing = |id: &str| -> Vec<&str> {
+            current_ids
+                .iter()
+                .copied()
+                .filter(|candidate| self.trait_reference_matches(id, candidate))
+                .collect()
+        };
+        fn trait_ids(conditions: Option<&Vec<crate::composite_rules::Condition>>) -> Vec<&str> {
+            conditions
+                .into_iter()
+                .flatten()
+                .filter_map(|condition| match condition {
+                    crate::composite_rules::Condition::Trait { id } => Some(id.as_str()),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        let mut legs: Vec<&str> = Vec::new();
+        for id in trait_ids(rule.all.as_ref()) {
+            let found = backing(id);
+            if found.is_empty() {
+                return None;
+            }
+            legs.extend(found);
+        }
+        if let Some(any) = &rule.any {
+            let needed = rule.needs.unwrap_or(1).min(any.len());
+            let mut satisfied = 0;
+            for id in trait_ids(Some(any)) {
+                let found = backing(id);
+                if !found.is_empty() {
+                    satisfied += 1;
+                    legs.extend(found);
+                }
+            }
+            if satisfied < needed {
+                return None;
+            }
+        }
+        if legs.is_empty() {
+            return None;
+        }
+        legs.sort_unstable();
+        legs.dedup();
+        Some(legs.into_iter().map(|id| id.to_string().into()).collect())
     }
 
     /// Check the trait-reference parts of a previously matched composite after

@@ -919,13 +919,15 @@ pub fn format_context_badged(
             &mut body,
             file,
             &selected,
-            &windowed,
-            &capped,
-            &drawn,
+            &ContextCoverage {
+                windowed: &windowed,
+                capped: &capped,
+                drawn: &drawn,
+                shown: shows_context,
+            },
             &owed,
             &id_to_file,
             opts,
-            shows_context,
             colorize,
         );
         render_context(
@@ -2306,7 +2308,6 @@ fn truncate_end(s: &str, max: usize) -> String {
 
 /// Emit the merged context. Source files render line-by-line; binaries render
 /// each match window as raw bytes wrapped into hex|ascii rows at `term_width`.
-#[allow(clippy::too_many_arguments)] // a render primitive; bundling would obscure it
 fn render_context(
     out: &mut String,
     file: &FileAnalysis,
@@ -2687,6 +2688,15 @@ fn render_text_chunks(
             .saturating_sub(prefix + 2 + SRC_COMMENT_BUDGET)
             .clamp(24, 100)
     };
+    let layout = SourceLayout {
+        owed,
+        marker,
+        loc_width,
+        content_width,
+        term_width,
+        colorize,
+        card: opts.card,
+    };
 
     // Set the context off from any file-level annotations above it (LLM view).
     if minimal && !out.is_empty() && !out.ends_with("\n\n") {
@@ -2773,20 +2783,16 @@ fn render_text_chunks(
                 .max_by_key(|n| (n.crit, std::cmp::Reverse(n.off)));
             render_source_line(
                 &mut block,
-                bytes,
-                row.off,
-                row.line,
-                row.col,
-                idx == last && cut_right,
-                &notes,
-                comment,
-                owed,
-                marker,
-                loc_width,
-                content_width,
-                term_width,
-                colorize,
-                opts.card,
+                &SourceRow {
+                    data: bytes,
+                    byte_base: row.off,
+                    line_no: row.line,
+                    col_base: row.col,
+                    cut_right: idx == last && cut_right,
+                    notes: &notes,
+                    comment,
+                },
+                &layout,
             );
         }
         push_source_block(out, &mut block);
@@ -2860,11 +2866,17 @@ fn render_hex_context(
     let stride = hex_stride(term_width, loc_width);
     let marker = comment_marker(&file.file_type);
 
+    let layout = HexLayout {
+        sel: &sel,
+        stride,
+        marker,
+        loc_width,
+        term_width,
+        opts,
+        colorize,
+    };
     for &i in &show {
-        let line = &file.context[i];
-        render_hex_unit(
-            out, line, &sel, stride, marker, loc_width, term_width, opts, colorize,
-        );
+        render_hex_unit(out, &file.context[i], &layout);
     }
 }
 
@@ -3002,6 +3014,36 @@ fn source_window(
     (byte_at(w0), byte_at(w1), lead, trail)
 }
 
+/// One source row to render: its bytes, where they sit in the file, and the
+/// notes whose match starts on it.
+#[derive(Clone, Copy)]
+struct SourceRow<'a> {
+    data: &'a [u8],
+    /// Absolute offset of the row's first byte.
+    byte_base: u64,
+    /// 1-based source line of the row's first byte.
+    line_no: u64,
+    /// 1-based source column of the row's first byte.
+    col_base: u64,
+    /// The source line continues past the captured window.
+    cut_right: bool,
+    notes: &'a [&'a Note],
+    /// The note the row's trailing comment describes.
+    comment: Option<&'a Note>,
+}
+
+/// How every row of one file's source context is laid out.
+#[derive(Clone, Copy)]
+struct SourceLayout<'a> {
+    owed: &'a HashSet<&'a str>,
+    marker: &'a str,
+    loc_width: usize,
+    content_width: usize,
+    term_width: usize,
+    colorize: bool,
+    card: bool,
+}
+
 /// Render one physical source row (a slice of a textual chunk). Colored: a
 /// 1-char severity gutter, the line number, the code clipped to a fixed width
 /// (with its match highlighted), then an aligned `// desc` comment. Plain (LLM):
@@ -3009,24 +3051,25 @@ fn source_window(
 /// LINE:COL DESC` annotation line. `byte_base`/`line_no`/`col_base` are the
 /// absolute offset and 1-based source position of the row's first byte;
 /// `cut_right` marks a row whose source line continues past the captured window.
-#[allow(clippy::too_many_arguments)] // a render primitive; bundling would obscure it
-fn render_source_line(
-    out: &mut String,
-    data: &[u8],
-    byte_base: u64,
-    line_no: u64,
-    col_base: u64,
-    cut_right: bool,
-    notes: &[&Note],
-    comment: Option<&Note>,
-    owed: &HashSet<&str>,
-    marker: &str,
-    loc_width: usize,
-    content_width: usize,
-    term_width: usize,
-    colorize: bool,
-    card: bool,
-) {
+fn render_source_line(out: &mut String, row: &SourceRow<'_>, layout: &SourceLayout<'_>) {
+    let SourceRow {
+        data,
+        byte_base,
+        line_no,
+        col_base,
+        cut_right,
+        notes,
+        comment,
+    } = *row;
+    let SourceLayout {
+        owed,
+        marker,
+        loc_width,
+        content_width,
+        term_width,
+        colorize,
+        card,
+    } = *layout;
     let raw = String::from_utf8_lossy(data);
     let base = byte_base;
     let loc_str = line_no.to_string();
@@ -3177,22 +3220,34 @@ fn render_source_line(
     out.push('\n');
 }
 
+/// How every window of one binary file's hex context is laid out.
+#[derive(Clone, Copy)]
+struct HexLayout<'a> {
+    /// The finding ids selected for display.
+    sel: &'a HashSet<&'a str>,
+    /// Bytes per hex row.
+    stride: usize,
+    marker: &'a str,
+    loc_width: usize,
+    term_width: usize,
+    opts: &'a TinyOpts,
+    colorize: bool,
+}
+
 /// Render one binary window: wrap its raw bytes into `stride`-byte hex|ascii
 /// rows, highlight the matched bytes, and trail each row that carries a match
 /// with a tinted `// desc` aligned in a hex-editor gutter. The comment is
 /// truncated to the remaining terminal width so a row never wraps.
-#[allow(clippy::too_many_arguments)] // a render primitive; bundling would obscure it
-fn render_hex_unit(
-    out: &mut String,
-    line: &ContextLine,
-    sel: &HashSet<&str>,
-    stride: usize,
-    marker: &str,
-    loc_width: usize,
-    term_width: usize,
-    opts: &TinyOpts,
-    colorize: bool,
-) {
+fn render_hex_unit(out: &mut String, line: &ContextLine, layout: &HexLayout<'_>) {
+    let HexLayout {
+        sel,
+        stride,
+        marker,
+        loc_width,
+        term_width,
+        opts,
+        colorize,
+    } = *layout;
     let full_context = opts.full_context;
     // Row trimming and the selected-notes filter below are cleave's terminal
     // view alone; every other consumer of this renderer keeps the window and
@@ -3492,6 +3547,20 @@ fn paint_spans(text: &str, mut spans: Vec<(usize, usize, Criticality)>) -> Strin
     buf
 }
 
+/// What the context pass draws for a file, which the location-less notes
+/// must not repeat.
+#[derive(Clone, Copy)]
+struct ContextCoverage<'a> {
+    /// Finding ids drawn as byte or source windows.
+    windowed: &'a HashSet<&'a str>,
+    /// Findings holding a note whose every window the plan cut.
+    capped: &'a HashSet<&'a str>,
+    /// Byte ranges of the source windows drawn.
+    drawn: &'a [(u64, u64)],
+    /// Any context is drawn at all.
+    shown: bool,
+}
+
 /// Emit selected findings that have *no anchorable location of their own* — once
 /// context is captured, that means a cross-file composite (its evidence lives in a
 /// member, so it has no local window) and nothing else: any intra-file finding is
@@ -3502,20 +3571,22 @@ fn paint_spans(text: &str, mut spans: Vec<(usize, usize, Criticality)>) -> Strin
 /// severity-tinted gutter glyph and description (no comment marker — there's no
 /// code to comment on), and a cross-file composite trails its contributing
 /// members; the LLM (Minimal) view uses the `{marker} SEV desc` annotation form.
-#[allow(clippy::too_many_arguments)] // a render primitive; bundling would obscure it
 fn render_no_anchor(
     out: &mut String,
     file: &FileAnalysis,
     selected: &[&str],
-    windowed: &HashSet<&str>,
-    capped: &HashSet<&str>,
-    drawn: &[(u64, u64)],
+    coverage: &ContextCoverage<'_>,
     owed: &HashSet<&str>,
     id_to_file: &HashMap<u32, &FileAnalysis>,
     opts: &TinyOpts,
-    context_shown: bool,
     colorize: bool,
 ) {
+    let ContextCoverage {
+        windowed,
+        capped,
+        drawn,
+        shown: context_shown,
+    } = *coverage;
     let sel: HashSet<&str> = selected.iter().copied().collect();
 
     let rich = matches!(opts.header, HeaderStyle::Rich);

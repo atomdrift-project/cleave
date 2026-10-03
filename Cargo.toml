@@ -237,7 +237,7 @@ tower = { version = "0.5", features = ["timeout", "limit"] }
 tower-http = { version = "0.7", features = ["limit"] }
 once_cell = "1.21"
 am-fs-squashfs = "0.1.5"
-fs_core = { package = "am-fs-core", version = "0.2.15" }
+fs_core = { package = "am-fs-core", version = "0.2.19" }
 
 [lib]
 name = "cleave"

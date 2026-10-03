@@ -663,6 +663,7 @@ impl FileTypeExt for FileType {
             FileType::Xbps => vec!["xbps", "archive"],
             FileType::GentooBinpkg => vec!["gentoo_binpkg", "archive"],
             FileType::Asar => vec!["asar", "archive"],
+            FileType::Phar => vec!["phar", "archive"],
             // Compressed images we identify but do not unpack. They take the
             // archive tier like the other opaque containers (iso, dmg): their
             // members are out of reach, but the container itself is scanned.

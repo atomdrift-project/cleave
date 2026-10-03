@@ -10,8 +10,8 @@ use super::condition::{
 };
 use super::context::{ConditionResult, EvaluationContext, StringParams};
 use super::evaluators::{
-    ContentLocationParams, MatchCountGuard, MatchLocationsGuard, SectionParams, eval_ast,
-    eval_encoded, eval_hex, eval_metrics, eval_path, eval_raw, eval_section, eval_symbol,
+    ContentLocationParams, MatchCountGuard, MatchLocationsGuard, SectionParams, TextPattern,
+    eval_ast, eval_encoded, eval_hex, eval_metrics, eval_path, eval_raw, eval_section, eval_symbol,
     eval_syscall, eval_text, eval_trait, eval_yara_inline,
 };
 use super::types::{
@@ -472,11 +472,13 @@ fn eval_condition(
             timed_eval!(
                 "raw",
                 eval_raw(
-                    exact.as_ref(),
-                    substr.as_ref(),
-                    regex.as_ref(),
-                    word.as_ref(),
-                    *case_insensitive,
+                    TextPattern {
+                        exact: exact.as_ref(),
+                        substr: substr.as_ref(),
+                        regex: regex.as_ref(),
+                        word: word.as_ref(),
+                        case_insensitive: *case_insensitive,
+                    },
                     (*length_min, *length_max),
                     *is_check,
                     merged_not.as_ref(),
@@ -557,11 +559,13 @@ fn eval_condition(
                 "encoded",
                 eval_encoded(
                     encoding.as_ref(),
-                    exact.as_ref(),
-                    substr.as_ref(),
-                    regex.as_ref(),
-                    word.as_ref(),
-                    *case_insensitive,
+                    TextPattern {
+                        exact: exact.as_ref(),
+                        substr: substr.as_ref(),
+                        regex: regex.as_ref(),
+                        word: word.as_ref(),
+                        case_insensitive: *case_insensitive,
+                    },
                     &location,
                     *is_check,
                     not.as_ref(),
@@ -2101,7 +2105,8 @@ impl TraitDefinition {
 /// File     →  same leaf-file (the deepest file-shaped unit, e.g. a
 ///             PE inside a zip; ignores decoded payload layers below)
 ///             (default)
-/// Leaf     →  same exact analyzed unit, including decoded payload layers
+/// Leaf     →  same exact analyzed unit: a decoded payload layer is its
+///             own unit, but a position inside a unit is not
 /// Parent   →  immediate parent findings only (downgrade conditions only)
 /// FileOrParent → matched file and immediate parent (downgrade only)
 /// ```
@@ -2154,7 +2159,9 @@ pub(crate) enum Scope {
     /// file are pooled together at the file level. Default.
     #[default]
     File,
-    /// Same exact analyzed unit, including decoded payload layers.
+    /// Same exact analyzed unit: each decoded payload layer is a unit of
+    /// its own. Positions within a unit (byte offsets, AST `row:col`) are
+    /// not, so an AST leg and a text leg in one unit share the scope.
     Leaf,
 }
 
@@ -2180,14 +2187,15 @@ impl Scope {
             // Outer scope or no location info — all evidence shares one key.
             // This is the only scope that pools by presence, deliberately.
             (Scope::Outer, _) | (_, None) => "",
-            // Leaf: exact location match required.
-            (Scope::Leaf, Some(loc)) => strip_byte_offset_location(loc),
+            // Leaf: the exact analyzed unit, with any position inside it
+            // dropped.
+            (Scope::Leaf, Some(loc)) => strip_byte_offset_location(strip_ast_position(loc)),
             // File: strip any decoded-payload suffix; what remains is
             // the leaf-file identifier. Parent is meaningful only to the
             // explicit downgrade pass; a composite cannot pool a parent's
             // evidence through a location key, so it keys like File.
             (Scope::File | Scope::Parent | Scope::FileOrParent, Some(loc)) => {
-                strip_byte_offset_location(strip_decode_suffix(loc))
+                strip_byte_offset_location(strip_ast_position(strip_decode_suffix(loc)))
             }
             // Nest: the file key cut back to its nest host's name.
             (Scope::Nest, Some(loc)) => {
@@ -2339,6 +2347,27 @@ fn strip_byte_offset_location(location: &str) -> &str {
     }
 
     location
+}
+
+/// Drop the AST `row:col` position from a location, keeping the unit it
+/// names. AST evidence is located by position (`12:5`), and a member or
+/// decoded layer prefixes its unit (`archive:pkg/a.py:12:5`,
+/// `encoding_chain:base64:12:5`), where text evidence in the same unit
+/// carries a byte offset that [`strip_byte_offset_location`] removes.
+/// Without this, an AST leg keys to its own line and never shares a scope
+/// with the text legs beside it.
+fn strip_ast_position(location: &str) -> &str {
+    if is_positional_only(location) {
+        return "";
+    }
+    let is_number = |part: &str| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit());
+    match location.rsplit_once(':') {
+        Some((head, column)) if is_number(column) => match head.rsplit_once(':') {
+            Some((unit, row)) if is_number(row) && !unit.is_empty() => unit,
+            _ => location,
+        },
+        _ => location,
+    }
 }
 
 /// True if `location` is a pure `row:col` (or `row:col:...`) string
@@ -2889,7 +2918,7 @@ impl CompositeTrait {
         ctx: &EvaluationContext<'a>,
         static_gates_prechecked: bool,
     ) -> Option<Finding> {
-        use super::debug::{DowngradeDebug, ProximityDebug, SkipReason};
+        use super::debug::{DowngradeDebug, ProximityDebug, ScopeDebug, SkipReason};
 
         // A `crit: exception` composite may assemble a directory of exceptions, so
         // re-include exception members in its directory references. Only exceptions
@@ -3102,6 +3131,22 @@ impl CompositeTrait {
 
         // Apply scope filter (e.g. `scope: leaf` for archive-FP suppression).
         // When the filter rejects all scope buckets, the rule does not fire.
+        // Record where each leg's evidence was bucketed first: a rejected
+        // rule otherwise shows every leg matched and still does not fire.
+        let scope = self.effective_scope();
+        if result.matched && !matches!(scope, Scope::Outer) {
+            ctx.with_debug(|debug| {
+                debug.set_scope(ScopeDebug {
+                    scope: format!("{scope:?}").to_lowercase(),
+                    satisfied: false,
+                    detail: self.scope_debug_detail(
+                        &proximity_tags,
+                        &ctx.report.archive_contents,
+                        &ctx.report.target.file_type,
+                    ),
+                });
+            });
+        }
         let proximity_tags = match self.apply_scope_filter(
             result.evidence,
             proximity_tags,
@@ -3110,6 +3155,11 @@ impl CompositeTrait {
         ) {
             Some((ev, tags)) => {
                 result.evidence = ev;
+                ctx.with_debug(|debug| {
+                    if let Some(scope) = debug.scope.as_mut() {
+                        scope.satisfied = true;
+                    }
+                });
                 tags
             }
             None => return None,
@@ -3646,6 +3696,66 @@ impl CompositeTrait {
             })
             .collect();
         Some((filtered_evidence, filtered_tags))
+    }
+
+    /// Build the human-readable scope explanation surfaced by `test-rules`:
+    /// what one scope bucket must hold, and which legs landed in each bucket,
+    /// e.g. `one bucket must hold every all-leg [2] plus 1 of 1 any-legs;
+    /// "archive:" {all[0] plugin-descriptor}; "archive:lib/p.jar" {all[1]
+    /// ps1, any[0] url}`. Authoring/debug aid only.
+    fn scope_debug_detail(
+        &self,
+        tagged_locations: &[TaggedLocation],
+        archive_contents: &[crate::types::ArchiveEntry],
+        top_level_file_type: &str,
+    ) -> String {
+        let scope = self.effective_scope();
+        let all = self.all.as_deref().unwrap_or_default();
+        let any = self.any.as_deref().unwrap_or_default();
+        let any_required = if any.is_empty() {
+            0
+        } else {
+            self.needs.unwrap_or(1).min(any.len())
+        };
+        let label = |index: usize| {
+            let (group, position, condition) = if index < all.len() {
+                ("all", index, all.get(index))
+            } else {
+                ("any", index - all.len(), any.get(index - all.len()))
+            };
+            match condition {
+                Some(Condition::Trait { id }) => {
+                    let leaf = id.rsplit_once("::").map_or(id.as_str(), |(_, leaf)| leaf);
+                    format!("{group}[{position}] {leaf}")
+                }
+                _ => format!("{group}[{position}]"),
+            }
+        };
+        let mut buckets: std::collections::BTreeMap<&str, std::collections::BTreeSet<usize>> =
+            std::collections::BTreeMap::new();
+        for tag in tagged_locations {
+            buckets
+                .entry(scope.key(
+                    tag.location.as_deref(),
+                    archive_contents,
+                    top_level_file_type,
+                ))
+                .or_default()
+                .insert(tag.condition_index);
+        }
+        let held: Vec<String> = buckets
+            .iter()
+            .map(|(key, conditions)| {
+                let legs: Vec<String> = conditions.iter().map(|&i| label(i)).collect();
+                format!("{key:?} {{{}}}", legs.join(", "))
+            })
+            .collect();
+        format!(
+            "one bucket must hold every all-leg [{}] plus {any_required} of {} any-legs; {}",
+            all.len(),
+            any.len(),
+            held.join("; ")
+        )
     }
 
     /// Build the human-readable proximity explanation surfaced by `test-rules`:
@@ -4642,17 +4752,21 @@ mod scope_tests {
 
     #[test]
     fn file_keeps_file_prefixed_locations() {
-        // Anything that carries actual file identity (path + position
-        // or just a path) must be preserved so two unrelated files in
-        // an archive don't get pooled. Only the empty/positional/decoded
-        // cases collapse.
+        // Anything that carries actual file identity must keep it so two
+        // unrelated files in an archive don't get pooled. The position
+        // after the path is not identity: it is dropped, as it is for a
+        // bare `row:col`, so evidence elsewhere in the same file still pools.
         assert_eq!(
             Scope::File.key(Some("Analytics.php:10:5"), &[], ""),
-            "Analytics.php:10:5"
+            "Analytics.php"
         );
         assert_eq!(
             Scope::File.key(Some("src/main.rs:42:1"), &[], ""),
-            "src/main.rs:42:1"
+            "src/main.rs"
+        );
+        assert_ne!(
+            Scope::File.key(Some("Analytics.php:10:5"), &[], ""),
+            Scope::File.key(Some("src/main.rs:10:5"), &[], "")
         );
         assert_eq!(Scope::File.key(Some("file:foo"), &[], ""), "file:foo");
         // Edge cases that look numeric but aren't `row:col`.
@@ -4801,15 +4915,46 @@ mod scope_tests {
     }
 
     #[test]
-    fn leaf_does_not_collapse_positional_locations() {
-        // `scope: leaf` is the strictest scope — every evidence must
-        // share the EXACT location. We must NOT widen leaf semantics
-        // when fixing the file-scope bug.
-        assert_eq!(Scope::Leaf.key(Some("6:14"), &[], ""), "6:14");
-        assert_eq!(Scope::Leaf.key(Some("7:1"), &[], ""), "7:1");
+    fn leaf_keys_a_position_to_the_unit_that_holds_it() {
+        // AST evidence is located by `row:col`, text evidence by a byte
+        // offset. Both are positions inside one analyzed unit, so `leaf`
+        // keys them alike -- otherwise an AST leg and a text leg in the
+        // same file could never satisfy one leaf-scoped rule.
+        for (ast, text, unit) in [
+            ("6:14", "0x1a", ""),
+            (
+                "archive:pkg/a.py:12:5",
+                "archive:pkg/a.py:0x1a",
+                "archive:pkg/a.py",
+            ),
+            ("Analytics.php:10:5", "Analytics.php:0x40", "Analytics.php"),
+        ] {
+            assert_eq!(Scope::Leaf.key(Some(ast), &[], ""), unit, "{ast}");
+            assert_eq!(Scope::Leaf.key(Some(text), &[], ""), unit, "{text}");
+        }
+    }
+
+    #[test]
+    fn leaf_keeps_each_unit_apart() {
+        // What `leaf` still separates: a decoded layer from its host and
+        // from other layers, and one archive member from another.
+        let host = Scope::Leaf.key(Some("6:14"), &[], "");
+        let layer = Scope::Leaf.key(Some("encoding_chain:base64:6:14"), &[], "");
+        let other_layer = Scope::Leaf.key(Some("encoding_chain:hex:6:14"), &[], "");
+        assert_eq!(layer, "encoding_chain:base64");
+        assert_ne!(host, layer);
+        assert_ne!(layer, other_layer);
+        assert_ne!(
+            Scope::Leaf.key(Some("archive:a.py:3:1"), &[], ""),
+            Scope::Leaf.key(Some("archive:b.py:3:1"), &[], "")
+        );
+    }
+
+    #[test]
+    fn file_keys_an_archive_member_position_to_the_member() {
         assert_eq!(
-            Scope::Leaf.key(Some("Analytics.php:10:5"), &[], ""),
-            "Analytics.php:10:5"
+            Scope::File.key(Some("archive:pkg/a.py:12:5"), &[], ""),
+            Scope::File.key(Some("archive:pkg/a.py:0x1a"), &[], "")
         );
     }
 

@@ -14,7 +14,6 @@ use crate::types::{AnalysisReport, Criticality, Evidence, Finding, FindingKind};
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::HashMap;
-use std::path::Path;
 use std::sync::OnceLock;
 
 /// Pre-computed caches passed to trait evaluation to avoid redundant work.
@@ -544,7 +543,7 @@ impl super::CapabilityMapper {
         inline_yara: Option<&HashMap<String, Vec<Evidence>>>,
     ) -> Vec<Finding> {
         // Determine file type from report (platform comes from self.platform)
-        let file_type = self.detect_file_type(&report.target.file_type);
+        let file_type = self.evaluation_file_type(report, binary_data.len());
 
         // Build section map for location-constrained matching from the report's
         // already-populated sections. Standalone trait evaluation should not
@@ -739,7 +738,7 @@ impl super::CapabilityMapper {
         dependent_only: bool,
     ) -> Vec<Finding> {
         // Compute raw regex matches (this is expensive but necessary if no cache provided)
-        let file_type = self.detect_file_type(&report.target.file_type);
+        let file_type = self.evaluation_file_type(report, binary_data.len());
         let raw_regex_hits = if self.match_indexes().raw_content_regex_index.has_patterns() {
             self.match_indexes()
                 .raw_content_regex_index
@@ -842,7 +841,7 @@ impl super::CapabilityMapper {
             suppressions,
         } = pass;
         // Determine file type from report
-        let file_type = self.detect_file_type(&report.target.file_type);
+        let file_type = self.evaluation_file_type(report, binary_data.len());
         let use_string_prefilters =
             !file_type.uses_raw_text_search_for(binary_data) || cache.source_text_prefiltered;
 
@@ -882,33 +881,6 @@ impl super::CapabilityMapper {
             ctx = ctx.with_raw_atom_offsets(cache.raw_atom_offsets);
         }
 
-        // Use trait index to only evaluate applicable traits
-        // This dramatically reduces work for specific file types
-        let mut applicable_indices: Vec<usize> = self
-            .match_indexes()
-            .trait_index
-            .get_applicable(&file_type)
-            .into_indices_static()
-            .collect();
-
-        let is_tiny_dos_com_candidate = file_type == crate::composite_rules::FileType::Unknown
-            && binary_data.len() <= 4096
-            && Path::new(&report.target.path)
-                .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("com"));
-
-        if is_tiny_dos_com_candidate {
-            applicable_indices.retain(|&idx| {
-                let trait_def = &self.trait_definitions[idx];
-                let source = trait_def.defined_in.to_string_lossy();
-                source.ends_with("/metadata/binary/layout/msdos.yaml")
-                    || source.ends_with("/micro-behaviors/os/msdos/internal/signatures.yaml")
-                    || source.ends_with("/micro-behaviors/os/msdos/interrupt/file_management.yaml")
-                    || source.ends_with("/micro-behaviors/time/schedule/calendar/msdos.yaml")
-                    || source.ends_with("/well-known/malware/virus/friday_the_13th/msdos.yaml")
-            });
-        }
-
         // Further filter by dependency status; on fixed-point re-iterations,
         // additionally to the worklist — traits already settled, or whose
         // `trait:` refs none of the newly-added ids could satisfy, cannot
@@ -916,8 +888,7 @@ impl super::CapabilityMapper {
         // Static half of the filter — applicability, `can_match_file_type`,
         // dependency class — comes from the per-(file type, pass) memo
         // (`trait_worklist`); only the fixed-point rescan narrowing is
-        // dynamic. The rare tiny-DOS-`.com` candidate keeps the old inline
-        // path because its `retain` above shrank `applicable_indices`.
+        // dynamic.
         let rescan_keep = |idx: usize| -> bool {
             let trait_def = &self.trait_definitions[idx];
             let Some(changed) = changed_ids else {
@@ -930,24 +901,7 @@ impl super::CapabilityMapper {
                 .iter()
                 .any(|r| changed.iter().any(|f| finding_could_affect_ref(r, f)))
         };
-        let filtered_indices: Vec<usize> = if is_tiny_dos_com_candidate {
-            applicable_indices
-                .into_iter()
-                .filter(|&idx| {
-                    let trait_def = &self.trait_definitions[idx];
-                    trait_def.r#if.can_match_file_type(&file_type)
-                        && trait_def.has_trait_dependency() == dependent_only
-                        // The work-list path folds the platform gate; this
-                        // bypass must apply it explicitly for pregated
-                        // evaluation to stay sound.
-                        && crate::composite_rules::platforms_intersect(
-                            &trait_def.platforms,
-                            &self.platforms,
-                        )
-                        && rescan_keep(idx)
-                })
-                .collect()
-        } else if changed_ids.is_some() {
+        let filtered_indices: Vec<usize> = if changed_ids.is_some() {
             self.trait_worklist(file_type, dependent_only)
                 .iter()
                 .copied()

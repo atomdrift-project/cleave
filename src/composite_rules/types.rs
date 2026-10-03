@@ -741,6 +741,10 @@ pub(crate) enum FileType {
     /// Electron ASAR application archive (.asar)
     #[archive]
     Asar,
+    /// PHP archive (.phar): a PHP stub followed by a manifest of stored,
+    /// deflated or bzip2-compressed members
+    #[archive]
+    Phar,
     /// VS Code extension (.vsix archive)
     #[archive]
     #[package]
@@ -909,6 +913,7 @@ impl From<filefacts::FileType> for FileType {
             Ff::Xbps => Self::Xbps,
             Ff::GentooBinpkg => Self::GentooBinpkg,
             Ff::Asar => Self::Asar,
+            Ff::Phar => Self::Phar,
             Ff::Crx => Self::Crx,
             Ff::Xpi => Self::Xpi,
             Ff::Whl => Self::Whl,
@@ -1324,6 +1329,7 @@ impl FileType {
             Self::Xbps => "xbps",
             Self::GentooBinpkg => "gentoo_binpkg",
             Self::Asar => "asar",
+            Self::Phar => "phar",
             Self::VsixArchive => "vsix",
             Self::Xpi => "xpi",
         }
@@ -1810,6 +1816,7 @@ mod tests {
         assert_eq!(FileType::from_str(Ff::TarZst.label()), FileType::Tar);
         assert_eq!(FileType::from_str(Ff::Dmg.label()), FileType::Dmg);
         assert_eq!(FileType::from_str(Ff::Asar.label()), FileType::Asar);
+        assert_eq!(FileType::from_str(Ff::Phar.label()), FileType::Phar);
         assert_eq!(FileType::from_str(Ff::OciImage.label()), FileType::OciImage);
         assert_eq!(FileType::from_str(Ff::Xbps.label()), FileType::Xbps);
         assert_eq!(
@@ -1917,6 +1924,7 @@ mod tests {
         assert!(family.contains(&FileType::SquashFs));
         assert!(family.contains(&FileType::Dmg));
         assert!(family.contains(&FileType::Asar));
+        assert!(family.contains(&FileType::Phar));
         assert!(family.contains(&FileType::OciImage));
         assert!(family.contains(&FileType::Xbps));
         assert!(family.contains(&FileType::GentooBinpkg));

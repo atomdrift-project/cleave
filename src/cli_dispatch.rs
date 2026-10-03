@@ -7,7 +7,7 @@ use cleave::commands::{
     extract_symbols_command, inspect_command, iter_files_command,
 };
 #[cfg(feature = "lint")]
-use cleave::commands::{test_match, test_rules, validate_command};
+use cleave::commands::{MatchRequest, test_match, test_rules, validate_command};
 use std::fs;
 
 struct AnalyzeDispatchContext<'a> {
@@ -33,39 +33,6 @@ pub(crate) struct DispatchContext<'a> {
     format: &'a cli::OutputFormat,
     disabled: &'a cli::DisabledComponents,
     analyze: AnalyzeDispatchContext<'a>,
-}
-
-#[cfg(feature = "lint")]
-struct TestMatchRequest<'a> {
-    target: &'a str,
-    kind: cli::SearchType,
-    method: cli::MatchMethod,
-    pattern: Option<&'a str>,
-    kv_path: Option<&'a str>,
-    exists: Option<bool>,
-    size_min: Option<usize>,
-    size_max: Option<usize>,
-    file_type: Option<cli::DetectFileType>,
-    count_min: usize,
-    count_max: Option<usize>,
-    per_kb_min: Option<f64>,
-    per_kb_max: Option<f64>,
-    case_insensitive: bool,
-    section: Option<&'a str>,
-    offset: Option<i64>,
-    offset_range: Option<(i64, Option<i64>)>,
-    section_offset: Option<i64>,
-    section_offset_range: Option<(i64, Option<i64>)>,
-    is_check: Option<cleave::composite_rules::StringValidator>,
-    encoding: Option<&'a str>,
-    entropy_min: Option<f64>,
-    entropy_max: Option<f64>,
-    length_min: Option<u64>,
-    length_max: Option<u64>,
-    value_min: Option<f64>,
-    value_max: Option<f64>,
-    min_size: Option<u64>,
-    max_size: Option<u64>,
 }
 
 fn analyze_targets(targets: &[String], ctx: &AnalyzeDispatchContext<'_>) -> Result<String> {
@@ -215,40 +182,12 @@ fn run_server(
 
 #[cfg(feature = "lint")]
 fn run_test_match_command(
-    req: &TestMatchRequest<'_>,
+    req: &MatchRequest<'_>,
     disabled: &cli::DisabledComponents,
     platforms: &[cleave::Platform],
 ) -> Result<String> {
     test_match(
-        req.target,
-        req.kind,
-        req.method,
-        req.pattern,
-        req.kv_path,
-        req.exists,
-        req.size_min,
-        req.size_max,
-        req.file_type,
-        req.count_min,
-        req.count_max,
-        req.per_kb_min,
-        req.per_kb_max,
-        req.case_insensitive,
-        req.section,
-        req.offset,
-        req.offset_range,
-        req.section_offset,
-        req.section_offset_range,
-        req.is_check,
-        req.encoding,
-        req.entropy_min,
-        req.entropy_max,
-        req.length_min,
-        req.length_max,
-        req.value_min,
-        req.value_max,
-        req.min_size,
-        req.max_size,
+        req,
         disabled,
         platforms,
         cleave::CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION,
@@ -460,7 +399,7 @@ pub(crate) fn dispatch_command(
             min_size,
             max_size,
         }) => run_test_match_command(
-            &TestMatchRequest {
+            &MatchRequest {
                 target: &target,
                 kind: r#type,
                 method,

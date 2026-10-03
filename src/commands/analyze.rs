@@ -277,59 +277,6 @@ fn analyze_and_format(
 
     let mut report = prepare_output_report(lib_report);
 
-    // Merge encoding layers and recalculate composites.
-    // The mapper is only needed when encoding layers are actually merged (rare for single files),
-    // so we defer its expensive initialization to avoid ~800ms overhead on the common path.
-    let merged_indices = report.merge_encoding_layers();
-    if !merged_indices.is_empty() {
-        let capability_mapper =
-            crate::capabilities::CapabilityMapper::new_with_precision_thresholds(
-                options.min_hostile_precision,
-                options.min_suspicious_precision,
-                options.enable_full_validation,
-            );
-        for &idx in &merged_indices {
-            let file = &report.files[idx];
-            let mut temp_report = types::AnalysisReport::new(types::TargetInfo {
-                path: file.path.clone(),
-                file_type: file.file_type.clone(),
-                sha256: file.sha256.clone(),
-                size_bytes: file.size,
-                architectures: None,
-            });
-            temp_report.findings = file.findings.clone();
-
-            let new_composites = capability_mapper.evaluate_container_composites(
-                &temp_report,
-                &file.findings,
-                &file.file_type,
-                // Every finding here came from this one file, so the `for:`
-                // filter has nothing to separate: the node gate already
-                // decided it.
-                None,
-            );
-            if !new_composites.is_empty() {
-                let file = &mut report.files[idx];
-                for finding in new_composites {
-                    if !file.findings.iter().any(|f| f.id == finding.id) {
-                        file.findings.push(finding);
-                    }
-                }
-                file.compute_summary();
-            }
-        }
-        tracing::debug!(
-            "Merged encoding layers into {} parent file(s)",
-            merged_indices.len()
-        );
-    }
-
-    // Strip unmatched component and baseline traits across every format. Runs
-    // here, after the encoding-layer merge re-evaluated container composites
-    // above, so a parent composite never loses the building-block traits it
-    // fired on. The method logs the per-criticality counts it removed.
-    report.strip_unmatched_traits();
-
     format_report_output(
         &mut report,
         format,
@@ -373,9 +320,17 @@ fn format_report_output(
     }
 }
 
+/// The report every `analyze` output is rendered from, whether the target is
+/// a file or a directory: finalized, then stripped of the component and
+/// baseline traits no fired composite uses, as scan does before it posts a
+/// report. Decoded layers stay their own `##` records; the composites they
+/// complete were evaluated on their parent file during analysis.
 fn prepare_output_report(mut report: cleave::AnalysisReport) -> types::AnalysisReport {
     report.shrink_to_fit();
     report.finalize();
+    // After finalize, which re-evaluates composites up the archive chain, so a
+    // parent composite never loses the building-block traits it fired on.
+    report.strip_unmatched_traits();
     report
 }
 

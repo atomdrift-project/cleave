@@ -184,12 +184,7 @@ pub(crate) fn prepare_test_analysis(
             .with_engine(engine.clone())
             .analyze(path)?
     } else {
-        create_analysis_report(
-            path,
-            &file_type,
-            &prepared_target.preferred_binary_data,
-            engine,
-        )?
+        create_analysis_report(path, &file_type, &full_data, engine)?
     };
 
     // For FAT binaries, source full-file strings from filefacts (the
@@ -222,5 +217,5 @@ pub(crate) fn prepare_test_analysis(
 }
 
 // Re-export command functions
-pub use match_cmd::run as test_match;
+pub use match_cmd::{MatchRequest, run as test_match};
 pub use rules::run as test_rules;

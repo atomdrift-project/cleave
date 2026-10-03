@@ -141,8 +141,17 @@ pub(crate) struct RuleDebugger<'a> {
 /// Without this, test-rules evaluated container composites with every origin
 /// allowed and reported MATCHED for correlators whose legs a real scan drops
 /// because the leg's member type is missing from the rule's `for:`.
+///
+/// What the container node finds itself -- its own atomic pass over its
+/// bytes, and the path traits run over its entry list -- carries the
+/// container's bit even when a member found the same id, as it does in the
+/// scan. Both are recomputed here rather than read off `report.findings`,
+/// where they sit beside the members' rolled-up findings. Leaving the bit off
+/// reported such a leg as dropped by the origin filter when it was not.
 fn container_finding_origins(
     report: &AnalysisReport,
+    mapper: &CapabilityMapper,
+    container_data: &[u8],
 ) -> Option<rustc_hash::FxHashMap<String, TypeMask>> {
     if report.files.is_empty() {
         return None;
@@ -159,6 +168,19 @@ fn container_finding_origins(
         origins
             .entry(finding.id.to_string())
             .or_insert(container_bit);
+    }
+    for finding in mapper.evaluate_traits_with_ast(report, container_data, None, None) {
+        *origins.entry(finding.id.to_string()).or_default() |= container_bit;
+    }
+    let entry_names: Vec<String> = report
+        .archive_contents
+        .iter()
+        .map(|entry| entry.path.clone())
+        .collect();
+    if !entry_names.is_empty() {
+        for finding in mapper.evaluate_basename_traits_for_entries(&entry_names) {
+            *origins.entry(finding.id.to_string()).or_default() |= container_bit;
+        }
     }
     Some(origins)
 }
@@ -223,7 +245,7 @@ impl<'a> RuleDebugger<'a> {
             section_map,
             inline_yara_results,
             parsed,
-            finding_origins: container_finding_origins(report),
+            finding_origins: container_finding_origins(report, mapper, binary_data),
             leg_for_mask: std::cell::Cell::new(TypeMask::ALL),
         }
     }
@@ -672,6 +694,18 @@ impl<'a> RuleDebugger<'a> {
             condition_results.push(ConditionDebugResult::new(
                 proximity_desc,
                 proximity.satisfied,
+            ));
+        }
+
+        // Add scope info if the rule's scope buckets its evidence. Without it
+        // a rule rejected for spanning two buckets showed every leg matched.
+        if let Some(scope) = eval_debug.scope {
+            condition_results.push(ConditionDebugResult::new(
+                format!(
+                    "Scope {}: satisfied={}\n        {}",
+                    scope.scope, scope.satisfied, scope.detail
+                ),
+                scope.satisfied,
             ));
         }
 
@@ -1176,10 +1210,16 @@ impl<'a> RuleDebugger<'a> {
             effective_crit,
             crate::types::Criticality::Baseline | crate::types::Criticality::Component
         ) {
-            let referenced = self
-                .report
+            // Only a citation the scan keeps protects the trait: the scan drops
+            // low-value bare-`any:` wrappers and `exception` composites before
+            // the strip, so a citation from one of those rescues nothing.
+            let mut emitted = self.report.clone();
+            self.mapper.filter_low_value(&mut emitted);
+            let referenced = emitted
                 .findings
                 .iter()
+                .chain(emitted.files.iter().flat_map(|file| file.findings.iter()))
+                .filter(|f| f.crit != crate::types::Criticality::Exception)
                 .any(|f| f.trait_refs.iter().any(|r| r.as_str() == id));
             if !referenced && trait_def.downgrade.is_none() {
                 out.push(format!(
@@ -1773,7 +1813,6 @@ impl<'a> RuleDebugger<'a> {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn debug_ast_condition(
         &self,
         kind: &Option<String>,
@@ -3160,6 +3199,62 @@ composite_rules:
 
         let wide = debugger.debug_rule("fixture/origin::wide").unwrap();
         assert!(wide.matched, "listing elf lets the ELF leg count");
+    }
+
+    /// A leg the container finds itself counts as the container's, even when a
+    /// member of an unlisted type found the same id -- the scan stamps the
+    /// container's own findings (here, a basename trait over its entry list)
+    /// with its bit. test-rules once kept only the member's bit and blamed the
+    /// origin filter, as it did for a JetBrains plugin's `plugin.xml`.
+    #[test]
+    fn container_own_finding_keeps_container_origin() {
+        let yaml = r#"
+defaults:
+  for: [zip, elf]
+  crit: notable
+  conf: 0.9
+
+traits:
+  - id: "fixture/origin::leg-a"
+    desc: "leg a"
+    for: [xml]
+    if:
+      type: basename
+      exact: plugin.xml
+
+composite_rules:
+  - id: "fixture/origin::container-only"
+    desc: "names only the container"
+    for: [zip]
+    all:
+      - id: "fixture/origin::leg-a"
+"#;
+        let (_dir, path) = create_test_yaml(yaml);
+        let mapper = CapabilityMapper::from_yaml(&path).unwrap();
+
+        let a = create_test_finding("fixture/origin::leg-a");
+        let mut report = create_test_report_with_findings(vec![a.clone()]);
+        report.target.path = "release.zip".into();
+        report.target.file_type = "zip".into();
+        report.archive_contents = vec![crate::types::ArchiveEntry {
+            path: "pkg/META-INF/plugin.xml".into(),
+            file_type: "xml".into(),
+            ..Default::default()
+        }];
+        report.files = vec![crate::types::FileAnalysis {
+            path: "release.zip!!pkg/META-INF/plugin.xml".into(),
+            file_type: "xml".into(),
+            findings: vec![a],
+            ..Default::default()
+        }];
+
+        let debugger = RuleDebugger::new(&mapper, &report, b"", vec![Platform::All], None);
+        let rule = debugger
+            .debug_rule("fixture/origin::container-only")
+            .unwrap();
+        let text = format_debug_output(std::slice::from_ref(&rule));
+        assert!(rule.matched, "{text}");
+        assert!(!text.contains("origin filter drops it"), "{text}");
     }
 
     /// Test that exact trait ID match in findings is detected

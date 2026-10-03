@@ -189,7 +189,6 @@ impl ElfAnalyzer {
 
     /// Core ELF analysis logic. Strings and structure both come from the
     /// caller's `AnalysisContext` (filefacts) — the single extraction authority.
-    #[allow(clippy::too_many_arguments)]
     fn analyze_elf_core<'a>(
         &self,
         logical_path: &Path,

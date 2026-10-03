@@ -238,6 +238,18 @@ pub(crate) struct ProximityDebug {
     pub detail: String,
 }
 
+/// Debug info for the `scope:` filter: which scope bucket each leg's
+/// evidence landed in, and whether one bucket held enough of them.
+#[derive(Debug, Clone)]
+pub(crate) struct ScopeDebug {
+    /// The rule's effective scope (`file`, `leaf`, `archive`, ...).
+    pub scope: String,
+    /// Whether a single bucket satisfied the rule.
+    pub satisfied: bool,
+    /// What one bucket must hold, and what each bucket holds.
+    pub detail: String,
+}
+
 /// Debug info for downgrade evaluation
 #[derive(Debug, Clone)]
 pub(crate) struct DowngradeDebug {
@@ -278,6 +290,8 @@ pub(crate) struct EvaluationDebug {
     pub condition_results: Vec<ConditionDebug>,
     /// Proximity constraint debug (if applicable)
     pub proximity: Option<ProximityDebug>,
+    /// Scope filter debug (if the rule's scope buckets its evidence)
+    pub scope: Option<ScopeDebug>,
     /// Downgrade debug (if applicable)
     pub downgrade: Option<DowngradeDebug>,
     /// Final precision score
@@ -292,6 +306,7 @@ impl EvaluationDebug {
             skip_reason: None,
             condition_results: Vec::new(),
             proximity: None,
+            scope: None,
             downgrade: None,
             precision: 0.0,
         }
@@ -310,6 +325,11 @@ impl EvaluationDebug {
     /// Set the proximity debug info
     pub(crate) fn set_proximity(&mut self, proximity: ProximityDebug) {
         self.proximity = Some(proximity);
+    }
+
+    /// Set the scope filter debug info
+    pub(crate) fn set_scope(&mut self, scope: ScopeDebug) {
+        self.scope = Some(scope);
     }
 
     /// Set the downgrade debug info

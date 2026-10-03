@@ -283,15 +283,17 @@ traits:
     );
 }
 
-// ============ scope: leaf preservation (bug-2 fix did not widen) ============
+// ============ scope: leaf joins positions within one unit ============
 
-/// `scope: leaf` is the strictest scope: every evidence item must
-/// share the EXACT `Evidence.location`. AST evidence for two different
-/// calls has different `row:col` locations; the fix to `Scope::File`
-/// must not bleed into `Scope::Leaf`. This test asserts the strict
-/// leaf semantics survived.
+/// `scope: leaf` is the exact analyzed unit: a decoded layer is a unit of
+/// its own, a position inside a unit is not. AST evidence for two calls
+/// lands at different `row:col` locations in the same file, just as text
+/// evidence lands at different byte offsets, so a leaf rule over both
+/// matches. (It once keyed AST evidence by position while stripping byte
+/// offsets, so a leaf rule with an AST leg could only fire if every leg
+/// sat at the same line and column.)
 #[test]
-fn scope_leaf_rejects_when_ast_conditions_are_on_different_lines() {
+fn scope_leaf_joins_ast_conditions_on_different_lines() {
     let (_dir, stdout) = run_with_traits(
         "test.py",
         "eval(\"a\")\nprint(\"b\")\n",
@@ -330,9 +332,8 @@ composite_rules:
         "micro-behaviors/test::leaf-strict-pair",
     );
     assert!(
-        !rule_matched(&stdout, "micro-behaviors/test::leaf-strict-pair"),
-        "scope: leaf must NOT match when AST conditions land at different\n\
-         `row:col` locations. If it does match, the bug-2 fix accidentally\n\
-         widened leaf scope semantics to behave like file scope.\n\nGot:\n{stdout}"
+        rule_matched(&stdout, "micro-behaviors/test::leaf-strict-pair"),
+        "scope: leaf must match AST conditions at different `row:col`\n\
+         locations of one file: a position is not a unit.\n\nGot:\n{stdout}"
     );
 }

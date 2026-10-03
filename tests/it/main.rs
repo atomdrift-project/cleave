@@ -41,6 +41,7 @@ mod lnk_anchor_and_member_yara_test;
 mod metaparse_integration_test;
 mod office_corpus_test;
 mod php_ast_call_kind_regression;
+mod scan_mode_parity_test;
 mod string_vs_content_test;
 mod subfile_pipeline_test;
 mod suppression_visibility_test;

@@ -58,9 +58,10 @@ use crate::capabilities::validation::{
     find_regex_literal_overlap_issues, find_scope_without_valid_container,
     find_self_referencing_composites, find_self_referencing_traits, find_self_suppressing_traits,
     find_short_pattern_warnings, find_should_use_defaults, find_sibling_name_restatement,
-    find_single_item_clauses, find_slow_regex_patterns, find_stale_filetype_allowlist_entries,
-    find_string_content_collisions, find_string_literal_should_use_text,
-    find_string_pattern_duplicates, find_structural_regex_duplicates, find_subsumed_required_legs,
+    find_single_item_clauses, find_slow_regex_patterns, find_sparse_sibling_cohorts,
+    find_stale_filetype_allowlist_entries, find_string_content_collisions,
+    find_string_literal_should_use_text, find_string_pattern_duplicates,
+    find_structural_regex_duplicates, find_subsumed_required_legs,
     find_suppression_only_building_blocks, find_too_short_patterns,
     find_unanchored_wellknown_composites, find_uncallable_symbol_matchers,
     find_uncompilable_ast_queries, find_unreferenced_exceptions,
@@ -2191,8 +2192,7 @@ impl super::CapabilityMapper {
                     ));
                 }
 
-                // Depth is a soft warning only when a path grows beyond the
-                // known technique refinements in the current taxonomy.
+                // Depth is an authoring-quality soft warning.
                 let deep_dirs = find_deep_taxonomy_directories(&dir_list);
                 if !deep_dirs.is_empty()
                     && !crate::validation_controls::is_validator_disabled("deep-taxonomy")
@@ -2217,6 +2217,40 @@ impl super::CapabilityMapper {
                     );
                     for (directory, depth) in &deep_dirs {
                         eprintln!("   {directory} (depth {depth})");
+                    }
+                }
+
+                // Rule counts alone do not prove branches are redundant, but a
+                // small sibling cohort merits a placement review.
+                tracing::trace!("Checking sparse taxonomy sibling cohorts");
+                let mut direct_rule_counts: HashMap<String, usize> = HashMap::new();
+                for id in rule_source_files.keys() {
+                    let Some((directory, _)) = id.split_once("::") else {
+                        continue;
+                    };
+                    *direct_rule_counts.entry(directory.to_string()).or_default() += 1;
+                }
+                let sparse_cohorts = find_sparse_sibling_cohorts(&direct_rule_counts);
+                if !sparse_cohorts.is_empty()
+                    && !crate::validation_controls::is_validator_disabled("sparse-siblings")
+                {
+                    warnings.push_count(
+                        "sparse-siblings",
+                        sparse_cohorts.len(),
+                        format!(
+                            "{} sibling groups contain fewer than 35 combined rules",
+                            sparse_cohorts.len()
+                        ),
+                    );
+                    eprintln!(
+                        "\n⚠️ SOFT WARNING: {} sibling groups contain fewer than 35 combined rules",
+                        sparse_cohorts.len()
+                    );
+                    eprintln!(
+                        "   Consider whether broader sibling placement would preserve precision."
+                    );
+                    for (parent, rules, children) in &sparse_cohorts {
+                        eprintln!("   {parent} ({children} sibling branches, {rules} rules)");
                     }
                 }
 

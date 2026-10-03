@@ -587,8 +587,15 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         id: "deep-taxonomy",
         category: ValidatorCategory::Policy,
         display_id: "deep-taxonomy",
-        description: "Directory path exceeds six levels below the tier.",
+        description: "Directory path exceeds five levels below the tier.",
         fix: "Flatten only when the shorter path preserves the technique distinction.",
+    },
+    ValidatorSpec {
+        id: "sparse-siblings",
+        category: ValidatorCategory::Policy,
+        display_id: "sparse-siblings",
+        description: "Sibling branches have fewer than 35 combined rules.",
+        fix: "Review defining traits and merge only when separate branches do not add precision.",
     },
     ValidatorSpec {
         id: "wide-dir",
@@ -797,7 +804,7 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         id: "metadata-binary-section",
         category: ValidatorCategory::Policy,
         display_id: "meta-section",
-        description: "Section-specific metadata binary text trait lacks a section filter.",
+        description: "Metadata binary text trait lacks a section filter.",
         fix: "Add a section filter when the claim depends on location; otherwise refine the validator for file-wide facts.",
     },
     ValidatorSpec {

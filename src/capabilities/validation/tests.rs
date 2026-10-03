@@ -4328,8 +4328,7 @@ mod taxonomy_tests {
         MAX_TRAITS_PER_DIRECTORY, ObjectivesWellknownViolation, find_cap_obj_violations,
         find_cap_wellknown_violations, find_deep_taxonomy_directories,
         find_metadata_cross_tier_refs, find_objectives_wellknown_violations,
-        find_oversized_trait_directories, find_sparse_sibling_cohorts,
-        find_suppression_only_building_blocks,
+        find_oversized_trait_directories, find_suppression_only_building_blocks,
     };
     use crate::composite_rules::traits::CompositeTrait;
     use crate::composite_rules::{Arch, Condition, FileType, Platform, TraitDefinition};
@@ -4999,7 +4998,7 @@ mod taxonomy_tests {
     }
 
     #[test]
-    fn test_depth_review_counts_below_tier_and_allows_five() {
+    fn test_depth_review_counts_below_tier_and_allows_six() {
         for tier in ["micro-behaviors", "objectives", "metadata", "well-known"] {
             let five = format!("{tier}/a/b/c/d/e");
             let six = format!("{five}/f");
@@ -5012,28 +5011,10 @@ mod taxonomy_tests {
                     six.clone(),
                     six.clone(),
                 ]),
-                vec![(six, 6), (seven, 7)]
+                vec![(seven, 7)]
             );
         }
         assert!(find_deep_taxonomy_directories(&["unrelated/a/b/c/d/e/f".to_string()]).is_empty());
-    }
-
-    #[test]
-    fn test_sparse_sibling_cohorts_use_35_rule_limit_and_skip_single_child() {
-        let rules = HashMap::from([
-            ("objectives/evasion/technique-small/a".to_string(), 17),
-            ("objectives/evasion/technique-small/b".to_string(), 17),
-            ("objectives/evasion/technique-limit/a".to_string(), 17),
-            ("objectives/evasion/technique-limit/b".to_string(), 18),
-            ("objectives/evasion/single-child/only".to_string(), 1),
-            ("well-known/tool/a".to_string(), 1),
-            ("well-known/tool/b".to_string(), 1),
-        ]);
-
-        assert_eq!(
-            find_sparse_sibling_cohorts(&rules),
-            vec![("objectives/evasion/technique-small".to_string(), 34, 2)]
-        );
     }
 
     /// Composite rules count toward the directory cap alongside atomic traits:
@@ -8472,16 +8453,24 @@ mod section_filter_validation_tests {
     }
 
     #[test]
-    fn metadata_section_filter_reports_binary_vocabulary_for_review() {
-        // File-wide vocabulary still gets the recommendation; its absence of a
-        // section must not force a made-up location into the classification.
+    fn metadata_section_filter_skips_file_wide_vocabulary() {
+        // File-wide vocabulary should not be forced into an arbitrary section.
         let traits = vec![text_trait(
             "metadata/file/string/command::vocabulary",
             vec![FileType::Pe],
         )];
         let result = find_meta_missing_section_filter(&traits, &HashMap::new());
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn metadata_section_filter_flags_a_section_claim_without_a_filter() {
+        let traits = vec![text_trait(
+            "metadata/binary/section/label::missing-location",
+            vec![FileType::Pe],
+        )];
+        let result = find_meta_missing_section_filter(&traits, &HashMap::new());
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].0, "metadata/file/string/command::vocabulary");
     }
 
     #[test]
@@ -11435,7 +11424,7 @@ mod platform_breadth_review_tests {
     use std::collections::HashMap;
 
     #[test]
-    fn platform_review_has_one_threshold_and_no_directory_exemptions() {
+    fn platform_review_exempts_format_defined_facts() {
         let mut traits = Vec::new();
         let mut sources = HashMap::new();
         for directory in [
@@ -11462,7 +11451,7 @@ mod platform_breadth_review_tests {
             }
         }
         let reviews = find_broad_platform_traits(&traits, &sources);
-        assert_eq!(reviews.len(), 5);
+        assert_eq!(reviews.len(), 3);
         assert!(
             reviews
                 .iter()

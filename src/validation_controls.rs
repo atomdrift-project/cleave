@@ -584,6 +584,13 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         fix: "Review placement contracts: nest genuine refinements or merge synonyms; retain distinct subjects with documented boundaries.",
     },
     ValidatorSpec {
+        id: "deep-taxonomy",
+        category: ValidatorCategory::Policy,
+        display_id: "deep-taxonomy",
+        description: "Directory path exceeds six levels below the tier.",
+        fix: "Flatten only when the shorter path preserves the technique distinction.",
+    },
+    ValidatorSpec {
         id: "wide-dir",
         category: ValidatorCategory::Policy,
         display_id: "wide-dir",
@@ -787,6 +794,13 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         fix: "Add a normalized section filter, usually text, rdata, data, or rsrc.",
     },
     ValidatorSpec {
+        id: "metadata-binary-section",
+        category: ValidatorCategory::Policy,
+        display_id: "meta-section",
+        description: "Section-specific metadata binary text trait lacks a section filter.",
+        fix: "Add a section filter when the claim depends on location; otherwise refine the validator for file-wide facts.",
+    },
+    ValidatorSpec {
         id: "broad-filetype-cap",
         category: ValidatorCategory::Policy,
         display_id: "ft-cap",
@@ -797,7 +811,7 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         id: "broad-platform-scope",
         category: ValidatorCategory::Policy,
         display_id: "plat-scope",
-        description: "Non-blocking review: an atomic trait declares 4+ platforms.",
+        description: "An atomic trait declares 4+ platforms.",
         fix: "Check that the matcher supports every declared platform. Preserve justified coverage; do not duplicate or relocate rules solely to satisfy a platform count.",
     },
     ValidatorSpec {

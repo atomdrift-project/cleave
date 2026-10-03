@@ -1527,11 +1527,11 @@ pub(crate) fn find_duplicate_second_level_directories(
     violations
 }
 
-/// Directory depth above this value warrants review, but never rejects rules.
+/// Directory depth above this value produces a soft validation warning.
 /// Count directories below the tier; filenames and local rule IDs do not count.
-pub(crate) const TAXONOMY_DEPTH_REVIEW_THRESHOLD: usize = 5;
+pub(crate) const TAXONOMY_DEPTH_REVIEW_THRESHOLD: usize = 6;
 
-/// Find taxonomy directories deeper than the advisory threshold in any tier.
+/// Find taxonomy directories deeper than the soft-warning threshold in any tier.
 #[must_use]
 pub(crate) fn find_deep_taxonomy_directories(trait_dirs: &[String]) -> Vec<(String, usize)> {
     let mut candidates = Vec::new();
@@ -1550,63 +1550,6 @@ pub(crate) fn find_deep_taxonomy_directories(trait_dirs: &[String]) -> Vec<(Stri
     }
     candidates.sort();
     candidates.dedup();
-    candidates
-}
-
-/// Find sparse sibling cohorts that may be over-fragmented in the taxonomy.
-///
-/// A cohort is advisory when a parent has at least two rule-bearing child
-/// branches and their combined subtree contains fewer than 35 rules.
-/// This does not prove the branches should be flattened: the child
-/// techniques may be genuinely distinct. It identifies places where cap pressure
-/// does not explain the extra branching and a human should check whether breadth
-/// could preserve precision with a simpler visible path.
-#[must_use]
-pub(crate) fn find_sparse_sibling_cohorts(
-    direct_rule_counts: &HashMap<String, usize>,
-) -> Vec<(String, usize, usize)> {
-    const SPARSE_SIBLING_RULE_THRESHOLD: usize = 35;
-    let mut subtree_counts: HashMap<String, usize> = HashMap::new();
-
-    for (directory, count) in direct_rule_counts {
-        if !directory.starts_with("micro-behaviors/") && !directory.starts_with("objectives/") {
-            continue;
-        }
-        let parts: Vec<&str> = directory.split('/').collect();
-        if parts.len() < 3 {
-            continue;
-        }
-        for end in 1..=parts.len() {
-            *subtree_counts.entry(parts[..end].join("/")).or_default() += count;
-        }
-    }
-
-    let mut children_by_parent: HashMap<String, Vec<usize>> = HashMap::new();
-    for (directory, count) in &subtree_counts {
-        if let Some((parent, _)) = directory.rsplit_once('/') {
-            children_by_parent
-                .entry(parent.to_string())
-                .or_default()
-                .push(*count);
-        }
-    }
-
-    let mut candidates = Vec::new();
-    for (parent, children) in children_by_parent {
-        // Ignore the tier and first category layer; they are too broad to be
-        // useful as local organization advice.
-        if parent.split('/').count() < 3 {
-            continue;
-        }
-        if children.len() < 2 {
-            continue;
-        }
-        let sibling_rules: usize = children.iter().sum();
-        if sibling_rules < SPARSE_SIBLING_RULE_THRESHOLD {
-            candidates.push((parent, sibling_rules, children.len()));
-        }
-    }
-    candidates.sort_by(|a, b| (a.1, &a.0).cmp(&(b.1, &b.0)));
     candidates
 }
 
@@ -1800,17 +1743,15 @@ pub(crate) fn find_parent_duplicate_segments(trait_dirs: &[String]) -> Vec<(Stri
 
 /// Sibling directories whose names say the same thing twice.
 ///
-/// Siblings answer one question, so two names built from one stem are usually
-/// that answer written twice. Two shapes carry the signal:
+/// Siblings answer one question, and inflected forms can accidentally create
+/// two homes for the same observation.
 ///
-/// * **a refinement filed as a sibling** -- `encrypt/` beside `encrypt-dotnet/`,
-///   `script/` beside `script-dropper/`. The longer name spells the shorter one
-///   and then qualifies it, which is what a *child* is: it belongs under what it
-///   refines, not next to it. The separator is the discriminator -- without it,
-///   `cloud`/`cloudflare` and `libev`/`libevent` are coincidences, not restatements.
-/// * **two word-forms of one noun** -- `header`/`headers`, `check`/`checks`,
-///   `encode`/`encoded`, `resolve`/`resolver`. Nothing distinguishes them, so
-///   traits land in whichever the author saw first and both fill up.
+/// Only near-identical word forms are flagged: `header`/`headers`,
+/// `check`/`checks`, `encode`/`encoded`, `resolve`/`resolver`.
+/// Hyphen-qualified siblings can name different mechanisms (for example,
+/// encrypted payload versus encrypted loader), and noun-plus-`ing` can change
+/// the subject entirely (`account` versus `accounting`). Neither is evidence
+/// of duplicate placement by spelling alone.
 ///
 /// Only same-parent siblings are compared, and `well-known/` is exempt: it names
 /// products, and a family legitimately shares a stem (`boto`/`boto3`).
@@ -1820,7 +1761,7 @@ pub(crate) fn find_parent_duplicate_segments(trait_dirs: &[String]) -> Vec<(Stri
 pub(crate) fn find_sibling_name_restatement(
     trait_dirs: &[String],
 ) -> Vec<(String, String, String)> {
-    const WORD_FORMS: &[&str] = &["s", "es", "d", "ed", "ing", "r", "er"];
+    const WORD_FORMS: &[&str] = &["s", "es", "d", "ed", "r", "er"];
 
     let mut by_parent: HashMap<&str, Vec<&str>> = HashMap::new();
     for dir in trait_dirs {
@@ -1849,10 +1790,9 @@ pub(crate) fn find_sibling_name_restatement(
                 if short.len() < 4 {
                     continue;
                 }
-                let restates = long.starts_with(&format!("{short}-"))
-                    || long
-                        .strip_prefix(short)
-                        .is_some_and(|tail| WORD_FORMS.contains(&tail));
+                let restates = long
+                    .strip_prefix(short)
+                    .is_some_and(|tail| WORD_FORMS.contains(&tail));
                 if restates {
                     out.push((parent.to_string(), short.to_string(), long.to_string()));
                 }
@@ -2711,10 +2651,27 @@ fn effective_filetype_count(t: &TraitDefinition) -> usize {
     }
 }
 
-/// Find atomic traits whose platform breadth deserves a non-blocking review.
+const BROAD_PLATFORM_ALLOWLIST: &[&str] = &[
+    // Package documentation and normalized registry records are data formats;
+    // the operating system that carries them does not change their matcher.
+    "metadata/package/description/disclosure::",
+    "metadata/package/documentation/claims::",
+    "metadata/package/documentation/security-advisory::",
+    "metadata/package/documentation/source::",
+    "metadata/registry::",
+    // Source-level UI field names, URL syntax, and a C Web Push API are likewise
+    // meaningful wherever that source is read.
+    "micro-behaviors/ui/controls/credential::wifi-",
+    "objectives/supply-chain/impersonation/homograph::url-host-mixed-script",
+    "well-known/lib/crypto/ece::webpush-ece-message-api",
+];
+
+/// Find atomic traits whose broad platform declaration may overstate the matcher.
 ///
-/// Applies uniformly across tiers; a directory name cannot justify a scope.
-/// A reviewer must compare the actual matcher with its declared platforms.
+/// Format-defined package metadata, registry records, and the listed
+/// cross-platform vocabulary/API facts are intentionally platform-independent.
+/// Their breadth is not evidence of a scope mistake; excluding them keeps this
+/// warning focused on rules whose platform claims merit review.
 #[must_use]
 pub(crate) fn find_broad_platform_traits(
     trait_definitions: &[TraitDefinition],
@@ -2722,7 +2679,12 @@ pub(crate) fn find_broad_platform_traits(
 ) -> Vec<(String, String, usize)> {
     let mut candidates: Vec<_> = trait_definitions
         .iter()
-        .filter(|t| effective_platform_count(&t.platforms) >= BROAD_PLATFORM_THRESHOLD)
+        .filter(|t| {
+            effective_platform_count(&t.platforms) >= BROAD_PLATFORM_THRESHOLD
+                && !BROAD_PLATFORM_ALLOWLIST
+                    .iter()
+                    .any(|prefix| t.id.starts_with(prefix))
+        })
         .map(|t| {
             let source = rule_source_files
                 .get(&t.id)
@@ -3022,9 +2984,9 @@ pub(crate) fn find_wellknown_missing_section_filter(
 
 /// Find metadata/ atomic traits targeting binary file types whose condition lacks a section filter.
 ///
-/// For binary targets, section-scoped matching improves precision. Unlike well-known/ traits,
-/// this is a recommendation rather than a hard requirement, since metadata/ traits often
-/// detect structural properties that apply file-wide.
+/// Section-specific metadata may need a section filter to support its claim.
+/// Whole-file vocabulary and provenance remain valid across sections and must
+/// not be flagged solely because `for:` names a binary format.
 ///
 /// Returns `Vec<(trait_id, source_file)>` for violations.
 #[must_use]
@@ -3035,7 +2997,7 @@ pub(crate) fn find_meta_missing_section_filter(
     trait_definitions
         .iter()
         .filter(|t| {
-            extract_trait_tier(&t.id) == "metadata"
+            t.id.starts_with("metadata/binary/section/")
                 && trait_targets_only_binaries(t)
                 && condition_supports_section_filter(&t.r#if)
                 && !condition_has_section_filter(&t.r#if)

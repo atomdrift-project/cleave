@@ -260,6 +260,7 @@ const ALLOWED_MB_COMMUNICATIONS: &[&str] = &[
     "email",
     "ethernet-ip", // EtherNet/IP + CIP industrial protocol     (TCP 44818)
     "ftp",
+    "tftp", // Trivial File Transfer Protocol is distinct from FTP
     "grpc", // gRPC client/server (HTTP/2 RPC)             (TCP 50051)
     "http",
     "icmp",

@@ -1820,7 +1820,9 @@ pub(crate) fn find_parent_duplicate_segments(trait_dirs: &[String]) -> Vec<(Stri
 pub(crate) fn find_sibling_name_restatement(
     trait_dirs: &[String],
 ) -> Vec<(String, String, String)> {
-    const WORD_FORMS: &[&str] = &["s", "es", "d", "ed", "ing", "r", "er"];
+    // Gerunds can name a different subject (account versus accounting), so
+    // compare plural/tense endings only.
+    const WORD_FORMS: &[&str] = &["s", "es", "d", "ed", "r", "er"];
 
     let mut by_parent: HashMap<&str, Vec<&str>> = HashMap::new();
     for dir in trait_dirs {
@@ -2690,8 +2692,9 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     "metrics:metadata/registry/",
 ];
 
-/// Returns the effective platform count for a trait.
-/// `Platform::All` expands to all known platform variants.
+/// Returns the count of explicitly selected platforms for a trait.
+/// `Platform::All` is the implicit, platform-neutral default, not a broad
+/// platform claim; the reviewer skips it below.
 fn effective_platform_count(platforms: &[Platform]) -> usize {
     if platforms.contains(&Platform::All) {
         CONCRETE_PLATFORM_COUNT
@@ -2722,7 +2725,10 @@ pub(crate) fn find_broad_platform_traits(
 ) -> Vec<(String, String, usize)> {
     let mut candidates: Vec<_> = trait_definitions
         .iter()
-        .filter(|t| effective_platform_count(&t.platforms) >= BROAD_PLATFORM_THRESHOLD)
+        .filter(|t| {
+            !t.platforms.contains(&Platform::All)
+                && effective_platform_count(&t.platforms) >= BROAD_PLATFORM_THRESHOLD
+        })
         .map(|t| {
             let source = rule_source_files
                 .get(&t.id)

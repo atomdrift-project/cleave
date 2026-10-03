@@ -11466,6 +11466,14 @@ mod platform_breadth_review_tests {
                 });
             }
         }
+        // A trait with no platforms field inherits Platform::All. It makes no
+        // enumerated platform claim and must not be reviewed as a 25-platform
+        // declaration merely because the engine expands the default.
+        traits.push(TraitDefinition {
+            id: "metadata/registry::platform-neutral".to_string(),
+            platforms: vec![Platform::All],
+            ..Default::default()
+        });
         let reviews = find_broad_platform_traits(&traits, &sources);
         assert_eq!(reviews.len(), 5);
         assert!(

@@ -1850,7 +1850,7 @@ dependencies = [
 [[package]]
 name = "filefacts"
 version = "2.0.0"
-source = "git+https://github.com/atomdrift-project/filefacts.git#4bf4d6f366cf62199d2a1055dedab20adc5f1561"
+source = "git+https://github.com/atomdrift-project/filefacts.git#0f3876dd8203e746dad5ddb009dca2781c4454e6"
 dependencies = [
  "aho-corasick",
  "cab",
@@ -5452,7 +5452,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter"
 version = "0.28.0"
-source = "git+https://github.com/tstromberg/tree-sitter?branch=master#a88e37f7c2202fa9dd2869ccf9c40d022460e73b"
+source = "git+https://github.com/tstromberg/tree-sitter?branch=master#8dbeeeccea5d7bf7685ca07b7d6d9753b849f225"
 dependencies = [
  "cc",
  "regex",
@@ -5504,7 +5504,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-clojure"
 version = "0.1.0"
-source = "git+https://github.com/atomdrift-project/filefacts.git#4bf4d6f366cf62199d2a1055dedab20adc5f1561"
+source = "git+https://github.com/atomdrift-project/filefacts.git#0f3876dd8203e746dad5ddb009dca2781c4454e6"
 dependencies = [
  "cc",
  "tree-sitter",
@@ -5574,7 +5574,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-language"
 version = "0.1.8"
-source = "git+https://github.com/tstromberg/tree-sitter?branch=master#a88e37f7c2202fa9dd2869ccf9c40d022460e73b"
+source = "git+https://github.com/tstromberg/tree-sitter?branch=master#8dbeeeccea5d7bf7685ca07b7d6d9753b849f225"
 
 [[package]]
 name = "tree-sitter-lua"

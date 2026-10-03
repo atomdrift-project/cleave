@@ -31,9 +31,13 @@ pub enum AnalysisGap {
     /// hit its output cap), so the symbols, functions and code metrics it
     /// recovers are missing. A later run may finish: the report is not cached.
     DisassemblyIncomplete,
+    /// The source parse hit filefacts' wall-clock backstop or was cancelled,
+    /// so the AST facts (calls, imports, literals) are missing for this run
+    /// only. A later run may parse: the report is not cached.
+    SourceParseIncomplete,
 }
 
-const ALL: [AnalysisGap; 10] = [
+const ALL: [AnalysisGap; 11] = [
     AnalysisGap::FlowUnavailable,
     AnalysisGap::FlowSchemaUnsupported,
     AnalysisGap::FlowGraphLimited,
@@ -44,6 +48,7 @@ const ALL: [AnalysisGap; 10] = [
     AnalysisGap::EmbeddedSourceIncomplete,
     AnalysisGap::EvaluationDeadline,
     AnalysisGap::DisassemblyIncomplete,
+    AnalysisGap::SourceParseIncomplete,
 ];
 
 impl AnalysisGap {
@@ -61,6 +66,7 @@ impl AnalysisGap {
             Self::EmbeddedSourceIncomplete => "embedded-source-incomplete",
             Self::EvaluationDeadline => "evaluation-deadline",
             Self::DisassemblyIncomplete => "disassembly-incomplete",
+            Self::SourceParseIncomplete => "source-parse-incomplete",
         }
     }
 }

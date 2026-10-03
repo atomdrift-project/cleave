@@ -72,6 +72,11 @@ pub(crate) fn merge_filefacts_context(
             .analysis_gaps
             .record(crate::types::AnalysisGap::DisassemblyIncomplete);
     }
+    if ctx.parsed.source_parse_incomplete() {
+        report
+            .analysis_gaps
+            .record(crate::types::AnalysisGap::SourceParseIncomplete);
+    }
     if let serde_json::Value::Object(map) = ctx.values_tree() {
         for (namespace, subtree) in map {
             report.merge_kv_subtree(&namespace, subtree);

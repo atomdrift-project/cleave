@@ -1180,12 +1180,20 @@ fn yara_degraded() -> bool {
 
 /// Whether `report` or any file in it is missing results a later run may
 /// produce: rule evaluation ran out of time (findings depend on how loaded the
-/// machine was) or rizin did not finish. Caching it would serve the shortfall
-/// to every later run.
+/// machine was), rizin did not finish, or a source parse was cut short.
+/// Caching it would serve the shortfall to every later run.
 fn evaluation_incomplete(report: &AnalysisReport) -> bool {
-    use crate::types::AnalysisGap::{DisassemblyIncomplete, EvaluationDeadline};
+    use crate::types::AnalysisGap::{
+        DisassemblyIncomplete, EvaluationDeadline, SourceParseIncomplete,
+    };
     let incomplete = |gaps: &crate::types::AnalysisGaps| {
-        gaps.contains(EvaluationDeadline) || gaps.contains(DisassemblyIncomplete)
+        [
+            EvaluationDeadline,
+            DisassemblyIncomplete,
+            SourceParseIncomplete,
+        ]
+        .into_iter()
+        .any(|gap| gaps.contains(gap))
     };
     incomplete(&report.analysis_gaps) || report.files.iter().any(|f| incomplete(&f.analysis_gaps))
 }
@@ -1599,12 +1607,15 @@ mod tests {
         );
     }
 
-    /// A report whose rule evaluation ran out of time, or whose rizin run did
-    /// not finish, lacks results a later run would have, so it must not be
-    /// served to later runs — nor a container holding such a member.
+    /// A report whose rule evaluation ran out of time, whose rizin run did not
+    /// finish, or whose source parse was cut short lacks results a later run
+    /// would have, so it must not be served to later runs — nor a container
+    /// holding such a member.
     #[test]
     fn incomplete_reports_are_not_cached() {
-        use crate::types::AnalysisGap::{DisassemblyIncomplete, EvaluationDeadline};
+        use crate::types::AnalysisGap::{
+            DisassemblyIncomplete, EvaluationDeadline, SourceParseIncomplete,
+        };
         let opts = AnalysisOptions::default();
         let settings = settings_of(&opts);
         let revision = ambient_traits_revision();
@@ -1612,9 +1623,13 @@ mod tests {
             report_cache_lookup(sha, "elf", &opts, &settings, &report.target.path, None)
         };
 
-        for (n, gap) in [EvaluationDeadline, DisassemblyIncomplete]
-            .into_iter()
-            .enumerate()
+        for (n, gap) in [
+            EvaluationDeadline,
+            DisassemblyIncomplete,
+            SourceParseIncomplete,
+        ]
+        .into_iter()
+        .enumerate()
         {
             let sha = format!("6e1d00de{:056x}", 2 * n + 1);
             let cut_short = test_report(&sha);

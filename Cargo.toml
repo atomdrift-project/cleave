@@ -310,7 +310,7 @@ tikv-jemalloc-ctl = { version = "0.7", optional = true, features = ["stats"] }
 assert_cmd = "2.2"
 backhand = { version = "0.25.5", default-features = false, features = ["error-strings", "gzip"] }
 criterion = { version = "0.8", features = ["html_reports"] }
-insta = { version = "1.48", features = ["yaml"] }
+insta = { version = "1.49", features = ["yaml"] }
 once_cell = "1.21"  # For shared test initialization
 predicates = "3.1"
 proptest = "1.11"

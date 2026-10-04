@@ -1295,7 +1295,7 @@ fn has_filetype_overlap(loc_a: &PatternLocation, loc_b: &PatternLocation) -> boo
 }
 
 fn has_same_count_density_filters(loc_a: &PatternLocation, loc_b: &PatternLocation) -> bool {
-    loc_a.count_min == loc_b.count_min
+    normalized_count_min(loc_a.count_min) == normalized_count_min(loc_b.count_min)
         && loc_a.count_max == loc_b.count_max
         && loc_a.per_kb_min == loc_b.per_kb_min
         && loc_a.per_kb_max == loc_b.per_kb_max
@@ -1344,6 +1344,7 @@ pub(crate) fn find_string_pattern_duplicates(
             for j in (i + 1)..locations.len() {
                 if locations[i].file_path != locations[j].file_path
                     && matcher_context_reusable_as_is(locations[i], locations[j])
+                    && has_same_count_density_filters(locations[i], locations[j])
                     && has_filetype_overlap(locations[i], locations[j])
                 {
                     has_overlap = true;
@@ -1368,7 +1369,9 @@ pub(crate) fn find_string_pattern_duplicates(
                 if loc_a.file_path == loc_b.file_path {
                     continue;
                 }
-                if !matcher_context_reusable_as_is(loc_a, loc_b) {
+                if !matcher_context_reusable_as_is(loc_a, loc_b)
+                    || !has_same_count_density_filters(loc_a, loc_b)
+                {
                     continue;
                 }
 
@@ -5770,6 +5773,41 @@ mod canonical_atomic_duplicate_tests {
         let mut exact = Vec::new();
         find_duplicate_atomic_traits(&[a, b], &mut exact);
         assert_eq!(exact.len(), 1);
+    }
+
+    #[test]
+    fn string_duplicate_check_respects_count_and_density() {
+        let mut a: TraitDefinition = serde_yaml::from_str(
+            "id: repeated-name\ndesc: Repeated name\ncrit: notable\nfor: [shell]\nif: {type: text, word: splarm}\n",
+        ).unwrap();
+        a.defined_in = "a.yaml".into();
+        let mut b = a.clone();
+        b.id = "other-name".into();
+        b.defined_in = "b.yaml".into();
+        let check = |a: &TraitDefinition, b: &TraitDefinition| {
+            let mut entries = extract_patterns(a);
+            entries.extend(extract_patterns(b));
+            let mut warnings = Vec::new();
+            find_string_pattern_duplicates(&ExtractedPatterns(entries), &mut warnings);
+            warnings
+        };
+        assert_eq!(check(&a, &b).len(), 1);
+        b.count_min = Some(1);
+        assert_eq!(check(&a, &b).len(), 1);
+        a.count_min = Some(2);
+        b.count_min = Some(6);
+        assert!(check(&a, &b).is_empty());
+        b.count_min = a.count_min;
+        assert_eq!(check(&a, &b).len(), 1);
+        b.count_max = Some(12);
+        assert!(check(&a, &b).is_empty());
+        b.count_max = None;
+        b.per_kb_min = Some(0.5);
+        assert!(check(&a, &b).is_empty());
+        a.per_kb_min = b.per_kb_min;
+        assert_eq!(check(&a, &b).len(), 1);
+        b.per_kb_max = Some(3.0);
+        assert!(check(&a, &b).is_empty());
     }
 
     #[test]

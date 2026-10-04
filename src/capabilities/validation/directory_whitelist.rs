@@ -259,6 +259,7 @@ const ALLOWED_MB_COMMUNICATIONS: &[&str] = &[
     "dnp3", // DNP3 SCADA/utility protocol                (TCP 20000)
     "email",
     "ethernet-ip", // EtherNet/IP + CIP industrial protocol     (TCP 44818)
+    "flood",       // Network flooding signals, independent of benchmark tools
     "ftp",
     "tftp", // Trivial File Transfer Protocol is distinct from FTP
     "grpc", // gRPC client/server (HTTP/2 RPC)             (TCP 50051)
@@ -340,7 +341,8 @@ const ALLOWED_MB_DATA: &[&str] = &[
     "runtime",
     "security",
     "serialize",
-    "stream", // Stream recording/processing, independent of acquisition source
+    "session", // Session-state storage and lifecycle operations
+    "stream",  // Stream recording/processing, independent of acquisition source
     "service",
     "source",
     "spoof",
@@ -394,6 +396,7 @@ const ALLOWED_MB_HARDWARE: &[&str] = &[
     "gpu",
     "input",
     "iokit",
+    "serial",
     "smartcard",
     "wireless",
 ];
@@ -413,6 +416,8 @@ const ALLOWED_MB_MEM: &[&str] = &[
     "query",
     "read",
     "sync",
+    // Writes through native-memory primitives, distinct from memory reads.
+    "write",
 ];
 
 /// Allowed subdirectories in micro-behaviors/network/

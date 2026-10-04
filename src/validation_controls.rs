@@ -815,6 +815,13 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         fix: "Narrow `for:`, or add a type-qualified allowlist entry (\"<type>:<dir-prefix>\").",
     },
     ValidatorSpec {
+        id: "all-platforms-directory",
+        category: ValidatorCategory::Policy,
+        display_id: "plat-all",
+        description: "A rule declares platforms: [all] outside reviewed directory contracts.",
+        fix: "Audit OS support and declare explicit platforms; allowlist a directory only when its evidence is independent of the target OS.",
+    },
+    ValidatorSpec {
         id: "broad-platform-scope",
         category: ValidatorCategory::Policy,
         display_id: "plat-scope",
@@ -1408,6 +1415,7 @@ mod tests {
             "wellknown-composite-only",
             "pure-alias",
             "broad-platform-scope",
+            "all-platforms-directory",
             "hostile-too-few-notable-legs",
             // Forward-compat degradation on older engines, not a load-breaking flaw.
             "unknown-metric-field",

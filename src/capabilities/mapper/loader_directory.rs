@@ -22,16 +22,16 @@ use crate::capabilities::validation::{
     check_overlapping_regex_patterns, check_regex_alternative_subsets,
     check_regex_or_overlapping_exact, check_regex_should_be_exact,
     check_same_string_different_types, collect_trait_refs_from_rule,
-    collect_trait_refs_from_trait_def, find_alternation_merge_candidates,
-    find_ast_function_call_should_use_symbol, find_atomic_logic_duplicates,
-    find_banned_directory_segments, find_bare_or_crit_escalations, find_benign_misplaced,
-    find_brittle_path_patterns, find_broad_filetype_traits, find_broad_notable_downgrades,
-    find_broad_platform_traits, find_cap_obj_violations, find_cap_wellknown_violations,
-    find_case_insensitive_overlap_issues, find_composite_only_wellknown_files,
-    find_container_name_convictions, find_convictions_without_content,
-    find_dangling_directory_refs, find_dead_composites, find_dead_downgrades,
-    find_deep_taxonomy_directories, find_directory_shadowed_refs, find_duplicate_atomic_traits,
-    find_duplicate_composite_rules, find_duplicate_inline_exclusions,
+    collect_trait_refs_from_trait_def, find_all_platform_rules_outside_allowlist,
+    find_alternation_merge_candidates, find_ast_function_call_should_use_symbol,
+    find_atomic_logic_duplicates, find_banned_directory_segments, find_bare_or_crit_escalations,
+    find_benign_misplaced, find_brittle_path_patterns, find_broad_filetype_traits,
+    find_broad_notable_downgrades, find_broad_platform_traits, find_cap_obj_violations,
+    find_cap_wellknown_violations, find_case_insensitive_overlap_issues,
+    find_composite_only_wellknown_files, find_container_name_convictions,
+    find_convictions_without_content, find_dangling_directory_refs, find_dead_composites,
+    find_dead_downgrades, find_deep_taxonomy_directories, find_directory_shadowed_refs,
+    find_duplicate_atomic_traits, find_duplicate_composite_rules, find_duplicate_inline_exclusions,
     find_duplicate_second_level_directories, find_empty_condition_clauses,
     find_exception_atomic_traits, find_exception_inline_conditions,
     find_exception_non_notable_members, find_exception_positive_refs, find_excessive_file_types,
@@ -1251,6 +1251,7 @@ impl super::CapabilityMapper {
             let mut unanchored = Vec::new();
             let mut composite_only = Vec::new();
             let mut broad_plat = Vec::new();
+            let mut unapproved_all_plat = Vec::new();
             let mut redundant_unix = Vec::new();
             let mut dead = Vec::new();
             let mut wk_no_size = Vec::new();
@@ -1534,6 +1535,10 @@ impl super::CapabilityMapper {
                         composite_only = find_composite_only_wellknown_files(traits, rules);
                     });
                     scope.spawn(|_| broad_plat = find_broad_platform_traits(traits, sources));
+                    scope.spawn(|_| {
+                        unapproved_all_plat =
+                            find_all_platform_rules_outside_allowlist(traits, rules, sources);
+                    });
                     scope
                         .spawn(|_| redundant_unix = find_redundant_unix_platforms(traits, sources));
                     scope.spawn(|_| dead = find_dead_composites(traits, rules));
@@ -3380,6 +3385,32 @@ impl super::CapabilityMapper {
                     "{} well-known/ directories are composite-only (add family-specific atomic traits or move to objectives/)",
                     composite_only.len()
                 ));
+                }
+
+                if !crate::validation_controls::is_validator_disabled("all-platforms-directory")
+                    && !unapproved_all_plat.is_empty()
+                {
+                    warnings.push_count(
+                        "all-platforms-directory",
+                        unapproved_all_plat.len(),
+                        format!(
+                            "{} rules declare platforms: [all] outside reviewed directory contracts",
+                            unapproved_all_plat.len()
+                        ),
+                    );
+                    eprintln!(
+                        "\n⚠️ SOFT WARNING: {} rules use platforms: [all] outside the directory allowlist",
+                        unapproved_all_plat.len()
+                    );
+                    eprintln!(
+                        "   Audit the target OS support and declare explicit platforms. Add an allowlist contract only for OS-independent evidence."
+                    );
+                    eprintln!(
+                        "   A source file's presence on an OS does not establish that its behavior applies there."
+                    );
+                    for (id, source) in &unapproved_all_plat {
+                        eprintln!("   {source}: '{id}'");
+                    }
                 }
 
                 // Platform breadth is a soft warning, not proof of invalid placement.

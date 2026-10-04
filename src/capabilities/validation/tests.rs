@@ -5019,6 +5019,36 @@ mod taxonomy_tests {
     }
 
     #[test]
+    fn reviewed_sparse_taxonomies_require_exact_parent_and_child_sets() {
+        let mut rules = HashMap::from([
+            ("micro-behaviors/fs/swap/on".to_string(), 1),
+            ("micro-behaviors/fs/swap/off".to_string(), 2),
+        ]);
+        assert!(find_sparse_sibling_cohorts(&rules).is_empty());
+        rules.insert("micro-behaviors/fs/swap/helper".to_string(), 1);
+        assert_eq!(
+            find_sparse_sibling_cohorts(&rules),
+            vec![("micro-behaviors/fs/swap".to_string(), 4, 3)]
+        );
+        let unreviewed = HashMap::from([
+            ("micro-behaviors/fs/swap-copy/on".to_string(), 1),
+            ("micro-behaviors/fs/swap-copy/off".to_string(), 2),
+        ]);
+        assert_eq!(
+            find_sparse_sibling_cohorts(&unreviewed),
+            vec![("micro-behaviors/fs/swap-copy".to_string(), 3, 2)]
+        );
+        let renamed = HashMap::from([
+            ("micro-behaviors/fs/swap/on".to_string(), 1),
+            ("micro-behaviors/fs/swap/stop".to_string(), 2),
+        ]);
+        assert_eq!(
+            find_sparse_sibling_cohorts(&renamed),
+            vec![("micro-behaviors/fs/swap".to_string(), 3, 2)]
+        );
+    }
+
+    #[test]
     fn test_sparse_sibling_cohorts_use_35_rule_limit_and_skip_single_child() {
         let rules = HashMap::from([
             ("objectives/evasion/technique-small/a".to_string(), 17),
@@ -11440,6 +11470,35 @@ mod platform_breadth_review_tests {
     use std::collections::HashMap;
 
     #[test]
+    fn reviewed_platform_scope_requires_exact_atom_and_platform_set() {
+        let scope = vec![
+            Platform::Ios,
+            Platform::MacOS,
+            Platform::Linux,
+            Platform::Windows,
+        ];
+        let mut traits = vec![TraitDefinition {
+            id: "micro-behaviors/fs/read/file/full::swift-data-file-read".to_string(),
+            platforms: scope.clone(),
+            ..Default::default()
+        }];
+        assert!(find_broad_platform_traits(&traits, &HashMap::new()).is_empty());
+        traits[0].platforms.reverse();
+        assert!(find_broad_platform_traits(&traits, &HashMap::new()).is_empty());
+        traits[0].platforms.push(Platform::Zos);
+        assert_eq!(
+            find_broad_platform_traits(&traits, &HashMap::new()).len(),
+            1
+        );
+        traits[0].platforms = scope;
+        traits[0].id = "micro-behaviors/fs/read/file/full::other-swift-api".to_string();
+        assert_eq!(
+            find_broad_platform_traits(&traits, &HashMap::new()).len(),
+            1
+        );
+    }
+
+    #[test]
     fn platform_review_has_one_threshold_and_no_directory_exemptions() {
         let mut traits = Vec::new();
         let mut sources = HashMap::new();
@@ -11466,9 +11525,8 @@ mod platform_breadth_review_tests {
                 });
             }
         }
-        // A trait with no platforms field inherits Platform::All. It makes no
-        // enumerated platform claim and must not be reviewed as a 25-platform
-        // declaration merely because the engine expands the default.
+        // All is checked by the directory-contract validator, not by the
+        // enumerated platform-count reviewer.
         traits.push(TraitDefinition {
             id: "metadata/registry::platform-neutral".to_string(),
             platforms: vec![Platform::All],
@@ -11483,5 +11541,68 @@ mod platform_breadth_review_tests {
         );
         traits.reverse();
         assert_eq!(reviews, find_broad_platform_traits(&traits, &sources));
+    }
+}
+
+#[cfg(test)]
+mod all_platform_directory_tests {
+    use crate::capabilities::validation::find_all_platform_rules_outside_allowlist;
+    use crate::composite_rules::{CompositeTrait, Platform, TraitDefinition};
+    use std::collections::HashMap;
+
+    #[test]
+    fn all_scope_checks_atoms_and_composites_with_directory_boundaries() {
+        let make_trait = |id: &str, platforms: Vec<Platform>| TraitDefinition {
+            id: id.to_string(),
+            platforms,
+            ..Default::default()
+        };
+        let traits = vec![
+            make_trait("metadata/registry::age", vec![Platform::All]),
+            make_trait(
+                "metadata/package/documentation/source::readme",
+                vec![Platform::All],
+            ),
+            make_trait(
+                "micro-behaviors/communications/url/host/nested::syntax",
+                vec![Platform::All],
+            ),
+            make_trait("metadata/registry-impostor::age", vec![Platform::All]),
+            make_trait("well-known/lib/crypto/ece::api", vec![Platform::All]),
+            make_trait(
+                "micro-behaviors/ui/controls/credential::wifi",
+                vec![Platform::Linux],
+            ),
+            make_trait("age", vec![Platform::All]),
+        ];
+        let rules = vec![
+            CompositeTrait {
+                id: "metadata/registry::withdrawal".to_string(),
+                platforms: vec![Platform::All],
+                ..Default::default()
+            },
+            CompositeTrait {
+                id: "objectives/persistence/login::entry".to_string(),
+                platforms: vec![Platform::All],
+                ..Default::default()
+            },
+        ];
+        // A misleading source path cannot grant permission to a canonical ID.
+        let sources = HashMap::from([(
+            "well-known/lib/crypto/ece::api".to_string(),
+            "/tmp/metadata/registry/fake.yaml".to_string(),
+        )]);
+        let found = find_all_platform_rules_outside_allowlist(&traits, &rules, &sources);
+        let ids: Vec<_> = found.iter().map(|(id, _)| id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec![
+                "age",
+                "metadata/registry-impostor::age",
+                "objectives/persistence/login::entry",
+                "well-known/lib/crypto/ece::api",
+            ]
+        );
+        assert_eq!(found.last().unwrap().1, "/tmp/metadata/registry/fake.yaml");
     }
 }

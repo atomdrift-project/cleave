@@ -1100,21 +1100,16 @@ pub(crate) fn resolve_platform_filetype_conflicts(
     }
 }
 
-/// Parse platform strings into Platform enum.
-/// Emits a warning if "all" is explicitly specified — omit `platforms:` instead.
+/// Parse platform strings into Platform enum. `all` is a deliberate scope
+/// for evidence that is independent of the target operating system.
 pub(crate) fn parse_platforms(platforms: &[String], warnings: &mut Vec<String>) -> Vec<Platform> {
+    if platforms.iter().any(|p| p.eq_ignore_ascii_case("all")) && platforms.len() != 1 {
+        warnings.push("'platforms: [all]' cannot be combined with other platforms.".to_string());
+    }
     platforms
         .iter()
         .filter_map(|p| match p.to_lowercase().as_str() {
-            "all" => {
-                warnings.push(
-                    "'platforms: [all]' is not allowed. Specify explicit platforms: \
-                     linux, macos, windows, unix, android, ios, aix, solaris, freebsd, openbsd, \
-                     netbsd, dragonflybsd, openwrt, qnx, esxi, zos, appliance, routeros, fortios."
-                        .to_string(),
-                );
-                None
-            }
+            "all" => Some(Platform::All),
             "linux" => Some(Platform::Linux),
             "macos" => Some(Platform::MacOS),
             "windows" => Some(Platform::Windows),
@@ -1897,15 +1892,20 @@ mod tests {
     // ==================== parse_platforms Tests ====================
 
     #[test]
-    fn test_parse_platforms_all_is_invalid() {
+    fn test_parse_platforms_all_is_valid() {
         let mut warnings = Vec::new();
         let result = parse_platforms(&["all".to_string()], &mut warnings);
-        assert!(
-            result.is_empty(),
-            "Platform::All should not be produced from 'all'"
-        );
+        assert_eq!(result, vec![Platform::All]);
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn test_parse_platforms_all_cannot_be_combined() {
+        let mut warnings = Vec::new();
+        let result = parse_platforms(&["all".to_string(), "windows".to_string()], &mut warnings);
+        assert_eq!(result, vec![Platform::All, Platform::Windows]);
         assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("platforms: [all]"));
+        assert!(warnings[0].contains("cannot be combined"));
     }
 
     #[test]

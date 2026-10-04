@@ -1553,6 +1553,244 @@ pub(crate) fn find_deep_taxonomy_directories(trait_dirs: &[String]) -> Vec<(Stri
     candidates
 }
 
+// Audited operation boundaries in TAXONOMY.md. These are exact child sets,
+// not exemptions for arbitrary future subdivisions under these parents.
+const REVIEWED_SPARSE_TAXONOMY_PARTITIONS: &[(&str, &[&str])] = &[
+    // Construct a path, canonicalize it, or extract a path component.
+    (
+        "micro-behaviors/fs/path-ops",
+        &["join", "normalize", "parse"],
+    ),
+    // Enabling and disabling swap are opposite kernel operations.
+    ("micro-behaviors/fs/swap", &["off", "on"]),
+    // Create a FIFO versus transfer data through a pipe.
+    ("micro-behaviors/fs/pipe", &["fifo", "transfer"]),
+    // Different SQL Server execution facilities, each corroborated by
+    // facility-specific configuration and shell/procedure evidence.
+    (
+        "objectives/execution/database",
+        &["clr-procedure", "ole-automation", "xp-cmdshell"],
+    ),
+    // Throughput measurement and HTTP request workload testing have
+    // distinct subjects, even when both are called benchmarks.
+    (
+        "micro-behaviors/communications/benchmark",
+        &["bandwidth", "http"],
+    ),
+    // Fixed-width decimal digits versus language character-escape syntax.
+    (
+        "micro-behaviors/data/decode/char-code",
+        &["decimal-triplet", "escape-sequence"],
+    ),
+    // Pointer coordinate access, event vocabulary, and synthetic input.
+    (
+        "micro-behaviors/hardware/input/mouse",
+        &["message", "position", "simulate"],
+    ),
+    // Creating a TLS context versus configuring certificate verification.
+    (
+        "micro-behaviors/communications/tls",
+        &["initialize", "verify"],
+    ),
+    // Installing a validation callback does not imply accepting invalid peers.
+    (
+        "micro-behaviors/communications/tls/verify",
+        &["callback", "disable"],
+    ),
+    // Different filesystem link kinds, with junctions requiring a mount-point
+    // tag or explicit junction-creation command rather than any reparse flag.
+    (
+        "micro-behaviors/fs/link",
+        &["hardlink", "junction", "symlink"],
+    ),
+    // Callback registration is different from requesting termination.
+    ("micro-behaviors/process/exit", &["handler", "terminate"]),
+    // Configure/inspect signal disposition versus dispatch a signal.
+    ("micro-behaviors/os/signal", &["dispatch", "handler"]),
+    // Hive export and LSA secret-key access are distinct credential sources.
+    (
+        "objectives/credential-access/windows-registry",
+        &["hive", "security-keys"],
+    ),
+    // Hollowing, remote-thread creation, and existing-thread hijack are different injection methods.
+    (
+        "objectives/command-and-control/dropper/process-inject",
+        &["hollow", "remote-thread", "thread-hijack"],
+    ),
+    // Database configuration-file harvesting is separate from database queries.
+    ("objectives/collection/database", &["credentials", "query"]),
+    // Blockchain clients speak to chains; name-service clients resolve chain names.
+    (
+        "micro-behaviors/communications/blockchain",
+        &["client", "name-service"],
+    ),
+    // PowerShell command-line launch options differ from host/runtime operations.
+    (
+        "micro-behaviors/process/interpreter/powershell",
+        &["command", "host"],
+    ),
+    // Connectivity, API/function, path, pipe, and environment-variable checks are distinct sandbox evidence.
+    (
+        "objectives/anti-analysis/sandbox-detect/environment",
+        &[
+            "connectivity",
+            "function",
+            "native-injector",
+            "path",
+            "pipe",
+            "var",
+        ],
+    ),
+    // Host marker, local platform, and remote gating are separate execution conditions.
+    (
+        "objectives/execution/condition",
+        &["host-marker", "platform", "remote-gate"],
+    ),
+    // Bind function/API, address structure, and address identity evidence differ.
+    (
+        "micro-behaviors/communications/socket/bind",
+        &["address", "function", "ident"],
+    ),
+    // DNS and ICMP are distinct exfiltration channels.
+    ("objectives/exfiltration/side-channel", &["dns", "icmp"]),
+    // COM, library staging, named pipes, preload variables, and services are distinct hijack surfaces.
+    (
+        "objectives/privilege-escalation/hijack-execution-flow",
+        &["com", "library-stage", "named-pipe", "preload", "service"],
+    ),
+    // Thread configuration, enumeration, grouping, lifecycle, priority, and termination are separate operations.
+    (
+        "micro-behaviors/process/thread",
+        &[
+            "config",
+            "enumerate",
+            "group",
+            "lifecycle",
+            "priority",
+            "terminate",
+        ],
+    ),
+    // Account takeover, stored MFA-secret recovery, and OWA-specific access have distinct evidence.
+    (
+        "objectives/credential-access/email/webmail",
+        &["account-takeover", "mfa-secrets", "owa"],
+    ),
+    // Linker auditing, loader environment, load paths, and symbol ABI versions are distinct.
+    (
+        "micro-behaviors/os/linker",
+        &["audit", "env", "load-path", "symbol-version"],
+    ),
+    // Polyglot format collisions, IExpress SED, and ZIP EOCD signatures are separate mechanisms.
+    (
+        "objectives/anti-static/polyglot",
+        &["format", "iexpress", "zip-eocd"],
+    ),
+    // Process enumeration, target selection, and window-based discovery are different questions.
+    (
+        "objectives/discovery/process",
+        &["enumerate", "targeting", "window"],
+    ),
+    // Packet socket, libpcap, tcpdump, and WinDivert are distinct capture backends.
+    (
+        "micro-behaviors/communications/capture",
+        &["packet-socket", "pcap", "tcpdump", "windivert"],
+    ),
+    // Archive integrity and executable/runtime integrity are separate anti-tamper checks.
+    (
+        "objectives/anti-analysis/anti-tampering",
+        &["archive", "integrity"],
+    ),
+    // ICMP channel use, ping, and route tracing are distinct operations.
+    (
+        "micro-behaviors/communications/icmp",
+        &["channel", "ping", "trace"],
+    ),
+    // Process census, explicit process lists, and Node SEA gates use different runtime evidence.
+    (
+        "objectives/anti-analysis/sandbox-detect/process",
+        &["census", "list", "node-sea"],
+    ),
+    // Local quarantine controls and network-appliance quarantine are different security surfaces.
+    (
+        "objectives/evasion/quarantine-removal",
+        &["bypass", "network-appliance"],
+    ),
+    // Keychain extraction primitives and theft workflows are different levels of evidence.
+    (
+        "objectives/credential-access/keychain",
+        &["extract", "theft"],
+    ),
+    // TCC bypass APIs, database edits, and Full Disk Access state are separate mechanisms.
+    (
+        "objectives/evasion/tcc-manipulation",
+        &["bypass", "db", "fda"],
+    ),
+    // Hidden installation, init activation, install-state markers, and hidden paths differ.
+    (
+        "objectives/persistence/system/daemon",
+        &["hidden", "init", "install-state", "path-hidden"],
+    ),
+    // Block identity, ioctl, loop devices, node creation, network blocks, and device links are separate.
+    (
+        "micro-behaviors/fs/device",
+        &["blkid", "ioctl", "loop", "mknod", "network-block", "query"],
+    ),
+    // Provider-specific Telegram and WhatsApp stores require different schemas and APIs.
+    (
+        "objectives/credential-access/messaging",
+        &["telegram", "whatsapp"],
+    ),
+    // Partition operations differ from raw-disk access.
+    ("micro-behaviors/fs/disk", &["partition", "raw"]),
+    // Arbitrary, cross-process, dump-format, and physical-memory reads are distinct.
+    (
+        "micro-behaviors/mem/read",
+        &["arbitrary", "cross-process", "dump", "physical"],
+    ),
+    // URL fragments, provider/service construction, and template expansion are different constructors.
+    (
+        "micro-behaviors/communications/url/construction",
+        &["fragment", "service", "template"],
+    ),
+    // Console, HTTP, inline, JIT, and monitoring hooks instrument different surfaces.
+    (
+        "objectives/evasion/process/hook",
+        &["console", "http", "inline", "jit", "monitor"],
+    ),
+    // Request-driven shell execution, command injection, and embedded inline commands differ by source.
+    (
+        "objectives/execution/interpreter/cmd",
+        &["http", "injection", "inline"],
+    ),
+    // DOM access, audio element use, creation, rendering, and tree traversal are separate UI operations.
+    (
+        "micro-behaviors/ui/window/dom",
+        &["access", "audio", "create", "render", "tree"],
+    ),
+    // Audio, raster, magic validation, and streaming are distinct media operations.
+    (
+        "micro-behaviors/data/format/media",
+        &["audio", "magic", "raster", "streaming"],
+    ),
+    // Credential-provider integration and Userinit launch replacement are different Winlogon surfaces.
+    (
+        "objectives/persistence/login/winlogon",
+        &["credential-provider", "userinit"],
+    ),
+];
+
+fn is_reviewed_sparse_taxonomy_partition(parent: &str, children: &[(String, usize)]) -> bool {
+    REVIEWED_SPARSE_TAXONOMY_PARTITIONS
+        .iter()
+        .any(|(reviewed_parent, expected)| {
+            parent == *reviewed_parent
+                && children.len() == expected.len()
+                && children
+                    .iter()
+                    .all(|(child, _)| expected.contains(&child.as_str()))
+        })
+}
+
 /// Find sparse sibling cohorts that may be over-fragmented in the taxonomy.
 ///
 /// A cohort produces a soft warning when a parent has at least two rule-bearing child
@@ -1581,13 +1819,13 @@ pub(crate) fn find_sparse_sibling_cohorts(
         }
     }
 
-    let mut children_by_parent: HashMap<String, Vec<usize>> = HashMap::new();
+    let mut children_by_parent: HashMap<String, Vec<(String, usize)>> = HashMap::new();
     for (directory, count) in &subtree_counts {
-        if let Some((parent, _)) = directory.rsplit_once('/') {
+        if let Some((parent, child)) = directory.rsplit_once('/') {
             children_by_parent
                 .entry(parent.to_string())
                 .or_default()
-                .push(*count);
+                .push((child.to_string(), *count));
         }
     }
 
@@ -1601,8 +1839,10 @@ pub(crate) fn find_sparse_sibling_cohorts(
         if children.len() < 2 {
             continue;
         }
-        let sibling_rules: usize = children.iter().sum();
-        if sibling_rules < SPARSE_SIBLING_RULE_THRESHOLD {
+        let sibling_rules: usize = children.iter().map(|(_, count)| count).sum();
+        if sibling_rules < SPARSE_SIBLING_RULE_THRESHOLD
+            && !is_reviewed_sparse_taxonomy_partition(&parent, &children)
+        {
             candidates.push((parent, sibling_rules, children.len()));
         }
     }
@@ -2601,7 +2841,7 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     "text:micro-behaviors/data/runtime/keywords/",
     "text:micro-behaviors/communications/http/keywords/",
     "text:micro-behaviors/data/parse/vocabulary/",
-    "text:micro-behaviors/ui/window/notify/keywords/",
+    "text:micro-behaviors/ui/window/notify/keywords-terms.yaml",
     "text:objectives/command-and-control/backdoor/keywords/",
     "text:objectives/command-and-control/botnet/keywords/",
     "text:objectives/command-and-control/backdoor/rat/keywords/",
@@ -2692,9 +2932,66 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     "metrics:metadata/registry/",
 ];
 
+/// Reviewed directory contracts where OS-independent evidence may declare
+/// `platforms: [all]`. Permission is not an assertion that every rule in a
+/// directory is portable: OS-specific observations still need explicit scopes.
+/// Keep this list synchronized with TAXONOMY.md's platform scope contracts.
+pub(crate) const ALL_PLATFORM_DIRECTORY_ALLOWLIST: &[&str] = &[
+    // Package text/resource facts retain their meaning on every target OS.
+    "metadata/package/description/disclosure",
+    "metadata/package/documentation/claims",
+    "metadata/package/documentation/security-advisory",
+    "metadata/package/documentation/source",
+    // Publication/custody/history describe the registry record, not execution.
+    "metadata/registry",
+    // Host syntax and spelling do not depend on the OS consuming a URL.
+    "micro-behaviors/communications/url/host",
+];
+
+fn all_platform_directory_allowed(id: &str) -> bool {
+    let Some((directory, _)) = id.split_once("::") else {
+        return false;
+    };
+    ALL_PLATFORM_DIRECTORY_ALLOWLIST.iter().any(|allowed| {
+        directory == *allowed
+            || directory
+                .strip_prefix(allowed)
+                .is_some_and(|suffix| suffix.starts_with('/'))
+    })
+}
+
+/// Review `all` on both atoms and composites, including inherited defaults.
+/// Match canonical directory IDs with segment boundaries; source filenames and
+/// arbitrary path substrings cannot grant permission.
+#[must_use]
+pub(crate) fn find_all_platform_rules_outside_allowlist(
+    trait_definitions: &[TraitDefinition],
+    composite_rules: &[CompositeTrait],
+    rule_source_files: &HashMap<String, String>,
+) -> Vec<(String, String)> {
+    let mut violations: Vec<_> = trait_definitions
+        .iter()
+        .map(|t| (&t.id, &t.platforms))
+        .chain(composite_rules.iter().map(|r| (&r.id, &r.platforms)))
+        .filter(|(id, platforms)| {
+            platforms.contains(&Platform::All) && !all_platform_directory_allowed(id)
+        })
+        .map(|(id, _)| {
+            (
+                id.clone(),
+                rule_source_files
+                    .get(id)
+                    .cloned()
+                    .unwrap_or_else(|| "unknown".to_string()),
+            )
+        })
+        .collect();
+    violations.sort();
+    violations
+}
+
 /// Returns the count of explicitly selected platforms for a trait.
-/// `Platform::All` is the implicit, platform-neutral default, not a broad
-/// platform claim; the reviewer skips it below.
+/// `Platform::All` is reviewed separately against the directory allowlist.
 fn effective_platform_count(platforms: &[Platform]) -> usize {
     if platforms.contains(&Platform::All) {
         CONCRETE_PLATFORM_COUNT
@@ -2714,10 +3011,68 @@ fn effective_filetype_count(t: &TraitDefinition) -> usize {
     }
 }
 
+/// Reviewed enumerated scopes, not permission to use `all`. Match the exact
+/// atom and platform set; changed scopes return to review. In particular neither
+/// wireless configuration nor Swift Foundation is supported on z/OS by these
+/// observations. Source-language and matcher changes still receive their normal
+/// file-type, duplicate, and condition validation.
+const REVIEWED_BROAD_PLATFORM_SCOPES: &[(&str, &[Platform])] = &[
+    (
+        "micro-behaviors/fs/read/file/full::swift-direct-file-read-api",
+        &[
+            Platform::Ios,
+            Platform::MacOS,
+            Platform::Linux,
+            Platform::Windows,
+        ],
+    ),
+    (
+        "micro-behaviors/fs/read/file/full::swift-data-file-read",
+        &[
+            Platform::Ios,
+            Platform::MacOS,
+            Platform::Linux,
+            Platform::Windows,
+        ],
+    ),
+    (
+        "micro-behaviors/hardware/wireless/network::wifi-ssid-identifier",
+        &[
+            Platform::Windows,
+            Platform::Linux,
+            Platform::MacOS,
+            Platform::Android,
+            Platform::Ios,
+        ],
+    ),
+    (
+        "micro-behaviors/hardware/wireless/network::wifi-password-key",
+        &[
+            Platform::Windows,
+            Platform::Linux,
+            Platform::MacOS,
+            Platform::Android,
+            Platform::Ios,
+        ],
+    ),
+];
+
+fn has_reviewed_platform_scope(t: &TraitDefinition) -> bool {
+    REVIEWED_BROAD_PLATFORM_SCOPES
+        .iter()
+        .any(|(id, platforms)| {
+            t.id == *id
+                && t.platforms.len() == platforms.len()
+                && platforms
+                    .iter()
+                    .all(|platform| t.platforms.contains(platform))
+        })
+}
+
 /// Find atomic traits whose platform breadth deserves a soft warning.
 ///
-/// Applies uniformly across tiers; a directory name cannot justify a scope.
-/// A reviewer must compare the actual matcher with its declared platforms.
+/// Enumerated scopes are reviewed uniformly across tiers. `all` is checked by
+/// `find_all_platform_rules_outside_allowlist` for both atoms and composites.
 #[must_use]
 pub(crate) fn find_broad_platform_traits(
     trait_definitions: &[TraitDefinition],
@@ -2728,6 +3083,7 @@ pub(crate) fn find_broad_platform_traits(
         .filter(|t| {
             !t.platforms.contains(&Platform::All)
                 && effective_platform_count(&t.platforms) >= BROAD_PLATFORM_THRESHOLD
+                && !has_reviewed_platform_scope(t)
         })
         .map(|t| {
             let source = rule_source_files

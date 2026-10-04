@@ -83,9 +83,9 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
 name = "am-fs-core"
-version = "0.2.19"
+version = "0.2.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aa3610e541e2ffe0e2509c9278b0cf9951210e84882f748816dad9d2437aa8ec"
+checksum = "e863635b901379df89efa7df22469d3d51963b7bbd9bca124d7552cfe8e04bc1"
 
 [[package]]
 name = "am-fs-squashfs"
@@ -1850,7 +1850,7 @@ dependencies = [
 [[package]]
 name = "filefacts"
 version = "2.0.0"
-source = "git+https://github.com/atomdrift-project/filefacts.git#0f3876dd8203e746dad5ddb009dca2781c4454e6"
+source = "git+https://github.com/atomdrift-project/filefacts.git#5a36fe558ce60c51751731032d2743167cccac7d"
 dependencies = [
  "aho-corasick",
  "cab",
@@ -3086,9 +3086,9 @@ dependencies = [
 
 [[package]]
 name = "mio"
-version = "1.2.3"
+version = "1.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4b18443e9c262bfe8fa82f51666e2642c53393f7e5c27b3e1aeab922cff5b9d8"
+checksum = "1788edb87fdc09c7e26304471e2f5be8cdefb1b6930d6e3985fc02ff53bf86ee"
 dependencies = [
  "libc",
  "wasi",
@@ -4837,7 +4837,7 @@ dependencies = [
 [[package]]
 name = "stng"
 version = "2.0.1"
-source = "git+https://github.com/atomdrift-project/stng.git?rev=78f439bbb96b8c15686a63f2631edf6b62269391#78f439bbb96b8c15686a63f2631edf6b62269391"
+source = "git+https://github.com/atomdrift-project/stng.git?rev=60c96257262bfeb9bcc0c399a529631e354f6681#60c96257262bfeb9bcc0c399a529631e354f6681"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -5452,7 +5452,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter"
 version = "0.28.0"
-source = "git+https://github.com/tstromberg/tree-sitter?branch=master#8dbeeeccea5d7bf7685ca07b7d6d9753b849f225"
+source = "git+https://github.com/tstromberg/tree-sitter?branch=master#3c432e1a6ec5d0c1e792bb7efa1fe53ed45d631a"
 dependencies = [
  "cc",
  "regex",
@@ -5504,7 +5504,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-clojure"
 version = "0.1.0"
-source = "git+https://github.com/atomdrift-project/filefacts.git#0f3876dd8203e746dad5ddb009dca2781c4454e6"
+source = "git+https://github.com/atomdrift-project/filefacts.git#5a36fe558ce60c51751731032d2743167cccac7d"
 dependencies = [
  "cc",
  "tree-sitter",
@@ -5574,7 +5574,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-language"
 version = "0.1.8"
-source = "git+https://github.com/tstromberg/tree-sitter?branch=master#8dbeeeccea5d7bf7685ca07b7d6d9753b849f225"
+source = "git+https://github.com/tstromberg/tree-sitter?branch=master#3c432e1a6ec5d0c1e792bb7efa1fe53ed45d631a"
 
 [[package]]
 name = "tree-sitter-lua"
@@ -5668,9 +5668,9 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter-swift"
-version = "0.7.3"
+version = "0.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fe36052155b9dd69ca82b3b8f1b4ccfb2d867125ac1a4db1dd7331829242668c"
+checksum = "2688c06564afa397313e0db17d140a73e2c6a47f3884794614246167c9dd5dfd"
 dependencies = [
  "cc",
  "tree-sitter-language",
@@ -5714,9 +5714,9 @@ dependencies = [
 
 [[package]]
 name = "twox-hash"
-version = "2.1.4"
+version = "2.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5283634e518fe9e82c7b20520bb4bc209009fd16c82077c802f8111ecbb0117a"
+checksum = "86a801b3cea342a06d468c8710662aa29e5e05e4f5c0d62f00bbb7f2ad7941c2"
 
 [[package]]
 name = "typed-path"

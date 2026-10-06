@@ -738,11 +738,9 @@ impl super::CapabilityMapper {
                         .or_else(|| index.by_id.get(finding.id.as_str()))?;
                     let unless_conds = self.unless_conditions(*source);
                     let should_suppress = unless_conds.iter().any(|cond| {
-                        if let Condition::Trait { id } = cond {
-                            self.unless_trait_id_matches(id, &all_ids)
-                        } else {
-                            false // non-Trait conditions are evaluated correctly at eval time
-                        }
+                        cond.trait_references()
+                            .iter()
+                            .any(|id| self.unless_trait_id_matches(id, &all_ids))
                     });
                     should_suppress.then(|| finding.id.clone())
                 })
@@ -798,14 +796,11 @@ impl super::CapabilityMapper {
         };
         let mut legs = Vec::new();
         for cond in self.unless_conditions(*source) {
-            let Condition::Trait { id } = cond else {
-                continue;
-            };
-            // A leg may name a directory prefix; report the concrete surviving
-            // findings it resolves to rather than echoing the pattern.
+            // A union is one leg; emit every concrete suppressor only once.
             for suppressor in findings.iter().filter(|f| {
-                let one: FxHashSet<&str> = std::iter::once(f.id.as_str()).collect();
-                self.unless_trait_id_matches(id, &one)
+                cond.trait_references()
+                    .iter()
+                    .any(|id| self.trait_reference_matches(id, &f.id))
             }) {
                 legs.push(crate::types::SuppressionLeg {
                     id: suppressor.id.clone(),
@@ -904,27 +899,29 @@ impl super::CapabilityMapper {
         rule: &crate::composite_rules::CompositeTrait,
         current_ids: &FxHashSet<&str>,
     ) -> Option<Vec<crate::types::Istr>> {
-        let backing = |id: &str| -> Vec<&str> {
+        let backing = |condition: &Condition| -> Vec<&str> {
             current_ids
                 .iter()
                 .copied()
-                .filter(|candidate| self.trait_reference_matches(id, candidate))
+                .filter(|candidate| {
+                    condition
+                        .trait_references()
+                        .iter()
+                        .any(|id| self.trait_reference_matches(id, candidate))
+                })
                 .collect()
         };
-        fn trait_ids(conditions: Option<&Vec<crate::composite_rules::Condition>>) -> Vec<&str> {
+        fn trait_conditions(conditions: Option<&Vec<Condition>>) -> Vec<&Condition> {
             conditions
                 .into_iter()
                 .flatten()
-                .filter_map(|condition| match condition {
-                    crate::composite_rules::Condition::Trait { id } => Some(id.as_str()),
-                    _ => None,
-                })
+                .filter(|condition| condition.is_trait_reference())
                 .collect()
         }
 
         let mut legs: Vec<&str> = Vec::new();
-        for id in trait_ids(rule.all.as_ref()) {
-            let found = backing(id);
+        for condition in trait_conditions(rule.all.as_ref()) {
+            let found = backing(condition);
             if found.is_empty() {
                 return None;
             }
@@ -933,8 +930,8 @@ impl super::CapabilityMapper {
         if let Some(any) = &rule.any {
             let needed = rule.needs.unwrap_or(1).min(any.len());
             let mut satisfied = 0;
-            for id in trait_ids(Some(any)) {
-                let found = backing(id);
+            for condition in trait_conditions(Some(any)) {
+                let found = backing(condition);
                 if !found.is_empty() {
                     satisfied += 1;
                     legs.extend(found);
@@ -972,8 +969,8 @@ impl super::CapabilityMapper {
 
         if let Some(all) = &rule.all {
             for condition in all {
-                if let crate::composite_rules::Condition::Trait { id } = condition
-                    && !matches(id)
+                if condition.is_trait_reference()
+                    && !condition.trait_references().iter().any(|id| matches(id))
                 {
                     return false;
                 }
@@ -981,20 +978,20 @@ impl super::CapabilityMapper {
         }
 
         if let Some(any) = &rule.any
-            && any.iter().all(|condition| {
-                matches!(condition, crate::composite_rules::Condition::Trait { .. })
-            })
+            && any.iter().all(Condition::is_trait_reference)
         {
             let mut matched = 0;
             for condition in any {
-                let crate::composite_rules::Condition::Trait { id } = condition else {
-                    continue;
-                };
                 let count = current_ids
                     .iter()
-                    .filter(|candidate| self.trait_reference_matches(id, candidate))
+                    .filter(|candidate| {
+                        condition
+                            .trait_references()
+                            .iter()
+                            .any(|id| self.trait_reference_matches(id, candidate))
+                    })
                     .count();
-                matched += count.max(usize::from(matches(id)));
+                matched += count;
             }
             if matched < rule.needs.unwrap_or(1) {
                 return false;

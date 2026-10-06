@@ -469,9 +469,11 @@ pub(crate) fn find_cap_obj_violations(
             }
 
             // Check if the trait condition references other traits
-            if let Condition::Trait { id: ref_id } = &trait_def.r#if
-                && let Some(ref_tier) = extract_tier(ref_id)
-                && ref_tier == "objectives"
+            for ref_id in trait_def
+                .r#if
+                .trait_references()
+                .iter()
+                .filter(|id| extract_tier(id) == Some("objectives"))
             {
                 let source = rule_source_files
                     .get(&trait_def.id)
@@ -541,8 +543,11 @@ pub(crate) fn find_metadata_cross_tier_refs(
         if extract_tier(&trait_def.id) != Some("metadata") {
             continue;
         }
-        if let Condition::Trait { id: ref_id } = &trait_def.r#if
-            && is_cross_tier_ref(ref_id)
+        for ref_id in trait_def
+            .r#if
+            .trait_references()
+            .iter()
+            .filter(|id| is_cross_tier_ref(id))
         {
             let source = rule_source_files
                 .get(&trait_def.id)
@@ -725,7 +730,7 @@ fn find_tier_wellknown_violations(
 
     let scan_conditions = |conds: &[Condition], in_benign: bool, refs: &mut Vec<(String, bool)>| {
         for cond in conds {
-            if let Condition::Trait { id } = cond {
+            for id in cond.trait_references() {
                 refs.push((id.clone(), in_benign));
             }
         }
@@ -738,7 +743,7 @@ fn find_tier_wellknown_violations(
         let mut refs: Vec<(String, bool)> = Vec::new();
 
         // Atomic `if:` is positive evidence.
-        if let Condition::Trait { id } = &trait_def.r#if {
+        for id in trait_def.r#if.trait_references() {
             refs.push((id.clone(), false));
         }
         // `unless:` is benign-context suppression.
@@ -868,14 +873,14 @@ pub(crate) fn find_suppression_only_building_blocks<'a>(
     for r in composite_rules {
         for conds in [r.all.as_ref(), r.any.as_ref()].into_iter().flatten() {
             for cond in conds {
-                if let Condition::Trait { id } = cond {
+                for id in cond.trait_references() {
                     add_edge(r.id.as_str(), id.as_str());
                 }
             }
         }
     }
     for t in trait_definitions {
-        if let Condition::Trait { id } = &t.r#if {
+        for id in t.r#if.trait_references() {
             add_edge(t.id.as_str(), id.as_str());
         }
     }
@@ -1103,8 +1108,11 @@ pub(crate) fn find_exception_positive_refs(
     // Atomic `if:` is positive evidence. Atomics are never exceptions (V1), so they
     // always evaluate as a non-exception parent.
     for t in trait_definitions {
-        if let Condition::Trait { id } = &t.r#if
-            && !exceptions_reached_by(id, false, &exception_ids).is_empty()
+        for id in t
+            .r#if
+            .trait_references()
+            .iter()
+            .filter(|id| !exceptions_reached_by(id, false, &exception_ids).is_empty())
         {
             violations.push((
                 t.id.clone(),
@@ -1122,8 +1130,10 @@ pub(crate) fn find_exception_positive_refs(
         }
         for conds in [r.all.as_ref(), r.any.as_ref()].into_iter().flatten() {
             for cond in conds {
-                if let Condition::Trait { id } = cond
-                    && !exceptions_reached_by(id, false, &exception_ids).is_empty()
+                for id in cond
+                    .trait_references()
+                    .iter()
+                    .filter(|id| !exceptions_reached_by(id, false, &exception_ids).is_empty())
                 {
                     violations.push((
                         r.id.clone(),
@@ -1163,12 +1173,12 @@ pub(crate) fn find_unreferenced_exceptions<'a>(
     // all rules. Atomics are never exceptions; a composite is one iff its crit says so.
     let mut refs: Vec<(bool, &'a str, &'a str)> = Vec::new();
     for t in trait_definitions {
-        if let Condition::Trait { id } = &t.r#if {
+        for id in t.r#if.trait_references() {
             refs.push((false, &t.id, id));
         }
         if let Some(unless) = &t.unless {
             for cond in unless {
-                if let Condition::Trait { id } = cond {
+                for id in cond.trait_references() {
                     refs.push((false, &t.id, id));
                 }
             }
@@ -1179,7 +1189,7 @@ pub(crate) fn find_unreferenced_exceptions<'a>(
                 .flatten()
             {
                 for cond in conds {
-                    if let Condition::Trait { id } = cond {
+                    for id in cond.trait_references() {
                         refs.push((false, &t.id, id));
                     }
                 }
@@ -1190,7 +1200,7 @@ pub(crate) fn find_unreferenced_exceptions<'a>(
         let from_is_exception = r.crit == Criticality::Exception;
         for (_, conds) in composite_condition_lists(r) {
             for cond in conds {
-                if let Condition::Trait { id } = cond {
+                for id in cond.trait_references() {
                     refs.push((from_is_exception, &r.id, id));
                 }
             }
@@ -1261,10 +1271,7 @@ pub(crate) fn find_exception_non_notable_members(
             .into_iter()
             .flatten()
             .flatten()
-            .filter_map(|cond| match cond {
-                Condition::Trait { id } => Some(id.as_str()),
-                _ => None,
-            });
+            .flat_map(|cond| cond.trait_references().iter().map(String::as_str));
         for member_id in members {
             if member_id.contains("::") {
                 // A dangling ref (unknown id) is caught by orphan validation, not here.
@@ -1322,7 +1329,7 @@ pub(crate) fn find_exception_inline_conditions(
         let source = source_of(rule_source_files, &rule.id);
         for (clause, conds) in composite_condition_lists(rule) {
             for cond in conds {
-                if !matches!(cond, Condition::Trait { .. }) {
+                if !cond.is_trait_reference() {
                     violations.push((
                         rule.id.clone(),
                         clause.to_string(),
@@ -1556,6 +1563,9 @@ pub(crate) fn find_deep_taxonomy_directories(trait_dirs: &[String]) -> Vec<(Stri
 // Audited operation boundaries in TAXONOMY.md. These are exact child sets,
 // not exemptions for arbitrary future subdivisions under these parents.
 const REVIEWED_SPARSE_TAXONOMY_PARTITIONS: &[(&str, &[&str])] = &[
+    // Algorithm-specific codec homes remain useful with a small current corpus;
+    // do not merge gzip, LZMA, and joint zlib evidence into one bucket.
+    ("micro-behaviors/data/codec", &["gzip", "lzma", "zlib"]),
     // Construct a path, canonicalize it, or extract a path component.
     (
         "micro-behaviors/fs/path-ops",
@@ -1947,6 +1957,472 @@ pub(crate) fn find_metadata_content_dirs(trait_dirs: &[String]) -> Vec<String> {
         })
         .cloned()
         .collect()
+}
+
+/// Existing rule IDs retained during migration. New string-evidence rules must be
+/// placed with the subject they support, not under the generic file/string axis.
+/// Remove each ID from this grandfather list when its definition leaves that tree.
+const LEGACY_METADATA_FILE_STRING_IDS: &[&str] = &[
+    "metadata/file/string/account::identity-name-fields",
+    "metadata/file/string/account::identity-email-fields",
+    "metadata/file/string/account::first-name-field",
+    "metadata/file/string/account::last-name-field",
+    "metadata/file/string/account::user-name-field",
+    "metadata/file/string/account::email-address-field",
+    "metadata/file/string/account::primary-email-field",
+    "metadata/file/string/account::work-email-field",
+    "metadata/file/string/account::account-identity-labels",
+    "metadata/file/string/account::user-email-label",
+    "metadata/file/string/account::email-domain-label",
+    "metadata/file/string/account::customer-email-profile-field",
+    "metadata/file/string/account::email-label-vocabulary",
+    "metadata/file/string/account::postal-address-field",
+    "metadata/file/string/account::customer-contact-field",
+    "metadata/file/string/account::account-email-label",
+    "metadata/file/string/account::dataset-user-id-text-pair",
+    "metadata/file/string/account::account-id-field",
+    "metadata/file/string/account::account-created-field",
+    "metadata/file/string/account::account-last-seen-field",
+    "metadata/file/string/account::account-field-vocabulary",
+    "metadata/file/string/account::session-agent-id-label",
+    "metadata/file/string/account::quoted-username-label",
+    "metadata/file/string/accounting::utmp-header-literal",
+    "metadata/file/string/accounting::lastlog-header-literal",
+    "metadata/file/string/accounting::acct-header-literal",
+    "metadata/file/string/accounting::utmpx-header-literal",
+    "metadata/file/string/accounting::lastlog-config-literal",
+    "metadata/file/string/accounting::utmpx-config-literal",
+    "metadata/file/string/accounting::acct-config-literal",
+    "metadata/file/string/accounting::accounting-path-macro-literal",
+    "metadata/file/string/accounting::accounting-record-type-literal",
+    "metadata/file/string/accounting::accounting-header-literals",
+    "metadata/file/string/accounting::accounting-config-literals",
+    "metadata/file/string/application-name::chromium-browser-name-literal",
+    "metadata/file/string/application-name::chrome-browser-name-literal",
+    "metadata/file/string/application-name::firefox-browser-name-literal",
+    "metadata/file/string/application-name::safari-browser-name-literal",
+    "metadata/file/string/application-name::browser-doc-example-index",
+    "metadata/file/string/application-name::edge-name-path",
+    "metadata/file/string/application-name::microsoft-edge-name",
+    "metadata/file/string/application-name::edge-name-ms",
+    "metadata/file/string/application-name::edge-name-other",
+    "metadata/file/string/application-name::opera-name-path",
+    "metadata/file/string/application-name::opera-name-other",
+    "metadata/file/string/application-name::brave-name",
+    "metadata/file/string/application-name::yandex-name",
+    "metadata/file/string/application-name::iexplore-executable-name",
+    "metadata/file/string/application-name::internet-explorer-product-name",
+    "metadata/file/string/application-name::edge-name-reference",
+    "metadata/file/string/application-name::system-settings-name-reference",
+    "metadata/file/string/application-name::system-preferences-name-reference",
+    "metadata/file/string/application-name::settings-app-name-reference",
+    "metadata/file/string/application-name::star-archive-format-marker",
+    "metadata/file/string/application-name::star-default-config-marker",
+    "metadata/file/string/application-name::netstat-usage-banner",
+    "metadata/file/string/application-name::netstat-source-marker",
+    "metadata/file/string/application-name::tool-identity-cpuid",
+    "metadata/file/string/application-name::tool-identity-hwinfo",
+    "metadata/file/string/application-name::tool-identity-putty",
+    "metadata/file/string/application-name::tool-identity-filezilla",
+    "metadata/file/string/application-name::tool-identity-wireshark",
+    "metadata/file/string/application-name::tool-identity-7zip--rx-1",
+    "metadata/file/string/application-name::tool-identity-7zip--rx-2",
+    "metadata/file/string/application-name::tool-identity-7zip--rx-3",
+    "metadata/file/string/application-name::tool-identity-7zip--rx-4",
+    "metadata/file/string/application-name::official-7zip-dll-basename",
+    "metadata/file/string/application-name::official-7zip-dll-reference",
+    "metadata/file/string/application-name::official-7zip-gui-basename",
+    "metadata/file/string/application-name::official-7zip-console-basename",
+    "metadata/file/string/application-name::official-7zip-standalone-basename",
+    "metadata/file/string/application-name::official-7zip-manager-basename",
+    "metadata/file/string/application-name::7zip-gui-official-manifest",
+    "metadata/file/string/application-name::pe-product-name-7zip",
+    "metadata/file/string/application-name::tool-identity-winrar",
+    "metadata/file/string/application-name::tool-identity-notepadplusplus",
+    "metadata/file/string/application-name::software-catalog-token-list",
+    "metadata/file/string/application-name::tool-identity-intel",
+    "metadata/file/string/application-name::tool-identity-7zip-cond-0--inline-573",
+    "metadata/file/string/application-name::trusted-tool-impersonator-context",
+    "metadata/file/string/application-name::tool-identity-7zip",
+    "metadata/file/string/application-name::official-7zip-component",
+    "metadata/file/string/application-name::windows-safe-mode-toggle-script",
+    "metadata/file/string/application-name::microsoft-activation-tool-script-marker",
+    "metadata/file/string/application-name::microsoft-activation-tool-domain-marker",
+    "metadata/file/string/application-name::microsoft-activation-tool-obfuscated-domain-marker",
+    "metadata/file/string/application-name::microsoft-activation-scripts-title",
+    "metadata/file/string/application-name::windows11-defender-disable-tweak",
+    "metadata/file/string/application-name::defender-history-clear-title",
+    "metadata/file/string/application-name::defender-history-remove-task-default",
+    "metadata/file/string/application-name::kms-suite-title",
+    "metadata/file/string/application-name::microsoft-activation-script-identity",
+    "metadata/file/string/application-name::microsoft-activation-script-benign-context",
+    "metadata/file/string/application-name::microsoft-activation-tool-script",
+    "metadata/file/string/application-name::defender-history-clear-once-script",
+    "metadata/file/string/architecture::mips64-architecture-string",
+    "metadata/file/string/architecture::riscv32-architecture-string",
+    "metadata/file/string/architecture::power8-architecture-string",
+    "metadata/file/string/architecture::sh4aeb-architecture-string",
+    "metadata/file/string/architecture::microblazebe-architecture-string",
+    "metadata/file/string/artifact::seccomp-syscall-deny-table",
+    "metadata/file/string/artifact::bpf-constant-name-table",
+    "metadata/file/string/artifact::ptrace-constant-name-table",
+    "metadata/file/string/artifact::cddl-spdx-header",
+    "metadata/file/string/artifact::btf-vmlinux-header-guard",
+    "metadata/file/string/artifact::btf-core-preserve-access-index-pragma",
+    "metadata/file/string/artifact::linux-uapi-bpf-func-mapper-macro",
+    "metadata/file/string/artifact::linux-btf-vmlinux-type-dump",
+    "metadata/file/string/artifact::linux-uapi-bpf-header",
+    "metadata/file/string/artifact::demo-prefix-keyword",
+    "metadata/file/string/artifact::vagrant-machine-communicate-marker",
+    "metadata/file/string/artifact::linux-syscall-note-license",
+    "metadata/file/string/artifact::process-word-token",
+    "metadata/file/string/artifact::payload-label",
+    "metadata/file/string/artifact::embedded-256-bit-hex-digest",
+    "metadata/file/string/attribution::author-banner",
+    "metadata/file/string/attribution::upstream-project-attribution",
+    "metadata/file/string/attribution::jsdoc-author-attribution",
+    "metadata/file/string/attribution::spdx-license-identifier",
+    "metadata/file/string/attribution::gnu-license-notice",
+    "metadata/file/string/attribution::meta-platforms-copyright",
+    "metadata/file/string/attribution::attributed-upstream-source",
+    "metadata/file/string/charset::standard-base64-alphabet-text",
+    "metadata/file/string/charset::standard-base64-alphabet",
+    "metadata/file/string/charset::lower-first-base64-alphabet",
+    "metadata/file/string/charset::standard-base64-alphabet-table",
+    "metadata/file/string/charset::base64-alphabet",
+    "metadata/file/string/charset::base62-alphanumeric-charset",
+    "metadata/file/string/charset::qwerty-order-alphabet",
+    "metadata/file/string/charset::lowercase-hex-alphabet",
+    "metadata/file/string/charset::sequential-decimal-lookup-table",
+    "metadata/file/string/charset::emoji-library-table-text",
+    "metadata/file/string/charset::professional-setup-phrase",
+    "metadata/file/string/charset::split-string",
+    "metadata/file/string/cicd::github-workflows-path-string",
+    "metadata/file/string/cicd::github-workflow-file-path",
+    "metadata/file/string/cicd::github-actions-secret-record-marker",
+    "metadata/file/string/cicd::cicd-runtime-fingerprint--rx-11",
+    "metadata/file/string/cicd::cicd-runtime-fingerprint--rx-13",
+    "metadata/file/string/cicd::cicd-runtime-fingerprint--rx-15",
+    "metadata/file/string/collection::grabber-word",
+    "metadata/file/string/collection::grabber-near-secret",
+    "metadata/file/string/collection::secret-near-grabber",
+    "metadata/file/string/collection::grabber-secret-word-context",
+    "metadata/file/string/command::killprocess-token",
+    "metadata/file/string/command::execute-token",
+    "metadata/file/string/command::download-token",
+    "metadata/file/string/command::disconnect-token",
+    "metadata/file/string/command::httpserver-token",
+    "metadata/file/string/command::dot-udp-command-text",
+    "metadata/file/string/command::download-finished-msg",
+    "metadata/file/string/command::execute-completed-msg",
+    "metadata/file/string/command::command-status-vocabulary",
+    "metadata/file/string/command::powershell-encoded-command-switch",
+    "metadata/file/string/command::command-id-field-name",
+    "metadata/file/string/command::script-many-shell-command-strings-100",
+    "metadata/file/string/command::shell-multiple-local-assignments",
+    "metadata/file/string/container::runc-oci-str",
+    "metadata/file/string/container::libcontainer-str",
+    "metadata/file/string/container::cri-api-str",
+    "metadata/file/string/container::runtimeservice-str",
+    "metadata/file/string/container::opencontainers-str",
+    "metadata/file/string/container::oci-runtime-spec-str",
+    "metadata/file/string/container::image-spec-str",
+    "metadata/file/string/container::org-opencontainers-str",
+    "metadata/file/string/container::prestart-str",
+    "metadata/file/string/container::poststart-str",
+    "metadata/file/string/container::poststop-str",
+    "metadata/file/string/container::cni-github-str",
+    "metadata/file/string/container::cni-prefix-str",
+    "metadata/file/string/container::cni-libcni-str",
+    "metadata/file/string/container::runc-refs",
+    "metadata/file/string/container::cri-refs",
+    "metadata/file/string/container::oci-refs",
+    "metadata/file/string/container::hooks-refs",
+    "metadata/file/string/container::hooks-with-config",
+    "metadata/file/string/container::oci",
+    "metadata/file/string/container::cni-refs",
+    "metadata/file/string/corpus::hashed-text-record",
+    "metadata/file/string/count::binary-strings-at-most-50",
+    "metadata/file/string/count::large-macho-strings-at-most-50",
+    "metadata/file/string/count::high-entropy-strings-200",
+    "metadata/file/string/count::few-high-entropy-strings-20",
+    "metadata/file/string/count::high-entropy-strings-450-plus",
+    "metadata/file/string/count::high-entropy-strings-20",
+    "metadata/file/string/count::binary-strings-one-to-five",
+    "metadata/file/string/count::large-pe-strings-at-most-128",
+    "metadata/file/string/count::few-string-literals",
+    "metadata/file/string/count::string-count-over-10000",
+    "metadata/file/string/count::string-concealment",
+    "metadata/file/string/count::no-strings-dup",
+    "metadata/file/string/count::string-scarcity-rich-binary",
+    "metadata/file/string/count::string-scarcity-soft-noise",
+    "metadata/file/string/count::no-strings-soft-noise",
+    "metadata/file/string/count::large-macho-high-entropy-string-profile",
+    "metadata/file/string/count::twenty-plus-shell-command-strings",
+    "metadata/file/string/count::ten-plus-ip-address-strings",
+    "metadata/file/string/count::fifty-plus-url-strings",
+    "metadata/file/string/count::vbs-many-long-tokens",
+    "metadata/file/string/credential::github-fine-grained-pat",
+    "metadata/file/string/credential::uppercase-password-identifier",
+    "metadata/file/string/credential::cloud-credential-type-name",
+    "metadata/file/string/credential::telnetadmin-account-token",
+    "metadata/file/string/credential::password-value-text",
+    "metadata/file/string/device::data-section-virtual-word",
+    "metadata/file/string/device::data-section-bluetooth-word",
+    "metadata/file/string/device::plc-keyword",
+    "metadata/file/string/device::hmi-keyword",
+    "metadata/file/string/device::scada-keyword",
+    "metadata/file/string/device::rtu-keyword",
+    "metadata/file/string/device::ics-device-keywords",
+    "metadata/file/string/device::turbine-speed-field",
+    "metadata/file/string/device::reboot-word",
+    "metadata/file/string/device::factory-word",
+    "metadata/file/string/device::vboxguest-service-registry-path",
+    "metadata/file/string/device::virtualbox-sdk-module-name",
+    "metadata/file/string/device::windows-usb-hardware-id",
+    "metadata/file/string/domain::fake-av-vendor-domain",
+    "metadata/file/string/domain::adult-redirect-domain",
+    "metadata/file/string/domain::url-with-top-tld",
+    "metadata/file/string/domain::long-alphanumeric-third-level-label",
+    "metadata/file/string/domain::channel-domain-variable-name",
+    "metadata/file/string/domain::structured-remote-url-field",
+    "metadata/file/string/file::office-document-extension--docx",
+    "metadata/file/string/file::office-document-extension--xlsx",
+    "metadata/file/string/file::office-document-extension--pptx",
+    "metadata/file/string/file::credential-file-extension--kdbx",
+    "metadata/file/string/file::credential-file-extension--ovpn",
+    "metadata/file/string/file::office-document-file-pattern--docx",
+    "metadata/file/string/file::office-document-file-pattern--xlsx",
+    "metadata/file/string/file::office-document-file-pattern--pptx",
+    "metadata/file/string/file::credential-file-pattern--kdbx",
+    "metadata/file/string/file::credential-file-pattern--psafe3",
+    "metadata/file/string/file::credential-file-pattern--ovpn",
+    "metadata/file/string/file::office-document-extension",
+    "metadata/file/string/file::credential-file-extension",
+    "metadata/file/string/file::office-document-file-pattern",
+    "metadata/file/string/file::credential-file-pattern",
+    "metadata/file/string/file::jvm-dot-cmd-suffix",
+    "metadata/file/string/file::jvm-dot-out-suffix",
+    "metadata/file/string/file::jvm-active-server-log-name",
+    "metadata/file/string/file::jvm-rotated-server-log-prefix",
+    "metadata/file/string/file::jvm-derby-log-path",
+    "metadata/file/string/file::quoted-lib-path-component",
+    "metadata/file/string/file::shell-scripts-dir-context",
+    "metadata/file/string/file::shell-benchmark-script-basename",
+    "metadata/file/string/file::linux-vmlinux-header-basename",
+    "metadata/file/string/file::wine-include-source-path",
+    "metadata/file/string/file::wine-lib-archive-member",
+    "metadata/file/string/file::token-read-text-reference",
+    "metadata/file/string/file::tmp",
+    "metadata/file/string/file::manifest-json-filename",
+    "metadata/file/string/file::content-js-filename",
+    "metadata/file/string/file::error-log-filename",
+    "metadata/file/string/file::config-header-filename",
+    "metadata/file/string/file::scr-extension-string",
+    "metadata/file/string/file::tmpfile-tar-filename",
+    "metadata/file/string/file::configuration-word",
+    "metadata/file/string/file::desktop-ini-filename",
+    "metadata/file/string/file::mscorsvc-dll-filename",
+    "metadata/file/string/form-validation::upgrade-required-message",
+    "metadata/file/string/form-validation::required-keys-update-string",
+    "metadata/file/string/form-validation::required-element-string",
+    "metadata/file/string/graphics::opengl-library-token",
+    "metadata/file/string/graphics::graphics-backend-tokens",
+    "metadata/file/string/graphics::mesa-namespace-fragment",
+    "metadata/file/string/graphics::vulkan-text-section-reference",
+    "metadata/file/string/graphics::vulkan-rdata-reference",
+    "metadata/file/string/graphics::graphics-runtime-library-name",
+    "metadata/file/string/graphics::dri-directory-reference",
+    "metadata/file/string/graphics::dri-driver-tokens",
+    "metadata/file/string/graphics::dri-reference",
+    "metadata/file/string/identity::android-aid-platform-marker",
+    "metadata/file/string/identity::android-data-app-path",
+    "metadata/file/string/identity::android-system-runtime-path",
+    "metadata/file/string/identity::android-vendor-runtime-path",
+    "metadata/file/string/identity::android-apex-runtime-path",
+    "metadata/file/string/identity::android-property-platform-marker",
+    "metadata/file/string/identity::android-getprop-platform-marker",
+    "metadata/file/string/identity::android-lib-platform-marker",
+    "metadata/file/string/identity::android-java-platform-marker",
+    "metadata/file/string/identity::android-framework-java-import",
+    "metadata/file/string/identity::android-system-path-marker",
+    "metadata/file/string/identity::arch-64bit-string",
+    "metadata/file/string/identity::multi-architecture-name-set--arm-mips",
+    "metadata/file/string/identity::multi-architecture-name-set--other",
+    "metadata/file/string/identity::multi-architecture-name-set",
+    "metadata/file/string/identity::crackme-string",
+    "metadata/file/string/identity::xmrig-product",
+    "metadata/file/string/identity::developer-frank-string",
+    "metadata/file/string/identity::developer-email-source-harvest--rx-6",
+    "metadata/file/string/identity::developer-email-source-harvest--rx-7",
+    "metadata/file/string/identity::filename-gvoffoqi",
+    "metadata/file/string/identity::fortios-automation-results-placeholder",
+    "metadata/file/string/identity::corporate-hostname-word-computer",
+    "metadata/file/string/identity::corporate-hostname-word-internal",
+    "metadata/file/string/identity::hostname-marker-word-corp",
+    "metadata/file/string/identity::hostname-marker-word-fqdn",
+    "metadata/file/string/identity::jvm-post-token",
+    "metadata/file/string/identity::jvm-activate-constant",
+    "metadata/file/string/identity::python3-interpreter-basename",
+    "metadata/file/string/identity::chrome-sandbox-basename",
+    "metadata/file/string/identity::chrome-crashpad-handler-basename",
+    "metadata/file/string/identity::node-pty-native-basename",
+    "metadata/file/string/identity::bpf-tool-basename",
+    "metadata/file/string/identity::kernel-module-basename",
+    "metadata/file/string/identity::pkgbuild-basename",
+    "metadata/file/string/identity::jfif-or-jpeg-media-marker",
+    "metadata/file/string/identity::cuckoo-typeface-name-token",
+    "metadata/file/string/identity::pattern-rules-catalog",
+    "metadata/file/string/identity::client-uuid-label",
+    "metadata/file/string/identity::code-snippet-identifier",
+    "metadata/file/string/identity::flags-identifier",
+    "metadata/file/string/identity::applescript-hidden-entry-snippet-path",
+    "metadata/file/string/identity::applescript-hidden-entry-secret",
+    "metadata/file/string/identity::applescript-hidden-entry-snippet",
+    "metadata/file/string/identity::abbreviated-curl-bash-reference",
+    "metadata/file/string/identity::cli-posix-shell-common-token",
+    "metadata/file/string/identity::cli-posix-shell-alternate-token",
+    "metadata/file/string/identity::cli-windows-shell-token",
+    "metadata/file/string/identity::argv-posix-shell-common-token",
+    "metadata/file/string/identity::argv-posix-shell-alternate-token",
+    "metadata/file/string/identity::argv-windows-shell-token",
+    "metadata/file/string/identity::hostname-field-token",
+    "metadata/file/string/identity::babel-script-mime-type",
+    "metadata/file/string/identity::userinfo-token",
+    "metadata/file/string/identity::chunk-token",
+    "metadata/file/string/identity::source-text-token",
+    "metadata/file/string/identity::system-shell-basename",
+    "metadata/file/string/identity::shell-loadable-builtin-path",
+    "metadata/file/string/identity::freedos-program-basename",
+    "metadata/file/string/identity::microsoft-vcredist-context",
+    "metadata/file/string/identity::executable-manifest-reference",
+    "metadata/file/string/identity::is-windows-named",
+    "metadata/file/string/limit::per-page-option-text",
+    "metadata/file/string/limit::max-length-63-assignment",
+    "metadata/file/string/network/port::port-2375-reference",
+    "metadata/file/string/network/port::port-2376-reference",
+    "metadata/file/string/network/port::docker-near-2375-text",
+    "metadata/file/string/network/port::c-common-service-port-array",
+    "metadata/file/string/network/port::ports-2375-and-2376",
+    "metadata/file/string/process-name::mobilestored-daemon",
+    "metadata/file/string/process-name::backboardd-daemon",
+    "metadata/file/string/process-name::lockdownd-daemon",
+    "metadata/file/string/process-name::smartd-name",
+    "metadata/file/string/process-name::qmgr-name",
+    "metadata/file/string/process-name::zabbix-agentd-name",
+    "metadata/file/string/process-name::crond-name",
+    "metadata/file/string/process-name::xinetd-name",
+    "metadata/file/string/process-name::inetd-name",
+    "metadata/file/string/process-name::named-name",
+    "metadata/file/string/process-name::telnetd-name",
+    "metadata/file/string/process-name::telnet-client-name",
+    "metadata/file/string/process-name::springboard-daemon",
+    "metadata/file/string/process-name::launchd-daemon",
+    "metadata/file/string/process-name::configd-daemon",
+    "metadata/file/string/process-name::wifid-daemon",
+    "metadata/file/string/process-name::securityd-daemon",
+    "metadata/file/string/process-name::usereventagent-daemon",
+    "metadata/file/string/process-name::native-database-service-names",
+    "metadata/file/string/process-name::httpd-name",
+    "metadata/file/string/process-name::nginx-name",
+    "metadata/file/string/process-name::apache-name",
+    "metadata/file/string/process-name::mysql-name",
+    "metadata/file/string/process-name::postgres-name",
+    "metadata/file/string/process-name::redis-name",
+    "metadata/file/string/process-name::mongod-name",
+    "metadata/file/string/process-name::tomcat-name",
+    "metadata/file/string/process-name::jboss-name",
+    "metadata/file/string/process-name::weblogic-name",
+    "metadata/file/string/process-name::source-kworker-name-literal",
+    "metadata/file/string/process-name::search-filter-host-exe-reference",
+    "metadata/file/string/process-name::search-protocol-host-exe-reference",
+    "metadata/file/string/process-name::runtime-broker-exe-reference",
+    "metadata/file/string/process-name::svchost-exe-reference",
+    "metadata/file/string/process-name::windows-system-process-name-reference",
+    "metadata/file/string/process-name::system-process-core-name",
+    "metadata/file/string/process-name::updater-exe-name",
+    "metadata/file/string/process-name::calc-exe-name",
+    "metadata/file/string/process-name::notepad-exe-name",
+    "metadata/file/string/process-name::iexplore-exe-name",
+    "metadata/file/string/security::domain-intel-text",
+    "metadata/file/string/security::rot13-reversed-back-connect-label",
+    "metadata/file/string/security::rot13-reversed-bind-port-label",
+    "metadata/file/string/security::native-rop-format-primitives",
+    "metadata/file/string/security::privileged-json-field-text",
+    "metadata/file/string/security::privileged-option-text",
+    "metadata/file/string/security::privileged-assignment-text",
+    "metadata/file/string/security::privileged-field-text",
+    "metadata/file/string/security::port-network-scanning-phrase",
+    "metadata/file/string/security::scanning-port-target-phrase",
+    "metadata/file/string/security::malware-term-in-comment",
+    "metadata/file/string/security::backdoor-term-in-comment",
+    "metadata/file/string/security::evasion-term-in-comment",
+    "metadata/file/string/security::evade-term-in-comment",
+    "metadata/file/string/security::malicious-software-term-in-comment",
+    "metadata/file/string/security::evasion-term-in-comment-any",
+    "metadata/file/string/security::version-target-identifier",
+    "metadata/file/string/security::version-service-identifier",
+    "metadata/file/string/security::version-scan-identifier",
+    "metadata/file/string/security::target-version-identifier",
+    "metadata/file/string/security::service-version-identifier",
+    "metadata/file/string/security::scan-version-identifier",
+    "metadata/file/string/security::cve-identifier",
+    "metadata/file/string/security::sqli-acronym",
+    "metadata/file/string/security::nosqli-acronym",
+    "metadata/file/string/security::xss-acronym",
+    "metadata/file/string/security::ssrf-acronym",
+    "metadata/file/string/security::lfi-acronym",
+    "metadata/file/string/security::rce-acronym",
+    "metadata/file/string/security::malicious-traffic-or-payload-phrase",
+    "metadata/file/string/security::injection-attack-class-acronyms",
+    "metadata/file/string/security::server-attack-class-acronyms",
+    "metadata/file/string/security::yara-x-engine-marker",
+    "metadata/file/string/security::yara-x-go-module",
+    "metadata/file/string/telemetry::telemetry-context-telemetry",
+    "metadata/file/string/telemetry::telemetry-context-analytics",
+    "metadata/file/string/telemetry::telemetry-context-identify",
+    "metadata/file/string/telemetry::browser-identity-field",
+    "metadata/file/string/telemetry::network-address-profile-field",
+    "metadata/file/string/telemetry::country-profile-field",
+    "metadata/file/string/telemetry::geolocation-profile-field",
+    "metadata/file/string/telemetry::region-profile-field",
+    "metadata/file/string/telemetry::os-profile-field",
+    "metadata/file/string/telemetry::platform-profile-field",
+    "metadata/file/string/telemetry::extension-os-profile-fields",
+    "metadata/file/string/telemetry::extension-runtime-identity-fields",
+    "metadata/file/string/telemetry::telemetry-context-markers",
+    "metadata/file/string/telemetry::telemetry-user-identity-fields",
+    "metadata/file/string/telemetry::geo-system-profile-field",
+    "metadata/file/string/telemetry::device-id-field",
+    "metadata/file/string/telemetry::device-id-field-python",
+    "metadata/file/string/telemetry::os-info-field",
+    "metadata/file/string/telemetry::repeated-analytics-term",
+    "metadata/file/string/telemetry::repeated-counter-term",
+    "metadata/file/string/telemetry::repeated-stats-term",
+    "metadata/file/string/telemetry::repeated-track-substring",
+    "metadata/file/string/telemetry::session-id-field-js",
+    "metadata/file/string/telemetry::device-id-field-js",
+    "metadata/file/string/telemetry::repeated-tracking-vocabulary",
+    "metadata/file/string/telemetry::clear-all-logs-symbol",
+    "metadata/file/string/telemetry::beacon-word",
+];
+
+/// Reject any new rule definition under the legacy `metadata/file/string/`
+/// namespace, including additions to already-established source directories.
+/// References to grandfathered IDs remain valid while their definitions move.
+#[must_use]
+pub(crate) fn find_new_metadata_file_string_ids(rule_ids: &[String]) -> Vec<String> {
+    let mut violations: Vec<String> = rule_ids
+        .iter()
+        .filter(|id| {
+            (id.starts_with("metadata/file/string/") || id.starts_with("metadata/file/string::"))
+                && !LEGACY_METADATA_FILE_STRING_IDS.contains(&id.as_str())
+        })
+        .cloned()
+        .collect();
+    violations.sort();
+    violations.dedup();
+    violations
 }
 
 /// Find directories where a segment duplicates its immediate parent.
@@ -3450,6 +3926,47 @@ mod content_dir_tests {
             "metadata/vendor",
         ]);
         assert!(find_metadata_content_dirs(&input).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod metadata_file_string_tests {
+    use super::find_new_metadata_file_string_ids;
+
+    fn ids(v: &[&str]) -> Vec<String> {
+        v.iter().map(ToString::to_string).collect()
+    }
+
+    #[test]
+    fn allows_existing_legacy_definitions_and_nonlegacy_ids() {
+        let input = ids(&[
+            "metadata/file/string/account::first-name-field",
+            "metadata/file/string/charset::standard-base64-alphabet-text",
+            "metadata/file/string/network/port::docker-near-2375-text",
+            "micro-behaviors/communications/http/string::header-reference",
+        ]);
+        assert!(find_new_metadata_file_string_ids(&input).is_empty());
+    }
+
+    #[test]
+    fn rejects_new_ids_inside_legacy_leaves_and_new_leaves() {
+        let input = ids(&[
+            // Adding a rule to an established source leaf is still forbidden.
+            "metadata/file/string/account::new-account-string",
+            // Creating a new taxonomy leaf is forbidden too.
+            "metadata/file/string/software::new-software-name",
+            "metadata/file/string/account/credentials::new-secret-label",
+            "micro-behaviors/data/string/replace",
+            "objectives/credential-access/theft/keywords",
+        ]);
+        assert_eq!(
+            find_new_metadata_file_string_ids(&input),
+            vec![
+                "metadata/file/string/account/credentials::new-secret-label".to_string(),
+                "metadata/file/string/account::new-account-string".to_string(),
+                "metadata/file/string/software::new-software-name".to_string(),
+            ]
+        );
     }
 }
 

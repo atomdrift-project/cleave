@@ -1625,6 +1625,22 @@ impl Condition {
         }
     }
 
+    /// Reference selector for conditions that name one trait.
+    pub(crate) fn trait_references(&self) -> &[String] {
+        match self {
+            Self::Trait { id } => std::slice::from_ref(id),
+            _ => &[],
+        }
+    }
+
+    /// Mutable selector for resolving local names during loading.
+    pub(crate) fn trait_references_mut(&mut self) -> &mut [String] {
+        match self {
+            Self::Trait { id } => std::slice::from_mut(id),
+            _ => &mut [],
+        }
+    }
+
     /// The `query:` string on a live tree-sitter condition, if any.
     pub(crate) fn ast_query_text(&self) -> Option<&str> {
         match self {

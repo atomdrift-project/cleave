@@ -217,7 +217,7 @@ impl DoomedSkipIndex {
 }
 
 fn collect_top_trait_ids(cond: &Condition, mark: &mut impl FnMut(&str)) {
-    if let Condition::Trait { id } = cond {
+    for id in cond.trait_references() {
         mark(id);
     }
 }
@@ -229,7 +229,7 @@ fn all_trait_ids_in_all_any(rule: &CompositeTrait) -> Vec<String> {
         .flatten()
     {
         for cond in conds {
-            if let Condition::Trait { id } = cond {
+            for id in cond.trait_references() {
                 ids.push(id.clone());
             }
         }

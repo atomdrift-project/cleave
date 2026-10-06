@@ -309,7 +309,9 @@ const ALLOWED_MB_DATA: &[&str] = &[
     "buffer",
     "cli-tool",
     "collection",
+    "codec", // Direction-neutral codec implementation or joint codec support
     "compress",
+    "compression", // Family composites spanning compression schemes and directions
     "config",
     "control-flow",
     "crypto",
@@ -406,16 +408,26 @@ const ALLOWED_MB_MEM: &[&str] = &[
     "advise",
     "alloc",
     "anonymous",
+    // Cross-operation composites over allocation and lifecycle evidence.
+    "combined",
     "c-runtime",
+    "compare",
+    "copy",
     "create",
     "decompress",
+    "fill",
+    "free",
     "gc",
     "inline-asm",
     "lock",
+    // Address-space mappings and their removal, independent of backing store.
+    "map",
     "protect",
     "query",
     "read",
+    "resize",
     "sync",
+    "unmap",
     // Writes through native-memory primitives, distinct from memory reads.
     "write",
 ];

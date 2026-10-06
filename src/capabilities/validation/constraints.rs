@@ -1337,7 +1337,7 @@ fn positive_trait_refs(rule: &CompositeTrait) -> Vec<String> {
     let mut refs = Vec::new();
     for conditions in [rule.all.as_ref(), rule.any.as_ref()].into_iter().flatten() {
         for cond in conditions {
-            if let Condition::Trait { id } = cond {
+            for id in cond.trait_references() {
                 refs.push(id.clone());
             }
         }
@@ -1661,7 +1661,7 @@ pub(crate) fn find_orphaned_components(
             .flatten()
         {
             for condition in conditions {
-                if let Condition::Trait { id } = condition {
+                for id in condition.trait_references() {
                     // Handle both specific references (with ::) and directory references
                     if id.contains("::") {
                         referenced_ids.insert(id.clone());
@@ -1680,7 +1680,7 @@ pub(crate) fn find_orphaned_components(
         // Also check unless: and downgrade: conditions
         if let Some(unless_conditions) = &rule.unless {
             for condition in unless_conditions {
-                if let Condition::Trait { id } = condition {
+                for id in condition.trait_references() {
                     if id.contains("::") {
                         referenced_ids.insert(id.clone());
                     } else {
@@ -1704,7 +1704,7 @@ pub(crate) fn find_orphaned_components(
             .flatten()
             {
                 for condition in conditions {
-                    if let Condition::Trait { id } = condition {
+                    for id in condition.trait_references() {
                         if id.contains("::") {
                             referenced_ids.insert(id.clone());
                         } else {
@@ -1721,7 +1721,7 @@ pub(crate) fn find_orphaned_components(
 
     // Collect trait references from atomic traits (if: id: form)
     for trait_def in trait_definitions {
-        if let Condition::Trait { id } = &trait_def.r#if {
+        for id in trait_def.r#if.trait_references() {
             if id.contains("::") {
                 referenced_ids.insert(id.clone());
             } else if id.contains('/') {
@@ -1736,7 +1736,7 @@ pub(crate) fn find_orphaned_components(
         // Also check unless: and downgrade: conditions on atomic traits
         if let Some(unless_conditions) = &trait_def.unless {
             for condition in unless_conditions {
-                if let Condition::Trait { id } = condition {
+                for id in condition.trait_references() {
                     if id.contains("::") {
                         referenced_ids.insert(id.clone());
                     } else {
@@ -1760,7 +1760,7 @@ pub(crate) fn find_orphaned_components(
             .flatten()
             {
                 for condition in conditions {
-                    if let Condition::Trait { id } = condition {
+                    for id in condition.trait_references() {
                         if id.contains("::") {
                             referenced_ids.insert(id.clone());
                         } else {
@@ -3412,16 +3412,13 @@ fn leg_evidence<'a>(
             continue;
         };
         for c in sub.all.iter().flatten().chain(sub.any.iter().flatten()) {
-            match c {
-                Condition::Trait { id: child } => {
+            if c.is_trait_reference() {
+                for child in c.trait_references() {
                     stack.extend(resolve_cached(child, index, cache));
                 }
-                other => {
-                    if !is_name_or_shape_only(other) {
-                        evidence.reads_content = true;
-                        return evidence;
-                    }
-                }
+            } else if !is_name_or_shape_only(c) {
+                evidence.reads_content = true;
+                return evidence;
             }
         }
     }
@@ -3445,7 +3442,7 @@ fn leg_terminals<'a>(
         match composite_by_id.get(next) {
             Some(sub) => {
                 for c in sub.all.iter().flatten().chain(sub.any.iter().flatten()) {
-                    if let Condition::Trait { id: child } = c {
+                    for child in c.trait_references() {
                         stack.extend(resolve_cached(child, index, cache));
                     }
                 }
@@ -3513,8 +3510,8 @@ pub(crate) fn find_convictions_without_content(
         let mut reads_content = false;
         let mut reaches_terminal = false;
         for cond in positive() {
-            match cond {
-                Condition::Trait { id } => {
+            if cond.is_trait_reference() {
+                for id in cond.trait_references() {
                     // A reference into a runtime-synthesized namespace resolves
                     // to nothing statically, but it is not absent evidence: an
                     // import, a code signature or an entitlement is a fact about
@@ -3531,7 +3528,8 @@ pub(crate) fn find_convictions_without_content(
                         reaches_terminal |= leg.reaches_terminal;
                     }
                 }
-                other => reads_content |= !is_name_or_shape_only(other),
+            } else {
+                reads_content |= !is_name_or_shape_only(cond);
             }
             // One content-reading leg clears the rule; the rest cannot change that.
             if reads_content {
@@ -3543,7 +3541,7 @@ pub(crate) fn find_convictions_without_content(
         }
         let mut terminals: HashSet<&str> = HashSet::new();
         for cond in positive() {
-            if let Condition::Trait { id } = cond {
+            for id in cond.trait_references() {
                 leg_terminals(id, &index, &composite_by_id, &mut cache, &mut terminals);
             }
         }
@@ -3592,10 +3590,11 @@ pub(crate) fn find_dangling_directory_refs(
             ("any", rule.any.as_ref()),
             ("unless", rule.unless.as_ref()),
         ] {
-            for cond in conds.into_iter().flatten() {
-                let Condition::Trait { id } = cond else {
-                    continue;
-                };
+            for id in conds
+                .into_iter()
+                .flatten()
+                .flat_map(Condition::trait_references)
+            {
                 // Exact references are already covered by `broken-reference`.
                 if id.contains("::") {
                     continue;

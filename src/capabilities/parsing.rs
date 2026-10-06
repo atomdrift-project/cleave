@@ -1720,7 +1720,7 @@ fn regex_length_warning(trait_id: &str, pattern: &str) -> String {
 pub(crate) fn autoprefix_trait_refs(rule: &mut CompositeTrait, prefix: &str) {
     fn prefix_conditions(conditions: &mut [Condition], prefix: &str) {
         for cond in conditions {
-            if let Condition::Trait { id } = cond {
+            for id in cond.trait_references_mut() {
                 // Only prefix if ID doesn't already contain '::' or '/' (i.e., it's local to this file)
                 if !id.contains("::") && !id.contains('/') {
                     *id = format!("{}::{}", prefix, id);

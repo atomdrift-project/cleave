@@ -973,10 +973,7 @@ fn extract_patterns(trait_def: &TraitDefinition) -> Vec<(String, PatternLocation
         .unless
         .iter()
         .flatten()
-        .filter_map(|cond| match cond {
-            Condition::Trait { id } => Some(id.clone()),
-            _ => None,
-        })
+        .flat_map(|cond| cond.trait_references().iter().cloned())
         .collect();
 
     // Helper to add a pattern

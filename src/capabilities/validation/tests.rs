@@ -5020,6 +5020,23 @@ mod taxonomy_tests {
 
     #[test]
     fn reviewed_sparse_taxonomies_require_exact_parent_and_child_sets() {
+        let codec = HashMap::from([
+            ("micro-behaviors/data/codec/gzip".to_string(), 7),
+            ("micro-behaviors/data/codec/lzma".to_string(), 1),
+            ("micro-behaviors/data/codec/zlib".to_string(), 1),
+        ]);
+        assert!(find_sparse_sibling_cohorts(&codec).is_empty());
+        let codec_with_new_sibling = HashMap::from([
+            ("micro-behaviors/data/codec/gzip".to_string(), 7),
+            ("micro-behaviors/data/codec/lzma".to_string(), 1),
+            ("micro-behaviors/data/codec/zlib".to_string(), 1),
+            ("micro-behaviors/data/codec/bzip2".to_string(), 1),
+        ]);
+        assert_eq!(
+            find_sparse_sibling_cohorts(&codec_with_new_sibling),
+            vec![("micro-behaviors/data/codec".to_string(), 10, 4)]
+        );
+
         let mut rules = HashMap::from([
             ("micro-behaviors/fs/swap/on".to_string(), 1),
             ("micro-behaviors/fs/swap/off".to_string(), 2),

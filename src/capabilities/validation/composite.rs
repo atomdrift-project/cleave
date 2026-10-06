@@ -24,7 +24,7 @@ use std::collections::{HashMap, HashSet};
 pub(crate) fn find_self_referencing_traits(traits: &[TraitDefinition]) -> Vec<&TraitDefinition> {
     traits
         .iter()
-        .filter(|t| matches!(&t.r#if, Condition::Trait { id } if id == &t.id))
+        .filter(|t| t.r#if.trait_references().iter().any(|id| id == &t.id))
         .collect()
 }
 
@@ -68,12 +68,10 @@ pub(crate) fn find_self_suppressing_traits(
     }
 
     fn scan(trait_def: &TraitDefinition, conditions: Option<&[Condition]>) -> Option<String> {
-        conditions?.iter().find_map(|cond| {
-            let Condition::Trait { id } = cond else {
-                return None;
-            };
-            ref_includes_rule(id, &trait_def.id).then(|| id.clone())
-        })
+        conditions?
+            .iter()
+            .flat_map(Condition::trait_references)
+            .find_map(|id| ref_includes_rule(id, &trait_def.id).then(|| id.clone()))
     }
 
     let mut violations = Vec::new();
@@ -113,12 +111,10 @@ pub(crate) fn find_self_referencing_composites(
     }
 
     fn scan_conditions(rule: &CompositeTrait, conditions: Option<&[Condition]>) -> Option<String> {
-        conditions?.iter().find_map(|cond| {
-            let Condition::Trait { id } = cond else {
-                return None;
-            };
-            ref_includes_rule(id, &rule.id).then(|| id.clone())
-        })
+        conditions?
+            .iter()
+            .flat_map(Condition::trait_references)
+            .find_map(|id| ref_includes_rule(id, &rule.id).then(|| id.clone()))
     }
 
     let mut violations = Vec::new();
@@ -346,7 +342,7 @@ pub(crate) fn collect_trait_refs_from_rule(rule: &CompositeTrait) -> Vec<(String
         refs: &mut Vec<(String, String)>,
     ) {
         for cond in conditions {
-            if let Condition::Trait { id } = cond {
+            for id in cond.trait_references() {
                 refs.push((id.clone(), rule_id.to_string()));
             }
         }
@@ -397,13 +393,13 @@ pub(crate) fn collect_trait_refs_from_trait_def(t: &TraitDefinition) -> Vec<(Str
         refs: &mut Vec<(String, String)>,
     ) {
         for cond in conditions {
-            if let Condition::Trait { id } = cond {
+            for id in cond.trait_references() {
                 refs.push((id.clone(), owner_id.to_string()));
             }
         }
     }
 
-    if let Condition::Trait { id } = &t.r#if {
+    for id in t.r#if.trait_references() {
         refs.push((id.clone(), t.id.clone()));
     }
     if let Some(ref conditions) = t.unless {

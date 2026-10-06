@@ -907,7 +907,8 @@ traits:
 /// after all composites have fired.
 #[test]
 fn test_retroactive_unless_suppression_atomic_with_composite_ref() {
-    let yaml = r#"
+    {
+        let yaml = r#"
 defaults:
   for: [binaries, scripts, source, manifests, documents, media, data, archives]
 
@@ -949,55 +950,56 @@ composite_rules:
       - id: test/packer::signal-a
       - id: test/packer::signal-b
 "#;
-    let (_dir, path) = create_test_yaml(yaml);
-    let mapper = CapabilityMapper::from_yaml(&path).unwrap();
+        let (_dir, path) = create_test_yaml(yaml);
+        let mapper = CapabilityMapper::from_yaml(&path).unwrap();
 
-    // All three strings present: both packer signals + the generic API string.
-    // combined composite should fire; generic-api should be retroactively suppressed.
-    let binary_data = b"SIGNAL_A SIGNAL_B GENERIC_API";
-    let mut report = create_test_report_with_size(binary_data.len() as u64);
-    for s in ["SIGNAL_A", "SIGNAL_B", "GENERIC_API"] {
-        report.strings.push(crate::types::StringInfo {
-            value: (s.to_string()).into(),
-            offset: Some(0),
-            encoding: "ascii".to_string(),
-            string_type: None,
-            section: None,
-            encoding_chain: Vec::new(),
-            fragments: None,
-        });
+        // All three strings present: both packer signals + the generic API string.
+        // combined composite should fire; generic-api should be retroactively suppressed.
+        let binary_data = b"SIGNAL_A SIGNAL_B GENERIC_API";
+        let mut report = create_test_report_with_size(binary_data.len() as u64);
+        for s in ["SIGNAL_A", "SIGNAL_B", "GENERIC_API"] {
+            report.strings.push(crate::types::StringInfo {
+                value: (s.to_string()).into(),
+                offset: Some(0),
+                encoding: "ascii".to_string(),
+                string_type: None,
+                section: None,
+                encoding_chain: Vec::new(),
+                fragments: None,
+            });
+        }
+
+        mapper.evaluate_and_merge_findings(&mut report, binary_data, None, None);
+
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.id == "test/packer::signal-a"),
+            "signal-a should fire"
+        );
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.id == "test/packer::signal-b"),
+            "signal-b should fire"
+        );
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.id == "test/packer::combined"),
+            "combined composite should fire"
+        );
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|f| f.id == "test/victim::generic-api"),
+            "generic-api should be retroactively suppressed by unless: test/packer::combined"
+        );
     }
-
-    mapper.evaluate_and_merge_findings(&mut report, binary_data, None, None);
-
-    assert!(
-        report
-            .findings
-            .iter()
-            .any(|f| f.id == "test/packer::signal-a"),
-        "signal-a should fire"
-    );
-    assert!(
-        report
-            .findings
-            .iter()
-            .any(|f| f.id == "test/packer::signal-b"),
-        "signal-b should fire"
-    );
-    assert!(
-        report
-            .findings
-            .iter()
-            .any(|f| f.id == "test/packer::combined"),
-        "combined composite should fire"
-    );
-    assert!(
-        !report
-            .findings
-            .iter()
-            .any(|f| f.id == "test/victim::generic-api"),
-        "generic-api should be retroactively suppressed by unless: test/packer::combined"
-    );
 }
 
 /// A composite that fired on a trait the retroactive pass then suppressed must
@@ -1120,7 +1122,8 @@ composite_rules:
 /// only matched `any:` leg is retroactively suppressed.
 #[test]
 fn test_retroactive_unless_suppression_rechecks_composite_any_quorum() {
-    let yaml = r#"
+    {
+        let yaml = r#"
 defaults:
   platforms: [linux, windows, macos]
   for: [binaries]
@@ -1172,32 +1175,33 @@ composite_rules:
       - id: test/late-unless::pack-a
       - id: test/late-unless::pack-b
 "#;
-    let (_dir, path) = create_test_yaml(yaml);
-    let mapper = CapabilityMapper::from_yaml(&path).unwrap();
+        let (_dir, path) = create_test_yaml(yaml);
+        let mapper = CapabilityMapper::from_yaml(&path).unwrap();
 
-    let binary_data = b"BASE_SIGNAL DELAYED_SIGNAL PACK_A PACK_B";
-    let mut report = create_test_report_with_size(binary_data.len() as u64);
-    for value in ["BASE_SIGNAL", "DELAYED_SIGNAL", "PACK_A", "PACK_B"] {
-        report.strings.push(crate::types::StringInfo {
-            value: value.to_string().into(),
-            offset: Some(0),
-            encoding: "ascii".to_string(),
-            string_type: None,
-            section: None,
-            encoding_chain: Vec::new(),
-            fragments: None,
-        });
+        let binary_data = b"BASE_SIGNAL DELAYED_SIGNAL PACK_A PACK_B";
+        let mut report = create_test_report_with_size(binary_data.len() as u64);
+        for value in ["BASE_SIGNAL", "DELAYED_SIGNAL", "PACK_A", "PACK_B"] {
+            report.strings.push(crate::types::StringInfo {
+                value: value.to_string().into(),
+                offset: Some(0),
+                encoding: "ascii".to_string(),
+                string_type: None,
+                section: None,
+                encoding_chain: Vec::new(),
+                fragments: None,
+            });
+        }
+
+        mapper.evaluate_and_merge_findings(&mut report, binary_data, None, None);
+
+        let fired = |id: &str| report.findings.iter().any(|f| f.id == id);
+        assert!(fired("test/late-unless::suppressor"));
+        assert!(!fired("test/late-unless::delayed-signal"));
+        assert!(
+            !fired("test/late-unless::profile"),
+            "the profile must be removed when retroactive suppression leaves its `any:` quorum unsatisfied"
+        );
     }
-
-    mapper.evaluate_and_merge_findings(&mut report, binary_data, None, None);
-
-    let fired = |id: &str| report.findings.iter().any(|f| f.id == id);
-    assert!(fired("test/late-unless::suppressor"));
-    assert!(!fired("test/late-unless::delayed-signal"));
-    assert!(
-        !fired("test/late-unless::profile"),
-        "the profile must be removed when retroactive suppression leaves its `any:` quorum unsatisfied"
-    );
 }
 
 /// An `any:` composite cites only the legs of the fixed-point round it first
@@ -1205,7 +1209,8 @@ composite_rules:
 /// round later still satisfies it: the composite stays and cites that leg.
 #[test]
 fn test_retroactive_unless_suppression_keeps_composites_satisfied_by_a_later_leg() {
-    let yaml = r#"
+    {
+        let yaml = r#"
 defaults:
   for: [binaries, scripts, source, manifests, documents, media, data, archives]
 
@@ -1267,45 +1272,46 @@ composite_rules:
       - id: test/late::pack-a
       - id: test/late::pack-b
 "#;
-    let (_dir, path) = create_test_yaml(yaml);
-    let mapper = CapabilityMapper::from_yaml(&path).unwrap();
+        let (_dir, path) = create_test_yaml(yaml);
+        let mapper = CapabilityMapper::from_yaml(&path).unwrap();
 
-    let binary_data = b"EARLY_SIGNAL BASE_SIGNAL PACK_A PACK_B";
-    let mut report = create_test_report_with_size(binary_data.len() as u64);
-    for value in ["EARLY_SIGNAL", "BASE_SIGNAL", "PACK_A", "PACK_B"] {
-        report.strings.push(crate::types::StringInfo {
-            value: value.to_string().into(),
-            offset: Some(0),
-            encoding: "ascii".to_string(),
-            string_type: None,
-            section: None,
-            encoding_chain: Vec::new(),
-            fragments: None,
-        });
-    }
+        let binary_data = b"EARLY_SIGNAL BASE_SIGNAL PACK_A PACK_B";
+        let mut report = create_test_report_with_size(binary_data.len() as u64);
+        for value in ["EARLY_SIGNAL", "BASE_SIGNAL", "PACK_A", "PACK_B"] {
+            report.strings.push(crate::types::StringInfo {
+                value: value.to_string().into(),
+                offset: Some(0),
+                encoding: "ascii".to_string(),
+                string_type: None,
+                section: None,
+                encoding_chain: Vec::new(),
+                fragments: None,
+            });
+        }
 
-    mapper.evaluate_and_merge_findings(&mut report, binary_data, None, None);
+        mapper.evaluate_and_merge_findings(&mut report, binary_data, None, None);
 
-    let fired = |id: &str| report.findings.iter().any(|f| f.id == id);
-    assert!(
-        !fired("test/late::early-signal"),
-        "the early leg is suppressed"
-    );
-    assert!(fired("test/late::step-two"));
-    let aggregate = report
-        .findings
-        .iter()
-        .find(|f| f.id == "test/late::aggregate")
-        .expect("the later `any:` leg still satisfies the aggregate");
-    assert_eq!(
-        aggregate
-            .trait_refs
+        let fired = |id: &str| report.findings.iter().any(|f| f.id == id);
+        assert!(
+            !fired("test/late::early-signal"),
+            "the early leg is suppressed"
+        );
+        assert!(fired("test/late::step-two"));
+        let aggregate = report
+            .findings
             .iter()
-            .map(crate::types::Istr::as_str)
-            .collect::<Vec<_>>(),
-        ["test/late::step-two"],
-        "the aggregate cites the leg that now holds it"
-    );
+            .find(|f| f.id == "test/late::aggregate")
+            .expect("the later `any:` leg still satisfies the aggregate");
+        assert_eq!(
+            aggregate
+                .trait_refs
+                .iter()
+                .map(crate::types::Istr::as_str)
+                .collect::<Vec<_>>(),
+            ["test/late::step-two"],
+            "the aggregate cites the leg that now holds it"
+        );
+    }
 }
 
 /// A COM image has no header, so a short one can be left `unknown` by

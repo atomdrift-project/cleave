@@ -164,7 +164,7 @@ pub(crate) fn composite_inflation_warning_threshold() -> f32 {
 }
 
 fn canonical_rule_id(id: &str) -> String {
-    id.to_string()
+    id.trim_end_matches('/').to_string()
 }
 
 pub(crate) struct ReferenceIndex<'a> {
@@ -185,6 +185,9 @@ pub(crate) fn build_reference_index<'a>(
 
         let mut split_positions: Vec<usize> =
             canonical.match_indices('/').map(|(idx, _)| idx).collect();
+        // The immediate leaf ends at `::`, not at a slash. Omitting it made
+        // leaf references look unresolved while references to parents worked.
+        split_positions.extend(canonical.find("::"));
         split_positions.sort_unstable();
         split_positions.dedup();
         for idx in split_positions {

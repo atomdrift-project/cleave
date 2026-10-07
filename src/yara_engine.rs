@@ -7,6 +7,7 @@
 //!
 //! Rules are compiled once at startup for performance.
 
+use crate::analyzers::{FileType, FileTypeExt};
 #[cfg(test)]
 use crate::capabilities::CapabilityMapper;
 use crate::types::{
@@ -437,7 +438,13 @@ rule cleave_engine_probe {
             return u64::MAX;
         }
         match compiler.build().serialize() {
-            Ok(bytes) => crate::cache::digest_bytes(&bytes),
+            Ok(mut bytes) => {
+                // The serialized compiler format alone does not capture our
+                // namespace and filetype routing semantics. Invalidate older
+                // caches that used short IDs or unnormalized language labels.
+                bytes.extend_from_slice(b"cleave-inline-routing-qualified-v3");
+                crate::cache::digest_bytes(&bytes)
+            }
             Err(_) => u64::MAX,
         }
     })
@@ -1432,19 +1439,42 @@ impl YaraEngine {
     /// Determine the filetype buckets an inline trait YARA rule belongs in.
     ///
     /// Explicit `for:` filetypes (drawn from the same vocabulary as
-    /// [`crate::analyzers::FileTypeExt::yara_filetypes`]) take priority and are
-    /// used verbatim. Otherwise the rule's derived [`RuleContext`] filetypes are
+    /// [`crate::analyzers::FileTypeExt::yara_filetypes`]) take priority. Canonical
+    /// source-language labels are expanded into their scan buckets. Otherwise
+    /// the rule's derived [`RuleContext`] filetypes are
     /// used, falling back to [`FALLBACK_BUCKET`] when nothing constrains it.
     fn classify_inline_trait_yara_tiers(
         source: &str,
         namespace: &str,
         declared_for: &[String],
     ) -> Vec<String> {
-        let mut buckets: Vec<String> = declared_for
-            .iter()
-            .map(|ft| ft.trim().to_ascii_lowercase())
-            .filter(|ft| !ft.is_empty() && ft != "none" && ft != "any" && ft != "all")
-            .map(|ft| yara_classify::canonical_binary_filetype(&ft).to_string())
+        // Reuse capability parsing so group names and exclusions have the
+        // same meaning here as in the trait that consumes the YARA match.
+        let parsed = crate::capabilities::parse_file_types(declared_for, &mut Vec::new());
+        let mut buckets: Vec<String> = parsed
+            .types
+            .into_iter()
+            .map(|ft| ft.label().to_string())
+            .filter(|ft| ft != "unknown" && ft != "all")
+            .flat_map(|ft| {
+                let canonical = yara_classify::canonical_binary_filetype(&ft);
+                if matches!(canonical, "pe" | "elf" | "macho" | "ne") {
+                    vec![canonical.to_string()]
+                } else if let Some(file_type) = FileType::from_label(&ft).or(match ft.as_str() {
+                    "class" => Some(FileType::JavaClass),
+                    "pyc" => Some(FileType::PythonBytecode),
+                    "objectivec" => Some(FileType::ObjectiveC),
+                    _ => None,
+                }) {
+                    file_type
+                        .yara_filetypes()
+                        .into_iter()
+                        .map(str::to_string)
+                        .collect()
+                } else {
+                    vec![ft]
+                }
+            })
             .collect();
         if !buckets.is_empty() {
             let mut seen = std::collections::HashSet::new();
@@ -1516,6 +1546,12 @@ impl YaraEngine {
 
             let Some(items) = items else { return vec![] };
 
+            let prefix = path
+                .strip_prefix(traits_dir)
+                .ok()
+                .and_then(|p| p.parent())
+                .map(|p| p.to_string_lossy().replace('\\', "/"));
+
             let mut result = Vec::new();
             for item in &items {
                 let Some(id) = item.get("id").and_then(|v| v.as_str()) else {
@@ -1536,7 +1572,8 @@ impl YaraEngine {
                 } else {
                     item_for
                 };
-                let namespace = format!("inline.{}", id);
+                let qualified_id = crate::traits_repo::qualify_trait_id(id, prefix.as_deref());
+                let namespace = format!("inline.{qualified_id}");
                 let buckets =
                     Self::classify_inline_trait_yara_tiers(source, &namespace, &declared_for);
                 tracing::trace!("Collected inline YARA rule for trait {}", id);
@@ -4605,31 +4642,18 @@ rule demo_inline_archive_rule {
         true
 }
 "#;
-        // Explicit `for:` filetypes are used verbatim as bucket keys.
+        let tiers = |declared: &[&str]| {
+            let declared: Vec<String> = declared.iter().copied().map(String::from).collect();
+            YaraEngine::classify_inline_trait_yara_tiers(source, "inline.demo-inline", &declared)
+        };
+        // Explicit `for:` filetypes parse like trait `for:` (so `ts` means
+        // JavaScript) and expand into every bucket that file type scans.
+        assert_eq!(tiers(&["ts"]), ["js", "mjs", "cjs", "jsx", "ts"]);
         assert_eq!(
-            YaraEngine::classify_inline_trait_yara_tiers(
-                source,
-                "inline.demo-inline",
-                &["ts".to_string()]
-            ),
-            vec!["ts".to_string()]
+            tiers(&["jar", "zip"]),
+            ["zip", "archive", "jar", "war", "ear", "class", "java"]
         );
-        assert_eq!(
-            YaraEngine::classify_inline_trait_yara_tiers(
-                source,
-                "inline.demo-inline",
-                &["jar".to_string(), "zip".to_string()]
-            ),
-            vec!["jar".to_string(), "zip".to_string()]
-        );
-        assert_eq!(
-            YaraEngine::classify_inline_trait_yara_tiers(
-                source,
-                "inline.demo-inline",
-                &["ps1".to_string()]
-            ),
-            vec!["ps1".to_string()]
-        );
+        assert_eq!(tiers(&["ps1"]), ["ps1", "psm1", "psd1"]);
     }
 
     #[test]

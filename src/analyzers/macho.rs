@@ -336,6 +336,76 @@ impl MachOAnalyzer {
             );
         report.files.extend(encoded_layers);
         report.findings.extend(plain_findings);
+        for payload in crate::extractors::macho_chacha::recover(data, &ctx.parsed) {
+            if self
+                .cancellation
+                .as_ref()
+                .is_some_and(|c| c.load(std::sync::atomic::Ordering::Acquire))
+            {
+                break;
+            }
+            let chain = vec![
+                "pbkdf2-sha256".to_string(),
+                "hkdf-sha256".to_string(),
+                format!("chacha20-poly1305:{}", payload.segments),
+            ];
+            let path = crate::types::encode_decoded_path(
+                &logical_path.display().to_string(),
+                &chain,
+                report.files.len(),
+            );
+            let child_input = AnalysisInput::new(
+                Path::new(&path),
+                &payload.data,
+                crate::FileType::AppleScript,
+            )
+            .at_depth(1);
+            match crate::analyzers::applescript::AppleScriptAnalyzer::new()
+                .with_engine(self.engine.clone())
+                .analyze_input(&child_input)
+            {
+                Ok(mut child_report) => {
+                    child_report.dedupe_findings();
+                    let doomed = self
+                        .engine
+                        .rules()
+                        .doomed_low_value_ids(&child_report.findings);
+                    crate::context::capture(
+                        &mut child_report,
+                        &payload.data,
+                        crate::FileType::AppleScript,
+                        &doomed,
+                    );
+                    let (mut child, nested, _) = child_report.into_file_analysis(0, &self.engine);
+                    child.path = path;
+                    child.depth = 1;
+                    child.encoding = Some(chain);
+                    child.compute_summary();
+                    report.files.push(child);
+                    report.files.extend(nested);
+                    report.structure.push(StructuralFeature {
+                        id: "crypto/authenticated-script-payload".to_string(),
+                        desc: "Compiled script recovered from authenticated encrypted chunks"
+                            .to_string(),
+                        evidence: vec![Evidence {
+                            method: "crypto".to_string(),
+                            source: "macho_chacha".to_string(),
+                            value: format!(
+                                "segments={}; pbkdf2_iterations={}; all tags verified",
+                                payload.segments, payload.iterations
+                            ),
+                            location: Some(format!("offset:{}", payload.offset)),
+                            offsets: vec![payload.offset as u64],
+                            ..Evidence::default()
+                        }],
+                    });
+                }
+                Err(error) => report
+                    .metadata
+                    .errors
+                    .push(format!("authenticated-script: {error:#}")),
+            }
+        }
         let embedded_ms = _t.elapsed().as_millis();
 
         tracing::info!(

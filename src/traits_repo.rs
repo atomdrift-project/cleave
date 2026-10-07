@@ -25,6 +25,20 @@ pub(crate) fn is_rule_source_entry(entry: &walkdir::DirEntry) -> bool {
     !name.starts_with('.') && !name.starts_with('_')
 }
 
+/// Use the same directory-qualified ID for capability loading and inline YARA.
+pub(crate) fn qualify_trait_id(id: &str, prefix: Option<&str>) -> String {
+    if let Some(prefix) = prefix
+        && !prefix.is_empty()
+        && !id.starts_with(prefix)
+        && !id.contains("::")
+        && !id.contains('/')
+    {
+        format!("{prefix}::{id}")
+    } else {
+        id.to_string()
+    }
+}
+
 /// Process-wide override for the traits directory.
 ///
 /// Set by [`set_override_dir`] (e.g. from a CLI flag or library caller) and

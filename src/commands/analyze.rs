@@ -114,6 +114,7 @@ pub fn run(config: &AnalyzeConfig<'_>) -> Result<String> {
         disable_yara: config.disabled.yara,
         disable_radare2: config.disabled.radare2,
         rizin_timeout: None,
+        rizin_retry_timeout: None,
         rizin_max_bytes: None,
         rizin_native_arch_only: false,
         disable_upx: config.disabled.upx,

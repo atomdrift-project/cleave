@@ -845,9 +845,11 @@ fn options_hash_with(
     // the old names, which no rule reads any more. `rizin=` is now the
     // fingerprint of the options the analysis opened files with, so it also
     // says whether rizin ran.
+    // v=22: compact members retain npm identity and install hooks for dependency
+    // discovery. Historical compact reports discarded them before scan ran.
     let zip_passwords = Sha256::digest(options.zip_passwords.join("\0").as_bytes());
     let key = format!(
-        "v=21,cm={},3p={},yara={},yskip={},ybuiltin={},zpw={},r2={},upx={},plat={},hp={},sp={},ps={},fv={},rizin={}",
+        "v=22,cm={},3p={},yara={},yskip={},ybuiltin={},zpw={},r2={},upx={},plat={},hp={},sp={},ps={},fv={},rizin={}",
         settings.compact_members,
         settings.third_party_yara,
         settings.yara,

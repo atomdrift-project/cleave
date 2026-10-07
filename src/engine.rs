@@ -37,6 +37,7 @@ pub(crate) struct Settings {
     pub(crate) radare2: bool,
     /// filefacts' `OpenOptions::rizin_timeout`; `None` is its default.
     pub(crate) rizin_timeout: Option<std::time::Duration>,
+    pub(crate) rizin_retry_timeout: Option<std::time::Duration>,
     /// filefacts' `OpenOptions::rizin_max_bytes`; `None` is no cap.
     pub(crate) rizin_max_bytes: Option<usize>,
     /// filefacts' `OpenOptions::rizin_native_arch_only`.
@@ -63,6 +64,7 @@ impl Default for Settings {
             upx: true,
             radare2: true,
             rizin_timeout: None,
+            rizin_retry_timeout: None,
             rizin_max_bytes: None,
             rizin_native_arch_only: false,
             compact_members: false,
@@ -87,6 +89,9 @@ pub(crate) fn filefacts_options(settings: &Settings) -> filefacts::OpenOptions<'
         .cache(!crate::cache::skip_cache() && filefacts::cache::env_override().unwrap_or(false));
     if let Some(timeout) = settings.rizin_timeout {
         options = options.rizin_timeout(timeout);
+    }
+    if let Some(timeout) = settings.rizin_retry_timeout {
+        options = options.rizin_retry_timeout(timeout);
     }
     if let Some(max_bytes) = settings.rizin_max_bytes {
         options = options.rizin_max_bytes(max_bytes);
@@ -397,5 +402,21 @@ traits:
             &compact.0,
             &compact.with_compact_members(true).0
         ));
+    }
+}
+
+#[cfg(test)]
+mod retry_settings_tests {
+    #[test]
+    fn native_retry_setting_survives_engine_configuration() {
+        let options = crate::AnalysisOptions {
+            rizin_timeout: Some(std::time::Duration::from_secs(60)),
+            rizin_retry_timeout: Some(std::time::Duration::from_secs(120)),
+            ..crate::AnalysisOptions::default()
+        };
+        let settings = crate::shared_resources::settings_from_options(&options);
+        assert_eq!(settings.rizin_timeout, options.rizin_timeout);
+        assert_eq!(settings.rizin_retry_timeout, options.rizin_retry_timeout);
+        let _parser_options = super::filefacts_options(&settings);
     }
 }

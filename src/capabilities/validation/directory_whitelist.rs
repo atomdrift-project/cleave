@@ -99,7 +99,8 @@ const ALLOWED_COLLECTION: &[&str] = &[
     "camera",         // Local camera imagery collection                  T1125
     "clipboard",      // Clipboard capture                                T1115
     "database",       // Database enumeration/access                      T1005
-    "email-harvest",  // Email address harvesting                         T1114
+    "email",          // Mailbox/address collection; target home of email-harvest
+    "email-harvest",  // Email address harvesting (migrating to email)    T1114
     "file-copy",      // File copying mechanisms                          T1005
     "file-targeting", // File enumeration for targeting                   T1083
     "keylog",         // Keystroke logging                                T1056.001
@@ -140,9 +141,11 @@ const ALLOWED_CREDENTIAL_ACCESS: &[&str] = &[
     "ftp",                // FTP client credentials
     "gaming",             // Gaming platform credentials (Steam)
     "keychain",           // macOS Keychain                                T1555.001
+    "memory",             // Raw process-memory extraction (dump is migrating by source)
     "messaging",          // Messaging app credentials (Telegram)
     "pam",                // PAM interception                              T1556.003
     "phishing",           // Credential phishing                           T1566
+    "registry",           // Registry keys/hives incl. offline SAM; target of windows-registry
     "shell",              // Shell history                                 T1552.003
     "ssh",                // SSH key theft                                 T1552.004
     "theft",              // Credential theft composites
@@ -150,7 +153,7 @@ const ALLOWED_CREDENTIAL_ACCESS: &[&str] = &[
     "vpn",                // VPN config credentials
     "wallet",             // Crypto wallet access                          B0028
     "wifi",               // Saved Wi-Fi credentials                       T1555
-    "windows-registry",   // Registry credential extraction
+    "windows-registry",   // Registry credential extraction (migrating to registry)
 ];
 
 /// Allowed subdirectories in objectives/discovery/
@@ -267,6 +270,7 @@ const ALLOWED_MB_COMMUNICATIONS: &[&str] = &[
     "icmp",
     "ip",
     "ipc",
+    "irc",       // IRC network protocol; target home of ipc/irc (IRC is not local IPC)
     "mcp",       // Model Context Protocol (stdio and HTTP transports)
     "messaging", // Chat/bot messaging-platform send APIs (sendMessage, etc.)
     "modbus",    // Modbus industrial control protocol          (TCP 502)
@@ -291,14 +295,20 @@ const ALLOWED_MB_METAPROGRAMMING: &[&str] = &["ast", "generation", "reflection"]
 const ALLOWED_MB_CRYPTO: &[&str] = &[
     "asymmetric",
     "certificate",
-    "cipher", // Generic cipher API names without a supported algorithm family
+    "cipher",  // Generic cipher API names without a supported algorithm family
+    "decrypt", // Direction-specific decryption; algorithm may be unknown
+    "encrypt", // Direction-specific encryption; algorithm may be unknown
     "hash",
     "hybrid", // Symmetric payload encryption combined with asymmetric key wrapping
     "kdf",
-    "library",
+    "key",      // Key generation, import/export, exchange and representation
+    "library",  // Legacy implementation partition; migrating by operation
     "mnemonic", // Mnemonic representations of cryptographic seed material
-    "native",   // Native crypto-provider APIs not narrowed to an algorithm
+    "native",   // Legacy provider references; migrating to provider
+    "provider", // Provider acquisition/release with no narrower operation
+    "sign",     // Signing operations, algorithm may be unknown
     "symmetric",
+    "verify", // Signature verification operations, algorithm may be unknown
 ];
 
 /// Allowed subdirectories in micro-behaviors/data/
@@ -307,6 +317,7 @@ const ALLOWED_MB_DATA: &[&str] = &[
     "app",
     "archive",
     "buffer",
+    "checksum", // Noncryptographic integrity checks (CRC, FNV); not crypto/hash
     "cli-tool",
     "collection",
     "codec", // Direction-neutral codec implementation or joint codec support
@@ -353,7 +364,7 @@ const ALLOWED_MB_DATA: &[&str] = &[
 ];
 
 /// Allowed subdirectories in micro-behaviors/dylib/
-const ALLOWED_MB_DYLIB: &[&str] = &["enumerate", "library", "load", "lookup"];
+const ALLOWED_MB_DYLIB: &[&str] = &["enumerate", "library", "load", "lookup", "unload"];
 
 /// Allowed subdirectories in micro-behaviors/fs/
 const ALLOWED_MB_FS: &[&str] = &[
@@ -418,14 +429,20 @@ const ALLOWED_MB_MEM: &[&str] = &[
     "fill",
     "free",
     "gc",
+    // Required spray layout; generic allocation alone does not qualify.
+    "heap-spray",
     "inline-asm",
     "lock",
     // Address-space mappings and their removal, independent of backing store.
     "map",
+    // Required out-of-bounds write mechanism; an unsafe API alone does not qualify.
+    "overflow",
     "protect",
     "query",
     "read",
     "resize",
+    // Required stack redirection; stack-pointer access alone does not qualify.
+    "stack-pivot",
     "sync",
     "unmap",
     // Writes through native-memory primitives, distinct from memory reads.
@@ -433,7 +450,22 @@ const ALLOWED_MB_MEM: &[&str] = &[
 ];
 
 /// Allowed subdirectories in micro-behaviors/network/
-const ALLOWED_MB_NETWORK: &[&str] = &["interface"];
+///
+/// Local network resources. Everything except `interface` is the target home of
+/// the matching micro-behaviors/os/network/ leaf, which stays allowed while the
+/// migration is in progress.
+const ALLOWED_MB_NETWORK: &[&str] = &[
+    "connections",
+    "dns", // Resolver configuration; DNS wire exchanges stay communications/dns
+    "forward",
+    "interface",
+    "neighbors",
+    "qos",
+    "route",
+    "share",
+    "status",
+    "tunnel", // OS virtual tunnel interfaces; app-level forwarding is communications/proxy
+];
 
 /// Allowed subdirectories in micro-behaviors/os/
 const ALLOWED_MB_OS: &[&str] = &[
@@ -485,9 +517,14 @@ const ALLOWED_MB_PROCESS: &[&str] = &[
     "create",
     "daemonize",
     "debug",
+    // Neutral acquisition/staging-to-activation chains (objective counterpart:
+    // objectives/execution/payload/).
+    "deploy",
     "enumerate",
     "exit",
     "fd",
+    // Fiber management; a fiber is not a thread.
+    "fiber",
     "fork",
     "hook",
     "identity",
@@ -502,10 +539,12 @@ const ALLOWED_MB_PROCESS: &[&str] = &[
     "sync",
     "terminate",
     "thread",
-    "threading",
+    "threading", // Legacy; migrating to thread, sync and work
     "tls",
     "tty",
     "user",
+    // Work queues, pools and task submission; not thread creation.
+    "work",
 ];
 
 /// Allowed subdirectories in micro-behaviors/revision-control/
@@ -634,6 +673,8 @@ const ALLOWED_EXECUTION: &[&str] = &[
     "lnk",         // LNK-based execution                           E1204
     "lolbin",      // Living-off-the-land binaries                  T1218
     "lure",        // User execution via social engineering          E1204
+    "payload",     // Admitted payload chains by activation sink; migrating from c2/dropper
+    "staging",     // Admitted executable-payload preparation without activation
     "trigger",     // Document exploitation triggers                 E1203
     "wmi",         // WMI execution                                  E1569
 ];
@@ -665,6 +706,7 @@ const ALLOWED_IMPACT: &[&str] = &[
     "infect",              // File infection (virus propagation)
     "ransom",              // Ransomware encryption + extortion              T1486
     "services",            // Service stopping                               T1489
+    "spam",                // Unsolicited-message abuse; migrating from lateral-movement/.../spam
     "system",              // System impact (crash, shutdown, reboot)
     "ui",                  // Screen locker / UI lockout
     "wipe",                // Disk wiping                                    T1561
@@ -900,7 +942,9 @@ const ALLOWED_METADATA_FILE: &[&str] = &[
     "catalog",           // File/catalog identity and generated registries
     "comment",           // Comment volume and span
     "data-blob", // Bytes that read as an opaque blob (entropy, NUL domination, one huge string)
-    "encoded",   // Encoded content presence (base64)
+    "encoded",   // Encoded content presence (base64); migrating to encoding
+    "encoding",  // Encoded content representation without a decoding operation
+    "entropy",   // Whole-file byte entropy; decoded-image measurements stay in image/
     "extension", // File extension classification
     "format",    // Text/data format identification (JSON, makefile)
     "function",  // Shape of the functions the parser recovered
@@ -962,7 +1006,8 @@ const ALLOWED_METADATA_FONT: &[&str] = &[
 const ALLOWED_METADATA_LANG: &[&str] = &[
     "compiled",            // Compiled language detection
     "compiler",            // Compiler identification
-    "encoded",             // Encoded strings (unicode, wide)
+    "encoded",             // Encoded strings (unicode, wide); migrating to encoding
+    "encoding",            // Text encoding of source/strings (unicode, wide)
     "generated",           // Emitted by a code generator rather than hand-written
     "runtime",             // Language runtime markers left in a compiled binary
     "go-build",            // Go build specifics
@@ -1710,6 +1755,100 @@ mod tests {
 
         let result = validate_directory_structure(traits_path);
         assert!(result.is_ok(), "Valid structure should pass: {:?}", result);
+    }
+
+    #[test]
+    fn test_taxonomy_migration_old_and_new_homes_coexist() {
+        // Each pair is (legacy home, target home) from TAXONOMY.md's migration
+        // map. Both must validate while rules move between them.
+        let pairs = [
+            (
+                "micro-behaviors/os/network/route",
+                "micro-behaviors/network/route",
+            ),
+            (
+                "micro-behaviors/os/network/share",
+                "micro-behaviors/network/share",
+            ),
+            (
+                "micro-behaviors/os/network/tunnel",
+                "micro-behaviors/network/tunnel",
+            ),
+            (
+                "micro-behaviors/communications/ipc/irc",
+                "micro-behaviors/communications/irc",
+            ),
+            (
+                "micro-behaviors/crypto/native",
+                "micro-behaviors/crypto/provider",
+            ),
+            (
+                "micro-behaviors/crypto/symmetric/aes/decrypt",
+                "micro-behaviors/crypto/decrypt",
+            ),
+            (
+                "micro-behaviors/crypto/asymmetric/key",
+                "micro-behaviors/crypto/key",
+            ),
+            (
+                "micro-behaviors/crypto/hash/crc32",
+                "micro-behaviors/data/checksum",
+            ),
+            (
+                "micro-behaviors/process/threading/queue",
+                "micro-behaviors/process/work",
+            ),
+            (
+                "objectives/command-and-control/dropper/file-exec",
+                "objectives/execution/payload",
+            ),
+            (
+                "objectives/command-and-control/dropper/staging",
+                "objectives/execution/staging",
+            ),
+            (
+                "objectives/collection/email-harvest",
+                "objectives/collection/email",
+            ),
+            (
+                "objectives/credential-access/windows-registry",
+                "objectives/credential-access/registry",
+            ),
+            (
+                "objectives/lateral-movement/social-engineering/spam",
+                "objectives/impact/spam",
+            ),
+            ("metadata/file/encoded", "metadata/file/encoding"),
+            ("metadata/lang/encoded", "metadata/lang/encoding"),
+        ];
+        let temp_dir = TempDir::new().unwrap();
+        let traits_path = temp_dir.path();
+        for (old, new) in pairs {
+            std::fs::create_dir_all(traits_path.join(old)).unwrap();
+            std::fs::create_dir_all(traits_path.join(new)).unwrap();
+        }
+        for new in [
+            "micro-behaviors/crypto/encrypt",
+            "micro-behaviors/crypto/sign",
+            "micro-behaviors/crypto/verify",
+            "micro-behaviors/dylib/unload",
+            "micro-behaviors/mem/heap-spray",
+            "micro-behaviors/mem/overflow",
+            "micro-behaviors/mem/stack-pivot",
+            "micro-behaviors/process/deploy",
+            "micro-behaviors/process/fiber",
+            "objectives/credential-access/memory",
+            "metadata/file/entropy",
+        ] {
+            std::fs::create_dir_all(traits_path.join(new)).unwrap();
+        }
+        let result = validate_directory_structure(traits_path);
+        assert!(result.is_ok(), "Migration homes should pass: {:?}", result);
+
+        // The new names do not open the parent to arbitrary siblings.
+        std::fs::create_dir_all(traits_path.join("micro-behaviors/network/misc")).unwrap();
+        let errors = validate_directory_structure(traits_path).unwrap_err();
+        assert!(errors.iter().any(|e| e.contains("misc")));
     }
 
     #[test]

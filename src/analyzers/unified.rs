@@ -633,30 +633,44 @@ impl UnifiedSourceAnalyzer {
         // Extract and analyze base64/zlib encoded payloads (same treatment as archives)
         // Use pre-extracted payloads if available to avoid redundant expensive I/O
         let owned_payload_stng;
-        let owned_extracted_payloads;
-        let extracted_payloads: &[crate::types::ExtractedPayload] =
-            if !preextracted_payloads.is_empty() {
-                preextracted_payloads
-            } else {
-                // Payload extraction needs min_length=16 strings.  We already have
-                // a min_length=4 extraction in `stng_strings` above (either from
-                // the caller's pre-extraction, or freshly produced into
-                // `owned_stng`).  Filtering that existing vec by length is
-                // equivalent to a second full extraction at min_length=16 for
-                // every extractor stng runs — raw scan uses `min_length` as a
-                // hard threshold, decoders use their own MIN_*_LENGTH constants,
-                // and XOR uses `xor_min_length` independently.  One extraction
-                // saves 5-50 ms per file on scripts.
-                let payload_stng: Vec<stng::ExtractedString> = stng_strings
-                    .iter()
-                    .filter(|s| s.value.len() >= 16)
-                    .cloned()
-                    .collect();
-                owned_payload_stng = payload_stng;
-                owned_extracted_payloads =
-                    crate::extractors::extract_encoded_payloads(&owned_payload_stng);
-                &owned_extracted_payloads
-            };
+        let mut owned_extracted_payloads;
+        let extracted_payloads: &[crate::types::ExtractedPayload] = if self.skip_embedded_detection
+        {
+            &[]
+        } else if !preextracted_payloads.is_empty() {
+            preextracted_payloads
+        } else {
+            // Payload extraction needs min_length=16 strings.  We already have
+            // a min_length=4 extraction in `stng_strings` above (either from
+            // the caller's pre-extraction, or freshly produced into
+            // `owned_stng`).  Filtering that existing vec by length is
+            // equivalent to a second full extraction at min_length=16 for
+            // every extractor stng runs — raw scan uses `min_length` as a
+            // hard threshold, decoders use their own MIN_*_LENGTH constants,
+            // and XOR uses `xor_min_length` independently.  One extraction
+            // saves 5-50 ms per file on scripts.
+            let payload_stng: Vec<stng::ExtractedString> = stng_strings
+                .iter()
+                .filter(|s| s.value.len() >= 16)
+                .cloned()
+                .collect();
+            owned_payload_stng = payload_stng;
+            owned_extracted_payloads =
+                crate::extractors::extract_encoded_payloads(&owned_payload_stng);
+            owned_extracted_payloads.extend(
+                crate::extractors::encoded_payload::extract_nibble_table_payloads(
+                    content.as_bytes(),
+                ),
+            );
+            if let Some(payload) =
+                crate::extractors::powershell_literals::extract_powershell_literal_payload(
+                    content.as_bytes(),
+                )
+            {
+                owned_extracted_payloads.push(payload);
+            }
+            &owned_extracted_payloads
+        };
 
         for (idx, payload) in extracted_payloads.iter().enumerate() {
             if cancellation.is_some_and(|c| c.load(std::sync::atomic::Ordering::Acquire)) {
@@ -684,31 +698,18 @@ impl UnifiedSourceAnalyzer {
 
             // Analyze the extracted payload based on its type (creates sub_report like archives)
             // Pass capability_mapper to evaluate rules on extracted content
-            let payload_report = match payload.detected_type {
-                FileType::Python => {
-                    UnifiedSourceAnalyzer::for_file_type(&FileType::Python).map(|analyzer| {
-                        analyzer
-                            .with_engine(self.engine.clone())
-                            .with_cancellation(cancellation.cloned())
-                            .analyze_source(
-                                Path::new(&virtual_path),
-                                &String::from_utf8_lossy(&payload_content),
-                            )
-                    })
-                }
-                FileType::Shell => {
-                    UnifiedSourceAnalyzer::for_file_type(&FileType::Shell).map(|analyzer| {
-                        analyzer
-                            .with_engine(self.engine.clone())
-                            .with_cancellation(cancellation.cloned())
-                            .analyze_source(
-                                Path::new(&virtual_path),
-                                &String::from_utf8_lossy(&payload_content),
-                            )
-                    })
-                }
-                _ => None,
-            };
+            let payload_report =
+                UnifiedSourceAnalyzer::for_file_type(&payload.detected_type).map(|analyzer| {
+                    analyzer
+                        .with_engine(self.engine.clone())
+                        .with_cancellation(cancellation.cloned())
+                        .with_encoded_context(payload.encoding_chain.clone())
+                        .without_embedded_detection()
+                        .analyze_source_as_configured(
+                            Path::new(&virtual_path),
+                            &String::from_utf8_lossy(&payload_content),
+                        )
+                });
 
             // Process payload report - convert to FileAnalysis for v2 flat files array
             if let Some(pr) = payload_report {
@@ -716,7 +717,7 @@ impl UnifiedSourceAnalyzer {
                 let (mut file_entry, _, _) = pr.into_file_analysis(0, &self.engine);
                 file_entry.path = virtual_path.clone();
                 file_entry.depth = 1; // Decoded content is one level deep
-                file_entry.encoding = Some(vec!["base64".to_string()]);
+                file_entry.encoding = Some(payload.encoding_chain.clone());
 
                 // Update evidence locations to indicate extracted payload. The
                 // payload renders against its own buffer (offsets stay local),

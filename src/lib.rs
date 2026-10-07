@@ -2043,6 +2043,9 @@ pub(crate) fn process_encoded_payloads(
     options: &AnalysisOptions,
     engine: &Engine,
 ) {
+    let has_mime = encoded_payloads
+        .iter()
+        .any(|p| p.encoding_chain.as_slice() == ["mime-base64"]);
     for payload in encoded_payloads {
         if options
             .cancellation
@@ -2282,7 +2285,7 @@ pub(crate) fn process_encoded_payloads(
         }
         if let Ok(mut temp_file) = tempfile::NamedTempFile::new() {
             let _ = std::io::Write::write_all(&mut temp_file, &payload.data);
-            if let Ok(payload_report) = analyze_file_with_resources_at_depth(
+            if let Ok(mut payload_report) = analyze_file_with_resources_at_depth(
                 temp_file.path(),
                 options,
                 engine,
@@ -2290,6 +2293,39 @@ pub(crate) fn process_encoded_payloads(
                 None,
                 analysis_depth + 1,
             ) {
+                // MIME attachments are real child files. Retain their archive
+                // members and attribution rather than flattening PE properties
+                // into the enclosing mail's own findings.
+                if payload.encoding_chain.as_slice() == ["mime-base64"] {
+                    let temporary_path = temp_file.path().display().to_string();
+                    let virtual_path = types::encode_decoded_path(
+                        &path.display().to_string(),
+                        &payload.encoding_chain,
+                        payload.original_offset,
+                    );
+                    payload_report.target.path = virtual_path.clone();
+                    let (mut entry, mut children, _) = payload_report.into_file_analysis(0, engine);
+                    entry.path = virtual_path.clone();
+                    entry.depth = 1;
+                    entry.encoding = Some(payload.encoding_chain.clone());
+                    for child in &mut children {
+                        child.path = child.path.replace(&temporary_path, &virtual_path);
+                        child.depth += 1;
+                        for finding in &mut child.findings {
+                            if let Some(source) = &mut finding.source_file {
+                                *source = source.replace(&temporary_path, &virtual_path);
+                            }
+                        }
+                    }
+                    for finding in &mut entry.findings {
+                        if let Some(source) = &mut finding.source_file {
+                            *source = source.replace(&temporary_path, &virtual_path);
+                        }
+                    }
+                    report.files.push(entry);
+                    report.files.extend(children);
+                    continue;
+                }
                 // Merge traits from payload analysis
                 for mut trait_item in payload_report.traits {
                     // Prefix trait offset with encoding chain
@@ -2312,6 +2348,29 @@ pub(crate) fn process_encoded_payloads(
                 }
             }
         }
+    }
+    if has_mime {
+        let mut origins: rustc_hash::FxHashMap<String, composite_rules::TypeMask> =
+            rustc_hash::FxHashMap::default();
+        let root_bit = composite_rules::FileType::from_str(&report.target.file_type).type_bit();
+        for finding in &report.findings {
+            *origins.entry(finding.id.to_string()).or_default() |= root_bit;
+        }
+        let mut nested = Vec::new();
+        for child in &report.files {
+            let bit = composite_rules::FileType::from_str(&child.file_type).type_bit();
+            for finding in &child.findings {
+                *origins.entry(finding.id.to_string()).or_default() |= bit;
+                nested.push(finding.clone());
+            }
+        }
+        let added = engine.rules().evaluate_container_composites(
+            report,
+            &nested,
+            &report.target.file_type,
+            Some(&origins),
+        );
+        report.findings.extend(added);
     }
 }
 
@@ -2701,6 +2760,12 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     } else {
         extractors::encoded_payload::extract_encoded_payloads(&stng_strings)
     };
+    encoded_payloads.extend(extractors::encoded_payload::extract_nibble_table_payloads(
+        file_data,
+    ));
+    encoded_payloads.extend(extractors::encoded_payload::extract_mime_attachments(
+        file_data,
+    ));
     encoded_payloads.extend(file_ctx.as_ref().and_then(|ctx| {
         extractors::encoded_payload::xor_encoded_pe(ctx.parsed.fileid(), file_data)
     }));

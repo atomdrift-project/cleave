@@ -289,6 +289,150 @@ pub fn extract_encoded_payloads(stng_strings: &[stng::ExtractedString]) -> Vec<E
     payloads
 }
 
+/// Decode MIME attachment bodies using only their declared transfer encoding.
+/// Keep the supported binary formats bounded; no attachment is executed.
+pub(crate) fn extract_mime_attachments(data: &[u8]) -> Vec<ExtractedPayload> {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    if data.len() > 10 * 1024 * 1024 {
+        return Vec::new();
+    }
+    let Ok(source) = std::str::from_utf8(data) else {
+        return Vec::new();
+    };
+    let lower = source.to_ascii_lowercase();
+    if !lower.contains("mime-version:") || !lower.contains("multipart/") {
+        return Vec::new();
+    }
+    let Ok(parts) = regex::Regex::new(
+        r"(?im)content-transfer-encoding:[ \t]*base64[^\r\n]*\r?\n(?:[^\r\n]+\r?\n)*\r?\n([A-Za-z0-9+/=\r\n]+)",
+    ) else {
+        return Vec::new();
+    };
+    parts
+        .captures_iter(source)
+        .take(16)
+        .filter_map(|caps| {
+            let body = caps.get(1)?;
+            let compact: String = body
+                .as_str()
+                .chars()
+                .filter(|c| !c.is_ascii_whitespace())
+                .collect();
+            let decoded = STANDARD.decode(compact).ok()?;
+            let detected_type = if decoded.starts_with(b"PK\x03\x04") {
+                FileType::Zip
+            } else if decoded.starts_with(b"MZ") {
+                FileType::Pe
+            } else if decoded.starts_with(b"\x7fELF") {
+                FileType::Elf
+            } else {
+                return None;
+            };
+            Some(ExtractedPayload {
+                preview: generate_preview(&decoded),
+                data: decoded,
+                encoding_chain: vec!["mime-base64".to_string()],
+                detected_type,
+                original_offset: body.start(),
+            })
+        })
+        .collect()
+}
+
+/// Reconstruct literal low/high nibble tables consumed by a script interpreter.
+/// This evaluates only decimal literals, never the surrounding program. Bounds
+/// and an explicit reconstruction/dispatch shape keep ordinary CSV data out.
+pub(crate) fn extract_nibble_table_payloads(data: &[u8]) -> Vec<ExtractedPayload> {
+    if data.len() > 1024 * 1024 {
+        return Vec::new();
+    }
+    let Ok(source) = std::str::from_utf8(data) else {
+        return Vec::new();
+    };
+    let lower = source.to_ascii_lowercase();
+    let is_powershell = lower.contains("addscript") && lower.contains("[int]");
+    let is_vbs = lower.contains("chr(clng(") && lower.contains("\nexecute ");
+    if !is_powershell && !is_vbs {
+        return Vec::new();
+    }
+    let mut decoded = Vec::new();
+    let offset;
+    if is_powershell {
+        let Ok(formula) = regex::Regex::new(r"(?i)\[int\].{0,40}\*\s*16\s*\+\s*\[int\]") else {
+            return Vec::new();
+        };
+        if !formula.is_match(source) {
+            return Vec::new();
+        }
+        let Ok(row) = regex::Regex::new(r"(?m)^\d{1,8},(\d{1,2}),(\d{1,2})\r?$") else {
+            return Vec::new();
+        };
+        offset = row.find(source).map_or(0, |m| m.start());
+        for caps in row.captures_iter(source) {
+            let (Ok(lo), Ok(hi)) = (caps[1].parse::<u8>(), caps[2].parse::<u8>()) else {
+                return Vec::new();
+            };
+            if lo > 15 || hi > 15 {
+                return Vec::new();
+            }
+            decoded.push(hi * 16 + lo);
+        }
+    } else {
+        let Ok(formula) = regex::Regex::new(r"(?i)Chr\(CLng\([^\r\n]{1,60}\)\*16\+CLng") else {
+            return Vec::new();
+        };
+        if !formula.is_match(source) {
+            return Vec::new();
+        }
+        let Ok(chunks) = regex::Regex::new(r#""([0-9.,]+)""#) else {
+            return Vec::new();
+        };
+        offset = chunks.find(source).map_or(0, |m| m.start());
+        let joined: String = chunks
+            .captures_iter(source)
+            .filter_map(|c| {
+                let chunk = &c[1];
+                (chunk == ","
+                    || chunk.split(',').filter(|s| !s.is_empty()).all(|pair| {
+                        pair.split_once('.').is_some_and(|(lo, hi)| {
+                            !lo.is_empty()
+                                && !hi.is_empty()
+                                && lo.bytes().all(|b| b.is_ascii_digit())
+                                && hi.bytes().all(|b| b.is_ascii_digit())
+                        })
+                    }))
+                .then(|| chunk.to_string())
+            })
+            .collect();
+        for pair in joined.split(',').filter(|s| !s.is_empty()) {
+            let Some((lo, hi)) = pair.split_once('.') else {
+                return Vec::new();
+            };
+            let (Ok(lo), Ok(hi)) = (lo.parse::<u8>(), hi.parse::<u8>()) else {
+                return Vec::new();
+            };
+            if lo > 15 || hi > 15 {
+                return Vec::new();
+            }
+            decoded.push(hi * 16 + lo);
+        }
+    }
+    if decoded.len() < MIN_PAYLOAD_LENGTH || !supports_nested_encoding(&decoded) {
+        return Vec::new();
+    }
+    vec![ExtractedPayload {
+        preview: generate_preview(&decoded),
+        data: decoded,
+        encoding_chain: vec!["nibble-table".to_string()],
+        detected_type: if is_powershell {
+            FileType::PowerShell
+        } else {
+            FileType::Vbs
+        },
+        original_offset: offset,
+    }]
+}
+
 /// A whole file that is a PE under a repeating XOR key: a dropper's payload
 /// shipped as opaque bytes. filefacts recovered the key while identifying the
 /// file, so this only decodes, and the image joins the other decoded payloads.

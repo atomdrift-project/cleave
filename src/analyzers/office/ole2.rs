@@ -10,9 +10,8 @@
 use anyhow::Result;
 use std::io::{Cursor, Read};
 
-/// Maximum embedded executables extracted per OLE2 document.
-/// Bounds work for adversarial inputs that pile many MZ-prefixed streams.
-const MAX_EMBEDDED_EXECUTABLES: usize = 10;
+/// Maximum executable or cabinet streams extracted per OLE2 document.
+const MAX_EMBEDDED_EXECUTABLES: usize = 32;
 
 /// Maximum embedded executable size to extract (50 MB).
 /// Streams above this are reported as present but skipped for sub-analysis.
@@ -44,6 +43,11 @@ const MSG_ATTACH_STORAGE_PREFIX: &str = "__attach_version1.0_#";
 pub(crate) enum EmbeddedExecKind {
     Pe,
     Elf,
+    Cab,
+    PowerShell,
+    Vbs,
+    Python,
+    JavaScript,
 }
 
 /// Embedded executable extracted from an OLE2 stream.
@@ -426,7 +430,7 @@ fn detect_subtype(stream_names: &[String]) -> Ole2Subtype {
     Ole2Subtype::Unknown
 }
 
-/// Scan streams for embedded PE/ELF executables.
+/// Scan streams for executable binaries, cabinets, and MSI Binary scripts.
 ///
 /// Sniffs the first 8 bytes of every stream (no name filter) so MSI binary
 /// streams (`Binary.<name>`), ad-hoc storage attachments, and obfuscated
@@ -462,13 +466,23 @@ fn find_embedded_executables(
         if stream.read_exact(&mut header).is_err() {
             continue;
         }
-        let kind = if header[0] == b'M' && header[1] == b'Z' {
-            EmbeddedExecKind::Pe
+        let binary_kind = if header[0] == b'M' && header[1] == b'Z' {
+            Some(EmbeddedExecKind::Pe)
         } else if header[..4] == [0x7f, b'E', b'L', b'F'] {
-            EmbeddedExecKind::Elf
+            Some(EmbeddedExecKind::Elf)
+        } else if header[..4] == *b"MSCF" {
+            Some(EmbeddedExecKind::Cab)
         } else {
-            continue;
+            None
         };
+
+        // MSI stores Binary-table stream names in a compact Unicode alphabet.
+        // Only those streams are eligible for source detection: database tables
+        // and ordinary Office text streams are not executable script members.
+        let stream_path = decode_msi_stream_name(path);
+        if binary_kind.is_none() && !stream_path.trim_start_matches('/').starts_with("Binary.") {
+            continue;
+        }
 
         // Slurp the full stream. cfb's stream reader is in-memory backed by
         // the host slice, so this is a single contiguous copy.
@@ -478,14 +492,66 @@ fn find_embedded_executables(
             continue;
         }
 
+        let Some(kind) = binary_kind.or_else(|| embedded_script_kind(&stream_path, &data)) else {
+            continue;
+        };
+
         found.push(EmbeddedExecutable {
-            stream_path: path.clone(),
+            stream_path,
             kind,
             data,
         });
     }
 
     found
+}
+
+fn decode_msi_stream_name(path: &str) -> String {
+    const ALPHABET: &[u8; 64] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz._";
+    let mut decoded = String::new();
+    for c in path.chars() {
+        let n = u32::from(c);
+        if let Some(pair) = n.checked_sub(0x3800).filter(|&pair| pair < 0x1000) {
+            if let (Some(&first), Some(&second)) = (
+                ALPHABET.get((pair & 63) as usize),
+                ALPHABET.get((pair >> 6) as usize),
+            ) {
+                decoded.push(char::from(first));
+                decoded.push(char::from(second));
+            }
+        } else if let Some(index) = n.checked_sub(0x4800).filter(|&index| index < 64) {
+            if let Some(&byte) = ALPHABET.get(index as usize) {
+                decoded.push(char::from(byte));
+            }
+        } else {
+            decoded.push(c);
+        }
+    }
+    decoded
+}
+
+fn embedded_script_kind(path: &str, data: &[u8]) -> Option<EmbeddedExecKind> {
+    use filefacts::FileType;
+    let text = std::str::from_utf8(data).ok()?;
+    // Long encoded data tables can precede the actual script. Use the complete
+    // stream for language identification, as archive members do.
+    let lower = text.to_ascii_lowercase();
+    if lower.contains("[powershell]::create") && lower.contains(".addscript(") {
+        return Some(EmbeddedExecKind::PowerShell);
+    }
+    if lower.contains("end function")
+        && (lower.contains("createobject(")
+            || (lower.contains("split(") && lower.contains("\nexecute ")))
+    {
+        return Some(EmbeddedExecKind::Vbs);
+    }
+    match filefacts::FileId::from_path_and_bytes(std::path::Path::new(path), data).file_type() {
+        FileType::PowerShell => Some(EmbeddedExecKind::PowerShell),
+        FileType::Vbs => Some(EmbeddedExecKind::Vbs),
+        FileType::Python => Some(EmbeddedExecKind::Python),
+        FileType::JavaScript => Some(EmbeddedExecKind::JavaScript),
+        _ => None,
+    }
 }
 
 /// Extract the attachments of an Outlook `.msg` (MS-OXMSG).

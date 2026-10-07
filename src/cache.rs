@@ -499,13 +499,7 @@ fn scan_traits_dir(traits_dir: &Path) -> TraitsScan {
             .follow_links(true)
             .sort_by_file_name()
             .into_iter()
-            .filter_entry(|entry| {
-                // Never descend into `.git`: it carries no rule/trait files yet
-                // dwarfs the trait set in entry count.
-                entry.depth() == 0
-                    || !entry.file_type().is_dir()
-                    || entry.file_name().to_str() != Some(".git")
-            });
+            .filter_entry(crate::traits_repo::is_rule_source_entry);
         for entry in walker.flatten() {
             // `file_type()` comes from the directory read, no extra stat.
             let path = entry.path();
@@ -671,11 +665,7 @@ fn compute_rules_source_tag(traits_dir: &Path) -> Option<u64> {
         let walker = WalkDir::new(traits_dir)
             .follow_links(true)
             .into_iter()
-            .filter_entry(|entry| {
-                entry.depth() == 0
-                    || !entry.file_type().is_dir()
-                    || entry.file_name().to_str() != Some(".git")
-            });
+            .filter_entry(crate::traits_repo::is_rule_source_entry);
         for entry in walker.flatten() {
             if !entry.file_type().is_file() {
                 continue;

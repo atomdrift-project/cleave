@@ -926,6 +926,23 @@ impl UnifiedSourceAnalyzer {
             report.identity = ctx.identity();
         }
 
+        // Decoded source layers bypass the top-level file pipeline. Scan their
+        // own bytes here so inline YARA evidence can participate in composites.
+        let inline_yara = if self.skip_embedded_detection
+            && let Some(yara) = self.engine.yara()
+        {
+            Some(crate::process_yara_result(
+                &mut report,
+                Some(yara.scan_bytes_with_inline(
+                    content.as_bytes(),
+                    Some(&self.file_type.yara_filetypes()),
+                )),
+                Some(yara),
+            ))
+        } else {
+            None
+        };
+
         // Evaluate all rules (atomic + composite) and merge into report,
         // borrowing the same filefacts context used for source AST extraction.
         self.engine
@@ -935,14 +952,17 @@ impl UnifiedSourceAnalyzer {
                 content.as_bytes(),
                 crate::capabilities::AnalysisBorrow::with_filefacts(tree, source_ctx)
                     .with_ast_kind_cache(ast_kind_cache.as_ref()),
-                None,
+                inline_yara.as_ref(),
                 None,
                 None,
                 None,
             );
 
         report.metadata.analysis_duration_ms = start.elapsed().as_millis() as u64;
-        report.metadata.tools_used = vec![format!("tree-sitter-{}", self.config.name)];
+        report
+            .metadata
+            .tools_used
+            .push(format!("tree-sitter-{}", self.config.name));
 
         report
     }

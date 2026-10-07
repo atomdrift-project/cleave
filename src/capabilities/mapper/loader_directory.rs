@@ -6431,13 +6431,7 @@ fn prepare_trait_file(
 
         // Auto-prefix trait ID if it doesn't already have the path prefix
         // Uses :: as delimiter between directory path and trait name
-        if let Some(ref prefix) = trait_prefix
-            && !trait_def.id.starts_with(prefix)
-            && !trait_def.id.contains("::")
-            && !trait_def.id.contains('/')
-        {
-            trait_def.id = format!("{}::{}", prefix, trait_def.id);
-        }
+        trait_def.id = crate::traits_repo::qualify_trait_id(&trait_def.id, trait_prefix.as_deref());
         // Validate YARA/AST conditions at load time
         let validated = trait_def
             .r#if

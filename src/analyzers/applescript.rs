@@ -97,6 +97,28 @@ impl Analyzer for AppleScriptAnalyzer {
         report.findings.extend(plain_findings);
 
         // Evaluate all rules (atomic + composite) and merge into report
+        // Decoded children bypass the outer orchestration's YARA pass. Scan
+        // their own compiled bytes before evaluating inline-YARA traits.
+        if input.depth > 0
+            && let Some(yara) = self.engine.yara()
+        {
+            use crate::analyzers::FileTypeExt;
+            match yara.scan_bytes_to_findings(
+                input.data,
+                Some(&crate::FileType::AppleScript.yara_filetypes()),
+            ) {
+                Ok((matches, findings)) => {
+                    report.yara_matches = matches;
+                    for finding in findings {
+                        report.push_finding_capped(finding);
+                    }
+                }
+                Err(error) => report
+                    .metadata
+                    .errors
+                    .push(format!("yara(decoded-scpt): {error:#}")),
+            }
+        }
         self.engine
             .rules()
             .evaluate_and_merge_findings_with_precomputed(

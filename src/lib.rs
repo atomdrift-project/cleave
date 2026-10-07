@@ -894,6 +894,8 @@ pub struct AnalysisOptions {
     /// records [`types::AnalysisGap::DisassemblyIncomplete`] and is not cached.
     /// `None` uses filefacts' default ([`filefacts::rizin::DEFAULT_RIZIN_TIMEOUT_SECS`]).
     pub rizin_timeout: Option<std::time::Duration>,
+    /// Optional larger deadline for one retry of each timed-out native file.
+    pub rizin_retry_timeout: Option<std::time::Duration>,
     /// Skip rizin for native binaries larger than this many bytes, keeping
     /// one huge binary from dominating a latency-sensitive scan. `None`: no cap.
     pub rizin_max_bytes: Option<usize>,
@@ -1198,6 +1200,7 @@ impl Default for AnalysisOptions {
             disable_yara: false,
             disable_radare2: false,
             rizin_timeout: None,
+            rizin_retry_timeout: None,
             rizin_max_bytes: None,
             rizin_native_arch_only: false,
             disable_upx: false,

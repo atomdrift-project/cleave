@@ -2320,17 +2320,15 @@ fn precompact_member_facts(file: &mut FileAnalysis, engine: &crate::Engine) {
 
 /// Drop folded-file payloads that have no reader in compact-member mode.
 /// `filefacts.values` is a full clone of the structural value tree; its
-/// consumers — this file's own `type: value` conditions and the host-format
-/// extractors — all run during the file's own evaluation, which is complete
-/// by fold time. Compact output reads `symbols` and `references` from the
-/// view, never `values`, so in compact mode the tree is ballast. No-op in
-/// full-retention mode: the v3 schema serializes it.
+/// Most consumers run during the file's own evaluation. Retain only the npm
+/// identity and lifecycle scripts needed by dependency discovery after archive
+/// members fold. No-op in full-retention mode: the v3 schema serializes it.
 fn drop_unread_folded_fields(file: &mut FileAnalysis, engine: &crate::Engine) {
     if !engine.compact_members() {
         return;
     }
     if let Some(view) = file.filefacts.as_mut() {
-        view.values = serde_json::Value::Null;
+        view.values = retained_dependency_values(&view.values);
         view.flow = None;
     }
     // Sub-notable findings never render as finding rows on any compact-path
@@ -2345,6 +2343,36 @@ fn drop_unread_folded_fields(file: &mut FileAnalysis, engine: &crate::Engine) {
                 e.value = String::new();
             }
         }
+    }
+}
+
+fn retained_dependency_values(tree: &serde_json::Value) -> serde_json::Value {
+    let mut npm = serde_json::Map::new();
+    for key in ["name", "version", "scripts"] {
+        if let Some(value) = tree.get("npm").and_then(|npm| npm.get(key)) {
+            npm.insert(key.to_owned(), value.clone());
+        }
+    }
+    if npm.is_empty() {
+        serde_json::Value::Null
+    } else {
+        serde_json::json!({"npm": npm})
+    }
+}
+
+#[cfg(test)]
+mod dependency_compact_retention_tests {
+    use super::retained_dependency_values;
+    use serde_json::json;
+    #[test]
+    fn compact_members_keep_dependency_identity_and_hooks_without_unrelated_values() {
+        let expected = json!({"npm":{"name":"tool","version":"1.2.3","scripts":{"postinstall":"npm install companion@2.0.0"}}});
+        let mut input = expected.clone();
+        input["npm"]["description"] = json!("large unrelated prose");
+        input["source"] = json!({"large":"unrelated AST metadata"});
+        assert_eq!(retained_dependency_values(&input), expected);
+        assert!(retained_dependency_values(&json!({"source":{}})).is_null());
+        assert!(retained_dependency_values(&serde_json::Value::Null).is_null());
     }
 }
 

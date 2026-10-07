@@ -1472,6 +1472,7 @@ impl YaraEngine {
         let yaml_files: Vec<PathBuf> = WalkDir::new(traits_dir)
             .follow_links(false)
             .into_iter()
+            .filter_entry(crate::traits_repo::is_rule_source_entry)
             .filter_map(std::result::Result::ok)
             .filter(|e| {
                 let p = e.path();
@@ -1955,16 +1956,16 @@ impl YaraEngine {
         HashMap<String, RuleContext>,
         usize,
     ) {
-        let third_party_dir = crate::cache::third_party_path();
         let rule_files: Vec<PathBuf> = WalkDir::new(dir)
             .follow_links(false)
             .into_iter()
+            .filter_entry(|entry| {
+                crate::traits_repo::is_rule_source_entry(entry)
+                    && (entry.depth() == 0 || entry.file_name() != "third-party")
+            })
             .filter_map(std::result::Result::ok)
             .filter(|entry| {
                 let path = entry.path();
-                if path.starts_with(&third_party_dir) {
-                    return false;
-                }
                 path.is_file()
                     && path
                         .extension()
@@ -2048,6 +2049,7 @@ impl YaraEngine {
         let rule_files: Vec<PathBuf> = WalkDir::new(dir)
             .follow_links(false)
             .into_iter()
+            .filter_entry(crate::traits_repo::is_rule_source_entry)
             .filter_map(std::result::Result::ok)
             .filter(|entry| {
                 let path = entry.path();
@@ -3139,6 +3141,50 @@ impl YaraEngine {
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // Tests use direct assertions and helpers for brevity
 mod tests {
     use super::*;
+
+    #[test]
+    fn rule_discovery_excludes_build_fixtures_and_separates_third_party() {
+        let cwd = std::env::current_dir().unwrap();
+        let root = tempfile::Builder::new()
+            .prefix(".yara-source-root-")
+            .tempdir_in(&cwd)
+            .unwrap();
+        let builtin = "rule builtin { condition: true }";
+        fs::write(root.path().join("builtin.yar"), builtin).unwrap();
+        let inline = "traits:\n  - id: visible-inline\n    for: [text]\n    if:\n      type: yara\n      source: 'rule visible { condition: true }'\n";
+        fs::write(root.path().join("inline.yaml"), inline).unwrap();
+        for dir in [".local-build/dependency/tests", "_testdata"] {
+            let path = root.path().join(dir);
+            fs::create_dir_all(&path).unwrap();
+            fs::write(
+                path.join("included.yar"),
+                "rule included { condition: true }",
+            )
+            .unwrap();
+            fs::write(
+                path.join("fixture.yaml"),
+                inline.replace("visible-inline", "fixture-inline"),
+            )
+            .unwrap();
+        }
+        let third_party = root.path().join("third-party/vendor");
+        fs::create_dir_all(&third_party).unwrap();
+        fs::write(
+            third_party.join("vendor.yar"),
+            "rule vendor { condition: true }",
+        )
+        .unwrap();
+
+        // A relative traits override must exclude third-party sources just as
+        // an absolute one does; comparing it with an absolute cache path fails.
+        for path in [root.path(), root.path().strip_prefix(&cwd).unwrap()] {
+            let (_, contexts, count) = YaraEngine::collect_builtin_sources_tiered(path);
+            assert_eq!(count, 1);
+            assert_eq!(contexts.len(), 1);
+            let (_, ids) = YaraEngine::collect_inline_trait_sources_tiered(path);
+            assert_eq!(ids, ["inline.visible-inline"]);
+        }
+    }
 
     /// A file the prefilter skips must hold no scalar equal to `yara`; every
     /// way YAML can build that scalar must keep the file.

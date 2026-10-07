@@ -245,7 +245,10 @@ impl OfficeAnalyzer {
             ooxml_metrics,
             xlm_metrics,
             cross_counts,
-            embedded_execs.len() as u32,
+            embedded_execs
+                .iter()
+                .filter(|e| e.kind != ole2::EmbeddedExecKind::Cab)
+                .count() as u32,
         );
 
         // Analyze VBA modules as sub-files through the standard Vbs pipeline
@@ -256,11 +259,19 @@ impl OfficeAnalyzer {
         let findings_before_subfiles = report.findings.len();
         self.analyze_vba_subfiles(&mut report, &vba_modules, doc_name, cancellation);
 
-        // Recursively analyze embedded PE/ELF payloads carried in OLE2 streams
-        // (e.g., MSI binary custom-action DLLs). Routes them through the standard
-        // PE/ELF pipeline and merges findings upward, mirroring the VBA path.
-        let embedded_count = embedded_execs.len() as u32;
-        self.analyze_embedded_executables(&mut report, &embedded_execs, doc_name, cancellation);
+        // Recursively analyze binary, cabinet, and script payloads in OLE2
+        // streams through their standard analyzers and merge findings upward.
+        let embedded_count = embedded_execs
+            .iter()
+            .filter(|e| e.kind != ole2::EmbeddedExecKind::Cab)
+            .count() as u32;
+        self.analyze_embedded_executables(
+            &mut report,
+            &embedded_execs,
+            doc_name,
+            depth,
+            cancellation,
+        );
 
         // Outlook attachments -- the phishing payload of a .msg (HTML/SVG
         // smuggling pages, archives, shortcuts, documents) -- go through the
@@ -614,8 +625,13 @@ impl OfficeAnalyzer {
         report: &mut AnalysisReport,
         executables: &[ole2::EmbeddedExecutable],
         doc_name: &str,
+        depth: u32,
         cancellation: Option<&Arc<std::sync::atomic::AtomicBool>>,
     ) {
+        let child_depth = depth.saturating_add(1);
+        if child_depth > super::subfile::MAX_SUBFILE_DEPTH {
+            return;
+        }
         for exec in executables {
             if cancellation.is_some_and(|c| c.load(std::sync::atomic::Ordering::Acquire)) {
                 break;
@@ -624,9 +640,14 @@ impl OfficeAnalyzer {
             let (file_type, kind_str) = match exec.kind {
                 ole2::EmbeddedExecKind::Pe => (FileType::Pe, "pe"),
                 ole2::EmbeddedExecKind::Elf => (FileType::Elf, "elf"),
+                ole2::EmbeddedExecKind::Cab => (FileType::Cab, "cab"),
+                ole2::EmbeddedExecKind::PowerShell => (FileType::PowerShell, "powershell"),
+                ole2::EmbeddedExecKind::Vbs => (FileType::Vbs, "vbs"),
+                ole2::EmbeddedExecKind::Python => (FileType::Python, "python"),
+                ole2::EmbeddedExecKind::JavaScript => (FileType::JavaScript, "javascript"),
             };
 
-            let Some(analyzer) = analyzer_for_file_type_arc(&file_type, &self.engine) else {
+            let Some(analyzer) = super::subfile::pick_analyzer(file_type, &self.engine) else {
                 continue;
             };
 
@@ -640,7 +661,9 @@ impl OfficeAnalyzer {
             // filefacts is the string-extraction authority: open the embedded
             // payload once and thread it into the sub-file analyzer.
             let exec_ctx = Some(crate::analysis_context::AnalysisContext::open_with(
-                self.engine.filefacts_options(),
+                self.engine
+                    .filefacts_options()
+                    .fileid(filefacts::FileId::forced(file_type)),
                 virtual_path,
                 &exec.data,
             ));
@@ -654,7 +677,7 @@ impl OfficeAnalyzer {
                 input = input.with_parsed_ctx(ctx);
             }
             input.cancellation = cancellation.cloned();
-            input.depth = 1;
+            input.depth = child_depth;
 
             match analyzer.analyze_input(&input) {
                 Ok(sub_report) => attach_member(
@@ -869,7 +892,7 @@ impl OfficeAnalyzer {
         // for full sub-analysis; this finding is the structural marker.
         let is_msi = doc.doc_subtype == ole2::Ole2Subtype::Msi;
         for exec in &doc.embedded_executables {
-            if is_msi {
+            if is_msi || exec.kind == ole2::EmbeddedExecKind::Cab {
                 // MSI custom-action DLLs are normal; the sub-analysis covers
                 // any actual malicious behavior in the embedded binary.
                 continue;
@@ -1013,7 +1036,11 @@ impl OfficeAnalyzer {
             // through finding emission; cross-format counts mirror that
             // for the metrics path so a `.doc` and `.docx` look uniform
             // to downstream traits.
-            embedded_executable_count: doc.embedded_executables.len() as u32,
+            embedded_executable_count: doc
+                .embedded_executables
+                .iter()
+                .filter(|e| e.kind != ole2::EmbeddedExecKind::Cab)
+                .count() as u32,
             is_encrypted: doc.has_encryption,
             ..Default::default()
         };

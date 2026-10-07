@@ -15,6 +15,16 @@
 use std::path::{Path, PathBuf};
 use std::sync::{OnceLock, RwLock};
 
+/// Keep rule discovery out of checkout and build artifacts. The selected root
+/// is always admitted, even if its own name starts with a dot or underscore.
+pub(crate) fn is_rule_source_entry(entry: &walkdir::DirEntry) -> bool {
+    if entry.depth() == 0 || !entry.file_type().is_dir() {
+        return true;
+    }
+    let name = entry.file_name().to_string_lossy();
+    !name.starts_with('.') && !name.starts_with('_')
+}
+
 /// Process-wide override for the traits directory.
 ///
 /// Set by [`set_override_dir`] (e.g. from a CLI flag or library caller) and

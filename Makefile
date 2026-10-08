@@ -295,10 +295,23 @@ ENGINE ?= ./$(CARGO_TARGET)/release/$(BINARY)
 # HEAD_ENGINE validates the `latest` pointer (newest bundle that works for the
 # current build); it's the working-tree binary, so always the local release build.
 HEAD_ENGINE ?= ./$(CARGO_TARGET)/release/$(BINARY)
+# The manifest is built on the one that is LIVE, fetched from the R2 origin (not
+# the CDN, which can lag): its floors, and its content-addressed bundles, which
+# are reused instead of rebuilt. Each publisher used to build on its own dist/,
+# so the cron host and a hand-run release rebuilt the same commit into different
+# bytes under the same name -- and the edge, told that name was immutable, kept
+# serving the first build against the second build's sha256 (a8f1b0916c,
+# 2026-10-07). Unreachable is not fatal: names carry their content hash, so a
+# rebuild is correct, only slower.
 gen-manifest: release ## Auto-generate versions.toml ([RELEASES=5] [COMMITS=8] [SOAK_DAYS=7] [ENGINE=path|empty] [SIGN=1 IDENTITY=...])
 	cd tools/manifest-gen && GOWORK=off go build -o manifest-gen .
+	@mkdir -p "$(DIST)"
+	@if command -v rclone >/dev/null && rclone copyto "$(R2_REMOTE)/$(R2_CLEAVE)/versions.toml" "$(DIST)/versions.published.toml" 2>/dev/null; then \
+	  echo "→ building on the published manifest ($(R2_REMOTE)/$(R2_CLEAVE)/versions.toml, R2 origin)"; \
+	else rm -f "$(DIST)/versions.published.toml"; \
+	  echo "⚠ published manifest unavailable; building on $(DIST)/versions.toml (bundles may be rebuilt)"; fi
 	tools/manifest-gen/manifest-gen \
-	  --traits "$(TRAITS)" --repo . --out "$(DIST)" \
+	  --traits "$(TRAITS)" --repo . --out "$(DIST)" --published "$(DIST)/versions.published.toml" \
 	  $(if $(ENGINE),--engine "$(ENGINE)",) \
 	  --head-engine "$(HEAD_ENGINE)" \
 	  --releases $(RELEASES) --commits $(COMMITS) --soak-days $(SOAK_DAYS) \
@@ -311,9 +324,15 @@ R2_CLEAVE ?= cleave
 publish-cleave: ## Upload dist/ bundles + versions.toml to R2 (artifacts FIRST, then manifest; unsigned publish removes any orphaned R2 signature)
 	@command -v rclone >/dev/null || { echo "rclone not found"; exit 1; }
 	@[ -f "$(DIST)/versions.toml" ] || { echo "no $(DIST)/versions.toml — run 'make gen-manifest' first"; exit 1; }
-	@echo "→ bundles (immutable, cache forever)"
-	rclone copy "$(DIST)" "$(R2_REMOTE)/$(R2_CLEAVE)/traits/" --include "*.tar.zst" \
+	@echo "→ bundles (immutable, cache forever; never overwritten)"
+	# --ignore-existing: a bundle name carries its content hash, so an existing
+	# name already holds these bytes -- and overwriting one is exactly what an
+	# `immutable` edge cache cannot follow.
+	rclone copy "$(DIST)" "$(R2_REMOTE)/$(R2_CLEAVE)/traits/" --include "*.tar.zst" --ignore-existing \
 	  --header-upload "Cache-Control: public, max-age=31536000, immutable" --progress
+	@echo "→ checking every referenced bundle is in the bucket before the manifest points at it"
+	rclone lsf "$(R2_REMOTE)/$(R2_CLEAVE)/traits/" --files-only --include "*.tar.zst" > "$(DIST)/.bucket-bundles"
+	python3 tools/manifest-gen/check-manifest.py "$(DIST)" --presence-only "$(DIST)/.bucket-bundles"
 	@echo "→ manifest (short cache so polls see updates)"
 	rclone copyto "$(DIST)/versions.toml" "$(R2_REMOTE)/$(R2_CLEAVE)/versions.toml" \
 	  --header-upload "Cache-Control: public, max-age=60"
@@ -331,7 +350,7 @@ release-cleave: gen-manifest publish-cleave ## Generate the manifest and publish
 
 ISSUER ?= https://accounts.google.com
 check-manifest: ## Pre-publish gate: manifest parses, artifacts present + sha match, signature verifies
-	python3 tools/manifest-gen/check-manifest.py "$(DIST)"
+	python3 tools/manifest-gen/check-manifest.py "$(DIST)" --published "$(DIST)/versions.published.toml"
 	@if [ -n "$(IDENTITY)" ]; then \
 	  echo "→ verifying signature with cosign ($(IDENTITY))"; \
 	  cosign verify-blob --new-bundle-format \
@@ -392,7 +411,7 @@ publish-traits: ## FULL RELEASE: compat-test HEAD + last (VERSIONS-1) releases �
 # hacks/traiter-linux.sh header) and swap the gen-manifest line below for
 # `SIGN=1 IDENTITY=$(IDENTITY)`
 # plus a `check-manifest IDENTITY=$(IDENTITY)` gate. The R2 upload is idempotent
-# (rclone skips unchanged bundles), so a redundant publish is cheap.
+# (published bundles are reused, never rebuilt or overwritten), so a redundant publish is cheap.
 # Safe to run by hand.
 #
 # PUBLIC MIRROR (opt-in): setting TRAITS_PUBLIC_REMOTE to a git remote name on

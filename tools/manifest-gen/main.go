@@ -49,6 +49,10 @@ type config struct {
 	channels                          []string
 	noValidate, sign                  bool
 	identity                          string
+	// published is the manifest currently live in the bucket, fetched from the
+	// R2 origin by `make gen-manifest`. Empty or absent: fall back to this
+	// machine's last render in --out (the behaviour before it existed).
+	published string
 }
 
 func main() {
@@ -74,6 +78,8 @@ func main() {
 	flag.BoolVar(&c.noValidate, "no-validate", false, "skip the gate (structure only; unsafe)")
 	flag.BoolVar(&c.sign, "sign", false, "cosign-sign the rendered manifest")
 	flag.StringVar(&c.identity, "identity", "", "expected signer identity (required with --sign)")
+	flag.StringVar(&c.published, "published", "",
+		"the manifest currently live in the bucket: floors come from it, and its content-addressed bundles are reused rather than rebuilt (absent: use --out/versions.toml)")
 	flag.Parse()
 	c.channels = strings.Split(*chans, ",")
 	c.validateArgs = strings.Fields(*validateArgs)
@@ -104,7 +110,23 @@ func run(c *config) {
 	if len(commits) == 0 {
 		fatal("no commits in %s", c.traits)
 	}
-	floors, _ := parseFloors(filepath.Join(c.out, "versions.toml")) // [channel][release]=key
+	// The LIVE manifest, not this machine's last render, is what clients see and
+	// what every publisher must build on. Two publishers (the 30-min cron host and
+	// a hand-run release) each reading their own dist/ disagreed about floors and
+	// rebuilt the same commit into different bytes under the same name -- which,
+	// cached `immutable` at the edge, broke `latest` for every client
+	// (a8f1b0916c, 2026-10-07: edge 94b4575b..., manifest a37b69b5...).
+	prior := filepath.Join(c.out, "versions.toml")
+	if c.published != "" {
+		if _, err := os.Stat(c.published); err == nil {
+			prior = c.published
+			logf("building on the published manifest %s", c.published)
+		} else {
+			logf("no published manifest at %s; building on %s", c.published, prior)
+		}
+	}
+	floors, _ := parseFloors(prior) // [channel][release]=key
+	published := parseArtifacts(prior)
 	memo := loadCache(c.out)
 	tarCache := map[string][]byte{}
 	cutoff := time.Now().UTC().AddDate(0, 0, -c.soakDays)
@@ -186,7 +208,7 @@ func run(c *config) {
 
 	saveCache(c.out, memo)
 
-	arts := buildArtifacts(c, pointers, latest, tarCache)
+	arts := buildArtifacts(c, pointers, latest, tarCache, published)
 	validUntil := time.Now().UTC().AddDate(0, 0, c.validDays).Format("2006-01-02T15:04:05Z")
 	manifest := render(validUntil, latest, c.artifactPrefix, arts, tags, c.channels, pointers)
 	path := filepath.Join(c.out, "versions.toml")
@@ -340,9 +362,16 @@ func defaultRunBin(repo, tag string) string {
 	return ""
 }
 
-// buildArtifacts produces a reproducible artifact for every distinct commit any
-// pointer references (resolving keys that may predate the commit window).
-func buildArtifacts(c *config, pointers map[string]map[string]string, latest string, tarCache map[string][]byte) map[string]artifact {
+// buildArtifacts produces the artifact for every distinct commit any pointer
+// references (resolving keys that may predate the commit window).
+//
+// An artifact already published under a content-addressed name is reused as is:
+// not rebuilt, not re-hashed, not re-uploaded. Its bytes are fixed by its name,
+// so there is nothing to recompute, and a 180 MB zstd -19 per referenced commit
+// per publish was most of a cron tick. Older, commit-named artifacts are rebuilt
+// once into a content-addressed name, which is also what repairs a name whose
+// bytes changed under the edge cache.
+func buildArtifacts(c *config, pointers map[string]map[string]string, latest string, tarCache map[string][]byte, published map[string]artifact) map[string]artifact {
 	want := map[string]bool{}
 	for _, byRel := range pointers {
 		for _, key := range byRel {
@@ -356,6 +385,11 @@ func buildArtifacts(c *config, pointers map[string]map[string]string, latest str
 	}
 	arts := map[string]artifact{}
 	for key := range want {
+		if prev, ok := published[key]; ok && contentAddressed(prev) {
+			arts[key] = prev
+			logf("reused %s  sha256=%s (already published)", prev.file, prev.sha)
+			continue
+		}
 		cm := resolveCommit(c.traits, key)
 		arts[key] = buildArtifact(c.traits, c.out, cm, tarCache)
 		logf("built %s  sha256=%s", arts[key].file, arts[key].sha)
@@ -542,11 +576,78 @@ func buildArtifact(traits, out string, c commit, tarCache map[string][]byte) art
 		fatal("zstd %s: %v", c.short, err)
 	}
 	sum := sha256.Sum256(buf.Bytes())
-	file := fmt.Sprintf("%s-%s.tar.zst", c.date, c.short)
+	sha := hex.EncodeToString(sum[:])
+	file := artifactName(c.date, c.short, sha)
 	if err := os.WriteFile(filepath.Join(out, file), buf.Bytes(), 0o644); err != nil {
 		fatal("write %s: %v", file, err)
 	}
-	return artifact{key: c.short, file: file, sha: hex.EncodeToString(sum[:]), commit: c.full, date: c.date}
+	return artifact{key: c.short, file: file, sha: sha, commit: c.full, date: c.date}
+}
+
+// artifactHashLen is how much of the sha256 goes into a bundle's name: 64 bits,
+// so two different builds of one commit cannot plausibly share a name.
+const artifactHashLen = 16
+
+// artifactName names a bundle by its CONTENT as well as its commit. Bundles are
+// served `immutable` for a year, which is only true if a name can never refer to
+// different bytes -- and a commit alone does not fix the bytes: git archive and
+// zstd output differ across tool versions, so two publisher machines build the
+// same commit differently.
+func artifactName(date, short, sha string) string {
+	return fmt.Sprintf("%s-%s-%s.tar.zst", date, short, sha[:artifactHashLen])
+}
+
+// contentAddressed reports whether a published artifact's name carries its own
+// hash, i.e. whether reusing it by name is safe.
+func contentAddressed(a artifact) bool {
+	return len(a.sha) >= artifactHashLen && a.file == artifactName(a.date, a.key, a.sha)
+}
+
+// parseArtifacts reads the [artifacts.*] table of a manifest written by render.
+// file is returned without its directory, matching what buildArtifact returns
+// (render re-adds the prefix).
+func parseArtifacts(manifestPath string) map[string]artifact {
+	arts := map[string]artifact{}
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return arts
+	}
+	var cur *artifact
+	flush := func() {
+		if cur != nil && cur.key != "" && cur.file != "" && cur.sha != "" {
+			arts[cur.key] = *cur
+		}
+		cur = nil
+	}
+	for _, raw := range strings.Split(string(data), "\n") {
+		line := strings.TrimSpace(raw)
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			flush()
+			if key, ok := strings.CutPrefix(line[1:len(line)-1], "artifacts."); ok {
+				cur = &artifact{key: key}
+			}
+			continue
+		}
+		if cur == nil {
+			continue
+		}
+		lhs, rhs, ok := parseAssign(line)
+		if !ok {
+			continue
+		}
+		switch lhs {
+		case "file":
+			cur.file = filepath.Base(rhs)
+		case "sha256":
+			cur.sha = rhs
+		case "commit":
+			cur.commit = rhs
+		case "date":
+			cur.date = rhs
+		}
+	}
+	flush()
+	return arts
 }
 
 // --- manifest render + floor parse ------------------------------------------

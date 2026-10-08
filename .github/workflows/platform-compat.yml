@@ -51,7 +51,7 @@ jobs:
             --dir compat
 
       - name: Smoke test on OpenIndiana
-        uses: vmactions/openindiana-vm@21e57a45fc8dbfc8b20804ba707c1dad6c271b4f # v1.1.6
+        uses: vmactions/openindiana-vm@f0ed27ca85a6d1f5b11e4242eba1d6effa5aaae2 # v1.1.8
         with:
           release: "202604"
           usesh: true
@@ -91,7 +91,7 @@ jobs:
             --dir compat
 
       - name: Smoke test on Tribblix
-        uses: vmactions/tribblix-vm@238d918a36eaef5ea23791b5f8a8e5c9a4917984 # v1.0.5
+        uses: vmactions/tribblix-vm@036967a9232db5edb0432ca7970d771d3a3c2853 # v1.0.6
         with:
           release: "0m40"
           usesh: true
@@ -122,7 +122,7 @@ jobs:
             --dir compat
 
       - name: Smoke test on GhostBSD
-        uses: vmactions/ghostbsd-vm@47d491c56cd289e73f89e24838195aa66e4460be # v1.0.3
+        uses: vmactions/ghostbsd-vm@496abbca512422d79455fa3a21eaca6977485420 # v1.0.4
         with:
           release: "26.1"
           usesh: true
@@ -154,7 +154,7 @@ jobs:
           chmod +x compat/cleave
 
       - name: Smoke test on openEuler
-        uses: vmactions/openeuler-vm@b8191b00fdc7bf7703d1404062bfde47aa805c1f # v1.0.1
+        uses: vmactions/openeuler-vm@87b5f241a9f6c408a66662a31b69b7c6a0334aec # v1.0.4
         with:
           release: "25.09"
           usesh: true
@@ -187,7 +187,7 @@ jobs:
       # artifact is static and only asks BlissOS for a compatible Linux kernel
       # and permission to execute files copied into the VM.
       - name: Probe static musl binary on BlissOS
-        uses: vmactions/blissos-vm@e4a4ae2a90caadc53ea5dc6b5d22d0c6de914f64 # v1.0.2
+        uses: vmactions/blissos-vm@82636c0172e31a2427f353e234414bd7378201be # v1.0.3
         with:
           release: "16"
           sync: scp

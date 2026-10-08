@@ -662,6 +662,26 @@ pub(crate) fn batch_ast_queries(
     deadline: Option<Instant>,
     cancellation: Option<&AtomicBool>,
 ) -> Option<FxHashMap<String, ConditionResult>> {
+    batch_ast_queries_with_budget(
+        tree,
+        source,
+        file_type,
+        query_strs,
+        deadline,
+        cancellation,
+        None,
+    )
+}
+
+pub(super) fn batch_ast_queries_with_budget(
+    tree: &tree_sitter::Tree,
+    source: &str,
+    file_type: FileType,
+    query_strs: &[&str],
+    deadline: Option<Instant>,
+    cancellation: Option<&AtomicBool>,
+    cpu_budget_override: Option<std::time::Duration>,
+) -> Option<FxHashMap<String, ConditionResult>> {
     if query_strs.len() < 2 || source.len() > AST_QUERY_BYTE_LIMIT {
         return None;
     }
@@ -763,11 +783,12 @@ pub(crate) fn batch_ast_queries(
 
     let cancelled = || cancellation.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed));
     // Use the same per-query CPU ceiling when there is no outer scan deadline.
-    let cpu_budget = compiling
+    let default_cpu_budget = compiling
         .iter()
         .map(|(query, _)| ast_query_cpu_budget(query, deadline))
         .min()
         .unwrap_or(AST_QUERY_CPU_BUDGET);
+    let cpu_budget = cpu_budget_override.unwrap_or(default_cpu_budget);
     let cpu_start = thread_cpu_time();
     let timed_out = Cell::new(false);
     let mut progress_cb = |_state: &tree_sitter::QueryCursorState| -> ControlFlow<()> {
@@ -855,7 +876,10 @@ pub(crate) fn batch_ast_queries(
             }
         }
     }
-    if cancelled() || deadline.is_some_and(|dl| Instant::now() > dl) {
+    // An interrupted shared walk has not established absence for queries it
+    // never reached. Do not cache those partial negatives: evaluating each
+    // query independently gives later source nodes their own bounded walk.
+    if cancelled() || timed_out.get() || deadline.is_some_and(|dl| Instant::now() > dl) {
         return None;
     }
     // A pattern whose states were abandoned (the per-group state cap or the

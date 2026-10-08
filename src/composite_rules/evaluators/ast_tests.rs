@@ -1158,6 +1158,36 @@ fn batch_ast_queries_leaves_out_multi_wildcard_queries() {
 }
 
 #[test]
+fn interrupted_ast_batch_does_not_cache_negative_results() {
+    let source = "const before = 1;\neval(\"late payload\");\n";
+    let parsed = parsed_for_test("script.js", source.as_bytes());
+    let tree = parsed.source_ast().expect("ast").tree;
+    let q_eval = r#"(call_expression function: (identifier) @fn (#eq? @fn "eval")) @call"#;
+    let q_name = "(identifier) @name";
+    let batch = super::ast::batch_ast_queries_with_budget(
+        tree,
+        source,
+        FileType::JavaScript,
+        &[q_eval, q_name],
+        None,
+        None,
+        Some(std::time::Duration::ZERO),
+    );
+    assert!(
+        batch.is_none(),
+        "an interrupted walk must use per-query fallback"
+    );
+    let report = create_test_report("script.js");
+    let ctx =
+        create_test_context_with_ast(&report, &parsed, source.as_bytes(), FileType::JavaScript);
+    let result = super::ast::eval_ast_query(q_eval, &ctx);
+    assert!(
+        result.matched,
+        "the independent query still sees the later call"
+    );
+}
+
+#[test]
 fn batch_ast_queries_keeps_text_predicates() {
     let source = r#"addr.replace(/:/g,"-"); eval("z");"#;
     let parsed = parsed_for_test("ip.js", source.as_bytes());

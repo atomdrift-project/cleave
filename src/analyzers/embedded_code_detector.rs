@@ -1503,6 +1503,7 @@ fn file_type_for_script_language(language: &str) -> Option<FileType> {
         "javascript" => Some(FileType::JavaScript),
         "php" => Some(FileType::Php),
         "powershell" => Some(FileType::PowerShell),
+        "lua" => Some(FileType::Lua),
         _ => None,
     }
 }
@@ -1545,6 +1546,8 @@ fn host_may_contain_script_obfuscation(content: &str) -> bool {
         "IEX(",
     ];
     NEEDLES.iter().any(|needle| content.contains(*needle))
+        || stng::script::detect::detect_script_language(content.as_bytes())
+            == Some(stng::script::detect::ScriptLanguage::Lua)
 }
 
 fn encoded_powershell_finding(parent_path: &str, decoded_len: usize, offset: u64) -> Finding {

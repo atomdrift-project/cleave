@@ -1,26 +1,19 @@
 //! Chrome/WebExtension manifest.json analyzer.
 //!
-//! Emits neutral capability traits — one per declared API permission
-//! (`micro-behaviors/browser-extension/permission/<perm>::declared`) and one
-//! per granted origin
-//! (`micro-behaviors/browser-extension/host-access/<host>::granted`, dynamic
-//! and therefore not expressible in YAML) — plus the exposure surfaces
-//! (externally_connectable, web_accessible_resources, persistent background)
-//! and the one genuine anomaly, a non-Google `update_url`
-//! (`objectives/supply-chain/metadata-anomaly/update-url::external`). Manifest
-//! version, content-script timing/frames, and host breadth are covered by YAML.
-//!
-//! IDs use the canonical `<directory>::<local-id>` form so they fold and
-//! aggregate in the UI/ML exactly like YAML traits. The dynamic value (host,
-//! permission) is the last *directory* segment — not the local id — because
-//! the UI collapses a subdirectory to its top finding, so each host/permission
-//! needs its own subdirectory to stay individually visible and ML-keyed.
+//! Emits declared authority as metadata, not runtime behavior. Canonical
+//! YAML-backed API permissions are evaluated by the shared rule engine;
+//! remaining API names use `metadata/permission/extension-api/<api>::declared`.
+//! Parsed host tokens use `metadata/permission/host/<host>::declared`, with
+//! original patterns and field paths retained as evidence. These dynamic
+//! data keys preserve the existing per-value UI grouping; they add no YAML
+//! rule directories or decoding. Exposure and activation declarations are
+//! metadata too. Update-URL anomaly rules retain their objective home.
 
 use crate::analyzers::{AnalysisInput, Analyzer};
 use crate::types::{AnalysisReport, Criticality, Evidence, Finding, StructuralFeature, TargetInfo};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Deserializer};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
@@ -251,6 +244,8 @@ impl ChromeManifestAnalyzer {
                 None,
             );
 
+        Self::deduplicate_declared_permissions(&manifest, &mut report);
+
         report.metadata.analysis_duration_ms = start.elapsed().as_millis() as u64;
         report.metadata.tools_used = vec!["serde_json".to_string()];
 
@@ -314,8 +309,8 @@ impl ChromeManifestAnalyzer {
     /// Normalize a match pattern / host permission / URL-pattern permission to
     /// a bare host token suitable for a trait-ID path component.
     ///
-    /// Broad/all-sites grants (`<all_urls>`, `*://*/*`, scheme-only globs, a
-    /// bare `*` host) collapse to the sentinel token `all-urls`. Otherwise the
+    /// Only `<all_urls>` uses the `all-urls` token. Wildcard hosts use
+    /// `all-hosts`, retaining their scheme/path limits in evidence. Otherwise the
     /// scheme, path, port, and a leading wildcard label (`*.`) are stripped and
     /// only ID-safe characters are kept. Returns `None` for entries that don't
     /// denote a real dotted host.
@@ -324,7 +319,7 @@ impl ChromeManifestAnalyzer {
         if p.is_empty() {
             return None;
         }
-        if p == "<all_urls>" || p == "*://*/*" || p == "*://*" {
+        if p == "<all_urls>" {
             return Some("all-urls".to_string());
         }
         // Drop the scheme (`https://`, `*://`, …).
@@ -340,81 +335,92 @@ impl ChromeManifestAnalyzer {
         // A leading wildcard label (`*.example.com`) denotes the registrable
         // domain; a bare `*` host denotes all sites.
         let host = host.strip_prefix("*.").unwrap_or(host);
-        if host.is_empty() || host == "*" {
-            return Some("all-urls".to_string());
+        if host.is_empty() && p.starts_with("file://") {
+            return Some("file-urls".to_string());
         }
-        let token: String = host
-            .to_ascii_lowercase()
+        if host == "*" {
+            return Some("all-hosts".to_string());
+        }
+        if host.is_empty() {
+            return None;
+        }
+        if !host
             .chars()
-            .filter(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '-')
-            .collect();
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+        {
+            return None;
+        }
+        let token = host.to_ascii_lowercase();
         // Reject anything that didn't resolve to a real dotted host.
-        if token.contains('.') && !token.starts_with('.') {
+        if token.contains('.')
+            && token
+                .split('.')
+                .all(|label| !label.is_empty() && !label.starts_with('-') && !label.ends_with('-'))
+        {
             Some(token)
         } else {
             None
         }
     }
 
-    /// Emit one neutral capability trait per distinct origin the extension is
-    /// granted authority over, gathered from `host_permissions`, URL-pattern
-    /// entries in `permissions` (MV2), and `content_scripts[].matches`.
-    ///
-    /// A host permission is not merely "communicate with this host": it grants
-    /// the extension authority over the origin — inject content scripts (DOM
-    /// read/write), read its cookies, issue privileged cross-origin requests,
-    /// and intercept/modify its traffic. That is an irreducibly
-    /// WebExtension-specific permission surface, so it lives under
-    /// `browser-extension/host-access/` (not `communications/`, which would
-    /// overclaim). The host lands in the trait-ID path so the ML pipeline gets
-    /// a per-origin feature; the per-host dynamic shape is reusable by any
-    /// analyzer that enumerates referenced hosts.
+    /// Emit declared host-pattern metadata, preserving each source field and
+    /// original scheme/path/wildcard rather than asserting runtime access.
     fn analyze_host_access(&self, manifest: &ChromeManifest, report: &mut AnalysisReport) {
         if self.is_known_benign_fixture(manifest, report) {
             return;
         }
-
-        let mut hosts: BTreeSet<String> = BTreeSet::new();
-        for host in &manifest.host_permissions {
-            if let Some(token) = Self::normalize_host(host) {
-                hosts.insert(token);
+        let mut hosts: BTreeMap<String, BTreeSet<(String, String)>> = BTreeMap::new();
+        let mut record = |pattern: &str, location: String| {
+            if let Some(token) = Self::normalize_host(pattern) {
+                hosts
+                    .entry(token)
+                    .or_default()
+                    .insert((location, pattern.to_string()));
             }
+        };
+        for (index, pattern) in manifest.host_permissions.iter().enumerate() {
+            record(pattern, format!("host_permissions[{index}]"));
         }
-        for perm in &manifest.permissions {
-            if let serde_json::Value::String(s) = perm
-                && (s == "<all_urls>" || s.contains("://") || s.contains('*') || s.contains('.'))
-                && let Some(token) = Self::normalize_host(s)
+        for (index, perm) in manifest.permissions.iter().enumerate() {
+            if let serde_json::Value::String(pattern) = perm
+                && (pattern == "<all_urls>" || pattern.contains("://"))
             {
-                hosts.insert(token);
+                record(pattern, format!("permissions[{index}]"));
             }
         }
-        for cs in &manifest.content_scripts {
-            for pattern in &cs.matches {
-                if let Some(token) = Self::normalize_host(pattern) {
-                    hosts.insert(token);
-                }
+        for (script, cs) in manifest.content_scripts.iter().enumerate() {
+            for (index, pattern) in cs.matches.iter().enumerate() {
+                record(
+                    pattern,
+                    format!("content_scripts[{script}].matches[{index}]"),
+                );
             }
         }
-
-        for host in hosts {
+        for (host, patterns) in hosts {
+            let desc = match host.as_str() {
+                "all-urls" => "Declares an all-URL match pattern".to_string(),
+                "all-hosts" => "Declares a wildcard-host match pattern".to_string(),
+                "file-urls" => "Declares a file-URL match pattern".to_string(),
+                _ => format!("Declares host patterns for {host}"),
+            };
+            let evidence = patterns
+                .into_iter()
+                .map(|(location, value)| Evidence {
+                    method: "parser".to_string(),
+                    source: "manifest.json".to_string(),
+                    value,
+                    location: Some(location),
+                    ..Default::default()
+                })
+                .collect();
             report.add_finding(
                 Finding::indicator(
-                    format!("micro-behaviors/browser-extension/host-access/{host}::granted"),
-                    if host == "all-urls" {
-                        "Manifest grants access to all URL origins".to_string()
-                    } else {
-                        format!("Manifest grants access to {host}")
-                    },
+                    format!("metadata/permission/host/{host}::declared"),
+                    desc,
                     0.95,
                 )
                 .with_criticality(Criticality::Notable)
-                .with_evidence(vec![Evidence {
-                    method: "parser".to_string(),
-                    source: "manifest.json".to_string(),
-                    value: host.clone(),
-                    location: Some("host_permissions".to_string()),
-                    ..Default::default()
-                }]),
+                .with_evidence(evidence),
             );
         }
     }
@@ -436,22 +442,18 @@ impl ChromeManifestAnalyzer {
             "idle",
             "unlimitedStorage",
         ];
-        // These established YAML traits are canonical and participate in
-        // taxonomy composites. Avoid emitting a second dynamic finding for
-        // the same manifest value.
-        const YAML_BACKED: &[&str] = &["activeTab", "scripting", "storage"];
-
+        // Emit a declaration fallback even without a configured rule tree;
+        // deduplicate against matching canonical YAML after evaluation.
         let mut seen: BTreeSet<String> = BTreeSet::new();
         for perm in &manifest.permissions {
             let serde_json::Value::String(perm) = perm else {
                 continue;
             };
-            if YAML_BACKED.contains(&perm.as_str()) {
-                continue;
-            }
-            // API permission names are pure alphanumeric; match-pattern / host
+            // API permission names may be dotted; match-pattern / host
             // / `<all_urls>` entries are routed to analyze_host_access instead.
-            if !perm.chars().all(|c| c.is_ascii_alphanumeric()) {
+            if !perm.chars().all(|c| c.is_ascii_alphanumeric() || c == '.')
+                || perm.split('.').any(str::is_empty)
+            {
                 continue;
             }
             let token = camel_to_kebab(perm);
@@ -465,7 +467,7 @@ impl ChromeManifestAnalyzer {
             };
             report.add_finding(
                 Finding::indicator(
-                    format!("micro-behaviors/browser-extension/permission/{token}::declared"),
+                    format!("metadata/permission/extension-api/{token}::declared"),
                     format!("Declares \"{perm}\" permission"),
                     0.95,
                 )
@@ -481,14 +483,115 @@ impl ChromeManifestAnalyzer {
         }
     }
 
+    /// Prefer a canonical permission only when its YAML matcher actually fired.
+    /// Missing or platform-filtered trait trees retain the native declaration.
+    fn deduplicate_declared_permissions(manifest: &ChromeManifest, report: &mut AnalysisReport) {
+        const CANONICAL: &[(&str, &str)] = &[
+            (
+                "activeTab",
+                "metadata/permission/active-tab::permission-active-tab",
+            ),
+            (
+                "scripting",
+                "metadata/permission/manifest::permission-scripting",
+            ),
+            ("storage", "metadata/permission/storage::permission-storage"),
+            (
+                "unlimitedStorage",
+                "metadata/permission/storage::permission-unlimited-storage",
+            ),
+            ("tabs", "metadata/permission/manifest::permission-tabs"),
+            (
+                "notifications",
+                "metadata/permission/manifest::permission-notifications",
+            ),
+            ("alarms", "metadata/permission/alarm::permission-alarms"),
+            ("cookies", "metadata/permission/cookie::permission-cookies"),
+            ("history", "metadata/permission/history::permission-history"),
+            (
+                "downloads",
+                "metadata/permission/download::permission-downloads",
+            ),
+            (
+                "nativeMessaging",
+                "metadata/permission/extension-api::permission-native-messaging",
+            ),
+            (
+                "proxy",
+                "metadata/permission/extension-api::permission-proxy",
+            ),
+            (
+                "debugger",
+                "metadata/permission/debugger::permission-debugger",
+            ),
+            (
+                "identity",
+                "metadata/permission/identity::permission-identity",
+            ),
+            (
+                "identity.email",
+                "metadata/permission/manifest::permission-identity-email",
+            ),
+            (
+                "clipboardRead",
+                "metadata/permission/clipboard::permission-clipboard-read",
+            ),
+            (
+                "clipboardWrite",
+                "metadata/permission/clipboard::permission-clipboard-write",
+            ),
+            ("webRequest", "metadata/permission/network::web-request"),
+            (
+                "webRequestBlocking",
+                "metadata/permission/network::web-request-blocking",
+            ),
+            (
+                "declarativeNetRequest",
+                "metadata/permission/network::permission-declarative-net-request",
+            ),
+            (
+                "declarativeNetRequestWithHostAccess",
+                "metadata/permission/network::declarative-net-request-with-host",
+            ),
+        ];
+        let mut replacements: BTreeMap<String, &str> = BTreeMap::new();
+        for (permission, canonical) in CANONICAL {
+            if manifest
+                .permissions
+                .iter()
+                .any(|v| v.as_str() == Some(permission))
+                && report.findings.iter().any(|f| f.id == *canonical)
+            {
+                replacements.insert(
+                    format!(
+                        "metadata/permission/extension-api/{}::declared",
+                        camel_to_kebab(permission)
+                    ),
+                    canonical,
+                );
+            }
+        }
+        report
+            .findings
+            .retain(|f| !replacements.contains_key(f.id.as_str()));
+        for finding in &mut report.findings {
+            for reference in &mut finding.trait_refs {
+                if let Some(canonical) = replacements.get(reference.as_str()) {
+                    *reference = (*canonical).into();
+                }
+            }
+            finding.trait_refs.sort_unstable();
+            finding.trait_refs.dedup();
+        }
+    }
+
     fn check_suspicious_patterns(&self, manifest: &ChromeManifest, report: &mut AnalysisReport) {
         // Check externally_connectable
         if manifest.externally_connectable.is_some() {
             report.add_finding(
                 Finding::indicator(
-                    "micro-behaviors/browser-extension/messaging::externally-connectable"
-                        .to_string(),
-                    "Extension allows external webpage connections".to_string(),
+                    "metadata/permission/extension-api::external-connection-policy".to_string(),
+                    "Declares external connection policy".to_string(),
                     0.85,
                 )
                 .with_criticality(Criticality::Notable)
@@ -506,10 +609,10 @@ impl ChromeManifestAnalyzer {
         if !manifest.web_accessible_resources.is_empty() {
             report.add_finding(
                 Finding::indicator(
-                    "micro-behaviors/browser-extension/web-accessible-resources::declared"
+                    "metadata/permission/extension-api::web-accessible-resource-entries"
                         .to_string(),
                     format!(
-                        "Extension exposes {} resources to web pages",
+                        "Declares {} web-accessible resource entries",
                         manifest.web_accessible_resources.len()
                     ),
                     0.75,
@@ -518,7 +621,10 @@ impl ChromeManifestAnalyzer {
                 .with_evidence(vec![Evidence {
                     method: "parser".to_string(),
                     source: "manifest.json".to_string(),
-                    value: format!("{} resources", manifest.web_accessible_resources.len()),
+                    value: format!(
+                        "{} resource entries",
+                        manifest.web_accessible_resources.len()
+                    ),
                     location: Some("web_accessible_resources".to_string()),
                     ..Default::default()
                 }]),
@@ -531,9 +637,8 @@ impl ChromeManifestAnalyzer {
         {
             report.add_finding(
                 Finding::indicator(
-                    "micro-behaviors/browser-extension/lifecycle::persistent-background"
-                        .to_string(),
-                    "Extension uses persistent background page".to_string(),
+                    "metadata/permission/activation::persistent-background-declaration".to_string(),
+                    "Declares persistent background page".to_string(),
                     0.8,
                 )
                 .with_criticality(Criticality::Notable)
@@ -622,6 +727,167 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_host_tokens_preserve_breadth_and_reject_lossy_names() {
+        for (pattern, expected) in [
+            ("<all_urls>", Some("all-urls")),
+            ("*://*/*", Some("all-hosts")),
+            ("https://*/*", Some("all-hosts")),
+            ("file:///*", Some("file-urls")),
+            ("https://*.Example.org:443/path*", Some("example.org")),
+            ("https://exam!ple.org/*", None),
+            ("https://example..org/*", None),
+            ("https://-example.org/*", None),
+            ("https:///path", None),
+        ] {
+            assert_eq!(
+                ChromeManifestAnalyzer::normalize_host(pattern).as_deref(),
+                expected,
+                "{pattern}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_host_declarations_keep_field_and_original_pattern() {
+        let report = ChromeManifestAnalyzer::new()
+            .analyze_manifest(
+                Path::new("manifest.json"),
+                r#"{
+            "manifest_version":3,"name":"Host declarations","version":"1.0",
+            "permissions":["identity.email","https://*/*"],
+            "host_permissions":["file:///*"],
+            "content_scripts":[{"matches":["*://*.EXAMPLE.org/path*"],"js":["content.js"]}]
+        }"#,
+            )
+            .unwrap();
+        for (id, location, pattern) in [
+            (
+                "metadata/permission/host/all-hosts::declared",
+                "permissions[1]",
+                "https://*/*",
+            ),
+            (
+                "metadata/permission/host/file-urls::declared",
+                "host_permissions[0]",
+                "file:///*",
+            ),
+            (
+                "metadata/permission/host/example.org::declared",
+                "content_scripts[0].matches[0]",
+                "*://*.EXAMPLE.org/path*",
+            ),
+        ] {
+            let finding = report.findings.iter().find(|f| f.id == id).unwrap();
+            assert!(
+                finding
+                    .evidence
+                    .iter()
+                    .any(|e| e.location.as_deref() == Some(location) && e.value == pattern)
+            );
+        }
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|f| f.id.contains("host/identity.email") || f.id.contains("host/all-urls"))
+        );
+    }
+
+    #[test]
+    fn test_noncanonical_api_names_are_metadata_and_deduplicated() {
+        let report = ChromeManifestAnalyzer::new()
+            .analyze_manifest(
+                Path::new("manifest.json"),
+                r#"{
+            "manifest_version":3,"name":"API declarations","version":"1.0",
+            "permissions":["management","management","customAPI","downloads","storage"]
+        }"#,
+            )
+            .unwrap();
+        for id in [
+            "metadata/permission/extension-api/management::declared",
+            "metadata/permission/extension-api/custom-a-p-i::declared",
+        ] {
+            assert_eq!(report.findings.iter().filter(|f| f.id == id).count(), 1);
+        }
+        assert!(!report.findings.iter().any(|f| {
+            f.id.starts_with("micro-behaviors/browser-extension/permission/")
+        }));
+    }
+
+    #[test]
+    fn test_permission_fallback_requires_matching_canonical_to_deduplicate() {
+        let manifest: ChromeManifest =
+            serde_json::from_str(r#"{"permissions":["downloads"]}"#).unwrap();
+        let mut report = ChromeManifestAnalyzer::new()
+            .analyze_manifest(
+                Path::new("manifest.json"),
+                r#"{
+            "manifest_version":3,"name":"Fallback","version":"1.0","permissions":["downloads"]
+        }"#,
+            )
+            .unwrap();
+        let fallback = "metadata/permission/extension-api/downloads::declared";
+        let canonical = "metadata/permission/download::permission-downloads";
+        assert!(report.findings.iter().any(|f| f.id == fallback));
+        report.add_finding(Finding::indicator(
+            canonical.to_string(),
+            "Declares downloads permission".to_string(),
+            0.9,
+        ));
+        let mut consumer = Finding::indicator(
+            "metadata/permission/manifest::synthetic-profile".to_string(),
+            "Permission profile".to_string(),
+            0.9,
+        );
+        consumer.trait_refs = vec![fallback.into()];
+        report.add_finding(consumer);
+        ChromeManifestAnalyzer::deduplicate_declared_permissions(&manifest, &mut report);
+        assert!(!report.findings.iter().any(|f| f.id == fallback));
+        assert!(report.findings.iter().any(|f| f.id == canonical));
+        assert!(
+            report
+                .findings
+                .iter()
+                .find(|f| f.id == "metadata/permission/manifest::synthetic-profile")
+                .unwrap()
+                .trait_refs
+                .iter()
+                .any(|r| r == canonical)
+        );
+    }
+
+    #[test]
+    fn test_resource_entry_count_and_activation_are_declarations() {
+        let report = ChromeManifestAnalyzer::new().analyze_manifest(Path::new("manifest.json"), r#"{
+            "manifest_version":2,"name":"Declaration fields","version":"1.0",
+            "permissions":[],"externally_connectable":{},
+            "background":{"scripts":["background.js"],"persistent":true},
+            "web_accessible_resources":[{"resources":["a.js","b.js","c.js"],"matches":["https://example.org/*"]}]
+        }"#).unwrap();
+        let resources = report
+            .findings
+            .iter()
+            .find(|f| f.id == "metadata/permission/extension-api::web-accessible-resource-entries")
+            .unwrap();
+        assert!(resources.desc.contains("1 web-accessible resource entries"));
+        assert!(
+            resources
+                .evidence
+                .iter()
+                .any(|e| e.value == "1 resource entries")
+        );
+        assert!(
+            report.findings.iter().any(
+                |f| f.id == "metadata/permission/activation::persistent-background-declaration"
+            )
+        );
+        assert!(report.findings.iter().any(|f| f.id
+            == "metadata/permission/extension-api::external-connection-policy"
+            && f.desc == "Declares external connection policy"));
+    }
+
+    #[test]
     fn test_basic_manifest() {
         let content = r#"{
             "manifest_version": 3,
@@ -637,10 +903,10 @@ mod tests {
 
         assert_eq!(report.target.file_type, "chrome-manifest");
         assert!(
-            !report
+            report
                 .findings
                 .iter()
-                .any(|f| f.id == "micro-behaviors/browser-extension/permission/storage::declared")
+                .any(|f| f.id == "metadata/permission/extension-api/storage::declared")
         );
     }
 
@@ -662,14 +928,12 @@ mod tests {
         // kebab-cased into the trait-ID path.
         let ids: Vec<&str> = report.findings.iter().map(|f| f.id.as_str()).collect();
         assert!(
-            ids.contains(&"micro-behaviors/browser-extension/permission/debugger::declared"),
+            ids.contains(&"metadata/permission/extension-api/debugger::declared"),
             "{ids:?}"
         );
-        assert!(ids.contains(&"micro-behaviors/browser-extension/permission/cookies::declared"));
-        assert!(
-            ids.contains(&"micro-behaviors/browser-extension/permission/web-request::declared")
-        );
-        assert!(ids.contains(&"micro-behaviors/browser-extension/permission/history::declared"));
+        assert!(ids.contains(&"metadata/permission/extension-api/cookies::declared"));
+        assert!(ids.contains(&"metadata/permission/extension-api/web-request::declared"));
+        assert!(ids.contains(&"metadata/permission/extension-api/history::declared"));
         // The risk/intent verdict is no longer hardcoded here.
         assert!(
             !report
@@ -699,7 +963,7 @@ mod tests {
             report
                 .findings
                 .iter()
-                .any(|f| f.id == "micro-behaviors/browser-extension/host-access/all-urls::granted")
+                .any(|f| f.id == "metadata/permission/host/all-urls::declared")
         );
         assert!(
             !report
@@ -730,11 +994,9 @@ mod tests {
         let ids: Vec<&str> = report.findings.iter().map(|f| f.id.as_str()).collect();
         // One dynamic per-origin capability trait per host; the registrable
         // domain is the ML-keyed leaf path component.
-        assert!(ids.contains(&"micro-behaviors/browser-extension/host-access/amazon.com::granted"));
-        assert!(
-            ids.contains(&"micro-behaviors/browser-extension/host-access/amazon.co.uk::granted")
-        );
-        assert!(ids.contains(&"micro-behaviors/browser-extension/host-access/ebay.com::granted"));
+        assert!(ids.contains(&"metadata/permission/host/amazon.com::declared"));
+        assert!(ids.contains(&"metadata/permission/host/amazon.co.uk::declared"));
+        assert!(ids.contains(&"metadata/permission/host/ebay.com::declared"));
     }
 
     #[test]

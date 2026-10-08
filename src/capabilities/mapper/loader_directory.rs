@@ -6128,6 +6128,78 @@ mod tests {
     use super::{find_non_leaf_yaml_files, is_open_filefacts_metric_path, matches_metric_family};
     use std::path::{Path, PathBuf};
 
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn full_validation_rejects_new_metadata_file_string_definition() {
+        let dir = tempfile::tempdir().expect("create temporary trait tree");
+        let string_dir = dir.path().join("metadata/file/string");
+        std::fs::create_dir_all(&string_dir).expect("create string directory");
+        std::fs::write(
+            string_dir.join("new.yaml"),
+            r#"defaults:
+  for: [pe]
+  platforms: [windows]
+traits:
+- id: new-string
+  desc: New generic file string
+  crit: baseline
+  conf: 0.5
+  if: {type: text, exact: a new generic file string}
+"#,
+        )
+        .expect("write temporary string rule");
+
+        let error = super::super::CapabilityMapper::from_directory_exact(
+            dir.path(),
+            super::super::CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION,
+            super::super::CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION,
+            true,
+            false,
+        )
+        .expect_err("new metadata/file/string definitions must fail validation");
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("new rule IDs under legacy metadata/file/string/"),
+            "unexpected validation error: {message}"
+        );
+    }
+
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn full_validation_rejects_new_metadata_file_literal_definition() {
+        let dir = tempfile::tempdir().expect("create temporary trait tree");
+        let literal_dir = dir.path().join("metadata/file/literal");
+        std::fs::create_dir_all(&literal_dir).expect("create literal directory");
+        std::fs::write(
+            literal_dir.join("new.yaml"),
+            r#"defaults:
+  for: [pe]
+  platforms: [windows]
+traits:
+- id: new-literal
+  desc: New context literal
+  crit: baseline
+  conf: 0.5
+  if: {type: text, exact: a new context literal}
+"#,
+        )
+        .expect("write temporary literal rule");
+
+        let error = super::super::CapabilityMapper::from_directory_exact(
+            dir.path(),
+            super::super::CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION,
+            super::super::CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION,
+            true,
+            false,
+        )
+        .expect_err("new metadata/file/literal definitions must fail validation");
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("new rule IDs under legacy metadata/file/literal/"),
+            "unexpected validation error: {message}"
+        );
+    }
+
     /// Issues `prepare_trait_file` + `push_parsing_warning` raise for one file.
     #[allow(clippy::expect_used)]
     fn file_type_issues(yaml: &str) -> Vec<(&'static str, String)> {

@@ -1206,3 +1206,113 @@ fn batch_ast_queries_keeps_text_predicates() {
         "combined query must still apply per-pattern #eq?"
     );
 }
+
+#[test]
+fn ast_query_counts_occurrences_not_captures_in_single_and_batch_paths() {
+    let query = "(call function: (identifier) @callee arguments: (argument_list) @args) @call";
+    let sibling = "(identifier) @id";
+    let _count = super::symbol_string::MatchCountGuard::set(true);
+    for count in [1, 2, 3] {
+        let source = "emit(123)\n".repeat(count);
+        let report = create_test_report("/test/count.py");
+        let parsed = parsed_for_test("count.py", source.as_bytes());
+        let ctx =
+            create_test_context_with_ast(&report, &parsed, source.as_bytes(), FileType::Python);
+        let single = eval_ast(None, None, None, None, None, Some(query), false, &ctx);
+        assert_eq!(
+            single.match_count, count,
+            "single query with three captures"
+        );
+        assert!(single.evidence.len() >= 3);
+        let tree = parsed.source_ast().unwrap().tree;
+        let grouped = super::ast::batch_ast_queries(
+            tree,
+            &source,
+            FileType::Python,
+            &[query, sibling],
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            grouped[query].match_count, count,
+            "grouped query with three captures"
+        );
+        assert!(grouped[query].evidence.len() >= 3);
+    }
+}
+
+#[test]
+fn ast_query_empty_capture_matches_are_not_source_occurrences() {
+    let query = "(call function: (identifier) @callee) (#eq? @callee \"emit\")";
+    let no_capture = "(identifier)";
+    let sibling = "(identifier) @id";
+    let _count = super::symbol_string::MatchCountGuard::set(true);
+    for source in ["value = 1", "emit(1)\n"] {
+        let report = create_test_report("/test/empty.py");
+        let parsed = parsed_for_test("empty.py", source.as_bytes());
+        let ctx =
+            create_test_context_with_ast(&report, &parsed, source.as_bytes(), FileType::Python);
+        let expected = usize::from(source.starts_with("emit"));
+        let single = eval_ast(None, None, None, None, None, Some(query), false, &ctx);
+        assert_eq!(single.match_count, expected);
+        let empty = eval_ast(None, None, None, None, None, Some(no_capture), false, &ctx);
+        assert!(!empty.matched);
+        let tree = parsed.source_ast().unwrap().tree;
+        let grouped = super::ast::batch_ast_queries(
+            tree,
+            source,
+            FileType::Python,
+            &[query, no_capture, sibling],
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(grouped[query].match_count, expected);
+        assert!(!grouped[no_capture].matched);
+    }
+}
+
+#[test]
+fn ast_query_legacy_batch_bytes_use_filefacts_source_view_and_offsets() {
+    let source = b"@echo off\r\nrem \x96\x7b\x93\x96\r\nshutdown -s -t 300\r\npause > NUL\r\n";
+    let parsed = parsed_for_test("legacy.bat", source);
+    let ast = parsed.source_ast().unwrap();
+    assert_eq!(filefacts::source_text_for_ast(source), ast.source);
+    assert_eq!(ast.source.len(), source.len());
+    let report = create_test_report("/test/legacy.bat");
+    let ctx = create_test_context_with_ast(&report, &parsed, source, FileType::Batch);
+    let query = "(cmd (command_name) @tool (#eq? @tool \"shutdown\"))";
+    let result = eval_ast(None, None, None, None, None, Some(query), false, &ctx);
+    assert!(result.matched);
+    assert_eq!(result.match_count, 1);
+    let offset = source.windows(8).position(|b| b == b"shutdown").unwrap() as u64;
+    assert!(
+        result
+            .evidence
+            .iter()
+            .any(|e| e.value == "shutdown" && e.offsets == [offset])
+    );
+    let grouped = super::ast::batch_ast_queries(
+        ast.tree,
+        &filefacts::source_text_for_ast(source),
+        FileType::Batch,
+        &[query, "(cmd (command_name) @tool (#eq? @tool \"pause\"))"],
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(grouped[query].match_count, 1);
+    assert_eq!(grouped[query].evidence[0].offsets, vec![offset]);
+    let simple = eval_ast(
+        None,
+        Some("command_name"),
+        None,
+        Some("shutdown"),
+        None,
+        None,
+        false,
+        &ctx,
+    );
+    assert!(simple.matched);
+}

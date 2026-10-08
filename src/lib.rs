@@ -2203,6 +2203,13 @@ pub(crate) fn process_encoded_payloads(
             "Decoded unicode-escape content".to_string()
         } else if payload.encoding_chain.as_slice() == ["url"] {
             "Percent-encoded content decoded".to_string()
+        } else if payload.detected_type == FileType::Unknown {
+            // Successful decoding alone does not establish an embedded payload.
+            // Uniform padding, identifiers and arbitrary data can also decode.
+            format!(
+                "Candidate bytes decoded: {}",
+                payload.encoding_chain.join(" → ")
+            )
         } else {
             format!(
                 "Encoded content decoded: {}",
@@ -2694,6 +2701,8 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
                 | FileType::Aiff
                 | FileType::Mp3
                 | FileType::Mp4
+                | FileType::Avif
+                | FileType::Tiff
                 | FileType::Ico
                 | FileType::Gif
                 | FileType::Bmp
@@ -3196,6 +3205,11 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             .and_then(|e| e.to_str())
             .is_some_and(|e| e.eq_ignore_ascii_case("yar") || e.eq_ignore_ascii_case("yara"));
     if !handled_yara_internally
+        && !report
+            .metadata
+            .tools_used
+            .iter()
+            .any(|tool| tool == "yara-x")
         && !is_yara_rule_source
         && let Some(engine) = yara_engine
         && file_type.is_program()

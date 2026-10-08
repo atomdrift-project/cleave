@@ -854,10 +854,10 @@ fn has_builtin_anti_analysis_finding(findings: &[Finding]) -> bool {
 /// ([`Criticality::score_weight`] 1, against 40 for suspicious): visible in the
 /// trait list and the LLM render, without nudging a benign sample's verdict.
 ///
-/// The `anti-analysis/malformed/` family is deliberate, matching the ELF and
-/// Mach-O header-parse findings. `anti-analysis/archive/` would trip
-/// [`has_builtin_anti_analysis_finding`]'s retroactive-suppression pass, which
-/// exists for hostile-container findings, not for "the bytes ran out".
+/// Partial extraction reports archive readability, not anti-analysis intent.
+/// Keep this structural finding outside `anti-analysis/archive/`, whose
+/// retroactive-suppression pass handles hostile-container findings rather
+/// than missing bytes.
 fn drain_extraction_notes(report: &mut AnalysisReport, guard: &ExtractionGuard) {
     let notes = guard.take_extraction_notes();
     if notes.is_empty() {
@@ -881,7 +881,7 @@ fn drain_extraction_notes(report: &mut AnalysisReport, guard: &ExtractionGuard) 
         src: None,
         kind: FindingKind::Structural,
         trait_refs: vec![],
-        id: "anti-analysis/malformed/archive-incomplete"
+        id: "metadata/file/archive::partial-extraction"
             .to_string()
             .into(),
         desc: format!(
@@ -5158,7 +5158,7 @@ traits:
             !report
                 .findings
                 .iter()
-                .any(|finding| finding.id == "anti-analysis/malformed/archive-incomplete")
+                .any(|finding| finding.id == "metadata/file/archive::partial-extraction")
         );
     }
 
@@ -5937,7 +5937,7 @@ traits:
         let incomplete = report
             .findings
             .iter()
-            .find(|f| f.id == "anti-analysis/malformed/archive-incomplete")
+            .find(|f| f.id == "metadata/file/archive::partial-extraction")
             .expect("a partial read should raise the incomplete-archive finding");
         assert_eq!(
             incomplete.crit,
@@ -5974,7 +5974,7 @@ traits:
             !report
                 .findings
                 .iter()
-                .any(|f| f.id == "anti-analysis/malformed/archive-incomplete"),
+                .any(|f| f.id == "metadata/file/archive::partial-extraction"),
             "an intact archive must not be flagged incomplete, errors: {:?}",
             report.metadata.errors
         );

@@ -22,7 +22,7 @@ pub(crate) fn is_rule_source_entry(entry: &walkdir::DirEntry) -> bool {
         return true;
     }
     let name = entry.file_name().to_string_lossy();
-    !name.starts_with('.') && !name.starts_with('_')
+    !name.starts_with('.') && !name.starts_with('_') && name != "testdata"
 }
 
 /// Use the same directory-qualified ID for capability loading and inline YARA.
@@ -415,5 +415,26 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(tmp.path().join("objectives")).unwrap();
         assert!(has_traits(tmp.path()));
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod rule_source_tests {
+    #[test]
+    fn fixture_yaml_is_not_a_rule_source() {
+        let root = tempfile::tempdir().unwrap();
+        for name in ["metadata", "testdata", ".scratch", "_scratch"] {
+            std::fs::create_dir(root.path().join(name)).unwrap();
+            std::fs::write(root.path().join(name).join("control.yaml"), "driver: test").unwrap();
+        }
+        let admitted: Vec<_> = walkdir::WalkDir::new(root.path())
+            .into_iter()
+            .filter_entry(super::is_rule_source_entry)
+            .filter_map(Result::ok)
+            .filter(|e| e.file_type().is_file())
+            .map(walkdir::DirEntry::into_path)
+            .collect();
+        assert_eq!(admitted, [root.path().join("metadata/control.yaml")]);
     }
 }

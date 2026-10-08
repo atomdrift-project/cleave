@@ -225,8 +225,9 @@ fn main() -> Result<()> {
 
     let disabled = args.disabled_components();
     apply_runtime_overrides(args.traits_dir.as_deref(), &disabled);
-    // `cleave validate` runs deterministic fixture scoring with YARA disabled,
-    // so skip the ~4 s (release) / ~18 s (debug) compile of 14 k+ inline YARA
+    // `cleave validate` defaults to deterministic scoring with YARA disabled;
+    // explicitly enabled fixtures load it lazily.
+    // Skip the ~4 s (release) / ~18 s (debug) compile of 14 k+ inline YARA
     // rules that the prefetch triggers. Trait-structure validation doesn't
     // require YARA to have compiled either — mapper loading is independent.
     if !disabled.yara && !is_validate_command {

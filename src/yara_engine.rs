@@ -3180,6 +3180,239 @@ mod tests {
     use super::*;
 
     #[test]
+    fn opaque_data_evaluates_inline_yara_and_composites_on_original_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let yaml = dir.path().join("traits.yaml");
+        let source = "rule binary_marker { strings: $a = { FF 00 FE 41 } condition: $a at 12 }";
+        std::fs::write(
+            &yaml,
+            format!(
+                r#"
+defaults:
+  platforms: [windows]
+traits:
+  - id: test/data::marker
+    desc: Binary marker
+    crit: notable
+    for: [data]
+    if:
+      type: yara
+      source: '{source}'
+composite_rules:
+  - id: test/data::combined
+    desc: Binary marker composite
+    crit: suspicious
+    for: [data]
+    all:
+      - id: test/data::marker
+"#
+            ),
+        )
+        .unwrap();
+        let mapper =
+            CapabilityMapper::from_directory_with_options(dir.path(), 0.0, 0.0, false, false)
+                .unwrap();
+        let ns = "inline.test/data::marker";
+        let mut compiler = yara_x::Compiler::new();
+        compiler.new_namespace(ns);
+        compiler.add_source(source.as_bytes()).unwrap();
+        let mut yara = YaraEngine::new_for_test();
+        let cell = yara.tiers.entry(FALLBACK_BUCKET.to_string()).or_default();
+        cell.set(Some(Arc::new(compiler.build()))).unwrap();
+        yara.populated_tiers.insert(FALLBACK_BUCKET.to_string());
+        yara.compiled_inline_namespaces.push(ns.to_string());
+        yara.rule_counts = (1, 0);
+        assert!(mapper.find_trait("test/data::marker").is_some());
+        assert!(format!("{:?}", mapper.find_trait("test/data::marker").unwrap().r#if).contains(ns));
+        let engine = crate::Engine::new(Arc::new(mapper), Some(Arc::new(yara)), Default::default());
+        let analyzer = crate::analyzers::generic::GenericAnalyzer::new(FileType::Data)
+            .with_engine(engine.clone());
+        use crate::analyzers::Analyzer;
+        for (tail, expected) in [(0x41, true), (0x42, false)] {
+            let mut bytes = b"RIFF\x08\0\0\0ACON\xff\0\xfe".to_vec();
+            bytes.push(tail);
+            let inline = engine
+                .yara()
+                .unwrap()
+                .scan_bytes_with_inline(&bytes, None)
+                .unwrap()
+                .1;
+            assert_eq!(
+                inline.get(ns).is_some_and(|e| !e.is_empty()),
+                expected,
+                "{inline:?}"
+            );
+            let input = crate::analyzers::AnalysisInput::new(
+                Path::new("payload.bin"),
+                &bytes,
+                FileType::Data,
+            );
+            let report = analyzer.analyze_input(&input).unwrap();
+            for id in ["test/data::marker", "test/data::combined"] {
+                assert_eq!(
+                    report.findings.iter().any(|f| f.id == id),
+                    expected,
+                    "{id}: {:?}",
+                    report
+                );
+            }
+            assert!(
+                report
+                    .metadata
+                    .tools_used
+                    .iter()
+                    .any(|tool| tool == "yara-x")
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_source_evaluates_inline_yara_and_composites_on_original_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let yaml = dir.path().join("traits.yaml");
+        let source = "rule binary_marker { strings: $a = { FF 00 FE 41 } condition: $a at 12 }";
+        std::fs::write(
+            &yaml,
+            format!(
+                r#"
+defaults:
+  platforms: [windows]
+traits:
+  - id: test/data::marker
+    desc: Binary marker
+    crit: notable
+    for: [batch, php]
+    if:
+      type: yara
+      source: '{source}'
+  - id: test/source::php-ascii-call
+    desc: PHP ASCII call after legacy bytes
+    crit: notable
+    for: [php]
+    if:
+      type: tree-sitter
+      language: php
+      query: '(function_call_expression function: (name) @fn (#eq? @fn "strlen"))'
+composite_rules:
+  - id: test/data::combined
+    desc: Binary marker composite
+    crit: suspicious
+    for: [batch, php]
+    all:
+      - id: test/data::marker
+"#
+            ),
+        )
+        .unwrap();
+        let mapper =
+            CapabilityMapper::from_directory_with_options(dir.path(), 0.0, 0.0, false, false)
+                .unwrap();
+        let ns = "inline.test/data::marker";
+        let mut compiler = yara_x::Compiler::new();
+        compiler.new_namespace(ns);
+        compiler.add_source(source.as_bytes()).unwrap();
+        let mut yara = YaraEngine::new_for_test();
+        let cell = yara.tiers.entry(FALLBACK_BUCKET.to_string()).or_default();
+        cell.set(Some(Arc::new(compiler.build()))).unwrap();
+        yara.populated_tiers.insert(FALLBACK_BUCKET.to_string());
+        yara.compiled_inline_namespaces.push(ns.to_string());
+        yara.rule_counts = (1, 0);
+        assert!(mapper.find_trait("test/data::marker").is_some());
+        assert!(format!("{:?}", mapper.find_trait("test/data::marker").unwrap().r#if).contains(ns));
+        let engine = crate::Engine::new(Arc::new(mapper), Some(Arc::new(yara)), Default::default());
+        use crate::analyzers::Analyzer;
+        for (file_type, prefix) in [
+            (FileType::Batch, &b"@REM        "[..]),
+            (FileType::Php, &b"<?php //    "[..]),
+        ] {
+            assert_eq!(prefix.len(), 12);
+            let analyzer: Box<dyn Analyzer> = if file_type == FileType::Batch {
+                Box::new(
+                    crate::analyzers::generic::GenericAnalyzer::new(file_type)
+                        .with_engine(engine.clone()),
+                )
+            } else {
+                Box::new(
+                    crate::analyzers::unified::UnifiedSourceAnalyzer::for_file_type(&file_type)
+                        .unwrap()
+                        .with_engine(engine.clone()),
+                )
+            };
+            for (tail, expected) in [(0x41, true), (0x42, false)] {
+                let mut bytes = prefix.to_vec();
+                bytes.extend_from_slice(b"\xff\0\xfe");
+                bytes.push(tail);
+                bytes.extend_from_slice(if file_type == FileType::Php {
+                    b"\r\nstrlen('OK');\r\n".as_slice()
+                } else {
+                    b"\r\n@echo ok\r\n".as_slice()
+                });
+                let inline = engine
+                    .yara()
+                    .unwrap()
+                    .scan_bytes_with_inline(&bytes, None)
+                    .unwrap()
+                    .1;
+                assert_eq!(
+                    inline.get(ns).is_some_and(|e| !e.is_empty()),
+                    expected,
+                    "{inline:?}"
+                );
+                let input = crate::analyzers::AnalysisInput::new(
+                    Path::new("payload.bat"),
+                    &bytes,
+                    file_type,
+                );
+                let report = analyzer.analyze_input(&input).unwrap();
+                assert_eq!(report.target.size_bytes, bytes.len() as u64);
+                assert_eq!(
+                    report.target.sha256,
+                    crate::analyzers::utils::calculate_sha256(&bytes)
+                );
+                if file_type == FileType::Php {
+                    let call = report
+                        .findings
+                        .iter()
+                        .find(|f| f.id == "test/source::php-ascii-call")
+                        .expect("ASCII AST call remains visible after non-UTF8 bytes");
+                    assert!(
+                        call.evidence.iter().any(|e| e.offsets.contains(&18)),
+                        "{:?}",
+                        call.evidence
+                    );
+                }
+                for id in ["test/data::marker", "test/data::combined"] {
+                    assert_eq!(
+                        report.findings.iter().any(|f| f.id == id),
+                        expected,
+                        "{id}: {:?}",
+                        report
+                    );
+                }
+                assert!(
+                    report
+                        .metadata
+                        .tools_used
+                        .iter()
+                        .any(|tool| tool == "yara-x")
+                );
+            }
+            // A documentation fixture containing YARA syntax must not self-detect.
+            let bytes = b"@REM        \xff\0\xfeA\r\n";
+            let input =
+                crate::analyzers::AnalysisInput::new(Path::new("document.yar"), bytes, file_type);
+            let report = analyzer.analyze_input(&input).unwrap();
+            assert!(!report.findings.iter().any(|f| f.id == "test/data::marker"));
+            assert!(
+                !report
+                    .findings
+                    .iter()
+                    .any(|f| f.id == "test/data::combined")
+            );
+        }
+    }
+
+    #[test]
     fn rule_discovery_excludes_build_fixtures_and_separates_third_party() {
         let cwd = std::env::current_dir().unwrap();
         let root = tempfile::Builder::new()

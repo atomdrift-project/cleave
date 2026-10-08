@@ -278,12 +278,8 @@ pub(crate) fn eval_ast<'a>(
     // Use cached AST or parse. Prefer the per-file cached UTF-8 view populated in
     // `EvaluationContext::new` — it avoids re-running from_utf8 on the full file
     // once per rule, which dominated CPU on large source archives.
-    let source = match ctx.cached_source_utf8 {
-        Some(s) => s,
-        None => match std::str::from_utf8(ctx.binary_data) {
-            Ok(s) => s,
-            Err(_) => return ConditionResult::no_match(),
-        },
+    let Some(source) = ctx.ast_source() else {
+        return ConditionResult::no_match();
     };
 
     let Some(cached_tree) = ctx.cached_ast else {
@@ -452,12 +448,8 @@ pub(super) fn eval_ast_query_with_budget<'a>(
     }
 
     // Only works for source code files — prefer the cached UTF-8 view when available.
-    let source = match ctx.cached_source_utf8 {
-        Some(s) => s,
-        None => match std::str::from_utf8(ctx.binary_data) {
-            Ok(s) => s,
-            Err(_) => return ConditionResult::no_match(),
-        },
+    let Some(source) = ctx.ast_source() else {
+        return ConditionResult::no_match();
     };
 
     // Trust filefacts's cached parse — cleave no longer carries its own
@@ -502,6 +494,7 @@ pub(super) fn eval_ast_query_with_budget<'a>(
     // wall-clock bound, a thread descheduled under oversubscription gets cut off
     // spuriously and silently drops detections. CPU time avoids both.
     let mut match_count: usize = 0;
+    let mut capture_count: usize = 0;
     let cpu_start = thread_cpu_time();
     let deadline = ctx.deadline;
     let timed_out = Cell::new(false);
@@ -542,6 +535,11 @@ pub(super) fn eval_ast_query_with_budget<'a>(
             timed_out.set(true);
             break;
         }
+        // Standalone predicate patterns can yield empty-capture matches.
+        // They are not an observed source occurrence and must not satisfy a trait.
+        if m.captures().is_empty() {
+            continue;
+        }
         // Check text predicates (e.g., #eq?, #match?) using tree-sitter's built-in method
         // This is REQUIRED - tree-sitter does NOT automatically filter by text predicates
         let mut text_provider = SourceTextProvider(source.as_bytes());
@@ -549,27 +547,34 @@ pub(super) fn eval_ast_query_with_budget<'a>(
             continue; // Skip matches that don't satisfy predicates
         }
 
+        // Count complete query matches once; captures provide evidence and
+        // have their own work bound. A four-capture query is one occurrence.
+        if capture_count >= AST_QUERY_CAPTURE_LIMIT {
+            capture_limited = true;
+            break 'matches;
+        }
+        match_count += 1;
         for capture in m.captures() {
-            if match_count >= AST_QUERY_CAPTURE_LIMIT {
+            if capture_count >= AST_QUERY_CAPTURE_LIMIT {
                 capture_limited = true;
                 break 'matches;
             }
-            if let Ok(text) = capture.node.utf8_text(source.as_bytes()) {
-                match_count += 1;
-                if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
-                    evidence.push(Evidence {
-                        method: "ast_query".to_string(),
-                        source: "tree-sitter".to_string(),
-                        value: truncate_evidence(text, 100),
-                        location: Some(format!(
-                            "{}:{}",
-                            capture.node.start_position().row + 1,
-                            capture.node.start_position().column + 1
-                        )),
-                        offsets: vec![capture.node.start_byte() as u64],
-                        ..Default::default()
-                    });
-                }
+            capture_count += 1;
+            if let Ok(text) = capture.node.utf8_text(source.as_bytes())
+                && evidence.len() < MAX_EVIDENCE_PER_TRAIT
+            {
+                evidence.push(Evidence {
+                    method: "ast_query".to_string(),
+                    source: "tree-sitter".to_string(),
+                    value: truncate_evidence(text, 100),
+                    location: Some(format!(
+                        "{}:{}",
+                        capture.node.start_position().row + 1,
+                        capture.node.start_position().column + 1
+                    )),
+                    offsets: vec![capture.node.start_byte() as u64],
+                    ..Default::default()
+                });
             }
         }
         // Queries without count or proximity consumers only need to prove one
@@ -735,6 +740,7 @@ pub(crate) fn batch_ast_queries(
         evidence: Vec<Evidence>,
         match_count: usize,
         query_matches: usize,
+        capture_count: usize,
         capture_limited: bool,
         match_limited: bool,
     }
@@ -744,6 +750,7 @@ pub(crate) fn batch_ast_queries(
             evidence: Vec::new(),
             match_count: 0,
             query_matches: 0,
+            capture_count: 0,
             capture_limited: false,
             match_limited: false,
         })
@@ -795,6 +802,9 @@ pub(crate) fn batch_ast_queries(
             timed_out.set(true);
             break;
         }
+        if m.captures().is_empty() {
+            continue;
+        }
         let Some(&qi) = combined.pattern_to_query.get(m.pattern_index) else {
             continue;
         };
@@ -815,28 +825,33 @@ pub(crate) fn batch_ast_queries(
         ) {
             continue;
         }
+        if bucket.capture_count >= AST_QUERY_CAPTURE_LIMIT {
+            bucket.capture_limited = true;
+            continue;
+        }
         bucket.query_matches += 1;
+        bucket.match_count += 1;
         for capture in m.captures() {
-            if bucket.match_count >= AST_QUERY_CAPTURE_LIMIT {
+            if bucket.capture_count >= AST_QUERY_CAPTURE_LIMIT {
                 bucket.capture_limited = true;
                 break;
             }
-            if let Ok(text) = capture.node.utf8_text(source.as_bytes()) {
-                bucket.match_count += 1;
-                if bucket.evidence.len() < MAX_EVIDENCE_PER_TRAIT {
-                    bucket.evidence.push(Evidence {
-                        method: "ast_query".to_string(),
-                        source: "tree-sitter".to_string(),
-                        value: truncate_evidence(text, 100),
-                        location: Some(format!(
-                            "{}:{}",
-                            capture.node.start_position().row + 1,
-                            capture.node.start_position().column + 1
-                        )),
-                        offsets: vec![capture.node.start_byte() as u64],
-                        ..Default::default()
-                    });
-                }
+            bucket.capture_count += 1;
+            if let Ok(text) = capture.node.utf8_text(source.as_bytes())
+                && bucket.evidence.len() < MAX_EVIDENCE_PER_TRAIT
+            {
+                bucket.evidence.push(Evidence {
+                    method: "ast_query".to_string(),
+                    source: "tree-sitter".to_string(),
+                    value: truncate_evidence(text, 100),
+                    location: Some(format!(
+                        "{}:{}",
+                        capture.node.start_position().row + 1,
+                        capture.node.start_position().column + 1
+                    )),
+                    offsets: vec![capture.node.start_byte() as u64],
+                    ..Default::default()
+                });
             }
         }
     }

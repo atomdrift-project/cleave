@@ -98,7 +98,7 @@ traits:
             let incomplete = report
                 .findings
                 .iter()
-                .any(|finding| finding.id.as_str() == "anti-analysis/malformed/archive-incomplete");
+                .any(|finding| finding.id.as_str() == "metadata/file/archive::partial-extraction");
             assert_eq!(incomplete, malformed, "gzip={gzip}, malformed={malformed}");
         }
     }
@@ -110,7 +110,7 @@ traits:
             report
                 .findings
                 .iter()
-                .any(|finding| finding.id.as_str() == "anti-analysis/malformed/archive-incomplete")
+                .any(|finding| finding.id.as_str() == "metadata/file/archive::partial-extraction")
         );
         let facts = report
             .filefacts

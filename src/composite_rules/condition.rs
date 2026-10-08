@@ -1055,6 +1055,9 @@ pub(crate) struct FlowOriginFilter {
     /// Observe an explicitly present named field, even if its value is opaque.
     #[serde(default)]
     pub field_exists: bool,
+    /// A field is absent from a concrete source keyword/attribute map.
+    #[serde(default)]
+    pub field_absent: bool,
     /// Alternatively, select an actual member-read origin by canonical path.
     /// A string or identifier merely spelling this path is not a member read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2272,20 +2275,21 @@ impl Condition {
                             + usize::from(origin.member.is_some())
                             + usize::from(origin.whole_value.is_some())
                             + usize::from(origin.field_exists)
+                            + usize::from(origin.field_absent)
                             != 1
                             || origin.member.as_ref().is_some_and(|p| p.trim().is_empty())
                             || origin.through.len() > 32
                         {
                             return Err(anyhow::anyhow!(
-                                "provenance requires exactly one of call/value/member/whole_value/field_exists and at most 32 transfer models"
+                                "provenance requires exactly one of call/value/member/whole_value/field_exists/field_absent and at most 32 transfer models"
                             ));
                         }
-                        if origin.field_exists
+                        if (origin.field_exists || origin.field_absent)
                             && (origin.field.as_ref().is_none_or(|s| s.trim().is_empty())
                                 || !origin.through.is_empty())
                         {
                             anyhow::bail!(
-                                "field_exists requires a nonempty field and no transfer models"
+                                "field presence/absence requires a nonempty field and no transfer models"
                             );
                         }
                         if origin.whole_value.is_some() && !origin.through.is_empty() {

@@ -679,13 +679,16 @@ impl ElfAnalyzer {
             }],
         });
 
-        // `binary.is_stripped` = 1.0 when `.symtab` is absent (the
-        // canonical "stripped" definition; filefacts computes this in
-        // `binary_flags`).
-        if metrics.get("binary.is_stripped").unwrap_or(0.0) > 0.0 {
+        // Full symbol-table absence is observable even in a header-only
+        // member. It does not establish that symbols were removed by a tool.
+        if metrics
+            .get("binary.full_symbol_table_absent_or_empty")
+            .unwrap_or(0.0)
+            > 0.0
+        {
             report.structure.push(StructuralFeature {
-                id: "binary/stripped".to_string(),
-                desc: "Symbol table stripped".to_string(),
+                id: "binary/full-symbol-table-absent-or-empty".to_string(),
+                desc: "Full symbol table absent or empty".to_string(),
                 evidence: vec![Evidence {
                     method: "symbols".to_string(),
                     source: "filefacts".to_string(),

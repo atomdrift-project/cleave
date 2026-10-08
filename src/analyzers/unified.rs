@@ -277,7 +277,9 @@ pub(crate) fn config_for_file_type(
             call_node_types: &["method_call", "function_call"],
             function_node_types: &["method_declaration", "function_declaration"],
             function_name_field: "name",
-            string_node_types: &["string", "gstring"],
+            // The grammar uses Java's character_literal node name for Groovy
+            // single-quoted strings, including multi-character commands.
+            string_node_types: &["string", "gstring", "character_literal"],
         }),
         FileType::Scala => Some(LanguageConfig {
             name: "scala",
@@ -440,6 +442,7 @@ impl UnifiedSourceAnalyzer {
             None,
             self.cancellation.as_ref(),
             ctx.as_ref(),
+            Some(content.as_bytes()),
         )
     }
 
@@ -456,12 +459,14 @@ impl UnifiedSourceAnalyzer {
             None,
             self.cancellation.as_ref(),
             ctx.as_ref(),
+            Some(content.as_bytes()),
         )
     }
 
     // Mirrors the fields of an `AnalysisInput` plus the decoded `content`; the
     // path-based entry has no `AnalysisInput` to pass, so the pieces are
     // threaded individually rather than bundled.
+    #[allow(clippy::too_many_arguments)]
     fn analyze_source_impl(
         &self,
         file_path: &Path,
@@ -471,6 +476,7 @@ impl UnifiedSourceAnalyzer {
         precomputed_sha256: Option<String>,
         cancellation: Option<&std::sync::Arc<std::sync::atomic::AtomicBool>>,
         source_ctx: Option<&crate::analysis_context::AnalysisContext<'_>>,
+        original_bytes: Option<&[u8]>,
     ) -> AnalysisReport {
         let start = std::time::Instant::now();
 
@@ -478,9 +484,12 @@ impl UnifiedSourceAnalyzer {
         let target = TargetInfo {
             path: file_path.display().to_string(),
             file_type: self.config.file_type.to_string(),
-            size_bytes: content.len() as u64,
-            sha256: precomputed_sha256
-                .unwrap_or_else(|| crate::analyzers::utils::calculate_sha256(content.as_bytes())),
+            size_bytes: original_bytes.map_or(content.len(), <[u8]>::len) as u64,
+            sha256: precomputed_sha256.unwrap_or_else(|| {
+                crate::analyzers::utils::calculate_sha256(
+                    original_bytes.unwrap_or(content.as_bytes()),
+                )
+            }),
             architectures: None,
         };
 
@@ -926,21 +935,31 @@ impl UnifiedSourceAnalyzer {
             report.identity = ctx.identity();
         }
 
-        // Decoded source layers bypass the top-level file pipeline. Scan their
-        // own bytes here so inline YARA evidence can participate in composites.
-        let inline_yara = if self.skip_embedded_detection
-            && let Some(yara) = self.engine.yara()
-        {
-            Some(crate::process_yara_result(
-                &mut report,
-                Some(yara.scan_bytes_with_inline(
-                    content.as_bytes(),
-                    Some(&self.file_type.yara_filetypes()),
-                )),
-                Some(yara),
-            ))
-        } else {
+        // Source traits need inline YARA before composites are evaluated.
+        // Borrow original bytes: the parser's recovered UTF-8 source is a
+        // syntax view and can replace bytes in legacy/polyglot scripts.
+        let rule_bytes = source_ctx.map_or(content.as_bytes(), |ctx| ctx.content);
+        let yara_bytes = original_bytes.unwrap_or(rule_bytes);
+        let is_yara_rule_source = self.file_type == FileType::Yara
+            || file_path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| {
+                    ext.eq_ignore_ascii_case("yar") || ext.eq_ignore_ascii_case("yara")
+                });
+        let inline_yara = if is_yara_rule_source {
             None
+        } else {
+            self.engine.yara().map(|yara| {
+                crate::process_yara_result(
+                    &mut report,
+                    Some(yara.scan_bytes_with_inline(
+                        yara_bytes,
+                        Some(&self.file_type.yara_filetypes()),
+                    )),
+                    Some(yara),
+                )
+            })
         };
 
         // Evaluate all rules (atomic + composite) and merge into report,
@@ -949,7 +968,7 @@ impl UnifiedSourceAnalyzer {
             .rules()
             .evaluate_and_merge_findings_with_precomputed(
                 &mut report,
-                content.as_bytes(),
+                rule_bytes,
                 crate::capabilities::AnalysisBorrow::with_filefacts(tree, source_ctx)
                     .with_ast_kind_cache(ast_kind_cache.as_ref()),
                 inline_yara.as_ref(),
@@ -1590,17 +1609,17 @@ impl Analyzer for UnifiedSourceAnalyzer {
         // mojibake for any single-byte script with `FF FE` in front of it.
         let bytes = crate::file_io::normalize_text_encoding(input.data);
 
-        let content = String::from_utf8_lossy(&bytes);
+        let content = filefacts::source_text_for_ast(&bytes);
 
         // Pass pre-extracted stng strings and payloads to avoid redundant extraction.
         // Merge cancellation: prefer struct field (set via builder), fall back to input field
         // (set by the server when it doesn't go through analyzer_for_file_type_arc).
         let effective_cancellation = self.cancellation.as_ref().or(input.cancellation.as_ref());
         // Reuse the threaded context only when it covers the exact bytes we
-        // analyze (no UTF-16/lossy normalization); otherwise open one on the
-        // normalized `content`. The two contexts have different byte lifetimes,
+        // analyze (no UTF-16 normalization); otherwise open one on those
+        // decoded bytes. The two contexts have different byte lifetimes,
         // so each branch makes its own call rather than merging into one option.
-        let reuse = content.as_bytes() == input.data;
+        let reuse = bytes.as_ref() == input.data;
         match input.parsed_ctx.as_ref() {
             Some(ctx) if reuse => Ok(self.analyze_source_impl(
                 input.path,
@@ -1610,11 +1629,12 @@ impl Analyzer for UnifiedSourceAnalyzer {
                 input.sha256.clone(),
                 effective_cancellation,
                 Some(ctx),
+                Some(input.data),
             )),
             _ => {
                 let owned_ctx = Some(crate::analysis_context::AnalysisContext::open(
                     input.path,
-                    content.as_bytes(),
+                    bytes.as_ref(),
                 ));
                 Ok(self.analyze_source_impl(
                     input.path,
@@ -1624,18 +1644,16 @@ impl Analyzer for UnifiedSourceAnalyzer {
                     input.sha256.clone(),
                     effective_cancellation,
                     owned_ctx.as_ref(),
+                    Some(input.data),
                 ))
             }
         }
     }
 
     fn analyze(&self, file_path: &Path) -> Result<AnalysisReport> {
-        // Use smart file reading with automatic UTF-16 normalization
-        let data = crate::file_io::read_file_normalized(file_path)?;
-        let bytes = data.as_slice();
-
-        let content = String::from_utf8_lossy(bytes);
-        Ok(self.analyze_source(file_path, &content))
+        let data = std::fs::read(file_path)?;
+        let input = AnalysisInput::new(file_path, &data, self.file_type);
+        self.analyze_input(&input)
     }
 
     fn can_analyze(&self, _file_path: &Path) -> bool {
@@ -1647,6 +1665,64 @@ impl Analyzer for UnifiedSourceAnalyzer {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn groovy_single_quoted_commands_reach_literal_rules() {
+        let dir = tempfile::tempdir().unwrap();
+        let traits = dir.path().join("traits.yaml");
+        std::fs::write(
+            &traits,
+            r#"
+defaults:
+  for: [groovy]
+traits:
+  - id: "test/groovy::command"
+    desc: "Groovy command literal"
+    crit: notable
+    if:
+      type: string_literal
+      exact: "hostname -f"
+"#,
+        )
+        .unwrap();
+        let mapper = crate::capabilities::CapabilityMapper::from_yaml(&traits).unwrap();
+        let analyzer = UnifiedSourceAnalyzer::for_file_type(&FileType::Groovy)
+            .unwrap()
+            .with_engine(crate::Engine::from_rules(std::sync::Arc::new(mapper)));
+        for code in ["String command = 'hostname -f'", "run('hostname -f')"] {
+            let report = analyzer.analyze_source(Path::new("command.groovy"), code);
+            assert!(
+                report
+                    .findings
+                    .iter()
+                    .any(|f| f.id == "test/groovy::command")
+            );
+            let literal = report
+                .strings
+                .iter()
+                .find(|s| &*s.value == "hostname -f" && s.section.as_deref() == Some("ast"))
+                .unwrap();
+            assert_eq!(literal.offset, Some(code.find("hostname").unwrap() as u64));
+        }
+        let report = analyzer.analyze_source(
+            Path::new("comment.groovy"),
+            "// run('hostname -f')\nString command = 'echo hostname -f'",
+        );
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|f| f.id == "test/groovy::command")
+        );
+        let report =
+            analyzer.analyze_source(Path::new("escaped.groovy"), r"String s = 'line\nnext'");
+        assert!(
+            report
+                .strings
+                .iter()
+                .any(|s| { &*s.value == "line\nnext" && s.section.as_deref() == Some("ast") })
+        );
+    }
 
     /// An AST leg is located by `row:col`, a text leg by a byte offset.
     /// Both are positions in one file, so a `scope: leaf` rule needing both
@@ -1720,6 +1796,7 @@ composite_rules:
                 "const data = 'recorded decoder input';",
                 &[extracted],
                 &[],
+                None,
                 None,
                 None,
                 None,

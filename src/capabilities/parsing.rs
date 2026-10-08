@@ -554,6 +554,7 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                     RuleFileType::Clojure,
                 ],
                 "manifests" => vec![
+                    RuleFileType::Yaml,
                     RuleFileType::PackageJson,
                     RuleFileType::PackageLockJson,
                     RuleFileType::CargoLock,
@@ -617,6 +618,8 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 "media" | "carriers" => vec![
                     RuleFileType::Font,
                     RuleFileType::Png,
+                    RuleFileType::Tiff,
+                    RuleFileType::Avif,
                     RuleFileType::Jpeg,
                     RuleFileType::Svg,
                     RuleFileType::Wav,
@@ -634,6 +637,8 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 "images" => vec![
                     RuleFileType::Jpeg,
                     RuleFileType::Png,
+                    RuleFileType::Tiff,
+                    RuleFileType::Avif,
                     RuleFileType::Ico,
                     RuleFileType::Gif,
                     RuleFileType::Bmp,
@@ -685,6 +690,8 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 // type must resolve to that type; authors who want loose text-ish
                 // content write `[text, data, json]` explicitly.
                 "data" | "dat" | "bin" | "payload" | "raw" => vec![RuleFileType::Data],
+                "pgp_signature" => vec![RuleFileType::PgpSignature],
+                "yaml" | "yml" => vec![RuleFileType::Yaml],
                 "json" => vec![RuleFileType::Json],
                 "gyp" | "gypi" | "binding.gyp" => vec![RuleFileType::Gyp],
                 // Compiled languages (fullname + extension)
@@ -728,6 +735,8 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 // Image formats
                 "jpeg" | "jpg" => vec![RuleFileType::Jpeg],
                 "png" => vec![RuleFileType::Png],
+                "tiff" | "tif" => vec![RuleFileType::Tiff],
+                "avif" | "avifs" => vec![RuleFileType::Avif],
                 // Font containers
                 "font" | "ttf" | "otf" | "ttc" | "woff" | "woff2" | "eot" => {
                     vec![RuleFileType::Font]
@@ -1603,6 +1612,23 @@ fn check_regex_length(
     check_regex_length_with_reuse(trait_id, condition, source_path, warnings, true);
 }
 
+// This reviewed SQL grammar binds COPY, an identifier (including quoted and
+// schema-qualified forms), optional columns, direction and destination in one
+// match. Proximity atoms could combine unrelated SQL statements. Keep the
+// exception exact: edits to its language must undergo validation again.
+fn reviewed_copy_statement_pattern(
+    trait_id: &str,
+    pattern: &str,
+    source_path: Option<&std::path::Path>,
+) -> bool {
+    trait_id.rsplit("::").next() == Some("copy-table-source")
+        && source_path.is_some_and(|path| {
+            path.ends_with("micro-behaviors/data/db/postgresql/copy-program.yaml")
+        })
+        && pattern
+            == r###"(?i)\bCOPY\s+(BINARY\s+)?("([^"\r\n]|""){1,128}"|[A-Za-z_][A-Za-z0-9_$]*)(\s*\.\s*("([^"\r\n]|""){1,128}"|[A-Za-z_][A-Za-z0-9_$]*))?(\s*\([^;]{1,256}\))?\s+(TO\s+(PROGRAM\s+(E\s*)?['$]|(E\s*)?['$]|STDOUT\b)|FROM\s+(PROGRAM\s+(E\s*)?['$]|(E\s*)?['$]|STDIN\b))"###
+}
+
 fn check_regex_length_with_reuse(
     trait_id: &str,
     condition: &crate::composite_rules::Condition,
@@ -1620,6 +1646,7 @@ fn check_regex_length_with_reuse(
         let comment_context_pattern = matches!(condition, Condition::Comment(_));
         if pattern.len() > MAX_REGEX_LENGTH_BYTES
             && !comment_context_pattern
+            && !reviewed_copy_statement_pattern(trait_id, pattern, source_path)
             && !crate::validation_controls::is_validator_disabled("regex-length")
         {
             warnings.push(regex_length_warning(trait_id, pattern));
@@ -2665,6 +2692,35 @@ mod tests {
     }
 
     #[test]
+    fn pgp_signature_scope_is_a_distinct_routing_bucket() {
+        let mut warnings = Vec::new();
+        let result = parse_file_types(&["pgp_signature".to_string()], &mut warnings);
+        assert_eq!(result.types, vec![RuleFileType::PgpSignature]);
+        assert!(warnings.is_empty());
+        assert_eq!(RuleFileType::from_str("pgp_signature"), result.types[0]);
+        assert_ne!(result.types[0], RuleFileType::Data);
+        assert_ne!(result.types[0], RuleFileType::Unknown);
+    }
+
+    #[test]
+    fn yaml_scope_and_manifest_alias_route_the_real_file_type() {
+        let mut warnings = Vec::new();
+        for label in ["yaml", "yml"] {
+            let result = parse_file_types(&[label.to_string()], &mut warnings);
+            assert_eq!(result.types, vec![RuleFileType::Yaml]);
+        }
+        let result = parse_file_types(&["manifests".to_string()], &mut warnings);
+        assert!(result.types.contains(&RuleFileType::Yaml));
+        assert_eq!(RuleFileType::from_str("yaml"), RuleFileType::Yaml);
+        assert_eq!(
+            RuleFileType::from(filefacts::FileType::Yaml),
+            RuleFileType::Yaml
+        );
+        assert!(RuleFileType::Yaml.uses_raw_text_search());
+        assert!(!RuleFileType::Yaml.is_source_code());
+    }
+
+    #[test]
     fn test_parse_file_types_dex_and_msi() {
         let mut warnings = Vec::new();
         let dex = parse_file_types(&["dex".to_string()], &mut warnings);
@@ -3135,6 +3191,38 @@ mod tests {
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("regex pattern exceeds 90 bytes"));
         assert!(warnings[0].contains("91 bytes"));
+    }
+
+    #[test]
+    fn reviewed_copy_statement_pattern_has_exact_boundaries() {
+        let pattern = r###"(?i)\bCOPY\s+(BINARY\s+)?("([^"\r\n]|""){1,128}"|[A-Za-z_][A-Za-z0-9_$]*)(\s*\.\s*("([^"\r\n]|""){1,128}"|[A-Za-z_][A-Za-z0-9_$]*))?(\s*\([^;]{1,256}\))?\s+(TO\s+(PROGRAM\s+(E\s*)?['$]|(E\s*)?['$]|STDOUT\b)|FROM\s+(PROGRAM\s+(E\s*)?['$]|(E\s*)?['$]|STDIN\b))"###;
+        let path =
+            std::path::Path::new("/traits/micro-behaviors/data/db/postgresql/copy-program.yaml");
+        assert!(super::reviewed_copy_statement_pattern(
+            "micro-behaviors/data/db/postgresql::copy-table-source",
+            pattern,
+            Some(path),
+        ));
+        assert!(!super::reviewed_copy_statement_pattern(
+            "other",
+            pattern,
+            Some(path)
+        ));
+        assert!(!super::reviewed_copy_statement_pattern(
+            "copy-table-source",
+            pattern,
+            None
+        ));
+        assert!(!super::reviewed_copy_statement_pattern(
+            "copy-table-source",
+            &format!("{pattern}.*"),
+            Some(path),
+        ));
+        assert!(!super::reviewed_copy_statement_pattern(
+            "copy-table-source",
+            pattern,
+            Some(std::path::Path::new("elsewhere/copy-program.yaml")),
+        ));
     }
 
     #[test]

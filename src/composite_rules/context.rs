@@ -233,6 +233,8 @@ pub(crate) struct EvaluationContext<'a> {
     /// both CPU (a 487 MB disk image spent ~185 CPU-s re-transcoding) and peak
     /// RSS (one transient copy per concurrent rule instead of one shared).
     pub cached_lossy_utf8: Arc<OnceLock<String>>,
+    /// Byte-preserving source normalization used by filefacts AST parsing.
+    pub cached_ast_source_utf8: Arc<OnceLock<String>>,
     /// True while evaluating a `crit: exception` composite. A directory trait
     /// reference normally excludes `crit: exception` members (so dropping an
     /// `objectives/` directory into `all:`/`any:` can't inherit a suppressor), but
@@ -291,6 +293,7 @@ impl<'a> EvaluationContext<'a> {
             cached_kv_offsets: Arc::new(OnceLock::new()),
             cached_lower_binary: Arc::new(OnceLock::new()),
             cached_lossy_utf8: Arc::new(OnceLock::new()),
+            cached_ast_source_utf8: Arc::new(OnceLock::new()),
             ast_kind_cache: None,
             ast_query_cache: None,
             string_exact_index: Arc::new(OnceLock::new()),
@@ -460,6 +463,20 @@ impl<'a> EvaluationContext<'a> {
             .get_or_init(|| self.binary_data.to_ascii_lowercase())
     }
 
+    /// The exact byte-preserving text view for the cached filefacts AST.
+    /// This differs from lossy decoding, which can expand invalid bytes and
+    /// would make tree offsets point at the wrong source locations.
+    pub(crate) fn ast_source(&self) -> Option<&str> {
+        self.cached_ast?;
+        if let Some(source) = self.cached_source_utf8 {
+            return Some(source);
+        }
+        Some(
+            self.cached_ast_source_utf8
+                .get_or_init(|| filefacts::source_text_for_ast(self.binary_data).into_owned()),
+        )
+    }
+
     /// UTF-8 view of the entire `binary_data`, built at most once per file.
     ///
     /// Byte-identical to `evaluators::utf8_view(binary_data, (0, len))`: valid
@@ -618,6 +635,7 @@ impl<'a> EvaluationContext<'a> {
             cached_kv_offsets: Arc::new(OnceLock::new()),
             cached_lower_binary: Arc::new(OnceLock::new()),
             cached_lossy_utf8: Arc::new(OnceLock::new()),
+            cached_ast_source_utf8: Arc::new(OnceLock::new()),
             ast_kind_cache: None,
             ast_query_cache: None,
             string_exact_index: Arc::new(OnceLock::new()),

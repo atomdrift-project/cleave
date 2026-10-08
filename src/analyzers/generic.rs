@@ -6,7 +6,7 @@
 
 use crate::analyzers::FileType;
 use crate::analyzers::symbol_extraction;
-use crate::analyzers::{AnalysisInput, Analyzer};
+use crate::analyzers::{AnalysisInput, Analyzer, FileTypeExt};
 use crate::types::{AnalysisReport, StringInfo, TargetInfo};
 use anyhow::Result;
 use std::path::Path;
@@ -260,7 +260,7 @@ impl GenericAnalyzer {
                 report.files.extend(
                     crate::analyzers::embedded_code_detector::analyze_batch_expansion_layer(
                         &file_path.display().to_string(),
-                        content,
+                        eval_bytes,
                         &self.engine,
                     ),
                 );
@@ -307,13 +307,35 @@ impl GenericAnalyzer {
         // `EF BF BD`) and shifts every offset, corrupting filefacts's
         // header reads and any other byte-precise probe.
         let t_eval = std::time::Instant::now();
+        // Source/script and opaque bytes must be scanned before trait
+        // evaluation so inline YARA conditions can support composites.
+        let is_yara_rule_source = self.file_type == FileType::Yara
+            || file_path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| {
+                    ext.eq_ignore_ascii_case("yar") || ext.eq_ignore_ascii_case("yara")
+                });
+        let inline_yara = if !is_yara_rule_source
+            && (self.file_type == FileType::Data || self.file_type.is_program())
+        {
+            let file_types = self.file_type.yara_filetypes();
+            let result = self
+                .engine
+                .yara()
+                .filter(|e| e.is_loaded())
+                .map(|e| e.scan_bytes_with_inline(eval_bytes, Some(file_types.as_slice())));
+            crate::process_yara_result(&mut report, result, self.engine.yara().map(AsRef::as_ref))
+        } else {
+            std::collections::HashMap::new()
+        };
         self.engine
             .rules()
             .evaluate_and_merge_findings_with_precomputed(
                 &mut report,
                 eval_bytes,
                 crate::capabilities::AnalysisBorrow::with_filefacts(tree, source_ctx),
-                None,
+                Some(&inline_yara),
                 None,
                 None,
                 None,
@@ -324,7 +346,7 @@ impl GenericAnalyzer {
         );
 
         report.metadata.analysis_duration_ms = start.elapsed().as_millis() as u64;
-        report.metadata.tools_used = vec![parser_name];
+        report.metadata.tools_used.push(parser_name);
 
         report
     }
@@ -762,6 +784,116 @@ traits:
             "decoded layer judged against its virtual path: {:?}",
             layer.findings.iter().map(|f| &f.id).collect::<Vec<_>>(),
         );
+    }
+
+    #[test]
+    fn batch_codepage_expansion_preserves_original_high_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let traits = dir.path().join("traits.yaml");
+        std::fs::write(
+            &traits,
+            r#"
+traits:
+  - id: "test/layer::decoded-marker"
+    desc: "Decoded payload marker"
+    crit: notable
+    for: [batch]
+    if:
+      type: text
+      substr: "decoded_payload_marker"
+"#,
+        )
+        .unwrap();
+        let mapper = crate::capabilities::CapabilityMapper::from_yaml(&traits).unwrap();
+        let analyzer = GenericAnalyzer::new(FileType::Batch)
+            .with_engine(crate::Engine::from_rules(std::sync::Arc::new(mapper)));
+        let ascii = b" !#$&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\"";
+        assert_eq!(ascii.len(), 94);
+        let encoded: Vec<u8> = (0x80..0xde).collect();
+        let mut bytes = b"@echo off\nchcp 708>nul\nset \"@manezao@=".to_vec();
+        bytes.extend(ascii);
+        bytes.extend(b"\"\nset \"@jasa@=");
+        bytes.extend(&encoded);
+        bytes.extend(b"\"\n");
+        for ch in b"echo decoded_payload_marker" {
+            let idx = ascii.iter().position(|c| c == ch).unwrap();
+            bytes.extend([b'%', encoded[idx], b'%']);
+        }
+        bytes.push(b'\n');
+        assert!(std::str::from_utf8(&bytes).is_err());
+        let lossy = String::from_utf8_lossy(&bytes);
+        let report = analyzer.analyze_source_internal(
+            &PathBuf::from("remapped.bat"),
+            &lossy,
+            None,
+            Some(&bytes),
+            None,
+            None,
+            None,
+            None,
+        );
+        let layer = report
+            .files
+            .iter()
+            .find(|file| file.encoding.as_deref() == Some(&["batch-expansion".to_string()][..]))
+            .expect("byte-preserving batch expansion layer");
+        assert!(
+            layer
+                .findings
+                .iter()
+                .any(|f| f.id == "test/layer::decoded-marker"),
+            "high-byte table must reach the decoder before UTF-8 replacement"
+        );
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|f| f.id == "test/layer::decoded-marker")
+        );
+    }
+
+    #[test]
+    fn batch_ast_queries_match_commands_but_not_echo_or_comments() {
+        let dir = tempfile::tempdir().unwrap();
+        let traits = dir.path().join("traits.yaml");
+        std::fs::write(
+            &traits,
+            r#"
+traits:
+  - id: "test/batch::delete-command"
+    desc: "Parsed delete command targets victim"
+    crit: notable
+    for: [batch]
+    if:
+      type: tree-sitter
+      language: batch
+      query: |
+        (cmd (command_name) @tool (argument_list) @args
+          (#match? @tool "(?i)^(del|erase)$")
+          (#eq? @args "victim.txt"))
+"#,
+        )
+        .unwrap();
+        let mapper = crate::capabilities::CapabilityMapper::from_yaml(&traits).unwrap();
+        let analyzer = GenericAnalyzer::new(FileType::Batch)
+            .with_engine(crate::Engine::from_rules(std::sync::Arc::new(mapper)));
+        for (code, expected) in [
+            ("@echo off\ndel victim.txt\n", true),
+            ("@echo off\nERASE victim.txt\n", true),
+            ("@echo off\nrem del victim.txt\n", false),
+            ("@echo off\necho del victim.txt\n", false),
+            ("@echo off\ndel other.txt\necho victim.txt\n", false),
+        ] {
+            let report = analyzer.analyze_source(&PathBuf::from("sample.bat"), code);
+            assert_eq!(
+                report
+                    .findings
+                    .iter()
+                    .any(|f| f.id == "test/batch::delete-command"),
+                expected,
+                "{code}"
+            );
+        }
     }
 
     #[test]

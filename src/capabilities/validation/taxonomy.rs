@@ -3232,6 +3232,14 @@ fn broad_filetype_category(cond: &Condition) -> &'static str {
 /// `text` matcher in an allowlisted `text:` directory passes; the same directory
 /// does **not** license a broad `value`/`symbol`/etc. matcher.
 pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
+    // A declared digest label and hexadecimal value has the same meaning in
+    // bootstrap source and manifests. Preserve its existing scope when the
+    // declaration moves from hash operations to integrity metadata.
+    "text:metadata/package/integrity/digest-value.yaml",
+    // The file's own directory components have the same meaning across
+    // content formats. Preserve the original scope when this neutral path
+    // observations move to naming metadata; their matchers scan no body.
+    "path:metadata/file/naming/directory-components.yaml",
     // Browser SQL schemas are shared by source and compiled carriers. These
     // bounded query matchers require specific columns and tables in any format.
     "text:micro-behaviors/data/db/access/chromium-queries.yaml",
@@ -3254,6 +3262,10 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     // (`static-lib`), or a batch/COM polyglot. Per-type twins of one hex
     // pattern are what the scope-twin check rejects, so the cap yields here.
     "hex:objectives/impact/infect/binary/dos/interrupt/",
+    // Preserve the same four carriers when the neutral find-next opcode
+    // moves out of infection objectives. This exact source-file exception
+    // does not broaden the remaining filesystem-search rules.
+    "hex:micro-behaviors/fs/search/dos-find-next.yaml",
     // IP addresses and port numbers are embedded in binaries, scripts, manifests, docs
     "text:micro-behaviors/communications/ip/",
     // URLs and URL fragments appear in any file type
@@ -3418,6 +3430,13 @@ pub(crate) const ALL_PLATFORM_DIRECTORY_ALLOWLIST: &[&str] = &[
     "metadata/package/documentation/claims",
     "metadata/package/documentation/security-advisory",
     "metadata/package/documentation/source",
+    // Scanned filenames and naming measurements are OS-independent properties.
+    // OS-specific filename rules still require their own explicit platform scope.
+    "metadata/file/naming",
+    // Transparent test-indication profiles defer all target-OS and file-type
+    // filtering to their referenced metadata/name observations. The OR itself
+    // means the same on every OS; it asserts neither purpose nor portability.
+    "metadata/file/profile/test-indications",
     // Publication/custody/history describe the registry record, not execution.
     "metadata/registry",
     // Host syntax and spelling do not depend on the OS consuming a URL.

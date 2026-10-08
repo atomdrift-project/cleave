@@ -176,6 +176,8 @@ pub(crate) fn analyzer_for_file_type_arc(
         | FileType::Aiff
         | FileType::Mp3
         | FileType::Mp4
+        | FileType::Avif
+        | FileType::Tiff
         | FileType::Ico
         | FileType::Gif
         | FileType::Bmp
@@ -682,6 +684,8 @@ impl FileTypeExt for FileType {
             FileType::Lnk => vec!["lnk", "shortcut"],
             FileType::Jpeg => vec!["jpeg", "jpg"],
             FileType::Png => vec!["png"],
+            FileType::Tiff => vec!["tiff", "tif"],
+            FileType::Avif => vec!["avif", "avifs"],
             FileType::Font => vec!["ttf", "otf", "ttc", "otc", "woff", "woff2", "eot"],
             FileType::Wav => vec!["wav", "wave"],
             FileType::Aiff => vec!["aiff", "aif", "aifc"],

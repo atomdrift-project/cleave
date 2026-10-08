@@ -48,11 +48,11 @@ use crate::capabilities::validation::{
     find_memory_hungry_regex_patterns, find_meta_missing_section_filter,
     find_metadata_content_dirs, find_metadata_cross_tier_refs, find_missing_search_patterns,
     find_mixed_archive_filetype_traits, find_needs_without_any, find_needs_zero,
-    find_new_metadata_file_string_ids, find_non_capturing_groups, find_none_only_with_proximity,
-    find_objectives_wellknown_violations, find_one_fact_convictions, find_orphaned_components,
-    find_overlapping_conditions, find_overlapping_scope_duplicates,
-    find_oversized_trait_directories, find_parent_duplicate_segments,
-    find_permuted_directory_paths, find_platform_named_directories,
+    find_new_metadata_file_literal_ids, find_new_metadata_file_string_ids,
+    find_non_capturing_groups, find_none_only_with_proximity, find_objectives_wellknown_violations,
+    find_one_fact_convictions, find_orphaned_components, find_overlapping_conditions,
+    find_overlapping_scope_duplicates, find_oversized_trait_directories,
+    find_parent_duplicate_segments, find_permuted_directory_paths, find_platform_named_directories,
     find_pooling_scope_without_container, find_pure_alias_traits,
     find_pure_directory_alias_composites, find_raw_should_use_text, find_redundant_any_refs,
     find_redundant_explicit_defaults, find_redundant_needs_one, find_redundant_unix_platforms,
@@ -2170,12 +2170,12 @@ impl super::CapabilityMapper {
                 // home for new text evidence. Grandfather exact existing IDs
                 // while their definitions move; do not allow additions even in
                 // an established source directory.
-                let string_rule_ids: Vec<String> = trait_definitions
+                let rule_ids: Vec<String> = trait_definitions
                     .iter()
                     .map(|t| t.id.clone())
                     .chain(composite_rules.iter().map(|r| r.id.clone()))
                     .collect();
-                let new_string_ids = find_new_metadata_file_string_ids(&string_rule_ids);
+                let new_string_ids = find_new_metadata_file_string_ids(&rule_ids);
                 if !new_string_ids.is_empty() {
                     eprintln!(
                         "\n❌ ERROR: {} new rule ID(s) under legacy metadata/file/string/",
@@ -2191,6 +2191,28 @@ impl super::CapabilityMapper {
                     warnings.push(format!(
                         "{} new rule IDs under legacy metadata/file/string/",
                         new_string_ids.len()
+                    ));
+                }
+
+                // `metadata/file/literal/` is also closed: context-only
+                // literals must move to a subject home or remain on reviewed
+                // hold, not grow a generic string-evidence bucket.
+                let new_literal_ids = find_new_metadata_file_literal_ids(&rule_ids);
+                if !new_literal_ids.is_empty() {
+                    eprintln!(
+                        "\n❌ ERROR: {} new rule ID(s) under legacy metadata/file/literal/",
+                        new_literal_ids.len()
+                    );
+                    eprintln!(
+                        "   Literal evidence needs a subject-specific home; only exact legacy IDs are temporarily allowed:\n"
+                    );
+                    for rule_id in &new_literal_ids {
+                        eprintln!("   {}", rule_id);
+                    }
+                    eprintln!();
+                    warnings.push(format!(
+                        "{} new rule IDs under legacy metadata/file/literal/",
+                        new_literal_ids.len()
                     ));
                 }
 

@@ -11597,6 +11597,16 @@ mod all_platform_directory_tests {
         ];
         let rules = vec![
             CompositeTrait {
+                id: "metadata/file/profile/source-indications::alternatives".to_string(),
+                platforms: vec![Platform::All],
+                ..Default::default()
+            },
+            CompositeTrait {
+                id: "metadata/file/profile/source-indications-impostor::alternatives".to_string(),
+                platforms: vec![Platform::All],
+                ..Default::default()
+            },
+            CompositeTrait {
                 id: "metadata/registry::withdrawal".to_string(),
                 platforms: vec![Platform::All],
                 ..Default::default()
@@ -11619,6 +11629,7 @@ mod all_platform_directory_tests {
             vec![
                 "age",
                 "metadata/file/naming-impostor::shape",
+                "metadata/file/profile/source-indications-impostor::alternatives",
                 "metadata/registry-impostor::age",
                 "objectives/persistence/login::entry",
                 "well-known/lib/crypto/ece::api",

@@ -2334,6 +2334,57 @@ pub(crate) fn find_new_metadata_file_string_ids(rule_ids: &[String]) -> Vec<Stri
     violations
 }
 
+/// Existing exact IDs retained while context-only literal rules leave the
+/// closed `metadata/file/literal` namespace. Remove each ID when its definition
+/// moves; references to retained IDs remain valid during migration.
+const LEGACY_METADATA_FILE_LITERAL_IDS: &[&str] = &[
+    "metadata/file/literal::lex-word-reference",
+    "metadata/file/literal::lowercase-alnum-alphabet",
+    "metadata/file/literal::bracket-http-url-prefix",
+    "metadata/file/literal::push-string-literal",
+    "metadata/file/literal::bracketed-shift-string",
+    "metadata/file/literal::c-256-entry-array-declaration",
+    "metadata/file/literal::dns-tunnel-phrase",
+    "metadata/file/literal::dns-exfil",
+    "metadata/file/literal::dns-c2",
+    "metadata/file/literal::dns-beacon",
+    "metadata/file/literal::hex-byte-token-3f",
+    "metadata/file/literal::hex-byte-token-ff",
+    "metadata/file/literal::bracket-hex-zero-prefix",
+    "metadata/file/literal::hex-number-text",
+    "metadata/file/literal::hex-token-length-undefined-cluster",
+    "metadata/file/literal::js-long-integer-array-literal",
+    "metadata/file/literal::repeated-85-to-95-character-variable-strings",
+    "metadata/file/literal::powershell-numeric-array-8-plus",
+    "metadata/file/literal::js-numeric-array-64-plus",
+    "metadata/file/literal::remote-desktop-feature-word",
+    "metadata/file/literal::safety-system-phrase",
+    "metadata/file/literal::search-setindex-reference",
+    "metadata/file/literal::staging-key-identifier-reference",
+    "metadata/file/literal::session-identifier-reference",
+    "metadata/file/literal::python-large-numeric-array-literal",
+    "metadata/file/literal::cve-pattern-many",
+    "metadata/file/literal::lowercase-digits-alphabet",
+];
+
+/// Reject new definitions under `metadata/file/literal`, including additions
+/// to existing source files. New literal evidence must live with its subject;
+/// exact legacy IDs remain temporarily valid while their definitions move.
+#[must_use]
+pub(crate) fn find_new_metadata_file_literal_ids(rule_ids: &[String]) -> Vec<String> {
+    let mut violations: Vec<String> = rule_ids
+        .iter()
+        .filter(|id| {
+            (id.starts_with("metadata/file/literal/") || id.starts_with("metadata/file/literal::"))
+                && !LEGACY_METADATA_FILE_LITERAL_IDS.contains(&id.as_str())
+        })
+        .cloned()
+        .collect();
+    violations.sort();
+    violations.dedup();
+    violations
+}
+
 /// Find directories where a segment duplicates its immediate parent.
 ///
 /// e.g., "micro-behaviors/execution/execution/" or "objectives/credential-access/credentials/"
@@ -3346,6 +3397,9 @@ pub(crate) const ALL_PLATFORM_DIRECTORY_ALLOWLIST: &[&str] = &[
     // filtering to their referenced metadata/name observations. The OR itself
     // means the same on every OS; it asserts neither purpose nor portability.
     "metadata/file/profile/test-indications",
+    // Source-indication reference profiles retain each named child's OS/type
+    // gate. Their OR asserts no execution, benign intent or portability.
+    "metadata/file/profile/source-indications",
     // Publication/custody/history describe the registry record, not execution.
     "metadata/registry",
     // Host syntax and spelling do not depend on the OS consuming a URL.
@@ -3904,6 +3958,76 @@ mod metadata_file_string_tests {
                 "metadata/file/string/software::new-software-name".to_string(),
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod metadata_file_literal_tests {
+    use super::find_new_metadata_file_literal_ids;
+
+    fn ids(v: &[&str]) -> Vec<String> {
+        v.iter().map(ToString::to_string).collect()
+    }
+
+    #[test]
+    fn allows_exact_existing_legacy_ids() {
+        let input = ids(&[
+            "metadata/file/literal::lex-word-reference",
+            "metadata/file/literal::lowercase-alnum-alphabet",
+            "metadata/file/literal::bracket-http-url-prefix",
+            "metadata/file/literal::push-string-literal",
+            "metadata/file/literal::bracketed-shift-string",
+            "metadata/file/literal::c-256-entry-array-declaration",
+            "metadata/file/literal::dns-tunnel-phrase",
+            "metadata/file/literal::dns-exfil",
+            "metadata/file/literal::dns-c2",
+            "metadata/file/literal::dns-beacon",
+            "metadata/file/literal::hex-byte-token-3f",
+            "metadata/file/literal::hex-byte-token-ff",
+            "metadata/file/literal::bracket-hex-zero-prefix",
+            "metadata/file/literal::hex-number-text",
+            "metadata/file/literal::hex-token-length-undefined-cluster",
+            "metadata/file/literal::js-long-integer-array-literal",
+            "metadata/file/literal::repeated-85-to-95-character-variable-strings",
+            "metadata/file/literal::powershell-numeric-array-8-plus",
+            "metadata/file/literal::js-numeric-array-64-plus",
+            "metadata/file/literal::remote-desktop-feature-word",
+            "metadata/file/literal::safety-system-phrase",
+            "metadata/file/literal::search-setindex-reference",
+            "metadata/file/literal::staging-key-identifier-reference",
+            "metadata/file/literal::session-identifier-reference",
+            "metadata/file/literal::python-large-numeric-array-literal",
+            "metadata/file/literal::cve-pattern-many",
+            "metadata/file/literal::lowercase-digits-alphabet",
+            "micro-behaviors/data/string::replace",
+        ]);
+        assert!(find_new_metadata_file_literal_ids(&input).is_empty());
+    }
+
+    #[test]
+    fn rejects_new_root_and_subleaf_ids() {
+        let input = ids(&[
+            "metadata/file/literal::new-root-literal",
+            "metadata/file/literal::lowercase-alnum-alphabet-v2",
+            "metadata/file/literal/new-subject::new-literal",
+            "metadata/file/literal/hex::hex-token",
+            "micro-behaviors/data/string::replace",
+        ]);
+        assert_eq!(
+            find_new_metadata_file_literal_ids(&input),
+            vec![
+                "metadata/file/literal/hex::hex-token".to_string(),
+                "metadata/file/literal/new-subject::new-literal".to_string(),
+                "metadata/file/literal::lowercase-alnum-alphabet-v2".to_string(),
+                "metadata/file/literal::new-root-literal".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn rejects_retired_legacy_ids() {
+        let input = ids(&["metadata/file/literal::retired-literal"]);
+        assert_eq!(find_new_metadata_file_literal_ids(&input), input);
     }
 }
 

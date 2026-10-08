@@ -504,6 +504,12 @@ pub(crate) enum FileType {
     Text,
     /// Opaque binary data (.dat, .bin, .payload, .raw)
     Data,
+    /// Detached OpenPGP signature, kept separate from opaque Data so
+    /// signature-specific observations do not target unrelated blobs.
+    #[serde(rename = "pgp_signature")]
+    PgpSignature,
+    /// Generic YAML configuration document
+    Yaml,
     /// Generic JSON document
     Json,
     /// node-gyp build manifest (binding.gyp, .gyp, .gypi)
@@ -591,6 +597,10 @@ pub(crate) enum FileType {
     Jpeg,
     /// PNG image
     Png,
+    /// TIFF image container.
+    Tiff,
+    /// AV1 image file format.
+    Avif,
     /// SVG image (`.svg`) — XML-based vector graphic. A distinct rule type
     /// rather than an alias for `Xml`: it is a media carrier (a payload can
     /// ride after `</svg>`), and folding it into `Xml` meant every `for: [svg]`
@@ -862,6 +872,8 @@ impl From<filefacts::FileType> for FileType {
             Ff::Lnk => Self::Lnk,
             Ff::Jpeg => Self::Jpeg,
             Ff::Png => Self::Png,
+            Ff::Tiff => Self::Tiff,
+            Ff::Avif => Self::Avif,
             Ff::Font => Self::Font,
             Ff::Svg => Self::Svg,
             Ff::Wav => Self::Wav,
@@ -888,6 +900,8 @@ impl From<filefacts::FileType> for FileType {
             Ff::Markdown => Self::Markdown,
             Ff::Text => Self::Text,
             Ff::Data => Self::Data,
+            Ff::PgpSignature => Self::PgpSignature,
+            Ff::Yaml => Self::Yaml,
             // Archives / packages
             Ff::Zip => Self::Zip,
             Ff::Tar | Ff::TarGz | Ff::TarBz2 | Ff::TarXz | Ff::TarZst => Self::Tar,
@@ -1018,6 +1032,7 @@ impl FileType {
             FileType::Zig => "zig",
             FileType::Elixir => "elixir",
             FileType::Makefile => "makefile",
+            FileType::Batch => "batch",
             _ => return None,
         })
     }
@@ -1054,6 +1069,7 @@ impl FileType {
                     | FileType::VsixManifest
                     | FileType::CargoToml
                     | FileType::PyProjectToml
+                    | FileType::Yaml
                     | FileType::GithubActions
                     | FileType::SystemdService
                     | FileType::DesktopEntry
@@ -1246,6 +1262,8 @@ impl FileType {
             Self::Dockerfile => "dockerfile",
             Self::Text => "text",
             Self::Data => "data",
+            Self::PgpSignature => "pgp_signature",
+            Self::Yaml => "yaml",
             Self::Json => "json",
             Self::Gyp => "gyp",
             Self::PackageJson => "package.json",
@@ -1286,6 +1304,8 @@ impl FileType {
             Self::Ipa => "ipa",
             Self::Jpeg => "jpeg",
             Self::Png => "png",
+            Self::Tiff => "tiff",
+            Self::Avif => "avif",
             Self::Svg => "svg",
             Self::Wav => "wav",
             Self::Aiff => "aiff",
@@ -1398,6 +1418,7 @@ impl FileType {
             "dockerfile" | "docker" | "containerfile" => FileType::Dockerfile,
             "text" | "txt" | "b64" | "base64" => FileType::Text,
             "data" | "dat" | "bin" | "payload" | "raw" => FileType::Data,
+            "yaml" | "yml" => FileType::Yaml,
             "json" => FileType::Json,
             "gyp" | "gypi" | "binding.gyp" => FileType::Gyp,
             // cpp aliases to c (handled above)
@@ -1421,6 +1442,8 @@ impl FileType {
             "composer-json" | "composerjson" | "composer.json" => FileType::ComposerJson,
             "jpeg" | "jpg" => FileType::Jpeg,
             "png" => FileType::Png,
+            "tiff" | "tif" => FileType::Tiff,
+            "avif" | "avifs" => FileType::Avif,
             "font" | "ttf" | "otf" | "ttc" | "woff" | "woff2" | "eot" => FileType::Font,
             "wav" | "wave" => FileType::Wav,
             "aiff" | "aif" | "aifc" => FileType::Aiff,
@@ -1784,6 +1807,10 @@ mod tests {
             FileType::ChromeManifest
         );
         assert_eq!(FileType::from_str(Ff::OleDoc.label()), FileType::OleDoc);
+        assert_eq!(
+            FileType::from_str(Ff::PgpSignature.label()),
+            FileType::PgpSignature
+        );
         // MSI is its own routing bucket: the office analyzer reports subtype
         // "msi", and filefacts labels .msi/.msp as `msi` (not ole_doc).
         assert_eq!(FileType::from_str("msi"), FileType::Msi);

@@ -105,7 +105,7 @@ composite_rules:
             report
                 .findings
                 .iter()
-                .any(|f| f.id.as_str() == "anti-analysis/malformed/archive-incomplete"),
+                .any(|f| f.id.as_str() == "metadata/file/archive::partial-extraction"),
             unsupported_payload
         );
     }
@@ -151,6 +151,6 @@ composite_rules:
         report
             .findings
             .iter()
-            .any(|f| f.id.as_str() == "anti-analysis/malformed/archive-incomplete")
+            .any(|f| f.id.as_str() == "metadata/file/archive::partial-extraction")
     );
 }

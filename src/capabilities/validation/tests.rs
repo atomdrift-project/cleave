@@ -11584,6 +11584,9 @@ mod all_platform_directory_tests {
                 "micro-behaviors/communications/url/host/nested::syntax",
                 vec![Platform::All],
             ),
+            make_trait("metadata/file/naming::readme-basename", vec![Platform::All]),
+            make_trait("metadata/file/naming/subdir::shape", vec![Platform::All]),
+            make_trait("metadata/file/naming-impostor::shape", vec![Platform::All]),
             make_trait("metadata/registry-impostor::age", vec![Platform::All]),
             make_trait("well-known/lib/crypto/ece::api", vec![Platform::All]),
             make_trait(
@@ -11615,6 +11618,7 @@ mod all_platform_directory_tests {
             ids,
             vec![
                 "age",
+                "metadata/file/naming-impostor::shape",
                 "metadata/registry-impostor::age",
                 "objectives/persistence/login::entry",
                 "well-known/lib/crypto/ece::api",

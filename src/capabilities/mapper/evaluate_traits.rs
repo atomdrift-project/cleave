@@ -291,7 +291,7 @@ impl super::CapabilityMapper {
         file_type: crate::composite_rules::FileType,
     ) -> Option<FxHashMap<String, Vec<Evidence>>> {
         let tree = cached_ast?;
-        let source = std::str::from_utf8(binary_data).ok()?;
+        let source = filefacts::source_text_for_ast(binary_data);
         let (required_node_types, call_node_types) =
             self.ast_kind_cache_plan_for(applicable_indices, file_type);
         if required_node_types.is_empty() {
@@ -517,11 +517,11 @@ impl super::CapabilityMapper {
         if !file_type.supports_ast_queries() {
             return None;
         }
-        let source = std::str::from_utf8(binary_data).ok()?;
+        let source = filefacts::source_text_for_ast(binary_data);
         let queries = self.collect_ast_query_strings(indices);
         crate::composite_rules::evaluators::batch_ast_queries(
             tree,
-            source,
+            &source,
             file_type,
             &queries,
             Some(std::time::Instant::now() + std::time::Duration::from_secs(180)),
@@ -950,6 +950,7 @@ impl super::CapabilityMapper {
         if !dependent_only
             && !has_any_matches
             && !has_strings
+            && !inline_yara.is_some_and(|results| results.values().any(|e| !e.is_empty()))
             && !is_structured_manifest
             && binary_data.len() < 100
         {

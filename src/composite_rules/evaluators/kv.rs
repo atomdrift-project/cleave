@@ -786,86 +786,13 @@ fn insert_pkginfo_value(map: &mut serde_json::Map<String, Value>, key: &str, val
 }
 
 fn parse_systemd_service(content: &[u8]) -> Option<Value> {
-    let text = std::str::from_utf8(content).ok()?;
-    let mut root: serde_json::Map<String, Value> = serde_json::Map::new();
-    let mut current_section: Option<String> = None;
-
-    for line in collect_systemd_logical_lines(text) {
-        let trimmed = line.trim();
-        if let Some(section) = parse_systemd_section_header(trimmed) {
-            current_section = Some(section);
-            continue;
-        }
-
-        let Some(section_name) = current_section.as_deref() else {
-            continue;
-        };
-        let Some(eq_pos) = line.find('=') else {
-            continue;
-        };
-
-        let raw_key = line[..eq_pos].trim();
-        if raw_key.is_empty() {
-            continue;
-        }
-        let key = normalize_systemd_key(raw_key);
-        if key.is_empty() {
-            continue;
-        }
-
-        let raw_value = line[eq_pos + 1..].trim().to_string();
-        let Some(section_obj) = ensure_json_object(&mut root, section_name) else {
-            continue;
-        };
-
-        if raw_value.is_empty() && is_systemd_multi_value_key(&key) {
-            clear_systemd_key(section_obj, &key);
-            continue;
-        }
-
-        if key == "environment" {
-            append_systemd_raw(section_obj, &key, raw_value.clone());
-            let items = split_systemd_items(&raw_value);
-            if !items.is_empty() {
-                append_string_items(section_obj, "environment_list", items.clone());
-                if let Some(env_obj) = ensure_json_object(section_obj, "environment") {
-                    for item in items {
-                        if let Some((name, value)) = item.split_once('=')
-                            && !name.is_empty()
-                        {
-                            append_string_occurrence(env_obj, name, value.to_string());
-                        }
-                    }
-                }
-            }
-            continue;
-        }
-
-        if is_systemd_command_key(&key) {
-            append_systemd_raw(section_obj, &key, raw_value.clone());
-            append_string_occurrence(section_obj, &key, raw_value);
-            continue;
-        }
-
-        if is_systemd_token_list_key(&key) {
-            append_systemd_raw(section_obj, &key, raw_value.clone());
-            let items = split_systemd_items(&raw_value);
-            if items.is_empty() {
-                append_string_occurrence(section_obj, &key, raw_value);
-            } else {
-                append_string_items(section_obj, &key, items);
-            }
-            continue;
-        }
-
-        append_string_occurrence(section_obj, &key, raw_value);
-    }
-
-    if root.is_empty() {
-        None
-    } else {
-        Some(Value::Object(root))
-    }
+    let parsed = filefacts::OpenOptions::new()
+        .file_type(filefacts::FileType::SystemdService)
+        .open(content);
+    let root = parsed.values().as_json();
+    root.as_object()
+        .filter(|map| !map.is_empty())
+        .map(|_| root.clone())
 }
 
 /// Parse a freedesktop.org Desktop Entry file into a section-keyed JSON object.
@@ -877,72 +804,13 @@ fn parse_systemd_service(content: &[u8]) -> Option<Value> {
 /// Localized key variants (e.g. `Name[cs]=...`) are dropped so only the canonical
 /// value is exposed to trait authors.
 fn parse_desktop_entry(content: &[u8]) -> Option<Value> {
-    let text = std::str::from_utf8(content).ok()?;
-    let mut root: serde_json::Map<String, Value> = serde_json::Map::new();
-    let mut current_section: Option<String> = None;
-
-    for raw_line in text.lines() {
-        let line = raw_line.trim_end_matches('\r');
-        let trimmed = line.trim_start();
-
-        // Desktop entry spec: blank lines and `#` comments are ignored.
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
-        }
-
-        if let Some(section) = parse_desktop_section_header(trimmed) {
-            current_section = Some(section);
-            continue;
-        }
-
-        let Some(section_name) = current_section.as_deref() else {
-            continue;
-        };
-        let Some(eq_pos) = line.find('=') else {
-            continue;
-        };
-
-        let raw_key = line[..eq_pos].trim();
-        if raw_key.is_empty() {
-            continue;
-        }
-
-        // Drop localized variants (`Name[cs]=...`): the canonical unlocalized key
-        // is enough for detection, and exposing per-locale keys makes trait authoring
-        // unwieldy.
-        if raw_key.contains('[') {
-            continue;
-        }
-
-        let key = normalize_systemd_key(raw_key);
-        if key.is_empty() {
-            continue;
-        }
-
-        let raw_value = line[eq_pos + 1..].trim().to_string();
-        let Some(section_obj) = ensure_json_object(&mut root, section_name) else {
-            continue;
-        };
-
-        if is_desktop_list_key(&key) {
-            append_systemd_raw(section_obj, &key, raw_value.clone());
-            let items = split_desktop_list(&raw_value);
-            if items.is_empty() {
-                append_string_occurrence(section_obj, &key, raw_value);
-            } else {
-                append_string_items(section_obj, &key, items);
-            }
-            continue;
-        }
-
-        append_string_occurrence(section_obj, &key, raw_value);
-    }
-
-    if root.is_empty() {
-        None
-    } else {
-        Some(Value::Object(root))
-    }
+    let parsed = filefacts::OpenOptions::new()
+        .file_type(filefacts::FileType::DesktopEntry)
+        .open(content);
+    let root = parsed.values().as_json();
+    root.as_object()
+        .filter(|map| !map.is_empty())
+        .map(|_| root.clone())
 }
 
 /// Parse an XML document into a JSON value queryable by value paths.
@@ -1046,463 +914,6 @@ fn xml_element_to_json(node: roxmltree::Node<'_, '_>, depth: usize) -> Value {
     }
 }
 
-fn parse_desktop_section_header(line: &str) -> Option<String> {
-    if line.starts_with('[') && line.ends_with(']') && line.len() >= 3 {
-        let inner = &line[1..line.len() - 1];
-        let normalized = normalize_systemd_key(inner);
-        if normalized.is_empty() {
-            None
-        } else {
-            Some(normalized)
-        }
-    } else {
-        None
-    }
-}
-
-/// Keys whose value is a `;`-separated list per the Desktop Entry spec.
-fn is_desktop_list_key(key: &str) -> bool {
-    matches!(
-        key,
-        "only_show_in"
-            | "not_show_in"
-            | "actions"
-            | "mime_type"
-            | "categories"
-            | "implements"
-            | "keywords"
-    )
-}
-
-/// Split a Desktop Entry list value on unescaped `;`.
-///
-/// Per freedesktop.org spec, `\;` escapes a literal semicolon inside a list item,
-/// and `\s`/`\n`/`\r`/`\t`/`\\` are the standard string escapes.
-fn split_desktop_list(input: &str) -> Vec<String> {
-    let mut items = Vec::new();
-    let mut current = String::new();
-    let mut chars = input.chars().peekable();
-
-    while let Some(ch) = chars.next() {
-        if ch == '\\' {
-            match chars.next() {
-                Some('s') => current.push(' '),
-                Some('n') => current.push('\n'),
-                Some('r') => current.push('\r'),
-                Some('t') => current.push('\t'),
-                Some(';') => current.push(';'),
-                Some('\\') | None => current.push('\\'),
-                Some(other) => {
-                    current.push('\\');
-                    current.push(other);
-                }
-            }
-        } else if ch == ';' {
-            if !current.is_empty() {
-                items.push(std::mem::take(&mut current));
-            }
-        } else {
-            current.push(ch);
-        }
-    }
-
-    if !current.is_empty() {
-        items.push(current);
-    }
-
-    items
-}
-
-fn collect_systemd_logical_lines(text: &str) -> Vec<String> {
-    let mut lines = Vec::new();
-    let mut current = String::new();
-    let mut continuing = false;
-
-    for raw_line in text.lines() {
-        let line = raw_line.trim_end_matches('\r');
-        let trimmed_start = line.trim_start();
-
-        if !continuing
-            && (trimmed_start.is_empty()
-                || trimmed_start.starts_with('#')
-                || trimmed_start.starts_with(';'))
-        {
-            continue;
-        }
-
-        if continuing
-            && (trimmed_start.is_empty()
-                || trimmed_start.starts_with('#')
-                || trimmed_start.starts_with(';'))
-        {
-            continue;
-        }
-
-        let segment = if continuing { trimmed_start } else { line };
-        let segment = segment.trim_end();
-        let has_continuation = ends_with_unescaped_backslash(segment);
-        let piece = if has_continuation {
-            segment[..segment.len().saturating_sub(1)].trim_end()
-        } else {
-            segment
-        };
-
-        current.push_str(piece);
-
-        if has_continuation {
-            current.push(' ');
-            continuing = true;
-        } else {
-            let logical = current.trim();
-            if !logical.is_empty() {
-                lines.push(logical.to_string());
-            }
-            current.clear();
-            continuing = false;
-        }
-    }
-
-    let trailing = current.trim();
-    if !trailing.is_empty() {
-        lines.push(trailing.to_string());
-    }
-
-    lines
-}
-
-fn ends_with_unescaped_backslash(s: &str) -> bool {
-    let mut count = 0usize;
-    for ch in s.chars().rev() {
-        if ch == '\\' {
-            count += 1;
-        } else {
-            break;
-        }
-    }
-    count % 2 == 1
-}
-
-fn parse_systemd_section_header(line: &str) -> Option<String> {
-    let inner = line.strip_prefix('[')?.strip_suffix(']')?.trim();
-    if inner.is_empty() {
-        None
-    } else {
-        Some(normalize_systemd_key(inner))
-    }
-}
-
-fn normalize_systemd_key(raw: &str) -> String {
-    let chars: Vec<char> = raw.chars().collect();
-    let mut out = String::new();
-
-    for (idx, ch) in chars.iter().enumerate() {
-        if ch.is_ascii_alphanumeric() {
-            let is_upper = ch.is_ascii_uppercase();
-            let prev = idx.checked_sub(1).and_then(|i| chars.get(i));
-            let next = chars.get(idx + 1);
-            let prev_is_lower_or_digit =
-                prev.is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit());
-            let prev_is_upper = prev.is_some_and(char::is_ascii_uppercase);
-            let next_is_lower = next.is_some_and(char::is_ascii_lowercase);
-
-            if is_upper
-                && !out.is_empty()
-                && (prev_is_lower_or_digit || (prev_is_upper && next_is_lower))
-            {
-                out.push('_');
-            }
-            out.push(ch.to_ascii_lowercase());
-        } else if (*ch == '-' || *ch == ' ' || *ch == '.' || *ch == '/')
-            && !out.ends_with('_')
-            && !out.is_empty()
-        {
-            out.push('_');
-        }
-    }
-
-    out.trim_matches('_').to_string()
-}
-
-fn is_systemd_token_list_key(key: &str) -> bool {
-    matches!(
-        key,
-        "after"
-            | "before"
-            | "wants"
-            | "wanted_by"
-            | "requires"
-            | "required_by"
-            | "requisite"
-            | "binds_to"
-            | "part_of"
-            | "upholds"
-            | "conflicts"
-            | "also"
-            | "alias"
-            | "documentation"
-            | "environment_file"
-            | "pass_environment"
-            | "unset_environment"
-            | "read_write_paths"
-            | "read_only_paths"
-            | "inaccessible_paths"
-            | "exec_paths"
-            | "no_exec_paths"
-            | "supplementary_groups"
-            | "capability_bounding_set"
-            | "ambient_capabilities"
-            | "restrict_address_families"
-            | "system_call_filter"
-            | "system_call_architectures"
-    )
-}
-
-fn is_systemd_command_key(key: &str) -> bool {
-    matches!(
-        key,
-        "exec_start"
-            | "exec_start_pre"
-            | "exec_start_post"
-            | "exec_reload"
-            | "exec_stop"
-            | "exec_stop_post"
-    )
-}
-
-fn is_systemd_multi_value_key(key: &str) -> bool {
-    key == "environment" || is_systemd_command_key(key) || is_systemd_token_list_key(key)
-}
-
-fn ensure_json_object<'a>(
-    map: &'a mut serde_json::Map<String, Value>,
-    key: &str,
-) -> Option<&'a mut serde_json::Map<String, Value>> {
-    if !map.contains_key(key) {
-        map.insert(key.to_string(), Value::Object(serde_json::Map::new()));
-    }
-    map.get_mut(key)?.as_object_mut()
-}
-
-fn append_systemd_raw(section_obj: &mut serde_json::Map<String, Value>, key: &str, value: String) {
-    if let Some(raw_obj) = ensure_json_object(section_obj, "_raw") {
-        append_string_occurrence(raw_obj, key, value);
-    }
-}
-
-fn append_string_occurrence(map: &mut serde_json::Map<String, Value>, key: &str, value: String) {
-    let new_value = Value::String(value);
-    match map.get_mut(key) {
-        None => {
-            map.insert(key.to_string(), new_value);
-        }
-        Some(Value::Array(arr)) => arr.push(new_value),
-        Some(existing) => {
-            let old = std::mem::replace(existing, Value::Null);
-            *existing = Value::Array(vec![old, new_value]);
-        }
-    }
-}
-
-fn append_string_items<I>(map: &mut serde_json::Map<String, Value>, key: &str, items: I)
-where
-    I: IntoIterator<Item = String>,
-{
-    for item in items {
-        append_string_occurrence(map, key, item);
-    }
-}
-
-fn clear_systemd_key(section_obj: &mut serde_json::Map<String, Value>, key: &str) {
-    section_obj.remove(key);
-    if key == "environment" {
-        section_obj.remove("environment_list");
-        section_obj.remove("environment");
-    }
-
-    if let Some(raw_obj) = section_obj.get_mut("_raw").and_then(Value::as_object_mut) {
-        raw_obj.remove(key);
-        if raw_obj.is_empty() {
-            section_obj.remove("_raw");
-        }
-    }
-}
-
-fn split_systemd_items(input: &str) -> Vec<String> {
-    let mut items = Vec::new();
-    let mut current = String::new();
-    let mut quote: Option<char> = None;
-    let mut chars = input.chars().peekable();
-    let mut in_item = false;
-
-    while let Some(ch) = chars.next() {
-        match quote {
-            Some(expected) => {
-                if ch == expected {
-                    quote = None;
-                } else if ch == '\\' {
-                    push_systemd_escape(&mut current, &mut chars);
-                } else {
-                    current.push(ch);
-                }
-                in_item = true;
-            }
-            None => match ch {
-                ' ' | '\t' => {
-                    if in_item {
-                        items.push(std::mem::take(&mut current));
-                        in_item = false;
-                    }
-                }
-                '"' | '\'' if current.is_empty() => {
-                    quote = Some(ch);
-                    in_item = true;
-                }
-                '\\' => {
-                    push_systemd_escape(&mut current, &mut chars);
-                    in_item = true;
-                }
-                _ => {
-                    current.push(ch);
-                    in_item = true;
-                }
-            },
-        }
-    }
-
-    if in_item {
-        items.push(current);
-    }
-
-    items
-}
-
-fn push_systemd_escape(out: &mut String, chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
-    let Some(next) = chars.next() else {
-        out.push('\\');
-        return;
-    };
-
-    match next {
-        'a' => out.push('\u{0007}'),
-        'b' => out.push('\u{0008}'),
-        'f' => out.push('\u{000C}'),
-        'n' => out.push('\n'),
-        'r' => out.push('\r'),
-        't' => out.push('\t'),
-        'v' => out.push('\u{000B}'),
-        '\\' => out.push('\\'),
-        '"' => out.push('"'),
-        '\'' => out.push('\''),
-        's' => out.push(' '),
-        'x' => push_radix_escape(out, chars, 16, 2, 'x'),
-        'u' => push_unicode_escape(out, chars, 4, 'u'),
-        'U' => push_unicode_escape(out, chars, 8, 'U'),
-        '0'..='7' => push_octal_escape(out, chars, next),
-        other => out.push(other),
-    }
-}
-
-fn push_radix_escape(
-    out: &mut String,
-    chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
-    radix: u32,
-    max_digits: usize,
-    fallback_prefix: char,
-) {
-    let mut digits = String::new();
-    while digits.len() < max_digits {
-        let Some(next) = chars.peek().copied() else {
-            break;
-        };
-        if next.is_digit(radix) {
-            digits.push(next);
-            chars.next();
-        } else {
-            break;
-        }
-    }
-
-    if digits.is_empty() {
-        out.push(fallback_prefix);
-        return;
-    }
-
-    if let Ok(value) = u32::from_str_radix(&digits, radix)
-        && let Some(decoded) = char::from_u32(value)
-    {
-        out.push(decoded);
-        return;
-    }
-
-    out.push(fallback_prefix);
-    out.push_str(&digits);
-}
-
-fn push_unicode_escape(
-    out: &mut String,
-    chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
-    digits: usize,
-    fallback_prefix: char,
-) {
-    let mut buf = String::new();
-    while buf.len() < digits {
-        let Some(next) = chars.peek().copied() else {
-            break;
-        };
-        if next.is_ascii_hexdigit() {
-            buf.push(next);
-            chars.next();
-        } else {
-            break;
-        }
-    }
-
-    if buf.len() != digits {
-        out.push(fallback_prefix);
-        out.push_str(&buf);
-        return;
-    }
-
-    if let Ok(value) = u32::from_str_radix(&buf, 16)
-        && let Some(decoded) = char::from_u32(value)
-    {
-        out.push(decoded);
-        return;
-    }
-
-    out.push(fallback_prefix);
-    out.push_str(&buf);
-}
-
-fn push_octal_escape(
-    out: &mut String,
-    chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
-    first: char,
-) {
-    let mut digits = String::new();
-    digits.push(first);
-    while digits.len() < 3 {
-        let Some(next) = chars.peek().copied() else {
-            break;
-        };
-        if ('0'..='7').contains(&next) {
-            digits.push(next);
-            chars.next();
-        } else {
-            break;
-        }
-    }
-
-    if let Ok(value) = u32::from_str_radix(&digits, 8)
-        && let Some(decoded) = char::from_u32(value)
-    {
-        out.push(decoded);
-        return;
-    }
-
-    out.push_str(&digits);
-}
-
 pub(crate) fn structured_format_from_file_type(
     file_type: &crate::composite_rules::FileType,
 ) -> StructuredFormat {
@@ -1513,7 +924,8 @@ pub(crate) fn structured_format_from_file_type(
         | crate::composite_rules::FileType::ChromeManifest => StructuredFormat::Json,
         crate::composite_rules::FileType::CargoToml
         | crate::composite_rules::FileType::PyProjectToml => StructuredFormat::Toml,
-        crate::composite_rules::FileType::GithubActions => StructuredFormat::Yaml,
+        crate::composite_rules::FileType::GithubActions
+        | crate::composite_rules::FileType::Yaml => StructuredFormat::Yaml,
         // An Xcode project is an OpenStep property list, which the plist
         // parser reads alongside the XML and binary dialects. Without this arm
         // a `project.pbxproj` reaching the evaluator by file type rather than
@@ -1612,8 +1024,31 @@ pub(crate) fn evaluate_kv(condition: &Condition, ctx: &EvaluationContext<'_>) ->
     // let it shadow the native parser for structured text formats. PKG-INFO
     // is the motivating edge case: filefacts preserves header casing, while
     // cleave's parser normalizes keys for stable lowercase rule paths.
+    let mut authoritative_flow = false;
     if let Some(synthetic) = ctx.report.values_tree.as_ref() {
         values.extend(navigate(synthetic.as_ref(), &segments));
+        // These namespaces are computed from executable command contexts.
+        // An empty computed array must not fall back to manifest-supplied
+        // lookalike facts. Native fields elsewhere retain parser fallback.
+        for (prefix, pointer) in [
+            (
+                "composer.install_hook_flows",
+                "/composer/install_hook_flows",
+            ),
+            (
+                "shell.literal_command_flows",
+                "/shell/literal_command_flows",
+            ),
+        ] {
+            if (path == prefix
+                || path
+                    .strip_prefix(prefix)
+                    .is_some_and(|tail| tail.starts_with('.') || tail.starts_with('[')))
+                && synthetic.pointer(pointer).is_some()
+            {
+                authoritative_flow = true;
+            }
+        }
     }
 
     let detected_format = ctx
@@ -1625,7 +1060,7 @@ pub(crate) fn evaluate_kv(condition: &Condition, ctx: &EvaluationContext<'_>) ->
         *detected_format
     };
 
-    if format != StructuredFormat::Unknown {
+    if format != StructuredFormat::Unknown && !authoritative_flow {
         let cached = ctx.cached_kv_parsed.get_or_init(|| {
             let parsed_value: Option<Value> = match format {
                 StructuredFormat::Json => serde_json::from_slice(content).ok(),
@@ -2071,6 +1506,36 @@ mod tests {
 
     /// `report.values_tree` is consulted in preference to the file's
     /// own structured-format parsing — even when the binary is empty.
+    #[test]
+    fn computed_command_flows_reject_forged_native_facts() {
+        let raw =
+            br#"{"composer":{"install_hook_flows":[{"kind":"forged"}]},"name":"native-field"}"#;
+        let path = Path::new("composer.json");
+        for computed in [serde_json::json!([]), serde_json::json!([{"kind":"real"}])] {
+            let ctx = create_test_ctx_with_values_tree(
+                raw,
+                path,
+                FileType::ComposerJson,
+                serde_json::json!({"composer":{"install_hook_flows":computed}}),
+            );
+            let mut query = KvQuery {
+                path: "composer.install_hook_flows[*].kind".into(),
+                exact: Some("forged".into()),
+                ..Default::default()
+            };
+            assert!(evaluate_kv(&Condition::Kv(query.clone()), &ctx).is_none());
+            query.exact = Some("real".into());
+            assert_eq!(
+                evaluate_kv(&Condition::Kv(query.clone()), &ctx).is_some(),
+                !computed.as_array().unwrap().is_empty()
+            );
+            query.path = "name".into();
+            query.exact = Some("native-field".into());
+            assert!(evaluate_kv(&Condition::Kv(query), &ctx).is_some());
+        }
+    }
+
+    /// `report.values_tree` resolves values for non-manifest analyzers.
     #[test]
     fn synthetic_values_tree_resolves_paths_for_office() {
         let kv = serde_json::json!({

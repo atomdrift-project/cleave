@@ -62,6 +62,14 @@ impl Target {
             | Self::DoesNothing { path, .. } => path,
         }
     }
+
+    /// Inline byte-flow fixtures need the YARA results their traits consume.
+    fn requires_yara(&self) -> bool {
+        match self {
+            Self::Hostile { traits, .. } | Self::Benign { traits, .. } => traits.enable_yara,
+            Self::WalkedHostile { .. } | Self::DoesNothing { .. } => false,
+        }
+    }
 }
 
 /// Print the score-contributing findings for a file, filtering out Component/Filtered noise.
@@ -150,6 +158,13 @@ fn run_inner(
         ..Default::default()
     };
 
+    // Only fixtures explicitly requiring inline YARA pay for that engine;
+    // their score and exact-trait expectations remain unchanged.
+    let yara_options = cleave::AnalysisOptions {
+        disable_yara: false,
+        ..options.clone()
+    };
+
     // Load the mapper once with full validation enabled. This replaces the
     // separate `validate_traits()` call — validation errors surface here — and
     // every analysis worker below reuses this same Arc, so the trait set is
@@ -191,8 +206,13 @@ fn run_inner(
         loop {
             let i = next.fetch_add(1, Ordering::Relaxed);
             let Some(t) = targets.get(i) else { break };
+            let fixture_options = if t.requires_yara() {
+                &yara_options
+            } else {
+                &options
+            };
             let report = stage.analyze(t.path(), |p| {
-                cleave::analyze_file_with_mapper(p, &options, &mapper)
+                cleave::analyze_file_with_mapper(p, fixture_options, &mapper)
             });
             let _ = reports[i].set(report);
         }
@@ -928,6 +948,9 @@ struct BenignCap {
 /// Unlike score caps these semantic assertions cannot be bypassed.
 #[derive(Clone, Debug, Default, Deserialize)]
 struct TraitExpectations {
+    /// Enable byte-flow matching for this fixture, without disabling assertions.
+    #[serde(default)]
+    enable_yara: bool,
     #[serde(default)]
     required_analysis_gaps: Vec<cleave::types::AnalysisGap>,
     #[serde(default)]
@@ -1072,8 +1095,38 @@ fn judge_traits(path: &Path, expected: &TraitExpectations, report: &AnalysisRepo
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod trait_expectation_tests {
-    use super::{HostileExpectation, TraitExpectations, trait_expectation_errors};
+    use super::{HostileExpectation, Target, TraitExpectations, trait_expectation_errors};
     use std::collections::HashSet;
+    use std::path::PathBuf;
+    #[test]
+    fn explicit_fixture_yara_request_routes_hostile_and_benign() {
+        for (text, expected) in [("", false), ("enable_yara=true", true)] {
+            let traits: TraitExpectations = toml::from_str(text).unwrap();
+            let hostile = Target::Hostile {
+                path: PathBuf::from("fixture.bat"),
+                min_score: 1,
+                min_hostile: 1,
+                min_suspicious: 2,
+                traits: traits.clone(),
+            };
+            let benign = Target::Benign {
+                path: PathBuf::from("fixture.bat"),
+                cap: 1,
+                min_score: 0,
+                traits,
+            };
+            assert_eq!(hostile.requires_yara(), expected);
+            assert_eq!(benign.requires_yara(), expected);
+        }
+        assert!(
+            !Target::DoesNothing {
+                path: PathBuf::from("fixture.bat"),
+                dir: PathBuf::from("fixtures"),
+            }
+            .requires_yara()
+        );
+    }
+
     #[test]
     fn defaults_preserve_existing_fixture_tables() {
         let expected: HostileExpectation =

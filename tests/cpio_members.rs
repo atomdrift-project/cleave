@@ -86,7 +86,7 @@ traits:
                 .findings
                 .iter()
                 .chain(report.files.iter().flat_map(|f| &f.findings))
-                .any(|f| f.id.as_str() == "anti-analysis/malformed/archive-incomplete");
+                .any(|f| f.id.as_str() == "metadata/file/archive::partial-extraction");
             assert_eq!(incomplete, partial, "compressed={compressed}");
         }
     }
@@ -98,6 +98,6 @@ traits:
         report
             .findings
             .iter()
-            .all(|f| f.id.as_str() != "anti-analysis/malformed/archive-incomplete")
+            .all(|f| f.id.as_str() != "metadata/file/archive::partial-extraction")
     );
 }

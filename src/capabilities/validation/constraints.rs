@@ -2038,6 +2038,7 @@ const SOURCE: &[FileType] = &[
     FileType::Clojure,
 ];
 const MANIFESTS: &[FileType] = &[
+    FileType::Yaml,
     FileType::PackageJson,
     FileType::PackageLockJson,
     FileType::GoMod,
@@ -2094,6 +2095,8 @@ const ARCHIVES: &[FileType] = FileType::archive_family_types();
 const MEDIA: &[FileType] = &[
     FileType::Font,
     FileType::Png,
+    FileType::Tiff,
+    FileType::Avif,
     FileType::Jpeg,
     FileType::Svg,
     FileType::Wav,

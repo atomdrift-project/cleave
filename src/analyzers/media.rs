@@ -135,6 +135,10 @@ impl Analyzer for MediaAnalyzer {
                     | "aifc"
                     | "mp3"
                     | "mp4"
+                    | "avif"
+                    | "avifs"
+                    | "tif"
+                    | "tiff"
                     | "m4a"
                     | "m4v"
                     | "mov"
@@ -162,6 +166,8 @@ mod tests {
             "/tmp/x.aif",
             "/tmp/x.mp3",
             "/tmp/x.mp4",
+            "/tmp/x.avif",
+            "/tmp/x.tif",
             "/tmp/x.m4a",
             "/tmp/x.mov",
             "/tmp/x.ico",

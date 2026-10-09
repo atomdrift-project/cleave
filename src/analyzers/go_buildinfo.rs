@@ -60,7 +60,7 @@ pub(crate) fn from_go_value(go: &serde_json::Value) -> GoBuildInfo {
         replaced_by: None,
     };
 
-    let main_module = go.get("module").map(&module_ref);
+    let main_module = go.get("module").map(module_ref);
 
     // filefacts' `deps[]` is flat with `kind:"replace"` entries following
     // the dependency they replace; fold those back into `replaced_by`.

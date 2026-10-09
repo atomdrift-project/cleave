@@ -205,12 +205,15 @@ fn current_rss_impl() -> Option<u64> {
         ) -> i32;
     }
 
-    // SAFETY: task_info with MACH_TASK_BASIC_INFO fills MachTaskBasicInfo;
-    // we pass a correctly-sized zeroed struct.
+    // SAFETY: mach_task_self takes no arguments and returns this task's port.
     let task = unsafe { mach_task_self() };
+    // SAFETY: MachTaskBasicInfo is a repr(C) struct of plain integers, for
+    // which all-zero bytes are a valid value.
     let mut info: MachTaskBasicInfo = unsafe { std::mem::zeroed() };
     let mut count = MACH_TASK_BASIC_INFO_COUNT;
 
+    // SAFETY: task_info with MACH_TASK_BASIC_INFO writes at most `count`
+    // 32-bit words into `info`, and `count` is exactly the size of `info`.
     let kr = unsafe {
         task_info(
             task,
@@ -500,8 +503,11 @@ fn getrusage_maxrss() -> Option<u64> {
 
     const RUSAGE_SELF: i32 = 0;
 
-    // SAFETY: getrusage fills the Rusage struct; we pass a zeroed buffer.
+    // SAFETY: Rusage is a repr(C) struct of plain integers, for which
+    // all-zero bytes are a valid value.
     let mut usage: Rusage = unsafe { std::mem::zeroed() };
+    // SAFETY: getrusage writes one struct rusage into `usage`, which is padded
+    // to that size.
     let ret = unsafe { getrusage(RUSAGE_SELF, &raw mut usage) };
     if ret == 0 && usage.ru_maxrss > 0 {
         Some(usage.ru_maxrss as u64 * 1024) // KB → bytes
@@ -541,8 +547,9 @@ fn current_rss_impl() -> Option<u64> {
     const KI_RSSIZE_OFFSET: usize = 264;
 
     let instantaneous = || -> Option<u64> {
-        // SAFETY: getpid/getpagesize are pure libc calls with no arguments.
+        // SAFETY: getpid takes no arguments and cannot fail.
         let pid = unsafe { getpid() };
+        // SAFETY: getpagesize takes no arguments and cannot fail.
         let page_size = unsafe { getpagesize() };
         if page_size <= 0 {
             return None;
@@ -625,9 +632,10 @@ fn total_memory_impl() -> Option<u64> {
     const SC_PAGESIZE: i32 = 11;
     const SC_PHYS_PAGES: i32 = 500;
 
-    // SAFETY: sysconf is a pure C function; both names are well-defined POSIX
-    // selectors and return -1 on error which we check for.
+    // SAFETY: sysconf takes a selector by value and returns -1 on error, which
+    // is checked below.
     let pages = unsafe { sysconf(SC_PHYS_PAGES) };
+    // SAFETY: as above.
     let page_size = unsafe { sysconf(SC_PAGESIZE) };
     if pages > 0 && page_size > 0 {
         Some(pages as u64 * page_size as u64)
@@ -695,10 +703,12 @@ fn global_memory_status() -> Option<MemoryStatusEx> {
         fn GlobalMemoryStatusEx(buffer: *mut MemoryStatusEx) -> i32;
     }
 
-    // SAFETY: GlobalMemoryStatusEx fills the struct when dw_length is set
-    // correctly; we zero-init and set the length field.
+    // SAFETY: MemoryStatusEx is a repr(C) struct of plain integers, for which
+    // all-zero bytes are a valid value.
     let mut status: MemoryStatusEx = unsafe { std::mem::zeroed() };
     status.dw_length = std::mem::size_of::<MemoryStatusEx>() as u32;
+    // SAFETY: GlobalMemoryStatusEx fills the struct once dw_length is set to
+    // its size, as it is above.
     let ret = unsafe { GlobalMemoryStatusEx(&raw mut status) };
     (ret != 0 && status.ull_total_phys > 0).then_some(status)
 }
@@ -739,9 +749,12 @@ fn current_rss_impl() -> Option<u64> {
             -> i32;
     }
 
-    // SAFETY: K32GetProcessMemoryInfo fills the struct for the current process.
+    // SAFETY: ProcessMemoryCounters is a repr(C) struct of plain integers, for
+    // which all-zero bytes are a valid value.
     let mut pmc: ProcessMemoryCounters = unsafe { std::mem::zeroed() };
     pmc.cb = std::mem::size_of::<ProcessMemoryCounters>() as u32;
+    // SAFETY: GetCurrentProcess returns a pseudo-handle that needs no closing;
+    // K32GetProcessMemoryInfo writes at most `pmc.cb` bytes, the struct's size.
     let ret = unsafe { K32GetProcessMemoryInfo(GetCurrentProcess(), &raw mut pmc, pmc.cb) };
     if ret != 0 {
         Some(pmc.working_set_size as u64)

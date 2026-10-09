@@ -80,6 +80,13 @@ enum InnoExtractDiagnosticKind {
     UnexpectedLoaderRevision,
     LoaderChecksumMismatch,
     SetupDataVersionUndetermined,
+    #[cfg_attr(
+        not(all(target_os = "linux", target_arch = "x86_64")),
+        allow(
+            dead_code,
+            reason = "only the Linux x86_64 long-path fallback constructs it"
+        )
+    )]
     LongMemberPathRemapped,
     GenericFailure,
 }
@@ -569,6 +576,7 @@ fn run_innoextract(command: &Path, src: &Path, out: &Path) -> InnoExtractResult 
     }
 }
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 fn clear_extraction_directory(path: &Path) -> std::io::Result<()> {
     for entry in std::fs::read_dir(path)? {
         let entry = entry?;

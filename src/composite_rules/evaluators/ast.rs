@@ -249,7 +249,7 @@ pub(crate) fn eval_ast<'a>(
                     // against the full call-expression text via `value`.
                     // Each node counts at most once.
                     let matched = test_match(&node_ev.value)
-                        || node_ev.alt_value.as_deref().is_some_and(&test_match);
+                        || node_ev.alt_value.as_deref().is_some_and(test_match);
 
                     if matched {
                         match_count += 1;
@@ -402,7 +402,7 @@ fn walk_ast_for_pattern_multi<'a>(
             // name as a fallback so `exact: foo` matches `foo(args)`.
             // Mirrors the cache path; see `Evidence.alt_value` docs.
             let alt = crate::analyzers::symbol_extraction::extract_function_name(&node, source);
-            let matched = matcher(text) || alt.as_deref().is_some_and(&matcher);
+            let matched = matcher(text) || alt.as_deref().is_some_and(matcher);
             if matched {
                 *match_count += 1;
                 if evidence.len() < MAX_EVIDENCE_PER_TRAIT {

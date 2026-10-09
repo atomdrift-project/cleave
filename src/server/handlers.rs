@@ -42,7 +42,7 @@ impl InFlightGuard {
         let max = state.max_concurrent_tasks;
         state
             .active_tasks
-            .fetch_update(
+            .try_update(
                 std::sync::atomic::Ordering::AcqRel,
                 std::sync::atomic::Ordering::Acquire,
                 |active| (active < max).then_some(active + 1),

@@ -4,7 +4,7 @@
 //! Tests for AST-based condition evaluators.
 
 use super::*;
-use crate::composite_rules::context::{AnalysisWarning, EvaluationContext};
+use crate::composite_rules::context::{AnalysisWarning, ConditionResult, EvaluationContext};
 use crate::composite_rules::types::FileType;
 use crate::types::{AnalysisReport, TargetInfo};
 
@@ -1345,4 +1345,157 @@ fn ast_query_legacy_batch_bytes_use_filefacts_source_view_and_offsets() {
         &ctx,
     );
     assert!(simple.matched);
+}
+
+/// The literals a JavaScript `query` requires, and whether `text` holds them.
+fn js_query_admits(query: &str, text: &str) -> bool {
+    let parsed = parsed_for_test("gate.js", b"x;");
+    let tree = parsed.source_ast().expect("JavaScript parses").tree;
+    let compiled = tree_sitter::Query::new(&tree.language(), query).expect("query compiles");
+    super::ast_gate::RequiredLiterals::of(&compiled, query)
+        .may_match(|literal| memchr::memmem::find(text.as_bytes(), literal).is_some())
+}
+
+#[test]
+fn ast_gate_requires_eq_and_match_literals_of_bound_captures() {
+    let eq = r#"((call_expression function: (identifier) @f) (#eq? @f "eval"))"#;
+    assert!(js_query_admits(eq, "eval(code)"));
+    assert!(!js_query_admits(eq, "run(code)"));
+
+    let regex = r#"((string) @s (#match? @s "Invalid seed phrase"))"#;
+    assert!(js_query_admits(regex, r#"throw "Invalid seed phrase!""#));
+    assert!(!js_query_admits(regex, "throw 'invalid'"));
+
+    // The query source escapes `(`; tree-sitter unescapes it to the regex
+    // `fetch\(`, whose literal is `fetch(`.
+    let escaped = r#"((statement_block) @b (#match? @b "fetch\\(url"))"#;
+    assert!(js_query_admits(escaped, "{ fetch(url) }"));
+    assert!(!js_query_admits(escaped, "{ fetch url }"));
+}
+
+#[test]
+fn ast_gate_never_requires_what_a_match_may_lack() {
+    for query in [
+        // Optional capture: an unbound capture passes its predicate.
+        r#"((call_expression function: (identifier)? @f) @c (#eq? @f "eval"))"#,
+        // Bound in only one alternative.
+        r#"([(identifier) @f (number) @n] (#eq? @f "eval"))"#,
+        // Negated and any- forms assert nothing present.
+        r#"((identifier) @f (#not-eq? @f "eval"))"#,
+        r#"((identifier) @f (#any-eq? @f "eval"))"#,
+        r#"((identifier) @f (#not-match? @f "eval"))"#,
+        // No case-sensitive literal, or one too short to extract.
+        r#"((identifier) @f (#match? @f "(?i)eval"))"#,
+        r#"((identifier) @f (#match? @f "^ev"))"#,
+        // A capture-to-capture comparison names no literal.
+        r#"((call_expression function: (identifier) @f arguments: (arguments (identifier) @a)) (#eq? @f @a))"#,
+        // Commented out: not a predicate tree-sitter applies.
+        "((identifier) @f\n ; (#eq? @f \"eval\")\n)",
+    ] {
+        assert!(js_query_admits(query, ""), "must not gate: {query}");
+    }
+}
+
+#[test]
+fn ast_gate_admits_when_any_pattern_could_match() {
+    let query = r#"
+        ((identifier) @a (#eq? @a "alpha"))
+        ((identifier) @b (#eq? @b "beta"))
+    "#;
+    assert!(js_query_admits(query, "beta;"));
+    assert!(!js_query_admits(query, "gamma;"));
+}
+
+/// A regex whose alternatives share only part of a multi-byte character
+/// (`é` = C3 A9, `ê` = C3 AA) requires the whole characters before it, never
+/// a U+FFFD stand-in: that would gate out every file the query matches.
+#[test]
+fn ast_gate_literal_never_splits_a_utf8_character() {
+    let query = r#"((string) @s (#match? @s "café[éê]"))"#;
+    assert!(js_query_admits(query, r#"x = "caféé";"#));
+    assert!(js_query_admits(query, r#"x = "caféê";"#));
+    assert!(!js_query_admits(query, r#"x = "tea";"#));
+}
+
+/// Enough statements that any walk outlasts a zero CPU budget.
+fn walk_heavy_source() -> String {
+    let mut source = String::new();
+    for i in 0..2000 {
+        source.push_str(&format!("call_{i}(arg_{i});\n"));
+    }
+    source.push_str("present_name(last);\n");
+    source
+}
+
+/// Regression guard for the literal gate: a query whose literal the file lacks
+/// must be answered without walking the tree. Under a zero CPU budget any walk
+/// records a timeout, so the gated query's clean result proves it never ran —
+/// and the control proves this source does make a walk time out. Before the
+/// gate, unmatchable queries like this ran to the full CPU budget, several per
+/// minified bundle.
+#[test]
+fn ast_gate_skips_the_walk_when_a_required_literal_is_absent() {
+    let source = walk_heavy_source();
+    let report = create_test_report("bundle.js");
+    let parsed = parsed_for_test("bundle.js", source.as_bytes());
+    let ctx =
+        create_test_context_with_ast(&report, &parsed, source.as_bytes(), FileType::JavaScript);
+    let timed_out = |r: &ConditionResult| {
+        r.warnings
+            .iter()
+            .any(|w| matches!(w, AnalysisWarning::AstTooDeep { max_depth: 0 }))
+    };
+
+    let absent = r#"((call_expression function: (identifier) @f) (#eq? @f "absent_name"))"#;
+    let gated = super::ast::eval_ast_query_with_budget(absent, &ctx, std::time::Duration::ZERO);
+    assert!(!gated.matched);
+    assert!(
+        !timed_out(&gated),
+        "gated query walked: {:?}",
+        gated.warnings
+    );
+
+    let present = r#"((call_expression function: (identifier) @f) (#eq? @f "present_name"))"#;
+    let walked = super::ast::eval_ast_query_with_budget(present, &ctx, std::time::Duration::ZERO);
+    assert!(timed_out(&walked), "control must walk and time out");
+}
+
+/// The batched path gates too: queries the file cannot satisfy are answered
+/// without joining (and possibly timing out) the shared walk.
+#[test]
+fn ast_gate_answers_batched_queries_without_a_walk() {
+    let source = walk_heavy_source();
+    let parsed = parsed_for_test("bundle.js", source.as_bytes());
+    let tree = parsed.source_ast().expect("JavaScript parses").tree;
+    let absent_a = r#"((call_expression function: (identifier) @f) (#eq? @f "absent_a"))"#;
+    let absent_b = r#"((identifier) @i (#match? @i "absent_b"))"#;
+
+    let batch = super::ast::batch_ast_queries_with_budget(
+        tree,
+        &source,
+        FileType::JavaScript,
+        &[absent_a, absent_b],
+        None,
+        None,
+        Some(std::time::Duration::ZERO),
+    )
+    .expect("gated queries are answered, not timed out");
+    for query in [absent_a, absent_b] {
+        let result = &batch[query];
+        assert!(
+            !result.matched && result.warnings.is_empty(),
+            "{query}: {result:?}"
+        );
+    }
+}
+
+/// Regression guard for the per-query CPU ceiling. At 30 s, unanchored
+/// sibling queries ran to the ceiling one after another on minified bundles
+/// (~80-107 s per member of one VS Code extension) without matching; 5 s kept
+/// that extension's findings identical. Raise it only with a measured reason.
+#[test]
+fn ast_query_cpu_budget_stays_tight() {
+    assert!(
+        crate::analyzers::ast_walker::AST_QUERY_CPU_BUDGET <= std::time::Duration::from_secs(5)
+    );
 }

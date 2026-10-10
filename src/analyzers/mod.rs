@@ -356,19 +356,23 @@ pub(crate) fn detect_file_type_from_detected(
     file_data: &[u8],
     detected: Option<FileType>,
 ) -> FileType {
-    if is_dotenv_name(file_path) {
-        return FileType::Text;
-    }
-    if is_arch_package_metadata_name(file_path) {
-        return FileType::Text;
-    }
-    if is_routeros_script_name(file_path) {
+    let detected = detected
+        .filter(|ft| *ft != FileType::Pe || looks_like_pe_image(file_data))
+        .filter(|ft| *ft != FileType::Unknown);
+
+    // The name-based text overrides apply only to content that is not a
+    // compiled binary or an archive: otherwise naming an ELF or a zip `.env`
+    // would skip binary and member analysis entirely.
+    let opaque = detected.is_some_and(|ft| ft.is_binary() || ft.is_archive());
+    if !opaque
+        && (is_dotenv_name(file_path)
+            || is_arch_package_metadata_name(file_path)
+            || is_routeros_script_name(file_path))
+    {
         return FileType::Text;
     }
 
     detected
-        .filter(|ft| *ft != FileType::Pe || looks_like_pe_image(file_data))
-        .filter(|ft| *ft != FileType::Unknown)
         .or_else(|| sniff_script_type_from_content(file_data))
         .or_else(|| known_manifest_type_from_basename(file_path))
         .or_else(|| known_data_type_from_extension(file_path))
@@ -1043,6 +1047,28 @@ mod tests {
                 Path::new(".env.backup.20260617_154013"),
                 b"CLOUDFLOW_CENTER_API_KEY=7e83812d309d3954a6fcdc5482aca2da73125828ab0d1e4a781e30404a718cfe\n"
             ),
+            FileType::Text
+        );
+    }
+
+    #[test]
+    fn binaries_named_like_text_keep_their_content_type() {
+        let elf = b"\x7fELF\x02\x01\x01\0\0\0\0\0\0\0\0\0\x02\0\x3e\0\x01\0\0\0";
+        let zip = b"PK\x03\x04\x14\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
+        for name in [".env", ".env.backup", ".PKGINFO", "setup.rsc"] {
+            assert_ne!(
+                detect_file_type_from_data(Path::new(name), elf),
+                FileType::Text,
+                "ELF named {name}"
+            );
+            assert_ne!(
+                detect_file_type_from_data(Path::new(name), zip),
+                FileType::Text,
+                "zip named {name}"
+            );
+        }
+        assert_eq!(
+            detect_file_type_from_data(Path::new(".env"), b"API_KEY=abc123\n"),
             FileType::Text
         );
     }

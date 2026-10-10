@@ -5,6 +5,7 @@
 //! - Tree-sitter query execution
 //! - Safe AST traversal with depth limits
 
+use super::ast_gate::RequiredLiterals;
 use super::{build_regex, truncate_evidence};
 use crate::analyzers::ast_walker::{AST_QUERY_CPU_BUDGET, thread_cpu_time};
 use crate::composite_rules::ast_kinds::map_kind_to_node_types;
@@ -53,8 +54,23 @@ use streaming_iterator::StreamingIterator;
 /// those recompiled (serially, under the write lock) on every archive member —
 /// ~150 s CPU and a lock convoy on a 54k-member zip. Compilation is
 /// deterministic, so a cached failure is exactly as correct as retrying it.
-static QUERY_CACHE: LazyLock<RwLock<FxHashMap<(String, String), Option<Arc<tree_sitter::Query>>>>> =
+static QUERY_CACHE: LazyLock<RwLock<FxHashMap<(String, String), Option<Arc<CompiledAstQuery>>>>> =
     LazyLock::new(|| RwLock::new(FxHashMap::default()));
+
+/// A compiled `query:` and the literals its matches require of the source.
+struct CompiledAstQuery {
+    query: tree_sitter::Query,
+    literals: RequiredLiterals,
+}
+
+impl CompiledAstQuery {
+    /// Whether `source` holds every literal some pattern requires. `false`
+    /// proves the query cannot match, so the walk can be skipped.
+    fn may_match(&self, source: &[u8]) -> bool {
+        self.literals
+            .may_match(|literal| memchr::memmem::find(source, literal).is_some())
+    }
+}
 
 /// Combined `query:` set for one (language, sorted query list). `pattern_to_query[i]`
 /// is the index into that list for combined-query pattern `i`.
@@ -464,9 +480,13 @@ pub(super) fn eval_ast_query_with_budget<'a>(
     // Track parse errors but continue — tree-sitter recovers from minor errors
     let has_parse_errors = tree.root_node().has_error();
 
-    let Some(query) = cached_ast_query(lang, ctx.file_type, query_str) else {
+    let Some(compiled) = cached_ast_query(lang, ctx.file_type, query_str) else {
         return ConditionResult::no_match();
     };
+    if !compiled.may_match(source.as_bytes()) {
+        return ConditionResult::no_match();
+    }
+    let query = &compiled.query;
 
     // Execute the query with safety limits
     let mut query_cursor = tree_sitter::QueryCursor::new();
@@ -521,7 +541,7 @@ pub(super) fn eval_ast_query_with_budget<'a>(
     };
     let options = tree_sitter::QueryCursorOptions::default().progress_callback(&mut progress_cb);
     let mut matches =
-        query_cursor.matches_with_options(&query, tree.root_node(), source.as_bytes(), options);
+        query_cursor.matches_with_options(query, tree.root_node(), source.as_bytes(), options);
     let mut buffer1: Vec<u8> = Vec::new();
     let mut buffer2: Vec<u8> = Vec::new();
     'matches: while let Some(m) = matches.next() {
@@ -543,7 +563,7 @@ pub(super) fn eval_ast_query_with_budget<'a>(
         // Check text predicates (e.g., #eq?, #match?) using tree-sitter's built-in method
         // This is REQUIRED - tree-sitter does NOT automatically filter by text predicates
         let mut text_provider = SourceTextProvider(source.as_bytes());
-        if !m.satisfies_text_predicates(&query, &mut buffer1, &mut buffer2, &mut text_provider) {
+        if !m.satisfies_text_predicates(query, &mut buffer1, &mut buffer2, &mut text_provider) {
             continue; // Skip matches that don't satisfy predicates
         }
 
@@ -615,7 +635,7 @@ fn cached_ast_query(
     lang: &tree_sitter::Language,
     file_type: FileType,
     query_str: &str,
-) -> Option<Arc<tree_sitter::Query>> {
+) -> Option<Arc<CompiledAstQuery>> {
     // Compile the query, cached process-wide to avoid recompilation across files
     // and threads. The frequent case is a hit on the read-lock fast path. On a
     // miss we take the write lock and compile *while holding it*, double-checking
@@ -638,7 +658,10 @@ fn cached_ast_query(
         drop(cache);
         return entry;
     }
-    let compiled = tree_sitter::Query::new(lang, query_str).ok().map(Arc::new);
+    let compiled = tree_sitter::Query::new(lang, query_str).ok().map(|query| {
+        let literals = RequiredLiterals::of(&query, query_str);
+        Arc::new(CompiledAstQuery { query, literals })
+    });
     cache.insert(key, compiled.clone());
     drop(cache);
     compiled
@@ -686,7 +709,20 @@ pub(super) fn batch_ast_queries_with_budget(
         return None;
     }
     let lang = &*tree.language();
-    let mut compiling: Vec<(&str, Arc<tree_sitter::Query>)> = Vec::new();
+    let mut compiling: Vec<(&str, Arc<CompiledAstQuery>)> = Vec::new();
+    // Queries whose required literals the file lacks: answered "no match"
+    // without joining the walk. Queries share literals (`require`, `exec`),
+    // so each is searched for once.
+    let mut out: FxHashMap<String, ConditionResult> = FxHashMap::default();
+    let mut presence: FxHashMap<Vec<u8>, bool> = FxHashMap::default();
+    let mut contains = |literal: &[u8]| {
+        if let Some(&found) = presence.get(literal) {
+            return found;
+        }
+        let found = memchr::memmem::find(source.as_bytes(), literal).is_some();
+        presence.insert(literal.to_vec(), found);
+        found
+    };
     for &q in query_strs {
         // A batch runs under the tightest budget among its queries, and a
         // multi-wildcard query's is 100ms. Batched, it capped every ordinary
@@ -697,11 +733,17 @@ pub(super) fn batch_ast_queries_with_budget(
             continue;
         }
         if let Some(compiled) = cached_ast_query(lang, file_type, q) {
-            compiling.push((q, compiled));
+            if compiled.literals.may_match(&mut contains) {
+                compiling.push((q, compiled));
+            } else {
+                out.insert(q.to_string(), ConditionResult::no_match());
+            }
         }
     }
     if compiling.len() < 2 {
-        return None;
+        // Too few left to share a walk; the gate's answers still stand, and a
+        // lone query left out of the map walks on the per-trait path.
+        return (!out.is_empty()).then_some(out);
     }
 
     let combined_source: String = compiling
@@ -728,7 +770,7 @@ pub(super) fn batch_ast_queries_with_budget(
                 let mut pattern_to_query = Vec::new();
                 let mut expected = 0usize;
                 for (i, (_, q)) in compiling.iter().enumerate() {
-                    let n = q.pattern_count();
+                    let n = q.query.pattern_count();
                     expected = expected.saturating_add(n);
                     pattern_to_query.extend(std::iter::repeat_n(i, n));
                 }
@@ -876,6 +918,13 @@ pub(super) fn batch_ast_queries_with_budget(
             }
         }
     }
+    if timed_out.get() {
+        tracing::debug!(
+            queries = n,
+            budget_ms = cpu_budget.as_millis(),
+            "tree-sitter query batch hit its CPU budget; each query walks alone"
+        );
+    }
     // An interrupted shared walk has not established absence for queries it
     // never reached. Do not cache those partial negatives: evaluating each
     // query independently gives later source nodes their own bounded walk.
@@ -897,7 +946,6 @@ pub(super) fn batch_ast_queries_with_budget(
     }
 
     let has_parse_errors = tree.root_node().has_error();
-    let mut out = FxHashMap::default();
     for (i, (qstr, _)) in compiling.iter().enumerate() {
         if exceeded[i] && !timed_out.get() {
             continue;

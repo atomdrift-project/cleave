@@ -7,7 +7,7 @@ mod handlers;
 mod ratelimit;
 
 use axum::Router;
-use axum::extract::{ConnectInfo, Request, State};
+use axum::extract::{ConnectInfo, DefaultBodyLimit, Request, State};
 use axum::http::StatusCode;
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Json, Response};
@@ -188,8 +188,8 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         .route("/_/memory", get(handlers::memory_stats))
         .route("/_/requests", get(handlers::requests))
         .route("/_/threads", get(handlers::threads))
-        .merge(analysis_routes)
-        .layer(RequestBodyLimitLayer::new(config.max_body_size))
+        .merge(analysis_routes);
+    let app = limit_bodies(app, config.max_body_size)
         .layer(middleware::from_fn_with_state(
             Arc::clone(&state),
             rate_limit_middleware,
@@ -215,6 +215,17 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
 
     eprintln!("Server shut down");
     Ok(())
+}
+
+/// Bound every request body by `max`, and by nothing tighter.
+///
+/// axum's extractors add their own 2 MB default beneath any outer limit, so
+/// `Multipart` cut each upload off at 2 MB while the configured limit (250 MB
+/// by default) went unused.
+fn limit_bodies<S: Clone + Send + Sync + 'static>(router: Router<S>, max: usize) -> Router<S> {
+    router
+        .layer(DefaultBodyLimit::disable())
+        .layer(RequestBodyLimitLayer::new(max))
 }
 
 /// Rate limiting middleware.

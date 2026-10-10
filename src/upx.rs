@@ -2,7 +2,7 @@
 //!
 //! This module detects and unpacks UPX-compressed binaries for analysis.
 
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::Path;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -134,21 +134,14 @@ impl UPXDecompressor {
     }
 
     fn copy_to_writable_temp(file_path: &Path) -> Result<NamedTempFile, UPXError> {
-        let temp_file = NamedTempFile::new()?;
-        let temp_path = temp_file.path();
-
-        // UPX decompresses in place. `fs::copy` preserves read-only mode from
-        // source samples on Unix, so force the private temp copy writable.
-        std::fs::copy(file_path, temp_path)?;
-
-        let metadata = std::fs::metadata(temp_path)?;
-        let mut permissions = metadata.permissions();
-        if permissions.readonly() {
-            #[allow(clippy::permissions_set_readonly_false)]
-            permissions.set_readonly(false);
-            std::fs::set_permissions(temp_path, permissions)?;
-        }
-
+        // UPX decompresses in place, so it needs a private writable copy. Copy
+        // the bytes only: `fs::copy` would also carry the sample's mode bits
+        // (setuid, world-writable) onto a file in shared temp space, while
+        // `NamedTempFile` creates it owner-only.
+        let data = std::fs::read(file_path)?;
+        let mut temp_file = NamedTempFile::new()?;
+        temp_file.write_all(&data)?;
+        temp_file.flush()?;
         Ok(temp_file)
     }
 
@@ -176,6 +169,8 @@ impl UPXDecompressor {
             .arg(temp_path)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::piped())
+            .env_clear()
+            .envs(crate::subprocess::allowed_env())
             .spawn()?;
 
         let stderr = child
@@ -511,6 +506,25 @@ mod tests {
         let mut permissions = std::fs::metadata(source.path()).unwrap().permissions();
         permissions.set_readonly(false);
         std::fs::set_permissions(source.path(), permissions).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_copy_to_writable_temp_drops_source_mode_bits() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut source = NamedTempFile::new().unwrap();
+        source.write_all(b"UPX! setuid sample").unwrap();
+        source.flush().unwrap();
+        std::fs::set_permissions(source.path(), std::fs::Permissions::from_mode(0o4777)).unwrap();
+
+        let copied = UPXDecompressor::copy_to_writable_temp(source.path()).unwrap();
+        let mode = std::fs::metadata(copied.path())
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o7777, 0o600, "mode {mode:o}");
+        assert_eq!(std::fs::read(copied.path()).unwrap(), b"UPX! setuid sample");
     }
 
     // =========================================================================

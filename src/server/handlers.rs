@@ -400,13 +400,20 @@ async fn analyze_inner(
         }
     };
 
-    let mut file_size = 0;
-    while let Ok(Some(chunk)) = field.chunk().await {
-        if chunk.is_empty() {
-            continue;
+    let file_size = match save_field(&mut field, &mut tokio_file).await {
+        Ok(n) => n,
+        Err(SaveError::Body(e)) => {
+            warn!(
+                status = e.status().as_u16(),
+                "Upload body unreadable: {}", e
+            );
+            return (
+                e.status(),
+                Json(serde_json::json!({"error": e.body_text()})),
+            )
+                .into_response();
         }
-        file_size += chunk.len();
-        if let Err(e) = tokio::io::AsyncWriteExt::write_all(&mut tokio_file, &chunk).await {
+        Err(SaveError::Write(e)) => {
             warn!("Failed to write chunk to temp file: {}", e);
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -414,7 +421,7 @@ async fn analyze_inner(
             )
                 .into_response();
         }
-    }
+    };
 
     if let Err(e) = tokio::io::AsyncWriteExt::flush(&mut tokio_file).await {
         warn!("Failed to flush temp file: {}", e);
@@ -550,6 +557,36 @@ async fn analyze_inner(
     }
 }
 
+/// Why an upload could not be saved whole.
+enum SaveError {
+    /// The body broke off or passed a size limit; axum supplies the status.
+    Body(axum::extract::multipart::MultipartError),
+    /// The temp file could not be written.
+    Write(std::io::Error),
+}
+
+/// Stream `field` into `out`, returning the number of bytes written.
+///
+/// Any body error fails the upload. Treating one as end-of-file analyzed the
+/// prefix received so far and answered with its verdict as if it covered the
+/// whole file — a clean report for a payload past the cut.
+async fn save_field<W>(
+    field: &mut axum::extract::multipart::Field<'_>,
+    out: &mut W,
+) -> Result<usize, SaveError>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    let mut size = 0;
+    while let Some(chunk) = field.chunk().await.map_err(SaveError::Body)? {
+        size += chunk.len();
+        tokio::io::AsyncWriteExt::write_all(out, &chunk)
+            .await
+            .map_err(SaveError::Write)?;
+    }
+    Ok(size)
+}
+
 /// Check memory pressure and attempt recovery before rejecting requests.
 ///
 /// Returns `Some(Response)` if the request should be rejected due to memory pressure,
@@ -656,7 +693,7 @@ pub(super) async fn analyze_path(
     let client_ip = addr.ip();
     let request_start = Instant::now();
 
-    let span = info_span!("request-path", %client_ip, request_id, path = %request.path);
+    let span = info_span!("request-path", %client_ip, request_id, path = ?request.path);
 
     analyze_path_inner(state, request, request_start, request_id)
         .instrument(span)
@@ -689,7 +726,7 @@ async fn analyze_path_inner(
 
     // Validate path is absolute
     if !path.is_absolute() {
-        warn!(path = %request.path, "Rejected relative path");
+        warn!(path = ?request.path, "Rejected relative path");
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": "Path must be absolute"})),
@@ -697,9 +734,31 @@ async fn analyze_path_inner(
             .into_response();
     }
 
+    let not_allowed = || {
+        (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "Path not in allowed directories"})),
+        )
+            .into_response()
+    };
+
     // Canonicalize the path to resolve symlinks and ..
     let Ok(canonical_path) = tokio::fs::canonicalize(path).await else {
-        warn!(path = %request.path, "File not found or not accessible");
+        // Outside the allowed directories a missing path must answer exactly
+        // as an existing one does: a distinct 404 let any client probe for
+        // files anywhere on the host (`~/.ssh/id_ed25519`, say).
+        let within = !path
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+            && state
+                .allowed_local_paths
+                .iter()
+                .any(|dir| path.starts_with(dir));
+        if !within {
+            warn!(path = ?request.path, "Path not in allowed directories");
+            return not_allowed();
+        }
+        warn!(path = ?request.path, "File not found or not accessible");
         return (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": "File not found"})),
@@ -715,15 +774,11 @@ async fn analyze_path_inner(
 
     if !allowed {
         warn!(
-            path = %request.path,
-            canonical = %canonical_path.display(),
+            path = ?request.path,
+            canonical = ?canonical_path,
             "Path not in allowed directories"
         );
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Path not in allowed directories"})),
-        )
-            .into_response();
+        return not_allowed();
     }
 
     // File existence already verified by canonicalize()
@@ -731,7 +786,7 @@ async fn analyze_path_inner(
     let path_str = request.path.clone();
     let extract_dir = state.extract_dir.clone();
 
-    info!(path = %path_str, "Starting analysis");
+    info!(path = ?path_str, "Starting analysis");
 
     // Hard gate: reject if too many analysis tasks are running. The slot is
     // released when the analysis ends (the guard moves into its task).
@@ -793,7 +848,7 @@ async fn analyze_path_inner(
 
     let _cancel_on_drop = CancelOnDrop(cancellation);
     let Ok(result) = tokio::time::timeout(ANALYSIS_TIMEOUT, handle).await else {
-        warn!(path = %path_str, "Analysis timed out; cancelling");
+        warn!(path = ?path_str, "Analysis timed out; cancelling");
         return timed_out_response();
     };
 
@@ -829,7 +884,7 @@ async fn analyze_path_inner(
                 .map(|d| d.display().to_string());
 
             info!(
-                path = %path_str,
+                path = ?path_str,
                 elapsed_ms = elapsed_ms,
                 hostile = hostile,
                 suspicious = suspicious,
@@ -850,18 +905,18 @@ async fn analyze_path_inner(
         }
         Ok(Err(e)) => {
             let status = analysis_error_status(&e);
-            warn!(path = %path_str, elapsed_ms = elapsed_ms, status = status.as_u16(), "Analysis failed: {:?}", e);
+            warn!(path = ?path_str, elapsed_ms = elapsed_ms, status = status.as_u16(), "Analysis failed: {:?}", e);
             analysis_error_response(&e)
         }
         Err(e) => {
             let detail = if e.is_panic() {
                 let msg = e.into_panic();
                 let msg = panic_payload_message(&msg);
-                error!(path = %path_str, elapsed_ms = elapsed_ms, panic = %msg, "Analysis panicked");
+                error!(path = ?path_str, elapsed_ms = elapsed_ms, panic = %msg, "Analysis panicked");
                 format!("analysis panicked: {msg}")
             } else {
                 let msg = format!("{e:?}");
-                warn!(path = %path_str, elapsed_ms = elapsed_ms, "Task join error: {msg}");
+                warn!(path = ?path_str, elapsed_ms = elapsed_ms, "Task join error: {msg}");
                 format!("task join error: {msg}")
             };
             (
@@ -999,6 +1054,123 @@ mod tests {
 
         drop(guards);
         assert!(InFlightGuard::try_register(&state, 101, request()).is_some());
+    }
+
+    /// An upload past axum's 2 MB extractor default is saved whole through the
+    /// server's own body limits, and one past the configured limit is refused
+    /// rather than saved short and analyzed as if complete.
+    #[tokio::test]
+    async fn uploads_are_saved_whole_or_refused() -> Result<(), Box<dyn std::error::Error>> {
+        use axum::body::Body;
+        use axum::extract::Multipart;
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        async fn save(mut multipart: Multipart) -> Result<String, StatusCode> {
+            let mut field = multipart
+                .next_field()
+                .await
+                .ok()
+                .flatten()
+                .ok_or(StatusCode::BAD_REQUEST)?;
+            match super::save_field(&mut field, &mut Vec::new()).await {
+                Ok(n) => Ok(n.to_string()),
+                Err(super::SaveError::Body(e)) => Err(e.status()),
+                Err(super::SaveError::Write(_)) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+            }
+        }
+        const LIMIT: usize = 4 << 20;
+        let app = super::super::limit_bodies(
+            axum::Router::new().route("/", axum::routing::post(save)),
+            LIMIT,
+        );
+
+        // No Content-Length: the limit is enforced mid-stream, the path that
+        // used to end the upload silently.
+        let upload = |len: usize| {
+            let boundary = "cleave-test-boundary";
+            let mut body = format!(
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"big.bin\"\r\n\r\n"
+            )
+            .into_bytes();
+            body.resize(body.len() + len, b'A');
+            body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+            Request::post("/")
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+        };
+
+        let whole = app.clone().oneshot(upload(3 << 20)?).await?;
+        assert_eq!(whole.status(), StatusCode::OK);
+        let saved = axum::body::to_bytes(whole.into_body(), usize::MAX).await?;
+        assert_eq!(saved, (3usize << 20).to_string().as_bytes());
+
+        // Refused, never analyzed short. (axum reports tower-http's mid-stream
+        // limit as a malformed body, 400; a declared Content-Length over the
+        // limit gets tower-http's 413 before the handler runs.)
+        let over = app.oneshot(upload(LIMIT + 1)?).await?;
+        assert!(over.status().is_client_error(), "{}", over.status());
+        Ok(())
+    }
+
+    /// Outside the allowed directories, a path that exists and one that does
+    /// not get the same answer, so `/analyze-path` cannot probe the host.
+    #[tokio::test]
+    async fn analyze_path_hides_existence_outside_allowed_dirs()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use super::super::AppState;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize};
+
+        let allowed = tempfile::tempdir()?;
+        let allowed_dir = allowed.path().canonicalize()?;
+        let outside = tempfile::tempdir()?;
+        let present = outside.path().join("present");
+        std::fs::write(&present, b"x")?;
+
+        let state = Arc::new(AppState {
+            rate_limiter: super::super::ratelimit::RateLimiter::new(0),
+            max_body_size: 0,
+            max_rss_bytes: u64::MAX,
+            allowed_local_paths: vec![allowed_dir.clone()],
+            extract_dir: None,
+            next_request_id: AtomicU64::new(1),
+            active_tasks: AtomicUsize::new(0),
+            max_concurrent_tasks: 1,
+            overloaded_since: parking_lot::Mutex::new(None),
+            in_flight: dashmap::DashMap::new(),
+            reload_in_progress: AtomicBool::new(false),
+        });
+        let answer = async |path: &std::path::Path| {
+            let request = super::AnalyzePathRequest {
+                path: path.display().to_string(),
+            };
+            let response = super::analyze_path_inner(
+                Arc::clone(&state),
+                request,
+                std::time::Instant::now(),
+                1,
+            )
+            .await;
+            let status = response.status();
+            axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .map(|body| (status, body))
+        };
+
+        let exists = answer(&present).await?;
+        assert_eq!(exists.0, StatusCode::FORBIDDEN);
+        assert_eq!(answer(&outside.path().join("missing")).await?, exists);
+        // `..` cannot make a missing outside path look like it is inside.
+        let escaping = allowed_dir.join("..").join("missing");
+        assert_eq!(answer(&escaping).await?, exists);
+        // Inside, a missing file is still reported as missing.
+        let inside = answer(&allowed_dir.join("missing")).await?;
+        assert_eq!(inside.0, StatusCode::NOT_FOUND);
+        Ok(())
     }
 
     #[test]

@@ -25,7 +25,9 @@ use std::sync::OnceLock;
 // anchored prefix composition, engine-mirrored parse mode). The v1 files
 // on disk hold atom_set entries computed by in-development revisions of
 // that algorithm; abandoning them recomputes everything once (~2.3 s).
-const FILE_NAME: &str = "regex-derivations-v2.json";
+// v3: prefix literals stop at the last whole UTF-8 character; v2 files hold
+// U+FFFD-substituted prefixes for patterns whose common prefix split one.
+const FILE_NAME: &str = "regex-derivations-v3.json";
 
 #[derive(Default, Serialize, Deserialize)]
 struct MemoData {

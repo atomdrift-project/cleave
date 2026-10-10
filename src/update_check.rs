@@ -112,7 +112,9 @@ fn notify(latest: &str, url: Option<&str>, installed: &str) {
     if !update_manifest::is_newer(latest, installed) {
         return;
     }
-    match url {
+    // `latest` is semver by now; `url` is free text bound for a terminal, where
+    // an escape sequence could rewrite what the user sees.
+    match url.filter(|u| !u.chars().any(char::is_control)) {
         Some(url) => {
             eprintln!("update available: cleave {latest} (you have {installed}) — {url}");
         }

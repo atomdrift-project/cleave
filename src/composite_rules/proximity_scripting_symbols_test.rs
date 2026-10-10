@@ -55,6 +55,8 @@ mod proximity_scripting_symbols_tests {
                     args: None,
                     alias: None,
                     not: None,
+                    module_level: false,
+                    receiver: None,
                 })
             })
             .collect();

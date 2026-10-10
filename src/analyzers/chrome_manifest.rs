@@ -23,19 +23,6 @@ pub(crate) struct ChromeManifestAnalyzer {
     engine: crate::Engine,
 }
 
-/// Deserialize a boolean that might be encoded as a string (e.g. `"true"` instead of `true`).
-fn deserialize_bool_tolerant<'de, D>(deserializer: D) -> Result<bool, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value = serde_json::Value::deserialize(deserializer)?;
-    match value {
-        serde_json::Value::Bool(b) => Ok(b),
-        serde_json::Value::String(s) => Ok(s.eq_ignore_ascii_case("true")),
-        _ => Ok(false),
-    }
-}
-
 /// Deserialize an optional boolean that might be a string, preserving None for absent values.
 fn deserialize_option_bool_tolerant<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
 where
@@ -111,10 +98,6 @@ struct ContentScript {
     #[serde(default)]
     #[allow(dead_code)] // Deserialized from JSON
     js: Vec<String>,
-    #[serde(default, deserialize_with = "deserialize_string_tolerant")]
-    run_at: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_bool_tolerant")]
-    all_frames: bool,
 }
 
 #[derive(Deserialize, Default, Debug)]
@@ -265,45 +248,19 @@ impl ChromeManifestAnalyzer {
             && manifest.web_accessible_resources.is_empty()
     }
 
-    fn is_electron_chrome_api_fixture(
-        &self,
-        manifest: &ChromeManifest,
-        report: &AnalysisReport,
-    ) -> bool {
-        let Some(content_script) = manifest.content_scripts.first() else {
-            return false;
-        };
-        let Some(background) = &manifest.background else {
-            return false;
-        };
-
-        report.target.size_bytes <= 512
-            && manifest.name.as_deref() == Some("chrome-api")
-            && manifest.version.as_deref() == Some("1.0")
-            && manifest.manifest_version == Some(2)
-            && manifest.permissions.len() == 1
-            && manifest.permissions.first() == Some(&serde_json::Value::String("<all_urls>".into()))
-            && manifest.host_permissions.is_empty()
-            && manifest.content_scripts.len() == 1
-            && content_script.matches.len() == 1
-            && content_script.matches.first().map(String::as_str) == Some("<all_urls>")
-            && content_script.js.len() == 1
-            && content_script.js.first().map(String::as_str) == Some("main.js")
-            && content_script.run_at.as_deref() == Some("document_start")
-            && !content_script.all_frames
-            && background.scripts.len() == 1
-            && background.scripts.first()
-                == Some(&serde_json::Value::String("background.js".into()))
-            && background.persistent == Some(false)
-            && background.service_worker.is_none()
-            && manifest.update_url.is_none()
-            && manifest.externally_connectable.is_none()
-            && manifest.web_accessible_resources.is_empty()
+    /// Electron's `spec/fixtures/extensions/chrome-api/manifest.json`, which
+    /// ships in Electron source trees. Pinned by content hash, not by shape:
+    /// its shape (a script injected into every URL at `document_start` plus a
+    /// background page) is exactly what a capable malicious extension declares.
+    fn is_electron_chrome_api_fixture(report: &AnalysisReport) -> bool {
+        const ELECTRON_CHROME_API_SHA256: &str =
+            "7eff0f97ed0d15789324981fad82a50b2e9810386b347fad2249d43942e6393c";
+        report.target.sha256 == ELECTRON_CHROME_API_SHA256
     }
 
     fn is_known_benign_fixture(&self, manifest: &ChromeManifest, report: &AnalysisReport) -> bool {
         self.is_bare_all_urls_fixture(manifest, report)
-            || self.is_electron_chrome_api_fixture(manifest, report)
+            || Self::is_electron_chrome_api_fixture(report)
     }
 
     /// Normalize a match pattern / host permission / URL-pattern permission to
@@ -1019,5 +976,45 @@ mod tests {
                 .iter()
                 .any(|f| f.id == "objectives/supply-chain/metadata-anomaly/update-url::external")
         );
+    }
+
+    /// Byte-for-byte copy of Electron's chrome-api fixture manifest.
+    const ELECTRON_CHROME_API_MANIFEST: &str = r#"{
+  "name": "chrome-api",
+  "version": "1.0",
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["main.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "background": {
+    "scripts": ["background.js"],
+    "persistent": false
+  },
+  "permissions": [
+    "<all_urls>"
+  ],
+  "manifest_version": 2
+}
+"#;
+
+    #[test]
+    fn test_only_the_exact_electron_fixture_is_exempt() {
+        let analyzer = ChromeManifestAnalyzer::new();
+        let has_all_urls = |content: &str| {
+            analyzer
+                .analyze_manifest(Path::new("manifest.json"), content)
+                .unwrap()
+                .findings
+                .iter()
+                .any(|f| f.id == "metadata/permission/host/all-urls::declared")
+        };
+        assert!(!has_all_urls(ELECTRON_CHROME_API_MANIFEST));
+        // The same shape under any other bytes is an ordinary extension.
+        assert!(has_all_urls(
+            &ELECTRON_CHROME_API_MANIFEST.replace("\"1.0\"", "\"1.1\"")
+        ));
     }
 }

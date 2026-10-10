@@ -15,7 +15,13 @@ pub(crate) const MAX_AST_DEPTH: usize = 10_000;
 /// accrues ~no CPU). A wall-clock budget conflates the two and silently drops
 /// AST detections on starved threads; CPU time does not. See the archive
 /// finding-drop investigation.
-pub(crate) const AST_QUERY_CPU_BUDGET: Duration = Duration::from_secs(30);
+///
+/// Was 30 s (2026-10-09). Several unanchored-sibling queries ran to that ceiling
+/// one after another on minified bundles — five on one 7.7 MB VS Code extension
+/// `main.js`, ~80-107 s per member — and matched nothing. At 5 s the four slow
+/// members of that extension produced identical findings at 3-4x less wall
+/// (2 s and 10 s were also finding-identical; 5 s keeps headroom).
+pub(crate) const AST_QUERY_CPU_BUDGET: Duration = Duration::from_secs(5);
 
 /// CPU time consumed by the calling thread (immune to descheduling under load).
 ///

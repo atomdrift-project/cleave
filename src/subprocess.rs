@@ -2,8 +2,10 @@
 //!
 //! A hostile archive can drive an extractor into an endless loop, and an
 //! unbounded wait parks the analysis thread for good. Every tool cleave runs
-//! on analysis input goes through [`output_with_timeout`].
+//! on analysis input goes through [`output_with_timeout`], and gets only the
+//! environment [`scrub_env`] allows.
 
+use std::ffi::OsString;
 use std::io::{self, Read};
 use std::process::{Child, Command, ExitStatus, Output};
 use std::thread::JoinHandle;
@@ -18,6 +20,39 @@ pub(crate) const EXTRACT_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// How often a running tool is checked for exit.
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
+
+/// The environment variables a tool parsing untrusted input may inherit: what
+/// it needs to find helpers, temp space, and a locale, plus the variables a
+/// Windows process needs to start. Everything else, such as API tokens and
+/// service keys, stays out of reach of a tool a hostile sample compromises.
+/// Mirrors `filefacts::tools::scrub_env`, which the filefacts release cleave
+/// builds against does not have yet.
+const ENV_ALLOWLIST: &[&str] = &[
+    "PATH",
+    "HOME",
+    "TMPDIR",
+    "TMP",
+    "TEMP",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "SYSTEMROOT",
+    "WINDIR",
+    "COMSPEC",
+    "PATHEXT",
+];
+
+/// The allowlisted subset of this process's environment.
+pub(crate) fn allowed_env() -> impl Iterator<Item = (&'static str, OsString)> {
+    ENV_ALLOWLIST
+        .iter()
+        .filter_map(|&key| std::env::var_os(key).map(|value| (key, value)))
+}
+
+/// Replace `command`'s environment with [`allowed_env`].
+pub(crate) fn scrub_env(command: &mut Command) {
+    command.env_clear().envs(allowed_env());
+}
 
 /// Spawn `command` and wait for it, killing it once `timeout` elapses.
 ///
@@ -92,6 +127,27 @@ mod tests {
         assert!(output.status.success());
         assert_eq!(output.stdout, b"out\n");
         assert_eq!(output.stderr, b"err\n");
+    }
+
+    #[test]
+    fn scrubbed_tool_sees_only_allowlisted_env() {
+        let mut command = Command::new("env");
+        command
+            .env("CLEAVE_TEST_SECRET", "hunter2")
+            .stdout(Stdio::piped());
+        scrub_env(&mut command);
+        let output = output_with_timeout(&mut command, PROBE_TIMEOUT)
+            .unwrap()
+            .unwrap();
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert!(!stdout.contains("CLEAVE_TEST_SECRET"), "{stdout}");
+        for line in stdout.lines() {
+            let key = line.split('=').next().unwrap();
+            assert!(ENV_ALLOWLIST.contains(&key), "unexpected variable {key}");
+        }
+        if std::env::var_os("PATH").is_some() {
+            assert!(stdout.lines().any(|line| line.starts_with("PATH=")));
+        }
     }
 
     #[test]

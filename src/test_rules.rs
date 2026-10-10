@@ -1364,7 +1364,7 @@ impl<'a> RuleDebugger<'a> {
     ) -> ConditionDebugResult {
         use crate::composite_rules::condition::SymbolKind;
         use crate::composite_rules::evaluators::symbol_string::{
-            eval_call, eval_symbol, eval_symbol_fact,
+            CallSite, eval_call, eval_symbol, eval_symbol_fact,
         };
 
         // Use the production evaluators, including symbol-family selection,
@@ -1377,6 +1377,10 @@ impl<'a> RuleDebugger<'a> {
                 query.regex.as_ref(),
                 query.arg.as_ref(),
                 query.args.as_deref(),
+                CallSite {
+                    module_level: query.module_level,
+                    receiver: query.receiver.as_ref().map(|r| &r.from),
+                },
                 ctx,
             ),
             Some(kind @ (SymbolKind::Member | SymbolKind::Bind | SymbolKind::Identifier)) => {

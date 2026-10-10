@@ -820,19 +820,16 @@ impl StringMatchIndex {
             }
         }
 
-        if common_prefix_len < 3 {
-            return None;
-        }
-
-        // Convert to string (regex-syntax guarantees valid UTF-8 for string patterns)
+        // The common prefix can end inside a multi-byte character (`[éê]`
+        // shares only the lead byte C3). Keep the whole characters before it:
+        // a lossy U+FFFD stand-in would name bytes no match contains.
         let prefix_bytes = &first.as_bytes()[..common_prefix_len];
-        let prefix = String::from_utf8_lossy(prefix_bytes);
+        let prefix = match std::str::from_utf8(prefix_bytes) {
+            Ok(s) => s,
+            Err(e) => std::str::from_utf8(&prefix_bytes[..e.valid_up_to()]).ok()?,
+        };
 
-        if prefix.len() >= 3 {
-            Some(prefix.into_owned())
-        } else {
-            None
-        }
+        (prefix.len() >= 3).then(|| prefix.to_owned())
     }
 
     /// Build the string match index from trait definitions.
@@ -3468,6 +3465,23 @@ mod tests {
             StringMatchIndex::extract_regex_literal("hello[0-9]"),
             Some("hello".to_string())
         );
+    }
+
+    /// The common prefix of a class's literals can end inside a multi-byte
+    /// character (`é` = C3 A9, `ê` = C3 AA). The prefix must stop at the last
+    /// whole character: a U+FFFD stand-in names bytes no matching input holds,
+    /// and every prefilter built on it would reject the trait's real matches.
+    #[test]
+    fn test_extract_regex_literal_splits_no_utf8_char() {
+        assert_eq!(
+            StringMatchIndex::extract_regex_literal("abc[éê]"),
+            Some("abc".to_string())
+        );
+        assert_eq!(
+            StringMatchIndex::extract_regex_literal("(?i)123é"),
+            Some("123".to_string())
+        );
+        assert_eq!(StringMatchIndex::extract_regex_literal("ab[éê]"), None);
     }
 
     #[test]

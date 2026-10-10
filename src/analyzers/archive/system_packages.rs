@@ -187,21 +187,18 @@ pub(crate) fn list_7z_entries_from_file(path: &Path) -> Result<Vec<ArchiveEntry>
     // Header-encrypted 7z archives make `7z l` prompt for a password on stdin,
     // which would block forever. Detach stdin and pass `-y`/empty `-p` so the
     // tool fails fast instead of waiting for interactive input.
-    let run = |bin: &str| {
-        let mut command = std::process::Command::new(bin);
-        command
-            .arg("l")
-            .arg("-y")
-            .arg("-p")
-            .arg(path)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
+    let bin = crate::analyzers::sfx_detector::sevenzip_cmd().context("7z is not installed")?;
+    let mut command = std::process::Command::new(bin);
+    command
+        .args(["l", "-y", "-p", "--"])
+        .arg(path)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    crate::subprocess::scrub_env(&mut command);
+    let output =
         crate::subprocess::output_with_timeout(&mut command, crate::subprocess::LIST_TIMEOUT)
-    };
-    let output = run("7z")
-        .or_else(|_| run("7zz"))
-        .context("Failed to run 7z listing")?;
+            .context("Failed to run 7z listing")?;
     let Some(output) = output else {
         anyhow::bail!(
             "7z listing killed after {}s",
@@ -973,14 +970,25 @@ pub(crate) fn extract_rar(
                         continue;
                     }
 
-                    archive = file_archive
-                        .extract_to(&out_path)
-                        .context("Failed to extract RAR entry")?;
+                    // Decode in memory, never with `extract_to`: given a full
+                    // destination name, UnRAR turns off its own path and link
+                    // safety and resolves RAR5 hardlink and file-copy targets
+                    // against our working directory, so a hostile archive could
+                    // copy or hardlink host files into the analysis tree.
+                    // `read` runs UnRAR's test mode, which creates nothing.
+                    let (data, next) =
+                        file_archive.read().context("Failed to extract RAR entry")?;
+                    archive = next;
 
-                    // Track bytes
-                    if !guard.check_bytes(unpacked_size, &filename) {
+                    // The header size can lie; account for the bytes decoded.
+                    if !guard.check_bytes(data.len() as u64, &filename) {
                         anyhow::bail!("Exceeded maximum total extraction size");
                     }
+                    let mut out = fs::OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(&out_path)?;
+                    out.write_all(&data)?;
                 } else if is_directory {
                     let Some(dir_path) = sanitize_entry_path(&filename, dest_dir) else {
                         guard.add_hostile_reason(HostileArchiveReason::PathTraversal(

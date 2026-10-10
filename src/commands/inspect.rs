@@ -1,9 +1,11 @@
 //! Facts command — dump everything filefacts extracts from one or more files.
 //!
 //! Output shape:
-//! - **One target, no view** → pretty JSON object with every
-//!   top-level view (`fileid`, `values`, `strings`, `metrics`, `ast`,
-//!   `sections`, `imports`, `exports`, `functions`, `errors`).
+//! - **One target, no view** → pretty JSON object with every view
+//!   filefacts extracts (`fileid`, `values`, `text`, `literals`,
+//!   `comments`, `metrics`, `sections`, `symbols`, `flow`, `identity`,
+//!   `references`, `archive_members`, `errors`). `flow` is `null` when
+//!   the file has no flow producer, which is not an empty graph.
 //! - **One target, view filter** → pretty JSON of that one view.
 //! - **Multiple targets** → JSONL, one line per file with a `"path"`
 //!   field plus either the full bundle or the single filtered tree.
@@ -91,10 +93,14 @@ fn inspect_one(
             "values": parsed.values(),
             "text": parsed.text(),
             "literals": parsed.literals(),
+            "comments": parsed.comments(),
             "metrics": parsed.metrics(),
             "sections": parsed.sections(),
             "symbols": parsed.symbols(),
+            "flow": parsed.flow(),
+            "identity": parsed.identity(),
             "references": parsed.references(),
+            "archive_members": parsed.archive_members(),
             "errors": parsed.errors(),
         }),
         Some(cli::InspectTree::Fileid { .. }) => serde_json::to_value(parsed.fileid())?,
@@ -113,5 +119,77 @@ fn inspect_one(
         Some(cli::InspectTree::Identifiers { .. }) => kind_to_value(SymbolKind::Identifier)?,
         Some(cli::InspectTree::References { .. }) => serde_json::to_value(parsed.references())?,
         Some(cli::InspectTree::Errors { .. }) => serde_json::to_value(parsed.errors())?,
+        Some(cli::InspectTree::Comments { .. }) => serde_json::to_value(parsed.comments())?,
+        Some(cli::InspectTree::Flow { .. }) => serde_json::to_value(parsed.flow())?,
+        Some(cli::InspectTree::Identity { .. }) => serde_json::to_value(parsed.identity())?,
+        Some(cli::InspectTree::ArchiveMembers { .. }) => {
+            serde_json::to_value(parsed.archive_members())?
+        }
     })
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    fn facts_of(source: &str, tree: Option<&cli::InspectTree>) -> Value {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("loader.js");
+        fs::write(&path, source).unwrap();
+        inspect_one(path.to_str().unwrap(), tree, &filefacts::OpenOptions::new()).unwrap()
+    }
+
+    /// The dump is the authoring reference for every filefacts-backed
+    /// condition, so a view the engine reads must not be missing from it
+    /// (`flow`, which `arg.from` provenance runs on, once was).
+    #[test]
+    fn full_dump_carries_every_filefacts_view() {
+        let facts = facts_of("const cp = require('child_process');\n", None);
+        let keys: Vec<&str> = facts
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        for view in [
+            "fileid",
+            "values",
+            "text",
+            "literals",
+            "comments",
+            "metrics",
+            "sections",
+            "symbols",
+            "flow",
+            "identity",
+            "references",
+            "archive_members",
+            "errors",
+        ] {
+            assert!(keys.contains(&view), "missing `{view}` in {keys:?}");
+        }
+    }
+
+    /// The flow view shows what provenance can follow: a method call's
+    /// receiver traced to the `require` that produced it.
+    #[test]
+    fn flow_view_links_a_call_receiver_to_its_origin() {
+        let flow = facts_of(
+            "const cp = require('child_process');\ncp.execSync('id');\n",
+            Some(&cli::InspectTree::Flow {
+                targets: Vec::new(),
+            }),
+        );
+        let values = flow["values"].as_array().unwrap();
+        let require = values
+            .iter()
+            .position(|v| v["target"] == "require")
+            .expect("require call in flow");
+        let exec = values
+            .iter()
+            .find(|v| v["target"] == "cp.execSync")
+            .expect("method call in flow");
+        assert_eq!(exec["receiver"], json!(require));
+    }
 }

@@ -469,9 +469,10 @@ pub enum Command {
 
     /// Dump raw file facts for one or more files.
     ///
-    /// `cleave facts <file> [<file>...]` dumps every top-level view
-    /// (`fileid`, `values`, `strings`, `metrics`, `ast`, `sections`,
-    /// `imports`, `exports`, `functions`, `errors`). A single file
+    /// `cleave facts <file> [<file>...]` dumps every view filefacts
+    /// extracts (`fileid`, `values`, `text`, `literals`, `comments`,
+    /// `metrics`, `sections`, `symbols`, `flow`, `identity`,
+    /// `references`, `archive_members`, `errors`). A single file
     /// produces a pretty JSON object; multiple files produce JSONL
     /// keyed by `path`.
     ///
@@ -832,6 +833,32 @@ pub enum InspectTree {
         #[arg(required = true)]
         targets: Vec<String>,
     },
+    /// Source comments (what `literals` deliberately leaves out)
+    Comments {
+        /// File paths to inspect (1+ required).
+        #[arg(required = true)]
+        targets: Vec<String>,
+    },
+    /// Value-flow graph behind `arg.from` provenance: calls with their
+    /// argument and receiver inputs, member reads, literals, helper
+    /// functions, and the producer's limitations
+    Flow {
+        /// File paths to inspect (1+ required).
+        #[arg(required = true)]
+        targets: Vec<String>,
+    },
+    /// Normalized identity claims (name, version, publisher, signature)
+    Identity {
+        /// File paths to inspect (1+ required).
+        #[arg(required = true)]
+        targets: Vec<String>,
+    },
+    /// Archive member listing (name, size, kind)
+    ArchiveMembers {
+        /// File paths to inspect (1+ required).
+        #[arg(required = true)]
+        targets: Vec<String>,
+    },
 }
 
 impl InspectTree {
@@ -854,7 +881,11 @@ impl InspectTree {
             | Self::Binds { targets }
             | Self::Identifiers { targets }
             | Self::References { targets }
-            | Self::Errors { targets } => targets,
+            | Self::Errors { targets }
+            | Self::Comments { targets }
+            | Self::Flow { targets }
+            | Self::Identity { targets }
+            | Self::ArchiveMembers { targets } => targets,
         }
     }
 
@@ -879,6 +910,10 @@ impl InspectTree {
             Self::Identifiers { .. } => "identifiers",
             Self::References { .. } => "references",
             Self::Errors { .. } => "errors",
+            Self::Comments { .. } => "comments",
+            Self::Flow { .. } => "flow",
+            Self::Identity { .. } => "identity",
+            Self::ArchiveMembers { .. } => "archive_members",
         }
     }
 }

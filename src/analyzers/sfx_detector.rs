@@ -461,6 +461,7 @@ fn probed_tool(
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
+        crate::subprocess::scrub_env(&mut probe);
         match crate::subprocess::output_with_timeout(&mut probe, crate::subprocess::PROBE_TIMEOUT) {
             Ok(Some(_)) => return Some(cached.get_or_init(|| path).clone()),
             Ok(None) => tracing::warn!(
@@ -483,7 +484,7 @@ fn innoextract_cmd() -> Option<std::path::PathBuf> {
     probed_tool(&CHOICE, &["innoextract"], &["--version"])
 }
 
-fn sevenzip_cmd() -> Option<std::path::PathBuf> {
+pub(crate) fn sevenzip_cmd() -> Option<std::path::PathBuf> {
     static CHOICE: OnceLock<std::path::PathBuf> = OnceLock::new();
     probed_tool(&CHOICE, &["7zz", "7z", "7za", "7zr"], &["i"])
 }
@@ -501,6 +502,7 @@ pub(crate) fn run_7z(src: &Path, out: &Path) -> bool {
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
+    crate::subprocess::scrub_env(&mut command);
     crate::subprocess::output_with_timeout(&mut command, crate::subprocess::EXTRACT_TIMEOUT)
         .is_ok_and(|output| output.is_some_and(|o| o.status.success()))
 }
@@ -515,6 +517,7 @@ fn run_innoextract(command: &Path, src: &Path, out: &Path) -> InnoExtractResult 
         std::ffi::OsStr::new("--extract"),
         std::ffi::OsStr::new("--output-dir"),
         out.as_os_str(),
+        std::ffi::OsStr::new("--"),
         src.as_os_str(),
     ];
     let mut extract = std::process::Command::new(command);
@@ -523,6 +526,7 @@ fn run_innoextract(command: &Path, src: &Path, out: &Path) -> InnoExtractResult 
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped());
+    crate::subprocess::scrub_env(&mut extract);
     match crate::subprocess::output_with_timeout(&mut extract, crate::subprocess::EXTRACT_TIMEOUT) {
         Ok(None) => InnoExtractResult {
             extracted: false,

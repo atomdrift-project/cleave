@@ -191,7 +191,15 @@ impl SampleExtractionConfig {
         // Reject path traversal attempts — full_path must stay inside extract_dir.
         // This is defence-in-depth: archive entry names are already sanitized upstream,
         // but an absolute or ../-containing relative_path must never escape extract_dir.
-        if !full_path.starts_with(&self.extract_dir) {
+        // `Path::starts_with` compares components lexically, so it passes
+        // `<dir>/<sha>/../../x`; only plain names may follow the sha directory.
+        let plain = std::path::Path::new(relative_path).components().all(|c| {
+            matches!(
+                c,
+                std::path::Component::Normal(_) | std::path::Component::CurDir
+            )
+        });
+        if !plain || !full_path.starts_with(&self.extract_dir) {
             tracing::warn!(
                 "Rejecting extract_dir path traversal attempt: {}",
                 full_path.display()

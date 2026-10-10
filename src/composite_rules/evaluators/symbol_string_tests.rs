@@ -247,7 +247,15 @@ fn test_eval_call_location_required_without_offset() {
     let ctx = create_test_context(&report, b"eval(payload)");
     let exact = "eval".to_string();
 
-    let result = super::eval_call(Some(&exact), None, None, None, None, &ctx);
+    let result = super::eval_call(
+        Some(&exact),
+        None,
+        None,
+        None,
+        None,
+        super::CallSite::default(),
+        &ctx,
+    );
 
     assert!(result.matched);
     assert_eq!(result.evidence[0].location.as_deref(), Some("0x0"));

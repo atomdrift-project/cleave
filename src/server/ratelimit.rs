@@ -1,7 +1,7 @@
 //! Token bucket rate limiter for per-IP request throttling.
 
 use dashmap::DashMap;
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv6Addr};
 use std::time::Instant;
 
 /// Maximum number of tracked IPs before forced eviction.
@@ -67,9 +67,18 @@ impl RateLimiter {
             }
         }
 
+        // One IPv6 host is routinely handed a whole /64, so a bucket per
+        // address gave it 2^64 buckets: no limit at all, and enough fresh keys
+        // to hold the table at its cap, where every request pays for a sweep.
+        // An IPv4-mapped address is the IPv4 client it maps.
+        let key = match ip.to_canonical() {
+            IpAddr::V6(v6) => IpAddr::V6(Ipv6Addr::from_bits(v6.to_bits() & !u128::from(u64::MAX))),
+            v4 => v4,
+        };
+
         let now = Instant::now();
 
-        let mut entry = self.buckets.entry(ip).or_insert_with(|| TokenBucket {
+        let mut entry = self.buckets.entry(key).or_insert_with(|| TokenBucket {
             tokens: self.max_tokens,
             last_update: now,
         });
@@ -154,5 +163,33 @@ mod tests {
 
         // ip2 should still have tokens
         assert!(limiter.check(ip2));
+    }
+
+    #[test]
+    fn ipv6_clients_share_a_bucket_per_64() {
+        let limiter = RateLimiter::new(2);
+        let host = |low: u64| {
+            IpAddr::V6(Ipv6Addr::from_bits(
+                (0x2001_0db8_u128 << 96) | u128::from(low),
+            ))
+        };
+
+        // Rotating addresses inside one /64 draws from one bucket.
+        assert!(limiter.check(host(1)));
+        assert!(limiter.check(host(2)));
+        assert!(!limiter.check(host(3)));
+        assert_eq!(limiter.active_count(), 1);
+
+        // The neighbouring /64 is another client.
+        let neighbour = IpAddr::V6(Ipv6Addr::from_bits((0x2001_0db8_0000_0001_u128 << 64) | 1));
+        assert!(limiter.check(neighbour));
+    }
+
+    #[test]
+    fn ipv4_mapped_ipv6_is_the_ipv4_client() {
+        let limiter = RateLimiter::new(1);
+        let v4 = Ipv4Addr::new(192, 0, 2, 7);
+        assert!(limiter.check(IpAddr::V4(v4)));
+        assert!(!limiter.check(IpAddr::V6(v4.to_ipv6_mapped())));
     }
 }

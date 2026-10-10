@@ -1309,6 +1309,8 @@ impl SymbolAliasQuery {
             args: None,
             alias: None,
             not,
+            module_level: false,
+            receiver: None,
         })
     }
 }
@@ -1877,6 +1879,23 @@ pub(crate) struct SymbolQuery {
     pub alias: Option<AliasFilter>,
     #[serde(default)]
     pub not: Option<Vec<NotException>>,
+    /// `kind: call` only: the call is evaluated in module-level code, so it
+    /// runs when the file loads (Node `require`, Python `import`) rather than
+    /// when some function is later called. Requires filefacts' flow graph;
+    /// `false` places no constraint.
+    #[serde(default)]
+    pub module_level: bool,
+    /// `kind: call` only: where the receiver comes from — the `cp` in
+    /// `cp.execSync()` — traced like `arg.from`.
+    #[serde(default)]
+    pub receiver: Option<ReceiverFilter>,
+}
+
+/// Provenance of a call's receiver, the value a method is called on.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ReceiverFilter {
+    pub from: FlowOriginFilter,
 }
 
 /// Payload for `type: comment` — source comment-body matches.
@@ -2269,60 +2288,16 @@ impl Condition {
                         ));
                     }
                     if let Some(origin) = &arg.from {
-                        let has_call = !origin.call.trim().is_empty();
-                        if usize::from(has_call)
-                            + usize::from(origin.value.is_some())
-                            + usize::from(origin.member.is_some())
-                            + usize::from(origin.whole_value.is_some())
-                            + usize::from(origin.field_exists)
-                            + usize::from(origin.field_absent)
-                            != 1
-                            || origin.member.as_ref().is_some_and(|p| p.trim().is_empty())
-                            || origin.through.len() > 32
-                        {
-                            return Err(anyhow::anyhow!(
-                                "provenance requires exactly one of call/value/member/whole_value/field_exists/field_absent and at most 32 transfer models"
-                            ));
-                        }
-                        if (origin.field_exists || origin.field_absent)
-                            && (origin.field.as_ref().is_none_or(|s| s.trim().is_empty())
-                                || !origin.through.is_empty())
-                        {
-                            anyhow::bail!(
-                                "field presence/absence requires a nonempty field and no transfer models"
-                            );
-                        }
-                        if origin.whole_value.is_some() && !origin.through.is_empty() {
-                            anyhow::bail!("whole_value does not accept provenance transfer models");
-                        }
-                        if !has_call && (origin.literal.is_some() || origin.argument != 0) {
-                            return Err(anyhow::anyhow!(
-                                "literal/argument constraints require a source call"
-                            ));
-                        }
-                        for pattern in std::iter::once(&origin.call)
-                            .filter(|s| !s.is_empty())
-                            .chain(origin.value.iter())
-                            .chain(origin.whole_value.iter())
-                            .chain(origin.member.iter())
-                            .chain(origin.literal.iter())
-                            .chain(origin.through.iter().map(|m| &m.call))
-                        {
-                            if let Some(e) = regex_compile_error(pattern) {
-                                anyhow::bail!("invalid provenance regex: {e}");
-                            }
-                        }
-                        for model in &origin.through {
-                            if model.call.trim().is_empty()
-                                || model.arguments.len() > 32
-                                || model.arguments.is_empty() && !model.receiver
-                            {
-                                return Err(anyhow::anyhow!(
-                                    "transfer model requires a call and contributing arguments or receiver"
-                                ));
-                            }
-                        }
+                        validate_origin(origin)?;
                     }
+                }
+                if (query.module_level || query.receiver.is_some())
+                    && !matches!(query.kind, Some(SymbolKind::Call))
+                {
+                    anyhow::bail!("module_level/receiver require kind: call");
+                }
+                if let Some(receiver) = &query.receiver {
+                    validate_origin(&receiver.from)?;
                 }
                 Ok(())
             }
@@ -4218,6 +4193,8 @@ is: curl
             args: None,
             alias: None,
             not: None,
+            module_level: false,
+            receiver: None,
         });
         assert!(cond.check_greedy_patterns().is_none());
     }
@@ -4546,6 +4523,8 @@ mod can_match_file_type_tests {
             args: None,
             alias: None,
             not: None,
+            module_level: false,
+            receiver: None,
         });
         let text = Condition::Text(TextQuery {
             substr: Some("eval".to_string()),
@@ -4589,4 +4568,60 @@ mod can_match_file_type_tests {
         assert!(!hex_section.can_match_file_type(&FileType::Python));
         assert!(hex_section.can_match_file_type(&FileType::Elf));
     }
+}
+
+/// Structural checks shared by every provenance filter (`arg.from`,
+/// `receiver.from`).
+fn validate_origin(origin: &FlowOriginFilter) -> Result<()> {
+    let has_call = !origin.call.trim().is_empty();
+    if usize::from(has_call)
+        + usize::from(origin.value.is_some())
+        + usize::from(origin.member.is_some())
+        + usize::from(origin.whole_value.is_some())
+        + usize::from(origin.field_exists)
+        + usize::from(origin.field_absent)
+        != 1
+        || origin.member.as_ref().is_some_and(|p| p.trim().is_empty())
+        || origin.through.len() > 32
+    {
+        return Err(anyhow::anyhow!(
+            "provenance requires exactly one of call/value/member/whole_value/field_exists/field_absent and at most 32 transfer models"
+        ));
+    }
+    if (origin.field_exists || origin.field_absent)
+        && (origin.field.as_ref().is_none_or(|s| s.trim().is_empty()) || !origin.through.is_empty())
+    {
+        anyhow::bail!("field presence/absence requires a nonempty field and no transfer models");
+    }
+    if origin.whole_value.is_some() && !origin.through.is_empty() {
+        anyhow::bail!("whole_value does not accept provenance transfer models");
+    }
+    if !has_call && (origin.literal.is_some() || origin.argument != 0) {
+        return Err(anyhow::anyhow!(
+            "literal/argument constraints require a source call"
+        ));
+    }
+    for pattern in std::iter::once(&origin.call)
+        .filter(|s| !s.is_empty())
+        .chain(origin.value.iter())
+        .chain(origin.whole_value.iter())
+        .chain(origin.member.iter())
+        .chain(origin.literal.iter())
+        .chain(origin.through.iter().map(|m| &m.call))
+    {
+        if let Some(e) = regex_compile_error(pattern) {
+            anyhow::bail!("invalid provenance regex: {e}");
+        }
+    }
+    for model in &origin.through {
+        if model.call.trim().is_empty()
+            || model.arguments.len() > 32
+            || model.arguments.is_empty() && !model.receiver
+        {
+            return Err(anyhow::anyhow!(
+                "transfer model requires a call and contributing arguments or receiver"
+            ));
+        }
+    }
+    Ok(())
 }

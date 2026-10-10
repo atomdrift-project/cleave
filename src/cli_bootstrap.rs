@@ -2,38 +2,14 @@ use cleave::cli;
 use tracing_subscriber::EnvFilter;
 
 pub(crate) fn get_parent_pid() -> u32 {
-    #[cfg(target_os = "linux")]
+    // The parent pid is one syscall; this used to spawn `ps` on macOS, looked
+    // up on PATH, where a planted `./ps` could run at startup.
+    #[cfg(unix)]
     {
-        if let Ok(stat) = std::fs::read_to_string("/proc/self/stat")
-            && let Some(close_paren) = stat.rfind(')')
-        {
-            let after_comm = &stat[close_paren + 1..];
-            let fields: Vec<&str> = after_comm.split_whitespace().collect();
-            if fields.len() > 1
-                && let Ok(ppid) = fields[1].parse::<u32>()
-            {
-                return ppid;
-            }
-        }
-        0
+        std::os::unix::process::parent_id()
     }
 
-    #[cfg(target_os = "macos")]
-    {
-        if let Ok(output) = std::process::Command::new("ps")
-            .args(["-o", "ppid=", "-p", &std::process::id().to_string()])
-            .output()
-            && output.status.success()
-        {
-            let ppid_str = String::from_utf8_lossy(&output.stdout);
-            if let Ok(ppid) = ppid_str.trim().parse::<u32>() {
-                return ppid;
-            }
-        }
-        0
-    }
-
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(not(unix))]
     {
         0
     }

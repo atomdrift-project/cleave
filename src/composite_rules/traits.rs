@@ -157,6 +157,8 @@ fn eval_condition(
             args,
             alias,
             not,
+            module_level,
+            receiver,
         }) => {
             let merged_not = merge_not_exceptions(not.as_ref(), rule.not);
             // Source-AST projection kinds (call/member/bind/identifier)
@@ -174,6 +176,10 @@ fn eval_condition(
                         regex.as_ref(),
                         arg.as_ref(),
                         args.as_deref(),
+                        crate::composite_rules::evaluators::symbol_string::CallSite {
+                            module_level: *module_level,
+                            receiver: receiver.as_ref().map(|r| &r.from),
+                        },
                         ctx,
                     )
                 ),
@@ -4474,6 +4480,8 @@ mod scope_tests {
                     args: None,
                     alias: None,
                     not: None,
+                    module_level: false,
+                    receiver: None,
                 })
             })
             .collect();
@@ -4860,6 +4868,8 @@ mod scope_tests {
             args: None,
             alias: None,
             not: None,
+            module_level: false,
+            receiver: None,
         })
     }
 

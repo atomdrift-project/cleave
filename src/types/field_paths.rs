@@ -171,6 +171,7 @@ pub(crate) const CLEAVE_OWNED_METRIC_FIELDS: &[&str] = &[
     // to stay inside the check. Absent entirely on an offline scan.
     "references.declared_count",
     "references.unresolved_count",
+    "references.unavailable_command_count",
     "references.unresolved_extension_count",
     // How many of a file's declared dependencies resolved to a registry
     // security hold — the provider's statement that it removed the package.

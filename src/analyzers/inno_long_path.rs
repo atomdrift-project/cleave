@@ -45,9 +45,22 @@ fn run_with_timeout(
     }
     let mut argv: Vec<*const libc::c_char> = owned_args.iter().map(|arg| arg.as_ptr()).collect();
     argv.push(std::ptr::null());
+    // The same scrubbed environment `subprocess::scrub_env` gives a `Command`.
+    let mut owned_env = Vec::new();
+    for (key, value) in crate::subprocess::allowed_env() {
+        let mut entry = format!("{key}=").into_bytes();
+        entry.extend_from_slice(value.as_bytes());
+        owned_env.push(
+            std::ffi::CString::new(entry)
+                .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?,
+        );
+    }
+    let mut envp: Vec<*const libc::c_char> = owned_env.iter().map(|var| var.as_ptr()).collect();
+    envp.push(std::ptr::null());
 
     // SAFETY: the child branch uses only async-signal-safe syscalls before
-    // exec. Argument buffers and descriptors are prepared before fork.
+    // exec. Argument and environment buffers and descriptors are prepared
+    // before fork.
     let pid = unsafe { libc::fork() };
     if pid == -1 {
         return Err(io::Error::last_os_error());
@@ -68,7 +81,7 @@ fn run_with_timeout(
             libc::raise(libc::SIGSTOP);
             libc::dup2(stdout_null.as_raw_fd(), libc::STDOUT_FILENO);
             libc::dup2(stderr_file.as_raw_fd(), libc::STDERR_FILENO);
-            libc::execv(executable.as_ptr(), argv.as_ptr());
+            libc::execve(executable.as_ptr(), argv.as_ptr(), envp.as_ptr());
             libc::_exit(127);
         }
     }

@@ -503,7 +503,11 @@ fn download_once(
 ) -> Result<Vec<u8>, FetchError> {
     let url = format!("{}/{path}", channel.base());
     tracing::debug!("fetching {url}");
-    let mut builder = reqwest::blocking::Client::builder().timeout(TIMEOUT);
+    // The bucket answers over TLS only; refusing a redirect down to plain
+    // HTTP keeps a hop from serving the manifest that vouches for the bundle.
+    let mut builder = reqwest::blocking::Client::builder()
+        .https_only(true)
+        .timeout(TIMEOUT);
     if let Some(connect) = connect {
         builder = builder.connect_timeout(connect);
     }

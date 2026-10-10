@@ -5543,6 +5543,29 @@ traits:
         assert_eq!(path1, path2);
     }
 
+    /// A member name with `..` must never be written outside the extract dir.
+    /// `Path::starts_with` compares components lexically, so
+    /// `<dir>/<sha>/../../x` passed a containment check built on it.
+    #[test]
+    fn test_sample_extraction_rejects_escaping_member_names() {
+        #[allow(clippy::expect_used)]
+        let root = tempfile::tempdir().expect("create root");
+        let config = SampleExtractionConfig::new(root.path().join("extract"));
+
+        for name in [
+            "../../escaped.txt",
+            "lib/../../../escaped.txt",
+            "/abs/escaped.txt",
+        ] {
+            assert_eq!(
+                config.extract("abc123def456", name, b"payload"),
+                None,
+                "{name}"
+            );
+        }
+        assert!(!root.path().join("escaped.txt").exists());
+    }
+
     /// A native phar, built the way `ext/phar` lays one out: a stub ending in
     /// `__HALT_COMPILER(); ?>`, a little-endian manifest, then each member's
     /// stored or compressed bytes back to back. `(name, content, flags,

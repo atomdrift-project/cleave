@@ -952,6 +952,11 @@ impl super::CapabilityMapper {
             && !has_strings
             && !inline_yara.is_some_and(|results| results.values().any(|e| !e.is_empty()))
             && !is_structured_manifest
+            // The follow phase has retained facts but no source bytes. Its
+            // located HTTP outcomes must still reach metrics-based traits.
+            && !report.filefacts_metrics.as_ref().is_some_and(|metrics| {
+                metrics.contains_key("references.declared_count")
+            })
             && binary_data.len() < 100
         {
             return vec![];

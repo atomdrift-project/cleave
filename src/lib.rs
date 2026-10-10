@@ -1674,6 +1674,17 @@ pub fn graft_reference_outcome_traits(
     file_sha: &str,
     options: &AnalysisOptions,
 ) -> Result<usize> {
+    graft_located_reference_outcome_traits(report, file_sha, options, &Default::default())
+}
+
+/// Re-evaluate follow-phase facts with the source spans of their fetch edges.
+/// The spans locate the declaring calls, not bytes from an unavailable payload.
+pub fn graft_located_reference_outcome_traits(
+    report: &mut AnalysisReport,
+    file_sha: &str,
+    options: &AnalysisOptions,
+    spans: &std::collections::BTreeMap<String, Vec<filefacts::Span>>,
+) -> Result<usize> {
     let Some(file) = report.files.iter().find(|f| f.sha256 == file_sha) else {
         return Ok(0);
     };
@@ -1698,13 +1709,98 @@ pub fn graft_reference_outcome_traits(
         architectures: None,
     });
     scratch.filefacts_metrics = file.filefacts_metrics.clone();
+    scratch.filefacts_metric_spans = Some(spans.clone());
+    scratch.findings = file.findings.clone();
+    // Archive retention may release evidence text while preserving byte spans.
+    // Rehydrate locations only, so post-fetch proximity checks retain the
+    // original source coordinates without inventing unavailable source text.
+    for finding in &mut scratch.findings {
+        if finding.evidence.iter().all(|e| e.offsets.is_empty()) {
+            if let Some(spans) = &finding.precomputed_spans {
+                for &[offset, len] in spans {
+                    let mut evidence = crate::types::Evidence::new("retained-span", "cleave", "")
+                        .with_offset(offset)
+                        .with_location(format!("0x{offset:x}"));
+                    evidence.match_len = Some(len);
+                    finding.evidence.push(evidence);
+                }
+            }
+        }
+    }
     scratch.files.push(file.clone());
     let no_bytes: &[u8] = &[];
     let found = mapper.evaluate_traits_with_ast(&scratch, no_bytes, None, None);
     if found.is_empty() {
         return Ok(0);
     }
-    let mut grafted = report.graft_findings(file_sha, found);
+    let mut grafted = report.graft_findings(file_sha, found.clone());
+    // File-local composites must see both the retained source observations and
+    // the new follow facts. Archive pooling alone cannot evaluate these rules.
+    scratch.findings.extend(found);
+    let local = mapper.evaluate_composite_rules(
+        &scratch,
+        no_bytes,
+        None,
+        None,
+        &crate::composite_rules::SectionMap::default(),
+        None,
+        None,
+        &[],
+    );
+    grafted += report.graft_findings(file_sha, local);
+
+    // Re-run the declaring member's immediate container with its real type
+    // and member origins. The registry/package helper below evaluates only
+    // registry-joined outer rules; it cannot evaluate archive-scoped rules.
+    // Keep unrelated (including nested) archives out of this evidence pool.
+    let parent_path = report
+        .files
+        .iter()
+        .find(|f| f.sha256 == file_sha)
+        .and_then(|f| {
+            f.path
+                .rsplit_once("!!")
+                .map(|(parent, _)| parent.to_owned())
+        });
+    if let Some(parent) = parent_path
+        .and_then(|path| report.files.iter().find(|f| f.path == path))
+        .cloned()
+    {
+        let mut container = AnalysisReport::new(crate::types::TargetInfo {
+            path: parent.path.clone(),
+            file_type: parent.file_type.clone(),
+            size_bytes: parent.size,
+            sha256: parent.sha256.clone(),
+            architectures: None,
+        });
+        container.findings = parent.findings.clone();
+        container.filefacts_metrics = parent.filefacts_metrics.clone();
+        let mut nested = Vec::new();
+        let mut origins = rustc_hash::FxHashMap::default();
+        let bit = crate::composite_rules::FileType::from_str(&parent.file_type).type_bit();
+        for finding in &parent.findings {
+            *origins.entry(finding.id.to_string()).or_default() |= bit;
+        }
+        for member in report.files.iter().filter(|f| {
+            f.path
+                .rsplit_once("!!")
+                .is_some_and(|(p, _)| p == parent.path)
+        }) {
+            let bit = crate::composite_rules::FileType::from_str(&member.file_type).type_bit();
+            for finding in &member.findings {
+                *origins.entry(finding.id.to_string()).or_default() |= bit;
+                nested.push(finding.clone());
+            }
+            container.files.push(member.clone());
+        }
+        let fresh = mapper.evaluate_container_composites(
+            &container,
+            &nested,
+            &parent.file_type,
+            Some(&origins),
+        );
+        grafted += report.graft_findings(&parent.sha256, fresh);
+    }
 
     // The atomic facts landed on one member, but a rule that convicts on them
     // pairs them with facts from elsewhere in the artifact — the manifest that

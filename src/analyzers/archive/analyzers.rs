@@ -4080,7 +4080,7 @@ impl ArchiveAnalyzer {
                 }
 
                 // Skip benign library packages
-                if is_benign_java_path(path) {
+                if is_benign_java_path(path.strip_prefix(temp_dir).unwrap_or(path)) {
                     return false;
                 }
 
@@ -4100,7 +4100,9 @@ impl ArchiveAnalyzer {
             .iter()
             .enumerate()
             .filter(|(_, entry)| {
-                !is_benign_java_path(entry.path()) && !interesting_paths.contains(entry.path())
+                let path = entry.path();
+                !is_benign_java_path(path.strip_prefix(temp_dir).unwrap_or(path))
+                    && !interesting_paths.contains(path)
             })
             .map(|(index, entry)| {
                 let len = entry.metadata().map_or(0, |meta| meta.len());
@@ -4276,7 +4278,11 @@ impl ArchiveAnalyzer {
         // verdict rests on sort to the front and survive it.
         let mut non_class_files: Vec<_> = other_files
             .into_iter()
-            .filter(|e| is_nested_archive_member(e.path(), None) || !is_benign_java_path(e.path()))
+            .filter(|e| {
+                let path = e.path();
+                is_nested_archive_member(path, None)
+                    || !is_benign_java_path(path.strip_prefix(temp_dir).unwrap_or(path))
+            })
             .filter(|e| is_interesting_jar_resource(e.path(), None))
             .collect();
         // Path breaks rank ties so the selection is reproducible; walkdir

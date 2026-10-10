@@ -523,6 +523,8 @@ mod validation_tests {
             args: None,
             alias: None,
             not: None,
+            module_level: false,
+            receiver: None,
         });
 
         let not = vec![NotException::Shorthand("test".to_string())];
@@ -548,6 +550,8 @@ mod validation_tests {
             args: None,
             alias: None,
             not: None,
+            module_level: false,
+            receiver: None,
         });
 
         let not = vec![NotException::Shorthand("testing".to_string())];
@@ -571,6 +575,8 @@ mod validation_tests {
             args: None,
             alias: None,
             not: None,
+            module_level: false,
+            receiver: None,
         });
 
         let not = vec![NotException::Shorthand("hurl".to_string())];
@@ -597,6 +603,8 @@ mod validation_tests {
             args: None,
             alias: None,
             not: None,
+            module_level: false,
+            receiver: None,
         });
 
         let not = vec![NotException::Shorthand("curl".to_string())];
@@ -620,6 +628,8 @@ mod validation_tests {
             args: None,
             alias: None,
             not: None,
+            module_level: false,
+            receiver: None,
         });
 
         let not = vec![NotException::Shorthand("hurl".to_string())];
@@ -1788,6 +1798,8 @@ mod llm_validation_tests {
             args: None,
             alias: None,
             not: None,
+            module_level: false,
+            receiver: None,
         });
 
         let warning = cond.check_symbol_regex_whitespace();
@@ -1811,6 +1823,8 @@ mod llm_validation_tests {
             args: None,
             alias: None,
             not: None,
+            module_level: false,
+            receiver: None,
         });
 
         let warning = cond.check_symbol_regex_whitespace();
@@ -1832,6 +1846,8 @@ mod llm_validation_tests {
             args: None,
             alias: None,
             not: None,
+            module_level: false,
+            receiver: None,
         });
 
         let warning = cond.check_symbol_regex_whitespace();
@@ -1852,6 +1868,8 @@ mod llm_validation_tests {
             args: None,
             alias: None,
             not: None,
+            module_level: false,
+            receiver: None,
         });
 
         let warning = cond.check_symbol_regex_whitespace();
@@ -1872,6 +1890,8 @@ mod llm_validation_tests {
             args: None,
             alias: None,
             not: None,
+            module_level: false,
+            receiver: None,
         });
 
         let warning = cond.check_symbol_regex_whitespace();

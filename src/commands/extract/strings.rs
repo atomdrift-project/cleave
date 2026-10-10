@@ -114,8 +114,10 @@ fn run_direct(
                 #[cfg(target_os = "macos")]
                 {
                     if file_type == FileType::MachO
-                        && let Ok(nm_output) = std::process::Command::new("nm")
-                            .args(["-u", "-m", &*path.to_string_lossy()])
+                        && let Some(nm) = filefacts::tools::resolve("nm")
+                        && let Ok(nm_output) = std::process::Command::new(nm)
+                            .args(["-u", "-m", "--"])
+                            .arg(path)
                             .output()
                     {
                         let nm_str = String::from_utf8_lossy(&nm_output.stdout);

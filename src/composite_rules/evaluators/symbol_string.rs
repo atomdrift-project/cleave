@@ -1287,6 +1287,22 @@ fn can_use_byte_matching(pattern: &str) -> bool {
 /// against the rule's name predicates, and — when `arg` is set —
 /// requires at least one of the call's `args[]` to match the arg
 /// filter on shape + value.
+/// Call-site constraints beyond the target name and its arguments, both
+/// answered by filefacts' flow graph.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct CallSite<'q> {
+    /// The call must run in module-level (load-time) code.
+    pub module_level: bool,
+    /// Where the call's receiver must come from.
+    pub receiver: Option<&'q crate::composite_rules::condition::FlowOriginFilter>,
+}
+
+impl CallSite<'_> {
+    const fn needs_flow(self) -> bool {
+        self.module_level || self.receiver.is_some()
+    }
+}
+
 #[must_use]
 pub(crate) fn eval_call<'a>(
     exact: Option<&String>,
@@ -1294,11 +1310,13 @@ pub(crate) fn eval_call<'a>(
     regex: Option<&String>,
     arg_filter: Option<&crate::composite_rules::condition::ArgFilter>,
     args_filters: Option<&[crate::composite_rules::condition::ArgFilter]>,
+    site: CallSite<'_>,
     ctx: &EvaluationContext<'a>,
 ) -> ConditionResult {
     let Some(view) = ctx.report.filefacts.as_ref() else {
         if arg_filter.is_some_and(|f| f.from.is_some())
             || args_filters.is_some_and(|fs| fs.iter().any(|f| f.from.is_some()))
+            || site.needs_flow()
         {
             ctx.report
                 .analysis_gaps
@@ -1322,7 +1340,8 @@ pub(crate) fn eval_call<'a>(
         };
         let target = target.as_deref().unwrap_or("");
         let needs_flow = arg_filter.is_some_and(|f| f.from.is_some())
-            || args_filters.is_some_and(|fs| fs.iter().any(|f| f.from.is_some()));
+            || args_filters.is_some_and(|fs| fs.iter().any(|f| f.from.is_some()))
+            || site.needs_flow();
         let canonical = if needs_flow {
             flow(ctx)
                 .and_then(|flow| flow_call(flow, *offset, target, args.len()))
@@ -1350,7 +1369,14 @@ pub(crate) fn eval_call<'a>(
             && !args.iter().enumerate().any(|(i, a)| {
                 filter.index.is_none_or(|wanted| wanted == i)
                     && arg_matches(a, filter)
-                    && origin_matches(*offset, target, args.len(), i, filter, ctx)
+                    && origin_matches(
+                        *offset,
+                        target,
+                        args.len(),
+                        FlowInput::Argument(i),
+                        filter.from.as_ref(),
+                        ctx,
+                    )
             })
         {
             continue;
@@ -1361,8 +1387,35 @@ pub(crate) fn eval_call<'a>(
         // multi-positional shape like `File.rename("a.png", "b.exe")`.
         if let Some(filters) = args_filters
             && !all_filters_match_distinct_with(args, filters, |i, filter| {
-                origin_matches(*offset, target, args.len(), i, filter, ctx)
+                origin_matches(
+                    *offset,
+                    target,
+                    args.len(),
+                    FlowInput::Argument(i),
+                    filter.from.as_ref(),
+                    ctx,
+                )
             })
+        {
+            continue;
+        }
+
+        if site.module_level
+            && !flow(ctx)
+                .and_then(|flow| flow_call(flow, *offset, target, args.len()))
+                .is_some_and(|call| call.module_level)
+        {
+            continue;
+        }
+        if site.receiver.is_some()
+            && !origin_matches(
+                *offset,
+                target,
+                args.len(),
+                FlowInput::Receiver,
+                site.receiver,
+                ctx,
+            )
         {
             continue;
         }
@@ -1616,17 +1669,24 @@ fn flow_call<'a>(
     unique.then_some(first)
 }
 
+/// Which of a call's inputs a provenance filter traces.
+#[derive(Clone, Copy)]
+enum FlowInput {
+    Argument(usize),
+    Receiver,
+}
+
 fn origin_matches(
     offset: Option<u64>,
     target: &str,
     argument_count: usize,
-    argument: usize,
-    filter: &crate::composite_rules::condition::ArgFilter,
+    input: FlowInput,
+    origin: Option<&crate::composite_rules::condition::FlowOriginFilter>,
     ctx: &EvaluationContext<'_>,
 ) -> bool {
     use crate::types::AnalysisGap;
     let gaps = &ctx.report.analysis_gaps;
-    let Some(origin) = &filter.from else {
+    let Some(origin) = origin else {
         return true;
     };
     let source_pattern = (!origin.call.is_empty())
@@ -1658,7 +1718,11 @@ fn origin_matches(
         gaps.record(AnalysisGap::FlowCallUnavailable);
         return false;
     };
-    let Some(value) = call.inputs.get(argument).copied() else {
+    let value = match input {
+        FlowInput::Argument(argument) => call.inputs.get(argument).copied(),
+        FlowInput::Receiver => call.receiver,
+    };
+    let Some(value) = value else {
         gaps.record(AnalysisGap::FlowCallUnavailable);
         return false;
     };
@@ -3195,8 +3259,15 @@ mod multi_arg_tests {
                 None,
                 None,
             );
-            let result =
-                super::eval_call(Some(&"send".into()), None, None, Some(&filter), None, &ctx);
+            let result = super::eval_call(
+                Some(&"send".into()),
+                None,
+                None,
+                Some(&filter),
+                None,
+                super::CallSite::default(),
+                &ctx,
+            );
             assert_eq!(result.matched, expected, "{source}");
             assert_eq!(
                 report.analysis_gaps.is_empty(),
@@ -3246,6 +3317,7 @@ mod multi_arg_tests {
                 None,
                 Some(&filter),
                 None,
+                super::CallSite::default(),
                 &ctx,
             );
             assert_eq!(result.matched, expected, "{expression}");
@@ -3307,8 +3379,15 @@ mod multi_arg_tests {
                 None,
                 None,
             );
-            let result =
-                super::eval_call(Some(&"send".into()), None, None, Some(&filter), None, &ctx);
+            let result = super::eval_call(
+                Some(&"send".into()),
+                None,
+                None,
+                Some(&filter),
+                None,
+                super::CallSite::default(),
+                &ctx,
+            );
             assert!(!result.matched);
             assert!(report.analysis_gaps.iter().any(|g| g.label() == expected));
             let (file, _, _) = report.into_file_analysis(0, &crate::Engine::empty());
@@ -3376,8 +3455,15 @@ mod multi_arg_tests {
                 None,
                 None,
             );
-            let result =
-                super::eval_call(Some(&"write".into()), None, None, Some(&filter), None, &ctx);
+            let result = super::eval_call(
+                Some(&"write".into()),
+                None,
+                None,
+                Some(&filter),
+                None,
+                super::CallSite::default(),
+                &ctx,
+            );
             assert_eq!(result.matched, expected, "{source}");
         }
         for (selection, valid) in [
@@ -3423,6 +3509,82 @@ mod multi_arg_tests {
             &[s("a.exe"), s("b.exe")],
             &[rx(r"\.exe$"), rx(r"\.exe$")]
         ));
+    }
+
+    /// `module_level` and `receiver` answer what a tree-sitter query over
+    /// `program` children used to: a method invoked on a `require` result in
+    /// code that runs when the module loads. Each line is a separate file.
+    #[test]
+    fn call_site_scope_and_receiver_provenance() {
+        use crate::composite_rules::condition::{FlowOriginFilter, SymbolQuery};
+        use crate::composite_rules::context::EvaluationContext;
+        use crate::composite_rules::types::FileType;
+        use crate::types::{AnalysisReport, FilefactsView, TargetInfo};
+
+        let require = FlowOriginFilter {
+            call: "^require$".into(),
+            ..Default::default()
+        };
+        let load_time = super::CallSite {
+            module_level: true,
+            receiver: Some(&require),
+        };
+        for (source, expected) in [
+            (
+                "const cp = require('child_process'); cp.execSync('id');",
+                true,
+            ),
+            (
+                "var cp = require('child_process'); if (x) { cp.execSync('id'); }",
+                true,
+            ),
+            ("require('child_process').execSync('id');", true),
+            // Runs only when `later` is called.
+            (
+                "const cp = require('child_process'); function later() { cp.execSync('id'); }",
+                false,
+            ),
+            // The receiver is not the require result.
+            (
+                "const cp = require('child_process'); console.warn('x');",
+                false,
+            ),
+            ("const cp = make(); cp.execSync('id');", false),
+        ] {
+            let parsed = filefacts::OpenOptions::new()
+                .path(std::path::Path::new("a.js"))
+                .open(source.as_bytes());
+            let mut report = AnalysisReport::new(TargetInfo {
+                path: "a.js".into(),
+                file_type: "javascript".into(),
+                size_bytes: source.len() as u64,
+                sha256: String::new(),
+                architectures: None,
+            });
+            report.filefacts = Some(FilefactsView {
+                flow: parsed.flow().cloned(),
+                symbols: parsed.symbols().into_iter().cloned().collect(),
+                ..Default::default()
+            });
+            let ctx = EvaluationContext::new(
+                &report,
+                source.as_bytes(),
+                FileType::JavaScript,
+                &[],
+                None,
+                None,
+            );
+            let result = super::eval_call(None, None, None, None, None, load_time, &ctx);
+            assert_eq!(result.matched, expected, "{source}");
+        }
+
+        // Both filters belong to call sites alone.
+        let misplaced = crate::composite_rules::Condition::Symbol(SymbolQuery {
+            exact: Some("cp".into()),
+            module_level: true,
+            ..Default::default()
+        });
+        assert!(misplaced.validate().is_err());
     }
 }
 
@@ -3524,6 +3686,7 @@ mod validator_wiring_tests {
                 None,
                 Some(&filter),
                 None,
+                super::CallSite::default(),
                 &ctx,
             );
             assert_eq!(result.matched, expected, "{source}");
@@ -3587,6 +3750,7 @@ mod validator_wiring_tests {
                     None,
                     None,
                     Some(&filters),
+                    super::CallSite::default(),
                     &ctx
                 )
                 .matched,
@@ -3601,6 +3765,7 @@ mod validator_wiring_tests {
                     None,
                     None,
                     Some(&duplicate),
+                    super::CallSite::default(),
                     &ctx
                 )
                 .matched
@@ -3661,6 +3826,7 @@ mod validator_wiring_tests {
                     None,
                     Some(&filter),
                     None,
+                    super::CallSite::default(),
                     &ctx
                 )
                 .matched,
@@ -3764,6 +3930,7 @@ mod validator_wiring_tests {
                     None,
                     Some(&filter),
                     None,
+                    super::CallSite::default(),
                     &ctx
                 )
                 .matched,
@@ -3866,6 +4033,7 @@ mod validator_wiring_tests {
                     None,
                     Some(&filter),
                     None,
+                    super::CallSite::default(),
                     &ctx
                 )
                 .matched,
@@ -3963,6 +4131,7 @@ mod validator_wiring_tests {
                     None,
                     Some(&filter),
                     None,
+                    super::CallSite::default(),
                     &ctx
                 )
                 .matched,

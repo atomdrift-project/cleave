@@ -153,23 +153,28 @@ fn main() -> Result<()> {
                         std::io::stderr(),
                         "\n--- SIGUSR1 all-thread backtrace (pid {pid}) ---"
                     );
-                    let lldb = Command::new("lldb")
-                        .args([
-                            "--batch",
-                            "-p",
-                            &pid,
-                            "-o",
-                            "thread backtrace all",
-                            "-o",
-                            "detach",
-                            "-o",
-                            "quit",
-                        ])
-                        .stdout(Stdio::inherit())
-                        .stderr(Stdio::inherit())
-                        .status();
-                    if !matches!(lldb, Ok(s) if s.success()) {
-                        let _ = Command::new("gdb")
+                    // Resolved to absolute paths, never searched for on a
+                    // PATH that may name the working directory.
+                    let lldb_ok = filefacts::tools::resolve("lldb").is_some_and(|lldb| {
+                        Command::new(lldb)
+                            .args([
+                                "--batch",
+                                "-p",
+                                &pid,
+                                "-o",
+                                "thread backtrace all",
+                                "-o",
+                                "detach",
+                                "-o",
+                                "quit",
+                            ])
+                            .stdout(Stdio::inherit())
+                            .stderr(Stdio::inherit())
+                            .status()
+                            .is_ok_and(|s| s.success())
+                    });
+                    if !lldb_ok && let Some(gdb) = filefacts::tools::resolve("gdb") {
+                        let _ = Command::new(gdb)
                             .args([
                                 "-batch",
                                 "-nx",

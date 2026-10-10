@@ -970,25 +970,42 @@ pub(crate) fn extract_rar(
                         continue;
                     }
 
-                    // Decode in memory, never with `extract_to`: given a full
-                    // destination name, UnRAR turns off its own path and link
-                    // safety and resolves RAR5 hardlink and file-copy targets
-                    // against our working directory, so a hostile archive could
-                    // copy or hardlink host files into the analysis tree.
-                    // `read` runs UnRAR's test mode, which creates nothing.
-                    let (data, next) =
-                        file_archive.read().context("Failed to extract RAR entry")?;
-                    archive = next;
+                    // Never `extract_to`: given a full destination name, UnRAR
+                    // turns off its own path and link safety and resolves RAR5
+                    // hardlink and file-copy targets against our working
+                    // directory, so a hostile archive could copy or hardlink
+                    // host files into the analysis tree.
+                    //
+                    // A member that fits the in-memory ceiling is decoded with
+                    // `read` (UnRAR's test mode, which creates nothing). A
+                    // larger one streams to disk instead of becoming a
+                    // multi-GiB allocation: `extract_with_base` into a private
+                    // staging directory keeps UnRAR's safety on and resolves
+                    // every redirect inside that directory.
+                    let written = if unpacked_size <= super::DEFAULT_MAX_MEMORY_FILE_SIZE {
+                        let (data, next) =
+                            file_archive.read().context("Failed to extract RAR entry")?;
+                        archive = next;
+                        let mut out = fs::OpenOptions::new()
+                            .write(true)
+                            .create_new(true)
+                            .open(&out_path)?;
+                        out.write_all(&data)?;
+                        data.len() as u64
+                    } else {
+                        let staging = tempfile::Builder::new()
+                            .prefix(".rar-stage-")
+                            .tempdir_in(dest_dir)?;
+                        archive = file_archive
+                            .extract_with_base(staging.path())
+                            .context("Failed to extract RAR entry")?;
+                        adopt_staged_member(staging.path(), &out_path)?
+                    };
 
                     // The header size can lie; account for the bytes decoded.
-                    if !guard.check_bytes(data.len() as u64, &filename) {
+                    if !guard.check_bytes(written, &filename) {
                         anyhow::bail!("Exceeded maximum total extraction size");
                     }
-                    let mut out = fs::OpenOptions::new()
-                        .write(true)
-                        .create_new(true)
-                        .open(&out_path)?;
-                    out.write_all(&data)?;
                 } else if is_directory {
                     let Some(dir_path) = sanitize_entry_path(&filename, dest_dir) else {
                         guard.add_hostile_reason(HostileArchiveReason::PathTraversal(
@@ -1011,6 +1028,29 @@ pub(crate) fn extract_rar(
     }
 
     Ok(())
+}
+
+/// Move the one regular file UnRAR staged under `staging` to `out_path`,
+/// returning its size. Symlinks are never followed or adopted, and anything
+/// other than exactly one regular file is refused; the staging directory
+/// (with whatever links UnRAR created inside it) is dropped by the caller.
+fn adopt_staged_member(staging: &Path, out_path: &Path) -> Result<u64> {
+    let mut files = walkdir::WalkDir::new(staging)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|e| e.file_type().is_file());
+    let (Some(staged), None) = (files.next(), files.next()) else {
+        anyhow::bail!("RAR member did not stage as exactly one regular file");
+    };
+    let size = staged.metadata()?.len();
+    // `out_path` was claimed unique by the guard; refuse rather than replace
+    // anything that appeared there since.
+    if out_path.symlink_metadata().is_ok() {
+        anyhow::bail!("RAR member output path already exists");
+    }
+    fs::rename(staged.path(), out_path)?;
+    Ok(size)
 }
 
 /// Extract a Windows CAB archive from an in-memory reader.

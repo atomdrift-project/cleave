@@ -1715,15 +1715,15 @@ pub fn graft_located_reference_outcome_traits(
     // Rehydrate locations only, so post-fetch proximity checks retain the
     // original source coordinates without inventing unavailable source text.
     for finding in &mut scratch.findings {
-        if finding.evidence.iter().all(|e| e.offsets.is_empty()) {
-            if let Some(spans) = &finding.precomputed_spans {
-                for &[offset, len] in spans {
-                    let mut evidence = crate::types::Evidence::new("retained-span", "cleave", "")
-                        .with_offset(offset)
-                        .with_location(format!("0x{offset:x}"));
-                    evidence.match_len = Some(len);
-                    finding.evidence.push(evidence);
-                }
+        if finding.evidence.iter().all(|e| e.offsets.is_empty())
+            && let Some(spans) = &finding.precomputed_spans
+        {
+            for &[offset, len] in spans {
+                let mut evidence = crate::types::Evidence::new("retained-span", "cleave", "")
+                    .with_offset(offset)
+                    .with_location(format!("0x{offset:x}"));
+                evidence.match_len = Some(len);
+                finding.evidence.push(evidence);
             }
         }
     }

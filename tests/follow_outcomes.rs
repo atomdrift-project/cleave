@@ -108,7 +108,8 @@ composite_rules:
                 .iter()
                 .any(|f| f.id.as_str() == id("local")),
             want_local,
-            "offset={offset}, count={count}, findings={:?}", report.files[1].findings
+            "offset={offset}, count={count}, findings={:?}",
+            report.files[1].findings
         );
         assert_eq!(
             report.files[0]

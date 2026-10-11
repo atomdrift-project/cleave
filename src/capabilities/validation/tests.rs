@@ -9800,8 +9800,16 @@ mod stale_filetype_allowlist {
             .iter()
             .enumerate()
             .filter_map(|(i, e)| {
-                e.split_once(':')
-                    .map(|(_, p)| (format!("t{i}"), format!("./{p}traits.yaml")))
+                e.split_once(':').map(|(_, p)| {
+                    (
+                        format!("t{i}"),
+                        if p.ends_with(".yaml") || p.ends_with(".yml") {
+                            format!("./{p}")
+                        } else {
+                            format!("./{p}traits.yaml")
+                        },
+                    )
+                })
             })
             .collect();
         assert!(
@@ -9834,7 +9842,14 @@ mod stale_filetype_allowlist {
                 skipped = Some(*e);
                 continue;
             }
-            sources.insert(format!("t{i}"), format!("./{prefix}traits.yaml"));
+            sources.insert(
+                format!("t{i}"),
+                if prefix.ends_with(".yaml") || prefix.ends_with(".yml") {
+                    format!("./{prefix}")
+                } else {
+                    format!("./{prefix}traits.yaml")
+                },
+            );
         }
         let stale = find_stale_filetype_allowlist_entries(&sources);
         let skipped = skipped.expect("at least one entry");

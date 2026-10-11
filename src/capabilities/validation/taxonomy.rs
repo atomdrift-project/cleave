@@ -3165,6 +3165,12 @@ fn broad_filetype_category(cond: &Condition) -> &'static str {
 /// `text` matcher in an allowlisted `text:` directory passes; the same directory
 /// does **not** license a broad `value`/`symbol`/etc. matcher.
 pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
+    // Named-call references use the normalized call-symbol namespace across
+    // script frontends. The printenv reference currently matches 13 script
+    // types; narrowing it to seven would discard existing call facts. This
+    // exact-file exception applies only to symbol matchers, and changes no
+    // parsing, decoding, match predicates, or runtime behavior.
+    "symbol:micro-behaviors/os/env/enumeration/query.yaml",
     // A declared digest label and hexadecimal value has the same meaning in
     // bootstrap source and manifests. Preserve its existing scope when the
     // declaration moves from hash operations to integrity metadata.
@@ -3567,6 +3573,18 @@ pub(crate) fn find_redundant_unix_platforms(
         .collect()
 }
 
+/// Match a broad-scope policy location. YAML file entries identify a complete
+/// source path; directory entries retain their existing subtree behavior.
+fn filetype_allowlist_source_matches(source: &str, prefix: &str) -> bool {
+    if prefix.ends_with(".yaml") || prefix.ends_with(".yml") {
+        source
+            .strip_suffix(prefix)
+            .is_some_and(|parent| parent.is_empty() || parent.ends_with('/'))
+    } else {
+        source.contains(prefix)
+    }
+}
+
 /// Find atomic traits whose effective file-type count exceeds the cap for their
 /// matcher type (see [`filetype_cap_for_condition`]), excluding those covered by
 /// a type-qualified [`BROAD_FILETYPE_ALLOWLIST`] entry.
@@ -3597,9 +3615,9 @@ pub(crate) fn find_broad_filetype_traits(
             // A type-qualified allowlist entry ("text:<dir-prefix>") lifts the
             // cap only for matchers of that one type in that directory subtree.
             let allowlisted = BROAD_FILETYPE_ALLOWLIST.iter().any(|entry| {
-                entry
-                    .split_once(':')
-                    .is_some_and(|(ty, prefix)| ty == category && source.contains(prefix))
+                entry.split_once(':').is_some_and(|(ty, prefix)| {
+                    ty == category && filetype_allowlist_source_matches(source, prefix)
+                })
             });
             if allowlisted {
                 return None;
@@ -3643,7 +3661,9 @@ pub(crate) fn find_stale_filetype_allowlist_entries(
                 // A malformed entry can never match; report it too.
                 return true;
             };
-            !rule_source_files.values().any(|src| src.contains(prefix))
+            !rule_source_files
+                .values()
+                .any(|src| filetype_allowlist_source_matches(src, prefix))
         })
         .copied()
         .collect()
@@ -4099,4 +4119,73 @@ pub(crate) fn find_permuted_directory_paths(trait_dirs: &[String]) -> Vec<(Strin
     }
     out.sort();
     out
+}
+
+#[cfg(test)]
+mod printenv_filetype_allowance_tests {
+    use super::{TraitDefinition, find_broad_filetype_traits};
+    use std::collections::HashMap;
+
+    #[test]
+    fn named_call_scope_preserves_script_frontends_without_licensing_other_matchers()
+    -> anyhow::Result<()> {
+        let symbol: TraitDefinition = serde_yaml::from_str(
+            "id: printenv\ndesc: Named call reference\ncrit: notable\nconf: 0.6\nfor: [shell, batch, python, javascript, ruby, php, lua, perl, powershell, applescript, vbs, mirc, ircii]\nif:\n  type: symbol\n  kind: call\n  exact: printenv\n",
+        )?;
+        assert_eq!(symbol.r#for.len(), 13);
+        for (path, permitted) in [
+            (
+                "/traits/micro-behaviors/os/env/enumeration/query.yaml",
+                true,
+            ),
+            (
+                "/traits/micro-behaviors/os/env/enumeration/query-extra.yaml",
+                false,
+            ),
+            (
+                "/traits/micro-behaviors/os/env/enumeration-extra/query.yaml",
+                false,
+            ),
+        ] {
+            let sources = HashMap::from([(symbol.id.clone(), path.to_string())]);
+            assert_eq!(
+                find_broad_filetype_traits(std::slice::from_ref(&symbol), &sources).is_empty(),
+                permitted,
+                "{path}"
+            );
+        }
+        for condition in [
+            "type: raw\nsubstr: printenv\n",
+            "type: value\npath: example.value\n",
+        ] {
+            let mut other = symbol.clone();
+            other.r#if = serde_yaml::from_str(condition)?;
+            let sources = HashMap::from([(
+                other.id.clone(),
+                "/traits/micro-behaviors/os/env/enumeration/query.yaml".to_string(),
+            )]);
+            assert_eq!(find_broad_filetype_traits(&[other], &sources).len(), 1);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn named_call_file_allowance_rejects_path_substring_collisions() -> anyhow::Result<()> {
+        let symbol: TraitDefinition = serde_yaml::from_str(
+            "id: printenv\ndesc: Named call reference\ncrit: notable\nconf: 0.6\nfor: [shell, batch, python, javascript, ruby, php, lua, perl]\nif:\n  type: symbol\n  kind: call\n  exact: printenv\n",
+        )?;
+        for path in [
+            "/traits/micro-behaviors/os/env/enumeration/query.yaml.backup.yaml",
+            "/traits/xmicro-behaviors/os/env/enumeration/query.yaml",
+            "/traits/micro-behaviors/os/env/enumeration/query.yaml/child.yaml",
+        ] {
+            let sources = HashMap::from([(symbol.id.clone(), path.to_string())]);
+            assert_eq!(
+                find_broad_filetype_traits(std::slice::from_ref(&symbol), &sources).len(),
+                1,
+                "{path}"
+            );
+        }
+        Ok(())
+    }
 }

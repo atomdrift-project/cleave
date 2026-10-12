@@ -6,8 +6,7 @@ CLI, and embedded as the `raw` field of [litmus's
 envelope](../../litmus/docs/JSON.md).
 
 For the library that produces these reports, see
-[RUST_API.md](RUST_API.md). For the HTTP server, see
-[SERVER_API.md](SERVER_API.md).
+[RUST_API.md](RUST_API.md).
 
 ## Schema versioning
 

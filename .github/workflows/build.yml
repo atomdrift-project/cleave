@@ -620,8 +620,8 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  # Same VM pattern as freebsd, and src/ is already OpenBSD-aware: lib.rs,
-  # main.rs, thread_dump.rs and server/handlers.rs all carry openbsd arms, and
+  # Same VM pattern as freebsd, and src/ is already OpenBSD-aware: lib.rs
+  # and main.rs carry openbsd arms, and
   # the jemalloc exclusion in Cargo.toml documents OpenBSD's version-string
   # format breaking tikv-jemalloc-sys's configure.
   #

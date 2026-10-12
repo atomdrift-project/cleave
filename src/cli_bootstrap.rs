@@ -33,37 +33,6 @@ fn scoped_filter(level: &str) -> String {
     format!("cleave={level},stng={level}")
 }
 
-pub(crate) fn determine_default_log_file() -> Option<String> {
-    let logs_dir = if let Ok(dir) = std::env::var("CLEAVE_LOGS_DIR") {
-        if dir.is_empty() {
-            return None;
-        }
-        std::path::PathBuf::from(dir)
-    } else if let Some(state_dir) = dirs::state_dir() {
-        // XDG_STATE_HOME (~/.local/state) is the correct place for logs,
-        // not XDG_CACHE_HOME (~/.cache) which is for disposable data.
-        state_dir.join("atomdrift").join("cleave").join("logs")
-    } else if let Some(cache_base) = dirs::cache_dir() {
-        // macOS/Windows: no XDG state dir, fall back to cache
-        cache_base.join("atomdrift").join("cleave").join("logs")
-    } else {
-        std::env::temp_dir().join("cleave-logs")
-    };
-
-    if let Err(e) = std::fs::create_dir_all(&logs_dir) {
-        eprintln!(
-            "cleave: failed to create logs directory {:?}: {}",
-            logs_dir, e
-        );
-        return None;
-    }
-
-    let pid = std::process::id();
-    let level = file_log_level();
-    let log_path = logs_dir.join(format!("cleave.{pid}.{level}.log"));
-    Some(log_path.to_string_lossy().into_owned())
-}
-
 pub(crate) fn apply_runtime_overrides(
     traits_dir: Option<&str>,
     disabled: &cli::DisabledComponents,
@@ -91,7 +60,6 @@ pub(crate) fn build_sample_extraction(
 
 pub(crate) fn init_logging(
     verbose: bool,
-    is_server: bool,
     is_validate: bool,
     format: cli::OutputFormat,
     effective_log_file: Option<&str>,
@@ -109,11 +77,6 @@ pub(crate) fn init_logging(
             (
                 EnvFilter::new(scoped_filter("debug")),
                 EnvFilter::new(scoped_filter("debug")),
-            )
-        } else if is_server {
-            (
-                EnvFilter::new(scoped_filter("info")),
-                EnvFilter::new(scoped_filter(file_log_level())),
             )
         } else if is_validate {
             // `validate` stays quiet on stderr (single summary line) but keeps
@@ -145,7 +108,7 @@ pub(crate) fn init_logging(
                 }),
         ));
 
-        if is_server && format == cli::OutputFormat::Terminal {
+        if format == cli::OutputFormat::Terminal {
             eprintln!("Logging to: {}", log_file);
         }
 
@@ -198,8 +161,6 @@ pub(crate) fn init_logging(
             EnvFilter::from_default_env()
         } else if verbose {
             EnvFilter::new(scoped_filter("trace"))
-        } else if is_server {
-            EnvFilter::new(scoped_filter("info"))
         } else if is_validate {
             // `validate` prints a single summary line on success; drop the
             // global `warn` floor so benign third-party warnings (e.g. goblin's
@@ -240,7 +201,6 @@ pub(crate) fn log_startup(effective_log_file: Option<&str>, verbose: bool) {
         ppid = ppid,
         verbose = verbose,
         validate = std::env::var("CLEAVE_VALIDATE").ok(),
-        logs_dir = std::env::var("CLEAVE_LOGS_DIR").ok(),
         log_level = std::env::var("CLEAVE_LOG_LEVEL").ok(),
         "Process context"
     );

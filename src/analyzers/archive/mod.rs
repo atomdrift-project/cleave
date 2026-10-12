@@ -1645,7 +1645,7 @@ impl ArchiveAnalyzer {
         }
     }
 
-    /// Returns true if the server has signalled cancellation for this request.
+    /// Returns true if the caller has signalled cancellation for this request.
     pub(crate) fn is_cancelled(&self) -> bool {
         self.cancelled
             .as_ref()

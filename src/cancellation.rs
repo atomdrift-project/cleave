@@ -25,11 +25,7 @@
 //!
 //! So a cancelled run stops scheduling promptly and abandons the one leaf that
 //! could otherwise run long in-process, but a rizin child or an in-flight YARA
-//! scan still costs its own timeout. The CLI's second SIGINT force-exits; a
-//! server has no such escape and pays that timeout.
-//!
-//! Server mode uses `tokio::signal::ctrl_c()` separately and should not call
-//! `install_signal_handlers()` — tokio would clobber our handler anyway.
+//! scan still costs its own timeout. The CLI's second SIGINT force-exits.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -51,9 +47,6 @@ pub fn is_cancelled() -> bool {
 
 /// Install SIGINT + SIGTERM handlers that flip the global flag on first
 /// signal and force-exit on second. Call this once during CLI startup.
-///
-/// Must not be called in server mode — tokio's own signal machinery would
-/// replace our handler.
 pub fn install_signal_handlers() {
     #[cfg(unix)]
     {

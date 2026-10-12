@@ -84,9 +84,6 @@ mod scan_mem_gate;
 // Adaptive nested rayon: serial member-inner joins when 2+ top-level files share the pool.
 mod rayon_nest;
 
-// HTTP API server
-pub mod server;
-
 /// This crate's version, captured from `Cargo.toml` at compile time.
 ///
 /// Exposed so an embedding binary (e.g. litmus, which links cleave as a
@@ -926,7 +923,7 @@ pub struct AnalysisOptions {
     /// Maximum file size (bytes) to scan during directory analysis.
     /// Files larger than this are skipped. 0 means no limit.
     pub max_scan_file_size: u64,
-    /// Per-request cancellation flag. When set to true by the caller (e.g. server on timeout),
+    /// Per-request cancellation flag. When set to true by the caller (e.g. on timeout),
     /// archive analysis will stop processing new members early.
     /// Not included in the analysis cache key.
     pub cancellation: Option<Arc<std::sync::atomic::AtomicBool>>,

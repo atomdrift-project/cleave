@@ -655,38 +655,6 @@ pub enum Command {
         #[arg(long, value_name = "COMMIT")]
         pin: Option<String>,
     },
-
-    /// Start HTTP API server for file analysis
-    #[command(alias = "server")]
-    Serve {
-        /// Address to bind to (default: 127.0.0.1:8080)
-        #[arg(long, default_value = "127.0.0.1:8080")]
-        bind: String,
-
-        /// Max requests per second per IP (default: 100)
-        #[arg(long, default_value = "100")]
-        qps: u32,
-
-        /// Max upload size in MB (default: 100)
-        #[arg(long, default_value = "100")]
-        max_size_mb: u64,
-
-        /// Max memory usage (RSS) in GB before rejecting requests (default: 25% of system RAM)
-        #[arg(long, env = "CLEAVE_MAX_RSS_GB")]
-        max_rss_gb: Option<u64>,
-
-        /// DANGEROUS: Allow analyzing local file paths via /analyze-path endpoint.
-        /// Comma-separated list of directories to allow access to (e.g., "/data/samples,/tmp/test").
-        /// Only paths within these directories can be analyzed.
-        #[arg(long)]
-        dangerous_local_file_paths: Option<String>,
-
-        /// Directory for extracting archive contents.
-        /// When set, archive members are extracted here and paths are included in responses.
-        /// This directory is automatically added to allowed local paths.
-        #[arg(long)]
-        extract_dir: Option<String>,
-    },
 }
 
 /// Parse a criticality level string into a Criticality enum value
@@ -1012,7 +980,7 @@ pub enum DetectFileType {
 /// Output format for the diff command
 #[derive(Debug, Clone, Copy, clap::ValueEnum, PartialEq)]
 pub enum OutputFormat {
-    /// JSON output (single object), matching server mode response shape
+    /// JSON output (single object)
     Json,
     /// JSONL output (newline-delimited JSON) for streaming
     Jsonl,

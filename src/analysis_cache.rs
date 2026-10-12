@@ -1143,17 +1143,6 @@ fn cached_file_under(
     Some(file)
 }
 
-/// Count entries currently in the toplevel report cache. Returns `None` if unavailable.
-pub(crate) fn report_cache_entry_count() -> Option<i64> {
-    with_conn(|conn| {
-        conn.query_row("SELECT COUNT(*) FROM toplevel_report_cache", [], |row| {
-            row.get(0)
-        })
-        .ok()
-    })
-    .flatten()
-}
-
 /// Whether the report cache holds any entry under the revision a lookup would
 /// use right now. False for a revision new to this cache (edited traits, or a
 /// new build) and when caching is unavailable: then every lookup will miss.
@@ -1526,7 +1515,7 @@ mod tests {
     /// A store must key on the traits the analysis actually ran under, not on
     /// whatever the process-global traits scan holds by the time it finishes.
     ///
-    /// `reload_capability_mapper` — the server's `/reload` endpoint and scan's
+    /// `reload_capability_mapper` — scan's
     /// periodic renewal task — drops the memoized traits fingerprint and
     /// installs a new mapper while analyses are still in flight. Keying the
     /// store on the ambient fingerprint filed a report evaluated against the

@@ -6,8 +6,7 @@ interprets them as findings against a catalogue of MBC and ATT&CK
 rules.
 
 This file documents the library API for Rust embedders. For the CLI,
-run `cleave --help`. For the HTTP server, see
-[SERVER_API.md](SERVER_API.md). For the output schema, see
+run `cleave --help`. For the output schema, see
 [JSON.md](JSON.md). The format coverage matrix lives in
 [../FILE_FORMATS.md](../FILE_FORMATS.md); this document does not
 duplicate it.
@@ -126,7 +125,6 @@ Members land under `extract_dir/<sha256[0:6]>/<relative-path>`.
 | `CLEAVE_SKIP_YARA_CACHE`  | `1` disables the YARA match cache only.                        |
 | `CLEAVE_VALIDATE`         | `1` runs full trait validation on startup.                     |
 | `CLEAVE_LOG_LEVEL`        | tracing level: `error`, `warn`, `info`, `debug`, `trace`.      |
-| `CLEAVE_LOGS_DIR`         | Write tracing logs to this directory instead of stderr.        |
 
 ### Cargo features
 

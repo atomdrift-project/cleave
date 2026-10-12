@@ -216,8 +216,7 @@ pub fn cpu_time() -> Option<CpuTime> {
 
 /// Memory limit: `min(50% RAM, 32 GiB)`.
 ///
-/// Use this as the default `limit` argument to [`start_periodic_logging`] and
-/// as the fallback when no explicit `--max-rss-gb` flag is given.
+/// Use this as the default `limit` argument to [`start_periodic_logging`].
 #[must_use]
 pub fn memory_limit() -> u64 {
     sysmem::memory_limit()
@@ -314,9 +313,7 @@ const PURGE_INTERVAL_SECS: u64 = 300;
 /// Returns a handle that can be used to stop the thread gracefully.
 ///
 /// `limit` is the RSS cap in bytes; pass `sysmem::memory_limit()` for the
-/// standard `min(50% RAM, 32 GiB)` value, or the server's configured
-/// `max_rss_bytes` so the watchdog and the per-request check enforce the
-/// same threshold.
+/// standard `min(50% RAM, 32 GiB)` value.
 ///
 /// The watchdog monitors RSS every `interval` and:
 /// 1. Warning threshold crossed → log warning + full memory stats
@@ -325,10 +322,8 @@ const PURGE_INTERVAL_SECS: u64 = 300;
 /// 4. Every 5 minutes (`PURGE_INTERVAL_SECS`) → run jemalloc arena purge,
 ///    log RSS before/after and the reclaimed delta.
 ///
-/// This is the primary enforcement mechanism. The per-request check in
-/// `server::handlers::check_memory_pressure` provides early 503 rejection,
-/// but this thread is the backstop that ticks on wall clock regardless of
-/// request traffic or in-flight analysis blocking.
+/// This is the primary enforcement mechanism, ticking on wall clock
+/// regardless of request traffic or in-flight analysis blocking.
 #[must_use]
 pub fn start_periodic_logging(interval: Duration, limit: u64) -> MemoryLoggerHandle {
     let shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -439,7 +434,6 @@ pub fn start_periodic_logging(interval: Duration, limit: u64) -> MemoryLoggerHan
 
 /// Log all memory-related statistics for post-mortem analysis.
 /// This consolidates stats from various subsystems that can cause memory issues.
-/// Mirrors the detail level of the `/_/memory` server endpoint.
 pub fn log_all_memory_stats() {
     // Log current RSS
     if let Some(rss) = current_rss() {
@@ -584,7 +578,7 @@ pub struct JemallocPurgeStats {
 
 /// Force jemalloc to decay and purge dirty pages across all arenas.
 ///
-/// On long-lived servers jemalloc tends to retain dirty pages in the
+/// In long-lived processes jemalloc tends to retain dirty pages in the
 /// "free-but-still-committed" state between bursts of work; `dirty_decay_ms=0`
 /// biases it to return pages fast, but decay is only driven by allocation
 /// activity, so a quiet period between bursts leaves pages resident. Calling
@@ -655,8 +649,8 @@ pub fn purge_jemalloc() -> Option<JemallocPurgeStats> {
 ///
 /// Sets `dirty_decay_ms` and `muzzy_decay_ms` to 0, forcing jemalloc to immediately
 /// return freed pages instead of holding them for reuse. This trades ~1-2% CPU for
-/// dramatically lower RSS in long-running processes (server mode) where the
-/// allocate-free cycle across thousands of analyses causes multi-GB fragmentation.
+/// dramatically lower RSS in long-running processes where the allocate-free
+/// cycle across thousands of analyses causes multi-GB fragmentation.
 ///
 /// No-op when jemalloc is not the allocator.
 pub fn configure_jemalloc_low_memory() {

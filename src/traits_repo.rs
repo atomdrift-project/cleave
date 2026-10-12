@@ -137,8 +137,8 @@ pub fn resolve_and_ensure() -> Result<PathBuf, String> {
 /// Resolve the traits directory without bootstrapping or process::exit.
 ///
 /// Same resolution order as `resolve_and_ensure()` but returns an error
-/// instead of installing. Used by hot-reload paths where killing the server
-/// on a bad traits path is unacceptable.
+/// instead of installing. Used by hot-reload paths where exiting the
+/// process on a bad traits path is unacceptable.
 #[allow(dead_code)] // Used by library target (shared_resources reload)
 pub fn try_resolve() -> Result<PathBuf, String> {
     if let Some(explicit) = explicit_traits_dir() {

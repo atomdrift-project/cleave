@@ -77,9 +77,8 @@ use cleave::cli;
 #[cfg(feature = "deadlock-detection")]
 use cli_bootstrap::start_deadlock_detector;
 use cli_bootstrap::{
-    apply_runtime_overrides, build_sample_extraction, configure_rayon_thread_pool,
-    determine_default_log_file, init_logging, log_exit_summary, log_startup, print_version_banner,
-    start_memory_logger,
+    apply_runtime_overrides, build_sample_extraction, configure_rayon_thread_pool, init_logging,
+    log_exit_summary, log_startup, print_version_banner, start_memory_logger,
 };
 use cli_dispatch::{build_dispatch_context, dispatch_command, write_output};
 
@@ -115,16 +114,11 @@ fn main() -> Result<()> {
 
     let args = cli::Args::parse();
 
-    let is_server = matches!(args.command, Some(cli::Command::Serve { .. }));
-
     // CLI scans run on rayon with no tokio runtime, so tokio::signal isn't
     // available. Install a libc signal handler that flips a global
     // cancellation flag on SIGINT/SIGTERM so long scans drain cleanly on
-    // Ctrl-C (second Ctrl-C forces exit). Skip for server mode — tokio
-    // installs its own handlers and would clobber ours.
-    if !is_server {
-        cleave::cancellation::install_signal_handlers();
-    }
+    // Ctrl-C (second Ctrl-C forces exit).
+    cleave::cancellation::install_signal_handlers();
 
     // Dump all thread backtraces on SIGUSR1 (Linux equivalent of BSD SIGINFO / Ctrl-T).
     // Attaches lldb/gdb to ourselves so every thread is reported with symbols.
@@ -198,14 +192,7 @@ fn main() -> Result<()> {
     }
 
     let format = args.format();
-    // Only create a default log file in server mode — CLI runs at warn level
-    // typically produce empty 0-byte log files that just accumulate.
-    let default_log_file = if is_server {
-        determine_default_log_file()
-    } else {
-        None
-    };
-    let effective_log_file = args.log_file.clone().or(default_log_file);
+    let effective_log_file = args.log_file.clone();
 
     // `cleave validate` is meant to print a single summary line on success, so
     // suppress the global `warn` tracing floor (e.g. goblin's benign fat-Mach-O
@@ -214,7 +201,6 @@ fn main() -> Result<()> {
 
     init_logging(
         args.verbose,
-        is_server,
         is_validate_command,
         format,
         effective_log_file.as_deref(),
@@ -247,12 +233,8 @@ fn main() -> Result<()> {
         print_version_banner(format);
     }
 
-    // Interactive runs get a once-a-day, zero-telemetry update notice. The
-    // long-running server is excluded — it refreshes on restart and shouldn't
-    // print transient notices into its logs.
-    if !is_server {
-        cleave::update_check::maybe_notify(args.no_update_check);
-    }
+    // Interactive runs get a once-a-day, zero-telemetry update notice.
+    cleave::update_check::maybe_notify(args.no_update_check);
 
     let zip_passwords = args.archive_passwords();
     let sample_extraction = build_sample_extraction(args.extract_dir.as_deref());

@@ -389,7 +389,7 @@ impl FileAnalysis {
 
     /// Clear `source` fields from all nested types — internal metadata not needed in output
     /// Drop fields that the compact output (`compact::convert_file`) never
-    /// reads. Every report consumer — the CLI, the cleave server, and litmus's
+    /// reads. Every report consumer — the CLI and litmus's
     /// feature extractor — serializes through `compact_from_files`, which pulls
     /// only findings, imports, exports, functions, sections, metrics, kv, and
     /// the already-rendered context. The fields cleared here are populated

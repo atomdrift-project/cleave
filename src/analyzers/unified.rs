@@ -1613,7 +1613,7 @@ impl Analyzer for UnifiedSourceAnalyzer {
 
         // Pass pre-extracted stng strings and payloads to avoid redundant extraction.
         // Merge cancellation: prefer struct field (set via builder), fall back to input field
-        // (set by the server when it doesn't go through analyzer_for_file_type_arc).
+        // (set by callers that don't go through analyzer_for_file_type_arc).
         let effective_cancellation = self.cancellation.as_ref().or(input.cancellation.as_ref());
         // Reuse the threaded context only when it covers the exact bytes we
         // analyze (no UTF-16 normalization); otherwise open one on those

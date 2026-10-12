@@ -15,7 +15,7 @@ CARGO_TARGET ?= $(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR),target)
 
 # For sccache, set RUSTC_WRAPPER=sccache in your environment
 
-.PHONY: all build debug release release-lto check-cargo install tarball rollout-bastille test test-fast test-unit lint fix fmt clean coverage ci install-hooks help regenerate-testdata loadtest bench-build benchmark sampled-benchmark validate tuna tuna-once wolfi wolfi-bootstrap wolfi-build wolfi-test wolfi-shell wolfi-clean wolfi-nuke cut-release
+.PHONY: all build debug release release-lto check-cargo install tarball test test-fast test-unit lint fix fmt clean coverage ci install-hooks help regenerate-testdata bench-build benchmark sampled-benchmark validate tuna tuna-once wolfi wolfi-bootstrap wolfi-build wolfi-test wolfi-shell wolfi-clean wolfi-nuke cut-release
 
 # Default target
 all: build
@@ -30,7 +30,6 @@ help: ## Show this help
 	@echo "  release               - Build in release mode"
 	@echo "  install               - Build release and install to PATH"
 	@echo "  tarball               - Build release tarball (binary + traits)"
-	@echo "  rollout-bastille      - Deploy to Bastille jails (BUILD=jail RUN=jail)"
 	@echo "  test                  - Run all tests (unit + integration)"
 	@echo "  test-fast             - Run tests quickly (skip YARA, lib tests only)"
 	@echo "  test-unit             - Run only unit tests (skip integration tests)"
@@ -40,7 +39,6 @@ help: ## Show this help
 	@echo "  coverage              - Generate code coverage report"
 	@echo "  ci                    - Run all CI checks (test + lint)"
 	@echo "  regenerate-testdata   - Regenerate integration test snapshots from ~/data/cleave"
-	@echo "  loadtest              - Run load test against cleave server"
 	@echo "  validate              - Validate trait definitions (for: restrictions, taxonomy, etc.)"
 	@echo "  benchmark             - Benchmark release build against ~/data/benchmark/ (DATASET=200MB)"
 	@echo "  sampled-benchmark     - Benchmark with samply CPU profiling (DATASET=200MB)"
@@ -125,10 +123,6 @@ tarball: release ## Build release tarball with binary and traits
 	@echo "Creating tarball..."
 	tar -czf $(OUT_DIR)/cleave.tgz -C $(OUT_DIR) cleave -C "$$PWD" traits
 	@echo "✓ Tarball: $(OUT_DIR)/cleave.tgz"
-
-rollout-bastille: ## Deploy to Bastille jails (BUILD=jail RUN=jail)
-	@[ -n "$(BUILD)" ] && [ -n "$(RUN)" ] || { echo "Usage: make rollout-bastille BUILD=<build-jail> RUN=<run-jail>"; exit 1; }
-	./hacks/rollout-bastille.sh "$(BUILD)" "$(RUN)"
 
 # Keep the extraction/analysis caches out of the test runs so they stay hermetic
 # (no reads/writes to the shared user cache dir — a stale entry there could
@@ -558,12 +552,6 @@ heap-benchmark: heap-build ## Benchmark with jemalloc heap profiling
 	@echo "✓ Heap profiles: $(OUT_DIR)/heap/jeprof.*.heap"
 	@echo "  Analyze with: jeprof --text $(OUT_DIR)/$(BINARY).heap $(OUT_DIR)/heap/jeprof.*.heap"
 	@echo "  Note: tikv-jemalloc uses _RJEM_MALLOC_CONF (not MALLOC_CONF)"
-
-loadtest: ## Run load test against cleave server
-	@echo "Building loadtest tool..."
-	@cd tools/loadtest && go build -o loadtest .
-	@echo "✓ Running load test..."
-	@tools/loadtest/loadtest $(LOADTEST_ARGS)
 
 # cleave-tuna: LLM-driven CPU+memory autoresearch loop.
 # See ../cleave-tuna/README.md.

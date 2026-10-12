@@ -126,10 +126,9 @@ counts installed on your machine.
 
 ## Documentation
 
-- [Integration guide](docs/INTEGRATION.md) — CLI, library, or HTTP server
+- [Integration guide](docs/INTEGRATION.md) — CLI or library
 - [JSON schema](docs/JSON.md) — report structure
 - [Rust API](docs/RUST_API.md) — embedding cleave
-- [Server API](docs/SERVER_API.md) — long-running analysis service
 - [Rule authoring](https://github.com/atomdrift-project/traits/blob/main/RULES.md)
 
 Issues and pull requests are welcome in the

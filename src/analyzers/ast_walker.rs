@@ -36,7 +36,7 @@ pub(crate) fn thread_cpu_time() -> Duration {
         tv_nsec: 0,
     };
     // SAFETY: `ts` is a valid, writable `timespec`; `CLOCK_THREAD_CPUTIME_ID` is
-    // POSIX (Linux/macOS/FreeBSD — cleave's server targets). On error we report
+    // POSIX (Linux/macOS/FreeBSD — cleave's primary targets). On error we report
     // zero (fail-open: never cut analysis short because the clock read failed).
     let rc = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut ts) };
     if rc == 0 {
@@ -49,8 +49,8 @@ pub(crate) fn thread_cpu_time() -> Duration {
 
 /// Fallback for targets without a usable `CLOCK_THREAD_CPUTIME_ID` (non-unix, plus
 /// the solarish family): report zero, which disables the CPU budget. Acceptable
-/// because the starvation bug only manifests under server-class oversubscription
-/// (Linux/macOS server targets); these hosts aren't oversubscribed that way.
+/// because the starvation bug only manifests under heavily oversubscribed hosts
+/// (Linux/macOS); these hosts aren't oversubscribed that way.
 #[cfg(not(all(unix, not(target_os = "illumos"), not(target_os = "solaris"))))]
 pub(crate) fn thread_cpu_time() -> Duration {
     Duration::ZERO

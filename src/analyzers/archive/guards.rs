@@ -130,7 +130,7 @@ pub(crate) struct ExtractionGuard {
     extraction_notes: Mutex<Vec<String>>,
     /// Count of notes beyond [`MAX_EXTRACTION_NOTES`], summarized on drain.
     dropped_notes: AtomicUsize,
-    /// Per-request cancellation flag from the server. When set, extraction
+    /// Per-request cancellation flag from the caller. When set, extraction
     /// stops at the next entry boundary via `check_file_count()`.
     cancellation: Option<Arc<AtomicBool>>,
     /// Case-folded extraction paths already claimed by a member, so two members
@@ -145,7 +145,7 @@ impl ExtractionGuard {
         Self::with_cancellation(None)
     }
 
-    /// Create a guard with a cancellation flag from the server.
+    /// Create a guard with a cancellation flag from the caller.
     pub(crate) fn with_cancellation(flag: Option<Arc<AtomicBool>>) -> Self {
         Self {
             total_bytes: AtomicU64::new(0),
@@ -159,7 +159,7 @@ impl ExtractionGuard {
         }
     }
 
-    /// Returns true if the server has signalled cancellation.
+    /// Returns true if the caller has signalled cancellation.
     pub(crate) fn is_cancelled(&self) -> bool {
         self.cancellation
             .as_ref()

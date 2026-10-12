@@ -1,14 +1,13 @@
 # Integrating with Cleave
 
-Three paths in. Pick by volume.
+Two paths in. Pick by volume.
 
 | Path        | Pick when                                              | Reference                              |
 | ----------- | ------------------------------------------------------ | -------------------------------------- |
-| CLI         | One-shot or batch use up to ~5 analyses / minute.      | `cleave --help`                        |
-| HTTP server | Sustained traffic past ~5 analyses / minute.           | [SERVER_API.md](SERVER_API.md)         |
+| CLI         | One-shot or batch use.                                 | `cleave --help`                        |
 | Rust library| You are already in Rust and need direct access.       | [RUST_API.md](RUST_API.md)             |
 
-All three emit the same `AnalysisReport`. Schema and field names:
+Both emit the same `AnalysisReport`. Schema and field names:
 [JSON.md](JSON.md).
 
 ## Notes
@@ -23,7 +22,7 @@ notable=1, suspicious=40, hostile=120. Reference:
 **CLI streaming**: `--format jsonl` emits one report per line for
 pipelines.
 
-**Library stability** is weaker than the CLI and HTTP surfaces.
+**Library stability** is weaker than the CLI surface.
 Breaking changes between minor releases until 1.0. Pin a commit. The
 JSON `AnalysisReport` is stable within a major version regardless of
 path.

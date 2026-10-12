@@ -1,6 +1,6 @@
 [package]
 name = "cleave"
-version = "2.12.1"
+version = "3.0.0-beta.0"
 edition = "2024"
 # support current + two older releases
 rust-version = "1.97"
@@ -191,7 +191,6 @@ regex-syntax = "0.8"  # For safe literal extraction from regex patterns (mandato
 memchr = "2.8"
 aho-corasick = "1.1"
 rustc-hash = "2.1"
-dashmap = "6.2"
 lru = "0.18"  # LRU cache for UTF-8 conversion results
 anyhow = "1.0"
 thiserror = "2.0"
@@ -231,11 +230,6 @@ tracing = "0.1"
 # dependency here re-arms the bridge for the whole binary.
 tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt", "ansi", "smallvec", "std"] }
 
-# HTTP server (for `cleave server` subcommand)
-axum = { version = "0.8", features = ["multipart"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "fs", "signal", "io-util", "sync"] }
-tower = { version = "0.5", features = ["timeout", "limit"] }
-tower-http = { version = "0.7", features = ["limit"] }
 once_cell = "1.21"
 am-fs-squashfs = "0.1.5"
 fs_core = { package = "am-fs-core", version = "0.2.24" }

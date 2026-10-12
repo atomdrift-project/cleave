@@ -123,63 +123,6 @@ fn run_update_rules(force: bool, check: bool, pin: Option<String>) -> Result<()>
     Ok(())
 }
 
-fn run_server(
-    bind: &str,
-    qps: u32,
-    max_size_mb: u64,
-    max_rss_gb: Option<u64>,
-    dangerous_local_file_paths: Option<String>,
-    extract_dir: Option<String>,
-) -> Result<()> {
-    let bind_addr: std::net::SocketAddr = bind.parse().context(format!(
-        "Invalid bind address '{}'. Expected format: IP:PORT (e.g., 127.0.0.1:8080)",
-        bind
-    ))?;
-
-    let mut allowed_local_paths: Vec<std::path::PathBuf> = dangerous_local_file_paths
-        .map(|s| {
-            s.split(',')
-                .map(str::trim)
-                .filter(|p| !p.is_empty())
-                .map(|p| {
-                    std::path::Path::new(p)
-                        .canonicalize()
-                        .unwrap_or_else(|_| std::path::PathBuf::from(p))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-
-    let extract_dir_path = extract_dir.map(|p| {
-        let path = std::path::PathBuf::from(&p);
-        if !path.exists() {
-            std::fs::create_dir_all(&path).ok();
-        }
-        path.canonicalize().unwrap_or(path)
-    });
-
-    if let Some(ref extract_path) = extract_dir_path
-        && !allowed_local_paths.contains(extract_path)
-    {
-        allowed_local_paths.push(extract_path.clone());
-    }
-
-    let config = cleave::server::ServerConfig {
-        bind: bind_addr,
-        qps,
-        max_body_size: (max_size_mb * 1024 * 1024) as usize,
-        max_rss_bytes: max_rss_gb
-            .map(|gb| gb * 1024 * 1024 * 1024)
-            .unwrap_or_else(sysmem::memory_limit),
-        allowed_local_paths,
-        extract_dir: extract_dir_path,
-    };
-
-    let rt = tokio::runtime::Runtime::new().context("Failed to create tokio runtime")?;
-    rt.block_on(cleave::server::run(config))?;
-    Ok(())
-}
-
 #[cfg(feature = "lint")]
 fn run_test_match_command(
     req: &MatchRequest<'_>,
@@ -444,24 +387,6 @@ pub(crate) fn dispatch_command(
         ),
         Some(cli::Command::UpdateRules { force, check, pin }) => {
             run_update_rules(force, check, pin)?;
-            return Ok(None);
-        }
-        Some(cli::Command::Serve {
-            bind,
-            qps,
-            max_size_mb,
-            max_rss_gb,
-            dangerous_local_file_paths,
-            extract_dir,
-        }) => {
-            run_server(
-                &bind,
-                qps,
-                max_size_mb,
-                max_rss_gb,
-                dangerous_local_file_paths,
-                extract_dir,
-            )?;
             return Ok(None);
         }
         None => run_analyze_paths(

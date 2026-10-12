@@ -52,7 +52,7 @@ pub struct AnalysisInput<'a> {
     /// Nesting depth (0 for top-level, incremented for archives/encoded payloads)
     pub depth: u32,
 
-    /// Per-request cancellation flag. When set to true by the server on timeout, analyzers that
+    /// Per-request cancellation flag. When set to true by the caller (e.g. on timeout), analyzers that
     /// check it should abort long-running loops and return a partial result.
     pub cancellation: Option<Arc<std::sync::atomic::AtomicBool>>,
 

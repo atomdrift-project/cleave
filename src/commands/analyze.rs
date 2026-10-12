@@ -129,9 +129,7 @@ pub fn run(config: &AnalyzeConfig<'_>) -> Result<String> {
         slow_rule_ms: config.slow_rule_ms,
         max_scan_file_size: config.max_scan_file_size,
         // Pick up the CLI's SIGINT/SIGTERM-driven cancellation flag so a
-        // long scan drains cleanly on Ctrl-C. In server mode the handler
-        // isn't installed and the OnceLock returns a fresh unset flag, so
-        // this is still a no-op for server-invoked analyses.
+        // long scan drains cleanly on Ctrl-C.
         cancellation: Some(cleave::cancellation::global_flag()),
         phase: None,
         dedicated_pool: false,

@@ -1589,3 +1589,135 @@ fn ast_node_gate_checks_complete_object_keys() {
         r#"((pair key: (_) @key value: (string) @value) (#eq? @value "'Origin'"))"#
     ));
 }
+
+/// Compare complete capture sequences, including order, against the unfiltered
+/// native matcher. Predicate pruning must preserve optional/repeated captures,
+/// anchors, alternatives, negative/any predicates, and capture comparisons.
+#[test]
+fn ast_early_predicates_preserve_structural_match_semantics() {
+    use streaming_iterator::StreamingIterator;
+    let parsed = parsed_for_test("predicates.js", b"a;");
+    let lang = parsed.source_ast().unwrap().tree.language();
+    let mut parser = tree_sitter::Parser::new();
+    parser.set_language(&lang).unwrap();
+    let patterns = [
+        "(identifier) @x",
+        "(program (expression_statement (identifier) @x)) @root",
+        "(program (expression_statement (identifier) @x) (expression_statement (identifier) @y)) @root",
+        "(program . (expression_statement (identifier) @x) (expression_statement)* .) @root",
+        "(program (expression_statement)* (expression_statement (identifier) @x) .) @root",
+        "(program (expression_statement (identifier) @x)+) @root",
+        "(program (expression_statement (identifier) @x)*) @root",
+        "(program (expression_statement (identifier) @x)? (expression_statement (identifier) @y)) @root",
+        "(program (expression_statement (identifier) @x) (expression_statement (identifier) @x)) @root",
+        "(program [(expression_statement (identifier) @x) (expression_statement (number))]+) @root",
+        "(_ (expression_statement (identifier) @x) (expression_statement (identifier) @y)) @root",
+        "(program (expression_statement (identifier) @x) . (expression_statement (identifier) @y)) @root",
+        "(program (expression_statement (identifier) @x) (expression_statement (identifier) @y)*) @root",
+    ];
+    let predicates = [
+        "(#eq? @x \"a\")",
+        "(#not-eq? @x \"a\")",
+        "(#match? @x \"^[ab]$\")",
+        "(#not-match? @x \"^b$\")",
+        "(#any-eq? @x \"a\")",
+        "(#any-not-eq? @x \"a\")",
+        "(#any-match? @x \"^a$\")",
+        "(#any-not-match? @x \"^a$\")",
+        "(#any-of? @x \"a\" \"b\")",
+        "(#not-any-of? @x \"b\" \"c\")",
+    ];
+    let mut queries = Vec::new();
+    for pattern in patterns {
+        for predicate in predicates {
+            let text = format!("({pattern} {predicate})");
+            queries.push((tree_sitter::Query::new(&lang, &text).unwrap(), text));
+        }
+        if pattern.contains("@y") {
+            let text = format!("({pattern} (#eq? @x @y) (#eq? @y \"a\"))");
+            queries.push((tree_sitter::Query::new(&lang, &text).unwrap(), text));
+        }
+    }
+    for len in 0..=5u32 {
+        for mut code in 0..3usize.pow(len) {
+            let mut src = String::new();
+            for _ in 0..len {
+                src.push_str(["a;", "b;", "c;"][code % 3]);
+                code /= 3;
+            }
+            let tree = parser.parse(&src, None).unwrap();
+            for (query, text) in &queries {
+                let collect = |early: bool| {
+                    let mut cursor = tree_sitter::QueryCursor::new();
+                    cursor.set_match_limit(65536);
+                    let mut filter = |pattern, capture, node: tree_sitter::Node<'_>| {
+                        query.capture_satisfies_text_predicates(
+                            pattern,
+                            capture,
+                            node,
+                            src.as_bytes(),
+                        )
+                    };
+                    let options = if early {
+                        tree_sitter::QueryCursorOptions::new().capture_predicate(&mut filter)
+                    } else {
+                        tree_sitter::QueryCursorOptions::new()
+                    };
+                    let mut matches = cursor.matches_with_options(
+                        query,
+                        tree.root_node(),
+                        src.as_bytes(),
+                        options,
+                    );
+                    let mut found = Vec::new();
+                    while let Some(m) = matches.next() {
+                        found.push((
+                            m.pattern_index,
+                            m.captures()
+                                .iter()
+                                .map(|c| (c.index, c.node.byte_range()))
+                                .collect::<Vec<_>>(),
+                        ));
+                    }
+                    found
+                };
+                let expected = collect(false);
+                assert_eq!(collect(true), expected, "{text} on {src:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn ast_batch_reuses_compilation_across_literal_subsets() {
+    let queries = [
+        r#"((identifier) @bank_alpha (#eq? @bank_alpha "alpha"))"#,
+        r#"((identifier) @bank_beta (#eq? @bank_beta "beta"))"#,
+        r#"((identifier) @bank_common (#eq? @bank_common "common"))"#,
+    ];
+    for (source, expected) in [
+        ("alpha; common;", [true, false, true]),
+        ("beta; common;", [false, true, true]),
+    ] {
+        let parsed = parsed_for_test("bank.js", source.as_bytes());
+        let tree = parsed.source_ast().unwrap().tree;
+        let results = super::ast::batch_ast_queries_with_budget(
+            tree,
+            source,
+            FileType::JavaScript,
+            &queries,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        for (query, matched) in queries.iter().zip(expected) {
+            assert_eq!(results[*query].matched, matched, "{source}: {query}");
+        }
+        assert!(super::ast::combined_bank_cached_for_test(
+            &tree.language(),
+            FileType::JavaScript,
+            &queries
+        ));
+    }
+}

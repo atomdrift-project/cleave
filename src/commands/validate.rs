@@ -207,6 +207,8 @@ pub fn run_with_options(
     // separate `validate_traits()` call — validation errors surface here — and
     // every analysis worker below reuses this same Arc, so the trait set is
     // parsed from disk exactly once per run.
+    let setup_ms = started.elapsed().as_millis();
+    let mapper_started = Instant::now();
     let mapper = Arc::new(
         CapabilityMapper::try_new_with_load_options(
             CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION,
@@ -216,7 +218,7 @@ pub fn run_with_options(
         )?
         .with_slow_rule_ms(slow_rule_ms),
     );
-    let load_ms = started.elapsed().as_millis();
+    let mapper_and_lint_ms = mapper_started.elapsed().as_millis();
     let index_started = Instant::now();
 
     // When the cache holds nothing for these traits, as after an edit, every
@@ -234,6 +236,15 @@ pub fn run_with_options(
     }
 
     let index_ms = index_started.elapsed().as_millis();
+    // A cold YARA singleton reached on a fixture worker must collect sources
+    // serially to avoid nested-pool deadlocks. Initialize it off the pool first
+    // so rule collection can use the whole pool, before any fixture waits on it.
+    // The full-validation cache hit above still avoids engine loading entirely.
+    let yara_started = Instant::now();
+    if targets.iter().any(Target::requires_yara) {
+        cleave::prefetch_yara_engine(yara_options.enable_third_party_yara);
+    }
+    let yara_ms = yara_started.elapsed().as_millis();
     let analysis_started = Instant::now();
 
     // One lane per pool thread, each pulling the next fixture, so that every
@@ -279,8 +290,10 @@ pub fn run_with_options(
         }
     });
     tracing::info!(
-        load_ms,
+        setup_ms,
+        mapper_and_lint_ms,
         index_ms,
+        yara_ms,
         analysis_ms = analysis_started.elapsed().as_millis(),
         fixtures = targets.len(),
         "validation phase timings"

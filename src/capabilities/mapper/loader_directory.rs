@@ -634,9 +634,10 @@ impl super::CapabilityMapper {
             None
         };
 
+        let load_started = std::time::Instant::now();
         tracing::info!("Loading trait definitions from {}", dir_path.display());
         if enable_full_validation {
-            tracing::info!("Full validation enabled (this may take 60+ seconds)");
+            tracing::info!("Full trait validation enabled");
         } else {
             tracing::info!("Fast validation mode (run 'cleave validate' for full validation)");
         }
@@ -802,7 +803,9 @@ impl super::CapabilityMapper {
             .filter_map(std::result::Result::ok)
             .filter(|entry| {
                 let path = entry.path();
-                if !path.is_file() || !path.extension().map(|e| e == "yaml").unwrap_or(false) {
+                if !entry.file_type().is_file()
+                    || !path.extension().map(|e| e == "yaml").unwrap_or(false)
+                {
                     return false;
                 }
                 // Skip third-party YARA config (not trait definitions)
@@ -824,7 +827,8 @@ impl super::CapabilityMapper {
         }
 
         tracing::info!("Found {} YAML files to parse", yaml_files.len());
-        let _t_parse = std::time::Instant::now();
+        let discovery_ms = load_started.elapsed().as_millis();
+        let parse_started = std::time::Instant::now();
 
         // Load all YAML files in parallel, preserving path for prefix calculation
         // Use indexed_map to preserve sorted order
@@ -857,7 +861,8 @@ impl super::CapabilityMapper {
         });
 
         tracing::trace!("Parsing complete");
-        let _t_merge = std::time::Instant::now();
+        let parse_ms = parse_started.elapsed().as_millis();
+        let prepare_started = std::time::Instant::now();
 
         // Merge all results, collecting errors to report all at once
         tracing::trace!("Merging trait definitions and composite rules");
@@ -1173,6 +1178,15 @@ impl super::CapabilityMapper {
         // Pre-calculate precision for ALL composite rules once
         // Atomic trait precisions are already calculated during parsing
         tracing::trace!("Validating trait definitions and composite rules");
+
+        tracing::info!(
+            discovery_ms,
+            parse_ms,
+            prepare_ms = prepare_started.elapsed().as_millis(),
+            load_ms = load_started.elapsed().as_millis(),
+            "trait loading phase timings"
+        );
+        let lint_started = std::time::Instant::now();
 
         // Everything from here to the end of this block is the trait-rule
         // linter: full validation and the reference diagnostics. Without the
@@ -5959,7 +5973,10 @@ impl super::CapabilityMapper {
 
         #[cfg(feature = "lint")]
         crate::capabilities::validation::facts_cache::completed();
-        tracing::trace!("Validation complete");
+        tracing::info!(
+            lint_ms = lint_started.elapsed().as_millis(),
+            "trait lint complete"
+        );
 
         // The four match indexes build lazily on the first analysis (see
         // `match_indexes`); loading only parses and validates traits/composites.

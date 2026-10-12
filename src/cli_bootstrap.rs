@@ -242,7 +242,22 @@ pub(crate) fn log_startup(effective_log_file: Option<&str>, verbose: bool) {
     tracing::trace!("Logging initialized (verbose={})", verbose);
 }
 
-pub(crate) fn configure_rayon_thread_pool() {
+fn preferred_core_count(
+    physical: Option<usize>,
+    logical: Option<usize>,
+    validating: bool,
+) -> Option<usize> {
+    // Apple Silicon has no SMT. Independent validation fixtures also use the
+    // efficiency cores profitably; single-archive scans retain their measured
+    // performance-core default. Explicit CLEAVE_RAYON_THREADS still wins.
+    if validating && cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        logical.or(physical)
+    } else {
+        physical
+    }
+}
+
+pub(crate) fn configure_rayon_thread_pool(validating: bool) {
     // Archive analysis nests `par_iter` up to 2 levels deep (outer member
     // walk + JAR class-file YARA scan). With fewer than ~4 workers the
     // inner par_iter can commit every thread and the outer join has no
@@ -288,7 +303,11 @@ pub(crate) fn configure_rayon_thread_pool() {
         // exceed logical — in a CPU-capped container sysfs still sees every
         // host core, and oversubscribing the allotment would only thrash.
         let logical = cleave::memory_tracker::cpu_count();
-        let physical = cleave::memory_tracker::physical_cpu_count();
+        let physical = preferred_core_count(
+            cleave::memory_tracker::physical_cpu_count(),
+            logical,
+            validating,
+        );
 
         let threads = match (physical, logical) {
             (Some(p), Some(l)) => p.min(l).max(MIN_SAFE_THREADS),
@@ -406,4 +425,17 @@ pub(crate) fn log_exit_summary() {
         peak_rss_mb = peak_rss / 1024 / 1024,
         "cleave exiting"
     );
+}
+
+#[test]
+fn validation_pool_core_preference() {
+    assert_eq!(preferred_core_count(Some(12), Some(36), false), Some(12));
+    assert_eq!(preferred_core_count(Some(12), None, true), Some(12));
+    assert_eq!(preferred_core_count(None, None, true), None);
+    let expected = if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        Some(36)
+    } else {
+        Some(12)
+    };
+    assert_eq!(preferred_core_count(Some(12), Some(36), true), expected);
 }

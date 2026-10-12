@@ -209,7 +209,7 @@ fn main() -> Result<()> {
 
     // Limit concurrency to reduce peak RSS (especially during archive analysis).
     // Configured via rayon::ThreadPoolBuilder in cli_bootstrap.
-    configure_rayon_thread_pool();
+    configure_rayon_thread_pool(is_validate_command);
 
     #[cfg(feature = "deadlock-detection")]
     start_deadlock_detector();

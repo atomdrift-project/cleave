@@ -499,17 +499,6 @@ pub(super) fn eval_ast_query_with_budget<'a>(
 
     let mut evidence = Vec::new();
 
-    // Text provider implementation for predicate checking
-    struct SourceTextProvider<'a>(&'a [u8]);
-    impl<'a> tree_sitter::TextProvider<&'a [u8]> for SourceTextProvider<'a> {
-        type I = std::iter::Once<&'a [u8]>;
-        fn text<'b>(&mut self, node: tree_sitter::Node<'b>) -> Self::I {
-            let start = node.byte_range().start;
-            let end = node.byte_range().end.min(self.0.len());
-            std::iter::once(&self.0[start..end])
-        }
-    }
-
     // Bound the query by CPU time (not wall-clock) via the progress callback.
     // Without a bound, pathological inputs can burn minutes of CPU; with a
     // wall-clock bound, a thread descheduled under oversubscription gets cut off
@@ -540,11 +529,14 @@ pub(super) fn eval_ast_query_with_budget<'a>(
         }
         ControlFlow::Continue(())
     };
-    let options = tree_sitter::QueryCursorOptions::default().progress_callback(&mut progress_cb);
+    let mut capture_predicate = |pattern, capture, node: tree_sitter::Node<'_>| {
+        query.capture_satisfies_text_predicates(pattern, capture, node, source.as_bytes())
+    };
+    let options = tree_sitter::QueryCursorOptions::default()
+        .progress_callback(&mut progress_cb)
+        .capture_predicate(&mut capture_predicate);
     let mut matches =
         query_cursor.matches_with_options(query, tree.root_node(), source.as_bytes(), options);
-    let mut buffer1: Vec<u8> = Vec::new();
-    let mut buffer2: Vec<u8> = Vec::new();
     'matches: while let Some(m) = matches.next() {
         // Mirror the progress-callback guards between matches: cancellation and
         // the wall-clock deadline stop work promptly; the CPU budget marks a
@@ -561,12 +553,7 @@ pub(super) fn eval_ast_query_with_budget<'a>(
         if m.captures().is_empty() {
             continue;
         }
-        // Check text predicates (e.g., #eq?, #match?) using tree-sitter's built-in method
-        // This is REQUIRED - tree-sitter does NOT automatically filter by text predicates
-        let mut text_provider = SourceTextProvider(source.as_bytes());
-        if !m.satisfies_text_predicates(query, &mut buffer1, &mut buffer2, &mut text_provider) {
-            continue; // Skip matches that don't satisfy predicates
-        }
+        // QueryMatches already checks the built-in text predicates.
 
         // Count complete query matches once; captures provide evidence and
         // have their own work bound. A four-capture query is one occurrence.
@@ -741,6 +728,7 @@ pub(crate) fn batch_ast_queries_with_index(
     }
     let lang = &*tree.language();
     let mut compiling: Vec<(&str, Arc<CompiledAstQuery>)> = Vec::new();
+    let mut active = Vec::new();
     let owned_node_text;
     let node_text = match node_text {
         Some(index) => index,
@@ -762,6 +750,8 @@ pub(crate) fn batch_ast_queries_with_index(
         presence.insert(literal.to_vec(), found);
         found
     };
+    // Keep this set independent of source text: filtering before building the
+    // bank would recompile one native query for each file-specific subset.
     for &q in query_strs {
         // A batch runs under the tightest budget among its queries, and a
         // multi-wildcard query's is 100ms. Batched, it capped every ordinary
@@ -772,14 +762,16 @@ pub(crate) fn batch_ast_queries_with_index(
             continue;
         }
         if let Some(compiled) = cached_ast_query(lang, file_type, q) {
-            if compiled.literals.may_match(&mut contains) && compiled.nodes.may_match(node_text) {
-                compiling.push((q, compiled));
-            } else {
+            let possible =
+                compiled.literals.may_match(&mut contains) && compiled.nodes.may_match(node_text);
+            if !possible {
                 out.insert(q.to_string(), ConditionResult::no_match());
             }
+            active.push(possible);
+            compiling.push((q, compiled));
         }
     }
-    if compiling.len() < 2 {
+    if active.iter().filter(|&&enabled| enabled).count() < 2 {
         // Too few left to share a walk; the gate's answers still stand, and a
         // lone query left out of the map walks on the per-trait path.
         return (!out.is_empty()).then_some(out);
@@ -805,7 +797,14 @@ pub(crate) fn batch_ast_queries_with_index(
             // failure or pattern-count mismatch is deterministic for this
             // combined source, so retrying it per member only burns CPU.
             let entry = (|| {
+                let compile_started = Instant::now();
                 let query = tree_sitter::Query::new(lang, &combined_source).ok()?;
+                tracing::debug!(
+                    queries = compiling.len(),
+                    patterns = query.pattern_count(),
+                    compile_ms = compile_started.elapsed().as_millis(),
+                    "compiled AST query bank"
+                );
                 let mut pattern_to_query = Vec::new();
                 let mut expected = 0usize;
                 for (i, (_, q)) in compiling.iter().enumerate() {
@@ -827,15 +826,20 @@ pub(crate) fn batch_ast_queries_with_index(
         }
     };
 
-    struct SourceTextProvider<'a>(&'a [u8]);
-    impl<'a> tree_sitter::TextProvider<&'a [u8]> for SourceTextProvider<'a> {
-        type I = std::iter::Once<&'a [u8]>;
-        fn text<'b>(&mut self, node: tree_sitter::Node<'b>) -> Self::I {
-            let start = node.byte_range().start;
-            let end = node.byte_range().end.min(self.0.len());
-            std::iter::once(&self.0[start..end])
+    // Compile the same query set once across archive members. File-specific
+    // literal gates only disable patterns on a private copy; they must not
+    // create another expensive ts_query_new for each surviving subset, or
+    // mutate the shared query observed by concurrent archive workers.
+    let narrowed = active.iter().any(|&enabled| !enabled).then(|| {
+        let mut query = combined.query.deep_clone();
+        for (pattern, &qi) in combined.pattern_to_query.iter().enumerate() {
+            if !active[qi] {
+                query.disable_pattern(pattern);
+            }
         }
-    }
+        query
+    });
+    let query = narrowed.as_ref().unwrap_or(&combined.query);
 
     struct Bucket {
         evidence: Vec<Evidence>,
@@ -887,15 +891,14 @@ pub(crate) fn batch_ast_queries_with_index(
         }
         ControlFlow::Continue(())
     };
-    let options = tree_sitter::QueryCursorOptions::default().progress_callback(&mut progress_cb);
-    let mut matches = query_cursor.matches_with_options(
-        &combined.query,
-        tree.root_node(),
-        source.as_bytes(),
-        options,
-    );
-    let mut buffer1: Vec<u8> = Vec::new();
-    let mut buffer2: Vec<u8> = Vec::new();
+    let mut capture_predicate = |pattern, capture, node: tree_sitter::Node<'_>| {
+        query.capture_satisfies_text_predicates(pattern, capture, node, source.as_bytes())
+    };
+    let options = tree_sitter::QueryCursorOptions::default()
+        .progress_callback(&mut progress_cb)
+        .capture_predicate(&mut capture_predicate);
+    let mut matches =
+        query_cursor.matches_with_options(query, tree.root_node(), source.as_bytes(), options);
     while let Some(m) = matches.next() {
         if cancelled() || deadline.is_some_and(|dl| Instant::now() > dl) {
             return None;
@@ -916,15 +919,6 @@ pub(crate) fn batch_ast_queries_with_index(
         }
         if bucket.query_matches >= AST_QUERY_MATCH_LIMIT as usize {
             bucket.match_limited = true;
-            continue;
-        }
-        let mut text_provider = SourceTextProvider(source.as_bytes());
-        if !m.satisfies_text_predicates(
-            &combined.query,
-            &mut buffer1,
-            &mut buffer2,
-            &mut text_provider,
-        ) {
             continue;
         }
         if bucket.capture_count >= AST_QUERY_CAPTURE_LIMIT {
@@ -988,6 +982,9 @@ pub(crate) fn batch_ast_queries_with_index(
 
     let has_parse_errors = tree.root_node().has_error();
     for (i, (qstr, _)) in compiling.iter().enumerate() {
+        if !active[i] {
+            continue;
+        }
         if exceeded[i] && !timed_out.get() {
             continue;
         }
@@ -1036,4 +1033,16 @@ fn ast_query_language_key(lang: &tree_sitter::Language, file_type: FileType) -> 
         lang.node_kind_count(),
         lang.field_count()
     )
+}
+
+#[cfg(test)]
+pub(super) fn combined_bank_cached_for_test(
+    lang: &tree_sitter::Language,
+    file_type: FileType,
+    queries: &[&str],
+) -> bool {
+    COMBINED_QUERY_CACHE
+        .read()
+        .get(&(ast_query_language_key(lang, file_type), queries.join("\n")))
+        .is_some_and(Option::is_some)
 }

@@ -1534,6 +1534,72 @@ pub(crate) fn find_brittle_path_patterns(traits: &[TraitDefinition], warnings: &
     }
 }
 
+/// Top-level predicates compile as empty patterns and never constrain the
+/// structural pattern beside them. Quoted strings and comments are opaque.
+fn has_detached_ast_predicate(query: &str) -> bool {
+    let bytes = query.as_bytes();
+    let mut i = 0usize;
+    let mut depth = 0usize;
+    while i < bytes.len() {
+        let c = bytes[i];
+        i += 1;
+        match c {
+            b';' => {
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    i += 1;
+                }
+            }
+            b'"' => {
+                while i < bytes.len() {
+                    let c = bytes[i];
+                    i += 1;
+                    if c == b'\\' {
+                        i = (i + 1).min(bytes.len());
+                    } else if c == b'"' {
+                        break;
+                    }
+                }
+            }
+            b'(' => {
+                if depth == 0 {
+                    let mut after = query[i..].trim_start();
+                    while after.starts_with(';') {
+                        after = after.find('\n').map_or("", |j| after[j..].trim_start());
+                    }
+                    if after.starts_with('#') {
+                        return true;
+                    }
+                }
+                depth += 1;
+            }
+            b'[' => depth += 1,
+            b')' | b']' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    false
+}
+
+#[test]
+fn ast_detached_predicate_lint_ignores_strings_comments_and_bound_predicates() {
+    for query in [
+        r#"((identifier) @id (#eq? @id "eval"))"#,
+        r#"((string) @s (#match? @s "é\\(é"))"#,
+        "(identifier) @id ; (#eq? @id \"eval\")\n",
+        r#"("(#eq?") @literal"#,
+        r#"[(identifier) (number)] @id"#,
+    ] {
+        assert!(!has_detached_ast_predicate(query), "{query}");
+    }
+    for query in [
+        r#"(identifier) @id (#eq? @id "eval")"#,
+        "(identifier) @id ( ; predicate\n #eq? @id \"eval\")",
+        "(identifier) @id\n(#not-match? @id \"é\")",
+    ] {
+        assert!(has_detached_ast_predicate(query), "{query}");
+    }
+}
+
 /// Invoke `f` with every `type: tree-sitter` `query:` a rule carries, paired
 /// with its explicit `language:` when the author pinned one.
 fn for_each_ast_query<'a>(condition: &'a Condition, f: &mut impl FnMut(&'a str, Option<&'a str>)) {
@@ -1582,6 +1648,13 @@ pub(crate) fn find_uncompilable_ast_queries(
                      for_types: &[FileType],
                      query: &str,
                      language: Option<&str>| {
+        if has_detached_ast_predicate(query) {
+            warnings.push(format!(
+                "AST query: {kind} '{id}' in {} has a detached top-level predicate; wrap the structural pattern and its predicates together in parentheses so the predicates constrain its matches",
+                defined_in.display()
+            ));
+            return;
+        }
         let declared: Vec<&str> = match language {
             Some(explicit) => vec![explicit],
             None => for_types

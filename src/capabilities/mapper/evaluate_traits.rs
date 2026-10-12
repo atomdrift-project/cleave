@@ -515,10 +515,9 @@ impl super::CapabilityMapper {
         node_text: Option<&crate::composite_rules::evaluators::NodeTextIndex>,
     ) -> Option<FxHashMap<String, crate::composite_rules::context::ConditionResult>> {
         let tree = cached_ast?;
-        // Each file's predicate gates select a different combined query. On
-        // small sources, compiling that combination costs more than the short
-        // individual walks, whose compiled queries are already shared. Reserve
-        // batching for files large enough to amortize the extra compilation.
+        // On small sources, preparing a private copy of the combined query
+        // costs more than the short individual walks, whose compiled queries
+        // are already shared. Reserve batching for larger files.
         if !file_type.supports_ast_queries() || binary_data.len() < 4 * 1024 {
             return None;
         }

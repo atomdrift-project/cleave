@@ -6403,7 +6403,13 @@ fn collect_early(validator_id: &str, check: impl FnOnce(&mut Vec<String>)) -> Op
         return None;
     }
     let mut messages = Vec::new();
+    let started = std::time::Instant::now();
     check(&mut messages);
+    tracing::debug!(
+        validator = validator_id,
+        elapsed_ms = started.elapsed().as_millis(),
+        "validator timing"
+    );
     Some(messages)
 }
 

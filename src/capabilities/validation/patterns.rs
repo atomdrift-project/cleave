@@ -1638,10 +1638,85 @@ pub(crate) fn find_uncompilable_ast_queries(
     composites: &[CompositeTrait],
     warnings: &mut Vec<String>,
 ) {
+    find_uncompilable_ast_queries_with_parallel(traits, composites, warnings, true);
+}
+
+fn find_uncompilable_ast_queries_with_parallel(
+    traits: &[TraitDefinition],
+    composites: &[CompositeTrait],
+    warnings: &mut Vec<String>,
+    parallel: bool,
+) {
     // A query compiles or fails the same way wherever it appears, and many
     // rules share queries, so each grammar-and-query pair is compiled once.
     let mut compiled: HashMap<(String, String), Result<(), String>> = HashMap::new();
     let facts = super::facts_cache::active();
+    // A lint compile constructs and immediately drops its private Query. It
+    // does not publish a runtime query or touch the runtime query caches.
+    // Prewarm declared grammar/query verdicts in parallel, then emit warnings
+    // through the original ordered walk. Unscoped queries retain their serial
+    // first-success fallback across grammars.
+    if parallel {
+        let mut pending = std::collections::HashSet::new();
+        let mut collect = |types: &[FileType], query: &str, language: Option<&str>| {
+            if has_detached_ast_predicate(query) {
+                return;
+            }
+            let languages: Vec<&str> = match language {
+                Some(language) => vec![language],
+                None => types
+                    .iter()
+                    .filter_map(FileType::tree_sitter_language_name)
+                    .collect(),
+            };
+            for language in languages {
+                pending.insert((language.to_string(), query.to_string()));
+            }
+        };
+        for rule in traits {
+            let mut visit =
+                |query: &str, language: Option<&str>| collect(&rule.r#for, query, language);
+            for_each_ast_query(&rule.r#if, &mut visit);
+            for condition in rule.unless.as_deref().unwrap_or_default() {
+                for_each_ast_query(condition, &mut visit);
+            }
+            if let Some(downgrade) = &rule.downgrade {
+                for_each_downgrade_ast_query(downgrade, &mut visit);
+            }
+        }
+        for rule in composites {
+            let mut visit =
+                |query: &str, language: Option<&str>| collect(&rule.r#for, query, language);
+            for condition in [&rule.all, &rule.any, &rule.unless]
+                .into_iter()
+                .flat_map(|legs| legs.as_deref().unwrap_or_default())
+            {
+                for_each_ast_query(condition, &mut visit);
+            }
+            if let Some(downgrade) = &rule.downgrade {
+                for_each_downgrade_ast_query(downgrade, &mut visit);
+            }
+        }
+        compiled = pending
+            .into_par_iter()
+            .map(|(language, query)| {
+                let compile = || {
+                    filefacts::validate_source_query(&language, &query).map_err(|e| e.to_string())
+                };
+                let outcome = match &facts {
+                    Some(facts) => facts.get_or_compute(
+                        super::facts_cache::key(
+                            "ast-query-v2",
+                            &[language.as_bytes(), query.as_bytes()],
+                        ),
+                        compile,
+                    ),
+                    None => compile(),
+                };
+                ((language, query), outcome)
+            })
+            .collect();
+    }
     let mut check = |kind: &str,
                      id: &str,
                      defined_in: &std::path::Path,
@@ -1919,6 +1994,85 @@ mod tests {
             language: language.map(str::to_string),
             ..Default::default()
         })
+    }
+
+    #[test]
+    fn parallel_ast_lint_preserves_serial_diagnostics_and_order() {
+        let cases = [
+            (
+                vec![FileType::JavaScript, FileType::TypeScript],
+                "(call_expression) @c",
+                None,
+            ),
+            (
+                vec![FileType::JavaScript, FileType::Python],
+                "(call_expression) @c",
+                None,
+            ),
+            (vec![FileType::All], "(call_expression", None),
+            (vec![FileType::All], "(_) @node", None),
+            (
+                vec![FileType::Python],
+                "(call) @c",
+                Some("unknown-language"),
+            ),
+            (
+                vec![FileType::JavaScript],
+                "(identifier) @id (#eq? @id \"eval\")",
+                None,
+            ),
+            (
+                vec![FileType::Python],
+                "(call_expression) @c",
+                Some("javascript"),
+            ),
+        ];
+        let mut traits: Vec<_> = cases
+            .into_iter()
+            .enumerate()
+            .map(|(i, (types, query, language))| TraitDefinition {
+                id: format!("test-{i}"),
+                r#for: types,
+                r#if: ast_query(query, language),
+                ..Default::default()
+            })
+            .collect();
+        traits[0].unless = Some(vec![ast_query("(missing_unless_node) @c", None)]);
+        let downgrade = super::DowngradeConditions {
+            any: Some(vec![ast_query("(missing_downgrade_node) @c", None)]),
+            all: None,
+            none: None,
+            needs: None,
+            scope: None,
+        };
+        traits[0].downgrade = Some(downgrade.clone());
+        let composites = [CompositeTrait {
+            id: "composite".into(),
+            r#for: vec![FileType::Python],
+            all: Some(vec![ast_query("(missing_all_node) @c", None)]),
+            any: Some(vec![ast_query("(call_expression) @c", Some("javascript"))]),
+            unless: Some(vec![ast_query("(missing_unless_node) @c", None)]),
+            downgrade: Some(downgrade),
+            ..Default::default()
+        }];
+        let mut serial = Vec::new();
+        super::find_uncompilable_ast_queries_with_parallel(
+            &traits,
+            &composites,
+            &mut serial,
+            false,
+        );
+        assert!(!serial.is_empty());
+        for _ in 0..8 {
+            let mut parallel = Vec::new();
+            super::find_uncompilable_ast_queries_with_parallel(
+                &traits,
+                &composites,
+                &mut parallel,
+                true,
+            );
+            assert_eq!(serial, parallel);
+        }
     }
 
     #[test]

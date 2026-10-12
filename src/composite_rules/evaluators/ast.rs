@@ -12,7 +12,7 @@ use crate::composite_rules::ast_kinds::map_kind_to_node_types;
 use crate::composite_rules::context::{AnalysisWarning, ConditionResult, EvaluationContext};
 use crate::composite_rules::types::FileType;
 use crate::types::{Evidence, MAX_EVIDENCE_PER_TRAIT};
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use rustc_hash::FxHashMap;
 use std::cell::Cell;
 use std::ops::ControlFlow;
@@ -43,8 +43,9 @@ use streaming_iterator::StreamingIterator;
 ///
 /// Design: **unbounded** (eviction was the original drift trigger — a bounded LRU
 /// thrashed under multi-language archives and recompiled queries concurrently) +
-/// **serialized compile** (`eval_ast_query` compiles under the write lock,
-/// double-checked, so no two `Query::new` overlap). Per-key concurrent
+/// **serialized compile** (a compiler mutex and double-checked cache ensure
+/// no two individual `Query::new` calls overlap). Cache hits remain readable
+/// while another query compiles. Per-key concurrent
 /// compilation was tried and measured *wall-neutral* (the one-time compile
 /// warmup is small and amortized), so it's not worth the extra concurrency on
 /// this correctness-sensitive path.
@@ -56,6 +57,12 @@ use streaming_iterator::StreamingIterator;
 /// deterministic, so a cached failure is exactly as correct as retrying it.
 static QUERY_CACHE: LazyLock<RwLock<FxHashMap<(String, String), Option<Arc<CompiledAstQuery>>>>> =
     LazyLock::new(|| RwLock::new(FxHashMap::default()));
+
+// Separate compiler ownership from cache publication so hits never wait for
+// an unrelated compilation. Keep the individual/bank compiler domains used
+// by the original two cache locks; compilation within each stays serialized.
+static QUERY_COMPILER: Mutex<()> = Mutex::new(());
+static COMBINED_QUERY_COMPILER: Mutex<()> = Mutex::new(());
 
 /// A compiled `query:` and the literals its matches require of the source.
 struct CompiledAstQuery {
@@ -155,6 +162,8 @@ fn count_unbounded_any_wildcards(query: &str) -> usize {
 /// Clear the shared AST query cache.
 #[allow(dead_code)] // Called via clear_thread_local_caches
 pub(crate) fn clear_ast_query_cache() {
+    let _queries = QUERY_COMPILER.lock();
+    let _banks = COMBINED_QUERY_COMPILER.lock();
     QUERY_CACHE.write().clear();
     COMBINED_QUERY_CACHE.write().clear();
 }
@@ -624,12 +633,9 @@ fn cached_ast_query(
     file_type: FileType,
     query_str: &str,
 ) -> Option<Arc<CompiledAstQuery>> {
-    // Compile the query, cached process-wide to avoid recompilation across files
-    // and threads. The frequent case is a hit on the read-lock fast path. On a
-    // miss we take the write lock and compile *while holding it*, double-checking
-    // first: each (language, query) compiles exactly once with no overlapping
-    // `Query::new`. CORRECTNESS-CRITICAL (see the QUERY_CACHE doc): compiling
-    // outside the lock reintroduces finding drift; do not "optimize" it away.
+    // Serialize misses without blocking cache readers. Hold compiler ownership
+    // through publication and recheck after acquiring it, so each key still
+    // compiles exactly once. Cache clearing takes the same compiler locks.
     let key = (
         ast_query_language_key(lang, file_type),
         query_str.to_string(),
@@ -641,9 +647,8 @@ fn cached_ast_query(
     if let Some(entry) = hit {
         return entry;
     }
-    let mut cache = QUERY_CACHE.write();
-    if let Some(entry) = cache.get(&key).cloned() {
-        drop(cache);
+    let _compiler = QUERY_COMPILER.lock();
+    if let Some(entry) = QUERY_CACHE.read().get(&key).cloned() {
         return entry;
     }
     let compiled = tree_sitter::Query::new(lang, query_str).ok().map(|query| {
@@ -655,8 +660,7 @@ fn cached_ast_query(
             nodes,
         })
     });
-    cache.insert(key, compiled.clone());
-    drop(cache);
+    QUERY_CACHE.write().insert(key, compiled.clone());
     compiled
 }
 
@@ -788,9 +792,9 @@ pub(crate) fn batch_ast_queries_with_index(
     let combined = if let Some(entry) = cached {
         entry?
     } else {
-        let mut cache = COMBINED_QUERY_CACHE.write();
-        if let Some(entry) = cache.get(&cache_key).cloned() {
-            drop(cache);
+        let _compiler = COMBINED_QUERY_COMPILER.lock();
+        let cached = COMBINED_QUERY_CACHE.read().get(&cache_key).cloned();
+        if let Some(entry) = cached {
             entry?
         } else {
             // Compile (or fail) once and record the outcome either way; a
@@ -820,8 +824,9 @@ pub(crate) fn batch_ast_queries_with_index(
                     pattern_to_query,
                 }))
             })();
-            cache.insert(cache_key, entry.clone());
-            drop(cache);
+            COMBINED_QUERY_CACHE
+                .write()
+                .insert(cache_key, entry.clone());
             entry?
         }
     };
@@ -1045,4 +1050,79 @@ pub(super) fn combined_bank_cached_for_test(
         .read()
         .get(&(ast_query_language_key(lang, file_type), queries.join("\n")))
         .is_some_and(Option::is_some)
+}
+
+#[cfg(test)]
+mod cache_lock_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use super::*;
+
+    #[test]
+    fn ast_cache_hit_does_not_wait_for_compiler() {
+        let source = b"const value = 1;";
+        let parsed = filefacts::OpenOptions::new()
+            .path(std::path::Path::new("cache-lock.js"))
+            .cache(false)
+            .open(source);
+        let _ = parsed.values();
+        let tree = parsed.source_ast().unwrap().tree.clone();
+        let language = tree.language();
+        let pattern = "(identifier) @cache_lock_hit";
+        let key = (
+            ast_query_language_key(&language, FileType::JavaScript),
+            pattern.to_string(),
+        );
+        let compiler = QUERY_COMPILER.lock();
+        let query = tree_sitter::Query::new(&language, pattern).unwrap();
+        let compiled = Arc::new(CompiledAstQuery {
+            literals: RequiredLiterals::of(&query, pattern),
+            nodes: RequiredNodes::of(&query, pattern),
+            query,
+        });
+        QUERY_CACHE.write().insert(key, Some(compiled.clone()));
+        let (send, receive) = std::sync::mpsc::channel();
+        let thread = std::thread::spawn(move || {
+            let hit = cached_ast_query(&tree.language(), FileType::JavaScript, pattern);
+            send.send(hit).unwrap();
+        });
+        // Release before asserting/joining so a regression cannot deadlock the test.
+        let hit = receive.recv_timeout(std::time::Duration::from_secs(5));
+        drop(compiler);
+        thread.join().unwrap();
+        assert!(Arc::ptr_eq(
+            &compiled,
+            &hit.expect("cached hits must not wait for compilation")
+                .unwrap()
+        ));
+    }
+
+    #[test]
+    fn ast_cache_concurrent_misses_share_one_query() {
+        let parsed = filefacts::OpenOptions::new()
+            .path(std::path::Path::new("cache-misses.js"))
+            .cache(false)
+            .open(b"const value = 1;");
+        let _ = parsed.values();
+        let tree = parsed.source_ast().unwrap().tree;
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(16));
+        let queries: Vec<_> = std::thread::scope(|scope| {
+            let threads: Vec<_> = (0..16)
+                .map(|_| {
+                    let tree = tree.clone();
+                    let barrier = barrier.clone();
+                    scope.spawn(move || {
+                        barrier.wait();
+                        cached_ast_query(
+                            &tree.language(),
+                            FileType::JavaScript,
+                            "(identifier) @cache_concurrent_misses",
+                        )
+                        .unwrap()
+                    })
+                })
+                .collect();
+            threads.into_iter().map(|t| t.join().unwrap()).collect()
+        });
+        assert!(queries.iter().all(|q| Arc::ptr_eq(&queries[0], q)));
+    }
 }

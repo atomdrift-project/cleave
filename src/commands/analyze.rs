@@ -273,6 +273,7 @@ fn analyze_and_format(
 
     // Core analysis — single pipeline in lib.rs, with caching
     let lib_report = cleave::analyze_file(path, options)?;
+    cleave::log_scan_stats();
 
     let mut report = prepare_output_report(lib_report);
 

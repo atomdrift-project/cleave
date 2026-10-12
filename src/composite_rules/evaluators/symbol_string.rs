@@ -2284,8 +2284,11 @@ pub(crate) fn eval_raw<'a>(
                 } else {
                     let kh = crate::composite_rules::compile_claim::ClaimSet::hash_key(&key);
                     if let Some(_guard) = CLAIMS.try_claim(kh) {
-                        compile_and_put(key)
-                    } else if let Some(hit) = CLAIMS.wait_for(|| cache.read().peek(&key).cloned()) {
+                        let hit = cache.read().peek(&key).cloned();
+                        hit.or_else(|| compile_and_put(key))
+                    } else if let Some(hit) =
+                        CLAIMS.wait_for(kh, || cache.read().peek(&key).cloned())
+                    {
                         Some(hit)
                     } else {
                         compile_and_put(key)

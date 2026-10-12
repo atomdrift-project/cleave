@@ -38,6 +38,7 @@ pub mod file_io;
 pub mod ip_validator;
 pub mod mem_profile;
 pub mod memory_tracker;
+pub mod rule_sources;
 pub mod rule_update;
 mod shared_resources;
 pub mod strings;

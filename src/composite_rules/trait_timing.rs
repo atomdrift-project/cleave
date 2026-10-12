@@ -9,7 +9,7 @@
 
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 fn enabled() -> bool {
@@ -18,36 +18,70 @@ fn enabled() -> bool {
 }
 
 /// (total nanos, evaluation count) per trait id.
-static TIMES: OnceLock<Mutex<FxHashMap<String, (u64, u64)>>> = OnceLock::new();
+type Times = FxHashMap<String, (u64, u64)>;
+type Shard = Arc<Mutex<Times>>;
+
+#[derive(Default)]
+struct Timings {
+    shards: Mutex<Vec<Shard>>,
+}
+
+impl Timings {
+    fn register(&self) -> Shard {
+        let shard = Arc::new(Mutex::new(Times::default()));
+        self.shards.lock().push(shard.clone());
+        shard
+    }
+
+    fn totals(&self) -> Times {
+        // Retain finished threads' totals, and allow workers to keep recording
+        // during a progress report. Never hold the registry while reading a shard.
+        let shards = self.shards.lock().clone();
+        let mut totals = Times::default();
+        for shard in shards {
+            for (id, &(ns, count)) in shard.lock().iter() {
+                let entry = totals.entry(id.clone()).or_default();
+                entry.0 += ns;
+                entry.1 += count;
+            }
+        }
+        totals
+    }
+}
+
+static TIMES: OnceLock<Timings> = OnceLock::new();
+thread_local! {
+    // The hot path only locks this thread's map. The registry lock is taken
+    // once per thread, instead of making every trait evaluation contend.
+    static LOCAL_TIMES: Shard = TIMES.get_or_init(Timings::default).register();
+}
+
+fn add(map: &mut Times, trait_id: &str, duration: Duration) {
+    if let Some(entry) = map.get_mut(trait_id) {
+        entry.0 += duration.as_nanos() as u64;
+        entry.1 += 1;
+    } else {
+        map.insert(trait_id.to_owned(), (duration.as_nanos() as u64, 1));
+    }
+}
 
 /// Add one evaluation's duration for `trait_id`. No-op unless
 /// `CLEAVE_TRAIT_TIMING=1`.
 pub(crate) fn record(trait_id: &str, duration: Duration) {
-    if !enabled() {
-        return;
-    }
-    let map = TIMES.get_or_init(|| Mutex::new(FxHashMap::default()));
-    let mut guard = map.lock();
-    if let Some(entry) = guard.get_mut(trait_id) {
-        entry.0 += duration.as_nanos() as u64;
-        entry.1 += 1;
-    } else {
-        guard.insert(trait_id.to_owned(), (duration.as_nanos() as u64, 1));
+    if enabled() {
+        LOCAL_TIMES.with(|shard| add(&mut shard.lock(), trait_id, duration));
     }
 }
 
 /// Log the top-`n` traits by aggregate evaluation time. No-op when disabled or
 /// nothing was recorded.
 pub(crate) fn report(n: usize) {
-    let Some(map) = TIMES.get() else { return };
-    let guard = map.lock();
-    let mut rows: Vec<_> = guard
-        .iter()
-        .map(|(id, &(ns, count))| (id.clone(), ns, count))
-        .collect();
-    drop(guard);
-    rows.sort_by_key(|&(_, ns, _)| std::cmp::Reverse(ns));
-    for (id, ns, count) in rows.into_iter().take(n) {
+    let Some(times) = TIMES.get() else { return };
+    let mut rows: Vec<_> = times.totals().into_iter().collect();
+    rows.sort_by(|(a_id, (a_ns, _)), (b_id, (b_ns, _))| {
+        b_ns.cmp(a_ns).then_with(|| a_id.cmp(b_id))
+    });
+    for (id, (ns, count)) in rows.into_iter().take(n) {
         tracing::info!(
             trait_id = %id,
             total_ms = ns / 1_000_000,
@@ -55,6 +89,30 @@ pub(crate) fn report(n: usize) {
             "trait time aggregate"
         );
     }
+}
+
+#[test]
+#[allow(clippy::unwrap_used)]
+fn trait_timing_combines_live_and_finished_threads() {
+    let times = Arc::new(Timings::default());
+    let threads: Vec<_> = (0..4)
+        .map(|_| {
+            let times = times.clone();
+            std::thread::spawn(move || {
+                let shard = times.register();
+                for _ in 0..1000 {
+                    add(&mut shard.lock(), "shared", Duration::from_nanos(7));
+                }
+            })
+        })
+        .collect();
+    // Reporting while workers run must not consume or lose their counts.
+    let _ = times.totals();
+    for thread in threads {
+        thread.join().unwrap();
+    }
+    assert_eq!(times.totals()["shared"], (28_000, 4_000));
+    assert_eq!(times.totals()["shared"], (28_000, 4_000));
 }
 
 /// Cheap per-evaluation timer for the slow-rule / hard-timeout checks.

@@ -463,6 +463,14 @@ pub(crate) struct TraitsContent {
 /// mid-process edit (the tests, [`traits_content_uncached`]) calls it directly;
 /// [`traits_scan_for`] memoizes it for the hot path.
 fn scan_traits_dir(traits_dir: &Path) -> TraitsScan {
+    let sources = crate::rule_sources::RuleSources::fresh(traits_dir).ok();
+    scan_traits_dir_with_sources(traits_dir, sources.as_ref())
+}
+
+fn scan_traits_dir_with_sources(
+    traits_dir: &Path,
+    sources: Option<&crate::rule_sources::RuleSources>,
+) -> TraitsScan {
     use rayon::prelude::*;
     use sha2::{Digest, Sha256};
 
@@ -494,7 +502,27 @@ fn scan_traits_dir(traits_dir: &Path) -> TraitsScan {
     // just the directory reads (`readdir`); extension and third-party
     // classification are pure path inspection, so they belong here.
     let mut candidates: Vec<Candidate> = Vec::new();
-    if traits_dir.exists() {
+    if let Some(sources) = sources {
+        for relative in sources.directories() {
+            let rel = relative.as_os_str().as_encoded_bytes();
+            layout_hasher.update((rel.len() as u64).to_le_bytes());
+            layout_hasher.update(rel);
+        }
+        for file in sources.files() {
+            let (is_yaml, is_yar) = match file.relative_path.extension().and_then(|e| e.to_str()) {
+                Some("yaml" | "yml") => (true, false),
+                Some("yar" | "yara") => (false, true),
+                _ => continue,
+            };
+            let path = traits_dir.join(&file.relative_path);
+            candidates.push(Candidate {
+                third_party: path.components().any(|c| c.as_os_str() == "third-party"),
+                path,
+                is_yaml,
+                is_yar,
+            });
+        }
+    } else if traits_dir.exists() {
         let walker = WalkDir::new(traits_dir)
             .follow_links(true)
             .sort_by_file_name()
@@ -535,7 +563,16 @@ fn scan_traits_dir(traits_dir: &Path) -> TraitsScan {
     // init with no lock held — see there — so this rayon use cannot deadlock.)
     let files: Vec<Option<(Option<SystemTime>, [u8; 32])>> = candidates
         .par_iter()
-        .map(|c| read_rule_file(traits_dir, &c.path))
+        .map(|c| match sources {
+            Some(sources) => {
+                let file = sources.file(c.path.strip_prefix(traits_dir).ok()?)?;
+                Some((
+                    file.modified,
+                    rule_file_digest(traits_dir, &c.path, &file.bytes),
+                ))
+            }
+            None => read_rule_file(traits_dir, &c.path),
+        })
         .collect();
 
     // Phase 3 — fold the per-file digests in walk order.
@@ -580,14 +617,14 @@ fn scan_traits_dir(traits_dir: &Path) -> TraitsScan {
     let yaml_digest: [u8; 32] = yaml_hasher.finalize().into();
     let rule_digest: [u8; 32] = rule_hasher.finalize().into();
 
-    // Info, not debug: reading the rule sources is a per-process cost every
-    // scan pays once, and worth seeing when a scan is slow.
+    // Report hashing separately from the snapshot's disk I/O timing.
     let elapsed = started.elapsed();
     tracing::info!(
         walk = ordinal,
         dir = %traits_dir.display(),
         entries = entries_visited,
-        reads = files_read,
+        reads = if sources.is_some() { 0 } else { files_read },
+        shared_files = if sources.is_some() { files_read } else { 0 },
         yaml_files = yaml_count,
         rule_files = rule_count,
         elapsed_ms = elapsed.as_millis(),
@@ -629,13 +666,13 @@ fn scan_traits_dir(traits_dir: &Path) -> TraitsScan {
 pub(crate) fn rules_source_tag() -> Option<u64> {
     let traits_dir = traits_path();
     if skip_yara_cache() {
-        return compute_rules_source_tag(&traits_dir);
+        return compute_shared_rules_source_tag(&traits_dir);
     }
     let revision = traits_scan().rule_revision?;
     if let Some(tag) = memoized_source_tag(&traits_dir, revision) {
         return Some(tag);
     }
-    let tag = compute_rules_source_tag(&traits_dir)?;
+    let tag = compute_shared_rules_source_tag(&traits_dir)?;
     store_source_tag(&traits_dir, revision, tag);
     Some(tag)
 }
@@ -653,39 +690,41 @@ pub(crate) fn rules_source_tag_uncached() -> Option<u64> {
 /// Hash every rule source under `traits_dir` by traits-relative path and
 /// contents.
 ///
-/// Walks separately from [`scan_traits_dir`] rather than riding along with it:
-/// its fold is a portable, order-independent FNV the compiled artifacts carry,
-/// and it runs only when the memo above misses.
+/// Always rereads disk for publication checks. Normal loading shares the
+/// immutable snapshot through `compute_shared_rules_source_tag` instead.
+/// The portable, order-independent FNV fold is unchanged.
 fn compute_rules_source_tag(traits_dir: &Path) -> Option<u64> {
+    let sources = crate::rule_sources::RuleSources::fresh(traits_dir).ok()?;
+    source_tag_from_snapshot(traits_dir, &sources)
+}
+
+fn compute_shared_rules_source_tag(traits_dir: &Path) -> Option<u64> {
+    let sources = crate::rule_sources::shared(traits_dir).ok()?;
+    source_tag_from_snapshot(traits_dir, &sources)
+}
+
+pub(crate) fn source_tag_from_snapshot(
+    traits_dir: &Path,
+    sources: &crate::rule_sources::RuleSources,
+) -> Option<u64> {
     use rayon::prelude::*;
-
     let started = Instant::now();
-    let mut sources: Vec<(PathBuf, bool)> = Vec::new();
-    if traits_dir.exists() {
-        let walker = WalkDir::new(traits_dir)
-            .follow_links(true)
-            .into_iter()
-            .filter_entry(crate::traits_repo::is_rule_source_entry);
-        for entry in walker.flatten() {
-            if !entry.file_type().is_file() {
-                continue;
-            }
-            let is_yar = match entry.path().extension().and_then(|e| e.to_str()) {
-                Some("yar" | "yara") => true,
-                // Trait YAML is a candidate, but only the few files carrying an
-                // inline rule survive the content test below.
-                Some("yaml" | "yml") => false,
-                _ => continue,
-            };
-            sources.push((entry.path().to_path_buf(), is_yar));
-        }
-    }
-
     let mut digests: Vec<u64> = sources
+        .files()
         .par_iter()
-        .filter_map(|(path, is_yar)| {
-            let bytes = fs::read(path).ok()?;
-            (*is_yar || mentions_yara(&bytes)).then(|| rule_source_digest(traits_dir, path, &bytes))
+        .filter_map(|file| {
+            let is_yar = match file.relative_path.extension().and_then(|e| e.to_str()) {
+                Some("yar" | "yara") => true,
+                Some("yaml" | "yml") => false,
+                _ => return None,
+            };
+            (is_yar || mentions_yara(&file.bytes)).then(|| {
+                rule_source_digest(
+                    traits_dir,
+                    &traits_dir.join(&file.relative_path),
+                    &file.bytes,
+                )
+            })
         })
         .collect();
     if digests.is_empty() {
@@ -704,7 +743,7 @@ fn compute_rules_source_tag(traits_dir: &Path) -> Option<u64> {
     }
     tracing::debug!(
         dir = %traits_dir.display(),
-        candidates = sources.len(),
+        candidates = sources.files().len(),
         rule_sources = digests.len(),
         elapsed_ms = started.elapsed().as_millis(),
         tag = %format!("{tag:016x}"),
@@ -783,6 +822,7 @@ static TRAITS_REVISION: parking_lot::RwLock<Option<i64>> = parking_lot::RwLock::
 /// re-scan after a rule update is served from cache under the *old* rules'
 /// fingerprint and the update silently doesn't take effect.
 pub(crate) fn invalidate_traits_scan() {
+    crate::rule_sources::invalidate();
     TRAITS_SCANS.write().clear();
     *CACHE_TIMESTAMP.write() = None;
     *TRAITS_REVISION.write() = None;
@@ -812,7 +852,8 @@ fn traits_scan_for(traits_dir: &Path) -> Arc<TraitsScan> {
             return Arc::clone(scan);
         }
     }
-    let scan = Arc::new(scan_traits_dir(traits_dir));
+    let sources = crate::rule_sources::shared(traits_dir).ok();
+    let scan = Arc::new(scan_traits_dir_with_sources(traits_dir, sources.as_deref()));
     let mut scans = TRAITS_SCANS.write();
     if let Some((_, existing)) = scans.iter().find(|(dir, _)| *dir == key) {
         return Arc::clone(existing);

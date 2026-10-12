@@ -72,7 +72,9 @@ impl ResultCache {
         );
         let settings = settings.finalize().to_vec();
         let paths: Vec<_> = targets.iter().map(|t| t.path().to_path_buf()).collect();
-        let key = fingerprint(
+        let sources = crate::rule_sources::shared(&traits_dir).ok()?;
+        let key = fingerprint_with_sources(
+            &sources,
             &traits_dir,
             &paths,
             expectations,
@@ -149,58 +151,69 @@ fn fingerprint(
     settings: &[u8],
     engine: &str,
 ) -> Result<String> {
+    let sources = crate::rule_sources::RuleSources::fresh(traits_dir)?;
+    fingerprint_with_sources(
+        &sources,
+        traits_dir,
+        fixtures,
+        expectations,
+        settings,
+        engine,
+    )
+}
+
+fn fingerprint_with_sources(
+    sources: &crate::rule_sources::RuleSources,
+    traits_dir: &Path,
+    fixtures: &[PathBuf],
+    expectations: &str,
+    settings: &[u8],
+    engine: &str,
+) -> Result<String> {
     let mut hash = Sha256::new();
     field(&mut hash, b"cleave-full-validation-v1");
     field(&mut hash, traits_dir.as_os_str().as_encoded_bytes());
     field(&mut hash, engine.as_bytes());
     field(&mut hash, settings);
     field(&mut hash, expectations.as_bytes());
-    let mut files = Vec::new();
-    for entry in walkdir::WalkDir::new(traits_dir)
-        .follow_links(true)
-        .sort_by_file_name()
-        .into_iter()
-        .filter_entry(crate::traits_repo::is_rule_source_entry)
-    {
-        // Unlike opportunistic caches, a validation proof must fail closed on
-        // unreadable directories, symlink loops, or unreadable inputs.
-        let entry = entry?;
-        if entry.file_type().is_dir() {
-            field(
-                &mut hash,
-                entry
-                    .path()
-                    .strip_prefix(traits_dir)?
-                    .as_os_str()
-                    .as_encoded_bytes(),
-            );
-        } else if entry.file_type().is_file()
-            && (matches!(
-                entry.path().extension().and_then(|s| s.to_str()),
-                Some("yaml" | "yml" | "yar" | "yara" | "yrc")
-            ) || entry.file_name() == "manifest.json")
-        {
-            files.push(entry.into_path());
-        }
+    for dir in sources.directories() {
+        field(&mut hash, dir.as_os_str().as_encoded_bytes());
     }
+    let mut files: Vec<_> = sources
+        .files()
+        .iter()
+        .map(|file| {
+            (
+                traits_dir.join(&file.relative_path),
+                Some(file.bytes.clone()),
+            )
+        })
+        .collect();
     let cwd = std::env::current_dir()?;
     files.extend(fixtures.iter().map(|p| {
-        if p.is_absolute() {
+        let path = if p.is_absolute() {
             p.clone()
         } else {
-            // Preserve the caller's logical fixture basename and directory.
             cwd.join(p)
-        }
+        };
+        (path, None)
     }));
-    files.sort();
+    files.sort_by(|a, b| a.0.cmp(&b.0));
     let digests: Result<Vec<_>> = files
         .par_iter()
-        .map(|path| {
-            let bytes =
-                std::fs::read(path).with_context(|| format!("hashing {}", path.display()))?;
+        .map(|(path, bytes)| {
+            let fresh;
+            let bytes = match bytes {
+                Some(bytes) => bytes.as_ref(),
+                None => {
+                    fresh = std::fs::read(path)
+                        .with_context(|| format!("hashing {}", path.display()))?;
+                    &fresh
+                }
+            };
             let mut file = Sha256::new();
             field(&mut file, path.as_os_str().as_encoded_bytes());
-            field(&mut file, &bytes);
+            field(&mut file, bytes);
             Ok(file.finalize())
         })
         .collect();
@@ -214,6 +227,41 @@ fn fingerprint(
 mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
+
+    #[test]
+    fn validation_snapshot_key_requires_fresh_publication_check() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let rule = root.join("rule.yaml");
+        std::fs::write(&rule, "before").unwrap();
+        let snapshot = crate::rule_sources::RuleSources::fresh(root).unwrap();
+        let initial =
+            fingerprint_with_sources(&snapshot, root, &[], "expected", b"settings", "engine")
+                .unwrap();
+        assert_eq!(
+            initial,
+            fingerprint(root, &[], "expected", b"settings", "engine").unwrap()
+        );
+        let mtime = std::fs::metadata(&rule).unwrap().modified().unwrap();
+        std::fs::write(&rule, "edited").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&rule)
+            .unwrap()
+            .set_modified(mtime)
+            .unwrap();
+        // Parsing still sees the initial bytes, but a successful validation
+        // must never be published under that key after the on-disk edit.
+        assert_eq!(
+            initial,
+            fingerprint_with_sources(&snapshot, root, &[], "expected", b"settings", "engine")
+                .unwrap()
+        );
+        assert_ne!(
+            initial,
+            fingerprint(root, &[], "expected", b"settings", "engine").unwrap()
+        );
+    }
 
     #[test]
     fn validation_key_reads_contents_and_all_inputs() {

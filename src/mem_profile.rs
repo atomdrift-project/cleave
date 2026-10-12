@@ -69,16 +69,24 @@ mod time_imp {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::Instant;
 
-    static PHASE_NANOS: [AtomicU64; Phase::COUNT] = [const { AtomicU64::new(0) }; Phase::COUNT];
+    use parking_lot::Mutex;
+    use std::sync::Arc;
+
+    type Counters = [AtomicU64; Phase::COUNT];
+    static THREAD_COUNTERS: Mutex<Vec<Arc<Counters>>> = Mutex::new(Vec::new());
+
+    fn register_counters() -> Arc<Counters> {
+        let counters = Arc::new([const { AtomicU64::new(0) }; Phase::COUNT]);
+        THREAD_COUNTERS.lock().push(counters.clone());
+        counters
+    }
 
     /// Phase accounting is opt-in (`CLEAVE_PHASE_STATS=1`).
     ///
     /// [`enter`] runs at the top of every `eval_*` — millions of times per
-    /// archive scan — and each call costs two clock reads plus a `fetch_add`
-    /// on this shared array, i.e. cache-line ping-pong across every rayon
-    /// worker. That is far too expensive to leave on for a diagnostic: the
-    /// counters are only ever read by `log_scan_stats`. Off, `enter` is one
-    /// acquire load and a return.
+    /// archive scan. Each worker owns its counters, avoiding cache-line
+    /// contention with other workers. Reporting reads these counters without
+    /// stopping workers. Off, `enter` is one cached flag load and a return.
     pub(super) fn enabled() -> bool {
         static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         *ON.get_or_init(|| std::env::var("CLEAVE_PHASE_STATS").is_ok_and(|v| v == "1"))
@@ -87,6 +95,7 @@ mod time_imp {
     struct Ctx {
         phase: Phase,
         last: Instant,
+        nanos: Arc<Counters>,
     }
 
     thread_local! {
@@ -105,8 +114,9 @@ mod time_imp {
             let ctx = slot.get_or_insert_with(|| Ctx {
                 phase: Phase::Other,
                 last: now,
+                nanos: register_counters(),
             });
-            PHASE_NANOS[ctx.phase as usize].fetch_add(
+            ctx.nanos[ctx.phase as usize].fetch_add(
                 now.duration_since(ctx.last).as_nanos() as u64,
                 Ordering::Relaxed,
             );
@@ -121,8 +131,12 @@ mod time_imp {
         if !enabled() {
             return;
         }
-        for (nanos, name) in PHASE_NANOS.iter().zip(Phase::NAMES) {
-            let ns = nanos.load(Ordering::Relaxed);
+        let counters = THREAD_COUNTERS.lock().clone();
+        for (index, name) in Phase::NAMES.into_iter().enumerate() {
+            let ns: u64 = counters
+                .iter()
+                .map(|c| c[index].load(Ordering::Relaxed))
+                .sum();
             if ns > 0 {
                 tracing::info!(
                     phase = name,

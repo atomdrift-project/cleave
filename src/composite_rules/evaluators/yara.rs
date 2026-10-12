@@ -408,6 +408,53 @@ fn extract_best_atom(segments: &[HexSegment]) -> Option<&[u8]> {
         .reduce(|best, b| if b.len() > best.len() { b } else { best })
 }
 
+/// A mandatory any-of atom set for a sequence with alternatives. Every
+/// branch must supply an atom; an uncovered branch makes that alternative
+/// unusable. Another mandatory segment can still supply the gate.
+fn mandatory_hex_atoms(segments: &[HexSegment]) -> Option<Vec<&[u8]>> {
+    const MAX_ATOMS: usize = 64;
+    let mut best: Option<Vec<&[u8]>> = None;
+    for segment in segments {
+        let candidate = match segment {
+            HexSegment::Bytes(bytes) if !bytes.is_empty() => Some(vec![bytes.as_slice()]),
+            HexSegment::Alternative(branches) => {
+                let mut atoms = Vec::new();
+                let mut complete = !branches.is_empty();
+                for branch in branches {
+                    let Some(required) = mandatory_hex_atoms(branch) else {
+                        complete = false;
+                        break;
+                    };
+                    atoms.extend(required);
+                    if atoms.len() > MAX_ATOMS {
+                        complete = false;
+                        break;
+                    }
+                }
+                complete.then_some(atoms)
+            }
+            _ => None,
+        };
+        if let Some(mut atoms) = candidate {
+            atoms.sort_unstable();
+            atoms.dedup();
+            let rank = |atoms: &[&[u8]]| {
+                (
+                    atoms.iter().map(|a| a.len()).min().unwrap_or(0),
+                    std::cmp::Reverse(atoms.len()),
+                )
+            };
+            if best
+                .as_ref()
+                .is_none_or(|current| rank(&atoms) > rank(current))
+            {
+                best = Some(atoms);
+            }
+        }
+    }
+    best
+}
+
 /// Match pattern at a specific position in data
 fn match_pattern_at(data: &[u8], pos: usize, segments: &[HexSegment]) -> bool {
     match_pattern_sequence(data, pos, segments)
@@ -754,7 +801,18 @@ pub(crate) fn eval_hex<'a>(
                 }
             }
         } else {
-            // No good atom found - fall back to linear scan in range
+            // Alternation-only patterns have no single top-level atom. A
+            // missing atom from every branch proves failure before the costly
+            // per-byte backtracking walk (and its branch-vector clones).
+            // The verifier permits a match starting inside the location range
+            // to extend beyond it, so the gate must inspect that tail too.
+            if let Some(atoms) = mandatory_hex_atoms(&segments)
+                && !atoms
+                    .iter()
+                    .any(|atom| memchr::memmem::find(&data[search_start..], atom).is_some())
+            {
+                return ConditionResult::no_match();
+            }
             for pos in search_start..search_end {
                 if match_pattern_at(data, pos, &segments) && accepts(pos) {
                     total_count += 1;
@@ -956,6 +1014,49 @@ mod tests {
         let atom = extract_best_atom(&segments).unwrap();
         // Should extract "48 83 C4 08" (4 bytes) not "31" (1 byte)
         assert_eq!(atom, &[0x48, 0x83, 0xC4, 0x08]);
+    }
+
+    #[test]
+    fn hex_alternative_atoms_cover_every_matching_branch() {
+        let patterns = [
+            "(AA BB|CC DD)",
+            "(AA [0-2] BB|CC ?? DD) (11|22)",
+            "(AA BB|??) CC DD",
+            "(AA BB|??)",
+            "[0-2] (AA BB|CC DD)",
+        ];
+        // Exhaustive small inputs exercise alternatives, wildcard branches,
+        // and zero-length versus nonzero-length gaps.
+        let alphabet = [0xAA, 0xBB, 0xCC, 0xDD, 0x11, 0x22];
+        for pattern in patterns {
+            let segments = parse_hex_pattern(pattern).unwrap();
+            let atoms = mandatory_hex_atoms(&segments);
+            for value in 0..6usize.pow(5) {
+                let mut v = value;
+                let data: Vec<_> = (0..5)
+                    .map(|_| {
+                        let b = alphabet[v % 6];
+                        v /= 6;
+                        b
+                    })
+                    .collect();
+                if (0..data.len()).any(|pos| match_pattern_at(&data, pos, &segments)) {
+                    assert!(
+                        atoms.as_ref().is_none_or(|atoms| atoms
+                            .iter()
+                            .any(|atom| memchr::memmem::find(&data, atom).is_some())),
+                        "gate dropped {pattern} on {data:?}"
+                    );
+                }
+            }
+        }
+        assert!(mandatory_hex_atoms(&parse_hex_pattern("(AA BB|??)").unwrap()).is_none());
+        assert_eq!(
+            mandatory_hex_atoms(&parse_hex_pattern("(AA BB|CC DD)").unwrap())
+                .unwrap()
+                .len(),
+            2
+        );
     }
 
     #[test]

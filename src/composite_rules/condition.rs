@@ -344,8 +344,14 @@ pub(crate) fn cached_regex(pattern: &str) -> Option<Arc<TraitRegex>> {
     };
     let kh = super::compile_claim::ClaimSet::hash_key(&pattern);
     let compiled = if let Some(_guard) = CLAIMS.try_claim(kh) {
-        compile_and_put()
-    } else if let Some(hit) = CLAIMS.wait_for(|| {
+        // Another compiler may have published between our first lookup and
+        // claiming the key. Recheck before doing that work again.
+        let hit = REGEX_CACHE
+            .read()
+            .ok()
+            .and_then(|c| c.peek(pattern).cloned());
+        hit.or_else(compile_and_put)
+    } else if let Some(hit) = CLAIMS.wait_for(kh, || {
         REGEX_CACHE
             .read()
             .ok()

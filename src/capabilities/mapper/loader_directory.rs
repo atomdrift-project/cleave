@@ -596,6 +596,7 @@ impl super::CapabilityMapper {
         let _span = tracing::info_span!("load_capabilities").entered();
         let dir_path = dir_path.as_ref();
         let _t_start = std::time::Instant::now();
+        let sources = crate::rule_sources::shared(dir_path)?;
 
         // A tree this build already validated clean skips the checks. The mark
         // is keyed on the tree's content, so an edited tree validates in full;
@@ -796,26 +797,18 @@ impl super::CapabilityMapper {
 
         // First, collect all YAML file paths
         tracing::trace!("Scanning directory for YAML files");
-        let mut yaml_files: Vec<_> = walkdir::WalkDir::new(dir_path)
-            .follow_links(true)
-            .into_iter()
-            .filter_entry(crate::traits_repo::is_rule_source_entry)
-            .filter_map(std::result::Result::ok)
-            .filter(|entry| {
-                let path = entry.path();
-                if !entry.file_type().is_file()
-                    || !path.extension().map(|e| e == "yaml").unwrap_or(false)
-                {
-                    return false;
-                }
-                // Skip third-party YARA config (not trait definitions)
+        let mut yaml_files: Vec<_> = sources
+            .files()
+            .iter()
+            .filter(|file| file.relative_path.extension().is_some_and(|e| e == "yaml"))
+            .map(|file| dir_path.join(&file.relative_path))
+            .filter(|path| {
                 if path.components().any(|c| c.as_os_str() == "third-party") {
                     return false;
                 }
                 let filename = path.file_name().and_then(|f| f.to_str()).unwrap_or("");
                 !filename.to_lowercase().contains("readme") && !filename.starts_with("EXAMPLE")
             })
-            .map(|entry| entry.path().to_path_buf())
             .collect();
 
         // Sort files deterministically by path string to ensure consistent loading order across OSes
@@ -837,7 +830,10 @@ impl super::CapabilityMapper {
             .par_iter()
             .enumerate()
             .map(|(idx, path)| {
-                let bytes = fs::read(path).with_context(|| format!("Failed to read {:?}", path))?;
+                let bytes = &sources
+                    .file(path.strip_prefix(dir_path)?)
+                    .with_context(|| format!("Missing snapshotted trait {}", path.display()))?
+                    .bytes;
                 let content = String::from_utf8_lossy(&bytes);
 
                 // Check for meaningless YAML patterns before parsing

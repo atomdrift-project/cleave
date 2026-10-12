@@ -722,19 +722,64 @@ impl YaraEngine {
         usize,
         usize,
     ) {
-        let (mut inline_tier_sources, inline_namespaces) = if traits_dir.exists() {
-            Self::collect_inline_trait_sources_tiered(traits_dir)
-        } else {
-            (HashMap::new(), Vec::new())
-        };
-        let (mut builtin_tier_sources, builtin_contexts, builtin_count) = if traits_dir.exists() {
-            Self::collect_builtin_sources_tiered(traits_dir)
-        } else {
-            (HashMap::new(), HashMap::new(), 0)
-        };
+        let sources = crate::rule_sources::shared(traits_dir).ok();
+        Self::collect_all_sources_with_sources(
+            traits_dir,
+            third_party_dir,
+            enable_third_party,
+            sources.as_deref(),
+        )
+    }
+
+    fn read_source<'a>(
+        sources: Option<&'a crate::rule_sources::RuleSources>,
+        dir: &Path,
+        path: &Path,
+    ) -> Option<std::borrow::Cow<'a, [u8]>> {
+        match sources {
+            Some(sources) => sources
+                .file(path.strip_prefix(dir).ok()?)
+                .map(|file| std::borrow::Cow::Borrowed(file.bytes.as_ref())),
+            None => fs::read(path).ok().map(std::borrow::Cow::Owned),
+        }
+    }
+
+    fn collect_all_sources_with_sources(
+        traits_dir: &Path,
+        third_party_dir: &Path,
+        enable_third_party: bool,
+        sources: Option<&crate::rule_sources::RuleSources>,
+    ) -> (
+        HashMap<String, Vec<(String, String)>>,
+        HashMap<String, RuleContext>,
+        Vec<String>,
+        usize,
+        usize,
+    ) {
+        let (mut inline_tier_sources, inline_namespaces) =
+            if sources.is_some() || traits_dir.exists() {
+                Self::collect_inline_trait_sources_tiered_with_sources(traits_dir, sources)
+            } else {
+                (HashMap::new(), Vec::new())
+            };
+        let (mut builtin_tier_sources, builtin_contexts, builtin_count) =
+            if sources.is_some() || traits_dir.exists() {
+                Self::collect_builtin_sources_tiered_with_sources(traits_dir, sources)
+            } else {
+                (HashMap::new(), HashMap::new(), 0)
+            };
+        let third_party_sources = sources
+            .and_then(|s| s.subtree_relative(third_party_dir.strip_prefix(traits_dir).ok()?));
+        let third_party_exists = sources.map_or_else(
+            || third_party_dir.exists(),
+            |_| third_party_sources.is_some(),
+        );
         let (mut tier_sources, third_party_contexts, third_party_count, _vt, _disabled) =
-            if enable_third_party && third_party_dir.exists() {
-                Self::collect_third_party_sources_tiered(third_party_dir)
+            if enable_third_party && third_party_exists {
+                Self::collect_third_party_sources_tiered_with_sources(
+                    third_party_dir,
+                    third_party_sources.as_ref(),
+                )
             } else {
                 (HashMap::new(), HashMap::new(), 0, 0, 0)
             };
@@ -963,8 +1008,15 @@ impl YaraEngine {
         use anyhow::Context;
         let traits_dir = crate::cache::traits_path();
         let third_party_dir = crate::cache::third_party_path();
+        let sources = crate::rule_sources::RuleSources::fresh(&traits_dir)?;
+        let initial_tag = crate::cache::source_tag_from_snapshot(&traits_dir, &sources);
         let (tier_sources, rule_contexts, inline_namespaces, builtin_count, third_party_count) =
-            Self::collect_all_sources(&traits_dir, &third_party_dir, enable_third_party);
+            Self::collect_all_sources_with_sources(
+                &traits_dir,
+                &third_party_dir,
+                enable_third_party,
+                Some(&sources),
+            );
 
         std::fs::create_dir_all(out_dir)
             .with_context(|| format!("create out dir {}", out_dir.display()))?;
@@ -1031,7 +1083,11 @@ impl YaraEngine {
         populated_tiers.sort();
 
         let builtin_count = builtin_count + inline_namespaces.len();
-        let source_tag = crate::cache::rules_source_tag_uncached().map(|t| format!("{t:016x}"));
+        anyhow::ensure!(
+            initial_tag == crate::cache::rules_source_tag_uncached(),
+            "rule sources changed during precompilation; retry with stable inputs"
+        );
+        let source_tag = initial_tag.map(|t| format!("{t:016x}"));
         anyhow::ensure!(
             source_tag.is_some(),
             "no rule sources found under {} — refusing to write an unfingerprinted manifest",
@@ -1496,26 +1552,53 @@ impl YaraEngine {
     ///
     /// Each rule is tagged with namespace `inline.{trait_id}` so that scan results
     /// can be mapped back to the originating trait during evaluation.
+    #[cfg(test)]
     fn collect_inline_trait_sources_tiered(
         traits_dir: &Path,
     ) -> (HashMap<String, Vec<(String, String)>>, Vec<String>) {
-        let yaml_files: Vec<PathBuf> = WalkDir::new(traits_dir)
-            .follow_links(false)
-            .into_iter()
-            .filter_entry(crate::traits_repo::is_rule_source_entry)
-            .filter_map(std::result::Result::ok)
-            .filter(|e| {
-                let p = e.path();
-                p.is_file()
-                    && p.extension()
-                        .map(|ext| ext == "yaml" || ext == "yml")
-                        .unwrap_or(false)
-            })
-            .map(|e| e.path().to_path_buf())
-            .collect();
+        Self::collect_inline_trait_sources_tiered_with_sources(traits_dir, None)
+    }
+
+    fn collect_inline_trait_sources_tiered_with_sources(
+        traits_dir: &Path,
+        sources: Option<&crate::rule_sources::RuleSources>,
+    ) -> (HashMap<String, Vec<(String, String)>>, Vec<String>) {
+        let yaml_files: Vec<PathBuf> = if let Some(sources) = sources {
+            sources
+                .files()
+                .iter()
+                .filter(|file| {
+                    !file.follows_directory_symlink()
+                        && true
+                        && matches!(
+                            file.relative_path.extension().and_then(|e| e.to_str()),
+                            Some("yaml" | "yml")
+                        )
+                })
+                .map(|file| traits_dir.join(&file.relative_path))
+                .collect()
+        } else {
+            WalkDir::new(traits_dir)
+                .follow_links(false)
+                .into_iter()
+                .filter_entry(crate::traits_repo::is_rule_source_entry)
+                .filter_map(std::result::Result::ok)
+                .filter(|e| {
+                    let p = e.path();
+                    p.is_file()
+                        && p.extension()
+                            .map(|ext| ext == "yaml" || ext == "yml")
+                            .unwrap_or(false)
+                })
+                .map(|e| e.path().to_path_buf())
+                .collect()
+        };
 
         let collect_one = |path: &PathBuf| {
-            let Ok(content) = fs::read_to_string(path) else {
+            let Some(bytes) = Self::read_source(sources, traits_dir, path) else {
+                return vec![];
+            };
+            let Ok(content) = std::str::from_utf8(&bytes) else {
                 return vec![];
             };
             // Parsing every trait file to find the few that hold inline YARA
@@ -1986,6 +2069,7 @@ impl YaraEngine {
     /// collections.
     ///
     /// Returns `(tier_sources, rule_contexts, builtin_file_count)`.
+    #[cfg(test)]
     fn collect_builtin_sources_tiered(
         dir: &Path,
     ) -> (
@@ -1993,24 +2077,54 @@ impl YaraEngine {
         HashMap<String, RuleContext>,
         usize,
     ) {
-        let rule_files: Vec<PathBuf> = WalkDir::new(dir)
-            .follow_links(false)
-            .into_iter()
-            .filter_entry(|entry| {
-                crate::traits_repo::is_rule_source_entry(entry)
-                    && (entry.depth() == 0 || entry.file_name() != "third-party")
-            })
-            .filter_map(std::result::Result::ok)
-            .filter(|entry| {
-                let path = entry.path();
-                path.is_file()
-                    && path
-                        .extension()
-                        .map(|ext| ext == "yar" || ext == "yara")
-                        .unwrap_or(false)
-            })
-            .map(|entry| entry.path().to_path_buf())
-            .collect();
+        Self::collect_builtin_sources_tiered_with_sources(dir, None)
+    }
+
+    fn collect_builtin_sources_tiered_with_sources(
+        dir: &Path,
+        sources: Option<&crate::rule_sources::RuleSources>,
+    ) -> (
+        HashMap<String, Vec<(String, String)>>,
+        HashMap<String, RuleContext>,
+        usize,
+    ) {
+        let rule_files: Vec<PathBuf> = if let Some(sources) = sources {
+            sources
+                .files()
+                .iter()
+                .filter(|file| {
+                    !file.follows_directory_symlink()
+                        && !file
+                            .relative_path
+                            .components()
+                            .any(|c| c.as_os_str() == "third-party")
+                        && matches!(
+                            file.relative_path.extension().and_then(|e| e.to_str()),
+                            Some("yar" | "yara")
+                        )
+                })
+                .map(|file| dir.join(&file.relative_path))
+                .collect()
+        } else {
+            WalkDir::new(dir)
+                .follow_links(false)
+                .into_iter()
+                .filter_entry(|entry| {
+                    crate::traits_repo::is_rule_source_entry(entry)
+                        && (entry.depth() == 0 || entry.file_name() != "third-party")
+                })
+                .filter_map(std::result::Result::ok)
+                .filter(|entry| {
+                    let path = entry.path();
+                    path.is_file()
+                        && path
+                            .extension()
+                            .map(|ext| ext == "yar" || ext == "yara")
+                            .unwrap_or(false)
+                })
+                .map(|entry| entry.path().to_path_buf())
+                .collect()
+        };
 
         tracing::debug!("Found {} built-in YARA rule files", rule_files.len());
 
@@ -2022,7 +2136,7 @@ impl YaraEngine {
         };
 
         let process_one = |path: &PathBuf| {
-            let bytes = fs::read(path).ok()?;
+            let bytes = Self::read_source(sources, dir, path)?;
             let raw_source = String::from_utf8_lossy(&bytes);
             let source = yara_classify::inject_condition_filetype_hints(&raw_source);
             let split = Self::split_monolithic_by_tier(&source, "traits", re);
@@ -2072,6 +2186,7 @@ impl YaraEngine {
     /// Returns `(tier_sources, rule_contexts, total_source_count, vt_skipped, disabled_count)`.
     /// `tier_sources` maps each filetype bucket (or [`FALLBACK_BUCKET`]) to its
     /// list of `(namespace, source)` pairs.
+    #[cfg(test)]
     fn collect_third_party_sources_tiered(
         dir: &Path,
     ) -> (
@@ -2081,23 +2196,52 @@ impl YaraEngine {
         usize,
         usize,
     ) {
+        Self::collect_third_party_sources_tiered_with_sources(dir, None)
+    }
+
+    fn collect_third_party_sources_tiered_with_sources(
+        dir: &Path,
+        sources: Option<&crate::rule_sources::RuleSources>,
+    ) -> (
+        HashMap<String, Vec<(String, String)>>,
+        HashMap<String, RuleContext>,
+        usize,
+        usize,
+        usize,
+    ) {
         let disabled_rules = crate::third_party_config::disabled_rule_ids();
 
-        let rule_files: Vec<PathBuf> = WalkDir::new(dir)
-            .follow_links(false)
-            .into_iter()
-            .filter_entry(crate::traits_repo::is_rule_source_entry)
-            .filter_map(std::result::Result::ok)
-            .filter(|entry| {
-                let path = entry.path();
-                path.is_file()
-                    && path
-                        .extension()
-                        .map(|e| e == "yar" || e == "yara")
-                        .unwrap_or(false)
-            })
-            .map(|entry| entry.path().to_path_buf())
-            .collect();
+        let rule_files: Vec<PathBuf> = if let Some(sources) = sources {
+            sources
+                .files()
+                .iter()
+                .filter(|file| {
+                    !file.follows_directory_symlink()
+                        && true
+                        && matches!(
+                            file.relative_path.extension().and_then(|e| e.to_str()),
+                            Some("yar" | "yara")
+                        )
+                })
+                .map(|file| dir.join(&file.relative_path))
+                .collect()
+        } else {
+            WalkDir::new(dir)
+                .follow_links(false)
+                .into_iter()
+                .filter_entry(crate::traits_repo::is_rule_source_entry)
+                .filter_map(std::result::Result::ok)
+                .filter(|entry| {
+                    let path = entry.path();
+                    path.is_file()
+                        && path
+                            .extension()
+                            .map(|e| e == "yar" || e == "yara")
+                            .unwrap_or(false)
+                })
+                .map(|entry| entry.path().to_path_buf())
+                .collect()
+        };
 
         tracing::debug!("Found {} third-party YARA files", rule_files.len());
 
@@ -2117,7 +2261,7 @@ impl YaraEngine {
         }
 
         let process_one = |path: &PathBuf| {
-            let bytes = fs::read(path).ok()?;
+            let bytes = Self::read_source(sources, dir, path)?;
 
             let namespace = path
                 .strip_prefix(dir)
@@ -3410,6 +3554,73 @@ composite_rules:
                     .any(|f| f.id == "test/data::combined")
             );
         }
+    }
+
+    #[test]
+    fn rule_sources_yara_snapshot_matches_discovery_and_freezes_edits() {
+        let root = tempfile::tempdir().unwrap();
+        let third_party = root.path().join("third-party");
+        fs::create_dir_all(third_party.join("vendor")).unwrap();
+        fs::write(
+            root.path().join("builtin.yar"),
+            "rule builtin { condition: true }",
+        )
+        .unwrap();
+        fs::write(
+            third_party.join("vendor/rule.yar"),
+            "rule vendor { condition: true }",
+        )
+        .unwrap();
+        fs::write(root.path().join("inline.yaml"),
+            "traits:\n  - id: visible-inline\n    for: [text]\n    if:\n      type: yara\n      source: 'rule visible { condition: true }'\n").unwrap();
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink("third-party/vendor", root.path().join("linked-dir"))
+                .unwrap();
+            std::os::unix::fs::symlink("builtin.yar", root.path().join("linked-file.yar")).unwrap();
+        }
+        let sources = crate::rule_sources::RuleSources::fresh(root.path()).unwrap();
+        let collect = |snapshot| {
+            let (sources, contexts, mut namespaces, builtin, third_party_count) =
+                YaraEngine::collect_all_sources_with_sources(
+                    root.path(),
+                    &third_party,
+                    true,
+                    snapshot,
+                );
+            let mut sources: Vec<_> = sources
+                .into_iter()
+                .map(|(tier, mut rules)| {
+                    rules.sort();
+                    (tier, rules)
+                })
+                .collect();
+            sources.sort();
+            let mut ids: Vec<_> = contexts.into_keys().collect();
+            ids.sort();
+            namespaces.sort();
+            (sources, ids, namespaces, builtin, third_party_count)
+        };
+        let before = collect(Some(&sources));
+        assert_eq!(before, collect(None));
+        fs::write(
+            root.path().join("builtin.yar"),
+            "rule edited { condition: false }",
+        )
+        .unwrap();
+        fs::remove_file(root.path().join("inline.yaml")).unwrap();
+        fs::write(
+            root.path().join("added.yar"),
+            "rule added { condition: true }",
+        )
+        .unwrap();
+        fs::remove_dir_all(&third_party).unwrap();
+        assert_eq!(
+            before,
+            collect(Some(&sources)),
+            "all loaders must use the frozen source set"
+        );
+        assert_ne!(before, collect(None));
     }
 
     #[test]

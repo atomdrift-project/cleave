@@ -53,26 +53,37 @@ impl ClaimSet {
     /// after inserting into the store (release is panic-safe via Drop).
     pub(crate) fn try_claim(&self, key_hash: u64) -> Option<ClaimGuard<'_>> {
         let slot = &self.slots[(key_hash as usize) % SLOTS];
+        // Construct the guard only after winning: dropping a guard clears
+        // the slot. `then_some` would clear another compiler's claim on failure.
         slot.compare_exchange(0, key_hash, Ordering::AcqRel, Ordering::Acquire)
             .is_ok()
-            .then_some(ClaimGuard { slot })
+            .then(|| ClaimGuard { slot })
     }
 
     /// Racer path: poll `peek` for the winner's value, bounded (~10 ms).
-    /// `None` means the caller should compile itself (winner slow, failed, or
-    /// this was a collision with an unrelated key).
-    pub(crate) fn wait_for<T>(&self, mut peek: impl FnMut() -> Option<T>) -> Option<T> {
+    /// `None` means the caller should compile itself. A slot collision with
+    /// an unrelated key, or a completed/failed owner, must not pay the timeout.
+    pub(crate) fn wait_for<T>(
+        &self,
+        key_hash: u64,
+        mut peek: impl FnMut() -> Option<T>,
+    ) -> Option<T> {
+        let slot = &self.slots[(key_hash as usize) % SLOTS];
         for i in 0..40 {
+            if let Some(v) = peek() {
+                return Some(v);
+            }
+            if slot.load(Ordering::Acquire) != key_hash {
+                // The owner can publish between the lookup and the slot read.
+                return peek();
+            }
             if i < 4 {
                 std::thread::yield_now();
             } else {
                 std::thread::sleep(std::time::Duration::from_micros(250));
             }
-            if let Some(v) = peek() {
-                return Some(v);
-            }
         }
-        None
+        peek()
     }
 }
 
@@ -86,5 +97,73 @@ pub(crate) struct ClaimGuard<'a> {
 impl Drop for ClaimGuard<'_> {
     fn drop(&mut self) {
         self.slot.store(0, Ordering::Release);
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used, clippy::panic)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn regex_compile_claim_failed_attempt_preserves_owner() {
+        let claims = ClaimSet::new();
+        let owner = claims.try_claim(7).expect("first claimant owns the slot");
+        for _ in 0..10 {
+            assert!(claims.try_claim(7).is_none());
+            // A colliding key must not clear the first key's claim either.
+            assert!(claims.try_claim(7 + SLOTS as u64).is_none());
+        }
+        drop(owner);
+        assert!(claims.try_claim(7).is_some());
+    }
+
+    #[test]
+    fn regex_compile_claim_collision_does_not_wait_for_unrelated_key() {
+        let claims = ClaimSet::new();
+        let _owner = claims.try_claim(7).expect("claim");
+        let mut checks = 0;
+        let value: Option<()> = claims.wait_for(7 + SLOTS as u64, || {
+            checks += 1;
+            None
+        });
+        assert!(value.is_none());
+        assert_eq!(
+            checks, 2,
+            "unrelated collisions must bypass the polling loop"
+        );
+        assert!(
+            claims.try_claim(7).is_none(),
+            "the original owner remains claimed"
+        );
+    }
+
+    #[test]
+    fn regex_compile_claim_observes_completed_publication() {
+        let claims = ClaimSet::new();
+        let mut owner = Some(claims.try_claim(7).expect("claim"));
+        let mut checks = 0;
+        let value = claims.wait_for(7, || {
+            checks += 1;
+            if checks == 1 {
+                drop(owner.take());
+                None
+            } else {
+                Some(42)
+            }
+        });
+        assert_eq!(value, Some(42));
+        assert_eq!(checks, 2);
+    }
+
+    #[test]
+    fn regex_compile_claim_release_is_panic_safe() {
+        let claims = ClaimSet::new();
+        let result = std::panic::catch_unwind(|| {
+            let _owner = claims.try_claim(11).expect("claim");
+            panic!("simulate failed compile");
+        });
+        assert!(result.is_err());
+        assert!(claims.try_claim(11).is_some());
     }
 }

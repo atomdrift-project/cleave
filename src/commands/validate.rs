@@ -6,6 +6,15 @@
 use crate::cli::OutputFormat;
 use crate::commands::validate_testdata;
 use crate::types::file_analysis::{ARCHIVE_DELIMITER, ENCODING_DELIMITER};
+
+/// Render a fixture path for a terminal, escaping control characters.
+///
+/// Fixture names mirror real sample names, and a name carrying an escape
+/// sequence would rewrite the validation output on the operator's screen.
+fn safe_path(path: &std::path::Path) -> String {
+    let display = path.display().to_string();
+    crate::output::escape_control_chars(&display).into_owned()
+}
 use anyhow::{Context, Result};
 use cleave::{AnalysisReport, CapabilityMapper, Criticality, FileAnalysis, validation_controls};
 use serde::{Deserialize, Serialize};
@@ -608,7 +617,7 @@ fn evaluate(
         let report = match result {
             Ok(r) => r,
             Err(e) => {
-                eprintln!("❌ {}: analysis failed: {e:#}", target.path().display());
+                eprintln!("❌ {}: analysis failed: {e:#}", safe_path(target.path()));
                 failed += 1;
                 match target {
                     Target::Hostile { .. } => stats.hostile_total += 1,
@@ -781,7 +790,7 @@ fn judge_walked_hostile(
     report: &AnalysisReport,
 ) -> bool {
     let Some(file) = report.files.first() else {
-        eprintln!("❌ {}: analysis produced no files", path.display());
+        eprintln!("❌ {}: analysis produced no files", safe_path(path));
         return false;
     };
     let hostile = count_findings(file, Criticality::Hostile);
@@ -791,14 +800,14 @@ fn judge_walked_hostile(
     if file.score < min_score {
         eprintln!(
             "❌ {} [{corpus}]: score {} < minimum {min_score}",
-            path.display(),
+            safe_path(path),
             file.score
         );
     }
     if hostile < min_hostile {
         eprintln!(
             "❌ {} [{corpus}]: hostile findings {hostile} < minimum {min_hostile}",
-            path.display()
+            safe_path(path)
         );
     }
     print_contributing_findings(file, "     ");
@@ -814,10 +823,10 @@ fn judge_hostile(
     report: &AnalysisReport,
 ) -> bool {
     let Some(file) = report.files.first() else {
-        eprintln!("❌ {}: analysis produced no files", path.display());
+        eprintln!("❌ {}: analysis produced no files", safe_path(path));
         return false;
     };
-    let display = path.display();
+    let display = safe_path(path);
     let hostile = count_findings(file, Criticality::Hostile);
     let suspicious = count_findings(file, Criticality::Suspicious);
 
@@ -844,7 +853,7 @@ fn judge_hostile(
 /// Judge a known-benign fixture root file. Returns `true` if it passes.
 fn judge_benign(path: &Path, cap: u32, min_score: u32, report: &AnalysisReport) -> bool {
     let Some(file) = report.files.first() else {
-        eprintln!("❌ {}: analysis produced no files", path.display());
+        eprintln!("❌ {}: analysis produced no files", safe_path(path));
         return false;
     };
     let misleading = misleading_benign_findings(report);
@@ -858,7 +867,7 @@ fn judge_benign(path: &Path, cap: u32, min_score: u32, report: &AnalysisReport) 
     }
 
     if file.score > cap {
-        eprintln!("❌ {}: score {} > cap {cap}", path.display(), file.score);
+        eprintln!("❌ {}: score {} > cap {cap}", safe_path(path), file.score);
     }
     // The floor guards a benign program's legitimate identity/functionality
     // traits (usage surface, purpose-defining syscalls) from silently
@@ -866,7 +875,7 @@ fn judge_benign(path: &Path, cap: u32, min_score: u32, report: &AnalysisReport) 
     if file.score < min_score {
         eprintln!(
             "❌ {}: score {} < minimum {min_score}",
-            path.display(),
+            safe_path(path),
             file.score
         );
     }
@@ -1087,7 +1096,7 @@ fn judge_traits(path: &Path, expected: &TraitExpectations, report: &AnalysisRepo
         }
     }
     for error in &errors {
-        eprintln!("❌ {}: {error}", path.display());
+        eprintln!("❌ {}: {error}", safe_path(path));
     }
     errors.is_empty()
 }

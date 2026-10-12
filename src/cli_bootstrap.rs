@@ -33,6 +33,36 @@ fn scoped_filter(level: &str) -> String {
     format!("cleave={level},stng={level}")
 }
 
+/// Field formatter that escapes terminal control characters in every event
+/// field, not just the message.
+///
+/// tracing-subscriber's default formatter escapes the `message` field and
+/// error values, but writes named fields (e.g. `path = %display`) raw — and
+/// cleave logs hostile-derived file names and paths in exactly those. An
+/// escape sequence inside one can rewrite an operator's terminal or poison a
+/// log file. This applies the same escaping to every field's rendered value.
+fn sanitized_field(
+    writer: &mut tracing_subscriber::fmt::format::Writer<'_>,
+    field: &tracing::field::Field,
+    value: &dyn std::fmt::Debug,
+) -> std::fmt::Result {
+    use std::fmt::Write;
+
+    let mut rendered = String::new();
+    write!(rendered, "{value:?}")?;
+    let rendered = cleave::output::escape_control_chars(&rendered);
+
+    // Same shape as the default formatter: the message field prints bare,
+    // `r#` names drop the prefix, everything else prints `name=value`.
+    let name = field.name();
+    if name == "message" {
+        write!(writer, "{rendered}")
+    } else {
+        let name = name.strip_prefix("r#").unwrap_or(name);
+        write!(writer, "{name}={rendered}")
+    }
+}
+
 pub(crate) fn apply_runtime_overrides(
     traits_dir: Option<&str>,
     disabled: &cli::DisabledComponents,
@@ -139,10 +169,13 @@ pub(crate) fn init_logging(
             }
         }
 
+        let fields = tracing_subscriber::fmt::format::debug_fn(sanitized_field);
+
         let stderr_layer = tracing_subscriber::fmt::layer()
             .with_target(true)
             .with_line_number(true)
             .with_writer(std::io::stderr)
+            .fmt_fields(fields.clone())
             .with_filter(stderr_filter);
 
         let file_layer = tracing_subscriber::fmt::layer()
@@ -150,6 +183,7 @@ pub(crate) fn init_logging(
             .with_line_number(true)
             .with_ansi(false)
             .with_writer(LogFile(file))
+            .fmt_fields(fields)
             .with_filter(file_filter);
 
         tracing_subscriber::registry()
@@ -177,6 +211,7 @@ pub(crate) fn init_logging(
             .with_thread_ids(false)
             .with_line_number(true)
             .with_writer(std::io::stderr)
+            .fmt_fields(tracing_subscriber::fmt::format::debug_fn(sanitized_field))
             .init();
     }
 }

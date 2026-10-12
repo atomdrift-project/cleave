@@ -34,8 +34,13 @@ impl<'a> Bitstream<'a> {
         }
 
         self.remaining = 16;
-        self.n = u16::from_le_bytes([self.buffer[0], self.buffer[1]]);
-        self.buffer = &self.buffer[2..];
+        // A trailing odd byte is padded with a zero high byte, matching the
+        // zeros-past-end model `peek_bits_oneword` already uses; indexing
+        // `buffer[1]` unconditionally panicked on such streams.
+        let hi = self.buffer.get(1).copied().unwrap_or(0);
+        self.n = u16::from_le_bytes([self.buffer[0], hi]);
+        let take = self.buffer.len().min(2);
+        self.buffer = &self.buffer[take..];
         Ok(())
     }
 
@@ -113,7 +118,9 @@ impl<'a> Bitstream<'a> {
             let n = if self.buffer.is_empty() {
                 0
             } else {
-                u16::from_le_bytes([self.buffer[0], self.buffer[1]])
+                // A single trailing byte is zero-padded like above.
+                let hi = self.buffer.get(1).copied().unwrap_or(0);
+                u16::from_le_bytes([self.buffer[0], hi])
             };
             let lo = n.rotate_left(bits as u32) & ((1u32 << bits) as u16).wrapping_sub(1);
 
@@ -209,6 +216,31 @@ mod tests {
         let mut bitstream = Bitstream::new(&bytes);
 
         assert_eq!(bitstream.read_u32_le(), Ok(873625686));
+    }
+
+    /// A stream ending on a lone trailing byte used to panic: the word fetch
+    /// indexed `buffer[1]` after checking only `is_empty()`. Hostile CHM
+    /// content controls block boundaries, so this is reachable. The trailing
+    /// byte is now zero-padded, matching the zeros-past-end model peeks
+    /// already used, and the following read reports EOF.
+    #[test]
+    fn odd_trailing_byte_reads_padded_then_eof() {
+        let mut bitstream = Bitstream::new(&[0xAB]);
+        // The padded 16-bit word is 0x00AB; bits are consumed MSB-first, so
+        // the first byte out is the zero pad, then the real trailing byte.
+        assert_eq!(bitstream.read_bits(8), Ok(0x00));
+        assert_eq!(bitstream.read_bits(8), Ok(0xAB));
+        assert_eq!(bitstream.read_bits(1), Err(DecodeFailed::UnexpectedEof));
+    }
+
+    /// Peeking across an odd tail must behave the same way.
+    #[test]
+    fn peek_over_odd_trailing_byte_does_not_panic() {
+        let mut bitstream = Bitstream::new(&[0b1010_0001]);
+        // Padded word 0x00A1, MSB-first: first nibble 0, peek of the next
+        // 8 bits spans the zero pad and the real byte's high bits.
+        assert_eq!(bitstream.read_bits(4), Ok(0));
+        assert_eq!(bitstream.peek_bits(8), 0b0000_1010u32);
     }
 
     #[test]

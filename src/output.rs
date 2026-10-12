@@ -18,6 +18,7 @@ use crate::types::{
 };
 use colored::Colorize;
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::fmt::Write;
 
 /// Aggregated finding for a directory path
 #[derive(Clone)]
@@ -3498,6 +3499,46 @@ const TAB_WIDTH: usize = 2;
 /// Expand tabs to [`TAB_WIDTH`] spaces. Returns the display string and a map from
 /// each original byte offset (`0..=line.len()`) to its offset in the display
 /// string, so match spans can be relocated to display coordinates.
+/// Replace terminal-significant control characters with escaped text.
+///
+/// Sample-derived strings (file names, source lines, log field values) can
+/// carry CSI/OSC escape sequences that rewrite what an operator sees in the
+/// terminal or a log file. Control characters other than tab, newline, and
+/// carriage return become `\u{XX}` text — the same set and shape
+/// tracing-subscriber itself escapes message fields with. Returns the input
+/// unchanged (no allocation) when nothing needs escaping, which is the
+/// overwhelmingly common case.
+#[must_use]
+pub fn escape_control_chars(s: &str) -> std::borrow::Cow<'_, str> {
+    use std::borrow::Cow;
+    if !s
+        .chars()
+        .any(|c| c.is_control() && !matches!(c, '\t' | '\n' | '\r'))
+    {
+        return Cow::Borrowed(s);
+    }
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if c.is_control() && !matches!(c, '\t' | '\n' | '\r') {
+            // Infallible on String; see expand_tabs.
+            let _ = write!(out, "\\u{{{:x}}}", u32::from(c));
+        } else {
+            out.push(c);
+        }
+    }
+    Cow::Owned(out)
+}
+
+/// Expand tabs to a fixed display width and escape control characters,
+/// returning the display form plus a map from every input byte offset to the
+/// corresponding display byte offset.
+///
+/// Control characters (except the tab handled above) are escaped as
+/// `\u{XX}` — sample-derived source lines can carry terminal escape
+/// sequences, and this is the single funnel both the colorized and plain
+/// renderers draw their text from. The map points every byte of an escaped
+/// character at the start of its escape sequence, so a match highlight
+/// whose offset lands on one covers the whole escape.
 fn expand_tabs(line: &str) -> (String, Vec<usize>) {
     let mut display = String::with_capacity(line.len());
     let mut map = vec![0usize; line.len() + 1];
@@ -3512,6 +3553,9 @@ fn expand_tabs(line: &str) -> (String, Vec<usize>) {
             for _ in 0..TAB_WIDTH {
                 display.push(' ');
             }
+        } else if ch.is_control() {
+            // Infallible on String; see escape_control_chars.
+            let _ = write!(display, "\\u{{{:x}}}", u32::from(ch));
         } else {
             display.push(ch);
         }
@@ -7522,5 +7566,47 @@ mod tests {
             output.contains("..."),
             "leading ellipsis marks the clip: {output:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod control_escape_tests {
+    use super::{escape_control_chars, expand_tabs};
+
+    #[test]
+    fn clean_text_passes_through_unescaped() {
+        let s = "ordinary/path with spaces.tar.gz\n";
+        assert_eq!(escape_control_chars(s).as_ref(), s);
+    }
+
+    #[test]
+    fn terminal_escapes_become_visible_text() {
+        assert_eq!(
+            escape_control_chars("evil\u{1b}[31mred\u{1b}[0m").as_ref(),
+            "evil\\u{1b}[31mred\\u{1b}[0m"
+        );
+        // C1 8-bit controls are the alternative CSI door some terminals honor.
+        assert_eq!(escape_control_chars("x\u{9b}9A").as_ref(), "x\\u{9b}9A");
+    }
+
+    #[test]
+    fn tab_newline_cr_are_preserved() {
+        let s = "a\tb\nc\rd";
+        assert_eq!(escape_control_chars(s).as_ref(), s);
+    }
+
+    /// The renderer's funnel must both escape and keep the byte-offset map
+    /// aligned, so a highlight landing on a control byte covers its escape.
+    #[test]
+    fn expand_tabs_escapes_and_maps_control_chars() {
+        let (display, map) = expand_tabs("a\u{1b}b\tc");
+        assert_eq!(display, "a\\u{1b}b  c");
+        // Byte 1..2 of the input is the ESC; its map slot points at the
+        // start of the escape text, and byte 2 ('b') points past it.
+        let esc_start = map[1];
+        assert_eq!(&display[esc_start..esc_start + 4], "\\u{1");
+        assert_eq!(map[2], esc_start + 6);
+        // The tab maps to the start of its two-space expansion.
+        assert_eq!(&display[map[3]..map[3] + 2], "  ");
     }
 }

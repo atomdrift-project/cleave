@@ -175,6 +175,17 @@ pub fn extract_to_memory(data: &[u8]) -> Result<MemoryStats, Error> {
         .ok_or(Error::Malformed("TOC out of bounds"))?;
 
     let mut cursor = 0usize;
+    // Running total of inflated bytes across all entries, so an archive of
+    // many mid-size bombs cannot fan past MAX_INFLATED_TOTAL in aggregate.
+    let mut total_inflated = 0usize;
+    let mut inflate = |raw: &[u8], flag: u8| -> Result<Vec<u8>, Error> {
+        let body = decompress_to_vec(raw, flag)?;
+        total_inflated = total_inflated.saturating_add(body.len());
+        if total_inflated > MAX_INFLATED_TOTAL {
+            return Err(Error::Malformed("inflated archive exceeds total size cap"));
+        }
+        Ok(body)
+    };
     while cursor < toc.len() {
         let Some(entry) = parse_toc_entry(toc, cursor) else {
             break;
@@ -224,7 +235,7 @@ pub fn extract_to_memory(data: &[u8]) -> Result<MemoryStats, Error> {
             b's' => {
                 // Python source entry point — wrap as .pyc with placeholder magic
                 // for now; we may patch the magic at the end.
-                let body = decompress_to_vec(raw, entry.compressed_flag)?;
+                let body = inflate(raw, entry.compressed_flag)?;
                 let pyc = build_pyc(pyc_magic.as_ref(), cookie.py_version, &body);
                 stats.entry_points.push(safe_name.clone());
                 stats.provenance.entry_points.push(safe_name.clone());
@@ -241,7 +252,7 @@ pub fn extract_to_memory(data: &[u8]) -> Result<MemoryStats, Error> {
             b'x' => {
                 // Splash screen resource — usually a PNG.
                 stats.provenance.has_splash = true;
-                let body = decompress_to_vec(raw, entry.compressed_flag)?;
+                let body = inflate(raw, entry.compressed_flag)?;
                 stats.entries.push(MemoryEntry {
                     name: safe_name,
                     kind: EntryKind::Splash,
@@ -249,7 +260,7 @@ pub fn extract_to_memory(data: &[u8]) -> Result<MemoryStats, Error> {
                 });
             }
             b'M' | b'm' => {
-                let body = decompress_to_vec(raw, entry.compressed_flag)?;
+                let body = inflate(raw, entry.compressed_flag)?;
                 let (pyc, needs_patch) = if body.len() >= 4 && &body[2..4] == b"\r\n" {
                     // Pre-PyInstaller 5.3 format: header is intact.
                     if pyc_magic.is_none() {
@@ -277,12 +288,12 @@ pub fn extract_to_memory(data: &[u8]) -> Result<MemoryStats, Error> {
             }
             b'z' | b'Z' => {
                 // Defer; the raw PYZ blob itself is internal — we yield only its inner files.
-                let body = decompress_to_vec(raw, entry.compressed_flag)?;
+                let body = inflate(raw, entry.compressed_flag)?;
                 pyz_blobs.push(body);
             }
             _ => {
                 // Generic data / native library — stream-decompress to a Vec.
-                let body = decompress_to_vec(raw, entry.compressed_flag)?;
+                let body = inflate(raw, entry.compressed_flag)?;
                 stats.entries.push(MemoryEntry {
                     name: safe_name,
                     kind: EntryKind::Binary,
@@ -301,6 +312,7 @@ pub fn extract_to_memory(data: &[u8]) -> Result<MemoryStats, Error> {
             &mut pyc_magic,
             cookie.py_version,
             &mut stats.entries,
+            &mut total_inflated,
         );
     }
 
@@ -505,6 +517,7 @@ fn walk_pyz_into(
     pyc_magic: &mut Option<[u8; 4]>,
     py_version: (u8, u8),
     out: &mut Vec<MemoryEntry>,
+    total_inflated: &mut usize,
 ) {
     if pyz.len() < 12 || &pyz[0..4] != PYZ_MAGIC {
         return;
@@ -555,6 +568,12 @@ fn walk_pyz_into(
         }
         match decompress_to_vec(blob, 1) {
             Ok(decoded) => {
+                // Same aggregate bound as the top-level pass: a PYZ with many
+                // mid-size members must not fan past the total cap.
+                *total_inflated = total_inflated.saturating_add(decoded.len());
+                if *total_inflated > MAX_INFLATED_TOTAL {
+                    return;
+                }
                 out.push(MemoryEntry {
                     name: rel,
                     kind: EntryKind::PyzMember,
@@ -639,13 +658,38 @@ fn sanitize_path(name: &str) -> String {
     out
 }
 
+/// Hard cap on one inflated entry (1 GiB). Real PyInstaller entries are
+/// Python modules and bundled resources, all far below this; a stream that
+/// expands past it is a bomb, not a bundle. Without the cap a small hostile
+/// exe can make `io::copy` allocate unboundedly before any caller-side guard
+/// runs, and an allocation abort is not catchable.
+const MAX_INFLATED_ENTRY: u64 = 1024 * 1024 * 1024;
+
+/// Hard cap on the combined inflated size of every entry (2 GiB). Bounds
+/// total memory when a hostile archive fans out many mid-size bombs that each
+/// pass the per-entry cap. The input exe is itself bounded by the caller's
+/// in-memory file limit, so only inflated content can push past it.
+const MAX_INFLATED_TOTAL: usize = 2 * 1024 * 1024 * 1024;
+
 fn decompress_to_vec(src: &[u8], compressed_flag: u8) -> Result<Vec<u8>, Error> {
+    decompress_to_vec_with_cap(src, compressed_flag, MAX_INFLATED_ENTRY)
+}
+
+fn decompress_to_vec_with_cap(src: &[u8], compressed_flag: u8, cap: u64) -> Result<Vec<u8>, Error> {
     if compressed_flag != 1 {
         return Ok(src.to_vec());
     }
     let mut decoder = ZlibDecoder::new(src);
-    let mut out = Vec::with_capacity(src.len() * 2);
-    io::copy(&mut decoder, &mut out)?;
+    // Reserve modestly: `src.len() * 2` on a large input is itself a giant
+    // upfront reservation, and growth amortizes fine at these sizes.
+    let mut out = Vec::with_capacity(src.len().saturating_mul(2).min(8 * 1024 * 1024));
+    // Take one byte past the cap so a stream that lands exactly on it is
+    // still accepted while anything larger is refused.
+    let mut limited = std::io::Read::take(&mut decoder, cap + 1);
+    io::copy(&mut limited, &mut out)?;
+    if out.len() as u64 > cap {
+        return Err(Error::Malformed("inflated entry exceeds size cap"));
+    }
     Ok(out)
 }
 
@@ -712,5 +756,28 @@ mod tests {
         // Python 2.7: 4 + 4 = 8 byte prelude
         let p = build_pyc(Some(&[1, 2, 3, 4]), (2, 7), b"body");
         assert_eq!(p.len(), 8 + 4);
+    }
+
+    /// A zlib member that inflates past the cap must be refused, not
+    /// accumulated: a small hostile exe used to be able to make this
+    /// allocate unboundedly before any caller-side guard could run.
+    #[test]
+    fn refuses_inflated_entry_past_cap() {
+        use flate2::write::ZlibEncoder;
+        use std::io::Write;
+
+        let mut enc = ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        enc.write_all(&vec![0u8; 64 * 1024]).unwrap();
+        let compressed = enc.finish().unwrap();
+
+        // Exactly at the cap is accepted …
+        let at_cap = decompress_to_vec_with_cap(&compressed, 1, 64 * 1024).unwrap();
+        assert_eq!(at_cap.len(), 64 * 1024);
+        // … one byte past it is refused.
+        let err = decompress_to_vec_with_cap(&compressed, 1, 64 * 1024 - 1).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::Malformed("inflated entry exceeds size cap")
+        ));
     }
 }

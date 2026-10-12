@@ -14,6 +14,8 @@ pub(crate) enum MarshalError {
     UnsupportedType(u8),
     #[error("unexpected shape")]
     UnexpectedShape,
+    #[error("nesting deeper than {0} levels")]
+    NestingTooDeep(usize),
 }
 
 #[derive(Debug)]
@@ -37,6 +39,14 @@ enum Value {
 }
 
 const FLAG_REF: u8 = 0x80;
+
+/// Maximum container nesting accepted in a marshalled value. A PYZ TOC is
+/// `list[tuple[str, tuple[int, int, int]]]` — depth 3 — so anything past this
+/// is not a TOC but a crafted nesting bomb: each level costs only five bytes
+/// (`(` + u32 count) against the reader's per-level stack frame, so without a
+/// bound a few hundred KB of hostile marshal data overflows the analysis
+/// stack, which no `catch_unwind` upstream can contain.
+const MAX_NESTING_DEPTH: usize = 500;
 
 struct Reader<'a> {
     buf: &'a [u8],
@@ -69,7 +79,10 @@ impl<'a> Reader<'a> {
         Ok(u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
     }
 
-    fn read_value(&mut self) -> Result<Value, MarshalError> {
+    fn read_value(&mut self, depth: usize) -> Result<Value, MarshalError> {
+        if depth > MAX_NESTING_DEPTH {
+            return Err(MarshalError::NestingTooDeep(MAX_NESTING_DEPTH));
+        }
         let code = self.u8()?;
         let has_ref = (code & FLAG_REF) != 0;
         let kind = code & !FLAG_REF;
@@ -119,7 +132,7 @@ impl<'a> Reader<'a> {
                 let n = self.u32_le()? as usize;
                 let mut items = Vec::with_capacity(n.min(1024));
                 for _ in 0..n {
-                    items.push(self.read_value()?);
+                    items.push(self.read_value(depth + 1)?);
                 }
                 Value::Tuple(items)
             }
@@ -127,7 +140,7 @@ impl<'a> Reader<'a> {
                 let n = self.u8()? as usize;
                 let mut items = Vec::with_capacity(n);
                 for _ in 0..n {
-                    items.push(self.read_value()?);
+                    items.push(self.read_value(depth + 1)?);
                 }
                 Value::Tuple(items)
             }
@@ -135,7 +148,7 @@ impl<'a> Reader<'a> {
                 let n = self.u32_le()? as usize;
                 let mut items = Vec::with_capacity(n.min(1024));
                 for _ in 0..n {
-                    items.push(self.read_value()?);
+                    items.push(self.read_value(depth + 1)?);
                 }
                 Value::List(items)
             }
@@ -148,8 +161,8 @@ impl<'a> Reader<'a> {
                         self.pos += 1;
                         break;
                     }
-                    let k = self.read_value()?;
-                    let v = self.read_value()?;
+                    let k = self.read_value(depth + 1)?;
+                    let v = self.read_value(depth + 1)?;
                     items.push((k, v));
                 }
                 Value::Dict(items)
@@ -173,7 +186,7 @@ impl<'a> Reader<'a> {
 /// Parse a PYZ TOC blob and return the list of inner entries.
 pub(crate) fn parse_pyz_toc(data: &[u8]) -> Result<Vec<PyzEntry>, MarshalError> {
     let mut reader = Reader::new(data);
-    let root = reader.read_value()?;
+    let root = reader.read_value(0)?;
     let items: Vec<(Value, Value)> = match root {
         // pyinstaller 3.1+ — list of (key, value) tuples.
         Value::List(list) => list
@@ -254,5 +267,28 @@ mod tests {
         assert!(!toc[0].is_pkg);
         assert_eq!(toc[0].pos, 100);
         assert_eq!(toc[0].length, 200);
+    }
+
+    /// Nested 1-element tuples cost five bytes per level, so a few hundred KB
+    /// of hostile marshal data used to overflow the analysis stack — a
+    // SIGSEGV no `catch_unwind` upstream can contain. The depth limit must
+    // reject it as data, not crash on it.
+    #[test]
+    fn rejects_unbounded_nesting() {
+        let mut buf = vec![b'('];
+        buf.extend_from_slice(&1u32.to_le_bytes());
+        for _ in 0..(MAX_NESTING_DEPTH + 8) {
+            buf.push(b'(');
+            buf.extend_from_slice(&1u32.to_le_bytes());
+        }
+        // Innermost value: a small ASCII string, then close nothing — the
+        // reader errors on nesting depth long before the missing closers
+        // would matter.
+        buf.push(b'z');
+        buf.push(0);
+        assert!(matches!(
+            parse_pyz_toc(&buf),
+            Err(MarshalError::NestingTooDeep(d)) if d == MAX_NESTING_DEPTH
+        ));
     }
 }

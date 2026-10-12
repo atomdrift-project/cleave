@@ -28,7 +28,6 @@ use crate::types::{
 use crate::types::{FileAnalysis, FindingCounts, ReportSummary};
 use crate::yara_engine::YaraEngine;
 use anyhow::{Context, Result};
-use std::fs::File;
 use std::fs::{self};
 use std::path::Path;
 use std::sync::Arc;
@@ -1387,6 +1386,10 @@ impl ArchiveAnalyzerConfig {
 /// The output filename is derived from `archive_path`'s stem (e.g. `foo.gz` → `foo`).
 const MAX_RECURSIVE_DECOMPRESSION_LAYERS: usize = 16;
 
+/// Bytes of a decoded stream kept for content sniffing (tar magic, nested
+/// codec magic). Every header this dispatch reads on sits far below this.
+const DECOMPRESS_SNIFF_LEN: u64 = 1024 * 1024;
+
 fn decompress_to_file<R: std::io::Read>(
     mut decoder: R,
     archive_path: &Path,
@@ -1413,11 +1416,11 @@ fn lzma_alone_decoder<R: std::io::Read>(reader: R) -> Result<xz2::read::XzDecode
     Ok(xz2::read::XzDecoder::new_stream(reader, stream))
 }
 
-/// Decode `reader` to exhaustion, keeping whatever came out before a truncated
-/// or corrupt stream cut it short.
+/// Stream `decoder` into a temp file beside the output, never materializing
+/// the decoded stream in memory.
 ///
-/// A single-file compressed stream is decoded entirely in memory before any of
-/// it reaches `dest_dir`, so propagating the read error would throw away every
+/// The decode is *tolerant*: a stream that breaks mid-way keeps whatever came
+/// out before the error. Propagating the read error would throw away every
 /// byte recovered so far and leave the extraction directory empty — which
 /// `analyze_archive_with_data` can only report as a total analysis failure. A
 /// truncated `.gz` therefore used to yield no verdict at all, even when the
@@ -1426,43 +1429,11 @@ fn lzma_alone_decoder<R: std::io::Read>(reader: R) -> Result<xz2::read::XzDecode
 /// the prefix is what we analyze: those bytes decoded successfully and are as
 /// genuine as any others. Only a stream that yields nothing is a hard error —
 /// there is nothing to fall back to, and the caller should hear why.
-fn decode_stream_tolerant<R: std::io::Read>(
-    reader: &mut R,
-    stem: &str,
-    guard: &guards::ExtractionGuard,
-) -> Result<Vec<u8>> {
-    let mut out = Vec::new();
-    // Matches the tar extractor's chunk: small enough to check cancellation
-    // promptly on a stream that decodes for minutes.
-    let mut buf = [0u8; 65536];
-    loop {
-        if guard.is_cancelled() {
-            anyhow::bail!("cancelled");
-        }
-        match std::io::Read::read(reader, &mut buf) {
-            Ok(0) => return Ok(out),
-            Ok(n) => out.extend_from_slice(&buf[..n]),
-            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(e) if out.is_empty() => {
-                return Err(anyhow::Error::new(e).context(format!("Failed to decompress: {stem}")));
-            }
-            Err(e) => {
-                tracing::debug!(
-                    stem,
-                    decoded_bytes = out.len(),
-                    error = %e,
-                    "compressed stream ended early; analyzing the decoded prefix",
-                );
-                guard.add_extraction_note(format!(
-                    "{stem}: compressed stream ended early after {} bytes ({e}); analyzed the decoded prefix",
-                    out.len()
-                ));
-                return Ok(out);
-            }
-        }
-    }
-}
-
+///
+/// Guard verdicts are fatal here: the per-chunk byte budget bails the
+/// extraction as soon as the total is exceeded, and a stream that turns out
+/// to be a decompression bomb (see [`guards::ExtractionGuard::check_compression_ratio`])
+/// is refused once decoded, mirroring the zip member path.
 fn decompress_to_file_at_depth<R: std::io::Read>(
     mut decoder: R,
     archive_path: &Path,
@@ -1471,63 +1442,124 @@ fn decompress_to_file_at_depth<R: std::io::Read>(
     guard: &guards::ExtractionGuard,
     decompression_depth: usize,
 ) -> Result<()> {
+    use std::io::Write;
+
     let stem = archive_path
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("extracted");
-    let mut limited = guards::LimitedReader::new(&mut decoder, guards::MAX_FILE_SIZE);
-    let decompressed = decode_stream_tolerant(&mut limited, stem, guard)?;
-    let written = decompressed.len() as u64;
-    guard.check_compression_ratio(compressed_size, written);
-    guard.check_bytes(written, stem);
 
-    extract_decompressed_data_or_write_file(
-        decompressed,
-        stem,
-        dest_dir,
-        guard,
-        decompression_depth,
-    )
+    let mut tmp = tempfile::Builder::new()
+        .prefix(".cleave-decode-")
+        .tempfile_in(dest_dir)
+        .context("Failed to create decompression temp file")?;
+    let mut limited = guards::LimitedReader::new(&mut decoder, guards::MAX_FILE_SIZE);
+    // Matches the tar extractor's chunk: small enough to check cancellation
+    // and the byte budget promptly on a stream that decodes for minutes.
+    let mut buf = [0u8; 65536];
+    let mut written = 0u64;
+    loop {
+        if guard.is_cancelled() {
+            anyhow::bail!("cancelled");
+        }
+        match std::io::Read::read(&mut limited, &mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                tmp.write_all(&buf[..n])
+                    .with_context(|| format!("Failed to write decompressed data: {stem}"))?;
+                written += n as u64;
+                if !guard.check_bytes(n as u64, stem) {
+                    anyhow::bail!("Exceeded maximum total extraction size");
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e) if written == 0 => {
+                return Err(anyhow::Error::new(e).context(format!("Failed to decompress: {stem}")));
+            }
+            Err(e) => {
+                tracing::debug!(
+                    stem,
+                    decoded_bytes = written,
+                    error = %e,
+                    "compressed stream ended early; analyzing the decoded prefix",
+                );
+                guard.add_extraction_note(format!(
+                    "{stem}: compressed stream ended early after {written} bytes ({e}); analyzed the decoded prefix"
+                ));
+                break;
+            }
+        }
+    }
+
+    if limited.is_limited() {
+        guard.add_hostile_reason(guards::HostileArchiveReason::ExcessiveFileSize {
+            file: stem.to_string(),
+            size: guards::MAX_FILE_SIZE,
+        });
+        anyhow::bail!("Exceeded maximum single-file decompression size");
+    }
+    if !guard.check_compression_ratio(compressed_size, written) {
+        anyhow::bail!("decompression bomb refused: {stem}");
+    }
+
+    dispatch_decompressed_file(tmp, stem, dest_dir, guard, decompression_depth, written)
 }
 
-fn extract_decompressed_data_or_write_file(
-    data: Vec<u8>,
+/// Decide what a fully decoded stream is and route it: tar containers are
+/// streamed straight into member extraction, nested single-file codecs
+/// recurse (bounded by [`MAX_RECURSIVE_DECOMPRESSION_LAYERS`]), and anything
+/// else is persisted as `dest_dir/stem`. The temp file holds the decoded
+/// bytes; it is removed automatically on every path except the leaf.
+fn dispatch_decompressed_file(
+    tmp: tempfile::NamedTempFile,
     stem: &str,
     dest_dir: &Path,
     guard: &guards::ExtractionGuard,
     decompression_depth: usize,
+    decoded_len: u64,
 ) -> Result<()> {
-    use std::io::Cursor;
-
-    if looks_like_tar_archive(&data) {
-        return tar::extract_tar_entries_safe(Cursor::new(data), dest_dir, guard);
-    }
+    // Sniff the decoded content from a bounded prefix.
+    let mut sniff = Vec::new();
+    let mut sniff_file = reopen_decoded(&tmp, stem)?;
+    std::io::Read::read_to_end(
+        &mut std::io::Read::take(&mut sniff_file, DECOMPRESS_SNIFF_LEN),
+        &mut sniff,
+    )
+    .with_context(|| format!("Failed to reread decompressed data: {stem}"))?;
 
     let logical_path = Path::new(stem);
-    match crate::analyzers::detect_file_type_from_data(logical_path, &data) {
-        FileType::Tar | FileType::Gem | FileType::OciImage | FileType::GentooBinpkg => {
-            tar::extract_tar_entries_safe(Cursor::new(data), dest_dir, guard)
-        }
+    let detected = crate::analyzers::detect_file_type_from_data(logical_path, &sniff);
+
+    if looks_like_tar_archive(&sniff)
+        || matches!(
+            detected,
+            FileType::Tar | FileType::Gem | FileType::OciImage | FileType::GentooBinpkg
+        )
+    {
+        return tar::extract_tar_entries_safe(reopen_decoded(&tmp, stem)?, dest_dir, guard);
+    }
+
+    match detected {
         FileType::TarGz | FileType::Npm | FileType::Crate | FileType::PythonSdist => {
             tar::extract_tar_entries_safe(
-                flate2::read::GzDecoder::new(Cursor::new(data)),
+                flate2::read::GzDecoder::new(reopen_decoded(&tmp, stem)?),
                 dest_dir,
                 guard,
             )
         }
         FileType::TarBz2 => tar::extract_tar_entries_safe(
-            bzip2::read::BzDecoder::new(Cursor::new(data)),
+            bzip2::read::BzDecoder::new(reopen_decoded(&tmp, stem)?),
             dest_dir,
             guard,
         ),
         FileType::TarXz => tar::extract_tar_entries_safe(
-            xz2::read::XzDecoder::new(Cursor::new(data)),
+            xz2::read::XzDecoder::new(reopen_decoded(&tmp, stem)?),
             dest_dir,
             guard,
         ),
         FileType::TarZst | FileType::PkgArch | FileType::PkgFreebsd | FileType::Xbps => {
             tar::extract_tar_entries_safe(
-                zstd::stream::read::Decoder::new(Cursor::new(data))
+                zstd::stream::read::Decoder::new(reopen_decoded(&tmp, stem)?)
                     .context("Failed to create zstd decoder")?,
                 dest_dir,
                 guard,
@@ -1536,57 +1568,67 @@ fn extract_decompressed_data_or_write_file(
         FileType::Gz | FileType::Bz2 | FileType::Xz | FileType::Lzma | FileType::Zst
             if decompression_depth >= MAX_RECURSIVE_DECOMPRESSION_LAYERS =>
         {
-            let mut out = File::create(dest_dir.join(stem))?;
-            std::io::Write::write_all(&mut out, &data)?;
-            Ok(())
+            persist_decoded_leaf(tmp, dest_dir, stem)
         }
         FileType::Gz => decompress_to_file_at_depth(
-            flate2::read::GzDecoder::new(Cursor::new(&data)),
+            flate2::read::GzDecoder::new(reopen_decoded(&tmp, stem)?),
             logical_path,
             dest_dir,
-            data.len() as u64,
+            decoded_len,
             guard,
             decompression_depth + 1,
         ),
         FileType::Bz2 => decompress_to_file_at_depth(
-            bzip2::read::BzDecoder::new(Cursor::new(&data)),
+            bzip2::read::BzDecoder::new(reopen_decoded(&tmp, stem)?),
             logical_path,
             dest_dir,
-            data.len() as u64,
+            decoded_len,
             guard,
             decompression_depth + 1,
         ),
         FileType::Xz => decompress_to_file_at_depth(
-            xz2::read::XzDecoder::new(Cursor::new(&data)),
+            xz2::read::XzDecoder::new(reopen_decoded(&tmp, stem)?),
             logical_path,
             dest_dir,
-            data.len() as u64,
+            decoded_len,
             guard,
             decompression_depth + 1,
         ),
         FileType::Lzma => decompress_to_file_at_depth(
-            lzma_alone_decoder(Cursor::new(&data))?,
+            lzma_alone_decoder(reopen_decoded(&tmp, stem)?)?,
             logical_path,
             dest_dir,
-            data.len() as u64,
+            decoded_len,
             guard,
             decompression_depth + 1,
         ),
         FileType::Zst => decompress_to_file_at_depth(
-            zstd::stream::read::Decoder::new(Cursor::new(&data))
+            zstd::stream::read::Decoder::new(reopen_decoded(&tmp, stem)?)
                 .context("Failed to create zstd decoder")?,
             logical_path,
             dest_dir,
-            data.len() as u64,
+            decoded_len,
             guard,
             decompression_depth + 1,
         ),
-        _ => {
-            let mut out = File::create(dest_dir.join(stem))?;
-            std::io::Write::write_all(&mut out, &data)?;
-            Ok(())
-        }
+        _ => persist_decoded_leaf(tmp, dest_dir, stem),
     }
+}
+
+/// Reopen the decoded stream for a second pass (member extraction, nested
+/// decode, sniffing). Each pass gets its own handle with the cursor at 0.
+fn reopen_decoded(tmp: &tempfile::NamedTempFile, stem: &str) -> Result<std::fs::File> {
+    tmp.reopen()
+        .with_context(|| format!("Failed to reread decompressed data: {stem}"))
+}
+
+/// Keep a decoded stream as the extraction's output file. `persist` renames
+/// within `dest_dir` (same filesystem), so the leaf never waits on a copy.
+fn persist_decoded_leaf(tmp: tempfile::NamedTempFile, dest_dir: &Path, stem: &str) -> Result<()> {
+    let out_path = dest_dir.join(stem);
+    tmp.persist(&out_path)
+        .with_context(|| format!("Failed to persist decompressed file: {stem}"))?;
+    Ok(())
 }
 
 fn looks_like_tar_archive(data: &[u8]) -> bool {
@@ -6506,5 +6548,90 @@ traits:
             "container types with no member extractor (their children would never \
              be analyzed and nothing would promote to the parent): {missing:?}"
         );
+    }
+
+    /// A small plain stream decodes to exactly one leaf file named after the
+    /// archive's stem, and a nested chain leaves only the innermost file —
+    /// no `.cleave-decode-` scratch files survive.
+    #[test]
+    fn single_stream_decodes_to_leaf_file() {
+        use flate2::write::GzEncoder;
+
+        let gz = |data: &[u8]| {
+            let mut enc = GzEncoder::new(Vec::new(), flate2::Compression::default());
+            enc.write_all(data).unwrap();
+            enc.finish().unwrap()
+        };
+
+        let dest = tempfile::tempdir().unwrap();
+        let guard = ExtractionGuard::new();
+        decompress_to_file(
+            flate2::read::GzDecoder::new(Cursor::new(&gz(b"hello"))),
+            Path::new("note.txt.gz"),
+            dest.path(),
+            1,
+            &guard,
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read(dest.path().join("note.txt")).unwrap(),
+            b"hello"
+        );
+
+        let nested = tempfile::tempdir().unwrap();
+        let guard = ExtractionGuard::new();
+        decompress_to_file(
+            flate2::read::GzDecoder::new(Cursor::new(&gz(&gz(b"payload")))),
+            Path::new("chain.gz"),
+            nested.path(),
+            1,
+            &guard,
+        )
+        .unwrap();
+        let entries: Vec<_> = std::fs::read_dir(nested.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(entries, vec!["chain".to_string()], "only the leaf remains");
+        assert_eq!(
+            std::fs::read(nested.path().join("chain")).unwrap(),
+            b"payload"
+        );
+    }
+
+    /// A single-stream bomb past the ratio thresholds must be refused outright.
+    /// The guards used to record the finding and continue anyway — after
+    /// buffering the entire stream in memory (up to the 20 GB read cap).
+    #[test]
+    fn single_stream_bomb_is_refused() {
+        use flate2::write::GzEncoder;
+
+        // 256 MiB of zeros gzips to a few hundred KB: ratio ~1000:1, past
+        // both MAX_COMPRESSION_RATIO and MIN_ZIP_BOMB_UNCOMPRESSED_SIZE.
+        let mut enc = GzEncoder::new(Vec::new(), flate2::Compression::default());
+        enc.write_all(&vec![0u8; 256 * 1024 * 1024]).unwrap();
+        let bomb = enc.finish().unwrap();
+        assert!(bomb.len() < 4 * 1024 * 1024, "fixture must stay small");
+
+        let dest = tempfile::tempdir().unwrap();
+        let guard = ExtractionGuard::new();
+        let err = decompress_to_file(
+            flate2::read::GzDecoder::new(Cursor::new(&bomb)),
+            Path::new("bomb.gz"),
+            dest.path(),
+            bomb.len() as u64,
+            &guard,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("bomb"),
+            "expected bomb refusal, got: {err:#}"
+        );
+        // Refusal must not leave scratch files behind.
+        let leftovers: Vec<_> = std::fs::read_dir(dest.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(leftovers.is_empty(), "leftovers: {leftovers:?}");
     }
 }

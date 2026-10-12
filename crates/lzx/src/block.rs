@@ -7,7 +7,12 @@ use crate::{Bitstream, DecodeFailed, DecoderState, Tree};
 // } else {
 //     (position_slot - 2) / 2
 // }
-const FOOTER_BITS: [u8; 289] = [
+//
+// Indexed by the position slot decoded from the main tree. The largest
+// window (32 MB) yields 290 slots, so the table must hold 290 entries:
+// one shorter, a hostile pretree decoding main element 2575 panicked on
+// the out-of-bounds index instead of failing with a decode error.
+const FOOTER_BITS: [u8; 290] = [
     0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13,
     13, 14, 14, 15, 15, 16, 16, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17,
     17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17,
@@ -19,7 +24,7 @@ const FOOTER_BITS: [u8; 289] = [
     17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17,
     17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17,
     17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17,
-    17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17,
+    17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17,
 ];
 
 // if position_slot == 0 {
@@ -356,5 +361,20 @@ impl Block {
                 Ok(Decoded::Read(self.remaining as usize))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BASE_POSITION, FOOTER_BITS};
+
+    /// Both tables are indexed by the decoded position slot, whose maximum is
+    /// set by the largest window (32 MB → 290 slots). One table shorter than
+    /// the other meant a hostile pretree could decode the last slot and panic
+    /// on the out-of-bounds index instead of failing with a decode error.
+    #[test]
+    fn footer_bits_covers_every_position_slot() {
+        assert_eq!(FOOTER_BITS.len(), BASE_POSITION.len());
+        assert_eq!(FOOTER_BITS[BASE_POSITION.len() - 1], 17);
     }
 }

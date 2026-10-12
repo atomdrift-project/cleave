@@ -1173,7 +1173,7 @@ fn yara_degraded() -> bool {
 /// produce: rule evaluation ran out of time (findings depend on how loaded the
 /// machine was), rizin did not finish, or a source parse was cut short.
 /// Caching it would serve the shortfall to every later run.
-fn evaluation_incomplete(report: &AnalysisReport) -> bool {
+pub(crate) fn evaluation_incomplete(report: &AnalysisReport) -> bool {
     use crate::types::AnalysisGap::{
         DisassemblyIncomplete, EvaluationDeadline, SourceParseIncomplete,
     };

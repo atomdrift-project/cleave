@@ -21,6 +21,7 @@ use std::sync::OnceLock;
 // Re-export all evaluator modules
 pub(crate) mod ast;
 mod ast_gate;
+pub(crate) use ast_gate::NodeTextIndex;
 pub(crate) mod binary;
 pub(crate) mod kv;
 pub(crate) mod metrics;

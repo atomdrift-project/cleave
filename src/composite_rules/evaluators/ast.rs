@@ -5,7 +5,7 @@
 //! - Tree-sitter query execution
 //! - Safe AST traversal with depth limits
 
-use super::ast_gate::RequiredLiterals;
+use super::ast_gate::{NodeTextIndex, RequiredLiterals, RequiredNodes};
 use super::{build_regex, truncate_evidence};
 use crate::analyzers::ast_walker::{AST_QUERY_CPU_BUDGET, thread_cpu_time};
 use crate::composite_rules::ast_kinds::map_kind_to_node_types;
@@ -61,6 +61,7 @@ static QUERY_CACHE: LazyLock<RwLock<FxHashMap<(String, String), Option<Arc<Compi
 struct CompiledAstQuery {
     query: tree_sitter::Query,
     literals: RequiredLiterals,
+    nodes: RequiredNodes,
 }
 
 impl CompiledAstQuery {
@@ -660,7 +661,12 @@ fn cached_ast_query(
     }
     let compiled = tree_sitter::Query::new(lang, query_str).ok().map(|query| {
         let literals = RequiredLiterals::of(&query, query_str);
-        Arc::new(CompiledAstQuery { query, literals })
+        let nodes = RequiredNodes::of(&query, query_str);
+        Arc::new(CompiledAstQuery {
+            query,
+            literals,
+            nodes,
+        })
     });
     cache.insert(key, compiled.clone());
     drop(cache);
@@ -677,6 +683,7 @@ const COMBINED_AST_QUERY_MATCH_LIMIT: u32 = 65_536;
 /// (fewer than two compiling queries, combined compile failed, match-limit
 /// overflow, timeout, or cancel). Results are keyed by the original query
 /// string so `unless:` / duplicate `if:` share one bucket.
+#[cfg(test)]
 pub(crate) fn batch_ast_queries(
     tree: &tree_sitter::Tree,
     source: &str,
@@ -696,6 +703,7 @@ pub(crate) fn batch_ast_queries(
     )
 }
 
+#[cfg(test)]
 pub(super) fn batch_ast_queries_with_budget(
     tree: &tree_sitter::Tree,
     source: &str,
@@ -705,11 +713,42 @@ pub(super) fn batch_ast_queries_with_budget(
     cancellation: Option<&AtomicBool>,
     cpu_budget_override: Option<std::time::Duration>,
 ) -> Option<FxHashMap<String, ConditionResult>> {
+    batch_ast_queries_with_index(
+        tree,
+        source,
+        file_type,
+        query_strs,
+        deadline,
+        cancellation,
+        cpu_budget_override,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn batch_ast_queries_with_index(
+    tree: &tree_sitter::Tree,
+    source: &str,
+    file_type: FileType,
+    query_strs: &[&str],
+    deadline: Option<Instant>,
+    cancellation: Option<&AtomicBool>,
+    cpu_budget_override: Option<std::time::Duration>,
+    node_text: Option<&NodeTextIndex>,
+) -> Option<FxHashMap<String, ConditionResult>> {
     if query_strs.len() < 2 || source.len() > AST_QUERY_BYTE_LIMIT {
         return None;
     }
     let lang = &*tree.language();
     let mut compiling: Vec<(&str, Arc<CompiledAstQuery>)> = Vec::new();
+    let owned_node_text;
+    let node_text = match node_text {
+        Some(index) => index,
+        None => {
+            owned_node_text = NodeTextIndex::new(tree, source);
+            &owned_node_text
+        }
+    };
     // Queries whose required literals the file lacks: answered "no match"
     // without joining the walk. Queries share literals (`require`, `exec`),
     // so each is searched for once.
@@ -733,7 +772,7 @@ pub(super) fn batch_ast_queries_with_budget(
             continue;
         }
         if let Some(compiled) = cached_ast_query(lang, file_type, q) {
-            if compiled.literals.may_match(&mut contains) {
+            if compiled.literals.may_match(&mut contains) && compiled.nodes.may_match(node_text) {
                 compiling.push((q, compiled));
             } else {
                 out.insert(q.to_string(), ConditionResult::no_match());
@@ -929,7 +968,9 @@ pub(super) fn batch_ast_queries_with_budget(
     // never reached. Do not cache those partial negatives: evaluating each
     // query independently gives later source nodes their own bounded walk.
     if cancelled() || timed_out.get() || deadline.is_some_and(|dl| Instant::now() > dl) {
-        return None;
+        // The gates proved these negatives before the interrupted cursor ran.
+        // Keep them so fallback does not re-run queries known to be impossible.
+        return (!out.is_empty()).then_some(out);
     }
     // A pattern whose states were abandoned (the per-group state cap or the
     // shared capture-list pool) has partial results. Leave its query out of

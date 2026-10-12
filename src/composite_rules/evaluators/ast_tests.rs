@@ -1499,3 +1499,93 @@ fn ast_query_cpu_budget_stays_tight() {
         crate::analyzers::ast_walker::AST_QUERY_CPU_BUDGET <= std::time::Duration::from_secs(5)
     );
 }
+
+#[test]
+fn ast_node_gate_only_rejects_impossible_capture_predicates() {
+    let source = r#"// http.request('not an identifier')
+        const alias = require('http'); alias.request('body');
+        let alpha = 1; beta(alpha); const empty = '';
+    "#;
+    let parsed = parsed_for_test("gate.js", source.as_bytes());
+    let tree = parsed.source_ast().unwrap().tree;
+    let index = super::ast_gate::NodeTextIndex::new(tree, source);
+    let admits = |q: &str| {
+        let compiled = tree_sitter::Query::new(&tree.language(), q).unwrap();
+        super::ast_gate::RequiredNodes::of(&compiled, q).may_match(&index)
+    };
+    assert!(!admits(r#"((identifier) @x (#eq? @x "http"))"#));
+    assert!(!admits(r#"((identifier) @x (#match? @x "^https?$"))"#));
+    assert!(admits(r#"((string_fragment) @x (#eq? @x "http"))"#));
+    assert!(admits(r#"((property_identifier) @x (#eq? @x "request"))"#));
+    assert!(admits(r#"((identifier) @x (#match? @x "(?i)^ALPHA$"))"#));
+    assert!(admits(r#"((identifier) @x (#not-eq? @x "missing"))"#));
+    assert!(admits(
+        r#"([(identifier) @x (string_fragment) @x] (#eq? @x "http"))"#
+    ));
+    assert!(admits(
+        r#"([(identifier) @x (number)] (#eq? @x "missing"))"#
+    ));
+    assert!(admits(
+        r#"((call_expression arguments: (arguments (identifier)? @x)) (#eq? @x "missing"))"#
+    ));
+    assert!(admits(
+        r#"((identifier) @x (#eq? @x "missing")) ((identifier) @x (#eq? @x "alpha"))"#
+    ));
+    assert!(admits("((identifier) @x ; (#eq? @x \"missing\")\n)"));
+    assert!(!admits(r#"((identifier) @x @y (#eq? @y "http"))"#));
+}
+
+#[test]
+fn ast_node_gate_avoids_broad_sibling_walk_with_misleading_raw_text() {
+    let source = format!("// http request write end\n{}", walk_heavy_source());
+    let parsed = parsed_for_test("gate.js", source.as_bytes());
+    let tree = parsed.source_ast().unwrap().tree;
+    let query = r#"((program (expression_statement (call_expression function: (identifier) @a))
+        (expression_statement (call_expression function: (identifier) @b)))
+        (#eq? @a "http") (#eq? @b "write"))"#;
+    let other = r#"((identifier) @x (#eq? @x "absent"))"#;
+    let result = super::ast::batch_ast_queries_with_budget(
+        tree,
+        &source,
+        FileType::JavaScript,
+        &[query, other],
+        None,
+        None,
+        Some(std::time::Duration::ZERO),
+    )
+    .unwrap();
+    assert!(!result[query].matched);
+    assert!(
+        result[query].warnings.is_empty(),
+        "no query ran to its CPU limit"
+    );
+}
+
+#[test]
+fn ast_node_gate_checks_complete_object_keys() {
+    let source = r#"const a = {header: 'Origin', ['operation']: 'set'};
+        const words = ['operation', 'absent']; // operation absent
+    "#;
+    let parsed = parsed_for_test("gate.js", source.as_bytes());
+    let tree = parsed.source_ast().unwrap().tree;
+    let index = super::ast_gate::NodeTextIndex::new(tree, source);
+    let admits = |q: &str| {
+        let compiled = tree_sitter::Query::new(&tree.language(), q).unwrap();
+        super::ast_gate::RequiredNodes::of(&compiled, q).may_match(&index)
+    };
+    assert!(!admits(r#"((pair key: (_) @key) (#eq? @key "operation"))"#));
+    assert!(!admits(
+        r#"((pair key: (_) @key) (#match? @key "^['\"]?absent['\"]?$"))"#
+    ));
+    assert!(admits(r#"((pair key: (_) @key) (#eq? @key "header"))"#));
+    assert!(admits(
+        r#"((pair key: (_) @key) (#eq? @key "['operation']"))"#
+    ));
+    // An alternative capture outside a key must discard the key restriction.
+    assert!(admits(
+        r#"([(pair key: (_) @key) (string_fragment) @key] (#eq? @key "operation"))"#
+    ));
+    assert!(admits(
+        r#"((pair key: (_) @key value: (string) @value) (#eq? @value "'Origin'"))"#
+    ));
+}

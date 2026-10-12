@@ -1,3 +1,8 @@
+[build]
+# Keep parallel rustc processes within common per-process file descriptor limits.
+# Users can override this with CARGO_BUILD_JOBS or `cargo --jobs`.
+jobs = 8
+
 [target.x86_64-unknown-illumos]
 rustflags = ["-C", "link-arg=-lstdc++"]
 

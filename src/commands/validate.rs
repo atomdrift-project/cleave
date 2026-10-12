@@ -22,6 +22,10 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
+use std::time::Instant;
+
+#[path = "validate_cache.rs"]
+mod result_cache;
 
 /// A single file to analyze during validation and how to judge its score.
 enum Target {
@@ -107,13 +111,13 @@ fn print_contributing_findings(file: &FileAnalysis, indent: &str) {
 /// failures), so it is emitted only under `verbose` to keep a passing run to a
 /// single line.
 pub fn run(format: &OutputFormat, exclude: Option<&str>, verbose: bool) -> Result<String> {
-    // Honor the environment toggle for released callers that cannot pass
-    // `--soft`; the explicit API remains [`run_soft`].
-    let soft = matches!(
-        std::env::var("CLEAVE_VALIDATE_SOFT").ok().as_deref(),
-        Some("1" | "true" | "yes" | "on")
-    );
-    run_inner(format, exclude, verbose, soft)
+    run_with_options(
+        format,
+        exclude,
+        verbose,
+        false,
+        CapabilityMapper::DEFAULT_SLOW_RULE_MS,
+    )
 }
 
 /// Run trait validation in **soft** mode: fail only on `Hard` problems — those
@@ -129,21 +133,45 @@ pub fn run(format: &OutputFormat, exclude: Option<&str>, verbose: bool) -> Resul
 /// bundle that won't load or won't detect on this engine. The hard set is
 /// defined in one place: `validation_controls::HARD_VALIDATOR_IDS`.
 pub fn run_soft(format: &OutputFormat, exclude: Option<&str>, verbose: bool) -> Result<String> {
-    run_inner(format, exclude, verbose, true)
+    run_with_options(
+        format,
+        exclude,
+        verbose,
+        true,
+        CapabilityMapper::DEFAULT_SLOW_RULE_MS,
+    )
 }
 
-fn run_inner(
+/// Run validation with the CLI's slow-rule threshold. The environment soft-mode
+/// toggle also applies to callers using the default (strict) mode.
+pub fn run_with_options(
     format: &OutputFormat,
     exclude: Option<&str>,
     verbose: bool,
     soft: bool,
+    slow_rule_ms: u64,
 ) -> Result<String> {
+    let started = Instant::now();
+    let soft = soft
+        || matches!(
+            std::env::var("CLEAVE_VALIDATE_SOFT").ok().as_deref(),
+            Some("1" | "true" | "yes" | "on")
+        );
     // `--exclude` silences specific validators (the only suppression knob);
     // `--soft` downgrades every Soft-severity problem to advisory, leaving only
     // Hard problems (won't load / won't fire) fatal.
     validation_controls::set_disabled_validators_override(exclude)?;
     validation_controls::set_soft_validation_mode(soft);
-    let (targets, expectations) = collect_targets()?;
+    let (targets, expectations, expectations_text) = collect_targets()?;
+    let traits_dir = cleave::traits_repo::try_resolve().map_err(anyhow::Error::msg)?;
+    let result_cache =
+        result_cache::ResultCache::new(&traits_dir, &targets, &expectations_text, soft, verbose);
+    if let Some(fixtures) = result_cache
+        .as_ref()
+        .and_then(result_cache::ResultCache::load)
+    {
+        return Ok(format_validate_output(&validation_output(fixtures), format));
+    }
     // Fixtures are analyzed from outside the traits repo, so no path
     // exemption can match their location; see `NeutralStage`.
     let stage =
@@ -164,6 +192,7 @@ fn run_inner(
         disable_yara: true,
         disable_radare2: true,
         disable_upx: true,
+        slow_rule_ms,
         ..Default::default()
     };
 
@@ -178,12 +207,17 @@ fn run_inner(
     // separate `validate_traits()` call — validation errors surface here — and
     // every analysis worker below reuses this same Arc, so the trait set is
     // parsed from disk exactly once per run.
-    let mapper = Arc::new(CapabilityMapper::try_new_with_load_options(
-        CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION,
-        CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION,
-        true,
-        false,
-    )?);
+    let mapper = Arc::new(
+        CapabilityMapper::try_new_with_load_options(
+            CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION,
+            CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION,
+            true,
+            false,
+        )?
+        .with_slow_rule_ms(slow_rule_ms),
+    );
+    let load_ms = started.elapsed().as_millis();
+    let index_started = Instant::now();
 
     // When the cache holds nothing for these traits, as after an edit, every
     // fixture is about to miss: build the match indexes once, here, before
@@ -199,6 +233,9 @@ fn run_inner(
         mapper.warm_indexes();
     }
 
+    let index_ms = index_started.elapsed().as_millis();
+    let analysis_started = Instant::now();
+
     // One lane per pool thread, each pulling the next fixture, so that every
     // fixture analysis begins on an idle worker stack. As `into_par_iter`
     // jobs, fixtures were also taken up by threads waiting inside another
@@ -208,24 +245,49 @@ fn run_inner(
     // moved until the flight's 180 s deadline (one validate in twenty,
     // 2026-09-26). A worker takes its broadcast job before it steals
     // anything, so no lane starts on top of another analysis's work.
+    // Start large fixtures early so a bundled source file does not begin near
+    // the end of the queue and leave every other lane idle. Keep report slots
+    // in original order so diagnostics and expectation checks stay stable.
+    let mut work: Vec<_> = targets
+        .iter()
+        .enumerate()
+        .map(|(i, t)| (i, std::fs::metadata(t.path()).map_or(0, |m| m.len())))
+        .collect();
+    work.sort_unstable_by_key(|&(i, size)| (std::cmp::Reverse(size), i));
     let next = AtomicUsize::new(0);
     let reports: Vec<OnceLock<Result<AnalysisReport>>> =
         targets.iter().map(|_| OnceLock::new()).collect();
     rayon::broadcast(|_| {
         loop {
-            let i = next.fetch_add(1, Ordering::Relaxed);
-            let Some(t) = targets.get(i) else { break };
+            let job = next.fetch_add(1, Ordering::Relaxed);
+            let Some(&(i, _)) = work.get(job) else { break };
+            let t = &targets[i];
             let fixture_options = if t.requires_yara() {
                 &yara_options
             } else {
                 &options
             };
+            let fixture_started = Instant::now();
             let report = stage.analyze(t.path(), |p| {
                 cleave::analyze_file_with_mapper(p, fixture_options, &mapper)
             });
+            let elapsed_ms = fixture_started.elapsed().as_millis();
+            if elapsed_ms >= 500 {
+                tracing::info!(path = %t.path().display(), elapsed_ms, "slow validation fixture");
+            }
             let _ = reports[i].set(report);
         }
     });
+    tracing::info!(
+        load_ms,
+        index_ms,
+        analysis_ms = analysis_started.elapsed().as_millis(),
+        fixtures = targets.len(),
+        "validation phase timings"
+    );
+    // Include aggregate trait costs (CLEAVE_TRAIT_TIMING=1) on validation runs,
+    // including runs whose fixture expectations fail below.
+    cleave::log_scan_stats();
     let results: Vec<(Target, Result<AnalysisReport>)> = targets
         .into_iter()
         .zip(reports)
@@ -245,14 +307,13 @@ fn run_inner(
         Vec::new()
     };
 
+    let cacheable = results.iter().all(|(_, result)| {
+        result
+            .as_ref()
+            .is_ok_and(|report| !crate::analysis_cache::evaluation_incomplete(report))
+    }) && crate::yara_engine::yara_degradation().is_none();
     let stats = evaluate(results, &expectations.does_nothing)?;
 
-    let traits_ver = cleave::traits_repo::version()
-        .map(|v| format!(" (traits: {v})"))
-        .unwrap_or_default();
-    let traits_dir = cleave::traits_repo::try_resolve()
-        .map(|p| format!(" traits_dir={}", p.display()))
-        .unwrap_or_default();
     // Report overlapping traits if found
     if !overlap_findings.is_empty() {
         eprintln!(
@@ -261,44 +322,46 @@ fn run_inner(
         );
     }
 
-    let report = ValidateOutput {
-        ok: true,
-        traits_version: traits_ver
-            .trim()
-            .strip_prefix("(traits: ")
-            .and_then(|s| s.strip_suffix(')'))
-            .map(str::to_string),
-        traits_dir: traits_dir
-            .trim()
-            .strip_prefix("traits_dir=")
-            .map(str::to_string),
-        disabled_validators: validation_controls::disabled_validators_by_category(),
-        fixtures: FixtureSummary {
-            hostile: FixtureCount {
-                passed: stats.hostile_passed,
-                total: stats.hostile_total,
-            },
-            benign: FixtureCount {
-                passed: stats.benign_passed,
-                total: stats.benign_total,
-            },
-            does_nothing: FixtureCount {
-                passed: stats.does_nothing_passed,
-                total: stats.does_nothing_total,
-            },
-            walked_hostile: stats
-                .walked_hostile
-                .iter()
-                .map(|(corpus, count)| WalkedCorpusCount {
-                    corpus: (*corpus).to_string(),
-                    passed: count.passed,
-                    total: count.total,
-                })
-                .collect(),
+    let report = validation_output(FixtureSummary {
+        hostile: FixtureCount {
+            passed: stats.hostile_passed,
+            total: stats.hostile_total,
         },
-    };
+        benign: FixtureCount {
+            passed: stats.benign_passed,
+            total: stats.benign_total,
+        },
+        does_nothing: FixtureCount {
+            passed: stats.does_nothing_passed,
+            total: stats.does_nothing_total,
+        },
+        walked_hostile: stats
+            .walked_hostile
+            .iter()
+            .map(|(corpus, count)| WalkedCorpusCount {
+                corpus: (*corpus).to_string(),
+                passed: count.passed,
+                total: count.total,
+            })
+            .collect(),
+    });
+    if cacheable && let Some(cache) = result_cache {
+        cache.store_if_unchanged(&report.fixtures);
+    }
 
     Ok(format_validate_output(&report, format))
+}
+
+fn validation_output(fixtures: FixtureSummary) -> ValidateOutput {
+    ValidateOutput {
+        ok: true,
+        traits_version: cleave::traits_repo::version(),
+        traits_dir: cleave::traits_repo::try_resolve()
+            .ok()
+            .map(|p| p.display().to_string()),
+        disabled_validators: validation_controls::disabled_validators_by_category(),
+        fixtures,
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -311,7 +374,7 @@ struct ValidateOutput {
     fixtures: FixtureSummary,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct FixtureSummary {
     hostile: FixtureCount,
     benign: FixtureCount,
@@ -320,13 +383,13 @@ struct FixtureSummary {
     walked_hostile: Vec<WalkedCorpusCount>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct FixtureCount {
     passed: usize,
     total: usize,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct WalkedCorpusCount {
     corpus: String,
     passed: usize,
@@ -404,7 +467,7 @@ fn format_validate_tiny(report: &ValidateOutput) -> String {
 /// Returns the loaded [`Expectations`] alongside the targets so the evaluator can
 /// consult the does-nothing caps. Expectations live in the traits repo (not the
 /// engine), so any build validates the exact fixture set a traits commit defines.
-fn collect_targets() -> Result<(Vec<Target>, Expectations)> {
+fn collect_targets() -> Result<(Vec<Target>, Expectations, String)> {
     let mut targets = Vec::new();
 
     let traits_dir = cleave::traits_repo::try_resolve().map_err(anyhow::Error::msg)?;
@@ -447,7 +510,7 @@ fn collect_targets() -> Result<(Vec<Target>, Expectations)> {
         }
     }
 
-    Ok((targets, exp))
+    Ok((targets, exp, expectations_text))
 }
 
 /// Every direct file in `testdata/hostile/` must have an expectation entry.

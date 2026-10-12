@@ -28,6 +28,7 @@ pub(crate) struct AnalysisBorrow<'a, 'b> {
     /// Kind-cache filled during the source analyzer's AST fact walk so
     /// evaluation does not walk the same tree again.
     pub(crate) ast_kind_cache: Option<&'a FxHashMap<String, Vec<Evidence>>>,
+    pub(crate) ast_node_text: Option<&'a crate::composite_rules::evaluators::NodeTextIndex>,
 }
 
 impl<'a, 'b> AnalysisBorrow<'a, 'b> {
@@ -36,6 +37,7 @@ impl<'a, 'b> AnalysisBorrow<'a, 'b> {
             cached_ast,
             filefacts: None,
             ast_kind_cache: None,
+            ast_node_text: None,
         }
     }
 
@@ -47,7 +49,16 @@ impl<'a, 'b> AnalysisBorrow<'a, 'b> {
             cached_ast,
             filefacts,
             ast_kind_cache: None,
+            ast_node_text: None,
         }
+    }
+
+    pub(crate) fn with_ast_node_text(
+        mut self,
+        index: &'a crate::composite_rules::evaluators::NodeTextIndex,
+    ) -> Self {
+        self.ast_node_text = Some(index);
+        self
     }
 
     pub(crate) fn with_ast_kind_cache(
@@ -398,6 +409,7 @@ impl super::CapabilityMapper {
             file_type,
             &applicable_indices,
             cancellation,
+            analysis.ast_node_text,
         );
 
         // Build all_strings ONCE — combines report strings, imports, and exports.

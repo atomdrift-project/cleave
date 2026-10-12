@@ -201,7 +201,7 @@ pub struct Args {
     pub max_file_size: u64,
 
     /// Warn when a single rule takes longer than this many milliseconds to evaluate.
-    /// Rules >1000ms are always logged at debug level (visible via --verbose).
+    /// Rules >500ms are always logged at info level (visible via RUST_LOG=cleave=info).
     #[arg(long, value_name = "MS", default_value_t = 4000)]
     pub slow_rule_ms: u64,
 

@@ -533,6 +533,7 @@ impl UnifiedSourceAnalyzer {
         let tree = source_ast.map(|ast| ast.tree);
 
         let mut ast_kind_cache = None;
+        let mut ast_node_text = crate::composite_rules::evaluators::NodeTextIndex::default();
         let mut seen_strings = SeenStrings::default();
         if let Some(tree) = tree {
             // One walk for functions, string/number/comment literals and the
@@ -563,6 +564,7 @@ impl UnifiedSourceAnalyzer {
                 &required,
                 &call_types,
                 &mut cache,
+                &mut ast_node_text,
                 &mut seen_strings,
             );
             if !required.is_empty() {
@@ -970,7 +972,8 @@ impl UnifiedSourceAnalyzer {
                 &mut report,
                 rule_bytes,
                 crate::capabilities::AnalysisBorrow::with_filefacts(tree, source_ctx)
-                    .with_ast_kind_cache(ast_kind_cache.as_ref()),
+                    .with_ast_kind_cache(ast_kind_cache.as_ref())
+                    .with_ast_node_text(&ast_node_text),
                 inline_yara.as_ref(),
                 None,
                 None,
@@ -986,6 +989,7 @@ impl UnifiedSourceAnalyzer {
         report
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn extract_ast_facts(
         &self,
         tree: &tree_sitter::Tree,
@@ -994,6 +998,7 @@ impl UnifiedSourceAnalyzer {
         required_node_types: &FxHashSet<&str>,
         call_node_types: &FxHashSet<&'static str>,
         kind_cache: &mut FxHashMap<String, Vec<Evidence>>,
+        node_text: &mut crate::composite_rules::evaluators::NodeTextIndex,
         seen_strings: &mut SeenStrings,
     ) {
         let source = content.as_bytes();
@@ -1009,6 +1014,7 @@ impl UnifiedSourceAnalyzer {
             required_node_types,
             call_node_types,
             kind_cache,
+            node_text,
             seen_strings,
         );
         // `call_sites` is collected by the walk for `Evidence.alt_value` on
@@ -1025,11 +1031,13 @@ impl UnifiedSourceAnalyzer {
         required_node_types: &FxHashSet<&str>,
         call_node_types: &FxHashSet<&'static str>,
         kind_cache: &mut FxHashMap<String, Vec<Evidence>>,
+        node_text: &mut crate::composite_rules::evaluators::NodeTextIndex,
         seen_strings: &mut SeenStrings,
     ) {
         loop {
             let node = cursor.node();
             let kind = node.kind();
+            node_text.record_node(&node, source);
             record_ast_kind_node(
                 kind,
                 &node,

@@ -512,20 +512,27 @@ impl super::CapabilityMapper {
         file_type: crate::composite_rules::FileType,
         indices: &[usize],
         cancellation: Option<&std::sync::atomic::AtomicBool>,
+        node_text: Option<&crate::composite_rules::evaluators::NodeTextIndex>,
     ) -> Option<FxHashMap<String, crate::composite_rules::context::ConditionResult>> {
         let tree = cached_ast?;
-        if !file_type.supports_ast_queries() {
+        // Each file's predicate gates select a different combined query. On
+        // small sources, compiling that combination costs more than the short
+        // individual walks, whose compiled queries are already shared. Reserve
+        // batching for files large enough to amortize the extra compilation.
+        if !file_type.supports_ast_queries() || binary_data.len() < 4 * 1024 {
             return None;
         }
         let source = filefacts::source_text_for_ast(binary_data);
         let queries = self.collect_ast_query_strings(indices);
-        crate::composite_rules::evaluators::batch_ast_queries(
+        crate::composite_rules::evaluators::batch_ast_queries_with_index(
             tree,
             &source,
             file_type,
             &queries,
             Some(std::time::Instant::now() + std::time::Duration::from_secs(180)),
             cancellation,
+            None,
+            node_text,
         )
     }
 
@@ -570,6 +577,7 @@ impl super::CapabilityMapper {
             binary_data,
             file_type,
             &applicable_indices,
+            None,
             None,
         );
 

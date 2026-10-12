@@ -7,7 +7,7 @@ use cleave::commands::{
     extract_symbols_command, inspect_command, iter_files_command,
 };
 #[cfg(feature = "lint")]
-use cleave::commands::{MatchRequest, test_match, test_rules, validate_command};
+use cleave::commands::{MatchRequest, test_match, test_rules};
 use std::fs;
 
 struct AnalyzeDispatchContext<'a> {
@@ -242,11 +242,13 @@ pub(crate) fn dispatch_command(
         }
         #[cfg(feature = "lint")]
         Some(cli::Command::Validate { exclude, soft }) => {
-            if soft {
-                cleave::commands::validate::run_soft(ctx.format, exclude.as_deref(), args.verbose)?
-            } else {
-                validate_command(ctx.format, exclude.as_deref(), args.verbose)?
-            }
+            cleave::commands::validate::run_with_options(
+                ctx.format,
+                exclude.as_deref(),
+                args.verbose,
+                soft,
+                ctx.analyze.slow_rule_ms,
+            )?
         }
         Some(cli::Command::Diff {
             old,

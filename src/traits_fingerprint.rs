@@ -224,7 +224,7 @@ fn keyed_env(excluded: &[&str]) -> Vec<(String, OsString)> {
 }
 
 /// Which build is running: its GNU build-id, a hash of the linked output that
-/// changes exactly when the code does, else its size and mtime. Every cache
+/// changes exactly when the code does, else a SHA-256 of its complete contents. Every cache
 /// key reads it, so it is computed once per process.
 ///
 /// Linux reads `/proc/self/exe`, which is the running image even after a
@@ -241,21 +241,33 @@ pub(crate) fn binary_identity() -> &'static str {
         exe.and_then(|exe| {
             build_id(&exe)
                 .map(|id| format!("build-id:{id}"))
-                .or_else(|| stat_identity(&exe).map(|id| format!("stat:{id}")))
+                .or_else(|| content_identity(&exe).map(|id| format!("sha256:{id}")))
         })
-        .unwrap_or_else(|| "unknown".to_owned())
+        // Failure must not let unrelated builds share an "unknown" key.
+        .unwrap_or_else(|| {
+            format!(
+                "unreadable:{}:{:?}",
+                std::process::id(),
+                std::time::SystemTime::now()
+            )
+        })
     })
 }
 
-/// A file's size and mtime, for identities with no content fingerprint.
-fn stat_identity(path: &Path) -> Option<String> {
-    let meta = fs::metadata(path).ok()?;
-    let mtime = meta
-        .modified()
-        .ok()?
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()?;
-    Some(format!("{}:{}", meta.len(), mtime.as_nanos()))
+/// Content identity for non-ELF executables (including macOS). A same-size
+/// replacement with preserved timestamps must still invalidate all caches.
+fn content_identity(path: &Path) -> Option<String> {
+    let mut file = fs::File::open(path).ok()?;
+    let mut hash = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let n = file.read(&mut buffer).ok()?;
+        if n == 0 {
+            break;
+        }
+        hash.update(&buffer[..n]);
+    }
+    Some(hex::encode(hash.finalize()))
 }
 
 /// The hex `NT_GNU_BUILD_ID` note of a 64-bit little-endian ELF file, or
@@ -366,6 +378,23 @@ mod tests {
         );
         assert!(build_id(Path::new("/etc/hostname")).is_none());
         assert_eq!(binary_identity(), format!("build-id:{id}"));
+    }
+
+    #[test]
+    fn binary_content_identity_ignores_preserved_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("engine");
+        fs::write(&path, b"engine-a").unwrap();
+        let mtime = fs::metadata(&path).unwrap().modified().unwrap();
+        let before = content_identity(&path).unwrap();
+        fs::write(&path, b"engine-b").unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(mtime)
+            .unwrap();
+        assert_ne!(before, content_identity(&path).unwrap());
     }
 
     #[test]

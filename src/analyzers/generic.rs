@@ -329,17 +329,15 @@ impl GenericAnalyzer {
         } else {
             std::collections::HashMap::new()
         };
-        self.engine
-            .rules()
-            .evaluate_and_merge_findings_with_precomputed(
-                &mut report,
-                eval_bytes,
-                crate::capabilities::AnalysisBorrow::with_filefacts(tree, source_ctx),
-                Some(&inline_yara),
-                None,
-                None,
-                None,
-            );
+        self.engine.evaluate_and_merge_findings_with_precomputed(
+            &mut report,
+            eval_bytes,
+            crate::capabilities::AnalysisBorrow::with_filefacts(tree, source_ctx),
+            Some(&inline_yara),
+            None,
+            None,
+            None,
+        );
         tracing::debug!(
             "GenericAnalyzer: Rule evaluation completed in {:?}",
             t_eval.elapsed()

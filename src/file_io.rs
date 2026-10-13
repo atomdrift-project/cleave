@@ -1,7 +1,7 @@
 //! Efficient file I/O utilities with memory optimization.
 //!
-//! Provides smart file reading that uses memory-mapping for large files
-//! to reduce memory usage and improve performance.
+//! Provides smart file reading that uses read-only anonymous mappings for
+//! stable large-file snapshots.
 //!
 //! Automatically detects and converts UTF-16 LE/BE files to UTF-8 for
 //! consistent text processing across all analysis modules.
@@ -11,19 +11,20 @@
 use anyhow::Result;
 use bytes::Bytes;
 use encoding_rs::{Encoding, UTF_16BE, UTF_16LE};
-use memmap2::Mmap;
+use memmap2::{Mmap, MmapMut};
 use std::borrow::Cow;
 use std::fs::File;
+use std::io::Read;
 use std::path::Path;
 
-/// Threshold for using memory-mapping instead of loading into memory.
-/// Files larger than this will be memory-mapped (zero-copy).
+/// Threshold for using an anonymous mapping instead of a `Vec`.
+/// Files larger than this are copied into a read-only mapped snapshot.
 const MMAP_THRESHOLD: u64 = 10 * 1024 * 1024; // 10 MB
 
-/// File data that can be memory-mapped, owned, or a shared refcounted buffer.
+/// File data that can be anonymously mapped, owned, or a shared refcounted buffer.
 #[derive(Debug)]
 pub enum FileData {
-    /// Memory-mapped file (zero-copy, for large files)
+    /// Read-only anonymous snapshot (for large files)
     Mapped(Mmap),
     /// Owned data (for small files)
     Owned(Vec<u8>),
@@ -203,9 +204,13 @@ pub fn normalize_text_encoding(data: &[u8]) -> Cow<'_, [u8]> {
     Cow::Borrowed(data)
 }
 
-/// Read a file efficiently, using memory-mapping for large files.
+/// Read a file efficiently, using an anonymous memory-mapped snapshot for
+/// large files.
 ///
-/// For files larger than 10MB, this uses memory-mapping (zero-copy).
+/// For files larger than 10MB, this copies into an anonymous mapping and makes
+/// it read-only before returning. Mapping the input file itself would let a
+/// concurrent writer change bytes behind Rust's immutable slice or truncate
+/// the file and terminate the scanner with `SIGBUS`.
 /// For smaller files, it reads into memory for better cache locality.
 ///
 /// **Note**: This function does NOT normalize text encoding. Use
@@ -219,28 +224,24 @@ pub fn normalize_text_encoding(data: &[u8]) -> Cow<'_, [u8]> {
 ///
 /// A `FileData` that can be used as a byte slice
 pub fn read_file_smart(path: &Path) -> Result<FileData> {
-    let metadata = std::fs::metadata(path)?;
-    let file_size = metadata.len();
+    let mut file = File::open(path)?;
+    let file_size = file.metadata()?.len();
 
     if file_size > MMAP_THRESHOLD {
-        // Large file: use memory-mapping (zero-copy)
-        let file = File::open(path)?;
-        // SAFETY: `Mmap::map` requires that the file not change while the map
-        // is borrowed. Cleave cannot enforce that on a scan target: a
-        // concurrent write changes bytes under a shared slice, and a
-        // truncation raises SIGBUS, which no `catch_unwind` stops. Accepted
-        // because targets are files at rest and copying every large file
-        // costs more than the risk; scan only files nothing else is writing.
-        let mmap = unsafe { Mmap::map(&file)? };
+        let map_len = usize::try_from(file_size)?;
+        let mut snapshot = MmapMut::map_anon(map_len)?;
+        file.read_exact(&mut snapshot)?;
+        let mmap = snapshot.make_read_only()?;
         tracing::debug!(
-            "Memory-mapped large file ({:.2} MB): {}",
+            "Snapshotted large file ({:.2} MB): {}",
             file_size as f64 / 1024.0 / 1024.0,
             path.display()
         );
         Ok(FileData::Mapped(mmap))
     } else {
         // Small file: read into memory for better cache locality
-        let data = std::fs::read(path)?;
+        let mut data = Vec::with_capacity(usize::try_from(file_size).unwrap_or(0));
+        file.read_to_end(&mut data)?;
         Ok(FileData::Owned(data))
     }
 }
@@ -285,7 +286,7 @@ pub fn read_file_normalized(path: &Path) -> Result<FileData> {
 /// Read a file into an owned `Vec<u8>`.
 ///
 /// This is a convenience wrapper that always returns owned data.
-/// Use `read_file_smart` if you want automatic memory-mapping for large files.
+/// Use `read_file_smart` if you want anonymous mapped snapshots for large files.
 pub fn read_file_to_vec(path: &Path) -> Result<Vec<u8>> {
     Ok(std::fs::read(path)?)
 }
@@ -322,8 +323,14 @@ mod tests {
         let data = read_file_smart(temp_file.path()).unwrap();
         assert_eq!(data.len(), 20 * 1024 * 1024);
 
-        // Large file should be memory-mapped
+        // Large file should use a read-only anonymous mapping.
         assert!(matches!(data, FileData::Mapped(_)));
+
+        // The scanner owns a stable snapshot; later changes to an
+        // attacker-controlled path cannot mutate bytes behind its `&[u8]`.
+        std::fs::write(temp_file.path(), vec![1u8; 20 * 1024 * 1024]).unwrap();
+        assert_eq!(data.as_slice()[0], 0);
+        assert_eq!(data.as_slice()[data.len() - 1], 0);
     }
 
     #[test]

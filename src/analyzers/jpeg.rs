@@ -67,17 +67,15 @@ impl JpegAnalyzer {
         // populates every `jpeg.*` / `image.*` / `file.entropy`
         // metric onto `report.filefacts_metrics` for the trait engine.
         // `source_ctx` is resolved by the caller (threaded or freshly opened).
-        self.engine
-            .rules()
-            .evaluate_and_merge_findings_with_precomputed(
-                &mut report,
-                data,
-                crate::capabilities::AnalysisBorrow::with_filefacts(None, source_ctx),
-                None,
-                None,
-                None,
-                None,
-            );
+        self.engine.evaluate_and_merge_findings_with_precomputed(
+            &mut report,
+            data,
+            crate::capabilities::AnalysisBorrow::with_filefacts(None, source_ctx),
+            None,
+            None,
+            None,
+            None,
+        );
 
         report
     }

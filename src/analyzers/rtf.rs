@@ -53,17 +53,15 @@ impl RtfAnalyzer {
         let filefacts_ctx = Some(crate::analysis_context::AnalysisContext::open(
             file_path, data,
         ));
-        self.engine
-            .rules()
-            .evaluate_and_merge_findings_with_precomputed(
-                &mut report,
-                data,
-                crate::capabilities::AnalysisBorrow::with_filefacts(None, filefacts_ctx.as_ref()),
-                None,
-                None,
-                None,
-                None,
-            );
+        self.engine.evaluate_and_merge_findings_with_precomputed(
+            &mut report,
+            data,
+            crate::capabilities::AnalysisBorrow::with_filefacts(None, filefacts_ctx.as_ref()),
+            None,
+            None,
+            None,
+            None,
+        );
         report
     }
 }

@@ -951,7 +951,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "tree-sitter",
- "unrar",
+ "unrar-ng",
  "walkdir",
  "xz2",
  "yara-classify",
@@ -1562,9 +1562,9 @@ dependencies = [
 
 [[package]]
 name = "deranged"
-version = "0.5.8"
+version = "0.5.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7cd812cc2bc1d69d4764bd80df88b4317eaef9e773c75226407d9bc0876b211c"
+checksum = "9e9de72ce2ad1f90dc62fa25f0f430ef85eb4b0d8fa0be4f30373bc40a21d28e"
 
 [[package]]
 name = "derive_arbitrary"
@@ -4215,9 +4215,9 @@ dependencies = [
 
 [[package]]
 name = "rustls-native-certs"
-version = "0.8.4"
+version = "0.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dab5152771c58876a2146916e53e35057e1a4dfa2b9df0f0305b07f611fdea4d"
+checksum = "4a073f5dc7469f984c52ad2752b63b0807745133b6de880b7b64c1ac4c48aec4"
 dependencies = [
  "openssl-probe",
  "rustls-pki-types",
@@ -4735,7 +4735,7 @@ dependencies = [
 [[package]]
 name = "stng"
 version = "2.1.1"
-source = "git+https://github.com/atomdrift-project/stng.git#6e21883f647086053b3d4194021091b1d3a63dfd"
+source = "git+https://github.com/atomdrift-project/stng.git#5d1e6ef1bb3c2b723a19961f3f85c2b4e8849291"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -5306,7 +5306,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter"
 version = "0.28.0"
-source = "git+https://github.com/tstromberg/tree-sitter?branch=master#6e41dd9075712903c5a7dc3c5198aab73463e81b"
+source = "git+https://github.com/tstromberg/tree-sitter?branch=master#68fddc3ea84b2b4445aba7e0f85847e79e342725"
 dependencies = [
  "cc",
  "regex",
@@ -5428,7 +5428,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-language"
 version = "0.1.8"
-source = "git+https://github.com/tstromberg/tree-sitter?branch=master#6e41dd9075712903c5a7dc3c5198aab73463e81b"
+source = "git+https://github.com/tstromberg/tree-sitter?branch=master#68fddc3ea84b2b4445aba7e0f85847e79e342725"
 
 [[package]]
 name = "tree-sitter-lua"
@@ -5613,22 +5613,22 @@ dependencies = [
 ]
 
 [[package]]
-name = "unrar"
-version = "0.5.8"
+name = "unrar-ng"
+version = "0.7.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "92ec61343a630d2b50d13216dea5125e157d3fc180a7d3f447d22fe146b648fc"
+checksum = "9ff7a01700c732826b5a3414f911cb72015642ebdf16566f2e88b36d5dc49aec"
 dependencies = [
  "bitflags 2.13.2",
  "regex",
- "unrar_sys",
+ "unrar-ng-sys",
  "widestring",
 ]
 
 [[package]]
-name = "unrar_sys"
-version = "0.5.8"
+name = "unrar-ng-sys"
+version = "0.7.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8b77675b883cfbe6bf41e6b7a5cd6008e0a83ba497de3d96e41a064bbeead765"
+checksum = "72678d22d4d6aa9f0b905f5d6d5cd3e462c55631b526297d06fb1663532daa76"
 dependencies = [
  "cc",
  "libc",

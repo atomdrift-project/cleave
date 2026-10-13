@@ -91,12 +91,13 @@ fn print_contributing_findings(file: &FileAnalysis, indent: &str) {
         if finding.crit == Criticality::Component || finding.crit == Criticality::Filtered {
             continue;
         }
-        eprintln!(
+        let rendered = format!(
             "{indent}{:10} {}  {}",
             format!("{:?}", finding.crit).to_lowercase(),
             finding.id,
             finding.desc
         );
+        eprintln!("{}", crate::output::escape_control_chars(&rendered));
     }
 }
 
@@ -813,7 +814,7 @@ fn evaluate(
                     if !disallowed.is_empty() {
                         eprintln!(
                             "❌ {}: {} disallowed finding(s) on a does-nothing fixture (intent or >= notable): {disallowed:?}",
-                            file.path,
+                            safe_path(Path::new(&file.path)),
                             disallowed.len(),
                         );
                         print_contributing_findings(file, "     ");
@@ -826,7 +827,11 @@ fn evaluate(
                     }
                     let cap = does_nothing_cap(&file.path, &dir, does_nothing);
                     if file.score > cap {
-                        eprintln!("❌ {}: score {} > cap {cap}", file.path, file.score);
+                        eprintln!(
+                            "❌ {}: score {} > cap {cap}",
+                            safe_path(Path::new(&file.path)),
+                            file.score
+                        );
                         print_contributing_findings(file, "     ");
                         failed += 1;
                     } else {
@@ -957,8 +962,10 @@ fn judge_benign(path: &Path, cap: u32, min_score: u32, report: &AnalysisReport) 
     }
     for (file_path, finding) in misleading {
         eprintln!(
-            "❌ {file_path}: suspicious/hostile intent or campaign trait on benign fixture: {} ({:?})",
-            finding.id, finding.crit
+            "❌ {}: suspicious/hostile intent or campaign trait on benign fixture: {} ({:?})",
+            crate::output::escape_control_chars(file_path),
+            crate::output::escape_control_chars(&finding.id),
+            finding.crit
         );
     }
     print_contributing_findings(file, "     ");

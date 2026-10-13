@@ -24,7 +24,7 @@
 //! running on last week's rules, not stop it.
 
 use std::collections::BTreeMap;
-use std::io::Cursor;
+use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -58,6 +58,10 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(4);
 /// Sidecar recording what the R2 backend installed. The installed tree is a
 /// `git archive` extraction with no `.git`, so the commit/date live here instead.
 const SIDECAR: &str = ".cleave-rules.toml";
+
+fn print_status(message: &str) {
+    eprintln!("{}", crate::output::escape_control_chars(message));
+}
 
 /// This build's version, matched against the manifest's release keys (e.g. `2.0.0-rc.4`).
 fn our_version() -> &'static str {
@@ -115,10 +119,10 @@ fn is_git_managed(dir: &Path) -> bool {
 pub fn update(dir: &Path, force: bool, quiet: bool) -> Result<(), String> {
     if is_git_managed(dir) {
         if !quiet {
-            eprintln!(
+            print_status(&format!(
                 "Traits at {} are git-managed (a checkout or symlink to one); leaving them untouched.\nUse 'git pull' there to update, or remove the directory to switch to bundle updates.",
                 dir.display()
-            );
+            ));
         }
         return Ok(());
     }
@@ -132,29 +136,29 @@ pub fn update(dir: &Path, force: bool, quiet: bool) -> Result<(), String> {
 
     if !force && installed(dir).is_some_and(|i| i.commit.starts_with(&key)) {
         if !quiet {
-            eprintln!("Already up to date: {} ({})", key, artifact.date);
+            print_status(&format!("Already up to date: {} ({})", key, artifact.date));
             warn_if_behind(&manifest);
         }
         return Ok(());
     }
 
     if !quiet {
-        eprintln!(
+        print_status(&format!(
             "Installing traits {} ({}) for cleave {} [{}]...",
             key,
             artifact.date,
             our_version(),
             source
-        );
+        ));
     }
     install(dir, artifact, &source, &channel)?;
     if !quiet {
-        eprintln!(
+        print_status(&format!(
             "Traits updated to {} ({}) at {}",
             key,
             artifact.date,
             dir.display()
-        );
+        ));
         warn_if_behind(&manifest);
     }
     Ok(())
@@ -163,10 +167,10 @@ pub fn update(dir: &Path, force: bool, quiet: bool) -> Result<(), String> {
 /// Report what would be installed without changing anything.
 pub fn check(dir: &Path) -> Result<(), String> {
     if is_git_managed(dir) {
-        eprintln!(
+        print_status(&format!(
             "Traits at {} are git-managed; use 'git pull' there to update.",
             dir.display()
-        );
+        ));
         return Ok(());
     }
     let (manifest, _) = fetch_manifest(None)?;
@@ -175,21 +179,21 @@ pub fn check(dir: &Path) -> Result<(), String> {
 
     match installed(dir) {
         Some(i) if i.commit.starts_with(&key) => {
-            eprintln!("Up to date: {} ({})", key, artifact.date);
+            print_status(&format!("Up to date: {} ({})", key, artifact.date));
         }
         Some(i) => {
-            eprintln!(
+            print_status(&format!(
                 "Update available: {} ({}) — currently {} [{}]",
                 key,
                 artifact.date,
                 i.commit.chars().take(9).collect::<String>(),
                 source
-            );
+            ));
         }
-        None => eprintln!(
+        None => print_status(&format!(
             "Not installed; available: {} ({}) [{}]",
             key, artifact.date, source
-        ),
+        )),
     }
     warn_if_behind(&manifest);
     Ok(())
@@ -209,9 +213,9 @@ pub fn pin(dir: &Path, commit: &str) -> Result<(), String> {
             )
         })?;
     let artifact = artifact_for(&manifest, &key)?;
-    eprintln!("Pinning traits to {} ({})...", key, artifact.date);
+    print_status(&format!("Pinning traits to {} ({})...", key, artifact.date));
     install(dir, artifact, &format!("pin:{key}"), &channel)?;
-    eprintln!("Traits pinned to {} at {}", key, dir.display());
+    print_status(&format!("Traits pinned to {} at {}", key, dir.display()));
     Ok(())
 }
 
@@ -239,11 +243,11 @@ fn artifact_for<'a>(m: &'a Manifest, key: &str) -> Result<&'a Artifact, String> 
 /// dev/unlisted build is never warned.
 fn warn_if_behind(m: &Manifest) {
     if let Some(target) = m.upgrade.get(our_version()) {
-        eprintln!(
+        print_status(&format!(
             "Note: cleave {} cannot use the newest rules. Upgrade to cleave {} for the latest detections.",
             our_version(),
             target
-        );
+        ));
     }
 }
 
@@ -347,9 +351,7 @@ fn install(dir: &Path, artifact: &Artifact, source: &str, channel: &Channel) -> 
 
     let decoder = zstd::stream::read::Decoder::new(Cursor::new(&bytes))
         .map_err(|e| format!("opening zstd stream: {e}"))?;
-    tar::Archive::new(decoder)
-        .unpack(&staging)
-        .map_err(|e| format!("extracting {}: {e}", artifact.file))?;
+    unpack_bundle(decoder, &staging).map_err(|e| format!("extracting {}: {e}", artifact.file))?;
 
     let meta = Installed {
         commit: artifact.commit.clone(),
@@ -361,6 +363,46 @@ fn install(dir: &Path, artifact: &Artifact, source: &str, channel: &Channel) -> 
     std::fs::write(staging.join(SIDECAR), rendered).map_err(|e| format!("writing sidecar: {e}"))?;
 
     swap_into_place(&staging, dir, &backup)
+}
+
+/// Extract a rules bundle without giving archive entries filesystem semantics.
+///
+/// The bundle is remote input even after its digest matches the remote
+/// manifest. In particular, a link named [`SIDECAR`] would make the metadata
+/// write in [`install`] overwrite its target. Rules need only ordinary files
+/// and directories, so links, devices, FIFOs, and other special entries are
+/// rejected before anything at that entry is created.
+fn unpack_bundle<R: Read>(reader: R, staging: &Path) -> Result<(), String> {
+    let mut archive = tar::Archive::new(reader);
+    let entries = archive
+        .entries()
+        .map_err(|e| format!("reading tar entries: {e}"))?;
+
+    for entry in entries {
+        let mut entry = entry.map_err(|e| format!("reading tar entry: {e}"))?;
+        let path = entry
+            .path()
+            .map_err(|e| format!("reading tar entry path: {e}"))?
+            .into_owned();
+        let kind = entry.header().entry_type();
+        if !kind.is_file() && !kind.is_dir() {
+            return Err(format!(
+                "unsupported tar entry type {:?} at {}",
+                kind,
+                path.display()
+            ));
+        }
+        if !entry
+            .unpack_in(staging)
+            .map_err(|e| format!("unpacking {}: {e}", path.display()))?
+        {
+            return Err(format!(
+                "tar entry escapes the staging directory: {}",
+                path.display()
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Replace `dir` with `staging`, keeping a rollback copy at `backup`.
@@ -552,6 +594,32 @@ fn hex(bytes: &[u8]) -> String {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bundle_rejects_links_before_the_sidecar_write_can_follow_them() {
+        let tmp = tempfile::tempdir().unwrap();
+        let staging = tmp.path().join("staging");
+        std::fs::create_dir(&staging).unwrap();
+        let victim = tmp.path().join("victim");
+        std::fs::write(&victim, "unchanged").unwrap();
+
+        let mut builder = tar::Builder::new(Vec::new());
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::symlink());
+        header.set_size(0);
+        header.set_mode(0o777);
+        header.set_link_name(&victim).unwrap();
+        header.set_cksum();
+        builder
+            .append_data(&mut header, SIDECAR, std::io::empty())
+            .unwrap();
+        let archive = builder.into_inner().unwrap();
+
+        let error = unpack_bundle(Cursor::new(archive), &staging).unwrap_err();
+        assert!(error.contains("unsupported tar entry type Symlink"));
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "unchanged");
+        assert!(std::fs::symlink_metadata(staging.join(SIDECAR)).is_err());
+    }
 
     /// Stage a directory holding a single marker file.
     #[test]

@@ -111,17 +111,15 @@ impl Analyzer for JavaClassAnalyzer {
         if let Some(ctx) = filefacts_ctx {
             report.imports.extend(ctx.imports_from_filefacts());
         }
-        self.engine
-            .rules()
-            .evaluate_and_merge_findings_with_precomputed(
-                &mut report,
-                input.data,
-                crate::capabilities::AnalysisBorrow::with_filefacts(None, filefacts_ctx),
-                None,
-                None,
-                None,
-                None,
-            );
+        self.engine.evaluate_and_merge_findings_with_precomputed(
+            &mut report,
+            input.data,
+            crate::capabilities::AnalysisBorrow::with_filefacts(None, filefacts_ctx),
+            None,
+            None,
+            None,
+            None,
+        );
 
         let elapsed = start.elapsed().as_millis() as u64;
         report.metadata.analysis_duration_ms = elapsed;
@@ -141,17 +139,15 @@ impl Analyzer for JavaClassAnalyzer {
                 crate::strings::StringExtractor::default().convert_stng_strings(&ctx.text_rows());
             report.imports.extend(ctx.imports_from_filefacts());
         }
-        self.engine
-            .rules()
-            .evaluate_and_merge_findings_with_precomputed(
-                &mut report,
-                &data,
-                crate::capabilities::AnalysisBorrow::with_filefacts(None, filefacts_ctx.as_ref()),
-                None,
-                None,
-                None,
-                None,
-            );
+        self.engine.evaluate_and_merge_findings_with_precomputed(
+            &mut report,
+            &data,
+            crate::capabilities::AnalysisBorrow::with_filefacts(None, filefacts_ctx.as_ref()),
+            None,
+            None,
+            None,
+            None,
+        );
 
         let elapsed = start.elapsed().as_millis() as u64;
         report.metadata.analysis_duration_ms = elapsed;

@@ -3207,87 +3207,6 @@ impl YaraEngine {
 
         evidence
     }
-
-    /// Map YARA namespace to capability ID
-    /// Returns the capability ID if the namespace maps to a known capability
-    #[must_use]
-    #[allow(dead_code)]
-    pub(crate) fn namespace_to_capability(&self, namespace: &str) -> Option<String> {
-        // YARA namespace format: exec.cmd, anti-static.obfuscation, etc.
-        // Convert to capability ID: execution/command, anti-analysis/obfuscation
-        let parts: Vec<&str> = namespace.split('.').collect();
-
-        match parts.as_slice() {
-            ["exec", "cmd"] | ["exec", "shell"] => Some("execution/command/shell".to_string()),
-            ["exec", "program"] => Some("execution/command/direct".to_string()),
-            ["net", sub] => Some(format!("net/{}", sub)),
-            ["crypto", sub] => Some(format!("crypto/{}", sub)),
-            ["fs", sub] => Some(format!("fs/{}", sub)),
-            ["anti-static", "obfuscation"] => Some("anti-analysis/obfuscation".to_string()),
-            ["process", sub] => Some(format!("process/{}", sub)),
-            ["credential", sub] => Some(format!("credential/{}", sub)),
-            // For third-party rules, use the namespace directly as the capability
-            _ if !namespace.is_empty() => Some(namespace.replace('.', "/")),
-            _ => None,
-        }
-    }
-
-    /// Scan a file and return both YARA matches and derived findings
-    /// This is the main entry point for universal YARA scanning
-    #[allow(dead_code)]
-    pub(crate) fn scan_bytes_to_findings(
-        &self,
-        data: &[u8],
-        file_type_filter: Option<&[&str]>,
-    ) -> Result<(Vec<YaraMatch>, Vec<crate::types::Finding>)> {
-        use crate::types::{Criticality, Finding, FindingKind};
-
-        let matches = self.scan_bytes_filtered(data, file_type_filter)?;
-        let mut findings = Vec::new();
-
-        for yara_match in &matches {
-            // Skip filtered matches
-            if yara_match.crit == "filtered" {
-                continue;
-            }
-
-            // Use derived trait_id for third-party rules, otherwise map namespace to capability
-            let finding_id = yara_match
-                .trait_id
-                .clone()
-                .or_else(|| self.namespace_to_capability(&yara_match.namespace));
-
-            if let Some(cap_id) = finding_id {
-                let evidence = self.yara_match_to_evidence(yara_match);
-
-                let criticality = match yara_match.crit.as_str() {
-                    "hostile" => Criticality::Hostile,
-                    "suspicious" => Criticality::Suspicious,
-                    "notable" => Criticality::Notable,
-                    _ => Criticality::Baseline,
-                };
-
-                findings.push(Finding {
-                    precomputed_spans: None,
-                    src: None,
-                    kind: FindingKind::Capability,
-                    trait_refs: vec![],
-                    id: cap_id.into(),
-                    desc: yara_match.desc.clone().into(),
-                    conf: 0.9,
-                    crit: criticality,
-                    mbc: yara_match.mbc.as_deref().map(Into::into),
-                    attack: yara_match.attack.as_deref().map(Into::into),
-                    evidence,
-                    match_count: 0,
-                    source_file: None,
-                    downgraded: false,
-                });
-            }
-        }
-
-        Ok((matches, findings))
-    }
 }
 
 impl Default for YaraEngine {
@@ -3424,6 +3343,295 @@ composite_rules:
                     .yara_matches
                     .iter()
                     .any(|m| m.namespace == "test.upx.regular"),
+                expected
+            );
+        }
+    }
+
+    fn native_inline_test_engine(dir: &Path) -> crate::Engine {
+        let source =
+            "rule native_marker { strings: $a = \"NativeInlineYaraFixture\" condition: $a }";
+        std::fs::write(
+            dir.join("traits.yaml"),
+            format!(
+                r#"
+defaults:
+  platforms: [windows, linux, macos]
+  for: [pe, elf, macho, applescript]
+traits:
+  - id: test/native::marker
+    desc: Native inline marker
+    crit: notable
+    if:
+      type: yara
+      source: '{source}'
+composite_rules:
+  - id: test/native::combined
+    desc: Native inline marker composite
+    crit: suspicious
+    all:
+      - id: test/native::marker
+"#
+            ),
+        )
+        .unwrap();
+        let mapper =
+            CapabilityMapper::from_directory_with_options(dir, 0.0, 0.0, false, false).unwrap();
+        let mut compiler = yara_x::Compiler::new();
+        let ns = "inline.test/native::marker";
+        compiler.new_namespace(ns);
+        compiler.add_source(source.as_bytes()).unwrap();
+        compiler.new_namespace("test.native.regular");
+        compiler.add_source(source.as_bytes()).unwrap();
+        let mut yara = YaraEngine::new_for_test();
+        yara.tiers
+            .entry(FALLBACK_BUCKET.to_string())
+            .or_default()
+            .set(Some(Arc::new(compiler.build())))
+            .unwrap();
+        yara.populated_tiers.insert(FALLBACK_BUCKET.to_string());
+        yara.compiled_inline_namespaces.push(ns.to_string());
+        yara.rule_counts = (2, 0);
+        crate::Engine::new(
+            Arc::new(mapper),
+            Some(Arc::new(yara)),
+            crate::engine::Settings {
+                radare2: false,
+                ..Default::default()
+            },
+        )
+    }
+
+    fn native_fixture_cases() -> Vec<(String, crate::FileType, Vec<u8>, bool)> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut cases = Vec::new();
+        for (name, ft, fixture) in [
+            ("pe.exe", crate::FileType::Pe, "tests/fixtures/test.exe"),
+            ("elf.so", crate::FileType::Elf, "tests/fixtures/test.elf"),
+            (
+                "thin.macho",
+                crate::FileType::MachO,
+                "tests/fixtures/test.macho",
+            ),
+            (
+                "fat.macho",
+                crate::FileType::MachO,
+                "testdata/xor/gapi-update.macho",
+            ),
+            (
+                "script.scpt",
+                crate::FileType::AppleScript,
+                "tests/fixtures/scpt-base64.scpt",
+            ),
+        ] {
+            let fixture = std::fs::read(root.join(fixture)).unwrap();
+            for (label, marker, expected) in [
+                ("positive", b"NativeInlineYaraFixture".as_slice(), true),
+                ("negative", b"NativeAbsentYaraFixture".as_slice(), false),
+            ] {
+                let mut bytes = fixture.clone();
+                bytes.extend_from_slice(marker);
+                cases.push((format!("{label}-{name}"), ft, bytes, expected));
+            }
+        }
+        cases
+    }
+
+    fn assert_native_marker(findings: &[crate::types::Finding], expected: bool, name: &str) {
+        for id in ["test/native::marker", "test/native::combined"] {
+            assert_eq!(
+                findings.iter().any(|f| f.id == id),
+                expected,
+                "{name}: {id}: {findings:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn native_children_preserve_inline_yara_and_composites_across_formats() {
+        use crate::analyzers::AnalysisInput;
+        let dir = tempfile::tempdir().unwrap();
+        let engine = native_inline_test_engine(dir.path());
+        for (name, ft, bytes, expected) in native_fixture_cases() {
+            let backing = dir.path().join(&name);
+            std::fs::write(&backing, &bytes).unwrap();
+            let logical = Path::new("archive-member").join(&name);
+            let input = AnalysisInput::new(&logical, &bytes, ft)
+                .with_backing_path(&backing)
+                .at_depth(1);
+            let analyzer = crate::analyzers::analyzer_for_file_type_arc(&ft, &engine).unwrap();
+            let report = analyzer.analyze_input(&input).unwrap();
+            assert_eq!(report.target.path, logical.display().to_string());
+            assert_native_marker(&report.findings, expected, &name);
+            assert_eq!(
+                report
+                    .yara_matches
+                    .iter()
+                    .any(|m| m.namespace == "test.native.regular"),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn archives_preserve_native_inline_yara_and_composites() {
+        use crate::analyzers::Analyzer;
+        let dir = tempfile::tempdir().unwrap();
+        let engine = native_inline_test_engine(dir.path());
+        let cases = native_fixture_cases();
+        let archive = dir.path().join("native-fixtures.zip");
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&archive).unwrap());
+        for (name, _, bytes, _) in &cases {
+            zip.start_file(name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            std::io::Write::write_all(&mut zip, bytes).unwrap();
+        }
+        zip.finish().unwrap();
+        let report = crate::analyzers::archive::ArchiveAnalyzer::new()
+            .with_engine(engine.clone())
+            .with_yara_arc(engine.yara().unwrap().clone())
+            .analyze(&archive)
+            .unwrap();
+        for (name, _, _, expected) in cases {
+            let child = report
+                .files
+                .iter()
+                .find(|f| f.path.ends_with(&name))
+                .expect("archive child");
+            assert_native_marker(&child.findings, expected, &name);
+            assert_eq!(
+                child.findings.iter().any(|f| f.id == "test/native/regular"),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn upx_elf_children_preserve_inline_yara_and_composites() {
+        use crate::analyzers::{AnalysisInput, FileType};
+        if !crate::upx::UPXDecompressor::is_available() {
+            eprintln!("UPX unavailable; ELF regression skipped");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let engine = native_inline_test_engine(dir.path());
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/lang_strings/go_linux_amd64");
+        let original = std::fs::read(&fixture).unwrap();
+        for (name, marker, expected) in [
+            ("positive.elf", b"NativeInlineYaraFixture".as_slice(), true),
+            ("negative.elf", b"NativeAbsentYaraFixture".as_slice(), false),
+        ] {
+            let backing = dir.path().join(name);
+            let mut bytes = original.clone();
+            bytes.extend_from_slice(marker);
+            std::fs::write(&backing, bytes).unwrap();
+            std::fs::set_permissions(&backing, std::fs::metadata(&fixture).unwrap().permissions())
+                .unwrap();
+            let packed = std::process::Command::new("upx")
+                .args(["--overlay=copy", "--force", "-q"])
+                .arg(&backing)
+                .output()
+                .unwrap();
+            assert!(
+                packed.status.success(),
+                "{}",
+                String::from_utf8_lossy(&packed.stderr)
+            );
+            let bytes = std::fs::read(&backing).unwrap();
+            let logical = Path::new("archive-member").join(name);
+            let input = AnalysisInput::new(&logical, &bytes, FileType::Elf)
+                .with_backing_path(&backing)
+                .at_depth(1);
+            let report = crate::analyzers::analyzer_for_file_type_arc(&FileType::Elf, &engine)
+                .unwrap()
+                .analyze_input(&input)
+                .unwrap();
+            assert_eq!(report.target.path, logical.display().to_string());
+            let child = report
+                .files
+                .iter()
+                .find(|f| {
+                    f.encoding
+                        .as_ref()
+                        .is_some_and(|e| e.iter().any(|s| s == "upx"))
+                })
+                .expect("ELF UPX child");
+            assert_native_marker(&child.findings, expected, name);
+            assert_eq!(
+                child
+                    .yara_matches
+                    .iter()
+                    .any(|m| m.namespace == "test.native.regular"),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn engine_yara_entry_honors_prefetch_disabled_rules_and_cancellation() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = native_inline_test_engine(dir.path());
+        let bytes =
+            std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/test.exe"))
+                .unwrap();
+        let mut bytes = bytes;
+        bytes.extend_from_slice(b"NativeInlineYaraFixture");
+        let empty = std::collections::HashMap::new();
+        let cancelled = std::sync::atomic::AtomicBool::new(true);
+        for (name, selected_engine, prefetched, cancellation, expected) in [
+            ("fresh.exe", engine.clone(), None, None, true),
+            (
+                "prefetched-empty.exe",
+                engine.clone(),
+                Some(&empty),
+                None,
+                false,
+            ),
+            (
+                "disabled.exe",
+                crate::Engine::from_rules(engine.rules().clone()),
+                None,
+                None,
+                false,
+            ),
+            (
+                "cancelled.exe",
+                engine.clone(),
+                None,
+                Some(&cancelled),
+                false,
+            ),
+            ("rule.yar", engine.clone(), None, None, false),
+        ] {
+            let path = dir.path().join(name);
+            let ctx = crate::analysis_context::AnalysisContext::open_with(
+                selected_engine.filefacts_options(),
+                &path,
+                &bytes,
+            );
+            let mut report = crate::types::AnalysisReport::new(crate::types::TargetInfo {
+                path: path.display().to_string(),
+                file_type: "pe".to_string(),
+                size_bytes: bytes.len() as u64,
+                sha256: String::new(),
+                architectures: None,
+            });
+            selected_engine.evaluate_and_merge_findings_with_precomputed(
+                &mut report,
+                &bytes,
+                crate::capabilities::AnalysisBorrow::with_filefacts(None, Some(&ctx)),
+                prefetched,
+                None,
+                None,
+                cancellation,
+            );
+            assert_native_marker(&report.findings, expected, name);
+            assert_eq!(
+                report
+                    .yara_matches
+                    .iter()
+                    .any(|m| m.namespace == "test.native.regular"),
                 expected
             );
         }

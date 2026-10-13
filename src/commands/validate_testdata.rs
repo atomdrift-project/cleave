@@ -59,7 +59,8 @@ pub fn check_testdata_overlaps(
                 }));
             }
             Err(e) => {
-                eprintln!("  Warning: failed to analyze {}: {}", relative_path, e);
+                let message = format!("  Warning: failed to analyze {relative_path}: {e}");
+                eprintln!("{}", crate::output::escape_control_chars(&message));
             }
         }
     }

@@ -1279,8 +1279,6 @@ static SUCCESSFUL_ANALYSES: AtomicU64 = AtomicU64::new(0);
 /// Total number of failed archive member analyses
 static FAILED_ANALYSES: AtomicU64 = AtomicU64::new(0);
 
-const SLOW_ARCHIVE_MEMBER_YARA_MS: u128 = 4_000;
-
 /// Warn when a single archive member analysis exceeds this threshold.
 const SLOW_ARCHIVE_MEMBER_ANALYSIS_MS: u128 = 30_000;
 
@@ -2246,93 +2244,30 @@ impl ArchiveAnalyzer {
                 );
             }
 
-            if let Some(ref yara_engine) = self.yara_engine {
-                if let Some(reason) =
-                    Self::archive_member_yara_skip_reason(relative_path, file_type, data.len())
-                {
-                    tracing::debug!(
-                        relative_path,
-                        file_type = %file_type.report_file_type(),
-                        size_kb = data.len() / 1024,
-                        reason,
-                        "Skipping archive member YARA scan"
-                    );
-                } else {
-                    let yara_filetypes = Self::archive_member_yara_filetypes(file_type);
-                    let yara_filter = if yara_filetypes.is_empty() {
-                        None
-                    } else {
-                        Some(yara_filetypes.as_slice())
-                    };
-                    tracing::debug!(
-                        relative_path,
-                        file_type = %file_type.report_file_type(),
-                        size_kb = data.len() / 1024,
-                        yara_mode = if yara_filter.is_some() {
-                            "filtered"
-                        } else {
-                            "generic-only fallback"
-                        },
-                        yara_filters = ?yara_filetypes,
-                        "Running archive member YARA scan"
-                    );
-                    crate::memory_tracker::set_current_phase(format!("yara on {relative_path}"));
-                    let yara_start = std::time::Instant::now();
-                    // `scan_bytes_to_findings`, not `scan_bytes_filtered`: a
-                    // member's rule hits must become findings, exactly as the
-                    // standalone path does (lib.rs, "Run YARA for file types
-                    // that didn't handle it internally"). Collecting only
-                    // `yara_matches` left every third-party rule that fired on
-                    // an archive member invisible in the report — a LNK inside
-                    // a zip lost the LNK_Ruleset hits it gets on its own.
-                    match yara_engine.scan_bytes_to_findings(data, yara_filter) {
-                        Ok((matches, findings)) => {
-                            let elapsed_ms = yara_start.elapsed().as_millis();
-                            crate::memory_tracker::clear_current_phase();
-                            if elapsed_ms > SLOW_ARCHIVE_MEMBER_YARA_MS {
-                                tracing::warn!(
-                                    relative_path,
-                                    file_type = %file_type.report_file_type(),
-                                    size_kb = data.len() / 1024,
-                                    yara_mode = if yara_filter.is_some() {
-                                        "filtered"
-                                    } else {
-                                        "generic-only fallback"
-                                    },
-                                    yara_filters = ?yara_filetypes,
-                                    elapsed_ms = elapsed_ms as u64,
-                                    matches = matches.len(),
-                                    "Slow archive member YARA scan"
-                                );
-                            }
-                            report.yara_matches = matches;
-                            let existing: HashSet<crate::types::Istr> =
-                                report.findings.iter().map(|f| f.id.clone()).collect();
-                            report.findings.extend(
-                                findings
-                                    .into_iter()
-                                    .filter(|f| !existing.contains(f.id.as_str())),
-                            );
-                            // Archive members receive YARA findings after their
-                            // regular trait analysis. Re-run unless suppression
-                            // now so configured third-party guards can use the
-                            // same-file YAML context carried by the member.
-                            self.engine
-                                .rules()
-                                .apply_retroactive_unless_suppression_to_findings(
-                                    &mut report.findings,
-                                    None,
-                                );
-                            if !report.metadata.tools_used.iter().any(|t| t == "yara-x") {
-                                report.metadata.tools_used.push("yara-x".to_string());
-                            }
-                        }
-                        Err(e) => {
-                            crate::memory_tracker::clear_current_phase();
-                            debug!("YARA scan failed for {}: {}", relative_path, e);
-                        }
-                    }
-                }
+            // Dedicated analyzers use the shared engine stage. Only an
+            // analyzer that has not run YARA needs this fallback; it must
+            // evaluate inline traits as well as materialize regular hits.
+            if !report
+                .metadata
+                .tools_used
+                .iter()
+                .any(|tool| tool == "yara-x")
+                && self.yara_engine.is_some()
+                && Self::archive_member_yara_skip_reason(relative_path, file_type, data.len())
+                    .is_none()
+            {
+                self.engine.evaluate_and_merge_findings_with_precomputed(
+                    &mut report,
+                    data,
+                    crate::capabilities::AnalysisBorrow::new(None),
+                    None,
+                    None,
+                    None,
+                    self.cancelled.as_deref(),
+                );
+                self.engine
+                    .rules()
+                    .apply_retroactive_unless_suppression_to_findings(&mut report.findings, None);
             }
 
             // Capture this member's context windows from its OWN bytes, mirroring
@@ -2389,17 +2324,15 @@ impl ArchiveAnalyzer {
                 report.identity = ctx.identity();
                 crate::capabilities::merge_filefacts_context(&mut report, ctx);
             }
-            self.engine
-                .rules()
-                .evaluate_and_merge_findings_with_precomputed(
-                    &mut report,
-                    data,
-                    crate::capabilities::AnalysisBorrow::with_filefacts(None, ctx.as_ref()),
-                    None,
-                    None,
-                    None,
-                    self.cancelled.as_deref(),
-                );
+            self.engine.evaluate_and_merge_findings_with_precomputed(
+                &mut report,
+                data,
+                crate::capabilities::AnalysisBorrow::with_filefacts(None, ctx.as_ref()),
+                None,
+                None,
+                None,
+                self.cancelled.as_deref(),
+            );
             report.dedupe_findings();
             let doomed = self.engine.rules().doomed_low_value_ids(&report.findings);
             crate::context::capture(&mut report, data, effective_type, &doomed);

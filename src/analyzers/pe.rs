@@ -503,6 +503,7 @@ impl PEAnalyzer {
     /// Analyze under `engine`: its rules and settings.
     #[must_use]
     pub(crate) fn with_engine(mut self, engine: crate::Engine) -> Self {
+        self.yara_engine = engine.yara().cloned();
         self.engine = engine;
         self
     }
@@ -552,13 +553,31 @@ impl PEAnalyzer {
         precomputed_sha256: Option<&str>,
         ctx: &Ctx<'a>,
     ) -> AnalysisReport {
+        self.analyze_structural_with_backing_ctx(
+            file_path,
+            file_path,
+            data,
+            precomputed_sha256,
+            ctx,
+        )
+    }
+
+    // Preserve logical paths while external tools reopen the backing file.
+    fn analyze_structural_with_backing_ctx<'a>(
+        &self,
+        file_path: &'a Path,
+        backing_path: &'a Path,
+        data: &'a [u8],
+        precomputed_sha256: Option<&str>,
+        ctx: &Ctx<'a>,
+    ) -> AnalysisReport {
         use crate::types::file_analysis::encode_upx_path;
         use crate::upx::UPXDecompressor;
 
         if !UPXDecompressor::is_upx_packed(data) {
             return self.analyze_structural_with_strings(
                 file_path,
-                file_path,
+                backing_path,
                 data,
                 precomputed_sha256,
                 ctx,
@@ -568,7 +587,7 @@ impl PEAnalyzer {
         // UPX-packed: structural analysis of packed binary first
         let mut report = self.analyze_structural_with_strings(
             file_path,
-            file_path,
+            backing_path,
             data,
             precomputed_sha256,
             ctx,
@@ -601,7 +620,7 @@ impl PEAnalyzer {
             return report;
         }
 
-        match UPXDecompressor::decompress(file_path) {
+        match UPXDecompressor::decompress(backing_path) {
             Ok(unpacked_data) => {
                 if let Ok(temp_file) = tempfile::NamedTempFile::new()
                     && fs::write(temp_file.path(), &unpacked_data).is_ok()
@@ -637,29 +656,20 @@ impl PEAnalyzer {
                     );
                     // Keep inline matches alongside ordinary YARA findings: trait
                     // evaluation needs the inline namespace evidence on this layer.
-                    let inline_yara = crate::process_yara_result(
-                        &mut unpacked_report,
-                        self.yara_engine
-                            .as_ref()
-                            .map(|yara| yara.scan_bytes_with_inline(&unpacked_data, Some(&["pe"]))),
-                        self.yara_engine.as_deref(),
-                    );
                     // Evaluate composites against the unpacked layer so that
                     // objective-level findings (infostealers, etc.) appear in the child.
-                    self.engine
-                        .rules()
-                        .evaluate_and_merge_findings_with_precomputed(
-                            &mut unpacked_report,
-                            &unpacked_data,
-                            crate::capabilities::AnalysisBorrow::with_filefacts(
-                                None,
-                                Some(&unpacked_ctx),
-                            ),
-                            Some(&inline_yara),
+                    self.engine.evaluate_and_merge_findings_with_precomputed(
+                        &mut unpacked_report,
+                        &unpacked_data,
+                        crate::capabilities::AnalysisBorrow::with_filefacts(
                             None,
-                            None,
-                            None,
-                        );
+                            Some(&unpacked_ctx),
+                        ),
+                        None,
+                        None,
+                        None,
+                        None,
+                    );
 
                     // Create separate FileAnalysis for unpacked layer
                     let unpacked_sha256 = crate::analyzers::utils::calculate_sha256(&unpacked_data);
@@ -1671,7 +1681,7 @@ impl Analyzer for PEAnalyzer {
                 &opened
             }
         };
-        let mut report = self.analyze_structural_with_strings(
+        let mut report = self.analyze_structural_with_backing_ctx(
             input.path,
             input.backing_path(),
             input.data,
@@ -1680,17 +1690,15 @@ impl Analyzer for PEAnalyzer {
         );
 
         // Post-processing
-        self.engine
-            .rules()
-            .evaluate_and_merge_findings_with_precomputed(
-                &mut report,
-                input.data,
-                crate::capabilities::AnalysisBorrow::with_filefacts(None, Some(ctx)),
-                None,
-                None,
-                None,
-                None,
-            );
+        self.engine.evaluate_and_merge_findings_with_precomputed(
+            &mut report,
+            input.data,
+            crate::capabilities::AnalysisBorrow::with_filefacts(None, Some(ctx)),
+            None,
+            None,
+            None,
+            None,
+        );
         Ok(report)
     }
 

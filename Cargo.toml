@@ -146,7 +146,11 @@ xz2 = "0.1"
 ar = "0.9"
 cpio = "0.4"
 zstd = "0.13"
-unrar = "0.5"
+# The original `unrar` crate vendors UnRAR 7.10 (2024) and is no longer
+# receiving upstream security refreshes. The maintained fork receives newer
+# UnRAR releases; keep the dependency alias so the extraction code's API name
+# stays unchanged.
+unrar = { package = "unrar-ng", version = "0.7.7" }
 cab = "0.6"
 # Apple disk images: dmgwiz decompresses every UDIF codec (zlib/bzip2/LZFSE/ADC/
 # LZMA) to a raw image — the fallback for DMGs 7z can't decompress (e.g. ULMO).

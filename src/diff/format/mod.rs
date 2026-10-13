@@ -42,7 +42,7 @@ pub fn format_terminal(report: &AnalysisReport) -> String {
     header::write(&mut out, diff);
     panes::write(&mut out, diff);
     ledger::write_jitter(&mut out, diff);
-    out
+    crate::output::sanitize_terminal_output(&out).into_owned()
 }
 
 // =============================================================================

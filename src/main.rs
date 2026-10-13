@@ -82,7 +82,18 @@ use cli_bootstrap::{
 };
 use cli_dispatch::{build_dispatch_context, dispatch_command, write_output};
 
-fn main() -> Result<()> {
+fn main() -> std::process::ExitCode {
+    match run() {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(error) => {
+            let rendered = format!("Error: {error:#}\n");
+            eprint!("{}", cleave::output::sanitize_terminal_output(&rendered));
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+fn run() -> Result<()> {
     // Self-debugging hooks are opt-in with `CLEAVE_DEBUG_BACKTRACE=1`: they let
     // any same-user process ptrace this one and make SIGUSR1 run lldb/gdb from
     // `PATH`. A tool that reads hostile files should not weaken its own process

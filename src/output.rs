@@ -636,7 +636,7 @@ pub fn format_context_badged(
         .filter(|f| file_has_output(f, opts) || f.identity.is_some() || legs.contains_key(&f.id))
         .collect();
     if files.is_empty() {
-        return gaps;
+        return sanitize_terminal_output(&gaps).into_owned();
     }
     let colorize = opts.color && colored::control::SHOULD_COLORIZE.should_colorize();
     let term_width = terminal_width();
@@ -1007,7 +1007,7 @@ pub fn format_context_badged(
     if emitted {
         out.push('\n');
     }
-    out
+    sanitize_terminal_output(&out).into_owned()
 }
 
 /// The atoms `roots`' composites rest on within `file`, resolved through any
@@ -3496,30 +3496,34 @@ fn paint_by_crit(crit: Criticality, text: &str) -> colored::ColoredString {
 /// Spaces a tab expands to in the source view.
 const TAB_WIDTH: usize = 2;
 
-/// Expand tabs to [`TAB_WIDTH`] spaces. Returns the display string and a map from
-/// each original byte offset (`0..=line.len()`) to its offset in the display
-/// string, so match spans can be relocated to display coordinates.
-/// Replace terminal-significant control characters with escaped text.
+fn is_terminal_direction_control(c: char) -> bool {
+    matches!(
+        c,
+        '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
+    )
+}
+
+/// Replace terminal-significant control and directionality characters with
+/// escaped text.
 ///
 /// Sample-derived strings (file names, source lines, log field values) can
 /// carry CSI/OSC escape sequences that rewrite what an operator sees in the
 /// terminal or a log file. Control characters other than tab, newline, and
-/// carriage return become `\u{XX}` text — the same set and shape
-/// tracing-subscriber itself escapes message fields with. Returns the input
-/// unchanged (no allocation) when nothing needs escaping, which is the
-/// overwhelmingly common case.
+/// carriage return, plus Unicode bidirectional formatting controls, become
+/// `\u{XX}` text. Returns the input unchanged (no allocation) when nothing
+/// needs escaping, which is the overwhelmingly common case.
 #[must_use]
 pub fn escape_control_chars(s: &str) -> std::borrow::Cow<'_, str> {
     use std::borrow::Cow;
-    if !s
-        .chars()
-        .any(|c| c.is_control() && !matches!(c, '\t' | '\n' | '\r'))
-    {
+    if !s.chars().any(|c| {
+        (c.is_control() && !matches!(c, '\t' | '\n' | '\r')) || is_terminal_direction_control(c)
+    }) {
         return Cow::Borrowed(s);
     }
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
-        if c.is_control() && !matches!(c, '\t' | '\n' | '\r') {
+        if (c.is_control() && !matches!(c, '\t' | '\n' | '\r')) || is_terminal_direction_control(c)
+        {
             // Infallible on String; see expand_tabs.
             let _ = write!(out, "\\u{{{:x}}}", u32::from(c));
         } else {
@@ -3527,6 +3531,72 @@ pub fn escape_control_chars(s: &str) -> std::borrow::Cow<'_, str> {
         }
     }
     Cow::Owned(out)
+}
+
+/// Remove terminal control sequences from a fully rendered human-facing view
+/// while preserving SGR styling sequences used by the renderer.
+///
+/// Sample-derived paths, archive member names, identity claims, and evidence
+/// all reach terminal output. Escaping those fields one by one is brittle: a
+/// newly rendered field can silently reopen CSI/OSC injection. This final
+/// boundary permits only newlines, tabs, and CSI Select Graphic Rendition
+/// sequences (`ESC [ ... m`). Every other control character and every Unicode
+/// bidirectional formatting control is rendered as visible `\\u{...}` text.
+/// SGR can alter presentation; it cannot move the cursor, clear the screen,
+/// set the terminal title, or write clipboard contents.
+#[must_use]
+pub fn sanitize_terminal_output(s: &str) -> std::borrow::Cow<'_, str> {
+    use std::borrow::Cow;
+
+    fn sgr_len(s: &str) -> Option<usize> {
+        let bytes = s.as_bytes();
+        if bytes.get(..2) != Some(b"\x1b[") {
+            return None;
+        }
+        let mut i = 2;
+        while let Some(&b) = bytes.get(i) {
+            if b == b'm' {
+                return Some(i + 1);
+            }
+            if !b.is_ascii_digit() && !matches!(b, b';' | b':') {
+                return None;
+            }
+            i += 1;
+        }
+        None
+    }
+
+    let mut out = String::new();
+    let mut copied = 0;
+    let mut i = 0;
+    while i < s.len() {
+        let Some(ch) = s[i..].chars().next() else {
+            break;
+        };
+        if ch == '\u{1b}'
+            && let Some(len) = sgr_len(&s[i..])
+        {
+            i += len;
+            continue;
+        }
+        if (ch.is_control() && !matches!(ch, '\n' | '\t')) || is_terminal_direction_control(ch) {
+            if out.is_empty() {
+                out.reserve(s.len());
+            }
+            out.push_str(&s[copied..i]);
+            let _ = write!(out, "\\u{{{:x}}}", u32::from(ch));
+            i += ch.len_utf8();
+            copied = i;
+        } else {
+            i += ch.len_utf8();
+        }
+    }
+    if out.is_empty() {
+        Cow::Borrowed(s)
+    } else {
+        out.push_str(&s[copied..]);
+        Cow::Owned(out)
+    }
 }
 
 /// Expand tabs to a fixed display width and escape control characters,
@@ -7571,7 +7641,7 @@ mod tests {
 
 #[cfg(test)]
 mod control_escape_tests {
-    use super::{escape_control_chars, expand_tabs};
+    use super::{escape_control_chars, expand_tabs, sanitize_terminal_output};
 
     #[test]
     fn clean_text_passes_through_unescaped() {
@@ -7593,6 +7663,29 @@ mod control_escape_tests {
     fn tab_newline_cr_are_preserved() {
         let s = "a\tb\nc\rd";
         assert_eq!(escape_control_chars(s).as_ref(), s);
+    }
+
+    #[test]
+    fn final_terminal_boundary_blocks_active_terminal_controls() {
+        let hostile = concat!(
+            "ok\x1b[31mred\x1b[0m",
+            "\x1b[2Jclear",
+            "\x1b]52;c;Y2xpcGJvYXJk\x07",
+            "\rrewrite",
+            "\u{9b}2J",
+            "photo\u{202e}exe.jpg"
+        );
+        assert_eq!(
+            sanitize_terminal_output(hostile).as_ref(),
+            concat!(
+                "ok\x1b[31mred\x1b[0m",
+                "\\u{1b}[2Jclear",
+                "\\u{1b}]52;c;Y2xpcGJvYXJk\\u{7}",
+                "\\u{d}rewrite",
+                "\\u{9b}2J",
+                "photo\\u{202e}exe.jpg"
+            )
+        );
     }
 
     /// The renderer's funnel must both escape and keep the byte-offset map

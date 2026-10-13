@@ -647,11 +647,20 @@ fn cached_ast_query(
     if let Some(entry) = hit {
         return entry;
     }
+    let diagnostic = tracing::enabled!(tracing::Level::DEBUG);
+    let wait_started = diagnostic.then(Instant::now);
     let _compiler = QUERY_COMPILER.lock();
+    if let Some(started) = wait_started
+        && started.elapsed().as_millis() >= 10
+    {
+        tracing::debug!(wait_ms = started.elapsed().as_millis(), file_type = ?file_type, grammar = %key.0,
+            "waited for AST query compiler");
+    }
     let hit = QUERY_CACHE.read().get(&key).cloned();
     if let Some(entry) = hit {
         return entry;
     }
+    let compile_started = diagnostic.then(Instant::now);
     let compiled = tree_sitter::Query::new(lang, query_str).ok().map(|query| {
         let literals = RequiredLiterals::of(&query, query_str);
         let nodes = RequiredNodes::of(&query, query_str);
@@ -661,6 +670,10 @@ fn cached_ast_query(
             nodes,
         })
     });
+    if let Some(started) = compile_started {
+        tracing::debug!(compile_us = started.elapsed().as_micros(), file_type = ?file_type, grammar = %key.0,
+            success = compiled.is_some(), query = ?query_str, "compiled individual AST query");
+    }
     QUERY_CACHE.write().insert(key, compiled.clone());
     compiled
 }
@@ -793,7 +806,15 @@ pub(crate) fn batch_ast_queries_with_index(
     let combined = if let Some(entry) = cached {
         entry?
     } else {
+        let wait_started = tracing::enabled!(tracing::Level::DEBUG).then(Instant::now);
         let _compiler = COMBINED_QUERY_COMPILER.lock();
+        if let Some(started) = wait_started
+            && started.elapsed().as_millis() >= 10
+        {
+            tracing::debug!(wait_ms = started.elapsed().as_millis(),
+                file_type = ?file_type, grammar = %cache_key.0,
+                "waited for AST query bank compiler");
+        }
         let cached = COMBINED_QUERY_CACHE.read().get(&cache_key).cloned();
         if let Some(entry) = cached {
             entry?
@@ -807,6 +828,8 @@ pub(crate) fn batch_ast_queries_with_index(
                 tracing::debug!(
                     queries = compiling.len(),
                     patterns = query.pattern_count(),
+                    file_type = ?file_type,
+                    grammar = %cache_key.0,
                     compile_ms = compile_started.elapsed().as_millis(),
                     "compiled AST query bank"
                 );

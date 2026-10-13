@@ -311,7 +311,12 @@ mod tests {
         assert!(fingerprint(root, &fixtures, "expectations", b"strict", "engine-a").is_err());
         assert_ne!(
             before,
-            key("expectations", b"strict", "engine-a", &[renamed.clone()])
+            key(
+                "expectations",
+                b"strict",
+                "engine-a",
+                std::slice::from_ref(&renamed)
+            )
         );
         std::fs::rename(&renamed, &fixture).unwrap();
         std::fs::create_dir(root.join("objectives/new-directory")).unwrap();

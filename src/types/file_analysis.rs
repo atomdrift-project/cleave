@@ -230,11 +230,6 @@ pub struct FileAnalysis {
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub env_vars: Vec<EnvVarInfo>,
 
-    /// Path to extracted sample file on disk (set when --sample-dir is used)
-    /// Allows external tools (radare2, objdump, strings) to analyze the file directly
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub extracted_path: Option<String>,
-
     /// Molecular formula representing the file's behavioral fingerprint
     /// Generated from findings using the malecule library
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -314,7 +309,6 @@ impl FileAnalysis {
             paths: Vec::new(),
             directories: Vec::new(),
             env_vars: Vec::new(),
-            extracted_path: None,
             formula: None,
             composite_sources: std::collections::BTreeMap::new(),
             kv: std::collections::BTreeMap::new(),
@@ -640,7 +634,6 @@ mod tests {
         assert_eq!(fa.score, 0);
         assert!(fa.counts.is_none());
         assert!(fa.encoding.is_none());
-        assert!(fa.extracted_path.is_none());
     }
 
     #[test]

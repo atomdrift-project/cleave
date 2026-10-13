@@ -410,7 +410,6 @@ struct MemberAnalysisResult {
     entry_path: String,
     archive_location: String,
     entry_metadata: ArchiveEntry,
-    extracted_path: Option<String>,
     report: Option<AnalysisReport>,
 }
 
@@ -655,7 +654,6 @@ impl MemberAccumulator {
         file_entry.path = result.entry_path.clone();
         file_entry.depth = 1;
         file_entry.compute_summary();
-        file_entry.extracted_path = result.extracted_path.clone();
 
         for f in &file_entry.findings {
             self.distinct_finding_ids.insert(f.id.clone().to_string());
@@ -1490,9 +1488,6 @@ impl ArchiveAnalyzer {
         if !self.zip_passwords.is_empty() {
             nested = nested.with_zip_passwords_arc(self.zip_passwords.clone());
         }
-        if let Some(ref config) = self.sample_extraction {
-            nested = nested.with_sample_extraction(config.clone());
-        }
         if let Some(ref flag) = self.cancelled {
             nested = nested.with_cancellation(flag.clone());
         }
@@ -1884,7 +1879,6 @@ impl ArchiveAnalyzer {
                     fa.id = 0;
                     fa.parent_id = None;
                     fa.depth = 0;
-                    fa.extracted_path = None;
                     crate::analysis_cache::file_analysis_cache_store(
                         sha256,
                         file_type_key,
@@ -2085,7 +2079,7 @@ impl ArchiveAnalyzer {
             // The generic factory intentionally creates PE analyzers with
             // standalone defaults. Archive-member PEs need the enclosing
             // request's archive settings so an installer nested inside a ZIP
-            // inherits --all-files, extraction output, memory limits, YARA,
+            // inherits --all-files, memory limits, YARA,
             // and cancellation for its own payloads.
             if *file_type == FileType::Pe {
                 let mut pe = crate::analyzers::pe::PEAnalyzer::new()
@@ -3375,7 +3369,7 @@ impl ArchiveAnalyzer {
             },
         };
         let chm_analyzer = self
-            .with_extraction_archive_sha256("")
+            .clone_for_member_analysis()
             .with_analysis_options(std::sync::Arc::new(chm_options));
 
         chm_analyzer.analyze_in_memory_members(
@@ -3775,16 +3769,6 @@ impl ArchiveAnalyzer {
             );
         }
 
-        let extracted_path = self.sample_extraction.as_ref().and_then(|config| {
-            let extract_relative_path = match &self.archive_path_prefix {
-                Some(prefix) => format!("{}/{}", prefix.replace('!', "/"), member.relative_path),
-                None => member.relative_path.clone(),
-            };
-            config
-                .extract(&member.sha256, &extract_relative_path, &member.data)
-                .map(|path| path.display().to_string())
-        });
-
         Some(MemberAnalysisResult {
             go_source: (member.file_type == FileType::Go).then(|| {
                 if member.data.len() <= 2 * 1024 * 1024 {
@@ -3796,7 +3780,6 @@ impl ArchiveAnalyzer {
             entry_path,
             archive_location,
             entry_metadata,
-            extracted_path,
             report: member_report,
         })
     }
@@ -4272,7 +4255,6 @@ impl ArchiveAnalyzer {
                     entry_path,
                     archive_location,
                     entry_metadata,
-                    extracted_path: None,
                     report,
                 })
             },
@@ -4449,7 +4431,6 @@ impl ArchiveAnalyzer {
                     entry_path,
                     archive_location,
                     entry_metadata,
-                    extracted_path: None,
                     report,
                 })
             },
@@ -4651,18 +4632,6 @@ impl ArchiveAnalyzer {
                     );
                 }
 
-                let extracted_path = self.sample_extraction.as_ref().and_then(|config| {
-                    let extract_relative_path = match &self.archive_path_prefix {
-                        Some(prefix) => {
-                            format!("{}/{}", prefix.replace('!', "/"), relative_path)
-                        }
-                        None => relative_path.clone(),
-                    };
-                    config
-                        .extract(&sha256, &extract_relative_path, file_data)
-                        .map(|path| path.display().to_string())
-                });
-
                 Some(MemberAnalysisResult {
                     go_source: (file_type == FileType::Go).then(|| {
                         if file_data.len() <= 2 * 1024 * 1024 {
@@ -4674,7 +4643,6 @@ impl ArchiveAnalyzer {
                     entry_path,
                     archive_location,
                     entry_metadata,
-                    extracted_path,
                     report,
                 })
             },

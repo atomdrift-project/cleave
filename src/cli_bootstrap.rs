@@ -76,18 +76,6 @@ pub(crate) fn apply_runtime_overrides(
     }
 }
 
-pub(crate) fn build_sample_extraction(
-    extract_dir: Option<&str>,
-) -> Option<cleave::SampleExtractionConfig> {
-    extract_dir.map(|dir| {
-        let path = std::path::PathBuf::from(dir);
-        if let Err(e) = std::fs::create_dir_all(&path) {
-            eprintln!("Warning: could not create extract directory {}: {}", dir, e);
-        }
-        cleave::SampleExtractionConfig::new(path)
-    })
-}
-
 pub(crate) fn init_logging(
     verbose: bool,
     is_validate: bool,

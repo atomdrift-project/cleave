@@ -1604,10 +1604,10 @@ impl YaraEngine {
             // Parsing every trait file to find the few that hold inline YARA
             // was over a quarter of a small file's cold analysis; on
             // 2026-09-26 only 457 of 19,611 files could hold one.
-            if !may_spell_yara(&content) {
+            if !may_spell_yara(content) {
                 return vec![];
             }
-            let Ok(doc) = serde_yaml::from_str::<serde_yaml::Value>(&content) else {
+            let Ok(doc) = serde_yaml::from_str::<serde_yaml::Value>(content) else {
                 return vec![];
             };
 

@@ -2178,7 +2178,6 @@ impl FileAnalysis {
             paths,
             directories,
             env_vars,
-            extracted_path: None,
             formula: None,
             composite_sources: std::collections::BTreeMap::new(),
             kv: std::collections::BTreeMap::new(),

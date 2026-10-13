@@ -197,7 +197,7 @@ impl Engine {
 /// Building an engine and analyzing with it.
 ///
 /// Every `analyze_*` method takes the per-call inputs from `options`: zip
-/// passwords, cancellation, size limits, sample extraction and phase
+/// passwords, cancellation, size limits, and phase
 /// tracking. What the engine was built with (rules, YARA, UPX, radare2 and its
 /// limits, platforms, precision thresholds, member folding) comes from the
 /// engine, and the fields of `options` that describe it are not consulted.

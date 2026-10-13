@@ -648,7 +648,8 @@ fn cached_ast_query(
         return entry;
     }
     let _compiler = QUERY_COMPILER.lock();
-    if let Some(entry) = QUERY_CACHE.read().get(&key).cloned() {
+    let hit = QUERY_CACHE.read().get(&key).cloned();
+    if let Some(entry) = hit {
         return entry;
     }
     let compiled = tree_sitter::Query::new(lang, query_str).ok().map(|query| {

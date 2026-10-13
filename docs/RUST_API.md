@@ -85,7 +85,6 @@ The options struct (`src/lib.rs:555`) is plain `pub` fields with
 | `max_memory_file_size`      | u64                     | 256 MiB       | Max bytes loaded per archive member.                   |
 | `max_scan_file_size`        | u64                     | 0 (unlimited) | Skip files larger than this in directory scans.        |
 | `slow_rule_ms`              | u64                     | 4000          | Warn when a rule's evaluation exceeds this.            |
-| `sample_extraction`         | `Option<SampleExtractionConfig>` | none | Write analysed archive members to disk.              |
 | `cancellation`              | `Option<Arc<AtomicBool>>` | none        | Cooperative cancellation flag.                         |
 | `phase`                     | `Option<PhaseTracker>`  | none          | Observability handle for in-flight work.               |
 
@@ -101,17 +100,6 @@ endpoint, a profiler, a watchdog) which phase a long analysis is in.
 
 `PhaseTracker::new()` builds an unregistered tracker; `with_label`
 registers it in cleave's global in-flight list.
-
-### `SampleExtractionConfig`
-
-Used when the caller wants archive members written to disk for later
-inspection.
-
-    let cfg = SampleExtractionConfig::new(PathBuf::from("/var/samples"))
-        .with_archive_sha256(archive_hash);
-    opts.sample_extraction = Some(cfg);
-
-Members land under `extract_dir/<sha256[0:6]>/<relative-path>`.
 
 ## Configuration
 

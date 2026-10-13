@@ -55,8 +55,6 @@ pub struct AnalyzeConfig<'a> {
     pub disabled: &'a cli::DisabledComponents,
     /// Whether to analyze all files instead of only known-interesting ones.
     pub all_files: bool,
-    /// Optional sample extraction configuration for nested payloads.
-    pub sample_extraction: Option<&'a types::SampleExtractionConfig>,
     /// Platform filters applied during rule evaluation.
     pub platforms: &'a [composite_rules::Platform],
     /// Minimum hostile precision threshold for composite evaluation.
@@ -101,13 +99,6 @@ pub fn run(config: &AnalyzeConfig<'_>) -> Result<String> {
     } else {
         config.platforms.to_vec()
     };
-    let sample_lib: Option<cleave::SampleExtractionConfig> =
-        config
-            .sample_extraction
-            .map(|s| cleave::SampleExtractionConfig {
-                extract_dir: s.extract_dir.clone(),
-                archive_sha256: s.archive_sha256.clone(),
-            });
     let options = cleave::AnalysisOptions {
         enable_third_party_yara: config.enable_third_party && !config.disabled.third_party,
         zip_passwords: config.zip_passwords.to_vec(),
@@ -125,7 +116,6 @@ pub fn run(config: &AnalyzeConfig<'_>) -> Result<String> {
         enable_precision_scoring: false,
         enable_full_validation: config.enable_full_validation,
         max_memory_file_size: config.max_memory_file_size,
-        sample_extraction: sample_lib,
         slow_rule_ms: config.slow_rule_ms,
         max_scan_file_size: config.max_scan_file_size,
         // Pick up the CLI's SIGINT/SIGTERM-driven cancellation flag so a

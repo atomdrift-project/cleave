@@ -21,8 +21,8 @@ pub(crate) use guards::{
 
 use crate::analyzers::{AnalysisInput, Analyzer, FileType, FileTypeExt};
 use crate::types::{
-    AnalysisReport, ArchiveEntry, Criticality, Evidence, Finding, FindingKind,
-    SampleExtractionConfig, StructuralFeature, TargetInfo,
+    AnalysisReport, ArchiveEntry, Criticality, Evidence, Finding, FindingKind, StructuralFeature,
+    TargetInfo,
 };
 #[cfg(test)]
 use crate::types::{FileAnalysis, FindingCounts, ReportSummary};
@@ -1324,8 +1324,6 @@ pub(crate) struct ArchiveAnalyzer {
     yara_engine: Option<Arc<YaraEngine>>,
     /// Passwords to try for encrypted zip files
     zip_passwords: Arc<[String]>,
-    /// Optional sample extraction configuration
-    sample_extraction: Option<SampleExtractionConfig>,
     /// Maximum file size to keep in memory during extraction.
     /// Files larger than this are written to temp files.
     max_memory_file_size: u64,
@@ -1337,7 +1335,6 @@ pub(crate) struct ArchiveAnalyzer {
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ArchiveAnalyzerConfig {
-    sample_extraction: Option<SampleExtractionConfig>,
     max_memory_file_size: Option<u64>,
     analysis_options: Option<Arc<crate::AnalysisOptions>>,
     cancellation: Option<Arc<std::sync::atomic::AtomicBool>>,
@@ -1347,7 +1344,6 @@ impl ArchiveAnalyzerConfig {
     #[must_use]
     pub(crate) fn from_analysis_options(options: &crate::AnalysisOptions) -> Self {
         Self {
-            sample_extraction: options.sample_extraction.clone(),
             max_memory_file_size: Some(options.max_memory_file_size),
             analysis_options: Some(Arc::new(options.clone())),
             cancellation: options.cancellation.clone(),
@@ -1365,9 +1361,6 @@ impl ArchiveAnalyzerConfig {
 
     #[must_use]
     pub(crate) fn apply(&self, mut analyzer: ArchiveAnalyzer) -> ArchiveAnalyzer {
-        if let Some(config) = &self.sample_extraction {
-            analyzer = analyzer.with_sample_extraction(config.clone());
-        }
         if let Some(size) = self.max_memory_file_size {
             analyzer = analyzer.with_max_memory_file_size(size);
         }
@@ -1680,7 +1673,6 @@ impl ArchiveAnalyzer {
             engine: crate::Engine::empty(),
             yara_engine: None,
             zip_passwords: Arc::from([]),
-            sample_extraction: None,
             max_memory_file_size: DEFAULT_MAX_MEMORY_FILE_SIZE,
             cancelled: None,
             analysis_options: None,
@@ -1756,13 +1748,6 @@ impl ArchiveAnalyzer {
         self
     }
 
-    /// Set sample extraction configuration for extracting analyzed files to disk
-    #[must_use]
-    pub(crate) fn with_sample_extraction(mut self, config: SampleExtractionConfig) -> Self {
-        self.sample_extraction = Some(config);
-        self
-    }
-
     /// Set a per-request cancellation flag. When set to true, streaming loops will stop early.
     #[must_use]
     pub(crate) fn with_cancellation(mut self, flag: Arc<std::sync::atomic::AtomicBool>) -> Self {
@@ -1798,17 +1783,15 @@ impl ArchiveAnalyzer {
     /// inside that member (for example an Inno installer inside a ZIP).
     pub(crate) fn child_archive_config(&self) -> ArchiveAnalyzerConfig {
         ArchiveAnalyzerConfig {
-            sample_extraction: self.sample_extraction.clone(),
             max_memory_file_size: Some(self.max_memory_file_size),
             analysis_options: self.analysis_options.clone(),
             cancellation: self.cancelled.clone(),
         }
     }
 
-    /// Create a copy of this analyzer with the sample_extraction config updated
-    /// to use the given archive SHA256 for extraction directory grouping.
+    /// Copy this analyzer with independent lane tracking for member analysis.
     #[must_use]
-    pub(crate) fn with_extraction_archive_sha256(&self, archive_sha256: &str) -> Self {
+    pub(crate) fn clone_for_member_analysis(&self) -> Self {
         Self {
             max_depth: self.max_depth,
             current_depth: self.current_depth,
@@ -1817,10 +1800,6 @@ impl ArchiveAnalyzer {
             engine: self.engine.clone(),
             yara_engine: self.yara_engine.clone(),
             zip_passwords: self.zip_passwords.clone(),
-            sample_extraction: self
-                .sample_extraction
-                .as_ref()
-                .map(|c| c.with_archive_sha256(archive_sha256.to_owned())),
             max_memory_file_size: self.max_memory_file_size,
             cancelled: self.cancelled.clone(),
             analysis_options: self.analysis_options.clone(),
@@ -3816,21 +3795,16 @@ composite_rules:
     }
 
     #[test]
-    fn archive_analyzer_config_applies_extract_dir_options() {
-        let extract_dir = tempfile::tempdir().expect("create extract dir");
+    fn archive_analyzer_config_applies_analysis_options() {
         let options = crate::AnalysisOptions {
             all_files: true,
             max_memory_file_size: 42,
-            sample_extraction: Some(SampleExtractionConfig::new(
-                extract_dir.path().to_path_buf(),
-            )),
             ..crate::AnalysisOptions::default()
         };
 
         let analyzer =
             ArchiveAnalyzerConfig::from_analysis_options(&options).apply(ArchiveAnalyzer::new());
 
-        assert!(analyzer.sample_extraction.is_some());
         assert_eq!(analyzer.max_memory_file_size, 42);
         assert!(
             analyzer
@@ -5530,92 +5504,6 @@ traits:
         );
     }
 
-    // =========================================================================
-    // Sample extraction (--extract-dir) tests
-    // =========================================================================
-
-    #[test]
-    fn test_sample_extraction_config_basic() {
-        #[allow(clippy::expect_used)]
-        let extract_dir = tempfile::tempdir().expect("create extract dir");
-        let config = SampleExtractionConfig::new(extract_dir.path().to_path_buf());
-
-        let data = b"hello world";
-        let sha256 = "abc123def456";
-        let result = config.extract(sha256, "test.txt", data);
-
-        assert!(result.is_some(), "extract should succeed");
-        let path = result.unwrap();
-        assert!(path.exists(), "extracted file should exist on disk");
-        assert_eq!(std::fs::read(&path).unwrap(), data);
-        // Should be under <extract_dir>/<sha256[0:6]>/test.txt
-        assert!(path.to_string_lossy().contains("abc123"));
-        assert!(path.to_string_lossy().ends_with("test.txt"));
-    }
-
-    #[test]
-    fn test_sample_extraction_config_with_archive_sha256() {
-        #[allow(clippy::expect_used)]
-        let extract_dir = tempfile::tempdir().expect("create extract dir");
-        let config = SampleExtractionConfig::new(extract_dir.path().to_path_buf())
-            .with_archive_sha256("archive_hash_abcdef".to_string());
-
-        let data = b"member content";
-        let result = config.extract("file_hash_xyz", "lib/module.py", data);
-
-        assert!(result.is_some());
-        let path = result.unwrap();
-        // Should use archive hash, not file hash
-        assert!(
-            path.to_string_lossy().contains("archiv"),
-            "should use archive sha256 prefix: {}",
-            path.display()
-        );
-        assert!(path.to_string_lossy().ends_with("lib/module.py"));
-        assert_eq!(std::fs::read(&path).unwrap(), data);
-    }
-
-    #[test]
-    fn test_sample_extraction_config_skip_existing() {
-        #[allow(clippy::expect_used)]
-        let extract_dir = tempfile::tempdir().expect("create extract dir");
-        let config = SampleExtractionConfig::new(extract_dir.path().to_path_buf());
-
-        let data = b"same content";
-        let sha256 = "deadbeef1234";
-
-        // First write
-        let path1 = config.extract(sha256, "file.bin", data);
-        assert!(path1.is_some());
-
-        // Second write with same data — should return same path without rewriting
-        let path2 = config.extract(sha256, "file.bin", data);
-        assert_eq!(path1, path2);
-    }
-
-    /// A member name with `..` must never be written outside the extract dir.
-    /// `Path::starts_with` compares components lexically, so
-    /// `<dir>/<sha>/../../x` passed a containment check built on it.
-    #[test]
-    fn test_sample_extraction_rejects_escaping_member_names() {
-        #[allow(clippy::expect_used)]
-        let root = tempfile::tempdir().expect("create root");
-        let config = SampleExtractionConfig::new(root.path().join("extract"));
-
-        for name in [
-            "../../escaped.txt",
-            "lib/../../../escaped.txt",
-            "/abs/escaped.txt",
-        ] {
-            assert_eq!(
-                config.extract("abc123def456", name, b"payload"),
-                None,
-                "{name}"
-            );
-        }
-        assert!(!root.path().join("escaped.txt").exists());
-    }
-
     /// A native phar, built the way `ext/phar` lays one out: a stub ending in
     /// `__HALT_COMPILER(); ?>`, a little-endian manifest, then each member's
     /// stored or compressed bytes back to back. `(name, content, flags,
@@ -5793,14 +5681,12 @@ traits:
     }
 
     #[test]
-    fn test_extract_dir_zip_archive_members() {
+    fn test_analyze_zip_archive_members() {
         // Zip archives go through the JAR analysis path (is_jar=true for zip).
         // Non-class files in JARs only produce FileAnalysis entries if they are
         // recognized code types. Use .py files to ensure they get analyzed.
         #[allow(clippy::expect_used)]
         let temp_dir = tempfile::tempdir().expect("create temp dir");
-        #[allow(clippy::expect_used)]
-        let extract_dir = tempfile::tempdir().expect("create extract dir");
         let zip_path = temp_dir.path().join("test.zip");
 
         // Create a zip with Python files (recognized code types that get FileAnalysis entries)
@@ -5817,10 +5703,8 @@ traits:
             zip.finish().unwrap();
         }
 
-        let config = SampleExtractionConfig::new(extract_dir.path().to_path_buf());
-        let analyzer = ArchiveAnalyzer::new()
-            .with_sample_extraction(config)
-            .with_analysis_options(Arc::new(crate::AnalysisOptions {
+        let analyzer =
+            ArchiveAnalyzer::new().with_analysis_options(Arc::new(crate::AnalysisOptions {
                 all_files: true,
                 ..crate::AnalysisOptions::default()
             }));
@@ -5833,29 +5717,28 @@ traits:
             "zip should have archive_contents"
         );
 
-        // If files were analyzed (depends on type detection), verify extraction
-        let extracted_files: Vec<_> = report
-            .files
-            .iter()
-            .filter_map(|f| f.extracted_path.as_ref())
-            .collect();
-        for path_str in &extracted_files {
-            let path = std::path::Path::new(path_str);
-            assert!(path.exists(), "extracted file should exist: {}", path_str);
+        for (name, content) in [
+            ("hello.py", b"import os\nprint('hello')".as_slice()),
+            ("subdir/data.py", b"import sys\nprint('data')".as_slice()),
+        ] {
+            let child = report
+                .files
+                .iter()
+                .find(|f| f.path.ends_with(name))
+                .expect("ZIP member should be analyzed");
+            assert_eq!(child.sha256, calculate_sha256(content));
+            assert_eq!(child.size, content.len() as u64);
         }
     }
 
     #[test]
-    fn test_extract_dir_tar_gz_archive_members() {
-        // tar.gz archives use the generic path — this was the bug
+    fn test_analyze_tar_gz_archive_members() {
         use flate2::Compression;
         use flate2::write::GzEncoder;
         use tar::Builder;
 
         #[allow(clippy::expect_used)]
         let temp_dir = tempfile::tempdir().expect("create temp dir");
-        #[allow(clippy::expect_used)]
-        let extract_dir = tempfile::tempdir().expect("create extract dir");
         let tar_gz_path = temp_dir.path().join("test.tar.gz");
 
         // Create a tar.gz with two files
@@ -5883,34 +5766,25 @@ traits:
             tar_builder.finish().unwrap();
         }
 
-        let config = SampleExtractionConfig::new(extract_dir.path().to_path_buf());
-        let analyzer = ArchiveAnalyzer::new()
-            .with_sample_extraction(config)
-            .with_analysis_options(Arc::new(crate::AnalysisOptions {
+        let analyzer =
+            ArchiveAnalyzer::new().with_analysis_options(Arc::new(crate::AnalysisOptions {
                 all_files: true,
                 ..crate::AnalysisOptions::default()
             }));
         #[allow(clippy::expect_used)]
         let report = analyzer.analyze(&tar_gz_path).expect("analyze tar.gz");
 
-        // Check that files were extracted to extract_dir
-        let extracted_files: Vec<_> = report
-            .files
-            .iter()
-            .filter_map(|f| f.extracted_path.as_ref())
-            .collect();
-        assert!(
-            !extracted_files.is_empty(),
-            "tar.gz members should have extracted_path set, got files: {:?}",
-            report.files.iter().map(|f| &f.path).collect::<Vec<_>>()
-        );
-
-        // Verify files actually exist on disk with correct content
-        for path_str in &extracted_files {
-            let path = std::path::Path::new(path_str);
-            assert!(path.exists(), "extracted file should exist: {}", path_str);
-            let content = std::fs::read(path).unwrap();
-            assert!(!content.is_empty(), "extracted file should not be empty");
+        for (name, content) in [
+            ("alpha.txt", b"file alpha content".as_slice()),
+            ("subdir/beta.txt", b"file beta content".as_slice()),
+        ] {
+            let child = report
+                .files
+                .iter()
+                .find(|f| f.path.ends_with(name))
+                .expect("tar.gz member should be analyzed");
+            assert_eq!(child.sha256, calculate_sha256(content));
+            assert_eq!(child.size, content.len() as u64);
         }
     }
 
@@ -6188,15 +6062,13 @@ traits:
     }
 
     #[test]
-    fn test_extract_dir_standalone_gz() {
-        // Standalone .gz (not .tar.gz) — decompressed content should be persisted
+    fn test_analyze_standalone_gz() {
+        // Standalone .gz (not .tar.gz) — decompressed content should be analyzed
         use flate2::Compression;
         use flate2::write::GzEncoder;
 
         #[allow(clippy::expect_used)]
         let temp_dir = tempfile::tempdir().expect("create temp dir");
-        #[allow(clippy::expect_used)]
-        let extract_dir = tempfile::tempdir().expect("create extract dir");
         let gz_path = temp_dir.path().join("data.json.gz");
 
         // Create a standalone .gz file (not a tarball)
@@ -6208,44 +6080,26 @@ traits:
             enc.finish().unwrap();
         }
 
-        let config = SampleExtractionConfig::new(extract_dir.path().to_path_buf());
-        let analyzer = ArchiveAnalyzer::new()
-            .with_sample_extraction(config)
-            .with_analysis_options(Arc::new(crate::AnalysisOptions {
+        let analyzer =
+            ArchiveAnalyzer::new().with_analysis_options(Arc::new(crate::AnalysisOptions {
                 all_files: true,
                 ..crate::AnalysisOptions::default()
             }));
         #[allow(clippy::expect_used)]
         let report = analyzer.analyze(&gz_path).expect("analyze .gz");
 
-        // The decompressed file should be extracted to extract_dir
-        let extracted_files: Vec<_> = report
+        let child = report
             .files
             .iter()
-            .filter_map(|f| f.extracted_path.as_ref())
-            .collect();
-        assert!(
-            !extracted_files.is_empty(),
-            "standalone .gz decompressed content should be extracted, got files: {:?}",
-            report.files.iter().map(|f| &f.path).collect::<Vec<_>>()
-        );
-
-        // Verify the decompressed content matches
-        for path_str in &extracted_files {
-            let path = std::path::Path::new(path_str);
-            assert!(path.exists(), "extracted file should exist: {}", path_str);
-            let content = std::fs::read(path).unwrap();
-            assert_eq!(
-                content, original_content,
-                "decompressed content should match original"
-            );
-        }
+            .find(|f| f.path.ends_with("data.json"))
+            .expect("decompressed child should be analyzed");
+        assert_eq!(child.sha256, calculate_sha256(original_content));
+        assert_eq!(child.size, original_content.len() as u64);
     }
 
     #[test]
-    fn test_extract_dir_standalone_lzma() {
+    fn test_analyze_standalone_lzma() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
-        let extract_dir = tempfile::tempdir().expect("create extract dir");
         // A bare stem deliberately leaves the decoded child unclassified by
         // extension. `all_files` must still analyze it as generic data rather
         // than recording only an empty path entry.
@@ -6261,10 +6115,8 @@ traits:
         encoder.write_all(&original_content).expect("write LZMA");
         encoder.finish().expect("finish LZMA");
 
-        let config = SampleExtractionConfig::new(extract_dir.path().to_path_buf());
-        let analyzer = ArchiveAnalyzer::new()
-            .with_sample_extraction(config)
-            .with_analysis_options(Arc::new(crate::AnalysisOptions {
+        let analyzer =
+            ArchiveAnalyzer::new().with_analysis_options(Arc::new(crate::AnalysisOptions {
                 all_files: true,
                 ..crate::AnalysisOptions::default()
             }));
@@ -6281,22 +6133,13 @@ traits:
             "generic data child should retain file facts and metrics"
         );
 
-        let extracted = report
-            .files
-            .iter()
-            .filter_map(|file| file.extracted_path.as_ref())
-            .find(|path| std::path::Path::new(path).is_file())
-            .expect("standalone .lzma should produce an extracted file");
-        assert_eq!(
-            std::fs::read(extracted).expect("read extracted LZMA content"),
-            original_content
-        );
+        assert_eq!(child.sha256, calculate_sha256(&original_content));
+        assert_eq!(child.size, original_content.len() as u64);
     }
 
     #[test]
-    fn test_extract_dir_standalone_bz2_wrapped_tar_without_tar_extension() {
+    fn test_analyze_standalone_bz2_wrapped_tar_without_tar_extension() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
-        let extract_dir = tempfile::tempdir().expect("create extract dir");
         let bz2_path = temp_dir.path().join("payload.unknown");
 
         let mut tar_data = Vec::new();
@@ -6330,10 +6173,8 @@ traits:
             enc.finish().expect("finish bz2");
         }
 
-        let config = SampleExtractionConfig::new(extract_dir.path().to_path_buf());
-        let analyzer = ArchiveAnalyzer::new()
-            .with_sample_extraction(config)
-            .with_analysis_options(Arc::new(crate::AnalysisOptions {
+        let analyzer =
+            ArchiveAnalyzer::new().with_analysis_options(Arc::new(crate::AnalysisOptions {
                 all_files: true,
                 ..crate::AnalysisOptions::default()
             }));
@@ -6347,12 +6188,9 @@ traits:
     }
 
     #[test]
-    fn test_extract_dir_standalone_zstd() {
-        // Standalone .zst — the specific format mentioned in the bug report
+    fn test_analyze_standalone_zstd() {
         #[allow(clippy::expect_used)]
         let temp_dir = tempfile::tempdir().expect("create temp dir");
-        #[allow(clippy::expect_used)]
-        let extract_dir = tempfile::tempdir().expect("create extract dir");
         let zst_path = temp_dir.path().join("meta.json.zst");
 
         // Create a standalone .zst file
@@ -6362,33 +6200,17 @@ traits:
             std::fs::write(&zst_path, compressed).unwrap();
         }
 
-        let config = SampleExtractionConfig::new(extract_dir.path().to_path_buf());
-        let analyzer = ArchiveAnalyzer::new().with_sample_extraction(config);
+        let analyzer = ArchiveAnalyzer::new();
         #[allow(clippy::expect_used)]
         let report = analyzer.analyze(&zst_path).expect("analyze .zst");
 
-        // The decompressed file should be extracted to extract_dir
-        let extracted_files: Vec<_> = report
+        let child = report
             .files
             .iter()
-            .filter_map(|f| f.extracted_path.as_ref())
-            .collect();
-        assert!(
-            !extracted_files.is_empty(),
-            "standalone .zst decompressed content should be extracted, got files: {:?}",
-            report.files.iter().map(|f| &f.path).collect::<Vec<_>>()
-        );
-
-        // Verify the decompressed content matches
-        for path_str in &extracted_files {
-            let path = std::path::Path::new(path_str);
-            assert!(path.exists(), "extracted file should exist: {}", path_str);
-            let content = std::fs::read(path).unwrap();
-            assert_eq!(
-                content, original_content,
-                "decompressed .zst content should match original"
-            );
-        }
+            .find(|f| f.path.ends_with("meta.json"))
+            .expect("decompressed child should be analyzed");
+        assert_eq!(child.sha256, calculate_sha256(original_content));
+        assert_eq!(child.size, original_content.len() as u64);
     }
 
     /// Build one gzip-compressed tar segment from `(path, contents)` members.

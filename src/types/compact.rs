@@ -54,12 +54,6 @@ pub struct CompactReport {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     #[serde(default)]
     pub fetched: Vec<serde_json::Value>,
-    /// Directory the analyzed archive's members were extracted into, when the
-    /// caller kept them on disk for a downstream consumer to open. Absent on
-    /// ordinary runs, which extract to a temporary directory and discard it.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(default)]
-    pub extracted_path: Option<String>,
 }
 
 /// An empty report of the current schema — no files, no fetch edges. Hand-written
@@ -73,7 +67,6 @@ impl Default for CompactReport {
             traits_version: None,
             files: Vec::new(),
             fetched: Vec::new(),
-            extracted_path: None,
         }
     }
 }
@@ -1251,7 +1244,6 @@ fn assemble_report(mut files: Vec<CompactFile>) -> CompactReport {
         traits_version,
         files,
         fetched: Vec::new(),
-        extracted_path: None,
     }
 }
 

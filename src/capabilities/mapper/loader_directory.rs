@@ -834,7 +834,7 @@ impl super::CapabilityMapper {
                     .file(path.strip_prefix(dir_path)?)
                     .with_context(|| format!("Missing snapshotted trait {}", path.display()))?
                     .bytes;
-                let content = String::from_utf8_lossy(&bytes);
+                let content = String::from_utf8_lossy(bytes);
 
                 // Check for meaningless YAML patterns before parsing
                 let yaml_warnings = super::helpers::check_yaml_patterns(&content, path);

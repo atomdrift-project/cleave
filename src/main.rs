@@ -77,8 +77,8 @@ use cleave::cli;
 #[cfg(feature = "deadlock-detection")]
 use cli_bootstrap::start_deadlock_detector;
 use cli_bootstrap::{
-    apply_runtime_overrides, build_sample_extraction, configure_rayon_thread_pool, init_logging,
-    log_exit_summary, log_startup, print_version_banner, start_memory_logger,
+    apply_runtime_overrides, configure_rayon_thread_pool, init_logging, log_exit_summary,
+    log_startup, print_version_banner, start_memory_logger,
 };
 use cli_dispatch::{build_dispatch_context, dispatch_command, write_output};
 
@@ -237,7 +237,6 @@ fn main() -> Result<()> {
     cleave::update_check::maybe_notify(args.no_update_check);
 
     let zip_passwords = args.archive_passwords();
-    let sample_extraction = build_sample_extraction(args.extract_dir.as_deref());
     let platforms = args.platforms();
     let max_memory_file_size = args.max_file_mem * 1024 * 1024;
     let max_scan_file_size = args.max_file_size * 1024 * 1024;
@@ -249,7 +248,6 @@ fn main() -> Result<()> {
         format: &format,
         disabled: &disabled,
         zip_passwords: &zip_passwords,
-        sample_extraction: sample_extraction.as_ref(),
         platforms: &platforms,
         slow_rule_ms: args.slow_rule_ms,
         output_to_file: args.output.is_some(),

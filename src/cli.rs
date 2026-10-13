@@ -179,12 +179,6 @@ pub struct Args {
     #[arg(long, value_name = "PLATFORMS", default_value = "all")]
     pub platforms: String,
 
-    /// Directory to extract all analyzed files for external tools or review.
-    /// Files are written to `<dir>/<sha256>/<original-path>` preserving structure.
-    /// When set, disables in-memory extraction (all files written to disk).
-    #[arg(long, value_name = "DIR")]
-    pub extract_dir: Option<String>,
-
     /// Custom traits directory (overrides CLEAVE_TRAITS_DIR env var and default "traits")
     #[arg(long, value_name = "DIR")]
     pub traits_dir: Option<String>,
@@ -995,6 +989,13 @@ pub enum OutputFormat {
 mod tests {
     use super::*;
     use clap::ValueEnum;
+
+    #[test]
+    fn test_reject_removed_extract_dir_flag() {
+        let error =
+            Args::try_parse_from(["cleave", "--extract-dir", "samples", "file.bin"]).unwrap_err();
+        assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
+    }
 
     #[test]
     fn test_parse_paths_without_subcommand() {

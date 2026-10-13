@@ -192,7 +192,6 @@ pub use types::diff::{
 // from `report.filefacts_metrics` (BTreeMap<String, f64>) under the
 // `text.*` prefix instead.
 pub use types::FileAnalysis;
-pub use types::SampleExtractionConfig;
 pub use types::traits_findings::{Evidence, Finding, FindingKind, Trait, TraitKind};
 
 // Re-export cache management functions
@@ -916,8 +915,6 @@ pub struct AnalysisOptions {
     pub enable_full_validation: bool,
     /// Maximum file size (bytes) to load into memory from archives
     pub max_memory_file_size: u64,
-    /// Configuration for extracting suspicious files from archives
-    pub sample_extraction: Option<types::SampleExtractionConfig>,
     /// Warn threshold for slow rule evaluation in milliseconds (default: 4000).
     /// Rules exceeding this emit a warning; >1000ms is always logged at debug level.
     pub slow_rule_ms: u64,
@@ -1209,7 +1206,6 @@ impl Default for AnalysisOptions {
             enable_precision_scoring: false,
             enable_full_validation: false,
             max_memory_file_size: 512 * 1024 * 1024, // 512 MB default
-            sample_extraction: None,
             slow_rule_ms: capabilities::CapabilityMapper::DEFAULT_SLOW_RULE_MS,
             max_scan_file_size: 600 * 1024 * 1024, // 600 MB default
             cancellation: None,
@@ -2072,7 +2068,6 @@ pub(crate) fn report_from_file_analysis(
         score: _,
         counts: _,
         encoding: _,
-        extracted_path: _,
         formula: _,
         composite_sources: _,
         precompact_facts: _,
@@ -3176,9 +3171,6 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             if let Some(engine) = yara_engine {
                 analyzer = analyzer.with_yara_arc(engine.clone());
             }
-            if let Some(ref config) = options.sample_extraction {
-                analyzer = analyzer.with_sample_extraction(config.clone());
-            }
             if let Some(ref flag) = options.cancellation {
                 analyzer = analyzer.with_cancellation(flag.clone());
             }
@@ -3463,7 +3455,6 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         fa.id = 0;
         fa.parent_id = None;
         fa.depth = 0;
-        fa.extracted_path = None;
         analysis_cache::file_analysis_cache_store(
             &sha256_hex,
             file_type_key,

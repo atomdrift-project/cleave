@@ -121,14 +121,17 @@ impl RuleSources {
     }
 
     /// Source files in sorted walk order.
+    #[must_use]
     pub fn files(&self) -> &[SourceFile] {
         &self.files
     }
     /// Directory layout, including the root as an empty relative path.
+    #[must_use]
     pub fn directories(&self) -> &[PathBuf] {
         &self.directories
     }
     /// Look up a source by its root-relative path.
+    #[must_use]
     pub fn file(&self, relative: &Path) -> Option<&SourceFile> {
         self.lookup.get(relative).map(|&i| &self.files[i])
     }
@@ -197,6 +200,7 @@ pub fn shared(root: &Path) -> Result<Arc<RuleSources>> {
         snapshots.remove(0);
     }
     snapshots.push(snapshot.clone());
+    drop(snapshots);
     Ok(snapshot)
 }
 

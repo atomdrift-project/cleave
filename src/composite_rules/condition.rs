@@ -185,11 +185,30 @@ impl TraitRegex {
         }
         let engine = &self.engine;
         super::regex_scratch::with_cache(engine.id, &engine.re, |cache| {
-            engine
-                .re
-                .search_with(cache, &regex_automata::Input::new(haystack))
-                .and_then(|m| haystack.get(m.start()..m.end()))
+            self.find_str_cached(haystack, cache)
         })
+    }
+
+    /// Batch callers keep this engine's scratch storage across independent inputs.
+    pub(crate) fn with_scratch<R>(
+        &self,
+        f: impl FnOnce(&mut regex_automata::meta::Cache) -> R,
+    ) -> R {
+        super::regex_scratch::with_batch_cache(self.engine.id, &self.engine.re, f)
+    }
+
+    pub(crate) fn find_str_cached<'v>(
+        &self,
+        haystack: &'v str,
+        cache: &mut regex_automata::meta::Cache,
+    ) -> Option<&'v str> {
+        if haystack.len() < self.min_len {
+            return None;
+        }
+        self.engine
+            .re
+            .search_with(cache, &regex_automata::Input::new(haystack))
+            .and_then(|m| haystack.get(m.start()..m.end()))
     }
 
     /// Iterate non-overlapping leftmost-first matches, invoking
@@ -208,19 +227,31 @@ impl TraitRegex {
         }
         let engine = &self.engine;
         super::regex_scratch::with_cache(engine.id, &engine.re, |cache| {
-            let mut it =
-                regex_automata::util::iter::Searcher::new(regex_automata::Input::new(haystack));
-            loop {
-                let m = it.advance(|input| Ok(engine.re.search_with(cache, input)));
-                let Some(m) = m else { return };
-                let Some(span) = haystack.get(m.start()..m.end()) else {
-                    continue;
-                };
-                if !f(m.start(), span) {
-                    return;
-                }
-            }
+            self.for_each_find_cached(haystack, cache, &mut f)
         });
+    }
+
+    pub(crate) fn for_each_find_cached<'v>(
+        &self,
+        haystack: &'v str,
+        cache: &mut regex_automata::meta::Cache,
+        mut f: impl FnMut(usize, &'v str) -> bool,
+    ) {
+        if haystack.len() < self.min_len {
+            return;
+        }
+        let mut it =
+            regex_automata::util::iter::Searcher::new(regex_automata::Input::new(haystack));
+        loop {
+            let m = it.advance(|input| Ok(self.engine.re.search_with(cache, input)));
+            let Some(m) = m else { return };
+            let Some(span) = haystack.get(m.start()..m.end()) else {
+                continue;
+            };
+            if !f(m.start(), span) {
+                return;
+            }
+        }
     }
 }
 

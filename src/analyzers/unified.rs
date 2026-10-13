@@ -966,6 +966,7 @@ impl UnifiedSourceAnalyzer {
 
         // Evaluate all rules (atomic + composite) and merge into report,
         // borrowing the same filefacts context used for source AST extraction.
+        let matching_start = tracing::enabled!(tracing::Level::DEBUG).then(std::time::Instant::now);
         self.engine
             .rules()
             .evaluate_and_merge_findings_with_precomputed(
@@ -981,6 +982,17 @@ impl UnifiedSourceAnalyzer {
             );
 
         report.metadata.analysis_duration_ms = start.elapsed().as_millis() as u64;
+        if let Some(matching_start) = matching_start {
+            tracing::debug!(
+                path = %file_path.display(),
+                size_bytes = content.len(),
+                preparation_ms = matching_start.duration_since(start).as_millis() as u64,
+                matching_ms = matching_start.elapsed().as_millis() as u64,
+                total_ms = report.metadata.analysis_duration_ms,
+                "source analysis timing",
+            );
+        }
+
         report
             .metadata
             .tools_used

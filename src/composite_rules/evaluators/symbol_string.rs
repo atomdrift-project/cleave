@@ -578,6 +578,23 @@ enum StringMatcher<'p> {
 }
 
 impl<'p> StringMatcher<'p> {
+    fn with_batch<R>(&self, count: usize, f: impl FnOnce(&mut StringMatchBatch<'_, 'p>) -> R) -> R {
+        if count > 1
+            && let Self::Regex(re) = self
+        {
+            return re.with_scratch(|cache| {
+                f(&mut StringMatchBatch {
+                    matcher: self,
+                    cache: Some(cache),
+                })
+            });
+        }
+        f(&mut StringMatchBatch {
+            matcher: self,
+            cache: None,
+        })
+    }
+
     /// Resolve the shared searcher for this condition's pattern. Takes the cache
     /// lock at most once per condition (the only `substr`/`word`/`regex` field
     /// set wins, in the historical precedence order).
@@ -676,6 +693,39 @@ impl<'p> StringMatcher<'p> {
                 .match_value_ref(value)
                 .filter(|span| span_length_ok(span.len(), bounds)),
         }
+    }
+}
+
+/// The scratch lease belongs to exactly the regex in `matcher`. Searches still
+/// receive separate inputs, so anchors and matches cannot cross string boundaries.
+struct StringMatchBatch<'m, 'p> {
+    matcher: &'m StringMatcher<'p>,
+    cache: Option<&'m mut regex_automata::meta::Cache>,
+}
+
+impl StringMatchBatch<'_, '_> {
+    fn match_value_bounded<'v>(
+        &mut self,
+        value: &'v str,
+        bounds: (Option<usize>, Option<usize>),
+    ) -> Option<&'v str> {
+        let (StringMatcher::Regex(re), Some(cache)) = (self.matcher, self.cache.as_deref_mut())
+        else {
+            return self.matcher.match_value_bounded(value, bounds);
+        };
+        if bounds == (None, None) {
+            return re.find_str_cached(value, cache);
+        }
+        let mut found = None;
+        re.for_each_find_cached(value, cache, |_, span| {
+            if span_length_ok(span.len(), bounds) {
+                found = Some(span);
+                false
+            } else {
+                true
+            }
+        });
+        found
     }
 }
 
@@ -978,59 +1028,61 @@ pub(crate) fn eval_text<'a, 'b>(
     let mut evidence = Vec::new();
     let mut match_count = 0usize;
 
-    for string_info in &ctx.report.strings {
-        if skip_decoded && !string_info.encoding_chain.is_empty() {
-            continue;
-        }
-        if !offset_in_range(string_info.offset, effective_range) {
-            continue;
-        }
+    matcher.with_batch(ctx.report.strings.len(), |matcher| {
+        for string_info in &ctx.report.strings {
+            if skip_decoded && !string_info.encoding_chain.is_empty() {
+                continue;
+            }
+            if !offset_in_range(string_info.offset, effective_range) {
+                continue;
+            }
 
-        if let Some(match_value) =
-            matcher.match_value_bounded(&string_info.value, (params.length_min, params.length_max))
-        {
-            let excluded_by_not = trait_not
-                .map(|exceptions| exceptions.iter().any(|exc| exc.matches(match_value)))
-                .unwrap_or(false);
-            let excluded_by_is = !validate_match(match_value, params.is_check);
+            if let Some(match_value) = matcher
+                .match_value_bounded(&string_info.value, (params.length_min, params.length_max))
+            {
+                let excluded_by_not = trait_not
+                    .map(|exceptions| exceptions.iter().any(|exc| exc.matches(match_value)))
+                    .unwrap_or(false);
+                let excluded_by_is = !validate_match(match_value, params.is_check);
 
-            if !excluded_by_not && !excluded_by_is {
-                match_count += 1;
-                // Allocate the evidence string only when actually storing it.
-                if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
-                    // `match_value` is a subslice of the string for word/regex
-                    // matches (e.g. `.dll` inside `name.dll`); offset it within
-                    // the string so the location points at the match, not the
-                    // enclosing string's start. A string that carries no offset
-                    // (version-resource/derived entries) still anchors via
-                    // `string_info_location` (its section start, else `0x0`) —
-                    // mirrors the exact-match branch above and `eval_string_literal`,
-                    // so a content match never reaches `fallback_anchor` locationless.
-                    // A parsed literal may be reconstructed or UTF-16, so a
-                    // decoded substring index is not a file displacement at
-                    // all; those keep the parser's own anchor.
-                    let within = if string_info.section.as_deref() == Some("literal") {
-                        0
-                    } else {
-                        (match_value.as_ptr() as usize)
-                            .saturating_sub(string_info.value.as_ptr() as usize)
-                            as u64
-                    };
-                    let location = match string_info.offset {
-                        Some(o) => format!("{:#x}", o.saturating_add(within)),
-                        None => string_info_location(ctx.report, string_info),
-                    };
-                    evidence.push(Evidence {
-                        method: "text".to_string(),
-                        source: "string_extractor".to_string(),
-                        value: truncate_evidence_value(match_value),
-                        location: Some(location),
-                        ..Default::default()
-                    });
+                if !excluded_by_not && !excluded_by_is {
+                    match_count += 1;
+                    // Allocate the evidence string only when actually storing it.
+                    if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
+                        // `match_value` is a subslice of the string for word/regex
+                        // matches (e.g. `.dll` inside `name.dll`); offset it within
+                        // the string so the location points at the match, not the
+                        // enclosing string's start. A string that carries no offset
+                        // (version-resource/derived entries) still anchors via
+                        // `string_info_location` (its section start, else `0x0`) —
+                        // mirrors the exact-match branch above and `eval_string_literal`,
+                        // so a content match never reaches `fallback_anchor` locationless.
+                        // A parsed literal may be reconstructed or UTF-16, so a
+                        // decoded substring index is not a file displacement at
+                        // all; those keep the parser's own anchor.
+                        let within = if string_info.section.as_deref() == Some("literal") {
+                            0
+                        } else {
+                            (match_value.as_ptr() as usize)
+                                .saturating_sub(string_info.value.as_ptr() as usize)
+                                as u64
+                        };
+                        let location = match string_info.offset {
+                            Some(o) => format!("{:#x}", o.saturating_add(within)),
+                            None => string_info_location(ctx.report, string_info),
+                        };
+                        evidence.push(Evidence {
+                            method: "text".to_string(),
+                            source: "string_extractor".to_string(),
+                            value: truncate_evidence_value(match_value),
+                            location: Some(location),
+                            ..Default::default()
+                        });
+                    }
                 }
             }
         }
-    }
+    });
 
     ConditionResult {
         matched: match_count > 0,
@@ -1075,62 +1127,67 @@ fn eval_text_encoded<'a, 'b>(
     let mut evidence = Vec::new();
     let mut match_count = 0usize;
 
-    for &idx in ctx.encoded_strings() {
-        let string_info = &ctx.report.strings[idx as usize];
-        if !offset_in_range(string_info.offset, effective_range) {
-            continue;
-        }
+    matcher.with_batch(ctx.encoded_strings().len(), |matcher| {
+        for &idx in ctx.encoded_strings() {
+            let string_info = &ctx.report.strings[idx as usize];
+            if !offset_in_range(string_info.offset, effective_range) {
+                continue;
+            }
 
-        let Some(match_value) =
-            matcher.match_value_bounded(&string_info.value, (params.length_min, params.length_max))
-        else {
-            continue;
-        };
-        let excluded_by_not = trait_not
-            .map(|exceptions| exceptions.iter().any(|exc| exc.matches(match_value)))
-            .unwrap_or(false);
-        let excluded_by_is = !validate_match(match_value, params.is_check);
-        if excluded_by_not || excluded_by_is {
-            continue;
-        }
+            let Some(match_value) = matcher
+                .match_value_bounded(&string_info.value, (params.length_min, params.length_max))
+            else {
+                continue;
+            };
+            let excluded_by_not = trait_not
+                .map(|exceptions| exceptions.iter().any(|exc| exc.matches(match_value)))
+                .unwrap_or(false);
+            let excluded_by_is = !validate_match(match_value, params.is_check);
+            if excluded_by_not || excluded_by_is {
+                continue;
+            }
 
-        match_count += 1;
-        if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
-            // The match lives inside an encoded blob: a sub-offset into the
-            // decoded value has no meaning in the source byte space, so anchor at
-            // the string's offset and span the *encoded* source bytes — not the
-            // shorter decoded length (see `encoded_source_len`). An offset-less
-            // entry still anchors via `string_info_location` (section start, else
-            // `0x0`), so the match never reaches `fallback_anchor` locationless.
-            //
-            // Proximity (`near_bytes`/`near_lines`) reads `offsets`, not the
-            // anchor: without them every hit in one decoded layer tags as the
-            // layer's start, so two matches thousands of bytes apart inside a
-            // single layer (e.g. an `unicode-escape` layer spanning a whole
-            // minified file) look adjacent. Record where the match sits within
-            // the layer — exact to the base64 quad for base64, decoded bytes
-            // otherwise — clamped to the file so it stays a real offset.
-            let offsets = string_info.offset.map_or_else(Vec::new, |anchor| {
-                let within = (match_value.as_ptr() as usize)
-                    .saturating_sub(string_info.value.as_ptr() as usize);
-                let within = match string_info.encoding_chain.as_slice() {
-                    [layer] if layer == "base64" => within / 3 * 4,
-                    _ => within,
-                } as u64;
-                let last = (ctx.binary_data.len() as u64).saturating_sub(1);
-                vec![anchor.saturating_add(within).min(last.max(anchor))]
-            });
-            evidence.push(Evidence {
-                method: "text".to_string(),
-                source: "string_extractor".to_string(),
-                value: truncate_evidence_value(match_value),
-                location: Some(string_info_location(ctx.report, string_info)),
-                offsets,
-                match_len: encoded_source_len(string_info.value.len(), &string_info.encoding_chain),
-                ..Default::default()
-            });
+            match_count += 1;
+            if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
+                // The match lives inside an encoded blob: a sub-offset into the
+                // decoded value has no meaning in the source byte space, so anchor at
+                // the string's offset and span the *encoded* source bytes — not the
+                // shorter decoded length (see `encoded_source_len`). An offset-less
+                // entry still anchors via `string_info_location` (section start, else
+                // `0x0`), so the match never reaches `fallback_anchor` locationless.
+                //
+                // Proximity (`near_bytes`/`near_lines`) reads `offsets`, not the
+                // anchor: without them every hit in one decoded layer tags as the
+                // layer's start, so two matches thousands of bytes apart inside a
+                // single layer (e.g. an `unicode-escape` layer spanning a whole
+                // minified file) look adjacent. Record where the match sits within
+                // the layer — exact to the base64 quad for base64, decoded bytes
+                // otherwise — clamped to the file so it stays a real offset.
+                let offsets = string_info.offset.map_or_else(Vec::new, |anchor| {
+                    let within = (match_value.as_ptr() as usize)
+                        .saturating_sub(string_info.value.as_ptr() as usize);
+                    let within = match string_info.encoding_chain.as_slice() {
+                        [layer] if layer == "base64" => within / 3 * 4,
+                        _ => within,
+                    } as u64;
+                    let last = (ctx.binary_data.len() as u64).saturating_sub(1);
+                    vec![anchor.saturating_add(within).min(last.max(anchor))]
+                });
+                evidence.push(Evidence {
+                    method: "text".to_string(),
+                    source: "string_extractor".to_string(),
+                    value: truncate_evidence_value(match_value),
+                    location: Some(string_info_location(ctx.report, string_info)),
+                    offsets,
+                    match_len: encoded_source_len(
+                        string_info.value.len(),
+                        &string_info.encoding_chain,
+                    ),
+                    ..Default::default()
+                });
+            }
         }
-    }
+    });
 
     ConditionResult {
         matched: match_count > 0,
@@ -1196,64 +1253,66 @@ pub(crate) fn eval_string_literal_with_options<'a, 'b>(
     // byte span, regardless of how many parser projections reported it.
     let mut seen_match_spans: FxHashSet<(u64, usize)> = FxHashSet::default();
 
-    for string_info in &ctx.report.strings {
-        if !matches!(
-            string_info.section.as_deref(),
-            Some("ast" | "literal" | "ast-docstring")
-        ) || (exclude_docstrings && string_info.section.as_deref() == Some("ast-docstring"))
-        {
-            continue;
-        }
-        if !offset_in_range(string_info.offset, effective_range) {
-            continue;
-        }
+    matcher.with_batch(ctx.report.strings.len(), |matcher| {
+        for string_info in &ctx.report.strings {
+            if !matches!(
+                string_info.section.as_deref(),
+                Some("ast" | "literal" | "ast-docstring")
+            ) || (exclude_docstrings && string_info.section.as_deref() == Some("ast-docstring"))
+            {
+                continue;
+            }
+            if !offset_in_range(string_info.offset, effective_range) {
+                continue;
+            }
 
-        if let Some(match_value) =
-            matcher.match_value_bounded(&string_info.value, (params.length_min, params.length_max))
-        {
-            let excluded_by_not = trait_not
-                .map(|exceptions| exceptions.iter().any(|exc| exc.matches(match_value)))
-                .unwrap_or(false);
-            let excluded_by_is = !validate_match(match_value, params.is_check);
+            if let Some(match_value) = matcher
+                .match_value_bounded(&string_info.value, (params.length_min, params.length_max))
+            {
+                let excluded_by_not = trait_not
+                    .map(|exceptions| exceptions.iter().any(|exc| exc.matches(match_value)))
+                    .unwrap_or(false);
+                let excluded_by_is = !validate_match(match_value, params.is_check);
 
-            if !excluded_by_not && !excluded_by_is {
-                let within = (match_value.as_ptr() as usize)
-                    .saturating_sub(string_info.value.as_ptr() as usize)
-                    as u64;
-                // A compiled literal may be UTF-16 or reconstructed from many
-                // instructions. Its decoded substring index is not a byte
-                // displacement in the file; preserve the parser's anchor.
-                let match_offset = if string_info.section.as_deref() == Some("literal") {
-                    string_info.offset
-                } else {
-                    string_info.offset.map(|o| o.saturating_add(within))
-                };
-                if let Some(offset) = match_offset
-                    && !seen_match_spans.insert((offset, match_value.len()))
-                {
-                    continue;
-                }
-                match_count += 1;
-                // Allocate the evidence string only when actually storing it.
-                if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
-                    // `match_value` is a subslice for word/regex matches; offset
-                    // it within the literal so the location points at the match,
-                    // not the enclosing literal's start (mirrors `eval_text`).
-                    let location = match match_offset {
-                        Some(o) => format!("{:#x}", o),
-                        None => string_info_location(ctx.report, string_info),
+                if !excluded_by_not && !excluded_by_is {
+                    let within = (match_value.as_ptr() as usize)
+                        .saturating_sub(string_info.value.as_ptr() as usize)
+                        as u64;
+                    // A compiled literal may be UTF-16 or reconstructed from many
+                    // instructions. Its decoded substring index is not a byte
+                    // displacement in the file; preserve the parser's anchor.
+                    let match_offset = if string_info.section.as_deref() == Some("literal") {
+                        string_info.offset
+                    } else {
+                        string_info.offset.map(|o| o.saturating_add(within))
                     };
-                    evidence.push(Evidence {
-                        method: "string_literal".to_string(),
-                        source: string_info.section.clone().unwrap_or_default(),
-                        value: truncate_evidence_value(match_value),
-                        location: Some(location),
-                        ..Default::default()
-                    });
+                    if let Some(offset) = match_offset
+                        && !seen_match_spans.insert((offset, match_value.len()))
+                    {
+                        continue;
+                    }
+                    match_count += 1;
+                    // Allocate the evidence string only when actually storing it.
+                    if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
+                        // `match_value` is a subslice for word/regex matches; offset
+                        // it within the literal so the location points at the match,
+                        // not the enclosing literal's start (mirrors `eval_text`).
+                        let location = match match_offset {
+                            Some(o) => format!("{:#x}", o),
+                            None => string_info_location(ctx.report, string_info),
+                        };
+                        evidence.push(Evidence {
+                            method: "string_literal".to_string(),
+                            source: string_info.section.clone().unwrap_or_default(),
+                            value: truncate_evidence_value(match_value),
+                            location: Some(location),
+                            ..Default::default()
+                        });
+                    }
                 }
             }
         }
-    }
+    });
 
     ConditionResult {
         matched: match_count > 0,
@@ -4142,5 +4201,85 @@ mod validator_wiring_tests {
                 "{mode}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod batch_match_tests {
+    use super::*;
+
+    #[test]
+    fn batched_regex_preserves_spans_bounds_and_input_boundaries() {
+        let values = [
+            "",
+            "a",
+            "abc",
+            "ab abcdef 123",
+            "prefix suffix",
+            "é",
+            "αβ abc",
+            "12345",
+            "a\nb",
+            "suffix",
+            "prefix",
+        ];
+        for pattern in [
+            "[a-z]+",
+            "^abc$",
+            "^$",
+            "a*",
+            "\\b[a-z]+\\b",
+            "prefix.*suffix",
+            "[0-9]+",
+            ".",
+            "\\p{Greek}+",
+        ] {
+            let matcher = StringMatcher::Regex(
+                crate::composite_rules::condition::lazy_regex(Some(pattern), false).unwrap(),
+            );
+            for bounds in [
+                (None, None),
+                (Some(0), Some(0)),
+                (Some(3), None),
+                (None, Some(2)),
+                (Some(4), Some(6)),
+            ] {
+                let expected: Vec<_> = values
+                    .iter()
+                    .map(|value| matcher.match_value_bounded(value, bounds))
+                    .collect();
+                for count in [0, 1, values.len()] {
+                    matcher.with_batch(count, |batch| {
+                        for _ in 0..32 {
+                            for (value, expected) in values.iter().zip(&expected) {
+                                let actual = batch.match_value_bounded(value, bounds);
+                                assert_eq!(actual, *expected, "{pattern:?}, {bounds:?}, {value:?}");
+                                assert_eq!(actual.map(str::as_ptr), expected.map(str::as_ptr));
+                            }
+                        }
+                    });
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[allow(clippy::panic)] // Exercise the scratch reservation unwind path.
+    fn batched_regex_allows_nested_exclusion_searches_and_unwinding() {
+        let re = crate::composite_rules::condition::lazy_regex(Some("[a-z]+"), false).unwrap();
+        let other = crate::composite_rules::condition::lazy_regex(Some("[0-9]+"), false).unwrap();
+        let matcher = StringMatcher::Regex(re.clone());
+        matcher.with_batch(2, |batch| {
+            assert_eq!(batch.match_value_bounded("abc", (None, None)), Some("abc"));
+            assert_eq!(re.find_str("nested"), Some("nested"));
+            assert_eq!(other.find_str("123"), Some("123"));
+            assert_eq!(batch.match_value_bounded("def", (None, None)), Some("def"));
+        });
+        let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            matcher.with_batch(2, |_batch| panic!("intentional batch unwind"));
+        }));
+        assert!(failed.is_err());
+        assert_eq!(re.find_str("after"), Some("after"));
     }
 }

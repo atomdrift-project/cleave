@@ -2540,6 +2540,7 @@ impl ArchiveAnalyzer {
         archive_data: &[u8],
         archive_type: FileType,
     ) {
+        let timing = tracing::enabled!(tracing::Level::DEBUG).then(std::time::Instant::now);
         if carries_system_symlinks(archive_type, &report.archive_contents) {
             drop_system_container_symlink_escapes(report);
         }
@@ -2808,6 +2809,13 @@ impl ArchiveAnalyzer {
         );
         if has_builtin_anti_analysis_finding(&report.findings) {
             mapper.apply_retroactive_unless_suppression_to_findings(&mut report.findings, None);
+        }
+        if let Some(timing) = timing {
+            tracing::debug!(
+                path = %report.target.path,
+                elapsed_ms = timing.elapsed().as_millis() as u64,
+                "archive container evaluation timing",
+            );
         }
     }
 

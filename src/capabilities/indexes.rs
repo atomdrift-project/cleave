@@ -3240,6 +3240,49 @@ mod tests {
     // ==================== TraitIndex Tests ====================
 
     #[test]
+    fn trait_index_matches_direct_gate_for_every_file_type_and_platform() {
+        let types: Vec<_> = std::iter::once(RuleFileType::All)
+            .chain(RuleFileType::all_concrete_variants())
+            .collect();
+        let traits: Vec<_> = types
+            .iter()
+            .flat_map(|ft| {
+                [Platform::All, Platform::Linux, Platform::Windows]
+                    .into_iter()
+                    .map(move |platform| TraitDefinition {
+                        platforms: vec![platform],
+                        r#for: vec![*ft],
+                        ..Default::default()
+                    })
+            })
+            .chain(std::iter::once(TraitDefinition {
+                r#for: Vec::new(),
+                ..Default::default()
+            }))
+            .collect();
+        for platforms in [
+            vec![Platform::All],
+            vec![Platform::Linux],
+            vec![Platform::Windows],
+        ] {
+            let index = TraitIndex::build_filtered(&traits, &platforms);
+            for ft in &types {
+                let actual: Vec<_> = index.get_applicable(ft).into_indices_static().collect();
+                let expected: Vec<_> = traits
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, t)| {
+                        platforms_intersect(&t.platforms, &platforms)
+                            && RuleFileType::rule_applies_to(&t.r#for, *ft)
+                    })
+                    .map(|(i, _)| i)
+                    .collect();
+                assert_eq!(actual, expected, "{ft:?}, {platforms:?}");
+            }
+        }
+    }
+
+    #[test]
     fn test_trait_index_new() {
         let index = TraitIndex::new();
         assert!(index.universal.bits.is_empty());

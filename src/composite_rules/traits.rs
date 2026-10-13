@@ -1562,8 +1562,8 @@ impl TraitDefinition {
     }
 
     /// [`Self::evaluate`] for callers whose work list already applied the
-    /// static platform gate (`CapabilityMapper::trait_worklist`); the other
-    /// gates (arch, file type, size, entropy) still run.
+    /// static platform and file-type gates (`CapabilityMapper::trait_worklist`);
+    /// dynamic gates (arch, size, entropy) still run.
     pub(crate) fn evaluate_pregated<'a>(&self, ctx: &EvaluationContext<'a>) -> Option<Finding> {
         self.evaluate_with_gates(ctx, true)
     }
@@ -1571,7 +1571,7 @@ impl TraitDefinition {
     fn evaluate_with_gates<'a>(
         &self,
         ctx: &EvaluationContext<'a>,
-        platform_prechecked: bool,
+        static_gates_prechecked: bool,
     ) -> Option<Finding> {
         use super::debug::{ConditionDebug, DowngradeDebug, SkipReason};
 
@@ -1581,7 +1581,7 @@ impl TraitDefinition {
         let _mcg = MatchCountGuard::set(self.needs_match_count());
 
         // Check platform match (skipped when the caller's work list proved it)
-        if !platform_prechecked
+        if !static_gates_prechecked
             && !super::types::platforms_intersect(&self.platforms, ctx.platforms)
         {
             ctx.record_skip(|| SkipReason::PlatformMismatch {
@@ -1608,7 +1608,7 @@ impl TraitDefinition {
         // container it is built on (a JAR admits `for: [zip]`, not
         // `for: [android_apk]`). A container collapsed to FileType::All
         // admits only archive-typed rules, not every script/binary rule.
-        if !FileType::rule_applies_to(&self.r#for, ctx.file_type) {
+        if !static_gates_prechecked && !FileType::rule_applies_to(&self.r#for, ctx.file_type) {
             ctx.record_skip(|| SkipReason::FileTypeMismatch {
                 rule: self.r#for.clone(),
                 context: ctx.file_type,
@@ -2535,6 +2535,10 @@ pub(crate) struct CompositeTrait {
     /// derived from `for:`.
     #[serde(skip)]
     pub(crate) for_mask_cache: std::sync::OnceLock<TypeMask>,
+    /// Derived from the immutable loaded `for:` list, like `for_mask_cache`.
+    /// Explicit scope remains authoritative and is never cached.
+    #[serde(skip)]
+    pub(crate) default_scope_cache: std::sync::OnceLock<Scope>,
     /// Confidence score for the generated finding
     pub conf: f32,
 
@@ -2636,6 +2640,7 @@ impl Default for CompositeTrait {
     fn default() -> Self {
         Self {
             for_mask_cache: std::sync::OnceLock::new(),
+            default_scope_cache: std::sync::OnceLock::new(),
             id: String::new(),
             desc: String::new(),
             id_shared: std::sync::OnceLock::new(),
@@ -2704,7 +2709,11 @@ impl CompositeTrait {
     /// The scope actually used for evaluation: the explicit `scope:` if
     /// given, otherwise [`Self::default_scope`].
     pub(crate) fn effective_scope(&self) -> Scope {
-        self.scope.unwrap_or_else(|| self.default_scope())
+        self.scope.unwrap_or_else(|| {
+            *self
+                .default_scope_cache
+                .get_or_init(|| self.default_scope())
+        })
     }
 
     /// `for:` as a type mask: which files' findings may satisfy this rule's

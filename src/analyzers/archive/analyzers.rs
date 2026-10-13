@@ -3755,6 +3755,14 @@ impl ArchiveAnalyzer {
         };
 
         let elapsed = member_start.elapsed();
+        tracing::debug!(
+            relative_path = %member.relative_path,
+            file_type = %member.file_type.report_file_type(),
+            size_bytes = member.data.len(),
+            elapsed_ms = elapsed.as_millis() as u64,
+            rayon_thread = ?rayon::current_thread_index(),
+            "archive member timing",
+        );
         if elapsed.as_millis() > SLOW_ARCHIVE_MEMBER_ANALYSIS_MS {
             tracing::warn!(
                 relative_path = %member.relative_path,
@@ -4229,6 +4237,14 @@ impl ArchiveAnalyzer {
                 };
 
                 let member_elapsed = member_start.elapsed();
+                tracing::debug!(
+                    relative_path,
+                    file_type = %file_type.report_file_type(),
+                    size_bytes = file_data.len(),
+                    elapsed_ms = member_elapsed.as_millis() as u64,
+                    rayon_thread = ?rayon::current_thread_index(),
+                    "archive member timing",
+                );
                 if member_elapsed.as_millis() > SLOW_ARCHIVE_MEMBER_ANALYSIS_MS {
                     tracing::warn!(
                         relative_path,
@@ -4397,6 +4413,14 @@ impl ArchiveAnalyzer {
 
                 let done = members_done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
                 let member_ms = member_start.elapsed().as_millis();
+                tracing::debug!(
+                    relative_path = %entry_path,
+                    file_type = %file_type.report_file_type(),
+                    size_bytes = file_data.len(),
+                    elapsed_ms = member_ms as u64,
+                    rayon_thread = ?rayon::current_thread_index(),
+                    "archive member timing",
+                );
                 if member_ms > 5000 {
                     tracing::warn!(
                         archive = archive_display,
@@ -4608,6 +4632,14 @@ impl ArchiveAnalyzer {
                 };
 
                 let member_elapsed = member_start.elapsed();
+                tracing::debug!(
+                    relative_path,
+                    file_type = %file_type.report_file_type(),
+                    size_bytes = file_data.len(),
+                    elapsed_ms = member_elapsed.as_millis() as u64,
+                    rayon_thread = ?rayon::current_thread_index(),
+                    "archive member timing",
+                );
                 if member_elapsed.as_millis() > SLOW_ARCHIVE_MEMBER_ANALYSIS_MS {
                     tracing::warn!(
                         relative_path,

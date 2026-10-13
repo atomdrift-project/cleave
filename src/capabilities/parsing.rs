@@ -1396,6 +1396,7 @@ pub(crate) fn apply_composite_defaults(
 
     CompositeTrait {
         for_mask_cache: std::sync::OnceLock::new(),
+        default_scope_cache: std::sync::OnceLock::new(),
         id: raw.id,
         desc: raw.desc,
         id_shared: std::sync::OnceLock::new(),

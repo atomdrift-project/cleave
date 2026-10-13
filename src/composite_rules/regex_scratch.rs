@@ -273,6 +273,25 @@ thread_local! {
 /// the id matches, else a cache stolen from the global pool, else a fresh one.
 /// The demoted hot cache parks globally so another thread can steal it.
 pub(crate) fn with_cache<R>(id: u64, re: &meta::Regex, f: impl FnOnce(&mut meta::Cache) -> R) -> R {
+    with_cache_inner(id, re, false, f)
+}
+
+/// Lease one regex's scratch storage for a batch of independent searches.
+/// Always account for growth when returning a batch, regardless of its length.
+pub(crate) fn with_batch_cache<R>(
+    id: u64,
+    re: &meta::Regex,
+    f: impl FnOnce(&mut meta::Cache) -> R,
+) -> R {
+    with_cache_inner(id, re, true, f)
+}
+
+fn with_cache_inner<R>(
+    id: u64,
+    re: &meta::Regex,
+    batch: bool,
+    f: impl FnOnce(&mut meta::Cache) -> R,
+) -> R {
     // Fast path: repeat use of this thread's most recent regex.
     let hot = HOT.with(|h| {
         let mut h = h.borrow_mut();
@@ -285,7 +304,7 @@ pub(crate) fn with_cache<R>(id: u64, re: &meta::Regex, f: impl FnOnce(&mut meta:
         };
         let result = f(&mut entry.cache);
         reservation.disarm();
-        finish(id, entry, true);
+        finish(id, entry, true, batch);
         return result;
     }
     // Slow path: demote the current hot cache to the global pool, then steal
@@ -313,7 +332,7 @@ pub(crate) fn with_cache<R>(id: u64, re: &meta::Regex, f: impl FnOnce(&mut meta:
     };
     let result = f(&mut entry.cache);
     reservation.disarm();
-    finish(id, entry, was_reserved);
+    finish(id, entry, was_reserved, batch);
     result
 }
 
@@ -321,7 +340,7 @@ pub(crate) fn with_cache<R>(id: u64, re: &meta::Regex, f: impl FnOnce(&mut meta:
 /// free, otherwise into the global pool (nested/interleaved use of the same
 /// regex on one thread built a transient second cache; the newer one wins
 /// the slot).
-fn finish(id: u64, mut entry: Box<Entry>, was_reserved: bool) {
+fn finish(id: u64, mut entry: Box<Entry>, was_reserved: bool, batch: bool) {
     let old_size = entry.size;
     // `meta::Cache::memory_usage` walks the cache's internal structures and
     // measured 0.7% of whole-run CPU when taken on every return. A cache only
@@ -329,7 +348,7 @@ fn finish(id: u64, mut entry: Box<Entry>, was_reserved: bool) {
     // on a coarse schedule: every 16th return (plus the first, when `size` is
     // still the insert-time estimate).
     entry.uses = entry.uses.wrapping_add(1);
-    let new_size = if entry.uses % 16 == 1 {
+    let new_size = if batch || entry.uses % 16 == 1 {
         entry.cache.memory_usage()
     } else {
         old_size
@@ -380,6 +399,28 @@ mod tests {
 
     fn engine(pattern: &str) -> meta::Regex {
         meta::Regex::new(pattern).unwrap()
+    }
+
+    #[test]
+    fn batch_return_accounts_for_growth_on_every_return() {
+        let _lock = test_lock();
+        let re = engine("[a-z]+[0-9]+");
+        let id = next_regex_id();
+        for value in ["abc123", "abcdefghijklmnop123456789"] {
+            with_batch_cache(id, &re, |cache| {
+                assert!(
+                    re.search_with(cache, &regex_automata::Input::new(value))
+                        .is_some()
+                );
+            });
+            HOT.with(|hot| {
+                let hot = hot.borrow();
+                assert_eq!(hot.id, id);
+                let entry = hot.entry.as_ref().unwrap();
+                assert_eq!(entry.size, entry.cache.memory_usage());
+            });
+        }
+        forget(id);
     }
 
     #[test]

@@ -842,16 +842,15 @@ impl super::CapabilityMapper {
             Some(nested_findings),
             None, // No AST for container
         );
-        // Pre-apply `evaluate_with_gates`' file-type gate: of ~70k traits only
-        // the container-capable ones (`for: all`, the container's own type, or
-        // the generic container it is built on) can match, and paying the
-        // evaluate prelude for the rest cost ~0.5 s of the calling thread per
-        // archive.
+        // The index already encodes the same file-type and platform gates as
+        // evaluate(). Reuse its cached bitset instead of walking every loaded
+        // trait for each archive; retain index order and the dynamic gates.
         let mut container_findings: Vec<Finding> = self
-            .trait_definitions
-            .iter()
-            .filter(|t| crate::composite_rules::FileType::rule_applies_to(&t.r#for, rule_file_type))
-            .filter_map(|trait_def| trait_def.evaluate(&parent_trait_ctx))
+            .match_indexes()
+            .trait_index
+            .get_applicable(&rule_file_type)
+            .into_indices_static()
+            .filter_map(|idx| self.trait_definitions[idx].evaluate(&parent_trait_ctx))
             .filter(|f| !seen_ids.contains(f.id.as_str()))
             .collect();
 

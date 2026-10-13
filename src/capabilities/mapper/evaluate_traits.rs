@@ -495,8 +495,8 @@ impl super::CapabilityMapper {
                 base_cached_evidence
             };
 
-        // Both index sources (the work list, and the tiny-DOS bypass
-        // above) apply the platform gate before an index reaches here.
+        // The work list applies both the platform and file-type gates
+        // before an index reaches here.
         let _locations = crate::composite_rules::evaluators::MatchLocationsGuard::set(
             tf & super::flags::NEEDS_LOCATIONS != 0,
         );

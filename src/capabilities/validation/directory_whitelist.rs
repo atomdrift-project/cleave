@@ -1119,6 +1119,7 @@ const ALLOWED_METADATA_SIGNED: &[&str] = &[
     "certificate",  // Certificate chain string patterns
     "entitlements", // Code entitlements (macOS/iOS, Android)
     "platform",     // Platform-signed binary composites (auto-generated)
+    "script",       // Script signature-block markers (not verified trust)
     "trust-level",  // Signing trust level (ad-hoc, developer, platform, app store)
 ];
 

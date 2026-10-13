@@ -215,17 +215,15 @@ impl ChromeManifestAnalyzer {
             file_path,
             content.as_bytes(),
         ));
-        self.engine
-            .rules()
-            .evaluate_and_merge_findings_with_precomputed(
-                &mut report,
-                content.as_bytes(),
-                crate::capabilities::AnalysisBorrow::with_filefacts(None, filefacts_ctx.as_ref()),
-                None,
-                None,
-                None,
-                None,
-            );
+        self.engine.evaluate_and_merge_findings_with_precomputed(
+            &mut report,
+            content.as_bytes(),
+            crate::capabilities::AnalysisBorrow::with_filefacts(None, filefacts_ctx.as_ref()),
+            None,
+            None,
+            None,
+            None,
+        );
 
         Self::deduplicate_declared_permissions(&manifest, &mut report);
 

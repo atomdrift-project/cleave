@@ -967,19 +967,17 @@ impl UnifiedSourceAnalyzer {
         // Evaluate all rules (atomic + composite) and merge into report,
         // borrowing the same filefacts context used for source AST extraction.
         let matching_start = tracing::enabled!(tracing::Level::DEBUG).then(std::time::Instant::now);
-        self.engine
-            .rules()
-            .evaluate_and_merge_findings_with_precomputed(
-                &mut report,
-                rule_bytes,
-                crate::capabilities::AnalysisBorrow::with_filefacts(tree, source_ctx)
-                    .with_ast_kind_cache(ast_kind_cache.as_ref())
-                    .with_ast_node_text(&ast_node_text),
-                inline_yara.as_ref(),
-                None,
-                None,
-                None,
-            );
+        self.engine.evaluate_and_merge_findings_with_precomputed(
+            &mut report,
+            rule_bytes,
+            crate::capabilities::AnalysisBorrow::with_filefacts(tree, source_ctx)
+                .with_ast_kind_cache(ast_kind_cache.as_ref())
+                .with_ast_node_text(&ast_node_text),
+            inline_yara.as_ref(),
+            None,
+            None,
+            None,
+        );
 
         report.metadata.analysis_duration_ms = start.elapsed().as_millis() as u64;
         if let Some(matching_start) = matching_start {

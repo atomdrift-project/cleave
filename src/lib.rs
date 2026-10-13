@@ -3244,6 +3244,9 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             }
         }
     }
+    // `AnalysisInput` borrows the decoded payload list. Structural analysis is
+    // complete, so end that borrow before the payloads are consumed below.
+    drop(input);
     let stage_structural_ms = structural_start.elapsed().as_millis() as u64;
 
     // Process encoded payloads and analyze them
@@ -3297,42 +3300,22 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             .iter()
             .any(|tool| tool == "yara-x")
         && !is_yara_rule_source
-        && let Some(engine) = yara_engine
+        && yara_engine.is_some_and(|yara| yara.is_loaded())
         && file_type.is_program()
-        && engine.is_loaded()
     {
-        let file_types = file_type.yara_filetypes();
-        let filter = if file_types.is_empty() {
-            None
-        } else {
-            Some(file_types.as_slice())
-        };
-
-        match engine.scan_bytes_to_findings(file_data, filter) {
-            Ok((matches, findings)) => {
-                report.yara_matches = matches;
-                let existing: std::collections::HashSet<crate::types::Istr> =
-                    report.findings.iter().map(|f| f.id.clone()).collect();
-                for finding in findings {
-                    if !existing.contains(finding.id.as_str()) {
-                        report.findings.push(finding);
-                    }
-                }
-                // This YARA pass runs after the analyzer's normal trait pass
-                // for source and script files. Re-apply `unless:` handling now
-                // that configured third-party YARA findings and their same-file
-                // YAML context findings are both present.
-                capability_mapper
-                    .apply_retroactive_unless_suppression_to_findings(&mut report.findings, None);
-                if !report.metadata.tools_used.iter().any(|t| t == "yara-x") {
-                    report.metadata.tools_used.push("yara-x".to_string());
-                }
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "YARA scan failed, continuing without YARA results");
-                report.metadata.errors.push(format!("yara: {e:#}"));
-            }
-        }
+        // This fallback also uses the shared stage, so inline results support
+        // traits instead of being discarded by a late findings-only scan.
+        engine.evaluate_and_merge_findings_with_precomputed(
+            &mut report,
+            file_data,
+            crate::capabilities::AnalysisBorrow::new(None),
+            None,
+            None,
+            None,
+            options.cancellation.as_deref(),
+        );
+        capability_mapper
+            .apply_retroactive_unless_suppression_to_findings(&mut report.findings, None);
     }
     let stage_yara_ms = yara_start.elapsed().as_millis() as u64;
     set_phase("done");

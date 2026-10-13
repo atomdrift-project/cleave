@@ -147,6 +147,64 @@ impl Engine {
         &self.0.settings
     }
 
+    /// Evaluate one layer, ensuring YARA evidence is available before traits.
+    /// A supplied map reuses the caller's prefetch, including an empty result;
+    /// otherwise this engine scans this layer's bytes. Format analyzers cannot
+    /// accidentally omit inline results when entering through this method.
+    pub(crate) fn evaluate_and_merge_findings_with_precomputed(
+        &self,
+        report: &mut AnalysisReport,
+        data: &[u8],
+        analysis: crate::capabilities::AnalysisBorrow<'_, '_>,
+        prefetched_inline: Option<&std::collections::HashMap<String, Vec<crate::types::Evidence>>>,
+        raw_regex: Option<Option<crate::capabilities::indexes::RawGateHits>>,
+        arch_ranges: Option<&[(crate::composite_rules::Arch, std::ops::Range<usize>)]>,
+        cancellation: Option<&std::sync::atomic::AtomicBool>,
+    ) {
+        if cancellation.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed)) {
+            return;
+        }
+        let generated;
+        let inline = if let Some(prefetched) = prefetched_inline {
+            Some(prefetched)
+        } else {
+            use crate::analyzers::FileTypeExt;
+            let file_type = crate::FileType::from_label(&report.target.file_type);
+            let is_rule_source = file_type == Some(crate::FileType::Yara)
+                || Path::new(&report.target.path)
+                    .extension()
+                    .is_some_and(|ext| {
+                        ext.eq_ignore_ascii_case("yar") || ext.eq_ignore_ascii_case("yara")
+                    });
+            if !is_rule_source && let Some(yara) = self.yara().filter(|yara| yara.is_loaded()) {
+                let filters = file_type.map(|ft| ft.yara_filetypes()).unwrap_or_default();
+                let yara_started = std::time::Instant::now();
+                generated = crate::process_yara_result(
+                    report,
+                    Some(yara.scan_bytes_with_inline(data, Some(filters.as_slice()))),
+                    Some(yara),
+                );
+                if yara_started.elapsed() > std::time::Duration::from_secs(4) {
+                    tracing::warn!(path = %report.target.path,
+                        elapsed_ms = yara_started.elapsed().as_millis() as u64,
+                        "Slow YARA scan before trait evaluation");
+                }
+                Some(&generated)
+            } else {
+                None
+            }
+        };
+        self.rules().evaluate_and_merge_findings_with_precomputed(
+            report,
+            data,
+            analysis,
+            inline,
+            raw_regex,
+            arch_ranges,
+            cancellation,
+        );
+    }
+
     /// Whether UPX-packed executables are unpacked.
     #[must_use]
     pub(crate) fn upx(&self) -> bool {

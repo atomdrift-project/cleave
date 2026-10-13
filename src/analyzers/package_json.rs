@@ -479,17 +479,15 @@ impl PackageJsonAnalyzer {
             file_path,
             content.as_bytes(),
         ));
-        self.engine
-            .rules()
-            .evaluate_and_merge_findings_with_precomputed(
-                &mut report,
-                content.as_bytes(),
-                crate::capabilities::AnalysisBorrow::with_filefacts(None, filefacts_ctx.as_ref()),
-                None,
-                None,
-                None,
-                None,
-            );
+        self.engine.evaluate_and_merge_findings_with_precomputed(
+            &mut report,
+            content.as_bytes(),
+            crate::capabilities::AnalysisBorrow::with_filefacts(None, filefacts_ctx.as_ref()),
+            None,
+            None,
+            None,
+            None,
+        );
 
         report.metadata.analysis_duration_ms = start.elapsed().as_millis() as u64;
         report.metadata.tools_used = vec![parser_source.to_string()];

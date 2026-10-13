@@ -1839,36 +1839,34 @@ impl Analyzer for MachOAnalyzer {
             self.union_supplementary_arches(&mut report, input.data, preferred_offset, &slices);
         }
 
+        // Direct calls also serve archive and decoded children. Scan full-file
+        // bytes before traits, including every FAT slice.
         // Evaluate traits against binary data.
         // For FAT binaries, evaluate against the full file since strings have file-relative offsets.
         // For thin binaries, evaluate against the single slice (same as full file).
         if is_fat {
             // Full file evaluation - strings and offsets are file-relative.
             // The full-file parse opened above, so the mapper does not reopen filefacts.
-            self.engine
-                .rules()
-                .evaluate_and_merge_findings_with_precomputed(
-                    &mut report,
-                    input.data,
-                    crate::capabilities::AnalysisBorrow::with_filefacts(None, full_ctx),
-                    None,
-                    None,
-                    None,
-                    None,
-                );
+            self.engine.evaluate_and_merge_findings_with_precomputed(
+                &mut report,
+                input.data,
+                crate::capabilities::AnalysisBorrow::with_filefacts(None, full_ctx),
+                None,
+                None,
+                None,
+                None,
+            );
         } else {
             // Thin binary - single slice is the whole file.
-            self.engine
-                .rules()
-                .evaluate_and_merge_findings_with_precomputed(
-                    &mut report,
-                    preferred_data,
-                    crate::capabilities::AnalysisBorrow::with_filefacts(None, preferred_ctx),
-                    None,
-                    None,
-                    None,
-                    None,
-                );
+            self.engine.evaluate_and_merge_findings_with_precomputed(
+                &mut report,
+                preferred_data,
+                crate::capabilities::AnalysisBorrow::with_filefacts(None, preferred_ctx),
+                None,
+                None,
+                None,
+                None,
+            );
         }
 
         Ok(report)

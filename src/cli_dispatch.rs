@@ -402,6 +402,18 @@ pub(crate) fn write_output(
     output_path: Option<String>,
     format: cli::OutputFormat,
 ) -> Result<()> {
+    // Every command eventually crosses this boundary, including developer and
+    // extraction commands whose rows contain sample-derived strings, symbol
+    // names, section names, and structured values. Keep JSON byte-for-byte
+    // machine-readable; terminal formats retain renderer SGR colors while all
+    // other control sequences become visible text.
+    let safe_result = matches!(
+        format,
+        cli::OutputFormat::Terminal | cli::OutputFormat::Tiny
+    )
+    .then(|| cleave::output::sanitize_terminal_output(result));
+    let result = safe_result.as_deref().unwrap_or(result);
+
     if let Some(output_path) = output_path {
         // An empty result in --output mode means the command already streamed
         // its output to the file (directory scans open and write through a

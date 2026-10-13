@@ -4,10 +4,10 @@
 //! all language analyzers. When implementing a new language analyzer, use
 //! these utilities to maintain consistency with existing analyzers.
 
+use crate::analyzers::Analyzer;
 use crate::analyzers::elf::ElfAnalyzer;
 use crate::analyzers::input::AnalysisInput;
 use crate::analyzers::pe::PEAnalyzer;
-use crate::analyzers::{Analyzer, FileTypeExt};
 use crate::types::{Evidence, StructuralFeature};
 use crate::yara_engine::YaraEngine;
 use sha2::{Digest, Sha256};
@@ -75,21 +75,6 @@ pub(crate) fn analyze_embedded_as_child(
         }
         analyzer.analyze_input(&input).ok()?
     };
-
-    if let Some(yara) = yara_engine.as_ref() {
-        match yara.scan_bytes_to_findings(bytes, Some(&file_type.yara_filetypes())) {
-            Ok((matches, findings)) => {
-                report.yara_matches = matches;
-                for finding in findings {
-                    report.push_finding_capped(finding);
-                }
-            }
-            Err(e) => report
-                .metadata
-                .errors
-                .push(format!("yara(embedded): {e:#}")),
-        }
-    }
 
     // Capture render context on the child's own bytes. The per-analyzer path
     // doesn't run capture (the lib/archive orchestration normally does), so

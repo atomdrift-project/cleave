@@ -5118,6 +5118,56 @@ mod taxonomy_tests {
             "atoms alone are under the cap"
         );
     }
+
+    #[test]
+    fn reviewed_manifest_identity_budget_is_exact_and_scoped() {
+        let reviewed = "metadata/package/dependencies/manifest/identity";
+        let traits: Vec<_> = (0..108)
+            .map(|i| make_trait(&format!("{reviewed}::rule-{i}"), "other::t"))
+            .collect();
+        assert!(find_oversized_trait_directories(&traits, &[]).is_empty());
+
+        let mut over_reviewed_budget = traits.clone();
+        over_reviewed_budget.push(make_trait(&format!("{reviewed}::rule-108"), "other::t"));
+        assert_eq!(
+            find_oversized_trait_directories(&over_reviewed_budget, &[]),
+            vec![(reviewed.to_string(), 109)]
+        );
+
+        let other = "metadata/package/dependencies/manifest/source";
+        let other_traits: Vec<_> = (0..101)
+            .map(|i| make_trait(&format!("{other}::rule-{i}"), "other::t"))
+            .collect();
+        assert_eq!(
+            find_oversized_trait_directories(&other_traits, &[]),
+            vec![(other.to_string(), 101)]
+        );
+    }
+
+    #[test]
+    fn reviewed_base64_decode_budget_is_exact_and_scoped() {
+        let reviewed = "micro-behaviors/data/decode/base64";
+        let traits: Vec<_> = (0..103)
+            .map(|i| make_trait(&format!("{reviewed}::rule-{i}"), "other::t"))
+            .collect();
+        assert!(find_oversized_trait_directories(&traits, &[]).is_empty());
+
+        let mut over_reviewed_budget = traits.clone();
+        over_reviewed_budget.push(make_trait(&format!("{reviewed}::rule-103"), "other::t"));
+        assert_eq!(
+            find_oversized_trait_directories(&over_reviewed_budget, &[]),
+            vec![(reviewed.to_string(), 104)]
+        );
+
+        let other = "micro-behaviors/data/decode/base64/pipeline";
+        let other_traits: Vec<_> = (0..101)
+            .map(|i| make_trait(&format!("{other}::rule-{i}"), "other::t"))
+            .collect();
+        assert_eq!(
+            find_oversized_trait_directories(&other_traits, &[]),
+            vec![(other.to_string(), 101)]
+        );
+    }
 }
 
 #[cfg(test)]

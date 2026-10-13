@@ -732,6 +732,11 @@ fn parse_pkginfo(content: &[u8]) -> Option<Value> {
     let mut current_value = String::new();
 
     for line in text.lines() {
+        // A blank line ends the metadata headers. The description body can
+        // contain header-shaped examples, which must not become field values.
+        if line.is_empty() {
+            break;
+        }
         if line.starts_with(' ') || line.starts_with('\t') {
             // Continuation line - append to current value
             if current_key.is_some() {
@@ -4072,6 +4077,52 @@ Classifier: Programming Language :: Python :: 3
             not: None,
         });
         assert!(evaluate_kv_test(&cond, pkginfo, path).is_some());
+    }
+
+    #[test]
+    fn test_pkginfo_body_cannot_supply_or_override_headers() {
+        for newline in ["\n", "\r\n"] {
+            let headers = [
+                "Metadata-Version: 2.4",
+                "Name: declared-package",
+                "Version: 1.0",
+                "",
+                "Name: description-example",
+                "Requires-Dist: example-dependency",
+                "License-Expression: MIT",
+                "Description-Content-Type: text/markdown",
+            ]
+            .join(newline);
+            let parsed = parse_pkginfo(headers.as_bytes()).unwrap();
+            assert_eq!(
+                parsed,
+                serde_json::json!({
+                    "metadata-version": "2.4",
+                    "name": "declared-package",
+                    "version": "1.0"
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn test_pkginfo_boundary_preserves_folded_and_repeated_headers() {
+        let metadata = concat!(
+            "Metadata-Version: 2.4\n",
+            "Name: declared-package\n",
+            "Summary: Short\n",
+            " continuation\n",
+            "Requires-Dist: first-dependency\n",
+            "Requires-Dist: second-dependency\n",
+            "\n",
+            "Requires-Dist: description-example\n"
+        );
+        let parsed = parse_pkginfo(metadata.as_bytes()).unwrap();
+        assert_eq!(parsed["summary"], "Short\ncontinuation");
+        assert_eq!(
+            parsed["requires-dist"],
+            serde_json::json!(["first-dependency", "second-dependency"])
+        );
     }
 
     #[test]

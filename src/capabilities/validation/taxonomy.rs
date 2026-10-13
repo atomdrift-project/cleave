@@ -292,12 +292,36 @@ const BANNED_SEGMENT_EXCEPTIONS: &[(&str, &str)] = &[
     ),
 ];
 
-/// Maximum number of rules (atomic traits plus composite rules) allowed in a
-/// single directory. Composites count because a directory holding 40 atoms and
-/// 90 roll-ups is just as flat to an author and to the ML directory feature as
-/// one holding 130 atoms. Directories exceeding this should be split into
-/// subdirectories.
+/// Default number of rules (atomic traits plus composite rules) allowed in a
+/// single directory before a reviewed budget is required. Composites count
+/// because a directory holding 40 atoms and 90 roll-ups is just as flat to an
+/// author and to the ML directory feature as one holding 130 atoms. A higher
+/// exact-path budget is allowed only when a documented review establishes that
+/// the leaf remains coherent.
 pub(crate) const MAX_TRAITS_PER_DIRECTORY: usize = 100;
+/// Exact reviewed budgets above the default directory review trigger.
+///
+/// These are narrow semantic exceptions, not a higher global ceiling. Each
+/// entry must be justified in TAXONOMY.md and backed by a current migration
+/// record showing that the leaf is accurate, at the right level, and free of
+/// duplicates. The Cargo dependency identity leaf is one coherent namespace:
+/// the eight moved declarations identify package dependencies, not source
+/// imports, and have no equivalent declaration already in the leaf. The
+/// Base64 decode leaf keeps one algorithm across implementation scopes;
+/// language, API and source form belong in `for` and matchers, not taxonomy
+/// children. Its review removed the duplicate Ruby URL-safe match and moved an
+/// encoded-only PHP string out.
+const REVIEWED_DIRECTORY_TRAIT_BUDGETS: &[(&str, usize)] = &[
+    ("metadata/package/dependencies/manifest/identity", 108),
+    ("micro-behaviors/data/decode/base64", 103),
+];
+
+fn trait_directory_budget(dir: &str) -> usize {
+    REVIEWED_DIRECTORY_TRAIT_BUDGETS
+        .iter()
+        .find_map(|(reviewed_dir, budget)| (*reviewed_dir == dir).then_some(*budget))
+        .unwrap_or(MAX_TRAITS_PER_DIRECTORY)
+}
 
 /// Maximum number of immediate subdirectories allowed in one directory.
 /// Past this, a level has stopped being a taxonomy and become a flat list:
@@ -2542,7 +2566,7 @@ pub(crate) fn find_oversized_trait_directories(
 
     let mut violations: Vec<_> = dir_counts
         .into_iter()
-        .filter(|(_, count)| *count > MAX_TRAITS_PER_DIRECTORY)
+        .filter(|(dir, count)| *count > trait_directory_budget(dir))
         .map(|(dir, count)| (dir.to_string(), count))
         .collect();
 

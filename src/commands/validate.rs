@@ -602,18 +602,23 @@ fn validate_fixture_table<'a>(
     Ok(())
 }
 
+/// Skip hidden tooling/VCS directories while retaining hidden fixture files.
+/// The selected corpus root is admitted regardless of its own directory name.
+fn is_fixture_entry(entry: &walkdir::DirEntry) -> bool {
+    entry.depth() == 0
+        || !entry.file_type().is_dir()
+        || !entry.file_name().to_string_lossy().starts_with('.')
+}
+
 /// Walk the does-nothing directory, collecting every analyzable file.
 fn walk_does_nothing(dir: &Path, out: &mut Vec<Target>) -> Result<()> {
     for entry in walkdir::WalkDir::new(dir)
         .follow_links(false)
         .into_iter()
         .filter_entry(|e| {
-            let name = e.file_name().to_string_lossy();
-            // Skip VCS metadata and the fixture-generator scripts. The latter are
-            // build tooling that legitimately imports pickle/gzip/tar to assemble
-            // the artifacts — they are not do-nothing samples and were only ever
-            // swept in accidentally by the recursive walk.
-            !name.starts_with(".git") && name != "scripts"
+            // Generator scripts assemble fixtures; they are not samples.
+            is_fixture_entry(e)
+                && (e.depth() == 0 || !e.file_type().is_dir() || e.file_name() != "scripts")
         })
     {
         let entry = entry?;
@@ -639,7 +644,7 @@ fn walk_hostile_corpus(
     for entry in walkdir::WalkDir::new(dir)
         .follow_links(false)
         .into_iter()
-        .filter_entry(|e| !e.file_name().to_string_lossy().starts_with(".git"))
+        .filter_entry(is_fixture_entry)
     {
         let entry = entry?;
         if !entry.file_type().is_file() {
@@ -1910,5 +1915,78 @@ mod does_nothing_override_tests {
             does_nothing_cap("/corpus/does-nothing/artifacts/other.c", dir, &dn),
             1
         );
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod fixture_discovery_tests {
+    use super::{Target, walk_does_nothing, walk_hostile_corpus};
+    use std::collections::HashSet;
+    use std::path::Path;
+
+    fn paths(targets: &[Target], dir: &Path) -> HashSet<std::path::PathBuf> {
+        targets
+            .iter()
+            .map(|target| target.path().strip_prefix(dir).unwrap().to_path_buf())
+            .collect()
+    }
+
+    #[test]
+    fn fixture_walk_skips_hidden_directories_but_preserves_hidden_files() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("fixtures");
+        for relative in [
+            ".claude/settings.local.json",
+            ".codex/settings.json",
+            ".git/config",
+            "artifacts/.scratch/fixture.txt",
+            "artifacts/.SRCINFO",
+            ".hidden-fixture",
+            "out/archive.tar",
+            "name with space.txt",
+            "scripts/generator.py",
+        ] {
+            let path = dir.join(relative);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "fixture").unwrap();
+        }
+        let expected: HashSet<_> = [
+            "artifacts/.SRCINFO",
+            ".hidden-fixture",
+            "out/archive.tar",
+            "name with space.txt",
+        ]
+        .into_iter()
+        .map(std::path::PathBuf::from)
+        .collect();
+        let mut targets = Vec::new();
+        walk_does_nothing(&dir, &mut targets).unwrap();
+        assert_eq!(paths(&targets, &dir), expected);
+        let mut targets = Vec::new();
+        walk_hostile_corpus(&dir, "fixture-corpus", 1, 1, &mut targets).unwrap();
+        let mut expected = expected;
+        expected.insert("scripts/generator.py".into());
+        assert_eq!(paths(&targets, &dir), expected);
+        assert!(dir.join(".claude/settings.local.json").is_file());
+    }
+
+    #[test]
+    fn fixture_walk_is_independent_of_git_state_and_admits_hidden_root() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join(".fixtures");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("sample.local"), "fixture").unwrap();
+        let mut before = Vec::new();
+        walk_does_nothing(&dir, &mut before).unwrap();
+        // No Git process or repository is needed. Ignore rules and local
+        // metadata must not change which visible fixture files are selected.
+        std::fs::create_dir(dir.join(".git")).unwrap();
+        std::fs::write(dir.join(".git/index"), "invalid Git index").unwrap();
+        std::fs::write(root.path().join(".gitignore"), "*.local\n").unwrap();
+        let mut after = Vec::new();
+        walk_does_nothing(&dir, &mut after).unwrap();
+        assert_eq!(paths(&before, &dir), HashSet::from(["sample.local".into()]));
+        assert_eq!(paths(&after, &dir), paths(&before, &dir));
     }
 }

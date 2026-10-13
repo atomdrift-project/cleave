@@ -15,14 +15,30 @@
 use std::path::{Path, PathBuf};
 use std::sync::{OnceLock, RwLock};
 
-/// Keep rule discovery out of checkout and build artifacts. The selected root
-/// is always admitted, even if its own name starts with a dot or underscore.
+/// Known top-level directories in a traits checkout.
+const RULE_SOURCE_DIRS: &[&str] = &[
+    "metadata",
+    "micro-behaviors",
+    "objectives",
+    "well-known",
+    "third-party",
+];
+
+/// Keep rule discovery within the taxonomy, excluding checkout/build artifacts.
+/// Explicit rule subtrees and standalone rule directories remain supported.
+/// The selected root is admitted even if its name starts with a dot/underscore.
 pub(crate) fn is_rule_source_entry(entry: &walkdir::DirEntry) -> bool {
     if entry.depth() == 0 || !entry.file_type().is_dir() {
         return true;
     }
     let name = entry.file_name().to_string_lossy();
-    !name.starts_with('.') && !name.starts_with('_') && name != "testdata"
+    if name.starts_with('.') || name.starts_with('_') || name == "testdata" {
+        return false;
+    }
+    if entry.depth() == 1 && entry.path().parent().is_some_and(has_traits) {
+        return RULE_SOURCE_DIRS.contains(&name.as_ref());
+    }
+    true
 }
 
 /// Use the same directory-qualified ID for capability loading and inline YARA.
@@ -192,10 +208,7 @@ fn default_traits_dir() -> PathBuf {
 /// Check if a directory looks like a valid traits checkout.
 fn has_traits(path: &Path) -> bool {
     // Must exist and contain at least one of the expected subdirectories
-    path.is_dir()
-        && (path.join("objectives").is_dir()
-            || path.join("micro-behaviors").is_dir()
-            || path.join("metadata").is_dir())
+    path.is_dir() && RULE_SOURCE_DIRS.iter().any(|name| path.join(name).is_dir())
 }
 
 /// Get the traits commit (short) currently in use.
@@ -422,19 +435,52 @@ mod tests {
 #[allow(clippy::unwrap_used)]
 mod rule_source_tests {
     #[test]
-    fn fixture_yaml_is_not_a_rule_source() {
+    fn rule_discovery_is_limited_to_known_tiers_in_a_traits_checkout() {
         let root = tempfile::tempdir().unwrap();
-        for name in ["metadata", "testdata", ".scratch", "_scratch"] {
-            std::fs::create_dir(root.path().join(name)).unwrap();
+        for name in super::RULE_SOURCE_DIRS.iter().copied().chain([
+            "testdata",
+            "samples",
+            "scripts",
+            "taxonomy-migration",
+            "triage-reports",
+            "unexpected",
+            ".scratch",
+            "_scratch",
+            "metadata/nested",
+            "metadata/.scratch",
+            "metadata/_scratch",
+        ]) {
+            std::fs::create_dir_all(root.path().join(name)).unwrap();
             std::fs::write(root.path().join(name).join("control.yaml"), "driver: test").unwrap();
         }
-        let admitted: Vec<_> = walkdir::WalkDir::new(root.path())
+        let admitted: std::collections::HashSet<_> = walkdir::WalkDir::new(root.path())
             .into_iter()
             .filter_entry(super::is_rule_source_entry)
-            .filter_map(Result::ok)
+            .map(Result::unwrap)
             .filter(|e| e.file_type().is_file())
             .map(walkdir::DirEntry::into_path)
             .collect();
-        assert_eq!(admitted, [root.path().join("metadata/control.yaml")]);
+        let mut expected: std::collections::HashSet<_> = super::RULE_SOURCE_DIRS
+            .iter()
+            .map(|name| root.path().join(name).join("control.yaml"))
+            .collect();
+        expected.insert(root.path().join("metadata/nested/control.yaml"));
+        assert_eq!(admitted, expected);
+    }
+
+    #[test]
+    fn explicitly_selected_rule_subtrees_are_not_restricted_to_tier_names() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join(".rules");
+        std::fs::create_dir_all(dir.join("arbitrary/category")).unwrap();
+        std::fs::write(dir.join("arbitrary/category/control.yaml"), "driver: test").unwrap();
+        let admitted: Vec<_> = walkdir::WalkDir::new(&dir)
+            .into_iter()
+            .filter_entry(super::is_rule_source_entry)
+            .map(Result::unwrap)
+            .filter(|e| e.file_type().is_file())
+            .map(walkdir::DirEntry::into_path)
+            .collect();
+        assert_eq!(admitted, [dir.join("arbitrary/category/control.yaml")]);
     }
 }

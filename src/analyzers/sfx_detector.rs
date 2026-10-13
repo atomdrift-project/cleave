@@ -337,20 +337,18 @@ fn try_extract(
         };
     };
 
-    // Archive members are commonly analyzed from an in-memory byte buffer. In
-    // that case `file_path` is the member's logical name (for example
-    // `setup.exe`), not a file the external extractor can open. Materialize the
-    // bytes only when Cleave does not have a matching on-disk backing file, and
-    // keep the temporary file alive until extraction completes.
-    let Ok(materialized_input) = materialize_extraction_input(file_path, data) else {
+    // Always give the external extractor a private copy of the bytes Cleave
+    // actually analyzed. Archive members commonly carry only a logical path,
+    // and trusting a same-sized file at that path can make an attacker-selected
+    // member redirect extraction to an unrelated file in Cleave's working
+    // directory.
+    let Ok(materialized_input) = materialize_extraction_input(data) else {
         return SfxExtraction {
             archive_report: None,
             inno_diagnostics: vec![],
         };
     };
-    let extraction_path = materialized_input
-        .as_ref()
-        .map_or(file_path, tempfile::NamedTempFile::path);
+    let extraction_path = materialized_input.path();
 
     let mut inno_diagnostics = vec![];
     let extracted = match kind {
@@ -391,23 +389,12 @@ fn try_extract(
     }
 }
 
-/// Return a temporary, extractor-readable copy when `file_path` is only a
-/// logical archive-member path. A real backing file with the expected length is
-/// used directly to avoid copying large standalone installers.
-fn materialize_extraction_input(
-    file_path: &Path,
-    data: &[u8],
-) -> std::io::Result<Option<tempfile::NamedTempFile>> {
-    if std::fs::metadata(file_path)
-        .is_ok_and(|metadata| metadata.is_file() && metadata.len() == data.len() as u64)
-    {
-        return Ok(None);
-    }
-
+/// Return a private, extractor-readable copy of the exact bytes being analyzed.
+fn materialize_extraction_input(data: &[u8]) -> std::io::Result<tempfile::NamedTempFile> {
     let mut materialized = tempfile::Builder::new().suffix(".exe").tempfile()?;
     materialized.write_all(data)?;
     materialized.flush()?;
-    Ok(Some(materialized))
+    Ok(materialized)
 }
 
 fn analyze_pyinstaller_in_memory(
@@ -830,33 +817,15 @@ mod tests {
     }
 
     #[test]
-    fn materializes_in_memory_archive_member_for_external_extractor() -> std::io::Result<()> {
+    fn materializes_exact_analyzed_bytes_for_external_extractor() -> std::io::Result<()> {
         let data = b"installer bytes that only exist in memory";
-        let logical_path = Path::new("nested/path/that/does/not/exist/setup.exe");
-
-        let Some(materialized) = materialize_extraction_input(logical_path, data)? else {
-            return Err(std::io::Error::other(
-                "a nonexistent logical path requires a temporary file",
-            ));
-        };
+        let materialized = materialize_extraction_input(data)?;
 
         assert_eq!(std::fs::read(materialized.path())?, data);
         assert_eq!(
             materialized.path().extension().and_then(|ext| ext.to_str()),
             Some("exe")
         );
-        Ok(())
-    }
-
-    #[test]
-    fn uses_matching_real_backing_file_without_materializing() -> std::io::Result<()> {
-        let mut backing = tempfile::NamedTempFile::new()?;
-        backing.write_all(b"real installer bytes")?;
-        backing.flush()?;
-
-        let materialized = materialize_extraction_input(backing.path(), b"real installer bytes")?;
-
-        assert!(materialized.is_none());
         Ok(())
     }
 

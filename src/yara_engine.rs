@@ -3324,6 +3324,112 @@ mod tests {
     use super::*;
 
     #[test]
+    fn upx_child_preserves_inline_yara_and_dependent_composites() {
+        if !crate::upx::UPXDecompressor::is_available() {
+            eprintln!("UPX unavailable; packed child regression skipped");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let source = "rule pe_marker { strings: $a = \"UPXInlineYaraFixture\" condition: uint16(0) == 0x5a4d and $a }";
+        std::fs::write(
+            dir.path().join("traits.yaml"),
+            format!(
+                r#"
+defaults:
+  platforms: [windows]
+  for: [pe]
+traits:
+  - id: test/pe::marker
+    desc: Packed child inline marker
+    crit: notable
+    if:
+      type: yara
+      source: '{source}'
+composite_rules:
+  - id: test/pe::combined
+    desc: Packed child marker composite
+    crit: suspicious
+    all:
+      - id: test/pe::marker
+"#
+            ),
+        )
+        .unwrap();
+        let mapper =
+            CapabilityMapper::from_directory_with_options(dir.path(), 0.0, 0.0, false, false)
+                .unwrap();
+        let mut compiler = yara_x::Compiler::new();
+        let ns = "inline.test/pe::marker";
+        compiler.new_namespace(ns);
+        compiler.add_source(source.as_bytes()).unwrap();
+        compiler.new_namespace("test.upx.regular");
+        compiler.add_source(source.as_bytes()).unwrap();
+        let mut yara = YaraEngine::new_for_test();
+        yara.tiers
+            .entry(FALLBACK_BUCKET.to_string())
+            .or_default()
+            .set(Some(Arc::new(compiler.build())))
+            .unwrap();
+        yara.populated_tiers.insert(FALLBACK_BUCKET.to_string());
+        yara.compiled_inline_namespaces.push(ns.to_string());
+        yara.rule_counts = (2, 0);
+        let yara = Arc::new(yara);
+        let engine = crate::Engine::new(Arc::new(mapper), Some(yara.clone()), Default::default());
+        let analyzer = crate::analyzers::pe::PEAnalyzer::new()
+            .with_engine(engine)
+            .with_yara_arc(yara);
+        let fixture =
+            std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/test.exe"))
+                .unwrap();
+        for (name, marker, expected) in [
+            ("positive.exe", b"UPXInlineYaraFixture".as_slice(), true),
+            ("negative.exe", b"UPXAbsentYaraFixture".as_slice(), false),
+        ] {
+            let path = dir.path().join(name);
+            let mut bytes = fixture.clone();
+            bytes.extend_from_slice(marker);
+            std::fs::write(&path, bytes).unwrap();
+            let output = std::process::Command::new("upx")
+                .args(["--overlay=copy", "--force", "-q"])
+                .arg(&path)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let packed = std::fs::read(&path).unwrap();
+            assert!(crate::upx::UPXDecompressor::is_upx_packed(&packed));
+            let report = analyzer.analyze_structural(&path, &packed, None);
+            let child = report
+                .files
+                .iter()
+                .find(|f| {
+                    f.encoding
+                        .as_ref()
+                        .is_some_and(|e| e.iter().any(|s| s == "upx"))
+                })
+                .expect("UPX child must be analyzed");
+            for id in ["test/pe::marker", "test/pe::combined"] {
+                assert_eq!(
+                    child.findings.iter().any(|f| f.id == id),
+                    expected,
+                    "{name}: {id}: {:?}",
+                    child.findings
+                );
+            }
+            assert_eq!(
+                child
+                    .yara_matches
+                    .iter()
+                    .any(|m| m.namespace == "test.upx.regular"),
+                expected
+            );
+        }
+    }
+
+    #[test]
     fn opaque_data_evaluates_inline_yara_and_composites_on_original_bytes() {
         let dir = tempfile::tempdir().unwrap();
         let yaml = dir.path().join("traits.yaml");

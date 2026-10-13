@@ -635,20 +635,15 @@ impl PEAnalyzer {
                         &mut unpacked_report,
                         &unpacked_data,
                     );
-                    if let Some(yara) = &self.yara_engine {
-                        match yara.scan_bytes_to_findings(&unpacked_data, Some(&["pe"])) {
-                            Ok((matches, findings)) => {
-                                unpacked_report.yara_matches = matches;
-                                for finding in findings {
-                                    unpacked_report.push_finding_capped(finding);
-                                }
-                            }
-                            Err(e) => unpacked_report
-                                .metadata
-                                .errors
-                                .push(format!("yara(upx): {e:#}")),
-                        }
-                    }
+                    // Keep inline matches alongside ordinary YARA findings: trait
+                    // evaluation needs the inline namespace evidence on this layer.
+                    let inline_yara = crate::process_yara_result(
+                        &mut unpacked_report,
+                        self.yara_engine
+                            .as_ref()
+                            .map(|yara| yara.scan_bytes_with_inline(&unpacked_data, Some(&["pe"]))),
+                        self.yara_engine.as_deref(),
+                    );
                     // Evaluate composites against the unpacked layer so that
                     // objective-level findings (infostealers, etc.) appear in the child.
                     self.engine
@@ -660,7 +655,7 @@ impl PEAnalyzer {
                                 None,
                                 Some(&unpacked_ctx),
                             ),
-                            None,
+                            Some(&inline_yara),
                             None,
                             None,
                             None,

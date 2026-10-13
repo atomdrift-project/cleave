@@ -333,10 +333,23 @@ pub fn extract_to_memory(data: &[u8]) -> Result<MemoryStats, Error> {
 /// Extract a PyInstaller archive into `out_dir`.
 ///
 /// Convenience wrapper that calls [`extract_to_memory`] and writes each entry
-/// to disk. `out_dir` is created if it does not exist.
+/// to disk. `out_dir` must not already exist; extraction creates it as a fresh
+/// directory so pre-existing symlinks cannot redirect archive writes.
 pub fn extract(data: &[u8], out_dir: &Path) -> Result<Stats, Error> {
     let mem = extract_to_memory(data)?;
-    fs::create_dir_all(out_dir)?;
+    write_to_new_directory(mem, out_dir)
+}
+
+fn write_to_new_directory(mem: MemoryStats, out_dir: &Path) -> Result<Stats, Error> {
+    if let Some(parent) = out_dir.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+    // Deliberately fail for every existing filesystem object, including an
+    // empty directory or a symlink. The archive writer then owns a directory
+    // that was empty when it was created and never materializes symlinks itself.
+    fs::create_dir(out_dir)?;
 
     let mut stats = Stats {
         py_version: mem.py_version,
@@ -756,6 +769,45 @@ mod tests {
         // Python 2.7: 4 + 4 = 8 byte prelude
         let p = build_pyc(Some(&[1, 2, 3, 4]), (2, 7), b"body");
         assert_eq!(p.len(), 8 + 4);
+    }
+
+    #[test]
+    fn disk_extraction_requires_a_new_output_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let output = temp.path().join("output");
+        fs::create_dir(&output).unwrap();
+        let mem = MemoryStats {
+            entries: vec![MemoryEntry {
+                name: "payload.txt".to_string(),
+                kind: EntryKind::Binary,
+                data: b"payload".to_vec(),
+            }],
+            ..Default::default()
+        };
+
+        assert!(write_to_new_directory(mem, &output).is_err());
+        assert!(!output.join("payload.txt").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn disk_extraction_refuses_a_symlink_output_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let target = temp.path().join("target");
+        fs::create_dir(&target).unwrap();
+        let output = temp.path().join("output");
+        std::os::unix::fs::symlink(&target, &output).unwrap();
+        let mem = MemoryStats {
+            entries: vec![MemoryEntry {
+                name: "payload.txt".to_string(),
+                kind: EntryKind::Binary,
+                data: b"payload".to_vec(),
+            }],
+            ..Default::default()
+        };
+
+        assert!(write_to_new_directory(mem, &output).is_err());
+        assert!(!target.join("payload.txt").exists());
     }
 
     /// A zlib member that inflates past the cap must be refused, not

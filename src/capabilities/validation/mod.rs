@@ -157,7 +157,7 @@ pub(crate) use regex_cost::find_pathological_regex_patterns;
 // Taxonomy validation
 pub(crate) use directory_whitelist::validate_directory_structure;
 pub(crate) use taxonomy::{
-    MAX_SUBDIRECTORIES_PER_DIRECTORY, MAX_TRAITS_PER_DIRECTORY, ObjectivesWellknownViolation,
+    MAX_SUBDIRECTORIES_PER_DIRECTORY, ObjectivesWellknownViolation,
     TAXONOMY_DEPTH_REVIEW_THRESHOLD, find_all_platform_rules_outside_allowlist,
     find_banned_directory_segments, find_benign_misplaced, find_broad_filetype_traits,
     find_broad_platform_traits, find_cap_obj_violations, find_cap_wellknown_violations,

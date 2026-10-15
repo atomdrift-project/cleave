@@ -1119,7 +1119,7 @@ const ALLOWED_METADATA_SIGNED: &[&str] = &[
     "certificate",  // Certificate chain string patterns
     "entitlements", // Code entitlements (macOS/iOS, Android)
     "platform",     // Platform-signed binary composites (auto-generated)
-    "script",       // Script signature-block markers (not verified trust)
+    "script",       // Script signature-block markers; they do not verify trust
     "trust-level",  // Signing trust level (ad-hoc, developer, platform, app store)
 ];
 
@@ -1840,6 +1840,7 @@ mod tests {
             "micro-behaviors/process/fiber",
             "objectives/credential-access/memory",
             "metadata/file/entropy",
+            "metadata/signed/script",
         ] {
             std::fs::create_dir_all(traits_path.join(new)).unwrap();
         }

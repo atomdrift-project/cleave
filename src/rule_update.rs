@@ -24,7 +24,7 @@
 //! running on last week's rules, not stop it.
 
 use std::collections::BTreeMap;
-use std::io::{Cursor, Read};
+use std::io::{self, Cursor, Read};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -371,7 +371,10 @@ fn install(dir: &Path, artifact: &Artifact, source: &str, channel: &Channel) -> 
 /// manifest. In particular, a link named [`SIDECAR`] would make the metadata
 /// write in [`install`] overwrite its target. Rules need only ordinary files
 /// and directories, so links, devices, FIFOs, and other special entries are
-/// rejected before anything at that entry is created.
+/// rejected before anything at that entry is created. Git archives also contain
+/// a PAX global metadata header (`pax_global_header`), which is not a file to
+/// extract. Consume and skip that valid header so the archive is handled like
+/// the one produced by `git archive --format=tar`.
 fn unpack_bundle<R: Read>(reader: R, staging: &Path) -> Result<(), String> {
     let mut archive = tar::Archive::new(reader);
     let entries = archive
@@ -380,15 +383,19 @@ fn unpack_bundle<R: Read>(reader: R, staging: &Path) -> Result<(), String> {
 
     for entry in entries {
         let mut entry = entry.map_err(|e| format!("reading tar entry: {e}"))?;
+        let kind = entry.header().entry_type();
+        if kind.is_pax_global_extensions() {
+            io::copy(&mut entry, &mut io::sink())
+                .map_err(|e| format!("reading PAX global header: {e}"))?;
+            continue;
+        }
         let path = entry
             .path()
             .map_err(|e| format!("reading tar entry path: {e}"))?
             .into_owned();
-        let kind = entry.header().entry_type();
         if !kind.is_file() && !kind.is_dir() {
             return Err(format!(
-                "unsupported tar entry type {:?} at {}",
-                kind,
+                "unsupported tar entry type {kind:?} at {}",
                 path.display()
             ));
         }

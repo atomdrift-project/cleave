@@ -16,11 +16,10 @@ use crate::capabilities::precision::{
 #[cfg(feature = "lint")]
 use crate::capabilities::validation::{
     ExtractedPatterns, MAX_NOTABLE_DOWNGRADE_DIRECT, MAX_NOTABLE_DOWNGRADE_EXPANDED,
-    MAX_SUBDIRECTORIES_PER_DIRECTORY, MAX_TRAITS_PER_DIRECTORY, MISSING_CONDITIONS,
-    ObjectivesWellknownViolation, TAXONOMY_DEPTH_REVIEW_THRESHOLD,
-    check_basename_pattern_duplicates, check_exact_contained_by_substr,
-    check_overlapping_regex_patterns, check_regex_alternative_subsets,
-    check_regex_or_overlapping_exact, check_regex_should_be_exact,
+    MAX_SUBDIRECTORIES_PER_DIRECTORY, MISSING_CONDITIONS, ObjectivesWellknownViolation,
+    TAXONOMY_DEPTH_REVIEW_THRESHOLD, check_basename_pattern_duplicates,
+    check_exact_contained_by_substr, check_overlapping_regex_patterns,
+    check_regex_alternative_subsets, check_regex_or_overlapping_exact, check_regex_should_be_exact,
     check_same_string_different_types, collect_trait_refs_from_rule,
     collect_trait_refs_from_trait_def, find_all_platform_rules_outside_allowlist,
     find_alternation_merge_candidates, find_ast_function_call_should_use_symbol,
@@ -5530,9 +5529,8 @@ impl super::CapabilityMapper {
                     && !crate::validation_controls::is_validator_disabled("oversized-dir")
                 {
                     eprintln!(
-                        "\n❌ ERROR: {} directories have more than {} rules (atomic + composite)",
-                        oversized_dirs.len(),
-                        MAX_TRAITS_PER_DIRECTORY
+                        "\n❌ ERROR: {} directories exceed their direct-rule budget (atomic + composite)",
+                        oversized_dirs.len()
                     );
                     eprintln!(
                         "   Why: the ML pipeline sees directory structure, not trait IDs; broad directories hide shared behavior."
@@ -5544,7 +5542,7 @@ impl super::CapabilityMapper {
                         "   Then reorganize the remaining traits into meaningful subdirectories only when each child adds precision under TAXONOMY.md."
                     );
                     eprintln!(
-                        "   Merely moving the same broad set to another location is not a fix; keep splits technique-based and platform-neutral where possible, and within the 100-rule cap.\n"
+                        "   Merely moving the same broad set to another location is not a fix; keep splits technique-based and platform-neutral where possible. The default budget is 100; exact-path exceptions require current evidence and a TAXONOMY.md entry.\n"
                     );
                     for (dir_path, count) in &oversized_dirs {
                         eprintln!("   {}: {} rules", dir_path, count);
@@ -5553,9 +5551,8 @@ impl super::CapabilityMapper {
                     warnings.push_id(
                     "oversized-dir",
                     format!(
-                        "{} directories exceed {} rules (audit duplicates, then reorganize only into TAXONOMY.md-precise subdirectories; relocation alone is not a fix)",
-                        oversized_dirs.len(),
-                        MAX_TRAITS_PER_DIRECTORY
+                        "{} directories exceed their direct-rule budget (audit duplicates, then reorganize only into TAXONOMY.md-precise subdirectories; relocation alone is not a fix)",
+                        oversized_dirs.len()
                     ),
                 );
                 }

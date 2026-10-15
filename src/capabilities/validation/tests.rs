@@ -5168,6 +5168,31 @@ mod taxonomy_tests {
             vec![(other.to_string(), 101)]
         );
     }
+
+    #[test]
+    fn reviewed_file_copy_budget_is_exact_and_scoped() {
+        let reviewed = "micro-behaviors/fs/file/copy";
+        let traits: Vec<_> = (0..101)
+            .map(|i| make_trait(&format!("{reviewed}::rule-{i}"), "other::t"))
+            .collect();
+        assert!(find_oversized_trait_directories(&traits, &[]).is_empty());
+
+        let mut over_reviewed_budget = traits.clone();
+        over_reviewed_budget.push(make_trait(&format!("{reviewed}::rule-101"), "other::t"));
+        assert_eq!(
+            find_oversized_trait_directories(&over_reviewed_budget, &[]),
+            vec![(reviewed.to_string(), 102)]
+        );
+
+        let other = "micro-behaviors/fs/file/move";
+        let other_traits: Vec<_> = (0..101)
+            .map(|i| make_trait(&format!("{other}::rule-{i}"), "other::t"))
+            .collect();
+        assert_eq!(
+            find_oversized_trait_directories(&other_traits, &[]),
+            vec![(other.to_string(), 101)]
+        );
+    }
 }
 
 #[cfg(test)]

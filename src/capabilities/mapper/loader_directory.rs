@@ -6297,22 +6297,26 @@ traits:
         let mut bytes = super::MapperCacheData::to_json_lines(&[atomic], &[composite], &[])
             .expect("encode cache");
         let cached = super::MapperCacheData::parse(&mut bytes).expect("decode cache");
-        let super::Condition::Yara { namespace, .. } = &cached.trait_definitions[0].r#if else {
-            panic!("cached atomic condition changed type");
-        };
-        assert_eq!(
-            namespace.as_deref(),
-            Some("inline.objectives/test::inline-yara")
+        assert!(
+            matches!(
+                &cached.trait_definitions[0].r#if,
+                super::Condition::Yara { namespace, .. }
+                    if namespace.as_deref() == Some("inline.objectives/test::inline-yara")
+            ),
+            "cached atomic YARA namespace must be restored"
         );
         let conditions = cached.composite_rules[0]
             .all
             .as_ref()
             .expect("all conditions");
-        let super::Condition::Yara { compiled, .. } = &conditions[0] else {
-            panic!("cached composite condition changed type");
-        };
         assert!(
-            compiled.is_some(),
+            matches!(
+                &conditions[0],
+                super::Condition::Yara {
+                    compiled: Some(_),
+                    ..
+                }
+            ),
             "cached composite YARA must be compiled again"
         );
     }

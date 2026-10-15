@@ -945,9 +945,17 @@ pub(crate) fn cache_timestamp() -> Result<SystemTime> {
     Ok(*CACHE_TIMESTAMP.write().get_or_insert(ts))
 }
 
-/// The analysis-cache revision fingerprint for the process's traits tree.
-/// Memoized; see [`traits_revision_fingerprint_for`].
-pub(crate) fn traits_revision_fingerprint() -> i64 {
+/// Content fingerprint of the active traits tree and running analyzer.
+///
+/// Consumers with their own analysis caches must use this rather than the
+/// traits commit: local edits and trees without Git metadata still change
+/// the analysis. Includes every rule file and its relative path.
+///
+/// Shares the source snapshot used by rule loading; hashes once without
+/// compiling rules. Memoized until a traits-directory switch or
+/// [`crate::reload_capability_mapper`] invalidates the snapshot.
+#[must_use]
+pub fn traits_revision_fingerprint() -> i64 {
     let cached = *TRAITS_REVISION.read();
     if let Some(revision) = cached {
         return revision;

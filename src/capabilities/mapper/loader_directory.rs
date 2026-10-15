@@ -185,9 +185,17 @@ impl MapperCacheData {
         );
         let (traits, composites) = rules.split_at_mut(header.traits);
         Ok(Self {
-            trait_definitions: parse_lines(traits, |t: &mut TraitDefinition, p| t.defined_in = p)?,
+            trait_definitions: parse_lines(traits, |t: &mut TraitDefinition, p| {
+                t.defined_in = p;
+                // Runtime YARA bindings are deliberately absent from the cache
+                // representation. Restore the same bindings as a YAML load.
+                if matches!(t.r#if, Condition::Yara { .. }) {
+                    t.set_yara_if_namespace();
+                }
+            })?,
             composite_rules: parse_lines(composites, |c: &mut CompositeTrait, p| {
                 c.defined_in = p;
+                c.compile_yara();
             })?,
             parse_errors: header.parse_errors,
         })
@@ -6257,6 +6265,56 @@ traits:
         let data = super::MapperCacheData::parse(&mut bytes).expect("decode cache");
         assert_eq!(data.trait_definitions[0].defined_in, trait_path);
         assert_eq!(data.composite_rules[0].defined_in, rule_path);
+    }
+
+    /// Cached rules must regain the runtime YARA state omitted by serde.
+    /// Otherwise inline support traits and YARA composite legs silently stop
+    /// matching after the first process warms the mapper cache.
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn mapper_cache_round_trip_restores_yara_runtime_state() {
+        let source = "rule cache_probe { strings: $a = \"QACACHE\" condition: $a }";
+        let mut atomic = super::TraitDefinition {
+            id: "objectives/test::inline-yara".into(),
+            r#if: super::Condition::Yara {
+                source: source.into(),
+                compiled: None,
+                namespace: None,
+            },
+            ..Default::default()
+        };
+        atomic.set_yara_if_namespace();
+        let mut composite = super::CompositeTrait {
+            id: "objectives/test::composite-yara".into(),
+            all: Some(vec![super::Condition::Yara {
+                source: source.into(),
+                compiled: None,
+                namespace: None,
+            }]),
+            ..Default::default()
+        };
+        composite.compile_yara();
+        let mut bytes = super::MapperCacheData::to_json_lines(&[atomic], &[composite], &[])
+            .expect("encode cache");
+        let cached = super::MapperCacheData::parse(&mut bytes).expect("decode cache");
+        let super::Condition::Yara { namespace, .. } = &cached.trait_definitions[0].r#if else {
+            panic!("cached atomic condition changed type");
+        };
+        assert_eq!(
+            namespace.as_deref(),
+            Some("inline.objectives/test::inline-yara")
+        );
+        let conditions = cached.composite_rules[0]
+            .all
+            .as_ref()
+            .expect("all conditions");
+        let super::Condition::Yara { compiled, .. } = &conditions[0] else {
+            panic!("cached composite condition changed type");
+        };
+        assert!(
+            compiled.is_some(),
+            "cached composite YARA must be compiled again"
+        );
     }
 
     /// A banned name in `defaults: for:` is reported once for the file, under

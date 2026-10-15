@@ -1721,3 +1721,71 @@ fn ast_batch_reuses_compilation_across_literal_subsets() {
         ));
     }
 }
+
+/// Repeated patterns reuse the same grammar positions while their query steps
+/// and field constraints differ. Compiler transition caching must preserve the
+/// complete captures for every pattern and errors for invalid structure.
+#[test]
+fn ast_compiler_preserves_repeated_patterns_with_fields_and_alternatives() {
+    let source = "send(input); api.read(input); store.write(42); left + right; left + 7;";
+    let parsed = parsed_for_test("compiler-cache.js", source.as_bytes());
+    let tree = parsed.source_ast().unwrap().tree;
+    let patterns = [
+        "(call_expression function: (identifier) @function arguments: (arguments (identifier) @argument))",
+        "(call_expression function: (member_expression object: (identifier) @object property: (property_identifier) @property) arguments: (arguments [(identifier) (number)] @argument))",
+        "(binary_expression left: (identifier) @left right: [(identifier) (number)] @right)",
+    ];
+    let expected = [
+        vec![vec![("function", "send"), ("argument", "input")]],
+        vec![
+            vec![
+                ("object", "api"),
+                ("property", "read"),
+                ("argument", "input"),
+            ],
+            vec![
+                ("object", "store"),
+                ("property", "write"),
+                ("argument", "42"),
+            ],
+        ],
+        vec![
+            vec![("left", "left"), ("right", "right")],
+            vec![("left", "left"), ("right", "7")],
+        ],
+    ];
+    let query_source = patterns.repeat(32).join("\n");
+    let query = tree_sitter::Query::new(&tree.language(), &query_source).unwrap();
+    let mut cursor = tree_sitter::QueryCursor::new();
+    let mut results = vec![Vec::new(); 96];
+    {
+        use streaming_iterator::StreamingIterator;
+        let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
+        while let Some(m) = matches.next() {
+            let captures: Vec<_> = m
+                .captures()
+                .iter()
+                .map(|c| {
+                    (
+                        query.capture_names()[c.index as usize],
+                        c.node.utf8_text(source.as_bytes()).unwrap(),
+                    )
+                })
+                .collect();
+            results[m.pattern_index].push(captures);
+        }
+    }
+    assert!(!cursor.did_exceed_match_limit());
+    for (i, matches) in results.iter().enumerate() {
+        assert_eq!(matches, &expected[i % 3], "pattern {i}");
+    }
+    // Invalid structure must retain the same error location even when valid
+    // repeated patterns have already populated the compiler's local cache.
+    let invalid = "(identifier (identifier))";
+    let prefix = format!("{query_source}\n");
+    let single = tree_sitter::Query::new(&tree.language(), invalid).unwrap_err();
+    let combined =
+        tree_sitter::Query::new(&tree.language(), &(prefix.clone() + invalid)).unwrap_err();
+    assert_eq!(combined.kind, single.kind);
+    assert_eq!(combined.offset, prefix.len() + single.offset);
+}

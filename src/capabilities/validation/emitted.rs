@@ -23,6 +23,14 @@ const EXACT_IDS: &[&str] = &[
     "metadata/signed/integrity::macho-code-directory-invalid",
 ];
 
+/// Fixed ids emitted by the Chrome/WebExtension manifest analyzer.
+const CHROME_EXACT_IDS: &[&str] = &[
+    "metadata/permission/extension-api::external-connection-policy",
+    "metadata/permission/extension-api::web-accessible-resource-entries",
+    "metadata/permission/activation::persistent-background-declaration",
+    "objectives/supply-chain/metadata-anomaly/update-url::external",
+];
+
 /// `metadata/signed/<category>::<leaf>` categories the analyzers emit.
 /// `macho.rs` `emit_signature_findings`: developer (team id), platform
 /// (`apple`), self-signed (signer org), unknown (`unknown`), id (bundle id);
@@ -45,6 +53,15 @@ const SIGNED_CATEGORIES: &[&str] = &[
 pub(crate) fn check_emitted_ref(id: &str) -> Option<Result<(), String>> {
     if id.starts_with("metadata/import/") {
         return crate::capabilities::mapper::imports::is_dynamic_import_ref(id).then_some(Ok(()));
+    }
+    if CHROME_EXACT_IDS.contains(&id) {
+        return Some(Ok(()));
+    }
+    if let Some(rest) = id.strip_prefix("metadata/permission/host/") {
+        return Some(check_chrome_host_ref(rest));
+    }
+    if let Some(rest) = id.strip_prefix("metadata/permission/extension-api/") {
+        return Some(check_chrome_api_ref(rest));
     }
     if EXACT_IDS.contains(&id) {
         return Some(Ok(()));
@@ -80,6 +97,51 @@ pub(crate) fn check_emitted_ref(id: &str) -> Option<Result<(), String>> {
             }
             None
         }
+    }
+}
+
+fn check_chrome_host_ref(rest: &str) -> Result<(), String> {
+    let Some((token, leaf)) = rest.split_once("::") else {
+        return Err("Chrome host declarations use `<host>::declared`".into());
+    };
+    if leaf != "declared" {
+        return Err("Chrome host declarations use the `declared` leaf".into());
+    }
+    let special = matches!(token, "all-urls" | "all-hosts" | "file-urls");
+    let hostname = token.contains('.')
+        && token.split('.').all(|label| {
+            !label.is_empty()
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        });
+    if special || hostname {
+        Ok(())
+    } else {
+        Err(
+            "Chrome host token must be a normalized dotted host or a supported wildcard token"
+                .into(),
+        )
+    }
+}
+
+fn check_chrome_api_ref(rest: &str) -> Result<(), String> {
+    let Some((token, leaf)) = rest.split_once("::") else {
+        return Err("Chrome API declarations use `<permission>::declared`".into());
+    };
+    let kebab_token = !token.is_empty()
+        && token.split('-').all(|part| {
+            !part.is_empty()
+                && part
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+        });
+    if leaf == "declared" && kebab_token {
+        Ok(())
+    } else {
+        Err("Chrome API declarations use a normalized kebab token and the `declared` leaf".into())
     }
 }
 
@@ -312,6 +374,65 @@ mod tests {
     fn exact_engine_ids_validate() {
         for id in EXACT_IDS {
             assert_eq!(check_emitted_ref(id), Some(Ok(())), "{id}");
+        }
+    }
+
+    #[test]
+    fn chrome_manifest_emitted_ids_validate() {
+        for id in [
+            "metadata/permission/host/all-urls::declared",
+            "metadata/permission/host/all-hosts::declared",
+            "metadata/permission/host/file-urls::declared",
+            "metadata/permission/host/example.org::declared",
+            "metadata/permission/host/sub.example.co.uk::declared",
+            "metadata/permission/extension-api/native-messaging::declared",
+            "metadata/permission/extension-api/declarative-net-request::declared",
+            "metadata/permission/extension-api/identity-2::declared",
+            "metadata/permission/extension-api::external-connection-policy",
+            "metadata/permission/extension-api::web-accessible-resource-entries",
+            "metadata/permission/activation::persistent-background-declaration",
+            "objectives/supply-chain/metadata-anomaly/update-url::external",
+        ] {
+            assert_eq!(check_emitted_ref(id), Some(Ok(())), "{id}");
+        }
+    }
+
+    #[test]
+    fn chrome_manifest_dynamic_ids_reject_malformed_near_misses() {
+        for id in [
+            "metadata/permission/host/Example.org::declared",
+            "metadata/permission/host/.example.org::declared",
+            "metadata/permission/host/example..org::declared",
+            "metadata/permission/host/-example.org::declared",
+            "metadata/permission/host/example.org::observed",
+            "metadata/permission/host/example.org/extra::declared",
+            "metadata/permission/extension-api/NativeMessaging::declared",
+            "metadata/permission/extension-api/native--messaging::declared",
+            "metadata/permission/extension-api/native-messaging::observed",
+            "metadata/permission/extension-api/native/messaging::declared",
+        ] {
+            assert!(matches!(check_emitted_ref(id), Some(Err(_))), "{id}");
+        }
+        for id in [
+            "metadata/permission/extension-api::unknown-policy",
+            "metadata/permission/activation::content-script-run-at-start",
+            "objectives/supply-chain/metadata-anomaly/update-url::first-party",
+        ] {
+            assert_eq!(check_emitted_ref(id), None, "{id}");
+        }
+    }
+
+    #[test]
+    fn chrome_yaml_traits_fall_through_to_static_validation() {
+        for id in [
+            // Aggregate host profile, not a per-host declaration.
+            "metadata/permission/host::broad-host-access",
+            // Canonical YAML API permission, not a dynamic fallback.
+            "metadata/permission/extension-api::permission-proxy",
+            // YAML activation behavior remains outside Chrome's fixed IDs.
+            "metadata/permission/activation::content-script-run-at-start",
+        ] {
+            assert_eq!(check_emitted_ref(id), None, "{id}");
         }
     }
 

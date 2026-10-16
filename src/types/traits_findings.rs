@@ -216,18 +216,26 @@ pub struct Note {
 /// after the fold (inheritance, aggregate attribution) contributes spans on
 /// top of the snapshot instead of being lost. Derivation matches compact
 /// conversion's historical rules: skip `archive:`-located evidence, take
-/// `[byte_offset, match_len-or-value-len]`, sort by offset, dedup by offset,
-/// cap at [`MAX_EV_LOCS`]. One definition so fold and convert never drift.
+/// `[byte_offset, match_len-or-value-len]`, sort by offset, keep the widest
+/// span when offsets tie, and cap at [`MAX_EV_LOCS`]. One definition so fold
+/// and convert never drift.
 #[must_use]
 pub(crate) fn finding_spans(finding: &Finding) -> Vec<[u64; 2]> {
     let mut ev_spans = evidence_spans(&finding.evidence);
     if let Some(pre) = &finding.precomputed_spans {
         ev_spans.extend(pre.iter().copied());
     }
-    ev_spans.sort_unstable_by_key(|s| s[0]);
-    ev_spans.dedup_by_key(|s| s[0]);
+    sort_dedup_spans_by_offset(&mut ev_spans);
     ev_spans.truncate(MAX_EV_LOCS);
     ev_spans
+}
+
+/// Sort spans by start offset and keep one deterministic span per offset.
+/// When detections begin at the same byte but report different lengths, retain
+/// the widest source range so output does not depend on evidence arrival order.
+pub(crate) fn sort_dedup_spans_by_offset(spans: &mut Vec<[u64; 2]>) {
+    spans.sort_unstable_by_key(|span| (span[0], std::cmp::Reverse(span[1])));
+    spans.dedup_by_key(|span| span[0]);
 }
 
 /// The byte spans a slice of evidence points at, unsorted and uncapped —
@@ -504,24 +512,10 @@ pub(crate) fn truncate_evidence_value(value: &str) -> String {
 /// Maximum number of byte offsets to include in JSON output
 pub(crate) const MAX_OFFSETS_IN_JSON: usize = 8;
 
-/// Serialize byte offsets, truncating to MAX_OFFSETS_IN_JSON
-fn serialize_truncated_offsets<S>(offsets: &[u64], serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    use serde::ser::SerializeSeq;
-    let len = offsets.len().min(MAX_OFFSETS_IN_JSON);
-    let mut seq = serializer.serialize_seq(Some(len))?;
-    for offset in offsets.iter().take(MAX_OFFSETS_IN_JSON) {
-        seq.serialize_element(offset)?;
-    }
-    seq.end()
-}
-
 /// A single piece of evidence supporting a finding.
 /// Evidence items with the same (method, source, value) tuple can be deduplicated
 /// by merging their offsets into a single Evidence with multiple locations.
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[derive(Debug, Deserialize, Clone, Default)]
 pub struct Evidence {
     /// Detection method (symbol, yara, tree-sitter, radare2, entropy, magic, etc.)
     pub method: String,
@@ -529,17 +523,12 @@ pub struct Evidence {
     #[serde(skip_serializing_if = "String::is_empty", default)]
     pub source: String,
     /// Value discovered (symbol name, pattern match, etc.) - truncated to 4KB on serialization
-    #[serde(serialize_with = "serialize_truncated_value")]
     pub value: String,
     /// Optional location context (semantic labels like "import", archive paths, etc.)
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub location: Option<String>,
     /// Byte offsets where this evidence was found (truncated to 8 in JSON output)
-    #[serde(
-        skip_serializing_if = "Vec::is_empty",
-        default,
-        serialize_with = "serialize_truncated_offsets"
-    )]
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub offsets: Vec<u64>,
     /// Total occurrence count when offsets are truncated (0 means use offsets.len())
     #[serde(skip_serializing_if = "is_zero_usize", default)]
@@ -563,6 +552,53 @@ pub struct Evidence {
     /// matching helper, not part of the observable Evidence surface.
     #[serde(skip)]
     pub alt_value: Option<String>,
+}
+
+impl Serialize for Evidence {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+
+        let bounded_value = bound_evidence_value(&self.value);
+        let value = bounded_value.as_deref().unwrap_or(&self.value);
+        // Serialization removes NULs and may truncate long evidence values.
+        // Keep the original source span when that changes the displayed value
+        // length, so a cached/deserialized finding still points at the bytes
+        // that matched.
+        let match_len = self
+            .match_len
+            .or_else(|| (value.len() != self.value.len()).then_some(self.value.len() as u64));
+        let field_count = 2
+            + usize::from(!self.source.is_empty())
+            + usize::from(self.location.is_some())
+            + usize::from(!self.offsets.is_empty())
+            + usize::from(!is_zero_usize(&self.count))
+            + usize::from(match_len.is_some());
+        let mut state = serializer.serialize_struct("Evidence", field_count)?;
+        state.serialize_field("method", &self.method)?;
+        if !self.source.is_empty() {
+            state.serialize_field("source", &self.source)?;
+        }
+        state.serialize_field("value", value)?;
+        if let Some(location) = &self.location {
+            state.serialize_field("location", location)?;
+        }
+        if !self.offsets.is_empty() {
+            state.serialize_field(
+                "offsets",
+                &self.offsets[..self.offsets.len().min(MAX_OFFSETS_IN_JSON)],
+            )?;
+        }
+        if !is_zero_usize(&self.count) {
+            state.serialize_field("count", &self.count)?;
+        }
+        if let Some(match_len) = match_len {
+            state.serialize_field("match_len", &match_len)?;
+        }
+        state.end()
+    }
 }
 
 impl Evidence {
@@ -617,8 +653,18 @@ impl Evidence {
     }
 
     /// Merge another evidence item with the same (method, source, value) into this one.
-    /// Combines offsets and updates the count.
+    /// Combines offsets and updates the count. If either item has a source-byte
+    /// length that differs from its value length, keep the widest effective
+    /// source span so duplicate merge order cannot change the emitted range.
     pub fn merge(&mut self, other: Evidence) {
+        let self_value_len = self.value.len() as u64;
+        let other_value_len = other.value.len() as u64;
+        let widest_match_len = self
+            .match_len
+            .unwrap_or(self_value_len)
+            .max(other.match_len.unwrap_or(other_value_len));
+        self.match_len = (widest_match_len != self_value_len).then_some(widest_match_len);
+
         // Add other's count (or 1 if unset)
         let other_count = if other.count > 0 { other.count } else { 1 };
         if self.count == 0 {
@@ -739,6 +785,187 @@ pub(crate) fn deduplicate_evidence(evidence: Vec<Evidence>) -> Vec<Evidence> {
 #[cfg(test)]
 #[allow(clippy::expect_used)]
 mod tests {
+    #[test]
+    fn evidence_json_roundtrip_sanitizes_nul_but_preserves_source_span() {
+        use super::{Evidence, Finding, finding_spans};
+
+        let value = "parseInt\0\u{1}\u{16}(Ljava/lang/String;I)I";
+        let evidence = Evidence {
+            method: "hex".into(),
+            value: value.into(),
+            offsets: vec![4243],
+            ..Default::default()
+        };
+
+        let json = serde_json::to_string(&evidence).expect("evidence serializes");
+        assert!(!json.contains('\0'));
+        assert!(json.contains("parseInt\\u0001\\u0016(Ljava/lang/String;I)I"));
+        assert!(json.contains("\"match_len\":33"));
+
+        let restored: Evidence =
+            serde_json::from_str(&json).expect("serialized evidence deserializes");
+        assert_eq!(restored.value, "parseInt\u{1}\u{16}(Ljava/lang/String;I)I");
+        assert_eq!(restored.match_len, Some(33));
+        let finding = Finding {
+            evidence: vec![restored],
+            ..Default::default()
+        };
+        assert_eq!(finding_spans(&finding), [[4243, 33]]);
+    }
+
+    #[test]
+    fn evidence_json_roundtrip_preserves_explicit_span_after_sanitization() {
+        use super::{Evidence, Finding, finding_spans};
+
+        let evidence = Evidence {
+            method: "decoded".into(),
+            value: "source\0value".into(),
+            offsets: vec![91],
+            match_len: Some(7),
+            ..Default::default()
+        };
+
+        let json = serde_json::to_string(&evidence).expect("evidence serializes");
+        assert!(json.contains("\"match_len\":7"));
+        let restored: Evidence = serde_json::from_str(&json).expect("evidence deserializes");
+        assert_eq!(restored.match_len, Some(7));
+        assert_eq!(
+            finding_spans(&Finding {
+                evidence: vec![restored],
+                ..Default::default()
+            }),
+            [[91, 7]]
+        );
+    }
+
+    #[test]
+    fn evidence_json_roundtrip_preserves_span_before_value_truncation() {
+        use super::{Evidence, Finding, MAX_EVIDENCE_VALUE_SIZE, finding_spans};
+
+        let evidence = Evidence {
+            method: "raw".into(),
+            value: "x".repeat(MAX_EVIDENCE_VALUE_SIZE + 100),
+            offsets: vec![123],
+            ..Default::default()
+        };
+
+        let json = serde_json::to_string(&evidence).expect("evidence serializes");
+        let restored: Evidence = serde_json::from_str(&json).expect("evidence deserializes");
+        assert!(restored.value.len() <= MAX_EVIDENCE_VALUE_SIZE);
+        assert_eq!(
+            restored.match_len,
+            Some((MAX_EVIDENCE_VALUE_SIZE + 100) as u64)
+        );
+        assert_eq!(
+            finding_spans(&Finding {
+                evidence: vec![restored],
+                ..Default::default()
+            }),
+            [[123, (MAX_EVIDENCE_VALUE_SIZE + 100) as u64]]
+        );
+    }
+
+    #[test]
+    fn legacy_evidence_json_without_match_len_keeps_value_length_fallback() {
+        use super::{Evidence, Finding, finding_spans};
+
+        let restored: Evidence =
+            serde_json::from_str(r#"{"method":"raw","value":"legacy","offsets":[17]}"#)
+                .expect("legacy evidence deserializes");
+        assert_eq!(restored.match_len, None);
+        assert_eq!(
+            finding_spans(&Finding {
+                evidence: vec![restored],
+                ..Default::default()
+            }),
+            [[17, 6]]
+        );
+    }
+
+    #[test]
+    fn finding_spans_prefers_widest_span_when_offsets_tie() {
+        use super::{Evidence, Finding, finding_spans};
+
+        let finding_with = |lengths: [u64; 2]| Finding {
+            evidence: lengths
+                .into_iter()
+                .map(|length| Evidence {
+                    method: "hex".into(),
+                    value: "matched bytes".into(),
+                    offsets: vec![4243],
+                    match_len: Some(length),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        };
+
+        assert_eq!(finding_spans(&finding_with([32, 33])), [[4243, 33]]);
+        assert_eq!(finding_spans(&finding_with([33, 32])), [[4243, 33]]);
+    }
+
+    #[test]
+    fn span_dedup_keeps_widest_nested_range_and_sorts_offsets() {
+        use super::sort_dedup_spans_by_offset;
+
+        let mut spans = vec![[9, 0], [4, 32], [2, 1], [4, 33], [9, 10], [4, 0], [2, 0]];
+        sort_dedup_spans_by_offset(&mut spans);
+        assert_eq!(spans, [[2, 1], [4, 33], [9, 10]]);
+
+        let mut reverse = vec![[2, 0], [4, 0], [9, 10], [4, 33], [2, 1], [4, 32], [9, 0]];
+        sort_dedup_spans_by_offset(&mut reverse);
+        assert_eq!(reverse, spans);
+    }
+
+    #[test]
+    fn finding_spans_merges_precomputed_and_live_evidence() {
+        use super::{Evidence, Finding, finding_spans};
+
+        let finding = Finding {
+            evidence: vec![Evidence {
+                method: "hex".into(),
+                value: "matched bytes".into(),
+                offsets: vec![9],
+                match_len: Some(32),
+                ..Default::default()
+            }],
+            precomputed_spans: Some(vec![[9, 33], [4, 2]]),
+            ..Default::default()
+        };
+
+        assert_eq!(finding_spans(&finding), [[4, 2], [9, 33]]);
+    }
+
+    #[test]
+    fn duplicate_evidence_merge_keeps_widest_effective_source_length() {
+        use super::{Evidence, deduplicate_evidence};
+
+        let evidence = |length| Evidence {
+            method: "raw".into(),
+            source: "same-source".into(),
+            value: "same evidence".into(),
+            offsets: vec![4243],
+            match_len: length,
+            ..Default::default()
+        };
+        for pair in [[Some(32), Some(33)], [Some(33), Some(32)]] {
+            let merged = deduplicate_evidence(pair.into_iter().map(evidence).collect());
+            assert_eq!(merged.len(), 1);
+            assert_eq!(merged[0].match_len, Some(33));
+            assert_eq!(super::evidence_spans(&merged), [[4243, 33]]);
+        }
+
+        // `None` means value length. An explicit shorter source range must not
+        // shrink the ordinary value-length span when duplicate rows merge.
+        let value_len = "same evidence".len() as u64;
+        for pair in [[None, Some(5)], [Some(5), None]] {
+            let merged = deduplicate_evidence(pair.into_iter().map(evidence).collect());
+            assert_eq!(merged.len(), 1);
+            assert_eq!(merged[0].match_len, None);
+            assert_eq!(super::evidence_spans(&merged), [[4243, value_len]]);
+        }
+    }
+
     /// Dependent-trait rounds and archive members record the same suppression
     /// more than once, from parallel workers in whatever order they finish.
     /// The drained result must not depend on that order.

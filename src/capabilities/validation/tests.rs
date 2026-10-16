@@ -4971,8 +4971,28 @@ mod taxonomy_tests {
     }
 
     #[test]
-    fn test_oversized_dir_has_one_combined_cap_without_exemptions() {
+    fn test_oversized_dir_uses_exact_reviewed_combined_budgets() {
         assert_eq!(MAX_TRAITS_PER_DIRECTORY, 100);
+        let reviewed_path = "micro-behaviors/communications/http/url/path";
+        let reviewed_rules: Vec<_> = (0..101)
+            .map(|i| make_trait(&format!("{reviewed_path}::r{i}"), "other::t"))
+            .collect();
+        assert!(find_oversized_trait_directories(&reviewed_rules, &[]).is_empty());
+        let unreviewed_sibling: Vec<_> = (0..101)
+            .map(|i| {
+                make_trait(
+                    &format!("micro-behaviors/communications/http/url/host::r{i}"),
+                    "other::t",
+                )
+            })
+            .collect();
+        assert_eq!(
+            find_oversized_trait_directories(&unreviewed_sibling, &[]),
+            vec![(
+                "micro-behaviors/communications/http/url/host".to_string(),
+                101
+            )]
+        );
         for dir in [
             "objectives/evasion/x",
             "objectives/command-and-control/reverse-shell/dup",

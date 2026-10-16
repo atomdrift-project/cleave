@@ -979,9 +979,12 @@ const ALLOWED_METADATA_IMAGE: &[&str] = &[
 ///
 /// Font container structure, as reported by filefacts's sfnt/WOFF/EOT walk:
 /// which container it is, whether the table directory is self-consistent, and
-/// whether every byte in the file is claimed by a table. Neutral measurements
-/// only — the masquerade and stowaway *objectives* built on them live under
-/// `objectives/evasion/masquerade/` and `objectives/anti-static/`.
+/// whether every byte in the file is claimed by a table. Legacy console-font
+/// signatures such as CPI/PSF headers are file-format markers under
+/// metadata/file/format/console-font; they do not describe this table-level
+/// structure. Neutral measurements only — the masquerade and stowaway
+/// *objectives* built on them live under `objectives/evasion/masquerade/` and
+/// `objectives/anti-static/`.
 /// Allowed subdirectories in metadata/media/
 ///
 /// Shared structural facts for every passive container that can carry a
@@ -995,7 +998,7 @@ const ALLOWED_METADATA_MEDIA: &[&str] = &[
 ];
 
 const ALLOWED_METADATA_FONT: &[&str] = &[
-    "container", // Format identity and header/table-directory validity
+    "container", // Parsed sfnt/WOFF/EOT identity and header/table-directory validity
     "layout",    // Byte coverage: gaps, trailing data, oversized private tables
 ];
 

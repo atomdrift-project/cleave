@@ -1402,7 +1402,7 @@ impl AnalysisReport {
                 if finding.trait_refs.is_empty() {
                     continue;
                 }
-                // member file id → source (dedup per member, first location wins).
+                // member file id → source (dedup per member, earliest source location wins).
                 let mut by_member: BTreeMap<u32, CompositeSource> = BTreeMap::new();
                 let mut ubiquitous = false;
                 'refs: for trait_ref in &finding.trait_refs {
@@ -1420,12 +1420,13 @@ impl AnalysisReport {
                                 file: member.id,
                                 ..Default::default()
                             });
-                        if entry.offset.is_none()
-                            && entry.line.is_none()
-                            && let Some((line, offset)) = note_location(member, trait_ref)
-                        {
-                            entry.line = line;
-                            entry.offset = offset;
+                        if let Some((line, offset)) = note_location(member, trait_ref) {
+                            let candidate = (line, offset);
+                            let current = (entry.line, entry.offset);
+                            if source_location_order(candidate) < source_location_order(current) {
+                                entry.line = line;
+                                entry.offset = offset;
+                            }
                         }
                         // A composite that spans most of the archive isn't *based
                         // on* particular files — it's a ubiquitous pattern (a
@@ -2636,8 +2637,7 @@ fn merge_finding(existing: &mut Finding, new: Finding) {
     if existing.precomputed_spans.is_some() || new.precomputed_spans.is_some() {
         let mut spans = crate::types::traits_findings::finding_spans(existing);
         spans.extend(crate::types::traits_findings::finding_spans(&new));
-        spans.sort_unstable_by_key(|s| s[0]);
-        spans.dedup_by_key(|s| s[0]);
+        crate::types::traits_findings::sort_dedup_spans_by_offset(&mut spans);
         spans.truncate(crate::types::traits_findings::MAX_EV_LOCS);
         existing.precomputed_spans = Some(spans);
     }
@@ -2652,12 +2652,13 @@ fn merge_finding(existing: &mut Finding, new: Finding) {
     }
 }
 
-/// Location of the first context note for finding `id` in `file`, as
+/// Earliest concrete context-note location for finding `id` in `file`, as
 /// `(line, offset)`. `line` is the 1-based source line for textual chunks (those
 /// carrying a `line`), advanced from the chunk's start past any newlines before
 /// the match; `offset` is the match's byte offset. Returns `None` when no note
 /// pins the finding — e.g. a metric or manifest-field-presence trait.
 fn note_location(file: &FileAnalysis, id: &str) -> Option<(Option<u64>, Option<u64>)> {
+    let mut best = None;
     for line in &file.context {
         for note in &line.notes {
             if note.id == id {
@@ -2668,11 +2669,26 @@ fn note_location(file: &FileAnalysis, id: &str) -> Option<(Option<u64>, Option<u
                     let extra = line.data[..rel].iter().filter(|&&b| b == b'\n').count() as u64;
                     start + extra
                 });
-                return Some((src_line, Some(note.off)));
+                let candidate = (src_line, Some(note.off));
+                if best.is_none_or(|current| {
+                    source_location_order(candidate) < source_location_order(current)
+                }) {
+                    best = Some(candidate);
+                }
             }
         }
     }
-    None
+    best
+}
+
+/// Stable ordering for representative composite-source locations. Prefer the
+/// earliest concrete byte offset, then the source line; unanchored notes sort
+/// after located evidence.
+fn source_location_order(location: (Option<u64>, Option<u64>)) -> (u64, u64) {
+    (
+        location.1.unwrap_or(u64::MAX),
+        location.0.unwrap_or(u64::MAX),
+    )
 }
 
 /// The leaf member name of an archive-member file path: the segment after the
@@ -3466,6 +3482,85 @@ mod tests {
             Some(0x1234),
             "binary component carries its offset"
         );
+    }
+
+    #[test]
+    fn attach_composite_sources_chooses_earliest_note_independent_of_input_order() {
+        use super::super::file_analysis::ARCHIVE_DELIMITER;
+        use super::super::traits_findings::{ContextLine, Note};
+
+        let run = |refs: &[&str], reverse_context: bool| {
+            let mut container =
+                FileAnalysis::new(0, "/x.tgz".into(), "tar.gz".into(), "s0".into(), 100);
+            let mut composite = test_finding("test/archive::aggregate", Criticality::Notable);
+            composite.trait_refs = refs.iter().map(|id| (*id).into()).collect();
+            container.findings = vec![composite];
+
+            let mut member = FileAnalysis::new(
+                1,
+                format!("/x.tgz{ARCHIVE_DELIMITER}pkg/index.js"),
+                "javascript".into(),
+                "s1".into(),
+                100,
+            );
+            member.depth = 1;
+            member.findings = vec![
+                test_finding("comp/path-z", Criticality::Component),
+                test_finding("comp/path-a", Criticality::Component),
+            ];
+            let earlier = ContextLine {
+                loc: 10,
+                line: Some(2),
+                col: Some(1),
+                data: b"first path".to_vec(),
+                notes: vec![Note {
+                    crit: Criticality::Component,
+                    id: "comp/path-a".into(),
+                    desc: String::new().into(),
+                    off: 20,
+                    len: 5,
+                    conf: 0.9,
+                }],
+            };
+            let later = ContextLine {
+                loc: 50,
+                line: Some(5),
+                col: Some(1),
+                data: b"second path".to_vec(),
+                notes: vec![Note {
+                    crit: Criticality::Component,
+                    id: "comp/path-z".into(),
+                    desc: String::new().into(),
+                    off: 60,
+                    len: 5,
+                    conf: 0.9,
+                }],
+            };
+            let mut notes = if reverse_context {
+                vec![later, earlier]
+            } else {
+                vec![earlier, later]
+            };
+            if reverse_context {
+                notes[0].notes[0].off = 80;
+                notes[0].loc = 70;
+            } else {
+                notes[1].notes[0].off = 80;
+                notes[1].loc = 70;
+            }
+            member.context = notes;
+
+            let mut files = vec![container, member];
+            AnalysisReport::attach_composite_sources(&mut files);
+            files[0].composite_sources["test/archive::aggregate"][0].clone()
+        };
+
+        let later_first = run(&["comp/path-z", "comp/path-a"], true);
+        let earlier_first = run(&["comp/path-a", "comp/path-z"], false);
+        assert_eq!(later_first.offset, Some(20));
+        assert_eq!(later_first.line, Some(2));
+        assert_eq!(earlier_first.offset, Some(20));
+        assert_eq!(earlier_first.line, Some(2));
     }
 
     #[test]

@@ -844,8 +844,7 @@ fn convert_file(file: &super::file_analysis::FileAnalysis, id: u32) -> CompactFi
             // Merge ev spans — deduplicate by offset, cap at MAX_EV_LOCS.
             if !ev_spans.is_empty() {
                 existing.ev.extend(ev_spans);
-                existing.ev.sort_unstable_by_key(|s| s[0]);
-                existing.ev.dedup_by_key(|s| s[0]);
+                crate::types::traits_findings::sort_dedup_spans_by_offset(&mut existing.ev);
                 existing
                     .ev
                     .truncate(crate::types::traits_findings::MAX_EV_LOCS);

@@ -4385,8 +4385,7 @@ fn suppression_legs(
 ) -> Vec<crate::types::SuppressionLeg> {
     let spans = || {
         let mut s = crate::types::traits_findings::evidence_spans(&result.evidence);
-        s.sort_unstable_by_key(|w| w[0]);
-        s.dedup_by_key(|w| w[0]);
+        crate::types::traits_findings::sort_dedup_spans_by_offset(&mut s);
         s.truncate(crate::types::traits_findings::MAX_EV_LOCS);
         s
     };

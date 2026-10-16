@@ -1041,6 +1041,47 @@ mod memo {
             (m.entries.len(), m.bytes, m.hits, m.misses)
         })
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{Kind, get, put};
+        use crate::types::{Evidence, FileAnalysis, Finding, traits_findings::finding_spans};
+
+        #[test]
+        fn file_analysis_memo_roundtrip_preserves_nul_match_span()
+        -> Result<(), Box<dyn std::error::Error>> {
+            let value = "parseInt\0\u{1}\u{16}(Ljava/lang/String;I)I";
+            let finding = Finding {
+                id: "test/java-parse-int".into(),
+                evidence: vec![Evidence {
+                    method: "hex".into(),
+                    value: value.into(),
+                    offsets: vec![4243],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            };
+            let file = FileAnalysis {
+                sha256: "b292-nul-span-memo-regression".into(),
+                findings: vec![finding],
+                ..Default::default()
+            };
+
+            let key = "b292-nul-span-memo-regression";
+            let bytes = serde_json::to_vec(&file)?;
+            put(Kind::FileAnalysis, key.to_string(), bytes);
+            let cached = get(Kind::FileAnalysis, key)
+                .ok_or_else(|| std::io::Error::other("memo contains the entry"))?;
+            let restored: FileAnalysis = serde_json::from_slice(&cached)?;
+
+            let evidence = &restored.findings[0].evidence[0];
+            assert!(!evidence.value.contains('\0'));
+            assert_eq!(evidence.value.len(), 32);
+            assert_eq!(evidence.match_len, Some(33));
+            assert_eq!(finding_spans(&restored.findings[0]), [[4243, 33]]);
+            Ok(())
+        }
+    }
 }
 
 /// Log the in-process analysis memo's occupancy and hit rate at `info`.

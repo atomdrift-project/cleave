@@ -312,11 +312,15 @@ pub(crate) const MAX_TRAITS_PER_DIRECTORY: usize = 100;
 /// children. Its review removed the duplicate Ruby URL-safe match and moved an
 /// encoded-only PHP string out. The file-copy leaf gained one precise ELF
 /// command atom and its shared source/ELF composite; the operation remains one
-/// coherent home, with no neutral child axis for those declarations.
+/// coherent home, with no neutral child axis for those declarations. The HTTP
+/// URL path leaf admits its additional API route reference: route syntax is a
+/// path fact; request use, SDK identity and endpoint operation are separate
+/// claims.
 const REVIEWED_DIRECTORY_TRAIT_BUDGETS: &[(&str, usize)] = &[
     ("metadata/package/dependencies/manifest/identity", 108),
     ("micro-behaviors/data/decode/base64", 103),
     ("micro-behaviors/fs/file/copy", 101),
+    ("micro-behaviors/communications/http/url/path", 101),
 ];
 
 fn trait_directory_budget(dir: &str) -> usize {

@@ -294,6 +294,11 @@ fn format_report_output(
     }
 
     match format {
+        cli::OutputFormat::Snapshot => {
+            let mut snapshot = serde_json::to_string(report)?;
+            snapshot.push('\n');
+            Ok(snapshot)
+        }
         cli::OutputFormat::Json => {
             let compact = types::compact_from_files(&report.files);
             Ok(serde_json::to_string(&compact)?)

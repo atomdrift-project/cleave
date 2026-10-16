@@ -144,7 +144,7 @@ pub struct ContextLine {
 
 /// Serialize/deserialize a [`Criticality`] as its ordinal `0..=5`, matching the
 /// compact finding `crit` field and keeping context notes small.
-mod crit_ordinal {
+pub(crate) mod crit_ordinal {
     use super::Criticality;
     use serde::{Deserialize, Deserializer, Serializer};
 
@@ -152,7 +152,7 @@ mod crit_ordinal {
     // inserting a variant (e.g. `Exception`) never shifts the serialized values.
     // `Exception` takes 6 — past the original 0..=5 range — so existing caches stay
     // valid. Keep `serialize` and `deserialize` exact inverses.
-    pub(super) fn serialize<S: Serializer>(c: &Criticality, s: S) -> Result<S::Ok, S::Error> {
+    pub(crate) fn serialize<S: Serializer>(c: &Criticality, s: S) -> Result<S::Ok, S::Error> {
         let ordinal: u8 = match c {
             Criticality::Filtered => 0,
             Criticality::Component => 1,
@@ -168,7 +168,7 @@ mod crit_ordinal {
     /// An unknown ordinal is an error, not `Baseline`: silently demoting a
     /// note from a newer or corrupt producer would hide what it marked. A cache
     /// entry that fails here is a miss and gets re-analyzed.
-    pub(super) fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Criticality, D::Error> {
+    pub(crate) fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Criticality, D::Error> {
         Ok(match u8::deserialize(d)? {
             0 => Criticality::Filtered,
             1 => Criticality::Component,
@@ -303,10 +303,11 @@ pub struct Finding {
     /// at `MAX_EV_LOCS`) precomputed from `evidence` — set when a folded
     /// archive member's evidence strings are released early (compact member
     /// retention). `None` means "compute from `evidence` at convert time",
-    /// the historical path; roots and grafted findings stay on it. Never
-    /// serialized: this is the retained-memory form of what compact
-    /// conversion would derive.
-    #[serde(skip)]
+    /// the historical path; roots and grafted findings stay on it. Also
+    /// serialized in diagnostic snapshots so their renderer can resolve
+    /// composite legs after a JSON round trip. Public compact conversion
+    /// emits the same locations through its own `spans` field.
+    #[serde(rename = "spans", default, skip_serializing_if = "Option::is_none")]
     pub precomputed_spans: Option<Vec<[u64; 2]>>,
     /// Total match count for density/frequency analysis (may exceed evidence.len())
     #[serde(skip_serializing_if = "is_zero_usize", default)]

@@ -132,7 +132,7 @@ fn flatten(value: &Value, prefix: &str, entries: &mut Vec<KvEntry>) {
 
 fn format_output(entries: &[KvEntry], target: &str, format: &cli::OutputFormat) -> Result<String> {
     match format {
-        cli::OutputFormat::Json | cli::OutputFormat::Jsonl => {
+        cli::OutputFormat::Json | cli::OutputFormat::Jsonl | cli::OutputFormat::Snapshot => {
             Ok(serde_json::to_string_pretty(entries)?)
         }
         cli::OutputFormat::Terminal | cli::OutputFormat::Tiny => {

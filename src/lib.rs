@@ -61,12 +61,16 @@ pub mod capabilities;
 pub mod cli;
 pub mod commands;
 pub mod composite_rules;
+pub mod context_retention;
 pub mod diff;
 pub mod env_mapper;
+pub mod file_wire;
 pub mod malecule_bridge;
+pub mod model_facts;
 pub mod output;
 pub mod path_mapper;
 pub mod random_validator;
+pub mod report_input;
 pub mod theme;
 pub mod third_party_config;
 pub mod third_party_yara;
@@ -2071,6 +2075,9 @@ pub(crate) fn report_from_file_analysis(
         formula: _,
         composite_sources: _,
         precompact_facts: _,
+        precompact_refs: _,
+        context_costs: _,
+        render_locality: _,
     } = fa;
     let target = TargetInfo {
         path,

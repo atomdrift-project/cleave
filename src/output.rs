@@ -1318,8 +1318,14 @@ fn window_plan<'a>(
     let bytes: usize = plan
         .iter()
         .zip(&file.context)
-        .filter(|(ids, _)| ids.is_some())
-        .map(|(_, line)| line.data.len())
+        .enumerate()
+        .filter(|(_, (ids, _))| ids.is_some())
+        .map(|(i, (_, line))| {
+            file.context_costs
+                .get(i)
+                .copied()
+                .unwrap_or(line.data.len())
+        })
         .sum();
     let capped = opts.max_windows > 0 && windows > opts.max_windows;
     let budgeted = opts.window_bytes > 0 && bytes > opts.window_bytes;
@@ -1427,7 +1433,11 @@ fn pick_windows(
             candidates.push(Candidate {
                 line: i,
                 tier,
-                bytes: file.context[i].data.len(),
+                bytes: file
+                    .context_costs
+                    .get(i)
+                    .copied()
+                    .unwrap_or(file.context[i].data.len()),
                 notes,
             });
         }
@@ -2366,7 +2376,7 @@ fn render_ascii_context(
         // Distinct planned findings on this window. (Capture already capped
         // locations per trait; merging can pool several here.)
         let mut seen = HashSet::new();
-        let mut notes: Vec<&Note> = line
+        let notes: Vec<&Note> = line
             .notes
             .iter()
             .filter(|n| ids.contains(n.id.as_str()) && seen.insert(n.id.as_str()))
@@ -2375,30 +2385,7 @@ fn render_ascii_context(
             continue;
         }
 
-        // Each note claims its match span widened by a criticality-sized margin,
-        // asymmetric — more trailing than leading, since a payload runs forward
-        // from the match. Notes whose claims touch share a block; a gap between
-        // them ends one and starts the next.
-        let len = line.data.len();
-        let within = |off: u64| (off.saturating_sub(line.loc) as usize).min(len);
-        notes.sort_by_key(|n| n.off);
-        let mut blocks: Vec<(usize, usize, Vec<&Note>)> = Vec::new();
-        for note in notes {
-            let (before, after) = if opts.lean_rows {
-                (0, ASCII_ROW as u64)
-            } else {
-                note.crit.hex_context()
-            };
-            let lo = within(note.off).saturating_sub(before as usize);
-            let hi = (within(note.off + u64::from(note.len.max(1))) + after as usize).min(len);
-            match blocks.last_mut() {
-                Some((_, block_end, block_notes)) if lo <= *block_end => {
-                    *block_end = (*block_end).max(hi);
-                    block_notes.push(note);
-                }
-                _ => blocks.push((lo, hi, vec![note])),
-            }
-        }
+        let blocks = ascii_blocks(line, notes, opts.lean_rows);
 
         for (start, end, mut block_notes) in blocks {
             // A blank line sets each block apart — from the file-level
@@ -2448,6 +2435,51 @@ fn render_ascii_context(
                 row = row_end;
             }
         }
+    }
+}
+
+/// Shared binary byte-range plan. Retention uses all captured notes, while
+/// rendering supplies the selected notes. Keeping the bounding range of every
+/// claim preserves any later subset, including a file rendered independently.
+fn ascii_blocks<'a>(
+    line: &'a ContextLine,
+    mut notes: Vec<&'a Note>,
+    lean: bool,
+) -> Vec<(usize, usize, Vec<&'a Note>)> {
+    let len = line.data.len();
+    let within = |off: u64| {
+        usize::try_from(off.saturating_sub(line.loc))
+            .unwrap_or(usize::MAX)
+            .min(len)
+    };
+    notes.sort_by_key(|n| n.off);
+    let mut blocks: Vec<(usize, usize, Vec<&Note>)> = Vec::new();
+    for note in notes {
+        let (before, after) = if lean {
+            (0, ASCII_ROW as u64)
+        } else {
+            note.crit.hex_context()
+        };
+        let lo = within(note.off).saturating_sub(before as usize);
+        let hi = within(note.off.saturating_add(u64::from(note.len.max(1))))
+            .saturating_add(after as usize)
+            .min(len);
+        match blocks.last_mut() {
+            Some((_, end, group)) if lo <= *end => {
+                *end = (*end).max(hi);
+                group.push(note);
+            }
+            _ => blocks.push((lo, hi, vec![note])),
+        }
+    }
+    blocks
+}
+
+pub(crate) fn binary_retained_bounds(line: &ContextLine) -> std::ops::Range<usize> {
+    let blocks = ascii_blocks(line, line.notes.iter().collect(), true);
+    match (blocks.first(), blocks.last()) {
+        (Some((start, _, _)), Some((_, end, _))) if start < end => *start..*end,
+        _ => 0..line.data.len(),
     }
 }
 
@@ -2883,7 +2915,7 @@ fn render_hex_context(
 
 /// True for file types whose context renders as a hex+ascii dump.
 /// Mirrors `filefacts::FileType::is_binary()` without requiring the enum.
-fn is_binary_file_type(file_type: &str) -> bool {
+pub(crate) fn is_binary_file_type(file_type: &str) -> bool {
     matches!(
         file_type,
         "elf"
@@ -3742,15 +3774,6 @@ fn render_no_anchor(
         Some(fc) => fc,
         None => opts.min_crit.max(Criticality::Notable),
     };
-    let has_local_offset = |f: &Finding| {
-        f.evidence.iter().any(|e| {
-            e.byte_offset().is_some()
-                && !e
-                    .location
-                    .as_deref()
-                    .is_some_and(|location| location.starts_with("archive:"))
-        })
-    };
     let represented = |f: &Finding| {
         let spans = crate::types::traits_findings::finding_spans(f);
         let overlaps = |lo: u64, hi: u64| {
@@ -3769,11 +3792,12 @@ fn render_no_anchor(
     let mut rest: Vec<&Finding> = file
         .findings
         .iter()
-        .filter(|f| {
+        .enumerate()
+        .filter(|(_, f)| {
             let id = f.id.as_str();
             (f.crit >= floor || owed.contains(id)) && sel.contains(id) && !windowed.contains(id)
         })
-        .filter(|f| {
+        .filter(|(index, f)| {
             // Owed evidence is never "represented" by another trait's note:
             // the reader must see it named, so it lists here unless drawn.
             owed.contains(f.id.as_str())
@@ -3781,8 +3805,9 @@ fn render_no_anchor(
                 || capped.contains(f.id.as_str())
                 || (!rich && !represented(f))
                 || file.composite_sources.contains_key(f.id.as_str())
-                || !has_local_offset(f)
+                || !file.finding_has_local_offset(*index)
         })
+        .map(|(_, f)| f)
         .collect();
     rest.sort_unstable_by(|a, b| b.crit.cmp(&a.crit).then_with(|| a.id.cmp(&b.id)));
 

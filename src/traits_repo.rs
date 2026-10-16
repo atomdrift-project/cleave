@@ -2,10 +2,10 @@
 //!
 //! Traits (detection rules) are distributed as signed `.tar.zst` bundles from
 //! the update bucket — see [`crate::rule_update`], which `cleave update-rules`
-//! drives. This module only handles *resolution* (where traits live) and the
-//! first-run bootstrap install. It performs no git *operations* — but it does
-//! read `.git/HEAD` to report a version for a git-managed traits checkout,
-//! which carries no bundle sidecar. See [`version`].
+//! drives. This module resolves the active traits directory and bootstraps it.
+//! For git-managed checkouts without a bundle sidecar, it reads HEAD and checks
+//! for local rule edits so the reported version identifies the loaded rules.
+//! See [`version`].
 //!
 //! Resolution order:
 //! 1. `--traits-dir` CLI flag / `CLEAVE_TRAITS_DIR` env var / API override
@@ -13,6 +13,7 @@
 //! 3. Platform data directory (bootstrapped from the bundle if missing)
 
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::{OnceLock, RwLock};
 
 /// Known top-level directories in a traits checkout.
@@ -228,9 +229,56 @@ fn has_traits(path: &Path) -> bool {
 #[must_use]
 pub fn version() -> Option<String> {
     let traits_dir = resolve_current_traits_dir();
-    crate::rule_update::installed(&traits_dir)
-        .map(|i| short_commit_prefix(&i.commit))
-        .or_else(|| git_head_commit(&traits_dir))
+    if let Some(installed) = crate::rule_update::installed(&traits_dir) {
+        return Some(short_commit_prefix(&installed.commit));
+    }
+    let head = git_head_commit(&traits_dir)?;
+    let rules_digest = crate::cache::traits_content_for(&traits_dir).rules;
+    if git_rule_tree_dirty_cached(&traits_dir, &head, rules_digest) {
+        // A checkout can load changed rules while HEAD still names the old
+        // rules. Hopper uses this revision as a dedupe key, so a dirty tree
+        // needs a content-derived version distinct from every commit prefix.
+        Some(format!("w{}", hex::encode(&rules_digest[..8])))
+    } else {
+        Some(head)
+    }
+}
+
+type GitDirtyCache = (PathBuf, String, [u8; 32], bool);
+static GIT_DIRTY_CACHE: OnceLock<RwLock<Option<GitDirtyCache>>> = OnceLock::new();
+
+fn git_rule_tree_dirty_cached(dir: &Path, head: &str, rules_digest: [u8; 32]) -> bool {
+    let cache = GIT_DIRTY_CACHE.get_or_init(|| RwLock::new(None));
+    {
+        let guard = cache
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((cached_dir, cached_head, cached_digest, dirty)) = guard.as_ref()
+            && cached_dir == dir
+            && cached_head == head
+            && *cached_digest == rules_digest
+        {
+            return *dirty;
+        }
+    }
+    let dirty = git_rule_tree_dirty(dir);
+    *cache
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) =
+        Some((dir.to_path_buf(), head.to_string(), rules_digest, dirty));
+    dirty
+}
+
+fn git_rule_tree_dirty(dir: &Path) -> bool {
+    let result = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["status", "--porcelain=v1", "--untracked-files=normal", "--"])
+        .args(RULE_SOURCE_DIRS.iter().copied())
+        .output();
+    // If Git is unavailable, a content version is safer than declaring a
+    // potentially edited checkout equivalent to the recorded commit.
+    !matches!(result, Ok(output) if output.status.success() && output.stdout.is_empty())
 }
 
 /// First 9 chars of a commit hash — the sidecar's own convention, kept for the
@@ -315,6 +363,47 @@ fn resolve_current_traits_dir_from(explicit: Option<String>) -> PathBuf {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn git_rule_tree_dirty_tracks_only_rule_sources() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        let run = |args: &[&str]| {
+            let output = Command::new("git")
+                .arg("-C")
+                .arg(dir)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        run(&["init", "-q"]);
+        std::fs::create_dir(dir.join("metadata")).unwrap();
+        std::fs::write(dir.join("metadata/base.yaml"), "old\n").unwrap();
+        run(&["add", "metadata/base.yaml"]);
+        run(&[
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-qm",
+            "base",
+        ]);
+        assert!(!git_rule_tree_dirty(dir));
+
+        std::fs::write(dir.join("README.md"), "unrelated\n").unwrap();
+        assert!(!git_rule_tree_dirty(dir));
+        std::fs::write(dir.join("metadata/base.yaml"), "edited\n").unwrap();
+        assert!(git_rule_tree_dirty(dir));
+        run(&["checkout", "--", "metadata/base.yaml"]);
+        std::fs::write(dir.join("metadata/new.yaml"), "new\n").unwrap();
+        assert!(git_rule_tree_dirty(dir));
+    }
 
     #[test]
     fn test_default_traits_dir_is_under_cleave() {

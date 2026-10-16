@@ -2164,6 +2164,8 @@ impl FileAnalysis {
             findings,
             suppressions,
             context,
+            context_costs: Vec::new(),
+            render_locality: Vec::new(),
             traits,
             structure,
             functions,
@@ -2183,6 +2185,7 @@ impl FileAnalysis {
             composite_sources: std::collections::BTreeMap::new(),
             kv: std::collections::BTreeMap::new(),
             precompact_facts: None,
+            precompact_refs: None,
         };
         file.populate_file_metrics();
         file

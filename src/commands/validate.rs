@@ -184,7 +184,7 @@ pub fn run_with_options(
     // rendering through the chosen output format.
     cleave::validation_controls::set_validation_output_format(Some(match format {
         OutputFormat::Tiny => cleave::validation_controls::ValidationOutputFormat::Tiny,
-        OutputFormat::Json | OutputFormat::Jsonl => {
+        OutputFormat::Json | OutputFormat::Jsonl | OutputFormat::Snapshot => {
             cleave::validation_controls::ValidationOutputFormat::Json
         }
         OutputFormat::Terminal => cleave::validation_controls::ValidationOutputFormat::Terminal,
@@ -412,7 +412,7 @@ struct WalkedCorpusCount {
 
 fn format_validate_output(report: &ValidateOutput, format: &OutputFormat) -> String {
     match format {
-        OutputFormat::Json | OutputFormat::Jsonl => {
+        OutputFormat::Json | OutputFormat::Jsonl | OutputFormat::Snapshot => {
             let json = serde_json::to_string_pretty(report).unwrap_or_else(|_| "{}".to_string());
             format!(
                 "{json}

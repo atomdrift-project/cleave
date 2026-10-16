@@ -163,6 +163,17 @@ pub struct FileAnalysis {
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub context: Vec<ContextLine>,
 
+    /// Original captured-window byte costs for the opt-in context retention
+    /// prototype. Indexed like `context`; preserves selection when padding is
+    /// removed. Empty on ordinary analysis reports.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub context_costs: Vec<usize>,
+
+    /// Render-only locality flags for compact replay, indexed like `findings`.
+    /// Empty vectors derive locality from the original matcher evidence.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub render_locality: Vec<bool>,
+
     // === Verbose fields (omitted in minimal mode) ===
     /// Traits discovered in this file
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
@@ -256,6 +267,11 @@ pub struct FileAnalysis {
     #[serde(rename = "pf", default, skip_serializing_if = "Option::is_none")]
     pub precompact_facts: Option<super::compact::CompactFacts>,
 
+    /// Declared references retained when decoding a wire report without the
+    /// original filefacts view. `None` derives them from filefacts as usual.
+    #[serde(rename = "pr", default, skip_serializing_if = "Option::is_none")]
+    pub precompact_refs: Option<Vec<super::compact::CompactRef>>,
+
     /// Flat structural-kv map. Path → leaf value, using the same
     /// `a.b[0].c` notation as `cleave value`. Auto-populated at
     /// `finalize()` time from the analyzer's `values_tree`. Type-default
@@ -272,6 +288,21 @@ pub struct FileAnalysis {
 }
 
 impl FileAnalysis {
+    /// Locality is a renderer predicate, not reconstructed forensic evidence.
+    pub(crate) fn finding_has_local_offset(&self, index: usize) -> bool {
+        self.render_locality.get(index).copied().unwrap_or_else(|| {
+            self.findings.get(index).is_some_and(|f| {
+                f.evidence.iter().any(|e| {
+                    e.byte_offset().is_some()
+                        && !e
+                            .location
+                            .as_deref()
+                            .is_some_and(|s| s.starts_with("archive:"))
+                })
+            })
+        })
+    }
+
     /// Create a new FileAnalysis with minimal required fields
     #[must_use]
     pub(crate) fn new(id: u32, path: String, file_type: String, sha256: String, size: u64) -> Self {
@@ -294,6 +325,8 @@ impl FileAnalysis {
             findings: Vec::new(),
             suppressions: Vec::new(),
             context: Vec::new(),
+            context_costs: Vec::new(),
+            render_locality: Vec::new(),
             traits: Vec::new(),
             structure: Vec::new(),
             functions: Vec::new(),
@@ -313,6 +346,7 @@ impl FileAnalysis {
             composite_sources: std::collections::BTreeMap::new(),
             kv: std::collections::BTreeMap::new(),
             precompact_facts: None,
+            precompact_refs: None,
         }
     }
 

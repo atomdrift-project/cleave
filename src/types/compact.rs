@@ -354,7 +354,18 @@ impl Serialize for CompactFacts {
     where
         S: Serializer,
     {
-        let mut fields = usize::from(self.metrics.is_some());
+        self.serialize_with_metrics(serializer, self.metrics.as_ref())
+    }
+}
+
+impl CompactFacts {
+    /// Reuse the fact field contract with a metric serialization adapter.
+    pub(crate) fn serialize_with_metrics<S: Serializer, M: Serialize>(
+        &self,
+        serializer: S,
+        metrics: Option<&M>,
+    ) -> Result<S::Ok, S::Error> {
+        let mut fields = usize::from(metrics.is_some());
         fields += usize::from(!self.imports.is_empty());
         fields += usize::from(!self.exports.is_empty());
         fields += usize::from(!self.functions.is_empty());
@@ -363,7 +374,7 @@ impl Serialize for CompactFacts {
         fields += usize::from(!self.members.is_empty());
 
         let mut st = serializer.serialize_struct("CompactFacts", fields)?;
-        if let Some(metrics) = &self.metrics {
+        if let Some(metrics) = metrics {
             st.serialize_field("metrics", metrics)?;
         }
         if !self.imports.is_empty() {
@@ -709,7 +720,7 @@ fn crit_to_int(criticality: Criticality) -> u8 {
 }
 
 /// Round all floats in a serde_json::Value to 2 decimal places
-fn round_json_floats(value: serde_json::Value) -> serde_json::Value {
+pub(crate) fn round_json_floats(value: serde_json::Value) -> serde_json::Value {
     match value {
         serde_json::Value::Number(n) => {
             if let Some(f) = n.as_f64() {
@@ -774,7 +785,10 @@ fn parse_hex_or_decimal_u64(raw: &str) -> Option<u64> {
     }
 }
 
-fn compact_ast(file: &super::file_analysis::FileAnalysis) -> (Vec<String>, Vec<String>) {
+fn compact_ast(
+    file: &super::file_analysis::FileAnalysis,
+    retain_model: bool,
+) -> (Vec<String>, Vec<String>) {
     let Some(view) = file.filefacts.as_ref() else {
         return (Vec::new(), Vec::new());
     };
@@ -789,10 +803,12 @@ fn compact_ast(file: &super::file_analysis::FileAnalysis) -> (Vec<String>, Vec<S
             filefacts::Symbol::Call {
                 target: Some(target),
                 ..
-            } => {
+            } if !retain_model || crate::model_facts::needed_symbol(target) => {
                 target_set.insert(target.clone());
             }
-            filefacts::Symbol::Member { path, .. } => {
+            filefacts::Symbol::Member { path, .. }
+                if !retain_model || crate::model_facts::needed_symbol(path) =>
+            {
                 member_set.insert(path.clone());
             }
             _ => {}
@@ -932,20 +948,7 @@ fn convert_file(file: &super::file_analysis::FileAnalysis, id: u32) -> CompactFi
         }
     }
 
-    let mut facts = file
-        .precompact_facts
-        .clone()
-        .unwrap_or_else(|| compact_facts_from(file));
-    // A fold-time projection leaves metrics unset (see
-    // `compact_facts_from_parts`); round the retained flat map now.
-    if facts.metrics.is_none() {
-        facts.metrics = file
-            .filefacts_metrics
-            .as_ref()
-            .map(nest_flat_metrics)
-            .map(round_json_floats)
-            .map(RoundedMetrics);
-    }
+    let facts = facts_from_file(file);
 
     // Compute formula if not already present. Use the canonical filter so the
     // JSON `f` field stays in lockstep with the CLI header — both must reflect
@@ -956,35 +959,7 @@ fn convert_file(file: &super::file_analysis::FileAnalysis, id: u32) -> CompactFi
         (!f.is_empty()).then_some(f)
     });
 
-    // External references this file declares, byte-anchored, for the galaxy
-    // view. Read straight from the filefacts view so every reference (fetched
-    // or not) is attributed to the file that named it.
-    let refs: Vec<CompactRef> = file
-        .filefacts
-        .as_ref()
-        .map(|ff| {
-            ff.references
-                .iter()
-                .filter_map(|r| {
-                    let locator = match &r.locator {
-                        filefacts::RefLocator::Purl(s)
-                        | filefacts::RefLocator::Url(s)
-                        | filefacts::RefLocator::Path(s) => s.clone(),
-                        // A locator kind newer than this build.
-                        _ => return None,
-                    };
-                    Some(CompactRef {
-                        locator,
-                        kind: ref_kind_str(r.kind).to_string(),
-                        offset: r.offset,
-                        // External today; intra-bundle resolution (prism's job for
-                        // now) will fill this when it moves into cleave.
-                        target_file: None,
-                    })
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    let refs = refs_from_file(file);
 
     CompactFile {
         id,
@@ -1024,6 +999,64 @@ fn convert_file(file: &super::file_analysis::FileAnalysis, id: u32) -> CompactFi
     }
 }
 
+/// Effective facts shared by the legacy and candidate wire encoders.
+pub(crate) fn facts_from_file(file: &super::FileAnalysis) -> CompactFacts {
+    let mut facts = file
+        .precompact_facts
+        .clone()
+        .unwrap_or_else(|| compact_facts_from(file));
+    // A fold-time projection leaves metrics unset (see
+    // `compact_facts_from_parts`); round the retained flat map now.
+    if facts.metrics.is_none() {
+        facts.metrics = file
+            .filefacts_metrics
+            .as_ref()
+            .map(nest_flat_metrics)
+            .map(round_json_floats)
+            .map(RoundedMetrics);
+    }
+
+    facts
+}
+
+/// Effective declarations, including those read from a saved wire report.
+pub(crate) fn refs_from_file(file: &super::FileAnalysis) -> Vec<CompactRef> {
+    if let Some(refs) = &file.precompact_refs {
+        return refs.clone();
+    }
+    // External references this file declares, byte-anchored, for the galaxy
+    // view. Read straight from the filefacts view so every reference (fetched
+    // or not) is attributed to the file that named it.
+    let refs: Vec<CompactRef> = file
+        .filefacts
+        .as_ref()
+        .map(|ff| {
+            ff.references
+                .iter()
+                .filter_map(|r| {
+                    let locator = match &r.locator {
+                        filefacts::RefLocator::Purl(s)
+                        | filefacts::RefLocator::Url(s)
+                        | filefacts::RefLocator::Path(s) => s.clone(),
+                        // A locator kind newer than this build.
+                        _ => return None,
+                    };
+                    Some(CompactRef {
+                        locator,
+                        kind: ref_kind_str(r.kind).to_string(),
+                        offset: r.offset,
+                        // External today; intra-bundle resolution (prism's job for
+                        // now) will fill this when it moves into cleave.
+                        target_file: None,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    refs
+}
+
 /// Project a file's fact-bearing collections into the compact `facts` block:
 /// dense capped tuples for imports/exports/functions/sections, 2dp-rounded
 /// nested metrics, and the AST target/member string sets.
@@ -1045,11 +1078,29 @@ pub(crate) fn compact_facts_from_parts(
     file: &super::file_analysis::FileAnalysis,
     with_metrics: bool,
 ) -> CompactFacts {
+    compact_facts_selected(file, with_metrics, false)
+}
+
+/// Shared projection: model retention filters after the existing caps, before
+/// cloning rows. Full analysis/cache and v8 output keep their previous behavior.
+pub(crate) fn compact_facts_selected(
+    file: &super::file_analysis::FileAnalysis,
+    with_metrics: bool,
+    retain_model: bool,
+) -> CompactFacts {
     // Flatten symbol-like collections into dense tuples, capped to prevent oversized output.
     let imports: Vec<CompactImport> = file
         .imports
         .iter()
         .take(MAX_IMPORTS)
+        .filter(|i| {
+            !retain_model
+                || crate::model_facts::needed_symbol(&i.symbol)
+                || (i.symbol.is_empty()
+                    && i.library
+                        .as_deref()
+                        .is_some_and(crate::model_facts::needed_symbol))
+        })
         .map(|i| CompactImport {
             library: i.library.clone().unwrap_or_default(),
             name: i.symbol.clone(),
@@ -1061,6 +1112,7 @@ pub(crate) fn compact_facts_from_parts(
         .exports
         .iter()
         .take(MAX_IMPORTS)
+        .filter(|x| !retain_model || crate::model_facts::needed_symbol(&x.symbol))
         .map(|x| CompactExport {
             name: x.symbol.clone(),
             forward_to: x.forward_to.clone(),
@@ -1071,6 +1123,7 @@ pub(crate) fn compact_facts_from_parts(
         .functions
         .iter()
         .take(MAX_IMPORTS)
+        .filter(|f| !retain_model || crate::model_facts::needed_symbol(&f.name))
         .map(|f| CompactFunction {
             name: f.name.clone(),
             offset: f.offset.as_deref().and_then(parse_hex_or_decimal_u64),
@@ -1078,21 +1131,26 @@ pub(crate) fn compact_facts_from_parts(
         })
         .collect();
 
-    let sections: Vec<CompactSection> = file
-        .sections
-        .iter()
-        .map(|s| CompactSection {
-            name: s.name.clone(),
-            offset: s.offset.unwrap_or(0),
-            size: s.size,
-            entropy: (s.entropy * 100.0).round() / 100.0,
-            flags: s.permissions.clone().unwrap_or_else(|| s.flags.join(",")),
-        })
-        .collect();
+    let sections: Vec<CompactSection> = if retain_model {
+        Vec::new()
+    } else {
+        file.sections
+            .iter()
+            .map(|s| CompactSection {
+                name: s.name.clone(),
+                offset: s.offset.unwrap_or(0),
+                size: s.size,
+                entropy: (s.entropy * 100.0).round() / 100.0,
+                flags: s.permissions.clone().unwrap_or_else(|| s.flags.join(",")),
+            })
+            .collect()
+    };
 
     // Round metrics floats to 2dp. Only the flat filefacts_metrics map
     // survives — typed projections were retired.
-    let metrics = if with_metrics {
+    let metrics = if with_metrics && retain_model {
+        crate::model_facts::flat_metrics(file.filefacts_metrics.as_ref())
+    } else if with_metrics {
         file.filefacts_metrics
             .as_ref()
             .map(nest_flat_metrics)
@@ -1102,7 +1160,7 @@ pub(crate) fn compact_facts_from_parts(
         None
     };
 
-    let (targets, members) = compact_ast(file);
+    let (targets, members) = compact_ast(file, retain_model);
 
     CompactFacts {
         metrics,
@@ -1236,8 +1294,7 @@ fn assemble_report(mut files: Vec<CompactFile>) -> CompactReport {
             "compact: neutralized dangling cross-file reference(s) before emit",
         );
     }
-    let traits_version =
-        crate::traits_repo::version().map(|v| if v.len() > 5 { v[..5].to_string() } else { v });
+    let traits_version = crate::traits_repo::version().map(wire_traits_version);
     CompactReport {
         version: SCHEMA_VERSION,
         traits_version,
@@ -1246,9 +1303,31 @@ fn assemble_report(mut files: Vec<CompactFile>) -> CompactReport {
     }
 }
 
+fn wire_traits_version(version: String) -> String {
+    // Commit revisions keep the compact wire format. A dirty-tree revision is
+    // content-derived and needs all 64 bits: truncating it to five characters
+    // would make unrelated rule edits collide in Hopper's dedupe key.
+    if version.starts_with('w') {
+        version
+    } else if version.len() > 5 {
+        version[..5].to_string()
+    } else {
+        version
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod wire_roundtrip_tests {
+
+    #[test]
+    fn dirty_revision_keeps_full_content_hash() {
+        assert_eq!(super::wire_traits_version("9a6092f79".into()), "9a609");
+        assert_eq!(
+            super::wire_traits_version("wc138fe08c4d2a0e1".into()),
+            "wc138fe08c4d2a0e1"
+        );
+    }
 
     /// A member whose facts were projected at fold time must convert to the
     /// same CompactFile as one converted directly — same function either way,

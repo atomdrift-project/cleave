@@ -125,6 +125,76 @@ fn run() -> Result<()> {
 
     let args = cli::Args::parse();
 
+    // Offline rendering must not initialize analysis, update rules, or touch
+    // the original sample. Keep this before all analysis bootstrap work.
+    if let Some(cli::Command::Render { args: render_args }) = &args.command {
+        let format = args.format();
+        anyhow::ensure!(
+            !(args.model_facts || args.share_analyses)
+                || matches!(format, cli::OutputFormat::Json | cli::OutputFormat::Jsonl),
+            "--model-facts and --share-analyses require render --format json or jsonl"
+        );
+        let rendered = cleave::report_input::run(render_args, |loaded| {
+            if matches!(
+                format,
+                cli::OutputFormat::Json | cli::OutputFormat::Jsonl | cli::OutputFormat::Snapshot
+            ) {
+                anyhow::ensure!(
+                    loaded.warnings.is_empty(),
+                    "replayable JSON requires an annotated snapshot; capture with --format snapshot instead of rewriting reconstructed input"
+                );
+            }
+            if args.trim_context {
+                anyhow::ensure!(
+                    cleave::output::TinyOpts::tiny().lean_rows,
+                    "--trim-context requires the default lean tiny renderer; unset CLEAVE_TINY_LEGACY_WINDOWS"
+                );
+                cleave::context_retention::trim(&mut loaded.report);
+            }
+            let report = &loaded.report;
+            match format {
+                cli::OutputFormat::Json | cli::OutputFormat::Jsonl => {
+                    let mut wire = if args.model_facts {
+                        cleave::file_wire::Report::for_model(report)?
+                    } else {
+                        cleave::file_wire::Report::from_analysis(report)?
+                    };
+                    wire.fetched = loaded.fetched.clone();
+                    wire.rev = loaded.traits_version.clone();
+                    if !args.model_facts {
+                        wire.fp = loaded.fact_profile.clone();
+                    }
+                    let mut json = if args.share_analyses {
+                        serde_json::to_string(&wire.into_shared()?)?
+                    } else {
+                        serde_json::to_string(&wire)?
+                    };
+                    json.push('\n');
+                    return Ok(json);
+                }
+                cli::OutputFormat::Snapshot => {
+                    anyhow::ensure!(
+                        loaded.fact_profile.is_none(),
+                        "retained facts require diagnostic JSON, not a full raw snapshot"
+                    );
+                    return Ok(serde_json::to_string(report)? + "\n");
+                }
+                _ => {}
+            }
+            let opts = match format {
+                cli::OutputFormat::Tiny => cleave::output::TinyOpts::tiny(),
+                cli::OutputFormat::Terminal => cleave::output::TinyOpts::terminal(),
+                _ => anyhow::bail!("render supports --format terminal or tiny"),
+            };
+            Ok(cleave::output::format_context(report, &opts))
+        })?;
+        return write_output(&rendered, args.output, format);
+    }
+    anyhow::ensure!(
+        !args.trim_context && !args.model_facts && !args.share_analyses,
+        "--trim-context, --model-facts and --share-analyses are supported by the render command only"
+    );
+
     // CLI scans run on rayon with no tokio runtime, so tokio::signal isn't
     // available. Install a libc signal handler that flips a global
     // cancellation flag on SIGINT/SIGTERM so long scans drain cleanly on

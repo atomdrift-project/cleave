@@ -199,6 +199,9 @@ pub(crate) fn dispatch_command(
     ctx: &DispatchContext<'_>,
 ) -> Result<Option<String>> {
     let result = match args.command {
+        Some(cli::Command::Render { .. }) => {
+            anyhow::bail!("render must run before analysis bootstrap")
+        }
         Some(cli::Command::Analyze { targets }) => run_analyze_paths(
             targets,
             &ctx.analyze,

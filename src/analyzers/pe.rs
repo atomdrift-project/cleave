@@ -707,18 +707,13 @@ impl PEAnalyzer {
                 let failure = crate::upx::classify_failure(&e);
                 report.findings.push(
                     Finding::structural(
-                        "anti-static/packer/upx/decompression-failed".to_string(),
+                        "metadata/binary/layout/compression::upx-decompression-failed".to_string(),
                         failure.description.to_string(),
                         1.0,
                     )
-                    .with_criticality(if failure.indicts_image {
-                        Criticality::Hostile
-                    } else {
-                        // A timeout, our own size cap or a missing `upx` says
-                        // nothing about the sample — reporting those as hostile
-                        // graded our environment instead of the file.
-                        Criticality::Notable
-                    }),
+                    // A checksum mismatch can result from corruption or mutation.
+                    // Tool refusal alone establishes neither evasion nor hostility.
+                    .with_criticality(Criticality::Notable),
                 );
             }
         }

@@ -134,13 +134,25 @@ pub struct Args {
     #[arg(long)]
     pub json: bool,
 
-    /// Output format: terminal (default), json (single object), or jsonl (streaming)
-    #[arg(long, value_enum)]
+    /// Output format: terminal (default), tiny, json, jsonl, or a replay snapshot
+    #[arg(long, value_enum, global = true)]
     pub format: Option<OutputFormat>,
 
     /// Write output to file
-    #[arg(short, long)]
+    #[arg(short, long, global = true)]
     pub output: Option<String>,
+
+    /// Experimental context retention (render command only).
+    #[arg(long, global = true)]
+    pub trim_context: bool,
+
+    /// Experimental: retain the audited shipping Azoth fact inputs (render JSON only).
+    #[arg(long, global = true)]
+    pub model_facts: bool,
+
+    /// Experimental: share exactly equal analyses in diagnostic joined JSON (render only).
+    #[arg(long, global = true)]
+    pub share_analyses: bool,
 
     /// Verbose logging
     #[arg(short, long)]
@@ -248,6 +260,7 @@ impl Args {
                 "json" => return OutputFormat::Json,
                 "jsonl" => return OutputFormat::Jsonl,
                 "tiny" => return OutputFormat::Tiny,
+                "snapshot" => return OutputFormat::Snapshot,
                 "terminal" => return OutputFormat::Terminal,
                 _ => {
                     eprintln!("warning: unknown CLEAVE_FORMAT '{val}', using terminal");
@@ -284,6 +297,12 @@ impl Args {
 #[derive(Subcommand, Debug)]
 #[allow(clippy::large_enum_variant)]
 pub enum Command {
+    /// Experimental: render a saved report without analyzing files or loading rules.
+    Render {
+        /// Saved report input.
+        #[command(flatten)]
+        args: crate::report_input::RenderArgs,
+    },
     /// Analyze files or directories
     Analyze {
         /// Target files or directories to analyze
@@ -971,9 +990,11 @@ pub enum DetectFileType {
     Raw,
 }
 
-/// Output format for the diff command
+/// Output format for analysis and extraction commands.
 #[derive(Debug, Clone, Copy, clap::ValueEnum, PartialEq)]
 pub enum OutputFormat {
+    /// Raw JSON snapshot with capture annotations for exact offline rendering
+    Snapshot,
     /// JSON output (single object)
     Json,
     /// JSONL output (newline-delimited JSON) for streaming
@@ -989,6 +1010,24 @@ pub enum OutputFormat {
 mod tests {
     use super::*;
     use clap::ValueEnum;
+
+    #[test]
+    fn render_accepts_local_format_and_output_options() {
+        let args = Args::try_parse_from([
+            "cleave",
+            "render",
+            "before.json",
+            "--format",
+            "tiny",
+            "-o",
+            "view.txt",
+        ])
+        .unwrap();
+        assert_eq!(args.format(), OutputFormat::Tiny);
+        assert_eq!(args.output.as_deref(), Some("view.txt"));
+        assert!(matches!(args.command, Some(Command::Render { args })
+            if args.input == "before.json"));
+    }
 
     #[test]
     fn test_reject_removed_extract_dir_flag() {

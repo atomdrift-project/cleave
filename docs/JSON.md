@@ -8,6 +8,105 @@ envelope](../../litmus/docs/JSON.md).
 For the library that produces these reports, see
 [RUST_API.md](RUST_API.md).
 
+## Offline rendering and comparisons
+
+**Experimental:** the `render` command and its candidate JSON formats may change.
+
+Render a saved report without reading its original files, loading rules, or
+running analysis:
+
+```sh
+cleave render report.json --format tiny
+cleave render - --format terminal < report.json
+```
+
+The command reads one JSON document: compact v8, a raw v3/v3.0 report, or a
+scan envelope containing either under `raw`. Unknown schema versions fail.
+Rendered output goes to stdout; warnings go to stderr. Compare saved outputs
+with the standard `diff` command.
+
+Compact v8 did not retain capture's winning per-window annotations or all
+provenance distinctions. The reader reconstructs annotations from spans and
+warns on stderr that its output cannot certify parity with the original live
+render. Two reconstructed outputs matching is useful, but does not prove that
+either matches the historical interpretation input.
+
+For exact replay baselines, capture the finalized typed report with its notes:
+
+```sh
+cleave --format snapshot /path/to/sample -o before.json
+cleave render before.json --format tiny > before.txt
+cleave render after.json --format tiny > after.txt
+diff -u before.txt after.txt
+```
+
+`snapshot` is an opt-in diagnostic output, with more fields than the compact
+storage format. The render command does not re-finalize a finalized snapshot.
+Intermediate analysis-cache reports require finalization and are marked as
+inexact, as are compact reconstruction and snapshots with missing context
+annotations. These limitations are reported on stderr.
+
+With the matching scan reader, use:
+
+```sh
+atomscan render before.json --format interpret > before.txt
+atomscan render after.json --format interpret > after.txt
+diff -u before.txt after.txt
+```
+
+This uses scan's live primary-context budget and annotation rewrite, with no
+models, fetching, updates, or LLM calls. Artifact reports and archive members
+are supported. Reports containing fetched subjects or registry sidecars need
+additional saved presentation state (fetch verdicts and registry provenance);
+the initial interpretation replay rejects those rather than silently omitting
+their evidence. Compare with the same renderer build and render-budget settings.
+
+### Experimental context retention
+
+The opt-in `file-1` candidate stores typed findings and file-local annotated
+context. It replaces the earlier `context-1` replay overlay with one canonical
+representation. It is not the final schema 9 and is not enabled for normal
+analysis JSON or hopper uploads. Both diagnostic formats remain readable.
+
+```sh
+cleave --format snapshot SAMPLE -o sample.snapshot.json
+cleave render sample.snapshot.json --format json --trim-context -o candidate.json
+atomscan render sample.snapshot.json --format interpret > before.txt
+atomscan render candidate.json --format interpret > after.txt
+diff -u before.txt after.txt
+```
+
+Without `--trim-context`, `render --format json` writes the same replayable
+profile with its full context. JSON/snapshot rewriting requires an annotated
+snapshot, rather than historical input whose annotations were reconstructed.
+
+The pass removes annotations for findings already filtered out, empties windows
+that cannot be selected, and trims binary padding using the renderer's own
+byte-range planner. It keeps all findings, facts, suppression evidence, window
+positions/order and original budget costs. Source windows with live annotations
+stay whole. It runs once over each file; archive prompt caps never determine
+what a leaf retains. Tiny/interpret output is the parity target. Terminal/prism
+can show less surrounding context after retention.
+
+Findings retain their actual order and historical values. Each context window
+holds capture-note references into its own file's `traits`, plus its original
+budget cost when trimming changed the length. Findings carry their spans,
+locality and provenance directly. No external trait catalog is required. The
+typed decoder builds the existing presentation view; it does not restore
+discarded raw matcher strings or promise a full raw-analysis round trip.
+
+Some source files grow because replay metadata costs more than the bytes cut.
+See [the candidate contract and measurements](JSON_FILE_CANDIDATE.md) for native
+JSONB/TOAST and optimized encode/decode timings.
+
+Two additional diagnostic options are available with `render --format json`:
+`--model-facts` retains the audited shipping Azoth inputs and stamps an explicit
+`fp` contract; `--share-analyses` writes `joined-1` with complete occurrences and
+a document-local analysis pool. Equal SHA alone never merges analyses. These
+options preserve the interpret target while reducing facts and repeated payloads;
+other fact consumers may need the default full-facts profile. See the
+[retention and sharing contract](JSON_FILE_CANDIDATE.md#retained-facts-direct-model-inputs-and-joined-sharing).
+
 ## Schema versioning
 
 `version` carries the report schema version. The current value is

@@ -37,6 +37,7 @@ pub(crate) enum SfxKind {
     Nsis,
     InnoSetup,
     PyInstaller,
+    Nuitka,
 }
 
 impl SfxKind {
@@ -45,6 +46,7 @@ impl SfxKind {
             SfxKind::Nsis => "file/sfx/nsis",
             SfxKind::InnoSetup => "file/sfx/inno-setup",
             SfxKind::PyInstaller => "file/sfx/pyinstaller",
+            SfxKind::Nuitka => "file/sfx/nuitka",
         }
     }
 
@@ -53,6 +55,7 @@ impl SfxKind {
             SfxKind::Nsis => "NSIS self-extracting installer",
             SfxKind::InnoSetup => "Inno Setup self-extracting installer",
             SfxKind::PyInstaller => "PyInstaller-bundled Python executable",
+            SfxKind::Nuitka => "Nuitka compressed one-file Python bundle",
         }
     }
 
@@ -61,6 +64,7 @@ impl SfxKind {
             SfxKind::Nsis => "NSIS",
             SfxKind::InnoSetup => "Inno Setup",
             SfxKind::PyInstaller => "PyInstaller",
+            SfxKind::Nuitka => "Nuitka",
         }
     }
 }
@@ -173,6 +177,11 @@ pub(crate) fn detect_sfx(
     if marker_outside_embedded_binary(data, PYINST_MAGIC, embedded_binaries).is_some() {
         return Some(SfxKind::PyInstaller);
     }
+    if marker_outside_embedded_binary(data, b"NUITKA_ONEFILE_", embedded_binaries).is_some()
+        && marker_outside_embedded_binary(data, NUITKA_COMPRESSED, embedded_binaries).is_some()
+    {
+        return Some(SfxKind::Nuitka);
+    }
     None
 }
 
@@ -223,10 +232,19 @@ pub(crate) fn analyze_sfx(
         SfxKind::Nsis => NSIS_DEADBEEF,
         SfxKind::InnoSetup => INNO_MARKER,
         SfxKind::PyInstaller => PYINST_MAGIC,
+        SfxKind::Nuitka => NUITKA_COMPRESSED,
     };
     let marker_offset = marker_outside_embedded_binary(data, marker, embedded_binaries);
 
-    let extraction = try_extract(file_path, data, kind, engine, yara_engine, archive_config);
+    let extraction = try_extract(
+        file_path,
+        data,
+        kind,
+        engine,
+        yara_engine,
+        archive_config,
+        marker_offset,
+    );
     let extracted = extraction.archive_report.is_some();
 
     let extraction_findings = extraction
@@ -308,7 +326,15 @@ fn try_extract(
     engine: &crate::Engine,
     yara_engine: Option<Arc<YaraEngine>>,
     archive_config: Option<&ArchiveAnalyzerConfig>,
+    marker_offset: Option<usize>,
 ) -> SfxExtraction {
+    // Bound nested Nuitka bundles, including those reached through encoded PEs.
+    if kind == SfxKind::Nuitka && file_path.to_string_lossy().matches("!!").count() >= 8 {
+        return SfxExtraction {
+            archive_report: None,
+            inno_diagnostics: vec![],
+        };
+    }
     // PyInstaller path: extract + analyze entirely in memory, no tmpdir.
     if kind == SfxKind::PyInstaller {
         return SfxExtraction {
@@ -353,6 +379,9 @@ fn try_extract(
     let mut inno_diagnostics = vec![];
     let extracted = match kind {
         SfxKind::Nsis => run_7z(extraction_path, tmp.path()),
+        SfxKind::Nuitka => {
+            marker_offset.is_some_and(|offset| extract_nuitka_at(data, offset, tmp.path()).is_ok())
+        }
         SfxKind::InnoSetup => {
             if let Some(innoextract) = innoextract_cmd() {
                 let result = run_innoextract(&innoextract, extraction_path, tmp.path());
@@ -659,11 +688,164 @@ fn analyze_dir(
         .ok()
 }
 
+// The Windows one-file payload starts with KA + Y (compressed), followed by
+// one Zstandard frame. Its decoded records are NUL-terminated UTF-16LE names,
+// u64 little-endian sizes and exact member bytes; an empty name ends the list.
+const NUITKA_COMPRESSED: &[u8] = b"KAY\x28\xb5\x2f\xfd";
+const NUITKA_MAX_TOTAL: u64 = 1024 * 1024 * 1024;
+const NUITKA_MAX_MEMBER: u64 = 512 * 1024 * 1024;
+
+fn nuitka_member_path(name: &str) -> std::io::Result<std::path::PathBuf> {
+    let name = name.replace('\\', "/");
+    if name.starts_with('/')
+        || name.contains(':')
+        || name
+            .split('/')
+            .any(|p| p.is_empty() || p == "." || p == "..")
+    {
+        return Err(std::io::Error::other("unsafe Nuitka member name"));
+    }
+    Ok(std::path::PathBuf::from(name))
+}
+
+fn read_nuitka_name(reader: &mut impl std::io::Read) -> std::io::Result<String> {
+    let mut units = Vec::new();
+    for _ in 0..4096 {
+        let mut pair = [0u8; 2];
+        reader.read_exact(&mut pair)?;
+        let unit = u16::from_le_bytes(pair);
+        if unit == 0 {
+            return String::from_utf16(&units)
+                .map_err(|_| std::io::Error::other("invalid Nuitka UTF-16 name"));
+        }
+        units.push(unit);
+    }
+    Err(std::io::Error::other("Nuitka member name too long"))
+}
+
+#[cfg(test)]
+fn extract_nuitka(data: &[u8], out: &Path) -> std::io::Result<()> {
+    let offset = memmem::find(data, NUITKA_COMPRESSED)
+        .ok_or_else(|| std::io::Error::other("missing Nuitka frame"))?;
+    extract_nuitka_at(data, offset, out)
+}
+
+fn extract_nuitka_at(data: &[u8], offset: usize, out: &Path) -> std::io::Result<()> {
+    use std::io::Read;
+    let decoder = zstd::stream::read::Decoder::new(&data[offset + 3..])?.single_frame();
+    // Cap both output and record overhead, even when the frame omits its size.
+    let mut reader = decoder.take(NUITKA_MAX_TOTAL + 1);
+    let mut total = 0u64;
+    let mut names = std::collections::HashSet::new();
+    for count in 0..4096 {
+        let name = read_nuitka_name(&mut reader)?;
+        if name.is_empty() {
+            let mut trailing = [0];
+            if count == 0 || reader.read(&mut trailing)? != 0 {
+                return Err(std::io::Error::other("invalid Nuitka record terminator"));
+            }
+            return Ok(());
+        }
+        let relative = nuitka_member_path(&name)?;
+        if !names.insert(relative.to_string_lossy().to_lowercase()) {
+            return Err(std::io::Error::other("duplicate Nuitka member"));
+        }
+        let mut size = [0u8; 8];
+        reader.read_exact(&mut size)?;
+        let size = u64::from_le_bytes(size);
+        total = total
+            .checked_add(size)
+            .ok_or_else(|| std::io::Error::other("Nuitka member size overflow"))?;
+        if size > NUITKA_MAX_MEMBER || total > NUITKA_MAX_TOTAL {
+            return Err(std::io::Error::other("Nuitka extraction byte limit"));
+        }
+        let path = out.join(relative);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)?;
+        if std::io::copy(&mut reader.by_ref().take(size), &mut file)? != size {
+            return Err(std::io::Error::other("truncated Nuitka member"));
+        }
+    }
+    Err(std::io::Error::other("Nuitka member count limit"))
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn nuitka_bundle(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut records = Vec::new();
+        for (name, content) in entries {
+            for unit in name.encode_utf16().chain(std::iter::once(0)) {
+                records.extend_from_slice(&unit.to_le_bytes());
+            }
+            records.extend_from_slice(&(content.len() as u64).to_le_bytes());
+            records.extend_from_slice(content);
+        }
+        records.extend_from_slice(&[0, 0]);
+        let mut host = pe_stub();
+        host.extend_from_slice(b"NUITKA_ONEFILE_PARENT\0KAY");
+        host.extend(zstd::stream::encode_all(records.as_slice(), 1).unwrap());
+        host.extend_from_slice(b"host section trailer");
+        host
+    }
+
+    #[test]
+    fn nuitka_extracts_unicode_and_nested_members_without_consuming_host_trailer() {
+        let data = nuitka_bundle(&[("main.dll", b"MZdemo"), ("lib\\caf\u{e9}.txt", b"text")]);
+        assert_eq!(detect_sfx(&data, &[]), Some(SfxKind::Nuitka));
+        let out = tempfile::tempdir().unwrap();
+        extract_nuitka(&data, out.path()).unwrap();
+        assert_eq!(
+            std::fs::read(out.path().join("main.dll")).unwrap(),
+            b"MZdemo"
+        );
+        assert_eq!(
+            std::fs::read(out.path().join("lib/caf\u{e9}.txt")).unwrap(),
+            b"text"
+        );
+    }
+
+    #[test]
+    fn nuitka_rejects_unsafe_duplicate_and_truncated_members() {
+        for name in [
+            "../escape",
+            "a\\..\\escape",
+            "/absolute",
+            "C:\\absolute",
+            "a//b",
+        ] {
+            let out = tempfile::tempdir().unwrap();
+            assert!(extract_nuitka(&nuitka_bundle(&[(name, b"x")]), out.path()).is_err());
+        }
+        let out = tempfile::tempdir().unwrap();
+        assert!(extract_nuitka(&nuitka_bundle(&[("a", b"x"), ("A", b"y")]), out.path()).is_err());
+        let mut data = nuitka_bundle(&[("main.dll", b"MZdemo")]);
+        data.truncate(data.len() - 25);
+        assert!(extract_nuitka(&data, out.path()).is_err());
+    }
+
+    #[test]
+    fn nuitka_requires_both_runtime_and_frame_outside_embedded_images() {
+        let data = nuitka_bundle(&[("main.dll", b"MZdemo")]);
+        let frame = memmem::find(&data, NUITKA_COMPRESSED).unwrap();
+        let embedded = [crate::analyzers::embedded_binary_detector::EmbeddedBinary {
+            offset: frame,
+            kind: crate::analyzers::embedded_binary_detector::EmbeddedKind::Pe64,
+            estimated_size: data.len() - frame,
+            encoding: None,
+            format_hint: None,
+        }];
+        assert_eq!(detect_sfx(&data, &embedded), None);
+        assert_eq!(detect_sfx(b"MZNUITKA_ONEFILE_PARENT", &[]), None);
+    }
 
     fn pe_stub() -> Vec<u8> {
         // Minimal 256-byte buffer with MZ header (enough for marker scanning)

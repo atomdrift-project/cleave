@@ -1335,22 +1335,45 @@ fn detect_base64_binary(
     let virtual_path = format!("{}##base64@{:#x}", parent_path, offset);
     let sha256 = crate::analyzers::utils::calculate_sha256(&decoded);
 
+    // ZIP is also the container for documents and ordinary application assets.
+    // Encoding plus archive magic establishes a format property, not evasion.
+    // The dispatcher below still analyzes every decoded member for behavior.
+    let is_zip = inner_type == "zip";
     let finding = Finding {
         precomputed_spans: None,
         src: None,
         kind: FindingKind::Capability,
-        id: format!("binary/embedded/base64-{}", inner_type).into(),
-        desc: format!(
-            "Base64-encoded {} payload ({} bytes decoded) at offset {:#x}",
-            inner_type.to_uppercase(),
-            decoded.len(),
-            offset,
-        )
+        id: if is_zip {
+            "metadata/file/encoding::base64-decoded-zip".into()
+        } else {
+            format!("binary/embedded/base64-{}", inner_type).into()
+        },
+        desc: if is_zip {
+            format!(
+                "Base64-encoded ZIP archive ({} decoded bytes)",
+                decoded.len()
+            )
+        } else {
+            format!(
+                "Base64-encoded {} payload ({} bytes decoded) at offset {:#x}",
+                inner_type.to_uppercase(),
+                decoded.len(),
+                offset,
+            )
+        }
         .into(),
         conf: 0.85,
-        crit: Criticality::Suspicious,
+        crit: if is_zip {
+            Criticality::Notable
+        } else {
+            Criticality::Suspicious
+        },
         mbc: None,
-        attack: Some("T1027.009".into()),
+        attack: if is_zip {
+            None
+        } else {
+            Some("T1027.009".into())
+        },
         evidence: vec![Evidence {
             method: "base64_magic_detection".to_string(),
             source: "embedded_code_detector".to_string(),
@@ -2719,6 +2742,37 @@ mod tests {
         let encoded = base64::engine::general_purpose::STANDARD.encode(&random_bytes);
         let info = make_string_info(&encoded);
         assert!(detect_base64_binary("test.sh", &info, 0, &test_mapper()).is_empty());
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn test_detect_base64_zip_is_metadata_and_still_analyzes_members() {
+        use base64::Engine;
+        use std::io::{Cursor, Write};
+
+        let mut archive = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        archive
+            .start_file("member.js", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        archive
+            .write_all(b"console.log('embedded archive content is still analyzed');\n")
+            .unwrap();
+        let bytes = archive.finish().unwrap().into_inner();
+        let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+        let info = make_string_info(&encoded);
+        let entries = detect_base64_binary("assets.js", &info, 0, &test_mapper());
+        let carrier = &entries[0].findings[0];
+        assert_eq!(
+            carrier.id.as_ref(),
+            "metadata/file/encoding::base64-decoded-zip"
+        );
+        assert_eq!(carrier.crit, Criticality::Notable);
+        assert!(carrier.attack.is_none());
+        assert!(
+            entries.iter().any(|entry| {
+                entry.path.ends_with("member.js") && entry.file_type == "javascript"
+            })
+        );
     }
 
     fn append_tar_test_file(archive: &mut tar::Builder<Vec<u8>>, path: &str, data: &[u8]) {

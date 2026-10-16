@@ -35,7 +35,9 @@ pub fn run(
     )?;
 
     match format {
-        cli::OutputFormat::Json | cli::OutputFormat::Jsonl => Ok(serde_json::to_string(&report)?),
+        cli::OutputFormat::Json | cli::OutputFormat::Jsonl | cli::OutputFormat::Snapshot => {
+            Ok(serde_json::to_string(&report)?)
+        }
         cli::OutputFormat::Terminal | cli::OutputFormat::Tiny => {
             Ok(cleave::diff::format::format_terminal(&report))
         }

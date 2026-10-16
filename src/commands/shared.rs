@@ -346,7 +346,9 @@ pub(crate) fn extract_strings_from_ast(
         .collect();
 
     match format {
-        crate::cli::OutputFormat::Json | crate::cli::OutputFormat::Jsonl => {
+        crate::cli::OutputFormat::Json
+        | crate::cli::OutputFormat::Jsonl
+        | crate::cli::OutputFormat::Snapshot => {
             Ok(serde_json::to_string_pretty(&filtered_strings)?)
         }
         crate::cli::OutputFormat::Terminal | crate::cli::OutputFormat::Tiny => {

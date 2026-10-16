@@ -1192,7 +1192,10 @@ fn judge_traits(path: &Path, expected: &TraitExpectations, report: &AnalysisRepo
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod trait_expectation_tests {
-    use super::{HostileExpectation, Target, TraitExpectations, trait_expectation_errors};
+    use super::{
+        HostileExpectation, NeutralStage, Target, TraitExpectations, judge_traits,
+        trait_expectation_errors,
+    };
     use std::collections::HashSet;
     use std::path::PathBuf;
     #[test]
@@ -1230,6 +1233,65 @@ mod trait_expectation_tests {
             toml::from_str("name='x'\nmin_score=35\nmin_hostile=0\nmin_suspicious=1").unwrap();
         assert!(trait_expectation_errors(&expected.traits, &HashSet::new()).is_empty());
     }
+
+    #[test]
+    fn neutral_stage_keeps_dos_com_objective_findings_for_exact_expectations() {
+        let Ok(traits_dir) = cleave::traits_repo::try_resolve() else {
+            eprintln!("traits repo unavailable; skipping integration check");
+            return;
+        };
+        let fixture =
+            traits_dir.join("testdata/hostile/dos-com/fuk-malformed-companion-overwriter.com");
+        if !fixture.is_file() {
+            eprintln!("FUK fixture unavailable; skipping integration check");
+            return;
+        }
+
+        let expected = TraitExpectations {
+            enable_yara: true,
+            required_traits: vec![
+                "objectives/impact/infect/binary/dos/file::dos-com-directory-infector".into(),
+                "objectives/impact/infect/binary/dos/file::dos-com-dta-overwriter".into(),
+                "objectives/impact/infect/binary/dos/interrupt::dos-int21-direct-action-infector"
+                    .into(),
+            ],
+            ..Default::default()
+        };
+        let mapper = std::sync::Arc::new(
+            cleave::CapabilityMapper::try_new_with_load_options(
+                cleave::CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION,
+                cleave::CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION,
+                true,
+                false,
+            )
+            .unwrap(),
+        );
+        let options = cleave::AnalysisOptions {
+            disable_yara: false,
+            disable_radare2: true,
+            disable_upx: true,
+            ..Default::default()
+        };
+        let stage = NeutralStage::new(&traits_dir).unwrap();
+        let report = stage
+            .analyze(&fixture, |path| {
+                cleave::analyze_file_with_mapper(path, &options, &mapper)
+            })
+            .unwrap();
+
+        let ids: HashSet<_> = report
+            .files
+            .iter()
+            .flat_map(|file| file.findings.iter())
+            .filter(|finding| finding.crit != super::Criticality::Filtered)
+            .map(|finding| finding.id.as_str())
+            .collect();
+        for id in &expected.required_traits {
+            assert!(ids.contains(id.as_str()), "missing {id}; findings: {ids:?}");
+        }
+        assert!(judge_traits(&fixture, &expected, &report));
+    }
+
     #[test]
     fn gap_expectations_accept_only_known_diagnostics() {
         let expected: TraitExpectations =

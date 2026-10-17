@@ -620,7 +620,7 @@ impl PEAnalyzer {
             return report;
         }
 
-        match UPXDecompressor::decompress(backing_path) {
+        match UPXDecompressor::decompress(data) {
             Ok(unpacked_data) => {
                 if let Ok(temp_file) = tempfile::NamedTempFile::new()
                     && fs::write(temp_file.path(), &unpacked_data).is_ok()
@@ -2095,6 +2095,33 @@ mod tests {
     // =========================================================================
     // UPX Integration Tests
     // =========================================================================
+
+    #[test]
+    fn test_pe_upx_recovers_virtual_archive_member() {
+        if !crate::upx::UPXDecompressor::is_available() {
+            return;
+        }
+        let packed = include_bytes!("../../testdata/upx/activation-factory-packed.pe");
+        let directory = tempfile::tempdir().unwrap();
+        let virtual_path = directory.path().join("archive.zip!!library.dll");
+        assert!(!virtual_path.exists());
+
+        let report = PEAnalyzer::new().analyze_structural(&virtual_path, packed, None);
+        let unpacked = report
+            .files
+            .iter()
+            .find(|file| {
+                file.encoding
+                    .as_ref()
+                    .is_some_and(|encodings| encodings.iter().any(|encoding| encoding == "upx"))
+            })
+            .expect("UPX payload must be recovered without a real source path");
+        assert_eq!(unpacked.size, 4096);
+        assert_eq!(unpacked.file_type, "pe");
+        assert!(!report.findings.iter().any(|finding| {
+            finding.id == "metadata/binary/layout/compression::upx-decompression-failed"
+        }));
+    }
 
     #[test]
     fn test_pe_upx_detection_in_data() {

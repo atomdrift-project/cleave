@@ -38,7 +38,42 @@ impl super::CapabilityMapper {
             return;
         }
 
-        let mut order: Vec<usize> = (0..report.files.len()).collect();
+        // Most members have no finding with an explicit parent-aware
+        // downgrade. Do not clone the aggregate parent findings or build its
+        // evaluation indexes for those members: on large archives that turns
+        // a no-op pass into quadratic work over the complete finding pool.
+        let composite_by_id = self.composite_id_index();
+        let mut order: Vec<usize> = report
+            .files
+            .iter()
+            .enumerate()
+            .filter(|(_, file)| {
+                file.depth > 0
+                    && file.findings.iter().any(|finding| {
+                        self.trait_id_map
+                            .get(finding.id.as_str())
+                            .and_then(|&idx| self.trait_definitions[idx].downgrade.as_ref())
+                            .or_else(|| {
+                                composite_by_id
+                                    .get(finding.id.as_str())
+                                    .and_then(|&idx| self.composite_rules[idx].downgrade.as_ref())
+                            })
+                            .is_some_and(|downgrade| {
+                                matches!(
+                                    downgrade.scope,
+                                    Some(
+                                        crate::composite_rules::Scope::Parent
+                                            | crate::composite_rules::Scope::FileOrParent
+                                    )
+                                )
+                            })
+                    })
+            })
+            .map(|(idx, _)| idx)
+            .collect();
+        if order.is_empty() {
+            return;
+        }
         order.sort_by_key(|&idx| (report.files[idx].depth, report.files[idx].id));
         let file_indices: HashMap<u32, usize> = report
             .files

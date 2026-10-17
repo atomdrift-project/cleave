@@ -273,6 +273,21 @@ fn git_rule_tree_dirty(dir: &Path) -> bool {
     let result = Command::new("git")
         .arg("-C")
         .arg(dir)
+        // This check targets `dir` directly; inherited repository overrides
+        // would make Git inspect a different worktree or index.
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .env_remove("GIT_COMMON_DIR")
+        // Global excludes are a user convenience for working-tree status, but
+        // they must not hide rule files from the version check. Cleave can load
+        // an ignored YAML file just like any other rule source, so a global
+        // `*.yaml` ignore would otherwise make the reported revision stale.
+        .arg("-c")
+        .arg(format!(
+            "core.excludesFile={}",
+            if cfg!(windows) { "NUL" } else { "/dev/null" }
+        ))
         .args(["status", "--porcelain=v1", "--untracked-files=normal", "--"])
         .args(RULE_SOURCE_DIRS.iter().copied())
         .output();
@@ -368,10 +383,23 @@ mod tests {
     fn git_rule_tree_dirty_tracks_only_rule_sources() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
+        // Keep user or system Git settings (for example commit.gpgsign or a
+        // custom init template) from changing this scratch repository's setup.
+        let git_config = dir.join("empty-git-config");
+        std::fs::write(&git_config, "").unwrap();
+        let git_template = dir.join("empty-git-template");
+        std::fs::create_dir(&git_template).unwrap();
         let run = |args: &[&str]| {
             let output = Command::new("git")
                 .arg("-C")
                 .arg(dir)
+                .env_remove("GIT_DIR")
+                .env_remove("GIT_WORK_TREE")
+                .env_remove("GIT_INDEX_FILE")
+                .env_remove("GIT_COMMON_DIR")
+                .env("GIT_CONFIG_GLOBAL", &git_config)
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env("GIT_TEMPLATE_DIR", &git_template)
                 .args(args)
                 .output()
                 .unwrap();
@@ -394,15 +422,27 @@ mod tests {
             "-qm",
             "base",
         ]);
-        assert!(!git_rule_tree_dirty(dir));
+        assert!(
+            !git_rule_tree_dirty(dir),
+            "fresh temporary repository should be clean"
+        );
 
         std::fs::write(dir.join("README.md"), "unrelated\n").unwrap();
-        assert!(!git_rule_tree_dirty(dir));
+        assert!(
+            !git_rule_tree_dirty(dir),
+            "an untracked file outside rule sources should be ignored"
+        );
         std::fs::write(dir.join("metadata/base.yaml"), "edited\n").unwrap();
-        assert!(git_rule_tree_dirty(dir));
+        assert!(
+            git_rule_tree_dirty(dir),
+            "an edited tracked rule should make the rule tree dirty"
+        );
         run(&["checkout", "--", "metadata/base.yaml"]);
         std::fs::write(dir.join("metadata/new.yaml"), "new\n").unwrap();
-        assert!(git_rule_tree_dirty(dir));
+        assert!(
+            git_rule_tree_dirty(dir),
+            "an untracked rule should make the rule tree dirty"
+        );
     }
 
     #[test]

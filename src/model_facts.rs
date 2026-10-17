@@ -224,10 +224,12 @@ mod tests {
 
     #[test]
     fn early_selection_matches_full_projection_including_caps_and_rounding() {
-        let mut file = crate::FileAnalysis::default();
-        file.imports = (0..4096)
-            .map(|_| crate::types::Import::new("unneeded", None))
-            .collect();
+        let mut file = crate::FileAnalysis {
+            imports: (0..4096)
+                .map(|_| crate::types::Import::new("unneeded", None))
+                .collect(),
+            ..Default::default()
+        };
         file.imports.push(crate::types::Import::new("socket", None));
         file.filefacts_metrics = Some(std::collections::BTreeMap::from([
             ("binary.overall_entropy".into(), 7.2345),

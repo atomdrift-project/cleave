@@ -716,7 +716,7 @@ fn read_nuitka_name(reader: &mut impl std::io::Read) -> std::io::Result<String> 
         let unit = u16::from_le_bytes(pair);
         if unit == 0 {
             return String::from_utf16(&units)
-                .map_err(|_| std::io::Error::other("invalid Nuitka UTF-16 name"));
+                .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error));
         }
         units.push(unit);
     }
@@ -777,6 +777,7 @@ fn extract_nuitka_at(data: &[u8], offset: usize, out: &Path) -> std::io::Result<
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

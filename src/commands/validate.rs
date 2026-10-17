@@ -1250,9 +1250,11 @@ mod trait_expectation_tests {
         let expected = TraitExpectations {
             enable_yara: true,
             required_traits: vec![
-                "objectives/impact/infect/binary/dos/file::dos-com-directory-infector".into(),
-                "objectives/impact/infect/binary/dos/file::dos-com-dta-overwriter".into(),
-                "objectives/impact/infect/binary/dos/interrupt::dos-int21-direct-action-infector"
+                "objectives/impact/wipe/file/header::dos-dta-cell-sized-host-prefix-corruption"
+                    .into(),
+                "objectives/lateral-movement/worm/file-copy::dos-parent-directory-self-image-replication"
+                    .into(),
+                "objectives/evasion/file-hiding/attributes::dos-overwrite-installer-hidden-readonly-image"
                     .into(),
             ],
             ..Default::default()

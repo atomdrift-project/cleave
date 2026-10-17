@@ -975,7 +975,7 @@ impl ElfAnalyzer {
             return report;
         }
 
-        match UPXDecompressor::decompress(backing_path) {
+        match UPXDecompressor::decompress(data) {
             Ok(unpacked_data) => {
                 if let Ok(temp_file) = tempfile::NamedTempFile::new()
                     && std::fs::write(temp_file.path(), &unpacked_data).is_ok()

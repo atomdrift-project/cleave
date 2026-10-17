@@ -3,7 +3,6 @@
 //! This module detects and unpacks UPX-compressed binaries for analysis.
 
 use std::io::{Read, Write};
-use std::path::Path;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tempfile::NamedTempFile;
@@ -125,21 +124,21 @@ impl UPXDecompressor {
             .is_ok_and(|output| output.status.success())
     }
 
-    fn copy_to_writable_temp(file_path: &Path) -> Result<NamedTempFile, UPXError> {
+    fn copy_to_writable_temp(data: &[u8]) -> Result<NamedTempFile, UPXError> {
         // UPX decompresses in place, so it needs a private writable copy. Copy
         // the bytes only: `fs::copy` would also carry the sample's mode bits
         // (setuid, world-writable) onto a file in shared temp space, while
         // `NamedTempFile` creates it owner-only.
-        let data = std::fs::read(file_path)?;
         let mut temp_file = NamedTempFile::new()?;
-        temp_file.write_all(&data)?;
+        temp_file.write_all(data)?;
         temp_file.flush()?;
         Ok(temp_file)
     }
 
     /// Decompress a UPX-packed file and return the decompressed data.
-    /// The input file_path points to the original packed file.
-    pub(crate) fn decompress(file_path: &Path) -> Result<Vec<u8>, UPXError> {
+    /// Use the same byte snapshot as the analyzer. Archive members may have
+    /// only a virtual path and no reopenable filesystem backing.
+    pub(crate) fn decompress(data: &[u8]) -> Result<Vec<u8>, UPXError> {
         let Some(upx) = filefacts::tools::resolve("upx") else {
             return Err(UPXError::NotInstalled);
         };
@@ -149,7 +148,7 @@ impl UPXDecompressor {
 
         // Create a temporary file to hold a copy for decompression
         // (upx -d modifies the file in place, so we work on a copy)
-        let temp_file = Self::copy_to_writable_temp(file_path)?;
+        let temp_file = Self::copy_to_writable_temp(data)?;
         let temp_path = temp_file.path();
 
         // Run upx -d on the temporary copy with a timeout.
@@ -446,9 +445,9 @@ mod tests {
     // =========================================================================
 
     #[test]
-    fn test_decompress_nonexistent_file() {
-        // Decompressing a nonexistent file should return an error
-        let result = UPXDecompressor::decompress(Path::new("/nonexistent/file/path.elf"));
+    fn test_decompress_empty_snapshot() {
+        // An empty in-memory snapshot should be rejected.
+        let result = UPXDecompressor::decompress(&[]);
         assert!(result.is_err());
     }
 
@@ -461,7 +460,7 @@ mod tests {
             .unwrap();
         temp_file.flush().unwrap();
 
-        let result = UPXDecompressor::decompress(temp_file.path());
+        let result = UPXDecompressor::decompress(&std::fs::read(temp_file.path()).unwrap());
 
         // Should fail if UPX is available (file is not UPX-packed)
         // or return NotInstalled if UPX is not available
@@ -485,7 +484,8 @@ mod tests {
         permissions.set_readonly(true);
         std::fs::set_permissions(source.path(), permissions).unwrap();
 
-        let copied = UPXDecompressor::copy_to_writable_temp(source.path()).unwrap();
+        let copied =
+            UPXDecompressor::copy_to_writable_temp(&std::fs::read(source.path()).unwrap()).unwrap();
         assert!(
             !std::fs::metadata(copied.path())
                 .unwrap()
@@ -509,7 +509,8 @@ mod tests {
         source.flush().unwrap();
         std::fs::set_permissions(source.path(), std::fs::Permissions::from_mode(0o4777)).unwrap();
 
-        let copied = UPXDecompressor::copy_to_writable_temp(source.path()).unwrap();
+        let copied =
+            UPXDecompressor::copy_to_writable_temp(&std::fs::read(source.path()).unwrap()).unwrap();
         let mode = std::fs::metadata(copied.path())
             .unwrap()
             .permissions()

@@ -324,7 +324,7 @@ impl GenericAnalyzer {
                 .engine
                 .yara()
                 .filter(|e| e.is_loaded())
-                .map(|e| e.scan_bytes_with_inline(eval_bytes, Some(file_types.as_slice())));
+                .map(|e| e.scan_bytes(eval_bytes, Some(file_types.as_slice())));
             crate::process_yara_result(&mut report, result, self.engine.yara().map(AsRef::as_ref))
         } else {
             std::collections::HashMap::new()

@@ -105,7 +105,7 @@ fn prefers_unix_php_platform(rule_name: &str) -> bool {
 
 /// Map platforms to the filetype strings expected by the YARA file-type filter.
 ///
-/// Returns lowercase type strings compatible with `scan_bytes_filtered`'s filter:
+/// Returns lowercase type strings compatible with `scan_bytes`'s filter:
 /// Windows → ["pe", "dll"], Unix ELF platforms → ["elf", "so"], macOS → ["macho", "dylib"].
 /// Returns empty slice for platforms with no reliable binary constraint.
 #[must_use]

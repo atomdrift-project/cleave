@@ -181,7 +181,7 @@ impl Engine {
                 let yara_started = std::time::Instant::now();
                 generated = crate::process_yara_result(
                     report,
-                    Some(yara.scan_bytes_with_inline(data, Some(filters.as_slice()))),
+                    Some(yara.scan_bytes(data, Some(filters.as_slice()))),
                     Some(yara),
                 );
                 if yara_started.elapsed() > std::time::Duration::from_secs(4) {

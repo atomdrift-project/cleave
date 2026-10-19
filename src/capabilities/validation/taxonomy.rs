@@ -1598,6 +1598,12 @@ const REVIEWED_SPARSE_TAXONOMY_PARTITIONS: &[(&str, &[&str])] = &[
     // algorithm homes; merging would discard the scheme that every matcher
     // requires. JVM long-state XOR is not intrinsically encode or decode.
     ("micro-behaviors/data/encoding", &["base64", "xor"]),
+    // IRC command vocabulary is distinct from declared connection settings;
+    // TAXONOMY.md records the boundary and focused near-miss fixtures.
+    (
+        "micro-behaviors/communications/irc",
+        &["command", "configure"],
+    ),
     // Algorithm-specific codec homes remain useful with a small current corpus;
     // do not merge gzip, LZMA, and joint zlib evidence into one bucket.
     ("micro-behaviors/data/codec", &["gzip", "lzma", "zlib"]),

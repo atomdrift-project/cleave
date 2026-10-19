@@ -1248,6 +1248,18 @@ impl PEAnalyzer {
 
         // Embedded PE / ELF scanning
         if !self.skip_embedded_scan {
+            let mut bundle_analyzer = self.archive_config.apply(
+                crate::analyzers::archive::ArchiveAnalyzer::new().with_engine(self.engine.clone()),
+            );
+            if let Some(yara) = &self.yara_engine {
+                bundle_analyzer = bundle_analyzer.with_yara_arc(yara.clone());
+            }
+            if bundle_analyzer.analyze_dotnet_bundle(pe_data, &mut report) {
+                embedded_archive_count = embedded_archive_count.saturating_add(1);
+            }
+        }
+
+        if !self.skip_embedded_scan {
             let host_name = std::path::Path::new(&report.target.path)
                 .file_name()
                 .and_then(|n| n.to_str())

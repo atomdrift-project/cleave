@@ -984,10 +984,7 @@ impl UnifiedSourceAnalyzer {
             self.engine.yara().map(|yara| {
                 crate::process_yara_result(
                     &mut report,
-                    Some(yara.scan_bytes_with_inline(
-                        yara_bytes,
-                        Some(&self.file_type.yara_filetypes()),
-                    )),
+                    Some(yara.scan_bytes(yara_bytes, Some(&self.file_type.yara_filetypes()))),
                     Some(yara),
                 )
             })

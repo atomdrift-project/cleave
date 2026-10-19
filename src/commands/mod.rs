@@ -40,9 +40,6 @@
 //! - Input handling: `read_paths_from_stdin` - Reads file paths from standard input
 //! - File type detection: `cli_file_type_to_internal` - Converts CLI file type to internal type
 //!
-//! ### Analysis Functions
-//! - `process_yara_result` - Processes YARA match results for reporting
-//!
 //! ### Reporting Functions
 //! - `create_analysis_report` - Generates comprehensive analysis reports
 //! - `find_similar_rules` - Searches for rules similar to a query string

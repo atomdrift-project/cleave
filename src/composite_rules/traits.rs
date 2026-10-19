@@ -2251,7 +2251,7 @@ impl Scope {
 /// `strip_byte_offset_location` kept (`…/Foo.class:12:5`); the class name
 /// ends at that `.class`. A `$` in the first character of the simple name
 /// (`$Proxy1`) is part of the name, not a nest separator.
-fn nest_host(key: &str) -> &str {
+pub(crate) fn nest_host(key: &str) -> &str {
     let Some(end) = key
         .rmatch_indices(".class")
         .map(|(i, _)| i)

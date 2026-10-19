@@ -3,6 +3,7 @@
 pub(crate) mod analyzers;
 mod asar;
 mod cpio;
+mod dotnet_bundle;
 mod guards;
 #[cfg(test)]
 mod guards_test;
@@ -1336,6 +1337,7 @@ pub(crate) struct ArchiveAnalyzer {
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ArchiveAnalyzerConfig {
+    current_depth: usize,
     max_memory_file_size: Option<u64>,
     analysis_options: Option<Arc<crate::AnalysisOptions>>,
     cancellation: Option<Arc<std::sync::atomic::AtomicBool>>,
@@ -1345,6 +1347,7 @@ impl ArchiveAnalyzerConfig {
     #[must_use]
     pub(crate) fn from_analysis_options(options: &crate::AnalysisOptions) -> Self {
         Self {
+            current_depth: 0,
             max_memory_file_size: Some(options.max_memory_file_size),
             analysis_options: Some(Arc::new(options.clone())),
             cancellation: options.cancellation.clone(),
@@ -1362,6 +1365,7 @@ impl ArchiveAnalyzerConfig {
 
     #[must_use]
     pub(crate) fn apply(&self, mut analyzer: ArchiveAnalyzer) -> ArchiveAnalyzer {
+        analyzer = analyzer.with_depth(self.current_depth);
         if let Some(size) = self.max_memory_file_size {
             analyzer = analyzer.with_max_memory_file_size(size);
         }
@@ -1784,6 +1788,7 @@ impl ArchiveAnalyzer {
     /// inside that member (for example an Inno installer inside a ZIP).
     pub(crate) fn child_archive_config(&self) -> ArchiveAnalyzerConfig {
         ArchiveAnalyzerConfig {
+            current_depth: self.current_depth + 1,
             max_memory_file_size: Some(self.max_memory_file_size),
             analysis_options: self.analysis_options.clone(),
             cancellation: self.cancelled.clone(),

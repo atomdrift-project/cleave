@@ -22,6 +22,17 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicI8, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
+/// A scan's reportable matches and inline-trait evidence travel together.
+/// Neither channel alone describes everything the scan found.
+#[derive(Debug, Default)]
+#[must_use]
+pub struct YaraScan {
+    /// Standalone YARA matches for the analysis report.
+    pub matches: Vec<YaraMatch>,
+    /// Trait evidence keyed by namespace (`inline.{trait_id}`).
+    pub inline_traits: HashMap<String, Vec<Evidence>>,
+}
+
 /// Process-wide override for "load built-in YARA rules only" (skip third-party).
 ///
 /// 0 = unset, 1 = force builtin-only, -1 = force third-party-allowed.
@@ -1201,7 +1212,7 @@ impl YaraEngine {
             // heavy builds, instead of inside the first member that scans.
             if let Some(first) = light.first().copied().or_else(|| heavy.first().copied()) {
                 let _ = self.tier_rules(first);
-                let _ = self.scan_bytes_filtered(b"prewarm", Some(&[first]));
+                let _ = self.scan_bytes(b"prewarm", Some(&[first]));
             }
             if !heavy.is_empty() {
                 scope.spawn(|| {
@@ -1693,25 +1704,18 @@ impl YaraEngine {
         (tier_sources, namespaces)
     }
 
-    /// Scan binary data and split results into regular YARA matches and inline trait results.
-    ///
-    /// Performs a staged scan:
-    /// 1. **CrossFormat tier** — broad curated rules that intentionally apply across formats
-    /// 2. **File-type tier(s)** — rules matching the target file type (PE, ELF, etc.)
-    /// 3. **Raw tier** — explicit raw/blob rules for untyped inputs
-    /// 4. **Unknown tier** — only when the target file type is unknown
+    /// Scan bytes, preserving both reportable matches and inline-trait evidence.
     ///
     /// Scanners are cached per-thread to avoid expensive re-creation.
     ///
-    /// Regular matches (non-`inline.*` namespaces) are returned as `Vec<YaraMatch>` for
-    /// inclusion in the analysis report. Inline matches are returned as a
-    /// `HashMap<String, Vec<Evidence>>` keyed by namespace (`"inline.{trait_id}"`), for use
-    /// by trait evaluation via `EvaluationContext::inline_yara_results`.
-    pub(crate) fn scan_bytes_with_inline(
+    /// A concrete filter scans the named file-type buckets plus the fallback
+    /// bucket; `None` scans every populated bucket. Filtering applies to both
+    /// result channels and never discards inline evidence.
+    pub(crate) fn scan_bytes(
         &self,
         data: &[u8],
         file_type_filter: Option<&[&str]>,
-    ) -> Result<(Vec<YaraMatch>, HashMap<String, Vec<Evidence>>)> {
+    ) -> Result<YaraScan> {
         let scan_start = std::time::Instant::now();
         if YARA_SCANS_DISABLED_AFTER_PANIC.load(Ordering::Relaxed) {
             anyhow::bail!(
@@ -1843,7 +1847,10 @@ impl YaraEngine {
             "YARA scan complete",
         );
 
-        Ok((yara_matches, inline_results))
+        Ok(YaraScan {
+            matches: yara_matches,
+            inline_traits: inline_results,
+        })
     }
 
     /// Hard wall-clock limit for a single YARA scan. If yara-x's internal
@@ -2885,27 +2892,6 @@ impl YaraEngine {
         false
     }
 
-    /// Scan against every bucket. Production callers name the buckets a file
-    /// type can match (`scan_bytes_filtered`); the unfiltered spelling is a
-    /// test convenience, kept out of reach so no per-member path can pick it
-    /// up again.
-    #[cfg(test)]
-    pub(crate) fn scan_bytes(&self, data: &[u8]) -> Result<Vec<YaraMatch>> {
-        self.scan_bytes_filtered(data, None)
-    }
-
-    /// Scan byte data with optional file type filtering.
-    /// Inline YARA results (namespace `inline.*`) are silently discarded; use
-    /// `scan_bytes_with_inline` when you need them for trait evaluation.
-    pub(crate) fn scan_bytes_filtered(
-        &self,
-        data: &[u8],
-        file_type_filter: Option<&[&str]>,
-    ) -> Result<Vec<YaraMatch>> {
-        let (matches, _inline) = self.scan_bytes_with_inline(data, file_type_filter)?;
-        Ok(matches)
-    }
-
     /// Build a `YaraMatch` from raw match data collected during scanning.
     /// Returns `None` if the rule is an inline trait rule (those go into `inline_results`).
     fn build_yara_match(
@@ -3241,6 +3227,201 @@ impl YaraEngine {
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // Tests use direct assertions and helpers for brevity
 mod tests {
     use super::*;
+
+    fn load_test_bucket(engine: &mut YaraEngine, bucket: &str, sources: &[(&str, &str)]) {
+        let mut compiler = yara_x::Compiler::new();
+        for (namespace, source) in sources {
+            compiler.new_namespace(namespace);
+            compiler.add_source(source.as_bytes()).unwrap();
+            if namespace.starts_with("inline.") {
+                engine
+                    .compiled_inline_namespaces
+                    .push(namespace.to_string());
+            }
+        }
+        engine
+            .tiers
+            .entry(bucket.to_string())
+            .or_default()
+            .set(Some(Arc::new(compiler.build())))
+            .unwrap();
+        engine.populated_tiers.insert(bucket.to_string());
+        engine.rule_counts.0 += sources.len();
+    }
+
+    #[test]
+    fn yara_scan_preserves_both_channels_with_file_type_filters() {
+        let mut engine = YaraEngine::new_for_test();
+        for bucket in ["class", "pe", FALLBACK_BUCKET] {
+            load_test_bucket(
+                &mut engine,
+                bucket,
+                &[
+                    (
+                        &format!("test.{bucket}"),
+                        r#"rule regular_marker { strings: $a = "REG" condition: $a }"#,
+                    ),
+                    (
+                        &format!("inline.test/{bucket}::marker"),
+                        r#"rule inline_marker { strings: $a = "INLINE" condition: $a }"#,
+                    ),
+                ],
+            );
+        }
+        let cases: &[(Option<&[&str]>, &[&str])] = &[
+            (Some(&["class"]), &["class", FALLBACK_BUCKET]),
+            (Some(&["pe"]), &["pe", FALLBACK_BUCKET]),
+            (Some(&[]), &[FALLBACK_BUCKET]),
+            (None, &["class", "pe", FALLBACK_BUCKET]),
+        ];
+        for &(filter, buckets) in cases {
+            for (data, regular, inline, offset) in [
+                (b"xx REG INLINE".as_slice(), true, true, 7),
+                (b"xx REG".as_slice(), true, false, 0),
+                (b"xx INLINE".as_slice(), false, true, 3),
+                (b"xx absent".as_slice(), false, false, 0),
+            ] {
+                let scan = engine.scan_bytes(data, filter).unwrap();
+                let mut actual: Vec<_> = scan.matches.iter().map(|m| m.namespace.clone()).collect();
+                let mut expected: Vec<_> = buckets
+                    .iter()
+                    .filter(|_| regular)
+                    .map(|bucket| format!("test.{bucket}"))
+                    .collect();
+                actual.sort();
+                expected.sort();
+                assert_eq!(actual, expected, "filter={filter:?}, data={data:?}");
+                let mut actual: Vec<_> = scan.inline_traits.keys().cloned().collect();
+                let mut expected: Vec<_> = buckets
+                    .iter()
+                    .filter(|_| inline)
+                    .map(|bucket| format!("inline.test/{bucket}::marker"))
+                    .collect();
+                actual.sort();
+                expected.sort();
+                assert_eq!(actual, expected, "filter={filter:?}, data={data:?}");
+                for evidence in scan.inline_traits.values() {
+                    let location = format!("offset:0x{offset:x}");
+                    assert!(evidence.iter().any(|e| {
+                        e.value == "INLINE" && e.location.as_deref() == Some(location.as_str())
+                    }));
+                }
+            }
+        }
+    }
+
+    /// A class-format fixture, not executable code: one extra UTF-8 constant
+    /// supplies the marker, and there are no methods or initializers.
+    fn marker_class(marker: &str) -> Vec<u8> {
+        let mut bytes = b"\xca\xfe\xba\xbe\0\0\0\x34\0\x06".to_vec();
+        for name in ["Control", "java/lang/Object"] {
+            bytes.push(1);
+            bytes.extend_from_slice(&(name.len() as u16).to_be_bytes());
+            bytes.extend_from_slice(name.as_bytes());
+            bytes.extend_from_slice(&[7, 0, if name == "Control" { 1 } else { 3 }]);
+        }
+        bytes.push(1);
+        bytes.extend_from_slice(&(marker.len() as u16).to_be_bytes());
+        bytes.extend_from_slice(marker.as_bytes());
+        bytes.extend_from_slice(b"\0\x21\0\x02\0\x04\0\0\0\0\0\0\0\0");
+        bytes
+    }
+
+    #[test]
+    fn yara_scan_jar_retains_inline_alerts_outside_sample_in_both_extraction_modes() {
+        use crate::analyzers::Analyzer;
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("traits.yaml"),
+            r#"
+defaults:
+  for: [class]
+traits:
+  - id: test/jar::alert
+    desc: Inline alert marker
+    crit: suspicious
+    if: {type: yara, source: 'rule marker { strings: $a = "ALERT_MARKER" condition: $a }'}
+  - id: test/jar::quiet
+    desc: Informational marker
+    crit: notable
+    if: {type: yara, source: 'rule marker { strings: $a = "QUIET_MARKER" condition: $a }'}
+"#,
+        )
+        .unwrap();
+        let mapper =
+            CapabilityMapper::from_directory_with_options(dir.path(), 0.0, 0.0, false, false)
+                .unwrap();
+        let mut yara = YaraEngine::new_for_test();
+        load_test_bucket(
+            &mut yara,
+            "class",
+            &[
+                (
+                    "inline.test/jar::alert",
+                    r#"rule marker { strings: $a = "ALERT_MARKER" condition: $a }"#,
+                ),
+                (
+                    "inline.test/jar::quiet",
+                    r#"rule marker { strings: $a = "QUIET_MARKER" condition: $a }"#,
+                ),
+                (
+                    "test.jar.regular",
+                    r#"rule marker { strings: $a = "REGULAR_MARKER" condition: $a }"#,
+                ),
+            ],
+        );
+        let engine = crate::Engine::new(Arc::new(mapper), Some(Arc::new(yara)), Default::default());
+        let archive = dir.path().join("selection.jar");
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&archive).unwrap());
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        for index in 0..25 {
+            zip.start_file(format!("padding/Decoy{index}.class"), options)
+                .unwrap();
+            zip.write_all(&marker_class(
+                "java/lang/ProcessBuilder java/net/HttpURLConnection",
+            ))
+            .unwrap();
+        }
+        for (name, marker) in [
+            ("hidden/Alert.class", "ALERT_MARKER"),
+            ("hidden/Quiet.class", "QUIET_MARKER"),
+            ("hidden/Regular.class", "REGULAR_MARKER"),
+        ] {
+            zip.start_file(name, options).unwrap();
+            zip.write_all(&marker_class(marker)).unwrap();
+        }
+        zip.finish().unwrap();
+        // The memory budget, not a process-global override, selects the path.
+        for memory_limit in [100 * 1024 * 1024, 0] {
+            let report = crate::analyzers::archive::ArchiveAnalyzer::new()
+                .with_engine(engine.clone())
+                .with_yara_arc(engine.yara().unwrap().clone())
+                .with_max_memory_file_size(memory_limit)
+                .analyze(&archive)
+                .unwrap();
+            let alert = report
+                .files
+                .iter()
+                .find(|f| f.path.ends_with("hidden/Alert.class"))
+                .expect("inline alert must survive outside the top-20 sample");
+            assert!(alert.findings.iter().any(|f| f.id == "test/jar::alert"));
+            assert!(report.findings.iter().any(|f| f.id == "test/jar::alert"));
+            assert!(
+                report
+                    .files
+                    .iter()
+                    .any(|f| f.path.ends_with("hidden/Regular.class"))
+            );
+            assert!(
+                !report
+                    .files
+                    .iter()
+                    .any(|f| f.path.ends_with("hidden/Quiet.class"))
+            );
+        }
+    }
 
     #[test]
     fn upx_child_preserves_inline_yara_and_dependent_composites() {
@@ -3692,9 +3873,9 @@ composite_rules:
             let inline = engine
                 .yara()
                 .unwrap()
-                .scan_bytes_with_inline(&bytes, None)
+                .scan_bytes(&bytes, None)
                 .unwrap()
-                .1;
+                .inline_traits;
             assert_eq!(
                 inline.get(ns).is_some_and(|e| !e.is_empty()),
                 expected,
@@ -3808,9 +3989,9 @@ composite_rules:
                 let inline = engine
                     .yara()
                     .unwrap()
-                    .scan_bytes_with_inline(&bytes, None)
+                    .scan_bytes(&bytes, None)
                     .unwrap()
-                    .1;
+                    .inline_traits;
                 assert_eq!(
                     inline.get(ns).is_some_and(|e| !e.is_empty()),
                     expected,
@@ -4032,7 +4213,7 @@ rule test_rule {
         engine.load_rule_source(rule).unwrap();
 
         let test_data = b"This contains TESTPATTERN in the data";
-        let matches = engine.scan_bytes(test_data).unwrap();
+        let matches = engine.scan_bytes(test_data, None).unwrap().matches;
 
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].rule, "test_rule");
@@ -4058,7 +4239,10 @@ rule threat_named_rule {
 "#;
         let mut engine = YaraEngine::new_for_test();
         engine.load_rule_source(rule).unwrap();
-        let matches = engine.scan_bytes(b"This contains TESTPATTERN").unwrap();
+        let matches = engine
+            .scan_bytes(b"This contains TESTPATTERN", None)
+            .unwrap()
+            .matches;
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].desc, "Detects Windows.Generic.Threat");
     }
@@ -4076,7 +4260,10 @@ rule unlabelled_rule {
 "#;
         let mut engine = YaraEngine::new_for_test();
         engine.load_rule_source(rule).unwrap();
-        let matches = engine.scan_bytes(b"This contains TESTPATTERN").unwrap();
+        let matches = engine
+            .scan_bytes(b"This contains TESTPATTERN", None)
+            .unwrap()
+            .matches;
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].desc, "YARA rule unlabelled_rule");
     }
@@ -4097,7 +4284,10 @@ rule described_rule {
 "#;
         let mut engine = YaraEngine::new_for_test();
         engine.load_rule_source(rule).unwrap();
-        let matches = engine.scan_bytes(b"This contains TESTPATTERN").unwrap();
+        let matches = engine
+            .scan_bytes(b"This contains TESTPATTERN", None)
+            .unwrap()
+            .matches;
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].desc, "Detects a specific loader stage");
     }
@@ -4117,7 +4307,7 @@ rule test_rule {
         engine.load_rule_source(rule).unwrap();
 
         let test_data = b"This does not contain the pattern";
-        let matches = engine.scan_bytes(test_data).unwrap();
+        let matches = engine.scan_bytes(test_data, None).unwrap().matches;
 
         assert_eq!(matches.len(), 0);
     }
@@ -4149,7 +4339,7 @@ rule test_rule {
     #[test]
     fn test_scan_without_rules() {
         let engine = YaraEngine::new_for_test();
-        let result = engine.scan_bytes(b"test data");
+        let result = engine.scan_bytes(b"test data", None);
         assert!(result.is_err());
         assert!(
             result
@@ -4204,7 +4394,7 @@ rule test_rule {
         engine.load_rule_source(rule).unwrap();
 
         let test_data = b"This contains PATTERN in the data";
-        let matches = engine.scan_bytes(test_data).unwrap();
+        let matches = engine.scan_bytes(test_data, None).unwrap().matches;
 
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].desc, "Test description");
@@ -4229,7 +4419,7 @@ rule test_rule : suspicious {
         engine.load_rule_source(rule).unwrap();
 
         let test_data = b"TAGGED data";
-        let matches = engine.scan_bytes(test_data).unwrap();
+        let matches = engine.scan_bytes(test_data, None).unwrap().matches;
 
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].crit, "suspicious");
@@ -4305,7 +4495,7 @@ rule test_rule {
         engine.load_rule_source(rule).unwrap();
 
         let test_data = b"FIRST and SECOND patterns";
-        let matches = engine.scan_bytes(test_data).unwrap();
+        let matches = engine.scan_bytes(test_data, None).unwrap().matches;
 
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].matched_strings.len(), 2);
@@ -4326,7 +4516,7 @@ rule test_rule {
         engine.load_rule_source(rule).unwrap();
 
         let test_data = vec![b'A'; 200];
-        let matches = engine.scan_bytes(&test_data).unwrap();
+        let matches = engine.scan_bytes(&test_data, None).unwrap().matches;
 
         assert_eq!(matches.len(), 1);
         assert!(matches[0].matched_strings[0].value.contains("200 bytes"));
@@ -4349,7 +4539,7 @@ rule test_rule {
         engine.load_rule_source(rule).unwrap();
 
         let test_data = b"TEST";
-        let matches = engine.scan_bytes(test_data).unwrap();
+        let matches = engine.scan_bytes(test_data, None).unwrap().matches;
 
         assert_eq!(matches.len(), 1);
         assert!(matches[0].is_capability); // Inferred from MBC presence
@@ -4372,7 +4562,7 @@ rule test_rule {
         engine.load_rule_source(rule).unwrap();
 
         let test_data = b"TEST";
-        let matches = engine.scan_bytes(test_data).unwrap();
+        let matches = engine.scan_bytes(test_data, None).unwrap().matches;
 
         assert_eq!(matches.len(), 1);
         assert!(matches[0].is_capability); // Inferred from ATT&CK presence

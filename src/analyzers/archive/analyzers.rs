@@ -32,10 +32,12 @@ use super::utils::{calculate_sha256, find_main_class, is_benign_java_path};
 use crate::analyzers::{
     AnalysisInput, FileType, FileTypeExt, detect_file_type, detect_file_type_from_path,
 };
+use crate::composite_rules::traits::nest_host;
 use crate::types::{
     ARCHIVE_DELIMITER, AnalysisReport, ArchiveEntry, ENCODING_DELIMITER, FileAnalysis, Finding,
     TargetInfo, YaraMatch, encode_archive_path,
 };
+use crate::yara_engine::YaraScan;
 use anyhow::{Context, Result};
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
@@ -103,6 +105,54 @@ fn jar_class_triage_score(data: &[u8]) -> usize {
         }
     }
     score
+}
+
+/// Keep selected JVM nests intact. A small anonymous implementation (for
+/// example, an empty X509TrustManager) can carry the decisive evidence while
+/// scoring below the class sample cutoff. Use the same host identity as
+/// nest-scoped composites, and do not spend additional seed slots on siblings.
+fn jar_nest_companion_indices<'a>(
+    paths: &[String],
+    selected: impl Iterator<Item = &'a str>,
+) -> Vec<usize> {
+    let selected: HashSet<&str> = selected.collect();
+    let hosts: HashSet<&str> = selected.iter().map(|path| nest_host(path)).collect();
+    let mut companions: Vec<usize> = paths
+        .iter()
+        .enumerate()
+        .filter(|(_, path)| !selected.contains(path.as_str()) && hosts.contains(nest_host(path)))
+        .map(|(index, _)| index)
+        .collect();
+    companions.sort_unstable_by(|left, right| paths[*left].cmp(&paths[*right]));
+    companions
+}
+
+/// Informational inline YARA must not turn the bounded class sample into a
+/// full walk. Alert definitions only make a class eligible for full analysis;
+/// they are evaluated again there with scope, exclusions and normal evidence.
+fn jar_inline_alert_ids(definitions: &[crate::composite_rules::TraitDefinition]) -> HashSet<&str> {
+    definitions
+        .iter()
+        .filter(|definition| definition.crit >= crate::types::Criticality::Suspicious)
+        .map(|definition| definition.id.as_str())
+        .collect()
+}
+
+fn jar_should_retain_class(scan: &YaraScan, alert_ids: &HashSet<&str>) -> bool {
+    !scan.matches.is_empty()
+        || scan.inline_traits.keys().any(|namespace| {
+            namespace
+                .strip_prefix("inline.")
+                .is_some_and(|id| alert_ids.contains(id))
+        })
+}
+
+/// The cheap prepass decides retention; full analysis evaluates the traits.
+struct JarClassTriage {
+    index: usize,
+    score: usize,
+    retain: bool,
+    matches: Vec<YaraMatch>,
 }
 
 /// Keep the best `limit` entries in linear time, then order only that bounded
@@ -1329,6 +1379,129 @@ pub(crate) fn log_archive_analysis_stats() {
 }
 
 impl ArchiveAnalyzer {
+    /// Analyze the managed members of a native .NET single-file host through
+    /// the normal bounded member pipeline. Packaging alone is not suspicious.
+    pub(crate) fn analyze_dotnet_bundle(&self, data: &[u8], report: &mut AnalysisReport) -> bool {
+        let guard = ExtractionGuard::with_cancellation(self.cancelled.clone());
+        let bundle = match super::dotnet_bundle::parse(data) {
+            Ok(Some(bundle)) => bundle,
+            Ok(None) => return false,
+            Err(error) => {
+                guard.add_extraction_note(format!(".NET bundle manifest: {error:#}"));
+                super::drain_extraction_notes(report, &guard);
+                return false;
+            }
+        };
+        report.merge_kv_subtree(
+            "dotnet_bundle",
+            serde_json::json!({
+                "version": format!("{}.{}", bundle.major, bundle.minor),
+                "members": bundle.entries.len(),
+            }),
+        );
+        for note in &bundle.notes {
+            guard.add_extraction_note(note.clone());
+        }
+        if self.current_depth >= self.max_depth {
+            guard.add_extraction_note(".NET bundle: maximum archive depth reached".to_string());
+            super::drain_extraction_notes(report, &guard);
+            return true;
+        }
+        let start = std::time::Instant::now();
+        let saved_tools = report.metadata.tools_used.clone();
+        let mut window = MemberWindow::new(self, "memory .NET bundle");
+        let fake_root = Path::new("/__cleave_bundle__");
+        let mut total = 0u64;
+        for entry in &bundle.entries {
+            if self.is_cancelled() {
+                guard.add_extraction_note(".NET bundle analysis cancelled".to_string());
+                break;
+            }
+            if !guard.check_file_count() {
+                break;
+            }
+            let Some(safe_path) = sanitize_entry_path(&entry.path, fake_root) else {
+                guard.add_hostile_reason(HostileArchiveReason::PathTraversal(entry.path.clone()));
+                continue;
+            };
+            // Analyze every occurrence, even identical or case-variant paths;
+            // otherwise an inert first entry can conceal a later payload.
+            let relative_path = posix_relative_path(&guard.claim_output_path(safe_path), fake_root);
+            let limit = self.max_memory_file_size.min(MAX_FILE_SIZE);
+            if entry.size > limit {
+                guard.add_extraction_note(format!(
+                    "{relative_path}: bundle member exceeds memory limit ({limit} bytes)"
+                ));
+                continue;
+            }
+            if entry.size > super::dotnet_bundle::MAX_BUNDLE_BYTES.saturating_sub(total) {
+                guard.add_extraction_note(
+                    ".NET bundle stopped at 512 MiB expanded byte cap".to_string(),
+                );
+                break;
+            }
+            // Charge declared output before decoding, including failures.
+            total += entry.size;
+            let file_data = match super::dotnet_bundle::read_member(data, &bundle, entry, limit) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    guard.add_extraction_note(format!("{relative_path}: {error:#}"));
+                    continue;
+                }
+            };
+            if !guard.check_bytes(file_data.len() as u64, &relative_path) {
+                break;
+            }
+            let file_type =
+                crate::analyzers::detect_file_type_from_data(Path::new(&relative_path), &file_data);
+            let sha256 = calculate_sha256(&file_data);
+            guard.record_member_metadata(super::guards::ExtractedMemberMetadata {
+                archive_path: relative_path.clone(),
+                compressed_size: Some(if entry.compressed == 0 {
+                    entry.size
+                } else {
+                    entry.compressed
+                }),
+                compression_method: Some(
+                    if entry.compressed == 0 {
+                        "stored"
+                    } else {
+                        "deflate"
+                    }
+                    .to_string(),
+                ),
+                entry_type: Some("regular".to_string()),
+                ..Default::default()
+            });
+            window.push(MemoryArchiveMember {
+                relative_path,
+                data: file_data,
+                file_type,
+                sha256,
+                container_kind: None,
+            });
+        }
+        window.finalize(report, start, ".NET single-file bundle", saved_tools);
+        if !report
+            .metadata
+            .tools_used
+            .iter()
+            .any(|tool| tool == "dotnet_bundle")
+        {
+            report.metadata.tools_used.push("dotnet_bundle".to_string());
+        }
+        super::merge_archive_member_metadata(report, guard.take_member_metadata());
+        super::drain_extraction_notes(report, &guard);
+        super::push_archive_hostile_findings(
+            report,
+            guard.take_reasons(),
+            Path::new("bundle.exe"),
+            "dotnet_bundle",
+            false,
+        );
+        true
+    }
+
     fn should_extract_archive_payloads(file_type: &FileType) -> bool {
         crate::analyzers::unified::UnifiedSourceAnalyzer::for_file_type(file_type).is_some()
     }
@@ -3059,8 +3232,8 @@ impl ArchiveAnalyzer {
     }
 
     /// Phase 1 of jar triage: score every class and optionally run YARA,
-    /// restricted to the class buckets. Returns each readable class's index,
-    /// salience score, and YARA matches.
+    /// restricted to the class buckets. Both extraction modes consume the same
+    /// retention decision, independent of their member storage.
     ///
     /// Shared by the in-memory and extracted paths so they cannot drift. They
     /// once did: the extracted path called the unfiltered `scan_file`, which
@@ -3072,9 +3245,10 @@ impl ArchiveAnalyzer {
         yara_engine: Option<&crate::yara_engine::YaraEngine>,
         classes: &[T],
         bytes: impl for<'a> Fn(&'a T) -> Option<std::borrow::Cow<'a, [u8]>> + Sync,
-    ) -> Vec<(usize, usize, Vec<YaraMatch>)> {
+    ) -> Vec<JarClassTriage> {
         let filetypes = FileType::JavaClass.yara_filetypes();
         let filter = (!filetypes.is_empty()).then_some(filetypes.as_slice());
+        let alert_ids = jar_inline_alert_ids(self.engine.rules().trait_definitions());
         let indexes: Vec<usize> = (0..classes.len()).collect();
         par_filter_map_members(&indexes, self.members_run_parallel(classes.len()), |&i| {
             if self.is_cancelled() {
@@ -3082,23 +3256,29 @@ impl ArchiveAnalyzer {
             }
             let data = bytes(&classes[i])?;
             let score = jar_class_triage_score(&data);
-            let Some(yara_engine) = yara_engine else {
-                return Some((i, score, Vec::new()));
+            let scan = if let Some(yara) = yara_engine {
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    yara.scan_bytes(&data, filter)
+                })) {
+                    Ok(Ok(scan)) => scan,
+                    Ok(Err(e)) => {
+                        debug!("YARA scan failed for class {i}: {e}");
+                        YaraScan::default()
+                    }
+                    Err(_panic) => {
+                        tracing::error!(class = i, "panic during YARA scan (caught)");
+                        YaraScan::default()
+                    }
+                }
+            } else {
+                YaraScan::default()
             };
-            let scanned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                yara_engine.scan_bytes_filtered(&data, filter)
-            }));
-            match scanned {
-                Ok(Ok(matches)) => Some((i, score, matches)),
-                Ok(Err(e)) => {
-                    debug!("YARA scan failed for class {i}: {e}");
-                    Some((i, score, Vec::new()))
-                }
-                Err(_panic) => {
-                    tracing::error!(class = i, "panic during YARA scan (caught)");
-                    Some((i, score, Vec::new()))
-                }
-            }
+            Some(JarClassTriage {
+                index: i,
+                score,
+                retain: jar_should_retain_class(&scan, &alert_ids),
+                matches: scan.matches,
+            })
         })
     }
 
@@ -3127,12 +3307,12 @@ impl ArchiveAnalyzer {
             self.triage_jar_classes(self.yara_engine.as_deref(), &class_members, |m| {
                 Some(std::borrow::Cow::Borrowed(m.data.as_slice()))
             });
-        for (i, score, matches) in triage_results {
-            class_scores[i] = score;
-            if !matches.is_empty() {
-                flagged_classes.insert(class_members[i].relative_path.clone());
+        for triage in triage_results {
+            class_scores[triage.index] = triage.score;
+            if triage.retain {
+                flagged_classes.insert(class_members[triage.index].relative_path.clone());
             }
-            for ym in matches {
+            for ym in triage.matches {
                 if !collected_yara.iter().any(|m: &YaraMatch| m.rule == ym.rule) {
                     collected_yara.push(ym);
                 }
@@ -3180,6 +3360,15 @@ impl ArchiveAnalyzer {
             },
         );
         selected.extend(sample_candidates.into_iter().map(|(_, member)| member));
+        let class_paths: Vec<String> = class_members
+            .iter()
+            .map(|member| member.relative_path.clone())
+            .collect();
+        let companions = jar_nest_companion_indices(
+            &class_paths,
+            selected.iter().map(|member| member.relative_path.as_str()),
+        );
+        selected.extend(companions.into_iter().map(|index| class_members[index]));
 
         selected.extend(
             members
@@ -3956,12 +4145,12 @@ impl ArchiveAnalyzer {
         let mut flagged_classes = HashSet::new();
         let mut collected_yara_matches = Vec::with_capacity(50);
         let mut class_scores = vec![0usize; class_files.len()];
-        for (i, score, file_matches) in triage_results {
-            class_scores[i] = score;
-            if !file_matches.is_empty() {
-                flagged_classes.insert(class_files[i].path().to_path_buf());
+        for triage in triage_results {
+            class_scores[triage.index] = triage.score;
+            if triage.retain {
+                flagged_classes.insert(class_files[triage.index].path().to_path_buf());
             }
-            for ym in file_matches {
+            for ym in triage.matches {
                 if !collected_yara_matches
                     .iter()
                     .any(|m: &YaraMatch| m.rule == ym.rule)
@@ -4044,10 +4233,21 @@ impl ArchiveAnalyzer {
             },
         );
 
-        let classes_to_analyze: Vec<_> = interesting_classes
+        let mut classes_to_analyze: Vec<_> = interesting_classes
             .into_iter()
             .chain(sample_classes.into_iter().map(|(_, _, entry)| entry))
             .collect();
+        let class_paths: Vec<String> = class_files
+            .iter()
+            .map(|entry| posix_relative_path(entry.path(), temp_dir))
+            .collect();
+        let selected_paths: Vec<String> = classes_to_analyze
+            .iter()
+            .map(|entry| posix_relative_path(entry.path(), temp_dir))
+            .collect();
+        let companions =
+            jar_nest_companion_indices(&class_paths, selected_paths.iter().map(String::as_str));
+        classes_to_analyze.extend(companions.into_iter().map(|index| &class_files[index]));
 
         debug!("Full analysis on {} classes", classes_to_analyze.len());
 
@@ -4657,11 +4857,94 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::{
         ArchiveAnalyzer, archive_entry_json, archive_entry_metadata, is_interesting_jar_resource,
-        jar_class_triage_score, keep_top_ranked, rebase_nested_archive_entry_path,
+        jar_class_triage_score, jar_inline_alert_ids, jar_nest_companion_indices,
+        jar_should_retain_class, keep_top_ranked, rebase_nested_archive_entry_path,
         rebase_nested_file_path,
     };
     use crate::analyzers::FileType;
     use std::sync::Arc;
+
+    #[test]
+    fn jar_inline_yara_selection_requires_an_alert_definition() {
+        use crate::composite_rules::TraitDefinition;
+        use crate::types::Criticality;
+        let definitions: Vec<_> = [
+            ("quiet", Criticality::Notable),
+            ("baseline", Criticality::Baseline),
+            ("exception", Criticality::Exception),
+            ("review", Criticality::Suspicious),
+            ("attack", Criticality::Hostile),
+        ]
+        .into_iter()
+        .map(|(id, crit)| TraitDefinition {
+            id: id.to_string(),
+            crit,
+            ..Default::default()
+        })
+        .collect();
+        let ids = jar_inline_alert_ids(&definitions);
+        assert_eq!(ids.len(), 2);
+        for (namespaces, regular_match, expected) in [
+            (vec!["inline.review"], false, true),
+            (vec!["inline.attack"], false, true),
+            (
+                vec!["inline.quiet", "inline.baseline", "inline.exception"],
+                false,
+                false,
+            ),
+            (vec!["inline.unknown", "review"], false, false),
+            (vec![], false, false),
+            (vec![], true, true),
+            (vec!["inline.quiet"], true, true),
+        ] {
+            let mut scan = crate::yara_engine::YaraScan {
+                inline_traits: namespaces
+                    .into_iter()
+                    .map(|ns| (ns.to_string(), vec![]))
+                    .collect(),
+                ..Default::default()
+            };
+            if regular_match {
+                scan.matches.push(serde_json::from_value(serde_json::json!({
+                    "rule": "regular", "namespace": "test.regular", "crit": "notable", "desc": "Marker"
+                })).unwrap());
+            }
+            assert_eq!(jar_should_retain_class(&scan, &ids), expected, "{scan:?}");
+        }
+    }
+
+    #[test]
+    fn jar_selection_retains_low_scoring_nest_companions_only() {
+        let paths: Vec<String> = [
+            "p/Client.class",
+            "p/Client$Trust.class",
+            "p/Client$Trust$1.class",
+            "p/ClientExtra.class",
+            "other/Client$Trust.class",
+            "p/$Proxy1.class",
+            "p/$Proxy1$Handler.class",
+            "p/Unrelated.class",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+        assert_eq!(
+            jar_nest_companion_indices(&paths, ["p/Client.class"].into_iter()),
+            [2, 1]
+        );
+        // Selecting an inner class restores its outer class and siblings.
+        assert_eq!(
+            jar_nest_companion_indices(&paths, ["p/Client$Trust.class"].into_iter()),
+            [2, 0]
+        );
+        // Duplicate seeds do not duplicate companions; a leading '$' is legal.
+        assert_eq!(
+            jar_nest_companion_indices(&paths, ["p/$Proxy1.class", "p/$Proxy1.class"].into_iter()),
+            [6]
+        );
+        assert!(jar_nest_companion_indices(&paths, std::iter::empty()).is_empty());
+        assert!(jar_nest_companion_indices(&paths, ["p/ClientExtra.class"].into_iter()).is_empty());
+    }
 
     #[test]
     fn jar_class_triage_prioritizes_salient_apis_over_archive_padding() {

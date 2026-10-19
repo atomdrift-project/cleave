@@ -9,12 +9,10 @@
 
 use crate::analysis_context::AnalysisContext;
 use crate::analyzers::{FileType, detect_file_type};
-use crate::commands::shared::{
-    dev_engine, find_rules_in_directory, find_similar_rules, process_yara_result,
-};
+use crate::commands::shared::{dev_engine, find_rules_in_directory, find_similar_rules};
 use crate::commands::test::{build_test_capability_mapper, evaluation_data, prepare_test_analysis};
 use crate::yara_engine::YaraEngine;
-use crate::{cli, composite_rules, test_rules};
+use crate::{cli, composite_rules, process_yara_result, test_rules};
 use anyhow::Result;
 use std::collections::HashMap;
 use std::path::Path;
@@ -98,7 +96,7 @@ pub fn run(
     };
 
     let inline_yara: HashMap<String, Vec<crate::types::Evidence>> = if yara_loaded {
-        let yara_result = yara_engine.scan_bytes_with_inline(
+        let yara_result = yara_engine.scan_bytes(
             &prepared.preferred_binary_data,
             if file_type_filter.is_empty() {
                 None

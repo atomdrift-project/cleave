@@ -12,7 +12,6 @@
 
 use crate::analyzers::{self, FileType, FileTypeExt};
 use crate::types;
-use crate::yara_engine::YaraEngine;
 use anyhow::Result;
 use serde::Serialize;
 use std::io::BufRead;
@@ -88,75 +87,6 @@ pub fn expand_paths(paths: Vec<String>, format: &crate::cli::OutputFormat) -> Ve
     }
 
     expanded
-}
-
-// ============================================================================
-// YARA Processing
-// ============================================================================
-
-/// Process YARA scan results and add them to the analysis report.
-///
-/// This function extracts YARA matches and inline evidence, converts matches
-/// to findings with appropriate criticality levels, and adds them to the report.
-pub(crate) fn process_yara_result(
-    report: &mut types::AnalysisReport,
-    yara_result: Option<
-        anyhow::Result<(
-            Vec<types::YaraMatch>,
-            std::collections::HashMap<String, Vec<types::Evidence>>,
-        )>,
-    >,
-    engine: Option<&YaraEngine>,
-) -> std::collections::HashMap<String, Vec<types::Evidence>> {
-    let Some(Ok((matches, inline))) = yara_result else {
-        return std::collections::HashMap::new();
-    };
-    report.yara_matches = matches;
-    for yara_match in &report.yara_matches {
-        // Prefer trait_id for third-party rules (e.g., "third_party/elastic/...")
-        // Fall back to namespace conversion for built-in rules
-        let cap_id = yara_match
-            .trait_id
-            .clone()
-            .unwrap_or_else(|| yara_match.namespace.replace('.', "/"));
-        if report.findings.iter().any(|c| c.id == cap_id) {
-            continue;
-        }
-        let evidence = engine
-            .map(|e| e.yara_match_to_evidence(yara_match))
-            .unwrap_or_default();
-        let crit = match yara_match.crit.as_str() {
-            "hostile" => types::Criticality::Hostile,
-            "notable" => types::Criticality::Notable,
-            "suspicious" => types::Criticality::Suspicious,
-            _ => types::Criticality::Baseline,
-        };
-        report.findings.push(types::Finding {
-            precomputed_spans: None,
-            src: None,
-            kind: types::FindingKind::Capability,
-            trait_refs: vec![],
-            id: cap_id.into(),
-            desc: yara_match.desc.clone().into(),
-            conf: 0.9,
-            crit,
-            mbc: yara_match.mbc.as_deref().map(Into::into),
-            attack: yara_match.attack.as_deref().map(Into::into),
-            evidence,
-            match_count: 0,
-            source_file: None,
-            downgraded: false,
-        });
-    }
-    if !report
-        .metadata
-        .tools_used
-        .iter()
-        .any(|tool| tool == "yara-x")
-    {
-        report.metadata.tools_used.push("yara-x".to_string());
-    }
-    inline
 }
 
 // ============================================================================

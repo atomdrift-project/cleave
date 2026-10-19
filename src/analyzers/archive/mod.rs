@@ -7,6 +7,7 @@ mod guards;
 #[cfg(test)]
 mod guards_test;
 mod iso;
+mod rpa;
 mod source_context;
 mod squashfs;
 mod system_packages;
@@ -2054,7 +2055,10 @@ impl ArchiveAnalyzer {
         // lure that named it. The extraction pass merges its own per-member
         // metadata onto these entries by path rather than appending duplicates.
         if is_zip_container(file_type)
-            || matches!(file_type, FileType::Iso | FileType::Cpio | FileType::Phar)
+            || matches!(
+                file_type,
+                FileType::Iso | FileType::Cpio | FileType::Phar | FileType::Rpa
+            )
         {
             report.archive_contents.extend(
                 filefacts_archive_entries
@@ -2366,6 +2370,15 @@ impl ArchiveAnalyzer {
             if preserved_rpm_facts {
                 guard.add_extraction_note(format!("RPM payload extraction incomplete: {e}"));
             }
+            let preserved_rpa_facts = matches!(file_type, FileType::Rpa)
+                && report
+                    .filefacts
+                    .as_ref()
+                    .is_some_and(|ff| ff.values.get("rpa").is_some());
+            if preserved_rpa_facts {
+                merge_filefacts_archive_listing(&mut report, &filefacts_archive_entries);
+                guard.add_extraction_note(format!("RPA member extraction incomplete: {e}"));
+            }
 
             // RAR payloads are often encrypted while the headers stay in the
             // clear. Keep the filefacts member table rather than dropping the
@@ -2397,6 +2410,7 @@ impl ArchiveAnalyzer {
                 if preserved_7z_metadata
                     || preserved_iso_facts
                     || preserved_rpm_facts
+                    || preserved_rpa_facts
                     || preserved_rar_metadata
                 {
                     drain_extraction_notes(&mut report, &guard);
@@ -2825,6 +2839,7 @@ impl ArchiveAnalyzer {
 
         match file_type {
             FileType::Cpio => cpio::extract_from_data(data, filefacts_members, dest_dir, guard),
+            FileType::Rpa => rpa::extract_from_data(data, dest_dir, guard),
             // A gem is an uncompressed `ustar` tar (members: metadata.gz,
             // data.tar.gz, checksums.yaml.gz); recursion descends into
             // data.tar.gz for the installed files.

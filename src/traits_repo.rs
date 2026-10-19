@@ -269,16 +269,33 @@ fn git_rule_tree_dirty_cached(dir: &Path, head: &str, rules_digest: [u8; 32]) ->
     dirty
 }
 
+/// Target this checkout even when invoked from another repository's Git hook.
+/// `git -C` changes directory but does not override inherited repository paths,
+/// notably the parent's GIT_INDEX_FILE (which may name its commit index.lock).
+fn git_command_in(dir: &Path) -> Command {
+    let mut command = Command::new("git");
+    command.arg("-C").arg(dir);
+    for name in [
+        "GIT_DIR",
+        "GIT_COMMON_DIR",
+        "GIT_WORK_TREE",
+        "GIT_IMPLICIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_GRAFT_FILE",
+        "GIT_SHALLOW_FILE",
+        "GIT_REPLACE_REF_BASE",
+        "GIT_NO_REPLACE_OBJECTS",
+        "GIT_PREFIX",
+    ] {
+        command.env_remove(name);
+    }
+    command
+}
+
 fn git_rule_tree_dirty(dir: &Path) -> bool {
-    let result = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        // This check targets `dir` directly; inherited repository overrides
-        // would make Git inspect a different worktree or index.
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
-        .env_remove("GIT_COMMON_DIR")
+    let result = git_command_in(dir)
         // Global excludes are a user convenience for working-tree status, but
         // they must not hide rule files from the version check. Cleave can load
         // an ignored YAML file just like any other rule source, so a global
@@ -291,6 +308,23 @@ fn git_rule_tree_dirty(dir: &Path) -> bool {
         .args(["status", "--porcelain=v1", "--untracked-files=normal", "--"])
         .args(RULE_SOURCE_DIRS.iter().copied())
         .output();
+    // libtest captures this output and nextest shows it when a test fails.
+    // Keep the original status result: rerunning Git after an assertion could
+    // hide a transient subprocess failure.
+    #[cfg(test)]
+    match &result {
+        Ok(output) => eprintln!(
+            "git rule status in {}: {}\nstdout: {}\nstderr: {}",
+            dir.display(),
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        ),
+        Err(error) => eprintln!(
+            "git rule status in {} could not run: {error}",
+            dir.display()
+        ),
+    }
     // If Git is unavailable, a content version is safer than declaring a
     // potentially edited checkout equivalent to the recorded commit.
     !matches!(result, Ok(output) if output.status.success() && output.stdout.is_empty())
@@ -389,23 +423,37 @@ mod tests {
         std::fs::write(&git_config, "").unwrap();
         let git_template = dir.join("empty-git-template");
         std::fs::create_dir(&git_template).unwrap();
+        eprintln!("temporary rule repository: {}", dir.display());
+        for name in [
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_INDEX_FILE",
+            "GIT_CONFIG_GLOBAL",
+            "GIT_CONFIG_SYSTEM",
+            "GIT_CONFIG_NOSYSTEM",
+            "GIT_CONFIG_COUNT",
+        ] {
+            if let Some(value) = std::env::var_os(name) {
+                eprintln!("{name}={value:?}");
+            }
+        }
         let run = |args: &[&str]| {
-            let output = Command::new("git")
-                .arg("-C")
-                .arg(dir)
-                .env_remove("GIT_DIR")
-                .env_remove("GIT_WORK_TREE")
-                .env_remove("GIT_INDEX_FILE")
-                .env_remove("GIT_COMMON_DIR")
+            let output = git_command_in(dir)
                 .env("GIT_CONFIG_GLOBAL", &git_config)
                 .env("GIT_CONFIG_NOSYSTEM", "1")
                 .env("GIT_TEMPLATE_DIR", &git_template)
                 .args(args)
                 .output()
+                .map_err(|error| {
+                    format!("could not run git -C {} {args:?}: {error}", dir.display())
+                })
                 .unwrap();
             assert!(
                 output.status.success(),
-                "{}",
+                "git -C {} {args:?} failed: {}\nstdout: {}\nstderr: {}",
+                dir.display(),
+                output.status,
+                String::from_utf8_lossy(&output.stdout),
                 String::from_utf8_lossy(&output.stderr)
             );
         };
@@ -424,25 +472,61 @@ mod tests {
         ]);
         assert!(
             !git_rule_tree_dirty(dir),
-            "fresh temporary repository should be clean"
+            "freshly committed rule sources should be clean"
         );
 
         std::fs::write(dir.join("README.md"), "unrelated\n").unwrap();
         assert!(
             !git_rule_tree_dirty(dir),
-            "an untracked file outside rule sources should be ignored"
+            "an unrelated README should not mark rule sources dirty"
         );
         std::fs::write(dir.join("metadata/base.yaml"), "edited\n").unwrap();
         assert!(
             git_rule_tree_dirty(dir),
-            "an edited tracked rule should make the rule tree dirty"
+            "editing a tracked rule should mark rule sources dirty"
         );
         run(&["checkout", "--", "metadata/base.yaml"]);
         std::fs::write(dir.join("metadata/new.yaml"), "new\n").unwrap();
         assert!(
             git_rule_tree_dirty(dir),
-            "an untracked rule should make the rule tree dirty"
+            "adding an untracked rule should mark rule sources dirty"
         );
+    }
+
+    #[test]
+    fn git_rule_tree_dirty_ignores_parent_repository_environment() {
+        let tmp = tempfile::tempdir().unwrap();
+        let index = tmp.path().join("index.lock");
+        let sentinel = b"parent commit index must remain untouched\n";
+        std::fs::write(&index, sentinel).unwrap();
+
+        // Exercise both fixture setup and production status checks in a child
+        // process, without changing the environment of concurrent tests.
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "traits_repo::tests::git_rule_tree_dirty_tracks_only_rule_sources",
+                "--nocapture",
+            ])
+            .env("GIT_INDEX_FILE", &index)
+            .env("GIT_DIR", tmp.path().join("foreign.git"))
+            .env("GIT_COMMON_DIR", tmp.path().join("foreign.git"))
+            .env("GIT_WORK_TREE", tmp.path())
+            .env("GIT_OBJECT_DIRECTORY", tmp.path().join("foreign-objects"))
+            .env(
+                "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+                tmp.path().join("foreign-alternates"),
+            )
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "rule repository checks failed with an inherited Git environment: {}\nstdout: {}\nstderr: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(std::fs::read(&index).unwrap(), sentinel);
     }
 
     #[test]

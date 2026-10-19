@@ -272,7 +272,14 @@ fn run() -> Result<()> {
             .context("failed to spawn SIGUSR1 thread")?;
     }
 
-    let format = args.format();
+    // Facts always returns JSON, even without --format. Applying the terminal
+    // sanitizer to it replaces raw DEL/C1/bidi characters with non-JSON \u{...}
+    // escapes and corrupts the authoring data stream.
+    let format = if matches!(args.command, Some(cli::Command::Facts { .. })) {
+        cli::OutputFormat::Json
+    } else {
+        args.format()
+    };
     let effective_log_file = args.log_file.clone();
 
     // `cleave validate` is meant to print a single summary line on success, so

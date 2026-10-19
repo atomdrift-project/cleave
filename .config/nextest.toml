@@ -8,6 +8,10 @@ test-threads = "num-cpus"
 # Continue running tests even if some fail
 fail-fast = false
 
+# Repeat captured failure details at the end so they remain visible after the
+# remaining tests finish, including when a failed test has been retried.
+failure-output = "immediate-final"
+
 # Mark tests as slow after 30s, terminate after 120s
 slow-timeout = { period = "30s", terminate-after = 4 }
 

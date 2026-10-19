@@ -38,6 +38,7 @@ pub(crate) enum SfxKind {
     InnoSetup,
     PyInstaller,
     Nuitka,
+    IExpress,
 }
 
 impl SfxKind {
@@ -47,6 +48,7 @@ impl SfxKind {
             SfxKind::InnoSetup => "file/sfx/inno-setup",
             SfxKind::PyInstaller => "file/sfx/pyinstaller",
             SfxKind::Nuitka => "file/sfx/nuitka",
+            SfxKind::IExpress => "metadata/file/format/iexpress::cabinet-self-extractor",
         }
     }
 
@@ -56,6 +58,7 @@ impl SfxKind {
             SfxKind::InnoSetup => "Inno Setup self-extracting installer",
             SfxKind::PyInstaller => "PyInstaller-bundled Python executable",
             SfxKind::Nuitka => "Nuitka compressed one-file Python bundle",
+            SfxKind::IExpress => "IExpress cabinet self-extractor",
         }
     }
 
@@ -65,6 +68,7 @@ impl SfxKind {
             SfxKind::InnoSetup => "Inno Setup",
             SfxKind::PyInstaller => "PyInstaller",
             SfxKind::Nuitka => "Nuitka",
+            SfxKind::IExpress => "IExpress",
         }
     }
 }
@@ -182,7 +186,48 @@ pub(crate) fn detect_sfx(
     {
         return Some(SfxKind::Nuitka);
     }
+    if iexpress_cabinet_offset(data, embedded_binaries).is_some() {
+        return Some(SfxKind::IExpress);
+    }
     None
+}
+
+// IExpress stores its format-mandated CABINET and RUNPROGRAM resource names
+// as UTF-16. Require both and a bounded, structurally plausible cabinet, rather
+// than inferring a bundle from a vendor/version string or bare MSCF bytes.
+fn iexpress_cabinet_offset(
+    data: &[u8],
+    embedded: &[crate::analyzers::embedded_binary_detector::EmbeddedBinary],
+) -> Option<usize> {
+    if !data.starts_with(b"MZ") {
+        return None;
+    }
+    for name in ["CABINET", "RUNPROGRAM"] {
+        let marker: Vec<u8> = name.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        marker_outside_embedded_binary(data, &marker, embedded)?;
+    }
+    memmem::find_iter(data, b"MSCF").find(|&offset| {
+        if embedded.iter().any(|b| {
+            b.encoding.is_none()
+                && offset >= b.offset
+                && offset < b.offset.saturating_add(b.estimated_size)
+        }) {
+            return false;
+        }
+        let Some(header) = data.get(offset..offset.saturating_add(36)) else {
+            return false;
+        };
+        let len = u32::from_le_bytes(header[8..12].try_into().unwrap_or_default()) as usize;
+        let files = u32::from_le_bytes(header[16..20].try_into().unwrap_or_default()) as usize;
+        header[4..8] == [0; 4]
+            && header[24..26] == [3, 1]
+            && len >= 36
+            && files >= 36
+            && files < len
+            && u16::from_le_bytes([header[26], header[27]]) > 0
+            && u16::from_le_bytes([header[28], header[29]]) > 0
+            && data.get(offset..offset.saturating_add(len)).is_some()
+    })
 }
 
 fn marker_outside_embedded_binary(
@@ -233,6 +278,7 @@ pub(crate) fn analyze_sfx(
         SfxKind::InnoSetup => INNO_MARKER,
         SfxKind::PyInstaller => PYINST_MAGIC,
         SfxKind::Nuitka => NUITKA_COMPRESSED,
+        SfxKind::IExpress => b"MSCF",
     };
     let marker_offset = marker_outside_embedded_binary(data, marker, embedded_binaries);
 
@@ -269,13 +315,17 @@ fn build_finding(kind: SfxKind, extracted: bool, marker_offset: Option<usize>) -
     Finding {
         precomputed_spans: None,
         src: None,
-        kind: FindingKind::Capability,
+        kind: if kind == SfxKind::IExpress {
+            FindingKind::Structural
+        } else {
+            FindingKind::Capability
+        },
         id: kind.finding_id().to_string().into(),
         desc: kind.description().to_string().into(),
         conf: if extracted { 1.0 } else { 0.9 },
         crit: Criticality::Notable,
         mbc: None,
-        attack: Some("T1059".into()),
+        attack: (kind != SfxKind::IExpress).then(|| "T1059".into()),
         evidence: vec![Evidence {
             method: "marker_detection".to_string(),
             source: "sfx_detector".to_string(),
@@ -378,7 +428,7 @@ fn try_extract(
 
     let mut inno_diagnostics = vec![];
     let extracted = match kind {
-        SfxKind::Nsis => run_7z(extraction_path, tmp.path()),
+        SfxKind::Nsis | SfxKind::IExpress => run_7z(extraction_path, tmp.path()),
         SfxKind::Nuitka => {
             marker_offset.is_some_and(|offset| extract_nuitka_at(data, offset, tmp.path()).is_ok())
         }
@@ -715,8 +765,12 @@ fn read_nuitka_name(reader: &mut impl std::io::Read) -> std::io::Result<String> 
         reader.read_exact(&mut pair)?;
         let unit = u16::from_le_bytes(pair);
         if unit == 0 {
-            return String::from_utf16(&units)
-                .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error));
+            return String::from_utf16(&units).map_err(|err| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    anyhow::Error::new(err).context("invalid Nuitka UTF-16 name"),
+                )
+            });
         }
         units.push(unit);
     }
@@ -781,7 +835,7 @@ fn extract_nuitka_at(data: &[u8], offset: usize, out: &Path) -> std::io::Result<
 mod tests {
     use super::*;
 
-    fn nuitka_bundle(entries: &[(&str, &[u8])]) -> Vec<u8> {
+    fn nuitka_bundle(entries: &[(&str, &[u8])]) -> std::io::Result<Vec<u8>> {
         let mut records = Vec::new();
         for (name, content) in entries {
             for unit in name.encode_utf16().chain(std::iter::once(0)) {
@@ -793,29 +847,28 @@ mod tests {
         records.extend_from_slice(&[0, 0]);
         let mut host = pe_stub();
         host.extend_from_slice(b"NUITKA_ONEFILE_PARENT\0KAY");
-        host.extend(zstd::stream::encode_all(records.as_slice(), 1).unwrap());
+        host.extend(zstd::stream::encode_all(records.as_slice(), 1)?);
         host.extend_from_slice(b"host section trailer");
-        host
+        Ok(host)
     }
 
     #[test]
-    fn nuitka_extracts_unicode_and_nested_members_without_consuming_host_trailer() {
-        let data = nuitka_bundle(&[("main.dll", b"MZdemo"), ("lib\\caf\u{e9}.txt", b"text")]);
+    fn nuitka_extracts_unicode_and_nested_members_without_consuming_host_trailer()
+    -> std::io::Result<()> {
+        let data = nuitka_bundle(&[("main.dll", b"MZdemo"), ("lib\\caf\u{e9}.txt", b"text")])?;
         assert_eq!(detect_sfx(&data, &[]), Some(SfxKind::Nuitka));
-        let out = tempfile::tempdir().unwrap();
-        extract_nuitka(&data, out.path()).unwrap();
+        let out = tempfile::tempdir()?;
+        extract_nuitka(&data, out.path())?;
+        assert_eq!(std::fs::read(out.path().join("main.dll"))?, b"MZdemo");
         assert_eq!(
-            std::fs::read(out.path().join("main.dll")).unwrap(),
-            b"MZdemo"
-        );
-        assert_eq!(
-            std::fs::read(out.path().join("lib/caf\u{e9}.txt")).unwrap(),
+            std::fs::read(out.path().join("lib/caf\u{e9}.txt"))?,
             b"text"
         );
+        Ok(())
     }
 
     #[test]
-    fn nuitka_rejects_unsafe_duplicate_and_truncated_members() {
+    fn nuitka_rejects_unsafe_duplicate_and_truncated_members() -> std::io::Result<()> {
         for name in [
             "../escape",
             "a\\..\\escape",
@@ -823,20 +876,22 @@ mod tests {
             "C:\\absolute",
             "a//b",
         ] {
-            let out = tempfile::tempdir().unwrap();
-            assert!(extract_nuitka(&nuitka_bundle(&[(name, b"x")]), out.path()).is_err());
+            let out = tempfile::tempdir()?;
+            assert!(extract_nuitka(&nuitka_bundle(&[(name, b"x")])?, out.path()).is_err());
         }
-        let out = tempfile::tempdir().unwrap();
-        assert!(extract_nuitka(&nuitka_bundle(&[("a", b"x"), ("A", b"y")]), out.path()).is_err());
-        let mut data = nuitka_bundle(&[("main.dll", b"MZdemo")]);
+        let out = tempfile::tempdir()?;
+        assert!(extract_nuitka(&nuitka_bundle(&[("a", b"x"), ("A", b"y")])?, out.path()).is_err());
+        let mut data = nuitka_bundle(&[("main.dll", b"MZdemo")])?;
         data.truncate(data.len() - 25);
         assert!(extract_nuitka(&data, out.path()).is_err());
+        Ok(())
     }
 
     #[test]
-    fn nuitka_requires_both_runtime_and_frame_outside_embedded_images() {
-        let data = nuitka_bundle(&[("main.dll", b"MZdemo")]);
-        let frame = memmem::find(&data, NUITKA_COMPRESSED).unwrap();
+    fn nuitka_requires_both_runtime_and_frame_outside_embedded_images() -> std::io::Result<()> {
+        let data = nuitka_bundle(&[("main.dll", b"MZdemo")])?;
+        let frame = memmem::find(&data, NUITKA_COMPRESSED)
+            .ok_or_else(|| std::io::Error::other("test bundle missing Nuitka frame"))?;
         let embedded = [crate::analyzers::embedded_binary_detector::EmbeddedBinary {
             offset: frame,
             kind: crate::analyzers::embedded_binary_detector::EmbeddedKind::Pe64,
@@ -846,6 +901,7 @@ mod tests {
         }];
         assert_eq!(detect_sfx(&data, &embedded), None);
         assert_eq!(detect_sfx(b"MZNUITKA_ONEFILE_PARENT", &[]), None);
+        Ok(())
     }
 
     fn pe_stub() -> Vec<u8> {
@@ -1094,5 +1150,26 @@ mod tests {
         );
         assert_eq!(finding.crit, Criticality::Notable);
         assert_eq!(finding.attack, None);
+    }
+    #[test]
+    fn iexpress_requires_resources_and_bounded_cabinet() {
+        let mut data = b"MZ".to_vec();
+        for name in ["CABINET", "RUNPROGRAM"] {
+            data.extend(name.encode_utf16().flat_map(u16::to_le_bytes));
+        }
+        let start = data.len();
+        let mut cab = [0_u8; 64];
+        cab[..4].copy_from_slice(b"MSCF");
+        cab[8..12].copy_from_slice(&64_u32.to_le_bytes());
+        cab[16..20].copy_from_slice(&44_u32.to_le_bytes());
+        cab[24..30].copy_from_slice(&[3, 1, 1, 0, 1, 0]);
+        data.extend(cab);
+        assert_eq!(detect_sfx(&data, &[]), Some(SfxKind::IExpress));
+        assert_eq!(detect_sfx(&data[..start + 48], &[]), None);
+        let mut version_only = b"MZ Microsoft wextract.pdb".to_vec();
+        version_only.extend(cab);
+        assert_eq!(detect_sfx(&version_only, &[]), None);
+        data[start + 28] = 0;
+        assert_eq!(detect_sfx(&data, &[]), None);
     }
 }

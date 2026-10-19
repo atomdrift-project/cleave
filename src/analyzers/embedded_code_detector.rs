@@ -799,6 +799,7 @@ pub(crate) const ENCODED_LAYER_NAMES: &[&str] = &[
     "base32",
     "base85",
     "script",
+    "scpt",
     "batch-expansion",
     "wide",
     "gzip",

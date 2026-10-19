@@ -381,6 +381,11 @@ pub(crate) enum FileType {
     /// RAR archive
     #[archive]
     Rar,
+    /// Ren'Py archive
+    #[archive]
+    Rpa,
+    /// Ren'Py compiled script
+    Rpyc,
     /// 7-Zip archive
     #[archive]
     #[serde(rename = "7z")]
@@ -885,6 +890,7 @@ impl From<filefacts::FileType> for FileType {
             Ff::Bmp => Self::Bmp,
             Ff::Webp => Self::Webp,
             Ff::Pickle => Self::Pickle,
+            Ff::Rpyc => Self::Rpyc,
             Ff::Pdf => Self::Pdf,
             Ff::Html => Self::Html,
             Ff::Jsp => Self::Jsp,
@@ -912,6 +918,7 @@ impl From<filefacts::FileType> for FileType {
             Ff::Zst => Self::Zst,
             Ff::SevenZ => Self::SevenZ,
             Ff::Rar => Self::Rar,
+            Ff::Rpa => Self::Rpa,
             Ff::Snap => Self::Snap,
             Ff::SquashFs => Self::SquashFs,
             Ff::Cpio => Self::Cpio,
@@ -1205,6 +1212,8 @@ impl FileType {
         match self {
             Self::All => "all",
             Self::Rar => "rar",
+            Self::Rpa => "rpa",
+            Self::Rpyc => "rpyc",
             Self::SevenZ => "7z",
             Self::Cpio => "cpio",
             Self::Snap => "snap",
@@ -1478,6 +1487,8 @@ impl FileType {
             "ipa" => FileType::Ipa,
             "pdf" => FileType::Pdf,
             "rar" => FileType::Rar,
+            "rpa" => FileType::Rpa,
+            "rpyc" | "rpymc" => FileType::Rpyc,
             "7z" => FileType::SevenZ,
             "cpio" => FileType::Cpio,
             // "unknown" falls through to the `_` wildcard arm below.

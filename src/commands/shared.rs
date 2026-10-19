@@ -7,7 +7,7 @@
 //!
 //! - **Data Structures**: Common types like `SectionInfo` and `SymbolInfo`
 //! - **Input Handling**: Functions for reading and expanding paths from stdin
-//! - **Analysis Helpers**: YARA processing and report creation
+//! - **Analysis Helpers**: Report creation and development-engine setup
 //! - **Utility Functions**: Type conversions, string extraction, and metric flattening
 
 use crate::analyzers::{self, FileType, FileTypeExt};

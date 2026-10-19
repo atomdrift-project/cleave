@@ -924,6 +924,35 @@ impl UnifiedSourceAnalyzer {
             report.findings.extend(plain_findings);
         }
 
+        // Reconstruct literal PowerShell containers without running script code.
+        // The virtual-path depth budget also bounds recursion across fresh source
+        // analyzers, whose per-instance embedded-detection flag starts enabled.
+        if !self.skip_embedded_detection && self.file_type == FileType::PowerShell {
+            let parent = file_path.display().to_string();
+            let depth = parent.matches("##").count() as u32;
+            if depth < 3 {
+                for payload in crate::extractors::powershell_payloads::extract(content.as_bytes()) {
+                    if cancellation.is_some_and(|c| c.load(std::sync::atomic::Ordering::Acquire)) {
+                        break;
+                    }
+                    let virtual_path = crate::types::encode_decoded_path(
+                        &parent,
+                        &payload.encoding_chain,
+                        payload.original_offset,
+                    );
+                    let entries = crate::analyzers::subfile::analyze_subfile_bytes(
+                        &payload.data,
+                        &virtual_path,
+                        payload.detected_type,
+                        &format!("decoded@{}", payload.original_offset),
+                        depth,
+                        &self.engine,
+                    );
+                    report.files.extend(entries);
+                }
+            }
+        }
+
         // Build the `source.*` kv tree from already-extracted
         // imports/exports/functions before the trait engine runs so
         // `type: value, path: source.imports, ...` traits can resolve.
@@ -1206,7 +1235,23 @@ impl UnifiedSourceAnalyzer {
         // `cleave facts literals`, which reports the decoded value, disagree
         // with what rules could match — so an author following the rule guide
         // would write a matcher against a string that could never fire.
-        let decoded_escapes = filefacts::decode_source_escapes(s);
+        let lua_long_string = self.config.name == "lua"
+            && (text.starts_with('[')
+                || node.parent().is_some_and(|parent| {
+                    parent.kind() == "string"
+                        && parent
+                            .utf8_text(source)
+                            .is_ok_and(|raw| raw.starts_with('['))
+                }));
+        let decoded_escapes = if lua_long_string {
+            // Lua long-bracket strings are raw, unlike quoted short strings.
+            s.to_string()
+        } else {
+            filefacts::decode_source_escapes_for_type(
+                s,
+                FileType::from_label(self.config.file_type).unwrap_or(FileType::Unknown),
+            )
+        };
         if decoded_escapes != s {
             let unescaped = StringInfo {
                 value: decoded_escapes.into(),
@@ -2534,6 +2579,29 @@ exploit()"#;
         assert!(
             result.is_ok(),
             "Timed out — likely deadlock in embedded code detection under rayon pressure"
+        );
+    }
+    #[test]
+    fn lua_literal_corpus_uses_decimal_escapes_and_preserves_raw_strings() {
+        let analyzer = UnifiedSourceAnalyzer::for_file_type(&FileType::Lua).unwrap();
+        let source = r#"local lib = require("\102\102\105")
+local name = "\065\109\115\105\083\099\097\110\066\117\102\102\101\114"
+local raw = [[\065]]
+"#;
+        let report = analyzer.analyze_source(Path::new("loader.lua"), source);
+        assert!(report.strings.iter().any(|s| s.value.as_ref() == "ffi"));
+        assert!(
+            report
+                .strings
+                .iter()
+                .any(|s| s.value.as_ref() == "AmsiScanBuffer")
+        );
+        assert!(report.strings.iter().any(|s| s.value.as_ref() == r"\065"));
+        assert!(
+            !report
+                .strings
+                .iter()
+                .any(|s| { s.section.as_deref() == Some("ast") && s.value.as_ref() == "A" })
         );
     }
 }

@@ -1594,6 +1594,10 @@ pub(crate) fn find_deep_taxonomy_directories(trait_dirs: &[String]) -> Vec<(Stri
 // Audited operation boundaries in TAXONOMY.md. These are exact child sets,
 // not exemptions for arbitrary future subdivisions under these parents.
 const REVIEWED_SPARSE_TAXONOMY_PARTITIONS: &[(&str, &[&str])] = &[
+    // Direction-neutral Base64 and XOR scheme evidence must retain distinct
+    // algorithm homes; merging would discard the scheme that every matcher
+    // requires. JVM long-state XOR is not intrinsically encode or decode.
+    ("micro-behaviors/data/encoding", &["base64", "xor"]),
     // Algorithm-specific codec homes remain useful with a small current corpus;
     // do not merge gzip, LZMA, and joint zlib evidence into one bucket.
     ("micro-behaviors/data/codec", &["gzip", "lzma", "zlib"]),

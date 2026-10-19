@@ -660,6 +660,8 @@ impl FileTypeExt for FileType {
             // paths scan the container itself.
             FileType::Iso => vec!["iso", "archive"],
             FileType::Rar => vec!["rar", "archive"],
+            FileType::Rpa => vec!["rpa", "archive"],
+            FileType::Rpyc => vec!["rpyc", "rpymc"],
             FileType::Deb => vec!["deb", "archive"],
             FileType::Rpm => vec!["rpm", "archive"],
             FileType::Cpio => vec!["cpio", "archive"],

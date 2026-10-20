@@ -411,12 +411,24 @@ fn extract_best_atom(segments: &[HexSegment]) -> Option<&[u8]> {
 /// A mandatory any-of atom set for a sequence with alternatives. Every
 /// branch must supply an atom; an uncovered branch makes that alternative
 /// unusable. Another mandatory segment can still supply the gate.
-fn mandatory_hex_atoms(segments: &[HexSegment]) -> Option<Vec<&[u8]>> {
+#[derive(Clone, Copy)]
+struct HexAtom<'a> {
+    bytes: &'a [u8],
+    prefix_min: usize,
+    prefix_max: usize,
+}
+
+fn mandatory_hex_atoms(segments: &[HexSegment]) -> Option<Vec<HexAtom<'_>>> {
     const MAX_ATOMS: usize = 64;
-    let mut best: Option<Vec<&[u8]>> = None;
+    let mut best: Option<Vec<HexAtom<'_>>> = None;
+    let (mut prefix_min, mut prefix_max) = (0usize, 0usize);
     for segment in segments {
         let candidate = match segment {
-            HexSegment::Bytes(bytes) if !bytes.is_empty() => Some(vec![bytes.as_slice()]),
+            HexSegment::Bytes(bytes) if !bytes.is_empty() => Some(vec![HexAtom {
+                bytes,
+                prefix_min,
+                prefix_max,
+            }]),
             HexSegment::Alternative(branches) => {
                 let mut atoms = Vec::new();
                 let mut complete = !branches.is_empty();
@@ -425,7 +437,11 @@ fn mandatory_hex_atoms(segments: &[HexSegment]) -> Option<Vec<&[u8]>> {
                         complete = false;
                         break;
                     };
-                    atoms.extend(required);
+                    atoms.extend(required.into_iter().map(|atom| HexAtom {
+                        bytes: atom.bytes,
+                        prefix_min: prefix_min + atom.prefix_min,
+                        prefix_max: prefix_max + atom.prefix_max,
+                    }));
                     if atoms.len() > MAX_ATOMS {
                         complete = false;
                         break;
@@ -436,11 +452,11 @@ fn mandatory_hex_atoms(segments: &[HexSegment]) -> Option<Vec<&[u8]>> {
             _ => None,
         };
         if let Some(mut atoms) = candidate {
-            atoms.sort_unstable();
-            atoms.dedup();
-            let rank = |atoms: &[&[u8]]| {
+            atoms.sort_unstable_by_key(|atom| (atom.bytes, atom.prefix_min, atom.prefix_max));
+            atoms.dedup_by_key(|atom| (atom.bytes, atom.prefix_min, atom.prefix_max));
+            let rank = |atoms: &[HexAtom<'_>]| {
                 (
-                    atoms.iter().map(|a| a.len()).min().unwrap_or(0),
+                    atoms.iter().map(|a| a.bytes.len()).min().unwrap_or(0),
                     std::cmp::Reverse(atoms.len()),
                 )
             };
@@ -451,8 +467,62 @@ fn mandatory_hex_atoms(segments: &[HexSegment]) -> Option<Vec<&[u8]>> {
                 best = Some(atoms);
             }
         }
+        let (min, max) = segment_length_bounds(segment);
+        prefix_min += min;
+        prefix_max += max;
     }
     best
+}
+
+/// Enumerate real matches from mandatory branch anchors, retaining the first
+/// `limit` starts in file order. Wildcards and variable gaps before each atom
+/// produce a range of possible starts; verify the complete original pattern at
+/// every candidate. The bounded set deduplicates overlapping branches without
+/// allocating an entry for every nonmatching candidate in a large binary.
+fn anchored_hex_matches(
+    data: &[u8],
+    search_start: usize,
+    search_end: usize,
+    segments: &[HexSegment],
+    atoms: &[HexAtom<'_>],
+    accepts: impl Fn(usize) -> bool,
+    limit: usize,
+) -> std::collections::BTreeSet<usize> {
+    let mut matches = std::collections::BTreeSet::new();
+    if search_start >= search_end || limit == 0 {
+        return matches;
+    }
+    for atom in atoms {
+        // Starts are constrained by the location range; matching bytes may
+        // extend beyond its end, just as in the unanchored verifier.
+        let finder = memchr::memmem::Finder::new(atom.bytes);
+        for offset in finder.find_iter(&data[search_start..]) {
+            let abs_atom = search_start + offset;
+            let Some(hi) = abs_atom.checked_sub(atom.prefix_min) else {
+                continue;
+            };
+            let lo = abs_atom.saturating_sub(atom.prefix_max).max(search_start);
+            let hi = hi.min(search_end - 1);
+            // Subsequent atom hits have nondecreasing lower bounds. Once
+            // these cannot precede the retained matches, this atom is done.
+            if matches.len() == limit && matches.last().is_some_and(|last| lo > *last) {
+                break;
+            }
+            for pos in lo..=hi {
+                if matches.len() == limit && matches.last().is_some_and(|last| pos >= *last) {
+                    break;
+                }
+                if !matches.contains(&pos) && match_pattern_at(data, pos, segments) && accepts(pos)
+                {
+                    matches.insert(pos);
+                    if matches.len() > limit {
+                        matches.pop_last();
+                    }
+                }
+            }
+        }
+    }
+    matches
 }
 
 /// Match pattern at a specific position in data
@@ -801,26 +871,31 @@ pub(crate) fn eval_hex<'a>(
                 }
             }
         } else {
-            // Alternation-only patterns have no single top-level atom. A
-            // missing atom from every branch proves failure before the costly
-            // per-byte backtracking walk (and its branch-vector clones).
-            // The verifier permits a match starting inside the location range
-            // to extend beyond it, so the gate must inspect that tail too.
-            if let Some(atoms) = mandatory_hex_atoms(&segments)
-                && !atoms
-                    .iter()
-                    .any(|atom| memchr::memmem::find(&data[search_start..], atom).is_some())
-            {
-                return ConditionResult::no_match();
-            }
-            for pos in search_start..search_end {
-                if match_pattern_at(data, pos, &segments) && accepts(pos) {
-                    total_count += 1;
-                    if matches.len() < MAX_STORED_MATCHES {
-                        matches.push(pos);
-                    }
-                    if total_count >= MAX_COUNT_MATCHES {
-                        break;
+            // Whole-pattern alternatives have no single top-level atom. Use
+            // each branch's mandatory atom to find candidates instead of
+            // testing every byte whenever just one such atom exists.
+            if let Some(atoms) = mandatory_hex_atoms(&segments) {
+                let found = anchored_hex_matches(
+                    data,
+                    search_start,
+                    search_end,
+                    &segments,
+                    &atoms,
+                    accepts,
+                    MAX_COUNT_MATCHES,
+                );
+                total_count = found.len();
+                matches.extend(found.into_iter().take(MAX_STORED_MATCHES));
+            } else {
+                for pos in search_start..search_end {
+                    if match_pattern_at(data, pos, &segments) && accepts(pos) {
+                        total_count += 1;
+                        if matches.len() < MAX_STORED_MATCHES {
+                            matches.push(pos);
+                        }
+                        if total_count >= MAX_COUNT_MATCHES {
+                            break;
+                        }
                     }
                 }
             }
@@ -1024,6 +1099,8 @@ mod tests {
             "(AA BB|??) CC DD",
             "(AA BB|??)",
             "[0-2] (AA BB|CC DD)",
+            "(?? AA BB|CC DD AA BB)",
+            "(AA BB|CC DD) (AA BB|DD CC)",
         ];
         // Exhaustive small inputs exercise alternatives, wildcard branches,
         // and zero-length versus nonzero-length gaps.
@@ -1044,9 +1121,22 @@ mod tests {
                     assert!(
                         atoms.as_ref().is_none_or(|atoms| atoms
                             .iter()
-                            .any(|atom| memchr::memmem::find(&data, atom).is_some())),
+                            .any(|atom| memchr::memmem::find(&data, atom.bytes).is_some())),
                         "gate dropped {pattern} on {data:?}"
                     );
+                }
+                if let Some(atoms) = &atoms {
+                    for (start, end) in [(0, 5), (0, 1), (1, 4)] {
+                        let expected: Vec<_> = (start..end)
+                            .filter(|pos| match_pattern_at(&data, *pos, &segments))
+                            .take(2)
+                            .collect();
+                        let actual: Vec<_> =
+                            anchored_hex_matches(&data, start, end, &segments, atoms, |_| true, 2)
+                                .into_iter()
+                                .collect();
+                        assert_eq!(actual, expected, "{pattern} on {data:?}, {start}..{end}");
+                    }
                 }
             }
         }
@@ -1056,6 +1146,54 @@ mod tests {
                 .unwrap()
                 .len(),
             2
+        );
+    }
+
+    #[test]
+    fn hex_alternative_anchors_preserve_counts_order_and_exclusions() {
+        // The same atom occurs at different branch offsets, and the branches
+        // overlap. Evidence must remain in file order and count each start once.
+        let segments = parse_hex_pattern("(AA BB|?? AA BB|[0-3] AA BB)").unwrap();
+        let atoms = mandatory_hex_atoms(&segments).unwrap();
+        let data = [0, 0xAA, 0xBB, 0, 0, 0xAA, 0xBB, 0, 0xAA, 0xBB];
+        for limit in [0, 1, 2, 16] {
+            let expected: Vec<_> = (0..data.len())
+                .filter(|pos| pos % 2 == 0 && match_pattern_at(&data, *pos, &segments))
+                .take(limit)
+                .collect();
+            let actual: Vec<_> = anchored_hex_matches(
+                &data,
+                0,
+                data.len(),
+                &segments,
+                &atoms,
+                |pos| pos % 2 == 0,
+                limit,
+            )
+            .into_iter()
+            .collect();
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
+    fn hex_alternative_partial_atom_in_large_buffer() {
+        let segments = parse_hex_pattern("(AA BB CC DD ?? 11 22|55 66 77 88 ?? 33 44)").unwrap();
+        let atoms = mandatory_hex_atoms(&segments).unwrap();
+        let mut data = vec![0; 8 * 1024 * 1024];
+        // An atom alone used to defeat the rejection gate and trigger a full
+        // byte-by-byte walk, even though no complete signature was present.
+        data[4096..4100].copy_from_slice(&[0xAA, 0xBB, 0xCC, 0xDD]);
+        assert!(
+            anchored_hex_matches(&data, 0, data.len(), &segments, &atoms, |_| true, 16).is_empty()
+        );
+        let end = data.len();
+        data[end - 7..].copy_from_slice(&[0x55, 0x66, 0x77, 0x88, 0x99, 0x33, 0x44]);
+        assert_eq!(
+            anchored_hex_matches(&data, 0, end, &segments, &atoms, |_| true, 16)
+                .into_iter()
+                .collect::<Vec<_>>(),
+            vec![end - 7]
         );
     }
 

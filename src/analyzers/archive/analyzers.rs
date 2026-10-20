@@ -4864,6 +4864,93 @@ mod tests {
     use crate::analyzers::FileType;
     use std::sync::Arc;
 
+    /// Slimming retains local spans, so releasing matcher evidence must not
+    /// resurrect a dominated finding as an unanchored note.
+    #[test]
+    fn slim_member_retained_spans_preserve_rendering_without_local_flags() {
+        use crate::output::{TinyOpts, format_context, format_tiny};
+        use crate::types::{ContextLine, Criticality, Evidence, FindingKind, Note};
+        use crate::{AnalysisReport, FileAnalysis, Finding, TargetInfo};
+
+        let finding = |id: &str, desc: &str, crit| {
+            Finding::new(id, FindingKind::Capability, desc, 0.95)
+                .with_criticality(crit)
+                .with_evidence(vec![
+                    Evidence::new("string", "fixture", "evil").with_offset(0),
+                ])
+        };
+        let winner = finding(
+            "micro-behaviors/process/execute::winner",
+            "Winning behavior",
+            Criticality::Hostile,
+        );
+        let dominated = finding(
+            "micro-behaviors/fs/read::dominated",
+            "Overlapping behavior",
+            Criticality::Notable,
+        );
+        let file = FileAnalysis {
+            path: "member.py".into(),
+            file_type: "python".into(),
+            size: 11,
+            context: vec![ContextLine {
+                loc: 0,
+                line: Some(1),
+                col: Some(1),
+                data: b"evil(data)\n".to_vec(),
+                notes: vec![Note {
+                    id: winner.id.clone(),
+                    desc: winner.desc.clone(),
+                    crit: winner.crit,
+                    conf: winner.conf,
+                    off: 0,
+                    len: 4,
+                }],
+            }],
+            findings: vec![winner, dominated],
+            ..FileAnalysis::default()
+        };
+        let slim = super::rebuild_slim_member(file.clone(), &crate::Engine::empty());
+        assert!(file.finding_has_local_offset(1));
+        assert!(slim.finding_has_local_offset(1));
+        assert_eq!(
+            crate::types::traits_findings::finding_spans(&file.findings[1]),
+            crate::types::traits_findings::finding_spans(&slim.findings[1])
+        );
+
+        let report = |file| {
+            let mut report = AnalysisReport::new(TargetInfo::default());
+            report.files.push(file);
+            report
+        };
+        let full = report(file);
+        let slim = report(slim);
+        let wire = |report: &AnalysisReport| {
+            serde_json::to_value(crate::file_wire::Report::from_analysis(report).unwrap()).unwrap()
+        };
+        assert_eq!(wire(&full), wire(&slim));
+        assert!(
+            wire(&slim)["files"][0]["traits"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|f| f.get("local").is_none())
+        );
+        assert!(!format_tiny(&full).contains("Overlapping behavior"));
+        assert_eq!(format_tiny(&full), format_tiny(&slim));
+        assert_eq!(
+            format_context(&full, &TinyOpts::terminal()),
+            format_context(&slim, &TinyOpts::terminal())
+        );
+        for report in [&full, &slim] {
+            let bytes =
+                serde_json::to_vec(&crate::file_wire::Report::from_analysis(report).unwrap())
+                    .unwrap();
+            let decoded = crate::file_wire::decode(&bytes).unwrap();
+            assert_eq!(format_tiny(&decoded.report), format_tiny(report));
+        }
+    }
+
     #[test]
     fn jar_inline_yara_selection_requires_an_alert_definition() {
         use crate::composite_rules::TraitDefinition;

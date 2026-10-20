@@ -169,8 +169,8 @@ pub struct FileAnalysis {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub context_costs: Vec<usize>,
 
-    /// Render-only locality flags for compact replay, indexed like `findings`.
-    /// Empty vectors derive locality from the original matcher evidence.
+    /// Historical locality overrides for legacy replay, indexed like `findings`.
+    /// Empty vectors derive locality from raw or retained local byte spans.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub render_locality: Vec<bool>,
 
@@ -288,17 +288,20 @@ pub struct FileAnalysis {
 }
 
 impl FileAnalysis {
-    /// Locality is a renderer predicate, not reconstructed forensic evidence.
+    /// Retaining spans while releasing matcher evidence must not change rendering.
     pub(crate) fn finding_has_local_offset(&self, index: usize) -> bool {
         self.render_locality.get(index).copied().unwrap_or_else(|| {
             self.findings.get(index).is_some_and(|f| {
-                f.evidence.iter().any(|e| {
-                    e.byte_offset().is_some()
-                        && !e
-                            .location
-                            .as_deref()
-                            .is_some_and(|s| s.starts_with("archive:"))
-                })
+                f.precomputed_spans
+                    .as_ref()
+                    .is_some_and(|spans| !spans.is_empty())
+                    || f.evidence.iter().any(|e| {
+                        e.byte_offset().is_some()
+                            && !e
+                                .location
+                                .as_deref()
+                                .is_some_and(|s| s.starts_with("archive:"))
+                    })
             })
         })
     }

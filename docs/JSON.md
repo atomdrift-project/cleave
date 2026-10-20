@@ -63,10 +63,10 @@ their evidence. Compare with the same renderer build and render-budget settings.
 
 ### Experimental context retention
 
-The opt-in `file-1` candidate stores typed findings and file-local annotated
+The opt-in `file-2` candidate stores typed findings and file-local annotated
 context. It replaces the earlier `context-1` replay overlay with one canonical
 representation. It is not the final schema 9 and is not enabled for normal
-analysis JSON or hopper uploads. Both diagnostic formats remain readable.
+analysis JSON or hopper uploads. Earlier `context-1`, `file-1`, and `joined-1` reports remain readable.
 
 ```sh
 cleave --format snapshot SAMPLE -o sample.snapshot.json
@@ -91,7 +91,7 @@ can show less surrounding context after retention.
 Findings retain their actual order and historical values. Each context window
 holds capture-note references into its own file's `traits`, plus its original
 budget cost when trimming changed the length. Findings carry their spans,
-locality and provenance directly. No external trait catalog is required. The
+and provenance directly; nonempty spans establish locality. No external trait catalog is required. The
 typed decoder builds the existing presentation view; it does not restore
 discarded raw matcher strings or promise a full raw-analysis round trip.
 
@@ -101,7 +101,7 @@ JSONB/TOAST and optimized encode/decode timings.
 
 Two additional diagnostic options are available with `render --format json`:
 `--model-facts` retains the audited shipping Azoth inputs and stamps an explicit
-`fp` contract; `--share-analyses` writes `joined-1` with complete occurrences and
+`fp` contract; `--share-analyses` writes `joined-2` with complete occurrences and
 a document-local analysis pool. Equal SHA alone never merges analyses. These
 options preserve the interpret target while reducing facts and repeated payloads;
 other fact consumers may need the default full-facts profile. See the

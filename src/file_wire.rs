@@ -22,7 +22,9 @@ pub mod features;
 pub mod shared;
 
 /// Candidate wire version. Production analysis still emits schema 8.
-pub const VERSION: &str = "file-1";
+pub const VERSION: &str = "file-2";
+/// Previous candidate, whose locality flags must retain their replay semantics.
+pub const LEGACY_VERSION: &str = "file-1";
 
 /// Typed report envelope. Each file owns its trait and annotation definitions.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -108,8 +110,9 @@ struct Trait {
     // None and Some([]) differ: the latter records explicit composite provenance.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     from: Option<Vec<CompositeSource>>,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    local: bool,
+    // Read/preserve old reports only. New reports derive locality from spans.
+    #[serde(default, rename = "local", skip_serializing_if = "Option::is_none")]
+    legacy_local: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -180,12 +183,19 @@ impl<'a> Report<'a> {
             let mut positions = HashMap::with_capacity(file.findings.len());
             for (i, f) in file.findings.iter().enumerate() {
                 positions.entry(f.id.as_str()).or_insert(u32::try_from(i)?);
+                if let Some(&local) = file.render_locality.get(i) {
+                    ensure!(
+                        local != finding_spans(f).is_empty(),
+                        "legacy locality conflicts with spans for {} in {}; replay the original report or reanalyze before rewriting",
+                        f.id,
+                        file.path
+                    );
+                }
             }
             let traits = file
                 .findings
                 .iter()
-                .enumerate()
-                .map(|(i, f)| Trait {
+                .map(|f| Trait {
                     id: f.id.clone(),
                     crit: f.crit,
                     desc: f.desc.clone(),
@@ -205,7 +215,7 @@ impl<'a> Report<'a> {
                         .collect(),
                     src: f.src,
                     from: file.composite_sources.get(f.id.as_str()).cloned(),
-                    local: file.finding_has_local_offset(i),
+                    legacy_local: None,
                 })
                 .collect();
             let ctx = file
@@ -306,7 +316,12 @@ impl<'a> Report<'a> {
     /// Convert to the existing presentation model. No rules or matcher evidence
     /// are reconstructed. This compatibility allocation is included in timings.
     pub fn into_loaded(self) -> Result<LoadedReport> {
-        ensure!(self.v == VERSION, "unsupported file profile {}", self.v);
+        ensure!(
+            matches!(self.v.as_str(), VERSION | LEGACY_VERSION),
+            "unsupported file profile {}",
+            self.v
+        );
+        let legacy = self.v == LEGACY_VERSION;
         if let Some(fp) = &self.fp {
             crate::model_facts::supports(fp, &[])?;
         }
@@ -365,7 +380,14 @@ impl<'a> Report<'a> {
                     );
                 }
 
-                file.render_locality.push(t.local);
+                if legacy {
+                    file.render_locality.push(t.legacy_local.unwrap_or(false));
+                } else {
+                    ensure!(
+                        t.legacy_local.is_none(),
+                        "local is not supported in {VERSION}; use spans"
+                    );
+                }
                 file.findings.push(f);
             }
             let has_costs = wire.ctx.iter().any(|c| c.w.is_some());
@@ -444,6 +466,7 @@ mod tests {
         second.conf = 0.99;
         second.desc = "Different historical description".into();
         second.src = Some(1);
+        second.precomputed_spans = None;
         let mut file = FileAnalysis {
             id: 0,
             path: "fixture.exe".into(),
@@ -452,7 +475,6 @@ mod tests {
             size: 4096,
             score: 100,
             findings: vec![first.clone(), second],
-            render_locality: vec![true, false],
             context_costs: vec![1024],
             context: vec![ContextLine {
                 loc: 0,
@@ -512,7 +534,17 @@ mod tests {
             loaded.report.files[0].findings[0].trait_refs,
             report.files[0].findings[0].trait_refs
         );
-        assert_eq!(loaded.report.files[0].render_locality, vec![true, false]);
+        assert!(loaded.report.files[0].render_locality.is_empty());
+        assert!(loaded.report.files[0].finding_has_local_offset(0));
+        assert!(!loaded.report.files[0].finding_has_local_offset(1));
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(
+            json["files"][0]["traits"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|f| f.get("local").is_none())
+        );
         assert!(
             loaded.report.files[0]
                 .findings
@@ -556,8 +588,42 @@ mod tests {
     }
 
     #[test]
+    fn legacy_locality_replays_but_conflicting_flags_cannot_be_silently_rewritten() {
+        let report = fixture();
+        let mut wire = Report::from_analysis(&report).unwrap();
+        wire.v = LEGACY_VERSION.into();
+        // Legacy absence means false, even with spans; preserve that old behavior.
+        let bytes = serde_json::to_vec(&wire).unwrap();
+        let loaded = crate::report_input::decode(&bytes).unwrap();
+        assert_eq!(loaded.report.files[0].render_locality, vec![false, false]);
+        assert!(!loaded.report.files[0].finding_has_local_offset(0));
+        assert!(
+            Report::from_analysis(&loaded.report)
+                .unwrap_err()
+                .to_string()
+                .contains("legacy locality conflicts")
+        );
+        wire.files[0].traits[0].legacy_local = Some(true);
+        let bytes = serde_json::to_vec(&wire).unwrap();
+        let loaded = crate::report_input::decode(&bytes).unwrap();
+        assert_eq!(loaded.report.files[0].render_locality, vec![true, false]);
+        assert_eq!(format_tiny(&loaded.report), format_tiny(&report));
+        let updated = Report::from_analysis(&loaded.report).unwrap();
+        assert_eq!(updated.v, VERSION);
+        assert!(
+            updated.files[0]
+                .traits
+                .iter()
+                .all(|f| f.legacy_local.is_none())
+        );
+    }
+
+    #[test]
     fn invalid_indices_costs_versions_and_missing_confidence_fail() {
         let value = serde_json::to_value(Report::from_analysis(&fixture()).unwrap()).unwrap();
+        let mut bad = value.clone();
+        bad["files"][0]["traits"][0]["local"] = serde_json::json!(true);
+        assert!(decode(&serde_json::to_vec(&bad).unwrap()).is_err());
         let mut bad = value.clone();
         bad["files"][0]["traits"][0]["uses"] = serde_json::json!([999]);
         assert!(decode(&serde_json::to_vec(&bad).unwrap()).is_err());

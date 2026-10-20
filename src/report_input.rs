@@ -79,8 +79,10 @@ pub fn decode(bytes: &[u8]) -> Result<LoadedReport> {
     let mut loaded = match version.as_deref() {
         Some("8") => from_compact(serde_json::from_slice(document)?, true)?,
         Some("context-1") => crate::context_retention::decode(serde_json::from_slice(document)?)?,
-        Some(crate::file_wire::VERSION) => return crate::file_wire::decode(document),
-        Some(crate::file_wire::shared::VERSION) => {
+        Some(crate::file_wire::VERSION | crate::file_wire::LEGACY_VERSION) => {
+            return crate::file_wire::decode(document);
+        }
+        Some(crate::file_wire::shared::VERSION | crate::file_wire::shared::LEGACY_VERSION) => {
             return crate::file_wire::shared::decode(document);
         }
         Some("3" | "3.0") => {
@@ -102,7 +104,7 @@ pub fn decode(bytes: &[u8]) -> Result<LoadedReport> {
             }
         }
         _ => bail!(
-            "unsupported report version {version:?}; expected compact v8, context-1, file-1, joined-1, or raw v3/v3.0"
+            "unsupported report version {version:?}; expected compact v8, context-1, file-1/file-2, joined-1/joined-2, or raw v3/v3.0"
         ),
     };
     validate(&loaded.report)?;

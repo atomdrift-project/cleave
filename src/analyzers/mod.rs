@@ -478,7 +478,88 @@ fn looks_like_pe_image(data: &[u8]) -> bool {
     }
 
     let e_lfanew = u32::from_le_bytes([data[60], data[61], data[62], data[63]]) as usize;
-    data.get(e_lfanew..e_lfanew.saturating_add(4)) == Some(b"PE\0\0")
+    if data.get(e_lfanew..e_lfanew.saturating_add(4)) == Some(b"PE\0\0") {
+        return true;
+    }
+
+    // A reflective loader can replace the NT signature while retaining a
+    // coherent image. Do not discard it before PEAnalyzer can report header
+    // tampering and scan the original bytes. MZ-prefixed text and truncated
+    // DOS headers still need to fail this gate: require bounded COFF/optional
+    // headers, all raw sections, and an entry point in executable content.
+    coherent_pe_with_damaged_signature(data, e_lfanew)
+}
+
+fn coherent_pe_with_damaged_signature(data: &[u8], nt: usize) -> bool {
+    fn u16_at(data: &[u8], at: usize) -> Option<u16> {
+        Some(u16::from_le_bytes(
+            data.get(at..at.checked_add(2)?)?.try_into().ok()?,
+        ))
+    }
+    fn u32_at(data: &[u8], at: usize) -> Option<u32> {
+        Some(u32::from_le_bytes(
+            data.get(at..at.checked_add(4)?)?.try_into().ok()?,
+        ))
+    }
+    let check = || -> Option<bool> {
+        if nt < 0x40 {
+            return Some(false);
+        }
+        let coff = nt.checked_add(4)?;
+        let machine = u16_at(data, coff)?;
+        let count = usize::from(u16_at(data, coff.checked_add(2)?)?);
+        let opt_size = usize::from(u16_at(data, coff.checked_add(16)?)?);
+        let characteristics = u16_at(data, coff.checked_add(18)?)?;
+        let opt = coff.checked_add(20)?;
+        let magic = u16_at(data, opt)?;
+        let min_opt = match (machine, magic) {
+            (0x014c, 0x010b) => 0xe0,
+            (0x8664 | 0xaa64, 0x020b) => 0xf0,
+            _ => return Some(false),
+        };
+        if !(1..=96).contains(&count) || opt_size < min_opt || characteristics & 2 == 0 {
+            return Some(false);
+        }
+        let entry = u32_at(data, opt.checked_add(16)?)?;
+        let image_size = u32_at(data, opt.checked_add(56)?)?;
+        let headers_size = usize::try_from(u32_at(data, opt.checked_add(60)?)?).ok()?;
+        let table = opt.checked_add(opt_size)?;
+        let table_end = table.checked_add(count.checked_mul(40)?)?;
+        if entry == 0
+            || entry >= image_size
+            || table_end > headers_size
+            || headers_size > data.len()
+        {
+            return Some(false);
+        }
+        let sections = data.get(table..table_end)?;
+        let mut executable_entry = false;
+        for section in sections.as_chunks::<40>().0 {
+            let virtual_size = u32_at(section, 8)?;
+            let virtual_start = u32_at(section, 12)?;
+            let raw_size = u32_at(section, 16)?;
+            let raw_start = u32_at(section, 20)?;
+            let flags = u32_at(section, 36)?;
+            let virtual_end = virtual_start.checked_add(virtual_size.max(raw_size))?;
+            if virtual_end > image_size {
+                return Some(false);
+            }
+            if raw_size != 0 {
+                let start = usize::try_from(raw_start).ok()?;
+                let end = start.checked_add(usize::try_from(raw_size).ok()?)?;
+                if start < headers_size || end > data.len() {
+                    return Some(false);
+                }
+                // Require actual stored executable bytes at the entry point,
+                // not a virtual-only zero-fill section with fabricated flags.
+                executable_entry |= flags & 0x2000_0000 != 0
+                    && entry >= virtual_start
+                    && entry < virtual_start.checked_add(raw_size)?;
+            }
+        }
+        Some(executable_entry)
+    };
+    check().unwrap_or(false)
 }
 
 fn known_manifest_type_from_basename(file_path: &Path) -> Option<FileType> {
@@ -826,6 +907,64 @@ mod tests {
             detect_file_type_from_data(Path::new("BOUT.inp"), b"MZ = 8    # Z size\n"),
             FileType::Text
         );
+    }
+
+    fn damaged_signature_fixture() -> Vec<u8> {
+        let mut data = vec![0u8; 0x400];
+        data[..2].copy_from_slice(b"MZ");
+        data[0x3c..0x40].copy_from_slice(&0x80u32.to_le_bytes());
+        data[0x80..0x84].copy_from_slice(b"TL\0\0");
+        data[0x84..0x86].copy_from_slice(&0x14cu16.to_le_bytes());
+        data[0x86..0x88].copy_from_slice(&1u16.to_le_bytes());
+        data[0x94..0x96].copy_from_slice(&0xe0u16.to_le_bytes());
+        data[0x96..0x98].copy_from_slice(&0x102u16.to_le_bytes());
+        data[0x98..0x9a].copy_from_slice(&0x10bu16.to_le_bytes());
+        data[0xa8..0xac].copy_from_slice(&0x1000u32.to_le_bytes());
+        data[0xd0..0xd4].copy_from_slice(&0x2000u32.to_le_bytes());
+        data[0xd4..0xd8].copy_from_slice(&0x200u32.to_le_bytes());
+        let sec = &mut data[0x178..0x1a0];
+        sec[..5].copy_from_slice(b".text");
+        sec[8..12].copy_from_slice(&0x200u32.to_le_bytes());
+        sec[12..16].copy_from_slice(&0x1000u32.to_le_bytes());
+        sec[16..20].copy_from_slice(&0x200u32.to_le_bytes());
+        sec[20..24].copy_from_slice(&0x200u32.to_le_bytes());
+        sec[36..40].copy_from_slice(&0x60000020u32.to_le_bytes());
+        data[0x200] = 0xc3;
+        data
+    }
+
+    #[test]
+    fn bridge_damaged_pe_signature_preserves_scan_dispatch() {
+        let mut data = damaged_signature_fixture();
+        for signature in [*b"TL\0\0", *b"ABCD", [0; 4]] {
+            data[0x80..0x84].copy_from_slice(&signature);
+            for name in ["sample", "sample.exe", "notes.txt"] {
+                assert_eq!(
+                    detect_file_type_from_data(Path::new(name), &data),
+                    FileType::Pe
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn bridge_damaged_pe_requires_stored_executable_entry() {
+        let data = damaged_signature_fixture();
+        for (offset, replacement) in [
+            (0x3c, u32::MAX),    // out-of-bounds NT header
+            (0x94, 0),           // missing optional header
+            (0xa8, 0x1800),      // entry outside stored section bytes
+            (0xd0, 0x1000),      // section outside declared image
+            (0x188, 0),          // no stored code
+            (0x18c, 0x300),      // raw section exceeds file
+            (0x19c, 0x40000040), // non-executable section
+        ] {
+            let mut invalid = data.clone();
+            invalid[offset..offset + 4].copy_from_slice(&replacement.to_le_bytes());
+            assert!(!looks_like_pe_image(&invalid), "offset {offset:x}");
+        }
+        assert!(!looks_like_pe_image(&data[..0x3ff]));
+        assert!(!looks_like_pe_image(b"MZ = 8    # ordinary text\n"));
     }
 
     #[test]

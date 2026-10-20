@@ -197,7 +197,8 @@ fn global_take(id: u64) -> Option<Box<Entry>> {
     entry
 }
 
-/// Drop every cache parked under `id` and release its bytes. Called when the
+/// Drop parked caches and this thread's hot cache for `id`, releasing their
+/// bytes. Called when the
 /// engine that owns `id` is dropped: without this, a regex evicted from its
 /// budgeted store and later recompiled (under a fresh id) leaves its old parked
 /// caches unreachable — nobody holds the dead id — yet still counted against
@@ -205,13 +206,26 @@ fn global_take(id: u64) -> Option<Box<Entry>> {
 /// fail `reserve_cached` and churn on cache creation while retained bytes sit
 /// pinned at the ceiling.
 pub(crate) fn forget(id: u64) {
-    let freed = {
-        let mut shard = shard_for(id).lock();
-        shard
-            .remove(&id)
-            .map_or(0, |stack| stack.iter().map(|e| e.size).sum::<usize>())
-    };
-    release_cached(freed);
+    // Deallocate outside the shard lock: other threads may be searching
+    // unrelated engines in this shard while a retired engine releases bytes.
+    let removed = shard_for(id).lock().remove(&id);
+    let parked_bytes = removed
+        .as_ref()
+        .map_or(0, |stack| stack.iter().map(|e| e.size).sum::<usize>());
+    // Engine owners can also be destroyed during TLS teardown, after HOT
+    // itself has gone away. try_with keeps that cleanup order harmless.
+    let hot = HOT
+        .try_with(|slot| {
+            let mut slot = slot.try_borrow_mut().ok()?;
+            if slot.id == id {
+                slot.entry.take()
+            } else {
+                None
+            }
+        })
+        .ok()
+        .flatten();
+    release_cached(parked_bytes + hot.as_ref().map_or(0, |entry| entry.size));
 }
 
 /// Park an already-reserved cache for other threads. The byte budget was
@@ -258,6 +272,16 @@ pub(crate) fn usage() -> (usize, usize) {
 struct HotSlot {
     id: u64,
     entry: Option<Box<Entry>>,
+}
+
+impl Drop for HotSlot {
+    fn drop(&mut self) {
+        // TLS destruction frees the cache too. Leaving its reservation behind
+        // eventually fills the pool with phantom bytes as workers come and go.
+        if let Some(entry) = self.entry.take() {
+            release_cached(entry.size);
+        }
+    }
 }
 
 thread_local! {
@@ -399,6 +423,104 @@ mod tests {
 
     fn engine(pattern: &str) -> meta::Regex {
         meta::Regex::new(pattern).unwrap()
+    }
+
+    // Global byte accounting must be measured without unrelated regex tests
+    // allocating concurrently. A fresh test process also starts with empty TLS.
+    fn isolated_lifetime_test(name: &str) -> bool {
+        const CHILD: &str = "CLEAVE_SCRATCH_LIFETIME_TEST_CHILD";
+        if std::env::var(CHILD).as_deref() == Ok(name) {
+            return false;
+        }
+        let test = format!("composite_rules::regex_scratch::tests::{name}");
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", &test, "--nocapture"])
+            .env(CHILD, name)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        true
+    }
+
+    #[test]
+    fn exiting_thread_releases_hot_scratch_reservation() {
+        if isolated_lifetime_test("exiting_thread_releases_hot_scratch_reservation") {
+            return;
+        }
+        assert_eq!(CACHED_BYTES.load(Ordering::Acquire), 0);
+        std::thread::spawn(|| {
+            let re = meta::Regex::builder()
+                .configure(
+                    meta::Config::new()
+                        .dfa(false)
+                        .onepass(false)
+                        .backtrack(false),
+                )
+                .build(r"(?:[A-Za-z0-9_]{1,32}[./:-]){4,16}(?:powershell|cmd|https?)")
+                .unwrap();
+            with_cache(next_regex_id(), &re, |cache| {
+                assert!(
+                    re.search_with(cache, &regex_automata::Input::new("abc/def/ghi/jkl/cmd"))
+                        .is_some()
+                );
+            });
+            assert!(CACHED_BYTES.load(Ordering::Acquire) > 0);
+        })
+        .join()
+        .unwrap();
+        assert_eq!(
+            CACHED_BYTES.load(Ordering::Acquire),
+            0,
+            "thread exit freed the cache but left a phantom reservation",
+        );
+    }
+
+    #[test]
+    fn dropping_raw_regex_reclaims_parked_scratch() {
+        if isolated_lifetime_test("dropping_raw_regex_reclaims_parked_scratch") {
+            return;
+        }
+        let re = super::super::evaluators::compile_bytes_regex(
+            r"(?:[A-Za-z0-9_]{1,32}[./:-]){4,16}(?:powershell|cmd|https?)",
+            false,
+        )
+        .unwrap();
+        assert!(re.is_match(b"abc/def/ghi/jkl/cmd"));
+        let id = HOT.with(|hot| {
+            let hot = hot.borrow();
+            assert!(hot.entry.as_ref().unwrap().size > 0);
+            hot.id
+        });
+        // Switching engines parks the original cache for later reuse.
+        with_cache(next_regex_id(), &engine("literal"), |_| {});
+        assert!(shard_for(id).lock().contains_key(&id));
+        drop(re);
+        assert!(
+            !shard_for(id).lock().contains_key(&id),
+            "the dead engine's ID can never retrieve this parked cache",
+        );
+    }
+
+    #[test]
+    fn dropping_raw_regex_reclaims_current_hot_scratch() {
+        if isolated_lifetime_test("dropping_raw_regex_reclaims_current_hot_scratch") {
+            return;
+        }
+        let re = super::super::evaluators::compile_bytes_regex(
+            r"(?:[A-Za-z0-9_]{1,32}[./:-]){4,16}(?:powershell|cmd|https?)",
+            false,
+        )
+        .unwrap();
+        assert!(re.is_match(b"abc/def/ghi/jkl/cmd"));
+        assert!(CACHED_BYTES.load(Ordering::Acquire) > 0);
+        drop(re);
+        assert!(HOT.with(|hot| hot.borrow().entry.is_none()));
+        assert_eq!(CACHED_BYTES.load(Ordering::Acquire), 0);
     }
 
     #[test]

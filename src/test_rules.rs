@@ -355,6 +355,7 @@ impl<'a> RuleDebugger<'a> {
     {
         EvaluationContext {
             report: self.report,
+            member_files: None,
             binary_data: self.binary_data,
             file_type: self.file_type,
             platforms: &self.platforms,
@@ -768,6 +769,7 @@ impl<'a> RuleDebugger<'a> {
     fn debug_condition(&self, condition: &Condition) -> ConditionDebugResult {
         let ctx = EvaluationContext {
             report: self.report,
+            member_files: None,
             binary_data: self.binary_data,
             file_type: self.file_type,
             platforms: &self.platforms,
@@ -1474,6 +1476,7 @@ impl<'a> RuleDebugger<'a> {
         // Create evaluation context
         let ctx = EvaluationContext {
             report: self.report,
+            member_files: None,
             binary_data: self.binary_data,
             file_type: self.file_type,
             platforms: &self.platforms,
@@ -1880,6 +1883,7 @@ impl<'a> RuleDebugger<'a> {
         // For simple mode, use eval_ast directly
         let ctx = EvaluationContext {
             report: self.report,
+            member_files: None,
             binary_data: self.binary_data,
             file_type: self.file_type,
             platforms: &self.platforms,
@@ -2025,6 +2029,7 @@ impl<'a> RuleDebugger<'a> {
 
         let ctx = EvaluationContext {
             report: self.report,
+            member_files: None,
             binary_data: self.binary_data,
             file_type: self.file_type,
             platforms: &self.platforms,

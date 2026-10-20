@@ -1369,9 +1369,7 @@ fn resolve_all_values(qualified_path: &str, ctx: &EvaluationContext<'_>) -> Vec<
             // (`node_modules/debug/README.md` answering for the root manifest).
             // The entry that speaks for the archive is the one nearest its root.
             if let Some(file) = ctx
-                .report
-                .files
-                .iter()
+                .files()
                 .filter(|f| sibling_path_matches(&f.path, name))
                 .min_by_key(|f| {
                     f.path
@@ -4382,6 +4380,34 @@ Author-Email: test@example.com
         let ctx = EvaluationContext::test_only_new(report, &[], FileType::All);
         let got = resolve_all_values("README.md::markdown.first_heading", &ctx);
         assert_eq!(got, vec![serde_json::json!("finalhandler")]);
+    }
+
+    #[test]
+    fn sibling_lookup_uses_only_borrowed_container_members() {
+        let mk = |value: &str| {
+            let mut file = FileAnalysis {
+                path: "README.md".into(),
+                ..Default::default()
+            };
+            file.kv.insert("heading".into(), json!(value));
+            file
+        };
+        let mut report = AnalysisReport::new(TargetInfo::default());
+        report.files.push(mk("outside"));
+        let member = mk("inside");
+        let members = [&member];
+        let mut ctx = EvaluationContext::test_only_new(&report, &[], FileType::All);
+        assert_eq!(
+            resolve_all_values("README.md::heading", &ctx),
+            vec![json!("outside")]
+        );
+        ctx.member_files = Some(&members);
+        assert_eq!(
+            resolve_all_values("README.md::heading", &ctx),
+            vec![json!("inside")]
+        );
+        ctx.member_files = Some(&[]);
+        assert!(resolve_all_values("README.md::heading", &ctx).is_empty());
     }
 
     #[test]

@@ -2331,7 +2331,7 @@ fn drop_unread_folded_fields(file: &mut FileAnalysis, engine: &crate::Engine) {
         return;
     }
     if let Some(view) = file.filefacts.as_mut() {
-        view.values = retained_dependency_values(&view.values);
+        view.retain_compact_values();
         view.flow = None;
     }
     // Sub-notable findings never render as finding rows on any compact-path
@@ -2349,23 +2349,9 @@ fn drop_unread_folded_fields(file: &mut FileAnalysis, engine: &crate::Engine) {
     }
 }
 
-fn retained_dependency_values(tree: &serde_json::Value) -> serde_json::Value {
-    let mut npm = serde_json::Map::new();
-    for key in ["name", "version", "scripts"] {
-        if let Some(value) = tree.get("npm").and_then(|npm| npm.get(key)) {
-            npm.insert(key.to_owned(), value.clone());
-        }
-    }
-    if npm.is_empty() {
-        serde_json::Value::Null
-    } else {
-        serde_json::json!({"npm": npm})
-    }
-}
-
 #[cfg(test)]
 mod dependency_compact_retention_tests {
-    use super::retained_dependency_values;
+    use crate::types::filefacts_view::retained_dependency_values;
     use serde_json::json;
     #[test]
     fn compact_members_keep_dependency_identity_and_hooks_without_unrelated_values() {
@@ -2376,6 +2362,12 @@ mod dependency_compact_retention_tests {
         assert_eq!(retained_dependency_values(&input), expected);
         assert!(retained_dependency_values(&json!({"source":{}})).is_null());
         assert!(retained_dependency_values(&serde_json::Value::Null).is_null());
+        assert_eq!(
+            retained_dependency_values(
+                &json!({"pe":{"debug":{"pdb":{"path":"C:\\build\\agent.pdb"}}}})
+            ),
+            json!({"pe":{"debug":{"pdb":{"path":"C:\\build\\agent.pdb"}}}})
+        );
     }
 }
 

@@ -33,6 +33,9 @@ pub(crate) struct FindingScope<'a> {
     /// container snapshot (Finding + Evidence vectors × member count).
     mid: &'a [Finding],
     extra: &'a [Finding],
+    /// Findings borrowed from disjoint report members, before `extra`.
+    /// Package evaluation can pool them without cloning their evidence.
+    pooled: &'a [&'a Finding],
     /// Hashed ids of all halves, so a lookup for an id nothing produced costs
     /// one hash instead of a full scan. `None` means always scan.
     id_hashes: Option<Arc<FxHashSet<u64>>>,
@@ -50,6 +53,7 @@ impl<'a> FindingScope<'a> {
             own,
             mid: &[],
             extra,
+            pooled: &[],
             id_hashes: Some(Arc::new(id_hashes)),
         }
     }
@@ -65,7 +69,37 @@ impl<'a> FindingScope<'a> {
             own,
             mid: &[],
             extra: extra.unwrap_or(&[]),
+            pooled: &[],
             id_hashes,
+        }
+    }
+
+    /// Borrow a pooled seed followed by findings from earlier fixed-point
+    /// iterations. Preserve duplicates and order exactly as a concatenated
+    /// owned vector would, without copying any finding or evidence storage.
+    pub(crate) fn from_pooled(pooled: &'a [&'a Finding], extra: &'a [Finding]) -> Self {
+        Self::with_pooled(&[], pooled, extra)
+    }
+
+    /// Borrow the report's own findings, disjoint member findings, and the
+    /// findings produced so far, in the same order as an owned concatenation.
+    pub(crate) fn with_pooled(
+        own: &'a [Finding],
+        pooled: &'a [&'a Finding],
+        extra: &'a [Finding],
+    ) -> Self {
+        let id_hashes = own
+            .iter()
+            .chain(pooled.iter().copied())
+            .chain(extra)
+            .map(|finding| hash_str(&finding.id))
+            .collect();
+        Self {
+            own,
+            mid: &[],
+            extra,
+            pooled,
+            id_hashes: Some(Arc::new(id_hashes)),
         }
     }
 
@@ -87,7 +121,11 @@ impl<'a> FindingScope<'a> {
 
     /// Every finding in scope, all halves, in report-then-mid-then-extra order.
     pub(crate) fn iter(&self) -> impl Iterator<Item = &Finding> {
-        self.own.iter().chain(self.mid).chain(self.extra)
+        self.own
+            .iter()
+            .chain(self.mid)
+            .chain(self.pooled.iter().copied())
+            .chain(self.extra)
     }
 
     /// Whether any finding in scope has exactly this id.
@@ -127,6 +165,10 @@ pub(crate) struct FileEvalCaches {
 pub(crate) struct EvaluationContext<'a> {
     /// The analysis report produced for this file
     pub report: &'a AnalysisReport,
+    /// A container assembled from existing file nodes can borrow its immediate
+    /// members for sibling-value lookups instead of cloning their reports.
+    /// `None` uses `report.files`; `Some(&[])` intentionally has no members.
+    pub member_files: Option<&'a [&'a crate::types::FileAnalysis]>,
     /// Raw binary data of the file being analyzed
     pub binary_data: &'a [u8],
     /// Detected file type
@@ -254,6 +296,28 @@ impl<'a> EvaluationContext<'a> {
         additional_findings: Option<&'a [Finding]>,
         cached_ast: Option<&'a tree_sitter::Tree>,
     ) -> Self {
+        Self::new_with_findings(
+            report,
+            binary_data,
+            file_type,
+            platforms,
+            FindingScope::new(&report.findings, additional_findings),
+            cached_ast,
+        )
+    }
+
+    /// Borrow report metadata with an explicit finding scope. Parent contexts
+    /// can exclude root findings without copying the report or indexing a
+    /// large root finding set that will immediately be discarded.
+    #[must_use]
+    pub(crate) fn new_with_findings(
+        report: &'a AnalysisReport,
+        binary_data: &'a [u8],
+        file_type: FileType,
+        platforms: &'a [Platform],
+        findings: FindingScope<'a>,
+        cached_ast: Option<&'a tree_sitter::Tree>,
+    ) -> Self {
         let arch: Arc<[Arch]> = report
             .target
             .architectures
@@ -278,11 +342,12 @@ impl<'a> EvaluationContext<'a> {
 
         Self {
             report,
+            member_files: None,
             binary_data,
             file_type,
             platforms,
             arch,
-            findings: FindingScope::new(&report.findings, additional_findings),
+            findings,
             cached_ast,
             debug_collector: None,
             suppressions: None,
@@ -589,6 +654,18 @@ impl<'a> EvaluationContext<'a> {
         self.findings.contains_id(id)
     }
 
+    pub(crate) fn files(&self) -> impl Iterator<Item = &'a crate::types::FileAnalysis> + '_ {
+        self.report
+            .files
+            .iter()
+            .take(if self.member_files.is_none() {
+                usize::MAX
+            } else {
+                0
+            })
+            .chain(self.member_files.into_iter().flatten().copied())
+    }
+
     /// May a finding with this id satisfy the composite currently being
     /// evaluated -- i.e. did it come from a file whose type that composite
     /// declared in `for:`?
@@ -620,6 +697,7 @@ impl<'a> EvaluationContext<'a> {
     ) -> Self {
         Self {
             report,
+            member_files: None,
             binary_data,
             file_type,
             platforms: &[],
@@ -940,5 +1018,69 @@ mod markup_comment_tests {
         assert_eq!(masked.iter().filter(|b| **b == b'\n').count(), 2);
         assert!(masked.starts_with(b"live\n"));
         assert!(!masked.windows(6).any(|w| w == b"hidden"));
+    }
+}
+
+#[cfg(test)]
+mod pooled_finding_tests {
+    use super::FindingScope;
+    use crate::types::{Evidence, Finding};
+
+    #[test]
+    fn pooled_scope_borrows_evidence_and_preserves_seed_then_iteration_order() {
+        let left = Finding {
+            id: "fixture/left".into(),
+            evidence: vec![Evidence::new("text", "fixture", "original evidence")],
+            ..Default::default()
+        };
+        let right = Finding {
+            id: "fixture/right".into(),
+            ..Default::default()
+        };
+        let extra = [Finding {
+            id: "fixture/derived".into(),
+            ..Default::default()
+        }];
+        let pooled = [&left, &right, &left];
+        let scope = FindingScope::from_pooled(&pooled, &extra);
+        let observed: Vec<_> = scope.iter().collect();
+        let expected = [&left, &right, &left, &extra[0]];
+        assert_eq!(observed.len(), expected.len());
+        for (actual, original) in observed.into_iter().zip(expected) {
+            assert!(
+                std::ptr::eq(actual, original),
+                "finding storage must be borrowed"
+            );
+        }
+        for id in ["fixture/left", "fixture/right", "fixture/derived"] {
+            assert!(scope.contains_id(id));
+        }
+        assert!(!scope.contains_id("fixture/missing"));
+    }
+
+    #[test]
+    fn container_scope_preserves_own_then_pooled_then_derived_order() {
+        let own = [Finding {
+            id: "fixture/own".into(),
+            ..Default::default()
+        }];
+        let member = Finding {
+            id: "fixture/member".into(),
+            ..Default::default()
+        };
+        let derived = [Finding {
+            id: "fixture/derived".into(),
+            ..Default::default()
+        }];
+        let pooled = [&member, &own[0], &member];
+        let scope = FindingScope::with_pooled(&own, &pooled, &derived);
+        let expected = [&own[0], &member, &own[0], &member, &derived[0]];
+        let actual: Vec<_> = scope.iter().collect();
+        assert_eq!(actual.len(), expected.len());
+        for (borrowed, original) in actual.into_iter().zip(expected) {
+            assert!(std::ptr::eq(borrowed, original));
+            assert!(scope.contains_id(original.id.as_str()));
+        }
+        assert!(!scope.contains_id("fixture/missing"));
     }
 }

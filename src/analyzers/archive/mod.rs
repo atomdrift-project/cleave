@@ -8,6 +8,7 @@ mod guards;
 #[cfg(test)]
 mod guards_test;
 mod iso;
+mod member_data;
 mod rpa;
 mod source_context;
 mod squashfs;
@@ -1447,10 +1448,11 @@ fn decompress_to_file_at_depth<R: std::io::Read>(
         .and_then(|s| s.to_str())
         .unwrap_or("extracted");
 
-    let mut tmp = tempfile::Builder::new()
+    let tmp = tempfile::Builder::new()
         .prefix(".cleave-decode-")
         .tempfile_in(dest_dir)
         .context("Failed to create decompression temp file")?;
+    let mut tmp = Some(tmp);
     let mut limited = guards::LimitedReader::new(&mut decoder, guards::MAX_FILE_SIZE);
     // Matches the tar extractor's chunk: small enough to check cancellation
     // and the byte budget promptly on a stream that decodes for minutes.
@@ -1463,11 +1465,22 @@ fn decompress_to_file_at_depth<R: std::io::Read>(
         match std::io::Read::read(&mut limited, &mut buf) {
             Ok(0) => break,
             Ok(n) => {
-                tmp.write_all(&buf[..n])
-                    .with_context(|| format!("Failed to write decompressed data: {stem}"))?;
+                if let Some(file) = tmp.as_mut() {
+                    file.write_all(&buf[..n])
+                        .with_context(|| format!("Failed to write decompressed data: {stem}"))?;
+                }
                 written += n as u64;
                 if !guard.check_bytes(n as u64, stem) {
                     anyhow::bail!("Exceeded maximum total extraction size");
+                }
+                // Once this monotone ratio crosses the bomb threshold, the
+                // decoded file can never be dispatched. Remove it now, but
+                // finish reading so the final hostile reason still reports
+                // the complete uncompressed size and late decoder errors.
+                if tmp.is_some()
+                    && guards::ExtractionGuard::compression_ratio_exceeded(compressed_size, written)
+                {
+                    drop(tmp.take());
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
@@ -1500,7 +1513,14 @@ fn decompress_to_file_at_depth<R: std::io::Read>(
         anyhow::bail!("decompression bomb refused: {stem}");
     }
 
-    dispatch_decompressed_file(tmp, stem, dest_dir, guard, decompression_depth, written)
+    dispatch_decompressed_file(
+        tmp.context("decoded scratch unexpectedly missing")?,
+        stem,
+        dest_dir,
+        guard,
+        decompression_depth,
+        written,
+    )
 }
 
 /// Decide what a fully decoded stream is and route it: tar containers are
@@ -2030,7 +2050,11 @@ impl ArchiveAnalyzer {
                 archive_path,
                 data,
             );
-            report.filefacts = Some(crate::types::FilefactsView::from_ctx(&ctx));
+            report.filefacts = Some(if self.engine.compact_members() {
+                crate::types::FilefactsView::from_ctx_compact(&ctx)
+            } else {
+                crate::types::FilefactsView::from_ctx(&ctx)
+            });
             report.identity = ctx.identity();
             filefacts_archive_entries = ctx.archive_entries();
             crate::capabilities::merge_filefacts_context(&mut report, &ctx);
@@ -2496,6 +2520,12 @@ impl ArchiveAnalyzer {
         } else {
             self.analyze_generic_archive(temp_dir.path(), &mut report, start);
         }
+
+        // All member readers and their mappings have finished. Container
+        // evaluation below uses the report and the original archive bytes;
+        // it never reopens extracted paths. Release their tmpfs pages before
+        // building the container's final metadata and composite findings.
+        drop(temp_dir);
 
         // Drain per-entry forensic metadata captured during extraction and
         // merge it into `report.archive_contents` by archive-relative path.
@@ -6005,6 +6035,53 @@ traits:
         );
     }
 
+    #[test]
+    fn truncated_large_tar_member_keeps_exact_readable_prefix() {
+        use std::io::Write;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("truncated-large.tar.gz");
+        let content = b"#!/bin/sh\necho readable-prefix\n";
+        let mut header = tar::Header::new_gnu();
+        header.set_path("payload.sh").unwrap();
+        header.set_size(256 * 1024 * 1024);
+        header.set_mode(0o644);
+        header.set_cksum();
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(header.as_bytes()).unwrap();
+        encoder.write_all(content).unwrap();
+        std::fs::write(&path, encoder.finish().unwrap()).unwrap();
+
+        let analyzer =
+            ArchiveAnalyzer::new().with_analysis_options(Arc::new(crate::AnalysisOptions {
+                all_files: true,
+                ..crate::AnalysisOptions::default()
+            }));
+        let report = analyzer.analyze(&path).unwrap();
+        let child = report
+            .files
+            .iter()
+            .find(|f| f.path.ends_with("payload.sh"))
+            .unwrap();
+        assert_eq!(child.sha256, calculate_sha256(content));
+        assert_eq!(child.size, content.len() as u64);
+        assert!(
+            report
+                .metadata
+                .errors
+                .iter()
+                .any(|e| e.contains("stopped after")),
+            "the TAR read error must remain visible: {:?}",
+            report.metadata.errors
+        );
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.id == "metadata/file/archive::partial-extraction")
+        );
+    }
+
     /// The in-memory ZIP path holds every member in RAM, so there is no
     /// temp_dir for the partial-extraction fallback to salvage. A member that
     /// fails to read must cost that member only.
@@ -6483,5 +6560,61 @@ traits:
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
         assert!(leftovers.is_empty(), "leftovers: {leftovers:?}");
+    }
+
+    #[test]
+    fn rejected_stream_releases_scratch_before_finishing_decode() {
+        struct MeasuredZeros {
+            remaining: u64,
+            emitted: u64,
+            peak_file_len: u64,
+            dest: std::path::PathBuf,
+        }
+
+        impl std::io::Read for MeasuredZeros {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                if self.emitted.is_multiple_of(16 * 1024 * 1024) {
+                    let current = std::fs::read_dir(&self.dest)?
+                        .map(|entry| entry.and_then(|entry| entry.metadata()).map(|m| m.len()))
+                        .collect::<std::io::Result<Vec<_>>>()?
+                        .into_iter()
+                        .max()
+                        .unwrap_or(0);
+                    self.peak_file_len = self.peak_file_len.max(current);
+                }
+                let n = buf.len().min(self.remaining as usize);
+                buf[..n].fill(0);
+                self.remaining -= n as u64;
+                self.emitted += n as u64;
+                Ok(n)
+            }
+        }
+
+        let dest = tempfile::tempdir().unwrap();
+        let guard = ExtractionGuard::new();
+        let uncompressed = 512 * 1024 * 1024;
+        let mut decoded = MeasuredZeros {
+            remaining: uncompressed,
+            emitted: 0,
+            peak_file_len: 0,
+            dest: dest.path().to_path_buf(),
+        };
+        let err = decompress_to_file(&mut decoded, Path::new("bomb.gz"), dest.path(), 1, &guard)
+            .unwrap_err();
+        assert!(err.to_string().contains("bomb"), "{err:#}");
+        assert_eq!(decoded.emitted, uncompressed);
+        assert!(
+            decoded.peak_file_len < 300 * 1024 * 1024,
+            "rejected decoded stream retained {} bytes of scratch",
+            decoded.peak_file_len
+        );
+        assert!(std::fs::read_dir(dest.path()).unwrap().next().is_none());
+        assert!(guard.take_reasons().iter().any(|reason| matches!(
+            reason,
+            guards::HostileArchiveReason::ZipBomb {
+                compressed: 1,
+                uncompressed: size,
+            } if *size == uncompressed
+        )));
     }
 }

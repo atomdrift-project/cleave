@@ -35,12 +35,17 @@ impl AppleScriptAnalyzer {
     fn add_scpt_facts(
         ctx: &crate::analysis_context::AnalysisContext<'_>,
         report: &mut AnalysisReport,
+        compact_values: bool,
     ) {
         if !scpt::is_scpt(ctx.content) {
             return;
         }
         report.imports = ctx.imports_from_filefacts();
-        report.filefacts = Some(crate::types::FilefactsView::from_ctx(ctx));
+        report.filefacts = Some(if compact_values {
+            crate::types::FilefactsView::from_ctx_compact(ctx)
+        } else {
+            crate::types::FilefactsView::from_ctx(ctx)
+        });
         report
             .strings
             .extend(crate::strings::scpt_literal_strings(ctx));
@@ -80,7 +85,7 @@ impl Analyzer for AppleScriptAnalyzer {
                 .convert_stng_iter(text.iter(), text.len());
         }
         if let Some(ctx) = filefacts_ctx {
-            Self::add_scpt_facts(ctx, &mut report);
+            Self::add_scpt_facts(ctx, &mut report, self.engine.compact_members());
         }
 
         // Analyze embedded code in strings
@@ -148,7 +153,7 @@ mod tests {
         });
         let text = ctx.parsed.text();
         report.strings = StringExtractor::new().convert_stng_iter(text.iter(), text.len());
-        AppleScriptAnalyzer::add_scpt_facts(&ctx, &mut report);
+        AppleScriptAnalyzer::add_scpt_facts(&ctx, &mut report, false);
         let rows: Vec<_> = report
             .strings
             .iter()
@@ -181,7 +186,7 @@ mod tests {
             sha256: String::new(),
             architectures: None,
         });
-        AppleScriptAnalyzer::add_scpt_facts(&ctx, &mut report);
+        AppleScriptAnalyzer::add_scpt_facts(&ctx, &mut report, false);
         assert!(
             report
                 .strings

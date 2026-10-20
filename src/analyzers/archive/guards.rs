@@ -316,12 +316,17 @@ impl ExtractionGuard {
         true
     }
 
-    /// Check compression ratio for zip bomb detection
-    pub(crate) fn check_compression_ratio(&self, compressed: u64, uncompressed: u64) -> bool {
-        if compressed > 0
+    /// Whether this stream is certain to be rejected once decoding finishes.
+    /// Both counters only increase, so a crossed threshold cannot become safe.
+    pub(crate) fn compression_ratio_exceeded(compressed: u64, uncompressed: u64) -> bool {
+        compressed > 0
             && uncompressed / compressed > MAX_COMPRESSION_RATIO
             && uncompressed >= MIN_ZIP_BOMB_UNCOMPRESSED_SIZE
-        {
+    }
+
+    /// Check compression ratio for zip bomb detection
+    pub(crate) fn check_compression_ratio(&self, compressed: u64, uncompressed: u64) -> bool {
+        if Self::compression_ratio_exceeded(compressed, uncompressed) {
             self.add_hostile_reason(HostileArchiveReason::ZipBomb {
                 compressed,
                 uncompressed,

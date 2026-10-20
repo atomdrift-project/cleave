@@ -132,6 +132,14 @@ pub(crate) struct LeanRegex {
     id: u64,
 }
 
+impl Drop for LeanRegex {
+    fn drop(&mut self) {
+        // Eviction and racing compilers can retire an engine while its
+        // scratch remains parked. This ID will never be searched again.
+        crate::composite_rules::regex_scratch::forget(self.id);
+    }
+}
+
 impl LeanRegex {
     /// Iterate non-overlapping leftmost-first matches over `haystack`, invoking
     /// `f(start, end)` (byte offsets); `f` returns `false` to stop early.

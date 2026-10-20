@@ -440,6 +440,7 @@ impl UnifiedSourceAnalyzer {
             &[],
             &[],
             None,
+            false,
             self.cancellation.as_ref(),
             ctx.as_ref(),
             Some(content.as_bytes()),
@@ -457,6 +458,7 @@ impl UnifiedSourceAnalyzer {
             &[],
             &[],
             None,
+            false,
             self.cancellation.as_ref(),
             ctx.as_ref(),
             Some(content.as_bytes()),
@@ -474,6 +476,7 @@ impl UnifiedSourceAnalyzer {
         preextracted_stng: &[stng::ExtractedString],
         preextracted_payloads: &[crate::types::ExtractedPayload],
         precomputed_sha256: Option<String>,
+        compact_filefacts_values: bool,
         cancellation: Option<&std::sync::Arc<std::sync::atomic::AtomicBool>>,
         source_ctx: Option<&crate::analysis_context::AnalysisContext<'_>>,
         original_bytes: Option<&[u8]>,
@@ -959,7 +962,11 @@ impl UnifiedSourceAnalyzer {
         super::source_kv::attach_to_report(&mut report, Some(content.as_bytes()));
 
         if let Some(ctx) = source_ctx {
-            let view = crate::types::FilefactsView::from_ctx(ctx);
+            let view = if compact_filefacts_values {
+                crate::types::FilefactsView::from_ctx_compact(ctx)
+            } else {
+                crate::types::FilefactsView::from_ctx(ctx)
+            };
             if !view.is_empty() {
                 report.filefacts = Some(view);
             }
@@ -1687,6 +1694,7 @@ impl Analyzer for UnifiedSourceAnalyzer {
                 input.strings,
                 input.payloads,
                 input.sha256.clone(),
+                self.engine.compact_members(),
                 effective_cancellation,
                 Some(ctx),
                 Some(input.data),
@@ -1702,6 +1710,7 @@ impl Analyzer for UnifiedSourceAnalyzer {
                     input.strings,
                     input.payloads,
                     input.sha256.clone(),
+                    self.engine.compact_members(),
                     effective_cancellation,
                     owned_ctx.as_ref(),
                     Some(input.data),
@@ -1857,6 +1866,7 @@ composite_rules:
                 &[extracted],
                 &[],
                 None,
+                false,
                 None,
                 None,
                 None,

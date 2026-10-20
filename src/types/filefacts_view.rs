@@ -75,10 +75,32 @@ impl FilefactsView {
     /// engine through the typed `FileAnalysis` fields, not this view.
     #[must_use]
     pub fn from_ctx(ctx: &crate::analysis_context::AnalysisContext<'_>) -> Self {
+        Self::from_ctx_with_values(ctx, ctx.parsed.values().as_json().clone())
+    }
+
+    /// Project a context for a report that will be folded into compact output.
+    ///
+    /// Compact files serialize structural values through their flattened `kv`
+    /// facts, so retaining the complete native tree here duplicates that data.
+    /// Only npm identity and lifecycle scripts have a post-evaluation reader
+    /// (dependency discovery); the remaining fields are still required by the
+    /// symbol/flow evaluators and compact reference projection.
+    #[must_use]
+    pub(crate) fn from_ctx_compact(ctx: &crate::analysis_context::AnalysisContext<'_>) -> Self {
+        Self::from_ctx_with_values(
+            ctx,
+            retained_dependency_values(ctx.parsed.values().as_json()),
+        )
+    }
+
+    fn from_ctx_with_values(
+        ctx: &crate::analysis_context::AnalysisContext<'_>,
+        values: serde_json::Value,
+    ) -> Self {
         let parsed = &ctx.parsed;
         Self {
             flow: parsed.flow().cloned(),
-            values: parsed.values().as_json().clone(),
+            values,
             symbols: retained_symbols(parsed),
             errors: serialize_to_array(parsed.errors()),
             references: parsed.references().to_vec(),
@@ -95,6 +117,43 @@ impl FilefactsView {
             && self.symbols.is_empty()
             && self.errors.is_empty()
             && self.references.is_empty()
+    }
+
+    /// Release native values with no compact-output reader after evaluation.
+    pub(crate) fn retain_compact_values(&mut self) {
+        self.values = retained_dependency_values(&self.values);
+    }
+}
+
+pub(super) fn retained_dependency_values(tree: &serde_json::Value) -> serde_json::Value {
+    let mut npm = serde_json::Map::new();
+    for key in ["name", "version", "scripts"] {
+        if let Some(value) = tree.get("npm").and_then(|npm| npm.get(key)) {
+            npm.insert(key.to_owned(), value.clone());
+        }
+    }
+    let mut retained = serde_json::Map::new();
+    if !npm.is_empty() {
+        retained.insert("npm".into(), serde_json::Value::Object(npm));
+    }
+    // PE augmentation reads this path after the view is attached so it can
+    // derive a high-confidence builder username. Keep it through evaluation;
+    // compact folding drops it with the other non-dependency values later.
+    if let Some(path) = tree
+        .get("pe")
+        .and_then(|pe| pe.get("debug"))
+        .and_then(|debug| debug.get("pdb"))
+        .and_then(|pdb| pdb.get("path"))
+    {
+        retained.insert(
+            "pe".into(),
+            serde_json::json!({"debug": {"pdb": {"path": path}}}),
+        );
+    }
+    if retained.is_empty() {
+        serde_json::Value::Null
+    } else {
+        serde_json::Value::Object(retained)
     }
 }
 

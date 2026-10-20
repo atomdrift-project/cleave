@@ -1921,7 +1921,6 @@ checksum = "64cd1e32ddd350061ae6edb1b082d7c54915b5c672c389143b9a63403a109f24"
 [[package]]
 name = "filefacts"
 version = "2.0.1"
-source = "git+https://github.com/atomdrift-project/filefacts.git#c58a451bb004a029944088ecdc8fac09c7153d23"
 dependencies = [
  "aho-corasick",
  "cab",
@@ -1951,12 +1950,15 @@ dependencies = [
  "sevenz-rust",
  "sha1 0.10.7",
  "sha2 0.10.9",
+ "signal-hook",
  "stng",
  "tar",
  "tempfile",
  "thiserror 2.0.21",
+ "tikv-jemallocator",
  "toml 0.8.23",
  "tracing",
+ "tracing-subscriber",
  "tree-sitter",
  "tree-sitter-bash",
  "tree-sitter-batch",
@@ -4948,6 +4950,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
+name = "signal-hook"
+version = "0.3.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d881a16cf4426aa584979d30bd82cb33429027e42122b169753d6ef1085ed6e2"
+dependencies = [
+ "libc",
+ "signal-hook-registry",
+]
+
+[[package]]
+name = "signal-hook-registry"
+version = "1.4.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c4db69cba1110affc0e9f7bcd48bbf87b3f4fc7c61fc9155afd4c469eb3d6c1b"
+dependencies = [
+ "errno",
+ "libc",
+]
+
+[[package]]
 name = "signature"
 version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5683,8 +5705,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-bash"
 version = "0.25.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e5ec769279cc91b561d3df0d8a5deb26b0ad40d183127f409494d6d8fc53062"
+source = "git+https://github.com/tstromberg/tree-sitter-bash#b672c98bad245e1cc41ff698782afe12b9a2718c"
 dependencies = [
  "cc",
  "tree-sitter-language",
@@ -5723,7 +5744,6 @@ dependencies = [
 [[package]]
 name = "tree-sitter-clojure"
 version = "0.1.0"
-source = "git+https://github.com/atomdrift-project/filefacts.git#c58a451bb004a029944088ecdc8fac09c7153d23"
 dependencies = [
  "cc",
  "tree-sitter",

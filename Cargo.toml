@@ -84,13 +84,7 @@ missing_panics_doc = "allow"  # Too strict for internal functions
 # Procedural macros
 cleave-macros = { path = "cleave-macros" }
 
-# Single-pass file facts extractor.
-# Owns every binary, archive-index, structured-document, and source-code
-# parser cleave consumes. Goal: cleave never invokes goblin, zip, tar,
-# tree-sitter, or the structured-format parsers directly — every parse
-# is materialised once via filefacts::open() and reused via the typed
-# views on `ParsedFile`.
-filefacts = { git = "https://github.com/atomdrift-project/filefacts.git", default-features = false }
+filefacts = { git = "https://github.com/atomdrift-project/filefacts.git" }
 
 cfb = "0.14"  # Microsoft OLE2/CFBF compound document parsing
 
@@ -388,6 +382,8 @@ opt-level = 3
 # fork together because tree-sitter uses its in-tree tree-sitter-language and
 # Cargo permits only one linked copy in the dependency graph.
 [patch.crates-io]
+# Inherited from a sibling by update-deps: [patch] applies only in the root.
+tree-sitter-bash = { git = "https://github.com/tstromberg/tree-sitter-bash" }
 # NetBSD and Solaris arms for wasmtime's signal trap handler, pulled in via
 # yara-x. Upstream 45.0.3 has neither, so those builds stop at
 # compile_error!("unsupported platform"). The branch name carries the version:

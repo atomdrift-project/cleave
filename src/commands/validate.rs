@@ -1260,10 +1260,13 @@ mod trait_expectation_tests {
             ..Default::default()
         };
         let mapper = std::sync::Arc::new(
+            // Exercise staging and exact findings with normal scan loading.
+            // Authoring issues elsewhere in the external rule pack must not
+            // prevent this regression check from reaching the fixture.
             cleave::CapabilityMapper::try_new_with_load_options(
                 cleave::CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION,
                 cleave::CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION,
-                true,
+                false,
                 false,
             )
             .unwrap(),

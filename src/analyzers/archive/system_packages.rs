@@ -266,6 +266,32 @@ pub(crate) fn list_7z_entries_from_file(path: &Path) -> Result<Vec<ArchiveEntry>
     Ok(entries)
 }
 
+/// Extract a VHD with the existing bounded 7-Zip subprocess path. The virtual
+/// capacity bounds expansion before launching it; unreadable/parent-dependent
+/// images retain an extraction note instead of silently appearing empty.
+pub(crate) fn extract_vhd_from_data(
+    data: &[u8],
+    dest_dir: &Path,
+    guard: &ExtractionGuard,
+) -> Result<()> {
+    let footer = data.last_chunk::<512>().context("Missing VHD footer")?;
+    anyhow::ensure!(&footer[..8] == b"conectix", "Invalid VHD footer");
+    let virtual_size = u64::from_be_bytes(footer[48..56].try_into()?);
+    if virtual_size > MAX_TOTAL_SIZE {
+        guard.add_hostile_reason(HostileArchiveReason::ExcessiveTotalSize(virtual_size));
+        return Ok(());
+    }
+    let temp = tempfile::Builder::new()
+        .prefix("cleave-vhd-")
+        .suffix(".vhd")
+        .tempfile()?;
+    fs::write(temp.path(), data)?;
+    if !crate::analyzers::sfx_detector::run_7z(temp.path(), dest_dir) {
+        guard.add_extraction_note("VHD extraction incomplete: 7-Zip unavailable, unsupported filesystem, or missing parent image".to_string());
+    }
+    Ok(())
+}
+
 /// Extract an Apple disk image (`.dmg` / UDIF) in two stages.
 ///
 /// **Stage 1 — system `7z`/`7zz` on the image directly.** 7-Zip walks the UDIF

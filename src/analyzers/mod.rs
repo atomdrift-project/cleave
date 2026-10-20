@@ -59,6 +59,7 @@ pub(crate) mod font;
 pub(crate) mod inno_long_path;
 pub(crate) mod java_class;
 pub(crate) mod jpeg;
+pub(crate) mod js_string_table;
 pub(crate) mod macho;
 pub(crate) mod media;
 pub(crate) mod office;
@@ -748,6 +749,7 @@ impl FileTypeExt for FileType {
             FileType::Cpio => vec!["cpio", "archive"],
             FileType::Crx => vec!["crx", "archive"],
             FileType::Dmg => vec!["dmg", "archive"],
+            FileType::Vhd => vec!["vhd", "archive"],
             FileType::OciImage => vec!["oci_image", "archive"],
             FileType::Xbps => vec!["xbps", "archive"],
             FileType::GentooBinpkg => vec!["gentoo_binpkg", "archive"],

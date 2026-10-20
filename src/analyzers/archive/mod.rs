@@ -3000,6 +3000,7 @@ impl ArchiveAnalyzer {
             // the embedded Mach-O from APFS images. The host-level `dmg.*`
             // facts come from filefacts regardless of what 7-Zip can extract.
             FileType::Dmg => system_packages::extract_dmg_from_data(data, dest_dir, guard),
+            FileType::Vhd => system_packages::extract_vhd_from_data(data, dest_dir, guard),
             _ => anyhow::bail!("Unsupported archive type: {:?}", file_type),
         }
     }

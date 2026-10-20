@@ -1694,7 +1694,7 @@ fn decode_variation_selector_payload(content: &str) -> Option<(String, usize)> {
 }
 
 /// Analyze a stng-decoded script payload as its own source layer.
-fn analyze_decoded_script_layer(
+pub(crate) fn analyze_decoded_script_layer(
     parent_path: &str,
     decoded: &str,
     offset: u64,

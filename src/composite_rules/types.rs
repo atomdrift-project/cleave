@@ -699,6 +699,9 @@ pub(crate) enum FileType {
     /// Apple disk image (.dmg, UDIF container)
     #[archive]
     Dmg,
+    /// Virtual Hard Disk container (.vhd)
+    #[archive]
+    Vhd,
     /// Ruby gem (.gem)
     #[archive]
     #[package]
@@ -928,6 +931,7 @@ impl From<filefacts::FileType> for FileType {
             Ff::Rpm => Self::Rpm,
             Ff::PkgMacos | Ff::PkgFreebsd | Ff::PkgArch => Self::Pkg,
             Ff::Dmg => Self::Dmg,
+            Ff::Vhd => Self::Vhd,
             Ff::Chm => Self::Chm,
             Ff::Cab => Self::Cab,
             Ff::OciImage => Self::OciImage,
@@ -1344,6 +1348,7 @@ impl FileType {
             Self::Egg => "egg",
             Self::Pkg => "pkg_macos",
             Self::Dmg => "dmg",
+            Self::Vhd => "vhd",
             Self::Gem => "gem",
             Self::Whl => "whl",
             Self::PythonSdist => "python_sdist",

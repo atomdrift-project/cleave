@@ -910,6 +910,26 @@ impl UnifiedSourceAnalyzer {
                     self.cancellation.as_deref(),
                 ),
             );
+            // Reduce only proved constant decoder calls; retain the original
+            // host and expose the result as a separate, bounded source layer.
+            if matches!(self.config.name, "javascript" | "typescript")
+                && let Some(ast) =
+                    source_ctx.and_then(crate::analysis_context::AnalysisContext::source_ast)
+                && let Some(decoded) = crate::analyzers::js_string_table::decode(ast)
+                && let Some(layer) =
+                    crate::analyzers::embedded_code_detector::analyze_decoded_script_layer(
+                        &parent,
+                        &decoded,
+                        0,
+                        FileType::JavaScript,
+                        vec!["js-constant-string-table".to_string()],
+                        &self.engine,
+                        0,
+                        false,
+                    )
+            {
+                report.files.push(layer);
+            }
             // Borrow the host haystack (B1r: Python-in-Rust) instead of
             // `content.to_string()` + `report.strings.clone()` per member.
             let (encoded_layers, plain_findings) =

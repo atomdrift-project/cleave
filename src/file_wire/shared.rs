@@ -8,7 +8,17 @@ use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 
 /// Diagnostic joined format; no shared catalog outside this JSON document.
-pub const VERSION: &str = "joined-1";
+pub const VERSION: &str = "joined-2";
+/// Previous candidate, retaining explicit locality on its analyses.
+pub const LEGACY_VERSION: &str = "joined-1";
+
+fn profiles(joined: &str) -> Result<(&'static str, &'static str)> {
+    match joined {
+        VERSION => Ok((super::VERSION, "split-2")),
+        LEGACY_VERSION => Ok((super::LEGACY_VERSION, "split-1")),
+        _ => anyhow::bail!("unsupported shared profile {joined}"),
+    }
+}
 
 /// A complete occurrence. `a` addresses this document's canonical analysis list.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,7 +84,12 @@ struct Summary {
     analysis_gaps: crate::types::AnalysisGaps,
 }
 
-fn leaf_bytes(file: &File<'_>, rev: Option<&str>, fp: Option<&str>) -> Result<Vec<u8>> {
+fn leaf_bytes(
+    file: &File<'_>,
+    v: &'static str,
+    rev: Option<&str>,
+    fp: Option<&str>,
+) -> Result<Vec<u8>> {
     #[derive(Serialize)]
     struct Leaf<'a, 'b> {
         v: &'static str,
@@ -85,7 +100,7 @@ fn leaf_bytes(file: &File<'_>, rev: Option<&str>, fp: Option<&str>) -> Result<Ve
         files: [&'a File<'b>; 1],
     }
     Ok(serde_json::to_vec(&Leaf {
-        v: super::VERSION,
+        v,
         rev,
         fp,
         files: [file],
@@ -108,6 +123,11 @@ impl<'a> Report<'a> {
     /// Move records into a shared joined representation. Hash/serialize only
     /// records whose nonempty SHA repeats; do not pay that cost on unique files.
     pub fn into_shared(self) -> Result<SharedReport<'a>> {
+        let version = match self.v.as_str() {
+            super::VERSION => VERSION,
+            super::LEGACY_VERSION => LEGACY_VERSION,
+            _ => anyhow::bail!("unsupported file profile {}", self.v),
+        };
         let mut seen = HashSet::new();
         let mut repeated = HashSet::new();
         for f in &self.files {
@@ -153,7 +173,7 @@ impl<'a> Report<'a> {
             files.push(place);
         }
         Ok(SharedReport {
-            v: VERSION.into(),
+            v: version.into(),
             rev: self.rev,
             fp: self.fp,
             files,
@@ -173,19 +193,20 @@ impl<'a> SharedReport<'a> {
     /// Split by exact analysis identity. No SHA-only deduplication or data loss.
     /// Durable analysis IDs/renewal transactions remain a hopper storage concern.
     pub fn split(self) -> Result<(Manifest, Vec<File<'a>>)> {
+        let (flat, split) = profiles(&self.v)?;
         let summaries = self
             .a
             .iter()
             .map(|a| {
                 Ok(summary(
                     a,
-                    &leaf_bytes(a, self.rev.as_deref(), self.fp.as_deref())?,
+                    &leaf_bytes(a, flat, self.rev.as_deref(), self.fp.as_deref())?,
                 ))
             })
             .collect::<Result<_>>()?;
         Ok((
             Manifest {
-                v: "split-1".into(),
+                v: split.into(),
                 rev: self.rev,
                 fp: self.fp,
                 files: self.files,
@@ -198,12 +219,17 @@ impl<'a> SharedReport<'a> {
 
     /// Rejoin a pinned list of canonical leaves with its occurrence manifest.
     pub fn join(manifest: Manifest, analyses: Vec<File<'a>>) -> Result<Self> {
-        anyhow::ensure!(manifest.v == "split-1", "unsupported split profile");
+        let version = match manifest.v.as_str() {
+            "split-2" => VERSION,
+            "split-1" => LEGACY_VERSION,
+            _ => anyhow::bail!("unsupported split profile {}", manifest.v),
+        };
+        let (flat, _) = profiles(version)?;
         anyhow::ensure!(manifest.a.len() == analyses.len(), "missing split analyses");
         for (s, a) in manifest.a.iter().zip(&analyses) {
             let actual = summary(
                 a,
-                &leaf_bytes(a, manifest.rev.as_deref(), manifest.fp.as_deref())?,
+                &leaf_bytes(a, flat, manifest.rev.as_deref(), manifest.fp.as_deref())?,
             );
             anyhow::ensure!(
                 s.key == actual.key
@@ -220,7 +246,7 @@ impl<'a> SharedReport<'a> {
             anyhow::ensure!(p.a < analyses.len(), "invalid analysis index {}", p.a);
         }
         Ok(Self {
-            v: VERSION.into(),
+            v: version.into(),
             rev: manifest.rev,
             fp: manifest.fp,
             files: manifest.files,
@@ -232,7 +258,7 @@ impl<'a> SharedReport<'a> {
     /// Materialize only for the existing renderer/legacy compatibility path.
     /// Direct feature readers keep analyses shared and skip all context bytes.
     pub fn into_loaded(self) -> Result<crate::report_input::LoadedReport> {
-        anyhow::ensure!(self.v == VERSION, "unsupported shared profile");
+        let (flat, _) = profiles(&self.v)?;
         let mut files = Vec::with_capacity(self.files.len());
         let mut remaining = vec![0usize; self.a.len()];
         for p in &self.files {
@@ -258,7 +284,7 @@ impl<'a> SharedReport<'a> {
             files.push(f);
         }
         Report {
-            v: super::VERSION.into(),
+            v: flat.into(),
             rev: self.rev,
             fp: self.fp,
             files,
@@ -270,6 +296,7 @@ impl<'a> SharedReport<'a> {
     /// Native JSONB split benchmark rows: one manifest and one row per exact
     /// analysis, including schema/profile metadata on each independent leaf.
     pub fn storage_rows(&self) -> Result<Vec<Vec<u8>>> {
+        let (flat, split) = profiles(&self.v)?;
         // A standalone file needs no separate placement/leaf transaction.
         if self.files.len() == 1 {
             return Ok(vec![serde_json::to_vec(self)?]);
@@ -289,12 +316,12 @@ impl<'a> SharedReport<'a> {
         let mut rows = Vec::with_capacity(self.a.len() + 1);
         let mut summaries = Vec::with_capacity(self.a.len());
         for a in &self.a {
-            let bytes = leaf_bytes(a, self.rev.as_deref(), self.fp.as_deref())?;
+            let bytes = leaf_bytes(a, flat, self.rev.as_deref(), self.fp.as_deref())?;
             summaries.push(summary(a, &bytes));
             rows.push(bytes);
         }
         let manifest = ManifestRef {
-            v: "split-1",
+            v: split,
             rev: self.rev.as_deref(),
             fp: self.fp.as_deref(),
             files: &self.files,
@@ -405,6 +432,40 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn legacy_shared_and_split_keep_versions_locality_and_leaf_hashes() {
+        let report = fixture();
+        let mut flat = Report::from_analysis(&report).unwrap();
+        flat.v = super::super::LEGACY_VERSION.into();
+        for file in &mut flat.files {
+            file.traits[0].legacy_local = Some(true);
+            file.traits[0].spans = vec![[0, 4]];
+        }
+        let shared = flat.into_shared().unwrap();
+        let expected = serde_json::to_vec(&shared).unwrap();
+        assert_eq!(shared.v, LEGACY_VERSION);
+        let rows = shared.storage_rows().unwrap();
+        let manifest: Manifest = serde_json::from_slice(&rows[0]).unwrap();
+        assert_eq!(manifest.v, "split-1");
+        for (summary, bytes) in manifest.a.iter().zip(&rows[1..]) {
+            assert_eq!(summary.key, hex::encode(Sha256::digest(bytes)));
+            let leaf: Report<'_> = serde_json::from_slice(bytes).unwrap();
+            assert_eq!(leaf.v, super::super::LEGACY_VERSION);
+        }
+        let (manifest, analyses) = shared.split().unwrap();
+        let joined = SharedReport::join(manifest, analyses).unwrap();
+        assert_eq!(serde_json::to_vec(&joined).unwrap(), expected);
+        let decoded = crate::report_input::decode(&expected).unwrap();
+        assert!(
+            decoded
+                .report
+                .files
+                .iter()
+                .all(|f| f.render_locality == vec![true])
+        );
+        assert!(crate::file_wire::features::FeatureReport::from_slice(&expected).is_ok());
     }
 
     #[test]

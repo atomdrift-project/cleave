@@ -136,7 +136,7 @@ impl FeatureReport {
         }
         let header: Header = serde_json::from_slice(bytes)?;
         let report = match header.v.as_str() {
-            super::VERSION => {
+            super::VERSION | super::LEGACY_VERSION => {
                 #[derive(Deserialize)]
                 struct Flat {
                     #[serde(default)]
@@ -168,7 +168,7 @@ impl FeatureReport {
                     analyses,
                 }
             }
-            super::shared::VERSION => {
+            super::shared::VERSION | super::shared::LEGACY_VERSION => {
                 #[derive(Deserialize)]
                 struct Joined {
                     #[serde(default)]

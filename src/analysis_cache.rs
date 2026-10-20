@@ -320,11 +320,24 @@ impl ReportFlight {
             .unwrap_or_default()
     }
 
+    /// Release an unused observer before running an independent fallback.
+    /// Keeping it alive through that work makes the owner copy and retain a
+    /// report that this caller will never consume.
+    pub(crate) fn run_independently<T>(self, work: impl FnOnce() -> T) -> T {
+        drop(self);
+        work()
+    }
+
     /// Publish the completed report to waiters and release the flight. The
-    /// report is copied once into an Arc; waiters then clone the cheap Arc
-    /// payload into their path-restamped result.
+    /// report is copied once into an Arc when waiters exist; otherwise the
+    /// flight retires without copying any report storage.
     pub(crate) fn complete(mut self, report: Option<&AnalysisReport>) {
         if !self.owner || self.completed {
+            return;
+        }
+        if release_unobserved_flight(&self.key, &self.state) {
+            self.completed = true;
+            release_owned(&self.key);
             return;
         }
         {
@@ -341,6 +354,29 @@ impl ReportFlight {
         remove_flight(&self.key, &self.state);
         self.completed = true;
         release_owned(&self.key);
+    }
+}
+
+/// Remove an owner-only flight atomically with respect to new followers.
+/// Every follower obtains its strong reference under this same map lock in
+/// `acquire_flight`. With the lock held, a count of one means nobody can read
+/// a published result, and removing the weak entry prevents a later caller
+/// from joining this retired state. Flights with waiters keep the existing
+/// publish-then-remove path, including callers arriving during the copy.
+fn release_unobserved_flight(key: &FlightKey, state: &Arc<FlightState>) -> bool {
+    let flights = IN_FLIGHT.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut flights = flights
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if Arc::strong_count(state) == 1
+        && flights
+            .get(key)
+            .is_some_and(|current| std::ptr::eq(current.as_ptr(), Arc::as_ptr(state)))
+    {
+        flights.remove(key);
+        true
+    } else {
+        false
     }
 }
 
@@ -1872,6 +1908,95 @@ mod tests {
         let shared = follower.wait().expect("follower should receive report");
         assert_eq!(shared.target.sha256, sha);
         assert_eq!(shared.target.file_type, "elf");
+    }
+
+    #[test]
+    fn completed_flights_preserve_waiters_across_generations() {
+        let sha = "flight-generation-regression-unique";
+        let options = AnalysisOptions::default();
+        let settings = settings_of(&options);
+        let first = acquire_report_flight(sha, "python", &options, &settings);
+        let first_waiter = acquire_report_flight(sha, "python", &options, &settings);
+        let mut first_report = test_report(sha);
+        first_report.target.path = "first.py".to_string();
+        first.complete(Some(&first_report));
+
+        let second = acquire_report_flight(sha, "python", &options, &settings);
+        assert!(second.is_owner());
+        let second_waiter = acquire_report_flight(sha, "python", &options, &settings);
+        let mut second_report = test_report(sha);
+        second_report.target.path = "second.py".to_string();
+        second.complete(Some(&second_report));
+
+        assert_eq!(first_waiter.wait().unwrap().target.path, "first.py");
+        assert_eq!(second_waiter.wait().unwrap().target.path, "second.py");
+    }
+
+    #[test]
+    fn independent_fallback_releases_observer_before_owner_completion() {
+        let sha = "independent-observer-release-regression";
+        let options = AnalysisOptions::default();
+        let settings = settings_of(&options);
+        let owner = acquire_member_flight(sha, "python", &options, &settings);
+        let observer = acquire_member_flight(sha, "python", &options, &settings);
+        assert!(owner.is_owner());
+        assert!(!observer.is_owner());
+        let weak = Arc::downgrade(&owner.state);
+        observer.run_independently(|| {
+            assert_eq!(
+                weak.strong_count(),
+                1,
+                "unused observer must be gone before fallback work"
+            );
+            owner.complete(Some(&test_report(sha)));
+            assert!(
+                weak.upgrade().is_none(),
+                "fallback must not retain the owner's report"
+            );
+        });
+    }
+
+    #[test]
+    fn independent_fallback_preserves_real_waiters() {
+        let sha = "independent-observer-keeps-real-waiter";
+        let options = AnalysisOptions::default();
+        let settings = settings_of(&options);
+        let owner = acquire_member_flight(sha, "python", &options, &settings);
+        let observer = acquire_member_flight(sha, "python", &options, &settings);
+        let waiter = acquire_member_flight(sha, "python", &options, &settings);
+        assert!(!observer.is_owner());
+        assert!(!waiter.is_owner());
+        observer.run_independently(|| owner.complete(Some(&test_report(sha))));
+        assert_eq!(
+            waiter
+                .wait()
+                .expect("real waiter receives owner result")
+                .target
+                .sha256,
+            sha
+        );
+    }
+
+    #[test]
+    fn owner_only_completion_releases_the_member_slot() {
+        let sha = "unobserved-member-regression-unique";
+        let options = AnalysisOptions::default();
+        let settings = settings_of(&options);
+        let owner = acquire_member_flight(sha, "python", &options, &settings);
+        assert!(owner.is_owner());
+        let owned_before = OWNED_FLIGHTS.with(std::cell::Cell::get);
+        owner.complete(Some(&test_report(sha)));
+        assert_eq!(OWNED_FLIGHTS.with(std::cell::Cell::get), owned_before - 1);
+
+        let next = acquire_member_flight(sha, "python", &options, &settings);
+        assert!(
+            next.is_owner(),
+            "a retired flight must not strand a later caller"
+        );
+        let follower = acquire_member_flight(sha, "python", &options, &settings);
+        next.complete(Some(&test_report(sha)));
+        assert_eq!(follower.wait().unwrap().target.sha256, sha);
+        assert_eq!(OWNED_FLIGHTS.with(std::cell::Cell::get), owned_before - 1);
     }
 
     #[test]

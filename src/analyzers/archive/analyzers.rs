@@ -244,6 +244,26 @@ thread_local! {
     static MEMBER_ANALYSIS_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+/// Retain the caller's bounded Rayon ownership while providing stack headroom.
+/// A joined std::thread lost that thread-local context, leaving nested archives
+/// serial while multiple top-level reports remained resident. Stack growth
+/// stays on the same thread and cannot create an extra parallel owner.
+fn with_nested_archive_stack<T>(work: impl FnOnce() -> Result<T>) -> Result<T> {
+    const RED_ZONE: usize = 8 * 1024 * 1024;
+    const STACK_SIZE: usize = 16 * 1024 * 1024;
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        stacker::maybe_grow(RED_ZONE, STACK_SIZE, work)
+    }))
+    .map_err(|error| {
+        let message = error
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| error.downcast_ref::<&str>().copied())
+            .unwrap_or("unknown panic payload");
+        anyhow::anyhow!("Nested archive analysis panicked: {message}")
+    })?
+}
+
 /// Filter-map `items` in parallel for the top archive, sequentially for nested
 /// archives.
 ///
@@ -453,6 +473,38 @@ fn par_filter_fold_members<T, U, F>(
     // entries above, so every Some folds exactly once, in order.
 }
 
+/// Consume member buffers as each analysis finishes, before ordered result
+/// delivery can wait for a slower predecessor. Scheduling and fold order are
+/// shared with the borrowed path; only the input lifetime differs.
+fn par_filter_fold_owned_members<T, U>(
+    items: impl IntoIterator<Item = T>,
+    parallel: bool,
+    heavy: impl Fn(&T) -> bool,
+    analyze: impl Fn(&T) -> Option<U> + Sync + Send,
+    fold: impl FnMut(U) + Send,
+) where
+    T: Send,
+    U: Send,
+{
+    // The scheduler borrows its input slice. Each slot transfers ownership to
+    // its one analysis invocation; the lock is released before analysis (and
+    // any recursive archive work), and is never contended.
+    let slots: Vec<_> = items
+        .into_iter()
+        .map(|item| (heavy(&item), parking_lot::Mutex::new(Some(item))))
+        .collect();
+    par_filter_fold_members(
+        &slots,
+        parallel,
+        |slot| slot.0,
+        |slot| {
+            let item = slot.1.lock().take()?;
+            analyze(&item)
+        },
+        fold,
+    );
+}
+
 /// Result of analyzing a single archive member, collected lock-free during par_iter
 /// and aggregated single-threaded afterwards.
 struct MemberAnalysisResult {
@@ -465,7 +517,7 @@ struct MemberAnalysisResult {
 
 struct MemoryArchiveMember {
     relative_path: String,
-    data: Vec<u8>,
+    data: super::member_data::MemberData,
     file_type: FileType,
     sha256: String,
     container_kind: Option<String>,
@@ -1202,8 +1254,8 @@ impl<'a: 'scope, 'scope> MemberWindow<'a, 'scope> {
             let mut acc = MemberAccumulator::default();
             while let Ok(batch) = rx.recv() {
                 let parallel = analyzer.members_run_parallel(batch.len());
-                par_filter_fold_members(
-                    &batch,
+                par_filter_fold_owned_members(
+                    batch,
                     parallel,
                     |member| member_is_heavy(member.data.len()),
                     |member| analyzer.analyze_one_member(member, slow_log_label),
@@ -1251,8 +1303,8 @@ impl<'a: 'scope, 'scope> MemberWindow<'a, 'scope> {
         let label = self.slow_log_label;
         let parallel = analyzer.members_run_parallel(self.window.len());
         let acc = &mut self.acc;
-        par_filter_fold_members(
-            &self.window,
+        par_filter_fold_owned_members(
+            self.window.drain(..),
             parallel,
             |member| member_is_heavy(member.data.len()),
             |member| analyzer.analyze_one_member(member, label),
@@ -1475,7 +1527,7 @@ impl ArchiveAnalyzer {
             });
             window.push(MemoryArchiveMember {
                 relative_path,
-                data: file_data,
+                data: file_data.into(),
                 file_type,
                 sha256,
                 container_kind: None,
@@ -1855,13 +1907,15 @@ impl ArchiveAnalyzer {
                     "Archive member flight busy while owning another; analyzing independently"
                 );
                 crate::rayon_nest::note_independent_member_analysis();
-                return self.analyze_extracted_member_uncached(
-                    file_path,
-                    relative_path,
-                    data,
-                    file_type,
-                    sha256,
-                );
+                return flight.run_independently(|| {
+                    self.analyze_extracted_member_uncached(
+                        file_path,
+                        relative_path,
+                        data,
+                        file_type,
+                        sha256,
+                    )
+                });
             }
             // Only a member worth deduplicating is worth waiting for. The
             // owner of a small member's flight can be diverted for tens of
@@ -1877,13 +1931,15 @@ impl ArchiveAnalyzer {
                     "Archive member flight busy; member below the wait floor, analyzing independently"
                 );
                 crate::rayon_nest::note_independent_member_analysis();
-                return self.analyze_extracted_member_uncached(
-                    file_path,
-                    relative_path,
-                    data,
-                    file_type,
-                    sha256,
-                );
+                return flight.run_independently(|| {
+                    self.analyze_extracted_member_uncached(
+                        file_path,
+                        relative_path,
+                        data,
+                        file_type,
+                        sha256,
+                    )
+                });
             }
             // On a pool worker, wait by running this lane's own pending jobs
             // rather than parking (or, as before, re-analyzing the same
@@ -1930,13 +1986,15 @@ impl ArchiveAnalyzer {
                         "Archive member flight busy; waiter cap reached, analyzing independently"
                     );
                     crate::rayon_nest::note_independent_member_analysis();
-                    return self.analyze_extracted_member_uncached(
-                        file_path,
-                        relative_path,
-                        data,
-                        file_type,
-                        sha256,
-                    );
+                    return flight.run_independently(|| {
+                        self.analyze_extracted_member_uncached(
+                            file_path,
+                            relative_path,
+                            data,
+                            file_type,
+                            sha256,
+                        )
+                    });
                 }
                 let w = flight.wait_yielding(deadline);
                 if counted {
@@ -1946,13 +2004,15 @@ impl ArchiveAnalyzer {
                     Some(w) => w,
                     None => {
                         crate::rayon_nest::note_independent_member_analysis();
-                        return self.analyze_extracted_member_uncached(
-                            file_path,
-                            relative_path,
-                            data,
-                            file_type,
-                            sha256,
-                        );
+                        return flight.run_independently(|| {
+                            self.analyze_extracted_member_uncached(
+                                file_path,
+                                relative_path,
+                                data,
+                                file_type,
+                                sha256,
+                            )
+                        });
                     }
                 }
             } else {
@@ -1960,13 +2020,15 @@ impl ArchiveAnalyzer {
                     Some(w) => w,
                     None => {
                         crate::rayon_nest::note_independent_member_analysis();
-                        return self.analyze_extracted_member_uncached(
-                            file_path,
-                            relative_path,
-                            data,
-                            file_type,
-                            sha256,
-                        );
+                        return flight.run_independently(|| {
+                            self.analyze_extracted_member_uncached(
+                                file_path,
+                                relative_path,
+                                data,
+                                file_type,
+                                sha256,
+                            )
+                        });
                     }
                 }
             };
@@ -1992,13 +2054,16 @@ impl ArchiveAnalyzer {
                         differing = ?self.engine.rules().paths_inequivalent_inputs(owner_path, relative_path),
                         "Archive member single-flight hit is path-bound; analyzing independently"
                     );
-                    return self.analyze_extracted_member_uncached(
-                        file_path,
-                        relative_path,
-                        data,
-                        file_type,
-                        sha256,
-                    );
+                    drop(report);
+                    return flight.run_independently(|| {
+                        self.analyze_extracted_member_uncached(
+                            file_path,
+                            relative_path,
+                            data,
+                            file_type,
+                            sha256,
+                        )
+                    });
                 }
                 crate::restamp_path_derived_values(&mut report, Path::new(relative_path));
                 tracing::debug!(sha256, relative_path, "Archive member single-flight hit");
@@ -2006,13 +2071,9 @@ impl ArchiveAnalyzer {
             }
             // The owner failed before publishing a report. Retry once through
             // the normal path so a waiter is not turned into a false success.
-            return self.analyze_extracted_member(
-                file_path,
-                relative_path,
-                data,
-                file_type,
-                sha256,
-            );
+            return flight.run_independently(|| {
+                self.analyze_extracted_member(file_path, relative_path, data, file_type, sha256)
+            });
         }
 
         let result = self.analyze_extracted_member_uncached(
@@ -2145,13 +2206,9 @@ impl ArchiveAnalyzer {
                 // submits work to the rayon pool via `in_worker_cold` and
                 // blocks on a LockLatch waiting for a rayon worker to pick it
                 // up — but every rayon worker is already blocked in join.
-                //
-                // Detecting the rayon context via `current_thread_index()` and
-                // recursing in-place breaks the cycle. Off-pool callers (e.g.
-                // the tokio blocking task that first enters classify_file for
-                // a top-level archive) still spawn a dedicated std::thread so
-                // they get the 8 MB stack that the original fix was added
-                // for.
+                // Off-pool callers also stay on their calling thread, growing
+                // its stack when necessary. A joined std::thread gave them
+                // headroom but lost their top-level parallel-owner context.
                 let nested_result = if rayon::current_thread_index().is_some() {
                     tracing::debug!(
                         relative_path,
@@ -2161,43 +2218,13 @@ impl ArchiveAnalyzer {
                     );
                     nested.analyze_archive_with_data(data, &path).map(Some)
                 } else {
-                    // Truncate relative_path in the thread name so it fits in
-                    // the 15-char pthread limit on Linux — but keep enough
-                    // tail for the crash message to identify the offending
-                    // member.
-                    let thread_name = {
-                        let tail: String = relative_path
-                            .chars()
-                            .rev()
-                            .take(40)
-                            .collect::<Vec<_>>()
-                            .into_iter()
-                            .rev()
-                            .collect();
-                        format!("nested-ar-d{nested_depth}-{tail}")
-                    };
-                    tracing::info!(
+                    tracing::debug!(
                         relative_path,
                         nested_depth,
                         file_size_bytes = data.len(),
-                        thread_name = %thread_name,
-                        "Spawning nested archive analyzer thread (off-pool caller)"
+                        "Analyzing nested archive on caller's guarded stack"
                     );
-                    let nested_data = data.to_vec();
-                    std::thread::Builder::new()
-                        .name(thread_name)
-                        .stack_size(8 * 1024 * 1024)
-                        .spawn(move || nested.analyze_archive_with_data(&nested_data, &path))
-                        .map_err(|e| anyhow::anyhow!("Failed to spawn nested archive thread: {e}"))?
-                        .join()
-                        .map_err(|e| {
-                            let msg = e
-                                .downcast_ref::<String>()
-                                .map(String::as_str)
-                                .or_else(|| e.downcast_ref::<&str>().copied())
-                                .unwrap_or("unknown panic payload");
-                            anyhow::anyhow!("Nested archive thread panicked: {msg}")
-                        })?
+                    with_nested_archive_stack(|| nested.analyze_archive_with_data(data, &path))
                         .map(Some)
                 };
 
@@ -2383,7 +2410,11 @@ impl ArchiveAnalyzer {
                     report.identity = ctx.identity();
                 }
                 if report.filefacts.is_none() {
-                    let view = crate::types::FilefactsView::from_ctx(ctx);
+                    let view = if self.engine.compact_members() {
+                        crate::types::FilefactsView::from_ctx_compact(ctx)
+                    } else {
+                        crate::types::FilefactsView::from_ctx(ctx)
+                    };
                     if !view.is_empty() {
                         report.filefacts = Some(view);
                     }
@@ -2490,7 +2521,11 @@ impl ArchiveAnalyzer {
             if let Some(ctx) = ctx.as_ref() {
                 report.strings = crate::strings::StringExtractor::default()
                     .convert_stng_strings(&ctx.text_rows());
-                let view = crate::types::FilefactsView::from_ctx(ctx);
+                let view = if self.engine.compact_members() {
+                    crate::types::FilefactsView::from_ctx_compact(ctx)
+                } else {
+                    crate::types::FilefactsView::from_ctx(ctx)
+                };
                 if !view.is_empty() {
                     report.filefacts = Some(view);
                 }
@@ -2699,7 +2734,7 @@ impl ArchiveAnalyzer {
                 let sha256 = calculate_sha256(&file_data);
                 let member = MemoryArchiveMember {
                     relative_path,
-                    data: file_data,
+                    data: file_data.into(),
                     file_type,
                     sha256,
                     container_kind: None,
@@ -2952,7 +2987,7 @@ impl ArchiveAnalyzer {
                 let sha256 = calculate_sha256(&file_data);
                 let member = MemoryArchiveMember {
                     relative_path,
-                    data: file_data,
+                    data: file_data.into(),
                     file_type,
                     sha256,
                     container_kind: None,
@@ -3121,7 +3156,8 @@ impl ArchiveAnalyzer {
                 }
 
                 let size = match entry.header().size() {
-                    Ok(s) => s,
+                    // Entry::size also honors a PAX logical-size override.
+                    Ok(_) => entry.size(),
                     Err(e) => {
                         stop_reason = Some(e.into());
                         break;
@@ -3135,7 +3171,7 @@ impl ArchiveAnalyzer {
                     continue;
                 }
 
-                let mut file_data = Vec::with_capacity(size.min(16 * 1024 * 1024) as usize);
+                let mut file_data = super::member_data::MemberData::for_tar(size);
                 let mut limited = LimitedReader::new(&mut entry, MAX_FILE_SIZE);
                 let mut buf = [0u8; 65536];
                 let mut written = 0u64;
@@ -3157,7 +3193,13 @@ impl ArchiveAnalyzer {
                     if n == 0 {
                         break;
                     }
-                    file_data.extend_from_slice(&buf[..n]);
+                    if let Err(error) = file_data.append(&buf[..n]) {
+                        read_err = Some(
+                            anyhow::Error::from(error)
+                                .context(format!("Failed to extract: {}", entry_name)),
+                        );
+                        break;
+                    }
                     written += n as u64;
                 }
                 // A stream cut inside this member (truncated download, damaged
@@ -3305,7 +3347,7 @@ impl ArchiveAnalyzer {
         let mut class_scores = vec![0usize; class_members.len()];
         let triage_results =
             self.triage_jar_classes(self.yara_engine.as_deref(), &class_members, |m| {
-                Some(std::borrow::Cow::Borrowed(m.data.as_slice()))
+                Some(std::borrow::Cow::Borrowed(&m.data[..]))
             });
         for triage in triage_results {
             class_scores[triage.index] = triage.score;
@@ -3470,7 +3512,7 @@ impl ArchiveAnalyzer {
             let sha256 = calculate_sha256(&m.data);
             members.push(MemoryArchiveMember {
                 relative_path: m.relative_path,
-                data: m.data,
+                data: m.data.into(),
                 file_type,
                 sha256,
                 container_kind: None,
@@ -3495,7 +3537,7 @@ impl ArchiveAnalyzer {
             .with_analysis_options(std::sync::Arc::new(chm_options));
 
         chm_analyzer.analyze_in_memory_members(
-            &members,
+            members,
             archive_path,
             report,
             start,
@@ -3607,7 +3649,7 @@ impl ArchiveAnalyzer {
                 let sha256 = calculate_sha256(file_data);
                 let member = MemoryArchiveMember {
                     relative_path,
-                    data: file_data.to_vec(),
+                    data: file_data.to_vec().into(),
                     file_type,
                     sha256,
                     container_kind: None,
@@ -3738,7 +3780,7 @@ impl ArchiveAnalyzer {
                 let sha256 = calculate_sha256(&file_data);
                 window.push(MemoryArchiveMember {
                     relative_path,
-                    data: file_data,
+                    data: file_data.into(),
                     file_type,
                     sha256,
                     container_kind: None,
@@ -3756,11 +3798,11 @@ impl ArchiveAnalyzer {
     }
 
     /// Run the par_iter analysis + aggregation over a prebuilt
-    /// `Vec<MemoryArchiveMember>`. Used by both the ZIP and PyInstaller
+    /// `Vec<MemoryArchiveMember>`. Used by both the CHM and PyInstaller
     /// in-memory paths.
     fn analyze_in_memory_members(
         &self,
-        members: &[MemoryArchiveMember],
+        members: Vec<MemoryArchiveMember>,
         archive_path: &Path,
         report: &mut AnalysisReport,
         start: std::time::Instant,
@@ -3777,9 +3819,9 @@ impl ArchiveAnalyzer {
         );
 
         let mut acc = MemberAccumulator::default();
-        par_filter_fold_members(
+        par_filter_fold_owned_members(
             members,
-            self.members_run_parallel(members.len()),
+            self.members_run_parallel(total_files),
             |member| member_is_heavy(member.data.len()),
             |member| self.analyze_one_member(member, slow_log_label),
             |result| acc.fold(result, &self.engine),
@@ -3922,14 +3964,14 @@ impl ArchiveAnalyzer {
 
         let members: Vec<MemoryArchiveMember> = mem
             .entries
-            .iter()
+            .into_iter()
             .map(|entry| {
                 let logical = Path::new(&entry.name);
                 let file_type = crate::analyzers::detect_file_type_from_data(logical, &entry.data);
                 let sha256 = calculate_sha256(&entry.data);
                 MemoryArchiveMember {
-                    relative_path: entry.name.clone(),
-                    data: entry.data.clone(),
+                    relative_path: entry.name,
+                    data: entry.data.into(),
                     file_type,
                     sha256,
                     container_kind: Some(pyinstaller_entry_kind(entry.kind).to_string()),
@@ -3947,8 +3989,25 @@ impl ArchiveAnalyzer {
                 .map(|m| m.sha256.clone())
         });
 
+        // The inventory is the only later consumer of member bytes. Capture
+        // its small metadata now so analysis can release each owned buffer.
+        let entries: Vec<_> = members
+            .iter()
+            .map(|member| {
+                let entry_path = self.format_entry_path(&member.relative_path);
+                let metadata = archive_entry_metadata(
+                    entry_path,
+                    Path::new(&member.relative_path),
+                    &member.file_type,
+                    member.sha256.clone(),
+                    &member.data,
+                    member.container_kind.clone(),
+                );
+                archive_entry_json(&metadata)
+            })
+            .collect();
         self.analyze_in_memory_members(
-            &members,
+            members,
             archive_path,
             report,
             start,
@@ -4045,27 +4104,8 @@ impl ArchiveAnalyzer {
             }
             kv.insert("type_counts".into(), serde_json::Value::Object(counts));
         }
-        if !members.is_empty() {
-            kv.insert(
-                "entries".into(),
-                serde_json::Value::Array(
-                    members
-                        .iter()
-                        .map(|member| {
-                            let entry_path = self.format_entry_path(&member.relative_path);
-                            let metadata = archive_entry_metadata(
-                                entry_path,
-                                Path::new(&member.relative_path),
-                                &member.file_type,
-                                member.sha256.clone(),
-                                &member.data,
-                                member.container_kind.clone(),
-                            );
-                            archive_entry_json(&metadata)
-                        })
-                        .collect(),
-                ),
-            );
+        if !entries.is_empty() {
+            kv.insert("entries".into(), serde_json::Value::Array(entries));
         }
         report.merge_kv_subtree("pyinstaller", serde_json::Value::Object(kv));
 
@@ -4855,6 +4895,50 @@ impl ArchiveAnalyzer {
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    #[test]
+    fn owned_members_release_inputs_before_ordered_fold() {
+        use super::par_filter_fold_owned_members;
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        struct Input {
+            index: usize,
+            dropped: Arc<Vec<AtomicUsize>>,
+        }
+        impl Drop for Input {
+            fn drop(&mut self) {
+                self.dropped[self.index].fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        for parallel in [false, true] {
+            let dropped = Arc::new((0..32).map(|_| AtomicUsize::new(0)).collect::<Vec<_>>());
+            let inputs = (0..32).map(|index| Input {
+                index,
+                dropped: Arc::clone(&dropped),
+            });
+            let mut folded = Vec::new();
+            par_filter_fold_owned_members(
+                inputs,
+                parallel,
+                |input| input.index % 3 == 0,
+                |input| {
+                    assert_eq!(input.dropped[input.index].load(Ordering::SeqCst), 0);
+                    // A skipped or failed member still releases its buffer.
+                    (input.index % 5 != 0).then_some(input.index)
+                },
+                |index| {
+                    assert_eq!(dropped[index].load(Ordering::SeqCst), 1);
+                    folded.push(index);
+                },
+            );
+            assert_eq!(folded, (0..32).filter(|i| i % 5 != 0).collect::<Vec<_>>());
+            assert!(dropped.iter().all(|n| n.load(Ordering::SeqCst) == 1));
+        }
+    }
+
     use super::{
         ArchiveAnalyzer, archive_entry_json, archive_entry_metadata, is_interesting_jar_resource,
         jar_class_triage_score, jar_inline_alert_ids, jar_nest_companion_indices,
@@ -5164,6 +5248,85 @@ mod tests {
             all_files_analyzer.archive_member_analysis_skip_reason(&FileType::Html, "member"),
             None
         );
+    }
+
+    #[test]
+    fn nested_archive_stack_preserves_owner_and_stack_headroom() {
+        let counters = crate::rayon_nest::isolate_counters();
+        let first = crate::rayon_nest::enter_toplevel_analysis_on(false);
+        let second = crate::rayon_nest::enter_toplevel_analysis_on(false);
+        assert_eq!(counters.toplevel_in_flight(), 2);
+        assert!(crate::rayon_nest::inner_work_parallel());
+        assert_eq!(counters.inner_owners(), 1);
+        let caller = std::thread::current().id();
+        super::with_nested_archive_stack(|| {
+            assert_eq!(std::thread::current().id(), caller);
+            assert!(crate::rayon_nest::inner_work_parallel());
+            assert_eq!(counters.inner_owners(), 1, "must borrow the existing owner");
+            assert!(stacker::remaining_stack().is_some_and(|bytes| bytes >= 8 * 1024 * 1024));
+            Ok(())
+        })
+        .expect("nested stack boundary");
+        assert_eq!(counters.inner_owners(), 1);
+        drop(second);
+        drop(first);
+        assert_eq!(counters.inner_owners(), 0);
+        assert_eq!(counters.toplevel_in_flight(), 0);
+    }
+
+    #[test]
+    #[allow(clippy::panic, reason = "exercise the nested analyzer panic boundary")]
+    fn nested_archive_stack_keeps_panic_as_an_analysis_error() {
+        let error = super::with_nested_archive_stack::<()>(|| panic!("nested stack fixture"))
+            .expect_err("nested panic must not escape the analysis boundary");
+        assert_eq!(
+            error.to_string(),
+            "Nested archive analysis panicked: nested stack fixture"
+        );
+    }
+
+    #[test]
+    fn off_pool_nested_archive_keeps_member_bytes_and_metadata() {
+        use std::io::{Cursor, Write};
+
+        assert!(rayon::current_thread_index().is_none());
+        let source = b"#!/usr/bin/env python3\nprint('nested archive fixture')\n";
+        let mut writer = ::zip::ZipWriter::new(Cursor::new(Vec::new()));
+        writer
+            .start_file("run.py", ::zip::write::SimpleFileOptions::default())
+            .expect("start member");
+        writer.write_all(source).expect("write member");
+        let data = writer.finish().expect("finish archive").into_inner();
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("nested.zip");
+        std::fs::write(&path, &data).expect("write archive");
+        let report = ArchiveAnalyzer::new()
+            .analyze_extracted_file(&path)
+            .expect("analyze nested archive off pool");
+        assert_eq!(report.target.file_type, "zip");
+        let member = report
+            .files
+            .iter()
+            .find(|file| file.path.ends_with("run.py"))
+            .expect("retain analyzed member");
+        assert_eq!(member.file_type, "python");
+        assert_eq!(member.size, source.len() as u64);
+        assert_eq!(member.sha256, super::calculate_sha256(source));
+        assert!(
+            report
+                .archive_contents
+                .iter()
+                .any(|entry| entry.path == "run.py")
+        );
+        // The lower-level archive helper records its ordinary member summary
+        // in this list; no additional extraction or analysis error is expected.
+        assert_eq!(
+            report.metadata.errors.len(),
+            1,
+            "{:?}",
+            report.metadata.errors
+        );
+        assert!(report.metadata.errors[0].starts_with("ZIP archive: 1 members, 1 analyzed, "));
     }
 
     #[test]

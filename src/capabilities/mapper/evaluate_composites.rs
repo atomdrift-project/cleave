@@ -9,10 +9,26 @@
 use crate::capabilities::indexes::TraitBitSet;
 use crate::composite_rules::PathQuery;
 use crate::composite_rules::{
-    Arch, EvaluationContext, FileType as RuleFileType, SectionMap, TypeMask,
+    Arch, EvaluationContext, FileType as RuleFileType, FindingScope, SectionMap, TypeMask,
 };
 use crate::types::{AnalysisReport, Criticality, Evidence, Finding, FindingKind};
+use std::borrow::Cow;
 use std::collections::HashMap;
+
+// Parent re-evaluation changes only these fields. Keep the report borrowed as
+// the original metadata snapshot, retaining only scalar edits between files.
+struct FindingDowngrade {
+    index: usize,
+    crit: Criticality,
+    downgraded: bool,
+}
+
+impl FindingDowngrade {
+    fn apply(&self, findings: &mut [Finding]) {
+        findings[self.index].crit = self.crit;
+        findings[self.index].downgraded = self.downgraded;
+    }
+}
 
 fn immediate_parent_path(path: &str) -> Option<&str> {
     match (path.rfind("!!"), path.rfind("##")) {
@@ -38,37 +54,35 @@ impl super::CapabilityMapper {
             return;
         }
 
-        // Most members have no finding with an explicit parent-aware
-        // downgrade. Do not clone the aggregate parent findings or build its
-        // evaluation indexes for those members: on large archives that turns
-        // a no-op pass into quadratic work over the complete finding pool.
+        // Most members have no explicit parent-aware downgrade at all. Avoid
+        // evaluating every archive member just to discover there is nothing
+        // to re-evaluate. Retain parent-before-child order
+        // for the affected files so descendants see any parent downgrades.
         let composite_by_id = self.composite_id_index();
+        let has_parent_downgrade = |finding: &Finding| {
+            self.trait_id_map
+                .get(finding.id.as_str())
+                .and_then(|&idx| self.trait_definitions[idx].downgrade.as_ref())
+                .or_else(|| {
+                    composite_by_id
+                        .get(finding.id.as_str())
+                        .and_then(|&idx| self.composite_rules[idx].downgrade.as_ref())
+                })
+                .is_some_and(|downgrade| {
+                    matches!(
+                        downgrade.scope,
+                        Some(
+                            crate::composite_rules::Scope::Parent
+                                | crate::composite_rules::Scope::FileOrParent
+                        )
+                    )
+                })
+        };
         let mut order: Vec<usize> = report
             .files
             .iter()
             .enumerate()
-            .filter(|(_, file)| {
-                file.depth > 0
-                    && file.findings.iter().any(|finding| {
-                        self.trait_id_map
-                            .get(finding.id.as_str())
-                            .and_then(|&idx| self.trait_definitions[idx].downgrade.as_ref())
-                            .or_else(|| {
-                                composite_by_id
-                                    .get(finding.id.as_str())
-                                    .and_then(|&idx| self.composite_rules[idx].downgrade.as_ref())
-                            })
-                            .is_some_and(|downgrade| {
-                                matches!(
-                                    downgrade.scope,
-                                    Some(
-                                        crate::composite_rules::Scope::Parent
-                                            | crate::composite_rules::Scope::FileOrParent
-                                    )
-                                )
-                            })
-                    })
-            })
+            .filter(|(_, file)| file.depth > 0 && file.findings.iter().any(has_parent_downgrade))
             .map(|(idx, _)| idx)
             .collect();
         if order.is_empty() {
@@ -85,13 +99,11 @@ impl super::CapabilityMapper {
         path_order.sort_unstable_by(|&left, &right| {
             report.files[left].path.cmp(&report.files[right].path)
         });
-        // Parent findings and type are supplied separately; retain the root
-        // report's other metadata for the evaluation context. Clear root
-        // findings from nested contexts because EvaluationContext combines
-        // report findings with additional findings.
-        let root_report = report.clone();
-        let mut nested_parent_report = report.clone();
-        nested_parent_report.findings.clear();
+        // Context metadata must see the initial report, while immediate-parent
+        // findings must include earlier downgrades. Defer writes to the report
+        // and overlay only those scalar edits on the immediate parent. This
+        // avoids retaining two deep copies of the entire archive report.
+        let mut updates: HashMap<usize, Vec<FindingDowngrade>> = HashMap::new();
         let section_map = SectionMap::default();
 
         for idx in order {
@@ -99,12 +111,12 @@ impl super::CapabilityMapper {
                 let child = &report.files[idx];
                 (child.parent_id, child.depth)
             };
-            if depth == 0 {
-                continue;
-            }
-
-            let (parent_findings, parent_bytes, parent_type, parent_report) = if depth == 1 {
-                (report.findings.clone(), root_bytes, root_type, &root_report)
+            let (parent_findings, parent_bytes, parent_type) = if depth == 1 {
+                (
+                    Cow::Borrowed(report.findings.as_slice()),
+                    root_bytes,
+                    root_type,
+                )
             } else {
                 let parent_idx = parent_id
                     .and_then(|id| file_indices.get(&id).copied())
@@ -121,22 +133,43 @@ impl super::CapabilityMapper {
                     continue;
                 };
                 let parent = &report.files[parent_idx];
+                let mut parent_findings = Cow::Borrowed(parent.findings.as_slice());
+                if let Some(edits) = updates.get(&parent_idx) {
+                    for edit in edits {
+                        edit.apply(parent_findings.to_mut());
+                    }
+                }
                 (
-                    parent.findings.clone(),
+                    parent_findings,
                     &[][..],
                     RuleFileType::from_str(&parent.file_type),
-                    &nested_parent_report,
                 )
             };
-
-            self.reeval_downgrades_parent_scope(
-                &mut report.files[idx].findings,
-                &parent_findings,
-                parent_report,
+            // Root contexts retain their original own+extra finding order;
+            // nested contexts exclude all more distant ancestor findings.
+            let own_findings = if depth == 1 {
+                report.findings.as_slice()
+            } else {
+                &[]
+            };
+            let parent_ctx = EvaluationContext::new_with_findings(
+                report,
                 parent_bytes,
                 parent_type,
-                &section_map,
-            );
+                &self.platforms,
+                FindingScope::new(own_findings, Some(&parent_findings)),
+                None,
+            )
+            .with_section_map(&section_map);
+            let edits = self.parent_scope_downgrades(&report.files[idx].findings, &parent_ctx);
+            if !edits.is_empty() {
+                updates.insert(idx, edits);
+            }
+        }
+        for (idx, edits) in updates {
+            for edit in edits {
+                edit.apply(&mut report.files[idx].findings);
+            }
         }
     }
 
@@ -556,6 +589,7 @@ impl super::CapabilityMapper {
     /// `scope: file-or-parent` sees both the child and its immediate parent.
     /// This is separate from archive pooling, so siblings and more distant
     /// ancestors are never admitted to either context.
+    #[cfg(test)]
     pub(crate) fn reeval_downgrades_parent_scope(
         &self,
         target_findings: &mut [crate::types::Finding],
@@ -569,7 +603,6 @@ impl super::CapabilityMapper {
             return;
         }
 
-        let file_caches = crate::composite_rules::context::FileEvalCaches::default();
         let parent_ctx = EvaluationContext::new(
             parent_report,
             parent_bytes,
@@ -578,23 +611,22 @@ impl super::CapabilityMapper {
             Some(parent_findings),
             None,
         )
-        .with_section_map(section_map)
-        .with_file_caches(&file_caches);
-        let target_snapshot: Vec<crate::types::Finding> = target_findings.to_vec();
-        let file_or_parent_ctx = EvaluationContext::new(
-            parent_report,
-            parent_bytes,
-            parent_type,
-            &self.platforms,
-            Some(parent_findings),
-            None,
-        )
-        .with_mid_findings(&target_snapshot)
-        .with_section_map(section_map)
-        .with_file_caches(&file_caches);
+        .with_section_map(section_map);
+        for edit in self.parent_scope_downgrades(target_findings, &parent_ctx) {
+            edit.apply(target_findings);
+        }
+    }
+
+    fn parent_scope_downgrades(
+        &self,
+        target_findings: &[Finding],
+        parent_ctx: &EvaluationContext<'_>,
+    ) -> Vec<FindingDowngrade> {
+        let file_or_parent_ctx = parent_ctx.clone().with_mid_findings(target_findings);
+        let mut edits = Vec::new();
         let composite_by_id = self.composite_id_index();
 
-        for finding in target_findings.iter_mut() {
+        for (index, finding) in target_findings.iter().enumerate() {
             let downgrade = self
                 .trait_id_map
                 .get(finding.id.as_str())
@@ -614,7 +646,7 @@ impl super::CapabilityMapper {
                 )
             {
                 let ctx = if downgrade.scope == Some(crate::composite_rules::Scope::Parent) {
-                    &parent_ctx
+                    parent_ctx
                 } else {
                     &file_or_parent_ctx
                 };
@@ -630,11 +662,15 @@ impl super::CapabilityMapper {
                     finding.crit
                 };
                 if new_crit < finding.crit {
-                    finding.downgraded = true;
-                    finding.crit = new_crit;
+                    edits.push(FindingDowngrade {
+                        index,
+                        crit: new_crit,
+                        downgraded: true,
+                    });
                 }
             }
         }
+        edits
     }
 
     /// Evaluate composite rules at the container level using findings from all nested files.
@@ -836,13 +872,34 @@ impl super::CapabilityMapper {
     /// container -- the honest option for a call site that cannot say where its
     /// findings came from, since the alternative is every composite here
     /// silently losing its legs.
-    pub(crate) fn evaluate_container_composites(
+    pub(crate) fn evaluate_container_composites<'a>(
         &self,
-        container_report: &AnalysisReport,
-        nested_findings: &[Finding],
+        container_report: &'a AnalysisReport,
+        nested_findings: impl IntoIterator<Item = &'a Finding>,
         file_type: &str,
         finding_origins: Option<&rustc_hash::FxHashMap<String, TypeMask>>,
     ) -> Vec<Finding> {
+        self.evaluate_container_composites_with_members(
+            container_report,
+            nested_findings,
+            file_type,
+            finding_origins,
+            None,
+        )
+    }
+
+    /// Evaluate a synthetic container over borrowed immediate members. Their
+    /// complete nodes remain available to sibling-value rules without making
+    /// report-sized copies for every declaring member in the fetch phase.
+    pub(crate) fn evaluate_container_composites_with_members<'a>(
+        &self,
+        container_report: &'a AnalysisReport,
+        nested_findings: impl IntoIterator<Item = &'a Finding>,
+        file_type: &str,
+        finding_origins: Option<&rustc_hash::FxHashMap<String, TypeMask>>,
+        member_files: Option<&'a [&'a crate::types::FileAnalysis]>,
+    ) -> Vec<Finding> {
+        let nested_findings: Vec<&Finding> = nested_findings.into_iter().collect();
         // Detect file type for the container
         let rule_file_type = self.detect_file_type(file_type);
 
@@ -860,7 +917,7 @@ impl super::CapabilityMapper {
                 matched_bits.insert(idx);
             }
         }
-        for finding in nested_findings {
+        for finding in &nested_findings {
             if let Some(&idx) = self.trait_id_map.get(finding.id.as_str()) {
                 matched_bits.insert(idx);
             }
@@ -869,14 +926,20 @@ impl super::CapabilityMapper {
         // Evaluate parent/container atomic traits against the container bytes first.
         // This allows archive-focused atomics (raw, yara, basename-derived, etc.)
         // to seed findings for later container-level composites.
-        let parent_trait_ctx = EvaluationContext::new(
+        let mut parent_trait_ctx = EvaluationContext::new(
             container_report,
             &container_bytes,
             rule_file_type,
             &self.platforms,
-            Some(nested_findings),
+            None,
             None, // No AST for container
         );
+        parent_trait_ctx.findings = crate::composite_rules::FindingScope::with_pooled(
+            &container_report.findings,
+            &nested_findings,
+            &[],
+        );
+        parent_trait_ctx.member_files = member_files;
         // The index already encodes the same file-type and platform gates as
         // evaluate(). Reuse its cached bitset instead of walking every loaded
         // trait for each archive; retain index order and the dynamic gates.
@@ -902,14 +965,12 @@ impl super::CapabilityMapper {
         // APK-layout composite whose legs are the APK's own member list.
         self.evaluate_container_self_scope(
             container_report,
+            member_files,
             &container_bytes,
             rule_file_type,
             &mut container_findings,
             &mut seen_ids,
         );
-
-        let mut combined_findings = nested_findings.to_vec();
-        combined_findings.extend(container_findings.iter().cloned());
 
         // `finding_origins` is built by the caller before this pass, so it
         // cannot know the composites this pass produces. Without an origin a
@@ -947,9 +1008,15 @@ impl super::CapabilityMapper {
                 &container_bytes,
                 rule_file_type,
                 &self.platforms,
-                Some(&combined_findings),
+                None,
                 None, // No AST for container
             );
+            ctx.findings = crate::composite_rules::FindingScope::with_pooled(
+                &container_report.findings,
+                &nested_findings,
+                &container_findings,
+            );
+            ctx.member_files = member_files;
             ctx.finding_origins = origins.as_ref();
             // Rules are evaluated one at a time so `for_mask` can be set per
             // rule: it is the only piece of per-rule state the condition
@@ -1022,20 +1089,19 @@ impl super::CapabilityMapper {
                 for finding in new_findings {
                     stamp(&mut origins, finding.id.as_str());
                     seen_ids.insert(finding.id.clone().to_string());
-                    combined_findings.push(finding.clone());
                     container_findings.push(finding);
                 }
                 let self_new = self.evaluate_container_self_scope(
                     container_report,
+                    member_files,
                     &container_bytes,
                     rule_file_type,
                     &mut container_findings,
                     &mut seen_ids,
                 );
-                for finding in &self_new {
+                for finding in &container_findings[self_new] {
                     stamp(&mut origins, finding.id.as_str());
                 }
-                combined_findings.extend(self_new);
                 continue;
             }
 
@@ -1062,7 +1128,6 @@ impl super::CapabilityMapper {
             for finding in negative_findings {
                 stamp(&mut origins, finding.id.as_str());
                 seen_ids.insert(finding.id.clone().to_string());
-                combined_findings.push(finding.clone());
                 container_findings.push(finding);
             }
         }
@@ -1090,6 +1155,7 @@ impl super::CapabilityMapper {
         // this filter.
         self.evaluate_container_self_scope(
             container_report,
+            member_files,
             &container_bytes,
             rule_file_type,
             &mut container_findings,
@@ -1121,22 +1187,23 @@ impl super::CapabilityMapper {
     /// Run the container's own `scope: file` / `scope: leaf` composites to a
     /// fixed point, over container-level findings only (never nested member
     /// findings, so nothing can pool across members). Appends new findings to
-    /// `container_findings`, records them in `seen_ids`, and returns them so
-    /// the caller can feed them to the pooling pass.
+    /// `container_findings`, records them in `seen_ids`, and returns their range
+    /// so the caller can stamp their origins without copying the findings.
     ///
     /// This was a single pass, so only the first level of a composite chain
     /// resolved: `android-apk-archive-layout` (three member-path atoms) fired,
     /// but every composite built on it -- at any crit, in any scope -- stayed
     /// dark in a scan while `test-rules`, which evaluates rules directly,
     /// reported them all matched.
-    fn evaluate_container_self_scope(
+    fn evaluate_container_self_scope<'a>(
         &self,
-        container_report: &AnalysisReport,
+        container_report: &'a AnalysisReport,
+        member_files: Option<&'a [&'a crate::types::FileAnalysis]>,
         container_bytes: &[u8],
         rule_file_type: RuleFileType,
         container_findings: &mut Vec<Finding>,
         seen_ids: &mut rustc_hash::FxHashSet<String>,
-    ) -> Vec<Finding> {
+    ) -> std::ops::Range<usize> {
         let self_rules: Vec<&crate::composite_rules::CompositeTrait> = self
             .composite_rules
             .iter()
@@ -1147,24 +1214,25 @@ impl super::CapabilityMapper {
                 )
             })
             .collect();
-        let mut added: Vec<Finding> = Vec::new();
+        let start = container_findings.len();
         // Each productive round adds at least one unseen rule id, so the rule
         // count bounds the rounds; the last round proves stability.
         for _ in 0..=self_rules.len() {
-            let container_only: Vec<Finding> = container_report
-                .findings
-                .iter()
-                .chain(container_findings.iter())
-                .cloned()
-                .collect();
-            let self_ctx = EvaluationContext::new(
+            let mut self_ctx = EvaluationContext::new(
                 container_report,
                 container_bytes,
                 rule_file_type,
                 &self.platforms,
-                Some(&container_only),
+                Some(container_findings),
                 None, // No AST for container
             );
+            self_ctx.member_files = member_files;
+            // The old concatenation included the report's findings a second
+            // time in the additional scope. Preserve its order and duplicate
+            // semantics while borrowing both slices.
+            self_ctx.findings = self_ctx
+                .findings
+                .with_mid_findings(&container_report.findings);
             let round: Vec<Finding> = self_rules
                 .iter()
                 .filter(|rule| !seen_ids.contains(rule.id.as_str()))
@@ -1176,11 +1244,10 @@ impl super::CapabilityMapper {
             }
             for finding in round {
                 seen_ids.insert(finding.id.clone().to_string());
-                container_findings.push(finding.clone());
-                added.push(finding);
+                container_findings.push(finding);
             }
         }
-        added
+        start..container_findings.len()
     }
 
     /// Evaluate package-scoped composites over the union of a fetched
@@ -1206,7 +1273,10 @@ impl super::CapabilityMapper {
     /// excluded for that reason. Returns only newly-matched composite
     /// findings (none of the `seed_findings` are echoed back).
     #[must_use]
-    pub(crate) fn evaluate_package_composites(&self, seed_findings: &[Finding]) -> Vec<Finding> {
+    pub(crate) fn evaluate_package_composites<'a>(
+        &self,
+        seed_findings: impl IntoIterator<Item = &'a Finding>,
+    ) -> Vec<Finding> {
         use crate::composite_rules::Scope;
 
         // Composites that pool across the artifact↔registry boundary.
@@ -1234,9 +1304,12 @@ impl super::CapabilityMapper {
         });
         let no_bytes: &[u8] = &[];
 
-        let mut combined = seed_findings.to_vec();
+        // The seed may span many archive members. Borrow it through every
+        // fixed-point iteration instead of cloning its findings and evidence
+        // for every declaring member in the follow phase.
+        let seed: Vec<&Finding> = seed_findings.into_iter().collect();
         let mut seen_ids: std::collections::HashSet<crate::types::Istr> =
-            combined.iter().map(|f| f.id.clone()).collect();
+            seed.iter().map(|f| f.id.clone()).collect();
         let mut new_findings: Vec<Finding> = Vec::new();
 
         // Fixed-point loop so a package composite can feed another.
@@ -1247,14 +1320,15 @@ impl super::CapabilityMapper {
             // with no side marked, so nothing can be stamped. `for:` still
             // gates the node (it must name `registry`); it just cannot also
             // filter which side a leg came from. See SCOPE_PLAN.md ("Open").
-            let ctx = EvaluationContext::new(
+            let mut ctx = EvaluationContext::new(
                 &report,
                 no_bytes,
                 RuleFileType::Registry,
                 &self.platforms,
-                Some(&combined),
+                None,
                 None,
             );
+            ctx.findings = crate::composite_rules::FindingScope::from_pooled(&seed, &new_findings);
             let matched: Vec<Finding> = package_rules
                 .iter()
                 .filter(|rule| !seen_ids.contains(rule.id.as_str()))
@@ -1266,7 +1340,6 @@ impl super::CapabilityMapper {
             }
             for finding in matched {
                 seen_ids.insert(finding.id.clone().to_string().into());
-                combined.push(finding.clone());
                 new_findings.push(finding);
             }
         }
@@ -1290,7 +1363,7 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use crate::capabilities::mapper::RuleFileType;
     use crate::composite_rules::TypeMask;
-    use crate::types::{AnalysisReport, Criticality, Finding, TargetInfo};
+    use crate::types::{AnalysisReport, Criticality, Evidence, Finding, TargetInfo};
 
     fn make_test_report() -> AnalysisReport {
         AnalysisReport::new(TargetInfo {
@@ -1314,6 +1387,89 @@ mod tests {
         let mut file = tempfile::NamedTempFile::new().expect("create temp yaml");
         file.write_all(yaml.as_bytes()).expect("write temp yaml");
         file
+    }
+
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn borrowed_members_preserve_atomic_self_and_archive_value_rules() {
+        let yaml = r#"
+defaults:
+  for: [zip, javascript]
+  platforms: [all]
+traits:
+  - id: "test/borrowed::member"
+    desc: Member leg
+    if: {type: raw, substr: unused-member-marker}
+  - id: "test/borrowed::atomic"
+    desc: Sibling value in atomic pass
+    if: {type: value, path: markdown.first_heading, eq: "README.md::markdown.first_heading"}
+composite_rules:
+  - id: "test/borrowed::self"
+    desc: Sibling value in self scope
+    scope: file
+    all:
+      - id: "test/borrowed::atomic"
+      - {type: value, path: markdown.first_heading, eq: "README.md::markdown.first_heading"}
+  - id: "test/borrowed::archive"
+    desc: Sibling value in archive scope
+    scope: archive
+    all:
+      - id: "test/borrowed::member"
+      - {type: value, path: markdown.first_heading, eq: "README.md::markdown.first_heading"}
+"#;
+        let file = write_test_traits(yaml);
+        let mapper = super::super::CapabilityMapper::from_yaml(file.path()).expect("fixture rules");
+        let sibling = |heading: &str| crate::types::FileAnalysis {
+            path: "fixture.zip!!README.md".into(),
+            kv: std::collections::BTreeMap::from([(
+                "markdown.first_heading".into(),
+                serde_json::json!(heading),
+            )]),
+            ..Default::default()
+        };
+        let mut owned = make_test_report();
+        owned.values_tree = Some(Box::new(
+            serde_json::json!({"markdown": {"first_heading": "inside"}}),
+        ));
+        owned.files.push(sibling("inside"));
+        let nested = [make_test_finding(
+            "test/borrowed::member",
+            Criticality::Notable,
+        )];
+        let expected = mapper.evaluate_container_composites(&owned, &nested, "zip", None);
+        let members = [&owned.files[0]];
+        let mut borrowed = make_test_report();
+        borrowed.values_tree = owned.values_tree.clone();
+        borrowed.files.push(sibling("outside"));
+        let actual = mapper.evaluate_container_composites_with_members(
+            &borrowed,
+            &nested,
+            "zip",
+            None,
+            Some(&members),
+        );
+        for id in [
+            "test/borrowed::atomic",
+            "test/borrowed::self",
+            "test/borrowed::archive",
+        ] {
+            assert!(
+                actual.iter().any(|finding| finding.id == id),
+                "missing {id}; actual={:?}, expected={:?}",
+                actual
+                    .iter()
+                    .map(|finding| finding.id.as_str())
+                    .collect::<Vec<_>>(),
+                expected
+                    .iter()
+                    .map(|finding| finding.id.as_str())
+                    .collect::<Vec<_>>()
+            );
+        }
+        assert_eq!(
+            serde_json::to_value(actual).unwrap(),
+            serde_json::to_value(expected).unwrap()
+        );
     }
 
     #[test]
@@ -2594,6 +2750,113 @@ composite_rules:
 
     #[test]
     #[allow(clippy::expect_used)]
+    fn parent_tree_pass_keeps_atomic_and_composite_file_or_parent_scopes() {
+        let yaml = r#"
+defaults:
+  for: [pe]
+  platforms: [unix, windows]
+traits:
+  - id: "test/context::known-tool"
+    desc: "Known tool"
+    crit: notable
+    if:
+      type: basename
+      exact: "known.exe"
+  - id: "test/target::atomic"
+    desc: "Target atomic behavior explained by a known tool"
+    crit: suspicious
+    if:
+      type: basename
+      exact: "target.exe"
+    downgrade:
+      scope: file-or-parent
+      any:
+        - id: "test/context::known-tool"
+composite_rules:
+  - id: "test/target::composite"
+    desc: "Target composite"
+    crit: hostile
+    all:
+      - id: "test/target::atomic"
+    downgrade:
+      scope: file-or-parent
+      any:
+        - id: "test/context::known-tool"
+"#;
+        let source = write_test_traits(yaml);
+        let mapper = super::super::CapabilityMapper::from_yaml(source.path())
+            .expect("load file-or-parent mapper");
+        let mut report = make_test_report();
+        let targets = || {
+            vec![
+                make_test_finding("test/target::atomic", Criticality::Suspicious),
+                make_test_finding("test/target::composite", Criticality::Hostile),
+            ]
+        };
+        let mut parent = crate::types::FileAnalysis {
+            id: 1,
+            path: "root.zip!!known.exe".into(),
+            depth: 1,
+            file_type: "pe".into(),
+            findings: targets(),
+            ..Default::default()
+        };
+        parent.findings.push(make_test_finding(
+            "test/context::known-tool",
+            Criticality::Notable,
+        ));
+        let child = crate::types::FileAnalysis {
+            id: 2,
+            parent_id: Some(1),
+            path: "root.zip!!known.exe##child.exe".into(),
+            depth: 2,
+            file_type: "pe".into(),
+            findings: targets(),
+            ..Default::default()
+        };
+        let unrelated = crate::types::FileAnalysis {
+            id: 3,
+            path: "root.zip!!unrelated.exe".into(),
+            depth: 1,
+            file_type: "pe".into(),
+            findings: targets(),
+            ..Default::default()
+        };
+        // The vector is deliberately not in parent-before-child order.
+        report.files = vec![child, unrelated, parent];
+        report.files[0].arch = Some("x86_64".into());
+        report.files[0].sha256 = "retained-child-sha".into();
+        report.files[0].findings[0].evidence.push(
+            Evidence::new("symbol", "fixture", "retained evidence")
+                .with_location("root.zip!!known.exe##child.exe")
+                .with_offset(42),
+        );
+        let mut expected = report.clone();
+        for idx in [0, 2] {
+            expected.files[idx].findings[0].crit = Criticality::Notable;
+            expected.files[idx].findings[0].downgraded = true;
+            expected.files[idx].findings[1].crit = Criticality::Suspicious;
+            expected.files[idx].findings[1].downgraded = true;
+        }
+        mapper.reeval_parent_scope_in_file_tree(&mut report, &[], RuleFileType::All);
+        for idx in [0, 2] {
+            assert_eq!(report.files[idx].findings[0].crit, Criticality::Notable);
+            assert_eq!(report.files[idx].findings[1].crit, Criticality::Suspicious);
+            assert!(report.files[idx].findings[..2].iter().all(|f| f.downgraded));
+        }
+        assert_eq!(report.files[1].findings[0].crit, Criticality::Suspicious);
+        assert_eq!(report.files[1].findings[1].crit, Criticality::Hostile);
+        assert!(report.files[1].findings.iter().all(|f| !f.downgraded));
+        // Check the entire report, including evidence, ancestry, metadata and
+        // unaffected findings; only the explicit severity edits may differ.
+        assert_eq!(
+            serde_json::to_value(&report).expect("serialize actual report"),
+            serde_json::to_value(&expected).expect("serialize expected report"),
+        );
+    }
+
+    #[test]
+    #[allow(clippy::expect_used)]
     fn test_cross_scope_downgrade_handles_unknown_trait_id() {
         use crate::composite_rules::{FileType as RuleFileType, SectionMap};
 
@@ -2776,6 +3039,14 @@ composite_rules:
     scope: outer
     all:
       - id: "test/pkg::deprecated"
+      - id: "test/pkg::native-addon"
+  - id: "test/pkg::chained-outer"
+    desc: "A derived package finding feeds the next iteration"
+    crit: suspicious
+    conf: 0.9
+    scope: outer
+    all:
+      - id: "test/pkg::deprecated-with-addon"
       - id: "test/pkg::native-addon"
   - id: "test/pkg::file-control"
     desc: "Same members, file scope (must not span the boundary)"
@@ -2994,6 +3265,12 @@ composite_rules:
                 .any(|f| f.id == "test/pkg::deprecated-with-addon"),
             "scope: outer composite should fire across the artifact↔registry union, got: {:?}",
             new_findings.iter().map(|f| &f.id).collect::<Vec<_>>()
+        );
+        assert!(
+            new_findings
+                .iter()
+                .any(|f| f.id == "test/pkg::chained-outer"),
+            "later iterations must see both the borrowed seed and earlier derived findings"
         );
         // The file-scoped control must be excluded by the scope filter — it is
         // never even evaluated in the package pass.

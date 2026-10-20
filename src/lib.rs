@@ -1865,9 +1865,7 @@ pub fn graft_located_reference_outcome_traits(
                 .rsplit_once("!!")
                 .map(|(parent, _)| parent.to_owned())
         });
-    if let Some(parent) = parent_path
-        .and_then(|path| report.files.iter().find(|f| f.path == path))
-        .cloned()
+    if let Some(parent) = parent_path.and_then(|path| report.files.iter().find(|f| f.path == path))
     {
         let mut container = AnalysisReport::new(crate::types::TargetInfo {
             path: parent.path.clone(),
@@ -1879,6 +1877,7 @@ pub fn graft_located_reference_outcome_traits(
         container.findings = parent.findings.clone();
         container.filefacts_metrics = parent.filefacts_metrics.clone();
         let mut nested = Vec::new();
+        let mut members = Vec::new();
         let mut origins = rustc_hash::FxHashMap::default();
         let bit = crate::composite_rules::FileType::from_str(&parent.file_type).type_bit();
         for finding in &parent.findings {
@@ -1892,17 +1891,19 @@ pub fn graft_located_reference_outcome_traits(
             let bit = crate::composite_rules::FileType::from_str(&member.file_type).type_bit();
             for finding in &member.findings {
                 *origins.entry(finding.id.to_string()).or_default() |= bit;
-                nested.push(finding.clone());
+                nested.push(finding);
             }
-            container.files.push(member.clone());
+            members.push(member);
         }
-        let fresh = mapper.evaluate_container_composites(
+        let fresh = mapper.evaluate_container_composites_with_members(
             &container,
-            &nested,
+            nested,
             &parent.file_type,
             Some(&origins),
+            Some(&members),
         );
-        grafted += report.graft_findings(&parent.sha256, fresh);
+        let parent_sha = parent.sha256.clone();
+        grafted += report.graft_findings(&parent_sha, fresh);
     }
 
     // The atomic facts landed on one member, but a rule that convicts on them
@@ -1914,13 +1915,11 @@ pub fn graft_located_reference_outcome_traits(
     // Archive-level atomic findings live on the report itself, not on any one
     // member, so pooling only the per-file lists misses exactly the facts an
     // archive-wide rule pairs the member's with.
-    let pooled: Vec<Finding> = report
+    let pooled = report
         .findings
         .iter()
-        .cloned()
-        .chain(report.files.iter().flat_map(|f| f.findings.iter().cloned()))
-        .collect();
-    if !pooled.is_empty() {
+        .chain(report.files.iter().flat_map(|f| &f.findings));
+    if !report.findings.is_empty() || report.files.iter().any(|f| !f.findings.is_empty()) {
         // Graft onto the outermost file node, not `target.sha256`: a merged
         // report assembled by a caller (scan's fetch phase grafts payload
         // subtrees into it) does not necessarily carry a target digest, and
@@ -1932,7 +1931,7 @@ pub fn graft_located_reference_outcome_traits(
             .iter()
             .min_by_key(|f| f.depth)
             .map_or_else(|| file_sha.to_string(), |f| f.sha256.clone());
-        let fresh = mapper.evaluate_package_composites(&pooled);
+        let fresh = mapper.evaluate_package_composites(pooled);
         if !fresh.is_empty() {
             grafted += report.graft_findings(&root_sha, fresh);
         }
@@ -1958,10 +1957,8 @@ pub fn graft_package_composites(
         return Ok(0);
     }
     let mapper = shared_resources::capability_mapper_with_options(options)?;
-    let mut seed = Vec::with_capacity(artifact_findings.len() + registry_findings.len());
-    seed.extend_from_slice(artifact_findings);
-    seed.extend_from_slice(registry_findings);
-    let new_findings = mapper.evaluate_package_composites(&seed);
+    let seed = artifact_findings.iter().chain(registry_findings);
+    let new_findings = mapper.evaluate_package_composites(seed);
     if new_findings.is_empty() {
         return Ok(0);
     }
@@ -2572,12 +2569,12 @@ pub(crate) fn process_encoded_payloads(
             let bit = composite_rules::FileType::from_str(&child.file_type).type_bit();
             for finding in &child.findings {
                 *origins.entry(finding.id.to_string()).or_default() |= bit;
-                nested.push(finding.clone());
+                nested.push(finding);
             }
         }
         let added = engine.rules().evaluate_container_composites(
             report,
-            &nested,
+            nested,
             &report.target.file_type,
             Some(&origins),
         );
@@ -3035,6 +3032,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     // package-manifest arms set no phase of their own, so without this they would
     // report the prior `cleave:stng` phase for their entire structural pass.
     set_phase(&format!("analyze:{}", file_type.report_file_type()));
+    let compact_nested_values = engine.compact_members();
     let mut report = match file_type {
         FileType::MachO => {
             set_phase("macho:struct+yara");
@@ -3082,7 +3080,13 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             let raw_regex =
                 capability_mapper.precompute_raw_regex_matches(eval_data, &rule_file_type);
             let mut report = struct_result?;
-            report.filefacts = ctx.as_ref().map(crate::types::FilefactsView::from_ctx);
+            report.filefacts = ctx.as_ref().map(|ctx| {
+                if compact_nested_values {
+                    crate::types::FilefactsView::from_ctx_compact(ctx)
+                } else {
+                    crate::types::FilefactsView::from_ctx(ctx)
+                }
+            });
             report.identity = ctx
                 .as_ref()
                 .and_then(crate::analysis_context::AnalysisContext::identity);
@@ -3178,7 +3182,13 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             let raw_regex =
                 capability_mapper.precompute_raw_regex_matches(file_data, &rule_file_type);
             let mut report = struct_result?;
-            report.filefacts = ctx.map(crate::types::FilefactsView::from_ctx);
+            report.filefacts = ctx.map(|ctx| {
+                if compact_nested_values {
+                    crate::types::FilefactsView::from_ctx_compact(ctx)
+                } else {
+                    crate::types::FilefactsView::from_ctx(ctx)
+                }
+            });
             report.identity = ctx.and_then(crate::analysis_context::AnalysisContext::identity);
             let inline_yara =
                 process_yara_result(&mut report, prefetched_yara, engine.map(AsRef::as_ref));
@@ -3239,7 +3249,11 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
                 input.sha256.as_deref(),
                 ctx,
             ));
-            let filefacts_view = crate::types::FilefactsView::from_ctx(ctx);
+            let filefacts_view = if compact_nested_values {
+                crate::types::FilefactsView::from_ctx_compact(ctx)
+            } else {
+                crate::types::FilefactsView::from_ctx(ctx)
+            };
             let raw_regex =
                 capability_mapper.precompute_raw_regex_matches(file_data, &rule_file_type);
             let mut report = struct_result?;
@@ -3349,7 +3363,11 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
                 report.identity = ctx.identity();
             }
             if report.filefacts.is_none() {
-                let view = crate::types::FilefactsView::from_ctx(ctx);
+                let view = if compact_nested_values {
+                    crate::types::FilefactsView::from_ctx_compact(ctx)
+                } else {
+                    crate::types::FilefactsView::from_ctx(ctx)
+                };
                 if !view.is_empty() {
                     report.filefacts = Some(view);
                 }

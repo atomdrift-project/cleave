@@ -67,6 +67,7 @@ impl GenericAnalyzer {
             None,
             None,
             None,
+            false,
             ctx.as_ref(),
             None,
         )
@@ -93,6 +94,7 @@ impl GenericAnalyzer {
             None,
             None,
             None,
+            false,
             ctx.as_ref(),
             None,
         )
@@ -107,6 +109,7 @@ impl GenericAnalyzer {
         original_bytes: Option<&[u8]>,
         analysis_bytes: Option<&[u8]>,
         precomputed_sha256: Option<String>,
+        compact_filefacts_values: bool,
         source_ctx: Option<&crate::analysis_context::AnalysisContext<'_>>,
         cancellation: Option<&Arc<std::sync::atomic::AtomicBool>>,
     ) -> AnalysisReport {
@@ -289,7 +292,11 @@ impl GenericAnalyzer {
         );
 
         if let Some(ctx) = source_ctx {
-            let view = crate::types::FilefactsView::from_ctx(ctx);
+            let view = if compact_filefacts_values {
+                crate::types::FilefactsView::from_ctx_compact(ctx)
+            } else {
+                crate::types::FilefactsView::from_ctx(ctx)
+            };
             if !view.is_empty() {
                 report.filefacts = Some(view);
             }
@@ -622,6 +629,7 @@ impl Analyzer for GenericAnalyzer {
                 Some(input.data),
                 Some(&decoded),
                 input.sha256.clone(),
+                self.engine.compact_members(),
                 source_ctx.as_ref(),
                 input.cancellation.as_ref(),
             );
@@ -647,6 +655,7 @@ impl Analyzer for GenericAnalyzer {
             Some(input.data),
             None,
             input.sha256.clone(),
+            self.engine.compact_members(),
             source_ctx,
             input.cancellation.as_ref(),
         ))
@@ -827,6 +836,7 @@ traits:
             Some(&bytes),
             None,
             None,
+            false,
             None,
             None,
         );

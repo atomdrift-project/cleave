@@ -3376,6 +3376,8 @@ pub(crate) const ALL_PLATFORM_DIRECTORY_ALLOWLIST: &[&str] = &[
     "metadata/file/profile/source-indications",
     // Publication/custody/history describe the registry record, not execution.
     "metadata/registry",
+    // Security-held status does not depend on the OS consuming the package.
+    "objectives/supply-chain/security-hold",
     // Host syntax and spelling do not depend on the OS consuming a URL.
     "micro-behaviors/communications/url/host",
 ];

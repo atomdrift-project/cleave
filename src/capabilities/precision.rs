@@ -1038,6 +1038,17 @@ pub(crate) fn validate_hostile_composite_precision(
             continue;
         }
 
+        // The reviewed provider-status policy is a classification, not a claim
+        // whose confidence comes from combining payload-behavior observations.
+        if super::parsing::is_registry_security_hold_policy(
+            &rule.id,
+            rule.any.as_deref(),
+            &rule.r#for,
+            rule.scope,
+        ) {
+            continue;
+        }
+
         // Precision should already be calculated - if not, that's a bug
         let precision = rule.precision.unwrap_or_else(|| {
             tracing::warn!("Composite rule '{}' has no precision calculated!", rule.id);

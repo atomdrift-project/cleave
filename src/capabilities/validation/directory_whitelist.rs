@@ -730,6 +730,7 @@ const ALLOWED_SUPPLY_CHAIN: &[&str] = &[
     "install-hook",     // Malicious install/build hooks (setup.py, postinstall)
     "metadata-anomaly", // Suspicious package metadata patterns
     "recon-exfil",      // Reconnaissance and data exfiltration from build env
+    "security-hold",    // Explicit hostile classification policy for security-held packages
     "takedown",         // Registry already pulled the package (unpublished/removed)
     "throwaway",        // Disposable freshly-registered package infrastructure
     "trojanized",       // Trojanized legitimate packages
@@ -2212,6 +2213,21 @@ mod tests {
             errors.iter().any(|e| e.contains("metadata/package/npm")),
             "Should flag 'npm' as invalid under package/: {:?}",
             errors
+        );
+    }
+    #[test]
+    fn security_hold_policy_directory_is_explicitly_admitted() {
+        let temp_dir = TempDir::new().unwrap();
+        let traits_path = temp_dir.path();
+        std::fs::create_dir_all(traits_path.join("objectives/supply-chain/security-hold")).unwrap();
+        assert!(validate_directory_structure(traits_path).is_ok());
+        std::fs::create_dir_all(traits_path.join("objectives/supply-chain/security-hold-impostor"))
+            .unwrap();
+        let errors = validate_directory_structure(traits_path).unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("security-hold-impostor"))
         );
     }
 }

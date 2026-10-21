@@ -780,6 +780,79 @@ mod bare_or_hostile_ceiling {
         assert_eq!(warned, 0);
     }
 
+    fn registry_security_hold_rule() -> models::RawCompositeRule {
+        models::RawCompositeRule {
+            id: "objectives/supply-chain/security-hold::registry-security-held-package".into(),
+            desc: "Registry security-held package".into(),
+            crit: Some("hostile".into()),
+            file_types: Some(vec!["registry".into()]),
+            platforms: Some(vec!["all".into()]),
+            scope: Some(crate::composite_rules::Scope::File),
+            any: Some(vec![
+                Condition::Trait {
+                    id: "metadata/registry::registry-security-hold".into(),
+                },
+                Condition::Trait {
+                    id: "metadata/registry::registry-security-hold-record".into(),
+                },
+            ]),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn registry_security_hold_policy_preserves_hostile() {
+        assert_eq!(
+            build(registry_security_hold_rule()),
+            (Criticality::Hostile, 0)
+        );
+    }
+
+    #[test]
+    fn registry_security_hold_exception_does_not_admit_other_rules_or_legs() {
+        for variant in 0..5 {
+            let mut raw = registry_security_hold_rule();
+            match variant {
+                0 => raw.id.push_str("-impostor"),
+                1 => raw.file_types = Some(vec!["package.json".into()]),
+                2 => raw.scope = Some(crate::composite_rules::Scope::Outer),
+                3 => {
+                    raw.any.as_mut().unwrap()[0] = Condition::Trait {
+                        id: "unrelated::leg".into(),
+                    }
+                }
+                _ => {
+                    raw.any.as_mut().unwrap().pop();
+                }
+            }
+            assert_eq!(
+                build(raw),
+                (Criticality::Suspicious, 1),
+                "variant {variant}"
+            );
+        }
+    }
+
+    #[test]
+    fn registry_security_hold_policy_precision_exception_is_exact() {
+        let mut warnings = Vec::new();
+        let mut rule = parsing::apply_composite_defaults(
+            registry_security_hold_rule(),
+            &models::TraitDefaults::default(),
+            &mut warnings,
+            std::path::Path::new("policy.yaml"),
+        );
+        rule.precision = Some(0.0);
+        let mut impostor = rule.clone();
+        impostor.id.push_str("-impostor");
+        let mut rules = vec![rule, impostor];
+        warnings.clear();
+        validation::validate_hostile_composite_precision(&mut rules, &[], &mut warnings, 3.5, 1.9);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("registry-security-held-package-impostor"));
+        assert!(rules.iter().all(|rule| rule.crit == Criticality::Hostile));
+    }
+
     #[test]
     fn a_bare_or_below_hostile_is_untouched() {
         let mut raw = rule(3, 0, None);

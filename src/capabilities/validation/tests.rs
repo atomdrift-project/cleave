@@ -11730,6 +11730,16 @@ mod all_platform_directory_tests {
                 ..Default::default()
             },
             CompositeTrait {
+                id: "objectives/supply-chain/security-hold::registry-security-held-package".into(),
+                platforms: vec![Platform::All],
+                ..Default::default()
+            },
+            CompositeTrait {
+                id: "objectives/supply-chain/security-hold-impostor::entry".into(),
+                platforms: vec![Platform::All],
+                ..Default::default()
+            },
+            CompositeTrait {
                 id: "objectives/persistence/login::entry".to_string(),
                 platforms: vec![Platform::All],
                 ..Default::default()
@@ -11750,6 +11760,7 @@ mod all_platform_directory_tests {
                 "metadata/file/profile/source-indications-impostor::alternatives",
                 "metadata/registry-impostor::age",
                 "objectives/persistence/login::entry",
+                "objectives/supply-chain/security-hold-impostor::entry",
                 "well-known/lib/crypto/ece::api",
             ]
         );

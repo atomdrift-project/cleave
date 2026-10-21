@@ -1187,6 +1187,32 @@ pub(crate) fn parse_criticality(s: &str) -> Result<Criticality, String> {
     }
 }
 
+/// Exact exception for the reviewed registry security-hold classification policy.
+/// Restrict it to the canonical rule, registry files, file scope and both named
+/// alternatives. Neither a copied ID nor an unrelated leg grants an exception.
+pub(crate) fn is_registry_security_hold_policy(
+    id: &str,
+    any: Option<&[Condition]>,
+    file_types: &[RuleFileType],
+    scope: Option<crate::composite_rules::Scope>,
+) -> bool {
+    const LEGS: [&str; 2] = [
+        "metadata/registry::registry-security-hold",
+        "metadata/registry::registry-security-hold-record",
+    ];
+    id == "objectives/supply-chain/security-hold::registry-security-held-package"
+        && file_types == [RuleFileType::Registry]
+        && scope == Some(crate::composite_rules::Scope::File)
+        && any.is_some_and(|any| {
+            any.len() == LEGS.len()
+                && LEGS.iter().all(|expected| {
+                    any.iter().any(
+                        |condition| matches!(condition, Condition::Trait { id } if id == expected),
+                    )
+                })
+        })
+}
+
 /// Convert a raw composite rule to a final CompositeTrait, applying file-level defaults
 /// Collects warnings into the provided vector instead of printing them.
 pub(crate) fn apply_composite_defaults(
@@ -1355,8 +1381,13 @@ pub(crate) fn apply_composite_defaults(
     // `all:` clause, or `needs: 2`+ across the `any:`.
     let combines_signals = requires_all.as_ref().is_some_and(|all| !all.is_empty())
         || raw.needs.is_some_and(|n| n > 1);
-    let criticality = if criticality == Criticality::Hostile && !combines_signals {
-        warnings.push(format!(
+    // Provider security-hold status is hostile by explicit classification policy,
+    // rather than by inference of payload behavior. Keep the generic cap intact.
+    let security_hold_policy =
+        is_registry_security_hold_policy(&raw.id, raw.any.as_deref(), &file_types, raw.scope);
+    let criticality =
+        if criticality == Criticality::Hostile && !combines_signals && !security_hold_policy {
+            warnings.push(format!(
             "Composite '{}' in {}: bare `any:` rule marked 'crit: hostile'. A rule that fires on \
              any single leg performs no intent inference, so it is capped at 'suspicious' like an \
              atomic trait. Add an `all:` leg or raise `needs:` to combine distinct signals, or \
@@ -1364,10 +1395,10 @@ pub(crate) fn apply_composite_defaults(
             raw.id,
             path.display()
         ));
-        Criticality::Suspicious
-    } else {
-        criticality
-    };
+            Criticality::Suspicious
+        } else {
+            criticality
+        };
 
     // Check regex patterns in all condition lists
     let warn_start = warnings.len();

@@ -459,7 +459,7 @@ jobs:
           PROFILE: ${{ inputs.profile }}
         run: tar -czf "cleave-$TARGET.tar.gz" -C "target/$TARGET/$PROFILE" cleave
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: cleave-${{ matrix.target }}
           path: cleave-${{ matrix.target }}.tar.gz
@@ -531,7 +531,7 @@ jobs:
       - name: Package
         run: tar -czf cleave-x86_64-unknown-freebsd.tar.gz cleave
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: cleave-x86_64-unknown-freebsd
           path: cleave-x86_64-unknown-freebsd.tar.gz
@@ -613,7 +613,7 @@ jobs:
       - name: Package
         run: tar -czf cleave-aarch64-unknown-freebsd.tar.gz cleave
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: cleave-aarch64-unknown-freebsd
           path: cleave-aarch64-unknown-freebsd.tar.gz
@@ -696,7 +696,7 @@ jobs:
       - name: Package
         run: tar -czf cleave-x86_64-unknown-openbsd.tar.gz cleave
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: cleave-x86_64-unknown-openbsd
           path: cleave-x86_64-unknown-openbsd.tar.gz
@@ -746,7 +746,7 @@ jobs:
       - name: Package
         run: tar -czf cleave-x86_64-unknown-netbsd.tar.gz cleave
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: cleave-x86_64-unknown-netbsd
           path: cleave-x86_64-unknown-netbsd.tar.gz
@@ -802,7 +802,7 @@ jobs:
       - name: Package
         run: tar -czf cleave-x86_64-unknown-dragonfly.tar.gz cleave
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: cleave-x86_64-unknown-dragonfly
           path: cleave-x86_64-unknown-dragonfly.tar.gz
@@ -859,7 +859,7 @@ jobs:
       - name: Package
         run: tar -czf cleave-x86_64-unknown-haiku.tar.gz cleave
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: cleave-x86_64-unknown-haiku
           path: cleave-x86_64-unknown-haiku.tar.gz
@@ -917,7 +917,7 @@ jobs:
       - name: Package
         run: tar -czf cleave-x86_64-unknown-hurd-gnu.tar.gz cleave
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: cleave-x86_64-unknown-hurd-gnu
           path: cleave-x86_64-unknown-hurd-gnu.tar.gz
@@ -998,7 +998,7 @@ jobs:
       - name: Package
         run: tar -czf cleave-x86_64-pc-solaris.tar.gz cleave
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: cleave-x86_64-pc-solaris
           path: cleave-x86_64-pc-solaris.tar.gz
@@ -1094,7 +1094,7 @@ jobs:
       - name: Package
         run: tar -czf omnios-native-cleave.tar.gz cleave
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: omnios-native-cleave
           path: omnios-native-cleave.tar.gz
@@ -1183,7 +1183,7 @@ jobs:
           PROFILE: ${{ inputs.profile }}
         run: tar -czf "cleave-$TARGET.tar.gz" -C "target/$TARGET/$PROFILE" cleave.exe
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: cleave-${{ matrix.target }}
           path: cleave-${{ matrix.target }}.tar.gz
@@ -1364,7 +1364,7 @@ jobs:
           PROFILE: ${{ inputs.profile }}
         run: tar -czf "cleave-$TARGET.tar.gz" -C "target/$TARGET/$PROFILE" cleave
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: cleave-${{ matrix.target }}
           path: cleave-${{ matrix.target }}.tar.gz

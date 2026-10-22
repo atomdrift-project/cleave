@@ -385,6 +385,8 @@ opt-level = 3
 # Cargo permits only one linked copy in the dependency graph.
 [patch.crates-io]
 # Inherited from a sibling by update-deps: [patch] applies only in the root.
+wasmtime = { git = "https://github.com/tstromberg/wasmtime.git", branch = "netbsd-solaris-45.0.3" }
+# Inherited from a sibling by update-deps: [patch] applies only in the root.
 tree-sitter-bash = { git = "https://github.com/tstromberg/tree-sitter-bash" }
 # NetBSD and Solaris arms for wasmtime's signal trap handler, pulled in via
 # yara-x. Upstream 45.0.3 has neither, so those builds stop at

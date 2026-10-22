@@ -32,13 +32,14 @@ pub(crate) fn is_data_only(ast: filefacts::SourceAst<'_>) -> bool {
     })
 }
 #[cfg(test)]
+#[allow(clippy::expect_used, reason = "invalid fixtures should fail the test")]
 mod tests {
     use super::*;
     fn check(s: &str) -> bool {
         let p = filefacts::OpenOptions::new()
             .path(std::path::Path::new("catalog.js"))
             .open(s.as_bytes());
-        is_data_only(p.source_ast().unwrap())
+        is_data_only(p.source_ast().expect("parsed JavaScript fixture"))
     }
     #[test]
     fn quoted_source_is_data() {

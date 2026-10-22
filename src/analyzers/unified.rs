@@ -931,31 +931,62 @@ impl UnifiedSourceAnalyzer {
                 report.files.push(layer);
             }
             if matches!(self.config.name, "javascript" | "typescript")
-                && let Some(ast) = source_ctx.and_then(crate::analysis_context::AnalysisContext::source_ast)
+                && let Some(ast) =
+                    source_ctx.and_then(crate::analysis_context::AnalysisContext::source_ast)
             {
                 for (offset, decoded) in crate::analyzers::js_joined_module::decode(ast) {
-                    for (inner, extra_chain) in crate::analyzers::js_joined_module::encrypted_layers(ast, &decoded, offset) {
-                        let mut chain = vec!["js-joined-base64-module".to_string()]; chain.extend(extra_chain);
-                        if let Some(layer) = crate::analyzers::embedded_code_detector::analyze_decoded_script_layer(
-                            &parent, &inner, offset, FileType::JavaScript, chain, &self.engine, 0, false,
-                        ) { report.files.push(layer); }
+                    for (inner, extra_chain) in
+                        crate::analyzers::js_joined_module::encrypted_layers(ast, &decoded, offset)
+                    {
+                        let mut chain = vec!["js-joined-base64-module".to_string()];
+                        chain.extend(extra_chain);
+                        if let Some(layer) =
+                            crate::analyzers::embedded_code_detector::analyze_decoded_script_layer(
+                                &parent,
+                                &inner,
+                                offset,
+                                FileType::JavaScript,
+                                chain,
+                                &self.engine,
+                                0,
+                                false,
+                            )
+                        {
+                            report.files.push(layer);
+                        }
                     }
-                    if let Some(layer) = crate::analyzers::embedded_code_detector::analyze_decoded_script_layer(
-                        &parent, &decoded, offset, FileType::JavaScript,
-                        vec!["js-joined-base64-module".to_string()], &self.engine, 0, false,
-                    ) { report.files.push(layer); }
+                    if let Some(layer) =
+                        crate::analyzers::embedded_code_detector::analyze_decoded_script_layer(
+                            &parent,
+                            &decoded,
+                            offset,
+                            FileType::JavaScript,
+                            vec!["js-joined-base64-module".to_string()],
+                            &self.engine,
+                            0,
+                            false,
+                        )
+                    {
+                        report.files.push(layer);
+                    }
                 }
             }
             if matches!(self.config.name, "javascript" | "typescript")
-                && let Some(ast) = source_ctx.and_then(crate::analysis_context::AnalysisContext::source_ast)
+                && let Some(ast) =
+                    source_ctx.and_then(crate::analysis_context::AnalysisContext::source_ast)
             {
                 for (offset, embedded) in crate::analyzers::js_edge_source::extract(ast) {
                     let path = format!("{parent}##edge-csharp@{offset}");
                     if let Some(analyzer) = Self::for_file_type(&FileType::CSharp) {
-                        let bridge_report = analyzer.with_engine(self.engine.clone()).without_embedded_detection()
+                        let bridge_report = analyzer
+                            .with_engine(self.engine.clone())
+                            .without_embedded_detection()
                             .analyze_source_as_configured(Path::new(&path), &embedded);
                         let (mut entry, _, _) = bridge_report.into_file_analysis(0, &self.engine);
-                        entry.path = path; entry.depth = 1; entry.encoding = None; entry.compute_summary();
+                        entry.path = path;
+                        entry.depth = 1;
+                        entry.encoding = None;
+                        entry.compute_summary();
                         report.files.push(entry);
                     }
                 }
@@ -966,15 +997,27 @@ impl UnifiedSourceAnalyzer {
             // executable use of those strings. Keep its encoded layers, but
             // do not infer program behavior from plain quoted source examples.
             let data_only = matches!(self.config.name, "javascript" | "typescript")
-                && source_ctx.and_then(crate::analysis_context::AnalysisContext::source_ast)
+                && source_ctx
+                    .and_then(crate::analysis_context::AnalysisContext::source_ast)
                     .is_some_and(crate::analyzers::js_literal_catalog::is_data_only);
             let encoded_constants: Vec<_> = if data_only {
-                report.strings.iter().filter(|s| !s.encoding_chain.is_empty()).cloned().collect()
-            } else { Vec::new() };
+                report
+                    .strings
+                    .iter()
+                    .filter(|s| !s.encoding_chain.is_empty())
+                    .cloned()
+                    .collect()
+            } else {
+                Vec::new()
+            };
             let (encoded_layers, plain_findings) =
                 crate::analyzers::embedded_code_detector::process_all_strings_with_host(
                     &parent,
-                    if data_only { &encoded_constants } else { &report.strings },
+                    if data_only {
+                        &encoded_constants
+                    } else {
+                        &report.strings
+                    },
                     &self.engine,
                     0,
                     Some(&self.file_type),

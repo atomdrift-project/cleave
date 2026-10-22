@@ -725,8 +725,7 @@ fn table_reference_region(
     let body = owner.child_by_field_name("body")?;
     let returned = children(body)
         .into_iter()
-        .filter(|n| n.kind() != "comment")
-        .last()?;
+        .rfind(|n| n.kind() != "comment")?;
     if returned.kind() != "return_statement"
         || !unsafe_refs
             .iter()
@@ -1778,16 +1777,18 @@ mod tests {
                 Path::new("input.js"),
                 source.as_bytes(),
             );
-            let ast = ctx.source_ast().unwrap();
+            let ast = ctx.source_ast().expect("parsed JavaScript fixture");
             let node = nodes(ast.tree.root_node())
-                .unwrap()
+                .expect("fixture within AST node limit")
                 .into_iter()
                 .find(|n| {
                     n.kind() == "function_declaration"
                         && function_name(*n, source).as_deref() == Some("W")
                 })
                 .expect("deferred fixture function");
-            text(node, source).unwrap().to_owned()
+            text(node, source)
+                .expect("deferred fixture function source")
+                .to_owned()
         }
         let original = deferred(&input);
         let retained = deferred(&out);

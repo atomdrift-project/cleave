@@ -84,7 +84,7 @@ missing_panics_doc = "allow"  # Too strict for internal functions
 # Procedural macros
 cleave-macros = { path = "cleave-macros" }
 
-filefacts = { path = "../filefacts" }
+filefacts = { git = "https://github.com/atomdrift-project/filefacts.git" }
 
 cfb = "0.14"  # Microsoft OLE2/CFBF compound document parsing
 
@@ -217,7 +217,7 @@ encoding_rs = "0.8"  # Character encoding detection and conversion
 # public API, and Cargo treats `git = URL` and `git = URL, rev = R` as
 # different sources even at the same commit — two copies of the crate, whose
 # types do not unify.
-stng = { path = "../stng" }
+stng = { git = "https://github.com/atomdrift-project/stng.git" }
 
 # Logging (tracing is the modern standard, more powerful than log+env_logger)
 tracing = "0.1"

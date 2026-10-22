@@ -1,8 +1,8 @@
 //! Process-wide cancellation flag driven by SIGINT / SIGTERM.
 //!
 //! The CLI scan path runs entirely on rayon workers with no tokio runtime, so
-//! `tokio::signal` isn't available. We install a tiny `libc::signal` handler
-//! that flips a `OnceLock<Arc<AtomicBool>>`; the scan worker closure checks
+//! `tokio::signal` isn't available. A dedicated signal thread flips a
+//! `OnceLock<Arc<AtomicBool>>`; the scan worker closure checks
 //! the flag before pulling the next file.
 //!
 //! Cancellation is observed *between* units of work, never inside one. cleave's
@@ -45,51 +45,23 @@ pub fn is_cancelled() -> bool {
     FLAG.get().is_some_and(|f| f.load(Ordering::Relaxed))
 }
 
-/// Install SIGINT + SIGTERM handlers that flip the global flag on first
-/// signal and force-exit on second. Call this once during CLI startup.
+/// Install signal handlers on a dedicated thread so forced shutdown can
+/// safely lock the process registry and delete temporary inputs.
 pub fn install_signal_handlers() {
-    #[cfg(unix)]
-    {
-        // Eagerly initialize the flag so the signal handler sees a ready
-        // OnceLock (OnceLock::get() without a prior set() returns None).
+    static INSTALLED: OnceLock<()> = OnceLock::new();
+    INSTALLED.get_or_init(|| {
         let _ = global_flag();
-        // SAFETY: `libc::signal` is the standard POSIX entry point; the
-        // handler itself only uses async-signal-safe primitives (atomic
-        // swap, `libc::write`, `libc::_exit`). The function-pointer cast
-        // goes through `*const ()` to appease the function_casts_as_integer
-        // lint without changing the ABI.
-        unsafe {
-            libc::signal(libc::SIGINT, handler as *const () as libc::sighandler_t);
-            libc::signal(libc::SIGTERM, handler as *const () as libc::sighandler_t);
+        if let Err(error) = ctrlc::set_handler(interrupted) {
+            tracing::warn!(%error, "could not install cancellation signal handler");
         }
-    }
+    });
 }
 
-#[cfg(unix)]
-extern "C" fn handler(_signo: libc::c_int) {
-    // OnceLock::get() on an already-initialized cell is a plain atomic load —
-    // safe from a signal handler. install_signal_handlers() guarantees init.
-    let Some(flag) = FLAG.get() else {
-        return;
-    };
-
-    // First signal: request drain. Second: force-exit. swap returns the prior
-    // value, so a prior `true` means this is the second hit.
-    if flag.swap(true, Ordering::SeqCst) {
-        const MSG: &[u8] = b"\n[cleave] second interrupt, forcing exit\n";
-        // SAFETY: write(2) and _exit are both on the POSIX async-signal-safe
-        // list. Exit code 130 = 128 + SIGINT (the shell convention).
-        unsafe {
-            libc::write(2, MSG.as_ptr().cast(), MSG.len());
-            libc::_exit(130);
-        }
+fn interrupted() {
+    if global_flag().swap(true, Ordering::SeqCst) {
+        crate::kill_all_rizin_groups();
+        eprintln!("\n[cleave] second interrupt, forcing exit");
+        std::process::exit(130);
     }
-
-    const MSG: &[u8] =
-        b"\n[cleave] interrupt received, draining workers (Ctrl-C again to force exit)\n";
-    // SAFETY: write(2) is async-signal-safe; ignoring the return is fine here
-    // because the message is advisory.
-    unsafe {
-        libc::write(2, MSG.as_ptr().cast(), MSG.len());
-    }
+    eprintln!("\n[cleave] interrupt received, draining workers (Ctrl-C again to force exit)");
 }

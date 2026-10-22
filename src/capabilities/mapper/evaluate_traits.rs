@@ -1112,7 +1112,32 @@ impl super::CapabilityMapper {
                     conf_b.cmp(&conf_a).then_with(|| a.id.cmp(&b.id))
                 })
             });
-            unique_findings.truncate(MAX_FINDINGS_PER_FILE);
+            // This pass feeds dependent atoms, composites and negative gates.
+            // Dropping their support before evaluation silently changes verdicts
+            // on large bundles. Only independent, noncritical observations may
+            // consume the presentation budget; required evidence stays bounded
+            // by the finite loaded rule set, even when that exceeds 500.
+            let references = self.trait_ref_index();
+            let protected = unique_findings
+                .iter()
+                .filter(|f| {
+                    f.crit >= Criticality::Suspicious
+                        || references.possibly_referenced(f.id.as_str())
+                })
+                .count();
+            let mut remaining = MAX_FINDINGS_PER_FILE.saturating_sub(protected);
+            unique_findings.retain(|f| {
+                if f.crit >= Criticality::Suspicious
+                    || references.possibly_referenced(f.id.as_str())
+                {
+                    true
+                } else if remaining > 0 {
+                    remaining -= 1;
+                    true
+                } else {
+                    false
+                }
+            });
             unique_findings.shrink_to_fit();
         }
 

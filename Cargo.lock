@@ -899,6 +899,7 @@ dependencies = [
  "lru 0.18.5",
  "lzx",
  "malecule",
+ "md-5",
  "memchr",
  "memmap2",
  "once_cell",

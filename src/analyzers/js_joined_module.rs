@@ -436,13 +436,13 @@ fn decrypt_layer(
             continue;
         };
         let args = children(args);
-        if args.len() == 2 {
-            if let (Some(blob), Some(password)) = (
+        if args.len() == 2
+            && let (Some(blob), Some(password)) = (
                 literal(args[0], source).filter(|s| envelope(s).is_some()),
                 literal(args[1], source).filter(|s| !s.is_empty() && s.len() <= 128),
-            ) {
-                candidates.push((blob, password));
-            }
+            )
+        {
+            candidates.push((blob, password));
         }
     }
     for n in nodes.iter().copied().filter(|n| n.kind() == "string") {
@@ -483,17 +483,15 @@ fn decrypt_layer(
         };
         let mut next = chain.to_vec();
         next.extend(["scrypt".into(), "aes-256-cbc".into()]);
-        if let Ok(bytes) = STANDARD.decode(&decoded) {
-            if let Ok(value) = String::from_utf8(bytes) {
-                if value.len() >= 64
-                    && value
-                        .bytes()
-                        .all(|b| matches!(b, b'\t' | b'\r' | b'\n' | 32..=126))
-                {
-                    decoded = value;
-                    next.push("base64".into());
-                }
-            }
+        if let Ok(bytes) = STANDARD.decode(&decoded)
+            && let Ok(value) = String::from_utf8(bytes)
+            && value.len() >= 64
+            && value
+                .bytes()
+                .all(|b| matches!(b, b'\t' | b'\r' | b'\n' | 32..=126))
+        {
+            decoded = value;
+            next.push("base64".into());
         }
         if decoded.len() < 64
             || !decoded
@@ -530,6 +528,7 @@ fn decrypt_layer(
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used, reason = "invalid fixtures should fail the test")]
 mod envelope_tests {
     use super::*;
     const PASSWORD: &str = "changed-fixture-password";
@@ -545,9 +544,9 @@ mod envelope_tests {
             host.as_bytes(),
         );
         encrypted_layers(
-            ctx.source_ast().unwrap(),
+            ctx.source_ast().expect("parsed JavaScript fixture"),
             OUTER,
-            host.find("import(").unwrap() as u64,
+            host.find("import(").expect("fixture import expression") as u64,
         )
     }
     #[test]

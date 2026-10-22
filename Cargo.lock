@@ -928,7 +928,7 @@ dependencies = [
  "simd-json",
  "smallvec",
  "stacker",
- "stng 2.1.1",
+ "stng",
  "streaming-iterator",
  "strsim",
  "sysmem",
@@ -1955,6 +1955,7 @@ checksum = "64cd1e32ddd350061ae6edb1b082d7c54915b5c672c389143b9a63403a109f24"
 [[package]]
 name = "filefacts"
 version = "2.0.1"
+source = "git+https://github.com/atomdrift-project/filefacts.git#e829200364d4078aa1180b2ebecb9fca4a45d185"
 dependencies = [
  "aho-corasick",
  "cab",
@@ -1985,7 +1986,7 @@ dependencies = [
  "sha1 0.10.7",
  "sha2 0.10.9",
  "signal-hook",
- "stng 2.1.1 (git+https://github.com/atomdrift-project/stng.git)",
+ "stng",
  "tar",
  "tempfile",
  "thiserror 2.0.21",
@@ -5191,6 +5192,7 @@ dependencies = [
 [[package]]
 name = "stng"
 version = "2.1.1"
+source = "git+https://github.com/atomdrift-project/stng.git#37f1b915620956f9a69da5ddfdc83fe67a7dbe58"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -5210,7 +5212,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.1",
- "stng-process 0.1.0",
+ "stng-process",
  "terminal_size",
  "tikv-jemallocator",
  "tracing",
@@ -5220,41 +5222,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "stng"
-version = "2.1.1"
-source = "git+https://github.com/atomdrift-project/stng.git#e150a5741af30022b28731fcd70f9d46f36c8d68"
-dependencies = [
- "aho-corasick",
- "base64 0.22.1",
- "data-encoding",
- "des",
- "flate2",
- "goblin",
- "iced-x86",
- "idna",
- "memchr",
- "psl",
- "rayon",
- "regex",
- "serde",
- "serde_json",
- "stng-process 0.1.0 (git+https://github.com/atomdrift-project/stng.git)",
- "tracing",
- "tree-sitter",
- "tree-sitter-lua",
-]
-
-[[package]]
 name = "stng-process"
 version = "0.1.0"
-dependencies = [
- "libc",
-]
-
-[[package]]
-name = "stng-process"
-version = "0.1.0"
-source = "git+https://github.com/atomdrift-project/stng.git#e150a5741af30022b28731fcd70f9d46f36c8d68"
+source = "git+https://github.com/atomdrift-project/stng.git#37f1b915620956f9a69da5ddfdc83fe67a7dbe58"
 dependencies = [
  "libc",
 ]
@@ -5853,6 +5823,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-clojure"
 version = "0.1.0"
+source = "git+https://github.com/atomdrift-project/filefacts.git#e829200364d4078aa1180b2ebecb9fca4a45d185"
 dependencies = [
  "cc",
  "tree-sitter",

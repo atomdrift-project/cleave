@@ -7360,3 +7360,8 @@ dependencies = [
  "cc",
  "pkg-config",
 ]
+
+[[patch.unused]]
+name = "wasmtime"
+version = "45.0.3"
+source = "git+https://github.com/tstromberg/wasmtime.git?branch=netbsd-solaris-45.0.3#7c04f13deaacdefc756b5cc53f5eaa0f09af4ce4"

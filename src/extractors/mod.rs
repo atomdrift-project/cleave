@@ -8,6 +8,7 @@ pub mod encoded_payload;
 pub(crate) mod macho_chacha;
 pub(crate) mod powershell_literals;
 pub(crate) mod powershell_payloads;
+pub(crate) mod ps_to_exe;
 
 pub(crate) use aes_payload::extract_aes_payloads;
 pub(crate) use encoded_payload::extract_encoded_payloads;

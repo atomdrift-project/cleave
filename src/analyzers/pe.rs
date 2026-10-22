@@ -1019,6 +1019,63 @@ impl PEAnalyzer {
         report.files.extend(encoded_layers);
         report.findings.extend(plain_findings);
 
+        // Converter envelopes carry ordinary scripts: the decoded child owns
+        // behavioral findings, while the parent records only the encoding.
+        if !self.skip_embedded_scan {
+            for payload in crate::extractors::ps_to_exe::recover(pe_data, &ctx.parsed) {
+                if self
+                    .cancellation
+                    .as_ref()
+                    .is_some_and(|c| c.load(std::sync::atomic::Ordering::Acquire))
+                {
+                    break;
+                }
+                let member_path = format!("ps-to-exe/resource-{}.ps1", payload.offset);
+                let virtual_path = format!("{}!{}", logical_path.display(), member_path);
+                let input = AnalysisInput::new(
+                    Path::new(&virtual_path),
+                    &payload.data,
+                    crate::FileType::PowerShell,
+                )
+                .at_depth(1);
+                match crate::analyzers::unified::UnifiedSourceAnalyzer::for_file_type(
+                    &crate::FileType::PowerShell,
+                )
+                .map(|a| a.with_engine(self.engine.clone()).analyze_input(&input))
+                {
+                    Some(Ok(child)) => {
+                        crate::analyzers::subfile::attach_member(
+                            &mut report,
+                            child,
+                            &payload.data,
+                            crate::FileType::PowerShell,
+                            &member_path,
+                            &virtual_path,
+                            &self.engine,
+                        );
+                        report.structure.push(StructuralFeature {
+                            id: "encoding/rc4-script-resource".to_string(),
+                            desc: "PowerShell script recovered from converter RC4 resource"
+                                .to_string(),
+                            evidence: vec![Evidence {
+                                method: "crypto".to_string(),
+                                source: "ps_to_exe".to_string(),
+                                value: "MD5-derived RC4 key from code-referenced seed".to_string(),
+                                location: Some(format!("offset:{}", payload.offset)),
+                                offsets: vec![payload.offset as u64],
+                                ..Evidence::default()
+                            }],
+                        });
+                    }
+                    Some(Err(error)) => report
+                        .metadata
+                        .errors
+                        .push(format!("ps-to-exe resource: {error:#}")),
+                    None => {}
+                }
+            }
+        }
+
         // Emit signature findings directly from filefacts's
         // `pe.signatures[]` view. Each leaf cert subject CN becomes
         // a `metadata/signed/<type>::<cn>` finding; the very first

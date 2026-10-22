@@ -134,10 +134,17 @@ pub(crate) fn recover(data: &[u8], parsed: &ParsedFile<'_>) -> Vec<RecoveredScri
         return vec![];
     }
     let values = parsed.values();
-    if values.get("pe.machine_id").and_then(|v| v.as_u64()) != Some(0x8664) {
+    if values
+        .get("pe.machine_id")
+        .and_then(serde_json::Value::as_u64)
+        != Some(0x8664)
+    {
         return vec![];
     }
-    let Some(base) = values.get("pe.image_base").and_then(|v| v.as_u64()) else {
+    let Some(base) = values
+        .get("pe.image_base")
+        .and_then(serde_json::Value::as_u64)
+    else {
         return vec![];
     };
     let Some(dirs) = values.get("pe.data_directories").and_then(|v| v.as_array()) else {
@@ -149,12 +156,12 @@ pub(crate) fn recover(data: &[u8], parsed: &ParsedFile<'_>) -> Vec<RecoveredScri
     else {
         return vec![];
     };
-    let Some(rva) = dir.get("rva").and_then(|v| v.as_u64()) else {
+    let Some(rva) = dir.get("rva").and_then(serde_json::Value::as_u64) else {
         return vec![];
     };
     let Some(size) = dir
         .get("size")
-        .and_then(|v| v.as_u64())
+        .and_then(serde_json::Value::as_u64)
         .and_then(|n| usize::try_from(n).ok())
     else {
         return vec![];

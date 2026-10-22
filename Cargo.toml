@@ -84,7 +84,7 @@ missing_panics_doc = "allow"  # Too strict for internal functions
 # Procedural macros
 cleave-macros = { path = "cleave-macros" }
 
-filefacts = { git = "https://github.com/atomdrift-project/filefacts.git" }
+filefacts = { path = "../filefacts" }
 
 cfb = "0.14"  # Microsoft OLE2/CFBF compound document parsing
 
@@ -168,6 +168,7 @@ stacker = "0.1"
 
 # Cryptography (for decrypting obfuscated payloads)
 aes = "0.9"
+scrypt = { version = "0.11", default-features = false }
 cbc = { version = "0.2", features = ["alloc"] }
 des = "0.8"
 chacha20poly1305 = { version = "0.10.1", default-features = false, features = ["alloc"] }
@@ -207,6 +208,7 @@ semver = "1"  # Version comparison for the update notifier
 reqwest = { version = "0.13", features = ["blocking", "rustls", "webpki-roots"], default-features = false }
 parking_lot = "0.12"  # Efficient mutexes/RwLocks. NOTE: `deadlock_detection` is opt-in (see the `deadlock-detection` feature) — it adds per-lock global-registry bookkeeping that has no place in release builds.
 libc = "0.2"          # For FreeBSD sysctl thread info and other OS APIs
+ctrlc = { version = "3", features = ["termination"] }
 memmap2 = "0.9"  # Memory-mapped file I/O for large files
 smallvec = "1.16"  # Stack-allocated vectors for small collections
 encoding_rs = "0.8"  # Character encoding detection and conversion
@@ -215,7 +217,7 @@ encoding_rs = "0.8"  # Character encoding detection and conversion
 # public API, and Cargo treats `git = URL` and `git = URL, rev = R` as
 # different sources even at the same commit — two copies of the crate, whose
 # types do not unify.
-stng = { git = "https://github.com/atomdrift-project/stng.git" }
+stng = { path = "../stng" }
 
 # Logging (tracing is the modern standard, more powerful than log+env_logger)
 tracing = "0.1"

@@ -701,7 +701,8 @@ use std::sync::Arc;
 /// host CLIs that need to reap rizin workers before a forced
 /// `process::exit`. Call it from a signal-handling thread (the `ctrlc`
 /// crate's dispatch thread, `signal-hook`'s iterator), never from an
-/// async-signal handler: it locks and deletes files. Cheap and idempotent.
+/// async-signal handler: it locks and deletes files. This terminal operation
+/// also refuses future rizin launches. Cheap and idempotent.
 /// No-op on non-Unix platforms.
 pub fn kill_all_rizin_groups() {
     filefacts::rizin::kill_all_rizin_groups();

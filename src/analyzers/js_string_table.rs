@@ -11,7 +11,7 @@ use tree_sitter::Node;
 const ALPHABET: &str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+/";
 const MAX_SOURCE: usize = 4 * 1024 * 1024;
 const MAX_TABLE: usize = 4096;
-const MAX_NODES: usize = 250_000;
+const MAX_NODES: usize = 1_000_000;
 const MAX_FUEL: usize = 2_000_000;
 type Span = (usize, usize);
 
@@ -642,7 +642,32 @@ fn rotation_shape(
     };
     catch_body.len() == 1 && rotate_call(catch_body[0], array, source)
 }
-fn table_references_safe(ctx: &Context<'_>, all: &[Node<'_>], rotator: Span) -> bool {
+#[derive(Clone, Copy)]
+enum ReductionRegion {
+    Whole,
+    ImmediatePrefix {
+        owner: Span,
+        after: usize,
+        before: usize,
+    },
+}
+impl ReductionRegion {
+    fn allows(self, node: Node<'_>) -> bool {
+        match self {
+            Self::Whole => true,
+            Self::ImmediatePrefix {
+                owner,
+                after,
+                before,
+            } => node.start_byte() >= after && node.end_byte() <= before && scope(node) == owner,
+        }
+    }
+}
+fn table_reference_region(
+    ctx: &Context<'_>,
+    all: &[Node<'_>],
+    rotator: Span,
+) -> Option<ReductionRegion> {
     let d = &ctx.decoders[ctx.active];
     let table = &ctx.tables[d.table];
     if !all
@@ -661,20 +686,76 @@ fn table_references_safe(ctx: &Context<'_>, all: &[Node<'_>], rotator: Span) -> 
                 })
         })
     {
-        return false;
+        return None;
     }
-
-    all.iter()
+    let unsafe_refs: Vec<_> = all
+        .iter()
+        .copied()
         .filter(|n| {
             n.kind() == "identifier"
                 && covers(table.scope, n.start_byte())
-                && text(**n, ctx.source) == Some(table.name.as_str())
+                && text(*n, ctx.source) == Some(table.name.as_str())
         })
-        .all(|n| {
-            covers(table.function, n.start_byte())
-                || covers(d.function, n.start_byte())
-                || covers(rotator, n.start_byte())
+        .filter(|n| {
+            // A simple parameter declaration is not an array escape. A direct body
+            // function declaration with the same name shadows it; normal binding
+            // resolution still controls every reduced call in the body.
+            let owner_parameter = n.parent().is_some_and(|p| {
+                p.kind() == "formal_parameters"
+                    && p.parent()
+                        .is_some_and(|f| (f.start_byte(), f.end_byte()) == table.scope)
+            });
+            !owner_parameter
+                && !covers(table.function, n.start_byte())
+                && !covers(d.function, n.start_byte())
+                && !covers(rotator, n.start_byte())
         })
+        .collect();
+    if unsafe_refs.is_empty() {
+        return Some(ReductionRegion::Whole);
+    }
+    // A terminal return may pass the producer to unknown/deferred code. The
+    // array is then no longer proved immutable for nested callbacks. Recover
+    // only immediate owner expressions after the direct checksum rotation and
+    // before that return. Every deferred function body remains untouched.
+    let owner = all
+        .iter()
+        .copied()
+        .find(|n| is_function(*n) && (n.start_byte(), n.end_byte()) == table.scope)?;
+    let body = owner.child_by_field_name("body")?;
+    let returned = children(body)
+        .into_iter()
+        .filter(|n| n.kind() != "comment")
+        .last()?;
+    if returned.kind() != "return_statement"
+        || !unsafe_refs
+            .iter()
+            .all(|n| returned.start_byte() <= n.start_byte() && n.end_byte() <= returned.end_byte())
+    {
+        return None;
+    }
+    let mut rotation_call = all
+        .iter()
+        .copied()
+        .find(|n| (n.start_byte(), n.end_byte()) == rotator && n.kind() == "call_expression")?;
+    while let Some(parent) = rotation_call
+        .parent()
+        .filter(|n| n.kind() == "parenthesized_expression")
+    {
+        rotation_call = parent;
+    }
+    let statement = rotation_call.parent()?;
+    if statement.kind() != "expression_statement"
+        || statement.parent() != Some(body)
+        || rotator.1 > returned.start_byte()
+    {
+        return None;
+    }
+    Some(ReductionRegion::ImmediatePrefix {
+        owner: table.scope,
+        after: rotator.1,
+        before: returned.start_byte(),
+    })
 }
 
 #[derive(Clone)]
@@ -1462,11 +1543,14 @@ pub(crate) fn decode(ast: filefacts::SourceAst<'_>) -> Option<String> {
                 }) else {
                     continue;
                 };
-                if !rotation_shape(&ctx, function, *condition, checksum)
-                    || !table_references_safe(&ctx, &all, (call.start_byte(), call.end_byte()))
-                {
+                if !rotation_shape(&ctx, function, *condition, checksum) {
                     continue;
                 }
+                let Some(region) =
+                    table_reference_region(&ctx, &all, (call.start_byte(), call.end_byte()))
+                else {
+                    continue;
+                };
                 for rotation in 0..ctx.tables[ctx.decoders[active].table].strings.len() {
                     if ctx.fuel.get() == 0 {
                         return None;
@@ -1481,6 +1565,7 @@ pub(crate) fn decode(ast: filefacts::SourceAst<'_>) -> Option<String> {
                         let mut end = 0;
                         for &n in &all {
                             if n.start_byte() < end
+                                || !region.allows(n)
                                 || covers(
                                     (function.start_byte(), function.end_byte()),
                                     n.start_byte(),
@@ -1639,5 +1724,73 @@ mod tests {
         );
         let out = reduce(&source).expect("remaining constants reduce");
         assert!(out.contains("ad(-0xef, readKey(), -0x9c, -0x7c)"));
+    }
+    fn escaped_terminal_fixture() -> String {
+        BASE.replace(
+            "function activate(context) {",
+            "function activate(context, e) {",
+        )
+        .replace(
+            "}\nexports.activate = activate;",
+            "return external(e);\n}\nexports.activate = activate;",
+        )
+    }
+    #[test]
+    fn recovers_only_immediate_prefix_before_terminal_producer_escape() {
+        let input = escaped_terminal_fixture();
+        assert!(input.contains("return external(e);"));
+        let out = reduce(&input).expect("stable immediate prefix");
+        assert!(out.contains("https://github.com/francesca898/dqwffqw/releases/download/vsx/autoimport-smart-tool-2.5.8.vsix"));
+        assert!(out.contains("return external(e);"));
+        assert!(
+            !out.contains("\"--install-extension\""),
+            "deferred installer bodies must remain unreduced after an escape"
+        );
+    }
+    #[test]
+    fn accepts_a_simple_parameter_shadowed_by_the_table_function() {
+        let input = BASE.replace(
+            "function activate(context) {",
+            "function activate(context, e) {",
+        );
+        assert!(
+            reduce(&input)
+                .expect("body function shadows parameter")
+                .contains("--install-extension")
+        );
+    }
+    #[test]
+    fn rejects_earlier_producer_escape_and_mutation_even_with_terminal_return() {
+        for extra in ["external(e);", "e().push('mutation');"] {
+            let input = escaped_terminal_fixture().replace(
+                "return external(e);",
+                &format!("{extra} return external(e);"),
+            );
+            assert!(reduce(&input).is_none(), "{extra}");
+        }
+    }
+    #[test]
+    fn terminal_escape_does_not_rewrite_nested_function_bodies() {
+        let input = escaped_terminal_fixture();
+        let out = reduce(&input).expect("stable prefix");
+        fn deferred(source: &str) -> String {
+            let ctx = crate::analysis_context::AnalysisContext::open(
+                Path::new("input.js"),
+                source.as_bytes(),
+            );
+            let ast = ctx.source_ast().unwrap();
+            let node = nodes(ast.tree.root_node())
+                .unwrap()
+                .into_iter()
+                .find(|n| {
+                    n.kind() == "function_declaration"
+                        && function_name(*n, source).as_deref() == Some("W")
+                })
+                .expect("deferred fixture function");
+            text(node, source).unwrap().to_owned()
+        }
+        let original = deferred(&input);
+        let retained = deferred(&out);
+        assert_eq!(original, retained);
     }
 }

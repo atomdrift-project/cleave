@@ -2895,3 +2895,48 @@ composite_rules:
         "the layer's own record is untouched"
     );
 }
+
+/// Large bundles must retain support findings until their consumers evaluate.
+/// The 500-finding presentation bound used to discard low-tier evidence first,
+/// losing hostile composites and negative gates while isolated rules still hit.
+#[test]
+fn atomic_finding_cap_retains_composite_support_and_exclusions() {
+    for (support_crit, excluded) in [("component", false), ("baseline", true), ("notable", false)] {
+        let mut yaml =
+            String::from("defaults:\n  platforms: [unix, windows]\n  for: [javascript]\ntraits:\n");
+        for i in 0..550 {
+            yaml.push_str(&format!(
+                "  - id: test/cap::noise-{i:03}\n    desc: Ordinary bundle observation\n    crit: notable\n    conf: 1.0\n    if: {{type: text, substr: CAP_NOISE}}\n"
+            ));
+        }
+        yaml.push_str(&format!(
+            "  - id: test/cap::zz-support\n    desc: Required low-priority evidence\n    crit: {support_crit}\n    conf: 0.8\n    if: {{type: text, substr: CAP_SUPPORT}}\ncomposite_rules:\n  - id: test/cap::verdict\n    desc: Composite requiring preserved evidence\n    crit: hostile\n    all:\n      - id: test/cap::noise-000\n"
+        ));
+        if excluded {
+            yaml.push_str("    unless:\n      - id: test/cap::zz-support\n");
+        } else {
+            yaml.push_str("      - id: test/cap::zz-support\n");
+        }
+        let (_dir, path) = create_test_yaml(&yaml);
+        let mapper = CapabilityMapper::from_yaml(&path).unwrap();
+        let source = pad_source("const a='CAP_NOISE'; const b='CAP_SUPPORT';".to_string());
+        let source = source.as_bytes();
+        let mut report = create_test_source_report("bundle.js", "javascript", source.len() as u64);
+        let atomic = mapper.evaluate_traits(&report, source);
+        assert!(
+            atomic.iter().any(|f| f.id == "test/cap::zz-support"),
+            "support must survive the atomic cap"
+        );
+        assert_eq!(
+            atomic.len(),
+            500,
+            "unreferenced observations remain bounded"
+        );
+        mapper.evaluate_and_merge_findings(&mut report, source, None, None);
+        let has_verdict = report.findings.iter().any(|f| f.id == "test/cap::verdict");
+        assert_eq!(
+            has_verdict, !excluded,
+            "support={support_crit}, excluded={excluded}"
+        );
+    }
+}

@@ -317,6 +317,9 @@ pub(crate) const MAX_TRAITS_PER_DIRECTORY: usize = 100;
 /// path fact; request use, SDK identity and endpoint operation are separate
 /// claims.
 const REVIEWED_DIRECTORY_TRAIT_BUDGETS: &[(&str, usize)] = &[
+    // Reviewed static-property catalogs; VSIX controls preserve distinct forms.
+    ("metadata/file/naming", 101),
+    ("metadata/file/archive", 101),
     ("metadata/package/dependencies/manifest/identity", 108),
     ("micro-behaviors/data/decode/base64", 103),
     ("micro-behaviors/fs/file/copy", 101),

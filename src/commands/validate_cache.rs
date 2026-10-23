@@ -1,4 +1,4 @@
-//! Successful full-validation cache. Every lookup reads input contents; stat
+//! Full-validation outcomes. Every lookup reads input contents; stat
 //! metadata is never evidence that rules, fixtures or engine code are unchanged.
 use super::{FixtureSummary, Target};
 use anyhow::{Context, Result};
@@ -17,7 +17,34 @@ pub(super) struct ResultCache {
 #[derive(Serialize, Deserialize)]
 struct Entry {
     key: String,
-    fixtures: FixtureSummary,
+    outcome: Outcome,
+}
+
+#[derive(Serialize, Deserialize)]
+pub(super) enum Outcome {
+    Passed(FixtureSummary),
+    /// A measured performance rejection is still a rejection on replay. Never
+    /// cache operational errors or promote an incomplete analysis to a pass.
+    PerformanceRejected(Vec<PerformanceIssue>),
+}
+
+#[derive(Serialize, Deserialize)]
+pub(super) struct PerformanceIssue {
+    message: String,
+    file: Option<String>,
+    line: Option<usize>,
+    rule_id: Option<String>,
+}
+
+impl PerformanceIssue {
+    pub(super) fn restore(self) -> crate::validation_controls::ValidationIssue {
+        let mut issue =
+            crate::validation_controls::ValidationIssue::new("rule-performance", self.message);
+        issue.file = self.file;
+        issue.line = self.line;
+        issue.rule_id = self.rule_id;
+        issue
+    }
 }
 
 impl ResultCache {
@@ -48,7 +75,15 @@ impl ResultCache {
         // Include all environment inputs, conservatively. Changing an unknown
         // dependency knob must miss rather than reuse a possibly different run.
         let mut env: Vec<_> = std::env::vars_os().collect();
-        env.retain(|(k, _)| k != "_" && k != "SHLVL");
+        // Shell bookkeeping and caller invocation IDs cannot affect rule
+        // evaluation. In particular, separate agent tool calls must be able
+        // to reuse a result even though each call has a fresh identifier.
+        env.retain(|(k, _)| {
+            !matches!(
+                k.to_str(),
+                Some("_" | "SHLVL" | "CODEX_TOOL_CALL_ID" | "CODEX_SESSION_ID" | "CODEX_THREAD_ID")
+            )
+        });
         env.sort();
         let mut settings = Sha256::new();
         field(&mut settings, &slow_rule_ms.to_le_bytes());
@@ -84,6 +119,8 @@ impl ResultCache {
             crate::traits_fingerprint::binary_identity(),
         )
         .ok()?;
+        tracing::debug!(key = %key, settings = %hex::encode(&settings),
+            engine = crate::traits_fingerprint::binary_identity(), "validation cache fingerprint");
         let tag = hex::encode(Sha256::digest(traits_dir.as_os_str().as_encoded_bytes()));
         let path = crate::cache::cache_dir()
             .ok()?
@@ -96,16 +133,45 @@ impl ResultCache {
         })
     }
 
-    pub(super) fn load(&self) -> Option<FixtureSummary> {
-        let entry: Entry = serde_json::from_slice(&std::fs::read(&self.path).ok()?).ok()?;
+    pub(super) fn load(&self) -> Option<Outcome> {
+        let bytes = std::fs::read(&self.path).ok()?;
+        let entry: Entry = match serde_json::from_slice(&bytes) {
+            Ok(entry) => entry,
+            Err(error) => {
+                tracing::debug!(%error, "validation cache entry could not be decoded");
+                return None;
+            }
+        };
         if entry.key != self.key {
+            tracing::debug!(cached = %entry.key, current = %self.key, "validation cache inputs differ");
             return None;
         }
         tracing::info!("full validation cache hit (content verified)");
-        Some(entry.fixtures)
+        Some(entry.outcome)
     }
 
     pub(super) fn store_if_unchanged(&self, fixtures: &FixtureSummary) {
+        self.store_outcome_if_unchanged(&Outcome::Passed(fixtures.clone()));
+    }
+
+    pub(super) fn store_rejection_if_unchanged(
+        &self,
+        issues: &[crate::validation_controls::ValidationIssue],
+    ) {
+        self.store_outcome_if_unchanged(&Outcome::PerformanceRejected(
+            issues
+                .iter()
+                .map(|issue| PerformanceIssue {
+                    message: issue.message.clone(),
+                    file: issue.file.clone(),
+                    line: issue.line,
+                    rule_id: issue.rule_id.clone(),
+                })
+                .collect(),
+        ));
+    }
+
+    fn store_outcome_if_unchanged(&self, outcome: &Outcome) {
         // Recollect as well as rehash: additions/removals in walked corpora and
         // newly unlisted top-level fixtures must invalidate the completed run.
         let unchanged = (|| -> Result<bool> {
@@ -126,11 +192,11 @@ impl ResultCache {
         #[derive(Serialize)]
         struct BorrowedEntry<'a> {
             key: &'a str,
-            fixtures: &'a FixtureSummary,
+            outcome: &'a Outcome,
         }
         if let Ok(bytes) = serde_json::to_vec(&BorrowedEntry {
             key: &self.key,
-            fixtures,
+            outcome,
         }) {
             if let Err(error) = crate::cache::atomic_write(&self.path, &bytes) {
                 tracing::debug!(%error, "validation result cache write failed");
@@ -173,7 +239,7 @@ fn fingerprint_with_sources(
     engine: &str,
 ) -> Result<String> {
     let mut hash = Sha256::new();
-    field(&mut hash, b"cleave-full-validation-v3");
+    field(&mut hash, b"cleave-full-validation-v4");
     field(&mut hash, traits_dir.as_os_str().as_encoded_bytes());
     field(&mut hash, engine.as_bytes());
     field(&mut hash, settings);
@@ -280,6 +346,17 @@ mod tests {
         };
         let fixtures = vec![fixture.clone()];
         let before = key("expectations", b"strict", "engine-a", &fixtures);
+        assert_eq!(
+            before,
+            key("expectations", b"strict", "engine-a", &fixtures)
+        );
+        let added = root.join("objectives/added.yaml");
+        std::fs::write(&added, b"rule: new").unwrap();
+        assert_ne!(
+            before,
+            key("expectations", b"strict", "engine-a", &fixtures)
+        );
+        std::fs::remove_file(added).unwrap();
         assert_eq!(
             before,
             key("expectations", b"strict", "engine-a", &fixtures)

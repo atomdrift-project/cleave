@@ -83,7 +83,6 @@ impl CompiledAstQuery {
         cancellation: Option<&AtomicBool>,
     ) {
         if source.len() >= 256 * 1024
-            && !crate::validation_performance::active()
             && let Some(index) = index
         {
             self.subqueries
@@ -519,6 +518,10 @@ pub(super) fn eval_ast_query_with_budget<'a>(
     {
         return ConditionResult::no_match();
     }
+    // Include necessary-child pruning in measured execution cost. Validation
+    // uses the same semantics-preserving gate as ordinary scans, while still
+    // executing queries independently rather than reusing a shared batch.
+    let _execution_timer = crate::validation_performance::ast_execution_started();
     if RequiredSubqueries::enabled() {
         let mut enabled = vec![true; compiled.query.pattern_count()];
         compiled.prune_subqueries(
@@ -551,7 +554,6 @@ pub(super) fn eval_ast_query_with_budget<'a>(
     // spuriously and silently drops detections. CPU time avoids both.
     let mut match_count: usize = 0;
     let mut capture_count: usize = 0;
-    let _execution_timer = crate::validation_performance::ast_execution_started();
     let cpu_start = thread_cpu_time();
     let deadline = ctx.deadline;
     let timed_out = Cell::new(false);
@@ -712,12 +714,11 @@ fn cached_ast_query(
     let compiled = tree_sitter::Query::new(lang, query_str).ok().map(|query| {
         let literals = RequiredLiterals::of(&query, query_str);
         let nodes = RequiredNodes::of(lang, &query, query_str);
-        let subqueries =
-            if RequiredSubqueries::enabled() && !crate::validation_performance::active() {
-                RequiredSubqueries::of(lang, &query, query_str)
-            } else {
-                RequiredSubqueries::default()
-            };
+        let subqueries = if RequiredSubqueries::enabled() {
+            RequiredSubqueries::of(lang, &query, query_str)
+        } else {
+            RequiredSubqueries::default()
+        };
         Arc::new(CompiledAstQuery {
             query,
             literals,

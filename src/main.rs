@@ -303,7 +303,7 @@ fn run() -> Result<()> {
     start_deadlock_detector();
 
     let disabled = args.disabled_components();
-    apply_runtime_overrides(args.traits_dir.as_deref(), &disabled);
+    apply_runtime_overrides(args.traits_dir.as_deref(), args.enriched, &disabled);
     // `cleave validate` defaults to deterministic scoring with YARA disabled;
     // explicitly enabled fixtures load it lazily.
     // Skip the ~4 s (release) / ~18 s (debug) compile of 14 k+ inline YARA

@@ -32,6 +32,7 @@ pub mod cancellation;
 pub(crate) mod context;
 pub mod decoders;
 mod engine;
+pub mod enriched;
 mod entropy;
 pub mod extractors;
 pub mod file_io;

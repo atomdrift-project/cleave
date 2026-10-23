@@ -120,6 +120,7 @@ fn explicit_traits_dir_from(override_dir: Option<PathBuf>, env: Option<String>) 
 /// Returns the path to a usable traits directory, or an error if traits cannot
 /// be obtained.
 pub fn resolve_and_ensure() -> Result<PathBuf, String> {
+    migrate_legacy_install();
     // 1. Explicit override via API setter or CLEAVE_TRAITS_DIR env var
     if let Some(explicit) = explicit_traits_dir() {
         let p = PathBuf::from(&explicit);
@@ -187,6 +188,7 @@ pub fn try_resolve() -> Result<PathBuf, String> {
 /// `resolve_current_traits_dir` it's public and doesn't require the dir to exist.
 #[must_use]
 pub fn install_target() -> PathBuf {
+    migrate_legacy_install();
     if let Some(explicit) = explicit_traits_dir() {
         return PathBuf::from(explicit);
     }
@@ -197,13 +199,64 @@ pub fn install_target() -> PathBuf {
     default_traits_dir()
 }
 
-/// Platform-specific data directory for cleave traits.
-fn default_traits_dir() -> PathBuf {
+/// Where the update bucket's traits are installed for this process: the
+/// enriched tree under `--enriched`, the open-source one otherwise.
+pub(crate) fn default_traits_dir() -> PathBuf {
+    installed_dir(crate::enriched::enabled())
+}
+
+/// Where the update bucket installs one channel's traits:
+/// `<data>/atomdrift/cleave/traits-oss` or `…/traits-enriched`.
+///
+/// The two sit side by side so a host can hold both, and so the open-source
+/// tree is never overwritten by, or mistaken for, the paid one. The directory
+/// name is the channel.
+#[must_use]
+pub fn installed_dir(enriched: bool) -> PathBuf {
+    installed_root().join(if enriched {
+        "traits-enriched"
+    } else {
+        "traits-oss"
+    })
+}
+
+fn installed_root() -> PathBuf {
     dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("atomdrift")
         .join("cleave")
-        .join("traits")
+}
+
+/// Move a `traits/` left by a cleave from before the split to `traits-oss/`,
+/// once per process, before anything resolves or installs the default tree.
+/// One atomic rename, so a host that is offline right after an upgrade still
+/// has rules.
+fn migrate_legacy_install() {
+    static MIGRATE: std::sync::Once = std::sync::Once::new();
+    MIGRATE.call_once(|| {
+        let root = installed_root();
+        migrate_legacy_dir(&root.join("traits"), &root.join("traits-oss"));
+    });
+}
+
+/// Rename the pre-split `traits/` to `traits-oss/`, unless the new one exists.
+///
+/// Whatever it is moves: an installed bundle, a checkout, or a symlink to one —
+/// a rename moves the link, not its target, so a developer's `traits ->
+/// traits-dev` keeps pointing where it did. Leaving a git-managed tree behind
+/// would instead strand it and bootstrap a public bundle in its place.
+fn migrate_legacy_dir(legacy: &Path, oss: &Path) {
+    if std::fs::symlink_metadata(oss).is_ok() || std::fs::symlink_metadata(legacy).is_err() {
+        return;
+    }
+    match std::fs::rename(legacy, oss) {
+        Ok(()) => {
+            tracing::info!(from = %legacy.display(), to = %oss.display(), "moved installed traits")
+        }
+        Err(e) => {
+            tracing::warn!(from = %legacy.display(), error = %e, "could not move installed traits; reinstalling")
+        }
+    }
 }
 
 /// Check if a directory looks like a valid traits checkout.
@@ -414,6 +467,45 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_pre_split_install_becomes_the_oss_tree_once() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (legacy, oss) = (tmp.path().join("traits"), tmp.path().join("traits-oss"));
+        std::fs::create_dir_all(legacy.join("objectives")).unwrap();
+        migrate_legacy_dir(&legacy, &oss);
+        assert!(oss.join("objectives").is_dir());
+        assert!(!legacy.exists());
+
+        // An existing traits-oss is never replaced by a stale traits/.
+        std::fs::create_dir_all(legacy.join("stale")).unwrap();
+        migrate_legacy_dir(&legacy, &oss);
+        assert!(legacy.join("stale").is_dir());
+        assert!(!oss.join("stale").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_pre_split_symlink_moves_and_keeps_its_target() {
+        let tmp = tempfile::tempdir().unwrap();
+        let checkout = tmp.path().join("traits-dev");
+        std::fs::create_dir_all(checkout.join(".git")).unwrap();
+        std::fs::create_dir_all(checkout.join("objectives")).unwrap();
+        let (legacy, oss) = (tmp.path().join("traits"), tmp.path().join("traits-oss"));
+        std::os::unix::fs::symlink(&checkout, &legacy).unwrap();
+
+        migrate_legacy_dir(&legacy, &oss);
+        assert_eq!(
+            std::fs::read_link(&oss).unwrap(),
+            checkout,
+            "the link moved, not its target"
+        );
+        assert!(std::fs::symlink_metadata(&legacy).is_err());
+        assert!(
+            checkout.join("objectives").is_dir(),
+            "the checkout is untouched"
+        );
+    }
+
+    #[test]
     fn git_rule_tree_dirty_tracks_only_rule_sources() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
@@ -531,8 +623,8 @@ mod tests {
 
     #[test]
     fn test_default_traits_dir_is_under_cleave() {
-        let dir = default_traits_dir();
-        assert!(dir.ends_with("cleave/traits"));
+        assert!(installed_dir(false).ends_with("atomdrift/cleave/traits-oss"));
+        assert!(installed_dir(true).ends_with("atomdrift/cleave/traits-enriched"));
     }
 
     /// A git-managed traits checkout must still report a version. It carries no

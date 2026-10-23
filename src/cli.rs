@@ -195,6 +195,12 @@ pub struct Args {
     #[arg(long, value_name = "DIR")]
     pub traits_dir: Option<String>,
 
+    /// Use the isotope13 Enriched ruleset: the private rules, fresh the hour
+    /// they clear QA. Requires a subscription token from ISOTOPE13_TOKEN or the
+    /// saved one, and asks for one on a terminal. Env: ATOMDRIFT_ENRICHED=1
+    #[arg(long)]
+    pub enriched: bool,
+
     /// Maximum file size (in MB) to keep in memory during archive analysis.
     /// Files larger than this are written to temp files. Default: 100 MB.
     #[arg(long, value_name = "MB", default_value_t = 100)]

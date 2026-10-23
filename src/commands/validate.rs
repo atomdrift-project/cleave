@@ -29,6 +29,8 @@ mod result_cache;
 
 /// A single file to analyze during validation and how to judge its score.
 enum Target {
+    /// Cost probes; findings are unrestricted, but execution budgets still apply.
+    Performance { path: PathBuf },
     /// Known-hostile sample whose root-file score and severe finding counts
     /// must stay above a per-file floor.
     Hostile {
@@ -72,7 +74,8 @@ impl Target {
             Self::Hostile { path, .. }
             | Self::Benign { path, .. }
             | Self::WalkedHostile { path, .. }
-            | Self::DoesNothing { path, .. } => path,
+            | Self::DoesNothing { path, .. }
+            | Self::Performance { path } => path,
         }
     }
 
@@ -80,7 +83,9 @@ impl Target {
     fn requires_yara(&self) -> bool {
         match self {
             Self::Hostile { traits, .. } | Self::Benign { traits, .. } => traits.enable_yara,
-            Self::WalkedHostile { .. } | Self::DoesNothing { .. } => false,
+            Self::WalkedHostile { .. } | Self::DoesNothing { .. } | Self::Performance { .. } => {
+                false
+            }
         }
     }
 }
@@ -165,8 +170,14 @@ pub fn run_with_options(
     validation_controls::set_soft_validation_mode(soft);
     let (targets, expectations, expectations_text) = collect_targets()?;
     let traits_dir = cleave::traits_repo::try_resolve().map_err(anyhow::Error::msg)?;
-    let result_cache =
-        result_cache::ResultCache::new(&traits_dir, &targets, &expectations_text, soft, verbose);
+    let result_cache = result_cache::ResultCache::new(
+        &traits_dir,
+        &targets,
+        &expectations_text,
+        soft,
+        verbose,
+        slow_rule_ms,
+    );
     if let Some(fixtures) = result_cache
         .as_ref()
         .and_then(result_cache::ResultCache::load)
@@ -178,10 +189,11 @@ pub fn run_with_options(
     let stage =
         NeutralStage::new(&cleave::traits_repo::try_resolve().map_err(anyhow::Error::msg)?)?;
 
-    // The analysis cache stays on: its entries are keyed on each fixture's
-    // SHA-256 and on the content of the trait set and the build, so a hit is
-    // exactly what analyzing again would produce. Route validation-issue
-    // rendering through the chosen output format.
+    // A verified full-validation cache hit above can reuse a measured pass.
+    // Fresh performance validation bypasses analysis reports and shared AST
+    // batches so each rule's cost is measured, not hidden by previously computed
+    // answers. Compiled-rule caches remain available. Route validation issues
+    // through the chosen output format.
     cleave::validation_controls::set_validation_output_format(Some(match format {
         OutputFormat::Tiny => cleave::validation_controls::ValidationOutputFormat::Tiny,
         OutputFormat::Json | OutputFormat::Jsonl | OutputFormat::Snapshot => {
@@ -246,6 +258,7 @@ pub fn run_with_options(
         cleave::prefetch_yara_engine(yara_options.enable_third_party_yara);
     }
     let yara_ms = yara_started.elapsed().as_millis();
+    let performance = crate::validation_performance::Session::begin();
     let analysis_started = Instant::now();
 
     // One lane per pool thread, each pulling the next fixture, so that every
@@ -326,7 +339,31 @@ pub fn run_with_options(
             .as_ref()
             .is_ok_and(|report| !crate::analysis_cache::evaluation_incomplete(report))
     }) && crate::yara_engine::yara_degradation().is_none();
+    let performance_issues = performance.issues();
+    if !performance_issues.is_empty() {
+        let rendered = match format {
+            OutputFormat::Tiny => {
+                validation_controls::format_validation_issues_tiny(&performance_issues)
+            }
+            OutputFormat::Json | OutputFormat::Jsonl | OutputFormat::Snapshot => {
+                validation_controls::format_validation_issues_json(&performance_issues)
+            }
+            OutputFormat::Terminal => {
+                validation_controls::format_validation_issues_terminal(&performance_issues)
+            }
+        };
+        eprintln!("{rendered}");
+    }
     let stats = evaluate(results, &expectations.does_nothing)?;
+    if performance_issues
+        .iter()
+        .any(|p| p.severity >= validation_controls::fatal_severity_threshold())
+    {
+        anyhow::bail!(
+            "{} rule performance validation check(s) failed",
+            performance_issues.len()
+        );
+    }
 
     // Report overlapping traits if found
     if !overlap_findings.is_empty() {
@@ -337,6 +374,10 @@ pub fn run_with_options(
     }
 
     let report = validation_output(FixtureSummary {
+        performance: FixtureCount {
+            passed: stats.performance_passed,
+            total: stats.performance_total,
+        },
         hostile: FixtureCount {
             passed: stats.hostile_passed,
             total: stats.hostile_total,
@@ -359,7 +400,10 @@ pub fn run_with_options(
             })
             .collect(),
     });
-    if cacheable && let Some(cache) = result_cache {
+    if cacheable
+        && performance_issues.is_empty()
+        && let Some(cache) = result_cache
+    {
         cache.store_if_unchanged(&report.fixtures);
     }
 
@@ -390,6 +434,8 @@ struct ValidateOutput {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct FixtureSummary {
+    #[serde(default)]
+    performance: FixtureCount,
     hostile: FixtureCount,
     benign: FixtureCount,
     does_nothing: FixtureCount,
@@ -397,7 +443,7 @@ struct FixtureSummary {
     walked_hostile: Vec<WalkedCorpusCount>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 struct FixtureCount {
     passed: usize,
     total: usize,
@@ -436,6 +482,12 @@ fn format_validate_terminal(report: &ValidateOutput) -> String {
         report.fixtures.does_nothing.passed,
         report.fixtures.does_nothing.total
     ));
+    if report.fixtures.performance.total > 0 {
+        out.push_str(&format!(
+            "  performance {}/{}",
+            report.fixtures.performance.passed, report.fixtures.performance.total
+        ));
+    }
     for c in &report.fixtures.walked_hostile {
         out.push_str(&format!("  {} {}/{}", c.corpus, c.passed, c.total));
     }
@@ -469,6 +521,12 @@ fn format_validate_tiny(report: &ValidateOutput) -> String {
         report.fixtures.does_nothing.passed,
         report.fixtures.does_nothing.total
     ));
+    if report.fixtures.performance.total > 0 {
+        out.push_str(&format!(
+            " performance={}/{}",
+            report.fixtures.performance.passed, report.fixtures.performance.total
+        ));
+    }
     for c in &report.fixtures.walked_hostile {
         out.push_str(&format!(" {}={}/{}", c.corpus, c.passed, c.total));
     }
@@ -476,7 +534,7 @@ fn format_validate_tiny(report: &ValidateOutput) -> String {
     out
 }
 
-/// Build the full target list: hostile/benign fixtures + walked does-nothing corpus.
+/// Build the full target list, including walked performance cost probes.
 ///
 /// Returns the loaded [`Expectations`] alongside the targets so the evaluator can
 /// consult the does-nothing caps. Expectations live in the traits repo (not the
@@ -524,6 +582,24 @@ fn collect_targets() -> Result<(Vec<Target>, Expectations, String)> {
         }
     }
 
+    let performance_dir = traits_dir.join("testdata").join("performance");
+    if performance_dir.is_dir() {
+        for entry in walkdir::WalkDir::new(&performance_dir)
+            .follow_links(false)
+            .into_iter()
+            .filter_entry(|e| {
+                is_fixture_entry(e)
+                    && (e.depth() == 0 || !e.file_type().is_dir() || e.file_name() != "scripts")
+            })
+        {
+            let entry = entry?;
+            if entry.file_type().is_file() {
+                targets.push(Target::Performance {
+                    path: entry.into_path(),
+                });
+            }
+        }
+    }
     Ok((targets, exp, expectations_text))
 }
 
@@ -662,6 +738,8 @@ fn walk_hostile_corpus(
 
 /// Walk the collected analysis results, emitting failures inline and tallying totals.
 struct ValidationStats {
+    performance_passed: usize,
+    performance_total: usize,
     hostile_passed: usize,
     hostile_total: usize,
     benign_passed: usize,
@@ -685,6 +763,8 @@ fn evaluate(
     let disable_score_caps = validation_controls::is_validator_disabled("score-caps");
 
     let mut stats = ValidationStats {
+        performance_passed: 0,
+        performance_total: 0,
         hostile_passed: 0,
         hostile_total: 0,
         benign_passed: 0,
@@ -702,6 +782,7 @@ fn evaluate(
                 eprintln!("❌ {}: analysis failed: {e:#}", safe_path(target.path()));
                 failed += 1;
                 match target {
+                    Target::Performance { .. } => stats.performance_total += 1,
                     Target::Hostile { .. } => stats.hostile_total += 1,
                     Target::Benign { .. } => stats.benign_total += 1,
                     Target::DoesNothing { .. } => stats.does_nothing_total += 1,
@@ -714,6 +795,10 @@ fn evaluate(
         };
 
         match target {
+            Target::Performance { .. } => {
+                stats.performance_total += 1;
+                stats.performance_passed += 1;
+            }
             Target::Hostile {
                 path,
                 min_score,

@@ -5773,7 +5773,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter"
 version = "0.28.0"
-source = "git+https://github.com/tstromberg/tree-sitter?branch=master#68fddc3ea84b2b4445aba7e0f85847e79e342725"
+source = "git+https://github.com/tstromberg/tree-sitter?branch=master#b6a85b1062dac229f8008613d5017edeadbcfa97"
 dependencies = [
  "cc",
  "regex",
@@ -5894,7 +5894,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-language"
 version = "0.1.8"
-source = "git+https://github.com/tstromberg/tree-sitter?branch=master#68fddc3ea84b2b4445aba7e0f85847e79e342725"
+source = "git+https://github.com/tstromberg/tree-sitter?branch=master#b6a85b1062dac229f8008613d5017edeadbcfa97"
 
 [[package]]
 name = "tree-sitter-lua"
@@ -7360,8 +7360,3 @@ dependencies = [
  "cc",
  "pkg-config",
 ]
-
-[[patch.unused]]
-name = "wasmtime"
-version = "45.0.3"
-source = "git+https://github.com/tstromberg/wasmtime.git?branch=netbsd-solaris-45.0.3#7c04f13deaacdefc756b5cc53f5eaa0f09af4ce4"

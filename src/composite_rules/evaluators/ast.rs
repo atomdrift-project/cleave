@@ -5,7 +5,7 @@
 //! - Tree-sitter query execution
 //! - Safe AST traversal with depth limits
 
-use super::ast_gate::{NodeTextIndex, RequiredLiterals, RequiredNodes};
+use super::ast_gate::{NodeTextIndex, RequiredLiterals, RequiredNodes, RequiredSubqueries};
 use super::{build_regex, truncate_evidence};
 use crate::analyzers::ast_walker::{AST_QUERY_CPU_BUDGET, thread_cpu_time};
 use crate::composite_rules::ast_kinds::map_kind_to_node_types;
@@ -69,9 +69,28 @@ struct CompiledAstQuery {
     query: tree_sitter::Query,
     literals: RequiredLiterals,
     nodes: RequiredNodes,
+    subqueries: RequiredSubqueries,
 }
 
 impl CompiledAstQuery {
+    fn prune_subqueries(
+        &self,
+        tree: &tree_sitter::Tree,
+        source: &str,
+        index: Option<&NodeTextIndex>,
+        enabled: &mut [bool],
+        deadline: Option<Instant>,
+        cancellation: Option<&AtomicBool>,
+    ) {
+        if source.len() >= 256 * 1024
+            && !crate::validation_performance::active()
+            && let Some(index) = index
+        {
+            self.subqueries
+                .prune_indexed(tree, source, index, enabled, deadline, cancellation);
+        }
+    }
+
     /// Whether `source` holds every literal some pattern requires. `false`
     /// proves the query cannot match, so the walk can be skipped.
     fn may_match(&self, source: &[u8]) -> bool {
@@ -493,8 +512,26 @@ pub(super) fn eval_ast_query_with_budget<'a>(
     let Some(compiled) = cached_ast_query(lang, ctx.file_type, query_str) else {
         return ConditionResult::no_match();
     };
-    if !compiled.may_match(source.as_bytes()) {
+    if !compiled.may_match(source.as_bytes())
+        || ctx
+            .ast_node_text
+            .is_some_and(|index| !compiled.nodes.may_match(index))
+    {
         return ConditionResult::no_match();
+    }
+    if RequiredSubqueries::enabled() {
+        let mut enabled = vec![true; compiled.query.pattern_count()];
+        compiled.prune_subqueries(
+            tree,
+            source,
+            ctx.ast_node_text,
+            &mut enabled,
+            ctx.deadline,
+            ctx.cancellation,
+        );
+        if !enabled.iter().any(|&active| active) {
+            return ConditionResult::no_match();
+        }
     }
     let query = &compiled.query;
 
@@ -514,6 +551,7 @@ pub(super) fn eval_ast_query_with_budget<'a>(
     // spuriously and silently drops detections. CPU time avoids both.
     let mut match_count: usize = 0;
     let mut capture_count: usize = 0;
+    let _execution_timer = crate::validation_performance::ast_execution_started();
     let cpu_start = thread_cpu_time();
     let deadline = ctx.deadline;
     let timed_out = Cell::new(false);
@@ -538,12 +576,22 @@ pub(super) fn eval_ast_query_with_budget<'a>(
         }
         ControlFlow::Continue(())
     };
-    let mut capture_predicate = |pattern, capture, node: tree_sitter::Node<'_>| {
-        query.capture_satisfies_text_predicates(pattern, capture, node, source.as_bytes())
-    };
+    let mut capture_predicate =
+        |pattern,
+         capture,
+         node: tree_sitter::Node<'_>,
+         previous: &[tree_sitter::QueryCapture<'_>]| {
+            query.capture_satisfies_match_predicates(
+                pattern,
+                capture,
+                node,
+                previous,
+                source.as_bytes(),
+            )
+        };
     let options = tree_sitter::QueryCursorOptions::default()
         .progress_callback(&mut progress_cb)
-        .capture_predicate(&mut capture_predicate);
+        .capture_match_predicate(&mut capture_predicate);
     let mut matches =
         query_cursor.matches_with_options(query, tree.root_node(), source.as_bytes(), options);
     'matches: while let Some(m) = matches.next() {
@@ -663,11 +711,18 @@ fn cached_ast_query(
     let compile_started = diagnostic.then(Instant::now);
     let compiled = tree_sitter::Query::new(lang, query_str).ok().map(|query| {
         let literals = RequiredLiterals::of(&query, query_str);
-        let nodes = RequiredNodes::of(&query, query_str);
+        let nodes = RequiredNodes::of(lang, &query, query_str);
+        let subqueries =
+            if RequiredSubqueries::enabled() && !crate::validation_performance::active() {
+                RequiredSubqueries::of(lang, &query, query_str)
+            } else {
+                RequiredSubqueries::default()
+            };
         Arc::new(CompiledAstQuery {
             query,
             literals,
             nodes,
+            subqueries,
         })
     });
     if let Some(started) = compile_started {
@@ -682,6 +737,10 @@ fn cached_ast_query(
 /// Combined `query:` batches share one cursor, so a bomb can starve later
 /// patterns — on exceed we drop the batch and fall back to per-query eval.
 const COMBINED_AST_QUERY_MATCH_LIMIT: u32 = 65_536;
+// A shared cursor must not let one combinatorial pattern spend the whole
+// batch's CPU budget. Its per-pattern overflow bit sends only that query to
+// the ordinary evaluator, which retains the full standalone state limit.
+const COMBINED_AST_QUERY_GROUP_STATE_LIMIT: u32 = 64;
 
 /// Run every applicable `query:` in one `QueryCursor` walk. `None` means
 /// "do not use a batch" — caller keeps the per-trait `eval_ast_query` path
@@ -727,6 +786,7 @@ pub(super) fn batch_ast_queries_with_budget(
         cancellation,
         cpu_budget_override,
         None,
+        None,
     )
 }
 
@@ -740,6 +800,7 @@ pub(crate) fn batch_ast_queries_with_index(
     cancellation: Option<&AtomicBool>,
     cpu_budget_override: Option<std::time::Duration>,
     node_text: Option<&NodeTextIndex>,
+    boolean_queries: Option<&rustc_hash::FxHashSet<String>>,
 ) -> Option<FxHashMap<String, ConditionResult>> {
     if query_strs.len() < 2 || source.len() > AST_QUERY_BYTE_LIMIT {
         return None;
@@ -747,6 +808,7 @@ pub(crate) fn batch_ast_queries_with_index(
     let lang = &*tree.language();
     let mut compiling: Vec<(&str, Arc<CompiledAstQuery>)> = Vec::new();
     let mut active = Vec::new();
+    let mut pattern_active = Vec::new();
     let owned_node_text;
     let node_text = match node_text {
         Some(index) => index,
@@ -776,16 +838,30 @@ pub(crate) fn batch_ast_queries_with_index(
         // query beside it at that, so on a loaded machine the walk stopped
         // early and their matches later in the file came and went with load.
         // Left out of the map, it runs alone under its own budget.
-        if count_unbounded_any_wildcards(q) >= 2 {
-            continue;
-        }
         if let Some(compiled) = cached_ast_query(lang, file_type, q) {
-            let possible =
-                compiled.literals.may_match(&mut contains) && compiled.nodes.may_match(node_text);
+            let mut enabled: Vec<bool> = (0..compiled.query.pattern_count())
+                .map(|pattern| {
+                    compiled.nodes.pattern_may_match(pattern, node_text)
+                        && compiled.literals.pattern_may_match(pattern, &mut contains)
+                })
+                .collect();
+            compiled.prune_subqueries(
+                tree,
+                source,
+                Some(node_text),
+                &mut enabled,
+                deadline,
+                cancellation,
+            );
+            let possible = enabled.iter().any(|&enabled| enabled);
             if !possible {
                 out.insert(q.to_string(), ConditionResult::no_match());
             }
+            if count_unbounded_any_wildcards(q) >= 2 {
+                continue;
+            }
             active.push(possible);
+            pattern_active.extend(enabled);
             compiling.push((q, compiled));
         }
     }
@@ -859,10 +935,10 @@ pub(crate) fn batch_ast_queries_with_index(
     // literal gates only disable patterns on a private copy; they must not
     // create another expensive ts_query_new for each surviving subset, or
     // mutate the shared query observed by concurrent archive workers.
-    let narrowed = active.iter().any(|&enabled| !enabled).then(|| {
+    let narrowed = pattern_active.iter().any(|&enabled| !enabled).then(|| {
         let mut query = combined.query.deep_clone();
-        for (pattern, &qi) in combined.pattern_to_query.iter().enumerate() {
-            if !active[qi] {
+        for (pattern, &enabled) in pattern_active.iter().enumerate() {
+            if !enabled {
                 query.disable_pattern(pattern);
             }
         }
@@ -877,6 +953,7 @@ pub(crate) fn batch_ast_queries_with_index(
         capture_count: usize,
         capture_limited: bool,
         match_limited: bool,
+        complete: bool,
     }
     let n = compiling.len();
     let mut buckets: Vec<Bucket> = (0..n)
@@ -887,12 +964,16 @@ pub(crate) fn batch_ast_queries_with_index(
             capture_count: 0,
             capture_limited: false,
             match_limited: false,
+            complete: false,
         })
         .collect();
 
     let mut query_cursor = tree_sitter::QueryCursor::new();
     query_cursor.set_match_limit(COMBINED_AST_QUERY_MATCH_LIMIT);
-    query_cursor.set_max_states_per_group(AST_QUERY_GROUP_STATE_LIMIT);
+    query_cursor.set_max_states_per_group(COMBINED_AST_QUERY_GROUP_STATE_LIMIT);
+    // A limited pattern will be retried independently. Stop spending shared
+    // traversal time on it so unrelated patterns can finish within the budget.
+    query_cursor.set_stop_on_pattern_limit(true);
     query_cursor.set_byte_range(0..source.len().min(AST_QUERY_BYTE_LIMIT));
 
     let cancelled = || cancellation.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed));
@@ -902,7 +983,18 @@ pub(crate) fn batch_ast_queries_with_index(
         .map(|(query, _)| ast_query_cpu_budget(query, deadline))
         .min()
         .unwrap_or(AST_QUERY_CPU_BUDGET);
-    let cpu_budget = cpu_budget_override.unwrap_or(default_cpu_budget);
+    // Diagnostic override for measuring the cost of repeated standalone
+    // walks after the shared batch reaches its CPU budget. An unfinished
+    // query still falls back to its ordinary per-query budget below.
+    let cpu_budget = cpu_budget_override
+        .or_else(|| {
+            std::env::var("CLEAVE_AST_BATCH_CPU_MS")
+                .ok()
+                .and_then(|value| value.parse::<u64>().ok())
+                .filter(|&ms| ms > 0)
+                .map(std::time::Duration::from_millis)
+        })
+        .unwrap_or(default_cpu_budget);
     let cpu_start = thread_cpu_time();
     let timed_out = Cell::new(false);
     let mut progress_cb = |_state: &tree_sitter::QueryCursorState| -> ControlFlow<()> {
@@ -920,12 +1012,22 @@ pub(crate) fn batch_ast_queries_with_index(
         }
         ControlFlow::Continue(())
     };
-    let mut capture_predicate = |pattern, capture, node: tree_sitter::Node<'_>| {
-        query.capture_satisfies_text_predicates(pattern, capture, node, source.as_bytes())
-    };
+    let mut capture_predicate =
+        |pattern,
+         capture,
+         node: tree_sitter::Node<'_>,
+         previous: &[tree_sitter::QueryCapture<'_>]| {
+            query.capture_satisfies_match_predicates(
+                pattern,
+                capture,
+                node,
+                previous,
+                source.as_bytes(),
+            )
+        };
     let options = tree_sitter::QueryCursorOptions::default()
         .progress_callback(&mut progress_cb)
-        .capture_predicate(&mut capture_predicate);
+        .capture_match_predicate(&mut capture_predicate);
     let mut matches =
         query_cursor.matches_with_options(query, tree.root_node(), source.as_bytes(), options);
     while let Some(m) = matches.next() {
@@ -943,15 +1045,21 @@ pub(crate) fn batch_ast_queries_with_index(
             continue;
         };
         let bucket = &mut buckets[qi];
-        if bucket.capture_limited || bucket.match_limited {
+        if bucket.complete || bucket.capture_limited || bucket.match_limited {
+            let pattern = m.pattern_index;
+            matches.disable_pattern(pattern);
             continue;
         }
         if bucket.query_matches >= AST_QUERY_MATCH_LIMIT as usize {
             bucket.match_limited = true;
+            let pattern = m.pattern_index;
+            matches.disable_pattern(pattern);
             continue;
         }
         if bucket.capture_count >= AST_QUERY_CAPTURE_LIMIT {
             bucket.capture_limited = true;
+            let pattern = m.pattern_index;
+            matches.disable_pattern(pattern);
             continue;
         }
         bucket.query_matches += 1;
@@ -979,18 +1087,29 @@ pub(crate) fn batch_ast_queries_with_index(
                 });
             }
         }
+        if boolean_queries.is_some_and(|queries| queries.contains(compiling[qi].0)) {
+            bucket.complete = true;
+            // A query can contain several patterns. Stop all of them without
+            // mutating the shared compiled Query or the other queries' states.
+            for (pattern, &owner) in combined.pattern_to_query.iter().enumerate() {
+                if owner == qi {
+                    matches.disable_pattern(pattern);
+                }
+            }
+        }
     }
     if timed_out.get() {
         tracing::debug!(
             queries = n,
+            source_bytes = source.len(),
             budget_ms = cpu_budget.as_millis(),
-            "tree-sitter query batch hit its CPU budget; each query walks alone"
+            "tree-sitter query batch hit its CPU budget; unresolved queries walk alone"
         );
     }
     // An interrupted shared walk has not established absence for queries it
     // never reached. Do not cache those partial negatives: evaluating each
     // query independently gives later source nodes their own bounded walk.
-    if cancelled() || timed_out.get() || deadline.is_some_and(|dl| Instant::now() > dl) {
+    if cancelled() || deadline.is_some_and(|dl| Instant::now() > dl) {
         // The gates proved these negatives before the interrupted cursor ran.
         // Keep them so fallback does not re-run queries known to be impossible.
         return (!out.is_empty()).then_some(out);
@@ -1009,12 +1128,22 @@ pub(crate) fn batch_ast_queries_with_index(
         }
     }
 
+    tracing::debug!(
+        queries = n,
+        active_queries = active.iter().filter(|&&enabled| enabled).count(),
+        limited_queries = exceeded.iter().filter(|&&limited| limited).count(),
+        settled_queries = buckets.iter().filter(|b| b.complete).count(),
+        source_bytes = source.len(),
+        cpu_ms = thread_cpu_time().saturating_sub(cpu_start).as_millis(),
+        timed_out = timed_out.get(),
+        "AST query batch summary"
+    );
     let has_parse_errors = tree.root_node().has_error();
     for (i, (qstr, _)) in compiling.iter().enumerate() {
         if !active[i] {
             continue;
         }
-        if exceeded[i] && !timed_out.get() {
+        if (exceeded[i] || timed_out.get()) && !buckets[i].complete {
             continue;
         }
         let bucket = &mut buckets[i];
@@ -1051,7 +1180,7 @@ pub(crate) fn batch_ast_queries_with_index(
             },
         );
     }
-    Some(out)
+    (!out.is_empty()).then_some(out)
 }
 
 fn ast_query_language_key(lang: &tree_sitter::Language, file_type: FileType) -> String {
@@ -1100,7 +1229,8 @@ mod cache_lock_tests {
         let query = tree_sitter::Query::new(&language, pattern).unwrap();
         let compiled = Arc::new(CompiledAstQuery {
             literals: RequiredLiterals::of(&query, pattern),
-            nodes: RequiredNodes::of(&query, pattern),
+            nodes: RequiredNodes::of(&language, &query, pattern),
+            subqueries: RequiredSubqueries::default(),
             query,
         });
         QUERY_CACHE.write().insert(key, Some(compiled.clone()));

@@ -18,9 +18,6 @@
 use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
 
-/// Fraction of total RAM used as the aggregate-reservation ceiling when live
-/// available memory can't be read (the only-thing-to-go-by fallback).
-const BUDGET_FRACTION: f64 = 0.75;
 /// On-disk size multiplier estimating an archive's peak resident footprint.
 /// Overridable via `CLEAVE_MEMGATE_EXPANSION`.
 ///
@@ -62,11 +59,29 @@ const FORCE_ADMIT_AFTER: Duration = Duration::from_secs(300);
 /// Log a one-shot admission-stall warning after this long parked.
 const STALL_REPORT_AFTER: Duration = Duration::from_secs(120);
 
+/// Reserve a quarter of the memory this scan could actually use at startup.
+/// A total-RAM floor can exceed all available memory on a shared host, forcing
+/// every file to run alone even when several small files would fit comfortably.
+/// Live checks still apply to each admission if other processes grow later.
+fn admission_limits(total: Option<u64>, available: Option<u64>) -> (usize, u64) {
+    let total = total.filter(|&bytes| bytes > 0);
+    let capacity = match (total, available) {
+        (Some(total), Some(available)) => total.min(available),
+        (Some(bytes), None) | (None, Some(bytes)) => bytes,
+        (None, None) => return (usize::MAX, 0),
+    };
+    let floor = (capacity / 4).max(LONE_HEADROOM_BYTES);
+    let budget = usize::try_from(capacity.saturating_sub(floor))
+        .unwrap_or(usize::MAX)
+        .max(MIN_ESTIMATE_BYTES);
+    (budget, floor)
+}
+
 /// Aggregate byte-budget admission gate over concurrently-analysed files.
 pub(crate) struct ScanMemGate {
-    /// Aggregate reservation ceiling (fallback when available memory is unknown).
+    /// Aggregate reservation ceiling, sized from memory available at startup.
     budget_bytes: usize,
-    /// Live available memory to keep free when admitting; `total − budget`.
+    /// Live available memory to keep free when admitting.
     free_floor_bytes: u64,
     reserved: Mutex<usize>,
     released: Condvar,
@@ -80,18 +95,8 @@ impl ScanMemGate {
     }
 
     fn with_available(available_fn: fn() -> Option<u64>) -> Self {
-        let (budget_bytes, free_floor_bytes) = match crate::memory_tracker::total_memory() {
-            #[allow(
-                clippy::cast_precision_loss,
-                clippy::cast_possible_truncation,
-                clippy::cast_sign_loss
-            )]
-            Some(total) if total > 0 => {
-                let budget = (total as f64 * BUDGET_FRACTION) as usize;
-                (budget, total.saturating_sub(budget as u64))
-            }
-            _ => (usize::MAX, 0),
-        };
+        let (budget_bytes, free_floor_bytes) =
+            admission_limits(crate::memory_tracker::total_memory(), available_fn());
         Self {
             budget_bytes,
             free_floor_bytes,
@@ -227,6 +232,38 @@ mod tests {
             reserved: Mutex::new(0),
             released: Condvar::new(),
             available_fn,
+        }
+    }
+
+    #[test]
+    fn startup_limits_use_available_memory_on_shared_hosts() {
+        let gb = 1024 * MB;
+        assert_eq!(
+            admission_limits(Some(256 * gb), Some(12 * gb)),
+            (9 * gb as usize, 3 * gb)
+        );
+        assert_eq!(
+            admission_limits(Some(16 * gb), None),
+            (12 * gb as usize, 4 * gb)
+        );
+        assert_eq!(
+            admission_limits(None, Some(12 * gb)),
+            (9 * gb as usize, 3 * gb)
+        );
+        assert_eq!(
+            admission_limits(Some(16 * gb), Some(32 * gb)),
+            (12 * gb as usize, 4 * gb)
+        );
+        assert_eq!(admission_limits(None, None), (usize::MAX, 0));
+    }
+
+    #[test]
+    fn startup_pressure_keeps_nonzero_reservations_and_lone_headroom() {
+        for available in [0, 1024 * MB, LONE_HEADROOM_BYTES] {
+            assert_eq!(
+                admission_limits(Some(256 * 1024 * MB), Some(available)),
+                (MIN_ESTIMATE_BYTES, LONE_HEADROOM_BYTES)
+            );
         }
     }
 

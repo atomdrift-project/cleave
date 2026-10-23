@@ -157,6 +157,8 @@ pub(crate) struct FileEvalCaches {
     string_exact_index: Arc<OnceLock<FxHashMap<String, Vec<u32>>>>,
     string_exact_index_ci: Arc<OnceLock<FxHashMap<String, Vec<u32>>>>,
     encoded_string_indices: Arc<OnceLock<Vec<u32>>>,
+    literal_string_indices: Arc<OnceLock<Vec<u32>>>,
+    flow_call_index: Arc<OnceLock<FxHashMap<(u64, usize), Vec<usize>>>>,
     html_comment_free_source: Arc<OnceLock<Option<Vec<u8>>>>,
 }
 
@@ -207,6 +209,8 @@ pub(crate) struct EvaluationContext<'a> {
     /// Keyed by the original query string. Missing key → `eval_ast_query`
     /// runs that pattern itself (compile fail, or the batch was declined).
     pub ast_query_cache: Option<&'a FxHashMap<String, ConditionResult>>,
+    /// Node kinds and short node texts collected during the source walk.
+    pub(crate) ast_node_text: Option<&'a super::evaluators::NodeTextIndex>,
     /// Index for O(1) exact string lookups. Values are indices into
     /// `report.strings` (not cloned strings) — the source is always
     /// `string_extractor` and the value/offset are looked up from the entry, so
@@ -222,6 +226,10 @@ pub(crate) struct EvaluationContext<'a> {
     /// without the raw pass ever seeing it. Built once per file; empty (the
     /// common case) makes the encoded pass a single is-empty check.
     pub encoded_string_indices: Arc<OnceLock<Vec<u32>>>,
+    /// Source/format literals only, in original report order.
+    pub literal_string_indices: Arc<OnceLock<Vec<u32>>>,
+    /// Call candidates by source offset and arity, in flow-value order.
+    pub flow_call_index: Arc<OnceLock<FxHashMap<(u64, usize), Vec<usize>>>>,
     /// Lazily masked copy used only by `type: text` rules that explicitly
     /// ignore markup comments. `None` means the file had no such comments.
     pub cached_html_comment_free_source: Arc<OnceLock<Option<Vec<u8>>>>,
@@ -361,9 +369,12 @@ impl<'a> EvaluationContext<'a> {
             cached_ast_source_utf8: Arc::new(OnceLock::new()),
             ast_kind_cache: None,
             ast_query_cache: None,
+            ast_node_text: None,
             string_exact_index: Arc::new(OnceLock::new()),
             string_exact_index_ci: Arc::new(OnceLock::new()),
             encoded_string_indices: Arc::new(OnceLock::new()),
+            literal_string_indices: Arc::new(OnceLock::new()),
+            flow_call_index: Arc::new(OnceLock::new()),
             cached_html_comment_free_source: Arc::new(OnceLock::new()),
             deadline: None,
             cancellation: None,
@@ -382,7 +393,7 @@ impl<'a> EvaluationContext<'a> {
 
     /// Share one member's lazy per-file caches across every context built
     /// for it (see [`FileEvalCaches`]). Must only be used for contexts over
-    /// the same `binary_data` / `report.strings`.
+    /// the same `binary_data`, `report.strings`, and filefacts flow graph.
     pub(crate) fn with_file_caches(mut self, caches: &FileEvalCaches) -> Self {
         self.cached_kv_format = Arc::clone(&caches.kv_format);
         self.cached_kv_parsed = Arc::clone(&caches.kv_parsed);
@@ -392,6 +403,8 @@ impl<'a> EvaluationContext<'a> {
         self.string_exact_index = Arc::clone(&caches.string_exact_index);
         self.string_exact_index_ci = Arc::clone(&caches.string_exact_index_ci);
         self.encoded_string_indices = Arc::clone(&caches.encoded_string_indices);
+        self.literal_string_indices = Arc::clone(&caches.literal_string_indices);
+        self.flow_call_index = Arc::clone(&caches.flow_call_index);
         self.cached_html_comment_free_source = Arc::clone(&caches.html_comment_free_source);
         self
     }
@@ -604,6 +617,25 @@ impl<'a> EvaluationContext<'a> {
         })
     }
 
+    /// Literal rules need none of the other strings extracted from a binary.
+    /// Partition once per file rather than rechecking every section per rule.
+    pub(crate) fn literal_strings(&self) -> &[u32] {
+        self.literal_string_indices.get_or_init(|| {
+            self.report
+                .strings
+                .iter()
+                .enumerate()
+                .filter(|(_, string)| {
+                    matches!(
+                        string.section.as_deref(),
+                        Some("ast" | "literal" | "ast-docstring")
+                    )
+                })
+                .map(|(i, _)| i as u32)
+                .collect()
+        })
+    }
+
     /// Run a closure against the debug collector if one is present.
     pub(crate) fn with_debug(&self, f: impl FnOnce(&mut EvaluationDebug)) {
         if let Some(collector) = self.debug_collector
@@ -716,9 +748,12 @@ impl<'a> EvaluationContext<'a> {
             cached_ast_source_utf8: Arc::new(OnceLock::new()),
             ast_kind_cache: None,
             ast_query_cache: None,
+            ast_node_text: None,
             string_exact_index: Arc::new(OnceLock::new()),
             string_exact_index_ci: Arc::new(OnceLock::new()),
             encoded_string_indices: Arc::new(OnceLock::new()),
+            literal_string_indices: Arc::new(OnceLock::new()),
+            flow_call_index: Arc::new(OnceLock::new()),
             cached_html_comment_free_source: Arc::new(OnceLock::new()),
             deadline: None,
             cancellation: None,

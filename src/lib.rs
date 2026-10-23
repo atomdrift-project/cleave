@@ -36,6 +36,7 @@ mod entropy;
 pub mod extractors;
 pub mod file_io;
 pub mod ip_validator;
+mod leaf_affinity;
 pub mod mem_profile;
 pub mod memory_tracker;
 pub mod rule_sources;
@@ -52,6 +53,7 @@ pub(crate) mod traits_fingerprint;
 pub mod traits_repo;
 mod upx;
 pub(crate) mod validation_controls;
+pub(crate) mod validation_performance;
 
 // Public modules
 pub mod analyzers;
@@ -3635,8 +3637,8 @@ pub struct ScanSummary {
 /// Load the CapabilityMapper and YARA engine once for a parallel scan.
 ///
 /// Both are wrapped in `Arc` so every rayon worker shares a single instance via
-/// cheap clones rather than reloading per file. The two loads run concurrently
-/// on the rayon pool. Shared by [`scan_directory`] and [`scan_files`].
+/// cheap clones rather than reloading per file. Shared by [`scan_directory`]
+/// and [`scan_files`].
 fn load_scan_resources(options: &AnalysisOptions) -> Result<Engine> {
     // Surface this pre-pipeline step in the phase tracker. It runs before
     // `analyze_file_with_resources_at_depth` reaches its first `set_phase`.

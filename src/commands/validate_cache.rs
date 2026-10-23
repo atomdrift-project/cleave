@@ -27,6 +27,7 @@ impl ResultCache {
         expectations: &str,
         soft: bool,
         verbose: bool,
+        slow_rule_ms: u64,
     ) -> Option<Self> {
         // These modes ask for work/diagnostics beyond a previously passed gate.
         if soft
@@ -50,6 +51,7 @@ impl ResultCache {
         env.retain(|(k, _)| k != "_" && k != "SHLVL");
         env.sort();
         let mut settings = Sha256::new();
+        field(&mut settings, &slow_rule_ms.to_le_bytes());
         for (k, v) in env {
             field(&mut settings, k.as_encoded_bytes());
             field(&mut settings, v.as_encoded_bytes());
@@ -171,7 +173,7 @@ fn fingerprint_with_sources(
     engine: &str,
 ) -> Result<String> {
     let mut hash = Sha256::new();
-    field(&mut hash, b"cleave-full-validation-v1");
+    field(&mut hash, b"cleave-full-validation-v3");
     field(&mut hash, traits_dir.as_os_str().as_encoded_bytes());
     field(&mut hash, engine.as_bytes());
     field(&mut hash, settings);

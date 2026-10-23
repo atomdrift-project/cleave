@@ -1173,6 +1173,7 @@ fn test_eval_string_literal_matches_only_ast_strings() {
 fn literal_query_can_exclude_python_docstrings_without_hiding_runtime_constants() {
     let mut report = create_test_report();
     for (value, offset, section) in [
+        ("https://native.example.org/ignored", 1, ".rodata"),
         ("https://docs.example.org/calendar", 10, "ast-docstring"),
         ("https://c2.example.net/payload", 80, "ast"),
     ] {
@@ -1207,6 +1208,7 @@ fn literal_query_can_exclude_python_docstrings_without_hiding_runtime_constants(
     };
     let ctx = EvaluationContext::test_only_new(&report, &[], FileType::Python);
 
+    assert_eq!(ctx.literal_strings(), &[1, 2]);
     let all_literals = eval_string_literal_with_options(&params, None, &ctx, false);
     assert!(all_literals.matched);
     assert_eq!(all_literals.match_count, 2);
@@ -1225,6 +1227,17 @@ fn literal_query_can_exclude_python_docstrings_without_hiding_runtime_constants(
     };
     assert!(eval_string_literal_with_options(&docs_only, None, &ctx, false).matched);
     assert!(!eval_string_literal_with_options(&docs_only, None, &ctx, true).matched);
+
+    let _boolean = MatchCountGuard::set(false);
+    let first = eval_string_literal_with_options(&params, None, &ctx, false);
+    assert_eq!(first.match_count, 1);
+    assert_eq!(first.evidence.len(), 1);
+    // A proximity consumer must still see every location under a boolean
+    // count guard, including a later runtime literal after the docstring.
+    let _locations = MatchLocationsGuard::set(true);
+    let located = eval_string_literal_with_options(&params, None, &ctx, false);
+    assert_eq!(located.match_count, 2);
+    assert_eq!(located.evidence.len(), 2);
 }
 
 #[test]
@@ -3781,4 +3794,200 @@ fn raw_unicode_substr_validator_window_uses_original_offsets() {
         .collect();
     let want = content.find("DÉJÀ").map(|o| o as u64);
     assert_eq!(offsets, want.into_iter().collect::<Vec<_>>());
+}
+
+#[test]
+fn binary_text_boolean_stops_after_preserving_capped_evidence() {
+    let mut report = create_test_report();
+    for i in 0..100 {
+        report.strings.push(StringInfo {
+            value: format!("prefix token-{i}").into(),
+            offset: Some(i * 100),
+            encoding: "utf8".into(),
+            string_type: None,
+            section: None,
+            encoding_chain: Vec::new(),
+            fragments: None,
+        });
+    }
+    let pattern = "token-[0-9]+".to_string();
+    let exceptions = vec![
+        serde_json::from_value::<NotException>(serde_json::json!({"regex":"^token-[0-9]$"}))
+            .unwrap(),
+    ];
+    let params = StringParams {
+        encoding: None,
+        exact: None,
+        substr: None,
+        regex: Some(&pattern),
+        word: None,
+        case_insensitive: false,
+        length_min: None,
+        length_max: None,
+        exclude_html_comments: false,
+        is_check: None,
+        section: None,
+        offset: None,
+        offset_range: None,
+        section_offset: None,
+        section_offset_range: None,
+        arch_clamp: None,
+    };
+    let ctx = EvaluationContext::test_only_new(&report, &[], FileType::Elf);
+    let full = {
+        let _count = MatchCountGuard::set(true);
+        eval_text(&params, Some(&exceptions), &ctx, None)
+    };
+    assert_eq!(full.match_count, 90);
+    let _boolean = MatchCountGuard::set(false);
+    let boolean = eval_text(&params, Some(&exceptions), &ctx, None);
+    assert!(boolean.matched);
+    assert_eq!(boolean.match_count, crate::types::MAX_EVIDENCE_PER_TRAIT);
+    assert_eq!(
+        serde_json::to_value(&boolean.evidence).unwrap(),
+        serde_json::to_value(&full.evidence).unwrap()
+    );
+    assert_eq!(boolean.evidence[0].value, "token-10");
+    assert_eq!(boolean.evidence[0].location.as_deref(), Some("0x3ef"));
+    let _locations = MatchLocationsGuard::set(true);
+    let located = eval_text(&params, Some(&exceptions), &ctx, None);
+    assert_eq!(located.match_count, full.match_count);
+}
+
+#[test]
+fn raw_literal_boolean_preserves_first_evidence_and_count_consumers() {
+    let report = create_test_report();
+    for needle in ["token", "déjà"] {
+        let needle = needle.to_string();
+        for case_insensitive in [false, true] {
+            let value = if case_insensitive {
+                needle.to_uppercase()
+            } else {
+                needle.clone()
+            };
+            let content = format!(" {value} \n{value}\n{value}\n");
+            let ctx = create_test_context(&report, content.as_bytes());
+            for kind in ["exact", "substr", "word"] {
+                // Raw word matching uses ASCII case folding, including for Unicode literals.
+                if kind == "word" && !needle.is_ascii() && case_insensitive {
+                    continue;
+                }
+                let pattern = TextPattern {
+                    exact: (kind == "exact").then_some(&needle),
+                    substr: (kind == "substr").then_some(&needle),
+                    word: (kind == "word").then_some(&needle),
+                    case_insensitive,
+                    ..TextPattern::default()
+                };
+                // Exact raw matching also intentionally folds only ASCII.
+                if kind == "exact" && !needle.is_ascii() && case_insensitive {
+                    continue;
+                }
+                let run = || {
+                    eval_raw(
+                        pattern,
+                        false,
+                        None,
+                        &ContentLocationParams::default(),
+                        &ctx,
+                        None,
+                    )
+                };
+                let full = {
+                    let _count = MatchCountGuard::set(true);
+                    run()
+                };
+                assert_eq!(full.match_count, 3, "{kind}/{needle}");
+                let _boolean = MatchCountGuard::set(false);
+                let boolean = run();
+                assert!(boolean.matched);
+                assert_eq!(boolean.match_count, 1, "{kind}/{needle}");
+                assert_eq!(
+                    serde_json::to_value(&boolean.evidence).unwrap(),
+                    serde_json::to_value(&full.evidence).unwrap()
+                );
+                let _locations = MatchLocationsGuard::set(true);
+                assert_eq!(run().match_count, full.match_count);
+            }
+        }
+    }
+}
+
+#[test]
+fn raw_literal_boolean_continues_past_rejected_contexts() {
+    let report = create_test_report();
+    let exceptions = vec![
+        serde_json::from_value::<NotException>(serde_json::json!({"substr":"blocked"})).unwrap(),
+    ];
+    for needle in ["token", "déjà"] {
+        let needle = needle.to_string();
+        for case_insensitive in [false, true] {
+            let value = if case_insensitive {
+                needle.to_uppercase()
+            } else {
+                needle.clone()
+            };
+            let content = format!(
+                "blocked {value} {} {value} 45.33.32.156 {} {value} 45.33.32.156",
+                "x".repeat(200),
+                "x".repeat(200)
+            );
+            let ctx = create_test_context(&report, content.as_bytes());
+            for external_ip in [false, true] {
+                let run = || {
+                    eval_raw(
+                        TextPattern {
+                            substr: Some(&needle),
+                            case_insensitive,
+                            ..TextPattern::default()
+                        },
+                        external_ip,
+                        Some(&exceptions),
+                        &ContentLocationParams::default(),
+                        &ctx,
+                        None,
+                    )
+                };
+                let full = {
+                    let _count = MatchCountGuard::set(true);
+                    run()
+                };
+                assert_eq!(full.match_count, 2);
+                let _boolean = MatchCountGuard::set(false);
+                let boolean = run();
+                assert!(boolean.matched);
+                assert_eq!(boolean.match_count, 1);
+                assert_eq!(
+                    serde_json::to_value(&boolean.evidence).unwrap(),
+                    serde_json::to_value(&full.evidence).unwrap()
+                );
+                assert!(boolean.evidence[0].offsets[0] > 200);
+            }
+        }
+    }
+}
+
+#[test]
+fn raw_unicode_absence_gate_preserves_lossy_replacement_matches() {
+    let report = create_test_report();
+    let ctx = create_test_context(&report, b"bad\xffbytes and d\xc3\xa9j\xc3\xa0");
+    for (needle, matched) in [
+        ("\u{fffd}bytes", true),
+        ("déjà", true),
+        ("Читы на стенд", false),
+    ] {
+        let needle = needle.to_string();
+        let result = eval_raw(
+            TextPattern {
+                substr: Some(&needle),
+                ..TextPattern::default()
+            },
+            false,
+            None,
+            &ContentLocationParams::default(),
+            &ctx,
+            None,
+        );
+        assert_eq!(result.matched, matched, "{needle}");
+    }
 }

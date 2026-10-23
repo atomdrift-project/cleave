@@ -1162,6 +1162,7 @@ impl UnifiedSourceAnalyzer {
             node_text,
             seen_strings,
         );
+        node_text.finish();
         // `call_sites` is collected by the walk for `Evidence.alt_value` on
         // call-kind nodes; the imports themselves come from filefacts.
     }

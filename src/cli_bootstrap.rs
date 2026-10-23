@@ -65,8 +65,12 @@ fn sanitized_field(
 
 pub(crate) fn apply_runtime_overrides(
     traits_dir: Option<&str>,
+    enriched: bool,
     disabled: &cli::DisabledComponents,
 ) {
+    if enriched {
+        cleave::enriched::set_enabled(true);
+    }
     if let Some(traits_dir) = traits_dir {
         cleave::traits_repo::set_override_dir(Some(std::path::PathBuf::from(traits_dir)));
     }

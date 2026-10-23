@@ -10,6 +10,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
 
+/// Concurrent readers for a snapshot. Reading 34k rule files on a 16-core Mac
+/// took 1.40 s with 16 readers, 0.70 s with 12, 0.38 s with 6, and 0.67 s
+/// with 2: past a handful, readers contend in the kernel's file-open path.
+const SNAPSHOT_READERS: usize = 6;
+
 /// One source file from an immutable rule tree snapshot.
 #[derive(Clone, Debug)]
 pub struct SourceFile {
@@ -97,7 +102,13 @@ impl RuleSources {
         let files: Result<Vec<_>> = if rayon::current_thread_index().is_some() {
             paths.into_iter().map(read_file).collect()
         } else {
-            paths.into_par_iter().map(read_file).collect()
+            // Bound concurrent reads; see SNAPSHOT_READERS.
+            let per_reader = paths.len().div_ceil(SNAPSHOT_READERS).max(1);
+            paths
+                .into_par_iter()
+                .with_min_len(per_reader)
+                .map(read_file)
+                .collect()
         };
         let files = files?;
         tracing::info!(root = %root.display(), files = files.len(),

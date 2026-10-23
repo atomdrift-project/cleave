@@ -12,16 +12,14 @@
 //! # Channels
 //!
 //! There are two, and they publish the same layout. The public bucket carries
-//! the open-source release, rolled up every four hours. The enriched channel
-//! carries each ruleset the hour it clears QA, and is reached through a small
-//! service that checks a subscription key and serves the private bucket
-//! behind it.
+//! the open-source release, rolled up every four hours, and is fetched with no
+//! token. The enriched channel carries each ruleset the hour it clears QA, and
+//! is reached through the rules Worker, which checks a subscription token and
+//! serves the private bucket behind it.
 //!
-//! A key in `ISOTOPE13_TOKEN` or `~/.tok/isotope13` selects the enriched
-//! channel; without one, nothing changes and nothing is sent anywhere new. A
-//! key Beamline refuses falls back to the public channel with a warning rather
-//! than failing the update: an expired subscription should leave a CI gate
-//! running on last week's rules, not stop it.
+//! [`crate::enriched::enabled`] chooses the channel; holding a token does not.
+//! Asked for enriched, a token the Worker will not honour is an error, never a
+//! quiet downgrade to public rules — see [`enriched_manifest`].
 
 use std::collections::BTreeMap;
 use std::io::{self, Cursor, Read};
@@ -42,11 +40,10 @@ const BASE_URL: &str = "https://updates.atomdrift.org/cleave";
 /// same way, so the only thing this constant changes is which bucket answers.
 const ENRICHED_URL: &str = "https://updates.isotope13.ai/v1/rules/cleave";
 
-/// Environment override for a subscription key, checked before the file.
-const TOKEN_ENV: &str = "ISOTOPE13_TOKEN";
-/// Where a subscription key lives otherwise — the same `~/.tok/<service>`
-/// convention every other isotope13 service reads one from.
-const TOKEN_FILE: &str = "isotope13";
+/// The manifest's name under either base.
+const MANIFEST: &str = "versions.toml";
+/// The rules Worker's answer to "which bucket did this token open".
+const CHANNEL_HEADER: &str = "x-isotope13-channel";
 
 /// Whole-request budget for manifest + bundle downloads.
 const TIMEOUT: Duration = Duration::from_secs(60);
@@ -58,6 +55,43 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(4);
 /// Sidecar recording what the R2 backend installed. The installed tree is a
 /// `git archive` extraction with no `.git`, so the commit/date live here instead.
 const SIDECAR: &str = ".cleave-rules.toml";
+
+/// Why rules were not updated.
+///
+/// Two kinds, because callers treat them oppositely. A host that cannot reach
+/// the bucket keeps scanning with the rules it has; a host asked for enriched
+/// rules that cannot have them must say so, not quietly scan with something
+/// else.
+#[derive(Debug)]
+pub enum Error {
+    /// `--enriched` cannot be honoured: no token, or one the rules Worker
+    /// refused.
+    Enriched(String),
+    /// Anything else: the network, the bucket, the manifest, the disk.
+    Other(String),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::Enriched(message) | Error::Other(message) => f.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
+
+impl From<String> for Error {
+    fn from(message: String) -> Self {
+        Error::Other(message)
+    }
+}
+
+impl From<&str> for Error {
+    fn from(message: &str) -> Self {
+        Error::Other(message.to_string())
+    }
+}
 
 fn print_status(message: &str) {
     eprintln!("{}", crate::output::escape_control_chars(message));
@@ -116,7 +150,7 @@ fn is_git_managed(dir: &Path) -> bool {
 }
 
 /// Install or refresh the traits compatible with this cleave release.
-pub fn update(dir: &Path, force: bool, quiet: bool) -> Result<(), String> {
+pub fn update(dir: &Path, force: bool, quiet: bool) -> Result<(), Error> {
     if is_git_managed(dir) {
         if !quiet {
             print_status(&format!(
@@ -144,7 +178,8 @@ pub fn update(dir: &Path, force: bool, quiet: bool) -> Result<(), String> {
 
     if !quiet {
         print_status(&format!(
-            "Installing traits {} ({}) for cleave {} [{}]...",
+            "Installing {} traits {} ({}) for cleave {} [{}]...",
+            channel.name(),
             key,
             artifact.date,
             our_version(),
@@ -152,6 +187,13 @@ pub fn update(dir: &Path, force: bool, quiet: bool) -> Result<(), String> {
         ));
     }
     install(dir, artifact, &source, &channel)?;
+    tracing::info!(
+        event = "enriched.rules",
+        channel = channel.name(),
+        commit = %artifact.commit,
+        date = %artifact.date,
+        outcome = "installed"
+    );
     if !quiet {
         print_status(&format!(
             "Traits updated to {} ({}) at {}",
@@ -165,7 +207,7 @@ pub fn update(dir: &Path, force: bool, quiet: bool) -> Result<(), String> {
 }
 
 /// Report what would be installed without changing anything.
-pub fn check(dir: &Path) -> Result<(), String> {
+pub fn check(dir: &Path) -> Result<(), Error> {
     if is_git_managed(dir) {
         print_status(&format!(
             "Traits at {} are git-managed; use 'git pull' there to update.",
@@ -200,7 +242,7 @@ pub fn check(dir: &Path) -> Result<(), String> {
 }
 
 /// Pin to a specific commit, if a bundle for it was published.
-pub fn pin(dir: &Path, commit: &str) -> Result<(), String> {
+pub fn pin(dir: &Path, commit: &str) -> Result<(), Error> {
     let (manifest, channel) = fetch_manifest(None)?;
     let key = manifest
         .artifacts
@@ -255,12 +297,12 @@ fn warn_if_behind(m: &Manifest) {
 ///
 /// Threaded rather than recomputed on purpose: a manifest from the enriched
 /// channel names bundles that exist only there, so resolving the two against
-/// different bases would 404 on a subscriber whose key expired between the two
-/// requests. One decision, made once, used twice.
+/// different bases would 404 on a subscriber whose token was revoked between
+/// the two requests. One decision, made once, used twice.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Channel {
     Public,
-    Enriched(String),
+    Enriched(crate::enriched::Token),
 }
 
 impl Channel {
@@ -271,7 +313,15 @@ impl Channel {
         }
     }
 
-    fn token(&self) -> Option<&str> {
+    /// The channel's name, which is also its traits directory's suffix.
+    fn name(&self) -> &'static str {
+        match self {
+            Channel::Public => "oss",
+            Channel::Enriched(_) => "enriched",
+        }
+    }
+
+    fn token(&self) -> Option<&crate::enriched::Token> {
         match self {
             Channel::Public => None,
             Channel::Enriched(token) => Some(token),
@@ -279,59 +329,109 @@ impl Channel {
     }
 }
 
-/// The subscription key, if this host has one. Trimmed, and an empty value is
-/// the same as none — an unset variable and one set to "" mean the same thing
-/// to whoever wrote the script.
-fn subscription_key() -> Option<String> {
-    if let Some(key) = std::env::var(TOKEN_ENV).ok().and_then(|k| key_from(&k)) {
-        return Some(key);
-    }
-    let path = dirs::home_dir()?.join(".tok").join(TOKEN_FILE);
-    key_from(&std::fs::read_to_string(path).ok()?)
-}
-
-/// The first non-empty line, trimmed, or `None`.
-///
-/// Both sources go through this so a key pasted into a file with a trailing
-/// newline and one exported with a stray space behave identically — and so an
-/// empty variable means "no key" rather than a key that is the empty string,
-/// which would be sent as `Authorization: Bearer ` and rejected.
-fn key_from(text: &str) -> Option<String> {
-    text.lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .map(str::to_string)
-}
-
-fn fetch_manifest(connect: Option<Duration>) -> Result<(Manifest, Channel), String> {
-    let mut channel = subscription_key().map_or(Channel::Public, Channel::Enriched);
-    let mut bytes = download(&channel, "versions.toml", connect);
-
-    // A key the server will not accept is a subscription that lapsed, a token
-    // that was revoked, or a typo. None of those should stop a scan: fall back
-    // to what every non-subscriber gets, and say so once.
-    if let (Channel::Enriched(_), Err(err)) = (&channel, &bytes)
-        && err.unauthorized()
-    {
-        tracing::warn!(
-            "isotope13 subscription key was not accepted ({}); using public rules. Check https://dash.isotope13.io",
-            err.status_text()
-        );
-        channel = Channel::Public;
-        bytes = download(&channel, "versions.toml", connect);
-    }
-
-    let text = bytes.map_err(|e| e.message)?;
-    let text = String::from_utf8(text).map_err(|e| format!("manifest is not valid UTF-8: {e}"))?;
+fn fetch_manifest(connect: Option<Duration>) -> Result<(Manifest, Channel), Error> {
+    let (bytes, channel) = if crate::enriched::enabled() {
+        let held = crate::enriched::token().map_err(Error::Enriched)?;
+        enriched_manifest(held, connect)?
+    } else {
+        let fetched = download(&Channel::Public, MANIFEST, connect).map_err(|e| e.message)?;
+        (fetched.bytes, Channel::Public)
+    };
+    let text = String::from_utf8(bytes).map_err(|e| format!("manifest is not valid UTF-8: {e}"))?;
     let manifest = toml::from_str(&text)
-        .map_err(|e| format!("parsing manifest {}/versions.toml: {e}", channel.base()))?;
+        .map_err(|e| format!("parsing manifest {}/{MANIFEST}: {e}", channel.base()))?;
     Ok((manifest, channel))
+}
+
+/// Ask for a token, check it against the enriched channel, and save it.
+///
+/// What `hood login` runs: the same check every enriched update makes, so a
+/// token is saved only once the rules Worker has honoured it.
+///
+/// # Errors
+///
+/// No terminal to ask on, or a token the Worker will not honour.
+pub fn login() -> Result<(), Error> {
+    let token =
+        crate::enriched::prompt("Sign in to isotope13 Enriched").map_err(Error::Enriched)?;
+    enriched_manifest(Some((token, crate::enriched::Source::Prompt)), None).map(drop)
+}
+
+/// The enriched manifest, and the channel — with the token — that opened it.
+///
+/// The rules Worker answers a token it will not honour (revoked, Community
+/// tier, a typo) with the *public* manifest and a 200, so that old clients keep
+/// running. Asked for enriched, that is a refusal: the channel header must say
+/// `fresh`. A refused saved token is replaced by asking, once, on a terminal;
+/// a refused token from the environment or the prompt is an error. A prompted
+/// token is saved only after it has been honoured.
+fn enriched_manifest(
+    mut held: Option<(crate::enriched::Token, crate::enriched::Source)>,
+    connect: Option<Duration>,
+) -> Result<(Vec<u8>, Channel), Error> {
+    use crate::enriched::Source;
+    loop {
+        let (token, source) = match held.take() {
+            Some(found) => found,
+            None => (
+                crate::enriched::prompt("isotope13 Enriched needs a token")
+                    .map_err(Error::Enriched)?,
+                Source::Prompt,
+            ),
+        };
+        let tid = token.fingerprint();
+        let channel = Channel::Enriched(token);
+        let refused = match download(&channel, MANIFEST, connect) {
+            Ok(got) if got.fresh => {
+                // A token that opened the channel but could not be saved still
+                // opens it for this run; the next one asks again.
+                if let (Source::Prompt, Some(token)) = (source, channel.token()) {
+                    match crate::enriched::save(token) {
+                        Ok(path) => {
+                            print_status(&format!("Saved isotope13 token to {}", path.display()));
+                        }
+                        Err(e) => tracing::warn!(%tid, error = %e, "isotope13 token not saved"),
+                    }
+                }
+                tracing::info!(
+                    event = "enriched.token",
+                    source = source.as_str(),
+                    outcome = "ok",
+                    %tid
+                );
+                return Ok((got.bytes, channel));
+            }
+            Ok(_) => "answered with the public channel".to_string(),
+            Err(err) if err.unauthorized() => err.status_text(),
+            Err(err) => return Err(Error::Other(err.message)),
+        };
+        tracing::warn!(
+            event = "enriched.token",
+            source = source.as_str(),
+            outcome = "refused",
+            %tid,
+            %refused
+        );
+        let why = format!(
+            "isotope13 token {tid} is not entitled to enriched rules ({refused}: revoked, or Community tier)"
+        );
+        if source != Source::File {
+            return Err(Error::Enriched(format!(
+                "{why}; see {}",
+                crate::enriched::DASH_URL
+            )));
+        }
+        let token = crate::enriched::prompt(&why).map_err(Error::Enriched)?;
+        held = Some((token, Source::Prompt));
+    }
 }
 
 /// Download a bundle, verify its sha256, and atomically swap it into `dir`.
 fn install(dir: &Path, artifact: &Artifact, source: &str, channel: &Channel) -> Result<(), String> {
     // Patient: the manifest fetch already reached the bucket.
-    let bytes = download(channel, &artifact.file, None).map_err(|e| e.message)?;
+    let bytes = download(channel, &artifact.file, None)
+        .map_err(|e| e.message)?
+        .bytes;
 
     let got = hex(Sha256::digest(&bytes).as_slice());
     if got != artifact.sha256 {
@@ -344,8 +444,13 @@ fn install(dir: &Path, artifact: &Artifact, source: &str, channel: &Channel) -> 
     let parent = dir.parent().unwrap_or_else(|| Path::new("."));
     std::fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
 
-    let staging = sibling(parent, ".cleave-traits-staging");
-    let backup = sibling(parent, ".cleave-traits-backup");
+    // Named for the directory they replace: `traits-oss` and `traits-enriched`
+    // share a parent, and two installs must not share a staging tree.
+    let name = dir
+        .file_name()
+        .map_or_else(|| "traits".into(), |n| n.to_string_lossy());
+    let staging = sibling(parent, &format!(".{name}-staging"));
+    let backup = sibling(parent, &format!(".{name}-backup"));
     remove_any(&staging);
     std::fs::create_dir_all(&staging).map_err(|e| format!("create staging: {e}"))?;
 
@@ -450,12 +555,18 @@ fn sibling(parent: &Path, name: &str) -> PathBuf {
     parent.join(name)
 }
 
+/// A successful download, and whether the rules Worker said it came from the
+/// fresh bucket.
+struct Fetched {
+    bytes: Vec<u8>,
+    fresh: bool,
+}
+
 /// A failed download, with the HTTP status when there was one.
 ///
-/// The status is what tells a lapsed subscription apart from a bucket that is
-/// down. The first should quietly drop to the public channel; the second is an
-/// error the operator needs to see, and swallowing it would leave a host
-/// silently pinned to whatever it installed last.
+/// The status is what tells a refused token apart from a bucket that is down:
+/// the first asks for another token, the second is an error the operator needs
+/// to see, and neither is retried into the other.
 struct FetchError {
     status: Option<u16>,
     message: String,
@@ -494,14 +605,14 @@ const RETRY_MAX: Duration = Duration::from_secs(8);
 /// connection to the bucket should not cost a host its update — it would go on
 /// scanning with whatever it installed last, silently a week behind. Only
 /// transport errors and 5xx are retried: a 404 means the manifest names a
-/// bundle that is not published, and a 401 means the subscription key was
-/// refused, which the caller handles by falling back to the public channel.
-/// Asking either of those again just spends the user's time.
+/// bundle that is not published, and a 401 means the token was refused, which
+/// [`enriched_manifest`] answers by asking for another. Asking either of those
+/// again just spends the user's time.
 fn download(
     channel: &Channel,
     path: &str,
     connect: Option<Duration>,
-) -> Result<Vec<u8>, FetchError> {
+) -> Result<Fetched, FetchError> {
     let mut backoff = RETRY_BASE;
     let mut attempt = 1;
     loop {
@@ -549,13 +660,15 @@ fn download_once(
     channel: &Channel,
     path: &str,
     connect: Option<Duration>,
-) -> Result<Vec<u8>, FetchError> {
+) -> Result<Fetched, FetchError> {
     let url = format!("{}/{path}", channel.base());
     tracing::debug!("fetching {url}");
-    // The bucket answers over TLS only; refusing a redirect down to plain
-    // HTTP keeps a hop from serving the manifest that vouches for the bundle.
+    // The bucket answers over TLS only, and nothing it serves is a redirect:
+    // following one could hand the token, or the manifest that vouches for
+    // every bundle, to a host that is neither of ours.
     let mut builder = reqwest::blocking::Client::builder()
         .https_only(true)
+        .redirect(reqwest::redirect::Policy::none())
         .timeout(TIMEOUT);
     if let Some(connect) = connect {
         builder = builder.connect_timeout(connect);
@@ -566,8 +679,8 @@ fn download_once(
     })?;
 
     let mut request = client.get(&url);
-    if let Some(key) = channel.token() {
-        request = request.bearer_auth(key);
+    if let Some(token) = channel.token() {
+        request = request.bearer_auth(token.secret());
     }
     let resp = request.send().map_err(|e| FetchError {
         status: None,
@@ -581,9 +694,17 @@ fn download_once(
             message: format!("GET {url}: {status}"),
         });
     }
-    resp.bytes().map(|b| b.to_vec()).map_err(|e| FetchError {
+    let fresh = resp
+        .headers()
+        .get(CHANNEL_HEADER)
+        .is_some_and(|v| v.as_bytes() == b"fresh");
+    let bytes = resp.bytes().map_err(|e| FetchError {
         status: Some(status.as_u16()),
         message: format!("reading {url}: {e}"),
+    })?;
+    Ok(Fetched {
+        bytes: bytes.to_vec(),
+        fresh,
     })
 }
 
@@ -628,29 +749,16 @@ mod tests {
         assert!(std::fs::symlink_metadata(staging.join(SIDECAR)).is_err());
     }
 
-    /// Stage a directory holding a single marker file.
     #[test]
-    fn a_key_is_the_first_non_empty_line() {
-        assert_eq!(
-            key_from("i13_krypton85_abc\n"),
-            Some("i13_krypton85_abc".into())
-        );
-        assert_eq!(key_from("  i13_x  "), Some("i13_x".into()));
-        assert_eq!(key_from("\n\n  \ni13_y\nignored\n"), Some("i13_y".into()));
-        // An empty value is no key, not an empty bearer token.
-        assert_eq!(key_from(""), None);
-        assert_eq!(key_from("   \n\t\n"), None);
-    }
-
-    #[test]
-    fn only_the_enriched_channel_sends_a_key() {
+    fn only_the_enriched_channel_sends_a_token() {
         let public = Channel::Public;
         assert_eq!(public.base(), BASE_URL);
         assert_eq!(public.token(), None);
 
-        let enriched = Channel::Enriched("i13_krypton85_abc".into());
+        let token = crate::enriched::Token::parse("i13_krypton85_abc").unwrap();
+        let enriched = Channel::Enriched(token.clone());
         assert_eq!(enriched.base(), ENRICHED_URL);
-        assert_eq!(enriched.token(), Some("i13_krypton85_abc"));
+        assert_eq!(enriched.token(), Some(&token));
     }
 
     #[test]
@@ -672,7 +780,7 @@ mod tests {
         assert!(at(429).retryable());
         assert!(at(408).retryable());
         // A bundle that is not published stays unpublished however many times
-        // we ask, and a refused key is handled by falling back, not by asking.
+        // we ask, and a refused token is answered with another, not by asking.
         assert!(!at(404).retryable());
         assert!(!at(401).retryable());
         assert!(!at(400).retryable());
@@ -691,16 +799,16 @@ mod tests {
     }
 
     #[test]
-    fn a_refused_key_falls_back_but_an_outage_does_not() {
+    fn a_refused_token_is_told_apart_from_an_outage() {
         let refused = |status| FetchError {
             status: Some(status),
             message: String::new(),
         };
-        // A lapsed subscription drops to the public channel...
+        // A refused token asks for another...
         assert!(refused(401).unauthorized());
         assert!(refused(403).unauthorized());
         // ...but a bucket that is down is an error the operator must see, not
-        // a host silently pinned to whatever it installed last.
+        // a reason to prompt anyone for a token.
         assert!(!refused(404).unauthorized());
         assert!(!refused(500).unauthorized());
         assert!(
@@ -714,7 +822,7 @@ mod tests {
     }
 
     fn staged(root: &Path) -> PathBuf {
-        let staging = root.join(".cleave-traits-staging");
+        let staging = root.join(".traits-staging");
         std::fs::create_dir_all(staging.join("objectives")).unwrap();
         std::fs::write(staging.join("marker"), "new").unwrap();
         staging
@@ -728,7 +836,7 @@ mod tests {
         std::fs::write(dir.join("stale"), "old").unwrap();
 
         let staging = staged(tmp.path());
-        swap_into_place(&staging, &dir, &tmp.path().join(".cleave-traits-backup")).unwrap();
+        swap_into_place(&staging, &dir, &tmp.path().join(".traits-backup")).unwrap();
 
         assert!(dir.join("marker").is_file());
         assert!(!dir.join("stale").exists(), "old tree should be gone");
@@ -744,7 +852,7 @@ mod tests {
         assert!(!dir.exists(), "precondition: the link resolves to nothing");
 
         let staging = staged(tmp.path());
-        swap_into_place(&staging, &dir, &tmp.path().join(".cleave-traits-backup")).unwrap();
+        swap_into_place(&staging, &dir, &tmp.path().join(".traits-backup")).unwrap();
 
         assert!(std::fs::symlink_metadata(&dir).unwrap().is_dir());
         assert!(dir.join("marker").is_file());
@@ -754,7 +862,7 @@ mod tests {
     fn swap_leaves_no_backup_behind() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join("traits");
-        let backup = tmp.path().join(".cleave-traits-backup");
+        let backup = tmp.path().join(".traits-backup");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::create_dir_all(backup.join("leftover")).unwrap();
 

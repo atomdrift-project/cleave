@@ -265,12 +265,7 @@ pub fn traits_path() -> PathBuf {
     if let Ok(explicit) = std::env::var("CLEAVE_TRAITS_DIR") {
         return PathBuf::from(explicit);
     }
-    // Platform data dir (same as traits_repo::default_traits_dir)
-    dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("atomdrift")
-        .join("cleave")
-        .join("traits")
+    crate::traits_repo::default_traits_dir()
 }
 
 /// Returns the third-party YARA rules directory (`third-party/` inside the traits directory).

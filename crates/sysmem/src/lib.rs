@@ -28,11 +28,12 @@ pub fn total_memory() -> Option<u64> {
 }
 
 /// Effective *available* memory in bytes — memory allocatable now without
-/// reclaim/swap pressure. Unlike [`total_memory`], this is a **live** value (not
+/// swapping, including reclaimable caches. Unlike [`total_memory`], this is a **live** value (not
 /// cached): poll it to throttle concurrent work as other processes — including
 /// other instances of this program — consume RAM.
 ///
-/// On Linux this is the smaller of `/proc/meminfo` `MemAvailable` and the cgroup
+/// On Linux this is the smaller of host availability (including clean,
+/// evictable ZFS ARC data when exposed) and the cgroup
 /// v2 headroom (`memory.max − memory.current`) when a cgroup limit is visible,
 /// so it respects both host and container pressure. Returns `None` on platforms
 /// (or in sandboxes) where no live source is readable, so callers fall back to a
@@ -323,7 +324,75 @@ fn available_memory_impl() -> Option<u64> {
 #[cfg(target_os = "linux")]
 fn meminfo_available_memory() -> Option<u64> {
     let meminfo = std::fs::read_to_string("/proc/meminfo").ok()?;
-    parse_meminfo_available_memory(&meminfo)
+    let available = parse_meminfo_available_memory(&meminfo)?;
+    // ARC data is outside Linux's page cache and is absent from MemAvailable.
+    // Reconcile with the cgroup ceiling *after* adding host-reclaimable data.
+    Some(host_available_with_arc(
+        available,
+        parse_meminfo_total_memory(&meminfo),
+        zfs_reclaimable_data(),
+    ))
+}
+
+#[cfg(target_os = "linux")]
+fn host_available_with_arc(available: u64, physical: Option<u64>, arc: u64) -> u64 {
+    physical.map_or(available, |total| available.saturating_add(arc).min(total))
+}
+
+/// Conservative ARC credit: clean evictable data only, preserving c_min.
+/// Metadata, dirty and pinned buffers never add to the estimate. OpenZFS's
+/// Linux shrinker uses these same evictable counters, with an additional
+/// optional page-cache-relative reserve:
+/// https://github.com/openzfs/zfs/blob/zfs-2.4.4/module/os/linux/zfs/arc_os.c
+#[cfg(target_os = "linux")]
+fn parse_zfs_reclaimable_data(stats: &str) -> Option<u64> {
+    let mut values = [None; 4];
+    for line in stats.lines() {
+        let mut fields = line.split_whitespace();
+        let index = match fields.next() {
+            Some("size") => 0,
+            Some("c_min") => 1,
+            Some("mru_evictable_data") => 2,
+            Some("mfu_evictable_data") => 3,
+            _ => continue,
+        };
+        if values[index].is_some() || fields.next()? != "4" {
+            return None;
+        }
+        values[index] = Some(fields.next()?.parse::<u64>().ok()?);
+    }
+    let [size, minimum, mru, mfu] = values;
+    Some(mru?.checked_add(mfu?)?.min(size?.saturating_sub(minimum?)))
+}
+
+#[cfg(target_os = "linux")]
+fn zfs_reclaimable_data() -> u64 {
+    use std::sync::{Mutex, PoisonError};
+    use std::time::{Duration, Instant};
+    // arcstats aggregates per-CPU counters. Avoid making every member's live
+    // memory check repeat that work; host MemAvailable and cgroup limits are
+    // still read on every call. This interval matches admission's polling.
+    static CACHE: Mutex<Option<(Instant, u64)>> = Mutex::new(None);
+    let mut cache = CACHE.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some((when, bytes)) = *cache {
+        if when.elapsed() < Duration::from_millis(250) {
+            return bytes;
+        }
+    }
+    let credit = (|| {
+        // With a nonzero page-cache reserve, or an unavailable policy file,
+        // conservatively leave accounting to MemAvailable alone.
+        let policy =
+            std::fs::read_to_string("/sys/module/zfs/parameters/zfs_arc_pc_percent").ok()?;
+        if policy.trim().parse::<u64>().ok()? != 0 {
+            return None;
+        }
+        let stats = std::fs::read_to_string("/proc/spl/kstat/zfs/arcstats").ok()?;
+        parse_zfs_reclaimable_data(&stats)
+    })()
+    .unwrap_or(0);
+    *cache = Some((Instant::now(), credit));
+    credit
 }
 
 #[cfg(target_os = "linux")]
@@ -1313,6 +1382,58 @@ cpu_info:5:cpu_info5:state\ton-line
         assert_eq!(mem, 76_543_210 * 1024);
         // Absent MemAvailable (very old kernels) → None, not a misparse.
         assert_eq!(parse_meminfo_available_memory("MemTotal: 1 kB\n"), None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn zfs_credit_counts_only_evictable_data_and_preserves_minimum() {
+        let stats = "name type data\nsize 4 1000\nc_min 4 300\n\
+                     mru_evictable_data 4 450\nmfu_evictable_data 4 200\n\
+                     mru_evictable_metadata 4 100\n";
+        assert_eq!(parse_zfs_reclaimable_data(stats), Some(650));
+        assert_eq!(
+            parse_zfs_reclaimable_data(&stats.replace("300", "500")),
+            Some(500)
+        );
+        assert_eq!(
+            parse_zfs_reclaimable_data(&stats.replace("300", "1100")),
+            Some(0)
+        );
+        assert_eq!(
+            parse_zfs_reclaimable_data(&stats.replace("450", "0").replace("200", "0")),
+            Some(0)
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn zfs_credit_rejects_incomplete_or_malformed_stats() {
+        for stats in [
+            "", "size 4 1000\nc_min 4 100\n",
+            "size 4 bad\nc_min 4 0\nmru_evictable_data 4 20\nmfu_evictable_data 4 10\n",
+            "size 4 1000\nsize 4 2000\nc_min 4 0\nmru_evictable_data 4 20\nmfu_evictable_data 4 10\n",
+            "size 4 1000\nc_min 4 0\nmru_evictable_data 2 20\nmfu_evictable_data 4 10\n",
+            "size 4 1000\nc_min 4 0\nmru_evictable_data 4 18446744073709551615\nmfu_evictable_data 4 10\n",
+        ] {
+            assert_eq!(parse_zfs_reclaimable_data(stats), None, "{stats}");
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn zfs_credit_cannot_bypass_physical_or_cgroup_limits() {
+        assert_eq!(
+            host_available_with_arc(10 * GB, Some(128 * GB), 200 * GB),
+            128 * GB
+        );
+        assert_eq!(host_available_with_arc(10 * GB, None, 200 * GB), 10 * GB);
+        let host = host_available_with_arc(10 * GB, Some(128 * GB), 90 * GB);
+        assert_eq!(
+            effective_linux_memory(Some(host), Some(4 * GB)),
+            Some(4 * GB)
+        );
+        assert_eq!(effective_linux_memory(Some(host), Some(0)), Some(0));
+        assert_eq!(host_available_with_arc(10 * GB, Some(128 * GB), 0), 10 * GB);
     }
 
     #[cfg(target_os = "linux")]

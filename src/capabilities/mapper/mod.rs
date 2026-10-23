@@ -167,6 +167,9 @@ pub struct CapabilityMapper {
     /// re-derived these with deep `matches!` walks and five hash-set probes
     /// per trait per member.
     pub(super) trait_eval_flags: Arc<OnceLock<Vec<u16>>>,
+    /// Queries used only as boolean tests can stop after their first match.
+    /// Shared query text must satisfy the strongest consumer's requirements.
+    pub(super) boolean_ast_queries: Arc<OnceLock<rustc_hash::FxHashSet<String>>>,
     /// Atomic-trait work lists per (file type, dependent) pass: applicable
     /// indices additionally filtered by `Condition::can_match_file_type` and
     /// `has_trait_dependency` — all static per (mapper, file type), but

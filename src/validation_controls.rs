@@ -962,6 +962,13 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         fix: "Fold the 'unless' clause into the referenced trait or a shared exclusion.",
     },
     ValidatorSpec {
+        id: "rule-performance",
+        category: ValidatorCategory::Policy,
+        display_id: "rule-perf",
+        description: "Rule exhausts an execution budget or is an extreme cost outlier on a fixture.",
+        fix: "Narrow the matcher or rewrite the expensive query; retain a representative performance fixture.",
+    },
+    ValidatorSpec {
         id: "regex-performance",
         category: ValidatorCategory::Policy,
         display_id: "re-perf",

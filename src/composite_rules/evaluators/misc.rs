@@ -191,7 +191,7 @@ pub(crate) fn eval_basename(
 /// in-archive or after extraction to disk — `basename` of `foo.jar!Main.class`
 /// is `Main.class`, the same as the extracted `Main.class`.
 pub(crate) fn path_basename(path: &str) -> &str {
-    match path.rfind(['/', '\\', '!']) {
+    match memchr::memrchr3(b'/', b'\\', b'!', path.as_bytes()) {
         Some(i) => &path[i + 1..],
         None => path,
     }
@@ -200,7 +200,7 @@ pub(crate) fn path_basename(path: &str) -> &str {
 /// Directory portion of a path, treating `/`, `\`, and `!` as boundaries.
 /// The complement of [`path_basename`]; empty when there is no separator.
 pub(crate) fn path_dirname(path: &str) -> &str {
-    match path.rfind(['/', '\\', '!']) {
+    match memchr::memrchr3(b'/', b'\\', b'!', path.as_bytes()) {
         Some(i) => &path[..i],
         None => "",
     }

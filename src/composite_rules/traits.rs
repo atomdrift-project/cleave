@@ -144,8 +144,11 @@ fn eval_condition(
     ctx: &EvaluationContext<'_>,
 ) -> ConditionResult {
     let arch_clamp = ctx.arch_clamp_range(rule.arch);
+    let _query_performance = condition
+        .ast_query_text()
+        .and_then(|_| crate::validation_performance::QueryTimer::start(rule.id, ctx));
 
-    match condition {
+    let result = match condition {
         Condition::Symbol(SymbolQuery {
             exact,
             substr,
@@ -624,7 +627,9 @@ fn eval_condition(
                 }
             })
         }
-    }
+    };
+    crate::validation_performance::observe_result(rule.id, &ctx.report.target.path, &result);
+    result
 }
 
 /// Extract relative path from full path (relative to traits directory)
@@ -1702,6 +1707,8 @@ impl TraitDefinition {
 
         // Start timing for timeout detection (covers all evaluation phases)
         let start = crate::composite_rules::trait_timing::EvalTimer::start();
+        let _performance =
+            crate::validation_performance::RuleTimer::start(&self.id, &self.defined_in, ctx);
 
         // Check unless conditions (file-level skip).
         //
@@ -3034,6 +3041,8 @@ impl CompositeTrait {
 
         // Start timing for timeout detection (covers all evaluation phases)
         let start = crate::composite_rules::trait_timing::EvalTimer::start();
+        let _performance =
+            crate::validation_performance::RuleTimer::start(&self.id, &self.defined_in, ctx);
 
         // Check unless conditions (file-level skip). Deferred when recording —
         // see the identical note on `TraitDefinition::evaluate_with_gates`.

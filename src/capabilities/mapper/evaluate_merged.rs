@@ -471,6 +471,7 @@ impl super::CapabilityMapper {
             ast_kind_cache,
             source_text_prefiltered,
             ast_query_cache: ast_query_cache.as_ref(),
+            ast_node_text: analysis.ast_node_text,
             // Decoded layers (`\uXXXX` escapes, base64, xor) can carry non-ASCII
             // text that the raw bytes do not: a `\u30xx`-escaped JS bundle is
             // pure ASCII yet its unicode-escape strings are Japanese, and the

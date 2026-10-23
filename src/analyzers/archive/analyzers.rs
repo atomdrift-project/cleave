@@ -228,6 +228,136 @@ fn member_is_heavy(bytes: usize) -> bool {
     bytes >= flight_wait_min_bytes()
 }
 
+fn prioritized_heavy_members() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("CLEAVE_PRIORITY_HEAVY_MEMBERS").as_deref() == Ok("1"))
+}
+
+/// Native analysis includes a long external disassembly pass. Start those
+/// members before source bundles, then prefer larger members in each class.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum MemberDispatch {
+    WholeMember(usize),
+    // Claim or wait for the member flight off-pool, then enter the source
+    // pool inside analyze_extracted_member_with_flight. Entering it earlier
+    // would disable safe duplicate waits and repeat identical large bundles.
+    SourceAnalysis,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct MemberPriority {
+    native: bool,
+    bytes: usize,
+    dispatch: Option<MemberDispatch>,
+}
+
+fn member_priority(member: &MemoryArchiveMember) -> Option<MemberPriority> {
+    if !member_is_heavy(member.data.len()) {
+        return None;
+    }
+    let native = matches!(member.file_type, FileType::Elf | FileType::Pe);
+    let dispatch = if native && member.data.len() >= 16 * 1024 * 1024 {
+        native_member_threads().map(MemberDispatch::WholeMember)
+    } else if member.file_type.is_source_code() && member.data.len() >= source_leaf_min_bytes() {
+        static EARLY: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if *EARLY
+            .get_or_init(|| std::env::var("CLEAVE_SOURCE_EARLY_DISPATCH").as_deref() == Ok("1"))
+        {
+            source_leaf_threads().map(|_| MemberDispatch::SourceAnalysis)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    Some(MemberPriority {
+        native,
+        bytes: member.data.len(),
+        dispatch,
+    })
+}
+
+/// Pull from the ranked queue when a worker becomes available. Parallel
+/// iterator splitting alone can admit a low-priority half before the second
+/// expensive member. Each invocation still belongs to its original index,
+/// so callers can deliver results in archive order.
+fn for_each_priority_member(indices: &[usize], f: impl Fn(usize) + Sync + Send) {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let next = AtomicUsize::new(0);
+    let workers = indices.len().min(rayon::current_num_threads());
+    (0..workers).into_par_iter().for_each(|_| {
+        while let Some(&index) = indices.get(next.fetch_add(1, Ordering::Relaxed)) {
+            f(index);
+        }
+    });
+}
+
+fn native_member_threads() -> Option<usize> {
+    static THREADS: std::sync::OnceLock<Option<usize>> = std::sync::OnceLock::new();
+    *THREADS.get_or_init(|| {
+        std::env::var("CLEAVE_NATIVE_MEMBER_THREADS")
+            .ok()?
+            .parse::<usize>()
+            .ok()
+            .filter(|&n| n > 0)
+    })
+}
+
+fn source_leaf_threads() -> Option<usize> {
+    static THREADS: std::sync::OnceLock<Option<usize>> = std::sync::OnceLock::new();
+    *THREADS.get_or_init(|| {
+        std::env::var("CLEAVE_SOURCE_LEAF_THREADS")
+            .ok()?
+            .parse::<usize>()
+            .ok()
+            .filter(|&n| n > 0)
+    })
+}
+
+/// Minimum source member size for the optional private leaf pool. Medium
+/// bundles can also spend most of their wall time waiting on unrelated work
+/// stolen by nested joins; allow measuring that boundary independently of
+/// the number of workers in the private pool.
+fn source_leaf_min_bytes() -> usize {
+    static MIN: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *MIN.get_or_init(|| {
+        std::env::var("CLEAVE_SOURCE_LEAF_MIN_KB")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|&kb| kb > 0)
+            .unwrap_or(4096)
+            .saturating_mul(1024)
+    })
+}
+
+/// Start isolated leaf members without waiting for a free scan worker. A
+/// source pool created only inside its member task cannot help when that task
+/// sits behind unrelated nested joins. The caller supplies one bounded heavy
+/// group; results still use original indices and ordinary work stays on Rayon.
+fn for_each_group_with_isolated_members(
+    indices: &[usize],
+    dispatch: impl Fn(usize) -> Option<MemberDispatch>,
+    f: impl Fn(usize) + Sync + Send,
+) {
+    std::thread::scope(|scope| {
+        let mut ordinary = Vec::new();
+        for &index in indices {
+            if let Some(dispatch) = dispatch(index) {
+                let f = &f;
+                scope.spawn(move || match dispatch {
+                    MemberDispatch::WholeMember(threads) => {
+                        crate::rayon_nest::with_isolated_leaf_pool(threads, || f(index))
+                    }
+                    MemberDispatch::SourceAnalysis => f(index),
+                });
+            } else {
+                ordinary.push(index);
+            }
+        }
+        for_each_priority_member(&ordinary, &f);
+    });
+}
+
 /// Smallest member a busy single-flight is worth waiting for
 /// (`CLEAVE_FLIGHT_WAIT_MIN_KB`, default 256 KiB); smaller duplicates are
 /// analyzed independently.
@@ -330,17 +460,13 @@ where
 // item concurrently, breaking the input-order guarantee.
 #[allow(clippy::significant_drop_tightening)]
 ///
-/// `heavy` marks members that must run on the calling (lane) thread even in
-/// a parallel window. A heavy member as a stealable job is a trap for every
-/// other whale: a thread blocked in one of its own `join`s steals whatever
-/// is pending, and a 9 MB bundle stolen that way extends the thief's own
-/// path — and any single-flight it owns — by the bundle's whole analysis
-/// (postman 32 → 52 s, 2026-09-02). Light members and trait chunks are the
-/// only work left to steal, so a diversion is bounded to well under a second.
+/// `priority` classifies heavy members and ranks them when prioritized
+/// admission is enabled. Heavy members run in bounded groups; light members
+/// can run concurrently with that group. Folding always follows input order.
 fn par_filter_fold_members<T, U, F>(
     items: &[T],
     parallel: bool,
-    heavy: impl Fn(&T) -> bool + Sync,
+    priority: impl Fn(&T) -> Option<MemberPriority> + Sync,
     f: F,
     mut fold: impl FnMut(U) + Send,
 ) where
@@ -446,8 +572,12 @@ fn par_filter_fold_members<T, U, F>(
                 }
             }
         };
-        let (heavy_items, light_items): (Vec<usize>, Vec<usize>) =
-            (0..chunk.len()).partition(|&i| heavy(&chunk[i]));
+        let (mut heavy_items, light_items): (Vec<usize>, Vec<usize>) =
+            (0..chunk.len()).partition(|&i| priority(&chunk[i]).is_some());
+        let prioritized = prioritized_heavy_members();
+        if prioritized {
+            heavy_items.sort_by_key(|&i| std::cmp::Reverse(priority(&chunk[i])));
+        }
         // `join`'s left side runs here; the right side is the only stealable
         // job. Heavy members run a bounded number at a time rather than one
         // after another: a module zip with ~30 multi-MB minified bundles spent
@@ -459,7 +589,20 @@ fn par_filter_fold_members<T, U, F>(
         rayon::join(
             || {
                 for group in heavy_items.chunks(heavy_member_parallelism()) {
-                    group.par_iter().for_each(|&i| deliver(i, f(&chunk[i])));
+                    if group
+                        .iter()
+                        .any(|&i| priority(&chunk[i]).is_some_and(|p| p.dispatch.is_some()))
+                    {
+                        for_each_group_with_isolated_members(
+                            group,
+                            |i| priority(&chunk[i]).and_then(|p| p.dispatch),
+                            |i| deliver(i, f(&chunk[i])),
+                        );
+                    } else if prioritized {
+                        for_each_priority_member(group, |i| deliver(i, f(&chunk[i])));
+                    } else {
+                        group.par_iter().for_each(|&i| deliver(i, f(&chunk[i])));
+                    }
                 }
             },
             || {
@@ -479,7 +622,7 @@ fn par_filter_fold_members<T, U, F>(
 fn par_filter_fold_owned_members<T, U>(
     items: impl IntoIterator<Item = T>,
     parallel: bool,
-    heavy: impl Fn(&T) -> bool,
+    priority: impl Fn(&T) -> Option<MemberPriority>,
     analyze: impl Fn(&T) -> Option<U> + Sync + Send,
     fold: impl FnMut(U) + Send,
 ) where
@@ -491,7 +634,7 @@ fn par_filter_fold_owned_members<T, U>(
     // any recursive archive work), and is never contended.
     let slots: Vec<_> = items
         .into_iter()
-        .map(|item| (heavy(&item), parking_lot::Mutex::new(Some(item))))
+        .map(|item| (priority(&item), parking_lot::Mutex::new(Some(item))))
         .collect();
     par_filter_fold_members(
         &slots,
@@ -1257,7 +1400,7 @@ impl<'a: 'scope, 'scope> MemberWindow<'a, 'scope> {
                 par_filter_fold_owned_members(
                     batch,
                     parallel,
-                    |member| member_is_heavy(member.data.len()),
+                    member_priority,
                     |member| analyzer.analyze_one_member(member, slow_log_label),
                     |result| acc.fold(result, &analyzer.engine),
                 );
@@ -1306,7 +1449,7 @@ impl<'a: 'scope, 'scope> MemberWindow<'a, 'scope> {
         par_filter_fold_owned_members(
             self.window.drain(..),
             parallel,
-            |member| member_is_heavy(member.data.len()),
+            member_priority,
             |member| analyzer.analyze_one_member(member, label),
             |result| acc.fold(result, &analyzer.engine),
         );
@@ -1793,6 +1936,7 @@ impl ArchiveAnalyzer {
     /// asleep in `wait_until_cold`, their halves under a waiting frame).
     fn member_may_wait(&self) -> bool {
         self.current_depth == 0
+            && !crate::rayon_nest::on_isolated_leaf_pool()
             && MEMBER_ANALYSIS_DEPTH.with(std::cell::Cell::get) == 0
             && rayon::current_thread_index()
                 .is_some_and(|t| t == self.lane_thread.load(std::sync::atomic::Ordering::Relaxed))
@@ -1894,7 +2038,11 @@ impl ArchiveAnalyzer {
         flight.set_label(relative_path);
         if !flight.is_owner() {
             let on_pool = rayon::current_thread_index().is_some();
-            if on_pool && (crate::analysis_cache::owns_any_flight() || !self.member_may_wait()) {
+            let isolated_wait = flight.can_wait_for_isolated_owner();
+            if on_pool
+                && !isolated_wait
+                && (crate::analysis_cache::owns_any_flight() || !self.member_may_wait())
+            {
                 // This thread is inside an analysis it owns (a nested
                 // archive, or a job stolen while its own `join` waited).
                 // Blocking here can deadlock — the flight it waits on may
@@ -1967,7 +2115,23 @@ impl ArchiveAnalyzer {
             } else {
                 std::time::Duration::from_secs(180)
             };
-            let waited = if on_pool {
+            let waited = if isolated_wait {
+                tracing::info!(target: "cleave::source_flights", relative_path, sha256, "waiting for isolated member");
+                match flight.wait_isolated(deadline) {
+                    Some(report) => report,
+                    None => {
+                        return flight.run_independently(|| {
+                            self.analyze_extracted_member_uncached(
+                                file_path,
+                                relative_path,
+                                data,
+                                file_type,
+                                sha256,
+                            )
+                        });
+                    }
+                }
+            } else if on_pool {
                 // Half the pool, and never the last two workers: an owner's
                 // spawned nested job needs a free worker to run on.
                 // A path pulled during another wait (`rayon_nest::run_wait_work`)
@@ -2055,6 +2219,9 @@ impl ArchiveAnalyzer {
                         "Archive member single-flight hit is path-bound; analyzing independently"
                     );
                     drop(report);
+                    if isolated_wait {
+                        tracing::info!(target: "cleave::source_flights", relative_path, sha256, "isolated result is path-bound; analyzing independently");
+                    }
                     return flight.run_independently(|| {
                         self.analyze_extracted_member_uncached(
                             file_path,
@@ -2066,6 +2233,9 @@ impl ArchiveAnalyzer {
                     });
                 }
                 crate::restamp_path_derived_values(&mut report, Path::new(relative_path));
+                if isolated_wait {
+                    tracing::info!(target: "cleave::source_flights", relative_path, sha256, "reused isolated member");
+                }
                 tracing::debug!(sha256, relative_path, "Archive member single-flight hit");
                 return Ok(Some(report));
             }
@@ -2076,12 +2246,13 @@ impl ArchiveAnalyzer {
             });
         }
 
-        let result = self.analyze_extracted_member_uncached(
+        let result = self.analyze_extracted_member_with_flight(
             file_path,
             relative_path,
             data,
             file_type,
             sha256,
+            Some(&flight),
         );
         match &result {
             Ok(Some(report)) => {
@@ -2129,6 +2300,58 @@ impl ArchiveAnalyzer {
     }
 
     fn analyze_extracted_member_uncached(
+        &self,
+        file_path: &Path,
+        relative_path: &str,
+        data: &[u8],
+        file_type: &FileType,
+        sha256: &str,
+    ) -> Result<Option<AnalysisReport>> {
+        self.analyze_extracted_member_with_flight(
+            file_path,
+            relative_path,
+            data,
+            file_type,
+            sha256,
+            None,
+        )
+    }
+
+    fn analyze_extracted_member_with_flight(
+        &self,
+        file_path: &Path,
+        relative_path: &str,
+        data: &[u8],
+        file_type: &FileType,
+        sha256: &str,
+        flight: Option<&crate::analysis_cache::ReportFlight>,
+    ) -> Result<Option<AnalysisReport>> {
+        let work = || {
+            static WAIT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+            if *WAIT
+                .get_or_init(|| std::env::var("CLEAVE_SOURCE_FLIGHT_WAIT").as_deref() == Ok("1"))
+                && let Some(flight) = flight
+            {
+                flight.mark_isolated_owner();
+            }
+            self.analyze_extracted_member_on_current_pool(
+                file_path,
+                relative_path,
+                data,
+                file_type,
+                sha256,
+            )
+        };
+        if file_type.is_source_code()
+            && data.len() >= source_leaf_min_bytes()
+            && let Some(threads) = source_leaf_threads()
+        {
+            return crate::rayon_nest::with_isolated_leaf_pool(threads, work);
+        }
+        work()
+    }
+
+    fn analyze_extracted_member_on_current_pool(
         &self,
         file_path: &Path,
         relative_path: &str,
@@ -3822,7 +4045,7 @@ impl ArchiveAnalyzer {
         par_filter_fold_owned_members(
             members,
             self.members_run_parallel(total_files),
-            |member| member_is_heavy(member.data.len()),
+            member_priority,
             |member| self.analyze_one_member(member, slow_log_label),
             |result| acc.fold(result, &self.engine),
         );
@@ -3851,7 +4074,7 @@ impl ArchiveAnalyzer {
         par_filter_fold_members(
             members,
             self.members_run_parallel(members.len()),
-            |member| member_is_heavy(member.data.len()),
+            |member| member_priority(member),
             |member| self.analyze_one_member(member, slow_log_label),
             |result| acc.fold(result, &self.engine),
         );
@@ -3874,6 +4097,9 @@ impl ArchiveAnalyzer {
         let entry_path = self.format_entry_path(&member.relative_path);
         let archive_location = self.format_evidence_location(&member.relative_path);
         let member_start = std::time::Instant::now();
+        if member.data.len() >= 16 * 1024 * 1024 {
+            tracing::info!(target: "cleave::native_timing", path = %member.relative_path, "member begin");
+        }
         let logical_path = Path::new(&member.relative_path);
         let entry_metadata = archive_entry_metadata(
             entry_path.clone(),
@@ -3885,6 +4111,9 @@ impl ArchiveAnalyzer {
         );
 
         let _analyze = crate::mem_profile::phase(crate::mem_profile::Phase::Analyze);
+        if member.data.len() >= 16 * 1024 * 1024 {
+            tracing::info!(target: "cleave::native_timing", path = %member.relative_path, ms = member_start.elapsed().as_millis() as u64, "member metadata complete");
+        }
         let member_report = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.analyze_extracted_member(
                 logical_path,
@@ -4308,7 +4537,7 @@ impl ArchiveAnalyzer {
         par_filter_fold_members(
             &classes_to_analyze,
             self.members_run_parallel(classes_to_analyze.len()),
-            |_| false,
+            |_| None,
             |entry| {
                 let _thread_local_cache_clear_guard = ThreadLocalCacheClearGuard;
                 if self.is_cancelled() {
@@ -4482,7 +4711,7 @@ impl ArchiveAnalyzer {
         par_filter_fold_members(
             &non_class_files,
             self.members_run_parallel(non_class_files.len()),
-            |_| false,
+            |_| None,
             |entry| {
                 let _thread_local_cache_clear_guard = ThreadLocalCacheClearGuard;
                 if self.is_cancelled() {
@@ -4700,7 +4929,7 @@ impl ArchiveAnalyzer {
         par_filter_fold_members(
             &files,
             self.members_run_parallel(files.len()),
-            |_| false,
+            |_| None,
             |entry| {
                 let _thread_local_cache_clear_guard = ThreadLocalCacheClearGuard;
                 if self.is_cancelled() {
@@ -4897,6 +5126,129 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     #[test]
+    #[allow(clippy::panic)] // An empty queue must never invoke its callback.
+    fn priority_members_preserve_queue_order_and_visit_once() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let indices: Vec<_> = (0..97).rev().collect();
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap();
+        let visited = std::sync::Mutex::new(Vec::new());
+        pool.install(|| {
+            super::for_each_priority_member(&indices, |i| {
+                visited.lock().unwrap().push(i);
+            })
+        });
+        assert_eq!(visited.into_inner().unwrap(), indices);
+
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .unwrap();
+        let counts: Vec<_> = (0..indices.len()).map(|_| AtomicUsize::new(0)).collect();
+        pool.install(|| {
+            super::for_each_priority_member(&indices, |i| {
+                counts[i].fetch_add(1, Ordering::Relaxed);
+                std::thread::yield_now();
+            })
+        });
+        assert!(counts.iter().all(|n| n.load(Ordering::Relaxed) == 1));
+        pool.install(|| super::for_each_priority_member(&[], |_| panic!("empty queue")));
+    }
+
+    #[test]
+    #[allow(clippy::panic)] // An empty group must never invoke its callback.
+    fn isolated_group_starts_while_the_only_scan_worker_is_busy() {
+        use std::sync::{
+            Mutex,
+            atomic::{AtomicUsize, Ordering},
+            mpsc::sync_channel,
+        };
+        use std::time::Duration;
+        let (started, ready) = sync_channel(2);
+        let (done, release) = sync_channel(2);
+        let ready = Mutex::new(ready);
+        let release = Mutex::new(release);
+        let visits = [
+            AtomicUsize::new(0),
+            AtomicUsize::new(0),
+            AtomicUsize::new(0),
+            AtomicUsize::new(0),
+        ];
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap();
+        pool.install(|| {
+            super::for_each_group_with_isolated_members(
+                &[0, 1, 2, 3],
+                |i| match i {
+                    0 => Some(super::MemberDispatch::WholeMember(2)),
+                    1 => Some(super::MemberDispatch::SourceAnalysis),
+                    _ => None,
+                },
+                |i| {
+                    visits[i].fetch_add(1, Ordering::Relaxed);
+                    if i < 2 {
+                        if i == 0 {
+                            assert!(crate::rayon_nest::on_isolated_leaf_pool());
+                            assert_eq!(rayon::current_num_threads(), 2);
+                            let analyzer = super::ArchiveAnalyzer::new();
+                            analyzer
+                                .lane_thread
+                                .store(rayon::current_thread_index().unwrap(), Ordering::Relaxed);
+                            assert!(
+                                !analyzer.member_may_wait(),
+                                "private worker indices must not be treated as scan lanes"
+                            );
+                        } else {
+                            assert!(
+                                rayon::current_thread_index().is_none(),
+                                "source admission must allow off-pool duplicate waits"
+                            );
+                            crate::rayon_nest::with_isolated_leaf_pool(3, || {
+                                assert!(crate::rayon_nest::on_isolated_leaf_pool());
+                                assert_eq!(rayon::current_num_threads(), 3);
+                            });
+                        }
+                        started.send(()).unwrap();
+                        release
+                            .lock()
+                            .unwrap()
+                            .recv_timeout(Duration::from_secs(5))
+                            .unwrap();
+                    } else if i == 2 {
+                        assert_eq!(rayon::current_num_threads(), 1);
+                        for _ in 0..2 {
+                            ready
+                                .lock()
+                                .unwrap()
+                                .recv_timeout(Duration::from_secs(5))
+                                .unwrap();
+                        }
+                        for _ in 0..2 {
+                            done.send(()).unwrap();
+                        }
+                    }
+                },
+            )
+        });
+        assert!(
+            visits
+                .iter()
+                .all(|count| count.load(Ordering::Relaxed) == 1)
+        );
+        pool.install(|| {
+            super::for_each_group_with_isolated_members(
+                &[],
+                |_| Some(super::MemberDispatch::WholeMember(2)),
+                |_| panic!("empty group"),
+            )
+        });
+    }
+
+    #[test]
     fn owned_members_release_inputs_before_ordered_fold() {
         use super::par_filter_fold_owned_members;
         use std::sync::{
@@ -4923,7 +5275,13 @@ mod tests {
             par_filter_fold_owned_members(
                 inputs,
                 parallel,
-                |input| input.index % 3 == 0,
+                |input| {
+                    (input.index % 3 == 0).then_some(super::MemberPriority {
+                        native: false,
+                        bytes: input.index,
+                        dispatch: None,
+                    })
+                },
                 |input| {
                     assert_eq!(input.dropped[input.index].load(Ordering::SeqCst), 0);
                     // A skipped or failed member still releases its buffer.

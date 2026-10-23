@@ -29,6 +29,7 @@ pub(crate) struct TraitEvalCache<'a> {
     pub cached_evidence: &'a FxHashMap<usize, Vec<Evidence>>,
     pub regex_candidates: &'a FxHashSet<usize>,
     pub arch_ranges: Option<&'a [(Arch, std::ops::Range<usize>)]>,
+    pub ast_node_text: Option<&'a crate::composite_rules::evaluators::NodeTextIndex>,
     pub ast_kind_cache: Option<&'a FxHashMap<String, Vec<Evidence>>>,
     /// Raw-file string-index scan ran for this source member. Enables
     /// skip-if-absent for exact/substr/regex-prefix `type: text` without
@@ -314,7 +315,70 @@ impl super::CapabilityMapper {
         Some(cache)
     }
 
+    fn boolean_ast_queries<'a>(&'a self) -> &'a FxHashSet<String> {
+        self.boolean_ast_queries.get_or_init(|| {
+            let mut requirements: FxHashMap<&str, bool> = FxHashMap::default();
+            let mut add = |condition: &'a Condition, full: bool| {
+                if let Some(query) = condition.ast_query_text() {
+                    *requirements.entry(query).or_default() |= full;
+                }
+            };
+            for (idx, t) in self.trait_definitions.iter().enumerate() {
+                let full = self.trait_eval_flags()[idx]
+                    & (super::flags::NEEDS_COUNT | super::flags::NEEDS_LOCATIONS)
+                    != 0;
+                add(&t.r#if, full);
+                for c in t.unless.iter().flatten() {
+                    add(c, false);
+                }
+                if let Some(d) = &t.downgrade {
+                    for c in d
+                        .any
+                        .iter()
+                        .flatten()
+                        .chain(d.all.iter().flatten())
+                        .chain(d.none.iter().flatten())
+                    {
+                        add(c, false);
+                    }
+                }
+            }
+            // Composite conditions may count or compare evidence locations.
+            // Conservatively retain complete results for their direct queries.
+            for rule in &self.composite_rules {
+                for c in rule
+                    .all
+                    .iter()
+                    .flatten()
+                    .chain(rule.any.iter().flatten())
+                    .chain(rule.unless.iter().flatten())
+                {
+                    add(c, true);
+                }
+                if let Some(d) = &rule.downgrade {
+                    for c in d
+                        .any
+                        .iter()
+                        .flatten()
+                        .chain(d.all.iter().flatten())
+                        .chain(d.none.iter().flatten())
+                    {
+                        add(c, true);
+                    }
+                }
+            }
+            requirements
+                .into_iter()
+                .filter(|(_, full)| !full)
+                .map(|(q, _)| q.to_owned())
+                .collect()
+        })
+    }
+
     fn collect_ast_query_strings<'a>(&'a self, indices: &[usize]) -> Vec<&'a str> {
+        static BATCH_GUARDED: OnceLock<bool> = OnceLock::new();
+        let batch_guarded = *BATCH_GUARDED
+            .get_or_init(|| std::env::var("CLEAVE_AST_BATCH_GUARDED").as_deref() == Ok("1"));
         let mut seen = FxHashSet::default();
         let mut out = Vec::new();
         let mut push = |c: &'a Condition| {
@@ -326,7 +390,13 @@ impl super::CapabilityMapper {
         };
         for &idx in indices {
             let t = &self.trait_definitions[idx];
-            push(&t.r#if);
+            // A batch runs before the trait's cheap suppressors. Leave guarded
+            // positive queries on the standalone path, so an `unless` hit can
+            // avoid their work (and suppression reporting can still evaluate
+            // them when it explicitly needs the positive evidence).
+            if batch_guarded || t.unless.as_ref().is_none_or(Vec::is_empty) {
+                push(&t.r#if);
+            }
             if let Some(unless) = &t.unless {
                 for c in unless {
                     push(c);
@@ -514,7 +584,14 @@ impl super::CapabilityMapper {
         cancellation: Option<&std::sync::atomic::AtomicBool>,
         node_text: Option<&crate::composite_rules::evaluators::NodeTextIndex>,
     ) -> Option<FxHashMap<String, crate::composite_rules::context::ConditionResult>> {
+        if crate::validation_performance::active() {
+            return None;
+        }
         let tree = cached_ast?;
+        static BATCH_ENABLED: OnceLock<bool> = OnceLock::new();
+        if !*BATCH_ENABLED.get_or_init(|| std::env::var("CLEAVE_AST_BATCH").as_deref() != Ok("0")) {
+            return None;
+        }
         // On small sources, preparing a private copy of the combined query
         // costs more than the short individual walks, whose compiled queries
         // are already shared. Reserve batching for larger files.
@@ -532,6 +609,7 @@ impl super::CapabilityMapper {
             cancellation,
             None,
             node_text,
+            Some(self.boolean_ast_queries()),
         )
     }
 
@@ -639,6 +717,7 @@ impl super::CapabilityMapper {
             ast_kind_cache: ast_kind_cache.as_ref(),
             source_text_prefiltered,
             ast_query_cache: ast_query_cache.as_ref(),
+            ast_node_text: None,
             // Decoded layers (`\uXXXX` escapes, base64, xor) can carry non-ASCII
             // text that the raw bytes do not: a `\u30xx`-escaped JS bundle is
             // pure ASCII yet its unicode-escape strings are Japanese, and the
@@ -821,6 +900,7 @@ impl super::CapabilityMapper {
                 ast_kind_cache: None,
                 source_text_prefiltered,
                 ast_query_cache: None,
+                ast_node_text: None,
                 content_is_ascii: false,
             },
             None,
@@ -874,6 +954,7 @@ impl super::CapabilityMapper {
         if let Some(ast_cache) = cache.ast_kind_cache {
             ctx = ctx.with_ast_kind_cache(ast_cache);
         }
+        ctx.ast_node_text = cache.ast_node_text;
         if let Some(qcache) = cache.ast_query_cache {
             ctx = ctx.with_ast_query_cache(qcache);
         }
@@ -1150,5 +1231,33 @@ impl super::CapabilityMapper {
         }
 
         unique_findings
+    }
+}
+
+#[cfg(test)]
+mod ast_batch_requirements_tests {
+    use super::super::CapabilityMapper;
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn shared_queries_preserve_count_and_proximity_consumers() {
+        let mut mapper = CapabilityMapper::empty();
+        for (id, query, extra) in [
+            ("boolean", "(identifier) @id", ""),
+            ("counted", "(identifier) @id", "count_min: 3"),
+            ("near", "(number) @n", ""),
+            ("direct", "(string) @s", ""),
+            ("plain", "(call_expression) @call", ""),
+        ] {
+            mapper.trait_definitions.push(serde_yaml::from_str(&format!(
+                "id: {id}\ndesc: Test\nconf: 1.0\nfor: [javascript]\n{extra}\nif:\n  type: tree-sitter\n  language: javascript\n  query: '{query}'\n"
+            )).unwrap());
+        }
+        mapper.composite_rules.push(serde_yaml::from_str(
+            "id: proximity\ndesc: Test\nconf: 1.0\nnear_bytes: 10\nall:\n  - id: near\n  - type: tree-sitter\n    language: javascript\n    query: '(string) @s'\n"
+        ).unwrap());
+        let boolean = mapper.boolean_ast_queries();
+        assert_eq!(boolean.len(), 1, "{boolean:?}");
+        assert!(boolean.contains("(call_expression) @call"));
     }
 }

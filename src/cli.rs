@@ -207,6 +207,8 @@ pub struct Args {
     pub max_file_size: u64,
 
     /// Warn when a single rule takes longer than this many milliseconds to evaluate.
+    /// During validation this is a soft rule-performance failure (CPU time where available).
+    /// Extreme AST cost outliers and exhausted query budgets are also soft failures.
     /// Rules >500ms are always logged at info level (visible via RUST_LOG=cleave=info).
     #[arg(long, value_name = "MS", default_value_t = 4000)]
     pub slow_rule_ms: u64,

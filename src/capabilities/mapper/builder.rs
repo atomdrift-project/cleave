@@ -43,6 +43,7 @@ impl super::CapabilityMapper {
             composite_worklists: std::sync::Arc::default(),
             trait_worklists: std::sync::Arc::default(),
             trait_eval_flags: std::sync::Arc::default(),
+            boolean_ast_queries: std::sync::Arc::default(),
             trait_ref_ids_memo: std::sync::Arc::default(),
             trait_id_map: std::collections::HashMap::new(),
             platforms: vec![Platform::All],

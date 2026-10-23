@@ -15,6 +15,10 @@
 use crate::capabilities::indexes::StringMatchIndex;
 use tree_sitter::{CaptureQuantifier, Query};
 
+#[path = "ast_loop_gate.rs"]
+mod loop_gate;
+pub(super) use loop_gate::RequiredSubqueries;
+
 /// Per pattern, the literals every match of that pattern contains.
 #[derive(Debug, Default)]
 pub(crate) struct RequiredLiterals(Vec<Vec<Box<[u8]>>>);
@@ -61,6 +65,16 @@ impl RequiredLiterals {
 
     /// Whether some pattern could match input in which `present` reports which
     /// literals occur.
+    pub(super) fn pattern_may_match(
+        &self,
+        pattern: usize,
+        mut present: impl FnMut(&[u8]) -> bool,
+    ) -> bool {
+        self.0
+            .get(pattern)
+            .is_none_or(|literals| literals.iter().all(|l| present(l)))
+    }
+
     pub(crate) fn may_match(&self, mut present: impl FnMut(&[u8]) -> bool) -> bool {
         self.0.is_empty()
             || self
@@ -175,6 +189,7 @@ struct NodePredicate {
 }
 
 enum NodePredicateValue {
+    Present,
     Exact(String),
     Regex(regex::bytes::Regex),
 }
@@ -183,7 +198,12 @@ enum NodePredicateValue {
 /// Display evidence is truncated and decoded literals lose source spelling;
 /// neither can prove that a Tree-sitter capture is absent.
 #[derive(Debug, Default)]
-pub(crate) struct NodeTextIndex(rustc_hash::FxHashMap<String, rustc_hash::FxHashSet<Box<str>>>);
+pub(crate) struct NodeTextIndex(
+    rustc_hash::FxHashMap<String, rustc_hash::FxHashSet<Box<str>>>,
+    rustc_hash::FxHashSet<Box<str>>,
+    Vec<std::ops::Range<usize>>,
+    bool,
+);
 
 fn indexed_kind(kind: &str) -> bool {
     matches!(
@@ -205,7 +225,20 @@ fn indexed_kind(kind: &str) -> bool {
 }
 
 impl NodeTextIndex {
+    pub(crate) fn finish(&mut self) {
+        self.3 = true;
+    }
+    pub(super) fn for_statement_ranges(&self) -> Option<&[std::ops::Range<usize>]> {
+        self.3.then_some(&self.2)
+    }
+
     pub(crate) fn record_node(&mut self, node: &tree_sitter::Node<'_>, source: &[u8]) {
+        if node.kind() == "for_statement" {
+            self.2.push(node.byte_range());
+        }
+        if !self.1.contains(node.kind()) {
+            self.1.insert(node.kind().into());
+        }
         // A wildcard object-key capture can be any node kind, including a
         // quoted or computed key. Index the entire field, never a decoded or
         // truncated spelling, so absence is a sound negative even for `_`.
@@ -252,6 +285,7 @@ impl NodeTextIndex {
                     break;
                 }
                 if !cursor.goto_parent() {
+                    values.finish();
                     return values;
                 }
             }
@@ -260,7 +294,7 @@ impl NodeTextIndex {
 }
 
 impl RequiredNodes {
-    pub(super) fn of(query: &Query, source: &str) -> Self {
+    pub(super) fn of(language: &tree_sitter::Language, query: &Query, source: &str) -> Self {
         Self(
             (0..query.pattern_count())
                 .map(|i| {
@@ -269,7 +303,7 @@ impl RequiredNodes {
                         .unwrap_or_default();
                     let kinds = capture_node_kinds(text);
                     let quantifiers = query.capture_quantifiers(i);
-                    positive_text_predicates(text)
+                    let mut predicates: Vec<_> = positive_text_predicates(text)
                         .into_iter()
                         .filter_map(|(op, capture, arg)| {
                             let bound = query.capture_index_for_name(capture).is_some_and(|c| {
@@ -282,6 +316,9 @@ impl RequiredNodes {
                                 return None;
                             }
                             let kind = kinds.get(capture).copied().flatten()?;
+                            if !indexed_kind(kind) {
+                                return None;
+                            }
                             let predicate = match op {
                                 Op::Eq => NodePredicateValue::Exact(arg),
                                 // The tree-sitter Rust binding uses this same regex engine
@@ -295,35 +332,93 @@ impl RequiredNodes {
                                 predicate,
                             })
                         })
-                        .collect()
+                        .collect();
+                    for (&capture, &kind) in &kinds {
+                        let Some(kind) = kind else { continue };
+                        if kind == "pair:key" || kind == "_" {
+                            continue;
+                        }
+                        let id = language.id_for_node_kind(kind, true);
+                        if language.node_kind_for_id(id) != Some(kind)
+                            || language.node_kind_is_supertype(id)
+                        {
+                            continue;
+                        }
+                        let required = query.capture_index_for_name(capture).is_some_and(|c| {
+                            matches!(
+                                quantifiers.get(c as usize),
+                                Some(CaptureQuantifier::One | CaptureQuantifier::OneOrMore)
+                            )
+                        });
+                        if required {
+                            predicates.push(NodePredicate {
+                                kind: kind.to_owned(),
+                                predicate: NodePredicateValue::Present,
+                            });
+                        }
+                    }
+                    for kind in required_node_kinds(text) {
+                        let id = language.id_for_node_kind(kind, true);
+                        if language.node_kind_for_id(id) == Some(kind)
+                            && !language.node_kind_is_supertype(id)
+                        {
+                            predicates.push(NodePredicate {
+                                kind: kind.to_owned(),
+                                predicate: NodePredicateValue::Present,
+                            });
+                        }
+                    }
+                    // Cheap structural absence should avoid searching every
+                    // indexed value for a regex the file cannot satisfy.
+                    predicates.sort_by_key(|p| match p.predicate {
+                        NodePredicateValue::Present => 0,
+                        NodePredicateValue::Exact(_) => 1,
+                        NodePredicateValue::Regex(_) => 2,
+                    });
+                    predicates
                 })
                 .collect(),
         )
     }
 
     pub(super) fn may_match(&self, index: &NodeTextIndex) -> bool {
-        self.0.is_empty()
-            || self.0.iter().any(|pattern| {
-                pattern.iter().all(|p| {
-                    let Some(values) = index.0.get(p.kind.as_str()) else {
-                        return false;
-                    };
-                    match &p.predicate {
-                        NodePredicateValue::Exact(value) => values.contains(value.as_str()),
-                        NodePredicateValue::Regex(regex) => {
-                            values.iter().any(|v| regex.is_match(v.as_bytes()))
-                        }
+        self.0.is_empty() || (0..self.0.len()).any(|pattern| self.pattern_may_match(pattern, index))
+    }
+
+    pub(super) fn pattern_may_match(&self, pattern: usize, index: &NodeTextIndex) -> bool {
+        self.0.get(pattern).is_none_or(|pattern| {
+            pattern.iter().all(|p| {
+                if matches!(p.predicate, NodePredicateValue::Present) {
+                    return index.1.contains(p.kind.as_str());
+                }
+                let Some(values) = index.0.get(p.kind.as_str()) else {
+                    return false;
+                };
+                match &p.predicate {
+                    NodePredicateValue::Present => true,
+                    NodePredicateValue::Exact(value) => values.contains(value.as_str()),
+                    NodePredicateValue::Regex(regex) => {
+                        values.iter().any(|v| regex.is_match(v.as_bytes()))
                     }
-                })
+                }
             })
+        })
     }
 }
 
-/// Recognize only `(small_node_kind) @capture`. If the same capture occurs in
-/// an alternative shape, abandon its restriction. Predicates, comments and
+/// Recognize named-node captures, including nodes with children. Text gates
+/// use only the small kinds we index; other kinds can prove structural absence.
+/// If the same capture occurs in an alternative shape, abandon its restriction. Predicates, comments and
 /// quoted node names are not capture declarations. Unknown syntax means less
 /// pruning, never a stronger claim about what the query can match.
-fn capture_node_kinds(source: &str) -> rustc_hash::FxHashMap<&str, Option<&str>> {
+fn query_tokens(source: &str) -> Vec<&str> {
+    query_token_spans(source)
+        .into_iter()
+        .map(|(token, _, _)| token)
+        .collect()
+}
+
+fn query_token_spans(source: &str) -> Vec<(&str, usize, usize)> {
     let mut tokens = Vec::new();
     let mut rest = source;
     while !rest.is_empty() {
@@ -331,17 +426,18 @@ fn capture_node_kinds(source: &str) -> rustc_hash::FxHashMap<&str, Option<&str>>
         if rest.is_empty() {
             break;
         }
+        let start = source.len() - rest.len();
         if rest.starts_with('"') {
             let Some((_, after)) = string_literal(rest) else {
                 return Default::default();
             };
-            tokens.push("\"");
+            tokens.push(("\"", start, source.len() - after.len()));
             rest = after;
         } else if matches!(
             rest.as_bytes()[0],
             b'(' | b')' | b'[' | b']' | b'?' | b'*' | b'+'
         ) {
-            tokens.push(&rest[..1]);
+            tokens.push((&rest[..1], start, start + 1));
             rest = &rest[1..];
         } else {
             let end = rest
@@ -350,13 +446,83 @@ fn capture_node_kinds(source: &str) -> rustc_hash::FxHashMap<&str, Option<&str>>
             if end == 0 {
                 return Default::default();
             }
-            tokens.push(&rest[..end]);
+            tokens.push((&rest[..end], start, start + end));
             rest = &rest[end..];
         }
     }
+    tokens
+}
+
+/// Necessary named node kinds, even when the query does not capture them.
+/// Alternatives and optional/repeated subtrees contribute no requirements;
+/// unknown node names and supertypes are rejected against the grammar above.
+fn required_node_kinds(source: &str) -> rustc_hash::FxHashSet<&str> {
+    let tokens = query_tokens(source);
+    let mut closes = vec![None; tokens.len()];
+    let mut stack = Vec::new();
+    for (i, &token) in tokens.iter().enumerate() {
+        match token {
+            "(" | "[" => stack.push(i),
+            ")" | "]" => {
+                let Some(open) = stack.pop() else {
+                    return Default::default();
+                };
+                closes[open] = Some(i);
+            }
+            _ => {}
+        }
+    }
+    if !stack.is_empty() {
+        return Default::default();
+    }
+    let optional = |open: usize| {
+        let Some(close) = closes[open] else {
+            return true;
+        };
+        let mut after = close + 1;
+        while tokens
+            .get(after)
+            .is_some_and(|t| t.starts_with('@') || *t == "+")
+        {
+            after += 1;
+        }
+        matches!(tokens.get(after), Some(&"?" | &"*"))
+    };
+    let mut kinds = rustc_hash::FxHashSet::default();
+    // Each stack entry says whether this subtree can prove a requirement.
+    let mut required = Vec::new();
+    for (i, &token) in tokens.iter().enumerate() {
+        match token {
+            "(" | "[" => {
+                let kind = tokens.get(i + 1).copied().unwrap_or_default();
+                let active = required.last().copied().unwrap_or(true)
+                    && token == "("
+                    && !kind.starts_with('#')
+                    && !optional(i);
+                required.push(active);
+                if active
+                    && kind != "_"
+                    && !kind.is_empty()
+                    && kind.chars().all(|c| c.is_alphanumeric() || c == '_')
+                {
+                    kinds.insert(kind);
+                }
+            }
+            ")" | "]" => {
+                required.pop();
+            }
+            _ => {}
+        }
+    }
+    kinds
+}
+
+fn capture_node_kinds(source: &str) -> rustc_hash::FxHashMap<&str, Option<&str>> {
+    let tokens = query_tokens(source);
     let mut kinds = rustc_hash::FxHashMap::default();
     let mut predicates = Vec::new();
     let mut opens = Vec::new();
+    let mut matching_open = rustc_hash::FxHashMap::default();
     for (i, token) in tokens.iter().enumerate() {
         if *token == "(" {
             opens.push(i);
@@ -365,7 +531,9 @@ fn capture_node_kinds(source: &str) -> rustc_hash::FxHashMap<&str, Option<&str>>
                     || tokens.get(i + 1).is_some_and(|t| t.starts_with('#')),
             );
         } else if *token == ")" {
-            opens.pop();
+            if let Some(open) = opens.pop() {
+                matching_open.insert(i, open);
+            }
             predicates.pop();
         } else if !predicates.last().copied().unwrap_or(false)
             && let Some(capture) = token.strip_prefix('@')
@@ -385,8 +553,12 @@ fn capture_node_kinds(source: &str) -> rustc_hash::FxHashMap<&str, Option<&str>>
                     .is_some_and(|&open| tokens.get(open + 1) == Some(&"pair"));
             let kind = if pair_key {
                 Some("pair:key")
-            } else if simple_node && indexed_kind(tokens[j - 2]) {
-                Some(tokens[j - 2])
+            } else if j > 0 && tokens[j - 1] == ")" {
+                matching_open.get(&(j - 1)).and_then(|&open| {
+                    tokens.get(open + 1).copied().filter(|kind| {
+                        !kind.is_empty() && kind.chars().all(|c| c.is_alphanumeric() || c == '_')
+                    })
+                })
             } else {
                 None
             };

@@ -263,6 +263,9 @@ thread_local! {
     /// (`AnalysisOptions::dedicated_pool`): exempt from the shared-pool
     /// bounded-owner rule, and invisible to it.
     static DEDICATED_POOL: Cell<bool> = const { Cell::new(false) };
+    /// Stronger than a caller's dedicated archive pool: these workers run
+    /// only one leaf and cannot wait for flights on another pool.
+    static ISOLATED_LEAF_POOL: Cell<bool> = const { Cell::new(false) };
     static BACKGROUND_THREAD: Cell<bool> = const { Cell::new(false) };
 }
 
@@ -381,6 +384,53 @@ pub(crate) fn enter_toplevel_analysis_on(dedicated_pool: bool) -> ToplevelInFlig
         dedicated: dedicated_pool,
         background: background_thread(),
     }
+}
+
+pub(crate) fn on_dedicated_pool() -> bool {
+    DEDICATED_POOL.with(Cell::get)
+}
+
+pub(crate) fn on_isolated_leaf_pool() -> bool {
+    ISOLATED_LEAF_POOL.with(Cell::get)
+}
+
+/// Complete a large leaf on an exclusive pool. A blocking handoff prevents
+/// its caller from stealing an unrelated file before consuming the result.
+/// All workers belong to this leaf, including nested Rayon jobs.
+pub(crate) fn with_isolated_leaf_pool<T: Send>(
+    threads: usize,
+    work: impl FnOnce() -> T + Send,
+) -> T {
+    if on_isolated_leaf_pool() {
+        return work();
+    }
+    std::thread::scope(|scope| {
+        let result = scope
+            .spawn(move || {
+                match rayon::ThreadPoolBuilder::new()
+                    .num_threads(threads)
+                    .stack_size(8 * 1024 * 1024)
+                    .thread_name(|i| format!("isolated-leaf-{i}"))
+                    .start_handler(|_| {
+                        crate::leaf_affinity::apply();
+                        DEDICATED_POOL.with(|flag| flag.set(true));
+                        ISOLATED_LEAF_POOL.with(|flag| flag.set(true));
+                    })
+                    .build()
+                {
+                    Ok(pool) => pool.install(work),
+                    Err(error) => {
+                        tracing::warn!(%error, "isolated leaf pool unavailable; using scan pool");
+                        work()
+                    }
+                }
+            })
+            .join();
+        match result {
+            Ok(result) => result,
+            Err(panic) => std::panic::resume_unwind(panic),
+        }
+    })
 }
 
 fn serial_traits_forced() -> bool {
@@ -564,6 +614,38 @@ pub(crate) fn inner_work_parallel() -> bool {
 mod tests {
     use super::*;
     use std::sync::Mutex;
+
+    #[test]
+    fn isolated_leaf_workers_keep_nested_work_on_the_same_pool() {
+        let borrowed = String::from("borrowed result");
+        let caller = std::thread::current().id();
+        let result = with_isolated_leaf_pool(2, || {
+            assert_ne!(std::thread::current().id(), caller);
+            let (nested_threads, sibling_dedicated) = rayon::join(
+                || with_isolated_leaf_pool(8, rayon::current_num_threads),
+                inner_work_parallel,
+            );
+            assert_eq!(nested_threads, 2, "nested work must reuse the leaf pool");
+            assert!(sibling_dedicated, "all leaf workers may parallelize");
+            borrowed.as_str()
+        });
+        assert_eq!(result, "borrowed result");
+        assert!(
+            !DEDICATED_POOL.with(Cell::get),
+            "caller remains on its original pool"
+        );
+    }
+
+    #[test]
+    #[allow(clippy::expect_used, clippy::panic)] // Exercise panic propagation and inspect its payload.
+    fn isolated_leaf_panic_reaches_the_callers_recovery_boundary() {
+        let panic = std::panic::catch_unwind(|| {
+            with_isolated_leaf_pool(2, || panic!("leaf failed"));
+        })
+        .expect_err("the failed member must not look successful");
+        assert_eq!(panic.downcast_ref::<&str>(), Some(&"leaf failed"));
+        assert!(!DEDICATED_POOL.with(Cell::get));
+    }
 
     /// A dedicated-pool analysis is parallel regardless of the owner cap and
     /// does not count as in flight for the shared pool.

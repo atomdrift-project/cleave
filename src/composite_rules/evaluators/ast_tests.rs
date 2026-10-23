@@ -1511,7 +1511,7 @@ fn ast_node_gate_only_rejects_impossible_capture_predicates() {
     let index = super::ast_gate::NodeTextIndex::new(tree, source);
     let admits = |q: &str| {
         let compiled = tree_sitter::Query::new(&tree.language(), q).unwrap();
-        super::ast_gate::RequiredNodes::of(&compiled, q).may_match(&index)
+        super::ast_gate::RequiredNodes::of(&tree.language(), &compiled, q).may_match(&index)
     };
     assert!(!admits(r#"((identifier) @x (#eq? @x "http"))"#));
     assert!(!admits(r#"((identifier) @x (#match? @x "^https?$"))"#));
@@ -1533,6 +1533,124 @@ fn ast_node_gate_only_rejects_impossible_capture_predicates() {
     ));
     assert!(admits("((identifier) @x ; (#eq? @x \"missing\")\n)"));
     assert!(!admits(r#"((identifier) @x @y (#eq? @y "http"))"#));
+}
+
+#[test]
+fn ast_node_gate_checks_required_kinds_without_rejecting_optional_or_supertype_nodes() {
+    let source = "// import_statement debugger_statement\nconst x = 1; run(x);";
+    let parsed = parsed_for_test("gate.js", source.as_bytes());
+    let tree = parsed.source_ast().unwrap().tree;
+    let index = super::ast_gate::NodeTextIndex::new(tree, source);
+    let admits = |q: &str| {
+        let compiled = tree_sitter::Query::new(&tree.language(), q).unwrap();
+        super::ast_gate::RequiredNodes::of(&tree.language(), &compiled, q).may_match(&index)
+    };
+    assert!(!admits("(import_statement) @import"));
+    assert!(!admits("(call_expression function: (import)) @call"));
+    assert!(!admits("(program (debugger_statement)) @program"));
+    assert!(admits(
+        "(program (expression_statement (call_expression function: (import)))?) @program"
+    ));
+    assert!(admits(
+        "(program [(import_statement) (lexical_declaration)]) @program"
+    ));
+    assert!(admits(
+        "(program (import_statement)* (lexical_declaration)) @program"
+    ));
+    assert!(!admits("(debugger_statement) @debugger"));
+    assert!(admits("(call_expression function: (identifier) @fn) @call"));
+    assert!(admits("(expression) @expression"));
+    assert!(admits("[(import_statement) @node (identifier) @node]"));
+    assert!(admits("(program (import_statement)? @import) @program"));
+    assert!(admits("(import_statement) @import (identifier) @id"));
+}
+
+#[test]
+fn ast_missing_kinds_are_answered_before_the_query_cpu_budget() {
+    let source = "// debugger_statement import_statement\nconst x = 1;";
+    let parsed = parsed_for_test("gate.js", source.as_bytes());
+    let tree = parsed.source_ast().unwrap().tree;
+    let queries = [
+        "(import_statement) @import",
+        "(debugger_statement) @debugger",
+    ];
+    let answers = super::ast::batch_ast_queries_with_budget(
+        tree,
+        source,
+        FileType::JavaScript,
+        &queries,
+        None,
+        None,
+        Some(std::time::Duration::ZERO),
+    )
+    .unwrap();
+    for query in queries {
+        assert!(!answers[query].matched);
+        assert!(answers[query].warnings.is_empty());
+    }
+}
+
+#[test]
+fn batch_ast_wide_sibling_overflow_does_not_starve_later_patterns() {
+    let source = format!(
+        "const table = [{}]; eval('late');",
+        vec!["'x'"; 512].join(",")
+    );
+    let parsed = parsed_for_test("wide.js", source.as_bytes());
+    let tree = parsed.source_ast().unwrap().tree;
+    let wide = "(array (string) @a (string) @b (string) @c) @array";
+    let late = "((call_expression function: (identifier) @f) (#eq? @f \"eval\")) @call";
+    let batch = batch_ast_queries(
+        tree,
+        &source,
+        FileType::JavaScript,
+        &[wide, late],
+        None,
+        None,
+    )
+    .unwrap();
+    assert!(
+        !batch.contains_key(wide),
+        "limited pattern must be evaluated independently"
+    );
+    assert_eq!(batch[late].match_count, 1);
+    assert!(batch[late].warnings.is_empty());
+}
+
+#[test]
+fn cursor_pattern_stop_preserves_other_patterns_and_resets_on_reuse() {
+    use streaming_iterator::StreamingIterator;
+    let source = format!("const x = [{}]; later();", vec!["'x'"; 20].join(","));
+    let parsed = parsed_for_test("stop.js", source.as_bytes());
+    let tree = parsed.source_ast().unwrap().tree;
+    let query = tree_sitter::Query::new(
+        &tree.language(),
+        "(array (string) @a (string) @b) @array\n(identifier) @id",
+    )
+    .unwrap();
+    let mut cursor = tree_sitter::QueryCursor::new();
+    let mut counts = [0; 2];
+    let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
+    while let Some(m) = matches.next() {
+        let pattern = m.pattern_index;
+        counts[pattern] += 1;
+        if pattern == 0 {
+            matches.disable_pattern(pattern);
+        }
+    }
+    assert_eq!(counts, [1, 2]);
+    // This only changes the executing cursor, not the shared compiled query.
+    let count_all = |cursor: &mut tree_sitter::QueryCursor| {
+        let mut counts = [0; 2];
+        let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
+        while let Some(m) = matches.next() {
+            counts[m.pattern_index] += 1;
+        }
+        counts
+    };
+    let independent = count_all(&mut tree_sitter::QueryCursor::new());
+    assert!(independent[0] > 1);
+    assert_eq!(count_all(&mut cursor), independent);
 }
 
 #[test]
@@ -1571,7 +1689,7 @@ fn ast_node_gate_checks_complete_object_keys() {
     let index = super::ast_gate::NodeTextIndex::new(tree, source);
     let admits = |q: &str| {
         let compiled = tree_sitter::Query::new(&tree.language(), q).unwrap();
-        super::ast_gate::RequiredNodes::of(&compiled, q).may_match(&index)
+        super::ast_gate::RequiredNodes::of(&tree.language(), &compiled, q).may_match(&index)
     };
     assert!(!admits(r#"((pair key: (_) @key) (#eq? @key "operation"))"#));
     assert!(!admits(
@@ -1602,6 +1720,7 @@ fn ast_early_predicates_preserve_structural_match_semantics() {
     parser.set_language(&lang).unwrap();
     let patterns = [
         "(identifier) @x",
+        "(identifier) @x @y",
         "(program (expression_statement (identifier) @x)) @root",
         "(program (expression_statement (identifier) @x) (expression_statement (identifier) @y)) @root",
         "(program . (expression_statement (identifier) @x) (expression_statement)* .) @root",
@@ -1634,8 +1753,12 @@ fn ast_early_predicates_preserve_structural_match_semantics() {
             queries.push((tree_sitter::Query::new(&lang, &text).unwrap(), text));
         }
         if pattern.contains("@y") {
-            let text = format!("({pattern} (#eq? @x @y) (#eq? @y \"a\"))");
-            queries.push((tree_sitter::Query::new(&lang, &text).unwrap(), text));
+            for predicate in ["#eq?", "#not-eq?", "#any-eq?", "#any-not-eq?"] {
+                for pair in ["@x @y", "@y @x"] {
+                    let text = format!("({pattern} ({predicate} {pair}))");
+                    queries.push((tree_sitter::Query::new(&lang, &text).unwrap(), text));
+                }
+            }
         }
     }
     for len in 0..=5u32 {
@@ -1650,16 +1773,21 @@ fn ast_early_predicates_preserve_structural_match_semantics() {
                 let collect = |early: bool| {
                     let mut cursor = tree_sitter::QueryCursor::new();
                     cursor.set_match_limit(65536);
-                    let mut filter = |pattern, capture, node: tree_sitter::Node<'_>| {
-                        query.capture_satisfies_text_predicates(
-                            pattern,
-                            capture,
-                            node,
-                            src.as_bytes(),
-                        )
-                    };
+                    let mut filter =
+                        |pattern,
+                         capture,
+                         node: tree_sitter::Node<'_>,
+                         previous: &[tree_sitter::QueryCapture<'_>]| {
+                            query.capture_satisfies_match_predicates(
+                                pattern,
+                                capture,
+                                node,
+                                previous,
+                                src.as_bytes(),
+                            )
+                        };
                     let options = if early {
-                        tree_sitter::QueryCursorOptions::new().capture_predicate(&mut filter)
+                        tree_sitter::QueryCursorOptions::new().capture_match_predicate(&mut filter)
                     } else {
                         tree_sitter::QueryCursorOptions::new()
                     };
@@ -1788,4 +1916,201 @@ fn ast_compiler_preserves_repeated_patterns_with_fields_and_alternatives() {
         tree_sitter::Query::new(&tree.language(), &(prefix.clone() + invalid)).unwrap_err();
     assert_eq!(combined.kind, single.kind);
     assert_eq!(combined.offset, prefix.len() + single.offset);
+}
+
+#[test]
+fn batch_boolean_queries_stop_all_patterns_but_count_queries_finish() {
+    let source = "alpha; beta; alpha; beta; 1; 2; 3; 4;";
+    let parsed = parsed_for_test("boolean.js", source.as_bytes());
+    let tree = parsed.source_ast().unwrap().tree;
+    let boolean = "(identifier) @id\n(expression_statement (identifier) @other)";
+    let counting = "(number) @number";
+    let boolean_queries = [boolean.to_owned()].into_iter().collect();
+    let results = super::ast::batch_ast_queries_with_index(
+        tree,
+        source,
+        FileType::JavaScript,
+        &[boolean, counting],
+        None,
+        None,
+        None,
+        None,
+        Some(&boolean_queries),
+    )
+    .unwrap();
+    assert_eq!(results[boolean].match_count, 1);
+    assert_eq!(results[counting].match_count, 4);
+    assert_eq!(results[counting].evidence.len(), 4);
+    // The same compiled bank must remain usable for a subsequent full-count walk.
+    let complete = super::ast::batch_ast_queries(
+        tree,
+        source,
+        FileType::JavaScript,
+        &[boolean, counting],
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(complete[boolean].match_count, 8);
+    assert_eq!(complete[counting].match_count, 4);
+}
+
+#[test]
+fn standalone_ast_query_uses_complete_node_index_for_negative_gates() {
+    let source = b"const message = 'eval';";
+    let parsed = parsed_for_test("standalone-gate.js", source);
+    let tree = parsed.source_ast().unwrap().tree;
+    let report = create_test_report("standalone-gate.js");
+    let index = super::ast_gate::NodeTextIndex::new(tree, std::str::from_utf8(source).unwrap());
+    let mut ctx = create_test_context_with_ast(&report, &parsed, source, FileType::JavaScript);
+    ctx.ast_node_text = Some(&index);
+    let query = r#"((identifier) @name (#eq? @name "eval"))"#;
+    let result = super::ast::eval_ast_query_with_budget(query, &ctx, std::time::Duration::ZERO);
+    assert!(!result.matched);
+    assert!(
+        result.warnings.is_empty(),
+        "the gate should prove absence before timeout"
+    );
+    let present = r#"((identifier) @name (#eq? @name "message"))"#;
+    assert!(super::ast::eval_ast_query(present, &ctx).matched);
+}
+
+#[test]
+fn batch_gates_each_pattern_without_changing_the_shared_query_results() {
+    let source = "alpha; 1; alpha; 2;";
+    let parsed = parsed_for_test("pattern-gates.js", source.as_bytes());
+    let tree = parsed.source_ast().unwrap().tree;
+    let mixed = r#"((identifier) @id (#eq? @id "alpha"))
+        ((program (expression_statement)* @statement) @root (#eq? @root "absent"))"#;
+    let number = "(number) @number";
+    let results = super::ast::batch_ast_queries(
+        tree,
+        source,
+        FileType::JavaScript,
+        &[mixed, number],
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(results[mixed].match_count, 2);
+    assert_eq!(results[number].match_count, 2);
+    // Gating is private to this cursor: a later file can match the formerly
+    // impossible alternative using the same compiled bank.
+    let other = "absent";
+    let parsed = parsed_for_test("pattern-gates.js", other.as_bytes());
+    let report = create_test_report("pattern-gates.js");
+    let ctx =
+        create_test_context_with_ast(&report, &parsed, other.as_bytes(), FileType::JavaScript);
+    assert!(super::ast::eval_ast_query(mixed, &ctx).matched);
+}
+
+#[test]
+fn ast_cross_capture_pruning_preserves_capture_iteration_and_cursor_reuse() {
+    use streaming_iterator::StreamingIterator;
+    let source = b"a; b; a; c; b;";
+    let parsed = parsed_for_test("capture-pairs.js", source);
+    let tree = parsed.source_ast().unwrap().tree;
+    let query = tree_sitter::Query::new(&tree.language(),
+        "((program (expression_statement (identifier) @a) (expression_statement (identifier) @b)) (#eq? @a @b))").unwrap();
+    let collect = |cursor: &mut tree_sitter::QueryCursor, early: bool, rejected: &mut usize| {
+        let mut filter = |pattern,
+                          capture,
+                          node: tree_sitter::Node<'_>,
+                          previous: &[tree_sitter::QueryCapture<'_>]| {
+            let accepts =
+                query.capture_satisfies_match_predicates(pattern, capture, node, previous, source);
+            *rejected += usize::from(!accepts);
+            accepts
+        };
+        let options = if early {
+            tree_sitter::QueryCursorOptions::new().capture_match_predicate(&mut filter)
+        } else {
+            tree_sitter::QueryCursorOptions::new()
+        };
+        let mut captures =
+            cursor.captures_with_options(&query, tree.root_node(), source.as_slice(), options);
+        let mut found = Vec::new();
+        while let Some((m, i)) = captures.next() {
+            let capture = m.captures()[*i];
+            found.push((m.pattern_index, capture.index, capture.node.byte_range()));
+        }
+        found
+    };
+    let mut cursor = tree_sitter::QueryCursor::new();
+    let mut rejected = 0;
+    let expected = collect(&mut cursor, false, &mut rejected);
+    assert!(!expected.is_empty());
+    assert_eq!(collect(&mut cursor, true, &mut rejected), expected);
+    assert!(
+        rejected > 0,
+        "mismatched names must be pruned before complete matches"
+    );
+    // The previous callback has been dropped. A fresh execution must clear it.
+    assert_eq!(collect(&mut cursor, false, &mut rejected), expected);
+}
+
+#[test]
+fn ast_batch_stops_limited_patterns_and_reenables_them_on_cursor_reuse() {
+    use streaming_iterator::StreamingIterator;
+    let source = format!("const table = [{}]; done();", vec!["'x'"; 512].join(","));
+    let parsed = parsed_for_test("limited.js", source.as_bytes());
+    let tree = parsed.source_ast().unwrap().tree;
+    let query = tree_sitter::Query::new(&tree.language(),
+        "(array (string) @a (string) @b (string) @c) @array\n(call_expression function: (identifier) @done)\n(program (lexical_declaration (variable_declarator name: (identifier) @first)) (expression_statement (call_expression function: (identifier) @last)))").unwrap();
+    let run = |cursor: &mut tree_sitter::QueryCursor, stop: bool, group_cap: bool| {
+        cursor.set_match_limit(if group_cap { 65536 } else { 2 });
+        cursor.set_max_states_per_group(if group_cap { 16 } else { 16384 });
+        cursor.set_stop_on_pattern_limit(stop);
+        let mut calls = 0;
+        let mut filter = |pattern: usize, _: u32, _: tree_sitter::Node<'_>| {
+            calls += usize::from(pattern == 0);
+            true
+        };
+        let mut matches = cursor.matches_with_options(
+            &query,
+            tree.root_node(),
+            source.as_bytes(),
+            tree_sitter::QueryCursorOptions::new().capture_predicate(&mut filter),
+        );
+        let mut counts = [0; 3];
+        while let Some(m) = matches.next() {
+            counts[m.pattern_index] += 1;
+        }
+        drop(matches);
+        (counts, calls)
+    };
+    let mut cursor = tree_sitter::QueryCursor::new();
+    for group_cap in [true, false] {
+        let baseline = run(&mut cursor, false, group_cap);
+        let stopped = run(&mut cursor, true, group_cap);
+        assert_eq!(stopped.0[1], 1);
+        assert_eq!(stopped.0[1], baseline.0[1]);
+        if group_cap {
+            // This candidate is already active when the wide array pattern
+            // is pruned. Compaction must retain it and all of its captures.
+            assert_eq!(stopped.0[2], 1);
+            assert_eq!(stopped.0[2], baseline.0[2]);
+            assert!(!cursor.pattern_exceeded(2));
+        }
+        assert!(
+            stopped.1 * 10 < baseline.1,
+            "limited pattern kept consuming the shared walk: {stopped:?} vs {baseline:?}"
+        );
+        assert!(cursor.pattern_exceeded(0));
+        assert!(!cursor.pattern_exceeded(1));
+    }
+    // A new execution clears the per-pattern stop without mutating the query.
+    let small = b"const table = ['a','b','c']; done();";
+    let parsed = parsed_for_test("small.js", small);
+    let tree = parsed.source_ast().unwrap().tree;
+    cursor.set_match_limit(65536);
+    cursor.set_max_states_per_group(16384);
+    let mut matches = cursor.matches(&query, tree.root_node(), small.as_slice());
+    let mut counts = [0; 3];
+    while let Some(m) = matches.next() {
+        counts[m.pattern_index] += 1;
+    }
+    drop(matches);
+    assert_eq!(counts, [1, 1, 1]);
+    assert!(!cursor.did_exceed_match_limit());
 }

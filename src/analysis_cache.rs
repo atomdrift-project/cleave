@@ -116,6 +116,9 @@ struct FlightState {
     /// Diagnostics for a wait that overruns: who owns this flight.
     owner_thread: Option<usize>,
     owner_label: Mutex<String>,
+    /// The owner executes on an exclusive pool and its scan caller blocks
+    /// without stealing. Publishing its result needs no scan-pool worker.
+    isolated_owner: std::sync::atomic::AtomicBool,
 }
 
 static IN_FLIGHT: OnceLock<Mutex<HashMap<FlightKey, Weak<FlightState>>>> = OnceLock::new();
@@ -131,6 +134,32 @@ pub(crate) struct ReportFlight {
 impl ReportFlight {
     pub(crate) fn is_owner(&self) -> bool {
         self.owner
+    }
+
+    pub(crate) fn mark_isolated_owner(&self) {
+        if self.owner && crate::rayon_nest::on_isolated_leaf_pool() {
+            self.state.isolated_owner.store(true, Ordering::Release);
+        }
+    }
+
+    pub(crate) fn can_wait_for_isolated_owner(&self) -> bool {
+        !self.owner
+            && !owns_any_flight()
+            && !crate::rayon_nest::on_dedicated_pool()
+            && !crate::rayon_nest::on_isolated_leaf_pool()
+            && self.state.isolated_owner.load(Ordering::Acquire)
+    }
+
+    /// Only scan workers that own no member may wait here. Private workers
+    /// never wait for another pool, so isolated owners cannot form cycles.
+    pub(crate) fn wait_isolated(
+        &self,
+        deadline: std::time::Duration,
+    ) -> Option<Option<AnalysisReport>> {
+        if !self.can_wait_for_isolated_owner() {
+            return None;
+        }
+        self.wait_completed_bounded(deadline)
     }
 
     /// Wait for the owner and clone its report. Returns `None` when this
@@ -191,6 +220,13 @@ impl ReportFlight {
         if self.owner || rayon::current_thread_index().is_some() {
             return Some(self.wait());
         }
+        self.wait_completed_bounded(deadline)
+    }
+
+    fn wait_completed_bounded(
+        &self,
+        deadline: std::time::Duration,
+    ) -> Option<Option<AnalysisReport>> {
         let started = std::time::Instant::now();
         let mut result = self
             .state
@@ -202,7 +238,7 @@ impl ReportFlight {
                 tracing::debug!(
                     sha256 = %self.key.sha256,
                     owner = %self.owner_label(),
-                    "single-flight wait exceeded its deadline off-pool; analyzing independently"
+                    "single-flight wait exceeded its deadline; analyzing independently"
                 );
                 return None;
             };
@@ -492,6 +528,7 @@ fn acquire_flight(
         wake: Condvar::new(),
         owner_thread: rayon::current_thread_index(),
         owner_label: Mutex::new(String::new()),
+        isolated_owner: std::sync::atomic::AtomicBool::new(false),
     });
     flights.insert(key.clone(), Arc::downgrade(&state));
     drop(flights);
@@ -1163,6 +1200,9 @@ pub(crate) fn report_cache_lookup(
     path: &str,
     rules: Option<&CapabilityMapper>,
 ) -> Option<AnalysisReport> {
+    if crate::validation_performance::active() {
+        return None;
+    }
     let opts_hash = typed_options_hash(options, settings, file_type);
     // A lookup keys on the ambient revision: it asks for a result computed
     // under the rules this caller is about to run.
@@ -1310,6 +1350,9 @@ pub(crate) fn file_analysis_cache_lookup(
     path: &str,
     rules: Option<&CapabilityMapper>,
 ) -> Option<FileAnalysis> {
+    if crate::validation_performance::active() {
+        return None;
+    }
     // FileAnalysis has no child inventory. An archive must use a full report
     // cache hit or be analyzed again, never be reconstructed as a leaf.
     if archive_file_type(file_type) {
@@ -1476,6 +1519,67 @@ fn evict_file_analysis_cache(conn: &Connection) {
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
+    #[test]
+    fn isolated_owner_can_publish_to_a_single_scan_worker() {
+        use std::sync::mpsc::sync_channel;
+        use std::time::Duration;
+        let sha = "isolated-leaf-owner-single-worker";
+        let options = AnalysisOptions::default();
+        let settings = settings_of(&options);
+        let (ready_tx, ready_rx) = sync_channel(0);
+        let (release_tx, release_rx) = sync_channel(0);
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                let owner = acquire_member_flight(sha, "javascript", &options, &settings);
+                let owner_ref = &owner;
+                crate::rayon_nest::with_isolated_leaf_pool(2, move || {
+                    owner_ref.mark_isolated_owner();
+                    ready_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                });
+                owner.complete(Some(&test_report(sha)));
+            });
+            ready_rx.recv().unwrap();
+            let follower = acquire_member_flight(sha, "javascript", &options, &settings);
+            assert!(follower.can_wait_for_isolated_owner());
+            crate::rayon_nest::with_isolated_leaf_pool(2, || {
+                assert!(
+                    !follower.can_wait_for_isolated_owner(),
+                    "private pools must never wait for each other"
+                );
+                let _nested = crate::rayon_nest::enter_toplevel_analysis_on(false);
+                assert!(
+                    !follower.can_wait_for_isolated_owner(),
+                    "nested options must not erase the exclusive worker's wait restriction"
+                );
+            });
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(1)
+                .build()
+                .unwrap()
+                .install(|| {
+                    assert!(follower.wait_isolated(Duration::ZERO).is_none());
+                    release_tx.send(()).unwrap();
+                    let report = follower
+                        .wait_isolated(Duration::from_secs(10))
+                        .unwrap()
+                        .unwrap();
+                    assert_eq!(report.target.sha256, sha);
+                });
+        });
+    }
+
+    #[test]
+    fn a_dedicated_archive_pool_is_not_an_isolated_leaf() {
+        let options = AnalysisOptions::default();
+        let settings = settings_of(&options);
+        let owner =
+            acquire_member_flight("dedicated-not-isolated", "javascript", &options, &settings);
+        let _guard = crate::rayon_nest::enter_toplevel_analysis_on(true);
+        owner.mark_isolated_owner();
+        assert!(!owner.state.isolated_owner.load(Ordering::Acquire));
+    }
+
     /// The settings an `AnalysisOptions` free function keys its cache entries with.
     fn settings_of(options: &AnalysisOptions) -> Settings {
         crate::shared_resources::settings_for_options(options)

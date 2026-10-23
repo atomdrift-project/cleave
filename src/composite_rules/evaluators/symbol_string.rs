@@ -1027,6 +1027,7 @@ pub(crate) fn eval_text<'a, 'b>(
 
     let mut evidence = Vec::new();
     let mut match_count = 0usize;
+    let needs_count = match_count_needed();
 
     matcher.with_batch(ctx.report.strings.len(), |matcher| {
         for string_info in &ctx.report.strings {
@@ -1078,6 +1079,13 @@ pub(crate) fn eval_text<'a, 'b>(
                             location: Some(location),
                             ..Default::default()
                         });
+                    }
+                    // Boolean consumers cannot use the remaining count. Keep
+                    // the exact same capped evidence (including exclusions and
+                    // offsets), then avoid sweeping every native string after
+                    // enough accepted hits have already filled that evidence.
+                    if !needs_count && evidence.len() >= MAX_EVIDENCE_PER_TRAIT {
+                        break;
                     }
                 }
             }
@@ -1253,13 +1261,11 @@ pub(crate) fn eval_string_literal_with_options<'a, 'b>(
     // byte span, regardless of how many parser projections reported it.
     let mut seen_match_spans: FxHashSet<(u64, usize)> = FxHashSet::default();
 
-    matcher.with_batch(ctx.report.strings.len(), |matcher| {
-        for string_info in &ctx.report.strings {
-            if !matches!(
-                string_info.section.as_deref(),
-                Some("ast" | "literal" | "ast-docstring")
-            ) || (exclude_docstrings && string_info.section.as_deref() == Some("ast-docstring"))
-            {
+    let literals = ctx.literal_strings();
+    matcher.with_batch(literals.len(), |matcher| {
+        for &index in literals {
+            let string_info = &ctx.report.strings[index as usize];
+            if exclude_docstrings && string_info.section.as_deref() == Some("ast-docstring") {
                 continue;
             }
             if !offset_in_range(string_info.offset, effective_range) {
@@ -1308,6 +1314,11 @@ pub(crate) fn eval_string_literal_with_options<'a, 'b>(
                             location: Some(location),
                             ..Default::default()
                         });
+                    }
+                    // Count/density and proximity consumers retain the full
+                    // enumeration; a boolean literal condition is settled.
+                    if !match_count_needed() {
+                        break;
                     }
                 }
             }
@@ -1403,7 +1414,7 @@ pub(crate) fn eval_call<'a>(
             || site.needs_flow();
         let canonical = if needs_flow {
             flow(ctx)
-                .and_then(|flow| flow_call(flow, *offset, target, args.len()))
+                .and_then(|flow| flow_call(ctx, flow, *offset, target, args.len()))
                 .and_then(|v| v.target.as_deref())
         } else {
             None
@@ -1461,7 +1472,7 @@ pub(crate) fn eval_call<'a>(
 
         if site.module_level
             && !flow(ctx)
-                .and_then(|flow| flow_call(flow, *offset, target, args.len()))
+                .and_then(|flow| flow_call(ctx, flow, *offset, target, args.len()))
                 .is_some_and(|call| call.module_level)
         {
             continue;
@@ -1701,16 +1712,29 @@ fn all_filters_match_distinct_with(
 }
 
 fn flow_call<'a>(
+    ctx: &EvaluationContext<'_>,
     flow: &'a filefacts::Flow,
     offset: Option<u64>,
     target: &str,
     argument_count: usize,
 ) -> Option<&'a filefacts::FlowValue> {
-    let mut candidates = flow.values.iter().filter(|v| {
-        v.kind == filefacts::FlowKind::Call
-            && Some(v.offset) == offset
-            && v.inputs.len() == argument_count
+    let offset = offset?;
+    let index = ctx.flow_call_index.get_or_init(|| {
+        let mut index = rustc_hash::FxHashMap::<_, Vec<usize>>::default();
+        for (i, value) in flow.values.iter().enumerate() {
+            if value.kind == filefacts::FlowKind::Call {
+                index
+                    .entry((value.offset, value.inputs.len()))
+                    .or_default()
+                    .push(i);
+            }
+        }
+        index
     });
+    let mut candidates = index
+        .get(&(offset, argument_count))?
+        .iter()
+        .map(|&i| &flow.values[i]);
     let first = candidates.next()?;
     if first.target.as_deref() == Some(target) {
         return Some(first);
@@ -1726,6 +1750,59 @@ fn flow_call<'a>(
     // A unique candidate can have a canonical import spelling different from
     // the raw symbol; still-ambiguous candidates must match their target too.
     unique.then_some(first)
+}
+
+#[cfg(test)]
+#[test]
+fn indexed_flow_call_preserves_ambiguity_and_order() -> anyhow::Result<()> {
+    use crate::composite_rules::context::FileEvalCaches;
+    use crate::composite_rules::types::FileType;
+    use crate::types::{AnalysisReport, TargetInfo};
+
+    let mut flow = filefacts::Flow::default();
+    flow.values = serde_json::from_value(serde_json::json!([
+        {"kind":"literal", "offset":10, "inputs":[], "target":"ignored"},
+        {"kind":"call", "offset":10, "inputs":[], "target":"first"},
+        {"kind":"call", "offset":10, "inputs":[], "target":"second"},
+        {"kind":"call", "offset":20, "inputs":[0], "target":"canonical"},
+        {"kind":"call", "offset":10, "inputs":[0,0], "target":"chained"},
+        {"kind":"call", "offset":10, "inputs":[], "target":"first"},
+        {"kind":"call", "offset":30, "inputs":[]}
+    ]))?;
+    let report = AnalysisReport::new(TargetInfo {
+        path: "calls.js".into(),
+        file_type: "javascript".into(),
+        size_bytes: 0,
+        sha256: String::new(),
+        architectures: None,
+    });
+    let caches = FileEvalCaches::default();
+    let ctx =
+        EvaluationContext::test_only_new(&report, b"", FileType::All).with_file_caches(&caches);
+    for (offset, target, arity, expected) in [
+        (Some(10), "first", 0, Some(1)),
+        (Some(10), "second", 0, Some(2)),
+        (Some(10), "ignored", 0, None),
+        (Some(10), "unresolved", 0, None),
+        (Some(20), "alias", 1, Some(3)),
+        (Some(20), "canonical", 0, None),
+        (Some(10), "chained", 2, Some(4)),
+        (Some(30), "computed", 0, Some(6)),
+        (Some(99), "first", 0, None),
+        (None, "first", 0, None),
+    ] {
+        let found = flow_call(&ctx, &flow, offset, target, arity)
+            .and_then(|value| flow.values.iter().position(|v| std::ptr::eq(v, value)));
+        assert_eq!(found, expected, "{offset:?}/{target}/{arity}");
+    }
+    let next =
+        EvaluationContext::test_only_new(&report, b"", FileType::All).with_file_caches(&caches);
+    assert!(std::sync::Arc::ptr_eq(
+        &ctx.flow_call_index,
+        &next.flow_call_index
+    ));
+    assert!(next.flow_call_index.get().is_some());
+    Ok(())
 }
 
 /// Which of a call's inputs a provenance filter traces.
@@ -1773,7 +1850,7 @@ fn origin_matches(
         return false;
     }
     let Some(flow) = flow(ctx) else { return false };
-    let Some(call) = flow_call(flow, offset, target, argument_count) else {
+    let Some(call) = flow_call(ctx, flow, offset, target, argument_count) else {
         gaps.record(AnalysisGap::FlowCallUnavailable);
         return false;
     };
@@ -2262,7 +2339,11 @@ pub(crate) fn eval_raw<'a>(
             search_data,
             w,
             case_insensitive,
-            MAX_MATCHES_TO_PROCESS,
+            if needs_count || is_check.is_some() || not.is_some() {
+                MAX_MATCHES_TO_PROCESS
+            } else {
+                1
+            },
         );
         let mut first_match = None;
         let mut first_offset = None;
@@ -2287,6 +2368,9 @@ pub(crate) fn eval_raw<'a>(
                 first_offset = Some((search_start + start) as u64);
             }
             match_count += 1;
+            if !needs_count {
+                break;
+            }
         }
         if match_count > 0
             && evidence.len() < MAX_EVIDENCE_PER_TRAIT
@@ -2556,6 +2640,9 @@ pub(crate) fn eval_raw<'a>(
                         first_offset = Some((search_start + s) as u64);
                         first_value = Some(line_value);
                     }
+                    if !needs_count {
+                        break;
+                    }
                 }
             }
 
@@ -2603,7 +2690,7 @@ pub(crate) fn eval_raw<'a>(
                                     match_count += 1;
                                 }
                             }
-                            true
+                            needs_count || match_count == 0
                         },
                     );
                 } else {
@@ -2627,6 +2714,9 @@ pub(crate) fn eval_raw<'a>(
                                 }
                                 match_count += 1;
                             }
+                        }
+                        if !needs_count && match_count > 0 {
+                            break;
                         }
                         pos = abs_pos + 1;
                     }
@@ -2663,7 +2753,7 @@ pub(crate) fn eval_raw<'a>(
                                 }
                                 match_count += 1;
                             }
-                            true
+                            needs_count || match_count == 0
                         },
                     );
                 } else {
@@ -2683,6 +2773,9 @@ pub(crate) fn eval_raw<'a>(
                                 first_match_offset = Some((search_start + abs_pos) as u64);
                             }
                             match_count += 1;
+                        }
+                        if !needs_count && match_count > 0 {
+                            break;
                         }
                         pos = abs_pos + 1;
                     }
@@ -2707,13 +2800,17 @@ pub(crate) fn eval_raw<'a>(
                             first_offset = Some((search_start + abs_pos) as u64);
                         }
                         match_count += 1;
-                        true
+                        needs_count
                     });
                 } else {
                     let needle = substr_str.as_bytes();
                     let iter = memchr::memmem::find_iter(search_data, needle);
                     first_offset = iter.clone().next().map(|o| (search_start + o) as u64);
-                    match_count = iter.count();
+                    match_count = if needs_count {
+                        iter.count()
+                    } else {
+                        usize::from(first_offset.is_some())
+                    };
                 }
 
                 if match_count > 0 && evidence.len() < MAX_EVIDENCE_PER_TRAIT {
@@ -2728,6 +2825,17 @@ pub(crate) fn eval_raw<'a>(
                 }
             }
         } else {
+            // A case-sensitive Unicode literal without U+FFFD cannot appear
+            // only through lossy decoding: each matching UTF-8 byte must be
+            // present in the original input. Reject absent literals before
+            // decoding a potentially huge binary/archive into text. Keep the
+            // existing text path for hits, including its context and offsets.
+            if !case_insensitive
+                && !substr_str.contains('\u{fffd}')
+                && memchr::memmem::find(search_data, substr_str.as_bytes()).is_none()
+            {
+                return ConditionResult::no_match();
+            }
             // Unicode pattern - fall back to cached UTF-8 conversion
             // Reuse the whole-file UTF-8 view built once at ctx construction
             // (source types) or on first use (everything else); only
@@ -2779,6 +2887,9 @@ pub(crate) fn eval_raw<'a>(
                             match_count += 1;
                         }
                     }
+                    if !needs_count && match_count > 0 {
+                        break;
+                    }
                     start = search_content[abs_pos..]
                         .char_indices()
                         .nth(1)
@@ -2827,6 +2938,9 @@ pub(crate) fn eval_raw<'a>(
                         }
                         match_count += 1;
                     }
+                    if !needs_count && match_count > 0 {
+                        break;
+                    }
                     start = search_content[abs_pos..]
                         .char_indices()
                         .nth(1)
@@ -2861,7 +2975,11 @@ pub(crate) fn eval_raw<'a>(
                     let o = LoweredOffsets::new(&content, case_insensitive).original(o);
                     (search_start + o) as u64
                 });
-                match_count = search_content.matches(search_pattern.as_ref()).count();
+                match_count = if needs_count {
+                    search_content.matches(search_pattern.as_ref()).count()
+                } else {
+                    usize::from(first_offset.is_some())
+                };
                 if match_count > 0 && evidence.len() < MAX_EVIDENCE_PER_TRAIT {
                     evidence.push(Evidence {
                         method: "raw".to_string(),

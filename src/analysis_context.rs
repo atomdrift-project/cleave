@@ -11,6 +11,76 @@ use std::path::Path;
 
 use crate::types::{ArchiveEntry, Export, Function, Import, Section};
 
+/// Isolate large native fact extraction from unrelated archive/AST jobs.
+/// stng's nested joins otherwise steal those jobs before starting Rizin,
+/// stretching a short string pass across most of a directory scan.
+/// Opt-in while measuring throughput and detection parity.
+fn native_facts_threads() -> Option<usize> {
+    static THREADS: std::sync::OnceLock<Option<usize>> = std::sync::OnceLock::new();
+    *THREADS.get_or_init(|| {
+        std::env::var("CLEAVE_NATIVE_FACTS_THREADS")
+            .ok()?
+            .parse::<usize>()
+            .ok()
+            .filter(|&n| n > 0)
+    })
+}
+
+fn native_facts_pool() -> Option<&'static rayon::ThreadPool> {
+    static POOL: std::sync::OnceLock<Option<rayon::ThreadPool>> = std::sync::OnceLock::new();
+    POOL.get_or_init(|| {
+        let threads = native_facts_threads()?;
+        match rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .thread_name(|i| format!("native-facts-{i}"))
+            .start_handler(|_| crate::leaf_affinity::apply())
+            .build()
+        {
+            Ok(pool) => Some(pool),
+            Err(error) => {
+                tracing::warn!(%error, "native fact pool unavailable; using scan pool");
+                None
+            }
+        }
+    })
+    .as_ref()
+}
+
+fn run_native_facts(threads: usize, f: impl FnOnce() + Send) {
+    if crate::rayon_nest::on_isolated_leaf_pool() {
+        f();
+    } else if std::env::var("CLEAVE_NATIVE_FACTS_ISOLATED").as_deref() == Ok("1") {
+        // A shared native pool can still nest one binary's long Rizin call
+        // inside another's string pass. Keep each pool exclusive, and wait
+        // off Rayon so the scan caller cannot bury its return under a bundle.
+        std::thread::scope(|scope| {
+            let result = scope
+                .spawn(move || {
+                    match rayon::ThreadPoolBuilder::new()
+                        .num_threads(threads)
+                        .thread_name(|i| format!("native-file-{i}"))
+                        .start_handler(|_| crate::leaf_affinity::apply())
+                        .build()
+                    {
+                        Ok(pool) => pool.install(f),
+                        Err(error) => {
+                            tracing::warn!(%error, "native file pool unavailable; using scan pool");
+                            f();
+                        }
+                    }
+                })
+                .join();
+            if let Err(panic) = result {
+                std::panic::resume_unwind(panic);
+            }
+        });
+    } else if let Some(pool) = native_facts_pool() {
+        pool.install(f);
+    } else {
+        f();
+    }
+}
+
 /// Files opened once via filefacts for the whole analysis pipeline.
 #[derive(Debug)]
 pub struct AnalysisContext<'a> {
@@ -35,7 +105,31 @@ impl<'a> AnalysisContext<'a> {
         path: &'a Path,
         content: &'a [u8],
     ) -> Self {
+        let timing = content.len() >= 16 * 1024 * 1024;
+        let started = std::time::Instant::now();
+        if timing {
+            tracing::info!(target: "cleave::native_timing", path = %path.display(), bytes = content.len(), "context open begin");
+        }
         let parsed = options.path(path).open(content);
+        if timing {
+            tracing::info!(target: "cleave::native_timing", path = %path.display(), kind = ?parsed.fileid().file_type(), ms = started.elapsed().as_millis() as u64, "context identified");
+        }
+        if content.len() >= 16 * 1024 * 1024
+            && matches!(
+                parsed.fileid().file_type(),
+                filefacts::FileType::Pe | filefacts::FileType::Elf | filefacts::FileType::MachO
+            )
+            && let Some(threads) = native_facts_threads()
+        {
+            // Materialize the shared extraction once, before any consumer on
+            // the scan pool can initiate its nested string-extraction joins.
+            run_native_facts(threads, || {
+                tracing::info!(target: "cleave::native_timing", path = %path.display(), ms = started.elapsed().as_millis() as u64, "native extraction begin");
+                let _ = parsed.text();
+                tracing::info!(target: "cleave::native_timing", path = %path.display(), ms = started.elapsed().as_millis() as u64, "native extraction complete");
+            });
+            tracing::info!(target: "cleave::native_timing", path = %path.display(), ms = started.elapsed().as_millis() as u64, "native extraction returned to scan");
+        }
         Self {
             path,
             content,

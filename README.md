@@ -71,6 +71,14 @@ most once every 24 hours. To run without that check after installing the bundle:
 CLEAVE_NO_UPDATE_CHECK=1 cleave suspect.bin
 ```
 
+On Windows, cleave stores installed YAML and YARA rules compressed in AppData.
+This keeps rule text that resembles malware out of ordinary files that Windows
+Defender may quarantine. If you installed rules with an older cleave release,
+run `cleave update-rules` once after upgrading; it repacks the installed rules
+even when the bundle revision has not changed. A warning during analysis also
+identifies older unpacked installs. Git checkouts used via `--traits-dir` remain
+ordinary source trees.
+
 ## Quick start
 
 ```bash

@@ -532,6 +532,7 @@ pub fn jemalloc_stats() -> Option<JemallocStats> {
             target_os = "openbsd",
             target_os = "illumos",
             target_os = "solaris",
+            target_arch = "arm",
         ))
     ))]
     {
@@ -559,6 +560,7 @@ pub fn jemalloc_stats() -> Option<JemallocStats> {
             target_os = "openbsd",
             target_os = "illumos",
             target_os = "solaris",
+            target_arch = "arm",
         ))
     )))]
     None
@@ -598,6 +600,7 @@ pub fn purge_jemalloc() -> Option<JemallocPurgeStats> {
             target_os = "openbsd",
             target_os = "illumos",
             target_os = "solaris",
+            target_arch = "arm",
         ))
     ))]
     {
@@ -640,6 +643,7 @@ pub fn purge_jemalloc() -> Option<JemallocPurgeStats> {
             target_os = "openbsd",
             target_os = "illumos",
             target_os = "solaris",
+            target_arch = "arm",
         ))
     )))]
     None
@@ -664,6 +668,7 @@ pub fn configure_jemalloc_low_memory() {
             target_os = "openbsd",
             target_os = "illumos",
             target_os = "solaris",
+            target_arch = "arm",
         ))
     ))]
     {
@@ -708,6 +713,7 @@ pub fn log_startup_diagnostics() {
             target_os = "openbsd",
             target_os = "illumos",
             target_os = "solaris",
+            target_arch = "arm",
         ))
     )) {
         "jemalloc"

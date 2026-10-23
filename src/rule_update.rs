@@ -133,6 +133,9 @@ pub struct Installed {
     pub source: String,
     /// The cleave version that performed the install.
     pub version: String,
+    /// Windows installs keep rule bytes compressed on disk.
+    #[serde(default)]
+    pub packed_rules: bool,
 }
 
 /// Read the install sidecar, if the traits dir was populated by the R2 backend.
@@ -168,7 +171,10 @@ pub fn update(dir: &Path, force: bool, quiet: bool) -> Result<(), Error> {
     let (key, source) = resolve(&manifest)?;
     let artifact = artifact_for(&manifest, &key)?;
 
-    if !force && installed(dir).is_some_and(|i| i.commit.starts_with(&key)) {
+    if !force
+        && installed(dir)
+            .is_some_and(|i| i.commit.starts_with(&key) && (!cfg!(windows) || i.packed_rules))
+    {
         if !quiet {
             print_status(&format!("Already up to date: {} ({})", key, artifact.date));
             warn_if_behind(&manifest);
@@ -220,8 +226,13 @@ pub fn check(dir: &Path) -> Result<(), Error> {
     let artifact = artifact_for(&manifest, &key)?;
 
     match installed(dir) {
-        Some(i) if i.commit.starts_with(&key) => {
+        Some(i) if i.commit.starts_with(&key) && (!cfg!(windows) || i.packed_rules) => {
             print_status(&format!("Up to date: {} ({})", key, artifact.date));
+        }
+        Some(i) if i.commit.starts_with(&key) => {
+            print_status(&format!(
+                "Rule revision is current, but this Windows install needs packed storage; run `cleave update-rules` ({key})"
+            ));
         }
         Some(i) => {
             print_status(&format!(
@@ -456,13 +467,15 @@ fn install(dir: &Path, artifact: &Artifact, source: &str, channel: &Channel) -> 
 
     let decoder = zstd::stream::read::Decoder::new(Cursor::new(&bytes))
         .map_err(|e| format!("opening zstd stream: {e}"))?;
-    unpack_bundle(decoder, &staging).map_err(|e| format!("extracting {}: {e}", artifact.file))?;
+    unpack_bundle(decoder, &staging, cfg!(windows))
+        .map_err(|e| format!("extracting {}: {e}", artifact.file))?;
 
     let meta = Installed {
         commit: artifact.commit.clone(),
         date: artifact.date.clone(),
         source: source.to_string(),
         version: our_version().to_string(),
+        packed_rules: cfg!(windows),
     };
     let rendered = toml::to_string(&meta).map_err(|e| format!("rendering sidecar: {e}"))?;
     std::fs::write(staging.join(SIDECAR), rendered).map_err(|e| format!("writing sidecar: {e}"))?;
@@ -480,8 +493,9 @@ fn install(dir: &Path, artifact: &Artifact, source: &str, channel: &Channel) -> 
 /// a PAX global metadata header (`pax_global_header`), which is not a file to
 /// extract. Consume and skip that valid header so the archive is handled like
 /// the one produced by `git archive --format=tar`.
-fn unpack_bundle<R: Read>(reader: R, staging: &Path) -> Result<(), String> {
+fn unpack_bundle<R: Read>(reader: R, staging: &Path, pack_rules: bool) -> Result<(), String> {
     let mut archive = tar::Archive::new(reader);
+    let mut written = std::collections::HashSet::new();
     let entries = archive
         .entries()
         .map_err(|e| format!("reading tar entries: {e}"))?;
@@ -503,6 +517,57 @@ fn unpack_bundle<R: Read>(reader: R, staging: &Path) -> Result<(), String> {
                 "unsupported tar entry type {kind:?} at {}",
                 path.display()
             ));
+        }
+        // Some bundle YAML (notably third-party/config.yaml and validation
+        // fixtures) is read directly by other commands. Only source-tree rule
+        // files are exposed through RuleSources' virtual paths.
+        let in_rule_tree = [
+            "metadata",
+            "micro-behaviors",
+            "objectives",
+            "well-known",
+            "third-party",
+        ]
+        .iter()
+        .any(|directory| path.starts_with(directory));
+        let pack = pack_rules
+            && kind.is_file()
+            && in_rule_tree
+            && path != Path::new("third-party/config.yaml")
+            && matches!(
+                path.extension().and_then(|e| e.to_str()),
+                Some("yaml" | "yml" | "yar" | "yara" | "yrc")
+            );
+        if pack {
+            // tar::Entry::unpack_in validates paths for ordinary files. The
+            // compressed path is written by us, so validate it explicitly.
+            if !path
+                .components()
+                .all(|c| matches!(c, std::path::Component::Normal(_)))
+            {
+                return Err(format!("unsafe tar entry path: {}", path.display()));
+            }
+            let mut packed_name = path.as_os_str().to_os_string();
+            packed_name.push(".zst");
+            let destination = staging.join(packed_name);
+            if !written.insert(destination.clone()) || destination.exists() {
+                return Err(format!("duplicate tar entry: {}", path.display()));
+            }
+            std::fs::create_dir_all(destination.parent().unwrap_or(staging))
+                .map_err(|e| format!("creating parent of {}: {e}", destination.display()))?;
+            let file = std::fs::File::create(&destination)
+                .map_err(|e| format!("creating {}: {e}", destination.display()))?;
+            let mut encoder = zstd::stream::write::Encoder::new(file, 3)
+                .map_err(|e| format!("compressing {}: {e}", path.display()))?;
+            io::copy(&mut entry, &mut encoder)
+                .map_err(|e| format!("compressing {}: {e}", path.display()))?;
+            encoder
+                .finish()
+                .map_err(|e| format!("finishing {}: {e}", destination.display()))?;
+            continue;
+        }
+        if !written.insert(staging.join(&path)) {
+            return Err(format!("duplicate tar entry: {}", path.display()));
         }
         if !entry
             .unpack_in(staging)
@@ -724,6 +789,63 @@ mod tests {
     use super::*;
 
     #[test]
+    fn packed_install_keeps_rule_bytes_out_of_plain_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let staging = tmp.path().join("staging");
+        std::fs::create_dir(&staging).unwrap();
+        let mut builder = tar::Builder::new(Vec::new());
+        for (path, bytes) in [
+            ("metadata/probe/traits.yaml", b"name: probe".as_slice()),
+            (
+                "third-party/rule.yar",
+                b"rule probe { condition: true }".as_slice(),
+            ),
+            ("third-party/compiled/php.yrc", b"compiled probe".as_slice()),
+            ("third-party/config.yaml", b"config: probe".as_slice()),
+            ("testdata/expectations.yaml", b"test: probe".as_slice()),
+        ] {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(bytes.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder.append_data(&mut header, path, bytes).unwrap();
+        }
+        let archive = builder.into_inner().unwrap();
+        unpack_bundle(Cursor::new(&archive), &staging, true).unwrap();
+        let plain = tmp.path().join("plain");
+        std::fs::create_dir(&plain).unwrap();
+        unpack_bundle(Cursor::new(archive), &plain, false).unwrap();
+
+        for (path, bytes) in [
+            ("metadata/probe/traits.yaml", b"name: probe".as_slice()),
+            (
+                "third-party/rule.yar",
+                b"rule probe { condition: true }".as_slice(),
+            ),
+            ("third-party/compiled/php.yrc", b"compiled probe".as_slice()),
+        ] {
+            assert!(!staging.join(path).exists());
+            assert!(staging.join(format!("{path}.zst")).is_file());
+            let sources = crate::rule_sources::RuleSources::fresh(&staging).unwrap();
+            assert_eq!(&*sources.file(Path::new(path)).unwrap().bytes, bytes);
+        }
+        assert_eq!(
+            std::fs::read(staging.join("third-party/config.yaml")).unwrap(),
+            b"config: probe"
+        );
+        assert_eq!(
+            std::fs::read(staging.join("testdata/expectations.yaml")).unwrap(),
+            b"test: probe"
+        );
+        let packed_sources = crate::rule_sources::RuleSources::fresh(&staging).unwrap();
+        let plain_sources = crate::rule_sources::RuleSources::fresh(&plain).unwrap();
+        assert_eq!(
+            crate::cache::source_tag_from_snapshot(&staging, &packed_sources),
+            crate::cache::source_tag_from_snapshot(&plain, &plain_sources)
+        );
+    }
+
+    #[test]
     fn bundle_rejects_links_before_the_sidecar_write_can_follow_them() {
         let tmp = tempfile::tempdir().unwrap();
         let staging = tmp.path().join("staging");
@@ -743,7 +865,7 @@ mod tests {
             .unwrap();
         let archive = builder.into_inner().unwrap();
 
-        let error = unpack_bundle(Cursor::new(archive), &staging).unwrap_err();
+        let error = unpack_bundle(Cursor::new(archive), &staging, false).unwrap_err();
         assert!(error.contains("unsupported tar entry type Symlink"));
         assert_eq!(std::fs::read_to_string(&victim).unwrap(), "unchanged");
         assert!(std::fs::symlink_metadata(staging.join(SIDECAR)).is_err());

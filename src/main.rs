@@ -37,6 +37,7 @@
         target_os = "openbsd",
         target_os = "illumos",
         target_os = "solaris",
+        target_arch = "arm",
     ))
 ))]
 mod jemalloc {

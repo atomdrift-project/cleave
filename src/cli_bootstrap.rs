@@ -34,7 +34,8 @@ fn scoped_filter(level: &str) -> String {
 }
 
 /// Field formatter that escapes terminal control characters in every event
-/// field, not just the message.
+/// field, not just the message. Wrapped in `.delimited(" ")` at each use:
+/// a custom field formatter writes fields back to back unless told otherwise.
 ///
 /// tracing-subscriber's default formatter escapes the `message` field and
 /// error values, but writes named fields (e.g. `path = %display`) raw — and
@@ -161,7 +162,8 @@ pub(crate) fn init_logging(
             }
         }
 
-        let fields = tracing_subscriber::fmt::format::debug_fn(sanitized_field);
+        use tracing_subscriber::field::MakeExt;
+        let fields = tracing_subscriber::fmt::format::debug_fn(sanitized_field).delimited(" ");
 
         let stderr_layer = tracing_subscriber::fmt::layer()
             .with_target(true)
@@ -203,7 +205,10 @@ pub(crate) fn init_logging(
             .with_thread_ids(false)
             .with_line_number(true)
             .with_writer(std::io::stderr)
-            .fmt_fields(tracing_subscriber::fmt::format::debug_fn(sanitized_field))
+            .fmt_fields({
+                use tracing_subscriber::field::MakeExt;
+                tracing_subscriber::fmt::format::debug_fn(sanitized_field).delimited(" ")
+            })
             .init();
     }
 }

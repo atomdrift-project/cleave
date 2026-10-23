@@ -178,11 +178,26 @@ pub fn run_with_options(
         verbose,
         slow_rule_ms,
     );
-    if let Some(fixtures) = result_cache
+    if let Some(outcome) = result_cache
         .as_ref()
         .and_then(result_cache::ResultCache::load)
     {
-        return Ok(format_validate_output(&validation_output(fixtures), format));
+        match outcome {
+            result_cache::Outcome::Passed(fixtures) => {
+                return Ok(format_validate_output(&validation_output(fixtures), format));
+            }
+            result_cache::Outcome::PerformanceRejected(issues) => {
+                let issues: Vec<_> = issues
+                    .into_iter()
+                    .map(result_cache::PerformanceIssue::restore)
+                    .collect();
+                print_performance_issues(&issues, format);
+                anyhow::bail!(
+                    "{} rule performance validation check(s) failed",
+                    issues.len()
+                );
+            }
+        }
     }
     // Fixtures are analyzed from outside the traits repo, so no path
     // exemption can match their location; see `NeutralStage`.
@@ -339,26 +354,19 @@ pub fn run_with_options(
             .as_ref()
             .is_ok_and(|report| !crate::analysis_cache::evaluation_incomplete(report))
     }) && crate::yara_engine::yara_degradation().is_none();
-    let performance_issues = performance.issues();
-    if !performance_issues.is_empty() {
-        let rendered = match format {
-            OutputFormat::Tiny => {
-                validation_controls::format_validation_issues_tiny(&performance_issues)
-            }
-            OutputFormat::Json | OutputFormat::Jsonl | OutputFormat::Snapshot => {
-                validation_controls::format_validation_issues_json(&performance_issues)
-            }
-            OutputFormat::Terminal => {
-                validation_controls::format_validation_issues_terminal(&performance_issues)
-            }
-        };
-        eprintln!("{rendered}");
-    }
+    let mut performance_issues = performance.issues();
+    stage.relabel_issues(&mut performance_issues);
+    print_performance_issues(&performance_issues, format);
     let stats = evaluate(results, &expectations.does_nothing)?;
     if performance_issues
         .iter()
         .any(|p| p.severity >= validation_controls::fatal_severity_threshold())
     {
+        if crate::yara_engine::yara_degradation().is_none()
+            && let Some(cache) = &result_cache
+        {
+            cache.store_rejection_if_unchanged(&performance_issues);
+        }
         anyhow::bail!(
             "{} rule performance validation check(s) failed",
             performance_issues.len()
@@ -410,6 +418,23 @@ pub fn run_with_options(
     Ok(format_validate_output(&report, format))
 }
 
+fn print_performance_issues(
+    issues: &[validation_controls::ValidationIssue],
+    format: &OutputFormat,
+) {
+    if issues.is_empty() {
+        return;
+    }
+    let rendered = match format {
+        OutputFormat::Tiny => validation_controls::format_validation_issues_tiny(issues),
+        OutputFormat::Json | OutputFormat::Jsonl | OutputFormat::Snapshot => {
+            validation_controls::format_validation_issues_json(issues)
+        }
+        OutputFormat::Terminal => validation_controls::format_validation_issues_terminal(issues),
+    };
+    eprintln!("{rendered}");
+}
+
 fn validation_output(fixtures: FixtureSummary) -> ValidateOutput {
     ValidateOutput {
         ok: true,
@@ -432,24 +457,24 @@ struct ValidateOutput {
     fixtures: FixtureSummary,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct FixtureSummary {
     #[serde(default)]
     performance: FixtureCount,
     hostile: FixtureCount,
     benign: FixtureCount,
     does_nothing: FixtureCount,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     walked_hostile: Vec<WalkedCorpusCount>,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct FixtureCount {
     passed: usize,
     total: usize,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct WalkedCorpusCount {
     corpus: String,
     passed: usize,
@@ -1564,6 +1589,7 @@ struct NeutralStage {
     dir: tempfile::TempDir,
     /// Lowercased substrings that must not appear in any path-derived value.
     forbidden: Vec<String>,
+    paths: parking_lot::Mutex<std::collections::BTreeMap<String, String>>,
 }
 
 impl NeutralStage {
@@ -1587,7 +1613,11 @@ impl NeutralStage {
             );
         }
         tracing::debug!(dir = %dir.path().display(), "neutral fixture stage created");
-        Ok(Self { dir, forbidden })
+        Ok(Self {
+            dir,
+            forbidden,
+            paths: parking_lot::Mutex::default(),
+        })
     }
 
     /// Place `fixture` at its neutral path and return that path.
@@ -1636,6 +1666,10 @@ impl NeutralStage {
         analyze: impl FnOnce(&Path) -> Result<AnalysisReport>,
     ) -> Result<AnalysisReport> {
         let neutral = self.stage(fixture)?;
+        self.paths.lock().insert(
+            neutral.to_string_lossy().into_owned(),
+            fixture.to_string_lossy().into_owned(),
+        );
         let mut report = analyze(&neutral)?;
         report.finalize();
         let leaks = path_leaks(&report, &self.forbidden);
@@ -1651,6 +1685,19 @@ impl NeutralStage {
             &fixture.to_string_lossy(),
         );
         Ok(report)
+    }
+
+    /// Diagnostics survive the temporary stage, including when a rejected
+    /// outcome is replayed later. Name the original fixture in those messages.
+    fn relabel_issues(&self, issues: &mut [validation_controls::ValidationIssue]) {
+        let paths = self.paths.lock();
+        for issue in issues {
+            for (neutral, original) in paths.iter() {
+                if issue.message.contains(neutral) {
+                    issue.message = issue.message.replace(neutral, original);
+                }
+            }
+        }
     }
 }
 
@@ -1949,6 +1996,17 @@ mod neutral_stage_tests {
             .unwrap();
         let original = fixture.to_string_lossy();
         assert_eq!(report.files[0].path, original);
+
+        let neutral = stage.stage(&fixture).unwrap();
+        let mut issues = vec![crate::validation_controls::ValidationIssue::new(
+            "rule-performance",
+            format!("cost exceeded on '{}!!/member.js'", neutral.display()),
+        )];
+        stage.relabel_issues(&mut issues);
+        assert_eq!(
+            issues[0].message,
+            format!("cost exceeded on '{original}!!/member.js'")
+        );
 
         // An engine path that bypasses the stage must fail loudly.
         let err = stage

@@ -305,6 +305,11 @@ fn run() -> Result<()> {
 
     let disabled = args.disabled_components();
     apply_runtime_overrides(args.traits_dir.as_deref(), args.enriched, &disabled);
+    // Asked for here, once, rather than by whichever rules download would
+    // otherwise be the first to need it.
+    if cleave::enriched::enabled() {
+        cleave::rule_update::sign_in()?;
+    }
     // `cleave validate` defaults to deterministic scoring with YARA disabled;
     // explicitly enabled fixtures load it lazily.
     // Skip the ~4 s (release) / ~18 s (debug) compile of 14 k+ inline YARA

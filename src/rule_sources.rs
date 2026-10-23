@@ -1,4 +1,6 @@
 //! Immutable source bytes shared by hashing, trait parsing and YARA loading.
+//! Packed rule files have virtual paths without `.zst` so all consumers see
+//! the same rule names and fingerprints as an unpacked traits checkout.
 //! A fresh snapshot reads every byte again; no stat-only cache is involved.
 use anyhow::{Context, Result};
 use parking_lot::RwLock;
@@ -44,7 +46,13 @@ pub struct RuleSources {
 
 impl RuleSources {
     /// Read a new snapshot, including directory layout and validation artifacts.
-    /// Fail closed on unreadable inputs and symlink loops.
+    ///
+    /// A structural problem in the tree (a broken link, a symlink loop, an
+    /// unreadable directory) fails the load. A single rule file that cannot be
+    /// read is skipped with a warning instead: endpoint protection quarantines
+    /// rules whose text resembles the malware they detect, and losing a few
+    /// rules must not cost every other one. A tree in which no file could be
+    /// read still fails, so a permissions problem never loads as an empty set.
     pub fn fresh(root: &Path) -> Result<Self> {
         let started = std::time::Instant::now();
         let root =
@@ -66,51 +74,97 @@ impl RuleSources {
                     symlink_directories.push((entry.depth(), relative.clone()));
                 }
                 directories.push(relative);
-            } else if entry.file_type().is_file()
-                && (matches!(
-                    entry.path().extension().and_then(|e| e.to_str()),
+            } else if entry.file_type().is_file() {
+                let compressed = entry.path().extension().is_some_and(|e| e == "zst");
+                let source_path = if compressed {
+                    entry.path().with_extension("")
+                } else {
+                    entry.path().to_path_buf()
+                };
+                if matches!(
+                    source_path.extension().and_then(|e| e.to_str()),
                     Some("yaml" | "yml" | "yar" | "yara" | "yrc")
-                ) || entry.file_name() == "manifest.json")
-            {
-                paths.push((
-                    relative,
-                    symlink_directories
-                        .iter()
-                        .map(|(_, p)| p.clone())
-                        .collect::<Vec<_>>(),
-                ));
+                ) || !compressed && entry.file_name() == "manifest.json"
+                {
+                    paths.push((
+                        relative,
+                        source_path.strip_prefix(&root)?.to_path_buf(),
+                        compressed,
+                        symlink_directories
+                            .iter()
+                            .map(|(_, p)| p.clone())
+                            .collect::<Vec<_>>(),
+                    ));
+                }
             }
         }
-        let read_file =
-            |(relative_path, symlink_directories): (PathBuf, Vec<PathBuf>)| -> Result<SourceFile> {
-                let path = root.join(&relative_path);
-                let mut file =
-                    fs::File::open(&path).with_context(|| format!("reading {}", path.display()))?;
+        let found = paths.len();
+        let read_file = |(stored_path, relative_path, compressed, symlink_directories): (
+            PathBuf,
+            PathBuf,
+            bool,
+            Vec<PathBuf>,
+        )|
+         -> Option<SourceFile> {
+            let path = root.join(&stored_path);
+            let read = || -> std::io::Result<(Vec<u8>, Option<SystemTime>)> {
+                let mut file = fs::File::open(&path)?;
                 let metadata = file.metadata()?;
                 let mut bytes = Vec::with_capacity(usize::try_from(metadata.len()).unwrap_or(0));
-                file.read_to_end(&mut bytes)
-                    .with_context(|| format!("reading {}", path.display()))?;
-                Ok(SourceFile {
+                file.read_to_end(&mut bytes)?;
+                if compressed {
+                    bytes = zstd::decode_all(&bytes[..])?;
+                }
+                Ok((bytes, metadata.modified().ok()))
+            };
+            match read() {
+                Ok((bytes, modified)) => Some(SourceFile {
                     relative_path,
                     bytes: bytes.into(),
-                    modified: metadata.modified().ok(),
+                    modified,
                     symlink_directories,
-                })
-            };
+                }),
+                Err(error) => {
+                    tracing::warn!(path = %path.display(), %error,
+                            "skipping unreadable or corrupt rule file; rules it defines are not loaded");
+                    None
+                }
+            }
+        };
         // Global YARA initialization may be entered by a Rayon worker while
         // its peers wait on the singleton. Do not enqueue work into that pool.
-        let files: Result<Vec<_>> = if rayon::current_thread_index().is_some() {
-            paths.into_iter().map(read_file).collect()
+        let mut files: Vec<_> = if rayon::current_thread_index().is_some() {
+            paths.into_iter().filter_map(read_file).collect()
         } else {
             // Bound concurrent reads; see SNAPSHOT_READERS.
             let per_reader = paths.len().div_ceil(SNAPSHOT_READERS).max(1);
             paths
                 .into_par_iter()
                 .with_min_len(per_reader)
-                .map(read_file)
+                .filter_map(read_file)
                 .collect()
         };
-        let files = files?;
+        files.sort_unstable_by(|a, b| a.relative_path.cmp(&b.relative_path));
+        if files
+            .windows(2)
+            .any(|pair| pair[0].relative_path == pair[1].relative_path)
+        {
+            anyhow::bail!(
+                "duplicate plain and compressed rule files under {}",
+                root.display()
+            );
+        }
+        if found > 0 && files.is_empty() {
+            anyhow::bail!(
+                "none of the {found} rule files under {} could be read",
+                root.display()
+            );
+        }
+        let skipped = found - files.len();
+        if skipped > 0 {
+            tracing::warn!(root = %root.display(), skipped, loaded = files.len(),
+                "rule set loaded with unreadable files skipped; detection coverage is reduced");
+        }
         tracing::info!(root = %root.display(), files = files.len(),
             bytes = files.iter().map(|f| f.bytes.len()).sum::<usize>(),
             read_ms = started.elapsed().as_millis(), "rule source snapshot read");
@@ -276,6 +330,46 @@ mod tests {
         assert_eq!(root.files().len(), 1);
         assert!(Arc::ptr_eq(&root.files()[0].bytes, &child.files()[0].bytes));
         assert_eq!(child.files()[0].relative_path, Path::new("rule.yar"));
+    }
+
+    /// Endpoint protection denies reads of quarantined rules; an unreadable
+    /// mode stands in for that.
+    #[cfg(unix)]
+    fn make_unreadable(path: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o000)).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rule_sources_skip_an_unreadable_file_and_keep_the_rest() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("kept.yaml"), "kept").unwrap();
+        let blocked = dir.path().join("blocked.yrc");
+        fs::write(&blocked, "blocked").unwrap();
+        make_unreadable(&blocked);
+        if fs::read(&blocked).is_ok() {
+            return; // Running as root: permissions cannot deny the read.
+        }
+        let sources = RuleSources::fresh(dir.path()).unwrap();
+        assert_eq!(
+            &*sources.file(Path::new("kept.yaml")).unwrap().bytes,
+            b"kept"
+        );
+        assert!(sources.file(Path::new("blocked.yrc")).is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rule_sources_fail_when_no_file_is_readable() {
+        let dir = tempfile::tempdir().unwrap();
+        let only = dir.path().join("only.yaml");
+        fs::write(&only, "rule").unwrap();
+        make_unreadable(&only);
+        if fs::read(&only).is_ok() {
+            return; // Running as root: permissions cannot deny the read.
+        }
+        assert!(RuleSources::fresh(dir.path()).is_err());
     }
 
     #[cfg(unix)]

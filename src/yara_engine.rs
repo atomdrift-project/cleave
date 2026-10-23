@@ -648,17 +648,25 @@ impl YaraEngine {
             .flatten()
         {
             let path = dir.join(format!("{bucket}.yrc"));
-            if let Ok(bytes) = std::fs::read(&path) {
-                match yara_x::Rules::deserialize(&bytes) {
-                    Ok(rules) => return Some(rules),
-                    Err(e) => {
-                        // `warn`, not `debug`: this is the silent degradation the
-                        // publish-side precompile gate exists to prevent, and at
-                        // `debug` a fleet can pay a full compile per tier per
-                        // process indefinitely with nothing to show for it.
-                        YARA_PRECOMPILED_REJECTED.fetch_add(1, Ordering::Relaxed);
-                        tracing::warn!(bucket = %bucket, path = %path.display(), error = ?e, "compiled YARA bucket failed to deserialize (engine/yara-x version skew or corrupt file); recompiling from source");
+            let bytes = match Self::read_compiled_bucket(&path) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    if path.exists() || path.with_extension("yrc.zst").exists() {
+                        tracing::warn!(bucket = %bucket, path = %path.display(), %error,
+                            "compiled YARA bucket could not be read; recompiling from source");
                     }
+                    continue;
+                }
+            };
+            match yara_x::Rules::deserialize(&bytes) {
+                Ok(rules) => return Some(rules),
+                Err(e) => {
+                    // `warn`, not `debug`: this is the silent degradation the
+                    // publish-side precompile gate exists to prevent, and at
+                    // `debug` a fleet can pay a full compile per tier per
+                    // process indefinitely with nothing to show for it.
+                    YARA_PRECOMPILED_REJECTED.fetch_add(1, Ordering::Relaxed);
+                    tracing::warn!(bucket = %bucket, path = %path.display(), error = ?e, "compiled YARA bucket failed to deserialize (engine/yara-x version skew or corrupt file); recompiling from source");
                 }
             }
         }
@@ -711,12 +719,38 @@ impl YaraEngine {
             && let Ok(bytes) = rules.serialize()
             && std::fs::create_dir_all(dir).is_ok()
         {
-            let tmp = dir.join(format!("{bucket}.yrc.tmp.{}", std::process::id()));
-            if std::fs::write(&tmp, &bytes).is_ok() {
-                let _ = std::fs::rename(&tmp, dir.join(format!("{bucket}.yrc")));
-            }
+            Self::write_compiled_bucket(&dir.join(format!("{bucket}.yrc")), &bytes);
         }
         Some(rules)
+    }
+
+    fn read_compiled_bucket(path: &Path) -> std::io::Result<Vec<u8>> {
+        let packed = path.with_extension("yrc.zst");
+        if packed.exists() {
+            return zstd::decode_all(std::fs::File::open(packed)?);
+        }
+        std::fs::read(path)
+    }
+
+    fn write_compiled_bucket(path: &Path, bytes: &[u8]) {
+        #[cfg(windows)]
+        let (path, bytes) = {
+            let Ok(packed) = zstd::encode_all(bytes, 3) else {
+                return;
+            };
+            (path.with_extension("yrc.zst"), packed)
+        };
+        #[cfg(not(windows))]
+        let (path, bytes) = (path.to_path_buf(), bytes.to_vec());
+
+        if crate::cache::atomic_write(&path, &bytes).is_ok() {
+            #[cfg(windows)]
+            {
+                // Retire an older uncompressed cache entry after the packed
+                // replacement is safely in place.
+                let _ = std::fs::remove_file(path.with_extension(""));
+            }
+        }
     }
 
     /// Collect rule source per tier (plus contexts/namespaces/counts) — the
@@ -989,8 +1023,8 @@ impl YaraEngine {
         let mut problems = Vec::new();
         for tier in &manifest.populated_tiers {
             let path = dir.join(format!("{tier}.yrc"));
-            match std::fs::metadata(&path) {
-                Ok(m) if m.len() > 0 => {}
+            match Self::read_compiled_bucket(&path) {
+                Ok(bytes) if !bytes.is_empty() => {}
                 Ok(_) => problems.push(format!("{tier}.yrc is empty")),
                 Err(e) => problems.push(format!("{tier}.yrc is unreadable: {e}")),
             }
@@ -5336,6 +5370,20 @@ rule ELASTIC_Windows_Generic_Threat : FILE
             restored.populated_tiers,
             vec!["pe".to_string(), FALLBACK_BUCKET.to_string()]
         );
+    }
+
+    #[test]
+    fn compressed_compiled_bucket_is_read_without_an_unpacked_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("php.yrc");
+        let bytes = b"compiled YARA bytes";
+        std::fs::write(
+            path.with_extension("yrc.zst"),
+            zstd::encode_all(&bytes[..], 3).unwrap(),
+        )
+        .unwrap();
+        assert!(!path.exists());
+        assert_eq!(YaraEngine::read_compiled_bucket(&path).unwrap(), bytes);
     }
 
     #[test]

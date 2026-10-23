@@ -1,8 +1,9 @@
 //! Locates the traits directory and installs/updates it from the R2 bundle.
 //!
-//! Traits (detection rules) are distributed as signed `.tar.zst` bundles from
+//! Traits (detection rules) are distributed as `.tar.zst` bundles from
 //! the update bucket — see [`crate::rule_update`], which `cleave update-rules`
-//! drives. This module resolves the active traits directory and bootstraps it.
+//! drives and verifies each bundle against the manifest's SHA-256. This module
+//! resolves the active traits directory and bootstraps it.
 //! For git-managed checkouts without a bundle sidecar, it reads HEAD and checks
 //! for local rule edits so the reported version identifies the loaded rules.
 //! See [`version`].
@@ -141,6 +142,14 @@ pub fn resolve_and_ensure() -> Result<PathBuf, String> {
     // 3. Platform data directory — bootstrap-install from the bundle if missing.
     let data_dir = default_traits_dir();
     if has_traits(&data_dir) {
+        if cfg!(windows)
+            && crate::rule_update::installed(&data_dir).is_some_and(|i| !i.packed_rules)
+        {
+            tracing::warn!(
+                dir = %data_dir.display(),
+                "this Windows rule install predates packed storage; run `cleave update-rules` to restore rules quarantined by endpoint protection"
+            );
+        }
         tracing::debug!("Using traits from data directory: {}", data_dir.display());
         return Ok(data_dir);
     }

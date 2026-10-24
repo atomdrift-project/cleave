@@ -1057,7 +1057,7 @@ pub(crate) fn eval_text<'a, 'b>(
                         // (version-resource/derived entries) still anchors via
                         // `string_info_location` (its section start, else `0x0`) —
                         // mirrors the exact-match branch above and `eval_string_literal`,
-                        // so a content match never reaches `fallback_anchor` locationless.
+                        // so a content match never reaches `report_unanchored` locationless.
                         // A parsed literal may be reconstructed or UTF-16, so a
                         // decoded substring index is not a file displacement at
                         // all; those keep the parser's own anchor.
@@ -1162,7 +1162,7 @@ fn eval_text_encoded<'a, 'b>(
                 // the string's offset and span the *encoded* source bytes — not the
                 // shorter decoded length (see `encoded_source_len`). An offset-less
                 // entry still anchors via `string_info_location` (section start, else
-                // `0x0`), so the match never reaches `fallback_anchor` locationless.
+                // `0x0`), so the match never reaches `report_unanchored` locationless.
                 //
                 // Proximity (`near_bytes`/`near_lines`) reads `offsets`, not the
                 // anchor: without them every hit in one decoded layer tags as the
@@ -3576,7 +3576,8 @@ mod multi_arg_tests {
             let restored = crate::report_from_file_analysis(file, "a.js".into());
             assert!(restored.analysis_gaps.iter().any(|g| g.label() == expected));
             let (file, _, _) = restored.into_file_analysis(0, &crate::Engine::empty());
-            let compact = crate::types::compact_from_files(&[file.clone()]);
+            let compact =
+                crate::types::compact_from_files(&[file.clone()], crate::types::Facts::Full);
             assert!(
                 compact.files[0]
                     .analysis_gaps

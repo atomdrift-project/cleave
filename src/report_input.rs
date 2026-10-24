@@ -1,7 +1,9 @@
-//! Experimental offline report decoding for the existing text renderers.
+//! Offline report decoding for the text renderers.
 //!
 //! Dispatch on the wire version before deserializing: CompactReport's version
 //! field deliberately ignores input and must not be used for version detection.
+//! Notes are not stored; the renderers derive them (`context::notes`), so a
+//! stored report renders as its live analysis did.
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
 
@@ -9,10 +11,10 @@ use anyhow::{Context, Result, bail, ensure};
 use serde_json::Value;
 
 use crate::types::file_analysis::CompositeSource;
-use crate::types::{CompactReport, Finding, FindingKind, Note, TargetInfo};
+use crate::types::{CompactReport, Finding, FindingKind, TargetInfo};
 use crate::{AnalysisReport, Criticality, FileAnalysis};
 
-/// Arguments shared by the experimental cleave and scan offline render commands.
+/// Arguments shared by the cleave and scan offline render commands.
 #[derive(Debug, clap::Args)]
 pub struct RenderArgs {
     /// Saved report, or - to read one JSON document from stdin.
@@ -28,9 +30,9 @@ pub struct LoadedReport {
     pub fetched: Vec<Value>,
     /// Historical rules revision carried by the wire envelope, when known.
     pub traits_version: Option<String>,
-    /// Retained model-input contract, when the report has intentionally pruned facts.
+    /// The fact profile the report was reduced to (`fp`), when it was.
     pub fact_profile: Option<String>,
-    /// Missing historical information that prevents certifying live parity.
+    /// Ways this render may differ from the report's live analysis.
     pub warnings: Vec<String>,
 }
 
@@ -75,16 +77,8 @@ pub fn decode(bytes: &[u8]) -> Result<LoadedReport> {
         header = serde_json::from_slice(document).context("invalid JSON in raw report")?;
     }
     let version = header.v.or(header.version).or(header.schema_version);
-    let raw_snapshot = matches!(version.as_deref(), Some("3" | "3.0"));
-    let mut loaded = match version.as_deref() {
-        Some("8") => from_compact(serde_json::from_slice(document)?, true)?,
-        Some("context-1") => crate::context_retention::decode(serde_json::from_slice(document)?)?,
-        Some(crate::file_wire::VERSION | crate::file_wire::LEGACY_VERSION) => {
-            return crate::file_wire::decode(document);
-        }
-        Some(crate::file_wire::shared::VERSION | crate::file_wire::shared::LEGACY_VERSION) => {
-            return crate::file_wire::shared::decode(document);
-        }
+    let loaded = match version.as_deref() {
+        Some("8" | "9") => from_compact(serde_json::from_slice(document)?)?,
         Some("3" | "3.0") => {
             let mut report: AnalysisReport = serde_json::from_slice(document)?;
             let mut warnings = Vec::new();
@@ -103,27 +97,13 @@ pub fn decode(bytes: &[u8]) -> Result<LoadedReport> {
                 warnings,
             }
         }
-        _ => bail!(
-            "unsupported report version {version:?}; expected compact v8, context-1, file-1/file-2, joined-1/joined-2, or raw v3/v3.0"
-        ),
+        _ => bail!("unsupported report version {version:?}; expected compact v8 or v9, or raw v3"),
     };
     validate(&loaded.report)?;
-    if raw_snapshot
-        && loaded
-            .report
-            .files
-            .iter()
-            .any(|f| f.context_costs.is_empty() && f.context.iter().any(|c| c.notes.is_empty()))
-        && loaded.warnings.is_empty()
-    {
-        loaded.warnings.push(
-            "raw report contains unannotated context; original capture notes may be missing".into(),
-        );
-    }
     Ok(loaded)
 }
 
-pub(crate) fn from_compact(compact: CompactReport, reconstruct: bool) -> Result<LoadedReport> {
+fn from_compact(compact: CompactReport) -> Result<LoadedReport> {
     let mut files = Vec::with_capacity(compact.files.len());
     for f in compact.files {
         let mut file = FileAnalysis {
@@ -188,38 +168,6 @@ pub(crate) fn from_compact(compact: CompactReport, reconstruct: bool) -> Result<
             }
             file.findings.push(finding);
         }
-        // Historical compact output discards capture's winning annotations.
-        // Spans are the best available reconstruction, but are not a substitute
-        // for retaining those annotations in a future lossless wire decoder.
-        for context in &mut file.context {
-            if !reconstruct {
-                continue;
-            }
-            if !context.notes.is_empty() {
-                continue;
-            }
-            let end = context
-                .loc
-                .checked_add(context.data.len() as u64)
-                .context("context byte range overflow")?;
-            for finding in &file.findings {
-                if finding.src.is_some() {
-                    continue;
-                }
-                for &[offset, length] in finding.precomputed_spans.as_deref().unwrap_or_default() {
-                    if offset >= context.loc && offset < end {
-                        context.notes.push(Note {
-                            crit: finding.crit,
-                            id: finding.id.clone(),
-                            desc: finding.desc.clone(),
-                            off: offset,
-                            len: u32::try_from(length.min(512))?,
-                            conf: finding.conf,
-                        });
-                    }
-                }
-            }
-        }
         files.push(file);
     }
     let mut report = AnalysisReport::new(TargetInfo::default());
@@ -228,12 +176,8 @@ pub(crate) fn from_compact(compact: CompactReport, reconstruct: bool) -> Result<
         report,
         fetched: compact.fetched,
         traits_version: compact.traits_version,
-        fact_profile: None,
-        warnings: if reconstruct {
-            vec!["compact v8 omits capture annotations and some provenance; reconstructed rendering cannot certify parity with the original live render".into()]
-        } else {
-            Vec::new()
-        },
+        fact_profile: compact.fp,
+        warnings: Vec::new(),
     })
 }
 
@@ -253,10 +197,6 @@ pub(crate) fn validate(report: &AnalysisReport) -> Result<()> {
     ensure!(!report.files.is_empty(), "report has no files to render");
     let mut by_id = HashMap::new();
     for file in &report.files {
-        ensure!(
-            file.render_locality.is_empty() || file.render_locality.len() == file.findings.len(),
-            "replay locality/finding count mismatch"
-        );
         for finding in &file.findings {
             ensure!(finding.conf.is_finite(), "non-finite finding confidence");
             for [offset, length] in crate::types::traits_findings::finding_spans(finding) {
@@ -264,21 +204,6 @@ pub(crate) fn validate(report: &AnalysisReport) -> Result<()> {
                     .checked_add(length.max(1))
                     .context("finding span overflow")?;
             }
-        }
-        ensure!(
-            file.context_costs.is_empty() || file.context_costs.len() == file.context.len(),
-            "context cost/window count mismatch in {}",
-            file.path
-        );
-        file.context_costs
-            .iter()
-            .try_fold(0usize, |total, &cost| total.checked_add(cost))
-            .context("context cost total overflow")?;
-        for (cost, line) in file.context_costs.iter().zip(&file.context) {
-            ensure!(
-                *cost >= line.data.len(),
-                "context cost smaller than retained bytes"
-            );
         }
         ensure!(
             by_id.insert(file.id, file).is_none(),
@@ -290,13 +215,12 @@ pub(crate) fn validate(report: &AnalysisReport) -> Result<()> {
                 .loc
                 .checked_add(context.data.len() as u64)
                 .context("context byte range overflow")?;
-            for note in &context.notes {
-                note.off
-                    .checked_add(u64::from(note.len.max(1)))
-                    .context("note byte range overflow")?;
-            }
         }
     }
+    // A reference to an absent file is expected, not an error: a stored report
+    // drops members no one will read again (scan's retention) while findings
+    // and members still name them, and every reader resolves ids fallibly. A
+    // parent chain still must not loop.
     let mut checked = HashSet::new();
     for file in &report.files {
         let mut visiting = HashSet::new();
@@ -306,30 +230,9 @@ pub(crate) fn validate(report: &AnalysisReport) -> Result<()> {
                 break;
             }
             ensure!(visiting.insert(id), "cycle in file parents at {id}");
-            let parent = by_id
-                .get(&id)
-                .with_context(|| format!("missing file id {id}"))?;
-            at = parent.parent_id;
+            at = by_id.get(&id).and_then(|parent| parent.parent_id);
         }
         checked.extend(visiting);
-        for finding in &file.findings {
-            if let Some(id) = finding.src {
-                ensure!(
-                    by_id.contains_key(&id),
-                    "dangling source file {id} in {}",
-                    finding.id
-                );
-            }
-        }
-        for sources in file.composite_sources.values() {
-            for source in sources {
-                ensure!(
-                    by_id.contains_key(&source.file),
-                    "dangling composite source {}",
-                    source.file
-                );
-            }
-        }
     }
     Ok(())
 }
@@ -351,7 +254,7 @@ pub fn run(
 mod tests {
     use super::*;
     use crate::output::format_tiny;
-    use crate::types::compact_from_files;
+    use crate::types::{Facts, compact_from_files};
 
     fn report() -> AnalysisReport {
         let mut report = AnalysisReport::new(TargetInfo::default());
@@ -383,14 +286,6 @@ mod tests {
                 line: Some(1),
                 col: Some(1),
                 data: b"eval(data);\n".to_vec(),
-                notes: vec![Note {
-                    crit: atom.crit,
-                    id: atom.id.clone(),
-                    desc: atom.desc.clone(),
-                    off: 0,
-                    len: 4,
-                    conf: atom.conf,
-                }],
             }],
             findings: vec![composite, atom],
             ..FileAnalysis::default()
@@ -408,13 +303,17 @@ mod tests {
     }
 
     #[test]
-    fn compact_and_scan_envelope_reconstruct_use_edges_and_offset_zero() {
+    fn compact_and_scan_envelope_render_like_the_live_report() {
         let report = report();
-        let compact = compact_from_files(&report.files);
+        let compact = compact_from_files(&report.files, Facts::Model);
         let loaded =
             decode(&serde_json::to_vec(&serde_json::json!({"raw":compact})).expect("encode"))
                 .expect("decode");
-        assert!(!loaded.warnings.is_empty());
+        assert!(loaded.warnings.is_empty());
+        assert_eq!(
+            loaded.fact_profile.as_deref(),
+            Some(crate::model_facts::profile_id())
+        );
         assert_eq!(
             loaded.report.files[0].findings[0].trait_refs[0].as_str(),
             "micro-behaviors/process::eval"
@@ -424,14 +323,28 @@ mod tests {
 
     #[test]
     fn rejects_unknown_versions_bad_references_and_parent_cycles() {
-        let mut value = serde_json::to_value(compact_from_files(&report().files)).expect("encode");
-        value["v"] = Value::String("9".into());
+        let mut value =
+            serde_json::to_value(compact_from_files(&report().files, Facts::Full)).expect("encode");
+        value["v"] = Value::String("10".into());
         assert!(decode(&serde_json::to_vec(&value).expect("encode")).is_err());
-        value["v"] = Value::String("8".into());
+        value["v"] = Value::String("9".into());
         value["files"][0]["traits"][0]["uses"] = serde_json::json!([99]);
         assert!(decode(&serde_json::to_vec(&value).expect("encode")).is_err());
         value["files"][0]["traits"][0]["uses"] = serde_json::json!([1]);
         value["files"][0]["pid"] = serde_json::json!(0);
         assert!(decode(&serde_json::to_vec(&value).expect("encode")).is_err());
+    }
+
+    #[test]
+    fn accepts_references_to_files_retention_dropped() {
+        // scan stores reports without the members no one will read again, but
+        // the survivors still name them as parent and finding source.
+        let mut value =
+            serde_json::to_value(compact_from_files(&report().files, Facts::Full)).expect("encode");
+        value["files"][0]["pid"] = serde_json::json!(77);
+        value["files"][0]["traits"][0]["from"] = serde_json::json!([{"file": 78}]);
+        let loaded = decode(&serde_json::to_vec(&value).expect("encode")).expect("decodes");
+        validate(&loaded.report).expect("renderable");
+        assert_eq!(loaded.report.files[0].findings[0].src, Some(78));
     }
 }

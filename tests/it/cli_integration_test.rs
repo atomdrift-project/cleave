@@ -151,7 +151,7 @@ fn test_analyze_json_output() {
         .args(["--json", "analyze", script_path.to_str().unwrap()])
         .assert()
         .success()
-        .stdout(predicate::str::contains(r#""v":"8""#))
+        .stdout(predicate::str::contains(r#""v":"9""#))
         .stdout(predicate::str::contains(r#""files":[{"#));
 }
 
@@ -202,7 +202,7 @@ fn test_analyze_output_to_file() {
 
     // Verify output file was created and contains v6 compact format
     let content = fs::read_to_string(&output_path).unwrap();
-    assert!(content.contains(r#""v":"8""#));
+    assert!(content.contains(r#""v":"9""#));
     assert!(content.contains(r#""files":["#));
 }
 
@@ -370,7 +370,7 @@ fn test_analyze_directory_json_output() {
         .args(["--json", "analyze", temp_dir.path().to_str().unwrap()])
         .assert()
         .success()
-        .stdout(predicate::str::contains(r#""v":"8""#));
+        .stdout(predicate::str::contains(r#""v":"9""#));
 }
 
 /// Test that --yara flag enables YARA (deprecated feature, disabled by default)

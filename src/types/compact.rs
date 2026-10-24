@@ -1,8 +1,7 @@
-//! Compact v7 output types for minimal JSON serialization
+//! The compact report: cleave's JSON output and stored form (schema 9).
 //!
-//! These types represent the v7 schema designed for dense filefacts-backed output.
 //! Each file's JSON is fully self-contained (splittable for per-file DB storage).
-//! Conversion from internal types happens via `compact_from_files()`.
+//! Conversion from internal types happens via [`compact_from_files`].
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -19,20 +18,27 @@ const MAX_IMPORTS: usize = 4096;
 /// `&'static str` that always reports the version this build emits, so it is
 /// never read from the wire — a decoded report re-encodes as the current
 /// schema, not the one it was written with.
-const SCHEMA_VERSION: &str = "8";
+const SCHEMA_VERSION: &str = "9";
 
 fn current_schema_version() -> &'static str {
     SCHEMA_VERSION
 }
 
-// ========================================================================
-// Compact output types (v7 schema)
-// ========================================================================
+/// Which facts a compact report keeps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Facts {
+    /// Only the facts the shipping models read (`model_facts`); the report's
+    /// `fp` names that profile.
+    #[default]
+    Model,
+    /// Every fact: imports, exports, functions, sections and all metrics.
+    Full,
+}
 
-/// Top-level v7 report
+/// The compact report.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompactReport {
-    /// Schema version — always "8"
+    /// Schema version this build writes.
     #[serde(rename = "v")]
     #[serde(skip_deserializing, default = "current_schema_version")]
     pub version: &'static str,
@@ -41,6 +47,10 @@ pub struct CompactReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(default)]
     pub traits_version: Option<String>,
+    /// The fact profile `facts` was reduced to (`model_facts::profile_id`);
+    /// absent when every fact is kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fp: Option<String>,
     /// Files array
     #[serde(rename = "files")]
     pub files: Vec<CompactFile>,
@@ -60,11 +70,24 @@ pub struct CompactReport {
 /// rather than derived so `version` reports the schema this build emits; a derived
 /// `Default` would leave it the empty string and produce a report claiming no
 /// schema at all.
+impl CompactReport {
+    /// Reduce every file's facts to the model-input profile and name it in
+    /// `fp`: the same report [`Facts::Model`] conversion builds, for a caller
+    /// that needed the full facts first (a model extracts features from them).
+    pub fn retain_model_facts(&mut self) {
+        for file in &mut self.files {
+            file.facts = crate::model_facts::project(&file.facts);
+        }
+        self.fp = Some(crate::model_facts::profile_id().to_string());
+    }
+}
+
 impl Default for CompactReport {
     fn default() -> Self {
         Self {
             version: SCHEMA_VERSION,
             traits_version: None,
+            fp: None,
             files: Vec::new(),
             fetched: Vec::new(),
         }
@@ -826,7 +849,7 @@ fn compact_ast(
 // ========================================================================
 
 /// Convert a FileAnalysis into a CompactFile
-fn convert_file(file: &super::file_analysis::FileAnalysis, id: u32) -> CompactFile {
+fn convert_file(file: &super::file_analysis::FileAnalysis, id: u32, facts: Facts) -> CompactFile {
     // Dedup findings by ID within this file, merge evidence
     let mut trait_map: HashMap<&str, CompactTrait> = HashMap::new();
     let mut trait_order: Vec<&str> = Vec::new();
@@ -948,7 +971,10 @@ fn convert_file(file: &super::file_analysis::FileAnalysis, id: u32) -> CompactFi
         }
     }
 
-    let facts = facts_from_file(file);
+    let facts = match facts {
+        Facts::Model => crate::model_facts::from_file(file),
+        Facts::Full => facts_from_file(file),
+    };
 
     // Compute formula if not already present. Use the canonical filter so the
     // JSON `f` field stays in lockstep with the CLI header — both must reflect
@@ -979,22 +1005,7 @@ fn convert_file(file: &super::file_analysis::FileAnalysis, id: u32) -> CompactFi
         findings: traits,
         suppressions: file.suppressions.clone(),
         refs,
-        // Context windows without their per-line notes: the note payloads
-        // duplicate the sibling `traits` entries (id/desc/conf/crit) per
-        // annotated line, and no JSON consumer reads them — collimator never
-        // reads `ctx`, and prism's deserializer takes only line/col/t/b/ln,
-        // deriving annotations by intersecting trait spans with windows.
-        // (Measured: 16.8 MB of an 87.8 MB default report.) The raw in-memory
-        // report keeps notes — the terminal renderer and `note_location`
-        // read them there.
-        context: file
-            .context
-            .iter()
-            .map(|l| crate::types::ContextLine {
-                notes: Vec::new(),
-                ..l.clone()
-            })
-            .collect(),
+        context: file.context.clone(),
         facts,
     }
 }
@@ -1193,9 +1204,13 @@ fn ref_kind_str(kind: filefacts::RefKind) -> &'static str {
 /// (encoding layer merging, criticality filtering). This is the primary entry point
 /// for the binary crate's JSON output path.
 #[must_use]
-pub fn compact_from_files(files: &[super::file_analysis::FileAnalysis]) -> CompactReport {
-    let compact_files: Vec<CompactFile> = files.iter().map(|f| convert_file(f, f.id)).collect();
-    assemble_report(compact_files)
+pub fn compact_from_files(
+    files: &[super::file_analysis::FileAnalysis],
+    facts: Facts,
+) -> CompactReport {
+    let compact_files: Vec<CompactFile> =
+        files.iter().map(|f| convert_file(f, f.id, facts)).collect();
+    assemble_report(compact_files, facts)
 }
 
 /// [`compact_from_files`], but consuming: each `FileAnalysis` is dropped as
@@ -1207,10 +1222,13 @@ pub fn compact_from_files(files: &[super::file_analysis::FileAnalysis]) -> Compa
 #[must_use]
 pub fn compact_from_files_consuming(
     files: Vec<super::file_analysis::FileAnalysis>,
+    facts: Facts,
 ) -> CompactReport {
-    let compact_files: Vec<CompactFile> =
-        files.into_iter().map(|f| convert_file(&f, f.id)).collect();
-    assemble_report(compact_files)
+    let compact_files: Vec<CompactFile> = files
+        .into_iter()
+        .map(|f| convert_file(&f, f.id, facts))
+        .collect();
+    assemble_report(compact_files, facts)
 }
 
 /// Strip every cross-file reference that does not resolve to an emitted file id.
@@ -1279,7 +1297,7 @@ fn link_reference_targets(files: &mut [CompactFile]) {
     }
 }
 
-fn assemble_report(mut files: Vec<CompactFile>) -> CompactReport {
+fn assemble_report(mut files: Vec<CompactFile>, facts: Facts) -> CompactReport {
     link_reference_targets(&mut files);
     let dangling = sanitize_references(&mut files);
     debug_assert_eq!(
@@ -1298,6 +1316,7 @@ fn assemble_report(mut files: Vec<CompactFile>) -> CompactReport {
     CompactReport {
         version: SCHEMA_VERSION,
         traits_version,
+        fp: (facts == Facts::Model).then(|| crate::model_facts::profile_id().to_string()),
         files,
         fetched: Vec::new(),
     }
@@ -1353,13 +1372,13 @@ mod wire_roundtrip_tests {
             7.123_456,
         )]));
 
-        let direct = compact_from_files(&[fa.clone()]);
+        let direct = compact_from_files(&[fa.clone()], Facts::Full);
 
         let mut folded = fa;
         // Mirror `precompact_member_facts`: metrics stay flat until convert.
         folded.precompact_facts = Some(compact_facts_from_parts(&folded, false));
         folded.imports = Vec::new();
-        let via_fold = compact_from_files(&[folded]);
+        let via_fold = compact_from_files(&[folded], Facts::Full);
 
         assert_eq!(
             serde_json::to_value(&direct).expect("direct"),
@@ -1530,7 +1549,7 @@ mod wire_roundtrip_tests {
             ),
         ];
 
-        let report = compact_from_files(&[fa]);
+        let report = compact_from_files(&[fa], Facts::Full);
         let traits = &report.files[0].findings;
 
         assert!(traits[0].uses.is_empty(), "an atomic trait uses nothing");
@@ -1598,7 +1617,7 @@ mod wire_roundtrip_tests {
             }],
         });
 
-        let report = compact_from_files(&[fa]);
+        let report = compact_from_files(&[fa], Facts::Full);
         let encoded = serde_json::to_string(&report).expect("encode");
         let decoded: CompactReport = serde_json::from_str(&encoded).expect("decode");
         assert_eq!(
@@ -1666,8 +1685,33 @@ mod formula_tests {
     use super::super::filefacts_view::FilefactsView;
     use super::super::traits_findings::Finding;
     use super::super::{Criticality, Evidence, FindingKind};
-    use super::compact_from_files;
+    use super::{Facts, compact_from_files};
     use serde_json::json;
+
+    #[test]
+    fn retaining_model_facts_after_conversion_equals_converting_to_the_model_profile() {
+        let mut fa = FileAnalysis::new(0, "/t.exe".into(), "pe".into(), "sha".into(), 64);
+        fa.imports = vec![
+            super::super::binary::Import {
+                symbol: "VirtualAlloc".into(),
+                library: Some("kernel32.dll".into()),
+                ..Default::default()
+            },
+            super::super::binary::Import {
+                symbol: "GetTickCount".into(),
+                library: Some("kernel32.dll".into()),
+                ..Default::default()
+            },
+        ];
+        let model = compact_from_files(std::slice::from_ref(&fa), Facts::Model);
+        let mut full = compact_from_files(&[fa], Facts::Full);
+        full.retain_model_facts();
+        assert_eq!(
+            serde_json::to_value(&full).ok(),
+            serde_json::to_value(&model).ok()
+        );
+        assert_eq!(model.fp.as_deref(), Some(crate::model_facts::profile_id()));
+    }
 
     fn finding(id: &str, crit: Criticality, conf: f32) -> Finding {
         Finding {
@@ -1710,7 +1754,7 @@ mod formula_tests {
         use super::convert_file;
 
         let obj = |fa: &FileAnalysis| -> serde_json::Value {
-            let v = serde_json::to_value(convert_file(fa, fa.id));
+            let v = serde_json::to_value(convert_file(fa, fa.id, Facts::Full));
             assert!(v.is_ok(), "serialize compact file: {v:?}");
             v.unwrap_or(serde_json::Value::Null)
         };
@@ -1760,10 +1804,12 @@ mod formula_tests {
             convert_file(
                 &file_with(vec![finding("a/b/c", Criticality::Notable, 0.9)]),
                 0,
+                Facts::Full,
             ),
             convert_file(
                 &file_with(vec![finding("d/e/f", Criticality::Notable, 0.9)]),
                 1,
+                Facts::Full,
             ),
         ];
         let src = |f: u32| CompactSource {
@@ -1795,7 +1841,7 @@ mod formula_tests {
             finding("metadata/lang/source", Criticality::Baseline, 0.95),
         ])];
 
-        let compact = compact_from_files(&files);
+        let compact = compact_from_files(&files, Facts::Full);
         let formula = compact.files[0].formula.as_deref().unwrap_or("");
         assert!(
             formula.contains('O'),
@@ -1820,7 +1866,7 @@ mod formula_tests {
             Criticality::Notable,
             0.6,
         )])];
-        let compact = compact_from_files(&files);
+        let compact = compact_from_files(&files, Facts::Full);
         assert!(
             compact.files[0].formula.is_none(),
             "expected no formula when sole finding is below 0.65 conf, got {:?}",
@@ -1839,7 +1885,7 @@ mod formula_tests {
             0.9,
         )]);
         fa.formula = Some("PRECOMPUTED".to_string());
-        let compact = compact_from_files(&[fa]);
+        let compact = compact_from_files(&[fa], Facts::Full);
         assert_eq!(compact.files[0].formula.as_deref(), Some("PRECOMPUTED"));
     }
 
@@ -1875,14 +1921,14 @@ mod formula_tests {
             ..FilefactsView::default()
         });
 
-        let value = serde_json::to_value(compact_from_files(&[fa]));
+        let value = serde_json::to_value(compact_from_files(&[fa], Facts::Full));
         assert!(value.is_ok(), "serialize compact: {value:?}");
         let Ok(value) = value else {
             return;
         };
         assert_eq!(
             value.get("v").and_then(serde_json::Value::as_str),
-            Some("8")
+            Some("9")
         );
         let ff = &value["files"][0]["facts"];
         assert_eq!(ff["metrics"]["file"]["entropy"], 7.13);

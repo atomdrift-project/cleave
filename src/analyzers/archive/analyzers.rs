@@ -793,7 +793,7 @@ fn archive_entry_json(entry: &ArchiveEntry) -> serde_json::Value {
 ///   (derived through the same dedup pipeline finalize would apply);
 ///   evidence appended later (inheritance, aggregate attribution) unions in
 ///   via `finding_spans`.
-/// - context lines (note_location + emission), precompacted facts, folded kv,
+/// - context windows (composite-source lines + emission), precompacted facts, folded kv,
 ///   filefacts references (link_flagged_references), identity/scalars.
 fn rebuild_slim_member(mut file: FileAnalysis, engine: &crate::Engine) -> FileAnalysis {
     let container_refs = engine.rules().container_ref_index();
@@ -5307,11 +5307,11 @@ mod tests {
     use std::sync::Arc;
 
     /// Slimming retains local spans, so releasing matcher evidence must not
-    /// resurrect a dominated finding as an unanchored note.
+    /// resurrect a dominated finding as an unanchored note, live or stored.
     #[test]
-    fn slim_member_retained_spans_preserve_rendering_without_local_flags() {
+    fn slim_member_retained_spans_preserve_rendering() {
         use crate::output::{TinyOpts, format_context, format_tiny};
-        use crate::types::{ContextLine, Criticality, Evidence, FindingKind, Note};
+        use crate::types::{ContextLine, Criticality, Evidence, Facts, FindingKind};
         use crate::{AnalysisReport, FileAnalysis, Finding, TargetInfo};
 
         let finding = |id: &str, desc: &str, crit| {
@@ -5340,14 +5340,6 @@ mod tests {
                 line: Some(1),
                 col: Some(1),
                 data: b"evil(data)\n".to_vec(),
-                notes: vec![Note {
-                    id: winner.id.clone(),
-                    desc: winner.desc.clone(),
-                    crit: winner.crit,
-                    conf: winner.conf,
-                    off: 0,
-                    len: 4,
-                }],
             }],
             findings: vec![winner, dominated],
             ..FileAnalysis::default()
@@ -5367,17 +5359,6 @@ mod tests {
         };
         let full = report(file);
         let slim = report(slim);
-        let wire = |report: &AnalysisReport| {
-            serde_json::to_value(crate::file_wire::Report::from_analysis(report).unwrap()).unwrap()
-        };
-        assert_eq!(wire(&full), wire(&slim));
-        assert!(
-            wire(&slim)["files"][0]["traits"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .all(|f| f.get("local").is_none())
-        );
         assert!(!format_tiny(&full).contains("Overlapping behavior"));
         assert_eq!(format_tiny(&full), format_tiny(&slim));
         assert_eq!(
@@ -5385,10 +5366,9 @@ mod tests {
             format_context(&slim, &TinyOpts::terminal())
         );
         for report in [&full, &slim] {
-            let bytes =
-                serde_json::to_vec(&crate::file_wire::Report::from_analysis(report).unwrap())
-                    .unwrap();
-            let decoded = crate::file_wire::decode(&bytes).unwrap();
+            let stored = crate::types::compact_from_files(&report.files, Facts::Full);
+            let decoded =
+                crate::report_input::decode(&serde_json::to_vec(&stored).unwrap()).unwrap();
             assert_eq!(format_tiny(&decoded.report), format_tiny(report));
         }
     }

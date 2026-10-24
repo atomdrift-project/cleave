@@ -10,7 +10,7 @@ For the library that produces these reports, see
 
 ## Offline rendering and comparisons
 
-**Experimental:** the `render` command and its candidate JSON formats may change.
+**Experimental:** the `render` command may change.
 
 Render a saved report without reading its original files, loading rules, or
 running analysis:
@@ -20,31 +20,25 @@ cleave render report.json --format tiny
 cleave render - --format terminal < report.json
 ```
 
-The command reads one JSON document: compact v8, a raw v3/v3.0 report, or a
+The command reads one JSON document: compact v9 or v8, a raw v3 snapshot, or a
 scan envelope containing either under `raw`. Unknown schema versions fail.
-Rendered output goes to stdout; warnings go to stderr. Compare saved outputs
-with the standard `diff` command.
+Rendered output goes to stdout; warnings go to stderr.
 
-Compact v8 did not retain capture's winning per-window annotations or all
-provenance distinctions. The reader reconstructs annotations from spans and
-warns on stderr that its output cannot certify parity with the original live
-render. Two reconstructed outputs matching is useful, but does not prove that
-either matches the historical interpretation input.
-
-For exact replay baselines, capture the finalized typed report with its notes:
+Reports store no context annotations. The renderer labels each context window
+from the file's final findings, the same way for a live analysis and a saved
+report, so a saved report renders as its analysis did. Compare saved outputs
+with `diff`:
 
 ```sh
-cleave --format snapshot /path/to/sample -o before.json
+cleave --format json /path/to/sample -o before.json
 cleave render before.json --format tiny > before.txt
 cleave render after.json --format tiny > after.txt
 diff -u before.txt after.txt
 ```
 
-`snapshot` is an opt-in diagnostic output, with more fields than the compact
-storage format. The render command does not re-finalize a finalized snapshot.
-Intermediate analysis-cache reports require finalization and are marked as
-inexact, as are compact reconstruction and snapshots with missing context
-annotations. These limitations are reported on stderr.
+`snapshot` writes the in-memory report with every field, for debugging. The
+render command does not re-finalize a finalized snapshot; an intermediate
+analysis-cache report is finalized first, and says so on stderr.
 
 With the matching scan reader, use:
 
@@ -55,57 +49,8 @@ diff -u before.txt after.txt
 ```
 
 This uses scan's live primary-context budget and annotation rewrite, with no
-models, fetching, updates, or LLM calls. Artifact reports and archive members
-are supported. Reports containing fetched subjects or registry sidecars need
-additional saved presentation state (fetch verdicts and registry provenance);
-the initial interpretation replay rejects those rather than silently omitting
-their evidence. Compare with the same renderer build and render-budget settings.
-
-### Experimental context retention
-
-The opt-in `file-2` candidate stores typed findings and file-local annotated
-context. It replaces the earlier `context-1` replay overlay with one canonical
-representation. It is not the final schema 9 and is not enabled for normal
-analysis JSON or hopper uploads. Earlier `context-1`, `file-1`, and `joined-1` reports remain readable.
-
-```sh
-cleave --format snapshot SAMPLE -o sample.snapshot.json
-cleave render sample.snapshot.json --format json --trim-context -o candidate.json
-atomscan render sample.snapshot.json --format interpret > before.txt
-atomscan render candidate.json --format interpret > after.txt
-diff -u before.txt after.txt
-```
-
-Without `--trim-context`, `render --format json` writes the same replayable
-profile with its full context. JSON/snapshot rewriting requires an annotated
-snapshot, rather than historical input whose annotations were reconstructed.
-
-The pass removes annotations for findings already filtered out, empties windows
-that cannot be selected, and trims binary padding using the renderer's own
-byte-range planner. It keeps all findings, facts, suppression evidence, window
-positions/order and original budget costs. Source windows with live annotations
-stay whole. It runs once over each file; archive prompt caps never determine
-what a leaf retains. Tiny/interpret output is the parity target. Terminal/prism
-can show less surrounding context after retention.
-
-Findings retain their actual order and historical values. Each context window
-holds capture-note references into its own file's `traits`, plus its original
-budget cost when trimming changed the length. Findings carry their spans,
-and provenance directly; nonempty spans establish locality. No external trait catalog is required. The
-typed decoder builds the existing presentation view; it does not restore
-discarded raw matcher strings or promise a full raw-analysis round trip.
-
-Some source files grow because replay metadata costs more than the bytes cut.
-See [the candidate contract and measurements](JSON_FILE_CANDIDATE.md) for native
-JSONB/TOAST and optimized encode/decode timings.
-
-Two additional diagnostic options are available with `render --format json`:
-`--model-facts` retains the audited shipping Azoth inputs and stamps an explicit
-`fp` contract; `--share-analyses` writes `joined-2` with complete occurrences and
-a document-local analysis pool. Equal SHA alone never merges analyses. These
-options preserve the interpret target while reducing facts and repeated payloads;
-other fact consumers may need the default full-facts profile. See the
-[retention and sharing contract](JSON_FILE_CANDIDATE.md#retained-facts-direct-model-inputs-and-joined-sharing).
+models, fetching, updates, or LLM calls. Compare with the same renderer build
+and render-budget settings.
 
 ## Schema versioning
 
@@ -114,17 +59,23 @@ other fact consumers may need the default full-facts profile. See the
 Consumers should treat unknown versions as a hard error.
 
 
-## Compact JSON v8
+## Compact JSON v9
 
-The CLI `--json` output uses compact schema v8 (`src/types/compact.rs`). Each
+The CLI `--json` output uses compact schema v9 (`src/types/compact.rs`). Each
 `files[]` entry is fully self-contained — splittable for per-file DB storage.
 The top-level object is:
 
 | JSON | Type | Meaning |
 | ---- | ---- | ------- |
-| `v` | string | Compact schema version, currently `"8"`. |
+| `v` | string | Compact schema version, currently `"9"`. |
 | `rev` | string | Traits-repo revision (first 8 chars of commit hash). Omitted if unknown. |
+| `fp` | string | The fact profile `facts` was reduced to (see [Compact facts](#compact-facts-facts)). Omitted with `--full-facts`. |
 | `files` | array | Per-file compact records. |
+
+v9 differs from v8 in three ways: `facts` keeps only what cleave's models read
+unless you pass `--full-facts`; context bytes are readable text (`s`) instead of
+Z85 (`b`); and context windows carry no annotations. Readers of v8 keep working
+on v8 reports; cleave reads both.
 
 Byte offsets in the compact report are **bare integers**, not `0x`-prefixed hex
 strings — a standalone JSON integer is smaller than a quoted hex string. (The
@@ -147,7 +98,7 @@ hex strings; that representation is unchanged.)
 | `traits` | array | Findings, as compact traits (below). Omitted if empty. |
 | `supp` | array | Suppressions: notable-or-above traits that matched but were withheld or demoted (below). Omitted if empty. |
 | `refs` | array | Declared references (deps, URLs, repository) — the file→dependency edges. Omitted if empty. |
-| `ctx` | array | Merged context windows: raw match-highlight bytes in file order. Omitted if empty. |
+| `ctx` | array | Merged context windows (below), in file order. Omitted if empty. |
 | `facts` | object | Dense filefacts-derived facts (below). Omitted if empty. |
 
 ### Compact trait (`traits[]`)
@@ -229,7 +180,25 @@ container, Node-style extension/index resolution). A package registry lookup is
 grafted onto the artifact node as its own `registry` file whose provenance leg a
 package-scoped composite can then reference.
 
+### Context windows (`ctx[]`)
+
+| JSON | Type | Meaning |
+| ---- | ---- | ------- |
+| `ln` | u64 | Byte offset of the window's first byte. |
+| `line` | u64 | 1-based source line of that byte. Textual files only. |
+| `col` | u64 | 1-based column of that byte. Textual files only. |
+| `s` | string | The window's bytes as text: byte `b` is the code point U+00`b`, and NUL is U+0100 (PostgreSQL's JSONB rejects `\u0000`). ASCII reads as itself. v8 reports carry Z85 bytes in `b` instead. |
+
+A window shows the bytes around one or more findings. To see which finding
+matched where, intersect `traits[].spans` with the window's byte range; that is
+what cleave's renderer does.
+
 ### Compact facts (`facts`)
+
+By default `facts` keeps only what cleave's models read: the metrics they use,
+and the imports, exports and other symbols whose names they look for. Sections
+and every other symbol are dropped, and `fp` names the profile. Pass
+`--full-facts` to keep everything below.
 
 | JSON | Meaning |
 | ---- | ------- |

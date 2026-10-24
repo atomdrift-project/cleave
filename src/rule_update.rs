@@ -357,7 +357,25 @@ fn fetch_manifest(connect: Option<Duration>) -> Result<(Manifest, Channel), Erro
     Ok((manifest, channel))
 }
 
-/// The token an enriched run needs, asked for now if this host holds none.
+/// Install or refresh the rules this run uses, in the tree it chose.
+///
+/// A held token opens the Enriched channel. When the rules Worker refuses it
+/// and `--enriched` did not insist, the run falls back to the open-source
+/// rules — says so once, through [`crate::enriched::fall_back`] — and
+/// refreshes those instead. With `--enriched`, the refusal is the error. A
+/// network failure is neither: it is returned, and the rules on disk serve.
+pub fn refresh(force: bool, quiet: bool) -> Result<(), Error> {
+    match update(&crate::traits_repo::install_target(), force, quiet) {
+        Err(Error::Enriched(why)) if !crate::enriched::required() => {
+            crate::enriched::fall_back(&why);
+            // The target moved with the fall back: it is the open-source tree now.
+            update(&crate::traits_repo::install_target(), force, quiet)
+        }
+        done => done,
+    }
+}
+
+/// The token `--enriched` needs, asked for now if this host holds none.
 ///
 /// Called once, before anything fetches rules, so the asking happens at the
 /// start of a run rather than inside whichever download happens first — and
@@ -432,10 +450,17 @@ fn connect_device(
                 if crate::cancellation::is_cancelled() {
                     return Err(Error::Enriched("connection cancelled".into()));
                 }
+                let waited = started.elapsed().as_secs();
                 tracing::debug!(
                     tid = %token.fingerprint(),
+                    waited,
                     "issued token not at the edge yet; checking again"
                 );
+                // A second stage, so a wait that is KV catching up reads as
+                // one — and a wait that never ends names which side to look at.
+                progress.set(&format!(
+                    "Approved. Waiting for the rules service to see the new token… {waited}s"
+                ));
                 std::thread::sleep(ISSUE_RECHECK);
             }
             other => break other,
@@ -490,11 +515,12 @@ fn save_issued(token: &crate::enriched::Token) -> String {
 /// The rules Worker answers a token it will not honour (revoked, Community
 /// tier, a typo) with the *public* manifest and a 200, so that old clients keep
 /// running. Asked for enriched, that is a refusal: the channel header must say
-/// `fresh`. A saved token the Worker no longer recognises — revoked, or this
-/// computer disconnected — is replaced by connecting again, on a terminal; any
-/// other refusal is an error that says what was wrong and where the token came
-/// from. No token at all is the same error — the CLIs ask through [`sign_in`]
-/// before they get here.
+/// `fresh`. Under `--enriched`, a saved token the Worker no longer recognises
+/// — revoked, or this computer disconnected — is replaced by connecting
+/// again, on a terminal; any other refusal is an error that says what was
+/// wrong and where the token came from, and [`refresh`] turns it into a fall
+/// back when `--enriched` did not insist. No token at all is the same error —
+/// the CLIs ask through [`sign_in`] before they get here.
 fn enriched_manifest(
     held: Option<(crate::enriched::Token, crate::enriched::Source)>,
     connect: Option<Duration>,
@@ -508,7 +534,11 @@ fn enriched_manifest(
         Err(answer) => answer,
     };
     let unknown = matches!(answer, Answer::Public(None) | Answer::Status(_));
-    if source == Source::File && unknown && crate::enriched::interactive() {
+    if source == Source::File
+        && unknown
+        && crate::enriched::required()
+        && crate::enriched::interactive()
+    {
         print_status(&format!(
             "✗ {}.\n",
             refusal(&token.fingerprint(), source, &answer)

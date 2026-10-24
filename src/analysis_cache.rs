@@ -920,9 +920,11 @@ fn options_hash_with(
     // says whether rizin ran.
     // v=22: compact members retain npm identity and install hooks for dependency
     // discovery. Historical compact reports discarded them before scan ran.
+    // v=23: context windows store bytes as byte text (`s`) and no notes; notes
+    // are derived from findings when a report renders.
     let zip_passwords = Sha256::digest(options.zip_passwords.join("\0").as_bytes());
     let key = format!(
-        "v=22,cm={},3p={},yara={},yskip={},ybuiltin={},zpw={},r2={},upx={},plat={},hp={},sp={},ps={},fv={},rizin={}",
+        "v=23,cm={},3p={},yara={},yskip={},ybuiltin={},zpw={},r2={},upx={},plat={},hp={},sp={},ps={},fv={},rizin={}",
         settings.compact_members,
         settings.third_party_yara,
         settings.yara,
@@ -2325,7 +2327,7 @@ mod tests {
     /// A cache hit must reproduce the *outputs* a fresh analysis would — not just
     /// the report's top-level fields. Several things the outputs are built from
     /// are transient and rebuilt only during analysis (which a cache hit skips):
-    /// context-line `notes` (render anchoring), finding `evidence` (compact
+    /// context windows (render anchoring, with notes derived from findings), finding `evidence` (compact
     /// `spans`), and `composite_sources` (compact `from`). If any such field is
     /// dropped by serialization, a cached report renders structurally anchorless.
     ///
@@ -2336,7 +2338,7 @@ mod tests {
     #[test]
     fn cache_roundtrip_preserves_rendered_outputs() {
         use crate::types::file_analysis::CompositeSource;
-        use crate::types::{ContextLine, Criticality, Evidence, Finding, Note};
+        use crate::types::{ContextLine, Criticality, Evidence, Finding};
 
         let sha = "feedface00";
         let mut report = test_report(sha);
@@ -2364,28 +2366,19 @@ mod tests {
         .with_criticality(Criticality::Hostile);
 
         fa.findings = vec![atom, composite];
-        // Context lines with a note → render anchoring.
+        // Context windows → render anchoring; the atom's span at 17 labels the second.
         fa.context = vec![
             ContextLine {
                 loc: 0,
                 line: Some(1),
                 col: Some(1),
-                data: b"data = b64decode(BLOB)".to_vec(),
-                notes: vec![],
+                data: b"data = decode(B)\n".to_vec(),
             },
             ContextLine {
                 loc: 17,
                 line: Some(2),
                 col: Some(1),
                 data: b"exec(payload)".to_vec(),
-                notes: vec![Note {
-                    crit: Criticality::Suspicious,
-                    id: "micro/exec".to_string().into(),
-                    desc: "exec call".to_string().into(),
-                    off: 17,
-                    len: 13,
-                    conf: 0.9,
-                }],
             },
         ];
         fa.composite_sources.insert(
@@ -2399,8 +2392,11 @@ mod tests {
         report.files = vec![fa];
 
         let compact = |r: &AnalysisReport| {
-            serde_json::to_string(&crate::types::compact::compact_from_files(&r.files))
-                .expect("compact serialization")
+            serde_json::to_string(&crate::types::compact::compact_from_files(
+                &r.files,
+                crate::types::Facts::Full,
+            ))
+            .expect("compact serialization")
         };
         let tiny_before = crate::output::format_tiny(&report);
         let compact_before = compact(&report);
@@ -2429,7 +2425,7 @@ mod tests {
         assert_eq!(
             tiny_before,
             crate::output::format_tiny(&restored),
-            "render anchoring (context notes) lost across cache round-trip"
+            "render anchoring (context windows) lost across cache round-trip"
         );
         assert_eq!(
             compact_before,

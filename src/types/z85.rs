@@ -8,8 +8,8 @@
 //! group and emit `k + 1` characters for `k` remaining bytes — so the length is
 //! self-describing and no separate length field is needed.
 //!
-//! Used to carry [`crate::types::ContextLine`] match bytes in the JSON report:
-//! analysis emits raw bytes, and the hex/text view is a render-time concern.
+//! Reports before schema 9 carried context bytes this way (`b`); cleave now
+//! writes byte text (`byte_text`) and only decodes Z85 to read old reports.
 
 /// The 85 Z85 digits, in value order (`0..=84`).
 const ALPHABET: &[u8; 85] =
@@ -30,8 +30,8 @@ const fn build_decode() -> [u8; 256] {
 
 /// Encode bytes as a Z85 string. A trailing group of 1–3 bytes yields 2–4
 /// characters (`k + 1`), so the original length is recoverable.
-#[must_use]
-pub(crate) fn encode(data: &[u8]) -> String {
+#[cfg(test)]
+fn encode(data: &[u8]) -> String {
     let mut out = String::with_capacity(data.len().div_ceil(4) * 5);
     for chunk in data.chunks(4) {
         let mut value = 0u32;
@@ -103,20 +103,6 @@ pub(crate) fn decode(text: &str) -> Result<Vec<u8>, DecodeError> {
         out.extend_from_slice(&group[..keep]);
     }
     Ok(out)
-}
-
-/// Serde glue for a `Vec<u8>` field carried as a Z85 string in JSON.
-pub(crate) mod serde_z85 {
-    use serde::{Deserialize, Deserializer, Serializer};
-
-    pub(crate) fn serialize<S: Serializer>(bytes: &[u8], s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str(&super::encode(bytes))
-    }
-
-    pub(crate) fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
-        let text = String::deserialize(d)?;
-        super::decode(&text).map_err(serde::de::Error::custom)
-    }
 }
 
 #[cfg(test)]

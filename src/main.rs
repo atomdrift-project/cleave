@@ -130,71 +130,33 @@ fn run() -> Result<()> {
     // the original sample. Keep this before all analysis bootstrap work.
     if let Some(cli::Command::Render { args: render_args }) = &args.command {
         let format = args.format();
-        anyhow::ensure!(
-            !(args.model_facts || args.share_analyses)
-                || matches!(format, cli::OutputFormat::Json | cli::OutputFormat::Jsonl),
-            "--model-facts and --share-analyses require render --format json or jsonl"
-        );
+        let facts = args.facts();
         let rendered = cleave::report_input::run(render_args, |loaded| {
-            if matches!(
-                format,
-                cli::OutputFormat::Json | cli::OutputFormat::Jsonl | cli::OutputFormat::Snapshot
-            ) {
-                anyhow::ensure!(
-                    loaded.warnings.is_empty(),
-                    "replayable JSON requires an annotated snapshot; capture with --format snapshot instead of rewriting reconstructed input"
-                );
-            }
-            if args.trim_context {
-                anyhow::ensure!(
-                    cleave::output::TinyOpts::tiny().lean_rows,
-                    "--trim-context requires the default lean tiny renderer; unset CLEAVE_TINY_LEGACY_WINDOWS"
-                );
-                cleave::context_retention::trim(&mut loaded.report);
-            }
             let report = &loaded.report;
             match format {
                 cli::OutputFormat::Json | cli::OutputFormat::Jsonl => {
-                    let mut wire = if args.model_facts {
-                        cleave::file_wire::Report::for_model(report)?
-                    } else {
-                        cleave::file_wire::Report::from_analysis(report)?
-                    };
-                    wire.fetched = loaded.fetched.clone();
-                    wire.rev = loaded.traits_version.clone();
-                    if !args.model_facts {
-                        wire.fp = loaded.fact_profile.clone();
-                    }
-                    let mut json = if args.share_analyses {
-                        serde_json::to_string(&wire.into_shared()?)?
-                    } else {
-                        serde_json::to_string(&wire)?
-                    };
-                    json.push('\n');
-                    return Ok(json);
-                }
-                cli::OutputFormat::Snapshot => {
                     anyhow::ensure!(
-                        loaded.fact_profile.is_none(),
-                        "retained facts require diagnostic JSON, not a full raw snapshot"
+                        facts == cleave::types::Facts::Model || loaded.fact_profile.is_none(),
+                        "--full-facts cannot restore facts this report was reduced to"
                     );
-                    return Ok(serde_json::to_string(report)? + "\n");
+                    let mut compact = cleave::types::compact_from_files(&report.files, facts);
+                    compact.traits_version.clone_from(&loaded.traits_version);
+                    compact.fetched.clone_from(&loaded.fetched);
+                    Ok(serde_json::to_string(&compact)? + "\n")
                 }
-                _ => {}
+                cli::OutputFormat::Snapshot => Ok(serde_json::to_string(report)? + "\n"),
+                cli::OutputFormat::Tiny => Ok(cleave::output::format_context(
+                    report,
+                    &cleave::output::TinyOpts::tiny(),
+                )),
+                cli::OutputFormat::Terminal => Ok(cleave::output::format_context(
+                    report,
+                    &cleave::output::TinyOpts::terminal(),
+                )),
             }
-            let opts = match format {
-                cli::OutputFormat::Tiny => cleave::output::TinyOpts::tiny(),
-                cli::OutputFormat::Terminal => cleave::output::TinyOpts::terminal(),
-                _ => anyhow::bail!("render supports --format terminal or tiny"),
-            };
-            Ok(cleave::output::format_context(report, &opts))
         })?;
         return write_output(&rendered, args.output, format);
     }
-    anyhow::ensure!(
-        !args.trim_context && !args.model_facts && !args.share_analyses,
-        "--trim-context, --model-facts and --share-analyses are supported by the render command only"
-    );
 
     // CLI scans run on rayon with no tokio runtime, so tokio::signal isn't
     // available. Install a libc signal handler that flips a global
@@ -304,10 +266,12 @@ fn run() -> Result<()> {
     start_deadlock_detector();
 
     let disabled = args.disabled_components();
-    apply_runtime_overrides(args.traits_dir.as_deref(), args.enriched, &disabled);
-    // Asked for here, once, rather than by whichever rules download would
-    // otherwise be the first to need it.
-    if cleave::enriched::enabled() {
+    apply_runtime_overrides(args.traits_dir.as_deref(), &disabled);
+    // A held token means the Enriched rules; `--enriched` insists on them,
+    // and is asked for a token here, once, rather than by whichever rules
+    // download would otherwise be the first to need it.
+    cleave::enriched::resolve(args.enriched).map_err(anyhow::Error::msg)?;
+    if cleave::enriched::required() {
         cleave::rule_update::sign_in()?;
     }
     // `cleave validate` defaults to deterministic scoring with YARA disabled;
@@ -352,6 +316,7 @@ fn run() -> Result<()> {
         max_crit: args.max_crit,
         min_file_crit: args.min_file_crit,
         max_file_crit: args.max_file_crit,
+        facts: args.facts(),
         all_files: args.all_files,
     });
 

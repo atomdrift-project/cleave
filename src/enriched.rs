@@ -1,11 +1,16 @@
-//! isotope13 Enriched: the subscription token, and the switch that requires it.
+//! isotope13 Enriched: the subscription token, and the switch it throws.
 //!
-//! `--enriched` (or `ATOMDRIFT_ENRICHED=1`) selects the fresh ruleset in
-//! `traits-enriched/`, and in scan, remote verdicts. It requires a token:
-//! `ISOTOPE13_TOKEN`, else the one saved in `<config>/atomdrift/isotope13-api.json`,
-//! else — on a terminal, through [`crate::rule_update::sign_in`] — one issued
-//! to this computer by <https://dash.isotope13.io/device>. Holding a token
-//! never turns enriched on by itself.
+//! A token — `ISOTOPE13_TOKEN`, else the one saved in
+//! `<config>/atomdrift/isotope13-api.json` — selects the fresh ruleset in
+//! `traits-enriched/`, and in scan, remote verdicts. Once a computer is
+//! connected it stays connected: the token is used for every refresh until
+//! the rules Worker refuses it, and only then does a run fall back to the
+//! open-source rules, saying so. `--enriched` (or `ATOMDRIFT_ENRICHED=1`)
+//! adds insistence: with no token it connects this computer — on a terminal,
+//! through [`crate::rule_update::sign_in`], with a code approved at
+//! <https://dash.isotope13.io/device> — and a refusal is an error rather than
+//! a fall back. `ATOMDRIFT_ENRICHED=0` keeps the open-source rules whatever
+//! the host holds.
 //!
 //! The token is opaque here. Whether it is valid, and what it is entitled to,
 //! is the server's to say, so the saved file holds the token and nothing that
@@ -35,8 +40,9 @@ const TOKEN_FILE: &str = "isotope13-api.json";
 const MAX_TOKEN_LEN: usize = 256;
 
 static ENABLED: AtomicBool = AtomicBool::new(false);
+static REQUIRED: AtomicBool = AtomicBool::new(false);
 
-/// Turn enriched mode on or off for this process (`--enriched`).
+/// Turn enriched mode on or off for this process.
 ///
 /// The default traits directory follows this switch, so the capability mapper
 /// and traits fingerprint built from the other one are dropped, exactly as
@@ -49,12 +55,78 @@ pub fn set_enabled(on: bool) {
     }
 }
 
-/// Whether enriched mode was asked for, by [`set_enabled`] or [`ENABLE_ENV`].
+/// Whether this run uses the Enriched rules: decided by [`resolve`], and
+/// withdrawn by [`fall_back`].
 #[must_use]
 pub fn enabled() -> bool {
     ENABLED.load(Ordering::Relaxed)
-        || std::env::var(ENABLE_ENV)
-            .is_ok_and(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+}
+
+/// Whether `--enriched` insisted: no token connects this computer, and a
+/// refusal is an error rather than a fall back to the open-source rules.
+#[must_use]
+pub fn required() -> bool {
+    REQUIRED.load(Ordering::Relaxed)
+}
+
+/// Decide this run's rules from what the host holds. Called once, before
+/// anything resolves a traits directory.
+///
+/// A held token means Enriched. `required` — `--enriched`, or
+/// [`ENABLE_ENV`] set to `1` — means Enriched too, with the token asked for
+/// by [`crate::rule_update::sign_in`] when there is none. [`ENABLE_ENV`] set
+/// to `0` means the open-source rules, whatever is held.
+///
+/// # Errors
+///
+/// A saved token file that others can read, or that cannot be read or
+/// parsed: a fault to fix rather than a token to quietly do without.
+pub fn resolve(required: bool) -> Result<(), String> {
+    let switch = env_switch(std::env::var(ENABLE_ENV).ok().as_deref());
+    let required = required || switch == Some(true);
+    REQUIRED.store(required, Ordering::Relaxed);
+    // Opted out, and the flag did not overrule it: whatever is held stays unused.
+    let opted_out = switch == Some(false) && !required;
+    let held = if opted_out { None } else { token()? };
+    let on = held.is_some() || required;
+    set_enabled(on);
+    tracing::info!(
+        event = "enriched.mode",
+        enabled = on,
+        required,
+        token = held.map_or("none", |(_, source)| source.as_str())
+    );
+    Ok(())
+}
+
+/// Leave the Enriched channel for the rest of this run, because it could not
+/// be had and `--enriched` did not insist: the open-source rules are used
+/// from here on, and the one warning says why.
+///
+/// A traits override pinned to the Enriched tree (scan pins the installed
+/// tree so a checkout in the working directory cannot supply the rules)
+/// follows, or the open-source rules would never be resolved.
+pub fn fall_back(why: &str) {
+    tracing::warn!(
+        event = "enriched.fallback",
+        reason = %why,
+        "isotope13 Enriched unavailable; using the open-source rules"
+    );
+    set_enabled(false);
+    if crate::traits_repo::override_dir()
+        .is_some_and(|dir| dir == crate::traits_repo::installed_dir(true))
+    {
+        crate::traits_repo::set_override_dir(Some(crate::traits_repo::installed_dir(false)));
+    }
+}
+
+/// What [`ENABLE_ENV`] says: on, off, or nothing.
+fn env_switch(value: Option<&str>) -> Option<bool> {
+    match value?.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
 }
 
 /// A subscription token. Its `Debug` shows only the fingerprint, so a token
@@ -250,14 +322,25 @@ pub fn how_to_get_one() -> String {
     )
 }
 
+/// "isotope¹³ Enriched" in its colours: the one way the product is named on
+/// a terminal, from the welcome to every tool's `version`.
+#[must_use]
+pub fn brand() -> String {
+    use colored::Colorize;
+    format!(
+        "{} {}",
+        "isotope¹³".truecolor(255, 0, 204).bold(),
+        "Enriched".truecolor(0, 158, 142).bold()
+    )
+}
+
 /// The welcome: one line on what Enriched is, and the link to approve.
 fn welcome(link: &str) {
     use colored::Colorize;
     eprintln!(
-        "\n⚛️  {} {} — the latest atomdrift rules, the moment they clear QA.\n\n   \
+        "\n⚛️  {} — the latest atomdrift rules, the moment they clear QA.\n\n   \
          Approve this computer in your browser:  {}\n",
-        "isotope¹³".truecolor(255, 0, 204).bold(),
-        "Enriched".truecolor(0, 158, 142).bold(),
+        brand(),
         link.bold(),
     );
 }
@@ -562,6 +645,19 @@ impl Dash {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_env_switch_is_on_off_or_absent() {
+        for on in ["1", "true", " YES ", "on"] {
+            assert_eq!(env_switch(Some(on)), Some(true), "{on:?}");
+        }
+        for off in ["0", "false", "No", "off"] {
+            assert_eq!(env_switch(Some(off)), Some(false), "{off:?}");
+        }
+        for unset in [None, Some(""), Some("maybe")] {
+            assert_eq!(env_switch(unset), None, "{unset:?}");
+        }
+    }
 
     #[test]
     fn a_plan_is_named_as_the_dashboard_names_it() {

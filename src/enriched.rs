@@ -607,14 +607,16 @@ struct Dash {
 
 impl Dash {
     fn new() -> Result<Self, String> {
-        let mut base = DASH_URL.to_string();
         #[cfg(debug_assertions)]
-        if let Some(local) = std::env::var("ISOTOPE13_DASH_URL")
+        let local = std::env::var("ISOTOPE13_DASH_URL")
             .ok()
-            .filter(|v| !v.is_empty())
-        {
-            base = format!("{}/", local.trim_end_matches('/'));
-        }
+            .filter(|v| !v.is_empty());
+        #[cfg(not(debug_assertions))]
+        let local: Option<String> = None;
+        let base = local.map_or_else(
+            || DASH_URL.to_string(),
+            |local| format!("{}/", local.trim_end_matches('/')),
+        );
         let http = reqwest::blocking::Client::builder()
             .https_only(base == DASH_URL)
             .redirect(reqwest::redirect::Policy::none())

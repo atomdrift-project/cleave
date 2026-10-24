@@ -788,6 +788,8 @@ pub(crate) const EMBEDDED_LANG_NAMES: &[&str] =
 /// variation-selector layers decoded here. Reference validation checks YAML
 /// refs against this list; adding a producer means adding its name here.
 pub(crate) const ENCODED_LAYER_NAMES: &[&str] = &[
+    "powershell-literal-program",
+    "javascript-literal-program",
     "xor",
     "base64",
     "base64-obf",
@@ -849,7 +851,10 @@ fn generate_embedded_language_trait(detected_lang: &FileType, offset: u64, value
 /// authors and ML pipelines key off "this layer was unwrapped from
 /// hex / base64 / xor / etc." without re-deriving from
 /// `encoding_chain` everywhere.
-fn generate_encoded_layer_traits(encoding_chain: &[String], offset: u64) -> Vec<Finding> {
+pub(crate) fn generate_encoded_layer_traits(
+    encoding_chain: &[String],
+    offset: u64,
+) -> Vec<Finding> {
     encoding_chain
         .iter()
         .map(|encoding| {
@@ -870,7 +875,17 @@ fn encoded_layer_finding(encoding: &str, offset: u64) -> Finding {
         kind: crate::types::FindingKind::Capability,
         desc: format!("Code recovered from {encoding}-encoded layer").into(),
         conf: 1.0,
-        crit: Criticality::Baseline,
+        // These typed reconstruction identities must survive conversion of
+        // the child report so the host's file-scope composites can use them.
+        // They are complete encoding observations, useful on their own.
+        crit: if matches!(
+            encoding,
+            "powershell-literal-program" | "javascript-literal-program"
+        ) {
+            Criticality::Notable
+        } else {
+            Criticality::Baseline
+        },
         mbc: None,
         attack: None,
         trait_refs: vec![],
@@ -1339,19 +1354,20 @@ fn detect_base64_binary(
     // ZIP is also the container for documents and ordinary application assets.
     // Encoding plus archive magic establishes a format property, not evasion.
     // The dispatcher below still analyzes every decoded member for behavior.
-    let is_zip = inner_type == "zip";
+    let is_archive = matches!(inner_type, "zip" | "gz" | "xz" | "lzma" | "bz2");
     let finding = Finding {
         precomputed_spans: None,
         src: None,
         kind: FindingKind::Capability,
-        id: if is_zip {
-            "metadata/file/encoding::base64-decoded-zip".into()
+        id: if is_archive {
+            format!("metadata/file/encoding::base64-decoded-{inner_type}").into()
         } else {
             format!("binary/embedded/base64-{}", inner_type).into()
         },
-        desc: if is_zip {
+        desc: if is_archive {
             format!(
-                "Base64-encoded ZIP archive ({} decoded bytes)",
+                "Base64-encoded {} archive ({} decoded bytes)",
+                inner_type.to_uppercase(),
                 decoded.len()
             )
         } else {
@@ -1364,13 +1380,13 @@ fn detect_base64_binary(
         }
         .into(),
         conf: 0.85,
-        crit: if is_zip {
+        crit: if is_archive {
             Criticality::Notable
         } else {
             Criticality::Suspicious
         },
         mbc: None,
-        attack: if is_zip {
+        attack: if is_archive {
             None
         } else {
             Some("T1027.009".into())
@@ -1546,6 +1562,7 @@ fn encoding_chain_for_deobfuscation(result: &stng::script::DeobfuscationResult) 
 /// as a whole layer instead of shredded `ScriptDecode` fragments.
 fn host_may_contain_script_obfuscation(content: &str) -> bool {
     const NEEDLES: &[&str] = &[
+        "@(",
         "EncodedCommand",
         "encodedcommand",
         "-EncodedC",
@@ -1730,10 +1747,6 @@ pub(crate) fn analyze_decoded_script_layer(
             decoded.len(),
             offset,
         ));
-    } else {
-        report
-            .findings
-            .extend(generate_encoded_layer_traits(&encoding_chain, offset));
     }
 
     let (mut entry, _, _) = report.into_file_analysis(0, engine);
@@ -1762,6 +1775,23 @@ pub(crate) fn analyze_script_deobfuscation_layers(
     }
 
     let mut layers = Vec::new();
+    for (offset, decoded, language) in super::literal_program::decode(content) {
+        let Some(file_type) = file_type_for_script_language(language) else {
+            continue;
+        };
+        if let Some(layer) = analyze_decoded_script_layer(
+            parent_path,
+            &decoded,
+            offset as u64,
+            file_type,
+            vec![format!("{language}-literal-program")],
+            engine,
+            current_depth,
+            false,
+        ) {
+            layers.push(layer);
+        }
+    }
     for result in stng::script::deobfuscate_script(content.as_bytes()) {
         if cancelled.is_some_and(|flag| flag.load(Ordering::Acquire)) {
             break;
@@ -2408,6 +2438,54 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::unwrap_used)]
+    fn typed_encoding_context_is_visible_during_layer_evaluation() {
+        let rules = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(
+            rules.path(),
+            r#"
+composite_rules:
+  - id: fixture/context::typed-layer
+    desc: Typed reconstructed source context
+    crit: notable
+    platforms: [windows]
+    for: [powershell]
+    all:
+      - id: metadata/lang/encoded/powershell-literal-program
+"#,
+        )
+        .unwrap();
+        let engine = crate::Engine::from_rules(std::sync::Arc::new(
+            crate::capabilities::CapabilityMapper::from_yaml(rules.path()).unwrap(),
+        ));
+        let layer = analyze_decoded_script_layer(
+            "sample.py",
+            "Write-Output 'ordinary reconstruction control'",
+            123,
+            FileType::PowerShell,
+            vec!["powershell-literal-program".to_string()],
+            &engine,
+            0,
+            false,
+        )
+        .unwrap();
+        assert!(
+            layer
+                .findings
+                .iter()
+                .any(|finding| finding.id == "fixture/context::typed-layer")
+        );
+        assert_eq!(
+            layer
+                .findings
+                .iter()
+                .filter(|finding| finding.id == "metadata/lang/encoded/powershell-literal-program")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
     fn test_short_base64_source_map_javascript_is_analyzed() {
         let value = "const JWTSECRET = process.env.JWTSECRET;\nconst ENDPOINT_CONFIG = { API_GATEWAY: \"aHR0cHM6Ly9leGFtcGxlLmNvbQ==\" };\nmodule.exports = ENDPOINT_CONFIG;";
         let mut info = make_string_info(value);
@@ -2729,7 +2807,10 @@ mod tests {
         );
         let carrier = &entries[0];
         assert!(
-            carrier.findings.iter().any(|f| f.id.contains("base64-gz")),
+            carrier
+                .findings
+                .iter()
+                .any(|f| f.id.contains("base64-decoded-gz")),
             "expected base64-gz finding, got: {:?}",
             carrier.findings.iter().map(|f| &f.id).collect::<Vec<_>>()
         );

@@ -1299,6 +1299,67 @@ impl PEAnalyzer {
             }
         }
 
+        // Recover the recognized feedback-stream/RC4 DLL envelope as data.
+        // Child behavioral findings describe the decrypted DLL; the container
+        // records encoding provenance, without inferring intent from packing.
+        if !self.skip_embedded_scan
+            && !self.is_cancelled()
+            && let Some(payload) = crate::extractors::metamorphic_graft::recover(pe_data)
+        {
+            let member_path = format!("feedback-rc4/payload-{}.dll", payload.offset);
+            let virtual_path = format!("{}!{}", logical_path.display(), member_path);
+            let child = (|| -> Result<AnalysisReport> {
+                let temp = tempfile::Builder::new().suffix(".dll").tempfile()?;
+                fs::write(temp.path(), &payload.data)?;
+                let input = AnalysisInput::new(
+                    Path::new(&virtual_path),
+                    &payload.data,
+                    crate::FileType::Pe,
+                )
+                .with_backing_path(temp.path())
+                .at_depth(1);
+                PEAnalyzer::new()
+                    .with_engine(self.engine.clone())
+                    .with_cancellation(self.cancellation.clone())
+                    .without_embedded_scan()
+                    .analyze_input(&input)
+            })();
+            match child {
+                Ok(child) => {
+                    let first = report.files.len();
+                    crate::analyzers::subfile::attach_member(
+                        &mut report,
+                        child,
+                        &payload.data,
+                        crate::FileType::Pe,
+                        &member_path,
+                        &virtual_path,
+                        &self.engine,
+                    );
+                    if let Some(file) = report.files.get_mut(first) {
+                        file.encoding = Some(vec!["feedback-stream-rc4".to_string()]);
+                    }
+                    report.structure.push(StructuralFeature {
+                        id: "encoding/feedback-rc4-dll".to_string(),
+                        desc: "DLL recovered from feedback-stream and RC4 envelope".to_string(),
+                        evidence: vec![Evidence {
+                            method: "crypto".to_string(),
+                            source: "metamorphic_graft".to_string(),
+                            value: "Code-relative stream parameters and trailer-derived RC4 key"
+                                .to_string(),
+                            location: Some(format!("offset:{}", payload.offset)),
+                            offsets: vec![payload.offset as u64],
+                            ..Evidence::default()
+                        }],
+                    });
+                }
+                Err(error) => report
+                    .metadata
+                    .errors
+                    .push(format!("Feedback/RC4 DLL: {error:#}")),
+            }
+        }
+
         // Converter envelopes carry ordinary scripts: the decoded child owns
         // behavioral findings, while the parent records only the encoding.
         if !self.skip_embedded_scan {

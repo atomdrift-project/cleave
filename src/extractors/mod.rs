@@ -6,6 +6,7 @@
 pub(crate) mod aes_payload;
 pub mod encoded_payload;
 pub(crate) mod macho_chacha;
+pub(crate) mod metamorphic_graft;
 pub(crate) mod mpress;
 pub(crate) mod node_sea;
 pub(crate) mod nrv32;
